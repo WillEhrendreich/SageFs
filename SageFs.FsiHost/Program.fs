@@ -62,6 +62,7 @@ type private Work =
   | RunAgentDiscover of id: int64
   | RunAgentLoadedAssemblies of id: int64
   | RunAgentTakeCoverage of id: int64
+  | RunAgentValueReads of id: int64 * values: string list
 
 /// Whether the agent has been started. A DU, so "asked before started" is a case to handle, not a null to trip over.
 type private AgentState =
@@ -211,6 +212,7 @@ let private run (argsFile: string) : int =
         | RunAgentTakeCoverage id -> withAgent id (fun agent -> send (AgentCoverageResult(id, agent.TakeCoverage())))
         | RunAgentLoadedAssemblies id -> withAgent id (fun agent -> send (AgentLoadedAssembliesResult(id, agent.LoadedAssemblyNames())))
         | RunAgentDiscover id -> withAgent id (fun agent -> send (AgentDiscoveryResult(id, agent.DiscoverLoaded())))
+        | RunAgentValueReads(id, values) -> withAgent id (fun agent -> send (AgentValueReadsResult(id, agent.ValueReads values)))
         | RunEval(id, code) ->
           use cancel = new CancellationTokenSource()
           lock runningLock (fun () -> running <- Some { Cancel = cancel; Thread = Thread.CurrentThread })
@@ -258,6 +260,7 @@ let private run (argsFile: string) : int =
       | Result.Ok(AgentDiscoverLoaded id) -> requests.Add(RunAgentDiscover id)
       | Result.Ok(AgentLoadedAssemblies id) -> requests.Add(RunAgentLoadedAssemblies id)
       | Result.Ok(AgentTakeCoverage id) -> requests.Add(RunAgentTakeCoverage id)
+      | Result.Ok(AgentValueReads(id, values)) -> requests.Add(RunAgentValueReads(id, values))
       | Result.Ok(AgentRunTest(id, test)) ->
         // Beside the session thread, not on it: a long test must never freeze evals, checks or completions.
         match Volatile.Read(&agentState.contents) with

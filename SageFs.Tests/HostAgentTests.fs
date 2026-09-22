@@ -13,7 +13,7 @@ let private noAssemblies () : System.Reflection.Assembly[] = [||]
 
 let private nothingLoaded : AssemblySources = { Dynamic = noAssemblies; Loaded = noAssemblies }
 
-let private emptyInit : AgentInit = { Projects = []; ResolveFrom = [] }
+let private emptyInit : AgentInit = { Projects = []; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }
 
 let private request (detours: DetourPolicy) (discovery: DiscoveryPolicy) : AfterEval =
   { EvaluatedCode = "let x = 1"; Detours = detours; Discovery = discovery; IsFileSave = false }
@@ -74,7 +74,7 @@ let tests =
   testList "HostAgent" [
     testList "start" [
       testCase "a project that is not on disk is a typed load error, never an exception" <| fun _ ->
-        let agent = Agent({ Projects = [ missingProject ]; ResolveFrom = [] }, nothingLoaded)
+        let agent = Agent({ Projects = [ missingProject ]; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }, nothingLoaded)
         match (agent.Started).AssemblyLoadErrors with
         | [ AssemblyLoadError.FileNotFound(path, _) ] -> Expect.equal "names the file" missingProject path
         | other -> failtestf "expected one FileNotFound, got %A" other
@@ -100,7 +100,7 @@ let tests =
         | Some dll ->
           let mutable dynAsms: Assembly[] = [||]
           let sources: AssemblySources = { Dynamic = (fun () -> dynAsms); Loaded = noAssemblies }
-          let agent = Agent({ Projects = [ dll ]; ResolveFrom = [] }, sources)
+          let agent = Agent({ Projects = [ dll ]; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }, sources)
           agent.Started.AssemblyLoadErrors
           |> Expect.isEmpty "the fixture must load cleanly for this test to mean anything"
 

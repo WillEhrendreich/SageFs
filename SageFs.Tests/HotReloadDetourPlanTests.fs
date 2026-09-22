@@ -319,11 +319,13 @@ let mutableStateClassificationTests =
       |> reasonsOfPlan
       |> Expect.equal "named as mutable module state" [ RestartReason.MutableModuleState "requestCount" ]
 
-    testCase "WHY — ReloadPlanning.restartReason — editing an immutable value still reports StartupComputedValue because the running app captured the finished value" <| fun _ ->
+    testCase "WHY — ReloadPlanning.restartReason — editing a public immutable value waits on the running app, and a copy it kept is named as ValueCopiedByApp with who kept it" <| fun _ ->
       let edited = mutableSource.Replace("""let getHome : string = "home" """.TrimEnd(), """let getHome : string = "HOME" """.TrimEnd())
-      planReload (declsOfSource mutableSource) (declsOfSource edited)
-      |> reasonsOfPlan
-      |> Expect.equal "named as a startup-computed value" [ RestartReason.StartupComputedValue "getHome" ]
+      match planReload (declsOfSource mutableSource) (declsOfSource edited) with
+      | ReloadPlan.PatchKeepingState ([], LiveState.Redefined d, []) -> d.Name |> Expect.equal "planned as a redefinition" "getHome"
+      | other -> failtestf "expected a redefinition of getHome, got %A" other
+      ReloadChange.restartReason (ReloadChange.ValueCopied ("getHome", "the route table's closure"))
+      |> Expect.equal "the app's evidence becomes the reason" (RestartReason.ValueCopiedByApp ("getHome", "the route table's closure"))
 
     testCase "WHY — ReloadPlanning.restartReason — a declaration the running build never had reports NewDeclaration because there is no original to re-point" <| fun _ ->
       let edited = mutableSource + "\ntype Extra = { Value: int }\n"

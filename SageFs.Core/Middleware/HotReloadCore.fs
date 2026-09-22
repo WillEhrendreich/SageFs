@@ -243,6 +243,10 @@ type DetourApplied =
 
 let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase) : DetourApplied =
   try
+    // Chesterton's fence: rule 2's value-read watches are Harmony patches, and
+    // a later Harmony unpatch on this method would rewrite its entry and put
+    // the OLD code back over this detour. Take them off first.
+    ValueReadTracking.releaseBeforeDetour method
     // Snapshot pre-detour observable state for canary validation
     let preSnapshot = snapshotMethodState method
 

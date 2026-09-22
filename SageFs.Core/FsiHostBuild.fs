@@ -31,6 +31,8 @@ let hostSourceNames =
     "ReflectionDiscovery.fs"
     "LiveTestingExecutors.fs"
     "DevReload.fs"
+    "ValueReads.fs"
+    "ValueReadTracking.fs"
     "HotReloadCore.fs"
     "HostAgent.fs"
     "FsiProtocol.fs"

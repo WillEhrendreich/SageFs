@@ -91,6 +91,11 @@ type ReloadChange =
   /// re-point, which is a different thing from one that changed.
   | DeclarationAdded of name: string
   | UsesNonPublicMember of fn: string * memberName: string
+  /// A redefined value the running app kept a copy of (rule 2). Found from the
+  /// running app's own evidence, never from the source diff.
+  | ValueCopied of name: string * holder: string
+  /// A redefined value SageFs couldn't check (rule 2), and why.
+  | ValueUntraceable of name: string * why: string
   /// A mutable binding's getter and setter were redirected onto different
   /// code generations: one leg landed and the other did not, so reads and
   /// writes now disagree about which field is live. Discovered only from the
@@ -116,6 +121,11 @@ type LiveState =
   /// save says so, because keeping state quietly is the one thing people
   /// complain about in Flutter.
   | Kept of decl: SourceDecl
+  /// An edited public immutable value (rule 2). It's patched, getter and all,
+  /// only if the running app says nothing kept a copy of the old one; the
+  /// worker asks before patching (ValueReads). Otherwise it's a restart that
+  /// names who kept it.
+  | Redefined of decl: SourceDecl
 
 [<RequireQualifiedAccess>]
 type ReloadPlan =
@@ -142,6 +152,8 @@ module ReloadChange =
     | ReloadChange.DeclarationAdded name -> sprintf "%s was added" name
     | ReloadChange.UsesNonPublicMember (fn, memberName) ->
       sprintf "%s uses %s, which is not public, so it cannot be patched in place" fn memberName
+    | ReloadChange.ValueCopied (name, holder) -> sprintf "the running app kept a copy of %s: %s" name holder
+    | ReloadChange.ValueUntraceable (name, why) -> sprintf "%s changed and SageFs can't check where its copies went: %s" name why
     | ReloadChange.MutableBindingTorn binding ->
       sprintf
         "'%s' tore: one of its accessors was re-pointed to the new code and the other was not, so reads and writes now disagree about which field is live"
@@ -184,6 +196,8 @@ module ReloadChange =
     // re-emitting the member alongside the patch) — unimplemented, not physics.
     | ReloadChange.UsesNonPublicMember (fn, memberName) ->
       RestartReason.NotYetSupported (sprintf "'%s', because it uses the non-public '%s'" fn memberName)
+    | ReloadChange.ValueCopied (name, holder) -> RestartReason.ValueCopiedByApp (name, holder)
+    | ReloadChange.ValueUntraceable (name, why) -> RestartReason.ValueUntraceable (name, why)
     // A tear is a mutable-binding coherence failure, not a capability gap —
     // the same reason a source-level `let mutable` edit gets when it cannot
     // be patched at all. The remedy is identical: restart to re-run the
@@ -467,6 +481,8 @@ type private DeclOutcome =
   | Unchanged
   | Patch of SourceDecl
   | Keep of SourceDecl
+  /// Rule 2: an edited public value, patched only on the running app's word.
+  | Redefine of SourceDecl
   | Restart of ReloadChange
 
 /// A declared type annotation in a value binding's header, e.g. `int` from
@@ -514,6 +530,13 @@ let private outcomeOf (baseline: Map<DeclKind * string list * string * int, Sour
       let shown = Option.defaultValue "(inferred)"
       DeclOutcome.Restart (ReloadChange.MutableStateRetyped (current.Name, shown was, shown now))
     | false, _, _ -> DeclOutcome.Restart (ReloadChange.MutableStateChanged current.Name)
+  // Rule 2: an edited public value can get its new value, if nothing in the
+  // running app kept a copy of the old one. That's the app's call, not the
+  // diff's, so the plan says "redefine" and the worker asks. A value that
+  // isn't public has no public getter to patch, and a changed header (a new
+  // annotation, say) changes what the binding IS: both still restart.
+  | Some before, DeclKind.ValueDecl when current.Access = DeclAccess.Public && normalize before.Header = normalize current.Header ->
+    DeclOutcome.Redefine current
   | Some _, _ -> DeclOutcome.Restart (changeFor current)
 
 /// A source file is a trustworthy hot-reload baseline only if it was not
@@ -769,7 +792,10 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
     current.Decls
     |> List.filter (fun d -> d.Access <> DeclAccess.Public && not (patchedNames.Contains d.Name) && isIdentifier d.Name)
   let patches = outcomes |> List.choose (function DeclOutcome.Patch f -> Some f | _ -> None)
-  let hiddenUses = hiddenUsesOf current patches hidden
+  let redefined = outcomes |> List.choose (function DeclOutcome.Redefine d -> Some d | _ -> None)
+  // A redefined value's new text is emitted into the patch too, so it can't
+  // reach the file's hidden members any more than a function can.
+  let hiddenUses = hiddenUsesOf current (patches @ redefined) hidden
   let unreachable =
     hiddenUses
     |> List.choose (fun (f, used) ->
@@ -786,10 +812,25 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
   let restarts =
     (outcomes |> List.choose (function DeclOutcome.Restart c -> Some c | _ -> None)) @ removed @ unreachable
     |> List.distinct
-  match restarts, carried @ kept with
-  | first :: rest, _ -> ReloadPlan.RestartRequired (first, rest)
+  match restarts, carried @ kept @ (redefined |> List.map LiveState.Redefined) with
   | [], [] -> ReloadPlan.PatchFunctions patches
   | [], state :: more -> ReloadPlan.PatchKeepingState (patches, state, more)
+  | _ :: _, _ ->
+    // Restarting anyway, so a redefined value is just another thing the
+    // restart picks up, and the card lists it where it sits in the file.
+    let all =
+      (outcomes
+       |> List.choose (function
+         | DeclOutcome.Restart c -> Some c
+         | DeclOutcome.Redefine d -> Some (ReloadChange.ValueChanged d.Name)
+         | DeclOutcome.Unchanged
+         | DeclOutcome.Patch _
+         | DeclOutcome.Keep _ -> None))
+      @ removed @ unreachable
+      |> List.distinct
+    match all with
+    | first :: rest -> ReloadPlan.RestartRequired (first, rest)
+    | [] -> ReloadPlan.PatchFunctions patches
 
 [<RequireQualifiedAccess>]
 type PatchOutcome =
@@ -809,6 +850,10 @@ let private reachedBy (names: string list) (f: SourceDecl) =
     names
     |> List.exists (fun m ->
       m.StartsWith(f.Name + ".", StringComparison.Ordinal) || m.Contains("." + f.Name + "."))
+  // A value is re-pointed through its getter.
+  | DeclKind.ValueDecl ->
+    let getter = "get_" + f.Name
+    names |> List.exists (fun m -> m = getter || m.EndsWith("." + getter, StringComparison.Ordinal))
   | _ -> names |> List.exists (fun m -> m = f.Name || m.EndsWith("." + f.Name, StringComparison.Ordinal))
 
 /// Whether the running build already had this declaration, of the same kind.

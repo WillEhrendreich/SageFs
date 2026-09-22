@@ -946,6 +946,38 @@ let run (sessionId: string) (port: int) = async {
             match response.EvaluationResult with
             | Error ex -> return Error (Features.LiveStateEmit.LiveStateError.EvalFailed ex.Message)
             | Ok output -> return Features.LiveStateEmit.parseProbe output }
+      // Rule 2: where did each redefined value's copies go? Asked of the
+      // agent in the process the app runs in. Every value that isn't provably
+      // safe to patch comes back as the reason to restart, naming who kept it.
+      let redefinitionRefusals
+        (current: Features.ReloadPlanning.FileDecls)
+        (redefined: Features.ReloadPlanning.SourceDecl list)
+        : Features.ReloadPlanning.ReloadChange list =
+        match redefined with
+        | [] -> []
+        | _ ->
+          let named = redefined |> List.map (fun d -> Features.KeptState.Pending.bindingName current d, d)
+          let shortName (binding: string) =
+            named |> List.tryFind (fun (b, _) -> b = binding) |> Option.map (fun (_, d) -> d.Name) |> Option.defaultValue binding
+          match result.Agent.ValueReads (named |> List.map fst) with
+          | HostAgent.AgentUnavailable reason ->
+            named
+            |> List.map (fun (_, d) ->
+              Features.ReloadPlanning.ReloadChange.ValueUntraceable(d.Name, sprintf "the app's agent didn't answer (%s)" reason))
+          | HostAgent.AgentAnswered evidence ->
+            let verdicts =
+              evidence |> List.map (fun e -> Middleware.ValueReads.valueOf e, Middleware.ValueReads.verdictOf e)
+            match Middleware.ValueReads.checkSave verdicts with
+            | Middleware.ValueReads.SaveCheck.AllSafe -> []
+            | Middleware.ValueReads.SaveCheck.Refused(first, rest) ->
+              first :: rest
+              |> List.choose (fun (binding, verdict) ->
+                match verdict with
+                | Middleware.ValueReads.ValueVerdict.SafeToPatch -> None
+                | Middleware.ValueReads.ValueVerdict.HeldBy(site, seen) ->
+                  Some(Features.ReloadPlanning.ReloadChange.ValueCopied(shortName binding, Middleware.ValueReads.describeHolder site seen))
+                | Middleware.ValueReads.ValueVerdict.CannotTell why ->
+                  Some(Features.ReloadPlanning.ReloadChange.ValueUntraceable(shortName binding, why)))
       // Re-emit the changed functions against the compiled module and report
       // what reached the running process. `carried` are the unedited private
       // `let mutable`s those functions use; they get stand-ins bound to the
@@ -958,6 +990,7 @@ let run (sessionId: string) (port: int) = async {
         (functions: Features.ReloadPlanning.SourceDecl list)
         (carried: Features.ReloadPlanning.SourceDecl list)
         (kept: Features.KeptState.Pending list)
+        (recheck: unit -> Features.ReloadOutcome.RestartReason list)
         : Async<SaveHandling> = async {
             let keptValues = kept |> List.map _.Value
             let recordKept () =
@@ -1045,7 +1078,7 @@ let run (sessionId: string) (port: int) = async {
                   // absent here, so `confirmPatchAsOutcome` cannot count it as
                   // landed: no evidence means never `Patched`, by construction.
                   let reachedRunningProcess = reachedRunningProcessOf response
-                  let outcome =
+                  let patched =
                     Features.ReloadPlanning.confirmPatchAsOutcome
                       baseline
                       functions
@@ -1054,6 +1087,16 @@ let run (sessionId: string) (port: int) = async {
                     |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses
                          (extraReasons @ ineffectiveReasons)
                     |> Features.ReloadOutcome.ReloadOutcome.withKept keptValues
+                  // Rule 2's second look: a redefined value was checked before
+                  // the patch, and a read that raced the patch (a lazy forced
+                  // in between, say) would have kept the OLD value. Ask again
+                  // now that every read goes to the new getter; if anything
+                  // kept a copy in the meantime, the honest outcome is a
+                  // restart, whatever the count says.
+                  let outcome =
+                    match recheck () with
+                    | [] -> patched
+                    | raced -> Features.ReloadOutcome.ReloadOutcome.RestartRequired raced
                   recordKept ()
                   Features.ReloadBroadcast.broadcastOutcome outcome
                   Log.info "Hot reload: %s — %s (%s)"
@@ -1087,19 +1130,27 @@ let run (sessionId: string) (port: int) = async {
             Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.unchanged fileName)
             return SaveHandling.Reported
           | Features.ReloadPlanning.ReloadPlan.PatchFunctions functions ->
-            return! patchInPlace fileName filePath baseline current functions [] []
+            return! patchInPlace fileName filePath baseline current functions [] [] (fun () -> [])
           | Features.ReloadPlanning.ReloadPlan.PatchKeepingState (functions, first, rest) ->
             let state = first :: rest
             let carried =
               state
               |> List.choose (function
                 | Features.ReloadPlanning.LiveState.Carried d -> Some d
-                | Features.ReloadPlanning.LiveState.Kept _ -> None)
+                | Features.ReloadPlanning.LiveState.Kept _
+                | Features.ReloadPlanning.LiveState.Redefined _ -> None)
             let keptDecls =
               state
               |> List.choose (function
                 | Features.ReloadPlanning.LiveState.Kept d -> Some d
-                | Features.ReloadPlanning.LiveState.Carried _ -> None)
+                | Features.ReloadPlanning.LiveState.Carried _
+                | Features.ReloadPlanning.LiveState.Redefined _ -> None)
+            let redefined =
+              state
+              |> List.choose (function
+                | Features.ReloadPlanning.LiveState.Redefined d -> Some d
+                | Features.ReloadPlanning.LiveState.Carried _
+                | Features.ReloadPlanning.LiveState.Kept _ -> None)
             // Ask the running app about each kept binding BEFORE patching
             // anything: its live value for the notice, and whether the edited
             // initializer is still the same type. A retype, or a probe that
@@ -1121,7 +1172,16 @@ let run (sessionId: string) (port: int) = async {
                 | Error reason ->
                   Log.warn "Hot reload: couldn't check the live value of '%s', so it isn't kept: %s" d.Name (Features.LiveStateEmit.LiveStateError.describe reason)
                   Some (Features.ReloadPlanning.ReloadChange.MutableStateChanged d.Name))
-            match refusals with
+            // Rule 2: redefined values are patched only on the running app's
+            // word that nothing kept a copy. SageFs running the app itself
+            // (run_app) is a different process from the one the evidence
+            // comes from, and a restart picks the value up anyway.
+            let valueRefusals =
+              match redefined, AppRunner.state appRunner with
+              | [], _ -> []
+              | _, AppRun.AppRunState.Running _ -> redefined |> List.map (fun d -> Features.ReloadPlanning.ReloadChange.ValueChanged d.Name)
+              | _ -> redefinitionRefusals current redefined
+            match valueRefusals @ refusals with
             | r :: rs -> return! restartOrFallBack fileName r rs
             | [] ->
               let kept =
@@ -1138,7 +1198,12 @@ let run (sessionId: string) (port: int) = async {
                          Decls = current
                          Decl = d } : Features.KeptState.Pending)
                   | _ -> None)
-              return! patchInPlace fileName filePath baseline current functions carried kept
+              // The redefined values go into the patch with the functions, in
+              // file order, so a function that uses one compiles against it.
+              let emitted = functions @ redefined |> List.sortBy _.StartLine
+              let recheck () =
+                redefinitionRefusals current redefined |> List.map Features.ReloadPlanning.ReloadChange.restartReason
+              return! patchInPlace fileName filePath baseline current emitted carried kept recheck
           | Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest) ->
             return! restartOrFallBack fileName first rest }
       let onFileChanged (change: FileWatcher.FileChange) =
@@ -1237,7 +1302,12 @@ let run (sessionId: string) (port: int) = async {
                     when restartReasons
                          |> List.exists (function
                            | Features.ReloadOutcome.RestartReason.MutableModuleState _
-                           | Features.ReloadOutcome.RestartReason.MutableStateTypeChanged _ -> true
+                           | Features.ReloadOutcome.RestartReason.MutableStateTypeChanged _
+                           // Rule 2: re-evaluating the whole file can't reach
+                           // a copy the app kept either, and it would reset
+                           // every `let mutable` in the file on the way.
+                           | Features.ReloadOutcome.RestartReason.ValueCopiedByApp _
+                           | Features.ReloadOutcome.RestartReason.ValueUntraceable _ -> true
                            | _ -> false) ->
                   let outcome = Features.ReloadOutcome.ReloadOutcome.RestartRequired restartReasons
                   Features.ReloadBroadcast.broadcastOutcome outcome

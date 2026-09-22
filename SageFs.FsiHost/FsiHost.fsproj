@@ -46,6 +46,11 @@
     <Compile Include="ReflectionDiscovery.fs" />
     <Compile Include="LiveTestingExecutors.fs" />
     <Compile Include="DevReload.fs" />
+    <!-- Rule 2: where a module value's reads went (pure), and the probes and startup
+         watch that learn which readers ran. Both before HotReloadCore, which releases a
+         watch before it detours a method. -->
+    <Compile Include="ValueReads.fs" />
+    <Compile Include="ValueReadTracking.fs" />
     <Compile Include="HotReloadCore.fs" />
     <Compile Include="HostAgent.fs" />
     <Compile Include="FsiProtocol.fs" />

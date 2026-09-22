@@ -54,6 +54,8 @@ type IFsiSession =
   abstract LoadedAssemblyNames: unit -> AgentReply<string list>
   /// Scan what the session's process has loaded for tests.
   abstract DiscoverLoaded: unit -> AgentReply<Discovery>
+  /// Where each named module value's reads went, and which readers ran (hot reload rule 2).
+  abstract ValueReads: values: string list -> AgentReply<SageFs.Middleware.ValueReads.ValueEvidence list>
   /// Run one discovered test where it lives.
   abstract RunTest: test: LiveTesting.TestCase -> Async<AgentReply<LiveTesting.TestResult>>
 
@@ -141,6 +143,8 @@ type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
     member _.LoadedAssemblyNames() = AgentAnswered(agent.LoadedAssemblyNames())
 
     member _.DiscoverLoaded() = AgentAnswered(agent.DiscoverLoaded())
+
+    member _.ValueReads(values) = AgentAnswered(agent.ValueReads values)
 
     member _.RunTest(test) =
       async {

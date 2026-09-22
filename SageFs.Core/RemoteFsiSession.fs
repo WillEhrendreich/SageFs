@@ -152,6 +152,11 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
       | Answered names -> HostAgent.AgentAnswered names
       | HostGone reason -> HostAgent.AgentUnavailable reason
 
+    member _.ValueReads(values) =
+      match wait (host.AgentValueReads values) with
+      | Answered evidence -> HostAgent.AgentAnswered evidence
+      | HostGone reason -> HostAgent.AgentUnavailable reason
+
     member _.DiscoverLoaded() =
       match wait (host.AgentDiscoverLoaded()) with
       | Answered discovery -> HostAgent.AgentAnswered discovery

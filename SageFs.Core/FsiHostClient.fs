@@ -130,6 +130,7 @@ type FsiHostSession
           | Result.Ok(AgentTestResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentLoadedAssembliesResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentCoverageResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentValueReadsResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentRefused(id, _) as answer) -> complete id answer
     with ex ->
       onLog (sprintf "[fsihost] read loop ended: %s" ex.Message)
@@ -280,6 +281,16 @@ type FsiHostSession
       | Got(AgentAfterEvalResult(_, report)) -> return Answered report
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent after-eval" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Where each named module value's reads went, and which readers ran (hot reload rule 2).
+  member _.AgentValueReads(values: string list) : Async<HostCall<SageFs.Middleware.ValueReads.ValueEvidence list>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentValueReads(id, values)) with
+      | Got(AgentValueReadsResult(_, evidence)) -> return Answered evidence
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent value reads" other)
       | Gone reason -> return HostGone reason
     }
 

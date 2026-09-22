@@ -91,9 +91,10 @@ let planReloadTests =
       plan (replace "Text: string }" "Text: string; Done: bool }" baselineSource)
       |> restartChanges |> Expect.equal "TodoItem changed" [ ReloadChange.TypeChanged "TodoItem" ]
 
-    testCase "WHY — ReloadPlanning.planReload — a module-level value edit requires a restart because the app captured the old value at startup" <| fun _ ->
-      plan (replace "\"home\"" "\"welcome\"" baselineSource)
-      |> restartChanges |> Expect.equal "getHome changed" [ ReloadChange.ValueChanged "getHome" ]
+    testCase "WHY — ReloadPlanning.planReload — a public value edit is planned as a redefinition, because only the running app knows whether it kept a copy (rule 2)" <| fun _ ->
+      match plan (replace "\"home\"" "\"welcome\"" baselineSource) with
+      | ReloadPlan.PatchKeepingState ([], LiveState.Redefined d, []) -> d.Name |> Expect.equal "getHome waits on the app's evidence" "getHome"
+      | other -> failtestf "expected getHome to be planned as a redefinition, got %A" other
 
     testCase "WHY — ReloadPlanning.planReload — a function signature edit requires a restart because callers were compiled against the old one" <| fun _ ->
       plan (replace "let render (items: TodoItem list) =" "let render (title: string) (items: TodoItem list) =" baselineSource)
@@ -211,9 +212,11 @@ let typeShapeAndLambdaTests =
       planFor "fun who -> \"A\" + who" "fun who -> \"B\" + who"
       |> patchedNames |> Expect.equal "the lambda-bound value" [ "lambdaHandler" ]
 
-    testCase "WHY — ReloadPlanning.planReload — a value whose closure is built inside a let still restarts, because the captured result was computed at startup" <| fun _ ->
+    testCase "WHY — ReloadPlanning.planReload — a value whose initializer calls a private function still restarts, because FSI can't reach the private function to run the new initializer" <| fun _ ->
       planFor "  fun () -> computedAtStartup" "  fun () -> computedAtStartup + \"!\""
-      |> restartChanges |> Expect.equal "a startup-computed value" [ ReloadChange.ValueChanged "eagerHandler" ]
+      |> restartChanges
+      |> Expect.equal "the value, and the private function it can't reach"
+           [ ReloadChange.ValueChanged "eagerHandler"; ReloadChange.UsesNonPublicMember ("eagerHandler", "computeEager") ]
   ]
 
 [<Tests>]
@@ -304,7 +307,8 @@ let carriedStateTests =
         first :: rest
         |> List.map (function
           | LiveState.Carried d -> "carried " + d.Name
-          | LiveState.Kept d -> "kept " + d.Name)
+          | LiveState.Kept d -> "kept " + d.Name
+          | LiveState.Redefined d -> "redefined " + d.Name)
         |> Expect.equal "hits is carried, not re-declared" [ "carried hits" ]
       | other -> failtestf "expected a patch that carries hits, got %A" other
 
@@ -545,7 +549,8 @@ let planReloadPropertyTests =
              state
              |> List.map (function
                | LiveState.Carried d -> d.Name
-               | LiveState.Kept d -> "kept:" + d.Name)
+               | LiveState.Kept d -> "kept:" + d.Name
+               | LiveState.Redefined d -> "redefined:" + d.Name)
              |> Set.ofList
            match planReload file (fileOf editedDecls), unreachable with
            | ReloadPlan.PatchFunctions patched, [] ->
@@ -562,10 +567,19 @@ let planReloadPropertyTests =
             let! file = genUniqueFile
             // The extra edit targets a declaration that only takes effect at startup.
             // Not a function (patched) and not a `let mutable` either: an edited
-            // initializer on live state is kept, not restarted (rule 3).
+            // initializer on live state is kept, not restarted (rule 3). And
+            // not a public value: that's a redefinition the running app decides
+            // (rule 2), so only a non-public value is startup-only here.
             let! targetKind =
               Gen.elements (allKinds |> List.filter (fun k -> k <> DeclKind.FunctionDecl && k <> DeclKind.MutableValueDecl))
-            let! target = genDeclNamed "omega" |> Gen.map (fun d -> mkDecl d.Name targetKind d.Access "0")
+            let! target =
+              genDeclNamed "omega"
+              |> Gen.map (fun d ->
+                let access =
+                  match targetKind, d.Access with
+                  | DeclKind.ValueDecl, DeclAccess.Public -> DeclAccess.Private
+                  | _, access -> access
+                mkDecl d.Name targetKind access "0")
             let! flags = Gen.listOfLength file.Decls.Length (Gen.elements [ true; false ])
             return fileOf (file.Decls @ [ target ]), flags, target }))
          (fun (file, flags, target) ->

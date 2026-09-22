@@ -53,6 +53,8 @@ let private refusalCaseName (reason: RestartReason) =
   | RestartReason.NewDeclaration _ -> "NewDeclaration"
   | RestartReason.NotYetSupported _ -> "NotYetSupported"
   | RestartReason.PatchIneffective _ -> "PatchIneffective"
+  | RestartReason.ValueCopiedByApp _ -> "ValueCopiedByApp"
+  | RestartReason.ValueUntraceable _ -> "ValueUntraceable"
 
 let private refusalOf (reason: RestartReason) : DevReload.ReloadRefusal =
   { Case = refusalCaseName reason

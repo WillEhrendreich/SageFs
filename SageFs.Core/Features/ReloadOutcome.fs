@@ -67,6 +67,13 @@ type RestartReason =
   /// The canary is evidence about the running process, which is the only thing
   /// the count claims to describe, so it is a verdict here.
   | PatchIneffective of declaration: string
+  /// An immutable value you redefined, and the running app kept a copy of the
+  /// old one (a closure built at startup, a lazy, a field). A patch of its
+  /// getter can't reach a copy. `holder` says who kept it and how.
+  | ValueCopiedByApp of binding: string * holder: string
+  /// An immutable value you redefined, and SageFs can't see where the running
+  /// app's copies went (an optimized build, say), so it won't claim a patch.
+  | ValueUntraceable of binding: string * why: string
 
 module RestartReason =
 
@@ -92,6 +99,10 @@ module RestartReason =
       sprintf
         "'%s' was re-pointed but the running code did not change, so the app is still executing the old body"
         decl
+    | RestartReason.ValueCopiedByApp(binding, holder) ->
+      sprintf "the running app kept a copy of '%s', and a patch can't reach a copy: %s" binding holder
+    | RestartReason.ValueUntraceable(binding, why) ->
+      sprintf "SageFs can't see where the running app's copies of '%s' went, so it won't claim a patch: %s" binding why
 
   /// What the user can actually do. Never empty — a refusal a user cannot act
   /// on is a dead end, and this is the field that stops it being one.
@@ -117,6 +128,12 @@ module RestartReason =
       sprintf
         "Restart the app to pick it up. The usual cause is that '%s' was inlined into its caller before the edit, so the caller holds its own copy of the old body and there is no entry point left to re-point. Marking it [<MethodImpl(MethodImplOptions.NoInlining)>] keeps it reloadable."
         decl
+    | RestartReason.ValueCopiedByApp(binding, _) ->
+      sprintf
+        "Restart the app to pick it up. A value only reloads while nothing has kept a copy of it: code that reads '%s' when it's needed (a function of its input) gets the new value, code that stored it at startup or cached it doesn't."
+        binding
+    | RestartReason.ValueUntraceable _ ->
+      "Restart the app to pick it up. Build through SageFs (it builds with -p:Optimize=false) and a redefined value can be checked and patched."
 
 /// A `let mutable` whose initializer you edited while the app was running. The
 /// app kept its live value (rule 3 of the state spec), and this is what the

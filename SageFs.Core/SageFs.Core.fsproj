@@ -77,6 +77,8 @@
         <EmbeddedResource Include="Features\ReflectionDiscovery.fs" LogicalName="FsiHost/ReflectionDiscovery.fs" />
         <EmbeddedResource Include="Features\LiveTestingExecutors.fs" LogicalName="FsiHost/LiveTestingExecutors.fs" />
         <EmbeddedResource Include="DevReload.fs" LogicalName="FsiHost/DevReload.fs" />
+        <EmbeddedResource Include="Middleware\ValueReads.fs" LogicalName="FsiHost/ValueReads.fs" />
+        <EmbeddedResource Include="Middleware\ValueReadTracking.fs" LogicalName="FsiHost/ValueReadTracking.fs" />
         <EmbeddedResource Include="Middleware\HotReloadCore.fs" LogicalName="FsiHost/HotReloadCore.fs" />
         <EmbeddedResource Include="HostAgent.fs" LogicalName="FsiHost/HostAgent.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/FsiProtocol.fs" LogicalName="FsiHost/FsiProtocol.fs" />
@@ -245,6 +247,7 @@
              the other Features/ files. Deliberately NOT embedded into the isolated FSI host: DevReload.fs is,
              and keeping that closure free of the planner is why the translation lives in its own module. -->
         <Compile Include="Features\ReloadBroadcast.fs" />
+        <Compile Include="Middleware\ValueReadTracking.fs" />
         <Compile Include="Middleware\HotReloadCore.fs" />
         <Compile Include="HostAgent.fs" />
         <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />

@@ -16,6 +16,8 @@ open SageFs.Utils
 open SageFs.Features.LiveTesting
 open SageFs.Middleware.HotReloadCore
 
+open SageFs.Middleware.ValueReadTracking
+
 /// Whether the methods an eval redefined are re-pointed at their new bodies.
 [<RequireQualifiedAccess>]
 type DetourPolicy =
@@ -63,7 +65,10 @@ type Discovery =
 /// What the agent starts from: the project outputs to load, and further files whose directories resolve dependencies.
 type AgentInit =
   { Projects: string list
-    ResolveFrom: string list }
+    ResolveFrom: string list
+    /// Hot reload watches where the app's module values go, so a redefined
+    /// value can be patched only when nothing kept a copy (rule 2).
+    ValueReads: ValueReadWatch }
 
 /// The outcome of starting an agent: which projects could not be loaded, and why.
 type AgentStarted =
@@ -212,6 +217,12 @@ let afterEvalStep (executors: TestExecutor list) (logger: ILogger) (state: State
         DetourReport = detourReport
         Hook = mergeHooks fromEval.AffectedTestIds (fromEval :: fromProjects) }
 
+/// Whether this agent watches value reads, and the tracker when it does.
+[<RequireQualifiedAccess>]
+type private ValueReadTracker =
+  | Tracking of Tracker
+  | NotTracking
+
 /// The agent of one process. It owns that process's reload registry (single owner: `AfterEval` is called from the one
 /// eval thread, and the lock makes any other caller safe), the runner for tests defined interactively, and the runner
 /// for tests found in the project assemblies.
@@ -219,6 +230,15 @@ let afterEvalStep (executors: TestExecutor list) (logger: ILogger) (state: State
 type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor list) =
   let gate = obj ()
   let mutable state = startState init
+  // Before anything else runs: the probes and the startup window's watch have
+  // to be on before the user's first line of code, or a read could slip past.
+  let valueReads =
+    match init.ValueReads with
+    | ValueReadWatch.IgnoreValueReads -> ValueReadTracker.NotTracking
+    | ValueReadWatch.WatchValueReads ->
+      let tracker = Tracker()
+      tracker.Track state.ProjectAssemblies
+      ValueReadTracker.Tracking tracker
   let started : AgentStarted =
     { LoadedProjects = state.ProjectAssemblies |> List.map (fun a -> a.Location)
       AssemblyLoadErrors = state.AssemblyLoadErrors }
@@ -241,7 +261,15 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
           LiveTest = LiveTestHookResultDto.fromResult LiveTestHookResult.empty
           AssemblyLoadErrors = state.AssemblyLoadErrors }
       | Some asm ->
+        // Readers an eval just defined are found (and probed) before hot
+        // reload detours anything onto them.
+        match valueReads with
+        | ValueReadTracker.Tracking tracker -> tracker.ScanEval asm
+        | ValueReadTracker.NotTracking -> ()
         let step = afterEvalStep executors logger state asm request
+        match valueReads with
+        | ValueReadTracker.Tracking tracker -> tracker.EvalFinished request.IsFileSave
+        | ValueReadTracker.NotTracking -> ()
         state <- step.State
         // Tests defined interactively stay runnable across evals that discover nothing: only a scan replaces the runner.
         match step.Hook.DiscoveredTests.Length > 0 || not (List.isEmpty step.Hook.DetectedProviders) with
@@ -251,6 +279,15 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
           DetourReport = step.DetourReport
           LiveTest = LiveTestHookResultDto.fromResult step.Hook
           AssemblyLoadErrors = step.State.AssemblyLoadErrors })
+
+  /// Where each value's reads went, and which of the readers ran (rule 2).
+  member _.ValueReads(values: string list) : SageFs.Middleware.ValueReads.ValueEvidence list =
+    lock gate (fun () ->
+      match valueReads with
+      | ValueReadTracker.Tracking tracker -> tracker.Evidence values
+      | ValueReadTracker.NotTracking ->
+        values
+        |> List.map (fun value -> SageFs.Middleware.ValueReads.ValueEvidence.Untracked(value, "this session isn't watching value reads, because it isn't a hot reload session")))
 
   /// Take the coverage the instrumented assemblies recorded, and reset it for the next run. Coverage lives in the process
   /// that ran the tests, so only its agent can read it.

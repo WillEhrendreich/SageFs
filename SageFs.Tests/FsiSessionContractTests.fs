@@ -37,7 +37,7 @@ let private newInProcess () : Async<IFsiSession> =
         TextWriter.Null,
         collectible = true
       )
-    return new InProcessFsiSession(session, { Projects = []; ResolveFrom = [] }) :> IFsiSession
+    return new InProcessFsiSession(session, { Projects = []; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }) :> IFsiSession
   }
 
 /// One host build shared by every remote test (keyed by SDK + sources).
@@ -63,7 +63,7 @@ let private newRemote () : Async<IFsiSession> =
         StartupTimeoutMs = 60_000 }
     match! start options with
     | Result.Ok host ->
-      match! attach host { Projects = []; ResolveFrom = [] } with
+      match! attach host { Projects = []; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads } with
       | Result.Ok session -> return session :> IFsiSession
       | Result.Error reason -> return failtest (describeAttachError reason)
     | Result.Error reason -> return failtest (describeStartError reason)

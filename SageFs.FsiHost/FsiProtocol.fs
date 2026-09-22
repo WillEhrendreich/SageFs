@@ -122,6 +122,8 @@ type Request =
   | AgentTakeCoverage of id: int64
   /// Run one test. Runs beside the session thread, so a long test never blocks evals or completions.
   | AgentRunTest of id: int64 * test: LiveTesting.TestCase
+  /// Where each named module value's reads went, and which readers ran (hot reload rule 2).
+  | AgentValueReads of id: int64 * values: string list
   | Interrupt
   | Shutdown
 
@@ -142,6 +144,7 @@ type Response =
   | AgentTestResult of id: int64 * result: LiveTesting.TestResult
   | AgentLoadedAssembliesResult of id: int64 * names: string list
   | AgentCoverageResult of id: int64 * coverage: HostAgent.CoverageReading
+  | AgentValueReadsResult of id: int64 * evidence: SageFs.Middleware.ValueReads.ValueEvidence list
   /// An agent request the host cannot serve (it was not started, or the request failed): the reason, never a guess.
   | AgentRefused of id: int64 * reason: string
   | Output of stream: OutputStream * text: string
