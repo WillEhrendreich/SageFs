@@ -168,18 +168,59 @@ the question's answered.
 
 One thing I found building this that you should know about: on .NET, a patch
 on a runtime method that hasn't been recompiled yet gets thrown away when
-tiered compilation recompiles it, and it doesn't come back. So the process
-running your app (the isolated FSI host) starts with tiered compilation off
-when hot reload is on, and the watch never lapses there. It still checks: a
-canary goes through every entry point at every save. If the watch ever stops
-seeing reads, every value that session tracks restarts on its next edit until
-the app restarts, and the panel says why. A read SageFs might have missed never
-gets a Patched. Pinned by `ReflectionReadTrackingTests` (a real emitted app,
-including a forced lapse), `ReflectionReadSimTests` (DST: 3000 seeded runs of
-reflective reads from many callers, reads inside other reflective calls,
-threads, mode switches and saves, never Patched over a copy and never filing
-a read under the wrong caller) and the real-app rule 2 reflection tests in
-`HotReloadStateOutcomeTests` (net10 + net11).
+tiered compilation recompiles it, and it doesn't come back. I measured it in
+the REPL: 4,000 of 12,000 calls to `MethodBase.Invoke` still hit the patch,
+and the other 8,000 didn't. SageFs checks for this. A canary read goes through
+every entry point at every save, and if the watch ever stops seeing reads,
+every value that session tracks restarts on its next edit until the app
+restarts, and the panel says why. A read SageFs might have missed never gets a
+Patched.
+
+So you get a choice, the `hotreload.tieredCompilation` setting. It's in the
+dashboard settings panel, global or per repo, and it applies the next time a
+session starts, because it's an environment variable the host reads once when
+it starts up.
+
+`tiering-off-while-watching` is the default. It turns tiered compilation off
+for the process running your app, so nothing gets recompiled and the watch
+can't lapse. Your app pays for it: every method gets the fully optimized JIT
+on its first call, and dynamic PGO never runs.
+
+`keep-tiering` leaves the runtime alone. Your app runs at the runtime's normal
+speed, but the watch can lapse, and after a lapse every tracked value restarts
+on its next edit until the app restarts. You get more restarts, never a wrong
+answer.
+
+Here's what that cost looked like on my machine, for the hot reload test app
+on net11 (5 runs each, taking turns, median):
+
+| | App start | Per request, warm |
+|---|---|---|
+| `tiering-off-while-watching` | 8.5s | 340 µs |
+| `keep-tiering` | 7.8s | 563 µs |
+
+Tiering off costs about 0.7s at startup. Requests actually came out faster
+with it off, because 2,200 requests in a couple of seconds isn't enough for
+the runtime to finish promoting code to its optimized tier. A long-running app
+with tiering on would catch up, and past that point PGO could win. For the
+edit loop, where the app gets restarted a lot and rarely runs long, off is the
+better deal, so that's the default. If your app does heavy work that you're
+measuring, turn tiering back on for that repo.
+
+I checked whether `exact-every-read` could skip this. Its getter watch covers
+a plain call or a `PropertyInfo.GetValue` on a tracked value by itself. But a
+`FieldInfo.GetValue` read of the backing field, or turning the getter into a
+delegate, only ever shows up through the entry watch, in every mode. So the
+setting applies the same way to all three modes.
+
+Pinned by `ReflectionReadTrackingTests` (a real emitted app, including a
+forced lapse), `ReflectionReadSimTests` (DST: 3000 seeded runs of reflective
+reads from many callers, reads inside other reflective calls, threads, mode
+switches, saves and injected lapses under `keep-tiering`: never Patched over a
+copy, never Patched while lapsed, never a read filed under the wrong caller)
+and the real-app rule 2 reflection tests in `HotReloadStateOutcomeTests`
+(net10 + net11), including one that hammers a real app with `keep-tiering`
+set and checks that a real lapse fails closed.
 
 ### Restarts
 
