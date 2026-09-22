@@ -411,8 +411,31 @@ let tweakLogTests =
       testCase "whyKept explains its verdict" <| fun _ ->
         let log = EventLog.empty
         let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
-        whyKept RetentionPolicy.defaults log.Events Set.empty (log.Events |> List.find (fun e -> e.Id = applied.Id))
+        whyKept RetentionPolicy.defaults Snapshot.empty log.Events Set.empty (log.Events |> List.find (fun e -> e.Id = applied.Id))
         |> Expect.equal "within the default undo window" KeepReason.WithinUndoWindow
+
+      testCase "whyKept sees dirtiness resolved by a rollback whose target crossed an EARLIER compaction round" <| fun _ ->
+        // Round 1: x is applied then saved (clean) and compacted away
+        // whole, both events' triples land in round1Snapshot.Origins.
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, _ = EventLog.append log 2L (TweakLogEvent.TweakSaved(addr "x", "1.0", "2.0", contentHash "2.0", contentHash baseSource))
+        let policy = { RetentionPolicy.defaults with UndoWindow = 0 }
+        let round1Snapshot, round1Tail = compact Snapshot.empty log.Events policy Set.empty
+        round1Tail |> Expect.isEmpty "round 1 compacted x's whole clean history away"
+        // Round 2: x is re-applied to "9.0" (genuinely dirty), then rolled
+        // back not to id 3 (its own tweak) but to id 2, round 1's
+        // COMPACTED TweakSaved, id 2's (address, before, after) triple
+        // lives only in round1Snapshot.Origins now. Resolving it correctly
+        // restores x to "1.0", Known = Saved again, clean.
+        let round2Log = { log with Events = round1Tail }
+        let round2Log, applied = EventLog.append round2Log 3L (TweakLogEvent.TweakApplied(addr "x", "2.0", "9.0", contentHash "9.0"))
+        let round2Log, _ = EventLog.append round2Log 4L (TweakLogEvent.RolledBack 2)
+        let appliedEvent = round2Log.Events |> List.find (fun e -> e.Id = applied.Id)
+        whyKept policy round1Snapshot round2Log.Events Set.empty appliedEvent
+        |> Expect.equal
+          "the rollback to round 1's compacted TweakSaved cleaned x again; nothing protects id 3 anymore. A whyKept that can't resolve id 2 (no fallback to the snapshot) would wrongly still see x as dirty and answer UnsavedTweak"
+          KeepReason.Compactable
     ]
 
     testList "compaction mode is configurable" [
