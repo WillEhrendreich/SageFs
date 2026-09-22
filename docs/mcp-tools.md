@@ -24,7 +24,24 @@ HTTP endpoints are not MCP tools.
 
 ## Connect
 
-**Streamable HTTP** (recommended: it auto-reconnects and doesn't drop sessions):
+**stdio (recommended)**: your client spawns `sagefs mcp`, so there's no
+ordering to get wrong — no port to be missing, no cached connection
+failure, no race between your client starting and the daemon starting.
+`sagefs mcp` checks whether the daemon is up, starts it if it isn't, waits
+for it, then bridges your client's stdin/stdout to it.
+
+```
+claude mcp add sagefs -- sagefs mcp
+```
+
+For clients that take raw JSON config:
+```json
+{ "mcpServers": { "sagefs": { "command": "sagefs", "args": [ "mcp" ] } } }
+```
+
+**Streamable HTTP** (for a client that only speaks HTTP, or that's already
+started before you get to configure it — the daemon has to be running
+first):
 ```json
 { "mcpServers": { "sagefs": { "type": "streamable-http", "url": "http://localhost:37749/" } } }
 ```
@@ -33,6 +50,20 @@ HTTP endpoints are not MCP tools.
 ```json
 { "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
 ```
+
+### No SageFs tools in your client
+
+If your client shows no SageFs tools, or it shows them but every call
+fails, you almost certainly configured HTTP and started your client before
+the daemon. An HTTP-based MCP client that fails to connect on its first try
+usually caches that failure and never retries, even once the daemon comes
+up seconds later — restarting the client is the only fix, and nothing
+tells you that's what you need to do. Switch to stdio (`claude mcp add
+sagefs -- sagefs mcp`, above) and this stops happening: your client spawns
+the bridge itself, and the bridge makes sure the daemon is there before
+your client ever sees an empty tool list. If you want to stay on HTTP,
+check `sagefs status` — if it says no daemon is running, start one with
+`sagefs` and restart your client.
 
 ## Execution and status
 
@@ -143,25 +174,54 @@ Two connections that pass the same name are still two different members.
 
 ## Per-client config
 
-The `url` is `http://localhost:37749/` for Streamable HTTP, or
-`http://localhost:37749/sse` for SSE.
+Prefer stdio (`command`/`args`, spawns `sagefs mcp`) over HTTP (`url`,
+requires the daemon already running) for the reason above.
+
+**Claude Code**:
+```
+claude mcp add sagefs -- sagefs mcp
+```
+or in `~/.claude/claude_desktop_config.json`:
+```json
+{ "mcpServers": { "sagefs": { "command": "sagefs", "args": [ "mcp" ] } } }
+```
 
 **GitHub Copilot (CLI)**, `~/.copilot/github-copilot/mcp.json`:
 ```json
-{ "servers": { "sagefs": { "type": "http", "url": "http://localhost:37749/" } } }
-```
-
-**Claude Code / Claude Desktop**, `~/.claude/claude_desktop_config.json`:
-```json
-{ "mcpServers": { "sagefs": { "url": "http://localhost:37749/" } } }
+{ "servers": { "sagefs": { "type": "stdio", "command": "sagefs", "args": [ "mcp" ] } } }
 ```
 
 **Cursor / Windsurf**, `.cursor/mcp.json` or the Windsurf MCP settings:
 ```json
-{ "mcpServers": { "sagefs": { "url": "http://localhost:37749/" } } }
+{ "mcpServers": { "sagefs": { "command": "sagefs", "args": [ "mcp" ] } } }
 ```
 
 **OpenCode**, `~/.opencode.json`:
+```json
+{ "mcp": { "sagefs": { "type": "local", "command": [ "sagefs", "mcp" ], "enabled": true } } }
+```
+
+If your client only takes a `url` (HTTP), the daemon has to be running
+first — see the troubleshooting note above. The `url` is
+`http://localhost:37749/` for Streamable HTTP, or `http://localhost:37749/sse`
+for SSE:
+
+**GitHub Copilot (CLI)** over HTTP:
+```json
+{ "servers": { "sagefs": { "type": "http", "url": "http://localhost:37749/" } } }
+```
+
+**Claude Code / Claude Desktop** over HTTP:
+```json
+{ "mcpServers": { "sagefs": { "url": "http://localhost:37749/" } } }
+```
+
+**Cursor / Windsurf** over HTTP:
+```json
+{ "mcpServers": { "sagefs": { "url": "http://localhost:37749/" } } }
+```
+
+**OpenCode** over SSE:
 ```json
 { "mcp": { "sagefs": { "type": "remote", "url": "http://localhost:37749/sse", "enabled": true } } }
 ```

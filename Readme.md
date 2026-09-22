@@ -135,7 +135,7 @@ SageFs runs in the foreground, streaming daemon logs to that terminal. It's not 
 
 **Web dashboard**: Open `http://localhost:37750/dashboard` for session management, evaluation, output, test state, and diagnostics without an editor extension.
 
-**AI agent** (Claude Code, Copilot, Codex, Cursor, anything that speaks MCP): point it at `http://localhost:37749/`, **then install the [SageFs skill](skills/sagefs/SKILL.md)**. Without the skill your agent will iterate with `dotnet build` and never touch the REPL. [docs/agents.md](docs/agents.md) has the one-line install, an `AGENTS.md` snippet for other agents, and what to do when an agent drifts.
+**AI agent** (Claude Code, Copilot, Codex, Cursor, anything that speaks MCP): `claude mcp add sagefs -- sagefs mcp` (or your client's equivalent for a stdio server). It starts the daemon for you if one isn't already running, so there's no ordering to get wrong. **Then install the [SageFs skill](skills/sagefs/SKILL.md)**. Without the skill your agent will iterate with `dotnet build` and never touch the REPL. [docs/agents.md](docs/agents.md) has the one-line install, an `AGENTS.md` snippet for other agents, and what to do when an agent drifts. Clients that only speak HTTP can still point at `http://localhost:37749/` — see [docs/mcp-tools.md](docs/mcp-tools.md#connect).
 
 ### 5. Enable live testing
 
