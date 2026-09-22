@@ -58,6 +58,11 @@ let greeting = "hello"
 /// Reads `greeting` through its getter on every request.
 let greet () : string = greeting
 
+/// Rule 2's other half: an immutable value startup DID capture. The route
+/// below copies it once, when the table is built, so no patch of `banner`
+/// can ever reach what the route serves.
+let banner = "A"
+
 // ── the route table, captured BY VALUE at startup like a Falco route list ───
 
 let handlers : (string * (unit -> string)) list =
@@ -69,4 +74,5 @@ let handlers : (string * (unit -> string)) list =
     "bumpTuned", bumpTuned
     "tuned", readTuned
     "shape", readShape
-    "greet", greet ]
+    "greet", greet
+    "banner", (let atStartup = banner in fun () -> atStartup) ]

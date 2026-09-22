@@ -157,6 +157,59 @@ let private retypedStateRestarts (runtime: HostRuntime) =
     })
   }
 
+/// Rule 2: an immutable value nobody captured at startup gets its new value,
+/// honestly reported as a patch, and nothing else in the file is disturbed.
+///
+/// RED, and parked on purpose. Patching `greeting`'s getter is the easy part.
+/// The hard part is knowing nobody copied the old value at startup: a function
+/// that ran once while the app started (`App.run` doing
+/// `let g = State.greeting`) looks exactly like one that runs per request, and
+/// the source can't tell them apart. That's phase 1's capture tracking. Without
+/// it, "Patched" for a value could be a lie, and that's the one thing this
+/// work must never do. So this stays red until phase 1 lands.
+let private uncapturedValueIsPatched (runtime: HostRuntime) =
+  testTask (sprintf "[%s] rule 2: a redefined immutable value nobody captured serves its new value, reported as a patch" (HostRuntime.moniker runtime)) {
+    do! withApp runtime (fun app -> task {
+      let! _ = bumpTimes app "bump" 2
+      let! verdict = save app "let greeting = \"hello\"" "let greeting = \"howdy\""
+      let! served = settle app "greet" "howdy"
+      served
+      |> Expect.equal (sprintf "the running app should serve the new value.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "howdy"
+      str (json verdict) "outcome" |> Expect.equal "and the wire has to say it was patched" "Patched"
+      let! count = get app "count"
+      count |> Expect.equal "and redefining a value must not reset the file's live state" "2"
+    })
+  }
+
+/// Rule 2's guard: a value startup DID capture is never reported as patched.
+/// Green today (it's a restart); it's here so rule 2's implementation can't
+/// start claiming a patch that the running app never sees.
+let private capturedValueIsNeverPatched (runtime: HostRuntime) =
+  testTask (sprintf "[%s] rule 2: a redefined value startup captured is never reported as patched" (HostRuntime.moniker runtime)) {
+    do! withApp runtime (fun app -> task {
+      let! verdict = save app "let banner = \"A\"" "let banner = \"B\""
+      let! served = get app "banner"
+      served |> Expect.equal "the route copied banner at startup, so it still serves the old value" "A"
+      let outcome = str (json verdict) "outcome"
+      outcome
+      |> Expect.notEqual (sprintf "reporting a patch here would be a lie.\nVerdict: %s" verdict) "Patched"
+      str (json verdict) "type"
+      |> Expect.notEqual "and the page must not be told to refresh into the same bytes" "reload"
+    })
+  }
+
+[<Tests>]
+let parkedUntilCaptureTracking =
+  // Not in --integration-host: this is a capability that doesn't exist yet,
+  // so it can't gate the pipeline. It stays named, runnable (--all) and
+  // un-weakened, and it goes green by itself when phase 1's capture tracking
+  // lands and rule 2 is built on it.
+  testList "[Integration] hot reload rule 2 (waits on phase 1 capture tracking)" [
+    for runtime in HostRuntime.all do
+      uncapturedValueIsPatched runtime
+  ]
+  |> Integration.register (Integration.Dedicated "--all (on demand: rule 2 needs phase 1's capture tracking, see hot-reload-state-spec.md)")
+
 [<Tests>]
 let hotReloadStateOutcomeTests =
   Integration.hostList "hot reload keeps live state across a save" [
@@ -166,4 +219,5 @@ let hotReloadStateOutcomeTests =
       editedInitializerIsKept runtime
       resetRunsTheNewInitializer runtime
       retypedStateRestarts runtime
+      capturedValueIsNeverPatched runtime
   ]
