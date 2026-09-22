@@ -855,7 +855,7 @@ let buildDashboardSnapshotWithSessions
   (lastThemeName: string)
   (cachedWorkerData: DashboardWorkerCache option)
   (sessions: WorkerProtocol.SessionInfo list)
-  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
+  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let sessionId = currentSessionId
     let sid = WorkerProtocol.SessionId.value sessionId
@@ -924,7 +924,7 @@ let buildDashboardSnapshotWithSessions
       match sid.Length > 0 with
       | true ->
         match hrState with
-        | Some hr -> renderHotReloadPanelWithKept sid hr.files hr.watchedCount hr.kept
+        | Some hr -> renderHotReloadPanelFull sid hr.files hr.watchedCount hr.kept hr.reflection
         | None -> renderHotReloadEmpty
       | false -> renderHotReloadEmpty
     let scPanel =
@@ -1051,7 +1051,7 @@ let buildDashboardSnapshot
   (lastWorkingDir: string)
   (lastThemeName: string)
   (cachedWorkerData: DashboardWorkerCache option)
-  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
+  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let! sessions = q.GetAllSessions ()
     return! buildDashboardSnapshotWithSessions q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions
@@ -1984,7 +1984,7 @@ let private settingsPaths () : SageFs.ConfigPaths =
     Repo = SageFs.RepoRootAt (System.Environment.CurrentDirectory) }
 
 let private settingsRows (paths: SageFs.ConfigPaths) : SettingsPanel.SettingRow list =
-  SageFs.SettingsCatalog.pilots
+  (SageFs.SettingsCatalog.pilots @ [ SageFs.SessionAgent.reflectionReadModeSetting ])
   |> List.map (fun d -> { Descriptor = d; Resolved = SageFs.SettingsCatalog.resolve paths d })
 
 /// The persisted default working directory (session.defaultWorkingDirectory),
@@ -1997,7 +1997,7 @@ let private resolveDefaultWorkingDir () : string =
   | Error _ -> ""
 
 let private descriptorForSignal (sigName: string) : SageFs.SettingDescriptor option =
-  SageFs.SettingsCatalog.pilots |> List.tryFind (fun d -> SettingsPanel.signalName d.Key = sigName)
+  (SageFs.SettingsCatalog.pilots @ [ SageFs.SessionAgent.reflectionReadModeSetting ]) |> List.tryFind (fun d -> SettingsPanel.signalName d.Key = sigName)
 
 /// Morph the whole panel back with the given notice — the one authoritative
 /// re-render after an edit (Tao of Datastar).

@@ -143,6 +143,9 @@ module WorkerHttpTransport =
     /// state spec). Writes the app's live state, so it's a POST like every
     /// other mutating route.
     let hotReloadResetState = WorkerRoute.Post "/hotreload/reset-state"
+    /// Switch the running app's reflection read mode (rule 2). Changes what the
+    /// app's process watches, so it's a POST like every other mutating route.
+    let hotReloadReflectionMode = WorkerRoute.Post "/hotreload/reflection-mode"
     let hotReloadWatchAll = WorkerRoute.Post "/hotreload/watch-all"
     let hotReloadUnwatchAll = WorkerRoute.Post "/hotreload/unwatch-all"
     let hotReloadWatchProject = WorkerRoute.Post "/hotreload/watch-project"
@@ -168,7 +171,7 @@ module WorkerHttpTransport =
     Routes.typecheckSymbols; Routes.completions; Routes.cancel; Routes.loadScript
     Routes.reset; Routes.hardReset; Routes.runTests; Routes.runTestsStream
     Routes.testDiscovery; Routes.evalLiveTestFile; Routes.instrumentationMaps; Routes.shutdown
-    Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle; Routes.hotReloadResetState
+    Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle; Routes.hotReloadResetState; Routes.hotReloadReflectionMode
     Routes.hotReloadWatchAll; Routes.hotReloadUnwatchAll
     Routes.hotReloadWatchProject; Routes.hotReloadUnwatchProject
     Routes.hotReloadWatchDirectory; Routes.hotReloadUnwatchDirectory
@@ -611,8 +614,34 @@ module WorkerHttpTransport =
         let kept =
           keptState.Pending ()
           |> List.map (fun k -> {| binding = k.Binding; keptValue = k.KeptValue; newInitializer = k.NewInitializer |})
+        // `reflectionReads` is rule 2's mode and the hot-loop questions, so the
+        // dashboard shows them from the same fetch. Without an agent it says why.
+        let reflectionReads : obj =
+          match keptState.ReflectionReads () with
+          | Result.Ok report ->
+            use doc = JsonDocument.Parse(Features.KeptState.ReflectionReadsJson.render report)
+            box (doc.RootElement.Clone())
+          | Result.Error why -> box {| unavailable = Features.KeptState.ReflectionReadsError.describe why |}
         ctx.Response.ContentType <- "application/json"
-        do! ctx.Response.WriteAsync(Serialization.serialize {| files = files; watchedCount = HotReloadState.watchedCount state; kept = kept |})
+        do! ctx.Response.WriteAsync(Serialization.serialize {| files = files; watchedCount = HotReloadState.watchedCount state; kept = kept; reflectionReads = reflectionReads |})
+      })) |> ignore
+
+      map Routes.hotReloadReflectionMode (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let requested = (jsonProp doc "mode").GetString() |> Option.ofObj |> Option.defaultValue ""
+        ctx.Response.ContentType <- "application/json"
+        match SageFs.Middleware.ValueReads.ReflectionReadMode.parse requested with
+        | Result.Error unknown ->
+          ctx.Response.StatusCode <- 400
+          do! ctx.Response.WriteAsync(Serialization.serialize {| message = SageFs.Middleware.ValueReads.ReflectionReadMode.describeUnknown unknown |})
+        | Result.Ok mode ->
+          match keptState.SetReflectionMode mode with
+          | Result.Error why ->
+            ctx.Response.StatusCode <- 503
+            do! ctx.Response.WriteAsync(Serialization.serialize {| message = Features.KeptState.ReflectionReadsError.describe why |})
+          | Result.Ok report ->
+            do! ctx.Response.WriteAsync(Features.KeptState.ReflectionReadsJson.render report)
       })) |> ignore
 
       map Routes.hotReloadResetState (Func<HttpContext, Task>(fun ctx -> task {

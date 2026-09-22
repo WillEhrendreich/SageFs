@@ -131,6 +131,7 @@ type FsiHostSession
           | Result.Ok(AgentLoadedAssembliesResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentCoverageResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentValueReadsResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentReflectionReadsResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentRefused(id, _) as answer) -> complete id answer
     with ex ->
       onLog (sprintf "[fsihost] read loop ended: %s" ex.Message)
@@ -291,6 +292,26 @@ type FsiHostSession
       | Got(AgentValueReadsResult(_, evidence)) -> return Answered evidence
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent value reads" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Where rule 2's reflection reads stand in the host.
+  member _.AgentReflectionReads() : Async<HostCall<SageFs.Middleware.ValueReads.ReflectionReadsReport>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentReflectionReads id) with
+      | Got(AgentReflectionReadsResult(_, report)) -> return Answered report
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent reflection reads" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Switch the reflection read mode of the app in the host.
+  member _.AgentSetReflectionMode(mode: SageFs.Middleware.ValueReads.ReflectionReadMode) : Async<HostCall<SageFs.Middleware.ValueReads.ReflectionReadsReport>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentSetReflectionMode(id, mode)) with
+      | Got(AgentReflectionReadsResult(_, report)) -> return Answered report
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent set reflection mode" other)
       | Gone reason -> return HostGone reason
     }
 

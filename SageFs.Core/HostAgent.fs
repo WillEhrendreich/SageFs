@@ -223,6 +223,14 @@ type private ValueReadTracker =
   | Tracking of Tracker
   | NotTracking
 
+/// What a session that doesn't watch value reads says about reflection reads.
+let private notTrackingReport : SageFs.Middleware.ValueReads.ReflectionReadsReport =
+  { Mode = SageFs.Middleware.ValueReads.ReflectionReadMode.standard
+    Watch = SageFs.Middleware.ValueReads.ReflectionWatchStatus.NotWatching "this session isn't watching value reads, because it isn't a hot reload session"
+    Notices = []
+    Walks = 0L
+    SiteHits = 0L }
+
 /// The agent of one process. It owns that process's reload registry (single owner: `AfterEval` is called from the one
 /// eval thread, and the lock makes any other caller safe), the runner for tests defined interactively, and the runner
 /// for tests found in the project assemblies.
@@ -235,8 +243,8 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
   let valueReads =
     match init.ValueReads with
     | ValueReadWatch.IgnoreValueReads -> ValueReadTracker.NotTracking
-    | ValueReadWatch.WatchValueReads ->
-      let tracker = Tracker()
+    | ValueReadWatch.WatchValueReads reflection ->
+      let tracker = Tracker(reflection, ReflectionClock.system)
       tracker.Track state.ProjectAssemblies
       ValueReadTracker.Tracking tracker
   let started : AgentStarted =
@@ -288,6 +296,20 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
       | ValueReadTracker.NotTracking ->
         values
         |> List.map (fun value -> SageFs.Middleware.ValueReads.ValueEvidence.Untracked(value, "this session isn't watching value reads, because it isn't a hot reload session")))
+
+  /// Where the session's reflection reads stand: the mode, whether the watch
+  /// is on, and every hot loop it has asked about. Runs beside evals: the
+  /// tracker is thread-safe, and this never waits on the eval thread.
+  member _.ReflectionReads() : SageFs.Middleware.ValueReads.ReflectionReadsReport =
+    match valueReads with
+    | ValueReadTracker.Tracking tracker -> tracker.ReflectionReads
+    | ValueReadTracker.NotTracking -> notTrackingReport
+
+  /// Switch the reflection read mode of the running app. No restart.
+  member _.SetReflectionMode(mode: SageFs.Middleware.ValueReads.ReflectionReadMode) : SageFs.Middleware.ValueReads.ReflectionReadsReport =
+    match valueReads with
+    | ValueReadTracker.Tracking tracker -> tracker.SetMode mode
+    | ValueReadTracker.NotTracking -> notTrackingReport
 
   /// Take the coverage the instrumented assemblies recorded, and reset it for the next run. Coverage lives in the process
   /// that ran the tests, so only its agent can read it.

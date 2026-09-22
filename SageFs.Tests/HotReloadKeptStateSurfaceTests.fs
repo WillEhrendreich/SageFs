@@ -26,14 +26,15 @@ let private decoded (node: XmlNode) = Net.WebUtility.HtmlDecode(renderNode node)
 /// records what it was asked to reset.
 let private startWorker (resets: Collections.Concurrent.ConcurrentBag<string>) =
   let access : Features.KeptState.Access =
-    { Pending = fun () -> [ kept ]
-      Reset =
-        fun binding -> async {
-          resets.Add binding
-          return
-            match binding = kept.Binding with
-            | true -> Features.KeptState.ResetOutcome.Reset(binding, "25")
-            | false -> Features.KeptState.ResetOutcome.NothingPending binding } }
+    { Features.KeptState.Access.none with
+        Pending = fun () -> [ kept ]
+        Reset =
+          fun binding -> async {
+            resets.Add binding
+            return
+              match binding = kept.Binding with
+              | true -> Features.KeptState.ResetOutcome.Reset(binding, "25")
+              | false -> Features.KeptState.ResetOutcome.NothingPending binding } }
   WorkerHttpTransport.startServer
     (fun _ -> async { return WorkerResponse.WorkerShuttingDown })
     (ref HotReloadState.empty)

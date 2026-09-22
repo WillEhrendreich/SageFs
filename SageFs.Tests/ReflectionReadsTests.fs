@@ -80,9 +80,9 @@ let modeTests =
     testCase "WHY — an unknown mode name is refused, and the refusal lists the names that work" <| fun _ ->
       match ReflectionReadMode.parse "fastest" with
       | Result.Ok m -> failtestf "'fastest' isn't a mode, got %A" m
-      | Result.Error why ->
+      | Result.Error unknown ->
         for mode in ReflectionReadMode.all do
-          why |> Expect.stringContains "names every real mode" (ReflectionReadMode.name mode)
+          ReflectionReadMode.describeUnknown unknown |> Expect.stringContains "names every real mode" (ReflectionReadMode.name mode)
 
     testCase "WHY — the default is ProbeCallers: the spike measured its steady state at about 38 ns a read, against 9,000 for a cached walk" <| fun _ ->
       ReflectionReadMode.standard |> Expect.equal "probe callers by default" ReflectionReadMode.ProbeCallers

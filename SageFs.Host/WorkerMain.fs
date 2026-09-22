@@ -729,7 +729,19 @@ let run (sessionId: string) (port: int) = async {
               return Features.KeptState.ResetOutcome.Reset(binding, value) }
   let keptStateAccess : Features.KeptState.Access =
     { Pending = fun () -> keptPending.Values |> Seq.map _.Value |> Seq.sortBy _.Binding |> Seq.toList
-      Reset = resetKept }
+      Reset = resetKept
+      ReflectionReads =
+        fun () ->
+          match result.Agent.ReflectionReads () with
+          | HostAgent.AgentAnswered report -> Result.Ok report
+          | HostAgent.AgentUnavailable reason -> Result.Error(Features.KeptState.ReflectionReadsError.NoAgent reason)
+      SetReflectionMode =
+        fun mode ->
+          match result.Agent.SetReflectionMode mode with
+          | HostAgent.AgentAnswered report ->
+            Log.info "Hot reload: reflection reads are %s now" (Middleware.ValueReads.ReflectionReadMode.name mode)
+            Result.Ok report
+          | HostAgent.AgentUnavailable reason -> Result.Error(Features.KeptState.ReflectionReadsError.NoAgent reason) }
 
   // Start file watcher unless no-watch was set
   let fileWatcher =

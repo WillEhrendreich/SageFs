@@ -261,6 +261,19 @@ let private run (argsFile: string) : int =
       | Result.Ok(AgentLoadedAssemblies id) -> requests.Add(RunAgentLoadedAssemblies id)
       | Result.Ok(AgentTakeCoverage id) -> requests.Add(RunAgentTakeCoverage id)
       | Result.Ok(AgentValueReads(id, values)) -> requests.Add(RunAgentValueReads(id, values))
+      | Result.Ok(AgentReflectionReads id) ->
+        // Beside the session thread: the tracker is thread-safe, and a running app must not hide its own mode.
+        match Volatile.Read(&agentState.contents) with
+        | AgentNotStarted -> refuse id "the agent was not started: send AgentStart first"
+        | AgentRunning agent ->
+          try send (AgentReflectionReadsResult(id, agent.ReflectionReads()))
+          with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+      | Result.Ok(AgentSetReflectionMode(id, mode)) ->
+        match Volatile.Read(&agentState.contents) with
+        | AgentNotStarted -> refuse id "the agent was not started: send AgentStart first"
+        | AgentRunning agent ->
+          try send (AgentReflectionReadsResult(id, agent.SetReflectionMode mode))
+          with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
       | Result.Ok(AgentRunTest(id, test)) ->
         // Beside the session thread, not on it: a long test must never freeze evals, checks or completions.
         match Volatile.Read(&agentState.contents) with

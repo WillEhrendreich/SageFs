@@ -56,6 +56,10 @@ type IFsiSession =
   abstract DiscoverLoaded: unit -> AgentReply<Discovery>
   /// Where each named module value's reads went, and which readers ran (hot reload rule 2).
   abstract ValueReads: values: string list -> AgentReply<SageFs.Middleware.ValueReads.ValueEvidence list>
+  /// Where rule 2's reflection reads stand in the session's process.
+  abstract ReflectionReads: unit -> AgentReply<SageFs.Middleware.ValueReads.ReflectionReadsReport>
+  /// Switch the reflection read mode of the running app.
+  abstract SetReflectionMode: mode: SageFs.Middleware.ValueReads.ReflectionReadMode -> AgentReply<SageFs.Middleware.ValueReads.ReflectionReadsReport>
   /// Run one discovered test where it lives.
   abstract RunTest: test: LiveTesting.TestCase -> Async<AgentReply<LiveTesting.TestResult>>
 
@@ -145,6 +149,10 @@ type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
     member _.DiscoverLoaded() = AgentAnswered(agent.DiscoverLoaded())
 
     member _.ValueReads(values) = AgentAnswered(agent.ValueReads values)
+
+    member _.ReflectionReads() = AgentAnswered(agent.ReflectionReads())
+
+    member _.SetReflectionMode(mode) = AgentAnswered(agent.SetReflectionMode mode)
 
     member _.RunTest(test) =
       async {

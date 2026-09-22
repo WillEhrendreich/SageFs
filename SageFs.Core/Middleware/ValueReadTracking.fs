@@ -43,10 +43,11 @@ open HarmonyLib
 open SageFs.Utils
 open SageFs.Middleware.ValueReads
 
-/// Whether a session watches value reads. Only hot reload needs it.
+/// Whether a session watches value reads, and how it watches reads through
+/// reflection. Only hot reload needs it.
 [<RequireQualifiedAccess>]
 type ValueReadWatch =
-  | WatchValueReads
+  | WatchValueReads of reflection: ReflectionReadSettings
   | IgnoreValueReads
 
 // ── naming ───────────────────────────────────────────────────────────────────
@@ -976,6 +977,12 @@ type private GetterWatchState =
   | WatchOn
   | WatchOff
 
+/// Whether a getter took its watch.
+[<RequireQualifiedAccess>]
+type private GetterWatchOutcome =
+  | Watched
+  | CantWatch of why: string
+
 /// Whether a walk that finds a reflective caller rewires it (probe-callers).
 [<RequireQualifiedAccess>]
 type private Rewire =
@@ -1239,13 +1246,13 @@ type Tracker(settings: ReflectionReadSettings, clock: unit -> int64) =
         member _.Reflected(entry, site) = onReflected w entry site }
 
   /// Put the getter watch on `getter`, and say so on its value.
-  let watchGetter (getter: MethodBase) (value: string) : Result<unit, string> =
+  let watchGetter (getter: MethodBase) (value: string) : GetterWatchOutcome =
     match instrument getter (GetterWatch(getterWatcher value)) with
     | Ok() ->
       lock gate (fun () -> watched.Add getter |> ignore)
       (watchOf value).Getter <- GetterWatchState.WatchOn
-      Ok()
-    | Error why -> Error why
+      GetterWatchOutcome.Watched
+    | Error why -> GetterWatchOutcome.CantWatch why
 
   /// Take every getter watch off.
   let unwatchGetters () =
@@ -1456,8 +1463,8 @@ type Tracker(settings: ReflectionReadSettings, clock: unit -> int64) =
     let all = lock gate (fun () -> List.ofSeq getters)
     for KeyValue(getter, value) in all do
       match watchGetter getter value with
-      | Ok() -> ()
-      | Error why ->
+      | GetterWatchOutcome.Watched -> ()
+      | GetterWatchOutcome.CantWatch why ->
         // Without the watch, a read through reflection during startup would go
         // unseen, so the value can't be vouched for.
         file (LedgerEvent.ValueUntracked(value, sprintf "SageFs couldn't watch its getter (%s)" why))
@@ -1550,8 +1557,8 @@ type Tracker(settings: ReflectionReadSettings, clock: unit -> int64) =
             |> List.ofSeq)
         for (getter, value) in unwatched do
           match watchGetter getter value with
-          | Ok() -> ()
-          | Error why -> Log.info "[ValueReads] %s keeps being watched at the reflection entry points instead of its getter: %s" value why
+          | GetterWatchOutcome.Watched -> ()
+          | GetterWatchOutcome.CantWatch why -> Log.info "[ValueReads] %s keeps being watched at the reflection entry points instead of its getter: %s" value why
     this.ReflectionReads
 
   /// Where the session's reflection reads stand: the mode, whether the entry
@@ -1592,5 +1599,5 @@ type Tracker(settings: ReflectionReadSettings, clock: unit -> int64) =
 /// checks it (ReflectionCanary), and a lapse fails closed.
 let processEnvironment (watch: ValueReadWatch) : (string * string) list =
   match watch with
-  | ValueReadWatch.WatchValueReads -> [ "DOTNET_TieredCompilation", "0" ]
+  | ValueReadWatch.WatchValueReads _ -> [ "DOTNET_TieredCompilation", "0" ]
   | ValueReadWatch.IgnoreValueReads -> []

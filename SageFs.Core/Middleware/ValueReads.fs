@@ -533,11 +533,17 @@ module ReflectionReadMode =
     | ReflectionReadMode.MarkOnReflect -> "mark-on-reflect"
     | ReflectionReadMode.ProbeCallers -> "probe-callers"
 
-  let parse (text: string) : Result<ReflectionReadMode, string> =
+  /// A name that isn't a mode, and the names that are.
+  type Unknown = { Given: string; Known: string list }
+
+  let describeUnknown (unknown: Unknown) =
+    sprintf "'%s' isn't a reflection read mode. Use one of: %s" unknown.Given (String.concat ", " unknown.Known)
+
+  let parse (text: string) : Result<ReflectionReadMode, Unknown> =
     let wanted = text.Trim().ToLowerInvariant()
     match all |> List.tryFind (fun mode -> name mode = wanted) with
     | Some mode -> Result.Ok mode
-    | None -> Result.Error(sprintf "'%s' isn't a reflection read mode. Use one of: %s" text (all |> List.map name |> String.concat ", "))
+    | None -> Result.Error { Given = text; Known = all |> List.map name }
 
   /// What the mode costs, in one line.
   let cost (mode: ReflectionReadMode) : string =

@@ -13,6 +13,7 @@ open Falco.Markup
 open Microsoft.Extensions.Logging.Abstractions
 open SageFs
 open SageFs.Middleware.ValueReads
+open SageFs.McpTools
 open SageFs.Server
 open SageFs.Server.McpTools
 open SageFs.WorkerProtocol
@@ -139,8 +140,8 @@ let endpointAndToolTests =
     testTask "WHY — GET /hotreload carries the reflection report, so the dashboard shows the question without a second call" {
       let switched = Collections.Concurrent.ConcurrentBag()
       use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker asked switched
-      let! json = http.GetStringAsync(server.BaseUrl + "/hotreload")
-      use doc = Text.Json.JsonDocument.Parse json
+      let! (json: string) = http.GetStringAsync(server.BaseUrl + "/hotreload")
+      let doc = Text.Json.JsonDocument.Parse(json)
       match doc.RootElement.TryGetProperty "reflectionReads" with
       | true, el -> Features.KeptState.ReflectionReadsJson.parse el |> Expect.equal "the report" (Result.Ok asked)
       | false, _ -> failtestf "no reflectionReads in %s" json
@@ -149,14 +150,14 @@ let endpointAndToolTests =
     testTask "WHY — POST /hotreload/reflection-mode switches the running app's mode, and a name that isn't a mode is refused with the ones that are" {
       let switched = Collections.Concurrent.ConcurrentBag()
       use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker asked switched
-      use body = new Net.Http.StringContent("""{"mode":"probe-callers"}""", Text.Encoding.UTF8, "application/json")
-      let! ok = http.PostAsync(server.BaseUrl + "/hotreload/reflection-mode", body)
-      int ok.StatusCode |> Expect.equal "switched" 200
+      let body = new Net.Http.StringContent("""{"mode":"probe-callers"}""", Text.Encoding.UTF8, "application/json")
+      let! (accepted: Net.Http.HttpResponseMessage) = http.PostAsync(server.BaseUrl + "/hotreload/reflection-mode", body)
+      int accepted.StatusCode |> Expect.equal "switched" 200
       switched |> Seq.toList |> Expect.equal "the worker was asked for exactly that mode" [ ReflectionReadMode.ProbeCallers ]
-      use bad = new Net.Http.StringContent("""{"mode":"fastest"}""", Text.Encoding.UTF8, "application/json")
-      let! refused = http.PostAsync(server.BaseUrl + "/hotreload/reflection-mode", bad)
-      int refused.StatusCode |> Expect.equal "refused" 400
-      let! why = refused.Content.ReadAsStringAsync()
+      let bad = new Net.Http.StringContent("""{"mode":"fastest"}""", Text.Encoding.UTF8, "application/json")
+      let! (rejected: Net.Http.HttpResponseMessage) = http.PostAsync(server.BaseUrl + "/hotreload/reflection-mode", bad)
+      int rejected.StatusCode |> Expect.equal "refused" 400
+      let! (why: string) = rejected.Content.ReadAsStringAsync()
       why |> Expect.stringContains "names the real modes" "mark-on-reflect"
     }
 

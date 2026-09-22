@@ -1085,6 +1085,79 @@ to reset. The dashboard's Hot Reload panel shows the same list with a Reset butt
         })
         |> withEcho ctx "reset_hot_reload_state"
 
+    [<McpServerTool>]
+    [<Description("""List or switch how hot reload watches module values read through REFLECTION.
+
+A redefined `let` value is patched only when nothing in the running app kept a
+copy of the old one (rule 2). A value read through reflection (`PropertyInfo.GetValue`,
+`MethodBase.Invoke`, `FieldInfo.GetValue`, a delegate made from its getter) has
+no read in anyone's IL, so SageFs watches the reflection entry points. How it
+watches is the mode:
+
+- probe-callers (default): exact about who read it, nearly free after each
+  caller's first read (about 40 ns a read).
+- mark-on-reflect: fastest, but any reflective read means an edit to that value
+  restarts the app.
+- exact-every-read: exact, but every read of every tracked value walks the
+  stack (8 to 16 us a read, plain reads included).
+
+When reflective reads of one value get hot (a loop), SageFs asks once which mode
+you want. This tool shows those questions.
+
+WORKFLOW:
+1. Call with no `mode` to see the current mode, whether the watch is on, and
+   every question the app has asked, with the choices.
+2. Call with `mode` (exact-every-read, mark-on-reflect or probe-callers) to
+   switch the running app. No restart. It answers any open question.
+
+The mode new sessions start in is the `hotreload.reflectionReadMode` setting.""")>]
+    member _.set_reflection_read_mode(
+        [<Description("exact-every-read, mark-on-reflect or probe-callers. Leave empty to see the current mode and any questions.")>]
+        [<Optional; DefaultParameterValue("")>]
+        mode: string,
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        logger.LogDebug("MCP-TOOL: set_reflection_read_mode called: mode={Mode}", mode)
+        withSessionWd ctx "mcp" wd (fun sidStr -> task {
+            match SageFs.WorkerProtocol.SessionId.validate sidStr with
+            | Error _ -> return sprintf "Error: '%s' isn't a session id I know." sidStr
+            | Ok sid ->
+            let! infoOpt = ctx.SessionOps.GetSessionInfo sid
+            match infoOpt |> Option.bind (fun i -> SageFs.WorkerProtocol.SessionLifecycleStatus.workerPort i.Status) with
+            | None -> return "Error: the session has no running worker, so there's no app to ask. Check get_fsi_status."
+            | Some port ->
+            let workerUrl = sprintf "http://127.0.0.1:%d" port
+            let describe (report: SageFs.Middleware.ValueReads.ReflectionReadsReport) = SageFs.Features.KeptState.ReflectionReadsText.describe report
+            match System.String.IsNullOrWhiteSpace mode with
+            | true ->
+                let! json = keptStateClient.GetStringAsync(workerUrl + "/hotreload")
+                use doc = System.Text.Json.JsonDocument.Parse json
+                match doc.RootElement.TryGetProperty "reflectionReads" with
+                | true, el ->
+                    match SageFs.Features.KeptState.ReflectionReadsJson.parse el with
+                    | Ok report -> return describe report
+                    | Error why ->
+                        match el.TryGetProperty "unavailable" with
+                        | true, reason -> return sprintf "Error: %s" (reason.GetString())
+                        | false, _ -> return sprintf "Error: %s" (SageFs.Features.KeptState.ReflectionReadsError.describe why)
+                | false, _ -> return "Error: this worker doesn't report reflection reads. It's older than the build that watches them."
+            | false ->
+                use content = new System.Net.Http.StringContent(System.Text.Json.JsonSerializer.Serialize({| mode = mode |}), System.Text.Encoding.UTF8, "application/json")
+                let! resp = keptStateClient.PostAsync(workerUrl + "/hotreload/reflection-mode", content)
+                let! body = resp.Content.ReadAsStringAsync()
+                use doc = System.Text.Json.JsonDocument.Parse body
+                match resp.IsSuccessStatusCode with
+                | true ->
+                    match SageFs.Features.KeptState.ReflectionReadsJson.parse doc.RootElement with
+                    | Ok report -> return sprintf "Switched. %s" (describe report)
+                    | Error why -> return sprintf "Switched, but %s" (SageFs.Features.KeptState.ReflectionReadsError.describe why)
+                | false -> return "Error: " + doc.RootElement.GetProperty("message").GetString()
+        })
+        |> withEcho ctx "set_reflection_read_mode"
+
     [<Description("""Get code completions at a cursor position. Returns available completions (types, functions, members) for the code at the given position. Useful for discovering APIs before writing code.
 
 CURSOR POSITION:

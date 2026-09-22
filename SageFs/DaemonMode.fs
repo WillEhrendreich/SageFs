@@ -756,6 +756,7 @@ let createHotReloadProxyEndpoints
     proxyGetRoute "/hotreload"
     proxyPostRoute "/hotreload/toggle"
     proxyPostRoute "/hotreload/reset-state"
+    proxyPostRoute "/hotreload/reflection-mode"
     proxyPostRoute "/hotreload/watch-all"
     proxyPostRoute "/hotreload/unwatch-all"
     proxyPostRoute "/hotreload/watch-project"
@@ -2932,7 +2933,20 @@ let run
                : Features.ReloadOutcome.KeptValue))
             |> Seq.toList
           | _ -> []
-        {| files = files; watchedCount = watchedCount; kept = kept |})
+        // Rule 2's reflection reads: the mode and the hot-loop questions. A
+        // worker that doesn't send them gets no mode control, not a guessed one.
+        let reflection =
+          match root.TryGetProperty "reflectionReads" with
+          | true, el ->
+            match Features.KeptState.ReflectionReadsJson.parse el with
+            | Ok report -> Features.KeptState.ReflectionReadsView.Reported report
+            | Error why ->
+              let why = Features.KeptState.ReflectionReadsError.describe why
+              match el.TryGetProperty "unavailable" with
+              | true, reason -> Features.KeptState.ReflectionReadsView.NotReported(reason.GetString() |> Option.ofObj |> Option.defaultValue why)
+              | false, _ -> Features.KeptState.ReflectionReadsView.NotReported why
+          | false, _ -> Features.KeptState.ReflectionReadsView.NotReported "this worker doesn't report reflection reads"
+        {| files = files; watchedCount = watchedCount; kept = kept; reflection = reflection |})
     GetWarmupContext = fun sessionId ->
       fetchWorkerEndpoint sessionId "/warmup-context" dashboardFetchTimeoutSec
         (WorkerProtocol.Serialization.deserialize<WarmupContext>)

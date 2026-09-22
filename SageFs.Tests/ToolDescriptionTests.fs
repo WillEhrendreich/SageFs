@@ -224,7 +224,9 @@ let descriptionPropertyTests =
       // (hot-reload-state-spec.md rule 3).
       // + manage_local_data, the one way to see and clear what SageFs keeps
       // under its data dir (friction.db, cohort.ledger.db).
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 52
+      // + set_reflection_read_mode, the way an agent sees and answers rule 2's
+      // reflection read question.
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 53
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

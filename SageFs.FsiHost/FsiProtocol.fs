@@ -124,6 +124,10 @@ type Request =
   | AgentRunTest of id: int64 * test: LiveTesting.TestCase
   /// Where each named module value's reads went, and which readers ran (hot reload rule 2).
   | AgentValueReads of id: int64 * values: string list
+  /// Where rule 2's reflection reads stand. Answered beside the session thread.
+  | AgentReflectionReads of id: int64
+  /// Switch the reflection read mode of the running app. Answered beside the session thread.
+  | AgentSetReflectionMode of id: int64 * mode: SageFs.Middleware.ValueReads.ReflectionReadMode
   | Interrupt
   | Shutdown
 
@@ -145,6 +149,7 @@ type Response =
   | AgentLoadedAssembliesResult of id: int64 * names: string list
   | AgentCoverageResult of id: int64 * coverage: HostAgent.CoverageReading
   | AgentValueReadsResult of id: int64 * evidence: SageFs.Middleware.ValueReads.ValueEvidence list
+  | AgentReflectionReadsResult of id: int64 * report: SageFs.Middleware.ValueReads.ReflectionReadsReport
   /// An agent request the host cannot serve (it was not started, or the request failed): the reason, never a guess.
   | AgentRefused of id: int64 * reason: string
   | Output of stream: OutputStream * text: string

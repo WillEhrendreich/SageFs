@@ -157,6 +157,16 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
       | Answered evidence -> HostAgent.AgentAnswered evidence
       | HostGone reason -> HostAgent.AgentUnavailable reason
 
+    member _.ReflectionReads() =
+      match wait (host.AgentReflectionReads()) with
+      | Answered report -> HostAgent.AgentAnswered report
+      | HostGone reason -> HostAgent.AgentUnavailable reason
+
+    member _.SetReflectionMode(mode) =
+      match wait (host.AgentSetReflectionMode mode) with
+      | Answered report -> HostAgent.AgentAnswered report
+      | HostGone reason -> HostAgent.AgentUnavailable reason
+
     member _.DiscoverLoaded() =
       match wait (host.AgentDiscoverLoaded()) with
       | Answered discovery -> HostAgent.AgentAnswered discovery

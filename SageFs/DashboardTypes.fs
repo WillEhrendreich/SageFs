@@ -994,7 +994,7 @@ type DashboardQueries = {
   GetElmRegionsForSession: WorkerProtocol.SessionId -> RenderRegion list option
   GetPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>
   GetAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>
-  GetHotReloadState: WorkerProtocol.SessionId -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list |} option>
+  GetHotReloadState: WorkerProtocol.SessionId -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option>
   GetWarmupContext: WorkerProtocol.SessionId -> Threading.Tasks.Task<WarmupContext option>
   GetWarmupProgress: WorkerProtocol.SessionId -> string
   GetSessionTestSummary: WorkerProtocol.SessionId -> Features.LiveTesting.TestSummary option
@@ -1055,7 +1055,7 @@ type DashboardQueries = {
 type DashboardWorkerCache = {
   SessionId: WorkerProtocol.SessionId
   EvalStats: SageFs.Affordances.EvalStats
-  HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list |} option
+  HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list; reflection: SageFs.Features.KeptState.ReflectionReadsView |} option
   WarmupContext: WarmupContext option
   /// Server-built friction review panel — reusing it avoids the synchronous
   /// SQLite read (GetFrictionStore + reportDirect + ListSentReports) on every

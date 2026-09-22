@@ -2427,11 +2427,19 @@ let resolveThemePush
 /// spec). Each one gets a line saying what was kept and what's waiting, and a
 /// Reset button that re-runs only that initializer (`$binding` is the field
 /// the worker's reset-state endpoint reads).
-let renderHotReloadPanelWithKept
+///
+/// `reflection` is rule 2's reflection read mode and the questions a hot
+/// reflective loop raised. The mode buttons post `$mode` to the worker's
+/// reflection-mode endpoint and the current one is pressed; each open question
+/// says the value, the caller, the rate, what the current mode costs, and
+/// offers every mode with what it does. A worker that didn't report any gets no
+/// control at all, rather than a guessed one.
+let renderHotReloadPanelFull
   (sessionId: string)
   (files: {| path: string; watched: bool |} list)
   (watchedCount: int)
-  (kept: SageFs.Features.ReloadOutcome.KeptValue list) =
+  (kept: SageFs.Features.ReloadOutcome.KeptValue list)
+  (reflection: SageFs.Features.KeptState.ReflectionReadsView) =
   let total = List.length files
   let hotReloadWatchAllLoading = "hotReloadWatchAllLoading"
   let hotReloadUnwatchAllLoading = "hotReloadUnwatchAllLoading"
@@ -2473,6 +2481,67 @@ let renderHotReloadPanelWithKept
                        @ indicatorAttrs hotReloadResetLoading
                        @ [ Ds.onClick (hotReloadClick (sprintf "$binding = %s; " (jsStringLiteral k.Binding)) "reset-state") ])
                       [ loadingSpan hotReloadResetLoading; Text.raw "Reset" ] ]) ] ]
+  let hotReloadModeLoading = "hotReloadModeLoading"
+  let modeButtons (current: SageFs.Middleware.ValueReads.ReflectionReadMode) =
+    Elem.div
+      [ Attr.style "display: flex; flex-wrap: wrap; gap: 4px;" ]
+      [ for mode in SageFs.Middleware.ValueReads.ReflectionReadMode.all do
+          let name = SageFs.Middleware.ValueReads.ReflectionReadMode.name mode
+          let pressed, label =
+            match mode = current with
+            | true -> "true", sprintf "● %s" name
+            | false -> "false", name
+          yield
+            Elem.button
+              ([ Attr.class' "eval-btn"
+                 Attr.style "height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+                 Attr.create "aria-pressed" pressed
+                 Attr.title (attrEnc (SageFs.Middleware.ValueReads.ReflectionReadMode.consequence mode))
+                 Attr.create "aria-label" (attrEnc (sprintf "Reflection reads: %s. %s" name (SageFs.Middleware.ValueReads.ReflectionReadMode.consequence mode))) ]
+               @ indicatorAttrs hotReloadModeLoading
+               @ [ Ds.onClick (hotReloadClick (sprintf "$mode = %s; " (jsStringLiteral name)) "reflection-mode") ])
+              [ loadingSpan hotReloadModeLoading
+                textEnc label ] ]
+  let reflectionSection =
+    match reflection with
+    | SageFs.Features.KeptState.ReflectionReadsView.NotReported _ -> []
+    | SageFs.Features.KeptState.ReflectionReadsView.Reported report ->
+      let watchLine =
+        match report.Watch with
+        | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Watching -> []
+        | SageFs.Middleware.ValueReads.ReflectionWatchStatus.NotWatching why ->
+          [ Elem.div [ Attr.class' "meta" ] [ textEnc (sprintf "The reflection watch isn't on (%s), so each value's getter carries it instead." why) ] ]
+        | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Lapsed why ->
+          [ Elem.div
+              [ Attr.class' "meta"; Attr.style "color: var(--fg-yellow);" ]
+              [ textEnc (sprintf "The reflection watch lapsed: %s. Every value edit restarts until the app restarts." why) ] ]
+      let questions =
+        report.Notices
+        |> List.choose (fun n ->
+          match n.State with
+          | SageFs.Middleware.ValueReads.NoticeState.Asked notice -> Some notice
+          | SageFs.Middleware.ValueReads.NoticeState.Unasked
+          | SageFs.Middleware.ValueReads.NoticeState.Chosen _ -> None)
+        |> List.map (fun notice ->
+          Elem.div
+            [ Attr.class' "reflection-question"; Attr.style "display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere;" ]
+            [ Elem.span []
+                [ textEnc (sprintf "%s is being read through reflection about %d times a second, by %s." notice.Value notice.ReadsPerSecond notice.Caller) ]
+              Elem.span []
+                [ textEnc (sprintf "In %s mode that means: %s." (SageFs.Middleware.ValueReads.ReflectionReadMode.name notice.Mode) (SageFs.Middleware.ValueReads.ReflectionReadMode.cost notice.Mode)) ]
+              yield!
+                SageFs.Middleware.ValueReads.ReflectionReadMode.all
+                |> List.map (fun mode ->
+                  Elem.span
+                    [ Attr.class' "meta" ]
+                    [ textEnc (sprintf "%s: %s" (SageFs.Middleware.ValueReads.ReflectionReadMode.name mode) (SageFs.Middleware.ValueReads.ReflectionReadMode.consequence mode)) ]) ])
+      [ Elem.div
+          [ Attr.class' "reflection-reads"
+            Attr.style "margin-bottom: 0.5rem; font-size: 0.75rem; display: flex; flex-direction: column; gap: 4px;" ]
+          [ Elem.div [ Attr.class' "meta" ] [ Text.raw "Reflection reads (values read through reflection after the app started):" ]
+            modeButtons report.Mode
+            yield! watchLine
+            yield! questions ] ]
   let grouped =
     files
     |> List.groupBy (fun f ->
@@ -2491,6 +2560,7 @@ let renderHotReloadPanelWithKept
       textEnc (sprintf "%d of %d files watched" watchedCount total)
     ]
     yield! keptNotice
+    yield! reflectionSection
     // With zero discovered files, Watch All/Unwatch All were previously
     // enabled, clickable, and silently did nothing — no toast, no change,
     // no explanation (sagefs-ux-roast.md §4.3). Say so instead of offering
@@ -2568,6 +2638,14 @@ let renderHotReloadPanelWithKept
       ]
     ]
   ]
+
+/// The panel without rule 2's reflection reads (a worker that doesn't report them).
+let renderHotReloadPanelWithKept
+  (sessionId: string)
+  (files: {| path: string; watched: bool |} list)
+  (watchedCount: int)
+  (kept: SageFs.Features.ReloadOutcome.KeptValue list) =
+  renderHotReloadPanelFull sessionId files watchedCount kept (SageFs.Features.KeptState.ReflectionReadsView.NotReported "not asked")
 
 /// The panel with nothing kept.
 let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: bool |} list) (watchedCount: int) =
