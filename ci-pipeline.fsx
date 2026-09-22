@@ -119,9 +119,12 @@ let verifyVersionAlignment () =
 /// missing or an unexpected extra TFM shows up.
 let requiredToolTfms = [ "net10.0"; "net11.0" ]
 let verifyToolInstallable () =
-  match Directory.GetFiles(releaseDir, "SageFs.*.nupkg") |> Array.tryHead with
-  | None -> failwith "No SageFs nupkg found in release/ — pack failed?"
-  | Some nupkg ->
+  // The package for THIS build's version, never whichever nupkg sorts first.
+  let expected = Path.Combine(releaseDir, $"SageFs.{pkgJsonVersion ()}.nupkg")
+  match File.Exists expected with
+  | false -> failwithf "No %s in release/. Did pack fail?" (Path.GetFileName expected)
+  | true ->
+    let nupkg = expected
     use zip = ZipFile.OpenRead nupkg
     let tfms =
       zip.Entries
@@ -688,6 +691,11 @@ pipeline "sagefs" {
     workingDir vscodeDir
     run (fun ctx ->
       async {
+        // Start release/ empty. The local gate reuses one checkout, and git clean
+        // keeps ignored output, so release/ used to pile up every old nupkg.
+        // The installability check then read an old one, and the manifest listed
+        // all of them.
+        if Directory.Exists releaseDir then Directory.Delete(releaseDir, true)
         Directory.CreateDirectory releaseDir |> ignore
         let vsixOut = Path.Combine(releaseDir, $"sagefs-vscode-{pkgJsonVersion ()}.vsix")
         return! ctx.RunCommand $"npx @vscode/vsce package -o \"{vsixOut}\""
@@ -745,6 +753,7 @@ pipeline "sagefs" {
             let! installExit =
               execToLog workDir [] log
                 [ "dotnet"; "tool"; "install"; "SageFs"; "--tool-path"; toolPath
+                  "--version"; pkgJsonVersion ()
                   "--add-source"; releaseDir; "--no-cache" ]
             match installExit with
             | 0 ->
