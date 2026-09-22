@@ -95,6 +95,10 @@
         <Compile Include="Features\Tweak\ExpressionEdit.fs" />
         <Compile Include="Features\Tweak\SideEffectClass.fs" />
         <Compile Include="Features\Tweak\TweakTransaction.fs" />
+        <!-- Section 4 (history and rollback): event-sourced tweak journal
+             with bounded-growth compaction, on top of the address/edit
+             modules above. -->
+        <Compile Include="Features\Tweak\TweakLog.fs" />
         <Compile Include="Features\LiveStateEmit.fs" />
         <Compile Include="Features\KeptState.fs" />
         <Compile Include="ShadowCopy.fs" />
