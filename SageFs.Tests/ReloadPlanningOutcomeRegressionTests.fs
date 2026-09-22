@@ -46,6 +46,7 @@ let private declsOf (source: string) =
 let private patchedDecls (before: FileDecls) (current: FileDecls) : SourceDecl list =
   match planReload before current with
   | ReloadPlan.PatchFunctions fs -> fs
+  | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "expected a plain patch plan, got %A keeping %A" (fs |> List.map _.Name) (first :: rest)
   | ReloadPlan.RestartRequired (first, rest) -> failtestf "expected a patch plan, got restart %A" (first :: rest)
 
 [<Tests>]

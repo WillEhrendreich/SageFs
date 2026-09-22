@@ -96,9 +96,24 @@ type ReloadChange =
   /// silently wrong.
   | MutableBindingTorn of binding: string
 
+/// Live module state a patch has to respect. Rule 1 of hot-reload-state-spec.md:
+/// code changes land, state stays.
+[<RequireQualifiedAccess>]
+type LiveState =
+  /// An unedited non-public `let mutable` the patch reads or writes. FSI can't
+  /// name a private member of the app's assembly, so the patch gets a
+  /// same-named stand-in that reads and writes the app's OWN storage. It is
+  /// never re-declared, because a re-declaration is a fresh field holding the
+  /// initializer and the live value would be gone.
+  | Carried of decl: SourceDecl
+
 [<RequireQualifiedAccess>]
 type ReloadPlan =
   | PatchFunctions of changed: SourceDecl list
+  /// The same patch, plus live state it has to leave where it is. Head and
+  /// rest, so this case can't be built with nothing in it: a patch with no
+  /// state to respect is `PatchFunctions`, and there is one way to say it.
+  | PatchKeepingState of changed: SourceDecl list * first: LiveState * rest: LiveState list
   | RestartRequired of first: ReloadChange * rest: ReloadChange list
 
 module ReloadChange =
@@ -596,14 +611,15 @@ let private targetNamesOf (decl: SourceDecl) : string list =
 /// that merely collides with a hidden declaration (a shadowing parameter, a
 /// same-named local) still counts as "uses" here — which is exactly why it is
 /// safe as a fallback: it never looks more permissive than the exact check.
-let private unreachableViaIdentifiers (patches: SourceDecl list) (hidden: SourceDecl list) : ReloadChange list =
+let private hiddenUsesViaIdentifiers (patches: SourceDecl list) (hidden: SourceDecl list) : (SourceDecl * SourceDecl list) list =
   let hiddenTargets = hidden |> List.map (fun h -> h, targetNamesOf h |> List.filter isIdentifier |> Set.ofList)
   patches
-  |> List.choose (fun f ->
+  |> List.map (fun f ->
     let used = identifiersOf f.Text
+    f,
     hiddenTargets
-    |> List.tryFind (fun (h, names) -> h.Name <> f.Name && names |> Set.exists (fun n -> Set.contains n used))
-    |> Option.map (fun (h, _) -> ReloadChange.UsesNonPublicMember (f.Name, h.Name)))
+    |> List.filter (fun (h, names) -> h.Name <> f.Name && names |> Set.exists (fun n -> Set.contains n used))
+    |> List.map fst)
 
 /// One FSharpChecker, reused across every reload decision in the process: it
 /// caches compiler internals (default reference sets, etc.) and is documented
@@ -656,7 +672,7 @@ let private symbolUsesOf (source: string) : Result<FSharp.Compiler.CodeAnalysis.
 /// mistaken for a reference to it, and a use that only reaches a hidden type
 /// through a union case or record field (never spelling the type's own name)
 /// still resolves, because the compiler resolved the reference.
-let private unreachableViaSymbols (source: string) (patches: SourceDecl list) (hidden: SourceDecl list) : Result<ReloadChange list, string> =
+let private hiddenUsesViaSymbols (source: string) (patches: SourceDecl list) (hidden: SourceDecl list) : Result<(SourceDecl * SourceDecl list) list, string> =
   symbolUsesOf source
   |> Result.map (fun uses ->
     let within (d: SourceDecl) (line: int) = line >= d.StartLine && line <= d.EndLine
@@ -665,29 +681,40 @@ let private unreachableViaSymbols (source: string) (patches: SourceDecl list) (h
       | true -> None
       | false -> su.Symbol.DeclarationLocation |> Option.map (fun r -> r.StartLine)
     patches
-    |> List.choose (fun f ->
-      uses
-      |> Seq.filter (fun su -> within f su.Range.StartLine)
-      |> Seq.choose declarationLine
-      |> Seq.tryPick (fun declLine -> hidden |> List.tryFind (fun h -> h.Name <> f.Name && within h declLine))
-      |> Option.map (fun h -> ReloadChange.UsesNonPublicMember (f.Name, h.Name))))
+    |> List.map (fun f ->
+      let declLines =
+        uses
+        |> Seq.filter (fun su -> within f su.Range.StartLine)
+        |> Seq.choose declarationLine
+        |> Set.ofSeq
+      f, hidden |> List.filter (fun h -> h.Name <> f.Name && declLines |> Set.exists (within h))))
 
 /// Prefers the exact FCS-symbol check on the real file text; falls back to the
 /// identifier-set heuristic — never to "reachable" — when there is no real
 /// source to check (a `FileDecls` a test built directly) or the standalone
 /// check could not run cleanly. The fallback can only ever add restarts the
 /// exact check would not have reported, never remove one it would have.
-let private unreachableOf (current: FileDecls) (patches: SourceDecl list) (hidden: SourceDecl list) : ReloadChange list =
+///
+/// Answers with EVERY hidden declaration each patch uses, in file order, so the
+/// planner can tell the ones it can carry (live mutable storage) from the ones
+/// it can't.
+let private hiddenUsesOf (current: FileDecls) (patches: SourceDecl list) (hidden: SourceDecl list) : (SourceDecl * SourceDecl list) list =
   match hidden, patches with
   | [], _
   | _, [] -> []
   | _ ->
     match current.RawSource with
     | Some source ->
-      match unreachableViaSymbols source patches hidden with
+      match hiddenUsesViaSymbols source patches hidden with
       | Ok found -> found
-      | Error _ -> unreachableViaIdentifiers patches hidden
-    | None -> unreachableViaIdentifiers patches hidden
+      | Error _ -> hiddenUsesViaIdentifiers patches hidden
+    | None -> hiddenUsesViaIdentifiers patches hidden
+
+/// A hidden declaration a patch can reach anyway: a `let mutable` is only its
+/// storage, and the patch gets a stand-in bound to that storage (see
+/// `LiveState.Carried`). A hidden function, value or type still can't be
+/// reached, because FSI would need its code, not just its field.
+let private isCarryable (d: SourceDecl) = d.Kind = DeclKind.MutableValueDecl
 
 /// Types, values and startup code are compared with the source the running app
 /// was built from; a function may be patched only if its header is unchanged.
@@ -709,13 +736,26 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
     current.Decls
     |> List.filter (fun d -> d.Access <> DeclAccess.Public && not (patchedNames.Contains d.Name) && isIdentifier d.Name)
   let patches = outcomes |> List.choose (function DeclOutcome.Patch f -> Some f | _ -> None)
-  let unreachable = unreachableOf current patches hidden
+  let hiddenUses = hiddenUsesOf current patches hidden
+  let unreachable =
+    hiddenUses
+    |> List.choose (fun (f, used) ->
+      used
+      |> List.tryFind (isCarryable >> not)
+      |> Option.map (fun h -> ReloadChange.UsesNonPublicMember (f.Name, h.Name)))
+  let carried =
+    hiddenUses
+    |> List.collect snd
+    |> List.filter isCarryable
+    |> List.distinct
+    |> List.map LiveState.Carried
   let restarts =
     (outcomes |> List.choose (function DeclOutcome.Restart c -> Some c | _ -> None)) @ removed @ unreachable
     |> List.distinct
-  match restarts with
-  | first :: rest -> ReloadPlan.RestartRequired (first, rest)
-  | [] -> ReloadPlan.PatchFunctions patches
+  match restarts, carried with
+  | first :: rest, _ -> ReloadPlan.RestartRequired (first, rest)
+  | [], [] -> ReloadPlan.PatchFunctions patches
+  | [], state :: more -> ReloadPlan.PatchKeepingState (patches, state, more)
 
 [<RequireQualifiedAccess>]
 type PatchOutcome =

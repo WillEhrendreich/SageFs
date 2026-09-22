@@ -593,13 +593,15 @@ let mapDiagnosticColumn (columnOffset: int) (col: int) = max 0 (col - columnOffs
 // Stable-identity reload (Run App)
 // ─────────────────────────────────────────────────────────────────
 
-/// Re-emits only the given functions inside the file's module path, opened onto
-/// the COMPILED module (`open global.…`) so they bind to the running app's own
-/// types and state; `#` line directives keep diagnostics on the source lines.
-let emitStableIdentity
+/// Writes the patch text: the file's module path, then per container its opens,
+/// `open global.<compiled module>`, the stand-ins for carried state, and the
+/// re-emitted declarations. `standIns` pairs a carried declaration with its
+/// already-rendered stand-in lines.
+let private renderPatch
     (filePath: string)
     (decls: SageFs.Features.ReloadPlanning.FileDecls)
     (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
+    (standIns: (SageFs.Features.ReloadPlanning.SourceDecl * string list) list)
     : PreprocessResult =
   let path = decls.ModulePath
   let pad depth = String.replicate depth "  "
@@ -615,6 +617,13 @@ let emitStableIdentity
       |> Array.toList
     sprintf "# %d \"%s\"" f.StartLine directiveFile :: text
 
+  /// One thing to write inside a container. Stand-ins go first, so the
+  /// functions after them resolve the carried name to the stand-in.
+  let emitItem (indent: string) (item: Choice<string list, SageFs.Features.ReloadPlanning.SourceDecl>) =
+    match item with
+    | Choice1Of2 standInLines -> standInLines
+    | Choice2Of2 f -> emitDecl indent f
+
   // A function declared inside `namespace X` + `module Y =` must be re-emitted
   // inside `Y`, not flattened into `X`: the compiled method it has to pair with
   // is `X.Y.f`, and `open global.X.Y` is what makes the types it mentions the
@@ -622,7 +631,10 @@ let emitStableIdentity
   // whole file's containers as one nested tree (rather than one block per
   // container) is what keeps `module X =` from being declared twice in a single
   // submission when two nested modules both changed.
-  let rec emitTree (depth: int) (qualified: string list) (items: (string list * SageFs.Features.ReloadPlanning.SourceDecl) list) =
+  let rec emitTree
+      (depth: int)
+      (qualified: string list)
+      (items: (string list * Choice<string list, SageFs.Features.ReloadPlanning.SourceDecl>) list) =
     let indent = pad depth
     let here = items |> List.filter (fst >> List.isEmpty) |> List.map snd
     let nested =
@@ -639,7 +651,7 @@ let emitStableIdentity
           match qualified with
           | [] -> []
           | _ -> [ sprintf "%sopen global.%s" indent (String.concat "." qualified) ]
-        opens @ compiledModule @ (here |> List.collect (emitDecl indent))
+        opens @ compiledModule @ (here |> List.collect (emitItem indent))
     let nestedLines =
       nested
       |> List.collect (fun (name, xs) ->
@@ -647,8 +659,45 @@ let emitStableIdentity
     hereLines @ nestedLines
 
   let headers = path |> List.mapi (fun depth part -> sprintf "%smodule %s =" (pad depth) part)
-  let body = emitTree path.Length path (functions |> List.map (fun f -> f.Container, f))
+  let items =
+    (standIns |> List.map (fun (d, lines) -> d.Container, Choice1Of2 lines))
+    @ (functions |> List.map (fun f -> f.Container, Choice2Of2 f))
+  let body = emitTree path.Length path items
   { Code = headers @ body |> String.concat "\n"
     LineOffset = 0
     ColumnOffset = 2 * path.Length
     OriginalFilePath = Some filePath }
+
+/// Re-emits only the given functions inside the file's module path, opened onto
+/// the COMPILED module (`open global.…`) so they bind to the running app's own
+/// types and state; `#` line directives keep diagnostics on the source lines.
+let emitStableIdentity
+    (filePath: string)
+    (decls: SageFs.Features.ReloadPlanning.FileDecls)
+    (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
+    : PreprocessResult =
+  renderPatch filePath decls functions []
+
+/// The same patch for functions that use unedited non-public `let mutable`s
+/// (`carried`). Each one gets a same-named stand-in bound to the app's own
+/// storage (`LiveStateEmit.carriedStandIn`) ahead of the functions in its
+/// module, so the patch compiles without re-declaring the binding and throwing
+/// away its live value. `Error` when a stand-in can't be written; the caller
+/// then restarts rather than patching with something that doesn't compile.
+let emitPatchCarrying
+    (filePath: string)
+    (decls: SageFs.Features.ReloadPlanning.FileDecls)
+    (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
+    (carried: SageFs.Features.ReloadPlanning.SourceDecl list)
+    : Result<PreprocessResult, SageFs.Features.ReloadPlanning.SourceDecl * string> =
+  let pad depth = String.replicate depth "  "
+  carried
+  |> List.fold
+       (fun acc d ->
+         acc
+         |> Result.bind (fun done' ->
+           SageFs.Features.LiveStateEmit.carriedStandIn (pad (decls.ModulePath.Length + d.Container.Length)) (decls.ModulePath @ d.Container) d
+           |> Result.map (fun lines -> done' @ [ d, lines ])
+           |> Result.mapError (fun reason -> d, reason)))
+       (Ok [])
+  |> Result.map (renderPatch filePath decls functions)

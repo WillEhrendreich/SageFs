@@ -904,31 +904,25 @@ let run (sessionId: string) (port: int) = async {
           Log.info "Hot reload: %s — %s; no app is running under SageFs, so the whole file is re-evaluated instead"
             fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
           return SaveHandling.FallBackWholeFile reasons }
-      // Patch the process in place when only function bodies changed; anything
-      // that takes effect at startup restarts the app (see ReloadPlanning).
-      // Every exit reports exactly one terminal outcome, so a Compiling overlay
-      // can never be left open and a refresh can never be sent for a save the
-      // running process did not take.
-      let reloadRunningApp (filePath: string) (baseline: Features.ReloadPlanning.FileDecls) : Async<SaveHandling> = async {
-        let fileName = IO.Path.GetFileName filePath
-        match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText filePath) with
-        | Error reason ->
-          Features.ReloadBroadcast.broadcastOutcome
-            (Features.ReloadOutcome.ReloadOutcome.CompileFailed (sprintf "%s does not parse: %s" fileName reason))
-          return SaveHandling.Reported
-        | Ok current ->
-          match Features.ReloadPlanning.planReload baseline current with
-          | Features.ReloadPlanning.ReloadPlan.PatchFunctions [] ->
-            // The file's declarations are byte-identical to the running build.
-            // Nothing to fetch and nothing to do, so this is reported as the
-            // non-event it is — the old code broadcast a browser reload here,
-            // which is the byte-identical refresh users read as breakage.
-            Log.info "Hot reload: %s saved with no declaration change — the running app is already current" fileName
-            Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.unchanged fileName)
-            return SaveHandling.Reported
-          | Features.ReloadPlanning.ReloadPlan.PatchFunctions functions ->
+      // Re-emit the changed functions against the compiled module and report
+      // what reached the running process. `carried` are the unedited private
+      // `let mutable`s those functions use; they get stand-ins bound to the
+      // app's own storage instead of being re-declared (LiveStateEmit).
+      let patchInPlace
+        (fileName: string)
+        (filePath: string)
+        (baseline: Features.ReloadPlanning.FileDecls)
+        (current: Features.ReloadPlanning.FileDecls)
+        (functions: Features.ReloadPlanning.SourceDecl list)
+        (carried: Features.ReloadPlanning.SourceDecl list)
+        : Async<SaveHandling> = async {
+            match Middleware.CompilationContext.emitPatchCarrying filePath current functions carried with
+            | Error (unreachable, reason) ->
+              Log.info "Hot reload: %s can't carry '%s' into the patch: %s" fileName unreachable.Name reason
+              let user = functions |> List.tryHead |> Option.map _.Name |> Option.defaultValue fileName
+              return! restartOrFallBack fileName (Features.ReloadPlanning.ReloadChange.UsesNonPublicMember (user, unreachable.Name)) []
+            | Ok patch ->
             DevReload.broadcastCompiling (Some fileName)
-            let patch = Middleware.CompilationContext.emitStableIdentity filePath current functions
             let request = { Code = patch.Code; Args = Map.ofList ["hotReload", box true] }
             match! evalWithinBudget request with
             | Error budget ->
@@ -1007,6 +1001,34 @@ let run (sessionId: string) (port: int) = async {
                   return SaveHandling.Reported
                 | Features.ReloadPlanning.PatchOutcome.RestartNeeded (first, rest) ->
                   return! restartOrFallBack fileName first rest
+            }
+      // Patch the process in place when only function bodies changed; anything
+      // that takes effect at startup restarts the app (see ReloadPlanning).
+      // Every exit reports exactly one terminal outcome, so a Compiling overlay
+      // can never be left open and a refresh can never be sent for a save the
+      // running process did not take.
+      let reloadRunningApp (filePath: string) (baseline: Features.ReloadPlanning.FileDecls) : Async<SaveHandling> = async {
+        let fileName = IO.Path.GetFileName filePath
+        match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText filePath) with
+        | Error reason ->
+          Features.ReloadBroadcast.broadcastOutcome
+            (Features.ReloadOutcome.ReloadOutcome.CompileFailed (sprintf "%s does not parse: %s" fileName reason))
+          return SaveHandling.Reported
+        | Ok current ->
+          match Features.ReloadPlanning.planReload baseline current with
+          | Features.ReloadPlanning.ReloadPlan.PatchFunctions [] ->
+            // The file's declarations are byte-identical to the running build.
+            // Nothing to fetch and nothing to do, so this is reported as the
+            // non-event it is — the old code broadcast a browser reload here,
+            // which is the byte-identical refresh users read as breakage.
+            Log.info "Hot reload: %s saved with no declaration change — the running app is already current" fileName
+            Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.unchanged fileName)
+            return SaveHandling.Reported
+          | Features.ReloadPlanning.ReloadPlan.PatchFunctions functions ->
+            return! patchInPlace fileName filePath baseline current functions []
+          | Features.ReloadPlanning.ReloadPlan.PatchKeepingState (functions, first, rest) ->
+            let carried = first :: rest |> List.map (function Features.ReloadPlanning.LiveState.Carried d -> d)
+            return! patchInPlace fileName filePath baseline current functions carried
           | Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest) ->
             return! restartOrFallBack fileName first rest }
       let onFileChanged (change: FileWatcher.FileChange) =

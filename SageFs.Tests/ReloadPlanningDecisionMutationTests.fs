@@ -34,6 +34,7 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     match planReload before after with
     | ReloadPlan.PatchFunctions fs -> fs |> List.map (fun d -> d.Name) |> Expect.equal "the new function b must be the only patch" ["b"]
     | ReloadPlan.RestartRequired (first, rest) -> failtestf "adding a function must patch, not restart: %A" (first :: rest)
+    | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   // WHY these two say DeclarationAdded rather than ValueChanged/TypeChanged:
   // `outcomeOf`'s None branch used to report an ADDED declaration as *Changed*,
@@ -49,6 +50,7 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     | ReloadPlan.RestartRequired (first, rest) ->
       (first :: rest) |> Expect.equal "a brand-new value must restart, described as an ADDED declaration, not a changed one" [ReloadChange.DeclarationAdded "v"]
     | ReloadPlan.PatchFunctions fs -> failtestf "a new value must restart, not patch: %A" (fs |> List.map (fun d -> d.Name))
+    | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   testCase "WHY — new_type_in_edited_file_is_Restart — a brand-new type must restart, described as an addition" <| fun () ->
     let before = declsOf "module M\nlet a () = 1\n"
@@ -57,6 +59,7 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     | ReloadPlan.RestartRequired (first, rest) ->
       (first :: rest) |> Expect.equal "a brand-new type must restart, described as an ADDED declaration, not a changed one" [ReloadChange.DeclarationAdded "T"]
     | ReloadPlan.PatchFunctions fs -> failtestf "a new type must restart, not patch: %A" (fs |> List.map (fun d -> d.Name))
+    | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   // ── Removed declarations ─────────────────────────────────────────────────
 
@@ -67,6 +70,7 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     | ReloadPlan.RestartRequired (first, rest) ->
       (first :: rest) |> Expect.equal "removing b must restart, described as DeclarationRemoved \"b\"" [ReloadChange.DeclarationRemoved "b"]
     | ReloadPlan.PatchFunctions fs -> failtestf "a removed function must restart, not patch: %A" (fs |> List.map (fun d -> d.Name))
+    | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   testCase "WHY — removed_entryPoint_is_EntryPointChanged_not_DeclarationRemoved — removal of the special decls keeps their special reason" <| fun () ->
     let before = declsOf "module M\n[<EntryPoint>]\nlet main a = 0\n"
@@ -75,6 +79,7 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     | ReloadPlan.RestartRequired (first, rest) ->
       (first :: rest) |> Expect.equal "removing the entry point must be reported as EntryPointChanged, not a generic DeclarationRemoved" [ReloadChange.EntryPointChanged]
     | ReloadPlan.PatchFunctions fs -> failtestf "removing the entry point must restart: %A" (fs |> List.map (fun d -> d.Name))
+    | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   // ── Signature vs body change on an existing function ────────────────────
 
@@ -84,6 +89,7 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     match planReload before after with
     | ReloadPlan.PatchFunctions fs -> fs |> List.map (fun d -> d.Name) |> Expect.equal "only f, patched" ["f"]
     | ReloadPlan.RestartRequired (first, rest) -> failtestf "a body-only edit must patch: %A" (first :: rest)
+    | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   testCase "WHY — function_header_changed_is_SignatureChanged_restart — a signature change cannot be patched (callers are compiled against the old shape)" <| fun () ->
     let before = declsOf "module M\nlet f (x: int) = x + 1\n"
@@ -92,6 +98,7 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     | ReloadPlan.RestartRequired (first, rest) ->
       (first :: rest) |> Expect.equal "a changed function header must restart as SignatureChanged \"f\"" [ReloadChange.SignatureChanged "f"]
     | ReloadPlan.PatchFunctions fs -> failtestf "a signature change must restart, not patch: %A" (fs |> List.map (fun d -> d.Name))
+    | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   // ── UsesNonPublicMember: a patch cannot see private/internal members ────
 
@@ -103,6 +110,7 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
       (first :: rest) |> Expect.equal "referencing the private helper must restart, naming both the patch and the hidden member"
         [ReloadChange.UsesNonPublicMember ("f", "helper")]
     | ReloadPlan.PatchFunctions fs -> failtestf "referencing a private member must restart, not patch in isolation: %A" (fs |> List.map (fun d -> d.Name))
+    | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   testCase "WHY — patch_referencing_a_public_function_is_still_a_patch — public members ARE visible to a patch, so this must not force a restart" <| fun () ->
     let before = "module M\nlet helper () = 1\nlet f () = 10\n"
@@ -110,6 +118,7 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     match planReload (declsOf before) (declsOf after) with
     | ReloadPlan.PatchFunctions fs -> fs |> List.map (fun d -> d.Name) |> Expect.equal "f alone, patched" ["f"]
     | ReloadPlan.RestartRequired (first, rest) -> failtestf "referencing a PUBLIC member must not force a restart: %A" (first :: rest)
+    | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   // ── confirmPatch ──────────────────────────────────────────────────────────
 

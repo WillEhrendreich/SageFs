@@ -290,6 +290,7 @@ let private reasonsOfPlan (plan: ReloadPlan) =
   match plan with
   | ReloadPlan.RestartRequired (first, rest) -> ReloadChange.restartReasons first rest
   | ReloadPlan.PatchFunctions fs -> failtestf "expected a restart, got a patch of %A" (fs |> List.map _.Name)
+  | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "expected a restart, got a patch of %A keeping %A" (fs |> List.map _.Name) (first :: rest)
 
 [<Tests>]
 let mutableStateClassificationTests =

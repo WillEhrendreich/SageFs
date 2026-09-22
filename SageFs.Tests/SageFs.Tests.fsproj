@@ -250,6 +250,7 @@
         <Compile Include="CellDependencyGraphTests.fs" />
         <Compile Include="TestSourceResolverTests.fs" />
         <Compile Include="ReloadOutcomeTests.fs" />
+        <Compile Include="LiveStateEmitTests.fs" />
         <Compile Include="ReloadBroadcastTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />
         <Compile Include="IdentifierScanTests.fs" />

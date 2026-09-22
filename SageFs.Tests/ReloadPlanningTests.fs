@@ -47,12 +47,14 @@ let private plan (edited: string) =
 let private patchedNames (p: ReloadPlan) =
   match p with
   | ReloadPlan.PatchFunctions fs -> fs |> List.map _.Name
+  | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "expected a plain patch, got %A keeping %A" (fs |> List.map _.Name) (first :: rest)
   | ReloadPlan.RestartRequired (first, rest) -> failtestf "expected a patch, got restart %A" (first :: rest)
 
 let private restartChanges (p: ReloadPlan) =
   match p with
   | ReloadPlan.RestartRequired (first, rest) -> first :: rest
   | ReloadPlan.PatchFunctions fs -> failtestf "expected a restart, got patch %A" (fs |> List.map _.Name)
+  | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "expected a restart, got patch %A keeping %A" (fs |> List.map _.Name) (first :: rest)
 
 [<Tests>]
 let extractDeclsTests =
@@ -137,6 +139,7 @@ let realSourceTests =
         match planReload d d with
         | ReloadPlan.PatchFunctions [] -> None
         | ReloadPlan.PatchFunctions patched -> Some (sprintf "%s patches %A" file (patched |> List.map _.Name))
+        | ReloadPlan.PatchKeepingState (patched, first, rest) -> Some (sprintf "%s patches %A keeping %A" file (patched |> List.map _.Name) (first :: rest))
         | ReloadPlan.RestartRequired (first, rest) -> Some (sprintf "%s restarts %A" file (first :: rest)))
       |> Array.toList
       |> Expect.equal "files that do not plan against themselves as a no-op" []
@@ -277,6 +280,26 @@ let accessTests =
     testCase "WHY — ReloadChange.describe — names the function and the member it cannot reach because the card must say why the app restarted" <| fun _ ->
       ReloadChange.describe (ReloadChange.UsesNonPublicMember ("answer", "secret"))
       |> Expect.equal "wording" "answer uses secret, which is not public, so it cannot be patched in place"
+  ]
+
+[<Tests>]
+let carriedStateTests =
+  let source =
+    "module Demo.Carry\n\nlet mutable private hits = 0\n\nlet private helper () = 1\n\nlet show () =\n  string hits\n\nlet both () =\n  helper () + hits\n"
+  testList "ReloadPlanning carried live state" [
+    testCase "WHY — ReloadPlanning.planReload — a patch that reads a private let mutable carries it instead of restarting, because the storage is reachable and re-declaring it would lose the live value" <| fun _ ->
+      match planReload (declsOf source) (declsOf (replace "string hits" "sprintf \"%d\" hits" source)) with
+      | ReloadPlan.PatchKeepingState (patched, first, rest) ->
+        patched |> List.map _.Name |> Expect.equal "only the edited function is re-emitted" [ "show" ]
+        first :: rest
+        |> List.map (function LiveState.Carried d -> d.Name)
+        |> Expect.equal "hits is carried, not re-declared" [ "hits" ]
+      | other -> failtestf "expected a patch that carries hits, got %A" other
+
+    testCase "WHY — ReloadPlanning.planReload — a patch that also uses a private function still restarts, because FSI needs that function's code and carrying only covers storage" <| fun _ ->
+      planReload (declsOf source) (declsOf (replace "helper () + hits" "helper () + hits + 1" source))
+      |> restartChanges
+      |> Expect.equal "both uses the private helper" [ ReloadChange.UsesNonPublicMember ("both", "helper") ]
   ]
 
 [<Tests>]
@@ -423,7 +446,8 @@ let private edit (d: SourceDecl) =
 
 let private reasonsOf (plan: ReloadPlan) =
   match plan with
-  | ReloadPlan.PatchFunctions _ -> Set.empty
+  | ReloadPlan.PatchFunctions _
+  | ReloadPlan.PatchKeepingState _ -> Set.empty
   | ReloadPlan.RestartRequired (first, rest) -> Set.ofList (first :: rest)
 
 /// What editing a declaration other than a function body must report.
@@ -467,7 +491,7 @@ let planReloadPropertyTests =
       planReload file padded = ReloadPlan.PatchFunctions [])
 
     testPropertyWithConfig config
-      "WHY — ReloadPlanning.planReload — body-only function edits patch exactly the edited functions, restarting only for a non-public member they cannot reach, because nothing else changed"
+      "WHY — ReloadPlanning.planReload — body-only function edits patch exactly the edited functions, carrying the non-public let mutables they use and restarting only for a non-public member they cannot reach, because nothing else changed"
     <| Prop.forAll
          (Arb.fromGen (gen {
             let! file = genUniqueFile
@@ -487,14 +511,29 @@ let planReloadPropertyTests =
            let editedNames = edited |> List.map _.Name |> Set.ofList
            let hidden =
              file.Decls |> List.filter (fun d -> d.Access <> DeclAccess.Public && not (editedNames.Contains d.Name))
+           let usedBy (f: SourceDecl) =
+             hidden |> List.filter (fun h -> h.Name <> f.Name && (tokens f.Text).Contains h.Name)
+           // A hidden `let mutable` is only storage, and the patch gets a
+           // stand-in bound to it. Anything else hidden still can't be reached.
            let unreachable =
              edited
              |> List.choose (fun f ->
-               hidden
-               |> List.tryFind (fun h -> h.Name <> f.Name && (tokens f.Text).Contains h.Name)
+               usedBy f
+               |> List.tryFind (fun h -> h.Kind <> DeclKind.MutableValueDecl)
                |> Option.map (fun h -> ReloadChange.UsesNonPublicMember (f.Name, h.Name)))
+           let carried =
+             edited
+             |> List.collect usedBy
+             |> List.filter (fun h -> h.Kind = DeclKind.MutableValueDecl)
+             |> List.map _.Name
+             |> Set.ofList
+           let carriedIn (state: LiveState list) =
+             state |> List.map (function LiveState.Carried d -> d.Name) |> Set.ofList
            match planReload file (fileOf editedDecls), unreachable with
-           | ReloadPlan.PatchFunctions patched, [] -> (patched |> List.map _.Name |> Set.ofList) = editedNames
+           | ReloadPlan.PatchFunctions patched, [] ->
+             Set.isEmpty carried && (patched |> List.map _.Name |> Set.ofList) = editedNames
+           | ReloadPlan.PatchKeepingState (patched, first, rest), [] ->
+             carriedIn (first :: rest) = carried && (patched |> List.map _.Name |> Set.ofList) = editedNames
            | ReloadPlan.RestartRequired (first, rest), _ :: _ -> Set.ofList (first :: rest) = Set.ofList unreachable
            | _ -> false)
 
