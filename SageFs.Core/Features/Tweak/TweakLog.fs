@@ -222,6 +222,13 @@ let project (log: EventLog) : Projection =
 
 let dirtySet (log: EventLog) : Set<TweakAddress> = project log |> Projection.dirtySet
 
+/// Is there an unresolved `ConflictRaised` on this address right now? An
+/// open conflict is exclusive: it blocks further saves and rollbacks on
+/// THAT address until a `ConflictResolved` closes it, so two
+/// half-understood decisions never stack on top of each other.
+let hasOpenConflict (log: EventLog) (address: TweakAddress) : bool =
+  (project log).OpenConflicts |> Set.contains address
+
 // ── rollback: an operation on top of the log, not itself an event ──
 
 [<RequireQualifiedAccess>]
@@ -240,9 +247,13 @@ type RollbackError =
   /// The target event exists but isn't a save/apply (nothing to invert).
   | NotAnOperation of eventId: int
   | AddressGone of ResolveError
+  /// This address already has an unresolved conflict open. Resolve that
+  /// one first, rather than layering a second decision on top of it.
+  | BlockedByOpenConflict of address: TweakAddress
 
 /// Roll back the write `opId` made, against `currentSource` as it is RIGHT
-/// NOW. Only ever applies (or reports a conflict), never guesses.
+/// NOW. Only ever applies (or reports a conflict), never guesses, and
+/// refuses outright when the target address already has an open conflict.
 let rollback (log: EventLog) (opId: int) (currentSource: string) : Result<RollbackOutcome, RollbackError> =
   match log.Events |> List.tryFind (fun e -> e.Id = opId) with
   | None -> Error(RollbackError.NoSuchOperation opId)
@@ -250,11 +261,21 @@ let rollback (log: EventLog) (opId: int) (currentSource: string) : Result<Rollba
     match target.Event with
     | TweakLogEvent.TweakApplied(addr, before, after, hashAfter)
     | TweakLogEvent.TweakSaved(addr, before, after, hashAfter, _) ->
-      match resolve currentSource addr with
-      | Error e -> Error(RollbackError.AddressGone e)
-      | Ok resolved when resolved.Hash = hashAfter -> Ok(RollbackOutcome.Applied(replaceRange currentSource resolved.Range before))
-      | Ok resolved -> Ok(RollbackOutcome.Conflict(after, resolved.Text, before))
+      match hasOpenConflict log addr with
+      | true -> Error(RollbackError.BlockedByOpenConflict addr)
+      | false ->
+        match resolve currentSource addr with
+        | Error e -> Error(RollbackError.AddressGone e)
+        | Ok resolved when resolved.Hash = hashAfter -> Ok(RollbackOutcome.Applied(replaceRange currentSource resolved.Range before))
+        | Ok resolved -> Ok(RollbackOutcome.Conflict(after, resolved.Text, before))
     | _ -> Error(RollbackError.NotAnOperation opId)
+
+/// The guard a save has to consult before it writes a `TweakSaved`: refused
+/// while the address has an open, unresolved conflict.
+let canSave (log: EventLog) (address: TweakAddress) : Result<unit, string> =
+  match hasOpenConflict log address with
+  | true -> Error(sprintf "%A has an open conflict; resolve it before saving again" address)
+  | false -> Ok()
 
 /// Reproduce a file from `baseSource` by replaying an ordered list of
 /// (address, textAfter) writes, exactly the shape `TweakApplied`/
