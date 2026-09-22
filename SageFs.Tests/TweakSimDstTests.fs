@@ -193,4 +193,42 @@ let tweakSimDstTests =
           |> List.filter (List.isEmpty >> not)
         violating |> Expect.isNonEmpty "DIRTY-SET-MATCHES-GROUND-TRUTH must catch the count-only compaction on at least one seeded schedule"
     ]
+
+    testList "the matrix: every invariant holds under every CompactionMode x ReplayScope combination" [
+
+      let matrix =
+        [ for mode in [ TweakLog.CompactionMode.OnSessionClose; TweakLog.CompactionMode.LiveOnBudget ] do
+            for scope in [ TweakLog.ReplayScope.SageFsWritesOnly; TweakLog.ReplayScope.EverythingAsDiffs ] ->
+              { TweakSim.defaultSettings with CompactionMode = mode; ReplayScope = scope } ]
+
+      for settings in matrix do
+        testCase (sprintf "%A / %A" settings.CompactionMode settings.ReplayScope) <| fun _ ->
+          let bad =
+            seeds
+            |> List.truncate 150
+            |> List.map (fun s ->
+              let sc = scenarioOf s
+              let states = traceWith settings SaveBehavior.Real RollbackBehavior.Real CompactionBehavior.Real sc
+              sc, TweakSimInvariants.all sc states, states)
+            |> List.filter (fun (_, vs, _) -> not (List.isEmpty vs))
+          bad
+          |> List.map (fun (sc, vs, _) -> sc, vs)
+          |> expectNone (sprintf "under %A / %A" settings.CompactionMode settings.ReplayScope)
+
+      testCase "OPEN-CONFLICT-EXCLUSIVE: no save or rollback ever lands on an address with an open conflict" <| fun _ ->
+        seeds
+        |> List.map (fun s -> let sc = scenarioOf s in sc, TweakSimInvariants.openConflictBlocksSaveAndRollback (realTrace sc))
+        |> List.filter (fun (_, vs) -> not (List.isEmpty vs))
+        |> expectNone "a save or rollback landed while a conflict was open on that address"
+
+      testCase "EVERYTHING-AS-DIFFS-REPLAYS-WHOLE-FILE: under that scope, replayWholeFile reproduces the file exactly" <| fun _ ->
+        let settings = { TweakSim.defaultSettings with ReplayScope = TweakLog.ReplayScope.EverythingAsDiffs }
+        seeds
+        |> List.map (fun s ->
+          let sc = scenarioOf s
+          let states = traceWith settings SaveBehavior.Real RollbackBehavior.Real CompactionBehavior.Real sc
+          sc, TweakSimInvariants.everythingAsDiffsReplaysWholeFileExactly (TweakSim.fileOf sc.InitialX sc.InitialOther) states)
+        |> List.filter (fun (_, vs) -> not (List.isEmpty vs))
+        |> expectNone "replayWholeFile disagreed with the actual final file"
+    ]
   ]

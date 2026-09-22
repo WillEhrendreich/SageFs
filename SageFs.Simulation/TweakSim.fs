@@ -63,6 +63,8 @@ module TweakSim =
     /// An editor now holds unsaved changes to this file.
     | OpenEditorDirty
     | CloseEditor
+    /// Resolves an open conflict on the tweaked address, if there is one.
+    | ResolveConflict
 
   type Scenario =
     { Seed: int
@@ -230,6 +232,10 @@ module TweakSim =
         match behavior, hashChangedUnderneath with
         | SaveBehavior.Real, true ->
           appendEvent s (TweakLog.TweakLogEvent.ConflictRaised(address, string v, resolved.Text, resolved.Text))
+        | SaveBehavior.Real, false when TweakLog.canSave s.Log address |> Result.isError ->
+          // An open conflict on this address blocks the save outright —
+          // consulted the same way a real product's save path has to.
+          s
         | _ ->
           match LiteralEdit.setLiteral s.Source address (LiteralEdit.LiteralValue.Integer v) with
           | Error _ -> s
@@ -309,6 +315,10 @@ module TweakSim =
         { s with X = revivedX; Txn = TweakTransaction.initial revivedX; PendingFailure = None }
       | SimEvent.OpenEditorDirty -> { s with EditorDirty = true }
       | SimEvent.CloseEditor -> { s with EditorDirty = false }
+      | SimEvent.ResolveConflict ->
+        match TweakLog.hasOpenConflict s.Log address with
+        | false -> s
+        | true -> appendEvent s (TweakLog.TweakLogEvent.ConflictResolved address)
     maybeCompact compactionBehavior s'
 
   /// The full state trace, oldest first (including the initial state), so
@@ -342,7 +352,7 @@ module TweakSim =
     let n = 5 + rng.Next 20
     let events =
       [ for _ in 1 .. n ->
-          match rng.Next 11 with
+          match rng.Next 12 with
           | 0 -> SimEvent.Tweak(int64 (rng.Next 1000))
           | 1 -> SimEvent.ForceTypeCheckFail
           | 2 -> SimEvent.ForceEvaluateFail
@@ -353,7 +363,8 @@ module TweakSim =
           | 7 -> SimEvent.RollbackLast
           | 8 -> SimEvent.Crash
           | 9 -> SimEvent.OpenEditorDirty
-          | _ -> SimEvent.CloseEditor ]
+          | 10 -> SimEvent.CloseEditor
+          | _ -> SimEvent.ResolveConflict ]
     { Seed = seed
       InitialX = int64 (rng.Next 1000)
       InitialOther = int64 (rng.Next 1000)
