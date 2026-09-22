@@ -33,7 +33,7 @@ let private newInProcess () : IFsiSession =
       TextWriter.Null,
       collectible = true
     )
-  new InProcessFsiSession(session, { Projects = []; ResolveFrom = [] }) :> IFsiSession
+  new InProcessFsiSession(session, { Projects = []; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }) :> IFsiSession
 
 let private coreDllPath = typeof<SageFs.WorkerProtocol.SessionId>.Assembly.Location
 
