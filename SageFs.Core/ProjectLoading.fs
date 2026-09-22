@@ -277,6 +277,133 @@ let resolveFreshestConfigOutput (dllPath: string) : string option =
   try chooseFreshestConfigOutputWith File.Exists File.GetLastWriteTimeUtc dllPath
   with _ -> None
 
+/// Which target framework each referenced project has to be loaded at.
+///
+/// Ionide loads every project in the closure on its own, and for a project with
+/// `<TargetFrameworks>net10.0;net11.0</TargetFrameworks>` it just takes the
+/// FIRST one. It never asks the project that references it. So a net11.0 test
+/// project referencing a multi-targeted library got the library's net10.0
+/// TargetPath. After a normal `dotnet build` of the test project only the
+/// net11.0 output exists, and warmup died with "Not all DLLs are found" on a
+/// project that was built. When the net10.0 output did exist, it was worse:
+/// the session quietly loaded the wrong build.
+///
+/// MSBuild already worked out the right answer. During the consumer's
+/// design-time build the SDK's `_GetProjectReferenceTargetFrameworkProperties`
+/// target runs NuGet's nearest-framework pick for every ProjectReference and
+/// stamps it on the `_MSBuildProjectReferenceExistent` item as
+/// `NearestTargetFramework`. That's the TFM `dotnet build` actually builds the
+/// reference at, so that's the one we load. No guessing from folder names.
+module ReferenceFrameworks =
+
+  /// One loaded project as far as TFM planning cares: where it lives, what TFM
+  /// it was evaluated at, and the TFM MSBuild picked for each project it
+  /// references (keyed by full project path).
+  type Node = {
+    ProjectFile: string
+    EvaluatedAt: string
+    ReferencesAt: Map<string, string>
+  }
+
+  let private normalize (path: string) = Path.GetFullPath path
+
+  /// The `NearestTargetFramework` MSBuild resolved for each of a project's
+  /// ProjectReferences, read from the design-time build's items. A reference
+  /// without that metadata (a non-SDK project, a failed resolution) is left out,
+  /// so it keeps whatever TFM it was loaded at.
+  let referencesAtOf (projectFile: string) (allItems: Map<string, Set<string * Map<string, string>>>) : Map<string, string> =
+    let dir = Path.GetDirectoryName(normalize projectFile)
+    match allItems.TryFind "_MSBuildProjectReferenceExistent" with
+    | None -> Map.empty
+    | Some items ->
+      items
+      |> Seq.choose (fun (include', metadata) ->
+        match metadata.TryFind "NearestTargetFramework" with
+        | Some tfm when not (String.IsNullOrWhiteSpace tfm) ->
+          let relative = include'.Replace('\\', Path.DirectorySeparatorChar)
+          Some (normalize (Path.Combine(dir, relative)), tfm)
+        | _ -> None)
+      |> Map.ofSeq
+
+  /// Projects nothing else in the closure references: the ones the user asked
+  /// for. They keep the TFM they were loaded at.
+  let roots (nodes: Node list) : Node list =
+    let referenced = nodes |> Seq.collect (fun n -> n.ReferencesAt.Keys) |> Set.ofSeq
+    nodes |> List.filter (fun n -> not (referenced.Contains n.ProjectFile))
+
+  /// The TFM every reachable project should be loaded at, walking breadth-first
+  /// from the roots. A project referenced by two consumers that want different
+  /// TFMs gets the first one reached: FSI can only load one copy of an
+  /// assembly, and the one closest to what the user asked for wins.
+  ///
+  /// The walk only goes THROUGH a project that's already loaded at the TFM it
+  /// should be. A project loaded at the wrong TFM reports the references of
+  /// that wrong build (a net10.0 SageFs.fsproj says "Core at net10.0"), so its
+  /// children wait until it's been reloaded. `settle` does that.
+  let plan (nodes: Node list) : Map<string, string> =
+    let byPath = nodes |> List.map (fun n -> n.ProjectFile, n) |> Map.ofList
+    let rec walk (queue: (string * string) list) (wanted: Map<string, string>) =
+      match queue with
+      | [] -> wanted
+      | (path, _) :: rest when wanted.ContainsKey path -> walk rest wanted
+      | (path, tfm) :: rest ->
+        let children =
+          match byPath.TryFind path with
+          | Some node when node.EvaluatedAt = tfm -> node.ReferencesAt |> Map.toList
+          | _ -> []
+        walk (rest @ children) (wanted.Add(path, tfm))
+    walk (roots nodes |> List.map (fun n -> n.ProjectFile, n.EvaluatedAt)) Map.empty
+
+  /// Projects loaded at a TFM other than the one `plan` says, with the TFM
+  /// they should be reloaded at.
+  let mismatches (nodes: Node list) : (string * string) list =
+    let wanted = plan nodes
+    nodes
+    |> List.choose (fun n ->
+      match wanted.TryFind n.ProjectFile with
+      | Some tfm when tfm <> n.EvaluatedAt -> Some (n.ProjectFile, tfm)
+      | _ -> None)
+
+  /// Reload mismatched projects until every project sits at the TFM its
+  /// consumer needs. `reload tfm paths` evaluates those projects at that TFM
+  /// (a real MSBuild evaluation, so TargetPath, compiler args and package
+  /// references all come from the right build). Each (project, TFM) pair is
+  /// tried once: when a reload can't produce it, the original stays and the
+  /// missing-DLL check reports exactly where it looked. That bounds the loop
+  /// at one attempt per pair.
+  let settle (toNode: 'P -> Node) (reload: string -> string list -> 'P list) (projects: 'P list) : 'P list =
+    let rec go (projects: 'P list) (attempted: Set<string * string>) =
+      let pending =
+        projects
+        |> List.map toNode
+        |> mismatches
+        |> List.filter (attempted.Contains >> not)
+      match pending with
+      | [] -> projects
+      | _ ->
+        let pendingSet = Set.ofList pending
+        let reloaded =
+          pending
+          |> List.groupBy snd
+          |> List.collect (fun (tfm, group) -> reload tfm (group |> List.map fst))
+          |> List.choose (fun p ->
+            let node = toNode p
+            match pendingSet.Contains (node.ProjectFile, node.EvaluatedAt) with
+            | true -> Some (node.ProjectFile, p)
+            | false -> None)
+          |> Map.ofList
+        let projects' =
+          projects
+          |> List.map (fun p ->
+            reloaded.TryFind (toNode p).ProjectFile |> Option.defaultValue p)
+        go projects' (Set.union attempted pendingSet)
+    go projects Set.empty
+
+  let ofProjectOptions (po: ProjectOptions) : Node =
+    { ProjectFile = normalize po.ProjectFileName
+      EvaluatedAt = po.TargetFramework
+      ReferencesAt = referencesAtOf po.ProjectFileName po.AllItems }
+
 let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
   let directory = config.WorkingDir
 
@@ -392,8 +519,24 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
       // session ran a project's old code while its new build sat unused). When
       // neither exists the original path is kept so the missing-DLL error stays
       // accurate.
+      //
+      // First, put every multi-targeted reference at the TFM its consumer
+      // builds it at (see ReferenceFrameworks). Ionide loaded each one at its
+      // first TFM, which is the wrong output for a consumer on another TFM.
+      let reloadAt (tfm: string) (paths: string list) : ProjectOptions list =
+        logger.LogInfo (
+          sprintf "  Reloading %s at %s (the TFM the referencing project builds it at)"
+            (paths |> List.map Path.GetFileName |> String.concat ", ") tfm)
+        try
+          (WorkspaceLoader.Create(toolsPath, [ ("TargetFramework", tfm) ])).LoadProjects paths
+          |> Seq.toList
+        with ex ->
+          logger.LogWarning (sprintf "  Reloading at %s failed: %s" tfm ex.Message)
+          []
+      let atConsumerFrameworks =
+        ReferenceFrameworks.settle ReferenceFrameworks.ofProjectOptions reloadAt loadedProjects
       let loadedProjects' =
-        loadedProjects
+        atConsumerFrameworks
         |> Seq.map (fun po ->
           match resolveFreshestConfigOutput po.TargetPath with
           | Some fresh -> { po with TargetPath = fresh }
@@ -622,6 +765,57 @@ let private topoSortByProjectReferences (projects: ProjectOptions list) : Projec
     visit p
   result |> List.ofSeq
 
+/// Where a missing DLL was supposed to come from.
+[<RequireQualifiedAccess>]
+type MissingDllSource =
+  /// The build output of a loaded project, at the TFM it was loaded at.
+  | ProjectOutput of project: string * targetFramework: string
+  /// A package or compiler reference (not something a project here builds).
+  | Reference
+
+/// A DLL warmup needed and couldn't find, and every path it tried.
+type MissingDll = {
+  Dll: string
+  LookedIn: string list
+  Source: MissingDllSource
+}
+
+/// The warmup error for missing DLLs. It used to say "this project isn't
+/// built yet" no matter what, which was a lie when SageFs was looking in the
+/// wrong TFM folder of a project that WAS built. So it names every path it
+/// tried, with the project and TFM each one belongs to. Then you can check
+/// the folder yourself and tell "not built" from "looked in the wrong place".
+let describeMissingDlls (missing: MissingDll list) : string =
+  let describe (m: MissingDll) =
+    let owner =
+      match m.Source with
+      | MissingDllSource.ProjectOutput (project, tfm) ->
+        sprintf "%s, the %s output of %s" (Path.GetFileName m.Dll) tfm (Path.GetFileName project)
+      | MissingDllSource.Reference -> sprintf "%s (a referenced assembly)" (Path.GetFileName m.Dll)
+    let paths = m.LookedIn |> List.map (sprintf "      %s") |> String.concat "\n"
+    sprintf "  - %s. Looked in:\n%s" owner paths
+  let frameworks =
+    missing
+    |> List.choose (fun m ->
+      match m.Source with
+      | MissingDllSource.ProjectOutput (_, tfm) -> Some tfm
+      | MissingDllSource.Reference -> None)
+    |> List.distinct
+  let notBuiltHint =
+    match frameworks with
+    | [] -> "the project isn't built yet"
+    | tfms -> sprintf "the project isn't built for %s yet" (String.concat "/" tfms)
+  sprintf
+    "Not all DLLs are found (%d missing). These are the exact paths SageFs checked:\n%s\n\
+     If those files don't exist, %s. If the DLL is sitting in some other folder, SageFs looked in the wrong place, \
+     and that's a SageFs bug worth reporting with this message.\n\
+     Recover without leaving SageFs: run hard_reset_fsi_session with rebuild:true (or click HARD_RESET on the dashboard). \
+     SageFs builds the project and shows any compiler errors (e.g. FS0001) right here, so you never have to switch to a \
+     terminal to find out why the build fails. (You can also build it yourself first: dotnet build.)"
+    missing.Length
+    (missing |> List.map describe |> String.concat "\n")
+    notBuiltHint
+
 let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
   let orderedProjects = topoSortByProjectReferences sln.Projects
   let projectDlls = orderedProjects |> Seq.map _.TargetPath
@@ -679,13 +873,17 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
   | missing ->
     for dll in missing do
       logger.LogError (sprintf "Missing DLL: %s" dll)
-    failwithf
-      "Not all DLLs are found (%d missing: %s) — this project isn't built yet (both Debug and Release outputs were checked). \
-       Recover WITHOUT leaving SageFs: run hard_reset_fsi_session with rebuild:true (or click HARD_RESET on the dashboard) — \
-       SageFs builds the project and surfaces any compiler errors (e.g. FS0001) right here, so you never have to switch to a \
-       terminal to find out why the build fails. (You can also build it yourself first: dotnet build.)"
-      missing.Length
-      (missing |> List.map Path.GetFileName |> String.concat ", ")
+    let producedBy =
+      orderedProjects
+      |> List.map (fun po -> po.TargetPath, MissingDllSource.ProjectOutput (po.ProjectFileName, po.TargetFramework))
+      |> Map.ofList
+    missing
+    |> List.map (fun dll ->
+      { Dll = dll
+        LookedIn = dll :: (siblingConfigPath dll |> Option.toList)
+        Source = producedBy.TryFind dll |> Option.defaultValue MissingDllSource.Reference })
+    |> describeMissingDlls
+    |> failwith
   // Flags from project OtherOptions that FSI should inherit for source-level
   // compatibility (e.g. --checknulls+ from <Nullable>enable</Nullable>).
   // We explicitly exclude --warnaserror (too strict for REPL) and --optimize

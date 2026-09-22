@@ -176,6 +176,7 @@
         <Compile Include="TestTreeSitterTests.fs" />
         <Compile Include="PluginContractTests.fs" />
         <Compile Include="ProjectLoadingTests.fs" />
+        <Compile Include="ReferenceFrameworkTests.fs" />
         <Compile Include="RuntimeCompatTests.fs" />
         <Compile Include="FsiProtocolTests.fs" />
         <Compile Include="FsiHostBuildTests.fs" />
@@ -332,6 +333,7 @@
         <Compile Include="SessionBindingIsolationOutcomeTests.fs" />
         <Compile Include="MultiClientOutcomeTests.fs" />
         <Compile Include="DaemonResumeOutcomeTests.fs" />
+        <Compile Include="MultiTargetReferenceOutcomeTests.fs" />
         <Compile Include="DstSeedCorpusTests.fs" />
         <Compile Include="PerfBudget.fs" />
         <Compile Include="FsiCrossSubmissionTests.fs" />
