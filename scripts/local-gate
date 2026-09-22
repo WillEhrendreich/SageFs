@@ -82,6 +82,12 @@ export SAGEFS_DATA_DIR="$STATE/data"   # never the user's real ~/.SageFs
 export TMPDIR="$STATE/tmp"
 rm -rf "$SAGEFS_DATA_DIR" "$TMPDIR"; mkdir -p "$SAGEFS_DATA_DIR" "$TMPDIR"
 export SOURCE_SHA="$sha"
+# MSBuild reuse nodes outlive the build that spawned them (about 15 minutes
+# idle). They used to inherit the lock fd below and hold it the whole time,
+# so the next gate sat at "another gate is running" behind a gate that had
+# already finished. Two fixes: no reuse nodes, and the pipeline runs with fd 9
+# closed so nothing it spawns can ever carry the lock.
+export MSBUILDDISABLENODEREUSE=1
 # Recorded tier durations persist across gates, so longest-first ordering
 # learns from every run.
 export SAGEFS_TIER_HISTORY="$STATE/tier-durations.json"
@@ -94,7 +100,7 @@ echo "    log: $log"
 start=$(date +%s)
 # Full output to the log; progress (stage boundaries, one line per finished
 # tier, failures) to the console as it happens.
-dotnet fsi ci-pipeline.fsx -- ci release 2>&1 | tee "$log" \
+dotnet fsi ci-pipeline.fsx -- ci release 9>&- 2>&1 | tee "$log" \
   | grep --line-buffered -aE '^── tier|STAGE #|^Tiers:|^Expected wall|trust report:|^\| |error' \
   | sed -u 's/\x1b\[[0-9;]*[A-Za-z]//g'
 code=${PIPESTATUS[0]}
