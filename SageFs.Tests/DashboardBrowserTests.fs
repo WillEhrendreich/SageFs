@@ -275,6 +275,93 @@ module DashboardDom =
       do! throughPanelReset reopen (attemptsLeft - 1) body
   }
 
+/// Chat-style scrolling of the output panel. The panel follows new output
+/// while you're at the bottom, holds still once you scroll up to read, and
+/// counts the evals you haven't seen in a pill over the bottom of the panel.
+module OutputScroll =
+  let panelSelector = "#output-panel"
+  let pillSelector = "#output-new-evals"
+
+  /// How far the panel's viewport sits above the bottom of its content, in px.
+  let distanceFromBottom (page: IPage) =
+    page.EvaluateAsync<float>(
+      "() => { var el = document.querySelector('#output-panel'); return el.scrollHeight - el.scrollTop - el.clientHeight; }")
+
+  /// Following means "sitting at the bottom", give or take a pixel of rounding.
+  let atBottomTolerance = 4.0
+
+  /// Run one eval through the real Evaluate box. The code is built so its
+  /// result text (`marker`) never appears in the echoed code line, so waiting
+  /// for the marker waits for the RESULT, not the echo.
+  let runEval (page: IPage) (marker: string) = task {
+    let half = marker.Length / 2
+    let code = sprintf "\"%s\" + \"%s\";;" (marker.Substring(0, half)) (marker.Substring half)
+    let textarea = DashboardDom.textarea page
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      do! textarea.FillAsync(code)
+      do! (DashboardDom.evalButton page).ClickAsync()
+    })
+    do! PlaywrightExpect.waitForSelectorText 30_000 page panelSelector marker
+    // Let any scroll the morph kicked off finish before anyone measures.
+    do! page.WaitForTimeoutAsync(600.0f)
+  }
+
+  /// Fill the output panel well past one screen, so there is room to scroll.
+  let fillPastOneScreen (page: IPage) (prefix: string) = task {
+    let textarea = DashboardDom.textarea page
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      do! textarea.FillAsync(sprintf "String.concat \"\\n\" [ for i in 1 .. 120 -> sprintf \"%s-%%03d\" i ];;" prefix)
+      do! (DashboardDom.evalButton page).ClickAsync()
+    })
+    do! PlaywrightExpect.waitForSelectorText 30_000 page panelSelector (sprintf "%s-120" prefix)
+    let! overflow =
+      page.EvaluateAsync<float>(
+        "() => { var el = document.querySelector('#output-panel'); return el.scrollHeight - el.clientHeight; }")
+    Expect.isTrue (overflow > 400.0) (sprintf "output must overflow the panel by a good margin to test scrolling (overflow %f px)" overflow)
+  }
+
+  /// Scroll up the way a person does: the mouse wheel over the panel.
+  let wheelUp (page: IPage) (px: float32) = task {
+    let! box = page.Locator(panelSelector).BoundingBoxAsync()
+    do! page.Mouse.MoveAsync(box.X + box.Width / 2.0f, box.Y + box.Height / 2.0f)
+    do! page.Mouse.WheelAsync(0.0f, -px)
+    // Let the wheel's scroll events land before anything reads the position.
+    do! page.WaitForTimeoutAsync(400.0f)
+  }
+
+  /// The text of the first output line at the top of the panel's viewport
+  /// and its offset from the panel's top edge: what the reader is looking at.
+  let readingPosition (page: IPage) =
+    page.EvaluateAsync<string>(
+      """() => {
+        var p = document.querySelector('#output-panel');
+        var top = p.getBoundingClientRect().top;
+        var lines = p.querySelectorAll('.output-line');
+        for (var i = 0; i < lines.length; i++) {
+          var r = lines[i].getBoundingClientRect();
+          if (r.top >= top) return lines[i].textContent + '|' + Math.round(r.top - top);
+        }
+        return '';
+      }""")
+
+  /// Where the line with this exact text now sits relative to the panel top.
+  let offsetOfLine (page: IPage) (text: string) =
+    page.EvaluateAsync<float>(
+      """(t) => {
+        var p = document.querySelector('#output-panel');
+        var top = p.getBoundingClientRect().top;
+        var lines = p.querySelectorAll('.output-line');
+        for (var i = 0; i < lines.length; i++) {
+          if (lines[i].textContent === t) return lines[i].getBoundingClientRect().top - top;
+        }
+        return -99999;
+      }""", text)
+
+  let waitForPillText (page: IPage) (text: string) =
+    PlaywrightExpect.waitForSelectorText 10_000 page pillSelector text
+
+  let pillVisible (page: IPage) = page.Locator(pillSelector).IsVisibleAsync()
+
 /// Helper to run an async Playwright test body inside Expecto.
 /// All dashboard browser tests are tagged [Integration] since they
 /// require a running SageFs daemon with dashboard on port 37750.
@@ -329,6 +416,99 @@ let tests =
       LocatorWaitForOptions(State = WaitForSelectorState.Visible))
     let! sessionId = panel.GetAttributeAsync("data-session-id")
     Expect.isNotNull sessionId "output panel carries the session id"
+  })
+
+  playwrightTest "output panel scrolls like a chat: follows at the bottom, holds when scrolled up, counts unseen evals" (fun page -> task {
+    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! OutputScroll.fillPastOneScreen page "chat-fill"
+
+    // At the bottom, new output follows and no pill shows up.
+    do! OutputScroll.runEval page "follow-one"
+    let! dist = OutputScroll.distanceFromBottom page
+    Expect.isTrue (dist <= OutputScroll.atBottomTolerance) (sprintf "at the bottom an eval must keep following (%f px from bottom)" dist)
+    let! pill = OutputScroll.pillVisible page
+    Expect.isFalse pill "no unseen-eval pill while following"
+
+    // Scroll up to read. Two evals land. What I'm reading must not move.
+    do! OutputScroll.wheelUp page 900.0f
+    let! reading = OutputScroll.readingPosition page
+    Expect.isTrue (reading <> "") "some output line sits at the top of the panel after scrolling up"
+    let lineText = reading.Substring(0, reading.LastIndexOf '|')
+    let before = float (reading.Substring(reading.LastIndexOf '|' + 1))
+    let! distUp = OutputScroll.distanceFromBottom page
+    Expect.isTrue (distUp > 200.0) (sprintf "the wheel must actually take us away from the bottom (%f px)" distUp)
+    do! OutputScroll.runEval page "unseen-one"
+    do! OutputScroll.runEval page "unseen-two"
+    // A couple of fallback SSE pushes, so a late yank would have happened.
+    do! page.WaitForTimeoutAsync(1500.0f)
+    let! after = OutputScroll.offsetOfLine page lineText
+    Expect.isTrue (abs (after - before) <= 2.0) (sprintf "scrolled up, the line I was reading (%s) must stay put (was %f px from the panel top, now %f)" lineText before after)
+    let! distAfter = OutputScroll.distanceFromBottom page
+    Expect.isTrue (distAfter > 200.0) (sprintf "scrolled up, evals must not yank the panel to the bottom (%f px from bottom)" distAfter)
+    do! OutputScroll.waitForPillText page "2 new evals"
+    let! pillUp = OutputScroll.pillVisible page
+    Expect.isTrue pillUp "the unseen-eval pill shows while scrolled up"
+    let pillButton = page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Jump to the newest output"))
+    let! pillByRole = pillButton.CountAsync()
+    Expect.equal pillByRole 1 "the pill is a real button with an accessible name"
+
+    // Click the pill: back at the bottom, pill gone, following again.
+    do! page.Locator(OutputScroll.pillSelector).ClickAsync()
+    do! page.WaitForTimeoutAsync(400.0f)
+    let! distJump = OutputScroll.distanceFromBottom page
+    Expect.isTrue (distJump <= OutputScroll.atBottomTolerance) (sprintf "the pill jumps to the bottom (%f px from bottom)" distJump)
+    let! pillGone = OutputScroll.pillVisible page
+    Expect.isFalse pillGone "the pill hides once you're back at the bottom"
+    do! OutputScroll.runEval page "refollow-one"
+    do! page.WaitForTimeoutAsync(400.0f)
+    let! distRefollow = OutputScroll.distanceFromBottom page
+    Expect.isTrue (distRefollow <= OutputScroll.atBottomTolerance) (sprintf "after the jump the panel follows new output again (%f px from bottom)" distRefollow)
+    let! pillStillGone = OutputScroll.pillVisible page
+    Expect.isFalse pillStillGone "no pill while following"
+
+    // Scrolling back to the bottom yourself re-pins too, and 1 is singular.
+    do! OutputScroll.wheelUp page 900.0f
+    do! OutputScroll.runEval page "single-one"
+    do! OutputScroll.waitForPillText page "1 new eval ↓"
+    let! singular = page.Locator(OutputScroll.pillSelector).TextContentAsync()
+    Expect.isFalse (singular.Contains "evals") (sprintf "one unseen eval reads singular (%s)" singular)
+    let! _ = page.EvaluateAsync<int>("() => { var el = document.querySelector('#output-panel'); el.scrollTop = el.scrollHeight; return 0; }")
+    do! page.WaitForTimeoutAsync(400.0f)
+    let! pillAfterSelfScroll = OutputScroll.pillVisible page
+    Expect.isFalse pillAfterSelfScroll "scrolling back to the bottom yourself hides the pill"
+    do! OutputScroll.runEval page "self-refollow"
+    do! page.WaitForTimeoutAsync(400.0f)
+    let! distSelf = OutputScroll.distanceFromBottom page
+    Expect.isTrue (distSelf <= OutputScroll.atBottomTolerance) (sprintf "after scrolling to the bottom yourself the panel follows again (%f px from bottom)" distSelf)
+  })
+
+  playwrightTest "output panel unseen-eval pill fits a phone-width viewport" (fun page -> task {
+    do! page.SetViewportSizeAsync(390, 844)
+    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! OutputScroll.fillPastOneScreen page "phone-fill"
+    do! OutputScroll.wheelUp page 900.0f
+    do! OutputScroll.runEval page "phone-unseen"
+    do! OutputScroll.waitForPillText page "1 new eval"
+    let! visible = OutputScroll.pillVisible page
+    Expect.isTrue visible "the pill shows at phone width"
+    // Inside the output area and the viewport, and nothing sits on top of it.
+    let! verdict =
+      page.EvaluateAsync<string>(
+        """() => {
+          var pill = document.querySelector('#output-new-evals');
+          var area = document.querySelector('#output-section');
+          var p = pill.getBoundingClientRect(), a = area.getBoundingClientRect();
+          var problems = [];
+          if (p.width < 1 || p.height < 1) problems.push('zero-size');
+          if (p.left < a.left - 0.5 || p.right > a.right + 0.5 || p.top < a.top - 0.5 || p.bottom > a.bottom + 0.5)
+            problems.push('outside output area ' + JSON.stringify(p) + ' vs ' + JSON.stringify(a));
+          if (p.left < 0 || p.right > window.innerWidth) problems.push('clipped by viewport');
+          if (pill.scrollWidth > pill.clientWidth + 1) problems.push('text overflows the pill');
+          var hit = document.elementFromPoint(p.left + p.width / 2, p.top + p.height / 2);
+          if (!hit || !(hit === pill || pill.contains(hit))) problems.push('covered by ' + (hit ? (hit.id || hit.className) : 'nothing'));
+          return problems.join('; ');
+        }""")
+    Expect.equal verdict "" "the pill fits at phone width with no overlap or clipping"
   })
 
   playwrightTest "keyboard help toggles on click" (fun page -> task {
