@@ -68,11 +68,11 @@ let start
   : Async<Result<IFsiSession, IsolatedStartError>> =
   async {
     let dotnet = dotnetPath ()
-    match resolveSdkVersion dotnet workingDir with
+    match resolveSdk dotnet workingDir with
     | Error reason -> return Error(SdkUnresolved reason)
-    | Ok sdkVersion ->
+    | Ok sdk ->
       // Building is a blocking process run; keep it off the caller's thread.
-      let! built = Async.AwaitTask(Task.Run(fun () -> ensureBuilt dotnet sdkVersion (hostCacheRoot ())))
+      let! built = Async.AwaitTask(Task.Run(fun () -> ensureBuiltWith dotnet sdk (hostCacheRoot ())))
       match built with
       | Error reason -> return Error(HostBuildFailed reason)
       | Ok build ->
@@ -81,7 +81,7 @@ let start
           | Built dll -> dll
           | Reused dll -> dll
         // The host is built for its SDK's target framework, so that major is the runtime it runs on by default.
-        let hostMajor = int (sdkVersion.Split('.').[0])
+        let hostMajor = int (sdk.Version.Split('.').[0])
         match RuntimeSelection.resolveRuntimeChoiceFor hostMajor projects with
         | RuntimeCompat.RuntimeMissing _ as choice -> return Error(RuntimeNotInstalled(RuntimeCompat.describe choice))
         | choice ->

@@ -36,7 +36,7 @@ let private cache = ConcurrentDictionary<string, Result<DirectoryConfig, ConfigH
 /// Start a host (no project), evaluate `content`, dispose. Blocking: config loading is a synchronous seam.
 let private evaluateUncached (workingDir: string) (content: string) : Result<DirectoryConfig, ConfigHostError> =
   let dotnet = IsolatedFsiSession.dotnetPath ()
-  match resolveSdkVersion dotnet workingDir |> Result.bind (fun sdk -> ensureBuilt dotnet sdk (IsolatedFsiSession.hostCacheRoot ())) with
+  match resolveSdk dotnet workingDir |> Result.bind (fun sdk -> ensureBuiltWith dotnet sdk (IsolatedFsiSession.hostCacheRoot ())) with
   | Error reason -> Error(HostUnavailable(describeBuildError reason))
   | Ok build ->
     let dll =

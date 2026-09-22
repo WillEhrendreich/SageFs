@@ -137,7 +137,13 @@ let embeddedSources () : Result<(string * string) list, HostBuildError> =
        (Ok [])
   |> Result.map List.rev
 
-let private runCapture (file: string) (arguments: string list) (workingDir: string) (timeoutMs: int) : Result<string, ProcessFailure> =
+let private runCaptureWith
+  (environment: (string * string) list)
+  (file: string)
+  (arguments: string list)
+  (workingDir: string)
+  (timeoutMs: int)
+  : Result<string, ProcessFailure> =
   let command = file + " " + String.concat " " arguments
   let psi = ProcessStartInfo(file)
   for argument in arguments do
@@ -149,6 +155,24 @@ let private runCapture (file: string) (arguments: string list) (workingDir: stri
   psi.CreateNoWindow <- true
   psi.Environment["DOTNET_NOLOGO"] <- "1"
   psi.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] <- "1"
+  // Loading a project in this process (Ionide.ProjInfo) sets MSBuild's own
+  // variables on the PROCESS, and every child inherits them. A child then
+  // loads that MSBuild and its targets no matter which dotnet it was told to
+  // use, which is how a repo-local SDK silently loses to the one SageFs
+  // itself runs on. Drop them so the muxer decides.
+  for key in
+    [ "MSBUILD_EXE_PATH"
+      "MSBuildSDKsPath"
+      "MSBuildExtensionsPath"
+      "MSBuildExtensionsPath32"
+      "MSBuildExtensionsPath64"
+      "DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR"
+      "DOTNET_HOST_PATH"
+      "DOTNET_ROOT"
+      "DOTNET_ROOT(x86)" ] do
+    psi.Environment.Remove key |> ignore
+  for key, value in environment do
+    psi.Environment[key] <- value
   try
     use proc = Process.Start psi
     // Drain both pipes concurrently or a chatty child deadlocks before it exits.
@@ -166,11 +190,62 @@ let private runCapture (file: string) (arguments: string list) (workingDir: stri
   with ex ->
     Error(CouldNotStart(file, ex.Message))
 
+/// The same, with nothing added to the environment.
+let private runCapture (file: string) (arguments: string list) (workingDir: string) (timeoutMs: int) : Result<string, ProcessFailure> =
+  runCaptureWith [] file arguments workingDir timeoutMs
+
+/// Which SDK builds the host, and which dotnet owns it. They are not always the
+/// same install: an Arcade repo (dotnet/fsharp, dotnet/runtime, most of
+/// dotnet/*) ships its SDK inside the checkout and points global.json at it
+/// with `"paths": [".dotnet", "$host$"]`. Resolving the version from the
+/// project's directory finds that SDK, but the host is built somewhere else,
+/// where the repo's .dotnet isn't on the search path. Carrying the root along
+/// is what makes the build use the SDK the project actually asked for.
+type SdkSelection = { Version: string; DotnetRoot: string option }
+
+module SdkSelection =
+  /// The muxer to build with: the SDK's own, when it lives outside the default
+  /// install, and the one we already have otherwise.
+  let muxer (fallback: string) (selection: SdkSelection) : string =
+    match selection.DotnetRoot with
+    | None -> fallback
+    | Some root ->
+      let candidates = [ Path.Combine(root, "dotnet.exe"); Path.Combine(root, "dotnet") ]
+      match candidates |> List.tryFind File.Exists with
+      | Some muxer -> muxer
+      | None -> fallback
+
+/// Pure: the dotnet root that owns `version`, from `dotnet --list-sdks` output
+/// ("11.0.100 [/path/to/.dotnet/sdk]"). The root is the sdk directory's parent.
+let sdkRootOf (version: string) (listSdksOutput: string) : string option =
+  listSdksOutput.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+  |> Array.tryPick (fun line ->
+    let line = line.Trim()
+    let openAt = line.IndexOf '['
+    let closeAt = line.LastIndexOf ']'
+    match openAt > 0 && closeAt > openAt with
+    | false -> None
+    | true ->
+      match line.Substring(0, openAt).Trim() = version with
+      | false -> None
+      | true -> line.Substring(openAt + 1, closeAt - openAt - 1).Trim() |> Path.GetDirectoryName |> Option.ofObj)
+
 /// The SDK version `dotnet` would use in `workingDir` (honouring global.json).
 let resolveSdkVersion (dotnet: string) (workingDir: string) : Result<string, HostBuildError> =
   runCapture dotnet [ "--version" ] workingDir 30_000
   |> Result.map (fun output -> output.Trim())
   |> Result.mapError (fun failure -> SdkUnavailable(workingDir, failure))
+
+/// The SDK for `workingDir`, and where it lives. Listing from the project's own
+/// directory is what makes a repo-local SDK visible at all.
+let resolveSdk (dotnet: string) (workingDir: string) : Result<SdkSelection, HostBuildError> =
+  resolveSdkVersion dotnet workingDir
+  |> Result.map (fun version ->
+    let root =
+      runCapture dotnet [ "--list-sdks" ] workingDir 30_000
+      |> Result.toOption
+      |> Option.bind (sdkRootOf version)
+    { Version = version; DotnetRoot = root })
 
 /// Pure: the SDK versions in `dotnet --list-sdks` output ("10.0.401 [/home/x/.dotnet/sdk]" per line).
 let parseSdkList (output: string) : string list =
@@ -205,8 +280,10 @@ let private withBuildLock (lockPath: string) (timeoutMs: int) (work: unit -> Res
     use _ = handle
     work ()
 
-/// Ensure a host built by the SDK `sdkVersion` exists under `cacheRoot`, building it if not.
-let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Result<HostBuild, HostBuildError> =
+/// Ensure a host built by `selection`'s SDK exists under `cacheRoot`, building it if not.
+let ensureBuiltWith (dotnet: string) (selection: SdkSelection) (cacheRoot: string) : Result<HostBuild, HostBuildError> =
+  let sdkVersion = selection.Version
+  let dotnet = SdkSelection.muxer dotnet selection
   embeddedSources ()
   |> Result.bind (fun sources ->
     hostHarmony ()
@@ -231,7 +308,20 @@ let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Resu
             File.WriteAllText(Path.Combine(source, name), content)
           File.WriteAllBytes(Path.Combine(source, HostHarmonyName + ".dll"), harmonyBytes)
           File.WriteAllText(Path.Combine(source, "global.json"), globalJson sdkVersion)
-          runCapture dotnet [ "build"; "FsiHost.fsproj"; "-c"; "Release"; "-o"; Path.Combine(directory, "bin"); "--nologo"; "-v"; "q" ] source 300_000
+          // DOTNET_ROOT is inherited, and it points at whichever install
+          // started us. A repo-local SDK loses to it: the muxer runs, then
+          // MSBuild loads its targets from the inherited root instead. Point
+          // the whole build at the SDK the project asked for.
+          let buildEnvironment =
+            match selection.DotnetRoot with
+            | None -> []
+            | Some root -> [ "DOTNET_ROOT", root; "DOTNET_HOST_PATH", SdkSelection.muxer dotnet selection ]
+          runCaptureWith
+            buildEnvironment
+            dotnet
+            [ "build"; "FsiHost.fsproj"; "-c"; "Release"; "-o"; Path.Combine(directory, "bin"); "--nologo"; "-v"; "q" ]
+            source
+            300_000
           |> Result.mapError (fun failure -> BuildFailed(sdkVersion, failure))
           |> Result.bind (fun _ ->
             match File.Exists dll with
@@ -239,3 +329,7 @@ let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Resu
             | true ->
               File.WriteAllText(stamp, sdkVersion)
               Ok(Built dll)))))
+
+/// Kept for callers that already know the version and nothing about where it lives.
+let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Result<HostBuild, HostBuildError> =
+  ensureBuiltWith dotnet { Version = sdkVersion; DotnetRoot = None } cacheRoot

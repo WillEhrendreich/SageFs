@@ -188,6 +188,7 @@
         <Compile Include="RuntimeCompatTests.fs" />
         <Compile Include="FsiProtocolTests.fs" />
         <Compile Include="FsiHostBuildTests.fs" />
+        <Compile Include="FsiHostSdkRootTests.fs" />
         <Compile Include="FsiHostClientTests.fs" />
         <Compile Include="FsiSessionContractTests.fs" />
         <Compile Include="McpWireProtocolTests.fs" />
