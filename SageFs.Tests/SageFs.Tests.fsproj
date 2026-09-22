@@ -405,6 +405,7 @@
         <Compile Include="AppStatePropertyTests.fs" />
         <Compile Include="EditorPropertyTests.fs" />
         <Compile Include="ArchitectureTests.fs" />
+        <Compile Include="UnionCaseShadowingTests.fs" />
         <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
         <Compile Include="TierPlanTests.fs" />
         <Compile Include="TestPortsTests.fs" />
