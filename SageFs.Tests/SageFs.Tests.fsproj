@@ -468,6 +468,7 @@
         <Compile Include="CliStatusExitCodeTests.fs" />
         <Compile Include="CliFirstRunTests.fs" />
         <Compile Include="FsiOutputParserTests.fs" />
+        <Compile Include="EvalResultSummaryTests.fs" />
         <Compile Include="SseReplayTests.fs" />
         <Compile Include="PerfTests.fs" />
         <Compile Include="SsePropertyTests.fs" />

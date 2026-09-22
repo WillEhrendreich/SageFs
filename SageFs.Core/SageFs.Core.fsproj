@@ -162,6 +162,9 @@
         <Compile Include="Features\Ghostwriter.fs" />
         <Compile Include="Features\SessionFilmstrip.fs" />
         <Compile Include="Features\FsiOutputParser.fs" />
+        <!-- Bounds a printed eval result's size before AppState.evalFn returns
+             it; see the file header for why (roast-8 "huge eval result"). -->
+        <Compile Include="Features\EvalResultSummary.fs" />
         <Compile Include="Features\BindingExplorer.fs" />
         <Compile Include="Features\LiveBindingsAdaptive.fs" />
         <Compile Include="Features\DomainModelViz.fs" />
