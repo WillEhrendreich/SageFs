@@ -27,9 +27,11 @@ Verify: `sagefs --version` should print the version. If the command isn't
 found, make sure `~/.dotnet/tools` is on your `PATH`.
 
 **Requires**: .NET 10 SDK to install SageFs itself. Check with
-`dotnet --version`. Individual sessions can target either .NET 10 or .NET
-11. Each session's host builds with that project's own SDK and runs on
-its own runtime, independent of what SageFs itself is installed with.
+`dotnet --version`. Sessions can be on .NET 10 or .NET 11. Each
+session's host builds with whichever SDK `dotnet --version` reports in your
+project's folder, and runs on that SDK's runtime. That's your `global.json`
+pin if you have one, otherwise the newest SDK installed. So if an 11 preview
+is installed and you want a project on 10, pin it.
 
 ### Daemon won't start / times out
 
