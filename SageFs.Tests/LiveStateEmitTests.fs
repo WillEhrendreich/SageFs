@@ -37,7 +37,7 @@ let liveStateEmitTests =
     testCase "WHY — LiveStateEmit.carriedStandIn — never re-declares the binding, because a re-declaration is a fresh field holding the initializer and the live value would be gone" <| fun _ ->
       let decl = declOf "module M\n\nlet mutable private hits = 0\n" "hits"
       match carriedStandIn "  " [ "M" ] decl with
-      | Error reason -> failtestf "expected a stand-in, got %s" reason
+      | Error reason -> failtestf "expected a stand-in, got %s" (LiveStateError.describe reason)
       | Ok lines ->
         let text = String.concat "\n" lines
         text.Contains "let mutable" |> Expect.isFalse "the stand-in must not declare its own storage"
@@ -47,7 +47,7 @@ let liveStateEmitTests =
     testCase "WHY — LiveStateEmit.carriedStandIn — uses a declared annotation as the property type, because then the initializer doesn't have to appear in the patch at all" <| fun _ ->
       let decl = declOf "module M\n\nlet mutable private hits : int = startCounting ()\n" "hits"
       match carriedStandIn "" [ "M" ] decl with
-      | Error reason -> failtestf "expected a stand-in, got %s" reason
+      | Error reason -> failtestf "expected a stand-in, got %s" (LiveStateError.describe reason)
       | Ok lines ->
         let text = String.concat "\n" lines
         text |> Expect.stringContains "the getter is typed by the annotation" "with get () : int ="
@@ -64,7 +64,7 @@ let liveStateEmitTests =
       let source = "module M\n\nlet mutable tuned = startCounting ()\n"
       let decls = match extractDecls source with Ok d -> d | Error e -> failtestf "%s" e
       match probeCode decls (declOf source "tuned") with
-      | Error reason -> failtestf "expected probe code, got %s" reason
+      | Error reason -> failtestf "expected probe code, got %s" (LiveStateError.describe reason)
       | Ok code ->
         code |> Expect.stringContains "the initializer is wrapped in a function" "let __sagefsInit_tuned () ="
         code.Contains "__sagefsInit_tuned ()\n" |> Expect.isFalse "and nothing calls it"

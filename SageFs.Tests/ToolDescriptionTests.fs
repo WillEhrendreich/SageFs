@@ -219,8 +219,10 @@ let descriptionPropertyTests =
       // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
       // Slice 2: join_cohort/leave_cohort/acquire_claim/release_claim/
       // reassign_claim/request_landing/get_cohort_status) + the 1 item-14c
-      // cohort tool (set_integration_ref).
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 50
+      // cohort tool (set_integration_ref) + reset_hot_reload_state, the one
+      // way an agent can see and reset live state a hot-reload save kept
+      // (hot-reload-state-spec.md rule 3).
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 51
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

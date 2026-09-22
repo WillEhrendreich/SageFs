@@ -711,7 +711,7 @@ let run (sessionId: string) (port: int) = async {
     | false, _ -> return Features.KeptState.ResetOutcome.NothingPending binding
     | true, pending ->
       match Features.LiveStateEmit.resetCode pending.Decls pending.Decl with
-      | Error reason -> return Features.KeptState.ResetOutcome.ResetFailed(binding, reason)
+      | Error reason -> return Features.KeptState.ResetOutcome.ResetFailed(binding, Features.LiveStateEmit.LiveStateError.describe reason)
       | Ok code ->
         let budget = DevReload.DevReloadConfig.defaults.CompileBudgetMs
         let request = { Code = code; Args = Map.ofList [ "hotReload", box true ] }
@@ -722,7 +722,7 @@ let run (sessionId: string) (port: int) = async {
           | Error ex -> return Features.KeptState.ResetOutcome.ResetFailed(binding, ex.Message)
           | Ok output ->
             match Features.LiveStateEmit.parseReset output with
-            | Error reason -> return Features.KeptState.ResetOutcome.ResetFailed(binding, reason)
+            | Error reason -> return Features.KeptState.ResetOutcome.ResetFailed(binding, Features.LiveStateEmit.LiveStateError.describe reason)
             | Ok value ->
               keptPending.TryRemove binding |> ignore
               Log.info "Hot reload: reset '%s' to its new initializer, it's %s now" binding value
@@ -941,10 +941,10 @@ let run (sessionId: string) (port: int) = async {
         | Error reason -> return Error reason
         | Ok code ->
           match! evalWithinBudget { Code = code; Args = Map.ofList [ "hotReload", box true ] } with
-          | Error budget -> return Error (sprintf "the probe didn't finish within %.0fs" budget.TotalSeconds)
+          | Error budget -> return Error (Features.LiveStateEmit.LiveStateError.TimedOut budget.TotalSeconds)
           | Ok response ->
             match response.EvaluationResult with
-            | Error ex -> return Error ex.Message
+            | Error ex -> return Error (Features.LiveStateEmit.LiveStateError.EvalFailed ex.Message)
             | Ok output -> return Features.LiveStateEmit.parseProbe output }
       // Re-emit the changed functions against the compiled module and report
       // what reached the running process. `carried` are the unedited private
@@ -978,7 +978,7 @@ let run (sessionId: string) (port: int) = async {
             | _ ->
             match Middleware.CompilationContext.emitPatchCarrying filePath current functions carried with
             | Error (unreachable, reason) ->
-              Log.info "Hot reload: %s can't carry '%s' into the patch: %s" fileName unreachable.Name reason
+              Log.info "Hot reload: %s can't carry '%s' into the patch: %s" fileName unreachable.Name (Features.LiveStateEmit.LiveStateError.describe reason)
               let user = functions |> List.tryHead |> Option.map _.Name |> Option.defaultValue fileName
               return! restartOrFallBack fileName (Features.ReloadPlanning.ReloadChange.UsesNonPublicMember (user, unreachable.Name)) []
             | Ok patch ->
@@ -1119,7 +1119,7 @@ let run (sessionId: string) (port: int) = async {
                 | Ok (Features.LiveStateEmit.ProbeReading.Retyped (was, now)) ->
                   Some (Features.ReloadPlanning.ReloadChange.MutableStateRetyped (d.Name, was, now))
                 | Error reason ->
-                  Log.warn "Hot reload: couldn't check the live value of '%s', so it isn't kept: %s" d.Name reason
+                  Log.warn "Hot reload: couldn't check the live value of '%s', so it isn't kept: %s" d.Name (Features.LiveStateEmit.LiveStateError.describe reason)
                   Some (Features.ReloadPlanning.ReloadChange.MutableStateChanged d.Name))
             match refusals with
             | r :: rs -> return! restartOrFallBack fileName r rs

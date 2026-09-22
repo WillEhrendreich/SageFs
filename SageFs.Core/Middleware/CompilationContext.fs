@@ -689,7 +689,7 @@ let emitPatchCarrying
     (decls: SageFs.Features.ReloadPlanning.FileDecls)
     (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
     (carried: SageFs.Features.ReloadPlanning.SourceDecl list)
-    : Result<PreprocessResult, SageFs.Features.ReloadPlanning.SourceDecl * string> =
+    : Result<PreprocessResult, SageFs.Features.ReloadPlanning.SourceDecl * SageFs.Features.LiveStateEmit.LiveStateError> =
   let pad depth = String.replicate depth "  "
   carried
   |> List.fold

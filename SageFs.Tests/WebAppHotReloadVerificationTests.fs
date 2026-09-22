@@ -290,6 +290,10 @@ module ShapeMatrix =
     /// The shape cannot be patched in place; the running app must still serve
     /// the pre-edit value, and the reason is stated here.
     | RestartOnly of reason: string
+    /// Live state: the edit is to an initializer, and the app KEEPS its live
+    /// value (rule 3 of hot-reload-state-spec.md). It must still serve the
+    /// pre-edit value, and the wire must not claim a change.
+    | KeepsLiveValue of reason: string
 
   type Cell = {
     /// The route segment: GET /shape/<Name>.
@@ -351,12 +355,16 @@ module ShapeMatrix =
           "nothing is called at request time, so there is no method entry point to re-point: the value was baked into the captured closure at startup" }
 
     { Name = "mutable"
-      Why = "a MUTABLE module-level field read by the handler"
+      Why = "a MUTABLE module-level field read by the handler, whose INITIALIZER is edited"
       Find = "let mutable mutableField = \"A\""
       Replace = "let mutable mutableField = \"B\""
+      // Was RestartOnly. Rule 3 of the state spec: the field is the app's live
+      // data, so an edited initializer keeps the live value and waits for a
+      // reset instead of forcing a restart. The served value is the same "A"
+      // either way; what changed is that it's on purpose and the save says so.
       Expected =
-        RestartOnly
-          "module initialisation already assigned the field, and a reader compiles to a direct field load (ldfld) that no method detour can rewire" }
+        KeepsLiveValue
+          "the field is live data the app is holding, so the edited initializer waits for a reset instead of replacing it" }
   ]
 
 /// The fixture's App.fs is the file we edit on disk. This test is the plan's
@@ -606,7 +614,8 @@ let webAppHotReloadVerificationTests =
             let served =
               match cell.Expected with
               | ShapeMatrix.Reloads -> servedSettled cell.Name "B"
-              | ShapeMatrix.RestartOnly _ -> shape cell.Name
+              | ShapeMatrix.RestartOnly _
+              | ShapeMatrix.KeepsLiveValue _ -> shape cell.Name
 
             // ── The honesty invariant, asserted BEFORE the per-cell verdict ──
             //
@@ -646,6 +655,14 @@ let webAppHotReloadVerificationTests =
                   "%s — this shape CANNOT be patched in place (%s), so the running app must still serve the pre-edit value. If this now serves the new value the limitation is gone: move the cell to Reloads and update docs/hot-reload.md.\nWorker said: %s\nHost log:\n%s"
                   cell.Name reason verdict (hostLog.ToString()))
                 "A" served
+            | ShapeMatrix.KeepsLiveValue reason ->
+              Expect.equal
+                (sprintf
+                  "%s: %s, so the running app must still serve its live value.\nWorker said: %s\nHost log:\n%s"
+                  cell.Name reason verdict (hostLog.ToString()))
+                "A" served
+              verdict
+              |> Expect.stringContains (sprintf "%s: the save has to say what it kept" cell.Name) "\"outcome\":\"KeptLiveState\""
         finally
           writeFixtureFile shapesSource original
       finally

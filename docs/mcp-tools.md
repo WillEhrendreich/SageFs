@@ -64,6 +64,7 @@ HTTP endpoints are not MCP tools.
 |:---|:---|
 | `enable_hot_reload` | Turn on file watching and hot reload for the session. |
 | `disable_hot_reload` | Turn it off. |
+| `reset_hot_reload_state` | List the live state a save kept when you edited its initializer (binding, kept value, waiting initializer), or pass a binding to run only that initializer in the running app. |
 | `run_app` | Run the session's executable project the way `dotnet run` would, with hot reload. Applies `launchSettings.json` (first "Project" profile) and picks a free loopback port when the project sets no URL. Restarts an Interactive session into the Hot Reload workflow first, so REPL bindings are lost. Saving source then hot-patches the running app, including a route table built once at startup. |
 | `stop_app` | Stop the app started by `run_app`. Its web host stops and frees its port; the session keeps running. |
 

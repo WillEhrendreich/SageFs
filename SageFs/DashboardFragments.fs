@@ -2393,7 +2393,16 @@ let resolveThemePush
 /// the exact field the worker reads (`path`/`directory`) immediately
 /// before `@post` fires, so `@post` still ships it — Datastar's actions
 /// always send the current signals store as the request body.
-let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: bool |} list) (watchedCount: int) =
+///
+/// `kept` is live state a save kept instead of resetting (rule 3 of the state
+/// spec). Each one gets a line saying what was kept and what's waiting, and a
+/// Reset button that re-runs only that initializer (`$binding` is the field
+/// the worker's reset-state endpoint reads).
+let renderHotReloadPanelWithKept
+  (sessionId: string)
+  (files: {| path: string; watched: bool |} list)
+  (watchedCount: int)
+  (kept: SageFs.Features.ReloadOutcome.KeptValue list) =
   let total = List.length files
   let hotReloadWatchAllLoading = "hotReloadWatchAllLoading"
   let hotReloadUnwatchAllLoading = "hotReloadUnwatchAllLoading"
@@ -2411,6 +2420,30 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
     [ Ds.indicator signal; Ds.attr' ("disabled", sprintf "$%s" signal) ]
   let loadingSpan (signal: string) =
     Elem.span [ Ds.show (sprintf "$%s" signal) ] [ Text.raw "⏳ " ]
+  let hotReloadResetLoading = "hotReloadResetLoading"
+  let keptNotice =
+    match kept with
+    | [] -> []
+    | _ ->
+      [ Elem.div
+          [ Attr.class' "kept-state"
+            Attr.style "margin-bottom: 0.5rem; font-size: 0.75rem; display: flex; flex-direction: column; gap: 4px;" ]
+          [ Elem.div [ Attr.class' "meta" ] [ Text.raw "Kept live state. Your edits to these initializers are waiting for a reset:" ]
+            yield!
+              kept
+              |> List.map (fun k ->
+                Elem.div
+                  [ Attr.style "display: flex; flex-wrap: wrap; align-items: center; gap: 4px;" ]
+                  [ Elem.span
+                      [ Attr.style "flex: 1 1 12rem; overflow-wrap: anywhere;" ]
+                      [ textEnc (sprintf "kept %s = %s, new initializer %s" k.Binding k.KeptValue k.NewInitializer) ]
+                    Elem.button
+                      ([ Attr.class' "eval-btn"
+                         Attr.style "height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+                         Attr.create "aria-label" (attrEnc (sprintf "Reset %s: run its new initializer %s" k.Binding k.NewInitializer)) ]
+                       @ indicatorAttrs hotReloadResetLoading
+                       @ [ Ds.onClick (hotReloadClick (sprintf "$binding = %s; " (jsStringLiteral k.Binding)) "reset-state") ])
+                      [ loadingSpan hotReloadResetLoading; Text.raw "Reset" ] ]) ] ]
   let grouped =
     files
     |> List.groupBy (fun f ->
@@ -2428,6 +2461,7 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
     Elem.div [ Attr.class' "meta"; Attr.style "margin-bottom: 0.5rem; font-size: 0.8rem;" ] [
       textEnc (sprintf "%d of %d files watched" watchedCount total)
     ]
+    yield! keptNotice
     // With zero discovered files, Watch All/Unwatch All were previously
     // enabled, clickable, and silently did nothing — no toast, no change,
     // no explanation (sagefs-ux-roast.md §4.3). Say so instead of offering
@@ -2505,6 +2539,10 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
       ]
     ]
   ]
+
+/// The panel with nothing kept.
+let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: bool |} list) (watchedCount: int) =
+  renderHotReloadPanelWithKept sessionId files watchedCount []
 
 /// Render empty hot-reload panel when no session is active.
 let renderHotReloadEmpty =

@@ -62,7 +62,11 @@ let private toolsFor (port: int) : SageFsTools =
       ActiveProject = None
       ProjectRoles = []
       App = AppRun.AppRunState.NotRunning }
-  let ops = { SessionManagementOps.stub with GetSessionInfo = fun _ -> Task.FromResult(Some info) }
+  let ops =
+    { SessionManagementOps.stub with
+        GetSessionInfo = fun _ -> Task.FromResult(Some info)
+        // A routable worker: tool routing refuses a session it can't reach.
+        GetProxy = fun _ -> Task.FromResult(Some(fun _ -> async { return WorkerResponse.WorkerShuttingDown })) }
   let ctx : McpContext =
     { FrictionStore = None
       DiagnosticsChanged = Event<Features.DiagnosticsStore.T>().Publish

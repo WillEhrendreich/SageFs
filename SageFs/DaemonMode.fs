@@ -728,6 +728,7 @@ let createHotReloadProxyEndpoints
   [
     proxyGetRoute "/hotreload"
     proxyPostRoute "/hotreload/toggle"
+    proxyPostRoute "/hotreload/reset-state"
     proxyPostRoute "/hotreload/watch-all"
     proxyPostRoute "/hotreload/unwatch-all"
     proxyPostRoute "/hotreload/watch-project"
@@ -2807,7 +2808,20 @@ let run
                watched = el.GetProperty("watched").GetBoolean() |})
           |> Seq.toList
         let watchedCount = root.GetProperty("watchedCount").GetInt32()
-        {| files = files; watchedCount = watchedCount |})
+        // Initializers saves kept waiting for a reset (rule 3). A worker from
+        // before rule 3 doesn't send `kept`, and that just means nothing's kept.
+        let kept =
+          match root.TryGetProperty "kept" with
+          | true, arr when arr.ValueKind = Text.Json.JsonValueKind.Array ->
+            arr.EnumerateArray()
+            |> Seq.map (fun k ->
+              ({ Binding = k.GetProperty("binding").GetString() |> Option.ofObj |> Option.defaultValue ""
+                 KeptValue = k.GetProperty("keptValue").GetString() |> Option.ofObj |> Option.defaultValue ""
+                 NewInitializer = k.GetProperty("newInitializer").GetString() |> Option.ofObj |> Option.defaultValue "" }
+               : Features.ReloadOutcome.KeptValue))
+            |> Seq.toList
+          | _ -> []
+        {| files = files; watchedCount = watchedCount; kept = kept |})
     GetWarmupContext = fun sessionId ->
       fetchWorkerEndpoint sessionId "/warmup-context" dashboardFetchTimeoutSec
         (WorkerProtocol.Serialization.deserialize<WarmupContext>)

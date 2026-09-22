@@ -57,10 +57,9 @@ let eagerHandler : unit -> string =
   let computedAtStartup = computeEager ()
   fun () -> computedAtStartup
 
-/// A MUTABLE module-level field. Module initialisation already ran, so editing
-/// the initialiser changes nothing the running process reads, and a caller that
-/// reads the field compiles to a direct field load that no method detour can
-/// rewire either. Restart-only.
+/// A MUTABLE module-level field. It's the app's live data, so editing its
+/// initializer keeps the live value (rule 3 of the state spec) and the save
+/// says it kept it. The new initializer runs when you reset it.
 let mutable mutableField = "A"
 
 // ── the table, captured BY VALUE at startup, exactly like a Falco route list ──

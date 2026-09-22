@@ -161,6 +161,10 @@ let private gatingDomain : Map<string, ToolGate> =
     "report_friction", ToolGate.AlwaysAvailable
     "enable_hot_reload", ToolGate.AlwaysAvailable
     "disable_hot_reload", ToolGate.AlwaysAvailable
+    // Lists or resets live state a hot-reload save kept. It goes straight to
+    // the worker, which answers for itself when it can't (no worker, nothing
+    // kept), so it doesn't need the session-state gate either.
+    "reset_hot_reload_state", ToolGate.AlwaysAvailable
     "stop_session", ToolGate.AlwaysAvailable
     // switch_session is navigation, not code execution: it only rebinds which
     // session the agent views and moves the daemon-global active pointer. It

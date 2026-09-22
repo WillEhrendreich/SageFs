@@ -469,6 +469,13 @@ let withEchoOutcomeNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<s
         return raise (SageFs.SageFsErrorException(err))
   }
 
+/// One client for reset_hot_reload_state's calls to the worker (the list and
+/// the reset). A reset runs one initializer, so it gets the same budget as a
+/// hot-reload compile.
+let private keptStateClient =
+  new System.Net.Http.HttpClient(
+    Timeout = System.TimeSpan.FromMilliseconds(float SageFs.DevReload.DevReloadConfig.defaults.CompileBudgetMs))
+
 type SageFsTools(ctx: McpContext, logger: ILogger<SageFsTools>) =
     [<McpServerTool>]
     [<Description("""Send F# code to the FSI REPL session. Each ';;' marks a transaction boundary.
@@ -1010,6 +1017,73 @@ var, this is per-session and reversible. The env var, if set, takes precedence."
                        "To disable hot reload daemon-wide, start the daemon with SAGEFS_DEVRELOAD=0." |]
         })
         |> withEcho ctx "disable_hot_reload"
+
+    [<McpServerTool>]
+    [<Description("""List or reset live state that hot reload KEPT.
+
+When you edit the initializer of a module-level `let mutable` while the app is
+running (say `let mutable count = 0` to `= 10`), hot reload keeps the app's live
+value instead of throwing it away, and the save says so: "kept 'App.count' = 37,
+new initializer 10". The new initializer waits here until you reset it.
+
+WORKFLOW:
+1. Call with no `binding` to list what's kept: each entry has the binding, the
+   value the app kept and the initializer that's waiting.
+2. Call with `binding` (the qualified name from that list, e.g. App.State.count)
+   to run ONLY that initializer and write its value into the running app. Nothing
+   else in the file runs and nothing else is touched.
+
+A changed TYPE is never kept (that's a restart), so everything listed here is safe
+to reset. The dashboard's Hot Reload panel shows the same list with a Reset button.""")>]
+    member _.reset_hot_reload_state(
+        [<Description("Qualified binding to reset, e.g. App.State.count. Leave empty to list what's kept.")>]
+        [<Optional; DefaultParameterValue("")>]
+        binding: string,
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        logger.LogDebug("MCP-TOOL: reset_hot_reload_state called: binding={Binding}", binding)
+        withSessionWd ctx "mcp" wd (fun sidStr -> task {
+            match SageFs.WorkerProtocol.SessionId.validate sidStr with
+            | Error _ -> return sprintf "Error: '%s' isn't a session id I know." sidStr
+            | Ok sid ->
+            let! infoOpt = ctx.SessionOps.GetSessionInfo sid
+            match infoOpt |> Option.bind (fun i -> SageFs.WorkerProtocol.SessionLifecycleStatus.workerPort i.Status) with
+            | None -> return "Error: the session has no running worker, so there's no live state to list or reset. Check get_fsi_status."
+            | Some port ->
+            let workerUrl = sprintf "http://127.0.0.1:%d" port
+            match System.String.IsNullOrWhiteSpace binding with
+            | true ->
+                let! json = keptStateClient.GetStringAsync(workerUrl + "/hotreload")
+                use doc = System.Text.Json.JsonDocument.Parse json
+                let kept =
+                    match doc.RootElement.TryGetProperty "kept" with
+                    | true, arr when arr.ValueKind = System.Text.Json.JsonValueKind.Array ->
+                        [ for k in arr.EnumerateArray() ->
+                            sprintf "kept %s = %s, new initializer %s"
+                              (k.GetProperty("binding").GetString())
+                              (k.GetProperty("keptValue").GetString())
+                              (k.GetProperty("newInitializer").GetString()) ]
+                    | _ -> []
+                match kept with
+                | [] -> return "Nothing is kept. No save has held on to live state waiting for a reset."
+                | lines ->
+                    return
+                        "Kept live state (each initializer runs when you reset it; pass its binding to this tool):\n"
+                        + (lines |> List.map (sprintf "- %s") |> String.concat "\n")
+            | false ->
+                use content = new System.Net.Http.StringContent(System.Text.Json.JsonSerializer.Serialize({| binding = binding |}), System.Text.Encoding.UTF8, "application/json")
+                let! resp = keptStateClient.PostAsync(workerUrl + "/hotreload/reset-state", content)
+                let! body = resp.Content.ReadAsStringAsync()
+                use doc = System.Text.Json.JsonDocument.Parse body
+                let message = doc.RootElement.GetProperty("message").GetString()
+                match resp.IsSuccessStatusCode with
+                | true -> return message
+                | false -> return "Error: " + message
+        })
+        |> withEcho ctx "reset_hot_reload_state"
 
     [<Description("""Get code completions at a cursor position. Returns available completions (types, functions, members) for the code at the given position. Useful for discovering APIs before writing code.
 

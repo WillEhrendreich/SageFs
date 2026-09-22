@@ -218,7 +218,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 49 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 51 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -228,9 +228,10 @@ let toolRegistrationTests =
       | Some methods ->
         // 42 (incl. switch_workflow, finally [<McpServerTool>]-registered) + the
         // 7 Claims v1 cohort tools (cohort-integration-plan.md Slice 2) + the 1
-        // item-14c cohort tool (set_integration_ref).
+        // item-14c cohort tool (set_integration_ref) + reset_hot_reload_state
+        // (hot-reload-state-spec.md rule 3).
         methods.Length
-          |> Expect.equal "MCP tool method count" 50
+          |> Expect.equal "MCP tool method count" 51
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -382,7 +383,7 @@ let stateTransitionSafetyTests =
         | Ok _ ->
           failtestf "bogus tool must be rejected in %A" state)
 
-    testCase "250-combo safety: all MCP tools × all states never throw (reflection)"
+    testCase "255-combo safety: all MCP tools × all states never throw (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -403,10 +404,11 @@ let stateTransitionSafetyTests =
                 "checkToolAvailability threw for (%A, %s): %s"
                 state tool ex.Message))
         // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
-        // Slice 2) + the 1 item-14c cohort tool (set_integration_ref) = 49.
+        // Slice 2) + the 1 item-14c cohort tool (set_integration_ref) +
+        // reset_hot_reload_state = 51.
         tested
         |> Expect.equal
-          "should test 5 states × 50 tools = 250" 250
+          "should test 5 states × 51 tools = 255" 255
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

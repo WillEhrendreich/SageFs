@@ -819,7 +819,7 @@ let buildDashboardSnapshotWithSessions
   (lastThemeName: string)
   (cachedWorkerData: DashboardWorkerCache option)
   (sessions: WorkerProtocol.SessionInfo list)
-  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
+  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let sessionId = currentSessionId
     let sid = WorkerProtocol.SessionId.value sessionId
@@ -888,7 +888,7 @@ let buildDashboardSnapshotWithSessions
       match sid.Length > 0 with
       | true ->
         match hrState with
-        | Some hr -> renderHotReloadPanel sid hr.files hr.watchedCount
+        | Some hr -> renderHotReloadPanelWithKept sid hr.files hr.watchedCount hr.kept
         | None -> renderHotReloadEmpty
       | false -> renderHotReloadEmpty
     let scPanel =
@@ -1015,7 +1015,7 @@ let buildDashboardSnapshot
   (lastWorkingDir: string)
   (lastThemeName: string)
   (cachedWorkerData: DashboardWorkerCache option)
-  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
+  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int; kept: SageFs.Features.ReloadOutcome.KeptValue list |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let! sessions = q.GetAllSessions ()
     return! buildDashboardSnapshotWithSessions q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions

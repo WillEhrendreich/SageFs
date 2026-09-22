@@ -37,18 +37,42 @@ let typeNameCandidates (segments: string list) : string list =
 let private fsharpString (s: string) =
   "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""
 
+/// Why live state couldn't be carried, kept, probed or reset. Every case
+/// ends in the app being left alone, and `describe` says why.
+[<RequireQualifiedAccess>]
+type LiveStateError =
+  /// The binding's own source has no initializer to read.
+  | NoInitializer of binding: string
+  /// FSI's output didn't carry the probe's or reset's answer.
+  | NoAnswer of fsiOutput: string
+  /// There was an answer and it didn't decode.
+  | Garbled of detail: string
+  /// The submission itself failed in FSI.
+  | EvalFailed of message: string
+  /// The submission ran past its budget and was abandoned.
+  | TimedOut of seconds: float
+
+module LiveStateError =
+  let describe =
+    function
+    | LiveStateError.NoInitializer binding -> sprintf "'%s' has no initializer I can read from its source" binding
+    | LiveStateError.NoAnswer output -> sprintf "the running app didn't answer (FSI said: %s)" output
+    | LiveStateError.Garbled detail -> sprintf "the running app's answer didn't make sense: %s" detail
+    | LiveStateError.EvalFailed message -> sprintf "FSI couldn't run it: %s" message
+    | LiveStateError.TimedOut seconds -> sprintf "it didn't finish within %.0fs" seconds
+
 /// The right-hand side of a value binding, from its own source text. `Header`
 /// is everything before the `=`, so the initializer is whatever follows the
 /// first `=` after it.
-let initializerOf (decl: SourceDecl) : Result<string, string> =
+let initializerOf (decl: SourceDecl) : Result<string, LiveStateError> =
   match decl.Text.IndexOf(decl.Header, StringComparison.Ordinal) with
-  | -1 -> Error(sprintf "the declaration of '%s' doesn't contain its own header" decl.Name)
+  | -1 -> Error(LiveStateError.NoInitializer decl.Name)
   | start ->
     match decl.Text.IndexOf('=', start + decl.Header.Length) with
-    | -1 -> Error(sprintf "the declaration of '%s' has no '='" decl.Name)
+    | -1 -> Error(LiveStateError.NoInitializer decl.Name)
     | eq ->
       match decl.Text.Substring(eq + 1).Trim() with
-      | "" -> Error(sprintf "the declaration of '%s' has an empty initializer" decl.Name)
+      | "" -> Error(LiveStateError.NoInitializer decl.Name)
       | rhs -> Ok rhs
 
 /// Lines of `text` re-indented to start at `indent`, keeping each line's
@@ -125,7 +149,7 @@ let private locateStorage (indent: string) (moduleSegments: string list) (decl: 
 /// F# infers the type from the initializer, and the initializer never runs.
 /// That matters, because re-running it is exactly what rule 1 forbids (and an
 /// initializer can have side effects, like opening a connection).
-let carriedStandIn (indent: string) (moduleSegments: string list) (decl: SourceDecl) : Result<string list, string> =
+let carriedStandIn (indent: string) (moduleSegments: string list) (decl: SourceDecl) : Result<string list, LiveStateError> =
   let typed body =
     let handle = handleName decl
     locateStorage indent moduleSegments decl
@@ -174,7 +198,7 @@ let private b64Marker = "SAGEFS_LIVE_STATE:"
 /// initializer as a function, in the file's own module path with its opens and
 /// `open global.<compiled module>`, so it compiles exactly like the source did.
 /// Wrapping it in a function is the point: defining it runs nothing.
-let private initializerModule (decls: FileDecls) (decl: SourceDecl) : Result<string list, string> =
+let private initializerModule (decls: FileDecls) (decl: SourceDecl) : Result<string list, LiveStateError> =
   initializerOf decl
   |> Result.map (fun init ->
     let path = decls.ModulePath @ decl.Container
@@ -208,7 +232,7 @@ let private previewOf (value: string) =
 /// The FSI submission that checks a kept binding at save time: is the edited
 /// initializer the same type as the live value, and what IS the live value.
 /// It never runs the initializer and never writes the storage.
-let probeCode (decls: FileDecls) (decl: SourceDecl) : Result<string, string> =
+let probeCode (decls: FileDecls) (decl: SourceDecl) : Result<string, LiveStateError> =
   initializerModule decls decl
   |> Result.map (fun moduleLines ->
     let segments = decls.ModulePath @ decl.Container
@@ -227,7 +251,7 @@ let probeCode (decls: FileDecls) (decl: SourceDecl) : Result<string, string> =
 /// The FSI submission behind a reset: run ONLY this binding's new initializer
 /// and store the result in the app's own field. Answers with the new value's
 /// preview.
-let resetCode (decls: FileDecls) (decl: SourceDecl) : Result<string, string> =
+let resetCode (decls: FileDecls) (decl: SourceDecl) : Result<string, LiveStateError> =
   initializerModule decls decl
   |> Result.map (fun moduleLines ->
     let segments = decls.ModulePath @ decl.Container
@@ -240,21 +264,21 @@ let resetCode (decls: FileDecls) (decl: SourceDecl) : Result<string, string> =
     moduleLines @ reportExpression body "previewText" |> String.concat "\n")
 
 /// The payload a probe or reset submission reported, out of FSI's echo of it.
-let private reportedText (evalOutput: string) : Result<string, string> =
+let private reportedText (evalOutput: string) : Result<string, LiveStateError> =
   let m = System.Text.RegularExpressions.Regex.Match(evalOutput, System.Text.RegularExpressions.Regex.Escape b64Marker + "([A-Za-z0-9+/=]*)")
   match m.Success with
-  | false -> Error(sprintf "the running app didn't answer the live-state probe (FSI said: %s)" evalOutput)
+  | false -> Error(LiveStateError.NoAnswer evalOutput)
   | true ->
     try Ok(System.Text.Encoding.UTF8.GetString(Convert.FromBase64String m.Groups.[1].Value))
-    with ex -> Error(sprintf "the live-state probe's answer didn't decode: %s" ex.Message)
+    with ex -> Error(LiveStateError.Garbled ex.Message)
 
-let parseProbe (evalOutput: string) : Result<ProbeReading, string> =
+let parseProbe (evalOutput: string) : Result<ProbeReading, LiveStateError> =
   reportedText evalOutput
   |> Result.bind (fun text ->
     match text.Split('\n') |> Array.toList with
     | "keeps" :: preview -> Ok(ProbeReading.Keeps(String.concat "\n" preview))
     | [ "retyped"; was; now ] -> Ok(ProbeReading.Retyped(was, now))
-    | _ -> Error(sprintf "the live-state probe answered something I don't understand: %s" text))
+    | _ -> Error(LiveStateError.Garbled text))
 
 /// The new value's preview after a reset.
-let parseReset (evalOutput: string) : Result<string, string> = reportedText evalOutput
+let parseReset (evalOutput: string) : Result<string, LiveStateError> = reportedText evalOutput

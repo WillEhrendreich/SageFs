@@ -76,6 +76,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "report_friction"
       "request_landing"
       "reset_fsi_session"
+      "reset_hot_reload_state"
       "run_app"
       "send_fsharp_code"
       "set_integration_ref"
