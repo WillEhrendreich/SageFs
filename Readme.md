@@ -61,6 +61,8 @@ Save a `.fs` file and SageFs figures out which functions changed and uses [Harmo
 
 Because it re-points **methods**, not everything is patchable: a handler that's *called* per request reloads, a handler whose output was *computed once* at startup can't. Prefer `let getHome (ctx: HttpContext) = ...` over `let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. `let mutable` state, changed signatures, and changed types restart the app instead of pretending to reload.
 
+There's one real gap. If your `.SageFs/init.fsx` `#load`s your sources and starts the app during warmup, a body edit comes out as a restart on .NET 10. On .NET 11 it patches the wrong copy, and that's why .NET 11 isn't the default yet. Next up: patching the copy the app actually calls, then state that survives a reload. Untouched mutables keep their value, and an edited initializer keeps the live value and tells you so, with a reset button for when you do want it fresh. The details are in [docs/hot-reload.md](docs/hot-reload.md#where-it-falls-short-right-now).
+
 > **[docs/hot-reload.md](docs/hot-reload.md) is the authority.** It carries the full what-reloads / what-restarts table, each row pinned by an executable test. This README deliberately doesn't duplicate it, so the two can't drift apart. (No test measures reload latency, so no figure is quoted here.)
 
 ### 🤖 AI Agent Support

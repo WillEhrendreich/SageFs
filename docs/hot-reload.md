@@ -4,7 +4,9 @@ Save a `.fs` file and the change lands in the process that's already running you
 app, including apps whose route table was built once at startup, the Falco /
 Giraffe / Saturn pattern (`module App.Program` + `let routes = [...]`). No
 restart. This is the thing I most wanted from a REPL and couldn't get anywhere
-else, so I built it.
+else, so I built it. There's one real gap right now, and a plan for values
+and state. Both are further down, under
+[Where it falls short right now](#where-it-falls-short-right-now).
 
 > **Prerequisite:** Hot reload requires the **Hot Reload workflow**:
 > `SessionWorkflow.HotReload`, which `switch_workflow` still spells `live` /
@@ -83,6 +85,57 @@ One requirement: the baseline is the source your loaded assembly was
 built from, so build the project before starting the session. A source file
 edited after its last build gets re-evaluated whole instead of patched, and
 SageFs logs that it's doing so.
+
+## Where it falls short right now
+
+I'd rather you hear this from me than find it at 11pm.
+
+- **Apps started by an init script that `#load`s your sources.** If your
+  `.SageFs/init.fsx` does `#load "Greeting.fs"` then `#load "App.fs"` and starts
+  the app during warmup, a body edit doesn't patch in place on .NET 10. It comes
+  out as a restart. You get the new code, but your live state is gone. On .NET
+  11 it's worse, and it's the reason .NET 11 isn't the default yet: the patch
+  lands on the compiled copy of the function, the app is calling the copy the
+  init script loaded, and the outcome still says "Patched". It works fine if
+  the app runs from your compiled project, or if you `#load` your sources
+  into the session yourself and then start the app. The broken path is only the
+  one where the init script loads the sources during warmup. There's a test
+  that pins this as broken (`SageFs.Tests/FsiEmitSimTests.fs`), and I'm fixing
+  it now.
+- **Mutable state you didn't touch.** Editing one function in a file shouldn't
+  touch a `let mutable` next to it, since only the changed functions get
+  re-evaluated, so its value should survive. No test proves that yet, so don't
+  treat it as a promise until one does. A **private** mutable that the edited
+  function reads is worse: that forces a restart, because the patch can't see
+  private members.
+- **Editing a value or a mutable's initializer** restarts the app (see the
+  table above).
+
+## What I'm working on
+
+These are in the order I'm doing them. None of them is done until a real-app
+test proves it on both .NET 10 and .NET 11.
+
+1. **Patch the copy the app actually calls.** SageFs will track which copy of a
+   function the app captured when it built its handler table, and aim the
+   patch there. If it can't find that copy it'll say restart-required, with the
+   reason, and never "Patched". That fixes the init-script case above on both
+   runtimes, and it's what unblocks .NET 11 as the default.
+2. **State survives a reload.** An untouched `let mutable`, ref cell or mutable
+   object keeps its live value, private ones included, and there'll be a test
+   pinning it.
+3. **Editing a live mutable's initializer keeps the live value and tells you.**
+   Change `let mutable count = 0` to `= 10` and the running counter keeps
+   counting. SageFs says something like "kept `count` = 37, your new
+   initializer applies on reset", and gives you a reset button in the dashboard
+   plus an MCP call. It only restarts if the type changed.
+4. **A redefined value gets its new value**, as long as nothing captured it at
+   startup. If something did, you get a restart and the reason, not a fake
+   patch.
+
+The rule behind all of it: code changes take effect, state stays, and SageFs
+never does either one quietly. It's the same place Flutter, React Fast Refresh
+and Clojure's `defonce` ended up, and I think they got it right.
 
 ## Browser auto-refresh (DevReload)
 
