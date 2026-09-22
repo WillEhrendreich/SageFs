@@ -111,6 +111,14 @@
              age only and ignores the version. -->
         <Compile Include="RetentionSim.fs" />
         <Compile Include="RetentionSimInvariants.fs" />
+        <!-- sagefs mcp stdio bridge: startup-race DST folding the real
+             McpBridge.decide for several independent bridge instances against
+             one shared, seeded daemon-liveness oracle; a twin reproduces a
+             real regression found while building the bridge (the
+             Probing->Starting transition being dead code). -->
+        <Compile Include="McpStdioBridgeSim.fs" />
+        <Compile Include="McpStdioBridgeInvariants.fs" />
+        <Compile Include="McpStdioBridgeGenerators.fs" />
     </ItemGroup>
 
     <ItemGroup>
