@@ -268,6 +268,21 @@ let reloadBroadcastTests =
       | other -> failtestf "a timed-out eval must be NotApplied, got %A" other
     }
 
+    // WHY — a lost save used to be silent: the overflow handler reset the
+    // session and said nothing, so a user who saved mid-overflow saw no
+    // outcome at all. "Nothing silent" is the hot reload rule, and it has to
+    // hold on the path that exists BECAUSE SageFs lost track of what changed.
+    test "WHY — a watch-buffer overflow is reported, not swallowed by a silent reset" {
+      let evt = Broadcast.watcherOverflow "/repo/SomeProject"
+      evt |> DevReloadEvent.refreshes |> Expect.isFalse "a reset alone is not a patch the browser should fetch"
+      match evt with
+      | DevReloadEvent.NotApplied report ->
+        report.Outcome |> Expect.equal "a client can branch on it" "WatcherOverflow"
+        report.Message |> Expect.stringContains "names the directory that overflowed" "/repo/SomeProject"
+        report.SuggestedAction |> Expect.stringContains "tells the user what to do" "save"
+      | other -> failtestf "a watch overflow must be NotApplied, got %A" other
+    }
+
     // WHY — the SSE payload is the actual contract with the page. A refresh
     // must be a refresh on the wire and a non-event must not be.
     test "WHY — the wire distinguishes a refresh from a non-event" {

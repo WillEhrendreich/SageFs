@@ -184,6 +184,21 @@ let compilerBusy (fileName: string) (waited: TimeSpan) : DevReload.DevReloadEven
       waited.TotalSeconds)
     "Save again — the stuck compile is bounded and releases on its own, so the next save goes through."
 
+/// The file watcher's OS-level buffer overflowed under `directory`: events
+/// were lost and SageFs cannot know which files actually changed. It resets
+/// the session as a precaution instead of guessing — the fix this event
+/// exists for is that the reset used to happen in total silence, so a save
+/// that got lost to the overflow never produced any outcome at all, hot
+/// reload's own "nothing silent" rule broken by the one path meant to keep
+/// FSI honest when it loses track of what happened.
+let watcherOverflow (directory: string) : DevReload.DevReloadEvent =
+  notApplied
+    "WatcherOverflow"
+    (sprintf
+      "The file-watch buffer overflowed under %s, so SageFs can't tell exactly what changed there. It reset the session to bring it back in sync with disk."
+      directory)
+    "If you were mid-save, save that file again to make sure the change was picked up."
+
 /// A save whose own re-evaluation ran past its budget and was abandoned. The
 /// budget is what guarantees the compiler is handed back, so the NEXT save is
 /// processed instead of being queued behind this one forever.

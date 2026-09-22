@@ -1225,6 +1225,7 @@ let run (sessionId: string) (port: int) = async {
                    | FileWatcher.FileChangeKind.Created -> "Created"
                    | FileWatcher.FileChangeKind.Deleted -> "Deleted"
                    | FileWatcher.FileChangeKind.Renamed -> "Renamed"
+                   | FileWatcher.FileChangeKind.Overflow -> "Overflow"
         Instrumentation.fileWatcherChanges.Add(
           1L,
           System.Collections.Generic.KeyValuePair("file.extension", ext :> obj),
@@ -1442,6 +1443,16 @@ let run (sessionId: string) (port: int) = async {
                 Log.info "Project file changed — soft reset needed"
                 let! _ = actor.PostAndAsyncReply(fun rc -> ResetSession rc)
                 ()
+              | FileWatcher.FileChangeAction.RecoverFromOverflow directory ->
+                // The watch buffer overflowed: we cannot know which files
+                // changed, so we cannot reload just one. Reset the whole
+                // session to bring FSI back in sync with disk — but a reset
+                // that happens in silence is exactly the bug this case
+                // exists to fix. A save that got lost to the overflow must
+                // still produce an outcome the user can see.
+                Log.warn "File watcher buffer overflowed under %s — resetting session to recover" directory
+                let! _ = actor.PostAndAsyncReply(fun rc -> ResetSession rc)
+                Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.watcherOverflow directory)
               | FileWatcher.FileChangeAction.Ignore -> ()
             with
             | :? OperationCanceledException ->

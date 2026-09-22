@@ -858,13 +858,17 @@ let fileWatcherResilienceTests = testSequenced <| testList "FileWatcher resilien
         // Assert the change came from the VALID watched directory, not a
         // specific filename: the invalid dir never gets a watcher, so nothing
         // can ever be reported from it, while the valid dir reports either the
-        // real tempDir/Probe.fs event or — if the suite's many concurrent
-        // watchers overflow this one's inotify buffer — the product's legitimate
-        // tempDir/__overflow_recovery__.fsproj SoftReset. Both prove the
-        // contract; asserting the exact filename made the test brittle to the
-        // overflow-recovery path.
-        Path.GetFullPath(Path.GetDirectoryName path)
-        |> Expect.equal "the reported change came from the valid (watched) directory" (Path.GetFullPath tempDir)
+        // real tempDir/Probe.fs event (path is a file under tempDir) or — if
+        // the suite's many concurrent watchers overflow this one's inotify
+        // buffer — the product's legitimate overflow recovery, whose change
+        // carries tempDir ITSELF as the path (see FileWatcher.FileChangeKind.Overflow).
+        // Both prove the contract; asserting one specific shape made the test
+        // brittle to the overflow-recovery path.
+        let fromValidDir =
+          String.Equals(Path.GetFullPath path, Path.GetFullPath tempDir, StringComparison.OrdinalIgnoreCase)
+          || String.Equals(Path.GetFullPath(Path.GetDirectoryName path), Path.GetFullPath tempDir, StringComparison.OrdinalIgnoreCase)
+        fromValidDir
+        |> Expect.isTrue "the reported change came from the valid (watched) directory, either as a file under it or as tempDir itself on overflow"
       finally
         watcher.Dispose()
     finally
