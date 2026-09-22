@@ -304,7 +304,7 @@ module TweakSim =
     | Some opId ->
       match behavior with
       | RollbackBehavior.Real ->
-        match TweakLog.rollback s.Log opId s.Source with
+        match TweakLog.rollback s.Log s.Snapshot opId s.Source with
         | Ok(TweakLog.RollbackOutcome.Applied newSource) ->
           let s = appendEvent s (TweakLog.TweakLogEvent.RolledBack opId)
           { s with Source = newSource }

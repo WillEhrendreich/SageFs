@@ -44,7 +44,7 @@ let tweakLogTests =
         let source = "module M\nlet x = 2.0\n"
         let log = EventLog.empty
         let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
-        match rollback log applied.Id source with
+        match rollback log Snapshot.empty applied.Id source with
         | Ok(RollbackOutcome.Applied newSource) -> newSource |> Expect.equal "back to the original text" "module M\nlet x = 1.0\n"
         | other -> failtestf "expected Applied, got %A" other
 
@@ -53,7 +53,7 @@ let tweakLogTests =
         let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
         // Someone (or something) changed it to 9.0 after our write.
         let laterSource = "module M\nlet x = 9.0\n"
-        match rollback log applied.Id laterSource with
+        match rollback log Snapshot.empty applied.Id laterSource with
         | Ok(RollbackOutcome.Conflict(wrote, now, before)) ->
           wrote |> Expect.equal "what we wrote" "2.0"
           now |> Expect.equal "what's there now" "9.0"
@@ -63,14 +63,57 @@ let tweakLogTests =
       testCase "rolling back a non-operation event is refused" <| fun _ ->
         let log = EventLog.empty
         let log, resolved = EventLog.append log 1L (TweakLogEvent.ConflictResolved(addr "x"))
-        match rollback log resolved.Id baseSource with
+        match rollback log Snapshot.empty resolved.Id baseSource with
         | Error(RollbackError.NotAnOperation _) -> ()
         | other -> failtestf "expected NotAnOperation, got %A" other
 
       testCase "rolling back an id that doesn't exist is refused" <| fun _ ->
-        match rollback EventLog.empty 999 baseSource with
+        match rollback EventLog.empty Snapshot.empty 999 baseSource with
         | Error(RollbackError.NoSuchOperation 999) -> ()
         | other -> failtestf "expected NoSuchOperation, got %A" other
+    ]
+
+    testList "rollback resolves through a compacted snapshot boundary" [
+
+      testCase "a TweakApplied compacted into the snapshot still rolls back correctly" <| fun _ ->
+        let source = "module M\nlet x = 2.0\n"
+        let log = EventLog.empty
+        let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        // Aggressive retention: nothing stays in the tail, applied.Id moves
+        // into the snapshot's Origins.
+        let policy = { RetentionPolicy.defaults with UndoWindow = 0 }
+        let snapshot, tail = compact Snapshot.empty log.Events policy Set.empty
+        tail |> Expect.isEmpty "the TweakApplied moved into the snapshot"
+        match rollback { log with Events = tail } snapshot applied.Id source with
+        | Ok(RollbackOutcome.Applied newSource) ->
+          newSource |> Expect.equal "still resolves before/after from Snapshot.Origins, not the (now-empty) tail" "module M\nlet x = 1.0\n"
+        | other -> failtestf "expected Applied via the snapshot fallback, got %A" other
+
+      testCase "a RolledBack in the tail whose OWN target was compacted still redoes correctly" <| fun _ ->
+        // TweakApplied (id 1) is compacted away; a RolledBack (id 2) in the
+        // tail targets it. Redoing that RolledBack (rolling IT back) must
+        // resolve id 1's before/after from Snapshot.Origins to know what to
+        // reapply, `effectOf`'s own recursion is the thing under test here.
+        let log = EventLog.empty
+        let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let policy = { RetentionPolicy.defaults with UndoWindow = 0 }
+        let snapshot, tail = compact Snapshot.empty log.Events policy Set.empty
+        let tailLog, rolledBack = EventLog.append { log with Events = tail } applied.Id (TweakLogEvent.RolledBack applied.Id)
+        let sourceAfterUndo = "module M\nlet x = 1.0\n"
+        match rollback tailLog snapshot rolledBack.Id sourceAfterUndo with
+        | Ok(RollbackOutcome.Applied redoneSource) ->
+          redoneSource |> Expect.equal "redo reapplies 2.0, resolved via the compacted target's Origins entry" "module M\nlet x = 2.0\n"
+        | other -> failtestf "expected the redo to apply, got %A" other
+
+      testCase "undo/redo gives the same answer on a compacted log as on the uncompacted log" <| fun _ ->
+        let source = "module M\nlet x = 2.0\n"
+        let uncompactedLog = EventLog.empty
+        let uncompactedLog, applied = EventLog.append uncompactedLog 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let viaUncompacted = rollback uncompactedLog Snapshot.empty applied.Id source
+        let policy = { RetentionPolicy.defaults with UndoWindow = 0 }
+        let snapshot, tail = compact Snapshot.empty uncompactedLog.Events policy Set.empty
+        let viaCompacted = rollback { uncompactedLog with Events = tail } snapshot applied.Id source
+        viaCompacted |> Expect.equal "compaction must never change what a still-resolvable rollback answers" viaUncompacted
     ]
 
     testList "open conflicts are exclusive" [
@@ -88,7 +131,7 @@ let tweakLogTests =
         let log = EventLog.empty
         let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
         let log, _ = EventLog.append log 2L (TweakLogEvent.ConflictRaised(addr "x", "2.0", "2.0", "1.0"))
-        match rollback log applied.Id source with
+        match rollback log Snapshot.empty applied.Id source with
         | Error(RollbackError.BlockedByOpenConflict a) -> a |> Expect.equal "names the blocked address" (addr "x")
         | other -> failtestf "expected BlockedByOpenConflict, got %A" other
 
@@ -98,7 +141,7 @@ let tweakLogTests =
         let log, appliedX = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
         let log, appliedY = EventLog.append log 2L (TweakLogEvent.TweakApplied(addr "y", "5.0", "6.0", contentHash "6.0"))
         let log, _ = EventLog.append log 3L (TweakLogEvent.ConflictRaised(addr "x", "2.0", "9.0", "1.0"))
-        match rollback log appliedY.Id source with
+        match rollback log Snapshot.empty appliedY.Id source with
         | Ok(RollbackOutcome.Applied _) -> ()
         | other -> failtestf "expected Applied (y has no open conflict), got %A" other
 
@@ -250,7 +293,7 @@ let tweakLogTests =
         let source = "module M\nlet x = 2.0\n"
         let log = EventLog.empty
         let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
-        match performUndo log UndoCursor.AtHead source 2L with
+        match performUndo log Snapshot.empty UndoCursor.AtHead source 2L with
         | Ok(log', cursor, newSource) ->
           newSource |> Expect.equal "back to 1.0" "module M\nlet x = 1.0\n"
           cursor |> Expect.equal "cursor now points at the undone op" (UndoCursor.At applied.Id)
@@ -265,10 +308,10 @@ let tweakLogTests =
         let log, a1 = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
         let log, a2 = EventLog.append log 2L (TweakLogEvent.TweakApplied(addr "x", "2.0", "3.0", contentHash "3.0"))
         let source = "module M\nlet x = 3.0\n"
-        let log, cursor1, source1 = performUndo log UndoCursor.AtHead source 3L |> Expect.wantOk "first undo"
+        let log, cursor1, source1 = performUndo log Snapshot.empty UndoCursor.AtHead source 3L |> Expect.wantOk "first undo"
         source1 |> Expect.equal "back to 2.0" "module M\nlet x = 2.0\n"
         cursor1 |> Expect.equal "cursor at a2" (UndoCursor.At a2.Id)
-        let _, cursor2, source2 = performUndo log cursor1 source1 4L |> Expect.wantOk "second undo"
+        let _, cursor2, source2 = performUndo log Snapshot.empty cursor1 source1 4L |> Expect.wantOk "second undo"
         source2 |> Expect.equal "back to 1.0" "module M\nlet x = 1.0\n"
         cursor2 |> Expect.equal "cursor at a1" (UndoCursor.At a1.Id)
 
@@ -276,8 +319,8 @@ let tweakLogTests =
         let source = "module M\nlet x = 2.0\n"
         let log = EventLog.empty
         let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
-        let log, cursor, undone = performUndo log UndoCursor.AtHead source 2L |> Expect.wantOk "undo"
-        let log, cursor', redone = performRedo log cursor undone 3L |> Expect.wantOk "redo"
+        let log, cursor, undone = performUndo log Snapshot.empty UndoCursor.AtHead source 2L |> Expect.wantOk "undo"
+        let log, cursor', redone = performRedo log Snapshot.empty cursor undone 3L |> Expect.wantOk "redo"
         redone |> Expect.equal "back to 2.0" "module M\nlet x = 2.0\n"
         log.Events.Length |> Expect.equal "two RolledBack ops appended on top of the original TweakApplied, storage never rewritten" 3
         ignore applied
@@ -287,13 +330,13 @@ let tweakLogTests =
         let source = "module M\nlet x = 2.0\n"
         let log = EventLog.empty
         let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
-        let log, c1, s1 = performUndo log UndoCursor.AtHead source 2L |> Expect.wantOk "undo"
-        let log, c2, s2 = performRedo log c1 s1 3L |> Expect.wantOk "redo"
-        let _, _, s3 = performUndo log c2 s2 4L |> Expect.wantOk "undo again"
+        let log, c1, s1 = performUndo log Snapshot.empty UndoCursor.AtHead source 2L |> Expect.wantOk "undo"
+        let log, c2, s2 = performRedo log Snapshot.empty c1 s1 3L |> Expect.wantOk "redo"
+        let _, _, s3 = performUndo log Snapshot.empty c2 s2 4L |> Expect.wantOk "undo again"
         s3 |> Expect.equal "back to 1.0 again" "module M\nlet x = 1.0\n"
 
       testCase "performUndo refuses cleanly when there's nothing to undo" <| fun _ ->
-        match performUndo EventLog.empty UndoCursor.AtHead baseSource 1L with
+        match performUndo EventLog.empty Snapshot.empty UndoCursor.AtHead baseSource 1L with
         | Error _ -> ()
         | Ok _ -> failtest "expected a refusal"
     ]
