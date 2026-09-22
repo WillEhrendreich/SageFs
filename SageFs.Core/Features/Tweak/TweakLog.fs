@@ -38,6 +38,14 @@
 /// scope`, `KnownFileHash.FileHashUnknown`, `UndoCursor.Compacted`, `Snapshot`'s
 /// own `Origins` carrying the full triple an undo/redo needs, not just half
 /// of it), never a bare `None` a reader has to go re-derive the reason for.
+///
+/// Compaction never costs correctness: `rollback` (so `performUndo`/
+/// `performRedo` too) and `whyKept` both resolve through the SAME
+/// `effectOf`, which falls back to `Snapshot.Origins` for anything the
+/// current tail no longer holds, however many compaction rounds moved it
+/// there. Undo/redo of a compacted op, and compaction's own must-keep
+/// check, give the identical answer whether the log has been compacted
+/// zero times or a dozen.
 module SageFs.Features.Tweak.TweakLog
 
 open System
@@ -683,24 +691,24 @@ type KeepReason =
   | Compactable
 
 /// Why compaction would (or wouldn't) fold this specific event into the
-/// snapshot right now, given the CURRENT full-history projection. A pure
-/// query, nothing here mutates anything, so a caller (or a test) can ask
-/// "why is this still here?" without re-deriving compaction's own logic.
+/// snapshot right now, given the CURRENT projection. A pure query, nothing
+/// here mutates anything, so a caller (or a test) can ask "why is this
+/// still here?" without re-deriving compaction's own logic.
 ///
-/// Scope limit, stated plainly: this checks dirtiness by folding `fullEvents`
-/// from EMPTY, not from a real snapshot's `Origins`. That's sound for a
-/// FIRST compaction (`fullEvents` really is the whole history) and sound in
-/// general for the DIRTY check itself, because a snapshot can never hold a
-/// dirty address to begin with, `compact` only ever folds a compactable
-/// (already-clean) prefix into one, by construction. What it does NOT get
-/// right is a `RolledBack` inside a SECOND round's tail whose target id was
-/// already folded into an earlier snapshot: this fold can't see that id's
-/// origin (it only knows the tail it was given), so that particular
-/// rollback is treated as a no-op for the purposes of THIS must-keep check.
-/// `compact` itself resolves `RolledBack` correctly against the real
-/// `Snapshot.Origins`, only this standalone diagnostic query has the gap.
+/// Sees across any number of compaction rounds: the dirty/conflict check
+/// folds `fullEvents` (whatever tail THIS round is looking at) starting
+/// from `snapshot.Projection`, not from empty, so an address's state from
+/// every EARLIER round is already baked into the seed. And a `RolledBack`
+/// in `fullEvents` whose target crossed an earlier round's boundary
+/// resolves through the same `effectOf` fallback to `snapshot.Origins`
+/// every other resolution in this module uses, so a rollback that
+/// genuinely cleaned an address (however many rounds ago its target was
+/// compacted) is never mistaken for a no-op. `compact` and this diagnostic
+/// query agree by construction now, both go through the identical
+/// `effectOf fallback` resolution.
 let whyKept
   (policy: RetentionPolicy)
+  (snapshot: Snapshot)
   (fullEvents: LoggedEvent list)
   (presetAddresses: Set<TweakAddress>)
   (e: LoggedEvent)
@@ -718,7 +726,8 @@ let whyKept
   match undoRetained.Contains e.Id with
   | true -> KeepReason.WithinUndoWindow
   | false ->
-    let p = foldEvents (fun id -> effectOf (fun _ -> None) fullEvents id) Projection.empty fullEvents
+    let lookup id = effectOf (fun oid -> snapshot.Origins |> Map.tryFind oid) fullEvents id
+    let p = foldEvents lookup snapshot.Projection fullEvents
     match addressOf e.Event with
     | Some a when p.OpenConflicts.Contains a -> KeepReason.OpenConflict
     | Some a when (Projection.dirtySet p).Contains a -> KeepReason.UnsavedTweak
@@ -737,7 +746,7 @@ let compact
   (policy: RetentionPolicy)
   (presetAddresses: Set<TweakAddress>)
   : Snapshot * LoggedEvent list =
-  let mustKeep (e: LoggedEvent) = whyKept policy events presetAddresses e <> KeepReason.Compactable
+  let mustKeep (e: LoggedEvent) = whyKept policy snapshot events presetAddresses e <> KeepReason.Compactable
   let splitIndex = events |> List.tryFindIndex mustKeep |> Option.defaultValue events.Length
   match splitIndex with
   | 0 -> snapshot, events

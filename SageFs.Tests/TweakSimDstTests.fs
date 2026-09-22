@@ -105,6 +105,37 @@ let tweakSimDstTests =
         |> expectNone "rollback of a compacted op disagreed with rollback of the same op via the full, never-compacted history"
     ]
 
+    testList "WHYKEPT-AGREES-ACROSS-MULTIPLE-COMPACTION-ROUNDS" [
+
+      // Deliberately tighter than `TweakSim.simRetention`: the whole point
+      // is to force compaction to run again and again over one trace, not
+      // just once, so this is where the "sees across any number of
+      // rounds" guarantee actually gets exercised.
+      let aggressivePolicy : TweakLog.RetentionPolicy = { UndoWindow = 1; MaxEvents = 2; MaxBytes = 100_000L }
+
+      let aggressiveSettings =
+        { TweakSim.defaultSettings with
+            CompactionMode = TweakLog.CompactionMode.LiveOnBudget
+            Retention = aggressivePolicy }
+
+      testCase "the harness actually reaches 3+ compaction rounds on at least one seed (proof the invariant below has something to bite)" <| fun _ ->
+        let maxRounds =
+          seeds
+          |> List.map (fun s -> traceWith aggressiveSettings SaveBehavior.Real RollbackBehavior.Real CompactionBehavior.Real (scenarioOf s))
+          |> List.map TweakSimInvariants.compactionRoundCount
+          |> List.max
+        (maxRounds, 3) |> Expect.isGreaterThanOrEqual "at least one seed compacted 3 or more times under the tight policy"
+
+      testCase "whyKept matches ground truth after however many rounds the trace actually ran" <| fun _ ->
+        seeds
+        |> List.map (fun s ->
+          let sc = scenarioOf s
+          let states = traceWith aggressiveSettings SaveBehavior.Real RollbackBehavior.Real CompactionBehavior.Real sc
+          sc, TweakSimInvariants.whyKeptAgreesWithGroundTruthAfterMultipleRounds aggressivePolicy states)
+        |> List.filter (fun (_, vs) -> not (List.isEmpty vs))
+        |> expectNone "whyKept's verdict disagreed with the never-compacted ShadowLog's ground truth"
+    ]
+
     testList "TWIN: skipping the hash check on save clobbers a concurrent edit" [
 
       testCase "REPRODUCED, a hand-picked scenario: tweak, then a user edit lands before save" <| fun _ ->

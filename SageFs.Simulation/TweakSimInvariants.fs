@@ -237,6 +237,86 @@ module TweakSimInvariants =
         | false ->
           violation i (sprintf "rollback of op %d disagreed: via compacted log+snapshot = %A, via full history = %A" opId viaCompacted viaFullHistory)))
 
+  /// Same address-extraction `TweakLog.addressOf` does, restated here
+  /// because that one's private: a `RolledBack`/`ReformatObserved`/
+  /// `HotReloadObserved` event carries no single address to check ground
+  /// truth against.
+  let private addressOfEvent (ev: TweakLog.TweakLogEvent) : TweakAddress.TweakAddress option =
+    match ev with
+    | TweakLog.TweakLogEvent.TweakApplied(addr, _, _, _) -> Some addr
+    | TweakLog.TweakLogEvent.TweakSaved(addr, _, _, _, _) -> Some addr
+    | TweakLog.TweakLogEvent.UserEditObserved(addr, _, _, _) -> Some addr
+    | TweakLog.TweakLogEvent.ConflictRaised(addr, _, _, _) -> Some addr
+    | TweakLog.TweakLogEvent.ConflictResolved addr -> Some addr
+    | TweakLog.TweakLogEvent.ReformatObserved _
+    | TweakLog.TweakLogEvent.HotReloadObserved _
+    | TweakLog.TweakLogEvent.RolledBack _ -> None
+
+  /// Same `undoRetained` computation `whyKept` does internally, restated
+  /// here (it's a local `let` inside `whyKept`, not exposed) so this
+  /// invariant can tell "protected by the undo window" apart from "should
+  /// agree with ground truth" the same way `whyKept` itself does.
+  let private undoRetainedIds (policy: TweakLog.RetentionPolicy) (events: TweakLog.LoggedEvent list) : Set<int> =
+    events
+    |> List.choose (fun ev ->
+      match ev.Event with
+      | TweakLog.TweakLogEvent.TweakApplied _
+      | TweakLog.TweakLogEvent.TweakSaved _ -> Some ev.Id
+      | _ -> None)
+    |> List.rev
+    |> List.truncate policy.UndoWindow
+    |> Set.ofList
+
+  /// How many times compaction actually advanced the snapshot boundary
+  /// over this trace, `Snapshot.UpToEventId` only ever grows, so counting
+  /// its distinct increases counts real compaction ROUNDS, not just
+  /// `maybeCompact` calls that found nothing to do.
+  let compactionRoundCount (states: State list) : int =
+    states
+    |> List.pairwise
+    |> List.filter (fun (before, after) -> after.Snapshot.UpToEventId > before.Snapshot.UpToEventId)
+    |> List.length
+
+  /// `whyKept`'s verdict for every event still in the (possibly MANY times
+  /// compacted) tail must agree with ground truth: an independent
+  /// dirty/conflict check folded fresh from `ShadowLog`, the trace's own
+  /// never-compacted mirror of the full history. This is the "sees across
+  /// any number of compaction rounds" guarantee stated as an equality a
+  /// trace can violate: whatever `s.Snapshot`/`s.Log` look like after
+  /// however many rounds `maybeCompact` actually ran, `whyKept` must still
+  /// classify every remaining event exactly the way the untouched full
+  /// history would.
+  let whyKeptAgreesWithGroundTruthAfterMultipleRounds (policy: TweakLog.RetentionPolicy) (states: State list) : Violation list =
+    match states with
+    | [] -> []
+    | _ ->
+      let final = states |> List.last
+      let groundTruth = TweakLog.project final.ShadowLog
+      let retained = undoRetainedIds policy final.Log.Events
+      final.Log.Events
+      |> List.indexed
+      |> List.choose (fun (i, e) ->
+        let verdict = TweakLog.whyKept policy final.Snapshot final.Log.Events Set.empty e
+        match retained.Contains e.Id with
+        | true -> None // WithinUndoWindow is always legitimate here, unrelated to ground truth
+        | false ->
+          match addressOfEvent e.Event with
+          | None ->
+            match verdict with
+            | TweakLog.KeepReason.Compactable -> None
+            | other ->
+              violation i (sprintf "an address-less event outside the undo window should be Compactable, got %A" other)
+          | Some a ->
+            let expected =
+              match groundTruth.OpenConflicts.Contains a, (TweakLog.Projection.dirtySet groundTruth).Contains a with
+              | true, _ -> TweakLog.KeepReason.OpenConflict
+              | false, true -> TweakLog.KeepReason.UnsavedTweak
+              | false, false -> TweakLog.KeepReason.Compactable
+            match verdict = expected with
+            | true -> None
+            | false ->
+              violation i (sprintf "whyKept said %A for %A but the never-compacted ShadowLog says %A" verdict a expected))
+
   let all (scenario: Scenario) (states: State list) : Violation list =
     neverAppliedWithoutTypeCheck scenario states
     @ failureKeepsLastGoodValue states
