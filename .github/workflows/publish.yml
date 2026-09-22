@@ -60,9 +60,13 @@ jobs:
       with:
         fetch-depth: 0
 
+    # global.json pins the SDK (an 11 preview right now), and every dotnet
+    # call in this checkout, `dotnet nuget push` included, refuses to run
+    # without it. Install exactly what it pins, plus the others we use.
     - name: Install Dotnet
       uses: actions/setup-dotnet@v5
       with:
+        global-json-file: global.json
         dotnet-version: |
           10.0.x
           8.0.x
