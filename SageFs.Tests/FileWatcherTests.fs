@@ -237,39 +237,113 @@ let fileWatcherTests =
     ]
 
     // Buffer overflow recovery
-    // When a FileSystemWatcher buffer overflows the Error event fires.
-    // The handler synthesises a .fsproj change so the caller triggers a SoftReset —
-    // the safest recovery when we don't know which specific files changed.
+    // When a FileSystemWatcher buffer overflows the Error event fires. We
+    // cannot know which specific files changed, so the change carries its
+    // OWN kind (Overflow) instead of borrowing a fabricated .fsproj path —
+    // fileChangeAction routes it to RecoverFromOverflow, which the worker
+    // uses to reset the session AND tell the user why (see WorkerMain.fs /
+    // Features.ReloadBroadcast.watcherOverflow). A silent SoftReset lost
+    // that "why" — the change looked exactly like an ordinary .fsproj edit.
     testList "buffer overflow recovery" [
-      testCase "synthetic .fsproj overflow change maps to SoftReset" <| fun () ->
-        // The overflow handler creates a change with a .fsproj path.
-        // Verify that fileChangeAction correctly routes it to SoftReset.
+      testCase "Overflow kind maps to RecoverFromOverflow, carrying the watched directory" <| fun () ->
         let overflowChange = {
-          FilePath = @"C:\Code\SomeProject\__overflow_recovery__.fsproj"
-          Kind = FileChangeKind.Changed
+          FilePath = @"C:\Code\SomeProject"
+          Kind = FileChangeKind.Overflow
           Timestamp = System.DateTimeOffset.UtcNow
         }
         overflowChange
         |> fileChangeAction
-        |> Flip.Expect.equal "overflow recovery change should trigger SoftReset" FileChangeAction.SoftReset
+        |> Flip.Expect.equal
+          "overflow should route to RecoverFromOverflow with the directory"
+          (FileChangeAction.RecoverFromOverflow @"C:\Code\SomeProject")
 
-      testCase "real .fsproj overflow change maps to SoftReset" <| fun () ->
-        // The overflow handler uses the real .fsproj path when found by Directory.GetFiles.
-        let overflowChange = {
+      testCase "Overflow is distinct from an ordinary .fsproj SoftReset" <| fun () ->
+        let projectChange = {
           FilePath = @"C:\Code\SomeProject\SomeProject.fsproj"
           Kind = FileChangeKind.Changed
           Timestamp = System.DateTimeOffset.UtcNow
         }
-        overflowChange
+        projectChange
         |> fileChangeAction
-        |> Flip.Expect.equal "real fsproj overflow should trigger SoftReset" FileChangeAction.SoftReset
-
-      testCase "shouldTriggerRebuild accepts overflow recovery path" <| fun () ->
-        // Ensure the synthetic path passes shouldTriggerRebuild so it reaches the callback.
-        let config = defaultWatchConfig [@"C:\Code\SomeProject"]
-        shouldTriggerRebuild config @"C:\Code\SomeProject\__overflow_recovery__.fsproj"
-        |> Flip.Expect.isTrue "overflow recovery path should pass shouldTriggerRebuild"
+        |> Flip.Expect.equal "a real .fsproj edit still SoftResets" FileChangeAction.SoftReset
     ]
+  ]
+
+  // ── Watch-scope pruning ──────────────────────────────────────────────
+  // A recursive FileSystemWatcher has no way to skip a subtree: on Linux,
+  // .NET adds one inotify watch per directory it finds, no matter what's in
+  // it. Measured live: one daemon held 148,077 inotify watches — over a
+  // quarter of the default 524,288 system limit — after three sessions had
+  // been created and stopped, because the watch root was a whole repo
+  // including every project's bin/obj and SageFs's own .runs test-artifact
+  // dirs. shouldPruneDir/watchableDirs stop those subtrees from ever being
+  // walked, instead of watching everything and filtering events after.
+[<Tests>]
+let excludedDirTests = testList "shouldPruneDir" [
+    for name in [ "bin"; "obj"; ".git"; ".vs"; ".idea"; "node_modules"; ".runs" ] do
+      testCase (sprintf "excludes a %s directory by name" name) <| fun () ->
+        let root = @"C:\Code\SomeProject"
+        let dir = Path.Combine(root, name)
+        shouldPruneDir root dir (fun _ -> false)
+        |> Flip.Expect.isTrue (sprintf "%s should be pruned" name)
+
+    testCase "an ordinary source directory is not pruned" <| fun () ->
+      let root = @"C:\Code\SomeProject"
+      shouldPruneDir root (Path.Combine(root, "Features")) (fun _ -> false)
+      |> Flip.Expect.isFalse "an ordinary subdirectory is watched"
+
+    testCase "a nested checkout root is pruned" <| fun () ->
+      let root = @"C:\Code\SomeProject"
+      let worktree = Path.Combine(root, ".claude", "worktrees", "agent-x")
+      let marked (d: string) = String.Equals(d, worktree, StringComparison.OrdinalIgnoreCase)
+      shouldPruneDir root worktree marked
+      |> Flip.Expect.isTrue "a nested checkout is somebody else's project"
+
+    testCase "the watch root's own checkout marker does not prune the root" <| fun () ->
+      let root = @"C:\Code\SomeProject"
+      let marked (d: string) = String.Equals(d, root, StringComparison.OrdinalIgnoreCase)
+      shouldPruneDir root root marked
+      |> Flip.Expect.isFalse "the root is never pruned by its own marker"
+
+    testCase "a bin directory nested several levels deep is still pruned by name" <| fun () ->
+      let root = @"C:\Code\Solution"
+      shouldPruneDir root (Path.Combine(root, "SageFs.Core", "bin")) (fun _ -> false)
+      |> Flip.Expect.isTrue "bin itself is pruned regardless of depth, wherever it sits under the root"
+  ]
+
+[<Tests>]
+let watchableDirsTests = testList "watchableDirs" [
+    testCase "walks source directories but prunes bin/obj/.git and nested checkouts" <| fun () ->
+      let root = Directory.CreateTempSubdirectory("sagefs-watchtree-").FullName
+      try
+        let makeDir (parts: string list) =
+          let p = Path.Combine(root :: parts |> Array.ofList)
+          Directory.CreateDirectory p |> ignore
+          p
+        let srcDir = makeDir [ "Features" ]
+        makeDir [ "bin"; "Debug" ] |> ignore
+        makeDir [ "obj"; "Debug" ] |> ignore
+        makeDir [ "SageFs.Tests"; ".runs"; "run1" ] |> ignore
+        let worktree = makeDir [ ".claude"; "worktrees"; "agent-x" ]
+        File.WriteAllText(Path.Combine(worktree, ".git"), "gitdir: /elsewhere")
+        let hasMarker (d: string) = File.Exists(Path.Combine(d, ".git")) || Directory.Exists(Path.Combine(d, ".git"))
+        let found = watchableDirs root hasMarker |> List.map Path.GetFullPath |> Set.ofList
+        found |> Flip.Expect.contains "the root itself is watched" (Path.GetFullPath root)
+        found |> Flip.Expect.contains "an ordinary source dir is watched" (Path.GetFullPath srcDir)
+        found
+        |> Set.exists (fun d -> d.Contains("bin" + string Path.DirectorySeparatorChar) || d.EndsWith "bin")
+        |> Flip.Expect.isFalse "no directory under bin is watched"
+        found
+        |> Set.exists (fun d -> d.Contains("obj" + string Path.DirectorySeparatorChar) || d.EndsWith "obj")
+        |> Flip.Expect.isFalse "no directory under obj is watched"
+        found
+        |> Set.exists (fun d -> d.Contains(".runs"))
+        |> Flip.Expect.isFalse "no directory under .runs is watched"
+        found
+        |> Set.exists (fun d -> Path.GetFullPath d = Path.GetFullPath worktree || d.StartsWith(Path.GetFullPath worktree))
+        |> Flip.Expect.isFalse "nothing under the nested checkout is watched"
+      finally
+        Directory.Delete(root, true)
   ]
 
 // ── Nested checkouts ────────────────────────────────────────────────────

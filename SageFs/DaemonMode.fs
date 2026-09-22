@@ -1046,14 +1046,24 @@ type LiveTestWatcherManager
       // timer can never be GC'd out from under a live daemon (see memory:
       // daemon timer GC bug — a timer with no other root gets collected and
       // silently stops firing).
-      let watchers = System.Collections.Generic.Dictionary<string, System.IO.FileSystemWatcher>()
+      // Value is an IDisposable, not a bare FileSystemWatcher: each claimed
+      // directory is now watched by `SageFs.FileWatcher.startPrunedWatcher`
+      // — one non-recursive watch per surviving subdirectory, with bin/obj/
+      // .git/node_modules/.runs and nested checkouts pruned from the walk
+      // instead of watched and filtered after the fact. A naive recursive
+      // watch over a whole checkout is exactly how one daemon was measured
+      // holding 148,077 inotify watches (a quarter of the system limit)
+      // after every session watching it had already stopped.
+      let watchers = System.Collections.Generic.Dictionary<string, System.IDisposable>()
 
       let handleFileChanged (directories: string list) (e: System.IO.FileSystemEventArgs) =
         let path = e.FullPath
         // A file inside another checkout nested under the watched directory (a
         // git worktree such as .claude/worktrees/*, a vendored repo) belongs
         // to that project — feeding it to this session's live testing
-        // type-checked foreign copies of the session's own files.
+        // type-checked foreign copies of the session's own files. Pruning
+        // already keeps a nested checkout from ever being walked, so this is
+        // now defense in depth rather than the only guard.
         let inNestedCheckout =
           directories |> List.exists (fun root -> SageFs.FileWatcher.isInNestedCheckout root path SageFs.FileWatcher.hasCheckoutMarker)
         let watchedSource =
@@ -1068,28 +1078,26 @@ type LiveTestWatcherManager
         match watchers.ContainsKey dir with
         | true -> ()
         | false ->
-          let watcher = new System.IO.FileSystemWatcher(dir)
-          watcher.IncludeSubdirectories <- true
           // FileName too: editors that save safely (vim, JetBrains, sed -i)
           // write a temp file and rename it over the source, which is a
           // rename, not a write.
-          watcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite ||| System.IO.NotifyFilters.FileName
-          watcher.Filters.Add("*.fs")
-          watcher.Filters.Add("*.fsx")
-          let handler = handleFileChanged [dir]
-          watcher.Changed.Add(handler)
-          watcher.Created.Add(handler)
-          // A rename's FullPath is the new name — the source file that was saved.
-          watcher.Renamed.Add(fun e -> handler e)
-          watcher.EnableRaisingEvents <- true
-          watchers.[dir] <- watcher
+          let handler = fun (_kind: SageFs.FileWatcher.FileChangeKind) (e: System.IO.FileSystemEventArgs) -> handleFileChanged [dir] e
+          let onOverflow (overflowDir: string) =
+            Log.warn "[watcher] Buffer overflow watching %s for live testing — some file-save events under it may have been lost" overflowDir
+          let disposable =
+            SageFs.FileWatcher.startPrunedWatcher
+              dir
+              [ ".fs"; ".fsx" ]
+              DevReload.DevReloadConfig.defaults.FileWatcherBufferSizeBytes
+              handler
+              onOverflow
+          watchers.[dir] <- disposable
           Log.info "[watcher] Registered file watcher for %s" dir
 
       let stopWatcher (dir: string) =
         match watchers.TryGetValue dir with
-        | true, watcher ->
-          watcher.EnableRaisingEvents <- false
-          watcher.Dispose()
+        | true, disposable ->
+          disposable.Dispose()
           watchers.Remove(dir) |> ignore
           Log.info "[watcher] Disposed file watcher for %s" dir
         | false, _ -> ()
@@ -1154,7 +1162,6 @@ type LiveTestWatcherManager
           // in-flight StartWatch/StopWatch effect from an earlier message.
           debounceTimer.Dispose()
           for KeyValue(_, w) in watchers do
-            w.EnableRaisingEvents <- false
             w.Dispose()
           watchers.Clear()
           reply.Reply(())
@@ -2776,6 +2783,19 @@ let run
       |> List.map (fun si -> si.Id, si.WorkingDirectory)
     liveTestWatcherManager.SyncToSessions(sessionDirPairs)
   seedSessionDirs ()
+
+  // Reconcile watchers the moment a session's lifecycle changes, instead of
+  // waiting on the periodic sync below. `stop_session`/`create_session`
+  // (dashboard AND MCP alike) dispatch `EditorAction.ListSessions`, which
+  // this same event stream turns into `ModelChanged` — so a stopped
+  // session's directory claim is dropped, and its watcher disposed, within
+  // this subscription rather than up to 5s later on the periodic sweep.
+  // Scoped to ModelChanged (not every event) so a hot path like FileReloaded
+  // doesn't pay for a resync it has no reason to need.
+  stateChangedEvent.Publish.Add(fun change ->
+    match change with
+    | ModelChanged _ -> seedSessionDirs ()
+    | _ -> ())
 
   // Periodic session-watcher sync — ensures new sessions get watchers
   let mutable watcherSyncTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
