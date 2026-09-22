@@ -4,6 +4,7 @@ open System
 open System.Threading.Tasks
 open Expecto
 open Microsoft.Playwright
+open SageFs.Server.DashboardTypes
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
@@ -1213,28 +1214,48 @@ let tests =
     finally
       (client :> IAsyncDisposable).DisposeAsync().AsTask().GetAwaiter().GetResult()
 
-    // 3. Switch the session to Hot Reload through the daemon's workflow
-    // route, the one editors use. (The dashboard's own switcher can't carry
-    // its target yet: Datastar's @post takes request options as its second
-    // argument, not a payload, so `workflowTarget` never reaches the server.)
-    let! sessionId = page.Locator("#main").GetAttributeAsync("data-viewing-session-id")
-    use http = new Net.Http.HttpClient(Timeout = TimeSpan.FromMinutes 5.0)
-    let switchTo (workflow: string) = task {
-      use body = new Net.Http.StringContent(sprintf "{\"workflow\":\"%s\"}" workflow, Text.Encoding.UTF8, "application/json")
-      let! resp = http.PostAsync(sprintf "http://localhost:%d/api/sessions/%s/workflow" PlaywrightFixture.mcpPort sessionId, body)
-      Expect.isTrue resp.IsSuccessStatusCode (sprintf "switching to %s returned %d" workflow (int resp.StatusCode))
+    // 3. Switch the session to Hot Reload through the REAL dashboard control
+    // — the workflow <select> in the sidebar — not the raw HTTP route.
+    // Fixed bug: the select's onchange fired
+    // `@post('/dashboard/switch-workflow', {workflowTarget: w})`, and
+    // Datastar's @post destructures only known option keys out of its
+    // second argument (payload/headers/contentType/...); an arbitrary
+    // `workflowTarget` key there was silently dropped, so the server never
+    // learned what the user picked. This journey proves the fix end to end:
+    // picking an option in the dropdown must actually switch the session.
+    let consoleErrors = Collections.Generic.List<string>()
+    page.Console.Add(fun msg ->
+      if msg.Type = "error" then
+        consoleErrors.Add(sprintf "[console] %s" msg.Text))
+    page.PageError.Add(fun err -> consoleErrors.Add(sprintf "[pageerror] %s" err))
+    let switcher = page.Locator(sprintf "#%s" DomIds.WorkflowSwitcher)
+    do! PlaywrightExpect.isVisibleAsync switcher "workflow switcher visible once a session is selected"
+    let switchViaDropdown (value: string) = task {
+      let! _ = switcher.SelectOptionAsync(value)
+      return ()
     }
-    do! switchTo "hotreload"
+    do! switchViaDropdown "hotreload"
     do! count "#hot-reload-panel" 1 180_000
     do! PlaywrightExpect.waitForSelectorText 180_000 page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     do! shot "3-hot-reload"
     for selector in [ "#cohort-panel"; "#cohort-lanes"; "#friction-panel" ] do
       do! count selector 0 5_000
+    // The switcher's OWN selected option reflects the switch actually
+    // landed server-side (the select is server-rendered from the session's
+    // real workflow, not just whatever the click left in the DOM).
+    let! selectedLabel = switcher.EvaluateAsync<string>("el => el.options[el.selectedIndex].textContent")
+    Expect.equal selectedLabel "Hot Reload" "the switcher itself shows Hot Reload selected after the real switch landed"
 
     // Put the shared session back the way the other journeys expect it.
-    do! switchTo "interactive"
+    do! switchViaDropdown "interactive"
     do! count "#hot-reload-panel" 0 180_000
     do! PlaywrightExpect.waitForSelectorText 180_000 page "#session-status" "Ready"
+    let! selectedLabelBack = switcher.EvaluateAsync<string>("el => el.options[el.selectedIndex].textContent")
+    Expect.equal selectedLabelBack "REPL" "the switcher shows REPL selected again after switching back"
+
+    let datastarOrConsoleErrors = consoleErrors |> List.ofSeq
+    Expect.isEmpty datastarOrConsoleErrors
+      (sprintf "zero Datastar/console errors across the dropdown-driven workflow switch, got: %s" (String.concat " | " datastarOrConsoleErrors))
   })
   ]
