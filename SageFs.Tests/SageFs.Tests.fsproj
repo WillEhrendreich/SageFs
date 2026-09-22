@@ -257,6 +257,8 @@
         <Compile Include="ExpressionEditTests.fs" />
         <Compile Include="SideEffectClassTests.fs" />
         <Compile Include="TweakTransactionTests.fs" />
+        <Compile Include="TweakLogTests.fs" />
+        <Compile Include="TweakSimDstTests.fs" />
         <Compile Include="LiveStateEmitTests.fs" />
         <Compile Include="ReloadBroadcastTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />

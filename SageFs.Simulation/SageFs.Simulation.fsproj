@@ -88,6 +88,13 @@
         <!-- P2: pure linearizability checker (permutation search over the real
              Cohort.decide) for the concurrency keystone (H1 claim exclusivity). -->
         <Compile Include="Linearizability.fs" />
+        <!-- Phase 3 (live tweaking): fold the real TweakTransaction/TweakAddress/
+             LiteralEdit/TweakLog through an interleaved, seeded chaos stream
+             (tweaks, concurrent file edits, saves, rollbacks, reformats,
+             crashes); twins reintroduce a skipped hash check, a naive
+             line-based undo, and a compaction that drops an unsaved tweak. -->
+        <Compile Include="TweakSim.fs" />
+        <Compile Include="TweakSimInvariants.fs" />
     </ItemGroup>
 
     <ItemGroup>
