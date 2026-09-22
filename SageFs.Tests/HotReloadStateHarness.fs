@@ -35,8 +35,11 @@ module HostRuntime =
     | HostRuntime.Net10 -> "net10.0"
     | HostRuntime.Net11 -> "net11.0"
 
+/// From this file's own folder, not AppContext.BaseDirectory: in a SageFs
+/// session the base directory is the host's, so walking up from it finds the
+/// wrong repo, or none.
 let private repoRoot () =
-  DirectoryInfo(AppContext.BaseDirectory).Parent.Parent.Parent.Parent.FullName
+  Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
 
 let private buildConfiguration () =
   match AppContext.BaseDirectory.Contains("Release") with
@@ -256,8 +259,12 @@ let private postJson (url: string) (body: string) = task {
 }
 
 /// Spin the whole thing up: scratch copy, SageFs build, host, app, watch set.
-let start (runtime: HostRuntime) : Task<RunningApp> = task {
+/// `configureRepo` runs against the scratch run dir before the host spawns —
+/// the worker's own CWD becomes that dir, so a `.SageFs/settings.json` it
+/// writes there is the repo layer `reflectionSettingsFor` resolves against.
+let startConfigured (runtime: HostRuntime) (configureRepo: string -> unit) : Task<RunningApp> = task {
   let runDir, project = copyFixture runtime
+  configureRepo runDir
   do! buildAsSageFsDoes runDir project
   let hostLog = StringBuilder()
   let! proc, workerUrl = spawnHost runtime runDir project hostLog
@@ -296,6 +303,8 @@ let start (runtime: HostRuntime) : Task<RunningApp> = task {
   return app
 }
 
+let start (runtime: HostRuntime) : Task<RunningApp> = startConfigured runtime (fun _ -> ())
+
 let private isVerdict (payload: string) =
   [ "reload"; "failed"; "noeffect"; "restarted" ]
   |> List.exists (fun t -> payload.Contains(sprintf "\"type\":\"%s\"" t))
@@ -308,7 +317,7 @@ let private isVerdict (payload: string) =
 /// watcher drops a second change to the same file inside `DoubleCompileGuardMs`
 /// on purpose. Two saves in a row have to be further apart than that or the
 /// product (correctly) sees one.
-let save (app: RunningApp) (find: string) (replace: string) : Task<string> = task {
+let saveWithinBudget (budget: TimeSpan) (app: RunningApp) (find: string) (replace: string) : Task<string> = task {
   let before = File.ReadAllText app.StateSource
   let occurrences = before.Split([| find |], StringSplitOptions.None).Length - 1
   occurrences |> Expect.equal (sprintf "the edit anchor has to appear exactly once in State.fs: %s" find) 1
@@ -321,7 +330,7 @@ let save (app: RunningApp) (find: string) (replace: string) : Task<string> = tas
   use reader = new StreamReader(stream)
   do! Task.Delay(DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
   File.WriteAllText(app.StateSource, before.Replace(find, replace))
-  use cts = new CancellationTokenSource(TimeSpan.FromSeconds 60.0)
+  use cts = new CancellationTokenSource(budget)
   let seen = ResizeArray<string>()
   let mutable verdict = ""
   try
@@ -340,10 +349,13 @@ let save (app: RunningApp) (find: string) (replace: string) : Task<string> = tas
   match verdict with
   | "" ->
     return
-      failwithf "no verdict within 60s for the edit %s -> %s. Saw:\n%s\nHost log:\n%s"
-        find replace (String.concat "\n" seen) (RunningApp.log app)
+      failwithf "no verdict within %.0fs for the edit %s -> %s. Saw:\n%s\nHost log:\n%s"
+        budget.TotalSeconds find replace (String.concat "\n" seen) (RunningApp.log app)
   | v -> return v
 }
+
+let save (app: RunningApp) (find: string) (replace: string) : Task<string> =
+  saveWithinBudget (TimeSpan.FromSeconds 60.0) app find replace
 
 /// GET a worker route, the same one the daemon proxies for the dashboard.
 let getWorker (app: RunningApp) (route: string) : Task<string> =

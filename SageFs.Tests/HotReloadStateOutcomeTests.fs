@@ -326,6 +326,52 @@ let private exactEveryReadPatches (runtime: HostRuntime) =
     })
   }
 
+/// keep-tiering for real: no manual Unpatch and no fake ledger event, just a
+/// real worker, real Harmony and tiered compilation left on. reflectDrop does
+/// 2000 reflective reads a call (thrown away, so probe-callers rewires
+/// nothing). In the REPL the CoreLib entry watch lost its patch somewhere
+/// around 12,000 calls, so this hammers it and waits for the report to say so.
+let private keepTieringLapsesAndFailsClosed (runtime: HostRuntime) =
+  testTask (sprintf "[%s] rule 2, keep-tiering: a real tiering lapse fails closed instead of saying Patched" (HostRuntime.moniker runtime)) {
+    let! app =
+      HotReloadStateHarness.startConfigured runtime (fun runDir ->
+        SageFs.SettingsStore.setKey
+          (SageFs.SettingsStore.repoPath runDir)
+          SageFs.SessionAgent.tieredCompilationSetting.Key
+          (SageFs.Middleware.ValueReads.TieringChoice.name SageFs.Middleware.ValueReads.TieringChoice.KeepTiering)
+        |> ignore)
+    try
+      let! (first: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
+      first.Watch
+      |> Expect.equal (sprintf "keep-tiering starts out watching like tiering-off does. The choice only decides whether the watch can lapse.\nHost log:\n%s" (RunningApp.log app)) SageFs.Middleware.ValueReads.ReflectionWatchStatus.Watching
+      let mutable lapsed = false
+      let mutable calls = 0
+      while not lapsed && calls < 80 do
+        let! _ = get app "reflectDrop"
+        calls <- calls + 1
+        let! (report: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
+        match report.Watch with
+        | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Lapsed _ -> lapsed <- true
+        | _ -> ()
+      match lapsed with
+      | false ->
+        // When the runtime recompiles a method is up to its background
+        // compiler, and some runs never get there. That says nothing about
+        // the fail-closed contract, and the forced lapse in
+        // ReflectionReadTrackingTests covers it every run, so this skips.
+        skiptest (sprintf "%d calls to reflectDrop (%d reads) never lapsed the watch with tiering kept on. The runtime didn't recompile the entry points this run.\nHost log:\n%s" calls (calls * 2000) (RunningApp.log app))
+      | true ->
+        // 160,000 stack walks just ran, so give the verdict more room than a
+        // quiet app needs.
+        let! verdict = HotReloadStateHarness.saveWithinBudget (System.TimeSpan.FromSeconds 150.0) app "let reflected = \"mirror\"" "let reflected = \"glass\""
+        str (json verdict) "outcome"
+        |> Expect.notEqual (sprintf "the watch lapsed, so a read in the gap can't be ruled out. Patched here is the lie fail-closed exists to prevent.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
+        let _, message = firstReason verdict
+        message |> Expect.stringContains "names the lapse, not a guess" "reflection"
+    finally
+      stop app
+  }
+
 [<Tests>]
 let hotReloadStateOutcomeTests =
   Integration.hostList "hot reload keeps live state across a save" [
@@ -342,4 +388,5 @@ let hotReloadStateOutcomeTests =
       probeCallersPatchesAThrownAwayReflectiveRead runtime
       markOnReflectRestarts runtime
       exactEveryReadPatches runtime
+      keepTieringLapsesAndFailsClosed runtime
   ]
