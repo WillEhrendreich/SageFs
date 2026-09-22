@@ -291,6 +291,7 @@ type SageFsModel = {
   /// content hash of the test's own identity, so one quarantine map covers every session
   /// that discovers the same test.
   QuarantinedTests: Map<Features.LiveTesting.TestId, Features.LiveTesting.QuarantineReason>
+  EvalsFinished: EvalTally
 }
 
 module SageFsModel =
@@ -326,6 +327,7 @@ module SageFsModel =
     PendingSuggestion = None
     PerSessionLiveTesting = Map.empty
     QuarantinedTests = Map.empty
+    EvalsFinished = EvalTally.empty
   }
 
   /// Where a given session's live-testing cycle lives: `Primary` (`LiveTesting`)
@@ -444,9 +446,7 @@ module SageFsModel =
     match model.SessionContext with
     | Some ctx -> ctx.Workflow
     | None -> WorkflowTypes.SessionWorkflow.Interactive
-  let addOutputLine (line: OutputLine) (store: SessionOutputStore) =
-    store.Add(line)
-    store
+  let addOutputLine (line: OutputLine) (store: SessionOutputStore) = store.Add(line); store
 
   /// Add multiple output lines, routing each to the correct session buffer.
   let addOutput (lines: OutputLine list) (store: SessionOutputStore) =
@@ -1054,7 +1054,7 @@ module SageFsUpdate =
         }
         { model with
             RecentOutput = SageFsModel.addOutputLine line model.RecentOutput
-            Diagnostics = model.Diagnostics |> Map.add sid diags }, []
+            Diagnostics = model.Diagnostics |> Map.add sid diags; EvalsFinished = EvalTally.record sid model.EvalsFinished }, []
 
       | TuiEvent.EvalFailed (sid, error) ->
         let line = {
@@ -1066,7 +1066,7 @@ module SageFsUpdate =
         let clearCreating = error.Contains "Create failed:"
         { model with
             RecentOutput = SageFsModel.addOutputLine line model.RecentOutput
-            CreatingSession = match clearCreating with | true -> false | false -> model.CreatingSession }, []
+            CreatingSession = (match clearCreating with | true -> false | false -> model.CreatingSession); EvalsFinished = EvalTally.record sid model.EvalsFinished }, []
 
       | TuiEvent.EvalStarted (sid, code) ->
         let line = {
@@ -1084,7 +1084,7 @@ module SageFsUpdate =
           Timestamp = DateTime.UtcNow
           SessionId = sid
         }
-        { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
+        { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput; EvalsFinished = EvalTally.record sid model.EvalsFinished }, []
 
       | TuiEvent.OutputEmitted line ->
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []

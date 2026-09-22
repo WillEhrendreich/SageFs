@@ -794,8 +794,20 @@ let private renderFoldableOutputLines (lines: OutputLine list) : XmlNode list =
 /// `$actionLoading` — the same signal that already greys EVAL/RESET/HARD_RESET
 /// and reveals [CANCEL] — so it needs no new server round trip or signal wiring,
 /// and can never disagree with those controls about whether an eval is running.
-let renderOutputForSession (sessionId: string) (lines: OutputLine list) (placeholder: string) =
-  Elem.div [ Attr.id DomIds.OutputPanel; testid "session-output"; Attr.create "data-session-id" (attrEnc sessionId) ] [
+///
+/// `evalsFinished` is the session's finished-eval count. It rides on the panel
+/// with the session id and a revision of the lines as Datastar signals, which
+/// is what drives chat-style following and the unseen-eval pill (see
+/// `OutputFollow`). The scroll handler and the follow effect live here too,
+/// on the one element that actually scrolls.
+let renderOutputForSession (sessionId: string) (evalsFinished: int) (lines: OutputLine list) (placeholder: string) =
+  Elem.div
+    [ Attr.id DomIds.OutputPanel; testid "session-output"; Attr.create "data-session-id" (attrEnc sessionId)
+      Ds.signal (Signals.OutputFeedSession, sessionId)
+      Ds.signal (Signals.OutputFeedEvals, evalsFinished)
+      Ds.signal (Signals.OutputFeedRev, OutputFollow.contentRev lines)
+      Ds.onEvent ("scroll", OutputFollow.scrollExpr)
+      Ds.effect OutputFollow.followEffectExpr ] [
     Elem.div
       [ Attr.class' "eval-in-progress-banner meta"
         Attr.style "padding: 2px 0 6px; color: var(--fg-yellow); font-weight: bold;"
@@ -811,7 +823,23 @@ let renderOutputForSession (sessionId: string) (lines: OutputLine list) (placeho
   ]
 
 let renderOutput (lines: OutputLine list) (placeholder: string) =
-  renderOutputForSession "" lines placeholder
+  renderOutputForSession "" 0 lines placeholder
+
+/// The unseen-eval pill. It floats over the bottom of the output area (a
+/// sibling of #output-panel, so it doesn't scroll away with the lines) and
+/// shows only while you're scrolled up and new evals landed. A real button:
+/// Tab reaches it, Enter/Space click it.
+let renderOutputNewEvalsPill () =
+  Elem.button
+    [ Attr.id DomIds.OutputNewEvals
+      Attr.type' "button"
+      Attr.class' "output-new-evals"
+      Attr.style "display:none"
+      Attr.create "aria-label" OutputFollow.JumpLabel
+      Ds.show OutputFollow.pillShowExpr
+      Ds.text OutputFollow.pillLabelExpr
+      Ds.onClick OutputFollow.jumpExpr ]
+    []
 
 /// Render diagnostics as an HTML fragment.
 let renderDiagnostics (diags: Diagnostic list) =
@@ -2123,6 +2151,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 [ Text.raw "[CLEAR]" ]
             ]
             snap.OutputPanel
+            renderOutputNewEvalsPill ()
           ]
           // Eval area — collapsed by default via <details>
           signalDetails Signals.EvaluateSectionOpen [ Attr.id DomIds.EvaluateSection; Attr.class' "eval-area" ] [

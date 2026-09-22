@@ -649,7 +649,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     let snap =
       { mkSnap "0.0.0" with
           SessionId = "0a2b3c4e"
-          OutputPanel = renderOutputForSession "0a2b3c4e" [ { Timestamp = None; Kind = ResultLine; Text = "SESSIONB" } ] "No output yet"
+          OutputPanel = renderOutputForSession "0a2b3c4e" 0 [ { Timestamp = None; Kind = ResultLine; Text = "SESSIONB" } ] "No output yet"
           SessionsPanel = renderSessionsForSession "0a2b3c4e" sessions false }
     let html = renderMainContent snap |> renderNode
     html |> Expect.stringContains "main must declare the one viewing identity" "data-viewing-session-id=\"0a2b3c4e\""
@@ -697,7 +697,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     let snap =
       { mkSnap "0.0.0" with
           SessionId = "0a2b3c4e"
-          OutputPanel = renderOutputForSession "0a2b3c4e" [ { Timestamp = None; Kind = ResultLine; Text = "val dashboardProbe: int = 8967" } ] "No output" }
+          OutputPanel = renderOutputForSession "0a2b3c4e" 0 [ { Timestamp = None; Kind = ResultLine; Text = "val dashboardProbe: int = 8967" } ] "No output" }
     let html = renderMainContent snap |> renderNode
     html |> Expect.stringContains "action morph must retain selected identity" "data-viewing-session-id=\"0a2b3c4e\""
     html |> Expect.stringContains "action morph output must use selected identity" "data-session-id=\"0a2b3c4e\""

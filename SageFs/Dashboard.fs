@@ -276,13 +276,6 @@ let completionInsertScript () =
     };
   """ DomIds.EvalTextarea DomIds.CompletionDropdown) ]
 
-/// Auto-scroll output panel to bottom when new content arrives via SSE morph.
-let autoScrollScript () =
-  Elem.script [] [ Text.raw (sprintf """
-    new MutationObserver(function(){var p=document.getElementById('%s');if(p)p.scrollTop=p.scrollHeight;})
-      .observe(document.getElementById('%s')||document.body,{childList:true,subtree:true});
-  """ DomIds.OutputPanel DomIds.Main) ]
-
 /// Details toggle — update arrow indicator when eval section opens/closes.
 let detailsToggleScript () =
   Elem.script [] [ Text.raw (sprintf """
@@ -308,7 +301,8 @@ let keyboardHandlerScript () =
           var a=null,v=null;
           if(e.key==='j'||e.key==='ArrowDown'){a='sessionNavDown';}
           if(e.key==='k'||e.key==='ArrowUp'){a='sessionNavUp';}
-          if(e.key==='Enter'){a='sessionSelect';}
+          // Enter on a focused button/link/summary/select is that control's own activation (the unseen-eval pill, every panel button), never session select.
+          if(e.key==='Enter'&&tag!=='button'&&tag!=='a'&&tag!=='summary'&&tag!=='select'){a='sessionSelect';}
           if(e.key==='x'||e.key==='Delete'){a='sessionDelete';}
           if(e.key==='X'){a='sessionStopOthers';}
           if(e.key==='n'){e.preventDefault();fetch('/dashboard/session/create',{method:'POST'});return;}
@@ -365,6 +359,12 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
     ]
     Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true" ] [
       Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, false); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "");
+                // Chat-style output following (see `OutputFollow`). The browser's
+                // own state lives here, outside #main, so no morph resets it;
+                // the server's feed signals are seeded here too and then
+                // re-rendered onto #output-panel by every push.
+                Ds.signal (Signals.OutputPinned, true); Ds.signal (Signals.OutputSeenEvals, 0); Ds.signal (Signals.OutputFollowSession, ""); Ds.signal (Signals.OutputScrollTop, 0);
+                Ds.signal (Signals.OutputFeedSession, ""); Ds.signal (Signals.OutputFeedEvals, 0); Ds.signal (Signals.OutputFeedRev, 0);
                 // Disconnect-indicator heartbeat (todo-dashboard-disconnect-indicator.md):
                 // seeded to "now" so the very first client-side staleness check
                 // (before the stream's first heartbeat patch lands) never
@@ -394,8 +394,11 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
         Text.raw "❌ Daemon not running — start SageFs to continue"
       ]
       Elem.div [ Attr.id DomIds.Main ] [ initialContent ]
+      // Polite announcement of unseen evals. Out here in the shell rather than
+      // next to the pill, because a morph rewrites text inside #main and a
+      // live region would re-announce on every push.
+      Elem.div [ Attr.class' "sr-only"; Attr.create "role" "status"; Attr.create "aria-live" "polite"; Attr.create "aria-atomic" "true"; Ds.text OutputFollow.announceExpr ] []
       completionInsertScript ()
-      autoScrollScript ()
       detailsToggleScript ()
       keyboardHandlerScript ()
     ]
@@ -477,6 +480,7 @@ let private buildOutputPanelsFrom
         match sessionState with
         | "Ready" -> "Ready — type code in the evaluator below, or use the MCP tools"
         | state -> sprintf "%s" state
+    let evalsFinished = q.GetSessionEvalCounts () |> Map.tryFind sessionId |> Option.defaultValue 0
     let computeResult () =
       // Per-session regions use the caller's immutable viewing session,
       // never the Elm runtime's global active session.
@@ -491,12 +495,12 @@ let private buildOutputPanelsFrom
           | Some r ->
             let lines = parseOutputLines r.Content
             match lines.IsEmpty with
-            | true -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) lines emptyPlaceholder
-            | false -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) lines "No output yet"
-          | None -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) [] emptyPlaceholder
+            | true -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) evalsFinished lines emptyPlaceholder
+            | false -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) evalsFinished lines "No output yet"
+          | None -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) evalsFinished [] emptyPlaceholder
         (outNode, sessionsPanel, sessionPicker)
       | None ->
-        (renderOutputForSession (WorkerProtocol.SessionId.value sessionId) [] emptyPlaceholder, sessionsPanel, sessionPicker)
+        (renderOutputForSession (WorkerProtocol.SessionId.value sessionId) evalsFinished [] emptyPlaceholder, sessionsPanel, sessionPicker)
     return computeResult ()
   }
 
@@ -1136,7 +1140,7 @@ let buildNoSessionSnapshotWithSessionsSorted
       HotReloadPanel = renderHotReloadEmpty
       LiveTestingPanel = liveTestingPanel
       SessionContextPanel = renderSessionContextEmpty
-      OutputPanel = renderOutputForSession "" [] "No session in play — create or resume one to start."
+      OutputPanel = renderOutputForSession "" 0 [] "No session in play — create or resume one to start."
       SessionsPanel = renderSessionsForSession "" liveRows false
       // The picker always shows in the no-session state (it is the "no session
       // in play" landing — Quick Start / Open Directory / Resume Previous),

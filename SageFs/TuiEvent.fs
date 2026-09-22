@@ -340,3 +340,29 @@ type SageFsView = {
   Diagnostics: Features.Diagnostics.Diagnostic list
   WatchStatus: WatchStatus option
 }
+
+/// How many evals have finished in each session: completed, failed or
+/// cancelled, keyed by session id. It only goes up, and clearing the output
+/// doesn't touch it. The dashboard renders a session's count into the output
+/// panel, and the "N new evals" pill is that count minus the one you saw
+/// when you scrolled away. Private, so nothing can lower a count.
+type EvalTally = private EvalTally of Map<string, int>
+
+module EvalTally =
+  let empty = EvalTally Map.empty
+
+  /// One more finished eval in this session. An event with no session (a
+  /// daemon-wide failure like a failed create) isn't anybody's eval.
+  let record (sessionId: string) (EvalTally counts as tally) =
+    match String.IsNullOrEmpty sessionId with
+    | true -> tally
+    | false ->
+      let n = counts |> Map.tryFind sessionId |> Option.defaultValue 0
+      EvalTally (counts |> Map.add sessionId (n + 1))
+
+  /// How many evals have finished in this session so far.
+  let count (sessionId: string) (EvalTally counts) =
+    counts |> Map.tryFind sessionId |> Option.defaultValue 0
+
+  /// Every session that has finished at least one eval, with its count.
+  let toList (EvalTally counts) = Map.toList counts

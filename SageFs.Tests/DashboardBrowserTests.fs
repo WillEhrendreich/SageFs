@@ -314,10 +314,17 @@ module OutputScroll =
       do! (DashboardDom.evalButton page).ClickAsync()
     })
     do! PlaywrightExpect.waitForSelectorText 30_000 page panelSelector (sprintf "%s-120" prefix)
+    do! page.WaitForTimeoutAsync(600.0f)
     let! overflow =
       page.EvaluateAsync<float>(
         "() => { var el = document.querySelector('#output-panel'); return el.scrollHeight - el.clientHeight; }")
     Expect.isTrue (overflow > 400.0) (sprintf "output must overflow the panel by a good margin to test scrolling (overflow %f px)" overflow)
+    // Opening Evaluate shrank the panel under us. That's not the user
+    // scrolling away, so the fill still has to follow to the bottom.
+    let! dist =
+      page.EvaluateAsync<float>(
+        "() => { var el = document.querySelector('#output-panel'); return el.scrollHeight - el.scrollTop - el.clientHeight; }")
+    Expect.isTrue (dist <= 4.0) (sprintf "the fill must follow to the bottom even though opening Evaluate resized the panel (%f px from bottom)" dist)
   }
 
   /// Scroll up the way a person does: the mouse wheel over the panel.
@@ -500,6 +507,10 @@ let tests =
           var p = pill.getBoundingClientRect(), a = area.getBoundingClientRect();
           var problems = [];
           if (p.width < 1 || p.height < 1) problems.push('zero-size');
+          // It floats over the panel. In the flex flow it would steal the
+          // panel's height and stretch to the full width.
+          if (getComputedStyle(pill).position !== 'absolute') problems.push('in the layout flow (position ' + getComputedStyle(pill).position + ')');
+          if (p.width > a.width * 0.9) problems.push('stretched to the full width (' + Math.round(p.width) + ' of ' + Math.round(a.width) + ' px)');
           if (p.left < a.left - 0.5 || p.right > a.right + 0.5 || p.top < a.top - 0.5 || p.bottom > a.bottom + 0.5)
             problems.push('outside output area ' + JSON.stringify(p) + ' vs ' + JSON.stringify(a));
           if (p.left < 0 || p.right > window.innerWidth) problems.push('clipped by viewport');
@@ -509,6 +520,18 @@ let tests =
           return problems.join('; ');
         }""")
     Expect.equal verdict "" "the pill fits at phone width with no overlap or clipping"
+    // Keyboard: the pill is in the tab order, and Enter on it jumps. The
+    // dashboard's global shortcut handler used to eat Enter as "select
+    // session" before any focused button could see it.
+    let! tabIndex = page.EvaluateAsync<int>("() => document.querySelector('#output-new-evals').tabIndex")
+    Expect.isTrue (tabIndex >= 0) "the pill is reachable with Tab"
+    do! page.Locator(OutputScroll.pillSelector).FocusAsync()
+    do! page.Keyboard.PressAsync("Enter")
+    do! page.WaitForTimeoutAsync(500.0f)
+    let! dist = OutputScroll.distanceFromBottom page
+    Expect.isTrue (dist <= OutputScroll.atBottomTolerance) (sprintf "Enter on the focused pill jumps to the bottom (%f px from bottom)" dist)
+    let! pillAfter = OutputScroll.pillVisible page
+    Expect.isFalse pillAfter "Enter on the pill hides it"
   })
 
   playwrightTest "keyboard help toggles on click" (fun page -> task {

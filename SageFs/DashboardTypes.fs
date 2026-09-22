@@ -21,6 +21,8 @@ open StarFederation.Datastar.FSharp
 module DomIds =
   let [<Literal>] Main = "main"
   let [<Literal>] OutputPanel = "output-panel"
+  /// The "N new evals ↓" pill over the bottom of the output panel.
+  let [<Literal>] OutputNewEvals = "output-new-evals"
   let [<Literal>] SessionsPanel = "sessions-panel"
   let [<Literal>] EvalResult = "eval-result"
   let [<Literal>] EvalTextarea = "eval-textarea"
@@ -169,6 +171,30 @@ module Signals =
   /// restarts the session (seconds, sometimes a rebuild) and must not grey
   /// out EVAL/RESET while it runs, nor be greyed out BY them.
   let [<Literal>] WorkflowSwitchLoading = "workflowSwitchLoading"
+  // Chat-style scrolling of the output panel (see `OutputFollow`). The three
+  // `OutputFeed*` signals are the server's: `renderOutputForSession` renders
+  // them onto #output-panel, so every morph carries the current values. The
+  // others are the browser's own and live in the shell outside #main, so no
+  // morph can touch them. All of them start with `_`, which tells Datastar to
+  // keep them out of the signals it sends with every @post: they're display
+  // state, and the backend has no use for them.
+  /// Server: the session the output panel is showing.
+  let [<Literal>] OutputFeedSession = "_outputFeedSession"
+  /// Server: how many evals have finished in that session.
+  let [<Literal>] OutputFeedEvals = "_outputFeedEvals"
+  /// Server: changes whenever the rendered output changes, so following
+  /// works for output that isn't an eval result (app logs, printfn).
+  let [<Literal>] OutputFeedRev = "_outputFeedRev"
+  /// Browser: true while the panel sits at the bottom and follows new output.
+  let [<Literal>] OutputPinned = "_outputPinned"
+  /// Browser: `OutputFeedEvals` as it was when you scrolled away.
+  let [<Literal>] OutputSeenEvals = "_outputSeenEvals"
+  /// Browser: the session the pinned state belongs to. When the panel
+  /// switches to another session, following starts over.
+  let [<Literal>] OutputFollowSession = "_outputFollowSession"
+  /// Browser: the panel's scrollTop at the last scroll event, so the scroll
+  /// handler can tell you moving up from the layout moving under you.
+  let [<Literal>] OutputScrollTop = "_outputScrollTop"
 
 /// Pure logic for the dashboard's workflow switcher (sagefs-ux-roast.md
 /// Island A item 3 / this session's Island B item 2 — "the dashboard cannot
@@ -312,6 +338,110 @@ type OutputLine = {
   Kind: OutputLineKind
   Text: string
 }
+
+/// Chat-style scrolling for the output panel, the way a chat app does it.
+/// Sitting at the bottom, the panel follows new output. Scrolled up, it holds
+/// still, and a pill over the bottom counts the evals that landed since you
+/// scrolled away ("3 new evals ↓"). Click it, or scroll back down yourself,
+/// and it follows again.
+///
+/// The split of who owns what is the whole trick. The server owns the facts:
+/// which session the panel shows, how many evals have finished there, and a
+/// revision of the rendered output. They ride on #output-panel as Datastar
+/// signals, so every fat morph of #main re-renders them. The browser owns only
+/// what the server can't know: whether you're pinned to the bottom, and the
+/// eval count at the moment you scrolled away. Those are signals declared in
+/// the shell, outside #main, so a morph never resets them. The pill is the
+/// difference between the two counts.
+///
+/// Everything here is either pure F# or a Datastar expression built from the
+/// same constants, so the browser's pill text and `pillLabel` can't drift.
+[<RequireQualifiedAccess>]
+module OutputFollow =
+  /// How close to the bottom still counts as "at the bottom". A few px of
+  /// slack, so sub-pixel rounding at odd zoom levels never unpins you.
+  let atBottomTolerancePx = 24
+
+  let [<Literal>] private OneEval = "new eval"
+  let [<Literal>] private ManyEvals = "new evals"
+  let [<Literal>] private DownArrow = "↓"
+
+  /// The pill's accessible name. It says what clicking does; the count is in
+  /// the visible text and in the polite live region.
+  let [<Literal>] JumpLabel = "Jump to the newest output"
+
+  /// Evals that finished since you scrolled away. Never negative: a smaller
+  /// count than the one you left (a restarted daemon) just means none.
+  let unseenEvals (finished: int) (seenWhenScrolledAway: int) =
+    max 0 (finished - seenWhenScrolledAway)
+
+  /// "1 new eval ↓", "3 new evals ↓".
+  let pillLabel (unseen: int) =
+    match unseen with
+    | 1 -> sprintf "%d %s %s" unseen OneEval DownArrow
+    | n -> sprintf "%d %s %s" n ManyEvals DownArrow
+
+  /// `unseenEvals`, in the browser.
+  let unseenExpr =
+    sprintf "Math.max(0, $%s - $%s)" Signals.OutputFeedEvals Signals.OutputSeenEvals
+
+  /// `pillLabel`, in the browser.
+  let pillLabelExpr =
+    sprintf "(n => n + (n === 1 ? ' %s' : ' %s') + ' %s')(%s)" OneEval ManyEvals DownArrow unseenExpr
+
+  /// The pill shows only while you're scrolled up and something new landed.
+  let pillShowExpr =
+    sprintf "!$%s && %s > 0" Signals.OutputPinned unseenExpr
+
+  /// Text for the polite live region: the pill label while it shows, empty
+  /// otherwise. It only changes when the count does, so a screen reader hears
+  /// one short update per new eval and nothing while you're following.
+  let announceExpr =
+    sprintf "(%s) ? %s : ''" pillShowExpr pillLabelExpr
+
+  /// Clicking the pill re-pins. The follow effect does the actual jump.
+  let jumpExpr = sprintf "$%s = true" Signals.OutputPinned
+
+  /// On every scroll of the panel. Reaching the bottom pins. Only moving UP
+  /// unpins, never just "not at the bottom": opening the Evaluate section
+  /// shrinks the panel, and Chrome's scroll anchoring fires a scroll event for
+  /// that with you suddenly 180px off the bottom. Found dogfooding at phone
+  /// width, where the first eval after opening Evaluate didn't follow. Wheel,
+  /// keys, touch and scrollbar drags all move scrollTop up; a layout change
+  /// under you doesn't. Our own jump to the bottom lands here and confirms the
+  /// pin.
+  let scrollExpr =
+    sprintf
+      "var t = el.scrollTop; el.scrollHeight - t - el.clientHeight <= %d ? ($%s = true) : (t < $%s - 1 && ($%s = false)); $%s = t"
+      atBottomTolerancePx Signals.OutputPinned Signals.OutputScrollTop Signals.OutputPinned Signals.OutputScrollTop
+
+  /// Runs on #output-panel whenever the server's feed signals or the pin
+  /// change. A different session starts over pinned. Pinned, it records the
+  /// current count as seen and jumps to the bottom. `behavior: 'instant'`
+  /// matters: a smooth scroll fires scroll events on the way down, and those
+  /// would read "not at the bottom yet" and unpin you mid-jump.
+  let followEffectExpr =
+    sprintf
+      "$%s !== $%s && ($%s = $%s, $%s = true); $%s; $%s && ($%s = $%s, el.scrollTo({ top: el.scrollHeight, behavior: 'instant' }))"
+      Signals.OutputFeedSession Signals.OutputFollowSession
+      Signals.OutputFollowSession Signals.OutputFeedSession Signals.OutputPinned
+      Signals.OutputFeedRev
+      Signals.OutputPinned Signals.OutputSeenEvals Signals.OutputFeedEvals
+
+  /// A revision of the rendered output: changes when any line does. Following
+  /// keys off it, so output that isn't an eval result still follows.
+  /// Deterministic (FNV-1a) rather than `String.GetHashCode`, which is
+  /// randomized per process and would make render snapshots unstable.
+  let contentRev (lines: OutputLine list) : int =
+    let mutable h = 2166136261u
+    let mix (s: string) =
+      for c in s do
+        h <- (h ^^^ uint32 c) * 16777619u
+      h <- (h ^^^ 10u) * 16777619u
+    for line in lines do
+      line.Timestamp |> Option.iter mix
+      mix line.Text
+    int (h >>> 1)
 
 /// Discriminated union for diagnostic severity.
 type DiagSeverity =

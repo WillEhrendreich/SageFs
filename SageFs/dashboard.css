@@ -289,6 +289,64 @@ h2 {
   flex-direction: column;
   overflow: hidden;
   border-bottom: 1px solid var(--border-normal);
+  /* Anchors the unseen-eval pill, which floats over the bottom of the panel. */
+  position: relative;
+}
+
+/* "N new evals ↓". Shows while you're scrolled up in the output (see
+   OutputFollow in DashboardTypes.fs). Same flat, square-cornered, bordered
+   look as the other panel controls. Sized in em so Ctrl+/- zoom (which sets
+   --font-size on :root) scales it with the rest of the page, and capped to
+   the area's width so it wraps instead of clipping at phone widths.
+   The `.output-area >` is there for specificity: the aria-label tooltip rule
+   further down sets `position: relative` on anything with an aria-label, and
+   it outranks a bare class. Without it the pill sat in the flex flow at full
+   width. */
+.output-area > .output-new-evals {
+  position: absolute;
+  width: max-content;
+  bottom: 0.75em;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  max-width: calc(100% - 16px);
+  padding: 0.3em 0.9em;
+  font-family: inherit;
+  font-size: 0.8em;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+  cursor: pointer;
+  color: var(--bg-default);
+  background: var(--fg-blue);
+  border: 1px solid var(--fg-blue);
+  border-radius: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition: background 0.15s, color 0.15s;
+
+  &:hover {
+    background: var(--bg-panel);
+    color: var(--fg-blue);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--fg-yellow);
+    outline-offset: 2px;
+  }
+}
+
+/* Visually hidden, still read by screen readers (the unseen-eval live region). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .output-header {

@@ -39,7 +39,7 @@ let private mkSnap () : DashboardSnapshot =
     EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
     ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
     HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
-    OutputPanel = renderOutputForSession "0a2b3c4d" [] "No output yet"
+    OutputPanel = renderOutputForSession "0a2b3c4d" 0 [] "No output yet"
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
     ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
     BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []
@@ -87,7 +87,7 @@ let dashboardTestIdTests = testList "Dashboard data-testid hooks" [
     html |> Expect.stringContains "quick-start testid present" "data-testid=\"quick-start\""
 
   testCase "WHY — the session output panel carries data-testid=\"session-output\" so a demo can observe a session's evaluated output" <| fun _ ->
-    let html = renderOutputForSession "0a2b3c4d" [] "No output yet" |> renderNode
+    let html = renderOutputForSession "0a2b3c4d" 0 [] "No output yet" |> renderNode
     html |> Expect.stringContains "session-output testid present" "data-testid=\"session-output\""
 
   testCase "WHY — the live testing enable/disable button carries data-testid=\"live-testing-toggle\" regardless of its current on/off label" <| fun _ ->

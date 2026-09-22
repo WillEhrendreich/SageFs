@@ -3248,8 +3248,13 @@ let run
       | Some info -> info.App
       | None -> AppRun.AppRunState.NotRunning
     GetSessionEvalCounts = fun () ->
-      elmRuntime.GetModel().Sessions.Sessions
-      |> List.map (fun s -> s.Id, s.EvalCount)
+      // From the finished-eval counter the Elm update keeps. The registry's
+      // own SessionSnapshot.EvalCount is never filled in (it's always 0).
+      EvalTally.toList (elmRuntime.GetModel().EvalsFinished)
+      |> List.choose (fun (key, n) ->
+        match WorkerProtocol.SessionId.validate key with
+        | Ok sid -> Some (sid, n)
+        | Error _ -> None)
       |> Map.ofList
     IsCreatingSession = fun () -> elmRuntime.GetModel().CreatingSession
   }
