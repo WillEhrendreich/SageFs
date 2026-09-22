@@ -191,6 +191,60 @@ let tweakLogTests =
         UndoCursor.redo log c |> Expect.equal "moves to the next op" (UndoCursor.At a2.Id)
     ]
 
+    testList "performUndo / performRedo: sequential undo, explicit redo, storage stays append-only" [
+
+      testCase "performUndo rolls back the most recent tweak and appends a RolledBack op" <| fun _ ->
+        let source = "module M\nlet x = 2.0\n"
+        let log = EventLog.empty
+        let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        match performUndo log UndoCursor.AtHead source 2L with
+        | Ok(log', cursor, newSource) ->
+          newSource |> Expect.equal "back to 1.0" "module M\nlet x = 1.0\n"
+          cursor |> Expect.equal "cursor now points at the undone op" (UndoCursor.At applied.Id)
+          log'.Events.Length |> Expect.equal "storage stayed append-only: one more event, not a rewrite" 2
+          match log'.Events |> List.last with
+          | { Event = TweakLogEvent.RolledBack id } -> id |> Expect.equal "targets the tweak it undid" applied.Id
+          | other -> failtestf "expected a RolledBack event, got %A" other
+        | Error e -> failtestf "expected Ok, got %s" e
+
+      testCase "repeated performUndo walks sequentially back through two tweaks" <| fun _ ->
+        let log = EventLog.empty
+        let log, a1 = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, a2 = EventLog.append log 2L (TweakLogEvent.TweakApplied(addr "x", "2.0", "3.0", contentHash "3.0"))
+        let source = "module M\nlet x = 3.0\n"
+        let log, cursor1, source1 = performUndo log UndoCursor.AtHead source 3L |> Expect.wantOk "first undo"
+        source1 |> Expect.equal "back to 2.0" "module M\nlet x = 2.0\n"
+        cursor1 |> Expect.equal "cursor at a2" (UndoCursor.At a2.Id)
+        let _, cursor2, source2 = performUndo log cursor1 source1 4L |> Expect.wantOk "second undo"
+        source2 |> Expect.equal "back to 1.0" "module M\nlet x = 1.0\n"
+        cursor2 |> Expect.equal "cursor at a1" (UndoCursor.At a1.Id)
+
+      testCase "performRedo re-applies what performUndo undid, and also appends (never rewrites)" <| fun _ ->
+        let source = "module M\nlet x = 2.0\n"
+        let log = EventLog.empty
+        let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, cursor, undone = performUndo log UndoCursor.AtHead source 2L |> Expect.wantOk "undo"
+        let log, cursor', redone = performRedo log cursor undone 3L |> Expect.wantOk "redo"
+        redone |> Expect.equal "back to 2.0" "module M\nlet x = 2.0\n"
+        log.Events.Length |> Expect.equal "two RolledBack ops appended on top of the original TweakApplied, storage never rewritten" 3
+        ignore applied
+        ignore cursor'
+
+      testCase "undo then redo then undo again keeps walking correctly (multi-cycle)" <| fun _ ->
+        let source = "module M\nlet x = 2.0\n"
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, c1, s1 = performUndo log UndoCursor.AtHead source 2L |> Expect.wantOk "undo"
+        let log, c2, s2 = performRedo log c1 s1 3L |> Expect.wantOk "redo"
+        let _, _, s3 = performUndo log c2 s2 4L |> Expect.wantOk "undo again"
+        s3 |> Expect.equal "back to 1.0 again" "module M\nlet x = 1.0\n"
+
+      testCase "performUndo refuses cleanly when there's nothing to undo" <| fun _ ->
+        match performUndo EventLog.empty UndoCursor.AtHead baseSource 1L with
+        | Error _ -> ()
+        | Ok _ -> failtest "expected a refusal"
+    ]
+
     testList "scrub coalescing" [
 
       testCase "ticks on the same address never become events; only settle does" <| fun _ ->
