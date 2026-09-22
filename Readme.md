@@ -576,6 +576,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 | Port already in use | `sagefs stop` or `--mcp-port 8080` |
 | Wrong project selected | "SageFs: Switch Project" in command palette |
 | Stale REPL after code changes | Save the file first — source edits auto-reload. Use hard reset only for `.fsproj` / package changes. |
+| Session stuck warming up on a big repo | Name an explicit project instead of letting it auto-discover — see [Large repos](docs/TROUBLESHOOTING.md#warmup-progress-phases) |
 
 📖 **[Full Troubleshooting Guide →](docs/TROUBLESHOOTING.md)**: covers first-run issues, runtime problems, platform-specific fixes, and diagnostic tools.
 

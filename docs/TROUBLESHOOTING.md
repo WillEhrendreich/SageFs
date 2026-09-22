@@ -179,6 +179,29 @@ field is a 0.0–1.0 float for progress bars.
 missing packages. Increase `SAGEFS_WARMUP_INACTIVITY_SECONDS` if your project
 has slow NuGet restores.
 
+**Large repos (dozens of projects, a big solution): name a project.**
+`create_session` with an empty `projects` list makes the worker auto-discover
+and load whatever it finds in the working directory — on a repo with many
+`.fsproj` files that can take minutes, since it's trying to resolve all of
+them, not the one you actually want. Passing one explicit project
+(`projects=["path/to/YourProject.fsproj"]`) is typically Ready in seconds on
+the exact same repo. `get_available_projects` lists candidates if you're not
+sure which one to name.
+
+**A session that never reaches Ready is bounded, not silent.** Warmup is
+governed by two limits: `SAGEFS_WARMUP_INACTIVITY_SECONDS` (default 30) is how
+long the worker can go with no progress before it's declared stuck;
+`SAGEFS_WARMUP_MAX_MINUTES` (default 10) is the hard ceiling regardless of
+progress. A session that's genuinely still working (a big repo resolving many
+projects) keeps that inactivity clock reset by its own progress and can run up
+to the absolute ceiling; a session that's gone quiet is faulted within the
+inactivity window, with a stated reason — never left reading "Starting" with
+nothing to show for it. `get_fsi_status` on a warming session reports
+`elapsedSeconds`, `boundSeconds`, and the last progress line so you can see
+which regime you're in. `stop_session` returns promptly in every case,
+including on an already-faulted or still-warming session — it does not wait
+for warmup to finish or fail first.
+
 ---
 
 ## Platform-Specific Issues

@@ -79,7 +79,7 @@ check `sagefs status` — if it says no daemon is running, start one with
 
 | Tool | What it does |
 |:---|:---|
-| `create_session` | Create an isolated FSI session for a project or working directory. |
+| `create_session` | Create an isolated FSI session for a project or working directory. Name an explicit `.fsproj` — an empty `projects` list auto-discovers whatever is in the directory, which on a large repo (dozens of projects) can take minutes with no explicit project loaded to show for it. Use `get_available_projects` to find the one you want first. |
 | `list_sessions` | List active sessions. |
 | `switch_session` | Change which session your calls route to. |
 | `stop_session` | Stop a session by id. |

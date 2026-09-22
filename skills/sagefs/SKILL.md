@@ -35,14 +35,35 @@ you" below.
    session for the main checkout is not yours if you're in
    `.claude/worktrees/whatever`. Don't create a duplicate either: check
    `list_sessions` first.
-4. **Build once, then create the session.** A session loads your project's
-   compiled output, so build first. This one build is allowed. If warmup
-   still says "Not all DLLs are found" after a build, that's a SageFs bug, not
-   you. Report it with the paths the message names. (Older versions got
-   multi-targeted project references wrong this way.) Then `create_session`
-   with your working directory and
-   project, and call `get_fsi_status` until it says `Ready`. Don't sleep in a
-   loop.
+4. **Build once, and wait for it to actually finish, before you create the
+   session.** A session loads your project's compiled output, so build
+   first — and "started a build" is not "built". A background build that
+   hasn't finished yet is the single most common cause of a session that
+   faults immediately with "Not all DLLs are found": SageFs looked for the
+   output before your build wrote it. If you see that message right after
+   creating a session, check whether a build is still running before
+   assuming anything else is wrong — then recover with `hard_reset_fsi_session
+   rebuild=true`, which builds and reloads in one step. If the message
+   still appears after a build you've confirmed finished, that's a SageFs
+   bug: report it with the paths the message names.
+5. **Name a project. Don't pass `projects: []` on anything but a small,
+   one-project directory.** `create_session` with `projects: []` doesn't
+   give you an empty REPL — it auto-discovers and loads whatever project or
+   solution sits in that directory, which on a large repo (a solution with
+   dozens of projects) can take minutes and used to give you nothing to
+   look at while it did. Call `get_available_projects` first, pick the one
+   project you actually need, and pass it explicitly:
+   `create_session(projects=["path/to/One.fsproj"], working_directory=...)`.
+   That is what actually gets you to `Ready` fast — auto-discovery is the
+   exception, for small directories, not the default.
+6. `create_session` returns immediately; the session then warms up. Call
+   `get_fsi_status` until it says `Ready`. Don't sleep in a loop — a
+   `WarmingUp`/"Rebuilding" response now carries `elapsedSeconds`,
+   `boundSeconds`, and the worker's own last-reported progress line, so you
+   can tell "large repo, still working" from "actually stuck" without
+   guessing. If it reports `Faulted` with a reason, that reason is real —
+   don't keep polling hoping it changes; act on it (usually
+   `hard_reset_fsi_session rebuild=true`).
 
 ## The loop
 
