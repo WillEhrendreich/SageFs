@@ -559,6 +559,63 @@ module ReflectionReadMode =
     | ReflectionReadMode.MarkOnReflect -> "fastest, but any reflective read means an edit to that value restarts the app"
     | ReflectionReadMode.ProbeCallers -> "exact about who read it and nearly free after each caller's first read"
 
+/// Whether the process a session's app runs in keeps the runtime's tiered
+/// compilation on. Rule 2's reflection entry watch is a Harmony prefix on a
+/// CoreLib method (measured in the REPL: 4,000 of 12,000 calls to
+/// MethodBase.Invoke still hit it once the runtime had recompiled it under
+/// load — the patch was gone the other 8,000 times). Turning tiering off
+/// stops that recompile, so the watch can't lapse; it costs the app itself
+/// (read-tracking-costs.md has the numbers): every method gets the fully
+/// optimized JIT on its first call instead of the cheap one, so warmup and
+/// startup are slower, and dynamic PGO — which only runs under tiering — is
+/// off for the app's whole life, so hot code can be slower in steady state
+/// too. A lapse fails closed (every tracked value goes can't-tell until the
+/// app restarts), so the real cost of keeping tiering on is more restarts in
+/// the edit loop, not a wrong answer.
+[<RequireQualifiedAccess>]
+type TieringChoice =
+  /// Turn DOTNET_TieredCompilation off for the app's process. The watch never
+  /// lapses. The app pays with a slower warmup (every method is fully
+  /// optimized on first call) and no dynamic PGO for its whole run.
+  | TieringOffWhileWatching
+  /// Leave tiering on. Warmup and steady-state speed are the runtime's
+  /// defaults, but the watch can lapse under load, and a lapse means an edit
+  /// to any tracked value restarts the app until the next one.
+  | KeepTiering
+
+module TieringChoice =
+  let all = [ TieringChoice.TieringOffWhileWatching; TieringChoice.KeepTiering ]
+
+  /// The one spelling used by config and the dashboard.
+  let name (choice: TieringChoice) : string =
+    match choice with
+    | TieringChoice.TieringOffWhileWatching -> "tiering-off-while-watching"
+    | TieringChoice.KeepTiering -> "keep-tiering"
+
+  /// A name that isn't a choice, and the choices that are.
+  type Unknown = { Given: string; Known: string list }
+
+  let describeUnknown (unknown: Unknown) =
+    sprintf "'%s' isn't a tiering choice. Use one of: %s" unknown.Given (String.concat ", " unknown.Known)
+
+  let parse (text: string) : Result<TieringChoice, Unknown> =
+    let wanted = text.Trim().ToLowerInvariant()
+    match all |> List.tryFind (fun choice -> name choice = wanted) with
+    | Some choice -> Result.Ok choice
+    | None -> Result.Error { Given = text; Known = all |> List.map name }
+
+  /// What the choice costs the app, in one line.
+  let cost (choice: TieringChoice) : string =
+    match choice with
+    | TieringChoice.TieringOffWhileWatching -> "every method is fully optimized on first call, so warmup and startup are slower, and dynamic PGO never runs"
+    | TieringChoice.KeepTiering -> "warmup and steady state keep the runtime's usual speed, but a hot loop can retier a watched method and lose its patch"
+
+  /// What picking the choice means for editing, in one line.
+  let consequence (choice: TieringChoice) : string =
+    match choice with
+    | TieringChoice.TieringOffWhileWatching -> "the watch can't lapse, at the cost of a slower-warming, less-optimized app"
+    | TieringChoice.KeepTiering -> "the app runs at its usual speed, but a lapse restarts it on the next edit of a tracked value until the app itself restarts"
+
 /// Who made a reflective read of a value, as far as SageFs knows.
 [<RequireQualifiedAccess>]
 type ReflectiveCaller =
@@ -865,10 +922,11 @@ module ReflectionNotices =
 /// host inside the agent's init.
 type ReflectionReadSettings =
   { Mode: ReflectionReadMode
-    HotLoop: HotLoopThreshold }
+    HotLoop: HotLoopThreshold
+    Tiering: TieringChoice }
 
 module ReflectionReadSettings =
-  let standard = { Mode = ReflectionReadMode.standard; HotLoop = HotLoopThreshold.standard }
+  let standard = { Mode = ReflectionReadMode.standard; HotLoop = HotLoopThreshold.standard; Tiering = TieringChoice.TieringOffWhileWatching }
 
 /// Whether the reflection entry points carry SageFs's watch.
 [<RequireQualifiedAccess>]

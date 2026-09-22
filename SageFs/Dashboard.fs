@@ -1984,7 +1984,7 @@ let private settingsPaths () : SageFs.ConfigPaths =
     Repo = SageFs.RepoRootAt (System.Environment.CurrentDirectory) }
 
 let private settingsRows (paths: SageFs.ConfigPaths) : SettingsPanel.SettingRow list =
-  (SageFs.SettingsCatalog.pilots @ [ SageFs.SessionAgent.reflectionReadModeSetting ])
+  (SageFs.SettingsCatalog.pilots @ [ SageFs.SessionAgent.reflectionReadModeSetting; SageFs.SessionAgent.tieredCompilationSetting ])
   |> List.map (fun d -> { Descriptor = d; Resolved = SageFs.SettingsCatalog.resolve paths d })
 
 /// The persisted default working directory (session.defaultWorkingDirectory),
@@ -1997,7 +1997,7 @@ let private resolveDefaultWorkingDir () : string =
   | Error _ -> ""
 
 let private descriptorForSignal (sigName: string) : SageFs.SettingDescriptor option =
-  (SageFs.SettingsCatalog.pilots @ [ SageFs.SessionAgent.reflectionReadModeSetting ]) |> List.tryFind (fun d -> SettingsPanel.signalName d.Key = sigName)
+  (SageFs.SettingsCatalog.pilots @ [ SageFs.SessionAgent.reflectionReadModeSetting; SageFs.SessionAgent.tieredCompilationSetting ]) |> List.tryFind (fun d -> SettingsPanel.signalName d.Key = sigName)
 
 /// Morph the whole panel back with the given notice — the one authoritative
 /// re-render after an edit (Tao of Datastar).

@@ -132,7 +132,7 @@ type private Clock() =
 let private started (mode: ReflectionReadMode) (threshold: HotLoopThreshold) =
   let app = emitApp ()
   let clock = Clock()
-  let tracker = Tracker({ Mode = mode; HotLoop = threshold }, clock.Now)
+  let tracker = Tracker({ Mode = mode; HotLoop = threshold; Tiering = TieringChoice.TieringOffWhileWatching }, clock.Now)
   tracker.Track [ app.Assembly ]
   tracker.EvalFinished true
   app, tracker, clock

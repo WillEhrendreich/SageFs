@@ -36,6 +36,34 @@ let reflectionReadModeSetting : SettingDescriptor =
         | _ -> ""
     Apply = ignore }
 
+/// Rule 2's tiering choice, as a setting: RestartRequired because it's an
+/// env var the isolated host only reads when the process starts. Read
+/// alongside the reflection read mode when a session starts.
+let tieredCompilationSetting : SettingDescriptor =
+  let names = TieringChoice.all |> List.map TieringChoice.name
+  let enumOf (raw: string) = EnumValue.create names raw |> Result.map VEnum
+  { Key = "hotreload.tieredCompilation"
+    Name = "Tiered compilation while watching"
+    Description =
+      TieringChoice.all
+      |> List.map (fun choice -> sprintf "%s: %s." (TieringChoice.name choice) (TieringChoice.consequence choice))
+      |> String.concat " "
+      |> sprintf "Whether hot reload turns the runtime's tiered compilation off in the app's process so its reflection watch can't lapse. Applies on the next session start. %s"
+    Category = SessionSettings
+    Scope = RepoOverridable
+    Applicability = RestartRequired
+    Default =
+      match enumOf (TieringChoice.name TieringChoice.TieringOffWhileWatching) with
+      | Result.Ok v -> v
+      | Result.Error _ -> failwith "the default tiering choice must be one of the choices"
+    Parse = enumOf
+    Render =
+      fun v ->
+        match v with
+        | VEnum e -> EnumValue.value e
+        | _ -> ""
+    Apply = ignore }
+
 /// The reflection settings a new session starts with, from the config layers
 /// at `paths`. A value that doesn't parse falls back to the default and says
 /// so in the log: a broken config line must not stop a session starting.
@@ -49,7 +77,16 @@ let reflectionSettingsAt (paths: ConfigPaths) : ReflectionReadSettings =
     | Result.Error why ->
       Utils.Log.warn "[ValueReads] the reflection read mode setting can't be read (%s); using %s" (ConfigError.describe why) (ReflectionReadMode.name ReflectionReadMode.standard)
       ReflectionReadMode.standard
-  { Mode = mode; HotLoop = HotLoopThreshold.standard }
+  let tiering =
+    match SettingsCatalog.resolve paths tieredCompilationSetting with
+    | Result.Ok provenance ->
+      match TieringChoice.parse (tieredCompilationSetting.Render provenance.Effective) with
+      | Result.Ok choice -> choice
+      | Result.Error _ -> TieringChoice.TieringOffWhileWatching
+    | Result.Error why ->
+      Utils.Log.warn "[ValueReads] the tiered compilation setting can't be read (%s); using %s" (ConfigError.describe why) (TieringChoice.name TieringChoice.TieringOffWhileWatching)
+      TieringChoice.TieringOffWhileWatching
+  { Mode = mode; HotLoop = HotLoopThreshold.standard; Tiering = tiering }
 
 /// The reflection settings for a session started in `workingDir`.
 let reflectionSettingsFor (workingDir: string) : ReflectionReadSettings =

@@ -1599,7 +1599,24 @@ type Tracker(settings: ReflectionReadSettings, clock: unit -> int64) =
 /// the REPL: 4,000 of 12,000 calls hit). With tiering off nothing is
 /// recompiled, so the reflection entry watch can't lapse. The canary still
 /// checks it (ReflectionCanary), and a lapse fails closed.
+///
+/// This is a choice, not a constant: `TieringChoice` (ValueReads.fs) is the
+/// hotreload.tieredCompilation setting. Every mode uses it the same way. I
+/// looked for a mode that's exempt (see read-tracking-costs.md): in
+/// exact-every-read the getter's OWN watch sees a plain call to it, or a
+/// PropertyInfo.GetValue call, independently of the entry watch
+/// (`onReflected`'s `Invoked, GetterWatchState.WatchOn -> ()` — it defers to
+/// the getter watch entirely). But a `FieldInfo.GetValue` read of the
+/// backing field, and turning the getter into a delegate, have no getter-level
+/// watch to catch them in ANY mode — they only show up through the entry
+/// watch (the `FieldRead` and `DelegateMade` arms of `onReflected` run no
+/// matter what `GetterWatchState` says). So exact-every-read narrows the
+/// exposure but doesn't close it, and a fail-closed system doesn't get to
+/// call "narrower" the same as "closed". The setting applies uniformly.
 let processEnvironment (watch: ValueReadWatch) : (string * string) list =
   match watch with
-  | ValueReadWatch.WatchValueReads _ -> [ "DOTNET_TieredCompilation", "0" ]
+  | ValueReadWatch.WatchValueReads settings ->
+    match settings.Tiering with
+    | TieringChoice.TieringOffWhileWatching -> [ "DOTNET_TieredCompilation", "0" ]
+    | TieringChoice.KeepTiering -> []
   | ValueReadWatch.IgnoreValueReads -> []
