@@ -332,6 +332,7 @@
         <Compile Include="CohortSpecTests.fs" />
         <Compile Include="EvalActorSimTests.fs" />
         <Compile Include="FileReloadRoutingSimTests.fs" />
+        <Compile Include="WatcherLifecycleSimTests.fs" />
         <Compile Include="DstFaultInjectionTests.fs" />
         <Compile Include="SseGoldenFixtureGenerationTests.fs" />
         <Compile Include="SupervisorSimTests.fs" />

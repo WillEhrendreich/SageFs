@@ -119,6 +119,15 @@
         <Compile Include="McpStdioBridgeSim.fs" />
         <Compile Include="McpStdioBridgeInvariants.fs" />
         <Compile Include="McpStdioBridgeGenerators.fs" />
+        <!-- File-watcher lifecycle DST: folds the real LiveTestWatcherCore
+             claim/reconcile core (for watch-count bookkeeping, not routing)
+             and the real FileWatcher.fileChangeAction; twins reintroduce a
+             session stop that never releases its claims (the inotify-watch
+             leak) and an overflow folded into an ordinary SoftReset (the
+             swallowed hot-reload verdict). -->
+        <Compile Include="WatcherLifecycleSim.fs" />
+        <Compile Include="WatcherLifecycleInvariants.fs" />
+        <Compile Include="WatcherLifecycleGenerators.fs" />
     </ItemGroup>
 
     <ItemGroup>
