@@ -2,6 +2,8 @@ module SageFs.Tests.HostAgentTests
 
 open System
 open System.IO
+open System.Reflection
+open System.Reflection.Emit
 open Expecto
 open Expecto.Flip
 open SageFs.Features.LiveTesting
@@ -28,6 +30,45 @@ let private unknownTest : TestCase =
     Framework = TestFramework.Expecto
     Category = TestCategory.Unit }
 
+/// The shape-matrix fixture's own compiled output — a real, already-built,
+/// namespace-qualified module (`module WebAppFixture.Shapes`) with a
+/// BCL-only-signature function (`plainHandler`), used as the "compiled
+/// project" a freshly-started session (no #load anywhere) has loaded. Picks
+/// whichever of Debug/Release is newest, mirroring `SageFsBinary.path`.
+let private webAppFixtureDll () =
+  let root = DirectoryInfo(AppContext.BaseDirectory).Parent.Parent.Parent.Parent.FullName
+  [ "Debug"; "Release" ]
+  |> List.map (fun cfg -> Path.Combine(root, "SageFs.Tests", "fixtures", "WebAppFixture", "bin", cfg, "net11.0", "WebAppFixture.dll"))
+  |> List.filter File.Exists
+  |> List.sortByDescending File.GetLastWriteTimeUtc
+  |> List.tryHead
+
+/// A dynamically-emitted "file save" re-eval, shaped exactly like FSI's own
+/// FLATTENED re-emit of a module file: the compiled type's namespace is
+/// stripped, and only the type name survives (`Shapes`, not
+/// `WebAppFixture.Shapes`) — so its FullName ("Shapes.plainHandler") is a
+/// SUFFIX of the compiled copy's ("WebAppFixture.Shapes.plainHandler"),
+/// which is exactly what `compatibleForDetour`'s EndsWith check requires.
+let private flattenedPlainHandlerSave () : Assembly =
+  let asmBuilder =
+    AssemblyBuilder.DefineDynamicAssembly(AssemblyName("sagefs-test-compiled-copy-save"), AssemblyBuilderAccess.Run)
+  let modBuilder = asmBuilder.DefineDynamicModule("MainModule")
+  let typeBuilder =
+    modBuilder.DefineType(
+      "Shapes",
+      TypeAttributes.Public ||| TypeAttributes.Class ||| TypeAttributes.Abstract ||| TypeAttributes.Sealed)
+  let methodBuilder =
+    typeBuilder.DefineMethod(
+      "plainHandler",
+      MethodAttributes.Public ||| MethodAttributes.Static,
+      typeof<string>,
+      [| typeof<string> |])
+  let il = methodBuilder.GetILGenerator()
+  il.Emit(OpCodes.Ldstr, "B")
+  il.Emit(OpCodes.Ret)
+  typeBuilder.CreateType() |> ignore
+  asmBuilder :> Assembly
+
 [<Tests>]
 let tests =
   testList "HostAgent" [
@@ -41,6 +82,41 @@ let tests =
       testCase "a session with no projects starts clean" <| fun _ ->
         let agent = Agent(emptyInit, nothingLoaded)
         Expect.isEmpty "no errors" agent.Started.AssemblyLoadErrors
+
+      // WHY — the compiled-app shape-matrix regression (--integration-host
+      // "hot-reload shape matrix", cell localType): a session that loaded a
+      // project's compiled assembly and NEVER ran a #load/interactive eval
+      // still has an app that holds the COMPILED copy of everything that
+      // project exposes — nothing else has redefined those names yet. A save
+      // that redirects the compiled copy genuinely reaches the running
+      // process, and must be reported as such. `startState` used to leave
+      // `AppHolds` empty until some later non-file-save eval touched a name,
+      // so this exact case reported `NoEffect`/`PatchIneffective` while the
+      // app was already serving the new value — the dishonest-count failure
+      // in the OTHER direction from the false-Patched bug.
+      testCase "WHY — a compiled project's own methods are what the session holds at start, so a save that redirects one honestly reaches the running process" <| fun _ ->
+        match webAppFixtureDll () with
+        | None -> skiptest "WebAppFixture fixture is not built — run the fixture's own build first"
+        | Some dll ->
+          let mutable dynAsms: Assembly[] = [||]
+          let sources: AssemblySources = { Dynamic = (fun () -> dynAsms); Loaded = noAssemblies }
+          let agent = Agent({ Projects = [ dll ]; ResolveFrom = [] }, sources)
+          agent.Started.AssemblyLoadErrors
+          |> Expect.isEmpty "the fixture must load cleanly for this test to mean anything"
+
+          dynAsms <- [| flattenedPlainHandlerSave () |]
+          let report =
+            agent.AfterEval
+              { EvaluatedCode = "module Shapes =\n  let plainHandler (who: string) = \"B\" + who"
+                Detours = DetourPolicy.ApplyDetours
+                Discovery = DiscoveryPolicy.WhenChanged
+                IsFileSave = true }
+
+          report.DetourReport.Redirected
+          |> Expect.isNonEmpty "the compiled plainHandler must actually be re-pointed"
+          report.DetourReport.ReachedRunningProcess
+          |> Expect.isNonEmpty
+            "the compiled copy IS what a freshly-started session holds — a save that redirects it must count as reaching the running process, not report NoEffect while the app already serves the new value"
     ]
 
     testList "AfterEval" [
