@@ -104,7 +104,7 @@ let verifyVersionAlignment () =
   let p, k = propsVersion (), pkgJsonVersion ()
   if p <> k then
     failwithf
-      "Version drift: Directory.Build.props is %s but sagefs-vscode/package.json is %s. Run scripts/pre-commit or bump package.json to %s."
+      "Version drift: Directory.Build.props is %s but sagefs-vscode/package.json is %s. Run scripts/bump-version, or set package.json to %s."
       p k p
   printfn "Versions aligned at %s" p
 

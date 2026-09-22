@@ -1,12 +1,36 @@
 #!/usr/bin/env bash
-# scripts/ship [<commit>]   gate a commit on this machine, then push exactly it to master.
+# scripts/ship [<commit>]   bump the version, gate that commit on this machine,
+#                           then push exactly it to master.
 #
 # Pushes the GATED sha, never a moving HEAD: other agents may commit while
 # the gate runs, and their commits were not gated. Publish follows from the
 # self-hosted "main build" job, which promotes this gate's release bundle.
+#
+# The bump lives here, not in a commit hook, so an ordinary commit never
+# touches Directory.Build.props and parallel worktrees never collide on it.
+# One push to master is one release, so one ship is one bump. Pass a commit to
+# gate and push something that already carries its bump (a re-run after a fix,
+# or a commit made elsewhere); the bump is skipped then, and pre-push still
+# refuses anything that doesn't raise the version.
 set -euo pipefail
 REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
-sha=$(git -C "$REPO" rev-parse "${1:-HEAD}^{commit}")
+
+if [ $# -gt 0 ]; then
+  sha=$(git -C "$REPO" rev-parse "$1^{commit}")
+else
+  if [ -n "$(git -C "$REPO" status --porcelain -- Directory.Build.props sagefs-vscode/package.json)" ]; then
+    echo "ship: Directory.Build.props or sagefs-vscode/package.json has uncommitted changes." >&2
+    echo "      commit or revert them first, so the bump lands on a clean version." >&2
+    exit 1
+  fi
+  version=$("$REPO/scripts/bump-version")
+  git -C "$REPO" commit --quiet --no-verify \
+    -m "chore: release v$version" \
+    -- Directory.Build.props sagefs-vscode/package.json
+  echo "ship: bumped to $version"
+  sha=$(git -C "$REPO" rev-parse HEAD)
+fi
+
 "$REPO/scripts/local-gate" "$sha"
 git -C "$REPO" push origin "$sha:refs/heads/master"
 echo "ship: pushed ${sha:0:8}; the self-hosted runner promotes its bundle to publish"

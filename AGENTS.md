@@ -36,8 +36,8 @@ Working on SageFs itself has two extra catches:
   bug and report the paths it names. SageFs.Core, SageFs.Host and SageFs
   multi-target net10.0;net11.0, and 0.6.782 resolved those references wrong,
   so a session on SageFs.Tests faulted even when everything was built.
-- **Self-hosting skew.** The pre-commit hook bumps the version on every commit,
-  so a worktree's `SageFs.Core` is usually newer than the installed daemon. A
+- **Self-hosting skew.** A worktree's `SageFs.Core` can be newer than the
+  installed daemon (the daemon is whatever was last published). A
   session that loads Core can then refuse with a version mismatch, or a
   "type not found, Version=..." error. That's a known SageFs bug. Report the
   exact error, work in a session that doesn't load Core if you can (pure files
@@ -187,5 +187,5 @@ dotnet pack SageFs -o nupkg  # Package the CLI tool
 - Do not introduce new NuGet dependencies without discussion
 - Do not change the indentation style (2 spaces)
 - Do not use `dotnet test` for local development — use the SageFs REPL
-- Do not modify `Directory.Build.props` version numbers — the pre-commit hook handles versioning
+- Do not modify `Directory.Build.props` version numbers. Nothing bumps on commit: `scripts/ship` bumps once per push, and `scripts/pre-push` refuses a master push that doesn't raise the version
 - Do not add Version attributes to PackageReference elements

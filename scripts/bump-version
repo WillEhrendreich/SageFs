@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# scripts/bump-version   raise the patch version in Directory.Build.props and
+#                        sync it into sagefs-vscode/package.json.
+#
+# Nothing bumps on commit any more: one push to master is one release, so
+# scripts/ship owns the bump and scripts/pre-push refuses a master push whose
+# version isn't higher than the one already on origin/master. Run this by hand
+# only when you want the bump as its own step.
+#
+# Prints the new version on stdout, and stages neither file: the caller decides
+# what to do with them.
+set -euo pipefail
+REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+PROPS="$REPO/Directory.Build.props"
+PKG="$REPO/sagefs-vscode/package.json"
+
+version=$(grep -oP '(?<=<Version>)[^<]+' "$PROPS" 2>/dev/null || true)
+if [ -z "$version" ]; then
+  echo "bump-version: no <Version> in $PROPS" >&2
+  exit 1
+fi
+
+major=$(echo "$version" | cut -d. -f1)
+minor=$(echo "$version" | cut -d. -f2)
+patch=$(echo "$version" | cut -d. -f3)
+next="$major.$minor.$((patch + 1))"
+
+sed -i "s|<Version>$version</Version>|<Version>$next</Version>|" "$PROPS"
+[ -f "$PKG" ] && sed -i "s|\"version\": \"[^\"]*\"|\"version\": \"$next\"|" "$PKG"
+
+echo "$next"

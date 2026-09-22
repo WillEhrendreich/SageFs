@@ -3,15 +3,46 @@
 # this machine. The check is only a file lookup, so pushing a gated commit is
 # instant. To gate and push in one step, run scripts/ship.
 #
+# A master push must also RAISE the version. Publishing is keyed on it, and
+# NuGet's --skip-duplicate means a repeated version ships nothing at all while
+# the pipeline stays green. Nothing bumps on commit any more (scripts/ship
+# owns it), so this is where the rule is enforced.
+#
 # Emergency override (logged, never silent): SAGEFS_SKIP_GATE=1 git push ...
 # The self-hosted "main build" job still runs the full gate on an ungated
 # commit before promoting anything, so the override skips only the local wait.
 STATE=${SAGEFS_GATE_HOME:-$HOME/.local/share/sagefs-gate}
 zero=0000000000000000000000000000000000000000
 status=0
+
+# The <Version> a commit carries, or empty if it can't be read.
+version_at() {
+  git show "$1:Directory.Build.props" 2>/dev/null | grep -oP '(?<=<Version>)[^<]+' || true
+}
+
+# 0 when $1 is a higher version than $2, comparing numerically per part.
+raises_version() {
+  [ "$1" = "$2" ] && return 1
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]
+}
+
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$remote_ref" = "refs/heads/master" ] || continue
   [ "$local_sha" = "$zero" ] && continue
+
+  if [ "$remote_sha" != "$zero" ]; then
+    pushed=$(version_at "$local_sha")
+    published=$(version_at "$remote_sha")
+    if [ -n "$pushed" ] && [ -n "$published" ] && ! raises_version "$pushed" "$published"; then
+      echo "pre-push: ${local_sha:0:8} is version $pushed, and master already has $published." >&2
+      echo "          a repeated version publishes nothing (NuGet --skip-duplicate) and still goes green." >&2
+      echo "          run: scripts/ship       (bump + gate + push)" >&2
+      echo "          or:  scripts/bump-version && git commit -- Directory.Build.props sagefs-vscode/package.json" >&2
+      status=1
+      continue
+    fi
+  fi
+
   [ -f "$STATE/passed/$local_sha/ok" ] && continue
   if [ "${SAGEFS_SKIP_GATE:-}" = "1" ]; then
     echo "pre-push: WARNING pushing ungated ${local_sha:0:8} (SAGEFS_SKIP_GATE=1); the runner will gate it" >&2
