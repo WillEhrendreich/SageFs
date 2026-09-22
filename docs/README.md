@@ -5,6 +5,7 @@ Everything else is reference material you can come back to when you need it.
 
 ## Start here
 - **[Get Started](../Readme.md#get-started)**: install, check your environment, start the daemon, connect an editor
+- **[Using SageFs with AI agents](agents.md)**: install the SageFs skill, so your agent uses the REPL instead of rebuilding, and pull it back when it drifts
 - **[Workflow Modes](workflow-modes.md)**: REPL, Live Testing, and Hot Reload: when to use which, and how the Live Testing *workflow* differs from the live-testing *toggle*
 - **[What you get in each editor](../Readme.md#what-you-get-in-each-editor)**: VS Code, Neovim, the web dashboard, and MCP
 - **[Gutter icons](../Readme.md#-gutter-icons)**: what the colored markers mean

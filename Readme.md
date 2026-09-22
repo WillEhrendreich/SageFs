@@ -73,6 +73,8 @@ SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) serv
 
 Agents left alone will happily pile on complexity. Give one a fast, type-checked REPL with tests re-running on every change and it gets caught the same way I do, right away.
 
+> **If you're using an agent, read [docs/agents.md](docs/agents.md) first and install the [SageFs skill](skills/sagefs/SKILL.md).** An agent that doesn't know the rules goes straight back to `dotnet build`, wait, `dotnet test`, wait, and you lose the whole point. The skill makes the REPL its inner loop. The page also shows how to pull an agent back when it drifts: a `back_to_the_repl` prompt, and a Claude Code hook that stops mid-task builds.
+
 ### 🖥️ One Daemon, Every Client
 
 Start SageFs once, then connect from VS Code, Neovim, the web dashboard, or an MCP client. Open several at once and they share a live session, with each client keeping its own selection. Pair with your agent, watch it work in the dashboard, keep typing in Neovim, all at the same time.
@@ -132,6 +134,8 @@ SageFs runs in the foreground, streaming daemon logs to that terminal. It's not 
 **Neovim**: Add `"WillEhrendreich/sagefs.nvim"` to your plugin manager. Press `Alt+Enter` to evaluate. See [Neovim setup](https://github.com/WillEhrendreich/sagefs.nvim).
 
 **Web dashboard**: Open `http://localhost:37750/dashboard` for session management, evaluation, output, test state, and diagnostics without an editor extension.
+
+**AI agent** (Claude Code, Copilot, Codex, Cursor, anything that speaks MCP): point it at `http://localhost:37749/`, **then install the [SageFs skill](skills/sagefs/SKILL.md)**. Without the skill your agent will iterate with `dotnet build` and never touch the REPL. [docs/agents.md](docs/agents.md) has the one-line install, an `AGENTS.md` snippet for other agents, and what to do when an agent drifts.
 
 > The built-in SageTUI client, legacy TUI, `SageFs.Gui` Raylib frontend, and the Visual Studio extension are deprecated and no longer current product interfaces. Their source stays in the repo for historical context. This doesn't affect Raylib application and game projects built with SageFs. See the [Raylib demos](#-visual-demos).
 

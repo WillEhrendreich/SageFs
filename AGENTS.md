@@ -23,6 +23,25 @@
 
 **You have failed this rule on the very first turn of this session, and on the turn immediately after being told about it, and on multiple turns after that. The next failure is a refusal to do the work, not a sentence of acknowledgment.**
 
+## The inner loop: the SageFs REPL, always
+
+Load and follow [`skills/sagefs/SKILL.md`](skills/sagefs/SKILL.md) before
+touching F#. The short version: the SageFs REPL (MCP) is the inner loop, and
+`dotnet build` / `dotnet test` is the final gate only. If you brief a
+sub-agent, put the loop in the brief. Sub-agents don't inherit it.
+
+Working on SageFs itself has two extra catches:
+- **Build before `create_session`.** A session created before its project was
+  built fails warmup with "Not all DLLs are found". That's the order you did
+  things in, not a daemon bug.
+- **Self-hosting skew.** The pre-commit hook bumps the version on every commit,
+  so a worktree's `SageFs.Core` is usually newer than the installed daemon. A
+  session that loads Core can then refuse with a version mismatch, or a
+  "type not found, Version=..." error. That's a known SageFs bug. Report the
+  exact error, work in a session that doesn't load Core if you can (pure files
+  can be `#load`ed into any session), and only then fall back to `dotnet` for
+  that step. Never silently.
+
 ## Project Overview
 
 SageFs is an F# live development environment with editor integrations for VS Code and Neovim, a web dashboard, and an MCP server for agent and programmatic access. Its daemon architecture hosts persistent, isolated F# Interactive sessions.
