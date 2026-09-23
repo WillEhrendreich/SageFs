@@ -546,6 +546,11 @@ type DaemonHealthView = {
   TestsPassed: int option
   /// Total tests failing, if live testing is active.
   TestsFailed: int option
+  /// What the daemon's own telemetry says about the daemon, worst first.
+  /// One line each, already phrased ("worker_rss broken went up: baseline
+  /// 412 (±38), now 51700 ..."), so the panel says which signal and by how
+  /// much rather than just turning a dot yellow.
+  Anomalies: string list
 }
 
 module DaemonHealthView =
@@ -564,7 +569,8 @@ module DaemonHealthView =
       SessionCount = snap.SessionSummaries.Length
       SessionSummaries = snap.SessionSummaries
       TestsPassed = testsPassed
-      TestsFailed = testsFailed }
+      TestsFailed = testsFailed
+      Anomalies = snap.Anomalies |> List.choose Features.HealthAnomaly.describe }
 
 /// A single failure narrative entry for the dashboard panel.
 type FailureNarrativeEntry = {

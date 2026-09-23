@@ -93,3 +93,32 @@ let healthWatchWiringTests =
       HealthWatch.reset ()
       HealthWatch.troubled () |> Expect.isEmpty "no readings, no claims"
   ]
+
+/// The evidence has to reach a client, not just change a flag. A daemon that
+/// flips to unhealthy without saying which signal moved is the same silence
+/// in a different costume.
+[<Tests>]
+let healthSurfacingTests =
+  testList "A daemon's own trouble reaches the client" [
+    testCase "a verdict has a name and its evidence, for any wire format" <| fun _ ->
+      let broken = HealthAnomaly.Verdict.Broken(evidence HealthAnomaly.SignalId.WorkerRss 51_700.0)
+      HealthAnomaly.verdictName broken |> Expect.equal "the one place this becomes text" "broken"
+      HealthAnomaly.evidenceOf broken
+      |> Option.map (fun e -> e.ObservedValue)
+      |> Expect.equal "the payload needs the numbers, not just the word" (Some 51_700.0)
+
+    testCase "a normal verdict carries no evidence and says so" <| fun _ ->
+      HealthAnomaly.verdictName HealthAnomaly.Verdict.Normal |> Expect.equal "named, not blank" "normal"
+      HealthAnomaly.evidenceOf HealthAnomaly.Verdict.Normal |> Expect.isNone "nothing to report"
+
+    testCase "the dashboard view carries a sentence per anomaly" <| fun _ ->
+      let snap = snapshotWith [ HealthAnomaly.Verdict.Broken(evidence HealthAnomaly.SignalId.WorkerRss 51_700.0) ] [ readySession ]
+      let view = SageFs.Server.DashboardTypes.DaemonHealthView.fromSnapshot snap
+      view.Anomalies |> Expect.hasLength "one anomaly, one line" 1
+      view.Anomalies.Head |> Expect.stringContains "it names the signal" "worker_rss"
+      view.Anomalies.Head |> Expect.stringContains "and what it is now" "5.17e+04"
+
+    testCase "a healthy daemon's view has nothing to show" <| fun _ ->
+      let view = SageFs.Server.DashboardTypes.DaemonHealthView.fromSnapshot (snapshotWith [] [ readySession ])
+      view.Anomalies |> Expect.isEmpty "no anomaly, no noise in the panel"
+  ]

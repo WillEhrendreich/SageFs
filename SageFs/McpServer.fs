@@ -2293,9 +2293,35 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
                          errorDetails = SageFsError.toJson err |})
           | _ -> None)
         |> Option.defaultValue (null :> obj)
+      // What the daemon's own telemetry says about the daemon. Without this
+      // a client sees `healthy` flip with nothing to explain it, which is
+      // the silence the detector exists to end: say which signal, what
+      // normal was, and what it is now.
+      let anomalies =
+        healthSnapshot.Anomalies
+        |> List.choose (fun verdict ->
+          SageFs.Features.HealthAnomaly.evidenceOf verdict
+          |> Option.map (fun e ->
+            {| signal = SageFs.Features.HealthAnomaly.signalName e.Signal
+               state = SageFs.Features.HealthAnomaly.verdictName verdict
+               message = SageFs.Features.HealthAnomaly.describe verdict |> Option.defaultValue ""
+               observedValue = e.ObservedValue
+               baselineMean = e.BaselineMean
+               baselineStdDev = e.BaselineStdDev
+               deviationInSigmas = e.DeviationInSigmas
+               sustainedForSeconds = e.SustainedFor.TotalSeconds
+               samplesSustained = e.SamplesSustained |}))
+        |> List.toArray
+      // A daemon whose own signals are broken is not healthy, however well
+      // its sessions are doing.
+      let overall = SageFs.Features.DaemonHealth.overallStatus healthSnapshot
+      let healthy = healthy && overall <> SageFs.Features.OverallHealth.Unhealthy
       do! jsonResponse ctx 200
             {| healthy = healthy
                status = sessionStatus
+               overall = SageFs.Features.DaemonHealth.healthLabel overall
+               anomalies = anomalies
+               memoryMB = healthSnapshot.MemoryMB
                error = sessionError
                version = version
                apiVersion = SageFs.EndpointContracts.apiVersion

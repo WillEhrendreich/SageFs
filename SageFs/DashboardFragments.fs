@@ -553,6 +553,14 @@ let renderDaemonHealth (view: DaemonHealthView) =
       Elem.span [ Attr.class' "session-health-list"; Attr.style "margin-left: 0.5rem;" ] [
         textEnc txt
       ]
+    // The daemon's own trouble, in words. Sessions can all be Ready while the
+    // daemon eats the machine, and that used to show up nowhere at all.
+    for anomaly in view.Anomalies do
+      Elem.span
+        [ Attr.class' "daemon-anomaly"
+          Attr.style "margin-left: 0.5rem;"
+          Attr.create "aria-label" "A signal the daemon tracks about itself has moved away from its own normal" ]
+        [ textEnc (sprintf "⚠ %s" anomaly) ]
     // Test counts removed from health row — they live in the Live Testing panel.
     // When live testing is inactive, no stale counts bleed into the health bar.
   ]

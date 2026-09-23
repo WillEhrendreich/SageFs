@@ -415,6 +415,23 @@ module HealthAnomaly =
     |> snd
     |> List.rev
 
+  /// Exhaustive name for a verdict — the one place a `Verdict` becomes text,
+  /// so a wire format never spells these itself.
+  let verdictName =
+    function
+    | Verdict.InsufficientHistory -> "learning"
+    | Verdict.Normal -> "normal"
+    | Verdict.Drifting _ -> "drifting"
+    | Verdict.Broken _ -> "broken"
+
+  /// The evidence behind a verdict, when there is any.
+  let evidenceOf (verdict: Verdict) : SignalEvidence option =
+    match verdict with
+    | Verdict.Drifting e
+    | Verdict.Broken e -> Some e
+    | Verdict.InsufficientHistory
+    | Verdict.Normal -> None
+
   /// One line for a human or an agent: exactly the shape the module exists
   /// to produce ("my own health endpoint went from 4ms to 900ms over the
   /// last minute"), not "anomaly detected".
