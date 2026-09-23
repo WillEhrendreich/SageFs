@@ -422,18 +422,33 @@ module McpTools =
                            | WorkerProtocol.SessionLifecycleStatus.Starting _
                            | WorkerProtocol.SessionLifecycleStatus.Restarting _ -> true
                            | _ -> false) ->
-              setActiveSessionId ctx agent ""
+              // issue #140: do NOT clear the mapping here. The candidate came
+              // from an earlier deliberate switch_session (or create_session);
+              // it still IS the session the agent wants, just not routable
+              // yet. Clearing it made an unrelated, unrouted status read
+              // (e.g. a no-arg get_fsi_status poll) silently undo the switch:
+              // once warmup finished, the next unrouted call had nothing
+              // cached and fell back to workingDirectory/registry guessing,
+              // which is ambiguous whenever two sessions share a directory —
+              // exactly the "switch_session called during warmup does not
+              // take effect" repro.
               return WarmingUp (candidate, i.Status)
             | Some i when (match i.Status with
                            | WorkerProtocol.SessionLifecycleStatus.Faulted _
                            | WorkerProtocol.SessionLifecycleStatus.Stopped -> true
                            | _ -> false) ->
-              setActiveSessionId ctx agent ""
+              // Same reasoning, and it matters for recovery too:
+              // reset_fsi_session/hard_reset_fsi_session resolve with no
+              // explicit sessionId and rely on this exact mapping surviving
+              // a Faulted classification to know which session to recover.
               return FaultedSession (candidate, FaultCause.ofStatus i.Status)
             | Some i ->
-              setActiveSessionId ctx agent ""
+              // Unroutable is transient (worker mid-restart) — same reasoning.
               return Unroutable (candidate, i.Status)
             | None ->
+              // The session record itself is gone from the registry (stopped
+              // and purged by any path) — nothing left to route to, so this
+              // IS the one case where the mapping must be cleared.
               setActiveSessionId ctx agent ""
               return Gone "Session is no longer running. Use create_session to start a new one."
         | Ok _ ->
@@ -2069,7 +2084,7 @@ module McpTools =
       | Ok validId ->
         let! info = ctx.SessionOps.GetSessionInfo validId
         match info with
-        | Some _ ->
+        | Some sessionInfo ->
           let _prev = activeSessionId ctx agent
           setActiveSessionId ctx agent sessionId
           // Also move the daemon-global active session, so session-less calls
@@ -2080,7 +2095,18 @@ module McpTools =
           match ctx.Dispatch with
           | Some dispatch -> dispatch (SageFsMsg.Event (TuiEvent.SessionSwitched(None, sessionId)))
           | None -> ()
-          return sprintf "Switched to session '%s'" sessionId
+          // issue #140: the switch itself is unconditional and durable now
+          // (resolveSessionId no longer discards it while the target is
+          // warming up) — but say so honestly rather than implying the
+          // session is immediately usable. Silently doing nothing was the
+          // old bug; claiming readiness would be a new one.
+          let warmupNote =
+            match sessionInfo.Status with
+            | WorkerProtocol.SessionLifecycleStatus.Starting _
+            | WorkerProtocol.SessionLifecycleStatus.Restarting _ ->
+              sprintf " — still warming up (%s). The switch holds: poll get_fsi_status until it reports Ready before send_fsharp_code." (WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status)
+            | _ -> ""
+          return sprintf "Switched to session '%s'%s" sessionId warmupNote
         | None ->
           return sprintf "Error: Session '%s' not found" sessionId
     }

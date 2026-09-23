@@ -425,6 +425,38 @@ module WorkingDirRoutingPriority =
       GetFeatureState = None; RecordEval = None; ActivityTracker = SageFs.AgentActivityTracker.create()
       LiveSnapshotSink = None; CohortOwner = None }
 
+  /// Same shape as mkCtx, but sessions/proxies are read through thunks each
+  /// call instead of frozen at construction — lets a test simulate a
+  /// session's warmup completing (status flips, proxy comes online) between
+  /// two resolveSessionId calls on the SAME context/SessionMap.
+  let mkCtxDynamic (sessions: unit -> WorkerProtocol.SessionInfo list) (proxies: unit -> Map<string, WorkerProtocol.SessionProxy>) : McpContext =
+    let sessionMap = ConcurrentDictionary<string, string>()
+    { FrictionStore = None; DiagnosticsChanged = Unchecked.defaultof<_>
+      StateChanged = None
+      SessionOps =
+        { CreateSession = fun _ _ _ -> Task.FromResult(Error(SageFsError.SessionCreationFailed "n/a"))
+          ListSessions = fun () -> Task.FromResult("")
+          StopSession = fun _ -> Task.FromResult(Error(SageFsError.SessionNotFound "n/a"))
+          PurgeSession = fun _ -> Task.FromResult(Error(SageFsError.SessionNotFound "n/a"))
+          RestartSession = fun _ _ -> Task.FromResult(Error(SageFsError.SessionNotFound "n/a"))
+          GetProxy = fun sid -> Task.FromResult(Map.tryFind (WorkerProtocol.SessionId.value sid) (proxies ()))
+          GetSessionInfo = fun sid -> Task.FromResult(sessions () |> List.tryFind (fun s -> s.Id = sid))
+          GetAllSessions = fun () -> Task.FromResult(sessions ())
+          UpdateSessionStatus = fun _ _ -> Task.FromResult(())
+          NotifyWorkerDied = fun _ -> ()
+          ClaimRun = SageFs.SessionManagementOps.stub.ClaimRun
+          ClaimStop = SageFs.SessionManagementOps.stub.ClaimStop
+          AdvanceRun = SageFs.SessionManagementOps.stub.AdvanceRun
+          EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
+          AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
+          SwitchWorkflow = fun _ _ -> Task.FromResult(Error(SageFsError.HardResetFailed "Not available"))
+          GetAdoptedCore = fun _ -> Task.FromResult(None)
+          GetWarmupProgress = fun _ -> Task.FromResult(None) }
+      SessionMap = sessionMap; McpPort = 0; Dispatch = None
+      GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
+      GetFeatureState = None; RecordEval = None; ActivityTracker = SageFs.AgentActivityTracker.create()
+      LiveSnapshotSink = None; CohortOwner = None }
+
   let tests = testSequenced <| testList "workingDirectory routing priority" [
     testTask "workingDirectory should override cached session" {
       let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
@@ -549,6 +581,42 @@ module WorkingDirRoutingPriority =
       finally
         Environment.CurrentDirectory <- originalDir
         try Directory.Delete(root, true) with _ -> ()
+    }
+    testTask "WHY — resolveSessionId — an unrouted status read during warmup must not undo a deliberate switch_session (issue #140)" {
+      // Repro shape from #140: two sessions share a working directory.
+      // switch_session targets the one still warming up. A later, unrouted
+      // get_fsi_status (no session_id, no workingDirectory) resolves through
+      // the SAME "candidate <> ''" branch resolveSessionId used to clear the
+      // cached mapping in — that side effect is the bug: it silently undid
+      // the switch, so once the target became Ready, the next unrouted call
+      // fell back to workingDirectory matching and hit "Multiple sessions
+      // match" instead of routing to the session the agent switched to.
+      let wd = @"C:\Code\Repos\Proj"
+      let ready = mkInfo (testSessionId "aaaaaaa1") wd
+      let mutable warmingStatus = WorkerProtocol.SessionLifecycleStatus.Starting { Pid = 999; Port = None }
+      let mutable warmingProxy : Map<string, WorkerProtocol.SessionProxy> = Map.ofList [ "aaaaaaa1", dummyProxy ]
+      let warming () = { mkInfo (testSessionId "bbbbbbb2") wd with Status = warmingStatus }
+      let ctx = mkCtxDynamic (fun () -> [ ready; warming () ]) (fun () -> warmingProxy)
+
+      // The agent deliberately switches to the still-warming session.
+      setActiveSessionId ctx "mcp" "bbbbbbb2"
+
+      // An unrelated, unrouted status read while it is still warming.
+      let! duringWarmup = resolveSessionId ctx "mcp" None None
+      match duringWarmup with
+      | WarmingUp ("bbbbbbb2", _) -> ()
+      | other -> failtestf "expected WarmingUp('bbbbbbb2', _), got %A" other
+
+      activeSessionId ctx "mcp"
+      |> Expect.equal "the switch must survive a status read taken mid-warmup" "bbbbbbb2"
+
+      // Warmup completes: status flips to Ready and the worker proxy comes online.
+      warmingStatus <- WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 999; Port = Some 6000 }
+      warmingProxy <- Map.add "bbbbbbb2" dummyProxy warmingProxy
+
+      let! afterReady = resolveSessionId ctx "mcp" None None
+      afterReady
+      |> Expect.equal "once Ready, the unrouted call must route to the session switched to, not fall back to an ambiguous workingDirectory match" (Routable "bbbbbbb2")
     }
   ]
 

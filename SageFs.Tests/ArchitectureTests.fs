@@ -1062,7 +1062,14 @@ let fileSizeBudgets =
       // matches the self-host-staleness (selfHostLine) and health
       // (healthLine) affordances already appended right beside it. Ratchet
       // back DOWN when this file is split; never bump to paper over drift.
-      "SageFs/Mcp.fs", 4363
+      // 4363 -> 4389: issue #140. resolveSessionId no longer clears an
+      // agent's cached active-session mapping just because the target
+      // resolved to WarmingUp/Unroutable/FaultedSession — a switch_session
+      // made during warmup was being silently undone by the next unrouted
+      // status read. Deliberate, reviewed fix, not silent accretion.
+      // Ratchet back DOWN when this file is split; never bump to paper
+      // over drift.
+      "SageFs/Mcp.fs", 4389
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
