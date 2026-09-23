@@ -40,7 +40,9 @@ let private readySession =
 
 [<Tests>]
 let healthWatchWiringTests =
-  testList "Daemon health reads its own telemetry" [
+  // Sequenced: these share the global HealthWatch registry, and reset() in one
+  // case raced another case mid-run under the parallel scheduler.
+  testSequenced <| testList "Daemon health reads its own telemetry" [
     testCase "a broken signal makes the daemon unhealthy even with every session Ready" <| fun _ ->
       snapshotWith [ HealthAnomaly.Verdict.Broken(evidence HealthAnomaly.SignalId.WorkerRss 51_700.0) ] [ readySession ]
       |> DaemonHealth.overallStatus
@@ -99,7 +101,7 @@ let healthWatchWiringTests =
 /// in a different costume.
 [<Tests>]
 let healthSurfacingTests =
-  testList "A daemon's own trouble reaches the client" [
+  testSequenced <| testList "A daemon's own trouble reaches the client" [
     testCase "a verdict has a name and its evidence, for any wire format" <| fun _ ->
       let broken = HealthAnomaly.Verdict.Broken(evidence HealthAnomaly.SignalId.WorkerRss 51_700.0)
       HealthAnomaly.verdictName broken |> Expect.equal "the one place this becomes text" "broken"

@@ -137,6 +137,10 @@ module private IsolatedDaemon =
     psi.ArgumentList.Add("--mcp-port")
     psi.ArgumentList.Add(string mcpPort)
     psi.ArgumentList.Add("--no-resume")
+    // A daemon on a custom port has to say who owns it, or it is refused: that
+    // is the rule that stops a test daemon outliving the test that spawned it.
+    psi.ArgumentList.Add("--owner-pid")
+    psi.ArgumentList.Add(string (Diagnostics.Process.GetCurrentProcess().Id))
     psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
     // Fast heartbeat/stale-after so the journey's staleness assertions land
     // in seconds instead of the 15s production default.
