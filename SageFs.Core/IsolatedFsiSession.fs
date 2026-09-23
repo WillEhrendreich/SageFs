@@ -105,6 +105,66 @@ let primaryProjectOutputDir (projects: string list) : string option =
     File.GetLastWriteTimeUtc
     projects
 
+/// The isolated host's own FSharp.Core.dll (`typeof<unit>` lives there) — a sibling of the host's own entry
+/// assembly, since `ensureBuiltWith` copies the SDK toolset's FSharp.Core into the same build output
+/// directory as `FsiHost.dll`.
+let private hostFSharpCoreDll (hostDll: string) : string = Path.Combine(Path.GetDirectoryName(hostDll: string), "FSharp.Core.dll")
+
+/// The project's own resolved FSharp.Core.dll, if `-r:` references one — the same lookup as
+/// `primaryProjectOutputDir`, by file name rather than by owning project.
+let private projectFSharpCoreDll (fsiArgs: string list) : string option =
+  fsiArgs
+  |> List.tryPick (fun (arg: string) ->
+    match arg.StartsWith("-r:", StringComparison.Ordinal) with
+    | false -> None
+    | true ->
+      let path = arg.Substring 3
+      match String.Equals(Path.GetFileName path, "FSharp.Core.dll", StringComparison.OrdinalIgnoreCase) with
+      | true -> Some path
+      | false -> None)
+
+/// A project's FSharp.Core is a different BUILD from the host's own — see #141. Both file sizes are carried
+/// because the file VERSION and even the .NET AssemblyVersion are commonly identical between the SDK's own
+/// toolset copy and a project's NuGet-restored copy despite being different builds with different members
+/// (a `Using` overload present in one, missing in the other) — version strings cannot detect this. File size
+/// is the cheap, reliable signal the issue's own diagnosis used (SHA-256 would be stronger but costs a full
+/// read of a multi-MB file on every warmup for a mismatch that, once known, never needs re-proving down to
+/// the byte).
+type FSharpCoreMismatch =
+  { HostCopy: string
+    HostSizeBytes: int64
+    ProjectCopy: string
+    ProjectSizeBytes: int64 }
+
+let describeFSharpCoreMismatch (m: FSharpCoreMismatch) : string =
+  sprintf
+    "This session's code runs against the host's own FSharp.Core (%s, %d bytes), not the project's resolved copy (%s, %d bytes). FSI hosts everything in one process, and the first FSharp.Core loaded wins — even when a project references a different build under the same version number. Code compiled into the project that hits a member only the project's copy has (a known case: `use` inside `task { }`, see SageFs issue #141 — a DEBUG build calls `TaskBuilderBase.Using` as a real virtual method, which a mismatched FSharp.Core may not have; a RELEASE build inlines it away entirely, so building the project with `dotnet build -c Release` sidesteps this specific failure today) will fail with MissingMethodException; that failure is not a bug in your code."
+    m.HostCopy
+    m.HostSizeBytes
+    m.ProjectCopy
+    m.ProjectSizeBytes
+
+/// Pure over file lengths, so it's testable without real FSharp.Core.dll files on disk. `None` when either
+/// length can't be read (fine: it means "not proven mismatched", never a false positive) or the lengths
+/// happen to agree.
+let detectFSharpCoreMismatchWith
+    (fileLength: string -> int64 option)
+    (hostFSharpCore: string)
+    (projectFSharpCore: string)
+    : FSharpCoreMismatch option =
+  match fileLength hostFSharpCore, fileLength projectFSharpCore with
+  | Some hostLen, Some projLen when hostLen <> projLen ->
+    Some
+      { HostCopy = hostFSharpCore
+        HostSizeBytes = hostLen
+        ProjectCopy = projectFSharpCore
+        ProjectSizeBytes = projLen }
+  | _ -> None
+
+let private fileLengthOrNone (path: string) : int64 option =
+  try Some(FileInfo(path).Length)
+  with _ -> None
+
 /// Start an isolated FSI session for `projects`, run from `workingDir`. `recorder` receives everything the user's
 /// code and FSI write to stdout (so per-eval output capture works exactly as it does in-process).
 let start
@@ -143,6 +203,15 @@ let start
             match primaryProjectOutputDir projects with
             | Some dir -> [ ProjectOutputEnvironmentVariable, dir ]
             | None -> []
+          // #141: the project's FSharp.Core, if it differs in build from the host's own (both commonly
+          // report the same version), silently loses at runtime — warn now instead of waiting for the
+          // MissingMethodException that only shows up when user code happens to hit a missing member.
+          match projectFSharpCoreDll fsiArgs with
+          | None -> ()
+          | Some projectFSharpCore ->
+            match detectFSharpCoreMismatchWith fileLengthOrNone (hostFSharpCoreDll dll) projectFSharpCore with
+            | Some mismatch -> logger.LogWarning("  " + describeFSharpCoreMismatch mismatch)
+            | None -> ()
           let options =
             { HostDll = dll
               Dotnet = dotnet

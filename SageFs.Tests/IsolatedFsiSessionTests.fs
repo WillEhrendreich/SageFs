@@ -60,6 +60,48 @@ let tests =
       }
     ]
 
+    // #141: the project's own FSharp.Core, when it's a different BUILD from the host's (identical version,
+    // different members), silently loses to the host's already-loaded copy. Detecting this at warmup and
+    // reporting it beats waiting for MissingMethodException from a method the loaded copy happens to lack.
+    testList "detectFSharpCoreMismatchWith" [
+      test "WHY — file size differs even when file version and AssemblyVersion match, because that's exactly what #141 found between the SDK toolset copy and a NuGet-restored copy" {
+        let lengths = Map.ofList [ "/host/FSharp.Core.dll", 4208424L; "/proj/FSharp.Core.dll", 2405672L ]
+        detectFSharpCoreMismatchWith (fun p -> lengths.TryFind p) "/host/FSharp.Core.dll" "/proj/FSharp.Core.dll"
+        |> Expect.equal
+             "reports both copies and both sizes"
+             (Some
+               { HostCopy = "/host/FSharp.Core.dll"
+                 HostSizeBytes = 4208424L
+                 ProjectCopy = "/proj/FSharp.Core.dll"
+                 ProjectSizeBytes = 2405672L })
+      }
+
+      test "None when both copies agree on size" {
+        let lengths = Map.ofList [ "/host/FSharp.Core.dll", 4208424L; "/proj/FSharp.Core.dll", 4208424L ]
+        detectFSharpCoreMismatchWith (fun p -> lengths.TryFind p) "/host/FSharp.Core.dll" "/proj/FSharp.Core.dll"
+        |> Expect.isNone "same size is not proof of a mismatch"
+      }
+
+      test "None (never a false positive) when a length can't be read" {
+        detectFSharpCoreMismatchWith (fun _ -> None) "/host/FSharp.Core.dll" "/proj/FSharp.Core.dll"
+        |> Expect.isNone "an unreadable file means unproven, not mismatched"
+      }
+    ]
+
+    testList "describeFSharpCoreMismatch" [
+      test "names both paths and sizes, and points at the known symptom" {
+        let m =
+          { HostCopy = "/host/FSharp.Core.dll"
+            HostSizeBytes = 4208424L
+            ProjectCopy = "/proj/FSharp.Core.dll"
+            ProjectSizeBytes = 2405672L }
+        let text = describeFSharpCoreMismatch m
+        text |> Expect.stringContains "host path" "/host/FSharp.Core.dll"
+        text |> Expect.stringContains "project path" "/proj/FSharp.Core.dll"
+        text |> Expect.stringContains "known symptom" "MissingMethodException"
+      }
+    ]
+
     testList "ProjectOutputEnvironmentVariable" [
       test "is the name the issue itself suggested" {
         ProjectOutputEnvironmentVariable |> Expect.equal "SAGEFS_PROJECT_OUTPUT, verbatim" "SAGEFS_PROJECT_OUTPUT"
