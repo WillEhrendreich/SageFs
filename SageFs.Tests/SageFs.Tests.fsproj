@@ -202,6 +202,7 @@
          <Compile Include="WarmupReplayCacheTests.fs" />
          <Compile Include="WarmupInitBoundaryTests.fs" />
          <Compile Include="SessionHealthTests.fs" />
+         <Compile Include="ProjectResolutionTests.fs" />
          <Compile Include="WarmupBatchedOpenTests.fs" />
          <Compile Include="WarmupProgressContractTests.fs" />
         <Compile Include="VscodeExtensionTests.fs" />
@@ -248,6 +249,7 @@
          <Compile Include="SessionManagerCqrsTests.fs" />
          <Compile Include="SessionManagerRestartTombstoneTests.fs" />
          <Compile Include="SessionManagerSpawnFirstRestartTests.fs" />
+         <Compile Include="SessionManagerEarnedReadyTests.fs" />
          <Compile Include="CreateSessionDedupeTests.fs" />
          <Compile Include="SessionManagerMailboxSupervisionTests.fs" />
          <Compile Include="SessionActivityTouchTests.fs" />

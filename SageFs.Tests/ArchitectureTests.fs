@@ -1112,7 +1112,17 @@ let fileSizeBudgets =
       // session warmups. Deliberate, reviewed fixes, not silent accretion.
       // Ratchet back DOWN when this file is split; never bump to paper over
       // drift.
-      "SageFs.Core/SessionManager.fs", 1885 ]
+      // 1885 -> 1909: the earned-Ready gate. WorkerReportedReady used to
+      // commit the worker's self-reported SessionStatus.Ready verbatim, even
+      // when the session had asked for projects and resolved none of them
+      // (loadedProjects: [], reported Ready anyway). It now classifies the
+      // request against what actually resolved (ProjectResolution.fs) before
+      // trusting the worker's report, and Faults with the exact request
+      // named when nothing resolved — a genuine scratch session (nothing
+      // asked for) is untouched. Deliberate, reviewed fix, not silent
+      // accretion. Ratchet back DOWN when this file is split; never bump to
+      // paper over drift.
+      "SageFs.Core/SessionManager.fs", 1909 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->

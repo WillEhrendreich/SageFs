@@ -257,6 +257,7 @@
         <Compile Include="Features\LeaseWatch.fs" />
         <Compile Include="ProcessEnvironment.fs" />
         <Compile Include="SessionBuild.fs" />
+        <Compile Include="ProjectResolution.fs" />
         <Compile Include="SessionManager.fs" />
         <Compile Include="SessionOperations.fs" />
         <Compile Include="AgentActivityTracker.fs" />

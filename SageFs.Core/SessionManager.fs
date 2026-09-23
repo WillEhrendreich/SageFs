@@ -1629,8 +1629,35 @@ module SessionManager =
             match ManagerState.tryGetSession id state, ManagerState.tryGetPendingSwap id state with
             | Some session, None when SessionLifecycleStatus.workerPid session.Info.Status = Some workerPid -> Some session
             | _ -> None
+          // Earned Ready (roast: "Ready" used to mean only "the worker
+          // process answered", not "what was asked for actually loaded").
+          // The worker's own SessionStatus.Ready is a self-report — trust it
+          // only when it isn't lying by omission. `session.Projects` is
+          // exactly what create_session asked for; an empty list means
+          // "auto-discover", so a directory listing (mirroring
+          // ProjectLoading.loadSolution's own auto-discovery glob, never
+          // MSBuild) stands in for "was there something to find". A session
+          // that asked for nothing, or found nothing to auto-discover, stays
+          // Ready — a bare scratch REPL is not broken. A session that named
+          // something, or had something to auto-discover, and resolved zero
+          // of it is not Ready: it is Faulted, with the exact request named,
+          // so a reader can act on it instead of discovering it eval-by-eval
+          // ("Expecto is not defined").
           match current with
+          | None ->
+            Log.warn "[SessionManager] Ignoring Ready from worker pid %d for session %s: it is no longer the session's worker" workerPid (SessionId.value id)
+            return state
           | Some session ->
+          match ProjectResolution.classifyOnDisk session.WorkingDir session.Projects roles.Length with
+          | ProjectResolution.RequestedButUnresolved requested ->
+            let reason = ProjectResolution.unresolvedReason requested
+            Log.warn "[SessionManager] Session %s reported Ready but resolved none of its requested projects: %s" (SessionId.value id) reason
+            let newState = ManagerState.addSession id (faultedTombstone (Some reason) session) state
+            onSessionFaulted id reason
+            onSessionProgressChanged ()
+            return newState
+          | ProjectResolution.NoneRequested
+          | ProjectResolution.Resolved ->
             let handle : WorkerHandle = { Pid = workerPid; Port = SessionLifecycleStatus.workerPort session.Info.Status }
             let updated =
               { session with
@@ -1676,9 +1703,6 @@ module SessionManager =
                 onHealthRestart,
               ct)
             return newState
-          | None ->
-            Log.warn "[SessionManager] Ignoring Ready from worker pid %d for session %s: it is no longer the session's worker" workerPid (SessionId.value id)
-            return state
         // The app's single owner: every Run, Stop and run step is decided here,
         // against the state and generation this mailbox holds (AppRun.AppSlot).
         | SessionCommand.ClaimRun(id, project, reply) ->

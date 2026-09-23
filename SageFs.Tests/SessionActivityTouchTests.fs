@@ -17,6 +17,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.SessionManager
 open SageFs.WorkerProtocol
+open SageFs.ProjectLoading
 
 type private Harness = {
   Mailbox: MailboxProcessor<SessionCommand>
@@ -74,6 +75,16 @@ let private withHarness (run: Harness -> Threading.Tasks.Task<unit>) = task {
     cancellation.Cancel()
 }
 
+/// Stands in for what the worker would report for "Test.fsproj" actually
+/// resolving — the earned-Ready gate (SessionManager.fs's
+/// WorkerReportedReady handler) now Faults a session whose requested
+/// project resolved to nothing, so a fake `WorkerReportedReady` for a
+/// session that named a project must report it as resolved, exactly like a
+/// real worker would. This test is about the touch mechanism, not project
+/// resolution.
+let private resolvedTestProject : ClassifiedProject =
+  { Path = "Test.fsproj"; Role = ProjectRole.Library; PackageRefs = [] }
+
 let private createSession (harness: Harness) : SessionInfo =
   match harness.Mailbox.PostAndReply(fun reply ->
     SessionCommand.CreateSession(["Test.fsproj"], @"C:\Test", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
@@ -103,7 +114,7 @@ let sessionActivityTouchTests =
         // GetStatus (see SessionManager.fs's WorkerReady handler). Post the
         // same WorkerReportedReady it would eventually post, so the test
         // proves the touch mechanism, not the real poll cadence.
-        harness.Mailbox.Post(SessionCommand.WorkerReportedReady(created.Id, pid, []))
+        harness.Mailbox.Post(SessionCommand.WorkerReportedReady(created.Id, pid, [ resolvedTestProject ]))
         let ready = flush harness created.Id
         ready.Status |> function SessionLifecycleStatus.Ready _ -> () | other -> failtestf "expected Ready, got %A" other
         let beforeTouch = ready.LastActivity
@@ -145,7 +156,7 @@ let sessionActivityTouchTests =
         let created = createSession harness
         let pid = SessionLifecycleStatus.workerPid created.Status |> Option.defaultWith (fun () -> failtest "expected a worker pid")
         harness.Mailbox.Post(SessionCommand.WorkerReady(created.Id, pid, "http://localhost:4123", fakeWorker))
-        harness.Mailbox.Post(SessionCommand.WorkerReportedReady(created.Id, pid, []))
+        harness.Mailbox.Post(SessionCommand.WorkerReportedReady(created.Id, pid, [ resolvedTestProject ]))
         let ready = flush harness created.Id
         let beforeTouch = ready.LastActivity
 
