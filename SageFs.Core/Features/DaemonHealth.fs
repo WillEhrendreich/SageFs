@@ -53,6 +53,17 @@ type HealthSnapshot = {
   /// daemon run — `None` until either a capture has been attempted or one
   /// was skipped for lacking headroom. See `GcDumpWatch`.
   GcDumpOutcome: GcDumpCapture.CaptureOutcome option
+  /// The daemon's own read of how much machine memory is left
+  /// (`SageFs.MemoryPressure`, via `MemoryPressureWatch`) — judged against
+  /// the machine's absolute available memory, not against this daemon's own
+  /// history. `Anomalies` alone missed both real incidents: a daemon whose
+  /// RSS grows in a smooth ramp never trips the EWMA/CUSUM detector, because
+  /// the learned baseline rises right along with it, so `/health` reported
+  /// Healthy with `anomalies: []` for the entire climb to 51.7GB and then
+  /// 55GB of a 62GB machine. This field is a second, level-based judgment
+  /// `overallStatus` also reads, so a smooth climb is caught by "the machine
+  /// is almost out of memory" even when nothing LOOKS anomalous in shape.
+  MemoryPressure: SageFs.MemoryPressure
 }
 
 module DaemonHealth =
@@ -82,6 +93,12 @@ module DaemonHealth =
 
   /// Determine overall health from snapshot. A broken signal counts even when
   /// every session is fine: the daemon itself is the thing in trouble then.
+  /// `MemoryPressure` is judged too, independently of `Anomalies` — a daemon
+  /// whose RSS climbed in a smooth ramp never breaks the shape-based
+  /// detector (its learned baseline rises right along with it), so the level
+  /// check is what actually catches it: `Critical` (the machine is almost
+  /// out of memory) makes the daemon Unhealthy on its own, and `Tight`
+  /// degrades it, the same way a faulted session does.
   let overallStatus (snap: HealthSnapshot) : OverallHealth =
     let broken =
       snap.Anomalies
@@ -90,7 +107,9 @@ module DaemonHealth =
         | _ -> false)
     let hasFaulted =
       snap.SessionSummaries |> List.exists (fun s -> s.Status = SessionHealthStatus.Faulted)
-    match broken, hasFaulted with
+    let memoryCritical = snap.MemoryPressure = SageFs.MemoryPressure.Critical
+    let memoryTight = snap.MemoryPressure = SageFs.MemoryPressure.Tight
+    match broken || memoryCritical, hasFaulted || memoryTight with
     | true, _ -> OverallHealth.Unhealthy
     | false, true -> OverallHealth.Degraded
     | false, false -> OverallHealth.Healthy

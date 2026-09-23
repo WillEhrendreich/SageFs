@@ -161,6 +161,15 @@
              gated on the verdict those two produce. -->
         <Compile Include="Features\GcDumpCapture.fs" />
         <Compile Include="Features\GcDumpWatch.fs" />
+        <!-- The shared three-level pressure vocabulary MemorySupervisor, the
+             expensive-work lease, and DaemonHealth.overallStatus all read.
+             Moved ahead of DaemonHealth.fs (was down by MemorySupervisor.fs)
+             so overallStatus can judge the machine's absolute memory level,
+             not just the shape-based HealthAnomaly verdict — a daemon whose
+             RSS climbs in a smooth ramp never trips the EWMA/CUSUM detector
+             (its learned baseline rises right along with it), so shape alone
+             reported Healthy through two real incidents that ate the machine. -->
+        <Compile Include="MemoryPressure.fs" />
         <Compile Include="Features\DaemonHealth.fs" />
         <Compile Include="Features\ScratchPad.fs" />
         <Compile Include="Features\EvalRipple.fs" />
@@ -242,11 +251,9 @@
         <Compile Include="WarmupSupervision.fs" />
         <Compile Include="WorkerEventGuard.fs" />
         <Compile Include="WorkerHealthProbe.fs" />
-        <!-- The shared three-level pressure vocabulary MemorySupervisor and
-             the expensive-work lease both read. -->
-        <Compile Include="MemoryPressure.fs" />
-        <!-- After WorkerHealthProbe: another pure supervisory decision, this
-             one over memory pressure rather than worker liveness. -->
+        <!-- MemoryPressure.fs itself now compiles earlier, just ahead of
+             Features\DaemonHealth.fs (see the comment there) — this is only
+             the supervisory decision built on top of it. -->
         <Compile Include="MemorySupervisor.fs" />
         <!-- After MemorySupervisor: the stateful wrapper that persists its
              PressureLevel across calls (same split as HealthWatch/HealthAnomaly). -->
@@ -280,6 +287,11 @@
         <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />
         <Compile Include="FsiHostBuild.fs" />
         <Compile Include="FsiHostClient.fs" />
+        <!-- No dependency on FileWatcher.fs itself (System/System.IO only) —
+             placed beside it because they're both directory-walk primitives,
+             and DashboardTypes.fs/Mcp.fs/DaemonMode.fs (SageFs/) need it for
+             their own project/file discovery walks. -->
+        <Compile Include="SafeDirectoryWalk.fs" />
         <Compile Include="FileWatcher.fs" />
         <Compile Include="DaemonOwnership.fs" />
         <Compile Include="LiveTestWatcherCore.fs" />

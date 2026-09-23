@@ -29,7 +29,8 @@ let private snapshotWith anomalies sessions =
     LiveTestingSummary = None
     MemoryMB = 51_700
     Anomalies = anomalies
-    GcDumpOutcome = None }
+    GcDumpOutcome = None
+    MemoryPressure = SageFs.MemoryPressure.Normal }
   : HealthSnapshot
 
 let private readySession =
@@ -63,6 +64,18 @@ let healthWatchWiringTests =
       snapshotWith [] [ readySession ]
       |> DaemonHealth.overallStatus
       |> Expect.equal "no anomaly, no fault" OverallHealth.Healthy
+
+    // The gap this closes: INCIDENT 2 in HealthAnomalyTests.fs proves a
+    // steady climb to 37GB eventually reads as Drifting OR Broken through
+    // the shape-based detector alone — but the smoother the ramp, the more
+    // the EWMA baseline keeps pace, and both real incidents reported
+    // `anomalies: []` for their entire climb. `MemoryPressure` is judged
+    // independently of `Anomalies`, against the machine's OWN available
+    // memory, so a smooth ramp is still caught the moment it gets dangerous.
+    testCase "WHY — overallStatus — the machine being almost out of memory is unhealthy even when the shape detector never fired" <| fun _ ->
+      { snapshotWith [] [ readySession ] with MemoryPressure = SageFs.MemoryPressure.Critical }
+      |> DaemonHealth.overallStatus
+      |> Expect.equal "a smooth ramp with anomalies: [] is exactly what ate the machine twice" OverallHealth.Unhealthy
 
     // The watch is what the daemon actually calls on its tick, so the wiring
     // is only real if feeding it the incident's shape produces a verdict the

@@ -992,12 +992,17 @@ let private dispatchDiscoveredTests
       |> Array.collect (fun dir ->
         match IO.Directory.Exists dir with
         | true ->
-          IO.Directory.GetFiles(dir, "*.fs", IO.SearchOption.AllDirectories)
-          |> Array.filter (fun f ->
-            let rel = f.Substring(dir.Length)
-            let sep = string IO.Path.DirectorySeparatorChar
-            not (rel.Contains(sep + "bin" + sep))
-            && not (rel.Contains(sep + "obj" + sep)))
+          // Pruned BEFORE descending (SafeDirectoryWalk) against the SAME
+          // canonical noise list the dashboard/MCP discovery walks use
+          // (bin/obj/.git/node_modules/... — this ad-hoc filter only ever
+          // checked two of them), and cycle-proof: a directory symlink
+          // loop under `dir` used to make `GetFiles(_, _, AllDirectories)`
+          // never come back.
+          let result = SafeDirectoryWalk.walkFiles dir (fun f -> f.EndsWith(".fs", StringComparison.OrdinalIgnoreCase)) isNoiseProjectPath SafeDirectoryWalk.Bounds.standard
+          if result.Truncated then
+            log.LogWarning("[Daemon] Tree-sitter file walk in {Dir} hit its depth/entry bound — some test files may be missed", dir)
+          result.Files
+          |> List.toArray
           |> Array.collect (fun f ->
             try
               let code = IO.File.ReadAllText f
@@ -3392,7 +3397,12 @@ let run
               LiveTestingSummary = testingSummary
               MemoryMB = memoryMB
               Anomalies = SageFs.Features.HealthWatch.troubled ()
-              GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome () }
+              GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome ()
+              // The same hysteresis-tracked level `shedIdleSessionsIfNeeded`
+              // (watcherSyncTimer, every 5s) already maintains — reading it
+              // here rather than recomputing keeps ONE authoritative level
+              // instead of two that could disagree.
+              MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel () }
             : SageFs.Features.HealthSnapshot)
     GetFailureNarratives = fun () ->
       let model = elmRuntime.GetModel()

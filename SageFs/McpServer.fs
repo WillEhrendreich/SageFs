@@ -2317,7 +2317,11 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
           // health tick (DaemonMode.GetDaemonHealth) — reported here too so
           // an MCP-only client sees the same evidence without a second
           // sampling+capture path.
-          GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome () }
+          GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome ()
+          // Same authoritative, hysteresis-tracked level DaemonMode's own
+          // health tick reads — see the field's doc comment on why shape
+          // alone (`Anomalies`) missed both real incidents.
+          MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel () }
       let sessionStatus =
         SageFs.Features.DaemonHealth.primarySessionStatusLabel healthSnapshot.SessionSummaries
       let healthy = healthyForSessions healthSnapshot.SessionSummaries
@@ -2372,6 +2376,12 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
                overall = SageFs.Features.DaemonHealth.healthLabel overall
                anomalies = anomalies
                memoryMB = healthSnapshot.MemoryMB
+               // The level-based judgment (§ HealthSnapshot.MemoryPressure's
+               // doc comment): "normal"/"tight"/"critical" against the
+               // MACHINE's available memory, independent of whether
+               // `anomalies` above has anything to say about shape.
+               memoryPressure = SageFs.MemoryPressure.describe healthSnapshot.MemoryPressure
+               memoryPressureNote = SageFs.MemoryPressure.explain healthSnapshot.MemoryPressure
                error = sessionError
                version = version
                apiVersion = SageFs.EndpointContracts.apiVersion

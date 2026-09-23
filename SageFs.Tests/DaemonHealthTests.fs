@@ -22,6 +22,7 @@ let healthSnapshotTests =
         MemoryMB = 256
         Anomalies = []
         GcDumpOutcome = None
+        MemoryPressure = SageFs.MemoryPressure.Normal
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "should be healthy" OverallHealth.Healthy
@@ -40,6 +41,7 @@ let healthSnapshotTests =
         MemoryMB = 128
         Anomalies = []
         GcDumpOutcome = None
+        MemoryPressure = SageFs.MemoryPressure.Normal
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "should be degraded" OverallHealth.Degraded
@@ -55,9 +57,67 @@ let healthSnapshotTests =
         MemoryMB = 64
         Anomalies = []
         GcDumpOutcome = None
+        MemoryPressure = SageFs.MemoryPressure.Normal
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "no sessions = healthy (idle)" OverallHealth.Healthy
+
+    testCase "WHY — overallStatus — critical machine memory pressure is Unhealthy even with anomalies: [] and every session Ready, because a smooth RSS ramp never trips the shape-based detector" <| fun _ ->
+      let snapshot = {
+        DaemonPid = 1234
+        DaemonPort = 37749
+        Uptime = TimeSpan.FromHours 3.0
+        Version = "0.6.820"
+        SessionSummaries = [
+          { SessionId = "abc123"; ProjectName = "MyLib"; Status = SessionHealthStatus.Ready; EvalCount = 42; LastActivity = DateTimeOffset.UtcNow }
+        ]
+        LiveTestingSummary = None
+        MemoryMB = 55_000
+        // Empty — the EWMA/CUSUM detector's own learned baseline rose right
+        // along with a smooth ramp, exactly like both real incidents. This
+        // snapshot has to be judged unhealthy some other way.
+        Anomalies = []
+        GcDumpOutcome = None
+        MemoryPressure = SageFs.MemoryPressure.Critical
+      }
+      let health = DaemonHealth.overallStatus snapshot
+      health |> Expect.equal "the machine is almost out of memory, whatever the shape detector says" OverallHealth.Unhealthy
+
+    testCase "WHY — overallStatus — tight machine memory pressure degrades, the same as a faulted session, even with anomalies: []" <| fun _ ->
+      let snapshot = {
+        DaemonPid = 1234
+        DaemonPort = 37749
+        Uptime = TimeSpan.FromHours 1.0
+        Version = "0.6.820"
+        SessionSummaries = [
+          { SessionId = "abc123"; ProjectName = "MyLib"; Status = SessionHealthStatus.Ready; EvalCount = 10; LastActivity = DateTimeOffset.UtcNow }
+        ]
+        LiveTestingSummary = None
+        MemoryMB = 40_000
+        Anomalies = []
+        GcDumpOutcome = None
+        MemoryPressure = SageFs.MemoryPressure.Tight
+      }
+      let health = DaemonHealth.overallStatus snapshot
+      health |> Expect.equal "the machine is short on memory — worth degrading for, not staying silent about" OverallHealth.Degraded
+
+    testCase "WHY — overallStatus — normal machine memory pressure changes nothing for an otherwise-healthy daemon" <| fun _ ->
+      let snapshot = {
+        DaemonPid = 1234
+        DaemonPort = 37749
+        Uptime = TimeSpan.FromMinutes 10.0
+        Version = "0.6.820"
+        SessionSummaries = [
+          { SessionId = "abc123"; ProjectName = "MyLib"; Status = SessionHealthStatus.Ready; EvalCount = 5; LastActivity = DateTimeOffset.UtcNow }
+        ]
+        LiveTestingSummary = None
+        MemoryMB = 300
+        Anomalies = []
+        GcDumpOutcome = None
+        MemoryPressure = SageFs.MemoryPressure.Normal
+      }
+      let health = DaemonHealth.overallStatus snapshot
+      health |> Expect.equal "plenty of machine memory, nothing anomalous, nothing faulted" OverallHealth.Healthy
   ]
 
 [<Tests>]
@@ -77,6 +137,7 @@ let healthFormatTests =
         MemoryMB = 200
         Anomalies = []
         GcDumpOutcome = None
+        MemoryPressure = SageFs.MemoryPressure.Normal
       }
       let text = DaemonHealth.formatSummary snapshot
       text |> Expect.stringContains "has pid" "5678"
@@ -104,6 +165,7 @@ let healthFormatTests =
         MemoryMB = 64
         Anomalies = []
         GcDumpOutcome = None
+        MemoryPressure = SageFs.MemoryPressure.Normal
       }
       let text = DaemonHealth.diagnosticSummary snapshot
       text |> Expect.equal "should explain the missing session state" "No sessions registered with the daemon."
@@ -123,6 +185,7 @@ let healthFormatTests =
         MemoryMB = 64
         Anomalies = []
         GcDumpOutcome = None
+        MemoryPressure = SageFs.MemoryPressure.Normal
       }
       let text = DaemonHealth.diagnosticSummary snapshot
       text |> Expect.stringContains "should mention the faulted project" "FaultedProject"
