@@ -237,6 +237,67 @@ let tests =
       }
     ]
 
+    // Symptom-3 (the third GitHub-issue-adjacent bug): a project whose ambient/pinned SDK is newer than
+    // SageFs's own runtime never reached Ready — Init.init's process-wide AssemblyLoadContext.Resolving
+    // handler for the wrong SDK is installed and never unhooked on failure. shouldSkipInProcessLoad is the
+    // pure decision that keeps loadSolution from ever calling Init.init for that case.
+    testList "sdkMajorOf" [
+      test "reads the leading major from a stable version" {
+        sdkMajorOf "10.0.401" |> Expect.equal "major 10" (Some 10)
+      }
+
+      test "reads the leading major from a prerelease version" {
+        sdkMajorOf "11.0.100-rc.1.26425.128" |> Expect.equal "major 11" (Some 11)
+      }
+
+      test "None for unparseable input" {
+        sdkMajorOf "" |> Expect.isNone "empty string has no major"
+        sdkMajorOf "not-a-version" |> Expect.isNone "non-numeric leading segment"
+      }
+    ]
+
+    testList "shouldSkipInProcessLoad (WHY — see the doc comment: Init.init's resolving handler is never unhooked on failure)" [
+      test "WHY — a newer ambient SDK than this process's own runtime must skip the in-process loader, because loading its MSBuild in-process poisons assembly resolution for the rest of the process's life" {
+        shouldSkipInProcessLoad 10 11 |> Expect.isTrue "SDK 11 into a net10 process is unsafe"
+      }
+
+      test "an equal ambient SDK major is safe" {
+        shouldSkipInProcessLoad 10 10 |> Expect.isFalse "same major is exactly what Init.init is for"
+      }
+
+      test "an older ambient SDK major is safe (newer SDKs build older TFMs routinely)" {
+        shouldSkipInProcessLoad 10 9 |> Expect.isFalse "older SDK major is safe"
+      }
+    ]
+
+    testList "classifyProjectLoaderFailure" [
+      test "WHY — recognises the exact in-process bind failure a newer-major SDK produces, because it reads as a generic tooling failure otherwise" {
+        let message = "Could not load file or assembly 'System.Runtime, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'. The system cannot find the file specified."
+        classifyProjectLoaderFailure 10 message
+        |> Expect.isSome "recognised as an SDK-major mismatch"
+
+      }
+
+      test "the explanation names both majors" {
+        let message = "Could not load file or assembly 'System.Runtime, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'. The system cannot find the file specified."
+        match classifyProjectLoaderFailure 10 message with
+        | None -> failtest "expected a classification"
+        | Some explanation ->
+          explanation |> Expect.stringContains "names the project's SDK major" "11"
+          explanation |> Expect.stringContains "names this process's runtime major" ".NET 10"
+
+      }
+
+      test "does not classify a System.Runtime failure at or below the host's own major (not this bug)" {
+        let message = "Could not load file or assembly 'System.Runtime, Version=9.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'."
+        classifyProjectLoaderFailure 10 message |> Expect.isNone "9 <= 10 is not the mismatch this detects"
+      }
+
+      test "does not classify an unrelated exception message" {
+        classifyProjectLoaderFailure 10 "some other MSBuild evaluation error" |> Expect.isNone "unrelated failures stay generic"
+      }
+    ]
+
     testList "resolveFreshestConfigOutput (real filesystem)" [
       test "WHY — a fresh Release build wins over a stale Debug output, because the REPL must run the code you built, not an old artifact" {
         let root = Path.Combine(Path.GetTempPath(), "sagefs-fresh-" + Guid.NewGuid().ToString("N"))

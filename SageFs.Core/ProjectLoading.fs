@@ -1,6 +1,7 @@
 module SageFs.ProjectLoading
 
 open System
+open System.Diagnostics
 open System.IO
 open System.Xml.Linq
 
@@ -459,6 +460,78 @@ module ProjectLoadProgress =
       Loaded(loadedProject.ProjectFileName, List.length knownProjects)
     | WorkspaceProjectState.Failed(projFile, _errors) -> Failed projFile
 
+/// Pure: the leading major version number from a `dotnet --version`-style string
+/// ("11.0.100-rc.1.26425.128" -> 11, "10.0.401" -> 10).
+let sdkMajorOf (version: string) : int option =
+  match version.Split '.' with
+  | [||] -> None
+  | parts ->
+    match Int32.TryParse parts.[0] with
+    | true, major -> Some major
+    | false, _ -> None
+
+/// Whether attempting Ionide's in-process MSBuild loader is safe for this process.
+///
+/// `Ionide.ProjInfo.Init.init` hooks a PROCESS-WIDE `AssemblyLoadContext.Default.Resolving` handler pointed
+/// at the resolved SDK's own directory (see `Init.setupForSdkVersion`) — and that handler is only ever
+/// swapped out by a LATER call to `Init.init`, never removed when the load it was installed for fails. A
+/// project whose ambient or global.json-pinned SDK major is NEWER than this process's own runtime major (a
+/// preview SDK installed alongside the stable one this daemon is pinned to, or an Arcade-style repo — see
+/// `FsiHostBuild.SdkSelection`) makes the subsequent MSBuild.dll load throw a `System.Runtime,
+/// Version=N.0.0.0` bind failure inside THIS already-running process. That failure is caught and the caller
+/// falls back to the manual fsproj parse — but by then the resolving handler for the wrong SDK is already
+/// attached and stays attached, so it can intercept and corrupt assembly resolution for anything this SAME
+/// process (this worker, or its later attach to an isolated FSI host) resolves afterward, for the rest of
+/// the process's life. Reproduced live: a session for an unbuilt net10.0 project pinned to a newer SDK never
+/// reaches Ready — depending on what gets resolved through the poisoned handler and when, the worker either
+/// exits before reporting its port or warmup simply times out. Skipping the in-process attempt entirely,
+/// straight to the manual parse, is cheap insurance: the manual parse never calls `Init.init`, so nothing is
+/// ever installed to leak.
+let shouldSkipInProcessLoad (hostMajor: int) (ambientSdkMajor: int) : bool = ambientSdkMajor > hostMajor
+
+/// The .NET SDK `dotnet --version` would use in `workingDir` (honouring any global.json on the way up), or
+/// None if the muxer can't be run or the call times out. A short timeout: this ambient pre-check must never
+/// itself hang a warmup — a failure here just means the normal in-process path is attempted as before.
+let private ambientSdkVersion (workingDir: string) : string option =
+  try
+    let psi = ProcessStartInfo("dotnet", "--version")
+    psi.WorkingDirectory <- workingDir
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    use proc = Process.Start psi
+    let stdout' = proc.StandardOutput.ReadToEndAsync()
+    match proc.WaitForExit 15_000 with
+    | false ->
+      (try proc.Kill true with _ -> ())
+      None
+    | true when proc.ExitCode = 0 -> Some(stdout'.Result.Trim())
+    | true -> None
+  with _ -> None
+
+/// Whether an Ionide project-loader failure is exactly the in-process SDK/runtime bind failure
+/// `shouldSkipInProcessLoad` exists to head off — used only as defense in depth for a path that check
+/// missed (the ambient `dotnet --version` probe itself failed or timed out, so the normal attempt still
+/// ran). Never the different, earlier message .NET uses when a whole FRAMEWORK is missing ("You must
+/// install or update .NET") — this is specifically an in-process assembly bind, one file, one version.
+let private systemRuntimeBindFailure = System.Text.RegularExpressions.Regex(@"System\.Runtime, Version=(\d+)\.")
+
+let classifyProjectLoaderFailure (hostMajor: int) (exceptionMessage: string) : string option =
+  let m = systemRuntimeBindFailure.Match exceptionMessage
+  match m.Success with
+  | false -> None
+  | true ->
+    match Int32.TryParse m.Groups.[1].Value with
+    | true, sdkMajor when sdkMajor > hostMajor ->
+      Some(
+        sprintf
+          "the project's .NET SDK is %d.x, newer than SageFs's own runtime (.NET %d) — its MSBuild tooling can't load into this already-running process. This is expected (a newer SDK is installed, or the project's global.json pins one); falling back to a manual fsproj parse, which gets source files but not full MSBuild-derived project metadata."
+          sdkMajor
+          hostMajor
+      )
+    | _ -> None
+
 let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress: int -> int -> string -> unit) =
   let directory = config.WorkingDir
 
@@ -504,35 +577,56 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
     for p in projects do
       logger.LogInfo (sprintf "Found project: %s" (Path.GetFileName p))
 
-    logger.LogInfo "Initializing build tooling..."
-    let toolsPath = Init.init (DirectoryInfo directory) None
-    logger.LogInfo (sprintf "  MSBuild/tools path: %A" toolsPath)
-    let defaultLoader: IWorkspaceLoader = WorkspaceLoader.Create(toolsPath, [])
-    // Fold Ionide's own per-project notifications through ProjectLoadProgress
-    // so "project 34 of 61" is real, live progress from inside LoadSln/
-    // LoadProjects — not a guess computed before or after the call.
-    let mutable progressState = ProjectLoadProgress.initial
-    defaultLoader.Notifications.Add(fun notification ->
-      let next, reported = ProjectLoadProgress.step progressState (ProjectLoadProgress.ofWorkspaceProjectState notification)
-      progressState <- next
-      match reported with
-      | Some(step, total, message) -> onProgress step total message
-      | None -> ())
+    let hostMajor = Environment.Version.Major
+    let ambientMajor = ambientSdkVersion directory |> Option.bind sdkMajorOf
+    // toolsPathOpt is Some only when Init.init actually ran — the only case loadedProjects can come back
+    // non-empty, since both the skip branch and a failed/empty Ionide load produce []. reloadAt (below)
+    // needs it for the multi-TFM re-evaluation pass, which only ever runs on a non-empty loadedProjects.
+    let loadedProjects, toolsPathOpt =
+      match ambientMajor with
+      | Some sdkMajor when shouldSkipInProcessLoad hostMajor sdkMajor ->
+        // See `shouldSkipInProcessLoad`: Init.init's process-wide resolving handler for a newer-major SDK
+        // never gets unhooked after a failed load, so the safe move is never to attempt it at all.
+        logger.LogWarning (
+          sprintf
+            "Skipping in-process MSBuild project load: this project's .NET SDK is %d.x, newer than SageFs's own runtime (.NET %d) — loading that SDK's MSBuild tooling into this process would leave it corrupted for the rest of the process's life, not just fail this one load. Falling back straight to a manual fsproj parse. This is expected (a newer SDK is installed, or the project's global.json pins one)."
+            sdkMajor
+            hostMajor
+        )
+        [], None
+      | _ ->
+        logger.LogInfo "Initializing build tooling..."
+        let toolsPath = Init.init (DirectoryInfo directory) None
+        logger.LogInfo (sprintf "  MSBuild/tools path: %A" toolsPath)
+        let defaultLoader: IWorkspaceLoader = WorkspaceLoader.Create(toolsPath, [])
+        // Fold Ionide's own per-project notifications through ProjectLoadProgress
+        // so "project 34 of 61" is real, live progress from inside LoadSln/
+        // LoadProjects — not a guess computed before or after the call.
+        let mutable progressState = ProjectLoadProgress.initial
+        defaultLoader.Notifications.Add(fun notification ->
+          let next, reported = ProjectLoadProgress.step progressState (ProjectLoadProgress.ofWorkspaceProjectState notification)
+          progressState <- next
+          match reported with
+          | Some(step, total, message) -> onProgress step total message
+          | None -> ())
 
-    logger.LogInfo "Loading solution and project references..."
-    let loadedProjects =
-      try
-        let slnProjects =
-          solutions
-          |> List.collect (fun s ->
-            logger.LogInfo (sprintf "  Loading %s..." (Path.GetFileName s))
-            defaultLoader.LoadSln s |> Seq.toList)
-        slnProjects
-        |> Seq.append (defaultLoader.LoadProjects projects)
-        |> Seq.toList
-      with ex ->
-        logger.LogWarning (sprintf "  Project loader failed (%s) — falling back to manual fsproj parse" ex.Message)
-        []
+        logger.LogInfo "Loading solution and project references..."
+        let loaded =
+          try
+            let slnProjects =
+              solutions
+              |> List.collect (fun s ->
+                logger.LogInfo (sprintf "  Loading %s..." (Path.GetFileName s))
+                defaultLoader.LoadSln s |> Seq.toList)
+            slnProjects
+            |> Seq.append (defaultLoader.LoadProjects projects)
+            |> Seq.toList
+          with ex ->
+            match classifyProjectLoaderFailure hostMajor ex.Message with
+            | Some explanation -> logger.LogWarning (sprintf "  Project loader failed: %s" explanation)
+            | None -> logger.LogWarning (sprintf "  Project loader failed (%s) — falling back to manual fsproj parse" ex.Message)
+            []
+        loaded, Some toolsPath
 
     logger.LogInfo (sprintf "  Loaded %d project(s)." (List.length loadedProjects))
 
@@ -595,15 +689,18 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
       // builds it at (see ReferenceFrameworks). Ionide loaded each one at its
       // first TFM, which is the wrong output for a consumer on another TFM.
       let reloadAt (tfm: string) (paths: string list) : ProjectOptions list =
-        logger.LogInfo (
-          sprintf "  Reloading %s at %s (the TFM the referencing project builds it at)"
-            (paths |> List.map Path.GetFileName |> String.concat ", ") tfm)
-        try
-          (WorkspaceLoader.Create(toolsPath, [ ("TargetFramework", tfm) ])).LoadProjects paths
-          |> Seq.toList
-        with ex ->
-          logger.LogWarning (sprintf "  Reloading at %s failed: %s" tfm ex.Message)
-          []
+        match toolsPathOpt with
+        | None -> [] // unreachable in practice: loadedProjects is non-empty only when Init.init ran
+        | Some toolsPath ->
+          logger.LogInfo (
+            sprintf "  Reloading %s at %s (the TFM the referencing project builds it at)"
+              (paths |> List.map Path.GetFileName |> String.concat ", ") tfm)
+          try
+            (WorkspaceLoader.Create(toolsPath, [ ("TargetFramework", tfm) ])).LoadProjects paths
+            |> Seq.toList
+          with ex ->
+            logger.LogWarning (sprintf "  Reloading at %s failed: %s" tfm ex.Message)
+            []
       let atConsumerFrameworks =
         ReferenceFrameworks.settle ReferenceFrameworks.ofProjectOptions reloadAt loadedProjects
       let loadedProjects' =
