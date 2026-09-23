@@ -6,6 +6,8 @@ open System.Net
 open System.Net.Sockets
 open Expecto
 open Expecto.Flip
+open FsCheck
+open FsCheck.FSharp
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -289,6 +291,133 @@ let dotnetSdkTests =
       result.Status |> Expect.equal "invalid pin must fail" EnvCheck.Status.Fail
       result.Detail |> Expect.stringContains "detail should name the bad pin" "11"
     }
+
+    // ── #139: a rollForward-eligible SDK below the newest installed SDK must
+    // still be found, and the "newest eligible" reported on failure must
+    // actually be the newest, not the oldest picked by a broken sort. ────────
+
+    test "#139 repro: latestMinor resolves the newest same-major SDK, not the oldest installed" {
+      // Exact scenario from github.com/WillEhrendreich/SageFs/issues/139:
+      // global.json pins 10.0.0 rollForward latestMinor allowPrerelease
+      // false; dotnet itself resolves 10.0.401, but `sagefs check` reported
+      // "not installed; newest eligible is 8.0.425".
+      let req : EnvCheck.SdkRequirement =
+        { Version = "10.0.0"; RollForward = "latestMinor"; AllowPrerelease = false }
+      let installed =
+        [ "8.0.425"; "9.0.318"; "10.0.112"; "10.0.204"; "10.0.401"; "11.0.100-rc.1.26425.128" ]
+        |> List.map sdkLine
+      let result = EnvCheck.sdkCheckFromInputs (Some req) None installed
+      result.Status |> Expect.equal "10.0.401 satisfies the latestMinor pin and must pass" EnvCheck.Status.Pass
+      result.Detail |> Expect.stringContains "the newest same-major SDK must be selected, not 8.0.425" "10.0.401"
+    }
+
+    test "newest-eligible-on-failure names the actual newest candidate, not the oldest" {
+      // No installed SDK satisfies an 11.0 latestMinor pin here — but the
+      // failure message's \"newest eligible\" must still be the newest of
+      // the (wrong-major) candidates, so it's not misleading about what's
+      // actually on the machine.
+      let req : EnvCheck.SdkRequirement =
+        { Version = "11.0.0"; RollForward = "latestMinor"; AllowPrerelease = true }
+      let installed = [ "8.0.100"; "9.0.100"; "10.0.401" ] |> List.map sdkLine
+      let result = EnvCheck.sdkCheckFromInputs (Some req) None installed
+      result.Status |> Expect.equal "no 11.x installed" EnvCheck.Status.Fail
+      result.Detail |> Expect.stringContains "newest eligible must be 10.0.401, not the oldest 8.0.100" "10.0.401"
+    }
+
+    test "passes with any SDK when no pin is found, picking the newest installed rather than the oldest" {
+      let result =
+        EnvCheck.sdkCheckFromInputs None None ([ "8.0.100"; "10.0.401"; "9.0.100" ] |> List.map sdkLine)
+      result.Status |> Expect.equal "any SDK passes without a pin" EnvCheck.Status.Pass
+      result.Detail |> Expect.stringContains "unpinned check must report the newest installed SDK" "10.0.401"
+    }
+  ]
+
+// ── RollForwardPolicy: closed DU, exhaustive window interpretation ────────────
+
+[<Tests>]
+let rollForwardPolicyTests =
+  testList "EnvCheck.RollForwardPolicy" [
+    test "parses every documented global.json rollForward value" {
+      EnvCheck.RollForwardPolicy.parse "patch" |> Expect.equal "patch" EnvCheck.RollForwardPolicy.Patch
+      EnvCheck.RollForwardPolicy.parse "latestPatch" |> Expect.equal "latestPatch" EnvCheck.RollForwardPolicy.LatestPatch
+      EnvCheck.RollForwardPolicy.parse "feature" |> Expect.equal "feature" EnvCheck.RollForwardPolicy.Feature
+      EnvCheck.RollForwardPolicy.parse "latestFeature" |> Expect.equal "latestFeature" EnvCheck.RollForwardPolicy.LatestFeature
+      EnvCheck.RollForwardPolicy.parse "minor" |> Expect.equal "minor" EnvCheck.RollForwardPolicy.Minor
+      EnvCheck.RollForwardPolicy.parse "latestMinor" |> Expect.equal "latestMinor" EnvCheck.RollForwardPolicy.LatestMinor
+      EnvCheck.RollForwardPolicy.parse "major" |> Expect.equal "major" EnvCheck.RollForwardPolicy.Major
+      EnvCheck.RollForwardPolicy.parse "latestMajor" |> Expect.equal "latestMajor" EnvCheck.RollForwardPolicy.LatestMajor
+      EnvCheck.RollForwardPolicy.parse "disable" |> Expect.equal "disable" EnvCheck.RollForwardPolicy.Disable
+    }
+
+    test "an unrecognized rollForward string is carried, not silently coerced" {
+      EnvCheck.RollForwardPolicy.parse "sideways"
+      |> Expect.equal "unknown policy strings are preserved for diagnosis" (EnvCheck.RollForwardPolicy.Unrecognized "sideways")
+    }
+
+    test "disable only accepts an exact version match" {
+      EnvCheck.RollForwardPolicy.satisfiesWindow EnvCheck.RollForwardPolicy.Disable "10.0.100" "10.0.101"
+      |> Expect.isFalse "disable must not roll forward to a different patch"
+      EnvCheck.RollForwardPolicy.satisfiesWindow EnvCheck.RollForwardPolicy.Disable "10.0.100" "10.0.100"
+      |> Expect.isTrue "disable accepts the exact pin"
+    }
+  ]
+
+// ── selectSatisfyingSdk: pure version-satisfaction function, property-tested
+// over (pin, rollForward policy, installed versions). ─────────────────────────
+
+[<Tests>]
+let selectSatisfyingSdkPropertyTests =
+  let cfg = { FsCheckConfig.defaultConfig with maxTest = 300 }
+  let genComponent = Gen.choose (0, 20)
+  let genVersion =
+    gen {
+      let! major = genComponent
+      let! minor = genComponent
+      let! patch = genComponent
+      return sprintf "%d.%d.%d" major minor patch
+    }
+  let genVersionList = Gen.listOfLength 6 genVersion
+  let genRollForward =
+    Gen.elements
+      [ "patch"; "latestPatch"; "feature"; "latestFeature"; "minor"; "latestMinor"; "major"; "latestMajor"; "disable" ]
+  let genCase =
+    gen {
+      let! pin = genVersion
+      let! rollForward = genRollForward
+      let! installed = genVersionList
+      return pin, rollForward, installed
+    }
+
+  testList "EnvCheck.selectSatisfyingSdk properties" [
+    testPropertyWithConfig cfg "a selected SDK always satisfies the requirement it was selected for" <|
+      Prop.forAll (Arb.fromGen genCase) (fun (pin, rollForward, installed) ->
+        let req : EnvCheck.SdkRequirement = { Version = pin; RollForward = rollForward; AllowPrerelease = true }
+        match EnvCheck.selectSatisfyingSdk req installed with
+        | None -> true
+        | Some selected -> EnvCheck.satisfiesRequirement req selected)
+
+    testPropertyWithConfig cfg "the selected SDK is at least as new as every other installed SDK that also satisfies the requirement" <|
+      Prop.forAll (Arb.fromGen genCase) (fun (pin, rollForward, installed) ->
+        let req : EnvCheck.SdkRequirement = { Version = pin; RollForward = rollForward; AllowPrerelease = true }
+        match EnvCheck.selectSatisfyingSdk req installed with
+        | None -> true
+        | Some selected ->
+          installed
+          |> List.filter (EnvCheck.satisfiesRequirement req)
+          |> List.forall (fun other -> EnvCheck.sdkVersionAtLeast other selected))
+
+    testPropertyWithConfig cfg "the pin itself, installed, is always a satisfying candidate (reflexivity)" <|
+      Prop.forAll (Arb.fromGen genCase) (fun (pin, rollForward, installed) ->
+        let req : EnvCheck.SdkRequirement = { Version = pin; RollForward = rollForward; AllowPrerelease = true }
+        EnvCheck.satisfiesRequirement req pin)
+
+    testPropertyWithConfig cfg "adding SDKs that don't satisfy the requirement never changes the selection (#139 regression guard)" <|
+      Prop.forAll (Arb.fromGen genCase) (fun (pin, rollForward, installed) ->
+        let req : EnvCheck.SdkRequirement = { Version = pin; RollForward = rollForward; AllowPrerelease = true }
+        let before = EnvCheck.selectSatisfyingSdk req installed
+        let decoys = [ "0.0.0"; "0.0.1"; "0.1.0" ] |> List.filter (fun v -> not (EnvCheck.satisfiesRequirement req v))
+        let after = EnvCheck.selectSatisfyingSdk req (decoys @ installed)
+        before = after)
   ]
 
 // ── checkFsiAvailable (probe outcome, no process spawned) ─────────────────────
@@ -454,6 +583,8 @@ let allEnvCheckTests =
     checkFsprojTests
     checkPortTests
     dotnetSdkTests
+    rollForwardPolicyTests
+    selectSatisfyingSdkPropertyTests
     fsiProbeTests
     sessionAuthorityTests
     printTests

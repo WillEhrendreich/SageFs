@@ -150,7 +150,7 @@ let private comparePreParts (a: string) (b: string) =
 
 /// True when candidate >= pin under SDK ordering (stable > prerelease at the
 /// same release tuple; a prerelease extends the pin's prerelease prefix).
-let private sdkVersionAtLeast (pin: string) (cand: string) =
+let sdkVersionAtLeast (pin: string) (cand: string) =
   match tryParseSdkVersion pin, tryParseSdkVersion cand with
   | Some (pinRel, pinPre), Some (candRel, candPre) ->
     let relCmp = compareNumList (padTo 4 pinRel) (padTo 4 candRel)
@@ -188,9 +188,63 @@ let private sameReleasePrefix (n: int) (a: string) (b: string) =
 let private isValidSdkPin (pin: string) =
   Text.RegularExpressions.Regex.IsMatch(pin, @"^\d+(\.\d+){2,}(-[0-9A-Za-z.]+)?$")
 
+/// The closed set of `global.json` `sdk.rollForward` policies the .NET SDK
+/// resolver documents, plus a catch-all for a string outside that set (an
+/// invalid global.json is `dotnet`'s problem to reject, not this diagnostic's
+/// — being unable to name the policy should not stop `sagefs check` from
+/// still trying to find a usable SDK). `satisfiesWindow` is the ONE place
+/// that turns a policy into a release-number window; nothing else in this
+/// module compares rollForward as a bare string.
+[<RequireQualifiedAccess>]
+type RollForwardPolicy =
+  | Patch
+  | LatestPatch
+  | Feature
+  | LatestFeature
+  | Minor
+  | LatestMinor
+  | Major
+  | LatestMajor
+  | Disable
+  | Unrecognized of string
+
+module RollForwardPolicy =
+  let parse (s: string) : RollForwardPolicy =
+    match s with
+    | "patch" -> RollForwardPolicy.Patch
+    | "latestPatch" -> RollForwardPolicy.LatestPatch
+    | "feature" -> RollForwardPolicy.Feature
+    | "latestFeature" -> RollForwardPolicy.LatestFeature
+    | "minor" -> RollForwardPolicy.Minor
+    | "latestMinor" -> RollForwardPolicy.LatestMinor
+    | "major" -> RollForwardPolicy.Major
+    | "latestMajor" -> RollForwardPolicy.LatestMajor
+    | "disable" -> RollForwardPolicy.Disable
+    | other -> RollForwardPolicy.Unrecognized other
+
+  /// True when `installed` falls inside the release-number window this
+  /// policy allows around `pin` — the caller is expected to have already
+  /// confirmed `installed >= pin` and the prerelease rule separately, this
+  /// only decides how far the release tuple may drift (patch: none of the
+  /// first 3 components; feature: the feature band may change but not
+  /// major.minor; minor: only the major must match; major/latestMajor: any).
+  /// An unrecognized policy gets the most permissive window — this is a
+  /// diagnostic, not the SDK resolver, and a typo'd rollForward should not
+  /// make `sagefs check` invent a failure the real resolver might not agree with.
+  let satisfiesWindow (policy: RollForwardPolicy) (pin: string) (installed: string) =
+    match policy with
+    | RollForwardPolicy.Disable -> sdkVersionEquals pin installed
+    | RollForwardPolicy.Patch | RollForwardPolicy.LatestPatch -> sameReleasePrefix 3 pin installed
+    | RollForwardPolicy.Feature | RollForwardPolicy.LatestFeature -> sameReleasePrefix 2 pin installed
+    | RollForwardPolicy.Minor | RollForwardPolicy.LatestMinor -> sameReleasePrefix 1 pin installed
+    | RollForwardPolicy.Major | RollForwardPolicy.LatestMajor -> true
+    | RollForwardPolicy.Unrecognized _ -> true
+
 /// Whether the installed SDK version satisfies the global.json pin under the
 /// configured rollForward policy (mirrors `dotnet` SDK resolution semantics).
-let private satisfiesRequirement (req: SdkRequirement) (installedVersion: string) =
+/// Pure over its two inputs, so the whole rollForward/version matrix is
+/// property-testable instead of a handful of hand-picked examples.
+let satisfiesRequirement (req: SdkRequirement) (installedVersion: string) =
   match isValidSdkPin req.Version with
   | false -> false
   | true ->
@@ -200,13 +254,46 @@ let private satisfiesRequirement (req: SdkRequirement) (installedVersion: string
       let prereleaseOk = req.AllowPrerelease || Option.isNone candPre
       prereleaseOk
       && sdkVersionAtLeast req.Version installedVersion
-      && match req.RollForward with
-         | "disable" -> sdkVersionEquals req.Version installedVersion
-         | "patch" | "latestPatch" -> sameReleasePrefix 3 req.Version installedVersion
-         | "feature" | "latestFeature" -> sameReleasePrefix 2 req.Version installedVersion
-         | "minor" | "latestMinor" -> sameReleasePrefix 1 req.Version installedVersion
-         | "major" | "latestMajor" -> true
-         | _ -> true
+      && RollForwardPolicy.satisfiesWindow (RollForwardPolicy.parse req.RollForward) req.Version installedVersion
+
+/// Total order over SDK version strings — release tuple first (numeric,
+/// padded to 4 components), then prerelease tag (a stable release always
+/// outranks any prerelease at the same release tuple). This is the ONE
+/// "pick the newest" comparator for this module; a second hand-rolled sort
+/// predicate here is exactly how #139 shipped (an inverted `List.sortWith`
+/// comparator silently picked the OLDEST eligible SDK instead of the newest).
+let private compareSdkVersion (a: string) (b: string) =
+  match tryParseSdkVersion a, tryParseSdkVersion b with
+  | None, None -> 0
+  | None, Some _ -> -1
+  | Some _, None -> 1
+  | Some (aRel, aPre), Some (bRel, bPre) ->
+    let relCmp = compareNumList (padTo 4 aRel) (padTo 4 bRel)
+    if relCmp <> 0 then relCmp
+    else
+      match aPre, bPre with
+      | None, None -> 0
+      | Some _, None -> -1
+      | None, Some _ -> 1
+      | Some p, Some q -> comparePreParts p q
+
+/// The newest version in a list of SDK version strings, or None when the
+/// list is empty. Malformed entries sort lowest rather than being dropped,
+/// so a genuinely-newest well-formed version is still found.
+let newestSdkVersion (versions: string list) : string option =
+  match versions with
+  | [] -> None
+  | v :: vs -> Some (vs |> List.fold (fun best cand -> if compareSdkVersion cand best > 0 then cand else best) v)
+
+/// The newest installed SDK that satisfies the global.json pin under its
+/// rollForward policy — the decision `sagefs check` (and, in spirit, the real
+/// `dotnet` resolver) makes. Pure over (requirement, installed versions), so
+/// it is property-testable across the whole policy/version matrix. None when
+/// nothing installed satisfies the pin.
+let selectSatisfyingSdk (req: SdkRequirement) (installed: string list) : string option =
+  installed
+  |> List.filter (satisfiesRequirement req)
+  |> newestSdkVersion
 
 let private sdkDownloadUrlMajorMinor (pin: string) =
   match tryParseSdkVersion pin with
@@ -232,12 +319,11 @@ let sdkCheckFromInputs
   let installed = installedLines |> List.choose tryParseSdkListLine |> List.distinct
   match requirement with
   | None ->
-    match installed with
-    | [] ->
+    match installed |> newestSdkVersion with
+    | None ->
       fail ".NET SDK" "No .NET SDKs are installed"
             "Install the .NET SDK from https://dotnet.microsoft.com/download/dotnet"
-    | versions ->
-      let newest = versions |> List.sortWith (fun a b -> if sdkVersionAtLeast a b then -1 else 1) |> List.head
+    | Some newest ->
       pass ".NET SDK" (sprintf ".NET SDK %s installed" newest)
   | Some req ->
     match isValidSdkPin req.Version with
@@ -245,28 +331,38 @@ let sdkCheckFromInputs
       fail ".NET SDK"
            (sprintf "global.json sdk.version '%s' is not a valid SDK version (expected e.g. 11.0.100)" req.Version)
            (sprintf "Fix the sdk.version in global.json to a full version such as 11.0.100, or remove it to use the latest installed SDK (%s)."
-                    (match installed with v :: _ -> v | [] -> "none installed"))
+                    (match installed |> newestSdkVersion with Some v -> v | None -> "none installed"))
     | true ->
-      let eligible =
+      // Prerelease policy narrows which installed SDKs are even in play
+      // before rollForward is considered — kept separate from
+      // `satisfiesRequirement` here only so the "nothing at all is eligible"
+      // failure can name that distinctly from "something is eligible but
+      // none of it satisfies the pin's rollForward window".
+      let prereleaseEligible =
         installed
         |> List.filter (fun v ->
           match tryParseSdkVersion v with
           | Some (_, pre) -> req.AllowPrerelease || Option.isNone pre
           | None -> false)
-      match eligible with
+      match prereleaseEligible with
       | [] ->
         fail ".NET SDK"
              (sprintf "No installed .NET SDK satisfies global.json (pin %s, rollForward %s)" req.Version req.RollForward)
              (sdkInstallGuidance req)
       | candidates ->
-        let selected = candidates |> List.sortWith (fun a b -> if sdkVersionAtLeast a b then -1 else 1) |> List.head
-        let satisfied = satisfiesRequirement req selected
-        match satisfied with
-        | false ->
+        // The newest candidate that ACTUALLY satisfies the pin under its
+        // rollForward window — never "the newest candidate overall, tested
+        // once" (that pattern is what #139 shipped: an overall-newest pick
+        // outside the rollForward window fails the check even when a lower,
+        // in-window SDK would have satisfied it and is what `dotnet` itself
+        // resolves).
+        match selectSatisfyingSdk req candidates with
+        | None ->
+          let closest = candidates |> newestSdkVersion |> Option.defaultValue "none"
           fail ".NET SDK"
-               (sprintf "Required .NET SDK %s (global.json, rollForward %s) is not installed; newest eligible is %s" req.Version req.RollForward selected)
+               (sprintf "Required .NET SDK %s (global.json, rollForward %s) is not installed; newest eligible is %s" req.Version req.RollForward closest)
                (sdkInstallGuidance req)
-        | true ->
+        | Some selected ->
           match targetFrameworkMajor with
           | Some tfmMajor ->
             let selectedMajor =
