@@ -704,11 +704,18 @@ let isNoiseProjectPath (path: string) : bool =
 let discoverProjects (workingDir: string) : DiscoveredProjects =
   let projects =
     try
-      Directory.EnumerateFiles(workingDir, "*.fsproj", SearchOption.AllDirectories)
-      |> Seq.map (fun p -> Path.GetRelativePath(workingDir, p))
-      |> Seq.filter (isNoiseProjectPath >> not)
-      |> Seq.sortBy (fun p -> (p.Split([| '/'; '\\' |]).Length, p.ToLowerInvariant()))
-      |> Seq.toList
+      // Pruned BEFORE descending (SafeDirectoryWalk), not filtered after a
+      // full recursive `EnumerateFiles(_, _, AllDirectories)` — that walked
+      // (and, given a directory symlink cycle, never stopped walking)
+      // exactly the noise this was supposed to skip. A live process dump
+      // caught this walk following Wine's `dosdevices/z:` -> `/` back into
+      // itself when the daemon was started from $HOME.
+      let result = SafeDirectoryWalk.walkFiles workingDir (fun p -> p.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase)) isNoiseProjectPath SafeDirectoryWalk.Bounds.standard
+      if result.Truncated then
+        Log.warn "[Discovery] Project walk in %s hit its depth/entry bound — some projects may be missing. %s is not a project tree if this keeps happening." workingDir workingDir
+      result.Files
+      |> List.map (fun p -> Path.GetRelativePath(workingDir, p))
+      |> List.sortBy (fun p -> (p.Split([| '/'; '\\' |]).Length, p.ToLowerInvariant()))
     with ex ->
       Log.warn "[Discovery] Project enumeration failed in %s: %s (%s)\n%s" workingDir ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       []

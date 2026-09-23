@@ -109,17 +109,43 @@ let shouldPruneDir (root: string) (dir: string) (hasCheckoutMarker: string -> bo
 /// one inotify watch per file inside it. Used both to seed a pruned watch
 /// and, on its own, as a pure-enough-to-test decision anyone can call
 /// against a real directory tree.
+///
+/// Same defenses as `SafeDirectoryWalk.walkFiles`, and the same reason: a
+/// live process dump caught a directory symlink cycle (Wine's
+/// `dosdevices/z:` -> `/`, found under `~/.local/share/Steam/...`) sending
+/// a walk into unbounded recursion when the daemon was started from
+/// $HOME — this function is the daemon's OWN fallback-watcher seed
+/// (`startPrunedWatcher`, rooted at the daemon's CWD), so it has the exact
+/// same exposure `SafeDirectoryWalk` was built to close. A candidate
+/// subdirectory that is itself a symlink is never descended into, and
+/// every directory's canonical path is tracked across the whole walk so a
+/// non-symlink cycle (two logical paths landing on the same real
+/// directory) can't loop either. `MaxWatchableEntries` bounds the total
+/// directories examined — silently, matching this function's existing
+/// no-truncation-reporting contract, rather than growing forever the way
+/// `Directory.EnumerateFiles(_, _, AllDirectories)` would.
+[<Literal>]
+let MaxWatchableEntries = 50_000
+
 let watchableDirs (root: string) (hasCheckoutMarker: string -> bool) : string list =
   let rootFull = Path.GetFullPath root
+  let visited = Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase)
+  let mutable examined = 0
   let rec walk (dir: string) : string list =
-    let children =
-      try
-        Directory.GetDirectories dir
-        |> Array.filter (fun sub -> not (shouldPruneDir rootFull sub hasCheckoutMarker))
-      with ex ->
-        Log.debug "[FileWatcher] Cannot enumerate %s: %s" dir ex.Message
-        [||]
-    dir :: (children |> Array.toList |> List.collect walk)
+    let full = try Path.GetFullPath dir with _ -> dir
+    match examined >= MaxWatchableEntries, visited.Add full with
+    | true, _ | _, false -> []
+    | false, true ->
+      examined <- examined + 1
+      let children =
+        try
+          Directory.GetDirectories dir
+          |> Array.filter (fun sub ->
+            not (SafeDirectoryWalk.isSymlinkDir sub) && not (shouldPruneDir rootFull sub hasCheckoutMarker))
+        with ex ->
+          Log.debug "[FileWatcher] Cannot enumerate %s: %s" dir ex.Message
+          [||]
+      dir :: (children |> Array.toList |> List.collect walk)
   match Directory.Exists rootFull with
   | true -> walk rootFull
   | false -> []

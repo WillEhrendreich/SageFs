@@ -4197,11 +4197,16 @@ module McpTools =
   let private discoverProjects (dir: string) : string list =
     let walked =
       try
-        Directory.EnumerateFiles(dir, "*.fsproj", SearchOption.AllDirectories)
-        |> Seq.filter McpAdapter.isProjectFile
-        |> Seq.filter (McpAdapter.isNoiseProjectPath >> not)
-        |> Seq.map (fun p -> Path.GetRelativePath(dir, p))
-        |> Seq.toList
+        // Pruned BEFORE descending (SafeDirectoryWalk), not filtered after
+        // the fact — the "unbounded recursive walk" this doc comment
+        // already warned about wasn't just a too-many-results problem: a
+        // directory symlink cycle (found live: Wine's `dosdevices/z:` ->
+        // `/`) makes `EnumerateFiles(_, _, AllDirectories)` never finish.
+        let result = SafeDirectoryWalk.walkFiles dir McpAdapter.isProjectFile McpAdapter.isNoiseProjectPath SafeDirectoryWalk.Bounds.standard
+        if result.Truncated then
+          Log.warn "[discoverProjects] walk in %s hit its depth/entry bound — some projects may be missing" dir
+        result.Files
+        |> List.map (fun p -> Path.GetRelativePath(dir, p))
       with _ -> []
     let declared =
       try

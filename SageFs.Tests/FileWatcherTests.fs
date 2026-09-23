@@ -344,6 +344,30 @@ let watchableDirsTests = testList "watchableDirs" [
         |> Flip.Expect.isFalse "nothing under the nested checkout is watched"
       finally
         Directory.Delete(root, true)
+
+    testCase "WHY — watchableDirs — a symlink cycle terminates instead of recursing forever (the Wine z: incident, minimized)" <| fun () ->
+      let root = Directory.CreateTempSubdirectory("sagefs-watchtree-cycle-").FullName
+      try
+        let a = Path.Combine(root, "a")
+        Directory.CreateDirectory a |> ignore
+        let canMakeSymlinks =
+          try
+            Directory.CreateSymbolicLink(Path.Combine(a, "b"), a) |> ignore
+            true
+          with _ -> false
+        match canMakeSymlinks with
+        | false -> skiptest "this environment cannot create directory symlinks"
+        | true ->
+          let noMarker (_: string) = false
+          // The whole point: this call returns at all.
+          let found = watchableDirs root noMarker |> List.map Path.GetFullPath |> Set.ofList
+          found |> Flip.Expect.contains "the root is still watched" (Path.GetFullPath root)
+          found |> Flip.Expect.contains "a is still watched" (Path.GetFullPath a)
+          found
+          |> Set.exists (fun d -> d.Contains(Path.Combine("a", "b")))
+          |> Flip.Expect.isFalse "the symlink itself is never descended into"
+      finally
+        Directory.Delete(root, true)
   ]
 
 // ── Nested checkouts ────────────────────────────────────────────────────

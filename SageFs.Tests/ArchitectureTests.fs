@@ -1046,7 +1046,16 @@ let fileSizeBudgets =
       // large-repo auto-discovery instead of silently hanging. Deliberate,
       // reviewed fixes, not silent accretion. Ratchet back DOWN when this
       // file is split; never bump to paper over drift.
-      "SageFs/Mcp.fs", 4337
+      // 4337 -> 4342: the private `discoverProjects` (cohort integration
+      // project scan) now walks through `SafeDirectoryWalk.walkFiles`
+      // instead of `Directory.EnumerateFiles(_, _, AllDirectories)` — a
+      // directory symlink cycle (found live: Wine's `dosdevices/z:` -> `/`
+      // under `~/.local/share/Steam/...`) sent that walk into unbounded
+      // recursion, which is what was eating the daemon's own RSS at
+      // ~2GB/minute with zero sessions. Deliberate, reviewed fix, not
+      // silent accretion. Ratchet back DOWN when this file is split; never
+      // bump to paper over drift.
+      "SageFs/Mcp.fs", 4342
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
