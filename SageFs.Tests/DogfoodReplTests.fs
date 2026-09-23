@@ -331,10 +331,7 @@ let fsharpCoreIdentityOutcomeTests =
     }
 
     // A real regression check against THIS machine's actual installed SDK, not an assumption: the
-    // reporter's own repro, evaluated through a real session against a real compiled fixture. Passing here
-    // proves the specific value is correct on this machine's toolset FSharp.Core TODAY; it is not
-    // (and cannot be, until the identity gap below closes) a guarantee across every machine's SDK build —
-    // see the pending identity case for why.
+    // reporter's own repro, evaluated through a real session against a real compiled fixture.
     testTask "the project's own compiled `task { use ... }` code computes the correct value on this machine's installed SDK" {
       do!
         withFSharpCoreSession (fun proxy ->
@@ -345,67 +342,100 @@ let fsharpCoreIdentityOutcomeTests =
           })
     }
 
-    // KNOWN GAP, #141. NOT YET FIXED — deliberately `ptestCase` (excluded from the default/acceptance
-    // run) rather than a silent skip: this asserts the real, currently-missing outcome, and stays visible
-    // in every test listing as PENDING rather than vanishing. What SHIPPED today
-    // (IsolatedFsiSession.detectFSharpCoreMismatchWith) is DETECTION — an honest, actionable warning
-    // logged at warmup when the project's and host's FSharp.Core differ — not a resolution: nothing in
-    // this change makes the loaded FSharp.Core identity change. Why: the isolated host process already
-    // has ITS OWN FSharp.Core loaded (to run FSI/FCS/FsiHost.dll itself) by the time any `-r:` reference
-    // is processed, and the CLR's default AssemblyLoadContext resolves a second request for the same
-    // simple name to the ALREADY-loaded copy regardless of what `-r:` path was given — verified live: the
-    // FSharp.Core the session actually resolves is `~/.SageFs/hosts/<sdk>/bin/FSharp.Core.dll` even though
-    // the project's `-r:` list carries its own NuGet-restored copy at a different path. A safe fix needs
-    // one of: (a) proving a wholesale FSharp.Core.dll swap in a per-session private host copy never
-    // touches a member FsiHost.dll/FSharp.Compiler.Service depend on that the project's copy lacks (risky:
-    // the two copies are NOT simply superset/subset — the host's copy has FEWER `Using` overloads than the
-    // project's own, per #141's own diagnosis, so a swap could just as easily break the host's own eval
-    // machinery as fix the project's code), or (b) an IL-level IDENTITY REWRITE of the project's
-    // referenced assemblies (Mono.Cecil, already a dependency here — the exact technique
-    // FsiHostBuild.renameAssembly already uses to keep the agent's own Harmony from colliding with a
-    // user's Lib.Harmony) so the project's FSharp.Core loads under a name nothing else in the process
-    // uses, leaving the host's own FSharp.Core completely untouched. Flip this to `testCase` once one of
-    // those lands and this assertion holds for real.
+    // #141, FIXED — IsolatedFsiSession.fixShadowCopiedFSharpCoreReferences, wired in from
+    // ActorCreation.createActorImmediate right after ShadowCopy.shadowCopySolution. `Repro.fsharpCoreLocation`
+    // (typeof<int option>.Assembly.Location, called from INSIDE the project's own compiled code, not typed
+    // bare at the prompt — see the comment on the next test for why bare typed-in code can never be this
+    // probe) now resolves to the project's own identity (a `SageFs.ProjectFSharpCore`-renamed copy placed
+    // beside the shadow-copied assembly), not the isolated host's shared cache.
     //
-    // Root cause of the ASYMMETRY #141 itself reports ("the same construct typed into the session
-    // works"), checked against a live hypothesis rather than assumed (Will's own instinct, relayed
-    // secondhand, was that a SageFs source-rewrite layer — `use` turned into `let` before eval — used to
-    // paper over this and stopped reaching compiled code once sessions became isolated).
+    // Getting here took three real, live-verified findings, kept here because the next person hitting a
+    // variant of this bug will want them:
+    //   1. Exposing the renamed FSharp.Core as an explicit `-r:` reference corrupts the WHOLE session's
+    //      type-checking (`Some 42;;`, typed into the same session, crashed FCS internally with
+    //      `convMethodRef: could not bind to method`). `--lib:` (a search directory, not a compiler
+    //      reference) avoids this — the CLR resolves it lazily, invisible to FCS's own type-checking.
+    //   2. A rewrite applied late, on the already-flattened `fsiArgs: string list` inside
+    //      `IsolatedFsiSession.start`, is bypassed: `ShadowCopy.shadowCopySolution` re-derives every
+    //      project's own assembly from its TRUE original `bin/` output for IL coverage instrumentation,
+    //      operating on the rich `Solution` record — a step `start` cannot see. Fixed by moving the rewrite
+    //      to run ON the shadow copy itself, in `ActorCreation.fs`, before anything downstream can
+    //      re-derive from the original.
+    //   3. Even with the rewrite landing on the right file, `Repro.fsharpCoreLocation()` STILL returned the
+    //      host's path when called normally — while `MethodInfo.Invoke` on the EXACT SAME `MethodInfo`,
+    //      in the SAME submission, returned the correct rewritten path. Cause: F#'s cross-module inlining.
+    //      Every F# assembly embeds `FSharpOptimizationCompressedData(B)`; FCS reads it to inline small
+    //      functions from a referenced assembly directly into the calling submission, RECOMPILED there
+    //      against FSI's own ambient FSharp.Core. `ProjectFSharpCoreIdentity.rewriteReferenceWith` strips
+    //      that resource (leaving `FSharpSignatureCompressedData*` — still needed to type-check calls into
+    //      the assembly — untouched), forcing every call into a rewritten assembly to be a real method
+    //      call FCS cannot recompile away. `Repro.useInTask`'s whole resumable-code state machine was
+    //      never at risk of this specific issue — far too large to be a cross-module inlining candidate —
+    //      but a project's smaller helper functions could easily have been, so the fix covers both.
     //
-    // The rewrite layer is real: `SageFs.FsiRewrite.rewriteInlineUseStatements` (SageFs.Core/FsiRewrite.fs)
-    // does exactly that, line-by-line string substitution rather than an AST transform (why an earlier grep
-    // for LetOrUse/SynBinding here came back empty — wrong search shape for a text-level rewrite). It runs
-    // at two call sites: SageFs.Core/Middleware/FsiCompatibility.fs:11 (the eval middleware, for code
-    // TYPED INTO the session) and SageFs.Core/AppState.fs:779 (file contents before `#load`). Both operate
-    // on SUBMITTED SOURCE TEXT ONLY — a project's own already-compiled DLL, loaded via `-r:`, has no source
-    // text for either call site to ever see, so the rewrite categorically cannot reach it, isolated
-    // sessions or not. A Harmony patch reintroducing this rewrite for compiled code would be solving a
-    // problem it was never positioned to solve.
+    // Root cause of the ASYMMETRY #141 itself reports ("the same construct typed into the session works"),
+    // checked against a live hypothesis rather than assumed (Will's own instinct, relayed secondhand, was
+    // that a SageFs source-rewrite layer — `use` turned into `let` before eval — used to paper over this
+    // and stopped reaching compiled code once sessions became isolated). The rewrite layer is real —
+    // `SageFs.FsiRewrite.rewriteInlineUseStatements` (SageFs.Core/FsiRewrite.fs) does exactly that,
+    // line-by-line string substitution rather than an AST transform — but it operates on SUBMITTED SOURCE
+    // TEXT ONLY, called from the eval middleware and from #load'd file contents; a project's own
+    // already-compiled DLL has no source text for either call site to ever see, so the rewrite categorically
+    // could not have explained this. (It has since been removed entirely — see the next test.) What
+    // actually explains "typed-in works, compiled sometimes doesn't": code typed into the session is
+    // compiled BY FSI, against whatever FSharp.Core FSI itself is already running — call site and callee
+    // are the same assembly by construction. The project's DLL was compiled ahead of time against a
+    // DIFFERENT FSharp.Core and only meets the host's build at runtime. Identity, end to end.
     //
-    // What actually explains "typed-in works, compiled sometimes doesn't" needs neither the rewrite nor a
-    // Debug/Release split: code typed into the session is compiled BY FSI, AGAINST WHATEVER FSharp.Core FSI
-    // ITSELF is already running — call site and callee are the same assembly by construction, so it works
-    // no matter which build that is. The project's DLL was compiled AHEAD OF TIME against a DIFFERENT
-    // FSharp.Core, has that build's method signatures baked into its IL, and meets the host's (possibly
-    // different) build only at runtime. Identity, end to end — not a compilation-mode difference.
-    //
-    // The Debug/Release finding below is real and still worth knowing, but answers a narrower question:
-    // WHICH compiled configurations are exposed, not why compiled differs from typed-in at all. A DEBUG
-    // build (`dotnet build` with no `-c`, exactly #141's own repro command) emits a REAL `callvirt` to
-    // `TaskBuilderBase.Using<...>` — confirmed by decompiling this fixture's own Debug output
-    // (SageFs.Tests/fixtures/FSharpCoreIdentityFixture/bin/Debug/net10.0/) and finding exactly that call,
-    // with exactly the ResumableCode-typed signature #141's error names. A RELEASE build of the SAME
-    // source fully inlines the resumable-code state machine and calls no such method at all (confirmed the
-    // same way against bin/Release/ — zero occurrences of "Using" in the decompiled IL). Practical,
-    // ship-today workaround for users hitting #141: build the project with `dotnet build -c Release`.
-    ptestCase "PENDING (#141) — typeof<int option>.Assembly.Location must be the project's own FSharp.Core, not the isolated host's" <| fun _ ->
-      (withFSharpCoreSession (fun proxy ->
-        task {
-          match evalIn proxy "fscore-identity" "Repro.fsharpCoreLocation ();;" with
-          | Error err -> failtestf "eval failed: %s" (SageFsError.describe err)
-          | Ok output ->
-            let normalized = output.Replace('\\', '/')
-            normalized.Contains "/.SageFs/hosts/"
-            |> Expect.isFalse (sprintf "FSharp.Core must resolve to the project's own copy, not the shared isolated-host cache, got: %s" output)
-        })).Result
+    // Separately real and still worth knowing: a DEBUG build (`dotnet build` with no `-c`, exactly #141's
+    // own repro command) emits a REAL `callvirt` to `TaskBuilderBase.Using<...>` — confirmed by decompiling
+    // this fixture's own Debug output and finding exactly that call, with exactly the ResumableCode-typed
+    // signature #141's error names. A RELEASE build of the same source fully inlines the resumable-code
+    // state machine and calls no such method at all. Independent of the identity fix above: even a
+    // correctly-resolved FSharp.Core wouldn't matter for a Release build, since there's no `Using` call to
+    // resolve against anything.
+    testTask "WHY — typeof<int option>.Assembly.Location, called from the project's OWN compiled code, resolves to the project's own FSharp.Core, because #141 is exactly this identity leaking to the host's copy instead" {
+      do!
+        withFSharpCoreSession (fun proxy ->
+          task {
+            match evalIn proxy "fscore-identity" "Repro.fsharpCoreLocation ();;" with
+            | Error err -> failtestf "eval failed: %s" (SageFsError.describe err)
+            | Ok output ->
+              let normalized = output.Replace('\\', '/')
+              normalized.Contains "/.SageFs/hosts/"
+              |> Expect.isFalse (sprintf "FSharp.Core must resolve to the project's own copy, not the shared isolated-host cache, got: %s" output)
+          })
+    }
+
+    // A bare `typeof<option<int>>.Assembly.Location;;`, TYPED AT THE PROMPT (the reporter's own literal
+    // probe, and the coordinator's own restated bar) is a DIFFERENT question from the test above, and one
+    // no identity rewrite can ever flip: that expression is compiled BY FSI, from source text FSI itself
+    // is evaluating — it never touches the project's referenced assembly at all, so it always resolves
+    // against whatever FSharp.Core FSI itself booted with. This is not a gap; it's what "typed-in code
+    // shares FSI's own identity by construction" (the root-cause finding two tests up) means concretely.
+    // What this test actually proves is the coordinator's real ask: that the host's OWN machinery —
+    // ordinary type-checking of typed-in expressions — still works correctly in a session where the
+    // FSharp.Core identity rewrite is ACTIVE (this fixture has a genuine mismatch every time this session
+    // is created), because failure mode 1 above (exposing the rewrite via `-r:`) proved that's a real way
+    // to break it, not a hypothetical.
+    testTask "WHY — plain typed-in expressions (Some, a list literal, arithmetic) still type-check correctly in a session where the FSharp.Core identity rewrite is active, because exposing a renamed FSharp.Core via -r: (the wrong way to do this) proved this is not automatic" {
+      do!
+        withFSharpCoreSession (fun proxy ->
+          task {
+            match evalIn proxy "fscore-typecheck-option" "Some 42;;" with
+            | Error err -> failtestf "'Some 42;;' eval failed: %s" (SageFsError.describe err)
+            | Ok output -> output |> Expect.stringContains "a plain option value still type-checks and prints" "Some 42"
+            match evalIn proxy "fscore-typecheck-list" "[1;2;3];;" with
+            | Error err -> failtestf "'[1;2;3];;' eval failed: %s" (SageFsError.describe err)
+            | Ok output -> output |> Expect.stringContains "a plain list literal still type-checks and prints" "[1; 2; 3]"
+            match evalIn proxy "fscore-typecheck-task-use" "(task { use s = new System.IO.MemoryStream() in return s.Length }).Result;;" with
+            | Error err -> failtestf "typed-in 'task { use ... }' eval failed: %s" (SageFsError.describe err)
+            | Ok output ->
+              // Genuinely calls TaskBuilderBase.Using now (the use->let rewrite that used to dodge this
+              // was removed as unnecessary and silently dropping disposal from user code) — proving it
+              // still works is exactly proving typed-in code's own FSharp.Core identity (FSI's own) is
+              // self-consistent, unaffected by the project's rewritten copy living alongside it.
+              output |> Expect.stringContains "typed-in task { use ... } computes the right value (0L, an empty stream)" "0L"
+          })
+    }
   ]

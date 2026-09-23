@@ -133,6 +133,23 @@ let createActorImmediate a =
       a.Logger.LogInfo (sprintf "  IL coverage: %d probes across %d assemblies in %.0fms" totalProbes maps.Length sw.Elapsed.TotalMilliseconds)
       Some dir, shadowSln, maps
 
+  // #141: for an Isolated session, the host already has ITS OWN FSharp.Core loaded to run FSI/FCS itself —
+  // a project's own assembly whose FSharp.Core differs from the host's (same version, commonly, different
+  // build) silently resolves against the HOST's copy at runtime and fails on any member the host's build
+  // lacks. Fixed HERE, on the shadow copy `shadowCopySolution` just produced — the ONE file every
+  // downstream step (namespace scanning below, coverage instrumentation above, FSI's own `-r:` loading)
+  // reads from — because a later fix on the flattened `fsiArgs` string list inside
+  // `IsolatedFsiSession.start` is provably too late: something upstream always wins the race and re-derives
+  // the loaded bytes from the project's original build output before that code ever runs (see
+  // `IsolatedFsiSession.fixShadowCopiedFSharpCoreReferences`'s own doc comment for the live evidence).
+  let sln =
+    match a.FsiKind, shadowDir with
+    | SageFs.SessionKinds.Isolated, Some dir ->
+      match IsolatedFsiSession.fixShadowCopiedFSharpCoreReferences a.Logger a.LoadConfig.WorkingDir sln with
+      | Some fixedShadowDir -> { sln with LibPaths = fixedShadowDir :: sln.LibPaths }
+      | None -> sln
+    | _ -> sln
+
   AspireSetup.configureAspireIfNeeded a.Logger sln
 
   let customData = a.InitFunctions |> Seq.map (fun fn -> fn sln) |> Map.ofSeq

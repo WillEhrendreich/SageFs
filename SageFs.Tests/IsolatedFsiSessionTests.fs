@@ -107,4 +107,36 @@ let tests =
         ProjectOutputEnvironmentVariable |> Expect.equal "SAGEFS_PROJECT_OUTPUT, verbatim" "SAGEFS_PROJECT_OUTPUT"
       }
     ]
+
+    // #141 follow-up: the IL-level identity rewrite (see ProjectFSharpCoreIdentity's own doc comment for
+    // why it isn't wired into `start` yet). rewriteReferenceWith is the one piece proven correct in
+    // isolation — these tests lock that proof in against a REAL compiled assembly, not a synthetic one,
+    // so the primitive stays trustworthy for whoever picks up centralizing it inside ShadowCopy.
+    testList "ProjectFSharpCoreIdentity.rewriteReferenceWith" [
+      test "WHY — retargets an assembly's FSharp.Core reference to the new name, because Cecil resolves every TypeRef through that ONE shared AssemblyNameReference object" {
+        // This very test assembly is a real, F#-compiled assembly that references FSharp.Core — no need
+        // for a synthetic input.
+        let testAssemblyPath = System.Reflection.Assembly.GetExecutingAssembly().Location
+        let originalBytes = System.IO.File.ReadAllBytes testAssemblyPath
+        match ProjectFSharpCoreIdentity.rewriteReferenceWith (fun bytes -> Mono.Cecil.AssemblyDefinition.ReadAssembly(new System.IO.MemoryStream(bytes))) originalBytes with
+        | None -> failtest "the test assembly references FSharp.Core (it's an F# project) — rewriteReferenceWith must find it"
+        | Some rewrittenBytes ->
+          use rewritten = Mono.Cecil.AssemblyDefinition.ReadAssembly(new System.IO.MemoryStream(rewrittenBytes))
+          let stillReferencesOriginal =
+            rewritten.MainModule.AssemblyReferences
+            |> Seq.exists (fun r -> r.Name = "FSharp.Core")
+          let referencesRenamed =
+            rewritten.MainModule.AssemblyReferences
+            |> Seq.exists (fun r -> r.Name = ProjectFSharpCoreIdentity.RewrittenName)
+          stillReferencesOriginal |> Expect.isFalse "the original FSharp.Core reference must be gone, not just supplemented"
+          referencesRenamed |> Expect.isTrue "the renamed reference must be present"
+      }
+
+      test "None for an assembly with no FSharp.Core reference at all (a plain CLR assembly)" {
+        let corlibPath = typeof<obj>.Assembly.Location
+        let bytes = System.IO.File.ReadAllBytes corlibPath
+        ProjectFSharpCoreIdentity.rewriteReferenceWith (fun b -> Mono.Cecil.AssemblyDefinition.ReadAssembly(new System.IO.MemoryStream(b))) bytes
+        |> Expect.isNone "System.Private.CoreLib has no FSharp.Core reference to rewrite"
+      }
+    ]
   ]
