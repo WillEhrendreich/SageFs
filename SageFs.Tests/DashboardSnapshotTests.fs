@@ -601,7 +601,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
       renderDaemonHealth
         { Version = "1.2.3"; MemoryMB = 0; UptimeLabel = "0s"
           OverallHealth = Features.OverallHealth.Healthy
-          SessionCount = 0; SessionSummaries = []; TestsPassed = None; TestsFailed = None; Anomalies = [] }
+          SessionCount = 0; SessionSummaries = []; TestsPassed = None; TestsFailed = None; Anomalies = []; GcDumpNote = None }
     let html = renderMainContent { mkSnap "1.2.3" with DaemonHealth = health } |> renderNode
     html |> Expect.stringContains "main content shows the version in the health bar" "1.2.3"
   }
@@ -1237,7 +1237,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
       renderDaemonHealth
         { Version = "1.2.3"; MemoryMB = 0; UptimeLabel = "0s"
           OverallHealth = Features.OverallHealth.Healthy
-          SessionCount = 0; SessionSummaries = []; TestsPassed = None; TestsFailed = None; Anomalies = [] }
+          SessionCount = 0; SessionSummaries = []; TestsPassed = None; TestsFailed = None; Anomalies = []; GcDumpNote = None }
     let snap = { (mkSnap "1.2.3" "s1" "C:\\" "ready") with DaemonHealth = health }
     let html = renderMainContent snap |> renderNode
     html |> Expect.stringContains "version should appear" "1.2.3"

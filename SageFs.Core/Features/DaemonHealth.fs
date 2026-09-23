@@ -49,6 +49,10 @@ type HealthSnapshot = {
   /// be degraded with every session Ready — a wedged request thread, or its
   /// RSS eating the machine — and before this that state was invisible.
   Anomalies: HealthAnomaly.Verdict list
+  /// The evidence a `WorkerRss` `Broken` verdict tried to capture this
+  /// daemon run — `None` until either a capture has been attempted or one
+  /// was skipped for lacking headroom. See `GcDumpWatch`.
+  GcDumpOutcome: GcDumpCapture.CaptureOutcome option
 }
 
 module DaemonHealth =

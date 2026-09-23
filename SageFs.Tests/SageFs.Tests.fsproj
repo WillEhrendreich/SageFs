@@ -195,6 +195,7 @@
         <Compile Include="FsiSessionContractTests.fs" />
         <Compile Include="McpWireProtocolTests.fs" />
          <Compile Include="HttpApiIntegrationTests.fs" />
+         <Compile Include="DaemonRssReturnsToBaselineTests.fs" />
          <Compile Include="McpStdioBridgeE2ETests.fs" />
          <Compile Include="WarmupContextTests.fs" />
          <Compile Include="WarmupOpenReplayTests.fs" />
@@ -454,6 +455,12 @@
         <Compile Include="ResolveSessionStatusReconciliationTests.fs" />
         <Compile Include="HealthAnomalyTests.fs" />
         <Compile Include="HealthAnomalySimDstTests.fs" />
+        <Compile Include="MachineMemoryTests.fs" />
+        <Compile Include="GcDumpCaptureTests.fs" />
+        <Compile Include="MemorySupervisorTests.fs" />
+        <Compile Include="MemoryShedSimTests.fs" />
+        <Compile Include="ExpensiveWorkLeaseTests.fs" />
+        <Compile Include="LeaseSimTests.fs" />
         <Compile Include="ScratchPadTests.fs" />
         <Compile Include="EvalRippleTests.fs" />
         <Compile Include="EvalLensTests.fs" />

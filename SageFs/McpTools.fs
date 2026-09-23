@@ -74,6 +74,10 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   | SageFs.SageFsError.PortInUse _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.SseConnectionError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
   | SageFs.SageFsError.SupervisorBusy _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
+  // Same admission-refused shape as SupervisorBusy — the daemon said no
+  // because it's overloaded (machine memory, not mailbox depth), not
+  // because the request itself was wrong.
+  | SageFs.SageFsError.MemoryPressureRefused _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
   | SageFs.SageFsError.JsonParseError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   // A cohort command the caller wasn't permitted to run given the current
   // cohort state/authority (not the claim holder, not the conductor, scope

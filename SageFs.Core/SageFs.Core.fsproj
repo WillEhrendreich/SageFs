@@ -154,8 +154,13 @@
         <Compile Include="Features\SessionScribe.fs" />
         <Compile Include="Features\MessageJournal.fs" />
         <Compile Include="Features\TestNarration.fs" />
+        <Compile Include="Features\MachineMemory.fs" />
         <Compile Include="Features\HealthAnomaly.fs" />
         <Compile Include="Features\HealthWatch.fs" />
+        <!-- After HealthAnomaly/HealthWatch: the RSS-Broken evidence capture,
+             gated on the verdict those two produce. -->
+        <Compile Include="Features\GcDumpCapture.fs" />
+        <Compile Include="Features\GcDumpWatch.fs" />
         <Compile Include="Features\DaemonHealth.fs" />
         <Compile Include="Features\ScratchPad.fs" />
         <Compile Include="Features\EvalRipple.fs" />
@@ -237,6 +242,19 @@
         <Compile Include="WarmupSupervision.fs" />
         <Compile Include="WorkerEventGuard.fs" />
         <Compile Include="WorkerHealthProbe.fs" />
+        <!-- The shared three-level pressure vocabulary MemorySupervisor and
+             the expensive-work lease both read. -->
+        <Compile Include="MemoryPressure.fs" />
+        <!-- After WorkerHealthProbe: another pure supervisory decision, this
+             one over memory pressure rather than worker liveness. -->
+        <Compile Include="MemorySupervisor.fs" />
+        <!-- After MemorySupervisor: the stateful wrapper that persists its
+             PressureLevel across calls (same split as HealthWatch/HealthAnomaly). -->
+        <Compile Include="Features\MemoryPressureWatch.fs" />
+        <!-- The coordination point for expensive, memory-costly work
+             (session create/warmup, rebuild, full build, test run, run app). -->
+        <Compile Include="ExpensiveWorkLease.fs" />
+        <Compile Include="Features\LeaseWatch.fs" />
         <Compile Include="ProcessEnvironment.fs" />
         <Compile Include="SessionBuild.fs" />
         <Compile Include="SessionManager.fs" />

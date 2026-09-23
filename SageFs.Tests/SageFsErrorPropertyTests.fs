@@ -141,6 +141,7 @@ let private genSageFsError =
       let! capacity = Gen.choose (1, 1000)
       return SageFsError.SupervisorBusy(pending, capacity)
     }
+    genNonEmptyString |> Gen.map SageFsError.MemoryPressureRefused
   ]
 
 // ── Reflection helpers ──
@@ -287,12 +288,12 @@ let sageFsErrorPropertyTests =
           1)
 
     // 9. DU completeness guard — detect new cases
-    testCase "SageFsError DU has exactly 39 cases" <| fun _ ->
+    testCase "SageFsError DU has exactly 40 cases" <| fun _ ->
       allDuCaseInfos
       |> Array.length
       |> Expect.equal
         "SageFsError case count changed — update generators and property tests"
-        39
+        40
 
     // 10. Unexpected wraps exception message
     testPropertyWithConfig propConfig "Unexpected description contains exception message" <|

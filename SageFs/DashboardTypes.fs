@@ -551,6 +551,10 @@ type DaemonHealthView = {
   /// 412 (±38), now 51700 ..."), so the panel says which signal and by how
   /// much rather than just turning a dot yellow.
   Anomalies: string list
+  /// What happened, if anything, when `worker_rss` went Broken this run —
+  /// "captured at <path>", "skipped: <reason>", "failed: <reason>", or
+  /// `None` if RSS has never gone Broken this run. See `GcDumpWatch`.
+  GcDumpNote: string option
 }
 
 module DaemonHealthView =
@@ -570,7 +574,13 @@ module DaemonHealthView =
       SessionSummaries = snap.SessionSummaries
       TestsPassed = testsPassed
       TestsFailed = testsFailed
-      Anomalies = snap.Anomalies |> List.choose Features.HealthAnomaly.describe }
+      Anomalies = snap.Anomalies |> List.choose Features.HealthAnomaly.describe
+      GcDumpNote =
+        snap.GcDumpOutcome
+        |> Option.map (function
+          | Features.GcDumpCapture.CaptureOutcome.Captured path -> sprintf "captured at %s" path
+          | Features.GcDumpCapture.CaptureOutcome.Skipped reason -> sprintf "skipped: %s" reason
+          | Features.GcDumpCapture.CaptureOutcome.Failed reason -> sprintf "failed: %s" reason) }
 
 /// A single failure narrative entry for the dashboard panel.
 type FailureNarrativeEntry = {

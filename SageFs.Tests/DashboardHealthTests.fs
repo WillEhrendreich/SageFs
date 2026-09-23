@@ -22,7 +22,8 @@ let private makeHealthSnapshot
     SessionSummaries = sessions
     LiveTestingSummary = liveTests
     MemoryMB = memoryMB
-    Anomalies = [] }
+    Anomalies = []
+    GcDumpOutcome = None }
 
 let private defaultSnap () =
   makeHealthSnapshot [] None (TimeSpan.FromMinutes 5.0) 128

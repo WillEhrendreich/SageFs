@@ -339,23 +339,37 @@ let handlePrune (dir: string) (log: ILogger) (checkDaemonRunning: unit -> System
   | false -> return Result.Ok false
 }
 
-/// Remove adaptive-store snapshots for sessions that no longer exist and
-/// reset the shared feature push state when the last session is gone.
-/// Returns the ids that were swept (roast queue item 2 — session state must
-/// die with the session instead of accumulating for the daemon's lifetime).
+/// Remove adaptive-store snapshots AND recent-output ring buffers for
+/// sessions that no longer exist, and reset the shared feature push state
+/// when the last session is gone. Returns the ids that were swept (roast
+/// queue item 2 — session state must die with the session instead of
+/// accumulating for the daemon's lifetime).
+///
+/// `liveIds` is deliberately not "every session ManagerState still knows
+/// about" — the caller passes only sessions worth RETAINING state for.
+/// `SessionLifecycleStatus.isDead` (Faulted/Stopped) is the daemon's own
+/// call: a session record can stay registered so a user can see why it
+/// died, while its adaptive live-bindings snapshot and recent output (both
+/// meaningless once the worker that produced them is gone) are freed
+/// immediately rather than lingering until the record itself is purged.
 let sweepStaleSessionState
   (liveIds: Set<string>)
   (adaptive: SageFs.Features.LiveBindingsAdaptive.State)
   (featureState: SageFs.Features.FeatureHooks.FeaturePushState ref)
+  (outputStore: SessionOutputStore)
   : string list =
-  let stale =
+  let staleAdaptive =
     adaptive.SessionSnapshots.Keys
     |> Seq.filter (fun k -> not (liveIds.Contains k))
     |> Seq.toList
-  stale |> List.iter (fun k -> SageFs.Features.LiveBindingsAdaptive.remove adaptive k)
+  staleAdaptive |> List.iter (fun k -> SageFs.Features.LiveBindingsAdaptive.remove adaptive k)
+  let staleOutput =
+    outputStore.LiveSessionIds
+    |> List.filter (fun k -> not (liveIds.Contains k))
+  staleOutput |> List.iter outputStore.Remove
   if liveIds.IsEmpty then
     System.Threading.Volatile.Write(&featureState.contents, SageFs.Features.FeatureHooks.FeaturePushState.empty)
-  stale
+  staleAdaptive @ staleOutput |> List.distinct
 
 /// Admission gate for the SessionManager mailbox — mirrors ElmLoop's own
 /// 256-message high-watermark alarm (`ElmLoop.fs:104-131`) for the mailbox
@@ -397,6 +411,52 @@ let private observeMailboxQueueDepthToHealthWatch (depth: float) : unit =
 let sampleMailboxQueueDepth (observe: float -> unit) (currentQueueLength: unit -> int) : unit =
   observe (float (currentQueueLength ()))
 
+/// A `SessionInfo`'s memory-shedding shape, for `MemorySupervisor`: Dead
+/// (see `SessionLifecycleStatus.isDead`) or Idle-for-this-long since
+/// `LastActivity`. `isUserActive` is a caller-supplied predicate rather than
+/// a fixed rule, because "who the user is looking at" only exists at the
+/// dashboard/Elm-model layer this function does not have — the admission
+/// check below passes `fun _ -> false` (admission refusal never depends on
+/// it), while the periodic sweep passes the real active-session check.
+let memorySessionSnapshotOf
+  (now: System.DateTime)
+  (isUserActive: WorkerProtocol.SessionId -> bool)
+  (si: WorkerProtocol.SessionInfo)
+  : MemorySupervisor.SessionSnapshot =
+  let status =
+    match WorkerProtocol.SessionLifecycleStatus.isDead si.Status with
+    | true -> MemorySupervisor.SessionMemoryStatus.Dead
+    | false -> MemorySupervisor.SessionMemoryStatus.Idle(now - si.LastActivity)
+  { Id = WorkerProtocol.SessionId.value si.Id
+    Status = status
+    IsUserActive = isUserActive si.Id }
+
+/// Machine memory admission gate — mirrors `checkMailboxAdmission` above,
+/// one level up: that one refuses when the MAILBOX is overloaded, this one
+/// refuses when the MACHINE is short on memory
+/// (`MemoryPressure.Critical`). Checked and refused
+/// BEFORE posting, same as the mailbox gate, so a starving machine never
+/// gains one more session to feed.
+let private checkMemoryAdmission (readSnapshot: unit -> SessionManager.QuerySnapshot) : Result<unit, SageFsError> =
+  let now = System.DateTime.UtcNow
+  let sessions =
+    SessionManager.QuerySnapshot.allSessions (readSnapshot())
+    |> List.map (memorySessionSnapshotOf now (fun _ -> false))
+  let rss = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64
+  let machineMemory = Features.MachineMemory.current ()
+  let machine : MemorySupervisor.MachineStats =
+    { DaemonRssBytes = rss
+      MachineAvailableBytes = machineMemory.AvailableBytes
+      MachineTotalBytes = machineMemory.TotalBytes }
+  let decision = Features.MemoryPressureWatch.evaluate MemorySupervisor.defaultThresholds machine sessions
+  decision.Actions
+  |> List.tryPick (function MemorySupervisor.ShedAction.RefuseNewSessions reason -> Some reason | _ -> None)
+  |> function
+     | Some reason ->
+       Log.warn "[MemorySupervisor] Admission refused: %s" reason
+       Result.Error(SageFsError.MemoryPressureRefused reason)
+     | None -> Result.Ok ()
+
 /// Build SessionManagementOps record from mailbox + snapshot reader.
 /// Session lifecycle events are recorded directly in the daemon.sagefm binary
 /// manifest (the sole source of truth for session resume) — there is no
@@ -411,6 +471,9 @@ let createSessionOps
       task {
         match checkMailboxAdmission sessionManager with
         | Result.Error busy -> return Result.Error busy
+        | Result.Ok () ->
+        match checkMemoryAdmission readSnapshot with
+        | Result.Error refused -> return Result.Error refused
         | Result.Ok () ->
         let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
         let! result =
@@ -2848,17 +2911,81 @@ let run
     liveTestWatcherManager.SyncToSessions(sessionDirPairs)
   seedSessionDirs ()
 
-  // Reconcile watchers the moment a session's lifecycle changes, instead of
-  // waiting on the periodic sync below. `stop_session`/`create_session`
-  // (dashboard AND MCP alike) dispatch `EditorAction.ListSessions`, which
-  // this same event stream turns into `ModelChanged` — so a stopped
-  // session's directory claim is dropped, and its watcher disposed, within
-  // this subscription rather than up to 5s later on the periodic sweep.
-  // Scoped to ModelChanged (not every event) so a hot path like FileReloaded
+  // Sessions worth RETAINING adaptive/output state for: everything except
+  // Faulted/Stopped (see sweepStaleSessionState's own doc comment). A
+  // Faulted session's record can stay registered for the user to inspect
+  // while its retained per-session state is freed the moment it dies,
+  // instead of only when the record itself is later purged.
+  let retentionWorthySessionIds () =
+    SessionManager.QuerySnapshot.allSessions (readSnapshot())
+    |> List.filter (fun si -> not (WorkerProtocol.SessionLifecycleStatus.isDead si.Status))
+    |> List.map (fun si -> WorkerProtocol.SessionId.value si.Id)
+    |> Set.ofList
+
+  // Sweep stale adaptive-store + feature-push state + recent output for
+  // sessions that are gone OR dead (roast queue item 2). Idempotent — cheap
+  // at idle. Called from the periodic timer below (a backstop) AND
+  // immediately on the lifecycle transitions that actually cause it
+  // (session faulted, or stopped/purged via ModelChanged below) so a dead
+  // session's memory is released at the moment it dies, not up to 5s later.
+  let runStaleSweep () =
+    let liveIds = retentionWorthySessionIds ()
+    match sweepStaleSessionState liveIds liveBindingsAdaptive sharedFeatureState (elmRuntime.GetModel().RecentOutput) with
+    | [] -> ()
+    | stale -> log.LogInformation("Swept {Count} stale session state entries", stale.Length)
+
+  // Evaluate the FULL memory-shedding policy (with the real "who is the
+  // user looking at right now" flag, which only exists at this Elm-model
+  // layer) and stop whatever it names — job 4, "shed load before the
+  // machine dies." Run on the same periodic cadence as the stale-state
+  // sweep, not on every model change: shedding idle SESSIONS (unlike
+  // reaping already-dead state) is disruptive enough that it belongs on a
+  // steady, low-frequency heartbeat rather than firing on every transition.
+  let shedIdleSessionsIfNeeded () =
+    let now = System.DateTime.UtcNow
+    let model = elmRuntime.GetModel()
+    let isUserActive sid = SageFs.ActiveSession.isViewing sid model.Sessions.ActiveSessionId
+    let sessions =
+      SessionManager.QuerySnapshot.allSessions (readSnapshot())
+      |> List.map (memorySessionSnapshotOf now isUserActive)
+    let rss = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64
+    let machineMemory = Features.MachineMemory.current ()
+    let machine : MemorySupervisor.MachineStats =
+      { DaemonRssBytes = rss
+        MachineAvailableBytes = machineMemory.AvailableBytes
+        MachineTotalBytes = machineMemory.TotalBytes }
+    let decision = Features.MemoryPressureWatch.evaluate MemorySupervisor.defaultThresholds machine sessions
+    decision.Actions
+    |> List.iter (function
+      | MemorySupervisor.ShedAction.StopIdleSessions ids ->
+        for idStr in ids do
+          Log.warn "[MemorySupervisor] Shedding idle session %s under memory pressure (%s)" idStr (decision.Reason |> Option.defaultValue "")
+          match WorkerProtocol.SessionId.validate idStr with
+          | Ok sid ->
+            sessionManager.PostAndAsyncReply(fun reply -> SessionManager.SessionCommand.StopSession(sid, reply))
+            |> Async.StartAsTask
+            |> ignore
+          | Error _ -> ()
+      | MemorySupervisor.ShedAction.ReapDeadSessions _
+      | MemorySupervisor.ShedAction.RefuseNewSessions _ -> ())
+
+  // Reconcile watchers AND stale retained state the moment a session's
+  // lifecycle changes, instead of waiting on the periodic sync below.
+  // `stop_session`/`create_session` (dashboard AND MCP alike) dispatch
+  // `EditorAction.ListSessions`, which this same event stream turns into
+  // `ModelChanged` — so a stopped session's directory claim is dropped, its
+  // watcher disposed, AND its recent-output/adaptive-bindings state freed
+  // within this subscription rather than up to 5s later on the periodic
+  // sweep. `SessionFaulted` gets its own arm for the same reason: a fault
+  // does not always also emit a `ModelChanged` on the same tick. Scoped to
+  // just these two (not every event) so a hot path like FileReloaded
   // doesn't pay for a resync it has no reason to need.
   stateChangedEvent.Publish.Add(fun change ->
     match change with
-    | ModelChanged _ -> seedSessionDirs ()
+    | ModelChanged _ ->
+      seedSessionDirs ()
+      runStaleSweep ()
+    | SessionFaulted _ -> runStaleSweep ()
     | _ -> ())
 
   // Periodic session-watcher sync — ensures new sessions get watchers
@@ -2866,15 +2993,8 @@ let run
   let watcherSyncCallback _ =
     try
       seedSessionDirs ()
-      // Sweep stale adaptive-store + feature-push state for sessions that no
-      // longer exist (roast queue item 2). Idempotent — cheap at idle.
-      let liveIds =
-        SessionManager.QuerySnapshot.allSessions (readSnapshot())
-        |> List.map (fun si -> WorkerProtocol.SessionId.value si.Id)
-        |> Set.ofList
-      match sweepStaleSessionState liveIds liveBindingsAdaptive sharedFeatureState with
-      | [] -> ()
-      | stale -> log.LogInformation("Swept {Count} stale session state entries", stale.Length)
+      runStaleSweep ()
+      shedIdleSessionsIfNeeded ()
     finally
       match isNull watcherSyncTimerRef with
       | true -> ()
@@ -3238,12 +3358,27 @@ let run
       // Resident memory, not the managed heap: the daemon that ate 51.7GB of a
       // 62GB machine looked fine by GC.GetTotalMemory. Every reading also
       // teaches the detector what this daemon's normal is.
-      let memoryMB = int (System.Diagnostics.Process.GetCurrentProcess().WorkingSet64 / 1_048_576L)
-      SageFs.Features.HealthWatch.observe
+      let rssBytes = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64
+      let memoryMB = int (rssBytes / 1_048_576L)
+      let rssVerdict =
+        SageFs.Features.HealthWatch.observe
+          SageFs.Features.HealthAnomaly.SignalId.WorkerRss
+          (float memoryMB)
+          System.DateTimeOffset.UtcNow
+      // The moment RSS is first confirmed Broken (not every sample after) —
+      // capture the evidence both incidents died without: by the time
+      // anyone noticed the daemon was eating the machine, there was no
+      // memory left to safely take a dump with. Off the hot path
+      // (GcDumpWatch.maybeCapture backgrounds the actual capture), at most
+      // once per daemon run, and only with enough machine headroom to try
+      // safely — see GcDumpCapture's own doc comment.
+      SageFs.Features.GcDumpWatch.maybeCapture
+        (System.Diagnostics.Process.GetCurrentProcess().Id)
+        (System.IO.Path.Combine(DaemonState.SageFsDir, "diagnostics"))
+        rssBytes
+        (SageFs.Features.MachineMemory.current ()).AvailableBytes
         SageFs.Features.HealthAnomaly.SignalId.WorkerRss
-        (float memoryMB)
-        System.DateTimeOffset.UtcNow
-      |> ignore
+        rssVerdict
       // Same tick, same cheap in-memory read: CurrentQueueLength is a counter
       // the mailbox already maintains (checkMailboxAdmission reads the same
       // one), so this can never itself become the thing that starves the
@@ -3256,7 +3391,8 @@ let run
               SessionSummaries = sessions
               LiveTestingSummary = testingSummary
               MemoryMB = memoryMB
-              Anomalies = SageFs.Features.HealthWatch.troubled () }
+              Anomalies = SageFs.Features.HealthWatch.troubled ()
+              GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome () }
             : SageFs.Features.HealthSnapshot)
     GetFailureNarratives = fun () ->
       let model = elmRuntime.GetModel()

@@ -149,6 +149,10 @@
              proves the invariants have teeth by failing against it. -->
         <Compile Include="HealthAnomalySim.fs" />
         <Compile Include="HealthAnomalySimInvariants.fs" />
+        <Compile Include="MemoryShedSim.fs" />
+        <Compile Include="MemoryShedInvariants.fs" />
+        <Compile Include="LeaseSim.fs" />
+        <Compile Include="LeaseSimInvariants.fs" />
     </ItemGroup>
 
     <ItemGroup>

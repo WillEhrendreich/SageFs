@@ -561,6 +561,16 @@ let renderDaemonHealth (view: DaemonHealthView) =
           Attr.style "margin-left: 0.5rem;"
           Attr.create "aria-label" "A signal the daemon tracks about itself has moved away from its own normal" ]
         [ textEnc (sprintf "⚠ %s" anomaly) ]
+    // Evidence captured (or not) for a worker_rss Broken verdict this run —
+    // both incidents this exists for had nothing to look at afterward.
+    match view.GcDumpNote with
+    | None -> ()
+    | Some note ->
+      Elem.span
+        [ Attr.class' "daemon-gcdump-note"
+          Attr.style "margin-left: 0.5rem;"
+          Attr.create "aria-label" "What happened when the daemon tried to capture a heap dump for its own worker_rss alarm" ]
+        [ textEnc (sprintf "🗎 gcdump: %s" note) ]
     // Test counts removed from health row — they live in the Live Testing panel.
     // When live testing is inactive, no stale counts bleed into the health bar.
   ]

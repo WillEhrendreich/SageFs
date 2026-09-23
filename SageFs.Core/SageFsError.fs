@@ -116,6 +116,17 @@ type SageFsError =
   /// caller's own external timeout). `pending`/`capacity` let the caller
   /// (and the log line) say exactly how overloaded, not just "busy."
   | SupervisorBusy of pending: int * capacity: int
+  /// The daemon refused a new session because the MACHINE, not the mailbox,
+  /// is short on memory — `MemorySupervisor.PressureLevel.RefusingAdmission`
+  /// (see the same module's doc comment for the two incidents this exists
+  /// for: a daemon RSS climbing to 51.7GB, then 55GB, of a 62GB box with
+  /// nothing refusing new work along the way). Distinct from
+  /// `SupervisorBusy`, which is about the mailbox's own queue depth, not the
+  /// box's memory — the two causes need different words, so this carries
+  /// `MemorySupervisor.step`'s own reason string rather than reusing
+  /// `SupervisorBusy`'s "commands pending" phrasing for a cause it doesn't
+  /// describe. Same retry semantics as `SupervisorBusy` (503, retryable).
+  | MemoryPressureRefused of reason: string
   /// The target session could not be routed to at all — gone, still warming
   /// up, faulted, or otherwise unroutable. `reason` is the resolution's own
   /// description (SessionResolution/RouteError already computed it; this
@@ -194,6 +205,8 @@ module SageFsError =
       sprintf "Failed to switch to session '%s': %s. Use list_sessions to check available sessions." id reason
     | SageFsError.SupervisorBusy(pending, capacity) ->
       sprintf "The session supervisor is overloaded (%d commands pending, capacity %d). Wait a moment and retry." pending capacity
+    | SageFsError.MemoryPressureRefused reason ->
+      sprintf "Refused: the machine is low on memory (%s)." reason
     | SageFsError.SessionNotRoutable reason ->
       sprintf "Session not reachable: %s" reason
     | SageFsError.WorkerCommunicationFailed(id, reason) ->
@@ -280,6 +293,7 @@ module SageFsError =
     | SageFsError.SessionStopFailed _ -> LogLevel.Warning
     | SageFsError.SessionSwitchFailed _ -> LogLevel.Warning
     | SageFsError.SupervisorBusy _ -> LogLevel.Warning
+    | SageFsError.MemoryPressureRefused _ -> LogLevel.Warning
     | SageFsError.CheckFailed _ -> LogLevel.Warning
     | SageFsError.CompletionFailed _ -> LogLevel.Warning
     | SageFsError.CancelFailed _ -> LogLevel.Warning
@@ -319,6 +333,7 @@ module SageFsError =
     | SageFsError.DuplicateSession _ -> 409
     // 503 Service Unavailable — overloaded, retry later (not the caller's fault)
     | SageFsError.SupervisorBusy _ -> 503
+    | SageFsError.MemoryPressureRefused _ -> 503
     // 504 Gateway Timeout
     | SageFsError.WorkerTimeout _ -> 504
     // 502 Bad Gateway
@@ -388,6 +403,7 @@ module SageFsError =
     | SageFsError.PortInUse _
     | SageFsError.SseConnectionError _
     | SageFsError.SupervisorBusy _
+    | SageFsError.MemoryPressureRefused _
     | SageFsError.Unexpected _ -> false
 
   /// Server errors: 500 — internal failures not caused by the client.
@@ -430,7 +446,8 @@ module SageFsError =
     | SageFsError.SseConnectionError _
     | SageFsError.RestartLimitExceeded _
     | SageFsError.PortInUse _
-    | SageFsError.SupervisorBusy _ -> false
+    | SageFsError.SupervisorBusy _
+    | SageFsError.MemoryPressureRefused _ -> false
 
   /// Gateway errors: 502/504 — the worker (upstream) is unreachable or timed out.
   let isGatewayError = function
@@ -472,6 +489,7 @@ module SageFsError =
     | SageFsError.DaemonStartFailed _
     | SageFsError.PortInUse _
     | SageFsError.SupervisorBusy _
+    | SageFsError.MemoryPressureRefused _
     | SageFsError.Unexpected _ -> false
 
   /// Infrastructure errors: 409 — system-level conflicts (port in use, restart limit, duplicate session).
@@ -480,6 +498,7 @@ module SageFsError =
     | SageFsError.RestartLimitExceeded _ -> true
     | SageFsError.DuplicateSession _ -> true
     | SageFsError.SupervisorBusy _ -> false
+    | SageFsError.MemoryPressureRefused _ -> false
     | SageFsError.CohortActionFailed _
     | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
@@ -524,6 +543,7 @@ module SageFsError =
   /// "wait and retry," not "resolve a conflict."
   let isOverloadError = function
     | SageFsError.SupervisorBusy _ -> true
+    | SageFsError.MemoryPressureRefused _ -> true
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
     | SageFsError.NoActiveSessions
@@ -575,6 +595,7 @@ module SageFsError =
     | SageFsError.ProjectFrameworkNotHostable _ -> "Point SageFs at a .NET (Core) project (net5.0 or newer) for now — .NET Framework support is not shipped yet, and the message names the issue tracking it"
     | SageFsError.SessionStopFailed _ -> "Try hard_reset_fsi_session"
     | SageFsError.SupervisorBusy _ -> "Wait a few seconds and retry — the daemon is handling a burst of concurrent session activity"
+    | SageFsError.MemoryPressureRefused _ -> "Stop unused sessions, or wait for machine memory to free up, then retry"
     | SageFsError.SessionSwitchFailed _ -> "Run list_sessions to check available sessions"
     | SageFsError.SessionNotRoutable _ -> "Run get_fsi_status or list_sessions to check session state"
     | SageFsError.WorkerCommunicationFailed _ -> "Run hard_reset_fsi_session"

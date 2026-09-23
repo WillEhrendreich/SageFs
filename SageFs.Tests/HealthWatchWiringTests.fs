@@ -28,7 +28,8 @@ let private snapshotWith anomalies sessions =
     SessionSummaries = sessions
     LiveTestingSummary = None
     MemoryMB = 51_700
-    Anomalies = anomalies }
+    Anomalies = anomalies
+    GcDumpOutcome = None }
   : HealthSnapshot
 
 let private readySession =

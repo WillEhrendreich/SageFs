@@ -2312,7 +2312,12 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
           SessionSummaries = sessionSummaries
           LiveTestingSummary = None
           MemoryMB = int (daemonProcess.WorkingSet64 / 1024L / 1024L)
-          Anomalies = SageFs.Features.HealthWatch.troubled () }
+          Anomalies = SageFs.Features.HealthWatch.troubled ()
+          // RSS is sampled (and a gcdump considered) on the dashboard's own
+          // health tick (DaemonMode.GetDaemonHealth) — reported here too so
+          // an MCP-only client sees the same evidence without a second
+          // sampling+capture path.
+          GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome () }
       let sessionStatus =
         SageFs.Features.DaemonHealth.primarySessionStatusLabel healthSnapshot.SessionSummaries
       let healthy = healthyForSessions healthSnapshot.SessionSummaries
@@ -2776,6 +2781,62 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
             do! jsonResponse ctx 200 {| success = true; sessionId = sidStr; evalCount = evalCount; content = content |}
           | _ ->
             do! jsonResponse ctx 200 {| success = true; sessionId = sidStr; evalCount = 0; content = ""; note = "Export is available for the active session." |}
+    } :> Task
+  ) |> ignore
+  // The coordination point for expensive, memory-costly work — session
+  // create/warmup, rebuild, a full `dotnet build`, a test-suite run,
+  // starting an app. Deliberately a plain HTTP endpoint, not an MCP tool
+  // over the stdio bridge: the guard hook (tools/agent-hooks/) and a
+  // caller's own `dotnet build` for a final gate both need to ask BEFORE
+  // spending memory, and neither one has an MCP session to ask through —
+  // this is what makes "the daemon's own accounting doesn't lie" possible
+  // even for work SageFs itself never runs. See ExpensiveWorkLease.fs.
+  app.MapPost("/api/lease/request", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      use! doc = readJsonBody ctx
+      let root = doc.RootElement
+      let str (name: string) =
+        let mutable v = Unchecked.defaultof<System.Text.Json.JsonElement>
+        match root.TryGetProperty(name, &v) with
+        | true -> Some(v.GetString())
+        | false -> None
+      match str "holder", str "kind" |> Option.bind SageFs.ExpensiveWorkLease.Kind.tryParse with
+      | None, _ ->
+        do! jsonResponse ctx 400 {| success = false; error = "missing 'holder' — identify the agent/cohort member asking, not a fresh id per call" |}
+      | _, None ->
+        let validKinds = SageFs.ExpensiveWorkLease.Kind.all |> List.map SageFs.ExpensiveWorkLease.Kind.toToken
+        do! jsonResponse ctx 400 {| success = false; error = sprintf "missing or unrecognized 'kind' — must be one of: %s" (String.concat ", " validKinds) |}
+      | Some holder, Some kind ->
+        match SageFs.Features.LeaseWatch.request holder kind with
+        | SageFs.ExpensiveWorkLease.Decision.Granted(leaseId, expiresAt) ->
+          do! jsonResponse ctx 200 {| success = true; decision = "granted"; leaseId = SageFs.ExpensiveWorkLease.LeaseId.value leaseId; expiresAt = expiresAt |}
+        | SageFs.ExpensiveWorkLease.Decision.Wait(retryAfter, reason) ->
+          do! jsonResponse ctx 200 {| success = true; decision = "wait"; retryAfterSeconds = retryAfter.TotalSeconds; reason = reason |}
+        | SageFs.ExpensiveWorkLease.Decision.Refused reason ->
+          do! jsonResponse ctx 200 {| success = true; decision = "refused"; reason = reason |}
+    } :> Task
+  ) |> ignore
+  app.MapPost("/api/lease/release", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      use! doc = readJsonBody ctx
+      let root = doc.RootElement
+      let str (name: string) =
+        let mutable v = Unchecked.defaultof<System.Text.Json.JsonElement>
+        match root.TryGetProperty(name, &v) with
+        | true -> Some(v.GetString())
+        | false -> None
+      match str "leaseId" with
+      | None -> do! jsonResponse ctx 400 {| success = false; error = "missing 'leaseId'" |}
+      | Some leaseIdStr ->
+        // LeaseId is an opaque GUID-backed token — wrap it back into the
+        // type by re-requesting it never round-trips a synthesized id,
+        // this ONLY matches an id LeaseWatch itself already handed out.
+        let leaseId = SageFs.ExpensiveWorkLease.LeaseId.ofWire leaseIdStr
+        match SageFs.Features.LeaseWatch.release leaseId with
+        | SageFs.ExpensiveWorkLease.ReleaseOutcome.Released ->
+          do! jsonResponse ctx 200 {| success = true; outcome = "released" |}
+        | SageFs.ExpensiveWorkLease.ReleaseOutcome.AlreadyGone ->
+          do! jsonResponse ctx 200 {| success = true; outcome = "already_gone" |}
     } :> Task
   ) |> ignore
   app.MapPost("/api/sessions/create", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
