@@ -117,7 +117,7 @@ type SageFsError =
   /// (and the log line) say exactly how overloaded, not just "busy."
   | SupervisorBusy of pending: int * capacity: int
   /// The daemon refused a new session because the MACHINE, not the mailbox,
-  /// is short on memory — `MemorySupervisor.PressureLevel.RefusingAdmission`
+  /// is short on memory — `MemoryPressure.Critical`
   /// (see the same module's doc comment for the two incidents this exists
   /// for: a daemon RSS climbing to 51.7GB, then 55GB, of a 62GB box with
   /// nothing refusing new work along the way). Distinct from
