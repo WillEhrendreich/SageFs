@@ -28,15 +28,20 @@ let private mkDaemonInfo pid =
 
 let private daemonOnPort = mkDaemonInfo 4242
 
-let private runStatus readOnPort fetchSessionCount =
+let private noWedgedPid : int -> int option = fun _ -> None
+
+let private runStatusWedged readOnPort wedgedPid fetchSessionCount =
   let origOut = Console.Out
   use outWriter = new StringWriter()
   Console.SetOut(outWriter)
   try
-    let code = Program.statusCommand readOnPort fetchSessionCount 37749
+    let code = Program.statusCommand readOnPort wedgedPid fetchSessionCount 37749
     code, outWriter.ToString()
   finally
     Console.SetOut(origOut)
+
+let private runStatus readOnPort fetchSessionCount =
+  runStatusWedged readOnPort noWedgedPid fetchSessionCount
 
 [<Tests>]
 let cliStatusExitCodeTests =
@@ -61,6 +66,16 @@ let cliStatusExitCodeTests =
       let code, stdout = runStatus (fun _ -> Some daemonOnPort) (fun _ -> Some 3)
       Expect.equal "still success" 0 code
       stdout |> Expect.stringContains "reports the live count" "Sessions:   3 active"
+    }
+
+    test "WHY — Program.statusCommand — a wedged daemon (no HTTP answer, live local pid) is reported distinctly from no daemon running, with its pid as the recovery handle" {
+      let code, stdout =
+        runStatusWedged (fun _ -> None) (fun _ -> Some 9001) (fun _ -> failtest "a wedged daemon's session count is never fetched over the HTTP that never answers")
+      Expect.isTrue "a wedged daemon is not success" (code <> 0)
+      stdout |> Expect.stringContains "says it is wedged" "wedged"
+      stdout |> Expect.stringContains "names the pid to recover" "9001"
+      (stdout.Contains "No daemon running")
+      |> Expect.isFalse "a wedged daemon must never read the same as no daemon at all"
     }
   ]
 

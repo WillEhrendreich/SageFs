@@ -15,6 +15,39 @@ type DaemonInfo = {
   SessionCount: int option
 }
 
+/// The three states a port can be in, not two. An HTTP probe that gets no
+/// answer used to mean "no daemon running" unconditionally — but a daemon
+/// whose process is alive and holding the port, just not answering (stuck
+/// warmup, a deadlocked request pipeline, whatever), reads identically over
+/// HTTP to nobody being there at all. `sagefs stop` then printed "No daemon
+/// running" while the old process kept the port, and starting a fresh
+/// daemon failed to bind right after — the incident this type exists to
+/// stop reading as a mystery. `Wedged` carries the pid because that pid is
+/// the recovery: it is what `sagefs stop` kills directly once it can no
+/// longer expect a graceful HTTP shutdown to work.
+[<RequireQualifiedAccess>]
+type DaemonPresence =
+  | NotRunning
+  | Running of DaemonInfo
+  | Wedged of pid: int
+
+module DaemonPresence =
+  /// A successful HTTP probe always wins. Otherwise, a locally-recorded pid
+  /// for this exact port (see `DaemonOwnership.DaemonInfoFile`) — valid only
+  /// while that process is still alive — means "wedged", never "not
+  /// running". No local pid at all means nobody is here.
+  let classify (httpProbe: DaemonInfo option) (wedgedPid: int option) : DaemonPresence =
+    match httpProbe, wedgedPid with
+    | Some info, _ -> DaemonPresence.Running info
+    | None, Some pid -> DaemonPresence.Wedged pid
+    | None, None -> DaemonPresence.NotRunning
+
+  let describe =
+    function
+    | DaemonPresence.NotRunning -> "no daemon running"
+    | DaemonPresence.Running info -> sprintf "daemon running (PID %d, port %d)" info.Pid info.Port
+    | DaemonPresence.Wedged pid -> sprintf "daemon process %d is holding the port but not answering — it is wedged" pid
+
 module DaemonState =
 
   let SageFsDir =

@@ -472,6 +472,8 @@
         <Compile Include="TestsPaneTests.fs" />
         <Compile Include="TimeoutsTests.fs" />
         <Compile Include="EnvCheckTests.fs" />
+        <Compile Include="DaemonPresenceTests.fs" />
+        <Compile Include="CustomPortOwnershipTests.fs" />
         <Compile Include="CliStopExitCodeTests.fs" />
         <Compile Include="CliStatusExitCodeTests.fs" />
         <Compile Include="CliFirstRunTests.fs" />

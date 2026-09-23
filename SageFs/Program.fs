@@ -151,6 +151,34 @@ let resolveOwnership (args: string array) (cwd: string) : DaemonOwnership.Effect
   | false -> ()
   effective
 
+/// Whether starting a daemon on `mcpPort` is allowed given the ownership
+/// flags it was given. Refused, not allowed.
+[<RequireQualifiedAccess>]
+type CustomPortOwnershipDecision =
+  | Allowed
+  | Refused of message: string
+
+/// A daemon on a port other than the default is, by construction, somebody's
+/// temporary daemon: a test harness, an agent's throwaway session, a demo
+/// runner. The user's own long-lived daemon always runs on the default
+/// port — that one is never gated, no matter what. Everything else has to
+/// say who owns it (`--owner-pid`, so it dies with its spawner) or when it
+/// should give up (`--ttl`, so an abandoned one self-terminates); this
+/// closes the incident where a custom-port test daemon outlived the agent
+/// that started it and nobody noticed until it had eaten hours of memory.
+let decideCustomPortOwnership
+  (defaultMcpPort: int)
+  (mcpPort: int)
+  (ownerPid: int option)
+  (ttl: TimeSpan option)
+  : CustomPortOwnershipDecision =
+  match mcpPort = defaultMcpPort, ownerPid, ttl with
+  | true, _, _ -> CustomPortOwnershipDecision.Allowed
+  | false, None, None ->
+    CustomPortOwnershipDecision.Refused
+      (sprintf "sagefs: --mcp-port %d needs --owner-pid <pid> or --ttl <duration> — a daemon on a non-default port is somebody's temporary daemon, and it has to say who owns it or when to give up." mcpPort)
+  | false, _, _ -> CustomPortOwnershipDecision.Allowed
+
 /// Run daemon mode (default behavior).
 let runDaemon (args: string array) =
   // Fail fast on a non-loopback SAGEFS_BIND_HOST before anything binds. The
@@ -163,6 +191,11 @@ let runDaemon (args: string array) =
   let mcpPort = parseMcpPort args
   let flags = Args.DaemonFlags.parse (Array.toList args)
   let ownership = resolveOwnership args Environment.CurrentDirectory
+  match decideCustomPortOwnership SageFsConfig.McpPortFromEnv mcpPort ownership.OwnerPid ownership.Ttl with
+  | CustomPortOwnershipDecision.Refused message ->
+    eprintfn "%s" message
+    2
+  | CustomPortOwnershipDecision.Allowed ->
   let isSupervised = args |> Array.exists (fun a -> a = "--supervised")
   match isSupervised with
   | true ->
@@ -264,7 +297,11 @@ type StopKillResult =
 
 /// The `sagefs stop` command with every daemon interaction injected so exit
 /// codes are testable without touching a real daemon:
-///   readOnPort     - locate the daemon state (stale-pid / no-daemon cases)
+///   readOnPort     - the HTTP probe (stale-pid / no-daemon / running cases)
+///   wedgedPid      - a locally-recorded pid for this port, valid only while
+///                    that process is still alive (see DaemonPresence) — the
+///                    third state readOnPort alone cannot see: a daemon that
+///                    is holding the port but never answers HTTP
 ///   requestShutdown - graceful HTTP shutdown request
 ///   killProcess    - fallback force-kill of the recorded PID
 ///   waitForExit    - whether the daemon's process actually exited after the request
@@ -279,26 +316,27 @@ type StopWait =
 
 let stopCommand
   (readOnPort: int -> DaemonInfo option)
+  (wedgedPid: int -> int option)
   (requestShutdown: int -> bool)
   (killProcess: int -> StopKillResult)
   (waitForExit: int -> StopWait)
   (mcpPort: int)
   =
-  match readOnPort mcpPort with
-  | Some info ->
-    let forceKill () =
-      match killProcess info.Pid with
-      | StopKilled ->
-        printfn "Daemon stopped (PID %d)" info.Pid
-        0
-      | StopProcessGone message ->
-        eprintfn "Stop daemon error for PID %d: %s" info.Pid message
-        printfn "Daemon was not running (stale PID %d)" info.Pid
-        1
-      | StopKillFailed message ->
-        eprintfn "Stop daemon error for PID %d: %s" info.Pid message
-        printfn "Daemon was not running (stale PID %d)" info.Pid
-        1
+  let reportKill (pid: int) =
+    match killProcess pid with
+    | StopKilled ->
+      printfn "Daemon stopped (PID %d)" pid
+      0
+    | StopProcessGone message ->
+      eprintfn "Stop daemon error for PID %d: %s" pid message
+      printfn "Daemon was not running (stale PID %d)" pid
+      1
+    | StopKillFailed message ->
+      eprintfn "Stop daemon error for PID %d: %s" pid message
+      printfn "Daemon was not running (stale PID %d)" pid
+      1
+  match DaemonPresence.classify (readOnPort mcpPort) (wedgedPid mcpPort) with
+  | DaemonPresence.Running info ->
     match requestShutdown mcpPort with
     | true ->
       // Accepting the request is not stopping: report success once the process is gone.
@@ -308,9 +346,14 @@ let stopCommand
         0
       | StopWait.StillRunning ->
         eprintfn "Daemon PID %d did not exit after the shutdown request; killing it" info.Pid
-        forceKill ()
-    | false -> forceKill ()
-  | None ->
+        reportKill info.Pid
+    | false -> reportKill info.Pid
+  | DaemonPresence.Wedged pid ->
+    // It never answered HTTP, so a graceful shutdown request would just time
+    // out — go straight to the kill this state exists to enable.
+    eprintfn "Daemon on port %d is wedged: process %d is holding the port but never answered. Killing it directly." mcpPort pid
+    reportKill pid
+  | DaemonPresence.NotRunning ->
     printfn "No daemon running"
     1
 
@@ -346,11 +389,12 @@ let private stopWaitForExit (pid: int) : StopWait =
 /// try/with, which silently omitted the line rather than failing `status`).
 let statusCommand
   (readOnPort: int -> DaemonInfo option)
+  (wedgedPid: int -> int option)
   (fetchSessionCount: DaemonInfo -> int option)
   (mcpPort: int)
   =
-  match readOnPort mcpPort with
-  | Some info ->
+  match DaemonPresence.classify (readOnPort mcpPort) (wedgedPid mcpPort) with
+  | DaemonPresence.Running info ->
     printfn "SageFs daemon running"
     printfn "  PID:        %d" info.Pid
     printfn "  Port:       %d" info.Port
@@ -363,9 +407,27 @@ let statusCommand
     | Some count -> printfn "  Sessions:   %d active" count
     | None -> ()
     0
-  | None ->
+  | DaemonPresence.Wedged pid ->
+    printfn "SageFs daemon is wedged"
+    printfn "  PID:        %d" pid
+    printfn "  Port:       %d" mcpPort
+    printfn "  It is holding the port but has not answered a request."
+    printfn "  Recover it with: sagefs stop --mcp-port %d" mcpPort
+    1
+  | DaemonPresence.NotRunning ->
     printfn "No daemon running"
     1
+
+/// The pid a wedged-daemon recovery targets: a daemon-info file recorded
+/// locally (written at daemon startup — see `DaemonOwnership.DaemonInfoFile`)
+/// that names this exact port, whose process is still alive right now. Read
+/// failures and stale records (process already gone) fall back to `None` —
+/// a wedged-daemon report is a recovery hint on top of the HTTP probe,
+/// never a reason to fail `stop`/`status` outright.
+let private wedgedPidFor (mcpPort: int) : int option =
+  DaemonOwnership.DaemonInfoFile.tryRead DaemonState.SageFsDir
+  |> Option.filter (fun info -> info.McpPort = mcpPort && DaemonState.isProcessAlive info.Pid)
+  |> Option.map (fun info -> info.Pid)
 
 /// The real session-count fetch: a real HTTP GET against the daemon's own
 /// `/api/sessions`, exactly as the original inline `Status` branch did.
@@ -472,11 +534,11 @@ let main args =
 
   | Stop ->
     let mcpPort = parseMcpPort args
-    stopCommand DaemonState.readOnPort DaemonState.requestShutdown stopKillProcess stopWaitForExit mcpPort
+    stopCommand DaemonState.readOnPort wedgedPidFor DaemonState.requestShutdown stopKillProcess stopWaitForExit mcpPort
 
   | Status ->
     let mcpPort = parseMcpPort args
-    statusCommand DaemonState.readOnPort fetchSessionCountHttp mcpPort
+    statusCommand DaemonState.readOnPort wedgedPidFor fetchSessionCountHttp mcpPort
 
   | Check ->
     let mcpPort  = parseMcpPort args
