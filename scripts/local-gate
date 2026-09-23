@@ -51,18 +51,56 @@ if [ $force = 0 ] && [ -f "$(passed_dir "$sha")/ok" ]; then
   exit 0
 fi
 
-# One gate at a time on this machine. A manual gate and the runner's fallback
-# must never share the checkout, the build output or the test ports.
+# Kill a process and everything it spawned, children first. The gate's tree is
+# dotnet fsi -> test processes -> daemons and FSI hosts, and a daemon outlives
+# its parent by design, so killing only the top of the tree leaks processes
+# that still hold the test ports. Walks by PID rather than by name: a `pkill
+# -f` pattern here would match this script's own command line.
+kill_tree() {
+  local pid=$1 kid
+  for kid in $(pgrep -P "$pid" 2>/dev/null); do kill_tree "$kid"; done
+  kill -TERM "$pid" 2>/dev/null || true
+}
+
+# One gate at a time on this machine, and the NEWEST one wins. A manual gate
+# and the runner's fallback must never share the checkout, the build output or
+# the test ports.
+#
+# Superseding rather than queueing, because an older gate is validating a
+# commit we are no longer shipping: its verdict is already worthless, and
+# waiting for it just pays for that worthlessness in wall clock — twice, since
+# the machine is saturated the whole time. The one exception is a gate already
+# running THIS commit, which is doing your work for you.
 exec 9>"$STATE/lock"
 if ! flock -n 9; then
-  echo "local-gate: another gate is running; waiting for it..."
-  flock 9
-  # It may have been gating this very commit.
-  if [ $force = 0 ] && [ -f "$(passed_dir "$sha")/ok" ]; then
-    echo "local-gate: $short passed while waiting"
-    exit 0
+  running_pid=$(cut -d' ' -f1 "$STATE/current" 2>/dev/null || true)
+  running_sha=$(cut -d' ' -f2 "$STATE/current" 2>/dev/null || true)
+  if [ -n "$running_sha" ] && [ "$running_sha" = "$sha" ]; then
+    echo "local-gate: $short is already being gated; waiting for that run"
+    flock 9
+    if [ $force = 0 ] && [ -f "$(passed_dir "$sha")/ok" ]; then
+      echo "local-gate: $short passed while waiting"
+      exit 0
+    fi
+  else
+    echo "local-gate: superseding the gate for ${running_sha:0:8} — this run gates $short"
+    if [ -n "$running_pid" ] && kill -0 "$running_pid" 2>/dev/null; then
+      kill_tree "$running_pid"
+      # TERM first so a tier can flush its log, then insist. The lock is held
+      # until that process actually dies, so this loop is also what we wait on.
+      for _ in $(seq 1 40); do
+        kill -0 "$running_pid" 2>/dev/null || break
+        sleep 0.5
+      done
+      kill -KILL "$running_pid" 2>/dev/null || true
+    fi
+    flock 9
   fi
 fi
+# Own the lock: publish who we are so the next gate can supersede us the same
+# way. Written after the lock, never before, or a crashed starter would leave a
+# pid that a newcomer would try to kill.
+echo "$$ $sha" > "$STATE/current"
 
 # A persistent clean checkout per source repo, on real disk (a Release build is
 # several GB and the integration suites write temp dirs; a tmpfs has filled
