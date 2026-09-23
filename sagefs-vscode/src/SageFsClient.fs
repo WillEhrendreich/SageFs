@@ -30,13 +30,27 @@ type HealthError =
     message: string
     suggestedAction: string }
 
+type SessionHealthSummary =
+  { id: string
+    projectName: string
+    status: string
+    health: {| status: string; reason: string option |}
+    faultReason: string option
+    workingDirectory: string
+    workerPid: int option
+    lastActivity: string
+    workflowLabel: string }
+
 type SageFsStatus =
   { connected: bool
     healthy: bool option
     status: string option
     apiVersion: int option
     features: string list
-    error: HealthError option }
+    error: HealthError option
+    sessionCount: int option
+    sessionStates: SessionHealthSummary array option
+    diagnosticSummary: string option }
 
 type SystemStatus =
   { supervised: bool
@@ -260,24 +274,54 @@ let getStatus (c: Client) =
           fieldArray "features" parsed
           |> Option.map (Array.choose tryCastString >> Array.toList)
           |> Option.defaultValue []
+        let sessionStates =
+          fieldArray "sessionStates" parsed
+          |> Option.map (Array.map (fun s ->
+            let healthObj = fieldObj "health" s
+            let healthStatus = healthObj |> Option.bind (fieldString "status") |> Option.defaultValue ""
+            let healthReason = healthObj |> Option.bind (fieldString "reason")
+            { id = fieldString "id" s |> Option.defaultValue ""
+              projectName = fieldString "projectName" s |> Option.defaultValue ""
+              status = fieldString "status" s |> Option.defaultValue ""
+              health = {| status = healthStatus; reason = healthReason |}
+              faultReason = fieldString "faultReason" s
+              workingDirectory = fieldString "workingDirectory" s |> Option.defaultValue ""
+              workerPid = fieldInt "workerPid" s
+              lastActivity = fieldString "lastActivity" s |> Option.defaultValue ""
+              workflowLabel = fieldString "workflowLabel" s |> Option.defaultValue "" }))
+        let diagnosticSummary = fieldString "diagnosticSummary" parsed
         return
           { connected = true
             healthy = fieldBool "healthy" parsed |> Option.orElse (Some false)
             status = fieldString "status" parsed
             apiVersion = fieldInt "apiVersion" parsed
             features = features
-            error = parseHealthError parsed }
+            error = parseHealthError parsed
+            sessionCount = fieldInt "sessionCount" parsed
+            sessionStates = sessionStates
+            diagnosticSummary = diagnosticSummary }
       | _ ->
-        return { connected = true; healthy = Some false; status = Some "no session"; apiVersion = None; features = []; error = None }
+        return { connected = true; healthy = Some false; status = Some "no session"; apiVersion = None; features = []; error = None; sessionCount = None; sessionStates = None; diagnosticSummary = None }
     with _ ->
-      return { connected = false; healthy = None; status = None; apiVersion = None; features = []; error = None }
+      return { connected = false; healthy = None; status = None; apiVersion = None; features = []; error = None; sessionCount = None; sessionStates = None; diagnosticSummary = None }
   }
 
 let isReady (c: Client) =
   promise {
     let! s = getStatus c
-    match s.connected, s.status with
-    | true, (Some "Ready" | Some "Evaluating") -> return true
+    match s.connected, s.sessionStates with
+    | true, Some states ->
+      let hasHealthyOrStarting =
+        states
+        |> Array.exists (fun ss ->
+          match ss.health.status with
+          | "Healthy" | "Starting" -> true
+          | _ -> false)
+      return hasHealthyOrStarting
+    | true, None ->
+      match s.status with
+      | Some ("Ready" | "Evaluating") -> return true
+      | _ -> return false
     | _ -> return false
   }
 
