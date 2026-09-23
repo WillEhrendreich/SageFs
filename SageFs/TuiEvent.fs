@@ -223,6 +223,12 @@ type SessionOutputStore(bufferCapacity: int) =
       version <- version + 1L
     | false -> ()
 
+  /// Every session id this store currently holds a buffer for — the sweep
+  /// (`DaemonMode.sweepStaleSessionState`) reads this to find ids to
+  /// `Remove` that no longer exist as a live session. A snapshot, not a
+  /// live view: the caller filters it against its own current session set.
+  member _.LiveSessionIds : string list = buffers.Keys |> List.ofSeq
+
   /// Clear all session buffers and staging.
   member _.ClearAll() =
     for kvp in buffers do kvp.Value.Clear()

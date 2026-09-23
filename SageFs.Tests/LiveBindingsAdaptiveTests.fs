@@ -95,7 +95,8 @@ let liveBindingsAdaptiveTests = testList "LiveBindingsAdaptive" [
       update store "s1" (mkSnap "s1" 1L [ "x" ])
       update store "s2" (mkSnap "s2" 1L [ "y" ])
       let feature = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
-      let swept = SageFs.Server.DaemonMode.sweepStaleSessionState (Set.ofList [ "s1" ]) store feature
+      let output = SageFs.SessionOutputStore()
+      let swept = SageFs.Server.DaemonMode.sweepStaleSessionState (Set.ofList [ "s1" ]) store feature output
       swept |> Expect.equal "only s2 swept" [ "s2" ]
       tryGet store "s1" |> Expect.isSome "s1 still live"
       tryGet store "s2" |> Expect.isNone "s2 removed"
@@ -109,9 +110,36 @@ let liveBindingsAdaptiveTests = testList "LiveBindingsAdaptive" [
         ref (SageFs.Features.FeatureHooks.FeaturePushState.empty
              |> SageFs.Features.FeatureHooks.recordEval "let x = 1" "val x: int = 1" 5L)
       feature.Value.EvalHistory.Length |> Expect.equal "history populated before reset" 1
-      let swept = SageFs.Server.DaemonMode.sweepStaleSessionState Set.empty store feature
+      let output = SageFs.SessionOutputStore()
+      let swept = SageFs.Server.DaemonMode.sweepStaleSessionState Set.empty store feature output
       swept |> Expect.equal "s1 swept" [ "s1" ]
       tryGet store "s1" |> Expect.isNone "s1 removed"
       feature.Value.EvalHistory |> Expect.isEmpty "shared feature state reset"
+
+    testCase "also removes recent-output ring buffers for dead sessions" <| fun _ ->
+      let store = create ()
+      let feature = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
+      let output = SageFs.SessionOutputStore()
+      output.Add({ Kind = SageFs.OutputKind.Info; Text = "hello from s1"; Timestamp = DateTime.UtcNow; SessionId = "s1" })
+      output.Add({ Kind = SageFs.OutputKind.Info; Text = "hello from s2"; Timestamp = DateTime.UtcNow; SessionId = "s2" })
+      output.GetBuffer("s1").IsEmpty |> Expect.isFalse "s1 has output before the sweep"
+      let swept = SageFs.Server.DaemonMode.sweepStaleSessionState (Set.ofList [ "s2" ]) store feature output
+      swept |> Expect.contains "s1's output buffer was swept" "s1"
+      output.GetBuffer("s1").IsEmpty |> Expect.isTrue "s1's output is gone"
+      output.GetBuffer("s2").IsEmpty |> Expect.isFalse "s2's output survives — it is still live"
+
+    testCase "a session with no adaptive snapshot but real recent output is still swept" <| fun _ ->
+      // The two stores don't always agree on which sessions they've heard
+      // of — a session that never evaluated anything (so never built an
+      // adaptive snapshot) can still have output lines (warmup/system
+      // messages). The output-store sweep must not depend on the adaptive
+      // store already knowing about the id.
+      let store = create ()
+      let feature = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
+      let output = SageFs.SessionOutputStore()
+      output.Add({ Kind = SageFs.OutputKind.System; Text = "warmup complete"; Timestamp = DateTime.UtcNow; SessionId = "s-output-only" })
+      let swept = SageFs.Server.DaemonMode.sweepStaleSessionState Set.empty store feature output
+      swept |> Expect.equal "the output-only session is swept" [ "s-output-only" ]
+      output.GetBuffer("s-output-only").IsEmpty |> Expect.isTrue "its output is gone"
   ]
 ]

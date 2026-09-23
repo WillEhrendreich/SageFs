@@ -656,3 +656,28 @@ let workerProtocolTests =
       }
     ]
   ]
+
+/// `isDead` is the daemon's single definition of "safe to release this
+/// session's retained state, whatever the record itself still says" — the
+/// sweep in `DaemonMode.sweepStaleSessionState`'s caller reads exactly this.
+[<Tests>]
+let sessionLifecycleStatusIsDeadTests =
+  testList "SessionLifecycleStatus.isDead" [
+    testCase "Faulted is dead, with or without a reason" <| fun () ->
+      SessionLifecycleStatus.isDead (SessionLifecycleStatus.Faulted(Some "boom")) |> Expect.isTrue "faulted with a reason"
+      SessionLifecycleStatus.isDead (SessionLifecycleStatus.Faulted None) |> Expect.isTrue "faulted with no reason"
+
+    testCase "Stopped is dead" <| fun () ->
+      SessionLifecycleStatus.isDead SessionLifecycleStatus.Stopped |> Expect.isTrue "stopped has no live worker"
+
+    testCase "Restarting is NOT dead — a replacement worker is already spawning" <| fun () ->
+      SessionLifecycleStatus.isDead (SessionLifecycleStatus.Restarting(Some 1234)) |> Expect.isFalse "expected back shortly"
+      SessionLifecycleStatus.isDead (SessionLifecycleStatus.Restarting None) |> Expect.isFalse "cold restart, still expected back"
+
+    testCase "every status with a live worker handle is NOT dead" <| fun () ->
+      let handle : WorkerHandle = { Pid = 999; Port = Some 5000 }
+      SessionLifecycleStatus.isDead (SessionLifecycleStatus.Starting handle) |> Expect.isFalse "starting"
+      SessionLifecycleStatus.isDead (SessionLifecycleStatus.Ready handle) |> Expect.isFalse "ready"
+      SessionLifecycleStatus.isDead (SessionLifecycleStatus.Evaluating handle) |> Expect.isFalse "evaluating"
+      SessionLifecycleStatus.isDead (SessionLifecycleStatus.Building("dotnet build", handle)) |> Expect.isFalse "building"
+  ]

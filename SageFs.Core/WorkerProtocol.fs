@@ -165,6 +165,23 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Faulted reason -> reason
       | _ -> None
 
+    /// True for a status with no live worker and nothing coming back on its
+    /// own — safe to release retained per-session state (recent output,
+    /// adaptive live bindings) even though the session RECORD itself may
+    /// still be kept around so the user can see why it died. `Restarting`
+    /// is deliberately NOT dead: a replacement worker is already spawning,
+    /// and the session is expected back shortly — reaping its state mid-swap
+    /// would just make the dashboard flash empty for no reason. See
+    /// `MemorySupervisor.SessionMemoryStatus.Dead`, which this maps onto.
+    let isDead = function
+      | SessionLifecycleStatus.Faulted _
+      | SessionLifecycleStatus.Stopped -> true
+      | SessionLifecycleStatus.Starting _
+      | SessionLifecycleStatus.Ready _
+      | SessionLifecycleStatus.Evaluating _
+      | SessionLifecycleStatus.Building _
+      | SessionLifecycleStatus.Restarting _ -> false
+
     /// Update the port on a status that carries a worker handle; a no-op on
     /// any status that doesn't (Faulted/Restarting/Stopped never do).
     let withWorkerPort (port: int option) = function
