@@ -7,15 +7,22 @@ A Claude Code `PreToolUse` hook for the Bash tool. When an agent reaches for
 a SageFs daemon is up, the hook denies the call and tells the agent to go back
 to the REPL loop (see `skills/sagefs/SKILL.md`).
 
-It fires only when all three are true:
+It fires only when all four are true:
 
 - the command runs one of those four dotnet verbs (after a `cd`, `&&`, `timeout`,
   `env` and the like is fine, a mention inside quotes or after `echo` is not)
 - the hook's working directory has an `.fsproj`, `.slnx` or `.sln` at or above it
 - something answers `http://localhost:37749/health` within 800ms
   (`SAGEFS_MCP_PORT` overrides the port)
+- that same `/health` reports a **Ready** session whose working directory
+  is the command's `cwd`, or an ancestor of it
 
 If SageFs isn't running, everything passes. There's no REPL to go back to.
+The last condition matters just as much: with SageFs up but no Ready
+session rooted at (or above) `cwd`, there's *still* no REPL to go back to —
+that's exactly the one build `create_session` itself needs before there can
+be a session at all, so it passes too (issue #144). A session that exists
+for `cwd` but isn't Ready yet (starting, faulted, ...) doesn't count either.
 
 Always allowed: `dotnet pack`, `dotnet tool ...`, `dotnet --version`,
 `dotnet --list-sdks`, `dotnet restore`, and anything else that isn't one of the
@@ -86,9 +93,11 @@ works.
 
 - `ReplGuard.fs` is the decision: command plus context in, `Allow` or
   `Deny reason` out. It's pure, and SageFs.Tests compiles the same file and tests
-  it (`ReplGuardTests.fs`).
+  it (`ReplGuardTests.fs`). `sessionProbe`/`directoryContains` in there are the
+  "is there a Ready REPL for this cwd" check, also unit-tested directly.
 - `sagefs-repl-guard.fsx` is the IO around it: reads the hook JSON from stdin,
-  walks up for a project file, probes `/health`, and writes the deny JSON.
+  walks up for a project file, probes `/health` once (for both daemon-liveness
+  and its `sessionStates`), and writes the deny JSON.
 - `sagefs-repl-guard` is a small POSIX sh wrapper. `dotnet fsi` takes about a
   second and a half to start, and a hook runs before every Bash call, so the
   wrapper exits straight away for commands that never mention dotnet. Only the
@@ -105,5 +114,7 @@ echo '{"hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"'"$PWD"'","tool_
   | tools/agent-hooks/sagefs-repl-guard
 ```
 
-With SageFs up, that prints the deny JSON. With it down, or with
-`SAGEFS_FINAL_GATE=1 dotnet test` as the command, it prints nothing and exits 0.
+With SageFs up and a Ready session rooted at (or above) `$PWD`, that prints
+the deny JSON. With SageFs down, with no Ready session covering `$PWD` yet,
+or with `SAGEFS_FINAL_GATE=1 dotnet test` as the command, it prints nothing
+and exits 0.

@@ -28,10 +28,56 @@ type LeaseProbe =
   | LeaseRefused of reason: string
   | LeaseMustWait of retryAfterSeconds: float * reason: string
 
+/// Whether some Ready daemon session's working directory contains (is at
+/// or above) the command's cwd. `NoReadySessionCoversCwd` covers both "no
+/// session at all for this directory" and "there's a session, but it isn't
+/// Ready yet" — either way there is no REPL here right now.
+type SessionProbe =
+  | ReadySessionCoversCwd
+  | NoReadySessionCoversCwd
+
 /// `Lease` is `None` whenever it was never asked for (the command isn't a
 /// declared final gate, or the daemon didn't answer) — `Context` cannot
-/// represent "asked and got nothing back," only "didn't ask."
-type Context = { Project: ProjectScope; Daemon: DaemonProbe; Lease: LeaseProbe option }
+/// represent "asked and got nothing back," only "didn't ask." `Session`
+/// follows the same shape: `None` means "never probed" (not an F# workspace,
+/// or the daemon didn't answer), not "probed and found nothing."
+type Context = { Project: ProjectScope; Daemon: DaemonProbe; Session: SessionProbe option; Lease: LeaseProbe option }
+
+/// The minimum a session summary the script fetches from `GET /health`'s
+/// `sessionStates` needs to answer "is there a Ready REPL for this cwd" —
+/// kept as plain primitives (not SageFs.Core's own session/status types) for
+/// the same dependency-free reason as `LeaseProbe` above.
+type SessionSummary = { WorkingDirectory: string; Status: string }
+
+[<Literal>]
+let private readyStatusLabel = "Ready"
+
+/// Normalizes a path for comparison: forward slashes, no trailing
+/// separator — so `/repo/`, `/repo` and `C:\repo\` all compare the same way.
+let private normalizePath (path: string) =
+  let p = (path: string).Replace('\\', '/').TrimEnd('/')
+  if p = "" then "/" else p
+
+/// Whether `ancestorOrSelf` is `target` itself, or a real path ancestor of
+/// it — never just a shared string prefix (`/repo` must not "contain"
+/// `/repo-other`). This is what turns "a session exists somewhere" into "a
+/// session exists for a directory I could actually be standing in."
+let directoryContains (ancestorOrSelf: string) (target: string) : bool =
+  let a = normalizePath ancestorOrSelf
+  let t = normalizePath target
+  a = t || t.StartsWith(a + "/")
+
+/// The whole "is there a REPL for this cwd" question: at least one session
+/// in `sessions` is Ready, and its working directory covers `cwd`. Status
+/// comparison is case-insensitive — the wire label's exact casing isn't
+/// this file's contract to police.
+let sessionProbe (cwd: string) (sessions: SessionSummary list) : SessionProbe =
+  let covered =
+    sessions
+    |> List.exists (fun s ->
+      System.String.Equals(s.Status, readyStatusLabel, System.StringComparison.OrdinalIgnoreCase)
+      && directoryContains s.WorkingDirectory cwd)
+  if covered then ReadySessionCoversCwd else NoReadySessionCoversCwd
 
 /// The dotnet verbs that belong in the final gate, not the inner loop.
 type SlowVerb =
@@ -212,8 +258,14 @@ let busyDenyReason (verb: SlowVerb) (leaseProbe: LeaseProbe) =
   ]
 
 /// The guard's whole decision.
-///   - An UNDECLARED slow verb, in an F# workspace, with SageFs answering,
-///     is denied on "use the REPL" grounds — unrelated to memory pressure.
+///   - An UNDECLARED slow verb, in an F# workspace, with SageFs answering
+///     AND a Ready session whose working directory covers this cwd, is
+///     denied on "use the REPL" grounds — unrelated to memory pressure.
+///     With SageFs up but no Ready session here, there is no REPL to go
+///     back to — that is exactly the one build `create_session` itself
+///     needs (issue #144), so it passes. A `Session` probe that failed or
+///     was never asked (`None`) fails OPEN the same way: this hook must
+///     never be the reason a build that needed to run couldn't.
 ///   - A DECLARED final gate is legitimate, but still asks for a lease
 ///     first: `LeaseGranted` (or no daemon to ask) allows it; `LeaseRefused`/
 ///     `LeaseMustWait` denies it as BUSY, with the reason and the wait.
@@ -223,10 +275,11 @@ let decide (command: string) (ctx: Context) : Decision =
   match classify command with
   | NoSlowLoop -> Allow
   | SlowLoop verb ->
-    match ctx.Project, ctx.Daemon with
-    | FSharpWorkspace, DaemonAnswering -> Deny(denyReason verb)
-    | NotFSharpWorkspace, _
-    | _, DaemonNotAnswering -> Allow
+    match ctx.Project, ctx.Daemon, ctx.Session with
+    | FSharpWorkspace, DaemonAnswering, Some ReadySessionCoversCwd -> Deny(denyReason verb)
+    | FSharpWorkspace, DaemonAnswering, (Some NoReadySessionCoversCwd | None)
+    | NotFSharpWorkspace, _, _
+    | _, DaemonNotAnswering, _ -> Allow
   | DeclaredFinalGate verb ->
     match ctx.Project, ctx.Daemon, ctx.Lease with
     | FSharpWorkspace, DaemonAnswering, Some(LeaseRefused _ as probe)

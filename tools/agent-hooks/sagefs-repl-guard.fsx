@@ -15,16 +15,17 @@ open System.Net.Http
 open System.Text.Json
 open SageFs.AgentHooks.ReplGuard
 
+let private str (el: JsonElement) (name: string) =
+  match el.TryGetProperty name with
+  | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
+  | _ -> ""
+
 let input = Console.In.ReadToEnd()
 
 let command, cwd =
   try
     use doc = JsonDocument.Parse input
     let root = doc.RootElement
-    let str (el: JsonElement) (name: string) =
-      match el.TryGetProperty name with
-      | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
-      | _ -> ""
     let cmd =
       match root.TryGetProperty "tool_input" with
       | true, ti when ti.ValueKind = JsonValueKind.Object -> str ti "command"
@@ -54,12 +55,35 @@ let mcpPort () =
   | true, p -> p
   | _ -> 37749
 
-let daemonAnswering () =
+/// `GET /health`'s own `sessionStates` array already carries every session's
+/// `workingDirectory` and lifecycle `status` — this parses just those two
+/// fields into `SessionSummary`s for `sessionProbe`, best-effort: a shape it
+/// doesn't recognize yields `[]`, never an exception, so a daemon that
+/// answered health at all is never mistaken for a parse failure.
+let private parseSessionSummaries (healthBody: string) : SessionSummary list =
+  try
+    use doc = JsonDocument.Parse healthBody
+    match doc.RootElement.TryGetProperty "sessionStates" with
+    | true, states when states.ValueKind = JsonValueKind.Array ->
+      states.EnumerateArray()
+      |> Seq.map (fun s -> { WorkingDirectory = str s "workingDirectory"; Status = str s "status" })
+      |> List.ofSeq
+    | _ -> []
+  with _ -> []
+
+/// Probes `/health` once and reports both whether the daemon answered and
+/// what it said about its sessions — one HTTP call feeds both `DaemonProbe`
+/// and `SessionProbe`, instead of a second round trip to `/api/sessions`.
+let healthProbe () : bool * SessionSummary list =
   try
     use http = new HttpClient(Timeout = TimeSpan.FromMilliseconds 800.0)
     use resp = http.GetAsync(sprintf "http://localhost:%d/health" (mcpPort ())).GetAwaiter().GetResult()
-    resp.IsSuccessStatusCode
-  with _ -> false
+    match resp.IsSuccessStatusCode with
+    | false -> false, []
+    | true ->
+      let body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+      true, parseSessionSummaries body
+  with _ -> false, []
 
 /// Ask the daemon for an expensive-work lease for THIS command's own final
 /// gate. Best-effort and fail-open: any transport/parse failure here must
@@ -103,15 +127,16 @@ if needsContext command then
   match projectScope () with
   | NotFSharpWorkspace -> ()
   | FSharpWorkspace ->
-    match daemonAnswering () with
-    | false -> ()
-    | true ->
+    match healthProbe () with
+    | false, _ -> ()
+    | true, sessions ->
+      let session = Some(sessionProbe cwd sessions)
       let lease =
         match classify command with
         | DeclaredFinalGate verb -> leaseProbe verb
         | SlowLoop _
         | NoSlowLoop -> None
-      match decide command { Project = FSharpWorkspace; Daemon = DaemonAnswering; Lease = lease } with
+      match decide command { Project = FSharpWorkspace; Daemon = DaemonAnswering; Session = session; Lease = lease } with
       | Allow -> ()
       | Deny reason ->
         let out =
