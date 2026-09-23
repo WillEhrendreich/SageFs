@@ -67,4 +67,28 @@ let integrationRegistryTests =
       |> List.filter (fun suite ->
         not (hostNames |> List.exists (fun n -> n.Contains("[Integration] " + suite))))
       |> Expect.isEmpty "every listed suite runs under --integration-host"
+
+    testCase "WHY — Integration.excludeByName — a tagged leaf is pruned without flattening its siblings' name hierarchy because --filter-test-list needs at least two name levels to match anything" <| fun _ ->
+      let tree =
+        testList "root" [
+          testList "Cli.stop exit codes" [ testCase "kept case" ignore ]
+          testList "[Benchmark] cycle Core Benchmark" [ testCase "excluded case" (fun () -> failtest "must never run") ]
+        ]
+      tree
+      |> Integration.excludeByName (fun full -> full.Contains "[Benchmark]")
+      |> Test.toTestCodeList
+      |> List.map (fun flat -> flat.name)
+      |> Expect.equal "the surviving leaf keeps its full, unflattened name path"
+           [ [ "root"; "Cli.stop exit codes"; "kept case" ] ]
+
+    testCase "WHY — defaultSuite's own filtering — --filter-test-list still matches a real testList name after exclusion because Expecto.Test.filter used to flatten every survivor's name into one joined string, breaking the flag for the whole suite" <| fun _ ->
+      let survivors =
+        testList "Cli.stop exit codes" [ testCase "no daemon running exits non-zero" ignore ]
+        |> Integration.excludeByName (fun _ -> false)
+      let summary = ref None
+      let handler = CLIArguments.Append_Summary_Handler(Tests.SummaryHandler(fun s -> summary.Value <- Some s))
+      Tests.runTestsWithCLIArgs [ handler ] [| "--filter-test-list"; "Cli.stop exit codes" |] survivors |> ignore
+      match summary.Value with
+      | Some s -> s.passed.Length |> Expect.equal "the filtered run actually executed the matching case" 1
+      | None -> failtest "no summary was captured"
   ]

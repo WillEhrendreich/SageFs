@@ -288,6 +288,46 @@ module Integration =
   let excludeRegistered (tree: Expecto.Test) =
     exclude (registered () |> List.map snd) tree
 
+  /// Prune every leaf whose full accumulated name (every ancestor TestLabel,
+  /// joined top-down with ".") satisfies `excludeName`, WITHOUT flattening the
+  /// survivors' own name hierarchy — unlike `Expecto.Test.filter`, which
+  /// rebuilds each surviving leaf as a single TestLabel holding the whole
+  /// joined name as ONE string. That flattening is the root cause of the
+  /// AGENTS.md `--filter-test-list` trap FOR OUR OWN SUITE: Expecto's
+  /// `getTestList` slices a leaf's name list on the assumption it has at
+  /// least the enclosing list PLUS the case name as separate elements; once
+  /// `defaultSuite` used to run every survivor through `Test.filter` (for the
+  /// `[Benchmark]` exclusion below), every leaf's name list collapsed to
+  /// exactly one element, so `--filter-test-list` could never see a "list"
+  /// component to match against again — confirmed with a minimal repro
+  /// against bare Expecto (11.0.0-alpha8): a hand-built two-level tree
+  /// filters correctly with `--filter-test-list`, and filters correctly
+  /// after this recursive prune, but ALWAYS matches zero once put through
+  /// `Expecto.Test.filter`, independent of the substring. `--filter-test-case`
+  /// was unaffected only because `getTestCase` reads the LAST name element,
+  /// which after flattening still holds the full joined string.
+  let rec private pruneByName (excludeName: string -> bool) (parents: string list) (t: Expecto.Test) : Expecto.Test option =
+    match t with
+    | Expecto.TestCase (_, _) ->
+      let full = String.concat "." (List.rev parents)
+      match excludeName full with
+      | true -> None
+      | false -> Some t
+    | Expecto.TestList (tests, focus) ->
+      match tests |> List.choose (pruneByName excludeName parents) with
+      | [] when not tests.IsEmpty -> None
+      | kept -> Some (Expecto.TestList (kept, focus))
+    | Expecto.TestLabel (name, inner, focus) ->
+      pruneByName excludeName (name :: parents) inner
+      |> Option.map (fun i -> Expecto.TestLabel (name, i, focus))
+    | Expecto.Sequenced (how, inner) ->
+      pruneByName excludeName parents inner
+      |> Option.map (fun i -> Expecto.Sequenced (how, i))
+
+  let excludeByName (excludeName: string -> bool) (tree: Expecto.Test) : Expecto.Test =
+    pruneByName excludeName [] tree
+    |> Option.defaultValue (Expecto.TestList ([], Expecto.FocusState.Normal))
+
   /// Full names in `tree` that still carry the "[Integration]" tag — tests that
   /// bypassed the registry. The default runner refuses to run while any exist.
   let unregisteredTagged (tree: Expecto.Test) =
@@ -347,9 +387,7 @@ module Integration =
     Expecto.Impl.testFromThisAssembly ()
     |> Option.defaultValue (Expecto.Tests.testList "empty" [])
     |> excludeRegistered
-    |> Expecto.Test.filter
-         Expecto.Tests.defaultConfig.joinWith.asString
-         (fun z -> not ((Expecto.Tests.defaultConfig.joinWith.format z).Contains "[Benchmark]"))
+    |> excludeByName (fun full -> full.Contains "[Benchmark]")
 
 /// One trust signal for every test tier (default, host, each dedicated entry
 /// point, mutation).
