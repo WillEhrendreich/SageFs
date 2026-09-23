@@ -1055,7 +1055,14 @@ let fileSizeBudgets =
       // ~2GB/minute with zero sessions. Deliberate, reviewed fix, not
       // silent accretion. Ratchet back DOWN when this file is split; never
       // bump to paper over drift.
-      "SageFs/Mcp.fs", 4342
+      // 4342 -> 4363: get_fsi_status now appends a stale-daemon affordance
+      // (issue #136) in both the Routable and no-session branches, reading
+      // UpdateCheckService.currentOutcome() — the daemon's own periodic
+      // NuGet check — silent unless genuinely behind. Deliberate, reviewed,
+      // matches the self-host-staleness (selfHostLine) and health
+      // (healthLine) affordances already appended right beside it. Ratchet
+      // back DOWN when this file is split; never bump to paper over drift.
+      "SageFs/Mcp.fs", 4363
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

@@ -406,6 +406,13 @@ let statusCommand
     match fetchSessionCount info with
     | Some count -> printfn "  Sessions:   %d active" count
     | None -> ()
+    // Issue #136: read the daemon's own periodic NuGet check (cached under
+    // its data dir — no network call from this one-shot CLI invocation) and
+    // say so if it's genuinely behind. Silent for current/unknown/opted-out
+    // — see UpdateCheck.describe's own doc comment on why.
+    UpdateCheckService.evaluateForCli DaemonState.SageFsDir info.Version
+    |> UpdateCheck.describe
+    |> Option.iter (printfn "\n%s")
     0
   | DaemonPresence.Wedged pid ->
     printfn "SageFs daemon is wedged"

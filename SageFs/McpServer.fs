@@ -2388,7 +2388,25 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
                features = [ "live-testing"; "coverage-intel"; "impact-forecast"; "action-prioritizer"; "mark-all-stale"; "time-travel" ]
                sessionCount = sessionStates.Length
                sessionStates = sessionStates
-               diagnosticSummary = diagnosticSummary |}
+               diagnosticSummary = diagnosticSummary
+               // Issue #136: is THIS daemon stale against what's published on
+               // NuGet? Read with no IO of its own (SageFs.DaemonMode's
+               // periodic background check keeps it fresh) — silent
+               // ("unknown") unless the last completed check actually found
+               // a newer release, never a false "current" from a check that
+               // was skipped or failed.
+               updateCheck =
+                 match SageFs.UpdateCheckService.currentOutcome () with
+                 | SageFs.UpdateOutcome.UpdateAvailable(current, latest, behind) ->
+                   box
+                     {| status = "behind"
+                        current = current.ToString()
+                        latest = latest.ToString()
+                        behind = behind
+                        message = SageFs.UpdateCheck.describe (SageFs.UpdateOutcome.UpdateAvailable(current, latest, behind)) |> Option.defaultValue "" |}
+                 | SageFs.UpdateOutcome.UpToDate current -> box {| status = "current"; current = current.ToString() |}
+                 | SageFs.UpdateOutcome.CheckSkipped _
+                 | SageFs.UpdateOutcome.CheckFailed _ -> box {| status = "unknown" |} |}
     }) :> Task
   ) |> ignore
   app.MapGet("/diag/threadpool", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

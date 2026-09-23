@@ -60,6 +60,18 @@ module Timeouts =
   let shutdownHttpClient = TimeSpan.FromSeconds(5.0)
   let sseKeepAlive = TimeSpan.FromHours(24.0)
 
+  // -- Update / staleness check (issue #136) --
+  /// Hard timeout on the NuGet flat-container GET. Any failure (including a
+  /// timeout) must be swallowed by the caller into `CheckFailed`, never
+  /// block daemon startup, and never slow a session.
+  let updateCheckFetch = envOrDefault "SAGEFS_UPDATE_CHECK_TIMEOUT_SECONDS" 3.0
+  /// How often the daemon re-asks NuGet whether a newer version exists.
+  /// Checked once on daemon start (if the on-disk cache is older than this)
+  /// and re-checked on this cadence for the lifetime of a long-running
+  /// daemon — the whole point being to catch a daemon that has been up long
+  /// enough to go stale without anyone restarting it.
+  let updateCheckInterval = envOrDefaultMinutes "SAGEFS_UPDATE_CHECK_INTERVAL_MINUTES" (6.0 * 60.0)
+
   // -- Live Testing (configurable at runtime via MCP, thread-safe) --
   let private _perTestLock = obj ()
   let private _globalTestLock = obj ()

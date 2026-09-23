@@ -3855,6 +3855,32 @@ let run
         | ex -> log.LogWarning("Status poll failed: {Error}", ex.Message)
       } :> System.Threading.Tasks.Task)
 
+  // Issue #136: "tell users and agents when they are running a stale
+  // SageFs" — the daemon that has been up the longest is exactly the one
+  // most likely to have gone stale under itself, so this keeps checking
+  // for its own whole lifetime, not just once at boot. The first check
+  // (immediately, off the critical path) also logs one line if it's
+  // already behind on startup — every later refresh just keeps
+  // UpdateCheckService.currentOutcome() fresh for get_fsi_status/health/
+  // the dashboard, silently, since a console line nobody's watching hours
+  // into a run wouldn't have helped the incident this exists to prevent.
+  let _updateCheckTask =
+    System.Threading.Tasks.Task.Run(fun () ->
+      task {
+        try
+          let! firstOutcome = UpdateCheckService.checkOnceAsync DaemonState.SageFsDir
+          match UpdateCheck.describe firstOutcome with
+          | Some line -> log.LogWarning("{Line}", line)
+          | None -> ()
+          while not cts.Token.IsCancellationRequested do
+            do! System.Threading.Tasks.Task.Delay(Timeouts.updateCheckInterval, cts.Token)
+            let! _ = UpdateCheckService.checkOnceAsync DaemonState.SageFsDir
+            ()
+        with
+        | :? OperationCanceledException -> ()
+        | ex -> log.LogDebug("Update check failed: {Error}", ex.Message)
+      } :> System.Threading.Tasks.Task)
+
   try
     let! _ = System.Threading.Tasks.Task.WhenAny(mcpRunning, dashboardRunning)
     ()

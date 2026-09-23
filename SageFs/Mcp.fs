@@ -1151,13 +1151,24 @@ module McpTools =
         let! sessions = ctx.SessionOps.GetAllSessions()
         let sessionCount = sessions |> List.length
         let availableTools = Affordances.availableTools SessionState.Uninitialized
+        // Stale-daemon affordance (issue #136), same silent-unless-stale
+        // read as the Routable branch below — deliberately included here
+        // too: a create_session failure that reads like a SageFs bug (the
+        // motivating incident) is most often noticed right where an agent
+        // next calls get_fsi_status with no session yet to show for it.
+        let staleLine =
+          UpdateCheckService.currentOutcome ()
+          |> UpdateCheck.describe
+          |> Option.map (fun line -> " " + line)
+          |> Option.defaultValue ""
         return
           System.Text.Json.JsonSerializer.Serialize(
             {| state = "NoSession"
                message =
-                 match sessionCount with
-                 | 0 -> "No sessions exist. Create one with create_session (args are snake_case): working_directory=<dir> projects=[\"<path>.fsproj\"] to load a specific project, or projects=[] to let the worker auto-discover whatever project/solution sits directly in working_directory (this is NOT a guaranteed-empty REPL — it only comes out empty if the directory has nothing to discover). Use get_available_projects to discover .fsproj files (pass working_directory to narrow a large tree)."
-                 | _ -> sprintf "%d session(s) exist but none matched the working directory. Use list_sessions to see them, or switch_session to select one." sessionCount
+                 (match sessionCount with
+                  | 0 -> "No sessions exist. Create one with create_session (args are snake_case): working_directory=<dir> projects=[\"<path>.fsproj\"] to load a specific project, or projects=[] to let the worker auto-discover whatever project/solution sits directly in working_directory (this is NOT a guaranteed-empty REPL — it only comes out empty if the directory has nothing to discover). Use get_available_projects to discover .fsproj files (pass working_directory to narrow a large tree)."
+                  | _ -> sprintf "%d session(s) exist but none matched the working directory. Use list_sessions to see them, or switch_session to select one." sessionCount)
+                 + staleLine
                available = availableTools |})
       | WarmingUp _ | Unroutable _ | FaultedSession _ ->
         // INVARIANT (get_fsi_status is total): a session that exists but is
@@ -1244,7 +1255,17 @@ module McpTools =
                   |> Option.map (fun line -> "\n" + line)
                   |> Option.defaultValue ""
             }
-          return enriched + rebuildLine + selfHostLine + healthLine
+          // Stale-daemon affordance (issue #136): the daemon's own periodic
+          // NuGet check (UpdateCheckService, DaemonMode's background loop),
+          // read here with no IO of its own — silent unless genuinely
+          // behind, so a current daemon never nags on the tool agents call
+          // constantly.
+          let staleLine =
+            UpdateCheckService.currentOutcome ()
+            |> UpdateCheck.describe
+            |> Option.map (fun line -> "\n" + line)
+            |> Option.defaultValue ""
+          return enriched + rebuildLine + selfHostLine + healthLine + staleLine
         | Ok other ->
           return sprintf "Unexpected response: %A" other
         | Error (RestartInProgress msg) ->
