@@ -140,6 +140,9 @@
         <Compile Include="WarmupSim.fs" />
         <Compile Include="WarmupInvariants.fs" />
         <Compile Include="WarmupGenerators.fs" />
+        <Compile Include="SessionStatusReconciliationSim.fs" />
+        <Compile Include="SessionStatusReconciliationInvariants.fs" />
+        <Compile Include="SessionStatusReconciliationGenerators.fs" />
         <!-- HealthAnomaly DST: seeded series shapes (flat, step, drift,
              spike, sawtooth, recovery, legitimate scale change) folded
              through the REAL HealthAnomaly.step; an AlwaysFineTwin behavior

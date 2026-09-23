@@ -210,7 +210,28 @@ module WorkerProtocol =
     /// wire-protocol SessionStatus). The worker's report carries no pid/port
     /// — it has no notion of how the daemon is tracking it — so those are
     /// carried over from whatever the daemon currently has recorded.
+    ///
+    /// Faulted and Stopped are TERMINAL: once the daemon has recorded one, a
+    /// live worker report can never undo it, no matter what it says. A `Get
+    /// Status` reply can legitimately arrive from a worker that has not
+    /// caught up to its own death yet — a hung process the parent-death
+    /// watchdog hasn't reaped, a reply that raced the fault the daemon
+    /// already learned about through another channel (WorkerExited, a spawn
+    /// failure) — and taking that reply at face value flips the registry
+    /// right back to "Starting"/"Ready". That is exactly how `/health` and
+    /// `get_fsi_status` could disagree with a session's own registry entry:
+    /// the caller of this function (`get_fsi_status`, Mcp.fs) writes
+    /// `reconciled` straight back into the registry whenever it differs, so
+    /// the old, un-sticky version did not just MISREPORT a faulted session —
+    /// polling it could resurrect it. A genuine restart never goes through
+    /// this function: it replaces the registry entry outright with a fresh
+    /// status, so making the terminal cases sticky here closes only the
+    /// stale-poll hole, not restart.
     let ofWorkerReport (current: SessionLifecycleStatus) (reported: SessionStatus) : SessionLifecycleStatus =
+      match current with
+      | SessionLifecycleStatus.Faulted _
+      | SessionLifecycleStatus.Stopped -> current
+      | _ ->
       let handle () : WorkerHandle =
         { Pid = workerPid current |> Option.defaultValue 0
           Port = workerPort current }
