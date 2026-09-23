@@ -61,9 +61,20 @@ let private rssMB (proc: Process) =
 [<Literal>]
 let private SoakMinutesEnvironmentVariable = "SAGEFS_IDLE_RSS_SOAK_MINUTES"
 
-/// Long enough to cross three 60s housekeeping cycles; short enough to belong
-/// in a gate that runs before every push.
-let private defaultWindow = TimeSpan.FromMinutes 3.0
+/// Long enough to cross a 60s housekeeping cycle, short enough that a guard
+/// is not the most expensive thing in the tier.
+///
+/// This was 10 minutes, then 3, and both were wrong for the same reason: the
+/// wall clock was picked from "how long feels thorough" instead of from the
+/// rate the test can actually detect. At a 200MB tolerance the incident this
+/// guards against — roughly 2GB/minute — blows the budget in about six
+/// seconds. A 60s window still catches anything above ~200MB/minute, a 10x
+/// margin over anything ever observed, and takes 3 minutes off every single
+/// run of the host tier, where the 3-minute version was the slowest test by
+/// a factor of five. Hunting an actual slow drip is what
+/// `SAGEFS_IDLE_RSS_SOAK_MINUTES` is for; that is a deliberate act, not
+/// something every contributor should pay for on every push.
+let private defaultWindow = TimeSpan.FromSeconds 60.0
 
 let private idleWindow () =
   match Environment.GetEnvironmentVariable SoakMinutesEnvironmentVariable with
@@ -128,8 +139,8 @@ let tests =
         // MB. Deliberately NOT scaled by the window: legitimate housekeeping
         // plateaus rather than growing linearly, so a fixed budget makes a
         // longer soak strictly MORE sensitive, which is the whole point of
-        // running one. At the default window this catches anything above
-        // ~66MB/minute; the incident ran ~2GB/minute and would blow it in
+        // running one. At the default 60s window this catches anything above
+        // ~200MB/minute; the incident ran ~2GB/minute and would blow it in
         // about six seconds.
         let toleranceMB = 200L
         (growthMB, toleranceMB)
