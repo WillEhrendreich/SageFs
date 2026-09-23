@@ -2205,6 +2205,35 @@ let resolveSessionStatus
       return fallbackSessionStatusLabel session.Status, sessionHealthStatusOfLifecycleFallback session.Status
   }
 
+/// The real sink: feeds a `HealthLatency` reading to the health watch.
+/// A named top-level function, not an inline lambda, so `timeHealthLatency`
+/// below never allocates a closure over `HealthWatch` per request.
+let private observeHealthLatencyToHealthWatch (elapsedMs: float) : unit =
+  SageFs.Features.HealthWatch.observe
+    SageFs.Features.HealthAnomaly.SignalId.HealthLatency
+    elapsedMs
+    System.DateTimeOffset.UtcNow
+  |> ignore
+
+/// Times `work` and reports its wall-clock duration (in ms) to `observe`,
+/// then returns `work`'s result unchanged. Wired around `/health`'s own
+/// handler below, deliberately — this is the exact code path that hung for a
+/// full minute in the incident `HealthAnomaly` was named after (Kestrel's
+/// request thread stuck while `/health` timed out and nothing noticed).
+/// Measuring it there, not on a timer, means the signal is "how long a REAL
+/// request actually took", not a fake self-timed probe that could stay fast
+/// while the real endpoint is stuck. `observe` is a parameter, not baked in,
+/// so this is testable with a plain capture instead of the shared, globally-
+/// mutable `HealthWatch` registry other tests also touch.
+let timeHealthLatency (observe: float -> unit) (work: unit -> Task<'a>) : Task<'a> =
+  task {
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    let! result = work ()
+    sw.Stop()
+    observe sw.Elapsed.TotalMilliseconds
+    return result
+  }
+
 /// `healthy` for `GET /health`. A daemon with zero sessions is the normal
 /// state right after startup — the daemon answering this endpoint at all IS
 /// the health signal, and a new user has not created a session yet. Whether a
@@ -2223,7 +2252,7 @@ let healthyForSessions (sessions: SageFs.Features.SessionHealthSummary list) : b
 
 let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    task {
+    timeHealthLatency observeHealthLatencyToHealthWatch (fun () -> task {
       let! allSessions = rctx.Config.SessionOps.GetAllSessions()
       let asm = System.Reflection.Assembly.GetExecutingAssembly()
       let version =
@@ -2345,7 +2374,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
                sessionCount = sessionStates.Length
                sessionStates = sessionStates
                diagnosticSummary = diagnosticSummary |}
-    } :> Task
+    }) :> Task
   ) |> ignore
   app.MapGet("/diag/threadpool", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {

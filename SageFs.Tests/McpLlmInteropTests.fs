@@ -212,7 +212,7 @@ module ProjectDiscoveryTests =
       testCase "loadSolution runs without error and returns a solution"
       <| fun _ ->
         // Verifies loadSolution completes without exception from the test working directory
-        let solution = SageFs.ProjectLoading.loadSolution quietLogger Args.ProjectLoadConfig.empty
+        let solution = SageFs.ProjectLoading.loadSolution quietLogger Args.ProjectLoadConfig.empty (fun _ _ _ -> ())
         ignore solution
 
       testCase "isSolutionFile matches .sln files"

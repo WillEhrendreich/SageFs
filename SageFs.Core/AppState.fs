@@ -1019,6 +1019,22 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
 /// Default is `buildPipeline`. Tracing module provides an instrumented alternative.
 type PipelineBuildFn = Middleware list -> MiddlewareNext -> MiddlewareNext
 
+/// The real sink: feeds an `EvalLatency` reading to the health watch. A named
+/// top-level function, not an inline lambda, so `observeEvalLatency` below
+/// never allocates a closure over `HealthWatch` per eval.
+let private observeEvalLatencyToHealthWatch (elapsedMs: float) : unit =
+  Features.HealthWatch.observe Features.HealthAnomaly.SignalId.EvalLatency elapsedMs System.DateTimeOffset.UtcNow
+  |> ignore
+
+/// Feeds one eval's wall-clock duration to `observe`. Called from the exact
+/// point `Events.EvalCompleted` is published below — sampling there, not on
+/// a timer, is what makes this an eval-latency signal instead of a periodic
+/// poll of something that already happened. `observe` is a parameter, not
+/// baked in, so this is testable with a plain capture instead of the shared,
+/// globally-mutable `HealthWatch` registry other tests also touch.
+let observeEvalLatency (observe: float -> unit) (elapsedMs: float) : unit =
+  observe elapsedMs
+
 let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) =
   let diagnosticsChangedEvent = Event<Features.DiagnosticsStore.T>()
   let emit evt = try onEvent evt with ex -> logger.LogWarning (sprintf "Event emission failed: %s" ex.Message)
@@ -1262,6 +1278,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             publishSnapshot newSt Idle evalStats'
             match res.EvaluationResult with
             | Ok result ->
+              observeEvalLatency observeEvalLatencyToHealthWatch sw.Elapsed.TotalMilliseconds
               emit (Events.EvalCompleted {|
                 Code = code
                 Result = result

@@ -404,7 +404,62 @@ module ReferenceFrameworks =
       EvaluatedAt = po.TargetFramework
       ReferencesAt = referencesAtOf po.ProjectFileName po.AllItems }
 
-let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
+/// Per-project progress while `loadSolution` asks Ionide's `IWorkspaceLoader`
+/// to evaluate MSBuild projects — the "project 34 of 61" a warming-up session
+/// couldn't say before this existed. A pure fold over the loader's own
+/// `WorkspaceProjectState` notifications, reduced to what progress reporting
+/// needs, so it is replayable and testable with no MSBuild involved. State is
+/// two ints: no per-project list, no string accumulation, so a thousand
+/// projects cost the same few bytes as one.
+module ProjectLoadProgress =
+  /// `KnownTotal` is the loader's own running project count — Ionide never
+  /// tells you up front how many projects a solution load will touch (it
+  /// discovers transitively-referenced projects as it goes), so this is the
+  /// best "total" available DURING the load. It only ever grows, which is
+  /// what keeps `step <= total` true at every report.
+  type State = { Completed: int; KnownTotal: int }
+
+  let initial = { Completed = 0; KnownTotal = 0 }
+
+  /// One MSBuild-project-evaluation update, reduced from Ionide's
+  /// `WorkspaceProjectState` to what progress reporting needs.
+  type Update =
+    | Loading of projectFile: string
+    | Loaded of projectFile: string * knownProjectCount: int
+    | Failed of projectFile: string
+
+  /// Fold one update through the state. Returns `None` for `Loading` — nothing
+  /// has completed yet, so there is no honest `step` to report (a `0/N` line
+  /// would violate the same "step must be positive" rule the wire format
+  /// already enforces) — and `Some (step, total, message)` once a project
+  /// finishes, one way or the other.
+  let step (s: State) (update: Update) : State * (int * int * string) option =
+    match update with
+    | Loading _ ->
+      let total = max s.KnownTotal (s.Completed + 1)
+      { s with KnownTotal = total }, None
+    | Loaded (file, knownCount) ->
+      let completed = s.Completed + 1
+      let total = max knownCount completed
+      { Completed = completed; KnownTotal = total },
+      Some(completed, total, sprintf "Loaded %s" (Path.GetFileName file))
+    | Failed file ->
+      let completed = s.Completed + 1
+      let total = max s.KnownTotal completed
+      { Completed = completed; KnownTotal = total },
+      Some(completed, total, sprintf "Failed to load %s" (Path.GetFileName file))
+
+  /// Reduce Ionide's `WorkspaceProjectState` to an `Update` this module knows
+  /// how to fold. The one place that DU becomes ours, so `loadSolution` never
+  /// has to pattern-match the library's type directly.
+  let ofWorkspaceProjectState (state: WorkspaceProjectState) : Update =
+    match state with
+    | WorkspaceProjectState.Loading projFile -> Loading projFile
+    | WorkspaceProjectState.Loaded(loadedProject, knownProjects, _fromCache) ->
+      Loaded(loadedProject.ProjectFileName, List.length knownProjects)
+    | WorkspaceProjectState.Failed(projFile, _errors) -> Failed projFile
+
+let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress: int -> int -> string -> unit) =
   let directory = config.WorkingDir
 
   let explicitProjects = config.Projects
@@ -453,6 +508,16 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
     let toolsPath = Init.init (DirectoryInfo directory) None
     logger.LogInfo (sprintf "  MSBuild/tools path: %A" toolsPath)
     let defaultLoader: IWorkspaceLoader = WorkspaceLoader.Create(toolsPath, [])
+    // Fold Ionide's own per-project notifications through ProjectLoadProgress
+    // so "project 34 of 61" is real, live progress from inside LoadSln/
+    // LoadProjects — not a guess computed before or after the call.
+    let mutable progressState = ProjectLoadProgress.initial
+    defaultLoader.Notifications.Add(fun notification ->
+      let next, reported = ProjectLoadProgress.step progressState (ProjectLoadProgress.ofWorkspaceProjectState notification)
+      progressState <- next
+      match reported with
+      | Some(step, total, message) -> onProgress step total message
+      | None -> ())
 
     logger.LogInfo "Loading solution and project references..."
     let loadedProjects =
@@ -477,7 +542,13 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
       // evaluation fails in-process. Fall back to a manual parse so sessions
       // still get source files — better than a silent 0.
       logger.LogWarning "  Loader returned 0 projects — attempting manual fsproj parse"
-      let manual = projects |> List.collect (fun projPath -> ManualProjectParse.parseFsproj logger projPath)
+      let totalManual = List.length projects
+      let manual =
+        projects
+        |> List.indexed
+        |> List.collect (fun (i, projPath) ->
+          onProgress (i + 1) totalManual (sprintf "Parsing %s (manual)" (Path.GetFileName projPath))
+          ManualProjectParse.parseFsproj logger projPath)
       let refs = ManualProjectParse.collectBinReferences logger projects
       // LibPaths must lead with the project's bin dir so FSI's assembly probe
       // resolves the project's own dependency versions (Falco, Npgsql, ...)

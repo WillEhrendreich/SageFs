@@ -377,6 +377,26 @@ let private checkMailboxAdmission (sessionManager: MailboxProcessor<SessionManag
   | Result.Ok () -> ()
   decision
 
+/// The real sink: feeds a `MailboxQueueDepth` reading to the health watch.
+/// A named top-level function, not an inline lambda, so `sampleMailboxQueueDepth`
+/// below never allocates a closure over `HealthWatch` per tick.
+let private observeMailboxQueueDepthToHealthWatch (depth: float) : unit =
+  SageFs.Features.HealthWatch.observe
+    SageFs.Features.HealthAnomaly.SignalId.MailboxQueueDepth
+    depth
+    System.DateTimeOffset.UtcNow
+  |> ignore
+
+/// Reports a `MailboxQueueDepth` reading to `observe`. Takes the depth as a
+/// getter, not the mailbox itself, so this is testable with a fake counter —
+/// the real caller passes `(fun () -> sessionManager.CurrentQueueLength)`, the
+/// same already-maintained counter `checkMailboxAdmission` above reads. O(1),
+/// never posts to the mailbox, never blocks it. `observe` is a parameter, not
+/// baked in, so this is testable with a plain capture instead of the shared,
+/// globally-mutable `HealthWatch` registry other tests also touch.
+let sampleMailboxQueueDepth (observe: float -> unit) (currentQueueLength: unit -> int) : unit =
+  observe (float (currentQueueLength ()))
+
 /// Build SessionManagementOps record from mailbox + snapshot reader.
 /// Session lifecycle events are recorded directly in the daemon.sagefm binary
 /// manifest (the sole source of truth for session resume) — there is no
@@ -3224,6 +3244,11 @@ let run
         (float memoryMB)
         System.DateTimeOffset.UtcNow
       |> ignore
+      // Same tick, same cheap in-memory read: CurrentQueueLength is a counter
+      // the mailbox already maintains (checkMailboxAdmission reads the same
+      // one), so this can never itself become the thing that starves the
+      // daemon.
+      sampleMailboxQueueDepth observeMailboxQueueDepthToHealthWatch (fun () -> sessionManager.CurrentQueueLength)
       Some ({ DaemonPid = System.Diagnostics.Process.GetCurrentProcess().Id
               DaemonPort = mcpPort
               Uptime = System.DateTimeOffset.UtcNow - daemonStartTime

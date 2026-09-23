@@ -95,6 +95,13 @@ type ActorResult = {
 /// The FSI session init runs in the background — callers can start
 /// serving MCP (get_fsi_status etc.) right away while warm-up proceeds.
 let createActorImmediate a =
+  // Every phase below reports through the SAME `SessionWarmUpProgress` event
+  // `createFsiSession`'s own onProgress already uses — one wire
+  // (`WARMUP_PROGRESS=`), fed by discovery, shadow-copy, instrumentation AND
+  // FSI warm-up in turn, so a newcomer watching a big repo warm up sees
+  // motion the whole way through, not just once FSI itself starts.
+  let emitWarmupProgress step total message =
+    a.OnEvent(Features.Events.SageFsEvent.SessionWarmUpProgress {| Step = step; Total = total; Message = message |})
   let originalSln =
     match a.IsBare with
     | true ->
@@ -102,7 +109,7 @@ let createActorImmediate a =
       ProjectLoading.emptySolution
     | false ->
       a.Logger.LogInfo "Discovering projects..."
-      let sln = loadSolution a.Logger a.LoadConfig
+      let sln = loadSolution a.Logger a.LoadConfig emitWarmupProgress
       a.Logger.LogInfo "Project loading complete."
       sln
 
@@ -112,10 +119,12 @@ let createActorImmediate a =
       None, originalSln, ([||] : Features.LiveTesting.InstrumentationMap array)
     | false ->
       a.Logger.LogInfo "Creating shadow copies of assemblies..."
+      emitWarmupProgress 1 2 "Creating shadow copies of assemblies"
       let dir = ShadowCopy.createShadowDir ()
       let shadowSln = ShadowCopy.shadowCopySolution dir originalSln
       a.Logger.LogInfo (sprintf "  Shadow copies in %s" dir)
       a.Logger.LogInfo "  Instrumenting assemblies for IL coverage..."
+      emitWarmupProgress 2 2 "Instrumenting assemblies for IL coverage"
       let sw = System.Diagnostics.Stopwatch.StartNew()
       let targetPaths = shadowSln.Projects |> List.map (fun po -> po.TargetPath)
       let maps = Features.LiveTesting.CoverageInstrumenter.instrumentShadowSolution targetPaths
