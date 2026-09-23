@@ -112,34 +112,9 @@ let tests =
         | Error _ -> true
     ]
 
-    testList "SessionKinds (isolation is the default)" [
-      testCase "unset selects Isolated: nothing opts in, isolation is how sessions normally work" <| fun _ ->
-        SageFs.SessionKinds.fromEnvironmentWith (fun _ -> null)
-        |> Expect.equal "default" SageFs.SessionKinds.Isolated
-
-      testCase "only an explicit 0 or false opts out, into the in-process reference implementation" <| fun _ ->
-        for value in [ "0"; "false"; "FALSE"; "False" ] do
-          SageFs.SessionKinds.fromEnvironmentWith (fun _ -> value)
-          |> Expect.equal (sprintf "'%s' opts out" value) SageFs.SessionKinds.InProcess
-
-      testProperty "any other value stays Isolated: the safe mode is what a typo or stray value gets"
-      <| fun (value: string) ->
-        match value with
-        | null -> true
-        | other when System.String.Equals(other, "0", System.StringComparison.Ordinal) -> true
-        | other when System.String.Equals(other, "false", System.StringComparison.OrdinalIgnoreCase) -> true
-        | other -> SageFs.SessionKinds.fromEnvironmentWith (fun _ -> other) = SageFs.SessionKinds.Isolated
-
+    testList "SessionKinds (isolation is unconditional)" [
       testCase "the test constructor pins the in-process reference implementation, so tests never depend on the environment" <| fun _ ->
         let args = SageFs.ActorCreation.mkCommonActorArgs (SageFs.Utils.Log.asILogger ()) false ignore SageFs.Args.ProjectLoadConfig.empty true
         Expect.equal "in-process" SageFs.SessionKinds.InProcess args.FsiKind
-
-      testCase "the switch reads exactly the documented variable" <| fun _ ->
-        let mutable asked = ""
-        SageFs.SessionKinds.fromEnvironmentWith (fun name ->
-          asked <- name
-          null)
-        |> ignore
-        Expect.equal "variable name" SageFs.SessionKinds.EnvironmentVariable asked
     ]
   ]

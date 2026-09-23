@@ -319,12 +319,9 @@ module SessionManager =
     // A project built for a newer runtime than the worker host's needs that runtime (roll-forward);
     // one that needs a runtime nobody installed is refused with what to install, not left to fail
     // warmup with a bare "assembly not referenced".
-    // In an isolated session the user's code runs in the FSI host (which is launched on the runtime the project
-    // needs), so the worker itself has nothing to roll forward for.
-    let runtimeChoice =
-      match SessionKinds.fromEnvironmentWith Environment.GetEnvironmentVariable with
-      | SessionKinds.Isolated -> RuntimeCompat.HostFits
-      | SessionKinds.InProcess -> RuntimeSelection.resolveRuntimeChoice projects
+    // Every session is Isolated: the user's code runs in the FSI host (which is launched on the runtime the
+    // project needs), so the worker itself has nothing to roll forward for.
+    let runtimeChoice = RuntimeCompat.HostFits
     match runtimeChoice with
     | RuntimeCompat.RuntimeMissing _ -> Error (SageFsError.WorkerSpawnFailed (RuntimeCompat.describe runtimeChoice))
     | _ ->
