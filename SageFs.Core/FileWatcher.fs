@@ -278,15 +278,58 @@ let shouldSuppressRecompile
     let elapsed = (current.Timestamp - ts).TotalMilliseconds
     sameFile && elapsed < float guardMs
 
-/// Side-effectful: watch `root` recursively while pruning excluded subtrees
-/// (see `shouldPruneDir`) — one non-recursive `FileSystemWatcher` per
-/// surviving directory, added as new subdirectories appear and disposed
-/// when their directory disappears, instead of .NET's own
-/// `IncludeSubdirectories = true` (which cannot skip a subtree: on Linux it
-/// adds one inotify watch per directory it finds under the root, no matter
-/// what's in it). `onChange` and `onOverflow` see exactly the same events a
-/// single recursive watcher would have raised — this only changes how many
-/// OS-level watches it costs to raise them.
+/// Pure: would `path` be dropped by a recursive watch rooted at `root`
+/// because SOME ancestor directory strictly between them (or `path`'s own
+/// parent) is itself excluded (`shouldPruneDir`) — a build/VCS/cache name,
+/// or a nested checkout root? Reuses `shouldPruneDir`'s exact rule so
+/// event-time filtering and the old directory-walk's pruning agree on
+/// exactly the same set of paths; unlike `isInNestedCheckout` (which only
+/// checks checkout markers) this also catches the name-based exclusions.
+let isUnderPrunedPath (root: string) (path: string) (hasCheckoutMarker: string -> bool) : bool =
+  let rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+  let rec walk (dir: string) =
+    match dir with
+    | null | "" -> false
+    | d when String.Equals(d.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), rootFull, StringComparison.OrdinalIgnoreCase) -> false
+    | d when not (d.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) -> false
+    | d when shouldPruneDir rootFull d hasCheckoutMarker -> true
+    | d -> walk (Path.GetDirectoryName d)
+  walk (Path.GetDirectoryName(Path.GetFullPath path))
+
+/// Side-effectful: watch `root` recursively for file changes, with excluded
+/// subtrees (`shouldPruneDir` — bin/obj/.git/node_modules/.runs/artifacts,
+/// nested checkouts) filtered out at EVENT time instead of never watched.
+///
+/// This used to be one non-recursive `FileSystemWatcher` per surviving
+/// directory instead of .NET's own `IncludeSubdirectories = true`, reasoned
+/// from "a recursive watch can't skip a subtree, so it wastes inotify
+/// *watches* on bin/obj". True, but watches were never the resource that
+/// mattered: `fs.inotify.max_user_watches` defaults to 524,288 on this
+/// machine, and this design spent the OTHER, genuinely scarce one —
+/// `fs.inotify.max_user_instances`, default 1024 — one FileSystemWatcher
+/// at a time, which turned out to cost a real instance each in the actual
+/// compiled runtime this daemon ships as (measured: 50 non-recursive
+/// watchers = 50 inotify fds in a Release build; `dotnet fsi` was
+/// independently checked first and misleadingly shares one fd across
+/// thousands of watchers — that difference is real and is why this had to
+/// be re-verified against a compiled binary before trusting it). Live
+/// reproduction on this machine: a freshly built daemon opening a session
+/// on the F# compiler repo (975 directories after pruning — itself down
+/// from 75,402 before `artifacts` was added to `excludedDirNames`) still
+/// hit "The configured user limit (1024) on the number of inotify
+/// instances has been reached" partway through, because ordinary desktop
+/// use (this editor, a compositor, a handful of other tools) already holds
+/// a few dozen instances against the same per-real-UID budget.
+///
+/// One recursive `FileSystemWatcher` costs exactly ONE inotify instance no
+/// matter how large the tree is (measured: 76,000 real directories, 1
+/// inotify fd, 76,000 inotify watches — 14.6% of the watch budget, 0.1% of
+/// nothing since it is one instance). Watching bin/obj/.git/artifacts too
+/// (no subtree can be excluded from a single recursive watch) spends watches,
+/// which are abundant, to save instances, which are not — and the events
+/// those excluded subtrees raise are filtered right here, before `onChange`
+/// ever sees them, so a build churning through `artifacts/` or `obj/` costs
+/// this a cheap path-prefix check per event, never a reload.
 let startPrunedWatcher
   (root: string)
   (extensions: string list)
@@ -295,101 +338,61 @@ let startPrunedWatcher
   (onOverflow: string -> unit)
   : IDisposable =
   let rootFull = Path.GetFullPath root
-  let watchers = Collections.Generic.Dictionary<string, FileSystemWatcher>(StringComparer.OrdinalIgnoreCase)
-  let treeLock = obj ()
-
-  let rec addOne (dir: string) : unit =
-    match lock treeLock (fun () -> watchers.ContainsKey dir) with
-    | true -> ()
-    | false ->
-      try
-        let watcher = new FileSystemWatcher(dir)
-        watcher.IncludeSubdirectories <- false
-        watcher.InternalBufferSize <- bufferSizeBytes
-        watcher.NotifyFilter <- NotifyFilters.LastWrite ||| NotifyFilters.FileName
-        for ext in extensions do
-          watcher.Filters.Add(sprintf "*%s" ext)
-
-        watcher.Changed.Add(onChange FileChangeKind.Changed)
-        watcher.Created.Add(fun e ->
-          onChange FileChangeKind.Created e
-          // A newly created directory (or one moved in whole) can itself
-          // contain a subtree — seed watchers for it exactly as the initial
-          // walk would have, pruning the same way.
-          match Directory.Exists e.FullPath with
-          | true -> for sub in watchableDirs e.FullPath hasCheckoutMarker do addOne sub
-          | false -> ())
-        watcher.Deleted.Add(fun e ->
-          onChange FileChangeKind.Deleted e
-          removeSubtree e.FullPath)
-        watcher.Renamed.Add(fun e ->
-          onChange FileChangeKind.Renamed e
-          // A renamed directory shows up here too (the entry lives in its
-          // parent's watcher): drop whatever was watching the old name and
-          // pick the new one up like a fresh subtree.
-          removeSubtree e.OldFullPath
-          match Directory.Exists e.FullPath with
-          | true -> for sub in watchableDirs e.FullPath hasCheckoutMarker do addOne sub
-          | false -> ())
-        watcher.Error.Add(fun e ->
-          let ex = e.GetException()
-          Log.warn "[FileWatcher] Buffer overflow watching %s — events may have been lost. Cause: %s\n%s" dir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-          onOverflow rootFull)
-        watcher.EnableRaisingEvents <- true
-        lock treeLock (fun () -> watchers.[dir] <- watcher)
-        Log.debug "[FileWatcher] Watching %s (pruned recursive watch of %s)" dir rootFull
-      // A watcher failing to start for ONE directory (permission denied, a
-      // race where the directory vanished between the walk and here) is a
-      // per-directory concern — warn and move on, the rest of the tree is
-      // unaffected. Running out of the OS's inotify budget is not that: it
-      // will fail identically for every remaining directory in this walk
-      // (and the next one), so logging the same "hot-reload disabled for
-      // this directory" line hundreds of times is exactly the confident,
-      // silent-ish wrong answer this exists to stop. Reported once, loudly,
-      // naming the actual sysctl to raise — see ComponentWatch's own doc
-      // comment for why this and the file-watcher's other failure mode
-      // (the MaxWatchableEntries cap) share one registry.
-      with
-      | :? IOException as ex when ex.Message.Contains("inotify", StringComparison.OrdinalIgnoreCase) ->
-        Log.error
-          "[FileWatcher] Out of inotify instances watching %s under %s: %s. Raise fs.inotify.max_user_instances (e.g. `sudo sysctl fs.inotify.max_user_instances=8192`, or persist it in /etc/sysctl.d/) and restart affected sessions. Hot reload is degraded for the rest of this tree until then."
-          dir rootFull ex.Message
-        SageFs.Features.ComponentWatch.reportFailure
-          { Component = sprintf "file-watcher:%s" rootFull
-            Reason = sprintf "inotify instance limit reached watching %s: %s" dir ex.Message
-            Hint = "Raise fs.inotify.max_user_instances (sudo sysctl fs.inotify.max_user_instances=8192) and restart affected sessions." }
-      | ex ->
-        Log.warn "[FileWatcher] Cannot watch %s: %s — hot-reload disabled for this directory\n%s" dir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-
-  and removeSubtree (dir: string) : unit =
-    lock treeLock (fun () ->
-      let toRemove =
-        watchers.Keys
-        |> Seq.filter (fun k ->
-          String.Equals(k, dir, StringComparison.OrdinalIgnoreCase)
-          || k.StartsWith(dir + string Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-        |> Seq.toList
-      for k in toRemove do
-        match watchers.TryGetValue k with
-        | true, w ->
-          w.EnableRaisingEvents <- false
-          w.Dispose()
-          watchers.Remove k |> ignore
-        | false, _ -> ())
-
+  let noop = { new IDisposable with member _.Dispose() = () }
   match Directory.Exists rootFull with
+  | false -> noop
   | true ->
-    for d in watchableDirs rootFull hasCheckoutMarker do addOne d
-    Log.info "FileWatcher started for %s: %d directory watch(es) after pruning bin/obj/.git/nested checkouts" rootFull watchers.Count
-  | false -> ()
+    // Diagnostic-only: how many directories this watch conceptually covers,
+    // and whether that walk itself hit MaxWatchableEntries (still worth
+    // knowing — a tree with a legitimate, non-excluded subtree bigger than
+    // 50,000 directories is a real oddity worth a loud report even though
+    // the recursive watcher below needs no per-directory setup to work).
+    // Pure directory enumeration: costs no inotify resources of its own.
+    let watchableCount = (watchableDirs rootFull hasCheckoutMarker).Length
+    try
+      let watcher = new FileSystemWatcher(rootFull)
+      watcher.IncludeSubdirectories <- true
+      watcher.InternalBufferSize <- bufferSizeBytes
+      watcher.NotifyFilter <- NotifyFilters.LastWrite ||| NotifyFilters.FileName
+      for ext in extensions do
+        watcher.Filters.Add(sprintf "*%s" ext)
 
-  { new IDisposable with
-      member _.Dispose() =
-        lock treeLock (fun () ->
-          for KeyValue(_, w) in watchers do
-            w.EnableRaisingEvents <- false
-            w.Dispose()
-          watchers.Clear()) }
+      let guarded (kind: FileChangeKind) (e: FileSystemEventArgs) =
+        match isUnderPrunedPath rootFull e.FullPath hasCheckoutMarker with
+        | true -> ()
+        | false -> onChange kind e
+
+      watcher.Changed.Add(guarded FileChangeKind.Changed)
+      watcher.Created.Add(guarded FileChangeKind.Created)
+      watcher.Deleted.Add(guarded FileChangeKind.Deleted)
+      watcher.Renamed.Add(guarded FileChangeKind.Renamed)
+      watcher.Error.Add(fun e ->
+        let ex = e.GetException()
+        Log.warn "[FileWatcher] Buffer overflow watching %s — events may have been lost. Cause: %s\n%s" rootFull ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        onOverflow rootFull)
+      watcher.EnableRaisingEvents <- true
+      Log.info "FileWatcher started for %s: one recursive watch (~%d directories in scope; bin/obj/.git/node_modules/.runs/artifacts/nested-checkouts filtered at event time, not walked separately)" rootFull watchableCount
+      watcher :> IDisposable
+    // Even one recursive watcher can fail if the per-real-UID inotify
+    // instance budget is ALREADY exhausted by other processes when this
+    // session starts — rare now that this needs exactly one instance
+    // instead of one per directory, but still reported loudly rather than
+    // silently leaving this session's hot reload dead. See ComponentWatch's
+    // doc comment for why this and the MaxWatchableEntries cap share one
+    // registry.
+    with
+    | :? IOException as ex when ex.Message.Contains("inotify", StringComparison.OrdinalIgnoreCase) ->
+      Log.error
+        "[FileWatcher] Out of inotify instances watching %s: %s. Raise fs.inotify.max_user_instances (e.g. `sudo sysctl fs.inotify.max_user_instances=8192`, or persist it in /etc/sysctl.d/) and restart affected sessions. Hot reload is unavailable for this session until then."
+        rootFull ex.Message
+      SageFs.Features.ComponentWatch.reportFailure
+        { Component = sprintf "file-watcher:%s" rootFull
+          Reason = sprintf "inotify instance limit reached watching %s: %s" rootFull ex.Message
+          Hint = "Raise fs.inotify.max_user_instances (sudo sysctl fs.inotify.max_user_instances=8192) and restart affected sessions." }
+      noop
+    | ex ->
+      Log.warn "[FileWatcher] Cannot watch %s: %s — hot reload disabled for this session\n%s" rootFull ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      noop
 
 /// Side-effectful: start watching directories for file changes.
 /// Returns a dispose function that stops all watchers.

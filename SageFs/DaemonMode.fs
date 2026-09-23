@@ -1179,13 +1179,18 @@ type LiveTestWatcherManager
       // daemon timer GC bug — a timer with no other root gets collected and
       // silently stops firing).
       // Value is an IDisposable, not a bare FileSystemWatcher: each claimed
-      // directory is now watched by `SageFs.FileWatcher.startPrunedWatcher`
-      // — one non-recursive watch per surviving subdirectory, with bin/obj/
-      // .git/node_modules/.runs and nested checkouts pruned from the walk
-      // instead of watched and filtered after the fact. A naive recursive
-      // watch over a whole checkout is exactly how one daemon was measured
-      // holding 148,077 inotify watches (a quarter of the system limit)
-      // after every session watching it had already stopped.
+      // directory is watched by `SageFs.FileWatcher.startPrunedWatcher` — one
+      // recursive `FileSystemWatcher` per directory, with bin/obj/.git/
+      // node_modules/.runs/artifacts and nested checkouts filtered out of
+      // its events (not walked separately: a single recursive watch can't
+      // skip a subtree). One recursive watch over a whole checkout is
+      // exactly how one daemon was once measured holding 148,077 inotify
+      // watches (a quarter of the `max_user_watches` system limit) after
+      // every session watching it had already stopped — watches are cheap
+      // here (524,288 of them, ~15% used by a repo the size of the F#
+      // compiler's), so that cost is accepted on purpose; see
+      // startPrunedWatcher's own doc comment for the instance-budget
+      // reasoning this design is actually built around.
       let watchers = System.Collections.Generic.Dictionary<string, System.IDisposable>()
 
       let handleFileChanged (directories: string list) (e: System.IO.FileSystemEventArgs) =

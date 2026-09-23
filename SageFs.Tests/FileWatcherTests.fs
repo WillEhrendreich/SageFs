@@ -438,15 +438,55 @@ let watchableDirsCappedTests = testList "watchableDirsCapped" [
         Directory.Delete(root, true)
   ]
 
-// NOTE — the premise this task started from ("each FileSystemWatcher costs
-// its own inotify instance on Linux, so a 75,000-directory repo is 74x over
-// the 1024-instance budget") does not hold on the .NET runtime this daemon
-// actually ships on: FileSystemWatcher shares ONE inotify instance per
-// process regardless of watcher count, confirmed live at 76,000 real
-// watchers over 76,000 real directories (0 errors, 1 inotify fd, 76,000
-// inotify watches). That is a live-environment fact about this runtime, not
-// something to assert as a unit test — see the handoff report for the
-// measurements.
+// ── Instance cost must not scale with directory count ───────────────────
+// `dotnet fsi` was checked FIRST and (misleadingly) shares one inotify fd
+// across thousands of FileSystemWatcher objects — a real, reproducible
+// difference from how a compiled binary behaves that cost real time to
+// track down. A compiled Release build of the daemon's own OLD
+// startPrunedWatcher (one non-recursive FileSystemWatcher per surviving
+// directory) does NOT share: measured directly, 50 such watchers held 50
+// separate inotify fds, and the real daemon binary hit "The configured
+// user limit (1024) on the number of inotify instances has been reached"
+// opening a session on the F# compiler repo at just 975 watched
+// directories, because ordinary desktop use already held a few dozen
+// instances against the same per-real-UID budget. This test runs through
+// Expecto's compiled test binary — not fsi — so it exercises the real
+// runtime behavior; it fails on the pre-fix per-directory design (fd count
+// scales with directory count) and passes on the current one recursive
+// watch (fd count stays flat).
+[<Tests>]
+let instanceCostTests = testList "startPrunedWatcher inotify cost" [
+    testCase "WHY — startPrunedWatcher — inotify instance cost does not scale with directory count, because a per-directory design exhausts the 1024-instance budget long before any watch-count limit" <| fun () ->
+      match System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux) with
+      | false -> skiptest "inotify accounting is Linux-specific"
+      | true ->
+      let root = Directory.CreateTempSubdirectory("sagefs-instancecost-").FullName
+      try
+        for i in 1 .. 500 do
+          Directory.CreateDirectory(Path.Combine(root, sprintf "d%04d" i)) |> ignore
+        let countInotifyFds () =
+          let pid = System.Diagnostics.Process.GetCurrentProcess().Id
+          let psi =
+            System.Diagnostics.ProcessStartInfo(
+              "bash", sprintf "-c \"ls -la /proc/%d/fd 2>/dev/null | grep -ci inotify\"" pid,
+              RedirectStandardOutput = true, UseShellExecute = false)
+          use p = System.Diagnostics.Process.Start psi
+          let out = p.StandardOutput.ReadToEnd()
+          p.WaitForExit()
+          match Int32.TryParse(out.Trim()) with
+          | true, n -> n
+          | false, _ -> -1
+        let before = countInotifyFds ()
+        use _watcher = startPrunedWatcher root [ ".fs"; ".fsx" ] 65536 (fun _ _ -> ()) (fun _ -> ())
+        let after = countInotifyFds ()
+        // <= 2 rather than an exact 1: other tests in this same process may
+        // hold their own watcher open concurrently (Expecto can parallelize
+        // test cases) — the property under test is "flat, not proportional
+        // to 500", not "exactly one fd system-wide at this instant".
+        (after - before, 2) |> Flip.Expect.isLessThanOrEqual "one recursive watch over 500 directories costs at most a couple of inotify instances, not 500"
+      finally
+        Directory.Delete(root, true)
+  ]
 
 // ── Nested checkouts ────────────────────────────────────────────────────
 
