@@ -154,8 +154,9 @@
         <Compile Include="Features\SessionScribe.fs" />
         <Compile Include="Features\MessageJournal.fs" />
         <Compile Include="Features\TestNarration.fs" />
-        <Compile Include="Features\DaemonHealth.fs" />
         <Compile Include="Features\HealthAnomaly.fs" />
+        <Compile Include="Features\HealthWatch.fs" />
+        <Compile Include="Features\DaemonHealth.fs" />
         <Compile Include="Features\ScratchPad.fs" />
         <Compile Include="Features\EvalRipple.fs" />
         <Compile Include="Features\EvalLens.fs" />

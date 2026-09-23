@@ -3215,14 +3215,23 @@ let run
                     Failed = summary.Failed
                     Running = summary.Running }
                   : SageFs.Features.LiveTestHealthSummary)
-      let memoryMB = int (System.GC.GetTotalMemory(false) / 1_048_576L)
+      // Resident memory, not the managed heap: the daemon that ate 51.7GB of a
+      // 62GB machine looked fine by GC.GetTotalMemory. Every reading also
+      // teaches the detector what this daemon's normal is.
+      let memoryMB = int (System.Diagnostics.Process.GetCurrentProcess().WorkingSet64 / 1_048_576L)
+      SageFs.Features.HealthWatch.observe
+        SageFs.Features.HealthAnomaly.SignalId.WorkerRss
+        (float memoryMB)
+        System.DateTimeOffset.UtcNow
+      |> ignore
       Some ({ DaemonPid = System.Diagnostics.Process.GetCurrentProcess().Id
               DaemonPort = mcpPort
               Uptime = System.DateTimeOffset.UtcNow - daemonStartTime
               Version = version
               SessionSummaries = sessions
               LiveTestingSummary = testingSummary
-              MemoryMB = memoryMB }
+              MemoryMB = memoryMB
+              Anomalies = SageFs.Features.HealthWatch.troubled () }
             : SageFs.Features.HealthSnapshot)
     GetFailureNarratives = fun () ->
       let model = elmRuntime.GetModel()

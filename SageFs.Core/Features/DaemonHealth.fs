@@ -44,6 +44,11 @@ type HealthSnapshot = {
   SessionSummaries: SessionHealthSummary list
   LiveTestingSummary: LiveTestHealthSummary option
   MemoryMB: int
+  /// What the daemon's own telemetry says about the daemon: signals that have
+  /// drifted or broken away from their own normal (HealthWatch). A daemon can
+  /// be degraded with every session Ready — a wedged request thread, or its
+  /// RSS eating the machine — and before this that state was invisible.
+  Anomalies: HealthAnomaly.Verdict list
 }
 
 module DaemonHealth =
@@ -71,16 +76,20 @@ module DaemonHealth =
       | SessionHealthStatus.Stopped -> "Stopped")
     |> Option.defaultValue "no session"
 
-  /// Determine overall health from snapshot.
+  /// Determine overall health from snapshot. A broken signal counts even when
+  /// every session is fine: the daemon itself is the thing in trouble then.
   let overallStatus (snap: HealthSnapshot) : OverallHealth =
-    match snap.SessionSummaries with
-    | [] -> OverallHealth.Healthy  // Idle daemon is healthy — no sessions yet
-    | sessions ->
-      let hasFaulted =
-        sessions |> List.exists (fun s -> s.Status = SessionHealthStatus.Faulted)
-      match hasFaulted with
-      | true -> OverallHealth.Degraded
-      | false -> OverallHealth.Healthy
+    let broken =
+      snap.Anomalies
+      |> List.exists (function
+        | HealthAnomaly.Verdict.Broken _ -> true
+        | _ -> false)
+    let hasFaulted =
+      snap.SessionSummaries |> List.exists (fun s -> s.Status = SessionHealthStatus.Faulted)
+    match broken, hasFaulted with
+    | true, _ -> OverallHealth.Unhealthy
+    | false, true -> OverallHealth.Degraded
+    | false, false -> OverallHealth.Healthy
 
   let healthEmoji = function
     | OverallHealth.Healthy -> "🟢"

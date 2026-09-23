@@ -2266,7 +2266,8 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
           Version = version
           SessionSummaries = sessionSummaries
           LiveTestingSummary = None
-          MemoryMB = int (daemonProcess.WorkingSet64 / 1024L / 1024L) }
+          MemoryMB = int (daemonProcess.WorkingSet64 / 1024L / 1024L)
+          Anomalies = SageFs.Features.HealthWatch.troubled () }
       let sessionStatus =
         SageFs.Features.DaemonHealth.primarySessionStatusLabel healthSnapshot.SessionSummaries
       let healthy = healthyForSessions healthSnapshot.SessionSummaries

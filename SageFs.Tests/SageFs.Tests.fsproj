@@ -445,6 +445,7 @@
         <Compile Include="MessageJournalTests.fs" />
         <Compile Include="TestNarrationTests.fs" />
         <Compile Include="DaemonHealthTests.fs" />
+        <Compile Include="HealthWatchWiringTests.fs" />
         <Compile Include="HealthAnomalyTests.fs" />
         <Compile Include="HealthAnomalySimDstTests.fs" />
         <Compile Include="ScratchPadTests.fs" />

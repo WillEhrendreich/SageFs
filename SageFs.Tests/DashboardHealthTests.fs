@@ -21,7 +21,8 @@ let private makeHealthSnapshot
     Version = "0.6.43"
     SessionSummaries = sessions
     LiveTestingSummary = liveTests
-    MemoryMB = memoryMB }
+    MemoryMB = memoryMB
+    Anomalies = [] }
 
 let private defaultSnap () =
   makeHealthSnapshot [] None (TimeSpan.FromMinutes 5.0) 128

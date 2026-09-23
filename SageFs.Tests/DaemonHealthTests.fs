@@ -20,6 +20,7 @@ let healthSnapshotTests =
         ]
         LiveTestingSummary = Some { TotalTests = 100; Passed = 98; Failed = 2; Running = 0 }
         MemoryMB = 256
+        Anomalies = []
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "should be healthy" OverallHealth.Healthy
@@ -36,6 +37,7 @@ let healthSnapshotTests =
         ]
         LiveTestingSummary = None
         MemoryMB = 128
+        Anomalies = []
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "should be degraded" OverallHealth.Degraded
@@ -49,6 +51,7 @@ let healthSnapshotTests =
         SessionSummaries = []
         LiveTestingSummary = None
         MemoryMB = 64
+        Anomalies = []
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "no sessions = healthy (idle)" OverallHealth.Healthy
@@ -69,6 +72,7 @@ let healthFormatTests =
         ]
         LiveTestingSummary = Some { TotalTests = 50; Passed = 48; Failed = 2; Running = 0 }
         MemoryMB = 200
+        Anomalies = []
       }
       let text = DaemonHealth.formatSummary snapshot
       text |> Expect.stringContains "has pid" "5678"
@@ -94,6 +98,7 @@ let healthFormatTests =
         SessionSummaries = []
         LiveTestingSummary = None
         MemoryMB = 64
+        Anomalies = []
       }
       let text = DaemonHealth.diagnosticSummary snapshot
       text |> Expect.equal "should explain the missing session state" "No sessions registered with the daemon."
@@ -111,6 +116,7 @@ let healthFormatTests =
         ]
         LiveTestingSummary = None
         MemoryMB = 64
+        Anomalies = []
       }
       let text = DaemonHealth.diagnosticSummary snapshot
       text |> Expect.stringContains "should mention the faulted project" "FaultedProject"
