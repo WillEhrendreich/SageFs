@@ -135,6 +135,23 @@ let reloadBroadcastTests =
       | other -> failtestf "a no-effect save must be NotApplied, got %A" other
     }
 
+    // WHY — job #3's regression: a fail-closed refusal for a redirect that
+    // reached SOME copy, with no proof it's the one the running app calls,
+    // needs its own stable wire token so a client can render it distinctly
+    // from every other refusal, and its remedy names the actual limitation
+    // (no build baseline) rather than a generic restart instruction.
+    test "WHY — an unverified copy carries its own stable case and an honest remedy" {
+      match Broadcast.eventOf (ReloadOutcome.NoEffect(1, [ RestartReason.UnverifiedCopy "greeting" ])) with
+      | DevReloadEvent.NotApplied report ->
+        match report.Reasons with
+        | [ refusal ] ->
+          refusal.Case |> Expect.equal "a stable token to branch on" "UnverifiedCopy"
+          refusal.Message |> Expect.stringContains "names the declaration" "greeting"
+          refusal.SuggestedAction |> Expect.stringContains "and what to do about it" "Restart the app"
+        | other -> failtestf "the refusal must travel, got %A" other
+      | other -> failtestf "an unverified copy must be NotApplied, not a claimed reload, got %A" other
+    }
+
     test "a compile failure keeps its summary and leaves the app serving the last good code" {
       match Broadcast.eventOf (ReloadOutcome.CompileFailed "FS0039: not defined") with
       | DevReloadEvent.CompilationFailed(summary, report, _) ->

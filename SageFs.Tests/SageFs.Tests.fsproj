@@ -165,6 +165,7 @@
         <Compile Include="SessionDisplayMutationTests.fs" />
         <Compile Include="ReloadPlanningDecisionMutationTests.fs" />
         <Compile Include="ReloadPlanningOutcomeRegressionTests.fs" />
+        <Compile Include="ReloadPlanningWholeFileReevalTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
         <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
@@ -184,6 +185,7 @@
         <Compile Include="TestTreeSitterTests.fs" />
         <Compile Include="PluginContractTests.fs" />
         <Compile Include="ProjectLoadingTests.fs" />
+        <Compile Include="ProjectLoadProgressTests.fs" />
         <Compile Include="ReferenceFrameworkTests.fs" />
         <Compile Include="RuntimeCompatTests.fs" />
         <Compile Include="FsiProtocolTests.fs" />
@@ -329,6 +331,8 @@
         <Compile Include="BatchFlusherTests.fs" />
         <Compile Include="BatchFlusherPropertyTests.fs" />
         <Compile Include="LifecyclePropertyTests.fs" />
+        <Compile Include="SessionLifecycleStatusReconciliationTests.fs" />
+        <Compile Include="SessionStatusReconciliationSimTests.fs" />
         <Compile Include="SimulationTests.fs" />
         <Compile Include="DstOracleTests.fs" />
         <Compile Include="WorkerLifecycleSimTests.fs" />
@@ -446,6 +450,7 @@
         <Compile Include="TestNarrationTests.fs" />
         <Compile Include="DaemonHealthTests.fs" />
         <Compile Include="HealthWatchWiringTests.fs" />
+        <Compile Include="HealthSignalWiringTests.fs" />
         <Compile Include="HealthAnomalyTests.fs" />
         <Compile Include="HealthAnomalySimDstTests.fs" />
         <Compile Include="ScratchPadTests.fs" />
@@ -561,6 +566,7 @@
         <Compile Include="CohortLinearizabilityTests.fs" />
         <Compile Include="UsabilityFixesTests.fs" />
         <Compile Include="SessionBuildOptimizationGateTests.fs" />
+        <Compile Include="ProcessEnvironmentTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

@@ -1409,22 +1409,29 @@ let run (sessionId: string) (port: int) = async {
                     setDynamicRunTest runTest
                   | _ -> ()
                   let reloaded = reloadedMethodsOf response
+                  let reachedRunningProcess = reachedRunningProcessOf response
                   let fileName = IO.Path.GetFileName filePath
-                  // How many definitions this save put in front of the process —
-                  // the denominator of "N of M", so a zero numerator is visible
-                  // as the non-event it is rather than reported as success.
-                  let considered =
+                  // THE original fix this comment used to describe: the code
+                  // here logged "Hot reloaded <file>" whenever ANY method had
+                  // been detoured, counting every declaration on disk as
+                  // "considered" with no check that the redirect reached the
+                  // running process. A whole-file re-evaluation re-declares
+                  // the file's own types, so the handlers the user edited
+                  // fail the detour matcher's parameter-type check while a
+                  // few incidental BCL-signature helpers match — "reloaded"
+                  // was reported, the page refreshed, and it served the old
+                  // code. `confirmWholeFileReeval` is the fail-closed
+                  // replacement: nothing counts as landed without
+                  // `reachedRunningProcess` (AppHolds) evidence, the same
+                  // proof an ordinary baselined save requires. Without it, a
+                  // `.SageFs/init.fsx`-started app (which takes exactly this
+                  // no-baseline route during warmup) could get "Hot reloaded
+                  // 1 of 1" for a body edit that redirected some OTHER copy
+                  // of the function than the one the running app calls.
+                  let baseOutcome =
                     match declsOnDisk with
-                    | Ok decls -> List.length decls.Decls
-                    | Error _ -> List.length reloaded
-                  // THE fix. This is where the shipped bug lived: the code here
-                  // logged "Hot reloaded <file>" whenever ANY method had been
-                  // detoured and left the detour middleware to refresh the
-                  // browser. A whole-file re-evaluation re-declares the file's
-                  // own types, so the handlers the user edited fail the detour
-                  // matcher's parameter-type check while a few incidental
-                  // BCL-signature helpers match — "reloaded" was reported, the
-                  // page refreshed, and it served the old code.
+                    | Ok decls -> Features.ReloadPlanning.confirmWholeFileReeval decls.Decls reloaded reachedRunningProcess
+                    | Error _ -> Features.ReloadOutcome.ReloadOutcome.ofPatchCounts (List.length reloaded) (List.length reloaded) []
                   //
                   // `restartReasons` is non-empty exactly when the planner
                   // already established that the user's change takes effect at
@@ -1445,11 +1452,22 @@ let run (sessionId: string) (port: int) = async {
                       Features.ReloadOutcome.ReloadOutcome.RestartRequired(
                         Features.ReloadPlanning.ReloadChange.restartReasons first rest @ restartReasons)
                     | BindingEscalation.ExtraReasons extraReasons ->
-                      match restartReasons with
-                      | [] ->
-                        Features.ReloadOutcome.ReloadOutcome.ofPatchCounts (List.length reloaded) considered []
-                        |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses extraReasons
-                      | reasons -> Features.ReloadOutcome.ReloadOutcome.RestartRequired (reasons @ extraReasons)
+                      match restartReasons, extraReasons with
+                      | [], [] -> baseOutcome
+                      | [], _ :: _ ->
+                        match baseOutcome with
+                        | Features.ReloadOutcome.ReloadOutcome.NoEffect _ ->
+                          baseOutcome |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses extraReasons
+                        | Features.ReloadOutcome.ReloadOutcome.Patched _ ->
+                          // `Patched` has no reasons field to carry a decline
+                          // in (see `ReloadOutcome.withExtraMisses`) — a save
+                          // that patched some functions cleanly while a
+                          // mutable binding declined must still report the
+                          // decline, so the honest overall verdict here is a
+                          // restart rather than a success that buries it.
+                          Features.ReloadOutcome.ReloadOutcome.RestartRequired extraReasons
+                        | other -> other
+                      | reasons, extra -> Features.ReloadOutcome.ReloadOutcome.RestartRequired (reasons @ extra)
                   Features.ReloadBroadcast.broadcastOutcome outcome
                   Log.info "Hot reload: %s — %s" fileName (Features.ReloadOutcome.ReloadOutcome.describe outcome)
                 | Error ex -> broadcastEvalFailure filePath preprocessed.LineOffset response ex

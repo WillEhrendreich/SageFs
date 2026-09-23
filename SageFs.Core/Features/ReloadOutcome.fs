@@ -74,6 +74,19 @@ type RestartReason =
   /// An immutable value you redefined, and SageFs can't see where the running
   /// app's copies went (an optimized build, say), so it won't claim a patch.
   | ValueUntraceable of binding: string * why: string
+  /// Harmony re-pointed A copy of this function, but nothing here proves it
+  /// is the copy the running process actually calls: no `AppHolds` record of
+  /// which copy the app captured, or a different one than the redirect moved.
+  /// Reached only when there is no known-good build baseline to diff a save
+  /// against (`ReloadRoute.ReevaluateWholeFile`), which is exactly the shape
+  /// an `.SageFs/init.fsx`-started app takes during warmup: a body edit still
+  /// gets detoured onto SOME same-named copy, and without the baseline-driven
+  /// `confirmPatchAsOutcome` check that ordinary saves get, that redirect used
+  /// to be counted as a landed patch outright. On a project where FSI's
+  /// multiemit keeps several distinct copies of "the same" function alive at
+  /// once, that is a guess dressed as a fact — the honest default is a
+  /// restart, not a claim this can't back up.
+  | UnverifiedCopy of declaration: string
 
 module RestartReason =
 
@@ -103,6 +116,10 @@ module RestartReason =
       sprintf "the running app kept a copy of '%s', and a patch can't reach a copy: %s" binding holder
     | RestartReason.ValueUntraceable(binding, why) ->
       sprintf "SageFs can't see where the running app's copies of '%s' went, so it won't claim a patch: %s" binding why
+    | RestartReason.UnverifiedCopy declaration ->
+      sprintf
+        "SageFs re-pointed a copy of '%s', but this file has no build baseline to confirm it's the copy the running app calls"
+        declaration
 
   /// What the user can actually do. Never empty — a refusal a user cannot act
   /// on is a dead end, and this is the field that stops it being one.
@@ -134,6 +151,8 @@ module RestartReason =
         binding
     | RestartReason.ValueUntraceable _ ->
       "Restart the app to pick it up. Build through SageFs (it builds with -p:Optimize=false) and a redefined value can be checked and patched."
+    | RestartReason.UnverifiedCopy _ ->
+      "Restart the app to be sure this change takes effect. This file has no known-good build baseline yet — rebuild the project and hard_reset_fsi_session (rebuild=true) so future saves to it can be confirmed precisely."
 
 /// A `let mutable` whose initializer you edited while the app was running. The
 /// app kept its live value (rule 3 of the state spec), and this is what the

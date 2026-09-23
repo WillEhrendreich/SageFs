@@ -22,7 +22,8 @@ let private allReasons =
     RestartReason.SignatureChanged "Program.handle"
     RestartReason.TypeShapeChanged "TodoItem"
     RestartReason.NewDeclaration "Program.newThing"
-    RestartReason.NotYetSupported "a static member" ]
+    RestartReason.NotYetSupported "a static member"
+    RestartReason.UnverifiedCopy "Program.greeting" ]
 
 let private allOutcomes =
   [ ReloadOutcome.Patched(1, 3)

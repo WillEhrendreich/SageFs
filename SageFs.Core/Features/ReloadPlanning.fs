@@ -926,6 +926,55 @@ let confirmPatchAsOutcome
       | false, _ -> RestartReason.NewDeclaration f.Name)
   ReloadOutcome.ofPatchCounts (List.length landed) (List.length patched) reasons
 
+/// Fail-closed patch confirmation for `ReloadRoute.ReevaluateWholeFile`: a
+/// save with no known-good baseline to diff against (the file was edited
+/// after the last build, was never built, or is the shape a `.SageFs/init.fsx`
+/// -started app takes during warmup). Without a baseline, `confirmPatchAsOutcome`'s
+/// "did this exist before" question can't be answered from a source diff — and
+/// assuming "new" for anything unproven, the way that function does for a
+/// declaration genuinely absent from a real baseline, is exactly the guess
+/// that used to report "Hot reloaded 1 of 1" here while the running process
+/// (started from an init script, so it holds its own copy of the handler)
+/// kept serving the old body. So every candidate is treated as if it already
+/// existed, the conservative direction: nothing lands without
+/// `reachedRunningProcess` evidence — the same AppHolds-verified proof
+/// `confirmPatchAsOutcome` requires of an existing declaration.
+///
+/// A name Harmony redirected (by `reloadedMethods`) without that evidence is
+/// `UnverifiedCopy`: SOME copy of the function moved, but nothing here shows
+/// the running app calls it. A name absent from `reloadedMethods` entirely
+/// was invisible to Harmony's matcher — nothing to pair it with — and is
+/// `NewDeclaration`, the same label a real baseline gives a declaration that
+/// did not exist before; here it means "this save can't tell you whether it's
+/// new or just unmatched, but either way nothing proves it reached the
+/// process."
+let confirmWholeFileReeval
+  (declsOnDisk: SourceDecl list)
+  (reloadedMethods: string list)
+  (reachedRunningProcess: string list)
+  : ReloadOutcome =
+  let candidates =
+    declsOnDisk
+    |> List.filter (fun d ->
+      match d.Kind with
+      | DeclKind.FunctionDecl
+      | DeclKind.ValueDecl -> true
+      | DeclKind.TypeDecl
+      | DeclKind.MutableValueDecl
+      | DeclKind.EntryPointDecl
+      | DeclKind.NestedModuleDecl
+      | DeclKind.StartupCode -> false)
+  let landed, missed =
+    candidates
+    |> List.partition (fun f -> reachedBy reloadedMethods f && reachedBy reachedRunningProcess f)
+  let reasons =
+    missed
+    |> List.map (fun f ->
+      match reachedBy reloadedMethods f with
+      | true -> RestartReason.UnverifiedCopy f.Name
+      | false -> RestartReason.NewDeclaration f.Name)
+  ReloadOutcome.ofPatchCounts (List.length landed) (List.length candidates) reasons
+
 /// A plan that refused before any patch was attempted, reported in the same
 /// vocabulary. SageFs does not own the app's lifetime here, so the user is the
 /// one who has to act — which is exactly what `RestartRequired` means.
