@@ -25,11 +25,24 @@ you" below.
 1. **Is SageFs up?** Call `get_fsi_status` (or `list_sessions`). If the tools
    aren't there at all, SageFs isn't connected. Tell the user; don't work
    around it silently.
-2. **Is the daemon current?** A stale daemon serves old code and gives you wrong
-   answers that look right. Compare the daemon's version (`get_fsi_status`, or
-   the dashboard's `/api/daemon-info`) with what the repo expects. If it's
-   behind, tell the user. **Never stop, restart or reinstall the user's daemon
-   without asking.** It's theirs, and other agents may be using it.
+2. **Is the daemon current?** Do this before you trust a single result. A stale
+   daemon serves old code and gives you wrong answers that look right, and it
+   is the most expensive failure in this whole document — see "a stale daemon"
+   under "Things that will bite you" for the disguises it wears.
+
+   Read its version from `get_fsi_status`, `sagefs status`, or the dashboard's
+   `/api/daemon-info`, and compare it against the code you're about to work on.
+   In the SageFs repo itself that's `Directory.Build.props`; anywhere else it's
+   "was this daemon started after the last build of this project?" If you can't
+   tell, the cheap tell is whether a symbol you just added is visible in the
+   session.
+
+   If it's behind, **tell the user and ask them to restart it**. Don't stop,
+   restart or reinstall it yourself — it's theirs, and other agents may be on
+   it. If they ask you how: `dotnet tool update -g sagefs`, then restart. If
+   that reports "already installed" while a newer version is on NuGet, pass
+   `--version X.Y.Z` explicitly — `dotnet tool update` resolves through NuGet's
+   search index, which lags the package store by a few minutes.
 3. **Do you have a session for where you're working?** Sessions are tied to a
    working directory, and **a git worktree is its own routing boundary**. A
    session for the main checkout is not yours if you're in
@@ -109,10 +122,27 @@ you need the details, use `explain_test_failure`.
 - **Never `#r` a DLL the session already loaded from the project.** It creates a
   second copy of every type ("type X is not compatible with type X"). `#r` also
   locks the DLL, so a later rebuild can't overwrite it.
-- **"type not found, Version=..."** or a Core version mismatch usually means the
-  daemon is older than the code you're loading (or SageFs is hosting its own
-  Core). That's a SageFs problem to report, not a reason to quietly switch to
-  `dotnet`.
+- **A stale daemon is the most expensive failure here, because it looks like
+  every other failure.** A daemon that has been running since before your code
+  changed keeps serving the assemblies it started with. Nothing warns you. It
+  wears at least three disguises:
+  - `"type not found, Version=..."` or a Core version mismatch.
+  - `Could not load file or assembly 'System.Runtime, Version=N.0.0.0'` in
+    worker stderr, on a project that builds fine on its own. That one means the
+    daemon's worker is on an older .NET than your project targets — it starts
+    fine and then chokes the moment it loads your DLLs.
+  - No error at all: evals that quietly disagree with the code in front of you.
+
+  **Check the daemon's version before you believe anything else.**
+  `get_fsi_status`, `sagefs status`, or `/health`. If it's behind the code
+  you're working on, say so and ask the user to restart it — that is the fix,
+  and no amount of `hard_reset_fsi_session` will substitute for it, because the
+  daemon process itself is the stale thing. Don't restart it yourself; it's
+  theirs and other agents may be on it.
+
+  An agent lost an entire session to this: it read the load error as "SageFs is
+  broken", spent hours working around it with `dotnet`, and the daemon was
+  simply old. Checking the version first would have cost one tool call.
 - **A filtered test run is never the acceptance check.** A filter that matches
   nothing prints `0 failed` and exits 0 in plain Expecto. SageFs's trust line
   says `NothingRan` or `NarrowedRun`. Only an unfiltered run counts.

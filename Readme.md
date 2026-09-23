@@ -103,11 +103,13 @@ flowchart TB
 
 ### 1. Install SageFs (30 seconds)
 
-You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). Nothing else.
+You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or the .NET 11 SDK. The tool ships a build for each and `dotnet` picks the one that matches yours. Nothing else.
 
 ```bash
 dotnet tool install --global SageFs
 ```
+
+To update later: `dotnet tool update --global SageFs`. If that says "already installed" when you know a newer version is out, add `--version X.Y.Z` — `dotnet tool update` resolves through NuGet's search index, which lags the package store by a few minutes.
 
 ### 2. Check your environment (optional)
 
@@ -573,6 +575,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 | Problem | Quick Fix |
 |:---|:---|
 | "SageFs daemon not found" | `dotnet tool install --global SageFs`, then `sagefs status` |
+| Results don't match the code you just wrote, or a "type not found, Version=…" / "Could not load file or assembly 'System.Runtime, Version=…'" error | Your daemon is older than your code and is still serving what it started with. `sagefs status` to see its version, then `dotnet tool update --global SageFs` and restart it. |
 | Port already in use | `sagefs stop` or `--mcp-port 8080` |
 | Wrong project selected | "SageFs: Switch Project" in command palette |
 | Stale REPL after code changes | Save the file first — source edits auto-reload. Use hard reset only for `.fsproj` / package changes. |

@@ -97,6 +97,12 @@ It'll happen. Usually the agent hits something awkward (a version mismatch, a
 session that isn't ready yet) and quietly goes back to building. Three ways to
 pull it back, from least to most enforced:
 
+> If it was a version mismatch, check your own daemon before you blame the
+> agent. `sagefs status` prints when it started — a daemon that's been up since
+> before your last build is serving old code, and the agent was right that
+> something was wrong, just not about what. See
+> [stale daemon](TROUBLESHOOTING.md#stale-daemon--the-one-that-wastes-the-most-time).
+
 - **Tell it.** "Back to the REPL" or "mandate 1". The skill tells the agent
   what those mean: stop, say where it left the loop, and resume from the REPL.
 - **Use the prompt.** SageFs ships an MCP prompt, `back_to_the_repl`. In Claude

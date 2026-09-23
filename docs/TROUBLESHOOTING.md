@@ -86,6 +86,54 @@ Use hard reset to pick up source file changes:
 - **Neovim**: `:SageFsHardReset`
 - **MCP**: `hard_reset_fsi_session` tool with `rebuild=true`
 
+**If a hard reset doesn't fix it, read the next section.** A hard reset reloads
+the session. It cannot help when the stale thing is the daemon itself.
+
+### Stale daemon — the one that wastes the most time
+
+A daemon that has been running since before your code changed keeps serving the
+assemblies it started with. Nothing warns you, and it does not look like a
+version problem. It looks like SageFs is broken.
+
+Three ways it shows up:
+
+- `type not found, Version=...`, or a `SageFs.Core` version mismatch.
+- `Could not load file or assembly 'System.Runtime, Version=N.0.0.0'` in worker
+  stderr, on a project that builds perfectly on its own. This one means the
+  daemon's worker is running an older .NET than your project targets: it starts
+  fine, then fails the moment it loads your DLLs.
+- No error at all. Evals just quietly disagree with the code in front of you.
+
+**Check the daemon before you believe any other diagnosis:**
+
+```bash
+sagefs status
+```
+
+It prints both `Version` and `Started`. `Started` is usually the faster tell:
+if the daemon has been up since before your last build, it is serving code
+older than what you're looking at, whatever the version says.
+
+If it's behind the code you're working on, restarting the *session* won't help —
+restart the *daemon*:
+
+```bash
+sagefs stop
+dotnet tool update --global SageFs
+sagefs
+```
+
+If `dotnet tool update` reports "already installed" when you know a newer
+version is published, pass the version explicitly:
+
+```bash
+dotnet tool update --global SageFs --version X.Y.Z
+```
+
+`dotnet tool update` resolves through NuGet's search/registration index, which
+lags the package store by a few minutes after a release. The package can be on
+NuGet while the CLI still can't see it.
+
 ### Hot reload not working
 
 - Hot reload is auto-injected by default for `.fs` file changes
