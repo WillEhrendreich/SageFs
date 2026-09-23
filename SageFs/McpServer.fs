@@ -2173,7 +2173,23 @@ let resolveSessionStatus
         let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus routeName) |> Async.StartAsTask
         match resp with
         | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-          return SageFs.WorkerProtocol.SessionStatus.label snap.Status, sessionHealthStatusOfWorkerStatus snap.Status
+          // Route the worker's raw report through the same reconciliation
+          // `ofWorkerReport` gives every other caller: Faulted/Stopped are
+          // sticky on the REGISTRY's current status, so a lagging worker
+          // reply (still saying "Starting" after the daemon already learned
+          // it died through another channel) can no longer make this label
+          // disagree with the `health` field `/health` computes from the
+          // registry via `SessionHealth.classify`. Two fields on one
+          // response disagreeing about the same session is the bug fixed
+          // twice elsewhere today (registry corruption, get_fsi_status) —
+          // this closes the last place it could still happen.
+          let reconciled = SageFs.WorkerProtocol.SessionLifecycleStatus.ofWorkerReport session.Status snap.Status
+          match reconciled with
+          | SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted _
+          | SageFs.WorkerProtocol.SessionLifecycleStatus.Stopped ->
+            return fallbackSessionStatusLabel reconciled, sessionHealthStatusOfLifecycleFallback reconciled
+          | _ ->
+            return SageFs.WorkerProtocol.SessionStatus.label snap.Status, sessionHealthStatusOfWorkerStatus snap.Status
         | SageFs.WorkerProtocol.WorkerResponse.WorkerError _ ->
           return fallbackSessionStatusLabel session.Status, sessionHealthStatusOfLifecycleFallback session.Status
         | _ ->

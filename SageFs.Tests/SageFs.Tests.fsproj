@@ -451,6 +451,7 @@
         <Compile Include="DaemonHealthTests.fs" />
         <Compile Include="HealthWatchWiringTests.fs" />
         <Compile Include="HealthSignalWiringTests.fs" />
+        <Compile Include="ResolveSessionStatusReconciliationTests.fs" />
         <Compile Include="HealthAnomalyTests.fs" />
         <Compile Include="HealthAnomalySimDstTests.fs" />
         <Compile Include="ScratchPadTests.fs" />
