@@ -102,6 +102,48 @@ fi
 # pid that a newcomer would try to kill.
 echo "$$ $sha" > "$STATE/current"
 
+# Take a lease from a running daemon, so AGENTS back off while the gate runs.
+# The flock above only stops a second gate; it does nothing about a sub-agent
+# starting a `dotnet build` on top of this one, which is what actually happened
+# three times in one day. Every tier then reports `errored` rather than `failed`
+# (starved, not wrong) and a 350s tier stretches past 1700s, so the verdict is
+# garbage and the recorded durations that feed future timeouts are poisoned too.
+#
+# Deliberately fail-open and bounded. A release must never be blocked by a
+# daemon that is down, wedged, or simply busy: if the lease is not granted
+# within the wait below, say so loudly and gate anyway. Coordination that can
+# deadlock a release is worse than no coordination.
+gate_lease_id=""
+lease_port=${SAGEFS_MCP_PORT:-37749}
+if command -v curl >/dev/null 2>&1; then
+  for _ in $(seq 1 12); do
+    reply=$(curl -s -m 5 -X POST "http://localhost:$lease_port/api/lease/request" \
+      -H 'Content-Type: application/json' \
+      -d "{\"holder\":\"local-gate-$$\",\"kind\":\"full_build\"}" 2>/dev/null || true)
+    case "$reply" in
+      *'"decision":"granted"'*)
+        gate_lease_id=$(echo "$reply" | grep -oE '"leaseId":"[^"]+"' | cut -d'"' -f4)
+        echo "local-gate: holding the build lease; agents will queue behind this run"
+        break ;;
+      *'"decision":"wait"'*)
+        echo "local-gate: waiting on an agent's build lease..."
+        sleep 10 ;;
+      *)  # refused, unreachable, or no daemon — not our problem to solve here
+        break ;;
+    esac
+  done
+  [ -z "$gate_lease_id" ] && echo "local-gate: no lease (daemon down or busy) — gating anyway, expect noise if an agent builds"
+fi
+release_gate_lease() {
+  [ -n "$gate_lease_id" ] || return 0
+  curl -s -m 5 -X POST "http://localhost:$lease_port/api/lease/release" \
+    -H 'Content-Type: application/json' -d "{\"leaseId\":\"$gate_lease_id\"}" >/dev/null 2>&1 || true
+  gate_lease_id=""
+}
+# Release on every exit path, including the failure `exit $code` below and a
+# Ctrl-C, or the pool leaks a seat until the lease expires on its own.
+trap release_gate_lease EXIT INT TERM
+
 # A persistent clean checkout per source repo, on real disk (a Release build is
 # several GB and the integration suites write temp dirs; a tmpfs has filled
 # and hung this before). Persistent means bin/obj, node_modules, the MCP SDK
