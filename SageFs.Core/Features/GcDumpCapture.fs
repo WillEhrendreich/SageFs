@@ -60,6 +60,26 @@ module GcDumpCapture =
   /// struggling machine.
   let captureTimeoutMs = 120_000
 
+  /// Whether dotnet-gcdump is installed at all. Worth knowing before a
+  /// capture is attempted (a skip for a missing tool is honest; a skip for
+  /// anything else is a bug), and worth telling a user who wants the
+  /// diagnostic: without the tool we can say the daemon is sick but not what
+  /// is holding the memory. Checks PATH and the default global-tool location,
+  /// which is where `dotnet tool install -g dotnet-gcdump` puts it.
+  let isToolAvailable () : bool =
+    let onPath =
+      match Environment.GetEnvironmentVariable "PATH" with
+      | null -> []
+      | path -> path.Split(IO.Path.PathSeparator) |> Array.toList
+    let names = [ "dotnet-gcdump"; "dotnet-gcdump.exe" ]
+    let homeTools =
+      match Environment.GetEnvironmentVariable "HOME" with
+      | null -> []
+      | home -> [ IO.Path.Combine(home, ".dotnet", "tools") ]
+    (onPath @ homeTools)
+    |> List.exists (fun dir ->
+      names |> List.exists (fun name -> try IO.File.Exists(IO.Path.Combine(dir, name)) with _ -> false))
+
   /// The file name for one capture — pid plus a timestamp, so two daemons
   /// (or two runs of the same daemon) never collide in the same directory.
   let fileNameFor (pid: int) (at: DateTimeOffset) : string =
