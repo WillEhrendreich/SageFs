@@ -119,7 +119,14 @@ module McpBridge =
     | DaemonStartFailed of reason: string
     | StdinLine of RpcMessage
     | SessionIdCaptured of string
-    /// A POST or the SSE GET failed once the bridge was `Ready`.
+    /// The daemon answered a specific request with a protocol-level error
+    /// (HTTP 4xx) — it is alive and reachable, only this ONE message was
+    /// rejected. Distinct from `HttpFailed`: this must never move the
+    /// bridge to `Fatal`, only answer the offending request.
+    | RequestRejected of msg: RpcMessage * reason: string
+    /// A POST or the SSE GET failed once the bridge was `Ready` — no usable
+    /// response came back at all (connection refused, timed out, stream
+    /// torn down). This IS "the daemon is gone."
     | HttpFailed of reason: string
     | StdinClosed
 
@@ -160,10 +167,16 @@ module McpBridge =
   /// event ever looks at it once we're Fatal): rot, not loss by a different
   /// name, but still a violation of "never lost." `ReportFatal` always comes
   /// first so the IO edge's top-level "why did this fail" line isn't buried
-  /// under per-message rejection lines.
+  /// under per-message rejection lines, and `Shutdown` always comes last:
+  /// `run`'s doc comment promises "1 if the bridge ended Fatal" as something
+  /// the caller actually GETS BACK, not something it has to wait for stdin
+  /// to close to observe. Emitting it here — not only from `StdinClosed` —
+  /// is what makes that true; without it a Fatal bridge just sat there doing
+  /// nothing until an external kill (found live while verifying issue #138's
+  /// second defect).
   let private giveUp (state: State) (reason: string) : State * Action list =
     let rejections = state.Pending |> List.map (fun m -> Action.RejectMessage(m, reason))
-    { Transport = TransportState.Fatal reason; Pending = [] }, Action.ReportFatal reason :: rejections
+    { Transport = TransportState.Fatal reason; Pending = [] }, (Action.ReportFatal reason :: rejections) @ [ Action.Shutdown ]
 
   /// The one pure transition. `Action list` (not a single `Action`) because
   /// reaching `Ready` for the first time atomically drains everything
@@ -236,10 +249,27 @@ module McpBridge =
     | TransportState.Closed, Event.SessionIdCaptured _
     | TransportState.Fatal _, Event.SessionIdCaptured _ -> state, []
 
+    // ---- A protocol-level rejection of ONE request (never fatal) ----
+    // Reuses `Action.RejectMessage` — the same shape already used for a
+    // message the bridge can't forward for a state reason (queued-at-give-up,
+    // Closed, Fatal) — rather than inventing a second "here's what's wrong
+    // with your request" shape. The bridge stays exactly where it was.
+    | TransportState.Ready _, Event.RequestRejected(msg, reason) -> state, [ Action.RejectMessage(msg, reason) ]
+
+    | TransportState.AwaitingDaemon _, Event.RequestRejected _
+    | TransportState.Closed, Event.RequestRejected _
+    | TransportState.Fatal _, Event.RequestRejected _ ->
+      // Can't happen — nothing is ever forwarded before Ready — but a stray
+      // report here is a no-op, same posture as a stray HttpFailed.
+      state, []
+
     // ---- Daemon dies mid-session ----
     | TransportState.Ready _, Event.HttpFailed reason ->
       let msg = sprintf "the daemon became unreachable: %s" reason
-      { state with Transport = TransportState.Fatal msg }, [ Action.ReportFatal msg ]
+      // Shutdown here too — same reasoning as `giveUp`'s doc comment: Fatal
+      // is a terminal state the process should actually leave on its own,
+      // not one it sits in until stdin happens to close.
+      { state with Transport = TransportState.Fatal msg }, [ Action.ReportFatal msg; Action.Shutdown ]
 
     | TransportState.AwaitingDaemon _, Event.HttpFailed _ ->
       // A probe's own failure arrives as `ProbeResult false`, not

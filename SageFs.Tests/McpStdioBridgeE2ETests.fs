@@ -124,8 +124,126 @@ let private runBridgeSmokeTest () : Task<unit> =
       | None -> ()
   }
 
+/// Issue #138 reproduced literally: write `initialize`, `notifications/
+/// initialized` AND `tools/list` to stdin before reading anything back —
+/// exactly the shape of the bug report's own bash repro (`{ printf ...; sleep
+/// 4; } | sagefs mcp`) and of a fast MCP client that doesn't serialize its
+/// own writes against the bridge's replies. Unlike `runBridgeSmokeTest`
+/// (which reads `initialize`'s reply before sending anything else), this
+/// pipes all three lines into stdin cold, before the daemon this bridge
+/// spawns is even reachable — so they all land in the bridge's `Pending`
+/// queue together and get released as ONE batch (`McpBridge.drain`) the
+/// moment the daemon answers healthy. That batch used to be dispatched via
+/// independent, unordered `Task.Run` calls sharing one stale (pre-session)
+/// `sessionId` snapshot, so every request after `initialize` went out with
+/// no `Mcp-Session-Id` header and got rejected — the SAME race the
+/// write-before-capture fix closes for a single reacting client, one level
+/// up. If this regresses, `tools/list` comes back empty or as an error
+/// instead of the real 50+-tool catalogue.
+let private runPipelinedBatchReproTest () : Task<unit> =
+  task {
+    let mcpPort, _dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
+    let dataDir = IO.Path.Combine(IO.Path.GetTempPath(), "sagefs-test", "mcp-stdio-e2e-batch", Guid.NewGuid().ToString("N"))
+
+    let psi = ProcessStartInfo()
+    psi.FileName <- sageFsExe
+    psi.ArgumentList.Add("mcp")
+    psi.ArgumentList.Add("--mcp-port")
+    psi.ArgumentList.Add(string mcpPort)
+    psi.ArgumentList.Add("--owner-pid")
+    psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    psi.RedirectStandardInput <- true
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.StandardOutputEncoding <- Encoding.UTF8
+    psi.StandardInputEncoding <- Encoding.UTF8
+    psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+
+    use proc = Process.Start(psi)
+    let stderrBuf = Text.StringBuilder()
+    proc.ErrorDataReceived.Add(fun e -> match e.Data with null -> () | line -> stderrBuf.AppendLine(line) |> ignore)
+    proc.BeginErrorReadLine()
+
+    let readTimeout = TimeSpan.FromSeconds(90.0)
+    let readLineWithTimeout () : Task<string option> =
+      task {
+        let readTask = proc.StandardOutput.ReadLineAsync()
+        let! completed = Task.WhenAny(readTask, Task.Delay(readTimeout))
+        match Object.ReferenceEquals(completed, readTask) with
+        | true -> return Option.ofObj readTask.Result
+        | false -> return None
+      }
+
+    let daemonPid = ref (None: int option)
+    try
+      try
+        // All three, cold, before reading a single byte back — the whole
+        // point of this test.
+        do!
+          proc.StandardInput.WriteLineAsync(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"e2e-batch-test","version":"0.0.1"}}}"""
+          )
+        do! proc.StandardInput.WriteLineAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""")
+        do! proc.StandardInput.WriteLineAsync("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""")
+        do! proc.StandardInput.FlushAsync()
+
+        let! initLine = readLineWithTimeout ()
+        match initLine with
+        | None ->
+          failwith (
+            sprintf
+              "sagefs mcp produced no stdout line within %gs — exited=%b exitCode=%s stderr:\n%s"
+              readTimeout.TotalSeconds
+              proc.HasExited
+              (if proc.HasExited then string proc.ExitCode else "n/a")
+              (stderrBuf.ToString())
+          )
+        | Some line ->
+          line |> Expect.stringContains "the initialize response names the server" "\"name\":\"SageFs\""
+
+          match SageFs.DaemonState.readOnPort mcpPort with
+          | Some info -> daemonPid.Value <- Some info.Pid
+          | None -> ()
+
+          let! toolsLine = readLineWithTimeout ()
+          match toolsLine with
+          | None -> failwith (sprintf "no tools/list response within %gs — stderr:\n%s" readTimeout.TotalSeconds (stderrBuf.ToString()))
+          | Some line2 ->
+            line2 |> Expect.stringContains "tools/list carries its request id back — not rejected as a stray 400" "\"id\":2"
+            line2
+            |> Expect.stringContains
+              "the real tool catalogue came back — the batch wasn't forwarded without the session id"
+              "\"send_fsharp_code\""
+      finally
+        try
+          proc.StandardInput.Close()
+        with _ -> ()
+        proc.WaitForExit(15_000) |> ignore
+        match proc.HasExited with
+        | false -> (try proc.Kill() with _ -> ())
+        | true -> ()
+    finally
+      match daemonPid.Value with
+      | Some pid ->
+        try
+          let d = Process.GetProcessById(pid)
+          match d.HasExited with
+          | false -> d.Kill()
+          | true -> ()
+        with _ -> ()
+      | None -> ()
+  }
+
 [<Tests>]
 let tests =
-  Integration.hostCase
-    "sagefs mcp: cold start with no daemon running answers initialize and tools/list on stdout"
-    (fun () -> runBridgeSmokeTest () |> _.GetAwaiter() |> _.GetResult())
+  testList "McpStdioBridge E2E" [
+    Integration.hostCase
+      "sagefs mcp: cold start with no daemon running answers initialize and tools/list on stdout"
+      (fun () -> runBridgeSmokeTest () |> _.GetAwaiter() |> _.GetResult())
+
+    Integration.hostCase
+      "sagefs mcp: issue #138 — initialize, notifications/initialized and tools/list piped in before any reply, tools/list still gets the session id"
+      (fun () -> runPipelinedBatchReproTest () |> _.GetAwaiter() |> _.GetResult())
+  ]

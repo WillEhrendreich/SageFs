@@ -4,6 +4,7 @@ open Expecto
 open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
+open SageFs.McpBridge
 open SageFs.Simulation
 open SageFs.Simulation.McpStdioBridgeSim
 open SageFs.Simulation.McpStdioBridgeInvariants
@@ -134,5 +135,49 @@ let tests =
             match daemonStartAttempted.Check t with
             | Outcome.Violated _ -> ()
             | Outcome.Holds -> failtestf "twin should violate daemon-start-attempted for seed %d" scenario.Seed
+    ]
+
+    testList "the Mcp-Session-Id capture-ordering race (issue #138)" [
+      let sampleMessage (tag: int) : RpcMessage =
+        RpcMessage.Request(RpcId.N(int64 tag), "tools/list", sprintf """{"jsonrpc":"2.0","id":%d,"method":"tools/list"}""" tag)
+
+      testCase "RED — today's ordering (capture-after-write) loses to an instant client" <| fun _ ->
+        // This is the exact shape of issue #138: the Python repro's
+        // notifications/initialized + tools/list sent immediately after
+        // initialize's reply, with no sleep in between. Verified by hand to
+        // fail against the OLD `forward` (capture posted after the stdout
+        // write) before the fix landed — Expecto reported exactly:
+        // "CaptureAfterWrite + Instant: the client's next request (...) was
+        // forwarded WITHOUT the session id sid-1 the daemon had already
+        // issued".
+        match sessionIdRaceHolds defaultPolicy CapturePolicy.CaptureAfterWrite ClientSpeed.Instant "sid-1" (sampleMessage 2) with
+        | Outcome.Violated _ -> ()
+        | Outcome.Holds -> failtest "capture-after-write + an instant client should lose the race — it doesn't, the invariant has no teeth"
+
+      testCase "capture-after-write survives a slow client — the issue's own '3-second pause' workaround" <| fun _ ->
+        sessionIdRaceHolds defaultPolicy CapturePolicy.CaptureAfterWrite ClientSpeed.Slow "sid-1" (sampleMessage 2)
+        |> Expect.equal "a slow-enough client never sees the race" Outcome.Holds
+
+      testCase "GREEN — the fix (capture-before-write) survives an instant client" <| fun _ ->
+        sessionIdRaceHolds defaultPolicy CapturePolicy.CaptureBeforeWrite ClientSpeed.Instant "sid-1" (sampleMessage 2)
+        |> Expect.equal "capture-before-write is unconditionally safe" Outcome.Holds
+
+      testCase "capture-before-write survives a slow client too" <| fun _ ->
+        sessionIdRaceHolds defaultPolicy CapturePolicy.CaptureBeforeWrite ClientSpeed.Slow "sid-1" (sampleMessage 2)
+        |> Expect.equal "safe regardless of client speed" Outcome.Holds
+
+      testPropertyWithConfig simConfig "capture-before-write is safe for every session id, message, and client speed" <| fun () ->
+        let n = pick genSeed
+        let sid = sprintf "sid-%d" n
+        let speed = if n % 2 = 0 then ClientSpeed.Instant else ClientSpeed.Slow
+        sessionIdRaceHolds defaultPolicy CapturePolicy.CaptureBeforeWrite speed sid (sampleMessage n)
+        |> Expect.equal (sprintf "capture-before-write never loses, for n=%d" n) Outcome.Holds
+
+      testPropertyWithConfig simConfig "capture-after-write always loses to an instant client, for every session id and message" <| fun () ->
+        let n = pick genSeed
+        let sid = sprintf "sid-%d" n
+        match sessionIdRaceHolds defaultPolicy CapturePolicy.CaptureAfterWrite ClientSpeed.Instant sid (sampleMessage n) with
+        | Outcome.Violated _ -> ()
+        | Outcome.Holds -> failtestf "should have lost the race for n=%d" n
     ]
   ]

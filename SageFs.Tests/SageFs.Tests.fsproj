@@ -198,6 +198,7 @@
          <Compile Include="HttpApiIntegrationTests.fs" />
          <Compile Include="DaemonRssReturnsToBaselineTests.fs" />
          <Compile Include="DaemonIdleRssTests.fs" />
+         <Compile Include="McpStdioBridgeSimTests.fs" />
          <Compile Include="McpStdioBridgeE2ETests.fs" />
          <Compile Include="WarmupContextTests.fs" />
          <Compile Include="WarmupOpenReplayTests.fs" />

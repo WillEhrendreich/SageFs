@@ -87,6 +87,22 @@ let tests =
           reason |> Expect.stringContains "should point at 'sagefs check'" "sagefs check"
         | other -> failtestf "expected Fatal, got %A" other
 
+      testCase "giving up emits Shutdown — a Fatal bridge terminates on its own, it never just sits there" <| fun _ ->
+        // Regression: `giveUp` used to reach Fatal WITHOUT ever emitting
+        // `Action.Shutdown`, and neither did the Ready+HttpFailed Fatal
+        // transition — and decide has no `Fatal, StdinClosed -> Shutdown`
+        // transition either, so nothing downstream ever completed
+        // `run`'s `exitCode.Task`. Reproduced live: `sagefs mcp` answered
+        // `initialize`, hit the issue #138 400, and then just sat there —
+        // `timeout` had to kill it. `run`'s own doc comment already
+        // promised "1 if the bridge ended Fatal"; this makes that true.
+        let s1, _ = decide policy initial Event.Probe
+        let s2, _ = decide policy s1 (Event.ProbeResult false) // AwaitingDaemon(Starting 0)
+        let s3, actions = decide { policy with MaxProbeAttempts = 0 } s2 Event.Probe
+        match s3.Transport with
+        | TransportState.Fatal _ -> actions |> List.contains Action.Shutdown |> Expect.isTrue "give-up must emit Shutdown"
+        | other -> failtestf "expected Fatal, got %A" other
+
       testCase "isTerminal is true only once Fatal or Closed" <| fun _ ->
         initial |> isTerminal |> Expect.isFalse "AwaitingDaemon is not terminal"
         { Transport = TransportState.Ready None; Pending = [] } |> isTerminal |> Expect.isFalse "Ready is not terminal"
@@ -108,10 +124,11 @@ let tests =
         final.Pending |> Expect.isEmpty "nothing is left dangling in Pending"
         actions
         |> Expect.equal
-          "ReportFatal first, then a RejectMessage for every queued message, in order"
+          "ReportFatal first, then a RejectMessage for every queued message, then Shutdown last — Fatal is terminal, not something the caller has to wait for stdin to close to escape"
           [ Action.ReportFatal(match final.Transport with TransportState.Fatal r -> r | _ -> "")
             Action.RejectMessage(req 1 "initialize", (match final.Transport with TransportState.Fatal r -> r | _ -> ""))
-            Action.RejectMessage(notif "notifications/x", (match final.Transport with TransportState.Fatal r -> r | _ -> "")) ]
+            Action.RejectMessage(notif "notifications/x", (match final.Transport with TransportState.Fatal r -> r | _ -> ""))
+            Action.Shutdown ]
     ]
 
     testList "messages never lost or duplicated during the race" [
@@ -169,6 +186,28 @@ let tests =
         actions |> Expect.equal "no action from a repeat capture" []
     ]
 
+    testList "a protocol-level rejection stays alive (issue #138, defect 2)" [
+      testCase "Ready + RequestRejected answers just that message and stays Ready" <| fun _ ->
+        let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = [] }
+        let msg = req 2 "tools/list"
+        let state, actions = decide policy readyState (Event.RequestRejected(msg, "daemon answered 400: bad request"))
+        state.Transport |> Expect.equal "still Ready, still holding its session id — a 400 is not the daemon going away" (TransportState.Ready(Some "sid"))
+        actions |> Expect.equal "reuses RejectMessage — the same shape any other unforwardable message gets" [ Action.RejectMessage(msg, "daemon answered 400: bad request") ]
+
+      testCase "RequestRejected with no session id yet still stays Ready" <| fun _ ->
+        let readyState = { Transport = TransportState.Ready None; Pending = [] }
+        let msg = req 1 "initialize"
+        let state, _ = decide policy readyState (Event.RequestRejected(msg, "daemon answered 400: bad request"))
+        state.Transport |> Expect.equal "Ready None, not Fatal" (TransportState.Ready None)
+
+      testCase "a stray RequestRejected outside Ready is a no-op, same posture as a stray HttpFailed" <| fun _ ->
+        let msg = req 1 "tools/list"
+        let fatal = { Transport = TransportState.Fatal "already gone"; Pending = [] }
+        let state, actions = decide policy fatal (Event.RequestRejected(msg, "irrelevant"))
+        state |> Expect.equal "unchanged" fatal
+        actions |> Expect.equal "nothing to do" []
+    ]
+
     testList "the daemon dies mid-session" [
       testCase "an HttpFailed while Ready becomes a clear Fatal" <| fun _ ->
         let readyState = { Transport = TransportState.Ready(Some "sid"); Pending = [] }
@@ -177,8 +216,8 @@ let tests =
         | TransportState.Fatal reason -> reason |> Expect.stringContains "carries the underlying reason" "connection reset"
         | other -> failtestf "expected Fatal, got %A" other
         match actions with
-        | [ Action.ReportFatal _ ] -> ()
-        | other -> failtestf "expected a single ReportFatal, got %A" other
+        | [ Action.ReportFatal _; Action.Shutdown ] -> ()
+        | other -> failtestf "expected ReportFatal then Shutdown — Fatal must terminate the process on its own, not hang waiting for stdin to close, got %A" other
 
       testCase "a DaemonStartFailed while Starting becomes a clear Fatal naming the failure" <| fun _ ->
         let starting = { Transport = TransportState.AwaitingDaemon(DaemonReadiness.Starting 1); Pending = [] }

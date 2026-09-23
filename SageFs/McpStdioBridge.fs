@@ -42,6 +42,21 @@ type StdoutWriter(stream: Stream) =
 /// on it.
 let openStdout () : StdoutWriter = StdoutWriter(Console.OpenStandardOutput())
 
+/// The two ways forwarding one message to the daemon can fail — kept apart
+/// on purpose (issue #138): a `Rejected` message means the daemon is alive
+/// and reachable and said "no" to THIS request; an `Unreachable` message
+/// means no usable response came back at all. Conflating them used to turn
+/// an ordinary protocol error (e.g. a missing session header) into "the
+/// daemon is gone," which killed the bridge over a single bad request.
+[<RequireQualifiedAccess>]
+type ForwardError =
+  /// The daemon answered with a client/protocol-level error (HTTP 4xx) for
+  /// this one request. Stays connected; only this request gets an error.
+  | Rejected of reason: string
+  /// No usable response — connection refused, timed out, the stream tore
+  /// down mid-read. This is "the daemon is gone."
+  | Unreachable of reason: string
+
 /// The real-world effects the bridge performs, injected so the pure
 /// orchestration loop (`run`, below) can be driven by fakes in tests without
 /// a real process or a real daemon. Each field maps to exactly one
@@ -53,12 +68,24 @@ type Io =
     /// to this process's lifetime, since other clients share it.
     StartDaemon: unit -> Task<Result<unit, string>>
     /// POST `msg` to the daemon (with the current session id header, if
-    /// any) and write every JSON-RPC message the daemon answers with —
+    /// any), and write every JSON-RPC message the daemon answers with —
     /// single JSON or SSE, one message or several — to stdout. Forwarding
     /// IS the write: they are not two actions that could be reordered
-    /// against each other. Returns the `Mcp-Session-Id` response header
-    /// when the daemon sent a new one.
-    Forward: string option -> RpcMessage -> Task<Result<string option, string>>
+    /// against each other.
+    ///
+    /// Takes an explicit capture callback instead of returning the new
+    /// session id, and the implementation MUST call it the instant the
+    /// `Mcp-Session-Id` response header is read — strictly BEFORE writing
+    /// anything to stdout (issue #138). That ordering is the entire fix: the
+    /// client physically cannot send its next request until it has read the
+    /// stdout write, so a capture posted ahead of that write is guaranteed
+    /// to reach the bridge's mailbox ahead of the `StdinLine` it provokes,
+    /// no matter how fast the client turns around. Returning the id instead
+    /// and posting it only after this Task completes (as a prior version of
+    /// this bridge did) reopens exactly that race — see
+    /// SageFs.Simulation/McpStdioBridgeSim.fs's capture-ordering-race
+    /// section for the DST that proves it.
+    Forward: (string -> unit) -> string option -> RpcMessage -> Task<Result<unit, ForwardError>>
     /// Open the server-push SSE stream (GET) once a session id exists, and
     /// write every message it carries to stdout until it closes or errors.
     OpenServerStream: string -> Task<Result<unit, string>>
@@ -84,6 +111,10 @@ let private writeRejection (stdout: StdoutWriter) (msg: RpcMessage) (reason: str
       | RpcId.N n -> string n
     let errMsg = System.Text.Json.JsonSerializer.Serialize(reason: string)
     stdout.WriteLine(sprintf """{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":%s}}""" idJson errMsg)
+    // Loud on both channels: the client gets a proper JSON-RPC error, and
+    // stderr gets the same reason so a human watching the process (or its
+    // log) never has to infer a rejection from a missing tool alone.
+    Log.warn "[mcp-stdio] rejected a request (%s): %s" reason (rawOf msg)
   | RpcMessage.Notification _
   | RpcMessage.Response _
   | RpcMessage.Unparseable _ -> Log.warn "[mcp-stdio] dropped an unanswerable message (%s): %s" reason (rawOf msg)
@@ -104,14 +135,25 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
 
   let post (mailbox: MailboxProcessor<Cmd>) (ev: Event) = mailbox.Post(Cmd.Ev ev)
 
-  let performAsync (mailbox: MailboxProcessor<Cmd>) (sessionId: string option) (action: Action) : Task<unit> =
+  // `onSessionId` is a SEPARATE parameter from "post to the mailbox" (rather
+  // than performAsync hardcoding that) so a batch of `ForwardToDaemon`
+  // actions produced by ONE `decide` call — e.g. `drain`, when several
+  // messages queued up before the daemon was even reachable and are
+  // released together — can update a LOCAL running session id that the
+  // REST of that same batch uses immediately, not just the mailbox's own
+  // state (which a later event would see, but which this synchronous batch
+  // can't wait around for). See the dispatch loop below for why this
+  // matters: it's issue #138's race again, just one level up — several
+  // requests queued together instead of one client reacting to a response.
+  let performAsync (mailbox: MailboxProcessor<Cmd>) (sessionId: string option) (onSessionId: string -> unit) (action: Action) : Task<unit> =
     task {
-      // Every one of these runs fire-and-forget (`Task.Run` below, never
-      // awaited) so an exception that escaped here would vanish silently —
-      // exactly the kind of hang this bridge exists to never produce. Catch
-      // and report instead: a probe/forward that throws becomes an
-      // HttpFailed/DaemonStartFailed event, same as an IO function that
-      // returns `Error` cleanly.
+      // Every one of these runs from a batch that's awaited SEQUENTIALLY
+      // but never blocks the mailbox's own receive loop (the whole batch is
+      // one fire-and-forget `Task.Run`, see below) — so an exception that
+      // escaped here would vanish silently — exactly the kind of hang this
+      // bridge exists to never produce. Catch and report instead: a
+      // probe/forward that throws becomes an HttpFailed/DaemonStartFailed
+      // event, same as an IO function that returns `Error` cleanly.
       try
         match action with
         | Action.Probe ->
@@ -122,10 +164,13 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
           | Ok() -> () // readiness is observed through later probes, not this call
           | Error reason -> post mailbox (Event.DaemonStartFailed reason)
         | Action.ForwardToDaemon msg ->
-          match! io.Forward sessionId msg with
-          | Ok(Some sid) -> post mailbox (Event.SessionIdCaptured sid)
-          | Ok None -> ()
-          | Error reason -> post mailbox (Event.HttpFailed reason)
+          // The capture callback runs BEFORE `io.Forward` writes anything to
+          // stdout — see `Io.Forward`'s doc comment for why that ordering is
+          // the whole fix.
+          match! io.Forward onSessionId sessionId msg with
+          | Ok() -> ()
+          | Error(ForwardError.Rejected reason) -> post mailbox (Event.RequestRejected(msg, reason))
+          | Error(ForwardError.Unreachable reason) -> post mailbox (Event.HttpFailed reason)
         | Action.RejectMessage(msg, reason) -> writeRejection stdout msg reason
         | Action.ReportFatal reason -> eprintfn "sagefs mcp: %s" reason
         | Action.TerminateSession sid -> do! io.TerminateSession sid
@@ -184,8 +229,30 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
             | TransportState.AwaitingDaemon _
             | TransportState.Closed
             | TransportState.Fatal _ -> None
-          for action in actions do
-            Task.Run<unit>(fun () -> performAsync inbox sessionId action) |> ignore
+          // One `Task.Run` for the WHOLE batch, actions awaited in order —
+          // never blocks the mailbox's own `inbox.Receive()` loop (this
+          // Task.Run isn't awaited here), but WITHIN the batch, action N+1
+          // now starts only once action N has actually finished, threading
+          // a live-updated `currentSessionId` through every
+          // `ForwardToDaemon` in it. Without this, `drain` releasing several
+          // queued messages at once (initialize + notifications/initialized
+          // + tools/list, all queued before the daemon answered — exactly
+          // what Will's own pipe-everything-in-at-once repro produces) fired
+          // them via independent, unordered `Task.Run` calls that ALL
+          // captured the SAME stale (None) sessionId snapshot from this one
+          // `decide` call, so every request after `initialize` still went
+          // out with no session header — the session-id race one level up
+          // from the single-message case `Io.Forward`'s doc comment covers.
+          match actions with
+          | [] -> ()
+          | _ ->
+            Task.Run<unit>(fun () ->
+              task {
+                let mutable currentSessionId = sessionId
+                for action in actions do
+                  do! performAsync inbox currentSessionId (fun sid -> currentSessionId <- Some sid; post inbox (Event.SessionIdCaptured sid)) action
+              })
+            |> ignore
           return! loop state'
       }
       loop McpBridge.initial)
@@ -265,7 +332,23 @@ let rec private drainSse (reader: StreamReader) (onMessage: string -> unit) : Ta
 /// POST one JSON-RPC message to the daemon's streamable-HTTP endpoint and
 /// write whatever it answers with to stdout — a single JSON object, or an
 /// SSE stream carrying one or more messages before the daemon closes it.
-let forward (client: HttpClient) (port: int) (stdout: StdoutWriter) (sessionId: string option) (msg: RpcMessage) : Task<Result<string option, string>> =
+///
+/// `captureSessionId` is called the instant a new `Mcp-Session-Id` response
+/// header is read — BEFORE anything is written to stdout. That ordering is
+/// load-bearing (issue #138): the caller posts it straight to the bridge's
+/// mailbox, and the client cannot possibly produce its next stdin line
+/// before it has read the write that follows, so capturing first guarantees
+/// the mailbox sees the session id ahead of the request it provokes. Capture
+/// after the write (a prior version of this function) makes that ordering a
+/// coin flip instead of a guarantee.
+let forward
+  (client: HttpClient)
+  (port: int)
+  (stdout: StdoutWriter)
+  (captureSessionId: string -> unit)
+  (sessionId: string option)
+  (msg: RpcMessage)
+  : Task<Result<unit, ForwardError>> =
   task {
     try
       use content = new StringContent(rawOf msg, Encoding.UTF8, "application/json")
@@ -276,17 +359,18 @@ let forward (client: HttpClient) (port: int) (stdout: StdoutWriter) (sessionId: 
       | Some sid -> req.Headers.Add(sessionIdHeader, sid)
       | None -> ()
       use! resp = client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
-      let capturedSid =
-        match resp.Headers.TryGetValues(sessionIdHeader) with
-        | true, values ->
-          match Seq.tryHead values with
-          | Some sid when Some sid <> sessionId -> Some sid
-          | _ -> None
-        | false, _ -> None
+      // Capture BEFORE any stdout write below — see this function's doc
+      // comment and `Io.Forward`'s.
+      match resp.Headers.TryGetValues(sessionIdHeader) with
+      | true, values ->
+        match Seq.tryHead values with
+        | Some sid when Some sid <> sessionId -> captureSessionId sid
+        | _ -> ()
+      | false, _ -> ()
       match resp.IsSuccessStatusCode with
       | false ->
         let! body = resp.Content.ReadAsStringAsync()
-        return Error(sprintf "daemon answered %d: %s" (int resp.StatusCode) body)
+        return Error(ForwardError.Rejected(sprintf "daemon answered %d: %s" (int resp.StatusCode) body))
       | true ->
         let mediaType = resp.Content.Headers.ContentType |> Option.ofObj |> Option.map (fun ct -> ct.MediaType) |> Option.defaultValue ""
         match mediaType with
@@ -294,15 +378,15 @@ let forward (client: HttpClient) (port: int) (stdout: StdoutWriter) (sessionId: 
           use! stream = resp.Content.ReadAsStreamAsync()
           use reader = new StreamReader(stream)
           do! drainSse reader stdout.WriteLine
-          return Ok capturedSid
+          return Ok()
         | _ ->
           let! body = resp.Content.ReadAsStringAsync()
           match String.IsNullOrWhiteSpace body with
           | true -> () // 202 Accepted for a notification/response the client sent — nothing to write
           | false -> stdout.WriteLine(body.Trim())
-          return Ok capturedSid
+          return Ok()
     with ex ->
-      return Error ex.Message
+      return Error(ForwardError.Unreachable ex.Message)
   }
 
 /// The long-lived GET stream for server-initiated messages (notifications,

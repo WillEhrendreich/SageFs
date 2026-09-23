@@ -145,6 +145,31 @@ module McpStdioBridgeInvariants =
           | [] -> Outcome.Holds
           | vs -> Outcome.Violated(String.concat "; " vs) }
 
+  /// The session-id capture-ordering race (issue #138), reduced to a check:
+  /// for a given `(CapturePolicy, ClientSpeed)`, was the client's next
+  /// request forwarded with the session id the daemon had already issued
+  /// for the response it was reacting to? See `McpStdioBridgeSim`'s
+  /// "capture-ordering race" section for the full model — this just wraps
+  /// its answer in the same `Outcome` shape every other invariant here uses.
+  let sessionIdRaceHolds
+    (policy: Policy)
+    (capturePolicy: McpStdioBridgeSim.CapturePolicy)
+    (speed: McpStdioBridgeSim.ClientSpeed)
+    (sid: string)
+    (next: RpcMessage)
+    : Outcome =
+    match McpStdioBridgeSim.forwardedWithCapturedSessionId policy capturePolicy speed sid next with
+    | true -> Outcome.Holds
+    | false ->
+      Outcome.Violated(
+        sprintf
+          "%A + %A: the client's next request (%s) was forwarded WITHOUT the session id %s the daemon had already issued"
+          capturePolicy
+          speed
+          (rawOf next)
+          sid
+      )
+
   let all: Invariant list =
     [ connectedOrClearError
       daemonStartedAtMostOncePerBridge

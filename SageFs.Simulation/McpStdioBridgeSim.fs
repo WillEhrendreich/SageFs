@@ -180,3 +180,109 @@ module McpStdioBridgeSim =
   /// the twin still reaches a clean `Fatal` — that is exactly why a second,
   /// separate invariant is needed to catch it.
   let runTwinNeverStarts (scenario: Scenario) : Trace = runWith Twin.decideNeverStarts scenario
+
+  // ── The Mcp-Session-Id capture-ordering race (issue #138) ────────────────
+  //
+  // `McpBridge.decide` has no bug here: given ANY order of
+  // `Event.SessionIdCaptured` vs the next `Event.StdinLine`, its transitions
+  // are internally consistent with whatever order it's fed. The bug lives
+  // one level up, in `McpStdioBridge.fs`'s IO edge: `forward` used to write
+  // the daemon's response to stdout BEFORE returning the captured
+  // `Mcp-Session-Id`, so `Event.SessionIdCaptured` reached the mailbox only
+  // AFTER that write — and the client, reacting to the very same write,
+  // could get its own next `Event.StdinLine` into the mailbox first.
+  // Whether that happens depends entirely on how fast the client replies,
+  // which is exactly why the issue's own "insert a 3-second sleep" makes it
+  // pass and an instant client (Claude Code) reliably loses.
+  //
+  // This section makes that IO-edge ordering an explicit, testable INPUT
+  // instead of an unexamined assumption: `CapturePolicy` names the two
+  // orderings `forward` could use, `ClientSpeed` names how fast the client
+  // turns around, `raceOrder` derives the resulting mailbox arrival order
+  // from them (this is the one place "today's bug" vs "the fix" is
+  // encoded, and it's the ONLY place — everything downstream folds the REAL
+  // `decide`), and `foldSessionIdRace` replays that order through it to see
+  // what actually gets forwarded.
+
+  /// Which order `forward` posts the session id capture relative to writing
+  /// the response to stdout — the entire bug, reduced to one flag.
+  [<RequireQualifiedAccess>]
+  type CapturePolicy =
+    /// Today's code, before the fix: write first, capture-post after.
+    /// Whether the client's own next message beats that post into the
+    /// mailbox depends on `ClientSpeed`.
+    | CaptureAfterWrite
+    /// The fix: capture-post happens before any stdout write, in the same
+    /// sequential task — the client physically cannot react before a write
+    /// it hasn't seen yet, so the capture is unconditionally in the mailbox
+    /// first, for every `ClientSpeed`.
+    | CaptureBeforeWrite
+
+  /// How fast the client sends its next request after reading the response
+  /// that carried the new session id.
+  [<RequireQualifiedAccess>]
+  type ClientSpeed =
+    /// Reads the response and replies before the bridge's own
+    /// capture-posting continuation gets scheduled — a fast, local,
+    /// already-warm client. This is what Claude Code does, and the issue's
+    /// own Python repro reproduces it with no sleep at all.
+    | Instant
+    /// Replies well after the capture would have posted either way — what
+    /// the issue's own "insert a 3-second pause" workaround produces.
+    | Slow
+
+  /// One arrival at the bridge's mailbox from the daemon side
+  /// (`Event.SessionIdCaptured`) or the client side (`Event.StdinLine`).
+  [<RequireQualifiedAccess>]
+  type RaceEvent =
+    | DaemonIssuesSessionId of string
+    | ClientSends of RpcMessage
+
+  /// The mailbox arrival order a given `(CapturePolicy, ClientSpeed)`
+  /// produces for "the daemon just answered with a new session id, and the
+  /// client is about to send its next request in reaction to that same
+  /// answer." `CaptureBeforeWrite` is unconditionally safe: the capture is
+  /// posted before the write the client is reacting to has even happened,
+  /// so no `ClientSpeed` can ever put the client's message first.
+  let raceOrder (policy: CapturePolicy) (speed: ClientSpeed) (sid: string) (next: RpcMessage) : RaceEvent list =
+    match policy, speed with
+    | CapturePolicy.CaptureBeforeWrite, _
+    | CapturePolicy.CaptureAfterWrite, ClientSpeed.Slow -> [ RaceEvent.DaemonIssuesSessionId sid; RaceEvent.ClientSends next ]
+    | CapturePolicy.CaptureAfterWrite, ClientSpeed.Instant -> [ RaceEvent.ClientSends next; RaceEvent.DaemonIssuesSessionId sid ]
+
+  /// Fold the REAL `decide` over `events`, starting from `Ready None` (the
+  /// state right after a response was written but before this bridge
+  /// necessarily knows its session id) — for every `Action.ForwardToDaemon`
+  /// it produces, record the session id in effect AT THAT MOMENT, computed
+  /// exactly the way `McpStdioBridge.fs`'s `run` loop computes it for
+  /// `performAsync` (`state'.Transport`'s captured id right after the event
+  /// that produced the action). A violation here is a violation there too.
+  let foldSessionIdRace (policy: Policy) (events: RaceEvent list) : (RpcMessage * string option) list =
+    let toEvent =
+      function
+      | RaceEvent.DaemonIssuesSessionId sid -> Event.SessionIdCaptured sid
+      | RaceEvent.ClientSends msg -> Event.StdinLine msg
+    let step (state: State, forwards: (RpcMessage * string option) list) (re: RaceEvent) =
+      let state', actions = decide policy state (toEvent re)
+      let sessionIdNow = match state'.Transport with TransportState.Ready sid -> sid | _ -> None
+      let forwards' =
+        actions
+        |> List.fold
+          (fun acc action ->
+            match action with
+            | Action.ForwardToDaemon msg -> (msg, sessionIdNow) :: acc
+            | _ -> acc)
+          forwards
+      state', forwards'
+    let _, forwards = events |> List.fold step ({ Transport = TransportState.Ready None; Pending = [] }, [])
+    List.rev forwards
+
+  /// True if `next` — sent in reaction to the response that carried `sid` —
+  /// was forwarded WITH that session id, under the given policy and client
+  /// speed. This IS the invariant issue #138 exists to restore: once the
+  /// daemon has issued a session id, no subsequent request is ever
+  /// forwarded without it.
+  let forwardedWithCapturedSessionId (policy: Policy) (capturePolicy: CapturePolicy) (speed: ClientSpeed) (sid: string) (next: RpcMessage) : bool =
+    match foldSessionIdRace policy (raceOrder capturePolicy speed sid next) with
+    | [ (msg, Some capturedSid) ] -> msg = next && capturedSid = sid
+    | _ -> false
