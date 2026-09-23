@@ -193,6 +193,7 @@
         <Compile Include="FsiHostBuildTests.fs" />
         <Compile Include="FsiHostSdkRootTests.fs" />
         <Compile Include="FsiHostClientTests.fs" />
+        <Compile Include="IsolatedFsiSessionTests.fs" />
         <Compile Include="FsiSessionContractTests.fs" />
         <Compile Include="McpWireProtocolTests.fs" />
          <Compile Include="HttpApiIntegrationTests.fs" />
@@ -617,6 +618,14 @@
              ReferenceOutputAssembly=false so the fixture DLL is built (and its
              bin/ populated) without polluting the test project's references. -->
         <ProjectReference Include="fixtures\WebAppFixture\WebAppFixture.fsproj"
+                          PrivateAssets="all"
+                          ReferenceOutputAssembly="false" />
+        <!-- #141/#142's outcome gate needs a REAL compiled project with no package references (the SDK's
+             implicit FSharp.Core — the config every normal user is in, and SageFs's own dogfood tests
+             never exercise since SageFs.Tests.fsproj references SageFs.Core). Same
+             ReferenceOutputAssembly="false" pattern: built so a session can load it, never linked into
+             this test project's own references. -->
+        <ProjectReference Include="fixtures\FSharpCoreIdentityFixture\FSharpCoreIdentityFixture.fsproj"
                           PrivateAssets="all"
                           ReferenceOutputAssembly="false" />
     </ItemGroup>

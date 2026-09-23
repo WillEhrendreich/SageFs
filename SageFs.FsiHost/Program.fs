@@ -119,7 +119,21 @@ type private Running =
   { Cancel: CancellationTokenSource
     Thread: Thread }
 
+/// #142: AppContext.BaseDirectory otherwise reports THIS process's own directory (the isolated host's
+/// build-output dir under ~/.SageFs/hosts/), never the project's — nothing about hosting user code in a
+/// separate process makes that true for the user's own code. SAGEFS_PROJECT_OUTPUT (set by the worker that
+/// launched this host — see IsolatedFsiSession.primaryProjectOutputDir) is the project's real build output
+/// directory; overriding AppContext's own backing data with it, once, before any user code runs, makes
+/// AppContext.BaseDirectory tell the truth for the rest of this process's life. Safe: this host process
+/// exists for exactly one session's projects, so there is no "someone else's BaseDirectory" to clobber.
+let private applyProjectBaseDirectory () =
+  match Environment.GetEnvironmentVariable "SAGEFS_PROJECT_OUTPUT" with
+  | null
+  | "" -> ()
+  | dir -> AppContext.SetData("APP_CONTEXT_BASE_DIRECTORY", dir)
+
 let private run (argsFile: string) : int =
+  applyProjectBaseDirectory ()
   let fsiArgs = File.ReadAllLines argsFile |> Array.filter (fun line -> line.Length > 0)
 
   let listener = TcpListener(IPAddress.Loopback, 0)

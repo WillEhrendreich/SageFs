@@ -225,3 +225,96 @@ let dogfoodReplTests =
           finally
             File.SetLastWriteTimeUtc(candidate, original)
   ]
+
+// #141/#142's own outcome gate — deliberately sitting next to the SageFs.Core identity test above so the
+// pair is obvious. That test proves the daemon runs the PROJECT's own SageFs.Core when the project happens
+// to be SageFs.Tests itself (self-hosting, the config SageFs lives in every day, and the only one the
+// pre-existing suite ever checked). Nothing here exercised the config every OTHER user is in: a project
+// with NO package references, so it gets the SDK's IMPLICIT FSharp.Core — exactly GitHub #141/#142's own
+// repro shape. That blind spot is why 9,470+ tests and five integration-host shards sailed past a session
+// where a project's own `task { use ... }` throws MissingMethodException.
+let private fsharpCoreFixtureProject =
+  Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "FSharpCoreIdentityFixture", "FSharpCoreIdentityFixture.fsproj")
+
+let private fsharpCoreFixtureDir =
+  Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "FSharpCoreIdentityFixture")
+
+let private fsharpCoreSession =
+  lazy (
+    let cts = new CancellationTokenSource()
+    let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+    let created =
+      mgr.PostAndAsyncReply(fun reply ->
+        SageFs.SessionManager.SessionCommand.CreateSession(
+          [ fsharpCoreFixtureProject ], fsharpCoreFixtureDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+      |> fun ask -> Async.RunSynchronously(ask, setupBudgetMs)
+    match created with
+    | Error err -> Error(sprintf "create failed: %s" (SageFsError.describe err))
+    | Ok info ->
+      let ready =
+        mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
+        |> fun ask -> Async.RunSynchronously(ask, setupBudgetMs)
+      match ready with
+      | Error err -> Error(sprintf "the FSharpCoreIdentityFixture session never reached Ready: %s" (SageFsError.describe err))
+      | Ok() ->
+        let session =
+          mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.GetSession(info.Id, reply))
+          |> fun ask -> Async.RunSynchronously(ask, setupBudgetMs)
+        match session with
+        | None -> Error "session vanished after Ready"
+        | Some s -> Ok(mgr, info.Id, s))
+
+/// Best-effort: stop the fixture session when the test process exits (see `sharedSession`'s identical
+/// teardown above — the reasoning is the same, for the same failure mode).
+do
+  AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
+    match fsharpCoreSession.IsValueCreated with
+    | false -> ()
+    | true ->
+      match fsharpCoreSession.Value with
+      | Error _ -> ()
+      | Ok(mgr, sessionId, _) ->
+        mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.StopSession(sessionId, reply))
+        |> Async.RunSynchronously
+        |> ignore)
+
+let private withFSharpCoreSession (run: SessionProxy -> unit) =
+  match fsharpCoreSession.Value with
+  | Error msg -> failtestf "FSharpCoreIdentityFixture session setup failed: %s" msg
+  | Ok(_, _, s) -> run s.Proxy
+
+/// The fixture's own build output directory — computed independently of anything IsolatedFsiSession.fs
+/// does, so the assertion below can't accidentally check the fix against itself.
+let private fsharpCoreFixtureOutputDir () : string option =
+  let bin = Path.Combine(fsharpCoreFixtureDir, "bin")
+  match Directory.Exists bin with
+  | false -> None
+  | true ->
+    Directory.EnumerateFiles(bin, "FSharpCoreIdentityFixture.dll", SearchOption.AllDirectories)
+    |> Seq.sortByDescending File.GetLastWriteTimeUtc
+    |> Seq.tryHead
+    |> Option.map Path.GetDirectoryName
+
+[<Tests>]
+let fsharpCoreIdentityOutcomeTests =
+  testSequenced
+  <| Integration.hostList "#141/#142 outcome gate: a project with no package references (the config every normal user is in)" [
+    // #142, FIXED: AppContext.BaseDirectory is overridden from SAGEFS_PROJECT_OUTPUT at host startup
+    // (SageFs.FsiHost/Program.fs's applyProjectBaseDirectory), set by IsolatedFsiSession.start from
+    // primaryProjectOutputDir. This is a complete fix, not a detection — it changes what the project's own
+    // code observes, not merely what SageFs logs about it.
+    testCase "WHY — AppContext.BaseDirectory leads back to the project's OWN build output directory, because #142 broke every test-helper pattern (walk up to find fixtures/config/a solution file) that resolves paths relative to its own assembly" <| fun _ ->
+      match fsharpCoreFixtureOutputDir () with
+      | None -> failtest "FSharpCoreIdentityFixture has no build output — the ProjectReference in SageFs.Tests.fsproj should have built it"
+      | Some expectedDir ->
+        withFSharpCoreSession (fun proxy ->
+          match evalIn proxy "fscore-basedir" "Repro.baseDirectory ();;" with
+          | Error err -> failtestf "eval failed: %s" (SageFsError.describe err)
+          | Ok output ->
+            let normalize (p: string) = p.Replace('\\', '/').TrimEnd('/')
+            output.Replace('\\', '/')
+            |> Expect.stringContains
+                 (sprintf "AppContext.BaseDirectory must be the project's own build output (%s), not the isolated host's" (normalize expectedDir))
+                 (normalize expectedDir))
+
+  ]

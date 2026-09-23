@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Deliberately no PackageReference at all — including no explicit FSharp.Core pin. This is the
+       configuration EVERY normal user's project is in: the SDK's implicit FSharp.Core package. It is
+       the exact shape of the reporter's #141 repro, and the one config SageFs's own dogfood tests
+       (DogfoodReplTests.fs) never exercise, because SageFs.Tests.fsproj itself references SageFs.Core. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- Opt OUT of the repo's own Directory.Packages.props (ManagePackageVersionsCentrally + a pinned
+         FSharp.Core PackageVersion) even though this fixture lives inside the SageFs tree: the whole point
+         is the SDK's IMPLICIT FSharp.Core, exactly like a normal standalone project with no central
+         package management at all — not whatever SageFs itself happens to pin. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Repro.fs" />
+  </ItemGroup>
+</Project>

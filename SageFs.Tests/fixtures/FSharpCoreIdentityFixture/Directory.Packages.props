@@ -1,0 +1,11 @@
+<Project>
+  <!-- Stops NuGet's Directory.Packages.props search from walking up to the repo root's (which pins
+       FSharp.Core centrally and sets ManagePackageVersionsCentrally=true — SageFs.NetSdk.props uses that
+       exact property, checked BEFORE this project's own <PropertyGroup> ever runs, to turn OFF the SDK's
+       implicit FSharp.Core reference: see Microsoft.FSharp.NetSdk.props). This fixture's whole point is
+       the SDK's IMPLICIT FSharp.Core — the config every normal, non-CPM project is in — so it must NOT
+       inherit the repo's own central package management at all. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>
