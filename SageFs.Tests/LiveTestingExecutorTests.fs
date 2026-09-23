@@ -48,6 +48,34 @@ let builtInDescriptionTests = testList "BuiltInExecutors.descriptions" [
   }
 ]
 
+/// A deliberately unresolvable assembly: ONE public type whose BASE TYPE lives in an
+/// AssemblyNameReference that resolves nowhere. Built with Mono.Cecil rather than compiled F#, because
+/// this needs a TYPE-LEVEL resolution failure (the base type, not merely a method signature) —
+/// live-verified that's what makes `GetExportedTypes()` actually fail on this runtime; a method whose
+/// PARAMETER type is unresolvable does not (the CLR resolves method signatures lazily, only base
+/// types/interfaces are resolved eagerly to materialize the `Type`).
+let private writeUnresolvableAssembly () : string =
+  let workDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sagefs-unresolvable-asm-test")
+  System.IO.Directory.CreateDirectory workDir |> ignore
+  let dst = System.IO.Path.Combine(workDir, sprintf "Unresolvable-%s.dll" (System.Guid.NewGuid().ToString "N"))
+  let asmName = Mono.Cecil.AssemblyNameDefinition("SageFsUnresolvableRegressionProbe", System.Version(1, 0, 0, 0))
+  let assembly = Mono.Cecil.AssemblyDefinition.CreateAssembly(asmName, "SageFsUnresolvableRegressionProbe", Mono.Cecil.ModuleKind.Dll)
+  let modul = assembly.MainModule
+  let missingRef = Mono.Cecil.AssemblyNameReference("SageFs.NoSuchAssembly.ForRegressionTest", System.Version(1, 0, 0, 0))
+  modul.AssemblyReferences.Add missingRef
+  let missingBaseType = Mono.Cecil.TypeReference("SageFs.NoSuchNamespace", "MissingBase", modul, missingRef :> Mono.Cecil.IMetadataScope)
+  let publicType =
+    Mono.Cecil.TypeDefinition(
+      "SageFsUnresolvableRegressionProbe",
+      "PublicType",
+      Mono.Cecil.TypeAttributes.Public ||| Mono.Cecil.TypeAttributes.Class,
+      missingBaseType)
+  modul.Types.Add publicType
+  use output = new System.IO.MemoryStream()
+  assembly.Write output
+  System.IO.File.WriteAllBytes(dst, output.ToArray())
+  dst
+
 let attributeDiscoveryTests = testList "AttributeDiscovery" [
   test "WHY — live testing discovery — skips dynamic assemblies because FSI submissions must not crash REPL evaluation" {
     let asm =
@@ -58,6 +86,35 @@ let attributeDiscoveryTests = testList "AttributeDiscovery" [
     SageFs.Features.ReflectionDiscovery.exportedTypes asm
     |> Array.length
     |> Expect.equal "dynamic assemblies should be treated as having no discoverable test types" 0
+  }
+
+  // Regression coverage for the live-testing discovery bug that looked like "0 tests" for hours because
+  // a load failure inside GetExportedTypes() was swallowed to a bare [||] with nothing logged, and — the
+  // worse half — could ALSO simply propagate uncaught for a single-type failure (see
+  // ReflectionDiscovery.exportedTypes's own doc comment for the live evidence). A deliberately
+  // unresolvable assembly must produce a REPORTED failure, not a silent empty list and not a crash.
+  test "WHY — a deliberately unresolvable assembly reports a failure through the log, not a silent empty list" {
+    let dllPath = writeUnresolvableAssembly ()
+    let asm = Assembly.LoadFrom dllPath
+
+    let logged = System.Collections.Concurrent.ConcurrentBag<string>()
+    let prevWarn = SageFs.Utils.Log.logWarn
+    SageFs.Utils.Log.logWarn <- fun s -> logged.Add s; prevWarn s
+    try
+      let types = SageFs.Features.ReflectionDiscovery.exportedTypes asm
+      types |> Array.length |> Expect.equal "the unresolvable type contributes no discoverable types" 0
+
+      let relevant =
+        logged
+        |> Seq.filter (fun s -> s.Contains "ReflectionDiscovery" && s.Contains asm.FullName)
+        |> Seq.toList
+      (relevant |> List.isEmpty |> not)
+      |> Expect.isTrue "a load failure must be logged, not silently swallowed to an empty array"
+      relevant
+      |> List.exists (fun s -> s.Contains "SageFs.NoSuchAssembly.ForRegressionTest")
+      |> Expect.isTrue "the log must name the actual assembly that failed to resolve, not just say 'something went wrong'"
+    finally
+      SageFs.Utils.Log.logWarn <- prevWarn
   }
 
   test "discovers Expecto [Tests] properties via custom executor" {

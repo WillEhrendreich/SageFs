@@ -112,30 +112,135 @@ let tests =
     // why it isn't wired into `start` yet). rewriteReferenceWith is the one piece proven correct in
     // isolation — these tests lock that proof in against a REAL compiled assembly, not a synthetic one,
     // so the primitive stays trustworthy for whoever picks up centralizing it inside ShadowCopy.
+    //
+    // Regression coverage for the live-testing discovery bug this same primitive caused when it rewrote
+    // the WHOLE "FSharp.Core" reference unconditionally: a project calling into a third party (Expecto)
+    // whose own API surface mentions FSharp.Core types got that call's signature retargeted too, even
+    // though nothing was actually missing on that call — see the production doc comment for the full
+    // live-verified story. These tests lock in the CURRENT contract: only call sites naming a member in
+    // `missingFromHost` move; everything else, including the reference itself when nothing qualifies,
+    // stays exactly as it was.
     testList "ProjectFSharpCoreIdentity.rewriteReferenceWith" [
-      test "WHY — retargets an assembly's FSharp.Core reference to the new name, because Cecil resolves every TypeRef through that ONE shared AssemblyNameReference object" {
-        // This very test assembly is a real, F#-compiled assembly that references FSharp.Core — no need
-        // for a synthetic input.
-        let testAssemblyPath = System.Reflection.Assembly.GetExecutingAssembly().Location
-        let originalBytes = System.IO.File.ReadAllBytes testAssemblyPath
-        match ProjectFSharpCoreIdentity.rewriteReferenceWith (fun bytes -> Mono.Cecil.AssemblyDefinition.ReadAssembly(new System.IO.MemoryStream(bytes))) originalBytes with
-        | None -> failtest "the test assembly references FSharp.Core (it's an F# project) — rewriteReferenceWith must find it"
+      let readAssembly (bytes: byte[]) = Mono.Cecil.AssemblyDefinition.ReadAssembly(new System.IO.MemoryStream(bytes))
+
+      // This very test assembly is a real, F#-compiled assembly that references FSharp.Core — no need for
+      // a synthetic input. Finds the FIRST real call site whose declaring type is FSharp.Core, so the
+      // "exactly one member redirected" tests below exercise a signature that genuinely exists in this
+      // DLL's IL, not a guessed one.
+      let testAssemblyBytes () = System.IO.File.ReadAllBytes(System.Reflection.Assembly.GetExecutingAssembly().Location)
+
+      // Recurses into NestedTypes — Cecil's own `ModuleDefinition.Types` lists top-level types only, and
+      // real call sites this primitive must retarget routinely live several levels of nested compiler-
+      // generated closures deep (see the "exactly the shape #141 lives in" test below for why that isn't
+      // hypothetical).
+      let rec allTypes (t: Mono.Cecil.TypeDefinition) : Mono.Cecil.TypeDefinition seq =
+        seq {
+          yield t
+          for nested in t.NestedTypes do
+            yield! allTypes nested
+        }
+
+      let firstFSharpCoreCallKey (bytes: byte[]) : string =
+        use asm = readAssembly bytes
+        let original =
+          asm.MainModule.AssemblyReferences
+          |> Seq.find (fun r -> r.Name = "FSharp.Core")
+        asm.MainModule.Types
+        |> Seq.collect allTypes
+        |> Seq.collect (fun t -> t.Methods)
+        |> Seq.filter (fun m -> m.HasBody)
+        |> Seq.collect (fun m -> m.Body.Instructions)
+        |> Seq.choose (fun instr ->
+          match instr.Operand with
+          | :? Mono.Cecil.GenericInstanceMethod as gim -> Some gim.ElementMethod
+          | :? Mono.Cecil.MethodReference as mr when not (mr :? Mono.Cecil.MethodDefinition) -> Some mr
+          | _ -> None)
+        |> Seq.filter (fun mr -> obj.ReferenceEquals(mr.DeclaringType.Scope, original :> Mono.Cecil.IMetadataScope))
+        |> Seq.map (fun mr ->
+          sprintf "%s::%s(%s)" mr.DeclaringType.FullName mr.Name (mr.Parameters |> Seq.map (fun p -> p.ParameterType.FullName) |> String.concat ","))
+        |> Seq.head
+
+      test "WHY — an empty missingFromHost is a no-op, because nothing the project has that the host lacks means no call site could possibly need redirecting" {
+        let originalBytes = testAssemblyBytes ()
+        ProjectFSharpCoreIdentity.rewriteReferenceWith readAssembly Set.empty originalBytes
+        |> Expect.isNone "no missing members means nothing to rewrite, not a wholesale rename"
+      }
+
+      test "WHY — retargets ONLY the call site(s) naming a member in missingFromHost, leaving the original FSharp.Core reference in place for everything else" {
+        let originalBytes = testAssemblyBytes ()
+        let key = firstFSharpCoreCallKey originalBytes
+        match ProjectFSharpCoreIdentity.rewriteReferenceWith readAssembly (Set.singleton key) originalBytes with
+        | None -> failtest "a missingFromHost set naming a real call site in this assembly must produce a rewrite"
         | Some rewrittenBytes ->
-          use rewritten = Mono.Cecil.AssemblyDefinition.ReadAssembly(new System.IO.MemoryStream(rewrittenBytes))
+          use rewritten = readAssembly rewrittenBytes
           let stillReferencesOriginal =
             rewritten.MainModule.AssemblyReferences
             |> Seq.exists (fun r -> r.Name = "FSharp.Core")
           let referencesRenamed =
             rewritten.MainModule.AssemblyReferences
             |> Seq.exists (fun r -> r.Name = ProjectFSharpCoreIdentity.RewrittenName)
-          stillReferencesOriginal |> Expect.isFalse "the original FSharp.Core reference must be gone, not just supplemented"
-          referencesRenamed |> Expect.isTrue "the renamed reference must be present"
+          stillReferencesOriginal
+          |> Expect.isTrue "the original reference must survive — every OTHER FSharp.Core call (and any third party's own FSharp.Core-typed signatures) still needs it"
+          referencesRenamed |> Expect.isTrue "the renamed reference must be present for the one redirected call"
+      }
+
+      // Regression coverage for the exact bug live-verified in the real #141/#142 gate: F#'s resumable-code
+      // desugaring of `task { use r = ... }` does NOT put the call to `TaskBuilderBase.Using` on the
+      // enclosing function's own top-level method — it puts it on the `Invoke` method of a compiler-
+      // generated closure class NESTED inside the containing type (one "Pipe #N input at line L" class per
+      // CE step). `Mono.Cecil.ModuleDefinition.Types` lists top-level types only; a walk that doesn't
+      // recurse into `NestedTypes` finds zero FSharp.Core call sites for this shape and silently returns
+      // `None` — which is exactly what #141 itself looks like when it's broken (a session that used to
+      // compute the right value starts throwing MissingMethodException again). Built with Cecil rather
+      // than a real compiled fixture so this test needs no separately-built Debug output to exist on disk.
+      test "WHY — finds and retargets a call site inside a NESTED type, because that is where F#'s resumable-code desugaring actually places TaskBuilderBase.Using" {
+        let asmName = Mono.Cecil.AssemblyNameDefinition("NestedCallSiteProbe", System.Version(1, 0, 0, 0))
+        let assembly = Mono.Cecil.AssemblyDefinition.CreateAssembly(asmName, "NestedCallSiteProbe", Mono.Cecil.ModuleKind.Dll)
+        let modul = assembly.MainModule
+        let fsharpCoreRef = Mono.Cecil.AssemblyNameReference("FSharp.Core", System.Version(11, 0, 0, 0))
+        modul.AssemblyReferences.Add fsharpCoreRef
+        let builderType = Mono.Cecil.TypeReference("Microsoft.FSharp.Control", "TaskBuilderBase", modul, fsharpCoreRef :> Mono.Cecil.IMetadataScope)
+        let usingMethod =
+          Mono.Cecil.MethodReference("Using", modul.TypeSystem.Object, builderType)
+        usingMethod.Parameters.Add(Mono.Cecil.ParameterDefinition(modul.TypeSystem.Object))
+
+        let outer =
+          Mono.Cecil.TypeDefinition("NestedCallSiteProbe", "Outer", Mono.Cecil.TypeAttributes.Public ||| Mono.Cecil.TypeAttributes.Class, modul.TypeSystem.Object)
+        modul.Types.Add outer
+        let nested =
+          Mono.Cecil.TypeDefinition("", "Inner", Mono.Cecil.TypeAttributes.NestedPublic ||| Mono.Cecil.TypeAttributes.Class, modul.TypeSystem.Object)
+        outer.NestedTypes.Add nested
+        let invoke =
+          Mono.Cecil.MethodDefinition("Invoke", Mono.Cecil.MethodAttributes.Public, modul.TypeSystem.Object)
+        nested.Methods.Add invoke
+        let il = invoke.Body.GetILProcessor()
+        il.Append(il.Create(Mono.Cecil.Cil.OpCodes.Ldnull))
+        il.Append(il.Create(Mono.Cecil.Cil.OpCodes.Ldnull))
+        il.Append(il.Create(Mono.Cecil.Cil.OpCodes.Call, usingMethod))
+        il.Append(il.Create(Mono.Cecil.Cil.OpCodes.Ret))
+
+        use output = new System.IO.MemoryStream()
+        assembly.Write output
+        let originalBytes = output.ToArray()
+
+        let missingFromHost = Set.singleton "Microsoft.FSharp.Control.TaskBuilderBase::Using(System.Object)"
+        match ProjectFSharpCoreIdentity.rewriteReferenceWith readAssembly missingFromHost originalBytes with
+        | None -> failtest "a call site inside a NestedType must still be found and retargeted"
+        | Some rewrittenBytes ->
+          use rewritten = readAssembly rewrittenBytes
+          let innerType = rewritten.MainModule.Types |> Seq.find (fun t -> t.Name = "Outer") |> fun t -> t.NestedTypes |> Seq.find (fun n -> n.Name = "Inner")
+          let invokeMethod = innerType.Methods |> Seq.find (fun m -> m.Name = "Invoke")
+          let callTarget =
+            invokeMethod.Body.Instructions
+            |> Seq.pick (fun i -> match i.Operand with :? Mono.Cecil.MethodReference as mr -> Some mr | _ -> None)
+          callTarget.DeclaringType.Scope.Name
+          |> Expect.equal "the nested type's own call site must be retargeted to the renamed identity" ProjectFSharpCoreIdentity.RewrittenName
       }
 
       test "None for an assembly with no FSharp.Core reference at all (a plain CLR assembly)" {
         let corlibPath = typeof<obj>.Assembly.Location
         let bytes = System.IO.File.ReadAllBytes corlibPath
-        ProjectFSharpCoreIdentity.rewriteReferenceWith (fun b -> Mono.Cecil.AssemblyDefinition.ReadAssembly(new System.IO.MemoryStream(b))) bytes
+        ProjectFSharpCoreIdentity.rewriteReferenceWith readAssembly (Set.singleton "irrelevant::key()") bytes
         |> Expect.isNone "System.Private.CoreLib has no FSharp.Core reference to rewrite"
       }
     ]

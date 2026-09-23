@@ -646,9 +646,19 @@ module BuiltInExecutors =
               [||]))
         |> Array.toList
       with
-      | :? ReflectionTypeLoadException -> []
-      | :? TypeLoadException -> []
-      | :? NotSupportedException -> []
+      // Mirrors buildLookup's own outer catch just above (and ReflectionDiscovery.exportedTypes's own fix
+      // for the exact same failure mode one layer down): an assembly-level scan failure is not "this
+      // assembly has no tests" — it is "discovery could not run", and a caller reading an empty list has
+      // no way to tell the two apart. A broad catch, not just the three exception types this used to
+      // handle, because GetExportedTypes() can also propagate a bare FileNotFoundException/
+      // FileLoadException/BadImageFormatException directly (live-verified: that happens for a single
+      // unresolvable type, where .NET skips the ReflectionTypeLoadException wrapper it only uses for a
+      // PARTIAL failure) — those were not being silently swallowed before this fix, they were entirely
+      // uncaught.
+      | ex ->
+        Log.warn "[LiveTesting] discoverLeafTests assembly scan failed for %s: %s\n%s" asm.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        Instrumentation.liveTestingAssemblyLoadErrors.Add(1L)
+        []
 
   let expecto : TestExecutor =
     TestExecutor.Custom {
