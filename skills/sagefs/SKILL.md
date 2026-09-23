@@ -119,18 +119,80 @@ you need the details, use `explain_test_failure`.
 - **Clean up.** `stop_session` on every session you created. Kill only
   processes you started, by exact PID, never by name.
 
-## When the REPL fights you
+## Before anything expensive: ask
+
+Session create/warmup, `hard_reset_fsi_session rebuild=true`, a full `dotnet
+build`, a test-suite run, starting an app — these cost real machine memory.
+One night, five agents each did one of these against a single daemon, all at
+once. Nobody was misbehaving; nothing coordinated. The daemon had no way to
+know until its RSS was already at 55GB of a 62GB box.
+
+**SageFs is the coordination point for this.** Before you run any of the five
+things above, ask `POST /api/lease/request` (`{ holder, kind }`, where `kind`
+is one of `session_create_or_warmup`, `rebuild`, `full_build`,
+`test_suite_run`, `run_app`, and `holder` identifies YOU — the same value
+every retry, never a fresh id per call) on the daemon's MCP port. You get back
+one of three things:
+
+- **`granted`** — go ahead. You get a `leaseId` and an `expiresAt`; call
+  `POST /api/lease/release` with the `leaseId` when you're done (a crashed or
+  forgetful caller just loses it at `expiresAt` — no need to release on every
+  exit path, but do release the normal one).
+- **`wait`** — a `retryAfterSeconds` and a `reason`. Sleep that long and ask
+  again with the SAME `holder`+`kind`. This is not a rejection of your
+  request, it's your place in a fair, first-come queue.
+- **`refused`** — you already hold a lease. Finish and release it before
+  asking for another; waiting won't help here, releasing will.
+
+This applies even to a `dotnet build` you run yourself outside the REPL (see
+below) — the whole point is that the daemon's accounting has to include
+memory it never spent a single byte of itself, or the accounting lies.
+
+## Busy versus broken — the distinction that matters most
+
+When SageFs refuses or delays something, figure out which of these you're in
+before you do anything else. Getting this backwards is exactly how the
+incident above happened: every agent read "the REPL is fighting me" and
+reached for `dotnet`, when the REPL wasn't broken — the daemon was busy, and
+`dotnet` spent the same memory anyway, outside its accounting, at the exact
+moment it was trying to shed load.
+
+- **BROKEN**: a real bug, a version skew, a tool erroring for reasons that
+  aren't your code, the REPL genuinely not doing what it says. The escape
+  hatch below is correct: use `dotnet` for that one step, and report it,
+  because the report is how it gets fixed.
+- **BUSY**: SageFs (or the `sagefs-repl-guard` hook, if it's installed) tells
+  you pressure is `tight` or `critical`, a lease request came back `wait` or
+  `refused`, or a declared final-gate `dotnet build`/`test`/`run` gets denied
+  with a message that says "BUSY, not broken." The escape hatch is exactly
+  the WRONG move here. **Wait the time it names, then retry the identical
+  command or lease request.** Shelling out anyway, or spinning up your own
+  daemon to get around a busy one, spends the exact memory SageFs is trying
+  to reclaim — invisibly to it. That is the whole mechanism of the incident
+  this section exists to prevent.
+
+If you genuinely cannot tell which one you're in, that itself is a bug: report
+it exactly like a BROKEN case (tool, input, full error) rather than guessing.
+
+## When the REPL fights you (this means BROKEN, not busy)
 
 Sometimes it will. A version skew, a load error, a tool that errors for reasons
-that aren't your code. When that happens:
+that aren't your code — this is the BROKEN case above, not the BUSY one. When
+that happens:
 
 1. **Don't fall back silently.** Write down exactly what broke: the tool, the
    input, the full error.
 2. Try the obvious fix once: build first, qualify `Result.Ok`, create the
    session in the right worktree, check the daemon version.
-3. If it still fights you, use `dotnet` for **that one step only**, and say so
-   in your report with the error from step 1. That report is how SageFs gets
-   fixed. Silent fallbacks are how it stays broken.
+3. If it still fights you, use `dotnet` for **that one step only** — after
+   taking a lease for it if SageFs is up (see above) — and say so in your
+   report with the error from step 1. That report is how SageFs gets fixed.
+   Silent fallbacks are how it stays broken.
+4. **Never spin up your own daemon to get around a busy one.** A second
+   daemon spends the same machine memory the first one is trying to protect,
+   completely outside anyone's accounting. Only spawn a second daemon when
+   you are testing daemon code itself that the running daemon predates — see
+   AGENTS.md's multi-agent section — and give it an explicit owner/TTL.
 
 ## Permissions and auto mode (Claude Code)
 

@@ -16,7 +16,22 @@ type DaemonProbe =
   | DaemonAnswering
   | DaemonNotAnswering
 
-type Context = { Project: ProjectScope; Daemon: DaemonProbe }
+/// What asking the daemon for an expensive-work lease got back, for a
+/// FINAL-GATE-declared command. Only asked when the command IS final-gate
+/// declared — a plain (undeclared) slow verb is denied on the "use the
+/// REPL" grounds alone and never needs a lease check. Kept as plain
+/// primitives (no dependency on SageFs.ExpensiveWorkLease's real DU)
+/// because this file has to stay dependency-free past FSharp.Core so the
+/// hook script loads fast.
+type LeaseProbe =
+  | LeaseGranted
+  | LeaseRefused of reason: string
+  | LeaseMustWait of retryAfterSeconds: float * reason: string
+
+/// `Lease` is `None` whenever it was never asked for (the command isn't a
+/// declared final gate, or the daemon didn't answer) — `Context` cannot
+/// represent "asked and got nothing back," only "didn't ask."
+type Context = { Project: ProjectScope; Daemon: DaemonProbe; Lease: LeaseProbe option }
 
 /// The dotnet verbs that belong in the final gate, not the inner loop.
 type SlowVerb =
@@ -165,7 +180,8 @@ let classify (command: string) : CommandClass =
       | None -> go (exported || isFinalGateExport seg) rest
   go false (segments command)
 
-/// The deny reason: the loop in two lines, then the way out.
+/// The deny reason for an UNDECLARED slow verb: BROKEN is never the issue
+/// here — this is "use the REPL," the loop in two lines, then the way out.
 let denyReason (verb: SlowVerb) =
   let v = SlowVerb.toToken verb
   String.concat "\n" [
@@ -174,23 +190,58 @@ let denyReason (verb: SlowVerb) =
     sprintf "If this is one of those, rerun it as `%s dotnet %s ...`. If the REPL is fighting you, report the exact error first, then use that escape hatch for that one step only." finalGateAssignment v
   ]
 
-/// The guard's whole decision. Only a slow-loop verb, in an F# workspace,
-/// with SageFs answering, is denied. With no daemon there's no REPL to go
-/// back to, so everything passes.
+/// The deny reason for a DECLARED final gate that a lease request refused
+/// or asked to wait for: SageFs is BUSY here, not broken, and the message
+/// says so explicitly — the whole point is an agent must never read this as
+/// "the REPL is fighting me, fall back to dotnet" (that IS the fallback,
+/// and it is what a busy daemon needs the LEAST). Waiting the named time is
+/// the only correct move; a build/test/run that shells out anyway spends
+/// exactly the memory SageFs is trying to reclaim, outside its own
+/// accounting.
+let busyDenyReason (verb: SlowVerb) (leaseProbe: LeaseProbe) =
+  let v = SlowVerb.toToken verb
+  let whatItSaid =
+    match leaseProbe with
+    | LeaseGranted -> "" // unreachable from decide's Deny path
+    | LeaseRefused reason -> sprintf "SageFs refused the lease: %s" reason
+    | LeaseMustWait(retryAfterSeconds, reason) -> sprintf "SageFs said wait %.0fs: %s" retryAfterSeconds reason
+  String.concat "\n" [
+    sprintf "SageFs is BUSY, not broken — `dotnet %s` (a declared final gate) costs real memory SageFs is trying to manage, even though SageFs itself never ran it." v
+    whatItSaid
+    "This is a WAIT, not a bug to route around: sleep the named time and rerun the identical command. Shelling out anyway spends the exact memory SageFs is trying to reclaim, invisibly to it — that is how five agents starved one daemon in one night."
+  ]
+
+/// The guard's whole decision.
+///   - An UNDECLARED slow verb, in an F# workspace, with SageFs answering,
+///     is denied on "use the REPL" grounds — unrelated to memory pressure.
+///   - A DECLARED final gate is legitimate, but still asks for a lease
+///     first: `LeaseGranted` (or no daemon to ask) allows it; `LeaseRefused`/
+///     `LeaseMustWait` denies it as BUSY, with the reason and the wait.
+/// With no daemon there is no REPL to go back to and no pool to ask, so
+/// everything passes either way.
 let decide (command: string) (ctx: Context) : Decision =
   match classify command with
-  | NoSlowLoop
-  | DeclaredFinalGate _ -> Allow
+  | NoSlowLoop -> Allow
   | SlowLoop verb ->
     match ctx.Project, ctx.Daemon with
     | FSharpWorkspace, DaemonAnswering -> Deny(denyReason verb)
     | NotFSharpWorkspace, _
     | _, DaemonNotAnswering -> Allow
+  | DeclaredFinalGate verb ->
+    match ctx.Project, ctx.Daemon, ctx.Lease with
+    | FSharpWorkspace, DaemonAnswering, Some(LeaseRefused _ as probe)
+    | FSharpWorkspace, DaemonAnswering, Some(LeaseMustWait _ as probe) -> Deny(busyDenyReason verb probe)
+    | FSharpWorkspace, DaemonAnswering, Some LeaseGranted
+    | FSharpWorkspace, DaemonAnswering, None
+    | NotFSharpWorkspace, _, _
+    | _, DaemonNotAnswering, _ -> Allow
 
 /// Whether the hook needs to look at the disk and the network at all. The
 /// script checks this first so non-dotnet commands never pay for a probe.
+/// A declared final gate now needs context too — it still has to ask for a
+/// lease before it can be allowed through.
 let needsContext (command: string) =
   match classify command with
-  | SlowLoop _ -> true
-  | NoSlowLoop
-  | DeclaredFinalGate _ -> false
+  | SlowLoop _
+  | DeclaredFinalGate _ -> true
+  | NoSlowLoop -> false

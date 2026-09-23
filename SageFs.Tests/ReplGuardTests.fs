@@ -3,6 +3,15 @@ module SageFs.Tests.ReplGuardTests
 /// The sagefs-repl-guard hook's decision (tools/agent-hooks/ReplGuard.fs,
 /// linked into this project). The hook script only does IO around this
 /// function, so this is where the rules get pinned.
+///
+/// Two things this guard decides, layered:
+///   1. An UNDECLARED slow verb ("you should be using the REPL") — this
+///      part is unrelated to memory pressure and always denies when SageFs
+///      is up.
+///   2. A DECLARED final gate now ALSO asks for an expensive-work lease —
+///      legitimate, but still costs memory the daemon needs to know about.
+///      `LeaseGranted` allows it; `LeaseRefused`/`LeaseMustWait` denies it
+///      as BUSY (never as broken), with the reason and the wait.
 
 open Expecto
 open Expecto.Flip
@@ -10,7 +19,10 @@ open FsCheck
 open FsCheck.FSharp
 open SageFs.AgentHooks.ReplGuard
 
-let private live = { Project = FSharpWorkspace; Daemon = DaemonAnswering }
+let private live = { Project = FSharpWorkspace; Daemon = DaemonAnswering; Lease = None }
+let private liveGranted = { live with Lease = Some LeaseGranted }
+let private liveMustWait = { live with Lease = Some(LeaseMustWait(12.0, "1 lease(s) active (cap 1 at tight pressure)")) }
+let private liveRefused = { live with Lease = Some(LeaseRefused "you already hold 1/1 leases") }
 
 let private isDeny =
   function
@@ -28,10 +40,10 @@ let private slowVerb = Gen.elements SlowVerb.all
 
 let private contexts =
   Gen.elements [
-    { Project = FSharpWorkspace; Daemon = DaemonAnswering }
-    { Project = FSharpWorkspace; Daemon = DaemonNotAnswering }
-    { Project = NotFSharpWorkspace; Daemon = DaemonAnswering }
-    { Project = NotFSharpWorkspace; Daemon = DaemonNotAnswering }
+    { Project = FSharpWorkspace; Daemon = DaemonAnswering; Lease = None }
+    { Project = FSharpWorkspace; Daemon = DaemonNotAnswering; Lease = None }
+    { Project = NotFSharpWorkspace; Daemon = DaemonAnswering; Lease = None }
+    { Project = NotFSharpWorkspace; Daemon = DaemonNotAnswering; Lease = None }
   ]
 
 let private prop gen body = Prop.forAll (Arb.fromGen gen) body
@@ -39,17 +51,29 @@ let private prop gen body = Prop.forAll (Arb.fromGen gen) body
 [<Tests>]
 let replGuardTests = testList "sagefs-repl-guard decision" [
 
-  testProperty "WHY — a slow-loop dotnet verb in an F# repo with SageFs up is denied, because that's the drift the hook exists to catch" <|
+  testProperty "WHY — an UNDECLARED slow-loop verb in an F# repo with SageFs up is denied, because that's the drift the hook exists to catch" <|
     prop (Gen.zip slowVerb args) (fun (verb, a) ->
       decide (sprintf "dotnet %s %s" (SlowVerb.toToken verb) a) live |> isDeny)
 
-  testProperty "WHY — SAGEFS_FINAL_GATE=1 in the env prefix always passes, because the final gate has to be runnable" <|
-    prop (Gen.zip3 slowVerb args contexts) (fun (verb, a, ctx) ->
-      decide (sprintf "SAGEFS_FINAL_GATE=1 dotnet %s %s" (SlowVerb.toToken verb) a) ctx = Allow)
+  testProperty "WHY — a DECLARED final gate with the lease GRANTED always passes, because the final gate has to be runnable" <|
+    prop (Gen.zip slowVerb args) (fun (verb, a) ->
+      decide (sprintf "SAGEFS_FINAL_GATE=1 dotnet %s %s" (SlowVerb.toToken verb) a) liveGranted = Allow)
 
-  testProperty "WHY — with no SageFs daemon answering, everything passes, because there's no REPL to go back to" <|
+  testProperty "WHY — a DECLARED final gate the daemon asks to WAIT for is denied as BUSY, not silently allowed" <|
+    prop (Gen.zip slowVerb args) (fun (verb, a) ->
+      decide (sprintf "SAGEFS_FINAL_GATE=1 dotnet %s %s" (SlowVerb.toToken verb) a) liveMustWait |> isDeny)
+
+  testProperty "WHY — a DECLARED final gate the daemon REFUSES a lease for is denied too" <|
+    prop (Gen.zip slowVerb args) (fun (verb, a) ->
+      decide (sprintf "SAGEFS_FINAL_GATE=1 dotnet %s %s" (SlowVerb.toToken verb) a) liveRefused |> isDeny)
+
+  testProperty "WHY — with no SageFs daemon answering, everything passes, because there's no REPL and no pool to ask" <|
     prop (Gen.zip slowVerb args) (fun (verb, a) ->
       decide (sprintf "dotnet %s %s" (SlowVerb.toToken verb) a) { live with Daemon = DaemonNotAnswering } = Allow)
+
+  testProperty "WHY — a daemon that answered but was never asked for a lease (Lease=None) still allows the final gate" <|
+    prop (Gen.zip slowVerb args) (fun (verb, a) ->
+      decide (sprintf "SAGEFS_FINAL_GATE=1 dotnet %s %s" (SlowVerb.toToken verb) a) live = Allow)
 
   testProperty "WHY — outside an F# repo everything passes, because SageFs has nothing to load there" <|
     prop (Gen.zip slowVerb args) (fun (verb, a) ->
@@ -73,15 +97,15 @@ let replGuardTests = testList "sagefs-repl-guard decision" [
     |> Expect.isEmpty "every one of these runs a slow-loop verb"
 
   testCase "WHY — an escape hatch on one segment doesn't excuse a later undeclared one" <| fun _ ->
-    decide "SAGEFS_FINAL_GATE=1 dotnet build && dotnet test" live
+    decide "SAGEFS_FINAL_GATE=1 dotnet build && dotnet test" liveGranted
     |> isDeny
     |> Expect.isTrue "the second segment never declared the final gate"
 
   testCase "WHY — export SAGEFS_FINAL_GATE=1 before the call counts as the declaration" <| fun _ ->
-    decide "export SAGEFS_FINAL_GATE=1 && dotnet test" live
+    decide "export SAGEFS_FINAL_GATE=1 && dotnet test" liveGranted
     |> Expect.equal "an exported gate applies to what follows" Allow
 
-  testCase "WHY — the deny reason restates the loop and names the escape hatch" <| fun _ ->
+  testCase "WHY — the undeclared deny reason restates the loop and names the escape hatch" <| fun _ ->
     match decide "dotnet test" live with
     | Allow -> failtest "dotnet test with SageFs up must be denied"
     | Deny reason ->
@@ -89,8 +113,23 @@ let replGuardTests = testList "sagefs-repl-guard decision" [
       |> List.filter (fun needle -> not (reason.Contains needle))
       |> Expect.isEmpty "the reason should carry the loop and the way out"
 
-  testCase "WHY — needsContext is false for anything the guard would allow without looking, so the hook skips the probe" <| fun _ ->
-    [ "git status"; "dotnet pack"; "SAGEFS_FINAL_GATE=1 dotnet test" ]
+  testCase "WHY — the busy deny reason says BUSY, names the wait, and never says to fall back to dotnet" <| fun _ ->
+    match decide "SAGEFS_FINAL_GATE=1 dotnet build" liveMustWait with
+    | Allow -> failtest "a MustWait lease outcome must deny"
+    | Deny reason ->
+      reason |> Expect.stringContains "explicitly says BUSY, not BROKEN" "BUSY, not broken"
+      reason |> Expect.stringContains "carries the wait" "wait 12"
+      (reason.Contains "1 lease(s) active") |> Expect.isTrue "carries the pool's own reason"
+
+  testCase "WHY — the busy deny reason for a Refused lease says so too" <| fun _ ->
+    match decide "SAGEFS_FINAL_GATE=1 dotnet build" liveRefused with
+    | Allow -> failtest "a Refused lease outcome must deny"
+    | Deny reason -> reason |> Expect.stringContains "carries the refusal reason" "you already hold 1/1 leases"
+
+  testCase "WHY — needsContext is true for a DECLARED final gate now too, since it still has to ask for a lease" <| fun _ ->
+    [ "git status"; "dotnet pack" ]
     |> List.filter needsContext
-    |> Expect.isEmpty "no probe needed"
+    |> Expect.isEmpty "these never touch dotnet's slow loop at all"
+    needsContext "SAGEFS_FINAL_GATE=1 dotnet test" |> Expect.isTrue "a final gate still needs a lease check"
+    needsContext "dotnet test" |> Expect.isTrue "an undeclared slow verb needs the daemon-answering check"
 ]
