@@ -764,7 +764,13 @@ module McpTools =
           |> String.concat "\n"
           |> sprintf "\nDiagnostics:\n%s"
       match result with
-      | Ok output -> sprintf "Result: %s%s" output diagStr
+      | Ok output ->
+        // issue #143: raw ANSI escape codes (e.g. from Expecto's colored
+        // console logger, or any printfn'd color) are noise to a human
+        // reading this and actively corrupt an agent trying to parse the
+        // result — strip them at the one place every eval-returning tool's
+        // text output already funnels through.
+        sprintf "Result: %s%s" (stripAnsi output) diagStr
       | Error err ->
         let errText = SageFsError.describeForAgent err
         let suggestion = errText |> ErrorMessages.categorize |> ErrorMessages.getSuggestion
@@ -1455,7 +1461,12 @@ module McpTools =
           (fun replyId -> WorkerProtocol.WorkerMessage.LoadScript(filePath, WorkerProtocol.SessionId.value replyId))
       return
         match routeResult with
-        | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Ok msg)) -> Ok msg
+        | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Ok msg)) ->
+          // issue #143: this is the same raw FSI-captured output as
+          // send_fsharp_code's EvalResult (LoadScript evaluates a #load
+          // directive through the same Eval path) — it never routed through
+          // formatWorkerEvalResult's stripAnsi, so it was a second leak.
+          Ok (stripAnsi msg)
         | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Error err)) -> Error err
         | Ok (WorkerProtocol.WorkerResponse.WorkerError err) -> Error err
         | Ok other -> Ok (sprintf "Unexpected response: %A" other)

@@ -739,6 +739,51 @@ let workerEvalJsonTests =
       JsonDocument.Parse(json) |> ignore
       json |> Expect.stringContains "contains escaped quote" "\\\""
 
+    testCase "WHY — formatWorkerEvalResultJson — strips ANSI escape codes from the result text, because raw color codes are noise to a human and corrupt a JSON-parsing agent (issue #143)"
+    <| fun _ ->
+      // Expecto's console logger (and anything else colorizing stdout, e.g.
+      // a plain `printfn "\x1b[31mred\x1b[0m"`) writes real ANSI escapes into
+      // the captured eval output — reproduces the exact bytes shown in #143.
+      let raw = "\x1b[37m[\x1b[37m12:05:27 \x1b[37mINF\x1b[37m] \x1b[37mEXPECTO? Running tests...\x1b[0m"
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok raw, [], Map.empty)
+      let json = McpAdapter.formatWorkerEvalResultJson resp
+      let doc = JsonDocument.Parse(json)
+      let result = doc.RootElement.GetProperty("result").GetString()
+      result.Contains("\x1b") |> Expect.isFalse "result must contain no raw ESC bytes"
+      result |> Expect.stringContains "the real text survives stripping" "EXPECTO? Running tests..."
+
+    testCase "WHY — formatWorkerEvalResult TEXT — strips ANSI escape codes from the result text (issue #143)"
+    <| fun _ ->
+      let raw = "\x1b[31mred\x1b[0m"
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok raw, [], Map.empty)
+      let text = McpTools.formatWorkerEvalResult WorkflowTypes.SessionWorkflow.Interactive resp
+      text |> Expect.equal "no escape codes in the formatted text result" "Result: red"
+
+    testTask "WHY — loadFSharpScriptResult — strips ANSI from a ScriptLoaded success message, since #load runs through the same raw-output Eval path as send_fsharp_code (issue #143)" {
+      let sid = "aaaaaaa1"
+      let proxy : WorkerProtocol.SessionProxy =
+        fun _msg -> async { return WorkerProtocol.WorkerResponse.ScriptLoaded("r1", Ok "\x1b[32mLoaded\x1b[0m OK") }
+      let ops = { SageFs.SessionManagementOps.stub with GetProxy = fun _ -> System.Threading.Tasks.Task.FromResult(Some proxy) }
+      let ctx : McpTools.McpContext =
+        { FrictionStore = None
+          DiagnosticsChanged = Unchecked.defaultof<_>
+          StateChanged = None
+          SessionOps = ops
+          SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>()
+          McpPort = 0
+          Dispatch = None
+          GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
+          GetFeatureState = None; RecordEval = None
+          ActivityTracker = SageFs.AgentActivityTracker.create()
+          LiveSnapshotSink = None; CohortOwner = None }
+      let! result : Result<string, SageFsError> = McpTools.loadFSharpScriptResult ctx "test" "foo.fsx" (Some sid) None
+      match result with
+      | Ok msg ->
+        msg.Contains("\x1b") |> Expect.isFalse "no raw ESC bytes in the loaded-script message"
+        msg |> Expect.stringContains "the real text survives stripping" "Loaded"
+      | Error e -> failtestf "expected Ok, got %A" e
+    }
+
     testCase "formatWorkerEvalResult TEXT includes the (line,col) span for a positioned diagnostic (dogfood F4)"
     <| fun _ ->
       let diag : WorkerProtocol.WorkerDiagnostic =

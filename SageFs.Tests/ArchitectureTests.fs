@@ -1069,7 +1069,13 @@ let fileSizeBudgets =
       // status read. Deliberate, reviewed fix, not silent accretion.
       // Ratchet back DOWN when this file is split; never bump to paper
       // over drift.
-      "SageFs/Mcp.fs", 4389
+      // 4389 -> 4400: issue #143. formatWorkerEvalResult and
+      // loadFSharpScriptResult's success branch now strip ANSI escape codes
+      // from eval output (AppState.stripAnsi, already used by the TUI)
+      // before it reaches an MCP caller. Deliberate, reviewed fix, not
+      // silent accretion. Ratchet back DOWN when this file is split; never
+      // bump to paper over drift.
+      "SageFs/Mcp.fs", 4400
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

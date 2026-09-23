@@ -748,8 +748,11 @@ Available: %s%s
       let diagsJson = diagnosticsToJson diags
       match result with
       | Ok output ->
+        // issue #143: same ANSI stripping as the TEXT path (Mcp.fs's
+        // formatWorkerEvalResult) — this is the JSON sibling and must not
+        // disagree about what a caller sees in "result".
         sprintf """{"success":true,"result":"%s","diagnostics":[%s]}"""
-          (escapeJson output) diagsJson
+          (escapeJson (stripAnsi output)) diagsJson
       | Error err ->
         sprintf """{"success":false,"error":"%s","diagnostics":[%s]}"""
           (escapeJson (SageFsError.describeForAgent err)) diagsJson
