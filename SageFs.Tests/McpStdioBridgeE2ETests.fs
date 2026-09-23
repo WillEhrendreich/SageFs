@@ -28,6 +28,8 @@ let private runBridgeSmokeTest () : Task<unit> =
     psi.ArgumentList.Add("mcp")
     psi.ArgumentList.Add("--mcp-port")
     psi.ArgumentList.Add(string mcpPort)
+    psi.ArgumentList.Add("--owner-pid")
+    psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
     psi.UseShellExecute <- false
     psi.CreateNoWindow <- true
     psi.RedirectStandardInput <- true

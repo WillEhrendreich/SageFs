@@ -213,6 +213,12 @@ let startDaemonProcess (mcpPort: int) : Task<Result<unit, string>> =
         )
       psi.ArgumentList.Add("--mcp-port")
       psi.ArgumentList.Add(string mcpPort)
+      // A daemon on a custom port has to name an owner, or it is refused. Ours
+      // is this bridge: the client spawned us, so a daemon we started for it
+      // should not outlive us. The default port is shared and exempt, which is
+      // why this only matters for a bridge asked for a port of its own.
+      psi.ArgumentList.Add("--owner-pid")
+      psi.ArgumentList.Add(string (Process.GetCurrentProcess().Id))
       let proc = Process.Start(psi)
       proc.OutputDataReceived.Add(fun e ->
         match e.Data with

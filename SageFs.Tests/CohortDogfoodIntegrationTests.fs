@@ -204,6 +204,8 @@ let private startIsolatedDaemon (workingDir: string) (dataDir: string) : Task<Pr
   psi.WorkingDirectory <- workingDir
   psi.ArgumentList.Add "--mcp-port"
   psi.ArgumentList.Add(string port)
+  psi.ArgumentList.Add("--owner-pid")
+  psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
   let self = Process.GetCurrentProcess()
   psi.ArgumentList.Add "--owner-pid"
   psi.ArgumentList.Add(string self.Id)

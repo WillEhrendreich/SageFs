@@ -286,6 +286,8 @@ let daemonStartupFailsClosedTests =
       psi.WorkingDirectory <- testProjectDir
       psi.ArgumentList.Add "--mcp-port"
       psi.ArgumentList.Add(string mcpPort)
+      psi.ArgumentList.Add("--owner-pid")
+      psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
       psi.ArgumentList.Add "--no-resume"
       psi.Environment["SAGEFS_DATA_DIR"] <- isolatedDataDir ()
       // Redirected to FILES (never undrained pipes — see DashboardBrowserRunner

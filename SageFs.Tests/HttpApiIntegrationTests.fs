@@ -112,6 +112,8 @@ let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = t
   psi.WorkingDirectory <- workingDir
   psi.ArgumentList.Add("--mcp-port")
   psi.ArgumentList.Add(string port)
+  psi.ArgumentList.Add("--owner-pid")
+  psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
   for arg in args do
     psi.ArgumentList.Add(arg)
 

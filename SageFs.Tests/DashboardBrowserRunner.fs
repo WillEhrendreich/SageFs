@@ -42,6 +42,8 @@ let runBrowserJourneys (cliArgs: string array) : int =
   psi.WorkingDirectory <- repoRoot
   psi.ArgumentList.Add("--mcp-port")
   psi.ArgumentList.Add(string mcpPort)
+  psi.ArgumentList.Add("--owner-pid")
+  psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
   psi.ArgumentList.Add("--no-resume")
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
   psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
@@ -360,6 +362,8 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
   psi.WorkingDirectory <- repoRoot
   psi.ArgumentList.Add("--mcp-port")
   psi.ArgumentList.Add(string mcpPort)
+  psi.ArgumentList.Add("--owner-pid")
+  psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
   psi.ArgumentList.Add("--no-resume")
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
   psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
@@ -567,6 +571,8 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
   psi.WorkingDirectory <- repoRoot
   psi.ArgumentList.Add("--mcp-port")
   psi.ArgumentList.Add(string mcpPort)
+  psi.ArgumentList.Add("--owner-pid")
+  psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
   psi.ArgumentList.Add("--no-resume")
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
   psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"

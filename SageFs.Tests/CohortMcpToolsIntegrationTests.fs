@@ -66,6 +66,8 @@ let private startIsolatedDaemon () : Task<Process * int> = task {
   psi.WorkingDirectory <- repoRoot
   psi.ArgumentList.Add "--mcp-port"
   psi.ArgumentList.Add(string port)
+  psi.ArgumentList.Add("--owner-pid")
+  psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
   let self = Process.GetCurrentProcess()
   psi.ArgumentList.Add "--owner-pid"
   psi.ArgumentList.Add(string self.Id)
