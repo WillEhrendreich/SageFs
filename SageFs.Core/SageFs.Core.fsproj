@@ -237,6 +237,7 @@
         <Compile Include="WarmupSupervision.fs" />
         <Compile Include="WorkerEventGuard.fs" />
         <Compile Include="WorkerHealthProbe.fs" />
+        <Compile Include="ProcessEnvironment.fs" />
         <Compile Include="SessionBuild.fs" />
         <Compile Include="SessionManager.fs" />
         <Compile Include="SessionOperations.fs" />

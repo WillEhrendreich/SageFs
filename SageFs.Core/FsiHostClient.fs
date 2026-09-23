@@ -16,6 +16,7 @@ open System.Text
 open System.Threading
 open System.Threading.Tasks
 open SageFs.FsiHost.FsiProtocol
+open SageFs.ProcessEnvironment
 
 /// How one eval call ended from the caller's point of view.
 type EvalCall =
@@ -397,8 +398,13 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
     psi.RedirectStandardError <- true
     psi.UseShellExecute <- false
     psi.CreateNoWindow <- true
-    for key, value in options.Environment do
-      psi.Environment[key] <- value
+    // This host is where the user's OWN code runs, so its environment is what
+    // any `dotnet` the user's code shells out to inherits. Strip whatever
+    // MSBuild-resolution variables the worker itself picked up (from the
+    // daemon that spawned it, or from loading the session's own projects) so
+    // that child sees the project's own SDK, not SageFs's. See
+    // SageFs.ProcessEnvironment.
+    applyTo psi options.Environment
     let fail (proc: Process) (error: StartError) : Result<FsiHostSession, StartError> =
       (try proc.Kill true with _ -> ())
       deleteArgsFile ()

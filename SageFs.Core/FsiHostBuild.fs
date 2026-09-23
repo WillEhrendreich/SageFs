@@ -13,6 +13,7 @@ open System.Reflection
 open System.Security.Cryptography
 open System.Text
 open System.Threading
+open SageFs.ProcessEnvironment
 
 /// The files that make up the host project, in the order they are written.
 let hostSourceNames =
@@ -153,26 +154,10 @@ let private runCaptureWith
   psi.RedirectStandardError <- true
   psi.UseShellExecute <- false
   psi.CreateNoWindow <- true
-  psi.Environment["DOTNET_NOLOGO"] <- "1"
-  psi.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] <- "1"
-  // Loading a project in this process (Ionide.ProjInfo) sets MSBuild's own
-  // variables on the PROCESS, and every child inherits them. A child then
-  // loads that MSBuild and its targets no matter which dotnet it was told to
-  // use, which is how a repo-local SDK silently loses to the one SageFs
-  // itself runs on. Drop them so the muxer decides.
-  for key in
-    [ "MSBUILD_EXE_PATH"
-      "MSBuildSDKsPath"
-      "MSBuildExtensionsPath"
-      "MSBuildExtensionsPath32"
-      "MSBuildExtensionsPath64"
-      "DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR"
-      "DOTNET_HOST_PATH"
-      "DOTNET_ROOT"
-      "DOTNET_ROOT(x86)" ] do
-    psi.Environment.Remove key |> ignore
-  for key, value in environment do
-    psi.Environment[key] <- value
+  // See SageFs.ProcessEnvironment for why this scrub exists and what it strips
+  // (Ionide.ProjInfo pins MSBuild's own resolution variables on this process;
+  // every child would otherwise inherit them and load the wrong SDK's MSBuild).
+  applyTo psi (("DOTNET_NOLOGO", "1") :: ("DOTNET_CLI_TELEMETRY_OPTOUT", "1") :: environment)
   try
     use proc = Process.Start psi
     // Drain both pipes concurrently or a chatty child deadlocks before it exits.

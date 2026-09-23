@@ -4,6 +4,7 @@ open System
 open System.Diagnostics
 open System.IO
 open System.Threading
+open SageFs.ProcessEnvironment
 open SageFs.Utils
 
 /// The project-build subsystem, extracted from the SessionManager supervisor so
@@ -199,6 +200,12 @@ module SessionBuild =
                 WorkingDirectory = workingDir)
               for arg in args do
                 psi.ArgumentList.Add(arg)
+              // Strip whatever MSBuild-resolution variables THIS process (daemon
+              // or worker) may itself have inherited or picked up, so the
+              // session's own build resolves the SDK from `workingDir`, not
+              // from whichever project SageFs last loaded internally. See
+              // SageFs.ProcessEnvironment.
+              applyTo psi []
               let proc = Process.Start(psi)
               let stderrLines = System.Collections.Generic.List<string>()
               let stderrTask =

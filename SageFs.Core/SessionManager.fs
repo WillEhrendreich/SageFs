@@ -391,11 +391,11 @@ module SessionManager =
     // supervisor); its stderr carries diagnostics (forwarded to the daemon log).
     // No OTel env vars — the host carries no OpenTelemetry (minimal closure).
 
-    // Propagate session config as env vars so worker startup stays independent of daemon CLI flags
-    for (key, value) in envVars do
-      psi.Environment.[key] <- value
-    for (key, value) in RuntimeCompat.rollForwardEnv runtimeChoice do
-      psi.Environment.[key] <- value
+    // Propagate session config as env vars so worker startup stays independent
+    // of daemon CLI flags, and strip MSBuild-resolution variables this daemon
+    // may have picked up so the worker and the isolated FSI host it spawns
+    // never inherit them (SageFs.ProcessEnvironment).
+    SageFs.ProcessEnvironment.applyTo psi (envVars @ RuntimeCompat.rollForwardEnv runtimeChoice)
 
     let proc = new Process()
     proc.StartInfo <- psi
