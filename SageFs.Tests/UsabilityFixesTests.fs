@@ -87,7 +87,7 @@ let portOwnershipTests =
     test "an occupied MCP port matching the probed daemon's own port classifies as OurDaemon" {
       let info : SageFs.DaemonInfo =
         { Pid = 4242; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow
-          WorkingDirectory = "/tmp"; Version = "0.6.700"; ApiVersion = None; SessionCount = Some 0 }
+          WorkingDirectory = "/tmp"; Version = "0.6.700"; ApiVersion = None; SessionCount = Some 0; ComponentFailures = [] }
       EnvCheck.classifyPortOwner 37749 false (Some info)
       |> Expect.equal "our own daemon's MCP port" (EnvCheck.PortOwner.OurDaemon 4242)
     }
@@ -95,7 +95,7 @@ let portOwnershipTests =
     test "an occupied dashboard port matching the probed daemon's dashboard port classifies as OurDaemon" {
       let info : SageFs.DaemonInfo =
         { Pid = 4242; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow
-          WorkingDirectory = "/tmp"; Version = "0.6.700"; ApiVersion = None; SessionCount = Some 0 }
+          WorkingDirectory = "/tmp"; Version = "0.6.700"; ApiVersion = None; SessionCount = Some 0; ComponentFailures = [] }
       EnvCheck.classifyPortOwner 37750 false (Some info)
       |> Expect.equal "our own daemon's dashboard port" (EnvCheck.PortOwner.OurDaemon 4242)
     }
@@ -103,7 +103,7 @@ let portOwnershipTests =
     test "an occupied port that does NOT match the probed daemon's ports is still Other" {
       let info : SageFs.DaemonInfo =
         { Pid = 4242; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow
-          WorkingDirectory = "/tmp"; Version = "0.6.700"; ApiVersion = None; SessionCount = Some 0 }
+          WorkingDirectory = "/tmp"; Version = "0.6.700"; ApiVersion = None; SessionCount = Some 0; ComponentFailures = [] }
       // Some unrelated process holds 9999 -- daemon info is for a different port entirely.
       EnvCheck.classifyPortOwner 9999 false (Some info)
       |> Expect.equal "unrelated occupied port is still a real conflict" EnvCheck.PortOwner.Other
@@ -112,7 +112,7 @@ let portOwnershipTests =
     test "checkPortAgainstDaemon PASSES (not Fail) when the port is held by our own daemon" {
       let info : SageFs.DaemonInfo =
         { Pid = 4242; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow
-          WorkingDirectory = "/tmp"; Version = "0.6.700"; ApiVersion = None; SessionCount = Some 0 }
+          WorkingDirectory = "/tmp"; Version = "0.6.700"; ApiVersion = None; SessionCount = Some 0; ComponentFailures = [] }
       // isPortFree can't be faked without binding a real socket here, so we
       // exercise the pure decision this check is built on (classifyPortOwner)
       // and confirm the check's own render honors OurDaemon -> Pass.

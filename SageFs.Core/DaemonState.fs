@@ -13,6 +13,12 @@ type DaemonInfo = {
   Version: string
   ApiVersion: int option
   SessionCount: int option
+  // Mirrors DaemonInfoContract.ComponentFailures (the field `/api/daemon-info`
+  // actually sends): non-empty means a component the daemon depends on
+  // (most commonly the MCP server itself) failed, even though this probe
+  // succeeded — see that type's doc comment for why the split matters.
+  // Defaults to `[]` for daemons predating this field.
+  ComponentFailures: string list
 }
 
 /// The three states a port can be in, not two. An HTTP probe that gets no
@@ -117,7 +123,16 @@ module DaemonState =
       WorkingDirectory = Environment.CurrentDirectory
       Version = "unknown"
       ApiVersion = None
-      SessionCount = None }
+      SessionCount = None
+      ComponentFailures = [] }
+
+  let private tryGetStringArrayProperty (name: string) (root: JsonElement) : string list =
+    match root.TryGetProperty(name) with
+    | true, value when value.ValueKind = JsonValueKind.Array ->
+      value.EnumerateArray()
+      |> Seq.choose (fun el -> if el.ValueKind = JsonValueKind.String then Some (el.GetString()) else None)
+      |> List.ofSeq
+    | _ -> []
 
   let tryParseDaemonInfoJson (mcpPort: int) (json: string) : DaemonInfo option =
     try
@@ -139,6 +154,7 @@ module DaemonState =
         Version = tryGetStringProperty "version" root |> Option.defaultValue "unknown"
         ApiVersion = tryGetIntProperty "apiVersion" root
         SessionCount = tryGetIntProperty "sessionCount" root
+        ComponentFailures = tryGetStringArrayProperty "componentFailures" root
       }
     with _ ->
       None

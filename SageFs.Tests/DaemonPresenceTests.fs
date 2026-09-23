@@ -23,7 +23,7 @@ let private mkDaemonInfo pid =
     WorkingDirectory = Path.Combine(Path.GetTempPath(), "sagefs-presence-tests")
     Version = "test"
     ApiVersion = None
-    SessionCount = None }
+    SessionCount = None; ComponentFailures = [] }
 
 [<Tests>]
 let daemonPresenceTests =

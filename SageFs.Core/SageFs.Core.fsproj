@@ -162,6 +162,12 @@
              gated on the verdict those two produce. -->
         <Compile Include="Features\GcDumpCapture.fs" />
         <Compile Include="Features\GcDumpWatch.fs" />
+        <!-- A daemon-wide "this component failed and a client should know"
+             registry — FileWatcher.fs (below) and McpServer.fs both report
+             into it. Needs no state of its own beyond a ConcurrentDictionary
+             so it can sit anywhere before its first consumer; here, right
+             beside the other watch modules it mirrors the shape of. -->
+        <Compile Include="Features\ComponentWatch.fs" />
         <!-- The shared three-level pressure vocabulary MemorySupervisor, the
              expensive-work lease, and DaemonHealth.overallStatus all read.
              Moved ahead of DaemonHealth.fs (was down by MemorySupervisor.fs)

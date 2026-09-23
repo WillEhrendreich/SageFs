@@ -413,7 +413,19 @@ let statusCommand
     UpdateCheckService.evaluateForCli DaemonState.SageFsDir info.Version
     |> UpdateCheck.describe
     |> Option.iter (printfn "\n%s")
-    0
+    // The daemon process answering this probe is not the same thing as
+    // every component it depends on actually working — a dead MCP server
+    // or a file watcher that gave up on a session's directory both show up
+    // here (see DaemonInfoContract.ComponentFailures), so "running" alone
+    // never gets the last word.
+    match info.ComponentFailures with
+    | [] -> 0
+    | failures ->
+      printfn ""
+      printfn "  DEGRADED — %d component(s) reporting a failure:" failures.Length
+      for f in failures do
+        printfn "    - %s" f
+      1
   | DaemonPresence.Wedged pid ->
     printfn "SageFs daemon is wedged"
     printfn "  PID:        %d" pid

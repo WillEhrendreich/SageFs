@@ -2369,11 +2369,22 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
       // A daemon whose own signals are broken is not healthy, however well
       // its sessions are doing.
       let overall = SageFs.Features.DaemonHealth.overallStatus healthSnapshot
-      let healthy = healthy && overall <> SageFs.Features.OverallHealth.Unhealthy
+      // A component the daemon depends on (this MCP server itself failing
+      // to start, a session's file watcher exhausting inotify or silently
+      // truncating its directory walk) reported into ComponentWatch — see
+      // its doc comment. Every session can look "Ready" while this is
+      // true, so it is its own veto rather than something folded into
+      // session status.
+      let componentFailures = SageFs.Features.ComponentWatch.current ()
+      let healthy = healthy && overall <> SageFs.Features.OverallHealth.Unhealthy && List.isEmpty componentFailures
       do! jsonResponse ctx 200
             {| healthy = healthy
                status = sessionStatus
                overall = SageFs.Features.DaemonHealth.healthLabel overall
+               componentFailures =
+                 componentFailures
+                 |> List.map (fun f -> {| name = f.Component; reason = f.Reason; hint = f.Hint |})
+                 |> List.toArray
                anomalies = anomalies
                memoryMB = healthSnapshot.MemoryMB
                // The level-based judgment (§ HealthSnapshot.MemoryPressure's
@@ -3322,10 +3333,14 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
 
 let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.CancellationToken) =
   task {
+    // Computed outside the try so a failure anywhere inside it can still
+    // point a reader (and ComponentWatch — see the `with` branches below)
+    // at the right log file, instead of "logPath" being out of scope
+    // exactly where it would be most useful.
+    let logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "SageFs", "mcp-server.log")
     try
       let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
       let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-      let logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "SageFs", "mcp-server.log")
       System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)) |> ignore
       let version = DaemonInfo.version
       let otelConfigured = DaemonInfo.otelConfigured
@@ -3433,6 +3448,24 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
     with
     | :? System.IO.IOException as ex when ex.Message.Contains("address") || ex.Message.Contains("already") ->
       Log.error "Port %d is already in use. Another SageFs instance may be running — try 'sagefs status' or use --mcp-port to pick a different port." cfg.Port
+      SageFs.Features.ComponentWatch.reportFailure
+        { Component = "mcp-server"
+          Reason = sprintf "port %d already in use: %s" cfg.Port ex.Message
+          Hint = sprintf "Run 'sagefs status' to find the process holding port %d, or start this daemon with --mcp-port to pick a different one." cfg.Port }
     | ex ->
+      // This is the daemon's primary agent/editor interface dying while the
+      // process itself keeps running (the dashboard is a separate
+      // WebApplication — see startDashboardServer — so it can stay up while
+      // this fails). Logging here alone is exactly the failure mode this
+      // exists to stop: a Task nobody's watching writing to a log file
+      // nobody's reading, while `/api/daemon-info` (what `sagefs status`
+      // and every editor's daemon probe actually poll) keeps reporting a
+      // healthy daemon. ComponentWatch is shared in-process, so the
+      // dashboard's own app can see this even though the MCP app that
+      // detected it never got to start serving anything.
       Log.error "MCP server failed to start (%s): %s\n%s" (ex.GetType().Name) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      SageFs.Features.ComponentWatch.reportFailure
+        { Component = "mcp-server"
+          Reason = sprintf "%s: %s" (ex.GetType().Name) ex.Message
+          Hint = sprintf "See %s for the stack trace, then run 'sagefs status'." logPath }
   }

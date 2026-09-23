@@ -722,6 +722,7 @@ let jupyterKernelTests =
           Version = "test"
           ApiVersion = None
           SessionCount = None
+          ComponentFailures = []
         }
 
         let readOnPort port =
@@ -743,6 +744,7 @@ let jupyterKernelTests =
           Version = "test"
           ApiVersion = None
           SessionCount = None
+          ComponentFailures = []
         }
 
         let readOnPort port =
@@ -764,6 +766,7 @@ let jupyterKernelTests =
           Version = "test"
           ApiVersion = None
           SessionCount = None
+          ComponentFailures = []
         }
 
         let probedPorts = System.Collections.Generic.List<int>()

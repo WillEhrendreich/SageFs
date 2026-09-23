@@ -1360,6 +1360,16 @@ type DaemonInfoContract = {
   DashboardPort: int
   ApiVersion: int
   SessionCount: int
+  // A failed component (the MCP server itself, a session's file watcher)
+  // reported into SageFs.Features.ComponentWatch — one line per failure,
+  // "component: reason — hint". This endpoint is served by the DASHBOARD's
+  // own WebApplication, a separate process-internal app from the MCP
+  // server's, so it keeps answering (and can carry this) even when the MCP
+  // server's own startup never got far enough to serve anything at all —
+  // that split is exactly how a daemon with a fully dead MCP server used
+  // to still read as "SageFs daemon running" from `sagefs status`, which
+  // probes this endpoint, not the MCP server's own `/health`.
+  ComponentFailures: string list
 }
 
 [<RequireQualifiedAccess>]
@@ -1372,7 +1382,10 @@ module DaemonInfoContract =
       McpPort = mcpPort
       DashboardPort = mcpPort + 1
       ApiVersion = EndpointContracts.apiVersion
-      SessionCount = sessionCount }
+      SessionCount = sessionCount
+      ComponentFailures =
+        SageFs.Features.ComponentWatch.current ()
+        |> List.map (fun f -> sprintf "%s: %s — %s" f.Component f.Reason f.Hint) }
 
 /// Parse an editor action string + optional value into an EditorAction DU case.
 let parseEditorAction (actionName: string) (value: string option) : EditorAction option =

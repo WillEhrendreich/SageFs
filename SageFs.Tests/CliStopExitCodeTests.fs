@@ -19,7 +19,7 @@ let private mkDaemonInfo pid =
     WorkingDirectory = Path.Combine(Path.GetTempPath(), "sagefs-stop-tests")
     Version = "test"
     ApiVersion = None
-    SessionCount = None }
+    SessionCount = None; ComponentFailures = [] }
 
 let private daemonOnPort = mkDaemonInfo 4242
 

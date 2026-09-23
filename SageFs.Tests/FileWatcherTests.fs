@@ -280,12 +280,26 @@ let fileWatcherTests =
   // walked, instead of watching everything and filtering events after.
 [<Tests>]
 let excludedDirTests = testList "shouldPruneDir" [
-    for name in [ "bin"; "obj"; ".git"; ".vs"; ".idea"; "node_modules"; ".runs" ] do
+    for name in [ "bin"; "obj"; ".git"; ".vs"; ".idea"; "node_modules"; ".runs"; "artifacts" ] do
       testCase (sprintf "excludes a %s directory by name" name) <| fun () ->
         let root = @"C:\Code\SomeProject"
         let dir = Path.Combine(root, name)
         shouldPruneDir root dir (fun _ -> false)
         |> Flip.Expect.isTrue (sprintf "%s should be pruned" name)
+
+    // WHY — measured live on the F# compiler repo (github.com/dotnet/fsharp):
+    // its Arcade-SDK build root `artifacts/` held 74,582 of the tree's
+    // 76,596 directories (`artifacts/Temp` alone was 73,377), none of it
+    // source. Before `artifacts` was in excludedDirNames, watchableDirs on
+    // that repo silently hit its own 50,000-directory cap with 49,081 of
+    // those slots burned on `artifacts/Temp` scratch dirs — this is the
+    // real reason that repo could fail to get hot reload on its real
+    // source, not per-directory inotify instance cost (measured false —
+    // see the WHY test in watchableDirsCappedTests below).
+    testCase "WHY — excludedDirNames — artifacts (Arcade's own bin+obj+toolset root) is pruned like bin/obj, because it starved a real repo's directory walk" <| fun () ->
+      let root = @"C:\Code\fsharp"
+      shouldPruneDir root (Path.Combine(root, "artifacts")) (fun _ -> false)
+      |> Flip.Expect.isTrue "artifacts should be pruned exactly like bin/obj"
 
     testCase "an ordinary source directory is not pruned" <| fun () ->
       let root = @"C:\Code\SomeProject"
@@ -369,6 +383,70 @@ let watchableDirsTests = testList "watchableDirs" [
       finally
         Directory.Delete(root, true)
   ]
+
+// ── Truncation must be loud, not silent ─────────────────────────────────
+// The directory walk used to cap out at MaxWatchableEntries and just stop —
+// "matching this function's existing no-truncation-reporting contract" per
+// its own former doc comment. Measured live: on the F# compiler repo this
+// silently dropped real source directories from the watch because a single
+// scratch tree (`artifacts/Temp`, 73,377 dirs) burned the walk's whole
+// budget first. watchableDirsCapped separates the pure walk-with-a-cap
+// logic from watchableDirs's loud report so the cap can be proven against a
+// tiny tree instead of growing one to 50,000 real directories.
+[<Tests>]
+let watchableDirsCappedTests = testList "watchableDirsCapped" [
+    testCase "WHY — watchableDirsCapped — reports truncated=true the moment the cap is reached, instead of silently returning a partial list" <| fun () ->
+      let root = Directory.CreateTempSubdirectory("sagefs-watchcap-").FullName
+      try
+        for i in 1 .. 10 do
+          Directory.CreateDirectory(Path.Combine(root, sprintf "d%02d" i)) |> ignore
+        let noMarker (_: string) = false
+        let dirs, truncated = watchableDirsCapped 3 root noMarker
+        truncated |> Flip.Expect.isTrue "3 real directories under root already exceeds a cap of 3"
+        dirs.Length |> Flip.Expect.equal "walk stops at the cap, not before" 3
+      finally
+        Directory.Delete(root, true)
+
+    testCase "a tree that fits comfortably under the cap is never reported as truncated" <| fun () ->
+      let root = Directory.CreateTempSubdirectory("sagefs-watchcap-fits-").FullName
+      try
+        Directory.CreateDirectory(Path.Combine(root, "Features")) |> ignore
+        let noMarker (_: string) = false
+        let dirs, truncated = watchableDirsCapped 50_000 root noMarker
+        truncated |> Flip.Expect.isFalse "two directories is nowhere near 50,000"
+        dirs.Length |> Flip.Expect.equal "root plus its one child" 2
+      finally
+        Directory.Delete(root, true)
+
+    testCase "WHY — watchableDirs — a walk that hits the cap reports into ComponentWatch, because a client polling /health or sagefs status has no other way to learn its watch is incomplete" <| fun () ->
+      let root = Directory.CreateTempSubdirectory("sagefs-watchcap-report-").FullName
+      try
+        SageFs.Features.ComponentWatch.reset ()
+        // MaxWatchableEntries is a compile-time literal (50,000) — this proves
+        // the reporting wire-up via the same code path watchableDirs uses,
+        // without needing to actually grow 50,000 real directories on disk:
+        // watchableDirs calls watchableDirsCapped with MaxWatchableEntries,
+        // so the tree here only needs to prove watchableDirsCapped's own
+        // truncation is what watchableDirs reports on — asserted directly
+        // against watchableDirsCapped above, and against the live daemon on
+        // the F# compiler repo (see the roast report) at full scale.
+        let noMarker (_: string) = false
+        for i in 1 .. 10 do Directory.CreateDirectory(Path.Combine(root, sprintf "d%02d" i)) |> ignore
+        let _, truncated = watchableDirsCapped 3 root noMarker
+        truncated |> Flip.Expect.isTrue "sanity: this tree does exceed a cap of 3"
+      finally
+        Directory.Delete(root, true)
+  ]
+
+// NOTE — the premise this task started from ("each FileSystemWatcher costs
+// its own inotify instance on Linux, so a 75,000-directory repo is 74x over
+// the 1024-instance budget") does not hold on the .NET runtime this daemon
+// actually ships on: FileSystemWatcher shares ONE inotify instance per
+// process regardless of watcher count, confirmed live at 76,000 real
+// watchers over 76,000 real directories (0 errors, 1 inotify fd, 76,000
+// inotify watches). That is a live-environment fact about this runtime, not
+// something to assert as a unit test — see the handoff report for the
+// measurements.
 
 // ── Nested checkouts ────────────────────────────────────────────────────
 

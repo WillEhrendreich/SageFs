@@ -83,7 +83,23 @@ let hasCheckoutMarker (dir: string) : bool =
 /// limit) after every session watching it had already stopped: the watch
 /// root was a checkout with per-project bin/obj trees and SageFs's own
 /// .runs test-artifact directories underneath it.
-let excludedDirNames = set [ "bin"; "obj"; ".git"; ".vs"; ".idea"; "node_modules"; ".runs" ]
+///
+/// `artifacts` was missing from this list and it matters far more than any
+/// entry already in it: measured live on the F# compiler repo
+/// (github.com/dotnet/fsharp, checked out at ~11GB), the Arcade-SDK build
+/// root `artifacts/` held 74,582 of the tree's 76,596 directories —
+/// `artifacts/Temp` alone was 73,377 — none of it source. Without this
+/// entry, `watchableDirs` on that repo hits its own `MaxWatchableEntries`
+/// cap with 49,081 of the 50,000 slots burned on `artifacts/Temp` scratch
+/// dirs, silently (see that function's doc comment) — before this fix,
+/// opening that repo could watch some or none of its real source
+/// depending on directory enumeration order, and nothing said so. With
+/// `artifacts` excluded the same repo needs 1,957 watchable directories,
+/// two orders of magnitude under the cap. `artifacts` is Arcade's own
+/// bin+obj+toolset root (dotnet/runtime, dotnet/aspnetcore, dotnet/fsharp,
+/// and everything else built on Arcade uses it) — exactly the same shape
+/// as `bin`/`obj`, just a convention this list didn't know about yet.
+let excludedDirNames = set [ "bin"; "obj"; ".git"; ".vs"; ".idea"; "node_modules"; ".runs"; "artifacts" ]
 
 /// Pure: should `dir` — and therefore everything under it — be pruned from
 /// a recursive watch? Either its own name is a build/VCS/cache artifact, or
@@ -121,20 +137,35 @@ let shouldPruneDir (root: string) (dir: string) (hasCheckoutMarker: string -> bo
 /// every directory's canonical path is tracked across the whole walk so a
 /// non-symlink cycle (two logical paths landing on the same real
 /// directory) can't loop either. `MaxWatchableEntries` bounds the total
-/// directories examined — silently, matching this function's existing
-/// no-truncation-reporting contract, rather than growing forever the way
-/// `Directory.EnumerateFiles(_, _, AllDirectories)` would.
+/// directories examined — loudly (`watchableDirs` below reports it), not
+/// silently as this used to: on the un-pruned F# compiler repo this cap
+/// was hit with 49,081 of its 50,000 slots burned on a single scratch
+/// directory (`artifacts/Temp`) before ever finishing the real source tree
+/// — a session opened there could silently get hot reload on some, or
+/// none, of its files depending on directory-enumeration order, and
+/// nothing said so. Bounding still beats growing forever the way
+/// `Directory.EnumerateFiles(_, _, AllDirectories)` would; it just has to
+/// say when it actually bites.
 [<Literal>]
 let MaxWatchableEntries = 50_000
 
-let watchableDirs (root: string) (hasCheckoutMarker: string -> bool) : string list =
+/// The walk `watchableDirs` runs, parameterized on the cap so it can be
+/// proven against a small tree in a test without waiting to grow one to
+/// 50,000 real directories. Returns the survivors AND whether the cap was
+/// reached before the frontier was exhausted — `true` means at least one
+/// undiscovered directory (and everything under it) was silently dropped.
+let watchableDirsCapped (cap: int) (root: string) (hasCheckoutMarker: string -> bool) : string list * bool =
   let rootFull = Path.GetFullPath root
   let visited = Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase)
   let mutable examined = 0
+  let mutable truncated = false
   let rec walk (dir: string) : string list =
     let full = try Path.GetFullPath dir with _ -> dir
-    match examined >= MaxWatchableEntries, visited.Add full with
-    | true, _ | _, false -> []
+    match examined >= cap, visited.Add full with
+    | true, _ ->
+      truncated <- true
+      []
+    | _, false -> []
     | false, true ->
       examined <- examined + 1
       let children =
@@ -147,8 +178,32 @@ let watchableDirs (root: string) (hasCheckoutMarker: string -> bool) : string li
           [||]
       dir :: (children |> Array.toList |> List.collect walk)
   match Directory.Exists rootFull with
-  | true -> walk rootFull
-  | false -> []
+  | true -> walk rootFull, truncated
+  | false -> [], false
+
+/// Impure (directory enumeration only, no watches): every directory under
+/// `root` — including `root` itself — that a pruned recursive watch would
+/// give its own watch to, capped at `MaxWatchableEntries`. If the cap is
+/// actually hit, this is not a quiet best-effort result — it means real
+/// directories under `root` will never be watched, so it is reported as
+/// loudly as an inotify exhaustion (see `startPrunedWatcher`): one
+/// `Log.error` naming the exact cap and root, plus a `ComponentWatch`
+/// entry so `/health`, `/api/daemon-info` and `sagefs status` all see it
+/// too, not just whoever happens to be reading this process's own log file.
+let watchableDirs (root: string) (hasCheckoutMarker: string -> bool) : string list =
+  let dirs, truncated = watchableDirsCapped MaxWatchableEntries root hasCheckoutMarker
+  match truncated with
+  | false -> ()
+  | true ->
+    let rootFull = try Path.GetFullPath root with _ -> root
+    Log.error
+      "[FileWatcher] Stopped walking %s after %d directories — the cap was reached before every directory was examined. Some directories under %s will NOT be watched (hot reload may silently miss them). This usually means a large generated/vendor/build-scratch directory needs its own entry in FileWatcher.excludedDirNames."
+      rootFull MaxWatchableEntries rootFull
+    SageFs.Features.ComponentWatch.reportFailure
+      { Component = sprintf "file-watcher:%s" rootFull
+        Reason = sprintf "directory walk stopped at the %d-directory cap before finishing %s" MaxWatchableEntries rootFull
+        Hint = "Add the large directory's name to FileWatcher.excludedDirNames (e.g. a build/scratch root like `artifacts`), then restart the session." }
+  dirs
 
 /// Create a default watch config for the given directories.
 let defaultWatchConfig dirs : WatchConfig = {
@@ -283,7 +338,27 @@ let startPrunedWatcher
         watcher.EnableRaisingEvents <- true
         lock treeLock (fun () -> watchers.[dir] <- watcher)
         Log.debug "[FileWatcher] Watching %s (pruned recursive watch of %s)" dir rootFull
-      with ex ->
+      // A watcher failing to start for ONE directory (permission denied, a
+      // race where the directory vanished between the walk and here) is a
+      // per-directory concern — warn and move on, the rest of the tree is
+      // unaffected. Running out of the OS's inotify budget is not that: it
+      // will fail identically for every remaining directory in this walk
+      // (and the next one), so logging the same "hot-reload disabled for
+      // this directory" line hundreds of times is exactly the confident,
+      // silent-ish wrong answer this exists to stop. Reported once, loudly,
+      // naming the actual sysctl to raise — see ComponentWatch's own doc
+      // comment for why this and the file-watcher's other failure mode
+      // (the MaxWatchableEntries cap) share one registry.
+      with
+      | :? IOException as ex when ex.Message.Contains("inotify", StringComparison.OrdinalIgnoreCase) ->
+        Log.error
+          "[FileWatcher] Out of inotify instances watching %s under %s: %s. Raise fs.inotify.max_user_instances (e.g. `sudo sysctl fs.inotify.max_user_instances=8192`, or persist it in /etc/sysctl.d/) and restart affected sessions. Hot reload is degraded for the rest of this tree until then."
+          dir rootFull ex.Message
+        SageFs.Features.ComponentWatch.reportFailure
+          { Component = sprintf "file-watcher:%s" rootFull
+            Reason = sprintf "inotify instance limit reached watching %s: %s" dir ex.Message
+            Hint = "Raise fs.inotify.max_user_instances (sudo sysctl fs.inotify.max_user_instances=8192) and restart affected sessions." }
+      | ex ->
         Log.warn "[FileWatcher] Cannot watch %s: %s — hot-reload disabled for this directory\n%s" dir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
   and removeSubtree (dir: string) : unit =
