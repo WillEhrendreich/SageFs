@@ -776,16 +776,13 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
       ct.ThrowIfCancellationRequested()
       logger.LogInfo $"Loading %s{fileName}"
       let! fileContents = File.ReadAllTextAsync fileName |> Async.AwaitTask
-      let compatibleContents = FsiRewrite.rewriteInlineUseStatements fileContents
-      match compatibleContents <> fileContents with
-      | true ->
-        logger.LogInfo $"⚡ Applied FSI compatibility transforms to {fileName}"
-        let beforeCount = (fileContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use ", System.StringComparison.Ordinal))).Length
-        let afterCount = (compatibleContents.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("use ", System.StringComparison.Ordinal))).Length  
-        logger.LogInfo $"   Rewrote {beforeCount - afterCount} 'use' statements to 'let'"
-      | false -> ()
+      // The user's startup file is evaluated EXACTLY as written. It used to be
+      // run through a `use` -> `let` rewrite first, which was both unnecessary
+      // and destructive: FSI accepts an indented `use` (inside a function or a
+      // computation expression) perfectly well, and turning it into `let`
+      // silently removes the disposal the user asked for.
       try
-        FsiSession.evalOrThrow fsiSession compatibleContents ct
+        FsiSession.evalOrThrow fsiSession fileContents ct
       with ex ->
         logger.LogError (sprintf "  ❌ Startup file %s failed: %s" fileName ex.Message)
         raise ex

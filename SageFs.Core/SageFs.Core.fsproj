@@ -218,7 +218,6 @@
         <Compile Include="Features\ObservedFriction.Repetition.fs" />
         <Compile Include="Features\ObservedFriction.InvalidState.fs" />
         <Compile Include="Features\ObservedFriction.fs" />
-        <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />
         <!-- Before SageFsError: ProjectFrameworkNotHostable carries its UnsupportedTfmReason. -->
         <Compile Include="ProjectCompatibility.fs" />
@@ -315,7 +314,6 @@
         <Compile Include="OpenReplay.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="Middleware\EvaluableSubmission.fs" />
-        <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />
         <Compile Include="Middleware\Directives.fs" />
         <Compile Include="Middleware\CompilationContext.fs" />

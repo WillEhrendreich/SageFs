@@ -10,7 +10,6 @@ open SageFs.Features.AutoCompletion
 open SageFs.AppState
 open SageFs.FileWatcher
 open SageFs.McpAdapter
-open SageFs.FsiRewrite
 open SageFs.FrameDiff
 open SageFs.Features.Events
 open SageFs.Features.Diagnostics
@@ -578,47 +577,47 @@ let escapeJsonControlCharExamples = testList "escapeJson: control character exam
 ]
 
 // ═══════════════════════════════════════════════════════════
-// FsiRewrite — rewriteInlineUseStatements
+// No `use` -> `let` rewrite may ever come back
 //
-// WHY: FSI doesn't support `use` at top level. The rewrite
-// replaces leading `use ` with `let ` for FSI eval. A bug
-// that replaces ALL occurrences of "use " in the line
-// corrupts string literals containing "use ".
+// WHY: SageFs used to rewrite every INDENTED `use` binding to
+// `let` before handing code to FSI, on both the eval path and
+// the startup-file path. The stated reason was that "FSI cannot
+// accept `use` bindings in expression context". That is simply
+// not true, and was verified false on the shipping toolchain:
+// an indented `use` inside a function body or inside a
+// `task { }` compiles and runs in FSI with no diagnostic at
+// all, through both the file and stdin paths.
+//
+// The binding FSI actually complains about is the opposite one
+// — a `use` at MODULE level, which has no scope to be disposed
+// at the end of, and which draws FS0524 ("'use' bindings are
+// not permitted in modules and are treated as 'let' bindings").
+// The rewrite left those alone and rewrote the safe ones, i.e.
+// exactly backwards.
+//
+// The cost was not cosmetic. `use` disposes and `let` does not,
+// so every `use` a user wrote inside a function or a
+// computation expression silently stopped disposing: streams
+// left open, handles held, transactions never rolled back — in
+// the user's own code, announced only as a Debug log line, and
+// on the startup-file path cheerfully reported as "Applied FSI
+// compatibility transforms".
+//
+// This test guards the removal. It is reflection over the built
+// Core assembly rather than a source grep, so renaming the file
+// cannot defeat it. It cannot stop someone reimplementing the
+// same idea under a different name — if you are reading this
+// because you are about to, please do not.
 // ═══════════════════════════════════════════════════════════
 
-let rewriteInlineUseStatementTests = testList "rewriteInlineUseStatements" [
-  test "leading use becomes let" {
-    let input = "    use svc = createService()"
-    let result = rewriteInlineUseStatements input
-    result |> Expect.equal "rewritten" "    let svc = createService()"
-  }
-  test "use inside string literal is NOT replaced" {
-    let input = """    use svc = create "use this service" """
-    let result = rewriteInlineUseStatements input
-    result |> Expect.stringContains "string preserved" "\"use this service\""
-  }
-  test "line without use is unchanged" {
-    let input = "    let x = 42"
-    let result = rewriteInlineUseStatements input
-    result |> Expect.equal "unchanged" "    let x = 42"
-  }
-  test "use! is not rewritten" {
-    let input = "    use! conn = getConnectionAsync()"
-    let result = rewriteInlineUseStatements input
-    result |> Expect.equal "use! unchanged" "    use! conn = getConnectionAsync()"
-  }
-  test "multiple lines only rewrites the use lines" {
-    let input = "    use x = a()\n    let y = 42\n    use z = b()"
-    let result = rewriteInlineUseStatements input
-    result |> Expect.stringContains "first rewritten" "    let x = a()"
-    result |> Expect.stringContains "middle unchanged" "    let y = 42"
-    result |> Expect.stringContains "third rewritten" "    let z = b()"
-  }
-  test "idempotent — rewriting twice gives same result" {
-    let input = "    use svc = createService()"
-    let once = rewriteInlineUseStatements input
-    let twice = rewriteInlineUseStatements once
-    twice |> Expect.equal "idempotent" once
+let noUseRewriteTests = testList "no use-to-let rewrite" [
+  test "SageFs.Core ships no FsiRewrite module" {
+    typeof<SageFs.SageFsError>.Assembly.GetTypes()
+    |> Array.exists (fun t ->
+      match t.FullName with
+      | null -> false
+      | name -> name.Contains "FsiRewrite" || name.Contains "FsiCompatibility")
+    |> Expect.isFalse "the use->let rewrite was removed because it silently dropped disposal from user code; it must not return"
   }
 ]
 
@@ -2417,7 +2416,7 @@ let allPureModulesTests = testList "Pure modules comprehensive" [
       escapeJsonControlCharExamples
     ]
     testList "rewriteInlineUseStatements" [
-      rewriteInlineUseStatementTests
+      noUseRewriteTests
     ]
     testList "splitStatements" [
       splitStatementsGapTests

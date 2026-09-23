@@ -173,14 +173,18 @@ let tracingMiddlewareTests =
     ]
 
     testList "namedCommonMiddleware" [
+      // 6 -> 5: the FsiCompat stage was removed. It rewrote every indented
+      // `use` binding to `let` before FSI saw the code, which was unnecessary
+      // (FSI accepts an indented `use` fine) and destructive (`let` does not
+      // dispose, so user code silently stopped releasing what it opened).
       test "has correct count" {
         namedCommonMiddleware
-        |> Expect.hasLength "6 middlewares" 6
+        |> Expect.hasLength "5 middlewares" 5
       }
 
       test "has unique names" {
         let names = namedCommonMiddleware |> List.map (fun nm -> nm.Name)
-        names |> List.distinct |> Expect.hasLength "all unique" 6
+        names |> List.distinct |> Expect.hasLength "all unique" 5
       }
 
       test "names are non-empty" {

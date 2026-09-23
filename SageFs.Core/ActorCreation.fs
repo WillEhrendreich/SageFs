@@ -15,7 +15,6 @@ let commonMiddleware: AppState.Middleware list = [
   // path and saves wasted rewrite work (plus a guaranteed FSI compile
   // error) on the "nothing to evaluate" path.
   EvaluableSubmission.nothingToEvaluateMiddleware
-  FsiCompatibility.fsiCompatibilityMiddleware
   Directives.viBindMiddleware
   Directives.OpenDirective.openDirectiveMiddleware
   ComputationExpression.compExprMiddleware
