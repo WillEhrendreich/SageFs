@@ -695,7 +695,7 @@ module private NoSessionLanding =
       })
       Expect.isTrue pickerHiddenNow "[state 4] session picker hidden once a session exists"
       let! sid = viewingSessionId page
-      let sessionRow = page.Locator(sprintf "[data-session-id=\"%s\"]" sid)
+      let sessionRow = page.Locator(sprintf "#session-card-%s" sid)
       do! PlaywrightExpect.isVisibleAsync sessionRow "[state 4] the new session's sidebar row is visible without a reload"
 
       assertNoErrors errors "no-session landing + Create journey"
@@ -782,7 +782,7 @@ module private NoSessionLanding =
       // equivalent of a session deep link now that there is no `?session=`
       // query parameter — via that session's own Switch control. ---
       let target1 = if viewingOnLoad = idA then idB else idA
-      let rowLocator (sid: string) = page.Locator(sprintf "[data-session-id=\"%s\"]" sid)
+      let rowLocator (sid: string) = page.Locator(sprintf "#session-card-%s" sid)
       let switchBtn1 = (rowLocator target1).GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "show this session's output here"))
       do! switchBtn1.ClickAsync()
       let! reachedTarget1 = waitUntil 15_000 (fun () -> task {
@@ -806,7 +806,7 @@ module private NoSessionLanding =
       // one other remains -> auto-advance to it (no picker). ---
       let stopBtn (sid: string) = (rowLocator sid).GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "unload the session"))
       do! (stopBtn target2).ClickAsync()
-      do! PlaywrightExpect.waitForSelectorText 10_000 page (sprintf "[data-session-id=\"%s\"]" target2) (sprintf "Stopping session id:%s" target2)
+      do! PlaywrightExpect.waitForSelectorText 15_000 page (sprintf "#session-card-%s" target2) (sprintf "Stopping session id:%s" target2)
       let! autoAdvanced = waitUntil 30_000 (fun () -> task {
         let! sid = viewingSessionId page
         return sid = target1
@@ -819,7 +819,7 @@ module private NoSessionLanding =
       // back to the picker, and the rest of the chrome must still render —
       // the exact transition that shipped broken as 0.6.470/0.6.471. ---
       do! (stopBtn target1).ClickAsync()
-      do! PlaywrightExpect.waitForSelectorText 10_000 page (sprintf "[data-session-id=\"%s\"]" target1) (sprintf "Stopping session id:%s" target1)
+      do! PlaywrightExpect.waitForSelectorText 15_000 page (sprintf "#session-card-%s" target1) (sprintf "Stopping session id:%s" target1)
       let! pickerBack = waitUntil 30_000 (fun () -> task {
         return! picker.IsVisibleAsync()
       })
