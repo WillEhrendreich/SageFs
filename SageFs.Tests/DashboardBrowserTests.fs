@@ -498,6 +498,12 @@ module private NoSessionLanding =
             lines |> Array.skip (max 0 (lines.Length - 40)) |> Array.iter (eprintfn "%s")
       with _ -> ()
 
+  let private closeBrowserSafely (browser: IBrowser) : Task =
+    try
+      browser.CloseAsync()
+    with _ ->
+      Task.CompletedTask
+
   /// Guaranteed teardown: kill this journey's OWN process (never touches
   /// 37749/37750, never `pkill -f SageFs`) and delete its temp data dir.
   let private killDaemon (d: Daemon) =
@@ -695,10 +701,7 @@ module private NoSessionLanding =
       try do! ctx.CloseAsync() with _ -> ()
     finally
       match browser with
-      | Some b ->
-        try
-          do! b.CloseAsync()
-        with _ -> ()
+      | Some b -> do! closeBrowserSafely b
       | None -> ()
       playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
       killDaemon daemon
@@ -823,10 +826,7 @@ module private NoSessionLanding =
       try do! ctx.CloseAsync() with _ -> ()
     finally
       match browser with
-      | Some b ->
-        try
-          do! b.CloseAsync()
-        with _ -> ()
+      | Some b -> do! closeBrowserSafely b
       | None -> ()
       playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
       killDaemon daemon
