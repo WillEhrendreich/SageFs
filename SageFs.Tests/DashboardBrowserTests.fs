@@ -774,16 +774,14 @@ module private NoSessionLanding =
       do! assertPermanentChrome page "state 2: sessions + bare URL"
       let picker = page.Locator("#session-picker")
       do! PlaywrightExpect.isHiddenAsync picker "[state 2] session picker hidden when sessions exist"
-      let! viewingOnLoad =
+      let! selected =
         waitUntil 15_000 (fun () -> task {
           let! sid = viewingSessionId page
-          return if sid = idA || sid = idB then Some sid else None
+          return sid = idA || sid = idB
         })
-      let! viewingOnLoad =
-        match viewingOnLoad with
-        | Some sid -> return sid
-        | None ->
-          return failtestf (sprintf "[state 2] bare URL never selected a live session (expected %s or %s)" idA idB)
+      Expect.isTrue selected
+        (sprintf "[state 2] bare URL never selected a live session (expected %s or %s)" idA idB)
+      let! viewingOnLoad = viewingSessionId page
 
       // --- State 3: reach a SPECIFIC session directly — this app's real
       // equivalent of a session deep link now that there is no `?session=`
