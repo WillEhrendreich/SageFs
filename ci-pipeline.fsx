@@ -613,7 +613,7 @@ pipeline "sagefs" {
     // source) and the VSIX package step.
     workingDir vscodeDir
     run "dotnet tool restore"
-    run "npm ci"
+    run "npm ci --include=dev"
     run "npm run compile"
   }
 
