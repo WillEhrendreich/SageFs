@@ -296,6 +296,51 @@ let isUnderPrunedPath (root: string) (path: string) (hasCheckoutMarker: string -
     | d -> walk (Path.GetDirectoryName d)
   walk (Path.GetDirectoryName(Path.GetFullPath path))
 
+/// Pure: classify a `FileSystemWatcher.Error` exception into a short label
+/// and an actionable hint. Before this, EVERY `Error` event — a genuine OS
+/// buffer overflow, a permission-denied hit walking into a restricted
+/// subdirectory, anything else — was logged under the single label "Buffer
+/// overflow" and never reported to `ComponentWatch`, so `/health` stayed
+/// "Healthy" while a watcher was silently losing events (reproduced live:
+/// "[FileWatcher] Buffer overflow watching /tmp — events may have been
+/// lost. Cause: Access to the path '/tmp/systemd-private-.../upower.service-
+/// ...' is denied." repeated 7+ times with `/health` reporting `healthy:
+/// true` throughout). A permission error is not a transient overflow: it
+/// will keep recurring for as long as the watched root contains
+/// permission-restricted subtrees (systemd's `PrivateTmp=` leaves ephemeral
+/// 0700 `systemd-private-*` directories under `/tmp` that come and go as
+/// services restart) — worth naming distinctly so an operator reads
+/// "wrong watch root", not "flaky buffer".
+let classifyWatcherError (ex: exn) : string * string =
+  match ex with
+  | :? InternalBufferOverflowException ->
+    "buffer overflow",
+    "The OS-level watch buffer overflowed under heavy file-change volume — raise DevReload.FileWatcherBufferSizeBytes if this recurs."
+  | :? UnauthorizedAccessException
+  | _ when ex.Message.Contains("denied", StringComparison.OrdinalIgnoreCase) ->
+    "permission denied",
+    "A subdirectory under this root denies read access to the daemon's user (e.g. another user's or systemd's private temp directories) — a recursive watch will keep losing events under it. Point the session/fallback watch at a real project root, not a shared scratch directory like /tmp."
+  | _ ->
+    "watcher error",
+    "The OS-level file watcher reported an error and may have lost events under this root."
+
+/// The full handling of one `FileSystemWatcher.Error` event: log it, report
+/// it into `ComponentWatch` (so `/health`, `/api/daemon-info` and `sagefs
+/// status` all see a watcher that is losing events — this used to be the gap:
+/// the log line fired every time but nothing outside this process's own log
+/// file ever learned about it), and invoke the caller's `onOverflow` recovery
+/// callback. Extracted from `startPrunedWatcher` so the wiring itself — not
+/// just the pure classification above — is unit-testable without spinning up
+/// a real OS-level `FileSystemWatcher`.
+let handleWatcherError (rootFull: string) (onOverflow: string -> unit) (ex: exn) : unit =
+  let kind, hint = classifyWatcherError ex
+  Log.warn "[FileWatcher] %s watching %s — events may have been lost. Cause: %s\n%s" kind rootFull ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+  SageFs.Features.ComponentWatch.reportFailure
+    { Component = sprintf "file-watcher:%s" rootFull
+      Reason = sprintf "%s watching %s: %s" kind rootFull ex.Message
+      Hint = hint }
+  onOverflow rootFull
+
 /// Side-effectful: watch `root` recursively for file changes, with excluded
 /// subtrees (`shouldPruneDir` — bin/obj/.git/node_modules/.runs/artifacts,
 /// nested checkouts) filtered out at EVENT time instead of never watched.
@@ -366,10 +411,7 @@ let startPrunedWatcher
       watcher.Created.Add(guarded FileChangeKind.Created)
       watcher.Deleted.Add(guarded FileChangeKind.Deleted)
       watcher.Renamed.Add(guarded FileChangeKind.Renamed)
-      watcher.Error.Add(fun e ->
-        let ex = e.GetException()
-        Log.warn "[FileWatcher] Buffer overflow watching %s — events may have been lost. Cause: %s\n%s" rootFull ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        onOverflow rootFull)
+      watcher.Error.Add(fun e -> handleWatcherError rootFull onOverflow (e.GetException()))
       watcher.EnableRaisingEvents <- true
       Log.info "FileWatcher started for %s: one recursive watch (~%d directories in scope; bin/obj/.git/node_modules/.runs/artifacts/nested-checkouts filtered at event time, not walked separately)" rootFull watchableCount
       watcher :> IDisposable

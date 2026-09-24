@@ -538,3 +538,60 @@ let nestedCheckoutTests =
         Directory.Delete(dir, true)
     }
   ]
+
+// ── A watcher losing events must show in /health, not just its own log ──
+// Reproduced live: "[FileWatcher] Buffer overflow watching /tmp — events may
+// have been lost. Cause: Access to the path '/tmp/systemd-private-.../
+// upower.service-...' is denied." repeated 7+ times while `/health` kept
+// reporting `healthy: true` throughout — the 0.6.827 ComponentWatch registry
+// only ever got wired up for inotify instance exhaustion and the
+// MaxWatchableEntries walk cap, never for a live watcher's own Error event.
+
+[<Tests>]
+let classifyWatcherErrorTests = testList "classifyWatcherError" [
+    test "WHY — a genuine buffer overflow is labeled distinctly from a permission error, because they call for different operator action (raise a buffer size vs. stop watching a shared scratch root)" {
+      let kind, _hint = classifyWatcherError (InternalBufferOverflowException "too many changes")
+      kind |> Flip.Expect.equal "a real OS buffer overflow keeps its own label" "buffer overflow"
+    }
+    test "WHY — UnauthorizedAccessException classifies as permission denied, not buffer overflow — this is the exact exception a recursive watch throws walking into a restricted systemd-private-* directory under /tmp" {
+      let kind, hint = classifyWatcherError (UnauthorizedAccessException "Access to the path '/tmp/systemd-private-x/upower.service-y' is denied.")
+      kind |> Flip.Expect.equal "an access-denied error is not a buffer overflow" "permission denied"
+      hint |> Flip.Expect.stringContains "the hint names the actual problem (wrong watch root), not a buffer-size knob" "scratch directory"
+    }
+    test "WHY — any other exception message containing 'denied' also classifies as permission denied, since .NET's Unix FileSystemWatcher surfaces some access failures as a plain IOException rather than UnauthorizedAccessException" {
+      let kind, _hint = classifyWatcherError (IOException "Access to the path '/tmp/x' is denied.")
+      kind |> Flip.Expect.equal "message-based fallback still recognizes the denial" "permission denied"
+    }
+    test "WHY — an unrecognized exception still gets a real label, never silently dropped" {
+      let kind, _hint = classifyWatcherError (Exception "something else entirely")
+      kind |> Flip.Expect.equal "unknown watcher errors get a generic but real label" "watcher error"
+    }
+  ]
+
+[<Tests>]
+let handleWatcherErrorTests = testList "handleWatcherError" [
+    test "WHY — a watcher Error event reports into ComponentWatch, because before this fix only inotify exhaustion and the MaxWatchableEntries cap did — a buffer overflow or permission-denied error left /health reporting healthy: true while a session's watcher silently lost events" {
+      SageFs.Features.ComponentWatch.reset ()
+      let root = @"/tmp/some-watched-root"
+      handleWatcherError root ignore (UnauthorizedAccessException "Access to the path '/tmp/some-watched-root/systemd-private-x' is denied.")
+      let failures = SageFs.Features.ComponentWatch.current ()
+      failures
+      |> List.exists (fun f -> f.Component = sprintf "file-watcher:%s" root)
+      |> Flip.Expect.isTrue "the watcher's Error event must be visible to /health, /api/daemon-info and sagefs status, not just this process's own log file"
+    }
+    test "WHY — the reported reason names the real cause, so an operator reads 'permission denied' instead of the old blanket 'buffer overflow' label for every Error event" {
+      SageFs.Features.ComponentWatch.reset ()
+      let root = @"/tmp/another-watched-root"
+      handleWatcherError root ignore (UnauthorizedAccessException "Access to the path '/tmp/another-watched-root/systemd-private-x' is denied.")
+      SageFs.Features.ComponentWatch.current ()
+      |> List.find (fun f -> f.Component = sprintf "file-watcher:%s" root)
+      |> fun f -> f.Reason
+      |> Flip.Expect.stringContains "the reason says what actually happened" "permission denied"
+    }
+    test "WHY — the caller's onOverflow recovery callback still fires — reporting to ComponentWatch is additive, not a replacement for the existing recovery path" {
+      let root = @"/tmp/yet-another-root"
+      let mutable called = None
+      handleWatcherError root (fun r -> called <- Some r) (InternalBufferOverflowException "overflow")
+      called |> Flip.Expect.equal "onOverflow receives the same root the Error event fired for" (Some root)
+    }
+  ]
