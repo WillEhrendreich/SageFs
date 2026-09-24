@@ -641,6 +641,7 @@ module private NoSessionLanding =
     let daemon = startDaemon ()
     let mutable playwright: IPlaywright option = None
     let mutable browser: IBrowser option = None
+    let mutable failure: exn option = None
     try
       let! healthy = waitHealthy 60.0 daemon
       if not healthy then
@@ -699,12 +700,16 @@ module private NoSessionLanding =
 
       assertNoErrors errors "no-session landing + Create journey"
       try do! ctx.CloseAsync() with _ -> ()
-    finally
-      match browser with
-      | Some b -> do! closeBrowserSafely b
-      | None -> ()
-      playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
-      killDaemon daemon
+    with ex ->
+      failure <- Some ex
+    match browser with
+    | Some b -> do! closeBrowserSafely b
+    | None -> ()
+    playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
+    killDaemon daemon
+    match failure with
+    | Some failure -> return raise failure
+    | None -> ()
   }
 
   /// States 2 + 3 + 5 + the Stop journey: (2) sessions already exist, bare
@@ -722,6 +727,7 @@ module private NoSessionLanding =
     let daemon = startDaemon ()
     let mutable playwright: IPlaywright option = None
     let mutable browser: IBrowser option = None
+    let mutable failure: exn option = None
     try
       let! healthy = waitHealthy 60.0 daemon
       if not healthy then
@@ -824,12 +830,16 @@ module private NoSessionLanding =
 
       assertNoErrors errors "sessions + switch + stop journey"
       try do! ctx.CloseAsync() with _ -> ()
-    finally
-      match browser with
-      | Some b -> do! closeBrowserSafely b
-      | None -> ()
-      playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
-      killDaemon daemon
+    with ex ->
+      failure <- Some ex
+    match browser with
+    | Some b -> do! closeBrowserSafely b
+    | None -> ()
+    playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
+    killDaemon daemon
+    match failure with
+    | Some failure -> return raise failure
+    | None -> ()
   }
 
 /// Helper to run an async Playwright test body inside Expecto.
