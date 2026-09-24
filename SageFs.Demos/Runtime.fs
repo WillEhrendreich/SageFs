@@ -117,6 +117,47 @@ let private nugetPackagesDir () : string =
   | "" -> Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, ".nuget", "packages")
   | dir -> dir
 
+/// The host machine's REAL isolated-FSI-host build cache (`SageFs.Core/
+/// IsolatedFsiSession.fs`'s `hostCacheRoot`/`SAGEFS_HOST_CACHE_DIR`, default
+/// `~/.SageFs/hosts` — mirrors `DaemonState.SageFsDir`'s own default exactly).
+/// Every session the daemon creates now runs its FSI in an isolated host
+/// process built on demand (`bc44bde7`, 2026-09-20): `FsiHostBuild.ensureBuilt`
+/// synthesizes a whole `FsiHost.fsproj` from embedded sources and `dotnet
+/// build`s it the first time a given (SDK, sources, Harmony) combination is
+/// needed. That build needs an implicit NuGet restore — fine on a networked
+/// daemon, fatal in this cell's `--unshare-net` sandbox with a FRESH, empty
+/// `SAGEFS_DATA_DIR=/home/demo/.sagefs` (so `hostCacheRoot()` resolves to an
+/// empty `/home/demo/.sagefs/hosts` every single recording) — confirmed
+/// directly: every scenario that creates a session stalled for the full
+/// per-step 300s ceiling with the daemon's own `outputRegion.Content.Length`
+/// stuck at 0 for the whole run, and SageFs's own CI hit the identical
+/// cold-build cost on `--integration-host` the day this landed (`7dd16808`:
+/// "each daemon built the FSI host from scratch... sharing one cache is
+/// safe" — hosts are content-addressed by SDK+sources+Harmony hash, so one
+/// cache safely serves every daemon). This mirrors that exact fix and the
+/// established `nugetPackagesDir` doctrine above: RO-bind the host's real,
+/// already-populated cache into the cell at the SAME absolute path, and
+/// point `SAGEFS_HOST_CACHE_DIR` at it, so `ensureBuilt`'s `isBuilt()` check
+/// finds an already-`.built` host and never needs to build (or reach the
+/// network) at all. Returns `None` (never binds anything, reproduces the
+/// exact pre-fix cell) when the directory does not exist on this machine —
+/// e.g. a fresh checkout with no prior real SageFs usage — so a missing
+/// cache degrades to today's cold-build behavior instead of a hard bwrap
+/// failure on a missing bind source.
+let private hostCacheDirIfPresent () : string option =
+  let dir =
+    match Environment.GetEnvironmentVariable "SAGEFS_HOST_CACHE_DIR" with
+    | null
+    | "" ->
+      let sageFsDir =
+        match Environment.GetEnvironmentVariable "SAGEFS_DATA_DIR" with
+        | null
+        | "" -> Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, ".SageFs")
+        | value -> Path.GetFullPath value
+      Path.Combine(sageFsDir, "hosts")
+    | value -> value
+  if Directory.Exists dir then Some dir else None
+
 /// The `dotnet` muxer's own directory (`DOTNET_ROOT`), resolved the same way
 /// the spike's stage4 script did (`dirname "$(readlink -f "$(command -v
 /// dotnet)")"`) so the cell can RO-bind exactly the runtime already installed
@@ -534,7 +575,7 @@ export SAGEFS_DATA_DIR=/home/demo/.sagefs
 export SAGEFS_BIND_HOST=127.0.0.1
 export DOTNET_ROOT=/dotnet-root
 %s
-/dotnet-root/dotnet /sagefs-bin/SageFs.dll --mcp-port 47749 --no-watch --no-resume \
+/dotnet-root/dotnet /sagefs-bin/SageFs.dll --mcp-port 47749 --no-resume \
   --owner-pid $$ --ttl 5m \
   </dev/null >/out/daemon.log 2>&1 &
 DAEMON_PID=$!
@@ -616,6 +657,14 @@ let private cellSpec
   (cohortRwBinds: (string * string) list)
   (daemonCwd: string option)
   : Sandbox.CellSpec =
+  // See `hostCacheDirIfPresent`'s own doc: RO-bind the host's real,
+  // already-populated isolated-FSI-host build cache at the SAME absolute
+  // path (never remapped, same reasoning as `nugetPackagesDir` above) so
+  // `ensureBuilt` reuses an existing build instead of cold-building one
+  // (implicit NuGet restore) inside this cell's `--unshare-net` sandbox.
+  // `None` on a machine with no prior cache reproduces the exact pre-fix
+  // cell byte-for-line.
+  let hostCacheDirOpt = hostCacheDirIfPresent ()
   { RoBinds =
       [ "/etc/fonts", "/etc/fonts"
         "/etc/ssl", "/etc/ssl"
@@ -625,6 +674,7 @@ let private cellSpec
         dotnetRoot, "/dotnet-root"
         repoRoot, repoRoot
         nugetPackagesDir, nugetPackagesDir ]
+      @ (hostCacheDirOpt |> Option.map (fun dir -> [ dir, dir ]) |> Option.defaultValue [])
       @ actorBinds
     RwBinds = [ hostOutDir, "/out"; sampleDir, sampleDir ] @ cohortRwBinds
     Env =
@@ -660,6 +710,7 @@ let private cellSpec
         // minimal /dev).
         "LIBGL_ALWAYS_SOFTWARE", "1"
         "__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/50_mesa.json" ]
+      @ (hostCacheDirOpt |> Option.map (fun dir -> [ "SAGEFS_HOST_CACHE_DIR", dir ]) |> Option.defaultValue [])
     InnerCommand = [ "/bin/sh"; "-c"; innerScript daemonCwd actorPrologue ] }
 
 // ---------------------------------------------------------------------------

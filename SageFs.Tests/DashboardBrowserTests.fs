@@ -1,6 +1,10 @@
 module SageFs.Tests.DashboardBrowserTests
 
 open System
+open System.IO
+open System.Net
+open System.Net.Http
+open System.Net.Sockets
 open System.Threading.Tasks
 open Expecto
 open Microsoft.Playwright
@@ -369,6 +373,452 @@ module OutputScroll =
     PlaywrightExpect.waitForSelectorText 10_000 page pillSelector text
 
   let pillVisible (page: IPage) = page.Locator(pillSelector).IsVisibleAsync()
+
+/// Gap I (outcome-gate-sweep.md, Island H — dashboard journeys): the
+/// no-session landing shipped broken TWICE (emergency releases 0.6.470 and
+/// 0.6.471) because the state matrix that would have caught it was never
+/// gated. `DashboardBrowserRunner.fs` always creates a Ready session BEFORE
+/// any journey above runs, so the no-session state is structurally
+/// unreachable through the shared daemon those journeys share.
+///
+/// This module owns its OWN isolated daemon — fresh ports, a fresh
+/// SAGEFS_DATA_DIR, `--no-resume`, and critically NO `/api/sessions/create`
+/// call before the first assertion — so the no-session landing, and every
+/// transition into and out of it, are actually exercised. The two journeys
+/// built from it are appended to THIS file's own `tests` value below (not a
+/// new `[<Tests>]` list and not a new file), so
+/// `DashboardBrowserRunner.runBrowserJourneys` already runs them under the
+/// existing `--integration-browser` entry point with no changes to
+/// DashboardBrowserRunner.fs or Program.fs — both out of this island's file
+/// scope (owned by Island B).
+///
+/// Resource discipline: one isolated daemon per journey (2 total), each on a
+/// freshly-probed free port pair (never 37749/37750, never the shared
+/// browser-suite pair), each with its own temp SAGEFS_DATA_DIR that is
+/// deleted on teardown, guaranteed kill via `try/finally` (mirrors
+/// DashboardDisconnectIndicatorBrowserTests.fs's proven isolated-daemon
+/// pattern), and event-driven waits throughout (`waitUntil` polls a real
+/// condition — server `/api/sessions` state or a DOM attribute — never a
+/// fixed sleep-then-assume).
+module private NoSessionLanding =
+  let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+
+  /// Two small, DISTINCT-directory, already-built sample projects (never the
+  /// WebappDatastar sample the shared runner owns — one-session-per-working-
+  /// directory means switching between two sessions needs two directories).
+  /// Both are tiny console apps (~126 total source lines between them,
+  /// including the Tests project's Expecto dependency), chosen to keep
+  /// warmup fast and to give Gap K's `run_app` note a second reference point
+  /// (ConsoleTicker is otherwise referenced by no test).
+  let private consoleTickerDir = Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker")
+  let private consoleTickerProj = Path.Combine(consoleTickerDir, "SageFs.Samples.ConsoleTicker.fsproj")
+  let private consoleTickerTestsDir = Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker.Tests")
+  let private consoleTickerTestsProj = Path.Combine(consoleTickerTestsDir, "SageFs.Samples.ConsoleTicker.Tests.fsproj")
+
+  let private pickFreePort () =
+    use l = new TcpListener(IPAddress.Loopback, 0)
+    l.Start()
+    (l.LocalEndpoint :?> IPEndPoint).Port
+
+  let rec private findPortPair attempts =
+    let mcp = pickFreePort ()
+    let dash = mcp + 1
+    try
+      use probe = new TcpListener(IPAddress.Loopback, dash)
+      probe.Start()
+      mcp
+    with
+    | :? SocketException when attempts > 0 -> findPortPair (attempts - 1)
+    | :? SocketException -> failwith "No-session journey: could not find a free port pair"
+
+  type private Daemon =
+    { Process: Diagnostics.Process
+      McpPort: int
+      DashboardPort: int
+      DataDir: string
+      OutLog: string
+      ErrLog: string }
+
+  let private drain (stream: StreamReader) (path: string) =
+    let writer = new StreamWriter(path, append = true)
+    let rec loop () =
+      async {
+        let! line = stream.ReadLineAsync() |> Async.AwaitTask
+        if not (isNull line) then
+          do! writer.WriteLineAsync(line) |> Async.AwaitTask
+          return! loop ()
+      }
+    async {
+      try do! loop () with _ -> ()
+      writer.Dispose()
+    }
+    |> Async.Start
+
+  /// Boot a fresh, session-free daemon on its own port pair and data dir.
+  /// `--no-resume` so it never inherits another run's manifest — the
+  /// no-session landing is exactly the state this daemon starts in and stays
+  /// in until a journey creates a session.
+  let private startDaemon () : Daemon =
+    let mcpPort = findPortPair 5
+    let dashboardPort = mcpPort + 1
+    let dataDir = Path.Combine(Path.GetTempPath(), "sagefs-nosession", Guid.NewGuid().ToString("N"))
+    Directory.CreateDirectory(dataDir) |> ignore
+    let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
+    let psi = Diagnostics.ProcessStartInfo()
+    psi.FileName <- exe
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    psi.WorkingDirectory <- repoRoot
+    psi.ArgumentList.Add("--mcp-port")
+    psi.ArgumentList.Add(string mcpPort)
+    psi.ArgumentList.Add("--no-resume")
+    psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+    // Redirect to FILES, never undrained pipes: an undrained pipe deadlocks
+    // the daemon once its log buffer fills, freezing warmup before Ready.
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    let proc = Diagnostics.Process.Start(psi)
+    let outLog = Path.Combine(dataDir, "daemon.stdout.log")
+    let errLog = Path.Combine(dataDir, "daemon.stderr.log")
+    drain proc.StandardOutput outLog
+    drain proc.StandardError errLog
+    { Process = proc; McpPort = mcpPort; DashboardPort = dashboardPort
+      DataDir = dataDir; OutLog = outLog; ErrLog = errLog }
+
+  let private dumpLogs (d: Daemon) =
+    for path in [ d.OutLog; d.ErrLog ] do
+      try
+        if File.Exists path then
+          let text = File.ReadAllText(path)
+          if not (String.IsNullOrWhiteSpace text) then
+            eprintfn "--- %s (tail) ---" (Path.GetFileName path)
+            let lines = text.Split('\n')
+            lines |> Array.skip (max 0 (lines.Length - 40)) |> Array.iter (eprintfn "%s")
+      with _ -> ()
+
+  /// Guaranteed teardown: kill this journey's OWN process (never touches
+  /// 37749/37750, never `pkill -f SageFs`) and delete its temp data dir.
+  let private killDaemon (d: Daemon) =
+    try
+      if not d.Process.HasExited then d.Process.Kill(entireProcessTree = true)
+    with _ -> ()
+    try d.Process.WaitForExit(5000) |> ignore with _ -> ()
+    try d.Process.Dispose() with _ -> ()
+    try Directory.Delete(d.DataDir, true) with _ -> ()
+
+  let private waitHealthy (budgetSeconds: float) (d: Daemon) : Task<bool> = task {
+    use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.McpPort))
+    client.Timeout <- TimeSpan.FromSeconds(5.0)
+    let deadline = DateTime.UtcNow.AddSeconds(budgetSeconds)
+    let mutable healthy = false
+    while not healthy && DateTime.UtcNow < deadline do
+      try
+        let! resp = client.GetAsync("/health")
+        resp.Dispose()
+        healthy <- true
+      with _ -> do! Task.Delay(250)
+    return healthy
+  }
+
+  /// Poll `condition` until it returns true or `budgetMs` elapses — a bounded
+  /// wait against a real async condition, never a fixed sleep-then-assume.
+  let private waitUntil (budgetMs: int) (condition: unit -> Task<bool>) : Task<bool> = task {
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let mutable ok = false
+    while not ok && sw.ElapsedMilliseconds < int64 budgetMs do
+      let! result = condition ()
+      if result then ok <- true
+      else do! Task.Delay(200)
+    return ok
+  }
+
+  /// Poll `/api/sessions` on `d`'s OWN HttpClient — never through the
+  /// browser — so "the server actually reached Ready" and "the browser
+  /// reflects it via SSE" stay two separately-proven facts, not one
+  /// conflated wait.
+  let private sessionsSnapshot (d: Daemon) : Task<(string * string * string) list> = task {
+    use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.McpPort))
+    client.Timeout <- TimeSpan.FromSeconds(5.0)
+    let! body = client.GetStringAsync("/api/sessions")
+    use doc = System.Text.Json.JsonDocument.Parse(body)
+    return
+      doc.RootElement.GetProperty("sessions").EnumerateArray()
+      |> Seq.map (fun s ->
+        s.GetProperty("id").GetString(),
+        s.GetProperty("status").GetString(),
+        s.GetProperty("workingDirectory").GetString())
+      |> Seq.toList
+  }
+
+  let private waitAllReady (budgetSeconds: float) (d: Daemon) (expectedCount: int) : Task<bool> =
+    waitUntil (int (budgetSeconds * 1000.0)) (fun () -> task {
+      try
+        let! sessions = sessionsSnapshot d
+        return sessions.Length >= expectedCount && sessions |> List.forall (fun (_, status, _) -> status = "Ready")
+      with _ -> return false
+    })
+
+  /// Setup-only helper for the second journey below (the FIRST journey
+  /// proves the real click-through Create path — this one only needs two
+  /// live sessions to exist quickly so it can focus on switch/stop).
+  let private createSessionViaApi (d: Daemon) (project: string) (dir: string) : Task<bool> = task {
+    use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.McpPort))
+    client.Timeout <- TimeSpan.FromSeconds(10.0)
+    let payload =
+      System.Text.Json.JsonSerializer.Serialize({| projects = [| project |]; workingDirectory = dir |})
+    use content = new StringContent(payload, Text.Encoding.UTF8, "application/json")
+    let! resp = client.PostAsync("/api/sessions/create", content)
+    let ok = resp.IsSuccessStatusCode
+    resp.Dispose()
+    return ok
+  }
+
+  /// The server-authoritative "which session is this page looking at" fact —
+  /// `#main`'s own `data-viewing-session-id` attribute (Dashboard.fs's
+  /// `renderMainContent`), never inferred from "Session: <id>" text.
+  let private viewingSessionId (page: IPage) : Task<string> =
+    page.EvaluateAsync<string>(
+      "() => { var m = document.querySelector('#main'); return m ? (m.getAttribute('data-viewing-session-id') || '') : ''; }")
+
+  let private attachErrorCollector (page: IPage) : Collections.Generic.List<string> =
+    let errors = Collections.Generic.List<string>()
+    page.Console.Add(fun msg -> if msg.Type = "error" then errors.Add(sprintf "[console] %s" msg.Text))
+    page.PageError.Add(fun err -> errors.Add(sprintf "[pageerror] %s" err))
+    errors
+
+  /// `PatchElementsNoTargetsFound` was the signature of the blank-screen bug
+  /// — assert there were NONE, and while we're collecting, zero console/page
+  /// errors of any kind across the whole journey.
+  let private assertNoErrors (errors: Collections.Generic.List<string>) (label: string) =
+    let datastarErrors = errors |> Seq.filter (fun m -> m.ToLowerInvariant().Contains("datastar")) |> List.ofSeq
+    Expect.isEmpty datastarErrors
+      (sprintf "[%s] zero Datastar console errors across the journey, got: %s" label (String.concat " | " datastarErrors))
+    let allErrors = errors |> List.ofSeq
+    Expect.isEmpty allErrors
+      (sprintf "[%s] zero console/page errors of any kind across the journey, got: %s" label (String.concat " | " allErrors))
+
+  /// The permanent chrome that must render in EVERY dashboard state — this
+  /// exact invariant is what the no-session landing broke twice: header,
+  /// sidebar Sessions panel, sidebar New Session accordion, and the
+  /// statusline (session-status pill + session identity — the same elements
+  /// the shared-daemon "session status renders with state" test above treats
+  /// as the statusline for the with-session case).
+  let private assertPermanentChrome (page: IPage) (label: string) = task {
+    let header = page.Locator(".app-header")
+    do! PlaywrightExpect.isVisibleAsync header (sprintf "[%s] app header visible" label)
+    let daemonHealth = page.Locator("#daemon-health")
+    do! PlaywrightExpect.isVisibleAsync daemonHealth (sprintf "[%s] daemon health bar visible" label)
+    let sessionsHeading = page.GetByRole(AriaRole.Heading, PageGetByRoleOptions(Name = "Sessions"))
+    do! PlaywrightExpect.isVisibleAsync sessionsHeading (sprintf "[%s] sidebar Sessions heading visible" label)
+    // The New Session accordion lives in an `.expanded-only` sidebar wrapper
+    // (display:none in minimal mode) — assert it is PRESENT in the DOM
+    // (it is permanent chrome regardless of session state), not that it is
+    // currently visible.
+    let! newSessionPresent =
+      page.EvaluateAsync<bool>("() => document.querySelector('.new-session-panel') !== null")
+    Expect.isTrue newSessionPresent (sprintf "[%s] sidebar New Session panel present in the DOM" label)
+    let statusPill = page.Locator("#session-status")
+    do! PlaywrightExpect.isVisibleAsync statusPill (sprintf "[%s] statusline session-status pill visible" label)
+    let tabline = page.Locator("#main .tabline-info").First
+    do! PlaywrightExpect.isVisibleAsync tabline (sprintf "[%s] statusline session identity visible" label)
+  }
+
+  /// States 1 + 4 + the click-through Create journey: (1) zero sessions, bare
+  /// URL renders the full shell with the picker in #main and zero console
+  /// errors; (4) filling in the picker's OWN working-directory input and
+  /// clicking its OWN Create button (never an API shortcut) reaches a live,
+  /// Ready session — reflected in THIS SAME page via SSE, with no navigation
+  /// and no reload.
+  let noSessionLandingAndCreateJourney () : Task<unit> = task {
+    let daemon = startDaemon ()
+    let mutable playwright: IPlaywright option = None
+    let mutable browser: IBrowser option = None
+    try
+      let! healthy = waitHealthy 60.0 daemon
+      if not healthy then
+        dumpLogs daemon
+        Tests.failtestf "no-session daemon on port %d never became healthy" daemon.McpPort
+
+      let! pw = Playwright.CreateAsync()
+      let! b = pw.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
+      playwright <- Some pw
+      browser <- Some b
+      let! ctx = b.NewContextAsync()
+      let! page = ctx.NewPageAsync()
+      let errors = attachErrorCollector page
+
+      let! _ = page.GotoAsync(sprintf "http://localhost:%d/dashboard" daemon.DashboardPort)
+      let bareUrl = page.Url
+
+      // --- State 1: zero sessions, bare URL. ---
+      do! assertPermanentChrome page "state 1: no sessions"
+      let picker = page.Locator("#session-picker")
+      do! PlaywrightExpect.isVisibleAsync picker "[state 1] session picker visible in #main"
+      do! PlaywrightExpect.waitForText 10_000 (page.Locator(".sessions-empty")) "No active sessions"
+      let! viewingBefore = viewingSessionId page
+      Expect.equal viewingBefore "" "[state 1] #main carries no viewing session id"
+
+      // --- State 4: session created from the no-session picker, through the
+      // real UI form (never the API — that's the click-through Create
+      // journey itself). ---
+      let dirInput = picker.Locator("input[placeholder*=\"/path/to/project\"]").First
+      do! PlaywrightExpect.isVisibleAsync dirInput "[state 4] picker's own working-directory input visible"
+      do! dirInput.FillAsync(consoleTickerDir)
+      let createBtn = picker.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Create")).First
+      do! PlaywrightExpect.isVisibleAsync createBtn "[state 4] picker's own Create button visible"
+      do! createBtn.ClickAsync()
+
+      // Server-side proof: the session actually reaches Ready.
+      let! serverReady = waitAllReady 90.0 daemon 1
+      Expect.isTrue serverReady "[state 4] the created session reached Ready on the server within 90s"
+
+      // Client-side proof: the SAME page reflects it via SSE — no
+      // navigation, no reload, the picker gone, a real session row present.
+      let! sidReflected = waitUntil 30_000 (fun () -> task {
+        let! sid = viewingSessionId page
+        return sid <> ""
+      })
+      Expect.isTrue sidReflected "[state 4] #main's viewing-session-id populated via SSE within 30s (no reload)"
+      Expect.equal page.Url bareUrl "[state 4] no navigation/reload occurred — URL is unchanged"
+      let! pickerHiddenNow = waitUntil 10_000 (fun () -> task {
+        let! visible = picker.IsVisibleAsync()
+        return not visible
+      })
+      Expect.isTrue pickerHiddenNow "[state 4] session picker hidden once a session exists"
+      let! sid = viewingSessionId page
+      let sessionRow = page.Locator(sprintf "[data-session-id=\"%s\"]" sid)
+      do! PlaywrightExpect.isVisibleAsync sessionRow "[state 4] the new session's sidebar row is visible without a reload"
+
+      assertNoErrors errors "no-session landing + Create journey"
+      try do! ctx.CloseAsync() with _ -> ()
+    finally
+      browser |> Option.iter (fun b -> try b.CloseAsync().GetAwaiter().GetResult() with _ -> ())
+      playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
+      killDaemon daemon
+  }
+
+  /// States 2 + 3 + 5 + the Stop journey: (2) sessions already exist, bare
+  /// URL renders the session view directly; (3) reaching a SPECIFIC session
+  /// directly via its own Switch control — this app's real equivalent of a
+  /// session deep link, now that the `?session=` query parameter has been
+  /// removed in favor of the signal-driven `viewingSessionId` (Dashboard.fs's
+  /// GET /dashboard: "There is NO session query parameter"); (5) clicking a
+  /// DIFFERENT sidebar row (not its button) switches into that session's
+  /// view; then Stop, twice — once with a session remaining (auto-advance,
+  /// no picker) and once as the last session (falls back to the picker, with
+  /// the rest of the chrome still intact — the exact transition that shipped
+  /// broken as 0.6.470/0.6.471).
+  let sessionsSwitchAndStopJourney () : Task<unit> = task {
+    let daemon = startDaemon ()
+    let mutable playwright: IPlaywright option = None
+    let mutable browser: IBrowser option = None
+    try
+      let! healthy = waitHealthy 60.0 daemon
+      if not healthy then
+        dumpLogs daemon
+        Tests.failtestf "sessions/switch/stop daemon on port %d never became healthy" daemon.McpPort
+
+      // Two sessions, created via the API (Create-through-the-UI is already
+      // proven by the journey above) so this journey can focus on
+      // states 2/3/5 and the Stop transitions.
+      let! createdA = createSessionViaApi daemon consoleTickerProj consoleTickerDir
+      Expect.isTrue createdA "session A (ConsoleTicker) create request accepted"
+      let! createdB = createSessionViaApi daemon consoleTickerTestsProj consoleTickerTestsDir
+      Expect.isTrue createdB "session B (ConsoleTicker.Tests) create request accepted"
+      let! bothReady = waitAllReady 120.0 daemon 2
+      if not bothReady then dumpLogs daemon
+      Expect.isTrue bothReady "both sessions reached Ready on the server within 120s"
+
+      let! sessions = sessionsSnapshot daemon
+      // Compare normalized, trailing-slash-trimmed full paths — the server
+      // may report its own canonicalization of the working directory that
+      // differs cosmetically (trailing separator, symlink resolution) from
+      // the literal `Path.Combine` result this file builds it from.
+      let normalize (p: string) = Path.GetFullPath(p).TrimEnd(Path.DirectorySeparatorChar)
+      let idFor (dir: string) =
+        let target = normalize dir
+        sessions
+        |> List.tryFind (fun (_, _, wd) -> String.Equals(normalize wd, target, StringComparison.OrdinalIgnoreCase))
+        |> Option.map (fun (id, _, _) -> id)
+        |> Option.defaultWith (fun () -> failwithf "no session found for %s among %A" dir sessions)
+      let idA = idFor consoleTickerDir
+      let idB = idFor consoleTickerTestsDir
+
+      let! pw = Playwright.CreateAsync()
+      let! b = pw.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
+      playwright <- Some pw
+      browser <- Some b
+      let! ctx = b.NewContextAsync()
+      let! page = ctx.NewPageAsync()
+      let errors = attachErrorCollector page
+
+      // --- State 2: sessions exist, bare URL renders the session view
+      // directly (no picker). ---
+      let! _ = page.GotoAsync(sprintf "http://localhost:%d/dashboard" daemon.DashboardPort)
+      do! assertPermanentChrome page "state 2: sessions + bare URL"
+      let picker = page.Locator("#session-picker")
+      do! PlaywrightExpect.isHiddenAsync picker "[state 2] session picker hidden when sessions exist"
+      let! viewingOnLoad = viewingSessionId page
+      Expect.isTrue (viewingOnLoad = idA || viewingOnLoad = idB)
+        (sprintf "[state 2] bare URL lands directly on a live session (got '%s', expected idA=%s or idB=%s)" viewingOnLoad idA idB)
+
+      // --- State 3: reach a SPECIFIC session directly — this app's real
+      // equivalent of a session deep link now that there is no `?session=`
+      // query parameter — via that session's own Switch control. ---
+      let target1 = if viewingOnLoad = idA then idB else idA
+      let rowLocator (sid: string) = page.Locator(sprintf "[data-session-id=\"%s\"]" sid)
+      let switchBtn1 = (rowLocator target1).GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "show this session's output here"))
+      do! switchBtn1.ClickAsync()
+      let! reachedTarget1 = waitUntil 15_000 (fun () -> task {
+        let! sid = viewingSessionId page
+        return sid = target1
+      })
+      Expect.isTrue reachedTarget1 (sprintf "[state 3] switch reached session %s directly, no reload" target1)
+
+      // --- State 5: click the OTHER sidebar row (not its button) into its
+      // view. ---
+      let target2 = if target1 = idA then idB else idA
+      let otherRow = rowLocator target2
+      do! otherRow.ClickAsync()
+      let! reachedTarget2 = waitUntil 15_000 (fun () -> task {
+        let! sid = viewingSessionId page
+        return sid = target2
+      })
+      Expect.isTrue reachedTarget2 (sprintf "[state 5] clicking the sidebar row switched into session %s's view" target2)
+
+      // --- Stop journey, part 1: stop the currently-viewed session while
+      // one other remains -> auto-advance to it (no picker). ---
+      let stopBtn (sid: string) = (rowLocator sid).GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "unload the session"))
+      do! (stopBtn target2).ClickAsync()
+      do! PlaywrightExpect.waitForSelectorText 10_000 page (sprintf "[data-session-id=\"%s\"]" target2) (sprintf "Stopping session id:%s" target2)
+      let! autoAdvanced = waitUntil 30_000 (fun () -> task {
+        let! sid = viewingSessionId page
+        return sid = target1
+      })
+      Expect.isTrue autoAdvanced (sprintf "[stop 1/2] stopping the viewed session auto-advanced to the remaining session %s" target1)
+      do! PlaywrightExpect.isHiddenAsync picker "[stop 1/2] session picker stays hidden — one session remains"
+      do! assertPermanentChrome page "stop 1/2: one session remains after auto-advance"
+
+      // --- Stop journey, part 2: stop the LAST remaining session -> falls
+      // back to the picker, and the rest of the chrome must still render —
+      // the exact transition that shipped broken as 0.6.470/0.6.471. ---
+      do! (stopBtn target1).ClickAsync()
+      do! PlaywrightExpect.waitForSelectorText 10_000 page (sprintf "[data-session-id=\"%s\"]" target1) (sprintf "Stopping session id:%s" target1)
+      let! pickerBack = waitUntil 30_000 (fun () -> task {
+        return! picker.IsVisibleAsync()
+      })
+      Expect.isTrue pickerBack "[stop 2/2] session picker re-appears once the last session is stopped"
+      let! viewingAfterLast = viewingSessionId page
+      Expect.equal viewingAfterLast "" "[stop 2/2] #main carries no viewing session id once zero sessions remain"
+      do! assertPermanentChrome page "stop 2/2: back to zero sessions"
+
+      assertNoErrors errors "sessions + switch + stop journey"
+      try do! ctx.CloseAsync() with _ -> ()
+    finally
+      browser |> Option.iter (fun b -> try b.CloseAsync().GetAwaiter().GetResult() with _ -> ())
+      playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
+      killDaemon daemon
+  }
 
 /// Helper to run an async Playwright test body inside Expecto.
 /// All dashboard browser tests are tagged [Integration] since they
@@ -1258,4 +1708,19 @@ let tests =
     Expect.isEmpty datastarOrConsoleErrors
       (sprintf "zero Datastar/console errors across the dropdown-driven workflow switch, got: %s" (String.concat " | " datastarOrConsoleErrors))
   })
+  // --- Gap I (outcome-gate-sweep.md, Island H): the no-session landing state
+  // matrix. Each of these owns its OWN isolated daemon (see NoSessionLanding
+  // above) — never the shared daemon the journeys above depend on, which
+  // always has a session by the time they run. Registered under the SAME
+  // "--integration-browser" Dedicated tag as every journey above, and part of
+  // THIS SAME `tests` value, so DashboardBrowserRunner.runBrowserJourneys
+  // already runs them — no CI/Program.fs wiring change needed. ---
+
+  testTask "[Integration] Dashboard browser: no-session landing renders the full shell, then Create from the picker reaches Ready with no reload (Gap I states 1+4)" {
+    do! NoSessionLanding.noSessionLandingAndCreateJourney () }
+  |> Integration.register (Integration.Dedicated "--integration-browser")
+
+  testTask "[Integration] Dashboard browser: sessions+bareURL renders directly, switch/row-click reach the right session, Stop auto-advances then falls back to the picker (Gap I states 2+3+5, click-through Stop)" {
+    do! NoSessionLanding.sessionsSwitchAndStopJourney () }
+  |> Integration.register (Integration.Dedicated "--integration-browser")
   ]

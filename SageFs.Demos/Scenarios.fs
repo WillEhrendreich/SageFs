@@ -113,12 +113,18 @@ let helloDashboard: Scenario =
               Target.DashboardCssSelector createSessionButtonSelector
             )
           // A real, non-empty project's warmup actually scans its source
-          // files — "Scanned 1 source files" (`AppState.fs`'s own literal
+          // files — "Scanned N source files" (`AppState.fs`'s own literal
           // wording) is a genuine, structural proof the project loaded
           // (never fires for a bare Quick Start session, which scans 0),
           // not just "a session card appeared" (§2's already-fixed
-          // nothingburger: that testid fires during `WarmingUp` too).
-          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 1 source files")
+          // nothingburger: that testid fires during `WarmingUp` too). N is 3
+          // for this one-file sample, not 1: Ionide.ProjInfo's effective
+          // compile list (what warmup actually scans) includes the SDK's two
+          // auto-generated files (AssemblyInfo.fs, AssemblyAttributes.fs)
+          // alongside Program.fs — confirmed directly against a real
+          // recording's own warmup transcript ("[2/4] Scanned 3 source
+          // files"), not guessed.
+          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 3 source files")
           Dwell = Dwell.short }
         // Creating a session does NOT switch the dashboard's main panel to
         // that session's own view — it stays on the "Start a Session"
@@ -198,7 +204,9 @@ let sessionsDashboard: Scenario =
               CadenceSeed.ofId "sessions-dashboard-open-project",
               Target.DashboardCssSelector createSessionButtonSelector
             )
-          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 1 source files")
+          // N is 3 for this sample, not 1 — see `helloDashboard`'s own doc
+          // comment on this exact literal.
+          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 3 source files")
           Dwell = Dwell.short }
         { Caption = Caption.mk "2/3 · The session warms up and goes green"
           Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
@@ -216,8 +224,29 @@ let sessionsDashboard: Scenario =
         // that panel's whole subtree, clearing scrollback) — it shows up in
         // the statusline instead. `body` (already proven for the "Ready"
         // check above) catches it wherever it actually renders.
+        //
+        // The RESET button lives inside the SAME collapsed `#evaluate-section`
+        // `<details>` accordion `replDashboard`'s own eval steps open via
+        // `ClickThenTypeThenClick` (`EvaluateSectionOpen` signal defaults to
+        // `false`, `Dashboard.fs`'s own initial-signal list) — a bare
+        // `Action.Click` on `[data-testid=reset]` with no pre-click never
+        // lands on a visible button. Confirmed directly: a real recording's
+        // own still frame at the timeout showed the accordion still collapsed
+        // (`▸ Evaluate`), never opened. Reusing `ClickThenTypeThenClick` with
+        // an empty `text` (never typing anything, exactly `TypeThenClick`'s
+        // own click-then-submit shape minus the type) keeps the expand click
+        // and the reset click in the SAME step, which the doc comment on
+        // `ClickThenTypeThenClick` requires: a separate pre-click step risks
+        // the accordion re-collapsing in the gap before reset ever fires.
         { Caption = Caption.mk "3/3 · Reset the session"
-          Action = Action.Click(Target.DashboardCssSelector resetButtonSelector)
+          Action =
+            Action.ClickThenTypeThenClick(
+              Target.DashboardCssSelector evaluateAccordionSelector,
+              Target.DashboardCssSelector resetButtonSelector,
+              Text.mk "",
+              CadenceSeed.ofId "sessions-dashboard-reset",
+              Target.DashboardCssSelector resetButtonSelector
+            )
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Session reset successfully")
           Dwell = Dwell.long } ]
     Cost = CostClass.web
@@ -245,7 +274,9 @@ let replDashboard: Scenario =
               CadenceSeed.ofId "repl-dashboard-open-project",
               Target.DashboardCssSelector createSessionButtonSelector
             )
-          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 1 source files")
+          // N is 3 for this sample, not 1 — see `helloDashboard`'s own doc
+          // comment on this exact literal.
+          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 3 source files")
           Dwell = Dwell.short }
         { Caption = Caption.mk "2/4 · It warms up and goes green"
           Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
@@ -266,10 +297,20 @@ let replDashboard: Scenario =
         // `it`-style prompt), so this reads the PROJECT's own mutable state
         // right after a totally unrelated expression, proving the session
         // never restarted between the two evals.
+        //
+        // NO accordion pre-click here, unlike step 3/4 above: `#evaluate-
+        // section` is a native `<details>` — clicking its `<summary>` a
+        // SECOND time while it is already open TOGGLES IT CLOSED, not a
+        // no-op. Confirmed directly against a real recording: the still
+        // frame at this step's own timeout showed the accordion open but the
+        // eval textarea completely empty — step 3/4's own click already
+        // opened it, so re-clicking here just closed it again before the
+        // type/submit ever reached a visible box. `TypeThenClick` (no
+        // pre-click) is correct once the accordion is already open from the
+        // immediately preceding step.
         { Caption = Caption.mk "4/4 · Evaluate the project's own state"
           Action =
-            Action.ClickThenTypeThenClick(
-              Target.DashboardCssSelector evaluateAccordionSelector,
+            Action.TypeThenClick(
               Target.DashboardCssSelector evalTextareaSelector,
               Text.mk "SageFs.Samples.WebappDatastar.Program.todos.Length",
               CadenceSeed.ofId "repl-dashboard-eval-2",
@@ -315,7 +356,7 @@ let ltDashboard: Scenario =
     Sample = Sample.FromCSharp
     Layout = LayoutTemplate.DashboardOnly
     Steps =
-      [ { Caption = Caption.mk "1/4 · Open a real test project"
+      [ { Caption = Caption.mk "1/5 · Open a real test project"
           Action =
             Action.TypeThenClick(
               Target.DashboardCssSelector newSessionDirSelector,
@@ -325,18 +366,51 @@ let ltDashboard: Scenario =
             )
           Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned")
           Dwell = Dwell.short }
-        { Caption = Caption.mk "2/4 · It warms up and goes green"
+        { Caption = Caption.mk "2/5 · It warms up and goes green"
           Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
           Dwell = Dwell.medium }
-        { Caption = Caption.mk "3/4 · Turn live testing on"
+        // The Live Testing panel (like Hot Reload/Bindings/Session Context)
+        // is NOT on the page by default: `DashboardFragments.fs` wraps
+        // `snap.LiveTestingPanel` in an `expanded-only` div that only shows
+        // once the sidebar's own "⊕" expand-toggle button (`#expand-toggle-
+        // btn`, `Signals.ExpandedDashboard` defaults `false`) has been
+        // clicked. Confirmed directly: a real recording's own still frame at
+        // this step's failure showed a completely bare page (Output +
+        // collapsed Evaluate only) with no Live Testing panel anywhere, and
+        // the click itself failed with "no bounding box" — a genuinely
+        // different, NEWER gap than the discovery-backend blocker this
+        // scenario's own doc comment above describes (that comment predates
+        // this sidebar panel, which did not exist when it was written).
+        //
+        // This is its OWN step, not bundled into the enable-click's step
+        // like `sessionsDashboard`'s reset fix: unlike a raw `<details>`
+        // (which snaps shut on the next server morph unless re-opened every
+        // step), `#main`'s `expanded` class is explicitly morph-protected
+        // (`Ds.preserveAttr "class"`, `DashboardFragments.fs`) — it is safe
+        // to expand it once and let a LATER step's fresh rect-resolution
+        // click the now-visible toggle, rather than chaining both clicks
+        // into one step with no settle between them. Confirmed directly this
+        // matters: bundling the expand-click and the enable-click into ONE
+        // atomic step (no settle between them) reliably hovered the correct
+        // "Enable" button — an accurate native tooltip proved the coordinates
+        // were right — but the click itself never registered (the button
+        // never left "Enable"/never showed a loading state) for the entire
+        // 300s window, extracted and diffed frame-by-frame from the raw
+        // segment. A settle between the panel's reveal and the click removes
+        // that race.
+        { Caption = Caption.mk "3/5 · Open the extra session panels"
+          Action = Action.Click(Target.DashboardCssSelector "#expand-toggle-btn")
+          Expect = Expectation.PageTextContains(liveTestingPanelSelector, "Live Testing:")
+          Dwell = Dwell.medium }
+        { Caption = Caption.mk "4/5 · Turn live testing on"
           Action = Action.Click(Target.DashboardElement DashboardId.LiveTestingToggle)
           Expect = Expectation.PageTextContains(liveTestingPanelSelector, "Live Testing: ON")
           Dwell = Dwell.medium }
         // No click — just watch the same live session actually discover and
         // run the project's real Expecto tests (§9's "Await" pattern: a step
         // with no click/type action still waits out its own expectation).
-        { Caption = Caption.mk "4/4 · SageFs runs the real tests — they pass"
+        { Caption = Caption.mk "5/5 · SageFs runs the real tests — they pass"
           Action = Action.Await Signal.testRunCompleted
           Expect = Expectation.PageTextContains(liveTestingPanelSelector, "✓")
           Dwell = Dwell.long } ]

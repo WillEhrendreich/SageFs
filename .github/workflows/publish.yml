@@ -67,7 +67,6 @@ jobs:
         echo "$root" >> "$GITHUB_PATH"
         echo "DOTNET_ROOT=$root" >> "$GITHUB_ENV"
         "$root/dotnet" --list-sdks
-
     - name: Enforce release Definition of Done
       if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.bypass_dod == 'true') }}
       shell: bash

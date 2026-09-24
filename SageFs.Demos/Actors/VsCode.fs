@@ -158,6 +158,25 @@ let launch
     | _, Error e -> return Error e
     | Ok(), Ok() ->
 
+    // A fresh --user-data-dir (every cell run: never persisted, never
+    // reused) means VS Code's OWN first-run "Welcome to VS Code / Sign in to
+    // use GitHub Copilot" full-screen prompt covers the entire window on
+    // every single recording — confirmed directly: a real recording's own
+    // still frame at a later step's failure showed nothing BUT this prompt,
+    // eating every subsequent keystroke/click meant for the editor
+    // underneath it. `workbench.startupEditor: "none"` is VS Code's own
+    // documented setting for exactly this (suppresses the welcome/walkthrough
+    // tab that opens on an otherwise-empty first launch); pre-seeding it into
+    // `<userDataDir>/User/settings.json` before the process ever starts is
+    // the same "prepare the profile before launch" doctrine `--user-data-dir`
+    // itself already follows — no code path here ever read this dir before,
+    // so creating `User/` for the first time is safe.
+    Directory.CreateDirectory(Path.Combine(userDataDir, "User")) |> ignore
+    File.WriteAllText(
+      Path.Combine(userDataDir, "User", "settings.json"),
+      """{ "workbench.startupEditor": "none" }"""
+    )
+
     let psi = ProcessStartInfo(codeBin, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true)
     psi.Environment.Clear()
     psi.Environment.["HOME"] <- userDataDir

@@ -127,6 +127,14 @@ let tests =
             let report = agent.AfterEval(request detours discovery)
             Expect.isEmpty (sprintf "no methods (%A, %A)" detours discovery) report.UpdatedMethods
             Expect.isEmpty "no tests" report.LiveTest.DiscoveredTests
+            // WHY — with nothing emitted, DetourReport must be the SAME
+            // named-empty value as UpdatedMethods, not just an empty list
+            // hardcoded independently of it: a caller that reads
+            // DetourReport.Bindings/.Declined directly (the whole point of
+            // carrying it) must never see a made-up or stale value here.
+            report.DetourReport
+            |> Expect.equal (sprintf "the named empty report (%A, %A)" detours discovery)
+              SageFs.Middleware.HotReloadCore.DetourReport.empty
 
       testProperty "the report is a pure function of the request when nothing is emitted"
       <| fun (code: string) ->
@@ -134,6 +142,15 @@ let tests =
         let ask () =
           agent.AfterEval { EvaluatedCode = code; Detours = DetourPolicy.RegisterOnly; Discovery = DiscoveryPolicy.WhenChanged; IsFileSave = false }
         ask () = ask ()
+
+      testProperty "WHY — HostAgent.AfterEval — UpdatedMethods and DetourReport.Redirected never disagree, because UpdatedMethods IS the DetourReport's own Redirected list, not a second tally someone could forget to keep in sync"
+      <| fun (code: string) ->
+        let agent = Agent(emptyInit, nothingLoaded)
+        [ for detours in [ DetourPolicy.ApplyDetours; DetourPolicy.RegisterOnly ] do
+            for discovery in [ DiscoveryPolicy.WhenChanged; DiscoveryPolicy.Forced ] ->
+              let report = agent.AfterEval { EvaluatedCode = code; Detours = detours; Discovery = discovery }
+              report.UpdatedMethods = report.DetourReport.Redirected ]
+        |> List.forall id
     ]
 
     testList "RunTest" [
