@@ -695,7 +695,10 @@ module private NoSessionLanding =
       try do! ctx.CloseAsync() with _ -> ()
     finally
       match browser with
-      | Some b -> try do! b.CloseAsync() with _ -> ()
+      | Some b ->
+        try
+          do! b.CloseAsync()
+        with _ -> ()
       | None -> ()
       playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
       killDaemon daemon
@@ -820,7 +823,10 @@ module private NoSessionLanding =
       try do! ctx.CloseAsync() with _ -> ()
     finally
       match browser with
-      | Some b -> try do! b.CloseAsync() with _ -> ()
+      | Some b ->
+        try
+          do! b.CloseAsync()
+        with _ -> ()
       | None -> ()
       playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
       killDaemon daemon
