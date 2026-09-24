@@ -1,9 +1,11 @@
 module SageFs.Tests.EnvCheckTests
 
 open System
+open System.Diagnostics
 open System.IO
 open System.Net
 open System.Net.Sockets
+open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open FsCheck
@@ -46,6 +48,15 @@ let private withBoundPort (action: int -> unit) =
     action port
   finally
     l.Stop()
+
+let private runProcess (psi: ProcessStartInfo) : Task<int * string * string> =
+  Async.StartAsTask(async {
+    use proc = Process.Start psi
+    let! stdout = proc.StandardOutput.ReadToEndAsync() |> Async.AwaitTask
+    let! stderr = proc.StandardError.ReadToEndAsync() |> Async.AwaitTask
+    do! proc.WaitForExitAsync() |> Async.AwaitTask
+    return proc.ExitCode, stdout, stderr
+  })
 
 // ── isPortFree ────────────────────────────────────────────────────────────────
 
@@ -588,4 +599,58 @@ let allEnvCheckTests =
     fsiProbeTests
     sessionAuthorityTests
     printTests
+  ]
+
+[<Tests>]
+let realCliSdkCheckTests =
+  SageFs.Tests.TestInfrastructure.Integration.hostList "EnvCheck real CLI (`sagefs check`)" [
+    testTask "WHY — the built SageFs CLI accepts the newest installed stable SDK for a lower latestMinor pin, proving #139 through the shipped command path" {
+      let workDir = Directory.CreateTempSubdirectory("sagefs-envcheck-cli-").FullName
+      try
+        let dotnet = ProcessStartInfo("dotnet")
+        dotnet.UseShellExecute <- false
+        dotnet.RedirectStandardOutput <- true
+        dotnet.RedirectStandardError <- true
+        dotnet.ArgumentList.Add "--list-sdks"
+        dotnet.WorkingDirectory <- workDir
+        let! sdkExit, sdkOutput, sdkError = runProcess dotnet
+        sdkExit |> Expect.equal "dotnet --list-sdks succeeds" 0
+        let stableVersions =
+          SageFs.FsiHostBuild.parseSdkList sdkOutput
+          |> List.filter (fun version -> not (version.Contains "-"))
+          |> List.sortDescending
+        let selected =
+          match stableVersions with
+          | [] -> failtest "this host has no stable .NET SDK for the real #139 check"
+          | version :: _ -> version
+        let major = selected.Split('.')[0]
+        File.WriteAllText(
+          Path.Combine(workDir, "global.json"),
+          sprintf "{ \"sdk\": { \"version\": \"%s.0.0\", \"rollForward\": \"latestMinor\", \"allowPrerelease\": false } }" major)
+
+        let version = ProcessStartInfo("dotnet")
+        version.UseShellExecute <- false
+        version.RedirectStandardOutput <- true
+        version.RedirectStandardError <- true
+        version.ArgumentList.Add "--version"
+        version.WorkingDirectory <- workDir
+        let! versionResult = runProcess version
+        let (versionExit: int), (dotnetVersion: string), (versionError: string) = versionResult
+        versionExit |> Expect.equal "dotnet --version succeeds" 0
+        let expected = dotnetVersion.Trim()
+        expected |> Expect.stringContains "dotnet resolves the same major selected from --list-sdks" (major + ".")
+
+        let psi = ProcessStartInfo(SageFs.Tests.TestInfrastructure.SageFsBinary.path ())
+        psi.UseShellExecute <- false
+        psi.RedirectStandardOutput <- true
+        psi.RedirectStandardError <- true
+        psi.WorkingDirectory <- workDir
+        psi.ArgumentList.Add "check"
+        let! checkExit, stdout, stderr = runProcess psi
+        let output = stdout + Environment.NewLine + stderr + Environment.NewLine + sdkError + versionError
+        checkExit |> Expect.equal (sprintf "`sagefs check` accepts %s under latestMinor; output:\n%s" expected output) 0
+        output |> Expect.stringContains "the real CLI names the SDK dotnet selected" expected
+      finally
+        try Directory.Delete(workDir, true) with _ -> ()
+    }
   ]
