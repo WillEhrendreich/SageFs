@@ -847,8 +847,19 @@ let httpApiRoutingTests =
       let! proc, client =
         startDaemonWithArgs port repoRoot []
       try
+        // Every other test in this file requests `webSampleProject`, the
+        // actual .fsproj sitting in `testProjectDir` (see its own comment:
+        // "instead of SageFs.Tests.fsproj so the session loads a small,
+        // separate project"). This one named the literal string
+        // "SageFs.Tests.fsproj" instead — a project that does not exist in
+        // `testProjectDir` at all. Before the earn-Ready gate
+        // (ProjectResolution/WorkerReportedReady) existed, a session went
+        // Ready regardless, so waitForReadySession below never noticed; now
+        // it correctly Faults an unresolved explicit request, and this test
+        // deterministically times out waiting for a Ready that was never
+        // coming for the wrong project name.
         let! createStatus, createBody =
-          createSession client "SageFs.Tests.fsproj" testProjectDir
+          createSession client webSampleProject testProjectDir
         createStatus |> Expect.equal "session create should succeed" 200
 
         let! ready, sessionsBody =

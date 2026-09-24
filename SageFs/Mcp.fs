@@ -1207,23 +1207,8 @@ module McpTools =
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
           let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-          // `ProjectResolution.reconcile` (not raw `ofWorkerReport`) gates
-          // this: `get_fsi_status` is exactly the polling loop the earned-
-          // Ready bug was found through (2026-09-23) — a live "Ready" report
-          // that outraces the daemon's own `WorkerReportedReady` must never
-          // be written back into the registry here, because this path never
-          // touches `ProjectRoles`. Doing so anyway used to persist
-          // Status=Ready with an empty ProjectRoles straight into the
-          // registry, corrupting the very pairing `WorkerReportedReady`
-          // exists to keep atomic — a NotYetEarned result below keeps the
-          // registry's own current status untouched instead.
-          let reconciliation =
-            info |> Option.map (fun sessionInfo ->
-              SageFs.ProjectResolution.reconcile sessionInfo.Projects (List.length sessionInfo.ProjectRoles) sessionInfo.Status snapshot.Status)
-          let reconciled =
-            reconciliation |> Option.map (function
-              | SageFs.ProjectResolution.ReconciledStatus.Reconciled s -> s
-              | SageFs.ProjectResolution.ReconciledStatus.NotYetEarned current -> current)
+          let reconciliation = info |> Option.map (fun i -> SageFs.ProjectResolution.reconcile i.Projects i.ProjectRoles.Length i.Status snapshot.Status)
+          let reconciled = reconciliation |> Option.map (function SageFs.ProjectResolution.ReconciledStatus.Reconciled s | SageFs.ProjectResolution.ReconciledStatus.NotYetEarned s -> s)
           match info, reconciliation with
           | Some sessionInfo, Some (SageFs.ProjectResolution.ReconciledStatus.Reconciled newStatus) when sessionInfo.Status <> newStatus ->
             do! ctx.SessionOps.UpdateSessionStatus (toSessionId sid) newStatus
