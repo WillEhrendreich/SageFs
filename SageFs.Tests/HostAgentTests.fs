@@ -148,7 +148,7 @@ let tests =
         let agent = Agent(emptyInit, nothingLoaded)
         [ for detours in [ DetourPolicy.ApplyDetours; DetourPolicy.RegisterOnly ] do
             for discovery in [ DiscoveryPolicy.WhenChanged; DiscoveryPolicy.Forced ] ->
-              let report = agent.AfterEval { EvaluatedCode = code; Detours = detours; Discovery = discovery }
+              let report = agent.AfterEval { EvaluatedCode = code; Detours = detours; Discovery = discovery; IsFileSave = false }
               report.UpdatedMethods = report.DetourReport.Redirected ]
         |> List.forall id
     ]
