@@ -2183,12 +2183,20 @@ let resolveSessionStatus
           // response disagreeing about the same session is the bug fixed
           // twice elsewhere today (registry corruption, get_fsi_status) —
           // this closes the last place it could still happen.
-          let reconciled = SageFs.WorkerProtocol.SessionLifecycleStatus.ofWorkerReport session.Status snap.Status
-          match reconciled with
-          | SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted _
-          | SageFs.WorkerProtocol.SessionLifecycleStatus.Stopped ->
+          //
+          // `ProjectResolution.reconcile` layers the earned-Ready guard on
+          // top of that: a raw "Ready" is only trusted once `ProjectRoles`
+          // actually carries what was requested — otherwise this must keep
+          // showing the registry's OWN current status, never the worker's
+          // raw claim, so `/health` can never say "Ready" a beat before
+          // `/api/sessions`' `loadedProjects` agrees.
+          match SageFs.ProjectResolution.reconcile session.Projects (List.length session.ProjectRoles) session.Status snap.Status with
+          | SageFs.ProjectResolution.ReconciledStatus.NotYetEarned current ->
+            return fallbackSessionStatusLabel current, sessionHealthStatusOfLifecycleFallback current
+          | SageFs.ProjectResolution.ReconciledStatus.Reconciled (SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted _ as reconciled)
+          | SageFs.ProjectResolution.ReconciledStatus.Reconciled (SageFs.WorkerProtocol.SessionLifecycleStatus.Stopped as reconciled) ->
             return fallbackSessionStatusLabel reconciled, sessionHealthStatusOfLifecycleFallback reconciled
-          | _ ->
+          | SageFs.ProjectResolution.ReconciledStatus.Reconciled _ ->
             return SageFs.WorkerProtocol.SessionStatus.label snap.Status, sessionHealthStatusOfWorkerStatus snap.Status
         | SageFs.WorkerProtocol.WorkerResponse.WorkerError _ ->
           return fallbackSessionStatusLabel session.Status, sessionHealthStatusOfLifecycleFallback session.Status
@@ -2694,7 +2702,18 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
               let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus "api") |> Async.StartAsTask
               match resp with
               | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-                return snap.EvalCount, float snap.AvgDurationMs, SageFs.WorkerProtocol.SessionStatus.label snap.Status
+                // Never trust the worker's raw "Ready" ahead of the registry:
+                // `loadedProjects` below comes from `sess.ProjectRoles`, and
+                // only `WorkerReportedReady`'s earned-Ready gate ever pairs
+                // that with `Status`. A live report taken at face value here
+                // is exactly the bug — "Ready" observable while
+                // `loadedProjects` is still empty (see
+                // ProjectResolution.reconcile).
+                let label =
+                  match SageFs.ProjectResolution.reconcile sess.Projects (List.length sess.ProjectRoles) sess.Status snap.Status with
+                  | SageFs.ProjectResolution.ReconciledStatus.NotYetEarned current -> fallbackSessionStatusLabel current
+                  | SageFs.ProjectResolution.ReconciledStatus.Reconciled _ -> SageFs.WorkerProtocol.SessionStatus.label snap.Status
+                return snap.EvalCount, float snap.AvgDurationMs, label
               | SageFs.WorkerProtocol.WorkerResponse.WorkerError _ ->
                 return 0, 0.0, fallbackSessionStatusLabel sess.Status
               | _ -> return 0, 0.0, fallbackSessionStatusLabel sess.Status
