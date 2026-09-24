@@ -471,6 +471,8 @@ module private NoSessionLanding =
     psi.WorkingDirectory <- repoRoot
     psi.ArgumentList.Add("--mcp-port")
     psi.ArgumentList.Add(string mcpPort)
+    psi.ArgumentList.Add("--owner-pid")
+    psi.ArgumentList.Add(string (Diagnostics.Process.GetCurrentProcess().Id))
     psi.ArgumentList.Add("--no-resume")
     psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
     // Redirect to FILES, never undrained pipes: an undrained pipe deadlocks
@@ -692,7 +694,9 @@ module private NoSessionLanding =
       assertNoErrors errors "no-session landing + Create journey"
       try do! ctx.CloseAsync() with _ -> ()
     finally
-      browser |> Option.iter (fun b -> try b.CloseAsync().GetAwaiter().GetResult() with _ -> ())
+      match browser with
+      | Some b -> try do! b.CloseAsync() with _ -> ()
+      | None -> ()
       playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
       killDaemon daemon
   }
@@ -815,7 +819,9 @@ module private NoSessionLanding =
       assertNoErrors errors "sessions + switch + stop journey"
       try do! ctx.CloseAsync() with _ -> ()
     finally
-      browser |> Option.iter (fun b -> try b.CloseAsync().GetAwaiter().GetResult() with _ -> ())
+      match browser with
+      | Some b -> try do! b.CloseAsync() with _ -> ()
+      | None -> ()
       playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
       killDaemon daemon
   }
