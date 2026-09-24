@@ -70,19 +70,58 @@ module ManualProjectParse =
         with _ ->
           acc, visited'
 
+  /// Arcade-style repos (fsharp/fsharp-compiler-services, dotnet/runtime,
+  /// dotnet/sdk, and other .NET-eng-templated repos) route ALL build output
+  /// through `<repoRoot>/artifacts/bin/<ProjectName>/<Config>/<Tfm>/` and
+  /// never create a `<projectDir>/bin/` at all — confirmed on
+  /// fsharp-compiler-services: `src/Compiler/` has no `bin/` anywhere under
+  /// it, real output lives at `artifacts/bin/FSharp.Compiler.Service/`. The
+  /// conventional-layout probe below finds nothing there and reports "not
+  /// built yet" on a project that IS built. Walk up from the project's own
+  /// directory looking for an ancestor `artifacts/bin/<ProjectName>/` —
+  /// bounded (8 levels) so a project with no Arcade layout anywhere in its
+  /// ancestry (the common case) doesn't walk to the filesystem root.
+  let arcadeBinDir (projDir: string) (projectFileName: string) : string option =
+    let projectName = Path.GetFileNameWithoutExtension projectFileName
+    let rec walk (dir: string) (depth: int) =
+      match depth > 8 with
+      | true -> None
+      | false ->
+        let candidate = Path.Combine(dir, "artifacts", "bin", projectName)
+        match Directory.Exists candidate with
+        | true -> Some candidate
+        | false ->
+          match Path.GetDirectoryName dir with
+          | null
+          | "" -> None
+          | parent when parent = dir -> None
+          | parent -> walk parent (depth + 1)
+    walk projDir 0
+
+  /// The directory the manual fallback should collect build output from for
+  /// `projPath`: the conventional `<projectDir>/bin` when it exists, or the
+  /// Arcade-style `artifacts/bin/<ProjectName>` found in an ancestor
+  /// directory otherwise. `None` when neither layout has been built yet.
+  let outputBinDir (projPath: string) : string option =
+    let projDir = Path.GetDirectoryName (Path.GetFullPath projPath)
+    let conventional = Path.Combine(projDir, "bin")
+    match Directory.Exists conventional with
+    | true -> Some conventional
+    | false -> arcadeBinDir projDir projPath
+
   /// Collect the built assembly and its dependencies for a project that was
-  /// already compiled (bin/<config>/<tfm>/). Used by the manual fallback so FSI
-  /// still gets project + NuGet references even when MSBuild evaluation fails.
+  /// already compiled (bin/<config>/<tfm>/, or the Arcade-style
+  /// artifacts/bin/<ProjectName>/<config>/<tfm>/ layout — see `outputBinDir`).
+  /// Used by the manual fallback so FSI still gets project + NuGet references
+  /// even when MSBuild evaluation fails.
   let collectBinReferences (logger: ILogger) (projPaths: string list) : DllName list =
     projPaths
     |> List.collect (fun projPath ->
-      let projDir = Path.GetDirectoryName (Path.GetFullPath projPath)
-      let binDir = Path.Combine(projDir, "bin")
-      match Directory.Exists binDir with
-      | false ->
+      match outputBinDir projPath with
+      | None ->
         logger.LogWarning (sprintf "  No bin dir for %s — project may not be built yet" (Path.GetFileName projPath))
         []
-      | true ->
+      | Some binDir ->
         // Layout varies: some builds put DLLs in bin/<cfg>/ directly, others in
         // bin/<cfg>/<tfm>/. Collect from ONE config dir only (newest by write
         // time) — mixing Debug + Release DLLs produces duplicate assembly
@@ -651,10 +690,12 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
       let binLibPaths =
         projects
         |> List.map (fun projPath ->
-          let binDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath projPath), "bin")
-          match Directory.Exists binDir with
-          | false -> None
-          | true ->
+          // Same layout ManualProjectParse.collectBinReferences reads from —
+          // conventional <projectDir>/bin, or the Arcade-style
+          // artifacts/bin/<ProjectName> found in an ancestor directory.
+          match ManualProjectParse.outputBinDir projPath with
+          | None -> None
+          | Some binDir ->
             Directory.EnumerateDirectories binDir
             |> Seq.sortByDescending (fun d -> Directory.GetLastWriteTimeUtc d)
             |> Seq.tryHead)

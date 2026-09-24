@@ -107,4 +107,27 @@ let tests =
         coreRefs.Head |> Expect.equal "the fresh (newest) copy must win over the stale orphan" fresh
       finally
         Directory.Delete(dir, true))
+
+    testCase "WHY — Arcade-style repos (fsharp/runtime/sdk) route build output through <repo>/artifacts/bin/<ProjectName>/, not <projectDir>/bin/; the manual fallback must find it there instead of reporting 'no bin dir'" (fun () ->
+      // Reproduces the real fsharp-compiler-services layout: the .fsproj lives
+      // at <repo>/src/Compiler/FSharp.Compiler.Service.fsproj, has NO bin/
+      // directory anywhere under src/Compiler, and its real build output is at
+      // <repo>/artifacts/bin/FSharp.Compiler.Service/<Config>/<Tfm>/*.dll.
+      let repoDir = Path.Combine(Path.GetTempPath(), "sagefs-manual-parse-arcade-" + Guid.NewGuid().ToString("N"))
+      let projDir = Path.Combine(repoDir, "src", "Compiler")
+      Directory.CreateDirectory projDir |> ignore
+      try
+        File.WriteAllText(Path.Combine(projDir, "App.fs"), "module App\nlet x = 1\n")
+        File.WriteAllText(Path.Combine(projDir, "FSharp.Compiler.Service.fsproj"), simpleFsproj)
+        let arcadeOut = Path.Combine(repoDir, "artifacts", "bin", "FSharp.Compiler.Service", "Release", "netstandard2.0")
+        Directory.CreateDirectory arcadeOut |> ignore
+        let dll = Path.Combine(arcadeOut, "FSharp.Compiler.Service.dll")
+        File.WriteAllBytes(dll, Array.init 32 byte)
+
+        let refs = ManualProjectParse.collectBinReferences quietLogger [ Path.Combine(projDir, "FSharp.Compiler.Service.fsproj") ]
+        refs
+        |> List.map Path.GetFileName
+        |> Expect.contains "the Arcade artifacts/bin output must be found even though <projectDir>/bin does not exist" "FSharp.Compiler.Service.dll"
+      finally
+        Directory.Delete(repoDir, true))
   ]
