@@ -8,6 +8,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <Compile Include="LiveTestingBudgets.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="TestCountBadge.fs" />
         <Compile Include="StableIdentityProbeFixture.fs" />
