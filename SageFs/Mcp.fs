@@ -1371,13 +1371,29 @@ module McpTools =
             | Some getCtx -> getCtx sid
             | None -> Task.FromResult None
           let health = SessionHealth.classify reconciledStatus sessionInfo.ProjectRoles warmup
+          // ONE reconciled status drives the top-level state AND the
+          // lifecycle. The old code hard-coded `state = "Ready"` while
+          // lifecycle, loadedProjects and health came from the reconciled
+          // status, so a warming session reported "Ready" beside
+          // "lifecycle: Starting" and "loadedProjects: []" — an agent gating
+          // on `state == Ready` walked straight into a session that was not
+          // loaded. Dogfooded live: the exact contradiction the roast reported.
+          let sessionState = WorkerProtocol.SessionLifecycleStatus.toSessionState reconciledStatus
+          let label = WorkerProtocol.SessionLifecycleStatus.label reconciledStatus
+          let stateLabel =
+            match sessionState with
+            | SageFs.SessionState.Ready -> "Ready"
+            | SageFs.SessionState.WarmingUp -> "WarmingUp"
+            | SageFs.SessionState.Faulted -> "Faulted"
+            | SageFs.SessionState.Evaluating -> "Ready"
+            | SageFs.SessionState.Uninitialized -> "WarmingUp"
           return System.Text.Json.JsonSerializer.Serialize(
-            {| state = "Ready"
+            {| state = stateLabel
                scope = "Session"
                sessionId = sid
                target = targets
                loadedProjects = sessionInfo.ProjectRoles |> List.map _.Path
-               lifecycle = WorkerProtocol.SessionLifecycleStatus.label reconciledStatus
+               lifecycle = label
                workerPid = WorkerProtocol.SessionLifecycleStatus.workerPid reconciledStatus
                workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort reconciledStatus
                workflow = WorkflowTypes.SessionWorkflow.label sessionInfo.Workflow
@@ -1385,7 +1401,7 @@ module McpTools =
                evalCount = snapshot.EvalCount
                averageDurationMs = snapshot.AvgDurationMs
                health = SessionHealth.toJson health
-               available = SageFs.Affordances.availableTools (WorkerProtocol.SessionLifecycleStatus.toSessionState reconciledStatus) |})
+               available = SageFs.Affordances.availableTools sessionState |})
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
