@@ -1,9 +1,8 @@
-# Live-testing baseline-run flake (observed 2026-09-25)
+# Live-testing: a queued run that never executes (observed 2026-09-25)
 
 ## What it looks like
 
-Two integration-host tests fail identically under a full-suite run, and pass
-in isolation:
+Two integration-host tests fail under a full-suite run, and pass when run alone:
 
 - `[Integration] HTTP API compiled live testing — editing a compiled F# file
   reruns tests against rebuilt output without an explicit rerun`
@@ -14,53 +13,66 @@ Both die on their **baseline** assertion, before any edit is made:
 
 ```
 baseline run should pass before editing the sample.
-Run:   {"message":"Queued N test(s) for explicit run.","queued":N,"success":true}
-Status:{"Summary":{"Total":N,"Passed":0,"Failed":0,"Stale":0,"Running":0},...}
+Run:   {"message":"Queued 3 test(s) for explicit run.","queued":3,"success":true}
+Status:{"Summary":{"Total":3,"Passed":0,"Failed":0,"Stale":0,"Running":0},
+        "DiscoveryState":"ready_with_tests"}
 ```
 
-## Evidence it is not a regression
+## It is not a regression from the type-migration work
 
 | Run | Commit | Result | Duration |
 |---|---|---|---|
-| full `--integration-host` | `45b75eb1` (this work) | errored | 69s |
+| full `--integration-host` | `45b75eb1` | errored | 69s |
 | **alone**, filtered | **`1b685a3d` (release, unmodified)** | **passed** | **10s** |
-| full `--integration-host` | `45b75eb1` (this work) | errored | 69s |
 
-The same test passes on the *unmodified release commit* when run alone, so the
-failure is not caused by the holder/restart/migration/rewrite work. It is
-sensitive to machine load: under a full-suite run the baseline run is queued
-but never reaches `Passed >= N` inside its 60s window, so the test reports
-`0 passed, 0 failed` and gives up.
+The same test passes on the unmodified release commit when run alone, so the
+holder/restart/migration/rewrite work did not cause it.
 
-## The shape of the bug
+## It is not a timing problem either — this was measured
 
-`POST /api/live-testing/run` returns `Queued N test(s) for explicit run` and
-`success: true`, but the run is asynchronous. The test then polls
-`waitForLiveTestingStatus` with a 60-second budget for
-`Passed >= N && Failed = 0 && Running = 0 && Stale = 0`. Under load the queue
-is not drained inside 60s, and the assertion reports the *stuck* state
-(`0 passed, 0 failed`) rather than "the baseline never completed", so the
-failure message is actively misleading: it reads as a broken product.
+I first assumed the queue was merely slow under load, and raised the budget
+from 60s to 180s to test that. **The longer budget disproved it:**
 
-This is the same class of problem the Lemmings roast found on the agent side —
-`0 passed, 0 failed` next to a discovered-test count is a claim a reader will
-misread. The MCP-side fix (reporting `not run` explicitly) is in
-`SageFs/McpPushNotifications.fs`; the HTTP-side fix would be to make the
-baseline wait either for completion or for a named timeout, and to say which.
+| Budget | Test 1 | Test 2 |
+|---|---|---|
+| 60s | errored at 69s | errored at 129s |
+| **180s** | **errored at 188s** | **errored at 368s** |
 
-## Why it is not fixed here
+Each test consumed its *entire* budget and still reported
+`Total: 3, Passed: 0, Failed: 0, Running: 0`. A slow run finishes inside a
+large budget; a run that never starts finishes at no budget. So this is a
+**live product defect**, and the earlier "load-sensitive flake" reading was
+wrong.
 
-It is pre-existing, it is load-dependent, and fixing the wait semantics means
-changing a real live-testing behaviour with its own tests. It is recorded here
-rather than folded into the type-migration work, so the next person does not
-re-diagnose it from scratch. When it is fixed, the fix belongs with the
-`waitForLiveTestingStatus` callers in `SageFs.Tests/HttpApiIntegrationTests.fs`
-and `SageFs.Tests/McpToolOutcomeTests.fs`.
+## The shape
+
+`Running: 0` with `Passed: 0` and `Failed: 0` is the tell: nothing is in
+flight. The request was accepted and the work never happened.
+
+`SageFs/McpServer.fs:3195` dispatches `TuiEvent.RunTestsRequested` after
+replying `Queued N test(s) for explicit run` with `success: true`.
+`SageFs/SageFsApp.fs:1606` handles that event and emits
+`Features.LiveTesting.TestCycleEffect.RunRequestedTests`. The dispatch looks
+correct; whatever consumes that effect on the worker side is not starting the
+run.
+
+This is the same class of problem the Lemmings roast found on the agent side:
+**a claim that is not backed by an outcome.** `Queued`/`success` asserts work
+was accepted, and `Total: 3` asserts tests exist, but neither means any test
+ran. The MCP-side fix for that pattern shipped in
+`SageFs/McpPushNotifications.fs`; this is the HTTP/live-testing side and it is
+still open.
+
+## Where the work is
+
+Follow `Features.LiveTesting.TestCycleEffect.RunRequestedTests` to its
+handler and find where the request stops becoming a `TestRunStartedAt`. The
+answer is a worker-side dispatch bug, not a timeout or an HTTP route.
 
 ## How to re-check
 
 ```bash
-# passes in isolation
+# passes in isolation (10s), which is why it hides so easily
 dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll \
   --integration-host \
   --filter-test-case "editing a compiled F# file reruns tests against rebuilt output without an explicit rerun"
