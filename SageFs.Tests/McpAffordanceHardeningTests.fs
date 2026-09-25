@@ -40,13 +40,13 @@ let stateMachineReachabilityTests =
   testList "state machine reachability" [
 
     testCase
-      "monotonicity: get_fsi_status reachable in every state" <| fun _ ->
+      "monotonicity: get_session_status reachable in every state" <| fun _ ->
       allStates
       |> List.iter (fun state ->
         availableTools state
-        |> List.contains "get_fsi_status"
+        |> List.contains "get_session_status"
         |> Expect.isTrue
-          (sprintf "get_fsi_status must be in %A" state))
+          (sprintf "get_session_status must be in %A" state))
 
     testCase
       "monotonicity: get_recent_fsi_events in every non-Uninitialized state"
@@ -110,17 +110,16 @@ let stateMachineReachabilityTests =
           |> Expect.isFalse
             (sprintf "load_fsharp_script must NOT be in %A" state))
 
-    testCase "get_startup_info exclusive to Ready" <| fun _ ->
+    testCase "get_startup_info is fully retired" <| fun _ ->
       allStates
       |> List.iter (fun state ->
-        let has = availableTools state |> List.contains "get_startup_info"
-        match state with
-        | Ready ->
-          has |> Expect.isFalse "get_startup_info is no longer an MCP affordance"
-        | _ ->
-          has
-          |> Expect.isFalse
-            (sprintf "get_startup_info must NOT be in %A" state))
+        availableTools state
+        |> List.contains "get_startup_info"
+        |> Expect.isFalse "get_startup_info must not be advertised")
+      tryGetMcpToolMethods ()
+      |> Option.get
+      |> Array.exists (fun m -> m.Name = "get_startup_info")
+      |> Expect.isFalse "get_startup_info must not be registered"
   ]
 
 // ── Group 2: Affordance Algebra Properties ──
@@ -196,10 +195,10 @@ let affordanceAlgebraTests =
 let toolRegistrationTests =
   testList "tool registration completeness" [
 
-    testCase "affordance module covers exactly 37 unique tool names" <| fun _ ->
+    testCase "affordance module covers exactly 44 unique tool names" <| fun _ ->
       allAffordanceTools
       |> List.length
-      |> Expect.equal "unique affordance tools" 37
+      |> Expect.equal "unique affordance tools" 44
 
     testCase "all affordance tool names are non-empty and non-whitespace"
     <| fun _ ->
@@ -218,7 +217,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 53 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 60 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -233,7 +232,7 @@ let toolRegistrationTests =
         // set_reflection_read_mode (rule 2's reflection read mode and its
         // hot-loop questions).
         methods.Length
-          |> Expect.equal "MCP tool method count" 53
+          |> Expect.equal "MCP tool method count" 60
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -306,7 +305,7 @@ let stateTransitionSafetyTests =
               "checkToolAvailability threw for (%A, %s): %s"
               state tool ex.Message))
       tested
-          |> Expect.equal "should test all 185 state×tool combos" 185
+          |> Expect.equal "should test all 220 state×tool combos" 220
 
     testCase "all rejections return ToolNotAvailable specifically" <| fun _ ->
       allStates
@@ -385,7 +384,7 @@ let stateTransitionSafetyTests =
         | Ok _ ->
           failtestf "bogus tool must be rejected in %A" state)
 
-    testCase "260-combo safety: all MCP tools × all states never throw (reflection)"
+    testCase "all MCP tools × all states never throw (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -411,7 +410,7 @@ let stateTransitionSafetyTests =
         // set_reflection_read_mode = 53.
         tested
         |> Expect.equal
-          "should test 5 states × 53 tools = 265" 265
+          "should test 5 states × 60 tools = 300" 300
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──
@@ -425,11 +424,12 @@ let affordanceSupersetSubsetTests =
       Set.isSubset warmingTools readyTools
       |> Expect.isTrue "Ready must contain all WarmingUp tools"
 
-    testCase "Ready ⊇ Uninitialized" <| fun _ ->
+    testCase "Ready contains Uninitialized except daemon-wide status" <| fun _ ->
       let readyTools = availableTools Ready |> Set.ofList
       let uninitTools = availableTools Uninitialized |> Set.ofList
-      Set.isSubset uninitTools readyTools
-      |> Expect.isTrue "Ready must contain all Uninitialized tools"
+      Set.difference uninitTools readyTools
+      |> Expect.equal "only daemon-wide status is intentionally Uninitialized-only"
+        (Set.singleton "get_daemon_status")
 
     testCase "Ready ⊇ Faulted" <| fun _ ->
       let readyTools = availableTools Ready |> Set.ofList
@@ -443,12 +443,13 @@ let affordanceSupersetSubsetTests =
       Set.isSubset evalTools readyTools
       |> Expect.isTrue "Ready must contain all Evaluating tools"
 
-    testCase "WarmingUp ⊋ Uninitialized (strict)" <| fun _ ->
+    testCase "WarmingUp and Uninitialized differ by daemon status and recent events" <| fun _ ->
       let warmingTools = availableTools WarmingUp |> Set.ofList
       let uninitTools = availableTools Uninitialized |> Set.ofList
-      Set.isProperSubset uninitTools warmingTools
-      |> Expect.isTrue
-        "Uninitialized must be strictly smaller than WarmingUp"
+      (Set.difference uninitTools warmingTools,
+       Set.difference warmingTools uninitTools)
+      |> Expect.equal "the two states are peers with two honest scope differences"
+        (Set.singleton "get_daemon_status", Set.singleton "get_recent_fsi_events")
 
     testCase "Ready ⊋ WarmingUp (strict)" <| fun _ ->
       let readyTools = availableTools Ready |> Set.ofList
@@ -479,16 +480,10 @@ let affordanceSupersetSubsetTests =
       evalTools.Contains "hard_reset_fsi_session"
       |> Expect.isFalse "cannot hard_reset while evaluating"
 
-    testCase "Uninitialized has the smallest tool set" <| fun _ ->
-      let uninitCount = availableTools Uninitialized |> List.length
-      allStates
-      |> List.filter (fun s -> s <> Uninitialized)
-      |> List.iter (fun state ->
-        let count = availableTools state |> List.length
-        (count > uninitCount)
-        |> Expect.isTrue
-          (sprintf "%A (%d) must exceed Uninitialized (%d)"
-            state count uninitCount))
+    testCase "Uninitialized and WarmingUp are peer-size states" <| fun _ ->
+      (availableTools Uninitialized |> List.length,
+       availableTools WarmingUp |> List.length)
+      |> Expect.equal "neither peer is a partial subset of the other" (14, 14)
 
     testCase "Faulted does not include mutation tools" <| fun _ ->
       let faultedTools = availableTools Faulted |> Set.ofList

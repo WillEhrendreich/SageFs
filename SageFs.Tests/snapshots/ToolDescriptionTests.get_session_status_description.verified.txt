@@ -1,0 +1,1 @@
+Get one session's status: explicit target, loaded projects, lifecycle, worker, workflow, evaluation state, health, and session-scoped facts. Use this to decide whether session-scoped work is safe; machine-wide facts are available from get_daemon_status.

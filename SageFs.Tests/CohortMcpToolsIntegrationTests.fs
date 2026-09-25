@@ -144,8 +144,8 @@ let private joinCohort (client: McpClient) (agentName: string) (role: string) =
 let private joinCohortWithDir (client: McpClient) (agentName: string) (role: string) (workingDirectory: string) =
   callTool client "join_cohort" [ "agentName", box agentName; "role", box role; "working_directory", box workingDirectory ]
 
-let private createSession (client: McpClient) (projects: string) (workingDirectory: string) =
-  callTool client "create_session" [ "projects", box projects; "working_directory", box workingDirectory ]
+let private createProjectSession (client: McpClient) (project: string) (workingDirectory: string) =
+  callTool client "create_project_session" [ "project", box project; "working_directory", box workingDirectory ]
 
 let private getCohortStatus (client: McpClient) =
   callTool client "get_cohort_status" []
@@ -207,10 +207,10 @@ let cohortMcpToolsTests =
         let projectFile = System.IO.Path.GetFileName SageFs.Tests.HttpApiIntegrationTests.smokeSampleProject
         let workingDir = SageFs.Tests.HttpApiIntegrationTests.smokeSampleProjectDir
 
-        let! createResult = createSession client projectFile workingDir
+        let! createResult = createProjectSession client projectFile workingDir
         let sessionId = createResult.Split('\n').[0].Trim()
         String.IsNullOrWhiteSpace sessionId
-        |> Expect.isFalse "create_session should report a session id on its first line"
+        |> Expect.isFalse "create_project_session should report a session id on its first line"
 
         let! joinResult = joinCohortWithDir client "checkout-binder" "Implementer" workingDir
         joinResult

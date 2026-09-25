@@ -5,7 +5,7 @@ RULES:
 - Submit small, incremental blocks (one definition at a time)
 - For '#r nuget:' directives, submit alone in their own call
 - Errors are non-destructive: previous definitions survive a failed submission
-- Use get_fsi_status to check session health if something seems wrong
+- Use get_session_status to check session health if something seems wrong
 
 TRANSACTION SEMANTICS:
 - Each ';;' boundary is a separate transaction. Statements are evaluated sequentially.
@@ -19,7 +19,7 @@ ERROR HANDLING (CRITICAL):
 - 'Operation could not be completed due to earlier error' means a PREVIOUS statement had a compile error, so definitions from it were never created. Fix the original error and resubmit that code first.
 - The session is NOT corrupted by errors. Do NOT call reset_fsi_session or hard_reset_fsi_session because of eval errors. Fix your code instead.
 - Submit smaller pieces (one definition per call) to isolate which part has the error.
-- NEVER use '#r' for assemblies loaded via '--proj'. Call get_startup_info to see which assembly names are already loaded. Using '#r' on a loaded assembly creates a duplicate .NET load context causing TypeLoadException on ALL subsequent evals — this is not a session bug, it is your '#r' directive that must be removed.
+- NEVER use '#r' for assemblies loaded via '--proj'. Call get_session_status to see which assembly names are already loaded. Using '#r' on a loaded assembly creates a duplicate .NET load context causing TypeLoadException on ALL subsequent evals — this is not a session bug, it is your '#r' directive that must be removed.
 - RUNTIME FileNotFoundException for Microsoft.AspNetCore.* or other shared-framework assemblies means FSI cannot execute them (installed ref packs are metadata-only; framework version mismatches surface as manifest errors). This is an environment limit, not a code bug — run that scenario externally instead (dotnet test / dotnet run) and bring results back into the REPL.
 
 RETURN VALUE:

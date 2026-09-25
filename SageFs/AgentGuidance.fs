@@ -32,15 +32,17 @@ let loopSteps = [
 ]
 
 let firstMinute = [
-  "Call get_fsi_status or list_sessions. Check the daemon's version against the repo. If it's behind, tell the user."
-  "Sessions belong to a working directory, and a git worktree is its own boundary. Use your own session, and don't create a duplicate."
-  "Build once, then create_session for your directory, then get_fsi_status until Ready. If warmup says \"Not all DLLs are found\" after a build, that's a SageFs bug: report the paths it names."
+  "Call get_daemon_status and check the daemon's version against the repo. If it's behind, tell the user."
+  "Call list_sessions. A session belongs to a working directory, and a git worktree is its own boundary. Use your own session, and don't create a duplicate."
+  "Call get_available_projects, then choose one create_project_session, create_solution_session, or create_bare_session. SageFs builds missing generated state itself before creating the session."
+  "Call get_session_status for that exact session until Ready. If it Faults, fix or report the named reason rather than waiting for it to change."
 ]
 
 let gotchas = [
   "\"Operation could not be completed due to earlier error\" means an earlier statement failed. Fix that statement. Don't reset the session."
   "If a bare Error or Ok in a Result match resolves to the wrong type (\"This union case does not take arguments\"), something in scope shadows it. Write Result.Error/Result.Ok."
   "Never #r a DLL the session already loaded from the project. You get two copies of every type, and the lock blocks rebuilds."
+  "Before an external full build, test suite, or run-app process, acquire acquire_full_build_lease, acquire_test_suite_lease, or acquire_run_app_lease, then release_work_lease when done. SageFs's own recovery and built-in tools already account for their work."
   "A filtered test run is never the acceptance check. Only an unfiltered run counts."
   "check_fsharp_code type-checks without running. cancel_eval stops a runaway eval, so don't reset for that either."
 ]

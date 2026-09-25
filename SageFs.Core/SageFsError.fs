@@ -189,7 +189,7 @@ module SageFsError =
     | SageFsError.SessionNotFound id ->
       sprintf "Session '%s' not found. Use list_sessions to see available sessions." id
     | SageFsError.NoActiveSessions ->
-      "No active sessions. Use create_session to start one."
+      "No active sessions. Use create_project_session, create_solution_session, or create_bare_session to start one."
     | SageFsError.AmbiguousSessions descriptions ->
       sprintf "Multiple sessions active. Specify sessionId:\n%s" (descriptions |> String.concat "\n")
     | SageFsError.SessionCreationFailed reason ->
@@ -506,7 +506,7 @@ module SageFsError =
     | SageFsError.PortInUse _ -> true
     | SageFsError.RestartLimitExceeded _ -> true
     | SageFsError.DuplicateSession _ -> true
-    | SageFsError.NeedsRebuild _ -> true
+    | SageFsError.NeedsRebuild _ -> false
     | SageFsError.SupervisorBusy _ -> false
     | SageFsError.MemoryPressureRefused _ -> false
     | SageFsError.CohortActionFailed _
@@ -598,7 +598,7 @@ module SageFsError =
   let suggestedAction = function
     | SageFsError.ToolNotAvailable _ -> "Wait for session to reach Ready state"
     | SageFsError.SessionNotFound _ -> "Run list_sessions to see available sessions"
-    | SageFsError.NoActiveSessions -> "Run create_session to start one"
+    | SageFsError.NoActiveSessions -> "Choose create_project_session, create_solution_session, or create_bare_session to start one"
     | SageFsError.AmbiguousSessions _ -> "Specify a sessionId explicitly"
     | SageFsError.SessionCreationFailed _ -> "Check the project path and run 'dotnet build'"
     | SageFsError.NeedsRebuild _ -> "Build the project, then retry creating the session"
@@ -609,7 +609,7 @@ module SageFsError =
     | SageFsError.SupervisorBusy _ -> "Wait a few seconds and retry — the daemon is handling a burst of concurrent session activity"
     | SageFsError.MemoryPressureRefused _ -> "Stop unused sessions, or wait for machine memory to free up, then retry"
     | SageFsError.SessionSwitchFailed _ -> "Run list_sessions to check available sessions"
-    | SageFsError.SessionNotRoutable _ -> "Run get_fsi_status or list_sessions to check session state"
+    | SageFsError.SessionNotRoutable _ -> "Run get_session_status or list_sessions to check session state"
     | SageFsError.WorkerCommunicationFailed _ -> "Run hard_reset_fsi_session"
     | SageFsError.WorkerSpawnFailed _ -> "Check .NET SDK installation with 'dotnet --info'"
     | SageFsError.WorkerTimeout _ -> "Retry or run hard_reset_fsi_session"

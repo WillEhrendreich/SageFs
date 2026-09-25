@@ -44,6 +44,25 @@ let private genSageFsError =
     Gen.constant SageFsError.NoActiveSessions
     genStringList |> Gen.map SageFsError.AmbiguousSessions
     genNonEmptyString |> Gen.map SageFsError.SessionCreationFailed
+    genStringList |> Gen.map SageFsError.NeedsRebuild
+    gen {
+      let! id = genNonEmptyString
+      let! dir = genNonEmptyString
+      return SageFsError.DuplicateSession(id, dir)
+    }
+    gen {
+      let! path = genNonEmptyString
+      let! reason = genNonEmptyString
+      return SageFsError.UnsafeSessionPath(path, reason)
+    }
+    gen {
+      let! project = genNonEmptyString
+      let! tfms = genStringList
+      return SageFsError.ProjectFrameworkNotHostable(
+        project,
+        tfms,
+        ProjectCompatibility.UnsupportedTfmReason.NetFramework)
+    }
     gen {
       let! id = genNonEmptyString
       let! reason = genNonEmptyString
@@ -223,8 +242,7 @@ let sageFsErrorPropertyTests =
         |> fun s -> s >= 400 && s <= 599
         |> Expect.isTrue (sprintf "toHttpStatus should be 400-599 for %A, got %d" err status))
 
-    // 5. isClientError ↔ toHttpStatus consistency
-    // Client errors are 400/404; infra errors (409) are 4xx but NOT client errors.
+    // 5. Client and infrastructure classifications map onto HTTP 4xx.
     testPropertyWithConfig propConfig "isClientError implies toHttpStatus is 4xx" <|
       fun () ->
         let err = pick genSageFsError
@@ -288,12 +306,12 @@ let sageFsErrorPropertyTests =
           1)
 
     // 9. DU completeness guard — detect new cases
-    testCase "SageFsError DU has exactly 40 cases" <| fun _ ->
+    testCase "SageFsError DU has exactly 41 cases" <| fun _ ->
       allDuCaseInfos
       |> Array.length
       |> Expect.equal
         "SageFsError case count changed — update generators and property tests"
-        40
+        41
 
     // 10. Unexpected wraps exception message
     testPropertyWithConfig propConfig "Unexpected description contains exception message" <|
@@ -303,12 +321,12 @@ let sageFsErrorPropertyTests =
         let desc = SageFsError.describe err
         desc.Contains(msg)
 
-    // ── isInfraError ↔ toHttpStatus 409 consistency ──
-    testPropertyWithConfig propConfig "isInfraError is true iff toHttpStatus is 409" <|
+    // ── 409 ownership: client precondition unless it is a system conflict ──
+    testPropertyWithConfig propConfig "isInfraError owns 409 except client preconditions" <|
       fun () ->
         let err = pick genSageFsError
         let status = SageFsError.toHttpStatus err
-        SageFsError.isInfraError err = (status = 409)
+        SageFsError.isInfraError err = (status = 409 && not (SageFsError.isClientError err))
 
     // ── isOverloadError ↔ toHttpStatus 503 consistency ──
     testPropertyWithConfig propConfig "isOverloadError is true iff toHttpStatus is 503" <|

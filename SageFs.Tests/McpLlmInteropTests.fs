@@ -178,24 +178,22 @@ module GetStartupInfoTests =
     ]
 
 // ============================================================================
-// CRITICAL IMPROVEMENT #3: Enhanced get_fsi_status with Startup Context
+// CRITICAL IMPROVEMENT #3: split daemon and session status
 // ============================================================================
 
 module EnhancedStatusTests =
-  
+
   let tests =
-    Integration.hostList "Enhanced get_fsi_status with startup context" [
-      
-      testCase "get_fsi_status should include startup information section"
-      <| fun _ ->
+    Integration.hostList "split daemon and session status" [
+
+      testCase "daemon and session status expose typed scopes" <| fun _ ->
         task {
           let ctx = sharedCtx ()
-          
-          let! result = getStatus ctx "test" None None
-          
-          // Should include startup information from AppState
-          result |> Expect.stringContains "Should show events" "Events:"
-          result |> Expect.stringContains "Should show tools" "Available:"
+          let! daemon = getDaemonStatus ctx
+          let! session = getSessionStatus ctx "test" None None
+          daemon |> Expect.stringContains "daemon scope" "\"scope\":\"Daemon\""
+          session |> Expect.stringContains "session scope" "\"scope\":\"Session\""
+          session |> Expect.stringContains "ready lifecycle" "\"state\":\"Ready\""
         }
         |> Async.AwaitTask
         |> Async.RunSynchronously

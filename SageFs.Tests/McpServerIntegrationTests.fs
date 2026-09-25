@@ -106,16 +106,23 @@ let tests =
         let ctx = agentCtx ()
         let sessionA = SessionId.newId ()
         let sessionB = SessionId.newId ()
-        ctx.SessionMap.["test-agent"] <- SessionId.value sessionA
-        ctx.SessionMap.["claude"] <- SessionId.value sessionB
-        let! _ = sendFSharpCode ctx "test-agent" "let sessionAValue = 1" OutputFormat.Text None None None None None None
-        let! _ = sendFSharpCode ctx "claude" "let sessionBValue = 2" OutputFormat.Text None None None None None None
-        let! aEvents = getRecentEvents ctx "test-agent" 20 None
-        let! bEvents = getRecentEvents ctx "claude" 20 None
-        aEvents |> Expect.stringContains "A sees its own eval" "sessionAValue"
-        Expect.isFalse "A must not see B's eval" (aEvents.Contains("sessionBValue"))
-        bEvents |> Expect.stringContains "B sees its own eval" "sessionBValue"
-        Expect.isFalse "B must not see A's eval" (bEvents.Contains("sessionAValue"))
+        let previous = currentTransportSessionId.Value
+        try
+          currentTransportSessionId.Value <- Some "conn-a"
+          ctx.SessionMap.[resolvedKey "mcp"] <- SessionId.value sessionA
+          let! _ = sendFSharpCode ctx "mcp" "let sessionAValue = 1" OutputFormat.Text None None None None None None
+          let! aEvents = getRecentEvents ctx "mcp" 20 None
+
+          currentTransportSessionId.Value <- Some "conn-b"
+          ctx.SessionMap.[resolvedKey "mcp"] <- SessionId.value sessionB
+          let! _ = sendFSharpCode ctx "mcp" "let sessionBValue = 2" OutputFormat.Text None None None None None None
+          let! bEvents = getRecentEvents ctx "mcp" 20 None
+          aEvents |> Expect.stringContains "A sees its own eval" "sessionAValue"
+          Expect.isFalse "A must not see B's eval" (aEvents.Contains("sessionBValue"))
+          bEvents |> Expect.stringContains "B sees its own eval" "sessionBValue"
+          Expect.isFalse "B must not see A's eval" (bEvents.Contains("sessionAValue"))
+        finally
+          currentTransportSessionId.Value <- previous
       }
 
 
@@ -133,18 +140,32 @@ let tests =
         printfn "getRecentEvents tool test passed"
       }
 
-    testTask "getStatus tool returns session info" {
-        printfn "Testing getStatus tool..."
+    testTask "daemon and session status tools return distinct typed contracts" {
         let ctx = agentCtx ()
 
-        let! result = getStatus ctx "test" None None
-
-        printfn "Status: %s" result
-        result |> Expect.stringContains "Should show session ID" (sprintf "Session: %s" ctx.SessionMap.["test"])
-        result |> Expect.stringContains "Should list available tools" "send_fsharp_code"
-        result |> Expect.stringContains "Should report zero tracked events" "Events: 0"
-
-        printfn "getStatus tool test passed"
+        let! daemonJson = getDaemonStatus ctx
+        let! sessionJson = getSessionStatus ctx "test" None None
+        let daemon = System.Text.Json.JsonDocument.Parse(daemonJson: string)
+        let session = System.Text.Json.JsonDocument.Parse(sessionJson: string)
+        try
+          daemon.RootElement.GetProperty("scope").GetString()
+          |> Expect.equal "daemon tool has daemon scope" "Daemon"
+          (daemon.RootElement.GetProperty("sessions").GetProperty("total").GetInt32(), 0)
+          |> Expect.isGreaterThanOrEqual "daemon status carries session counts"
+          (daemon.RootElement.GetProperty("leases").GetProperty("activeCount").GetInt32(), 0)
+          |> Expect.isGreaterThanOrEqual "daemon status carries lease counts"
+          session.RootElement.GetProperty("scope").GetString()
+          |> Expect.equal "session tool has session scope" "Session"
+          session.RootElement.GetProperty("sessionId").GetString()
+          |> Expect.equal "session status names the routed session" ctx.SessionMap.["test"]
+          session.RootElement.GetProperty("state").GetString()
+          |> Expect.equal "session status carries lifecycle state" "Ready"
+          session.RootElement.GetProperty("available").EnumerateArray()
+          |> Seq.exists (fun item -> item.GetString() = "send_fsharp_code")
+          |> Expect.isTrue "session status carries the current affordances"
+        finally
+          daemon.Dispose()
+          session.Dispose()
       }
 
     testTask "loadFSharpScript tool loads and executes script" {

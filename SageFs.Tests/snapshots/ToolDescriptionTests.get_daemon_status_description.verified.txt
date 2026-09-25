@@ -1,0 +1,1 @@
+Get daemon-wide status: versions, health, memory pressure, machine memory, daemon/worker RSS and CPU, session counts, health anomalies, and safe lease summaries. Use this before trusting a session or starting expensive work.

@@ -111,7 +111,7 @@ module McpAdapter =
     // NOTE: no longer says "Start the daemon with: SageFs" — that hint can
     // never be true at the moment this text is printed: it is a tool call
     // the running daemon just served (sagefs-roast.md Finding #5).
-    sprintf "Available Projects/Solutions in %s:\n\n📦 F# Projects (.fsproj):\n%s%s\n\n📂 Solutions (.sln/.slnx):\n%s\n\n💡 Create a session for ProjectName.fsproj or SolutionName.slnx via create_session\n💡 Sessions can also be created from connected editors or the dashboard" workingDir projectList moreNote solutionList
+    sprintf "Available Projects/Solutions in %s:\n\n📦 F# Projects (.fsproj):\n%s%s\n\n📂 Solutions (.sln/.slnx):\n%s\n\n💡 Pass one .fsproj to create_project_session, one .sln/.slnx to create_solution_session, or choose create_bare_session explicitly.\n💡 Sessions can also be created from connected editors or the dashboard" workingDir projectList moreNote solutionList
 
   let formatStartupBanner (version: string) (mcpPort: int option) =
     match mcpPort with

@@ -81,6 +81,7 @@ let declarationCompletenessTests =
         | Some state ->
           match toolGate tool with
           | Some ToolGate.StateGated -> ()
+          | Some ToolGate.AlwaysAvailable when tool = "get_daemon_status" -> ()
           | Some ToolGate.AlwaysAvailable ->
             failtestf
               "'%s' is missing from %A's availableTools yet declared AlwaysAvailable" tool state
@@ -188,7 +189,8 @@ let gateDecisionTests =
 
     testCase "gate allows state-free tools in every state"
     <| fun _ ->
-      [ "get_fsi_status"; "list_sessions"; "get_friction_report"; "report_friction" ]
+      [ "get_daemon_status"; "get_session_status"; "list_sessions"; "get_friction_report"; "report_friction"
+        "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease" ]
       |> List.iter (fun tool ->
         allStates
         |> List.iter (fun state ->
@@ -350,8 +352,11 @@ let enforcementTests =
 
     testTask "state-free tools pass regardless of session state" {
       let! statusResult =
-        enforceWithSession WorkerProtocol.SessionStatus.Starting "get_fsi_status"
-      Expect.isOk "get_fsi_status must pass while warming up" statusResult
+        enforceWithSession WorkerProtocol.SessionStatus.Starting "get_session_status"
+      Expect.isOk "get_session_status must pass while warming up" statusResult
+      let! daemonResult =
+        enforceWithSession WorkerProtocol.SessionStatus.Starting "get_daemon_status"
+      Expect.isOk "get_daemon_status must pass while warming up" daemonResult
       let! eventsResult =
         enforceWithSession WorkerProtocol.SessionStatus.Starting "get_friction_report"
       Expect.isOk "get_friction_report must pass while warming up" eventsResult
@@ -361,10 +366,13 @@ let enforcementTests =
     }
 
     testTask "no session: session-creation allowed, code execution rejected" {
-      let! createResult = enforceNoSession "create_session"
-      Expect.isOk "create_session must pass when no session exists" createResult
-      let! statusResult = enforceNoSession "get_fsi_status"
-      Expect.isOk "get_fsi_status must pass when no session exists" statusResult
+      for tool in [ "create_project_session"; "create_solution_session"; "create_bare_session" ] do
+        let! createResult = enforceNoSession tool
+        Expect.isOk (sprintf "%s must pass when no session exists" tool) createResult
+      let! statusResult = enforceNoSession "get_session_status"
+      Expect.isOk "get_session_status must pass when no session exists" statusResult
+      let! daemonResult = enforceNoSession "get_daemon_status"
+      Expect.isOk "get_daemon_status must pass when no session exists" daemonResult
       let! evalResult = enforceNoSession "send_fsharp_code"
       match evalResult with
       | Error _ -> ()

@@ -2104,7 +2104,7 @@ let sageFsErrorDescribeTests = testList "SageFsError.describe" [
   }
   test "NoActiveSessions gives actionable message" {
     SageFsError.describe SageFsError.NoActiveSessions
-    |> Expect.stringContains "suggests create" "create_session"
+    |> Expect.stringContains "suggests project creation" "create_project_session"
   }
   test "AmbiguousSessions lists descriptions" {
     SageFsError.describe (SageFsError.AmbiguousSessions ["session1"; "session2"])

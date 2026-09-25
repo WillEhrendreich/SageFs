@@ -237,7 +237,7 @@ let sageFsErrorTests = testList "SageFsError.describe" [
     SageFsError.SessionNotFound "abc123",
       ["abc123"; "list_sessions"]
     SageFsError.NoActiveSessions,
-      ["No active sessions"; "create_session"]
+      ["No active sessions"; "create_project_session"]
     SageFsError.AmbiguousSessions ["session1"; "session2"],
       ["Multiple sessions"; "session1"; "session2"]
     SageFsError.SessionCreationFailed "out of memory",

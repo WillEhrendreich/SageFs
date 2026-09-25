@@ -123,9 +123,9 @@ let describeResolutionTests = testList "describeResolution" [
 ]
 
 let describeErrorTests = testList "SageFsError.describe (session errors)" [
-  test "NoActiveSessions mentions create_session" {
+  test "NoActiveSessions mentions explicit creation tools" {
     SageFsError.describe SageFsError.NoActiveSessions
-    |> Expect.stringContains "mentions create" "create_session"
+    |> Expect.stringContains "mentions project creation" "create_project_session"
   }
   test "SessionNotFound includes the session id" {
     SageFsError.describe (SageFsError.SessionNotFound "xyz")

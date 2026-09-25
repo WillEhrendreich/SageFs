@@ -4180,14 +4180,14 @@ module McpTools =
   /// `ctx.CohortOwner` is `None` only when nothing wired a cohort owner
   /// (tests that predate Slice 2) — every production McpContext (DaemonMode.fs)
   /// always supplies one.
-  let private requireCohortOwner (ctx: McpContext) : Result<Features.CohortOwner.Handle, SageFsError> =
+  let internal requireCohortOwner (ctx: McpContext) : Result<Features.CohortOwner.Handle, SageFsError> =
     match ctx.CohortOwner with
     | Some owner -> Ok owner
     | None -> Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
 
   /// Dispatch one `CohortCommand` through the owner, mapping any refusal to
   /// `SageFsError` at this boundary (roast §10).
-  let private commitCohort (ctx: McpContext) (cmd: Cohort.CohortCommand<MemberTable.MemberId>)
+  let internal commitCohort (ctx: McpContext) (cmd: Cohort.CohortCommand<MemberTable.MemberId>)
       : Task<Result<Cohort.CohortEvent<MemberTable.MemberId> list * Cohort.CohortEffect<MemberTable.MemberId> list, SageFsError>> =
     task {
       match requireCohortOwner ctx with
@@ -4262,7 +4262,7 @@ module McpTools =
       |> Array.tryFind (fun m -> MemberTable.MemberId.display m = display)
       |> Option.defaultValue (MemberTable.MemberId.Minted display)
 
-  let private renderCohortFrame (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
+  let internal renderCohortFrame (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
     Features.CohortStatusText.render frame
 
   /// Resolve the caller's SESSION (checkout) for `join_cohort` (item 13c of
@@ -4381,209 +4381,4 @@ module McpTools =
             match events |> List.tryPick (function Cohort.CohortEvent.LandingQueued(lid, _) -> Some lid | _ -> None) with
             | Some(Cohort.LandingId lid) -> Ok (sprintf "Landing %s queued." lid)
             | None -> Error (SageFsError.Unexpected (exn "request_landing committed with no LandingQueued event")))
-    }
-
-  // ── Integration ref/worktree (item 14c) ───────────────────────────────
-  //
-  // `Cohort.CohortState.IntegrationHead` (the git sha) is the only piece of
-  // this daemon's cohort-integration configuration that lives in the
-  // replayable ledger — see `Cohort.CohortCommand.SetIntegrationHead`'s doc
-  // comment. The WORKTREE PATH, its BRANCH, and the daemon-owned INTEGRATION
-  // SESSION id are held here instead, in a plain daemon-mutable cell: they
-  // are process-local git/session handles, not cohort domain state, and
-  // recomputing them from the ledger alone is impossible anyway (a worktree
-  // is a filesystem side effect, not an event). Documented v1 limitation:
-  // on daemon restart this binding is lost (`cohortIntegrationRef` resets to
-  // `None`) even though `IntegrationHead` itself survives via ledger replay
-  // — a landing effect finds no worktree to run git against until
-  // `set_integration_ref` is called again.
-  /// The integration session's lifecycle. Replaces a `string option` that
-  /// conflated "not created yet" with "failed to create" (both `None`) and so
-  /// dropped the fault reason a landing needs — this DU carries it into
-  /// Blocked(Inconclusive)/get_cohort_status.
-  [<RequireQualifiedAccess>]
-  type IntegrationSession =
-    | Started of sessionId: string
-    /// Session create/warmup failed — reason surfaced to every landing.
-    | Failed of reason: string
-    /// Git side configured; session create not yet completed. Transient.
-    | Pending
-
-  type CohortIntegrationBinding = {
-    WorktreePath: string
-    Branch: string
-    /// Git side (worktree+branch) is usable for Rebase/FastForward whatever
-    /// this is.
-    Session: IntegrationSession
-  }
-
-  /// Daemon-lifetime, process-global: v1 supports exactly one implicit
-  /// cohort per daemon (Slice 2), so exactly one integration binding.
-  /// `DaemonMode.fs`'s real `LandingPerformer` reads this directly
-  /// (`McpTools.cohortIntegrationRef`) — see its module doc there.
-  let cohortIntegrationRef : CohortIntegrationBinding option ref = ref None
-
-  /// v1's fixed integration worktree location: one per daemon process,
-  /// beside the daemon's other persisted state.
-  let private integrationWorktreePath () : string =
-    System.IO.Path.Combine(DaemonState.SageFsDir, "cohort-integration")
-
-  /// Discover the project set to load into the integration session (F6:
-  /// cohort-dogfood-findings.md — the unbounded recursive walk alone found
-  /// 34 `.fsproj` files, many of them samples/GUI/VS/vscode projects that
-  /// need external toolchains and can never build, blocking every
-  /// landing's verify step forever). Prefers the repo's own curated
-  /// `.slnx` at the worktree root — already proven buildable by dogfood
-  /// (`dotnet build SageFs.slnx` exits 0) — over the walk, via
-  /// `CohortIntegrationScope.selectIntegrationProjects`
-  /// (NO-EMPTY-ESCAPE: falls back to the walk whenever no `.slnx` is found
-  /// or it declares nothing, so narrowing can never drop a project a
-  /// landing needs — only avoid pulling in more than the solution already
-  /// commits to building).
-  let private discoverProjects (dir: string) : string list =
-    let walked =
-      try
-        // Pruned BEFORE descending (SafeDirectoryWalk), not filtered after
-        // the fact — the "unbounded recursive walk" this doc comment
-        // already warned about wasn't just a too-many-results problem: a
-        // directory symlink cycle (found live: Wine's `dosdevices/z:` ->
-        // `/`) makes `EnumerateFiles(_, _, AllDirectories)` never finish.
-        let result = SafeDirectoryWalk.walkFiles dir McpAdapter.isProjectFile McpAdapter.isNoiseProjectPath SafeDirectoryWalk.Bounds.standard
-        if result.Truncated then
-          Log.warn "[discoverProjects] walk in %s hit its depth/entry bound — some projects may be missing" dir
-        result.Files
-        |> List.map (fun p -> Path.GetRelativePath(dir, p))
-      with _ -> []
-    let declared =
-      try
-        Directory.EnumerateFiles(dir, "*.slnx")
-        |> Seq.tryHead
-        |> Option.map (File.ReadAllText >> Features.CohortIntegrationScope.parseSlnxProjectPaths)
-        |> Option.defaultValue []
-      with _ -> []
-    Features.CohortIntegrationScope.selectIntegrationProjects declared walked
-
-  /// Configure this cohort's integration ref/worktree/branch (item 14c).
-  /// CONDUCTOR-ONLY — enforced twice: the MCP authority gate
-  /// (`Affordances.CohortTool.SetIntegrationRef` is Conductor-only in
-  /// `cohortTools`, so a non-conductor call never reaches this function at
-  /// all) and, redundantly, by `Cohort.decide`'s own `SetIntegrationHead`
-  /// arm (step (d) below).
-  ///
-  /// Sequential, not transactional: (a) resolve the MAIN repo root (F16:
-  /// the CALLING agent's own active session working directory when one is
-  /// resolvable — never blindly the daemon PROCESS's own cwd, which has no
-  /// necessary relationship to the repo a cohort is landing changes for;
-  /// see `CohortIntegrationScope.chooseMainRepoRootSource` and
-  /// cohort-dogfood-findings.md F16), then revParse the ref to a sha there;
-  /// (b) add a fresh `sagefs/cohort-<shortsha>` worktree off it (removing a
-  /// stale one first); (c) store worktree+branch (`Session = Pending`);
-  /// (d) dispatch `SetIntegrationHead`; (e) build the worktree (F5: a
-  /// failed build must NEVER reach session creation — see
-  /// `CohortIntegrationScope.worktreeBuildOutcome`); (f) create the
-  /// integration session and record it. The git side (a-c) is usable for
-  /// Rebase/FastForward on its own, so an (e)/(f) failure returns Ok with
-  /// the fault recorded as `Session = Failed`, never unwinding correct git
-  /// state, and never hanging — fail-fast, with the reason surfaced to
-  /// every landing via `get_cohort_status`.
-  let setIntegrationRef (ctx: McpContext) (agentName: string) (integrationRef: string) : Task<Result<string, SageFsError>> =
-    task {
-      let! callerSessionWorkingDirectory = task {
-        match activeSessionId ctx agentName with
-        | "" -> return None
-        | sid ->
-          let! infoOpt = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-          return infoOpt |> Option.map (fun info -> info.WorkingDirectory)
-      }
-      let rootSource = Features.CohortIntegrationScope.chooseMainRepoRootSource callerSessionWorkingDirectory Environment.CurrentDirectory
-      let candidateDir = Features.CohortIntegrationScope.candidateDirectory rootSource
-      // Walk up to the actual git checkout root — the resolved candidate
-      // (a session's working directory, or the daemon's cwd) may be a
-      // SUBdirectory of the repo, not the root itself.
-      let mainRepoDir =
-        match Checkout.root (Checkout.classify candidateDir) with
-        | Some root -> root
-        | None -> candidateDir
-      let! shaResult = Features.CohortGit.revParse mainRepoDir integrationRef
-      match shaResult with
-      | Error reason ->
-        return Error (SageFsError.SessionCreationFailed (sprintf "could not resolve '%s' to a commit in %s: %s" integrationRef mainRepoDir reason))
-      | Ok sha ->
-        let worktreePath = integrationWorktreePath ()
-        let! _removed =
-          match Directory.Exists worktreePath with
-          | true -> Features.CohortGit.removeWorktree mainRepoDir worktreePath
-          | false -> async { return Ok () }
-        let branch = sprintf "sagefs/cohort-%s" (sha.Substring(0, min 8 sha.Length))
-        let! addResult = Features.CohortGit.addWorktree mainRepoDir worktreePath branch sha
-        match addResult with
-        | Error reason ->
-          return Error (SageFsError.SessionCreationFailed (sprintf "could not create the integration worktree at %s on branch %s: %s" worktreePath branch reason))
-        | Ok () ->
-          cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; Session = IntegrationSession.Pending }
-          let who = memberIdFor agentName
-          let! commitResult = commitCohort ctx (Cohort.CohortCommand.SetIntegrationHead(who, sha))
-          match commitResult with
-          | Error e -> return Error e
-          | Ok _ ->
-            let projects = discoverProjects worktreePath
-            // F5: build the worktree BEFORE session creation, so the
-            // integration session is test-ready from the start instead of
-            // faulting at warmup with a generic, alarming "N missing DLLs"
-            // (cohort-dogfood-findings.md F5). A failed build is a dead
-            // end — fail fast with the real build reason, never attempt
-            // CreateSession, never hang.
-            let! buildResult = SessionBuild.runBuildAsync projects worktreePath
-            let buildOutcome =
-              buildResult
-              |> Result.mapError SageFsError.describeForAgent
-              |> Features.CohortIntegrationScope.worktreeBuildOutcome
-            match buildOutcome with
-            | Features.CohortIntegrationScope.WorktreeBuildOutcome.BuildFailed reason ->
-              cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; Session = IntegrationSession.Failed reason }
-              Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the worktree build failed before session creation: %s" sha worktreePath branch reason
-              return Ok (
-                sprintf
-                  "Integration configured: head=%s worktree=%s branch=%s. WARNING: the worktree build failed (%s) — landings will report this reason until it is retried."
-                  sha worktreePath branch reason)
-            | Features.CohortIntegrationScope.WorktreeBuildOutcome.ReadyForSession ->
-              let targets = SessionProjectTarget.tryCreateMany projects |> Result.defaultValue []
-              let! sessionResult = ctx.SessionOps.CreateSession targets worktreePath WorkflowTypes.SessionWorkflow.Interactive
-              match sessionResult with
-              | Ok sessionId ->
-                cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; Session = IntegrationSession.Started sessionId }
-                return Ok (
-                  sprintf
-                    "Integration configured: head=%s worktree=%s branch=%s session=%s"
-                    sha worktreePath branch sessionId)
-              | Error sessionErr ->
-                // Capture the fault reason IN the binding (not just the log), so
-                // every landing that needs the session reports this reason via
-                // get_cohort_status instead of a generic "not started".
-                let reason = SageFsError.describeForAgent sessionErr
-                cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; Session = IntegrationSession.Failed reason }
-                Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the integration session failed to start: %s" sha worktreePath branch reason
-                return Ok (
-                  sprintf
-                    "Integration configured: head=%s worktree=%s branch=%s. WARNING: the integration session failed to start (%s) — landings will report this reason until it is retried."
-                    sha worktreePath branch reason)
-    }
-
-  /// Read-only frame deref (D4), plus the integration session's state so a
-  /// failed/dead session shows PROACTIVELY, not only when a landing hits it.
-  /// (Here, after `cohortIntegrationRef`, so it can read the binding.)
-  let getCohortStatus (ctx: McpContext) : Task<Result<string, SageFsError>> =
-    task {
-      match requireCohortOwner ctx with
-      | Error e -> return Error e
-      | Ok owner ->
-        let integration =
-          match cohortIntegrationRef.Value with
-          | None -> "Integration session: (not configured — call set_integration_ref)"
-          | Some b ->
-            match b.Session with
-            | IntegrationSession.Started sid -> sprintf "Integration session: %s (started)" sid
-            | IntegrationSession.Failed reason -> sprintf "Integration session: FAILED to start — %s" reason
-            | IntegrationSession.Pending -> "Integration session: pending"
-        return Ok (renderCohortFrame (owner.ReadFrame()) + integration + "\n")
     }

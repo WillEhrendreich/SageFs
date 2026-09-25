@@ -111,18 +111,18 @@ let affordancesPropertyTests =
         let state = pick genSessionState
         availableTools state |> List.isEmpty |> not
 
-    testCase "availableTools for Ready is superset of Uninitialized tools" <| fun _ ->
+    testCase "Ready contains Uninitialized except daemon-wide status" <| fun _ ->
       let readyTools = availableTools Ready |> Set.ofList
       let uninitTools = availableTools Uninitialized |> Set.ofList
-      Set.isSubset uninitTools readyTools
-      |> Expect.isTrue "Ready should contain all Uninitialized tools"
+      Set.difference uninitTools readyTools
+      |> Expect.equal "only daemon-wide status is intentionally Uninitialized-only" (Set.singleton "get_daemon_status")
 
-    testCase "get_fsi_status is available in every state" <| fun _ ->
+    testCase "get_session_status is available in every state" <| fun _ ->
       allSessionStates
       |> List.iter (fun state ->
         availableTools state
-        |> List.contains "get_fsi_status"
-        |> Expect.isTrue (sprintf "get_fsi_status should be available in %A" state))
+        |> List.contains "get_session_status"
+        |> Expect.isTrue (sprintf "get_session_status should be available in %A" state))
 
     testCase "send_fsharp_code is only available in Ready state" <| fun _ ->
       allSessionStates

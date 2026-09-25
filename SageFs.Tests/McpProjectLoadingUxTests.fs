@@ -117,16 +117,17 @@ module FormatCreateSessionReplyTests =
 
       testCase "WHY — a non-empty request states exactly what was requested" <| fun _ ->
         let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj"; SessionProjectTarget.Project "Tests.fsproj" ] None
-        reply |> Expect.stringContains "should list the requested projects" "App.fsproj, Tests.fsproj"
+        reply |> Expect.stringContains "first requested project" "Project: App.fsproj"
+        reply |> Expect.stringContains "second requested project" "Project: Tests.fsproj"
 
-      testCase "WHY — an empty request (projects=[]) says auto-discovery will run, NOT that the REPL is guaranteed empty (Finding #2/#3)" <| fun _ ->
+      testCase "WHY — bare is explicit and never implies project discovery" <| fun _ ->
         let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Bare ] None
-        reply |> Expect.stringContains "should mention auto-discovery" "auto-discover"
-        Expect.isFalse "must not claim a guaranteed-empty/no-project REPL" (reply.Contains("no project") || reply.Contains("scratch REPL"))
+        reply |> Expect.stringContains "should state bare semantics" "Bare REPL (no project discovery)"
+        Expect.isFalse "must not imply auto-discovery" (reply.Contains("auto-discover"))
 
-      testCase "WHY — always points at get_fsi_status to confirm what actually loaded, since the reply cannot know that yet" <| fun _ ->
+      testCase "WHY — always points at get_session_status to confirm what actually loaded, since the reply cannot know that yet" <| fun _ ->
         let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj" ] None
-        reply |> Expect.stringContains "should direct the agent to confirm via get_fsi_status" "get_fsi_status"
+        reply |> Expect.stringContains "should direct the agent to confirm via get_session_status" "get_session_status"
 
       testCase "WHY — a detection hint, when present, is appended rather than dropped" <| fun _ ->
         let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj" ] (Some "💡 some hint")
@@ -165,7 +166,8 @@ module FormatAvailableProjectsHintTests =
         let text = McpAdapter.formatAvailableProjects "/repo" [| "App.fsproj" |] [||] 0
         Expect.isFalse "must not tell the agent to start what is already running" (text.Contains("Start the daemon"))
 
-      testCase "WHY — still points at create_session so the discovery step leads somewhere" <| fun _ ->
+      testCase "WHY — discovery points at both explicit creation paths" <| fun _ ->
         let text = McpAdapter.formatAvailableProjects "/repo" [| "App.fsproj" |] [||] 0
-        text |> Expect.stringContains "should still mention create_session" "create_session"
+        text |> Expect.stringContains "project creation hint" "create_project_session"
+        text |> Expect.stringContains "solution creation hint" "create_solution_session"
     ]

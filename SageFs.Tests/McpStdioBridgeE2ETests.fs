@@ -98,7 +98,11 @@ let private runBridgeSmokeTest () : Task<unit> =
           | Some line2 ->
             line2 |> Expect.stringContains "the tools/list response carries the request id back" "\"id\":2"
             line2 |> Expect.stringContains "the real tool catalogue came back, not an empty list" "\"send_fsharp_code\""
-            line2 |> Expect.stringContains "another real tool, confirming this is the actual SageFs server" "\"create_session\""
+            line2 |> Expect.stringContains "explicit project creation tool is present" "\"create_project_session\""
+            line2 |> Expect.stringContains "lease tool is present" "\"acquire_full_build_lease\""
+            Expect.isFalse "retired create_session must not be registered" (line2.Contains("\"name\":\"create_session\""))
+            Expect.isFalse "retired get_fsi_status must not be registered" (line2.Contains("\"name\":\"get_fsi_status\""))
+            Expect.isFalse "retired get_startup_info must not be registered" (line2.Contains("\"name\":\"get_startup_info\""))
       finally
         // Let the bridge terminate its MCP session and exit cleanly.
         try

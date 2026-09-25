@@ -232,6 +232,7 @@ let architectureTests =
               | t when t = typeof<string list> -> box ([] : string list)
               | t when t = typeof<SessionState> -> box SessionState.Uninitialized
               | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
+              | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
@@ -262,6 +263,7 @@ let architectureTests =
               | t when t = typeof<string list> -> box ([] : string list)
               | t when t = typeof<SessionState> -> box SessionState.Uninitialized
               | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
+              | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
@@ -289,6 +291,7 @@ let architectureTests =
               | t when t = typeof<string list> -> box ([ "a"; "b" ] : string list)
               | t when t = typeof<SessionState> -> box SessionState.Uninitialized
               | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
+              | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
@@ -1075,7 +1078,11 @@ let fileSizeBudgets =
       // before it reaches an MCP caller. Deliberate, reviewed fix, not
       // silent accretion. Ratchet back DOWN when this file is split; never
       // bump to paper over drift.
-      "SageFs/Mcp.fs", 4400
+      // 4400 -> 4385: the cohort integration/worktree block moved to
+      // McpCohortIntegration.fs. The MCP surface keeps the same tools, while
+      // the process-global binding now has one explicit owner and the landing
+      // performer reads that same binding. Exact post-split size.
+      "SageFs/Mcp.fs", 4385
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
@@ -1102,7 +1109,10 @@ let fileSizeBudgets =
       // LiveTestState; its lifecycle module (Features/RequestedRuns.fs) and the
       // unrelated dashboard treemap projection (Features/TestTreemap.fs) moved
       // out, so the file SHRANK. Exact post-split size, per the rule above.
-      "SageFs.Core/Features/LiveTestingTypes.fs", 4380
+      // 4380 -> 4341: execution-integrity and SSE batch payload contracts
+      // moved to TestExecutionContracts.fs, preserving their public namespace.
+      // Exact post-split size.
+      "SageFs.Core/Features/LiveTestingTypes.fs", 4341
       // 2900 -> 2950: a one-time bump for the roast UX-6 keystone (per-session
       // live-testing enable/disable — EnableLiveTestingForSession /
       // DisableLiveTestingForSession, resolveOrCreateLiveTestingTarget) — a
@@ -1126,7 +1136,9 @@ let fileSizeBudgets =
       // 3130 -> 3124: requested-run wiring (RunTestsRequested allocates once,
       // TestRunStartedAt, result stamping) was paid for by splitting the
       // dispatch-batch reducer out to SageFsDispatchReduction.fs. Exact size.
-      "SageFs/SageFsApp.fs", 3124
+      // 3124 -> 3094: SseDedupKey moved to SageFsSseDedup.fs without changing
+      // its public module path. Exact post-split size.
+      "SageFs/SageFsApp.fs", 3094
       "SageFs.Core/AppState.fs", 2000
       // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
       // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,

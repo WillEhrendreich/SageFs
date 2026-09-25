@@ -30,9 +30,16 @@ let private promptMethods =
 let serverInstructionsTests = testList "MCP server instructions" [
 
   testCase "WHY — they state the REPL loop, so an agent knows the loop from the first connection" <| fun _ ->
-    [ "send_fsharp_code"; "create_session"; "get_fsi_status"; "hard_reset_fsi_session"; "rebuild=true"; "final gate" ]
+    [ "send_fsharp_code"; "create_project_session"; "create_solution_session"; "create_bare_session"
+      "get_daemon_status"; "get_session_status"; "hard_reset_fsi_session"; "rebuild=true"; "final gate"
+      "acquire_full_build_lease"; "acquire_test_suite_lease"; "release_work_lease" ]
     |> List.filter (fun needle -> not (contains needle serverInstructions))
     |> Expect.isEmpty "the loop's tools and the final gate should all be named"
+
+  testCase "WHY — retired tool names never reappear in the always-on guidance" <| fun _ ->
+    [ "get_fsi_status"; "get_startup_info"; "create_session" ]
+    |> List.filter (fun needle -> contains needle serverInstructions)
+    |> Expect.isEmpty "retired tools must not be advertised to a new connection"
 
   testCase "WHY — every loop step is in them, so the instructions and the prompts can't drift apart" <| fun _ ->
     loopSteps

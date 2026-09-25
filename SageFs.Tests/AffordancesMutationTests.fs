@@ -44,16 +44,18 @@ let affordancesMutationTests = testList "Affordances mutations" [
     (tools |> List.contains "send_fsharp_code",
      tools |> List.contains "reset_fsi_session",
      tools |> List.contains "hard_reset_fsi_session",
-     tools |> List.contains "create_session")
+     tools |> List.contains "create_project_session",
+     tools |> List.contains "create_solution_session",
+     tools |> List.contains "create_bare_session")
     |> Expect.equal "Faulted must offer reset/hard-reset/create but never send_fsharp_code"
-      (false, true, true, true)
+      (false, true, true, true, true, true)
 
-  testCase "WHY — every_state_can_list_sessions_and_check_fsi_status — the baseline monitoring tools must never disappear from any state" <| fun () ->
+  testCase "WHY — every_state_can_list_sessions_and_check_session_status — the baseline monitoring tools must never disappear from any state" <| fun () ->
     [ Uninitialized; WarmingUp; Ready; Evaluating; Faulted ]
     |> List.forall (fun s ->
       let tools = Affordances.availableTools s
-      List.contains "list_sessions" tools && List.contains "get_fsi_status" tools)
-    |> Expect.isTrue "list_sessions and get_fsi_status must be present in every SessionState"
+      List.contains "list_sessions" tools && List.contains "get_session_status" tools)
+    |> Expect.isTrue "list_sessions and get_session_status must be present in every SessionState"
 
   // ── checkToolAvailability ────────────────────────────────────────────────
 
@@ -71,8 +73,8 @@ let affordancesMutationTests = testList "Affordances mutations" [
 
   // ── gatingDomain / toolGate / checkToolCallAllowed ──────────────────────
 
-  testCase "WHY — alwaysAvailable_tool_bypasses_state — get_fsi_status must be callable even when Faulted" <| fun () ->
-    Affordances.checkToolCallAllowed Faulted "get_fsi_status"
+  testCase "WHY — alwaysAvailable_tool_bypasses_state — session status must be callable even when Faulted" <| fun () ->
+    Affordances.checkToolCallAllowed Faulted "get_session_status"
     |> Expect.equal "an AlwaysAvailable tool must succeed regardless of session state" (Ok ())
 
   testCase "WHY — stateGated_tool_respects_state — send_fsharp_code must be gated by the ACTUAL current state" <| fun () ->

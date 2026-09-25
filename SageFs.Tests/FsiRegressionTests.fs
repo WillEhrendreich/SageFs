@@ -210,9 +210,9 @@ let fsiRegressionTests = testList "FSI regression" [
       |> Expect.equal "all should describe" errors.Length
     }
 
-    test "NoActiveSessions suggests create_session" {
+    test "NoActiveSessions suggests explicit project creation" {
       SageFsError.describe SageFsError.NoActiveSessions
-      |> Expect.stringContains "should mention create" "create_session"
+      |> Expect.stringContains "should mention project creation" "create_project_session"
     }
 
     test "SessionNotFound includes session id" {

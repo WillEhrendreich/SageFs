@@ -247,7 +247,7 @@ let private runToolOutcomeBody
   : Task<unit> =
   task {
 
-        // Created via the MCP create_session TOOL, not the REST endpoint,
+        // Created via the explicit MCP project-session TOOL, not the REST endpoint,
         // with workflow="livetesting". Verified live and necessary: a
         // session created via REST (Interactive workflow) shows live tests
         // discovered/passed just fine through /api/live-testing/status, but
@@ -257,9 +257,9 @@ let private runToolOutcomeBody
         // surface and the MCP read-path this gate exists to catch. Only
         // creating the session already IN the LiveTesting SessionWorkflow
         // populates that model.
-        let! createBody = callTool client "create_session" [ "projects", box fixtureProject; "working_directory", box fixtureDir; "workflow", box "livetesting" ]
+        let! createBody = callTool client "create_project_session" [ "project", box fixtureProject; "working_directory", box fixtureDir; "workflow", box "livetesting" ]
         createBody
-        |> Expect.isNotEmpty "create_session should report something"
+        |> Expect.isNotEmpty "create_project_session should report something"
 
         let! ready, sessionsBody = Http.waitForReadySession httpClient fixtureDir (TimeSpan.FromSeconds 60.0)
         ready

@@ -74,6 +74,7 @@
         <Compile Include="TuiEvent.fs" />
         <Compile Include="TestsPane.fs" />
         <Compile Include="SageFsApp.fs" />
+        <Compile Include="SageFsSseDedup.fs" />
         <Compile Include="SageFsDispatchReduction.fs" />
         <Compile Include="ElmDaemon.fs" />
         <Compile Include="CohortLandingVerify.fs" />
@@ -104,6 +105,7 @@
         <Compile Include="McpRouteError.fs" />
         <Compile Include="CreateSessionUx.fs" />
         <Compile Include="Mcp.fs" />
+        <Compile Include="McpCohortIntegration.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />
         <Compile Include="AgentGuidance.fs" />

@@ -59,7 +59,10 @@ let describedToolMethods =
 let requiredParamsByTool =
   [ "send_fsharp_code", set ["agentName"; "code"]
     "check_fsharp_code", set ["code"]
-    "create_session", set ["projects"; "working_directory"]
+    "create_project_session", set ["project"; "working_directory"]
+    "create_solution_session", set ["solution"; "working_directory"]
+    "create_bare_session", set ["working_directory"]
+    "release_work_lease", set ["lease_id"]
     "stop_session", set ["session_id"]
     "switch_session", set ["session_id"]
     "switch_workflow", set ["target"]
@@ -140,12 +143,20 @@ let descriptionSnapshotTests =
       do! verifyText "load_fsharp_script_description" desc
     }
 
-    testTask "get_fsi_status description" {
+    testTask "get_daemon_status description" {
       let desc =
         toolDescriptions
-        |> List.find (fun (name, _) -> name = "get_fsi_status")
+        |> List.find (fun (name, _) -> name = "get_daemon_status")
         |> snd
-      do! verifyText "get_fsi_status_description" desc
+      do! verifyText "get_daemon_status_description" desc
+    }
+
+    testTask "get_session_status description" {
+      let desc =
+        toolDescriptions
+        |> List.find (fun (name, _) -> name = "get_session_status")
+        |> snd
+      do! verifyText "get_session_status_description" desc
     }
   ]
 
@@ -197,14 +208,14 @@ let descriptionPropertyTests =
       |> Expect.isTrue
         "Should explain that errors don't corrupt session state"
 
-    testCase "get_fsi_status description stays focused on worker readiness"
+    testCase "get_session_status description stays focused on session readiness"
     <| fun _ ->
       let desc =
         toolDescriptions
-        |> List.find (fun (name, _) -> name = "get_fsi_status")
+        |> List.find (fun (name, _) -> name = "get_session_status")
         |> snd
       desc.Contains("get_live_test_status", StringComparison.OrdinalIgnoreCase)
-      |> Expect.isFalse "get_fsi_status should not redirect MCP agents into live-testing tooling"
+      |> Expect.isFalse "get_session_status should not redirect MCP agents into live-testing tooling"
 
     testCase "targeted_verify description teaches trust-first workflow"
     <| fun _ ->
@@ -226,7 +237,7 @@ let descriptionPropertyTests =
       // under its data dir (friction.db, cohort.ledger.db).
       // + set_reflection_read_mode, the way an agent sees and answers rule 2's
       // reflection read question.
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 53
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 60
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

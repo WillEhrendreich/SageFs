@@ -15,14 +15,14 @@ let affordanceTests =
       <| fun _ ->
         availableTools Uninitialized
         |> Expect.containsAll "status, friction, session tools"
-          [ "get_fsi_status"; "get_friction_report"; "get_available_projects"
-            "list_sessions"; "create_session" ]
+          [ "get_daemon_status"; "get_session_status"; "get_friction_report"; "get_available_projects"
+            "list_sessions"; "create_project_session"; "create_solution_session"; "create_bare_session" ]
 
-      testCase "WarmingUp state offers get_fsi_status and get_recent_fsi_events"
+      testCase "WarmingUp state offers get_session_status and get_recent_fsi_events"
       <| fun _ ->
         availableTools WarmingUp
         |> Expect.containsAll "status and events"
-          [ "get_fsi_status"; "get_recent_fsi_events" ]
+          [ "get_session_status"; "get_recent_fsi_events" ]
 
       testCase "WarmingUp state does not offer send_fsharp_code"
       <| fun _ ->
@@ -49,7 +49,7 @@ let affordanceTests =
       <| fun _ ->
         availableTools Ready
         |> Expect.containsAll "all read tools"
-          [ "get_fsi_status"; "get_recent_fsi_events"; "check_fsharp_code" ]
+          [ "get_session_status"; "get_recent_fsi_events"; "check_fsharp_code" ]
 
       testCase "Ready state offers reset and hard reset"
       <| fun _ ->
@@ -71,14 +71,14 @@ let affordanceTests =
       <| fun _ ->
         availableTools Evaluating
         |> Expect.containsAll "read tools during eval"
-          [ "get_fsi_status"; "get_recent_fsi_events"; "check_fsharp_code" ]
+          [ "get_session_status"; "get_recent_fsi_events"; "check_fsharp_code" ]
 
       testCase "Faulted state offers reset tools"
       <| fun _ ->
         let tools = availableTools Faulted
         tools
         |> Expect.containsAll "reset tools"
-          [ "reset_fsi_session"; "hard_reset_fsi_session"; "get_fsi_status" ]
+          [ "reset_fsi_session"; "hard_reset_fsi_session"; "get_session_status" ]
 
       testCase "Faulted state does not offer send_fsharp_code"
       <| fun _ ->

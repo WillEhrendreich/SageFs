@@ -58,14 +58,14 @@ module CreateSessionUx =
   let tryCreateTarget (paths: string list) : Result<SessionProjectTarget list, string> =
     SessionProjectTarget.tryCreateMany paths
 
-  /// The `create_session` success reply. At CREATION time the worker has not
-  /// finished resolving projects yet, so this states exactly what was requested
-  /// and points at get_fsi_status to confirm what actually loaded.
+  /// Explicit session-creation success reply. At creation time the worker has
+  /// not finished resolving projects, so this states exactly what was requested
+  /// and points at get_session_status to confirm what actually loaded.
   let formatCreateSessionReply
     (sid: string)
     (targets: SessionProjectTarget list)
     (detectionHint: string option) : string =
     let requestedLine = sprintf "Requested target: %s" (SessionProjectTarget.describe targets)
     let hintLine = detectionHint |> Option.map (sprintf "\n\n%s") |> Option.defaultValue ""
-    sprintf "%s\n%s\nSession is warming up (typically 15-30s). Call get_fsi_status once it reports State='Ready' to confirm what actually loaded — the 'Loaded:' field there reflects the worker's own resolution.%s"
+    sprintf "%s\n%s\nSession is warming up (typically 15-30s). Call get_session_status once it reports State='Ready' to confirm what actually loaded — the 'Loaded:' field there reflects the worker's own resolution.%s"
       sid requestedLine hintLine

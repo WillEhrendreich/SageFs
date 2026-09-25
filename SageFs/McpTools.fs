@@ -491,7 +491,7 @@ RULES:
 - Submit small, incremental blocks (one definition at a time)
 - For '#r nuget:' directives, submit alone in their own call
 - Errors are non-destructive: previous definitions survive a failed submission
-- Use get_fsi_status to check session health if something seems wrong
+- Use get_session_status to check session health if something seems wrong
 
 TRANSACTION SEMANTICS:
 - Each ';;' boundary is a separate transaction. Statements are evaluated sequentially.
@@ -505,7 +505,7 @@ ERROR HANDLING (CRITICAL):
 - 'Operation could not be completed due to earlier error' means a PREVIOUS statement had a compile error, so definitions from it were never created. Fix the original error and resubmit that code first.
 - The session is NOT corrupted by errors. Do NOT call reset_fsi_session or hard_reset_fsi_session because of eval errors. Fix your code instead.
 - Submit smaller pieces (one definition per call) to isolate which part has the error.
-- NEVER use '#r' for assemblies loaded via '--proj'. Call get_startup_info to see which assembly names are already loaded. Using '#r' on a loaded assembly creates a duplicate .NET load context causing TypeLoadException on ALL subsequent evals — this is not a session bug, it is your '#r' directive that must be removed.
+- NEVER use '#r' for assemblies loaded via '--proj'. Call get_session_status to see which assembly names are already loaded. Using '#r' on a loaded assembly creates a duplicate .NET load context causing TypeLoadException on ALL subsequent evals — this is not a session bug, it is your '#r' directive that must be removed.
 - RUNTIME FileNotFoundException for Microsoft.AspNetCore.* or other shared-framework assemblies means FSI cannot execute them (installed ref packs are metadata-only; framework version mismatches surface as manifest errors). This is an environment limit, not a code bug — run that scenario externally instead (dotnet test / dotnet run) and bring results back into the REPL.
 
 RETURN VALUE:
@@ -617,7 +617,7 @@ PATH:
 WHEN TO USE:
 - After an unexpected or ambiguous result to see what actually happened and in what order.
 - To audit which code was recently evaluated in this session.
-- As a lightweight alternative to get_fsi_status when you only want the recent activity log.
+- As a lightweight alternative to get_session_status when you only want the recent activity log.
 
 OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it succeeded or errored, and a truncated preview of the code and result. Entries are ordered oldest-first (the newest is last). If nothing has been recorded yet, says so plainly instead of a made-up entry.""")>]
     member _.get_recent_fsi_events(
@@ -676,24 +676,16 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
         }
         |> withEchoOutcome ctx "release_work_lease"
 
-    [<McpServerTool>]
     [<Description("""Get detailed startup information: loaded projects, enabled features, and command-line arguments. Use to understand what capabilities are available in the current session.
 
-DIFFERENCE FROM get_fsi_status:
-- get_fsi_status gives you the LIVE runtime state (current status, session health, active affordances).
-- get_startup_info gives you STATIC configuration — how SageFs was launched (CLI flags, ports, TUI/GUI mode, etc.).
-
-WHEN TO USE:
-- To find out which projects were specified on the CLI vs loaded dynamically.
-- To understand which features were enabled at startup (e.g., live testing, TUI, GUI).
-- When investigating environment differences ("was live testing enabled when this was launched?").""")>]
+This compatibility formatter is no longer a registered MCP tool. Use get_daemon_status for daemon-wide facts and get_session_status for live session facts.""")>]
     member _.get_startup_info(
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        logger.LogDebug("MCP-TOOL: get_startup_info called")
+        logger.LogDebug("MCP-TOOL: get_startup_info compatibility formatter called")
         getStartupInfo ctx "mcp" wd |> withEcho ctx "get_startup_info"
 
     [<McpServerTool>]
@@ -701,10 +693,11 @@ WHEN TO USE:
 
 WHEN TO USE:
 - When you want to know which projects exist in this repo before creating a session for one of them.
-- To find a test project to pass to create_session so you can run tests in an isolated session.
+- To find a test project to pass to create_project_session so you can run tests in an isolated session.
+- To find a solution to pass to create_solution_session, or to choose create_bare_session when no project or solution belongs in the REPL.
 - As a discovery step when the user opens a new workspace and you need to understand the project structure.
 
-NOTE: This does NOT load any projects — it only lists what is available on disk. Use create_session or hard_reset_fsi_session with rebuild=true to actually load a project.""")>]
+NOTE: This does NOT load anything — it only lists what is available on disk. Pass one explicit .fsproj to create_project_session, one .sln/.slnx to create_solution_session, or use create_bare_session explicitly.""")>]
     member _.get_available_projects(
         [<Description("Directory to scan for .fsproj/.sln/.slnx files. This tool does NOT route to any session — it only walks this directory on disk. Defaults to the working directory of your one active session if you have exactly one, otherwise the current directory.")>]
         [<Optional; DefaultParameterValue("")>]
@@ -727,7 +720,7 @@ WHAT SURVIVES:
 
 AFTER RESET:
 - The session re-runs project warm-up scripts automatically (~1-3s for most projects).
-- Re-check get_fsi_status until it reports State='Ready' before sending new code. A temporary warming-up message before that is normal.
+- Re-check get_session_status until it reports State='Ready' before sending new code. A temporary warming-up message before that is normal.
 
 WHEN TO USE (rare):
 - The session warm-up itself failed and you see cascade errors on EVERY submission, even trivial ones like '1+1;;'.
@@ -780,7 +773,7 @@ Set rebuild=true to run 'dotnet build' before reloading.
 
 IMPORTANT:
 - rebuild=true returns immediately after scheduling the rebuild/restart.
-- During that restart window, get_fsi_status may temporarily report that the session is still warming up instead of returning a full status snapshot.
+- During that restart window, get_session_status may temporarily report that the session is still warming up instead of returning a full status snapshot.
 
 WORKFLOW: For test-only changes, use this with rebuild=true instead of the full pack/reinstall cycle.
 The full pack/reinstall cycle is only needed when SageFs's own source code changes (SageFs\ or SageFs.Server\).
@@ -790,7 +783,7 @@ This is the ONE blessed reload path — hard_reset_fsi_session with rebuild=true
 the project, respawns the worker process, and re-adopts your freshly-built SageFs.Core
 into it, so the session runs the code you just edited instead of the copy loaded at
 worker spawn. There is no separate "self-host reload" tool — this IS it. After calling
-it, poll get_fsi_status until State='Ready'; once ready, the status text confirms which
+it, poll get_session_status until State='Ready'; once ready, the status text confirms which
 SageFs.Core version is now loaded so you can see the rebuild actually took effect.
 In-process hot reload cannot do this for SageFs.Core itself (the running worker's
 SageFs.Core is a Trusted-Platform-Assembly resolved by the native binder before any
@@ -970,7 +963,7 @@ process-wide kill switch for hot reload.""")>]
                     return resultJson false workerPort (sprintf "Not available: this session is in %s mode" modeLabel) false
                         [| "Hot reload requires Live mode, which is configured when the session's FSI process starts and cannot be turned on afterward."
                            "Switch this session to Live mode: switch_workflow target=live (this recreates the session, so REPL definitions and cell state are lost)."
-                           "Or start a fresh Live session: create_session workflow=live." |]
+                           "Or start a fresh Live session: create_project_session or create_solution_session with workflow=live." |]
         })
         |> withEcho ctx "enable_hot_reload"
 
@@ -1059,7 +1052,7 @@ to reset. The dashboard's Hot Reload panel shows the same list with a Reset butt
             | Ok sid ->
             let! infoOpt = ctx.SessionOps.GetSessionInfo sid
             match infoOpt |> Option.bind (fun i -> SageFs.WorkerProtocol.SessionLifecycleStatus.workerPort i.Status) with
-            | None -> return "Error: the session has no running worker, so there's no live state to list or reset. Check get_fsi_status."
+            | None -> return "Error: the session has no running worker, so there's no live state to list or reset. Check get_session_status."
             | Some port ->
             let workerUrl = sprintf "http://127.0.0.1:%d" port
             match System.String.IsNullOrWhiteSpace binding with
@@ -1135,7 +1128,7 @@ The mode new sessions start in is the `hotreload.reflectionReadMode` setting."""
             | Ok sid ->
             let! infoOpt = ctx.SessionOps.GetSessionInfo sid
             match infoOpt |> Option.bind (fun i -> SageFs.WorkerProtocol.SessionLifecycleStatus.workerPort i.Status) with
-            | None -> return "Error: the session has no running worker, so there's no app to ask. Check get_fsi_status."
+            | None -> return "Error: the session has no running worker, so there's no app to ask. Check get_session_status."
             | Some port ->
             let workerUrl = sprintf "http://127.0.0.1:%d" port
             let describe (report: SageFs.Middleware.ValueReads.ReflectionReadsReport) = SageFs.Features.KeptState.ReflectionReadsText.describe report
@@ -1301,10 +1294,10 @@ OUTPUT: JSON containing case names, fields per case, which cases are entry point
     [<Description("""List all active FSI sessions with their metadata: session ID, project names, current status, working directory, and last activity timestamp.
 
 WHEN TO USE:
-- To find session IDs for use with switch_session, stop_session, or get_fsi_status.
+- To find session IDs for use with switch_session, stop_session, or get_session_status.
 - To check whether multiple sessions are running (each session is an isolated worker process).
 - To see which session is currently active (tool calls without an explicit session route to the active one).
-- After SageFs restarts or after create_session to confirm the session is registered.""")>]
+- After SageFs restarts or after an explicit session-creation tool to confirm the session is registered.""")>]
     member _.list_sessions() : Task<string> =
         logger.LogDebug("MCP-TOOL: list_sessions called")
         listSessions ctx |> withEcho ctx "list_sessions"
@@ -1313,12 +1306,12 @@ WHEN TO USE:
     [<Description("""Stop an active FSI session by its ID. The worker process is gracefully shut down and its resources are released. Works the same way — and returns just as promptly — whether the session is Ready, still Starting, or already Faulted; a stop is never left waiting on warmup to finish or fail first.
 
 WHEN TO USE:
-- After finishing work in a session created with create_session to free the worker process.
+- After finishing work in a session created with create_project_session, create_solution_session, or create_bare_session to free the worker process.
 - When a session is stuck and a hard_reset_fsi_session hasn't helped — stop it and create a fresh one.
 - On a session that faulted during warmup — stopping it does not require it to reach Ready or Faulted first, and does not hang.
 - To clean up sessions that are no longer needed in multi-session workflows.
 
-NOTE: Stopping the last (or only) session will leave no active session. You will need to create_session or restart SageFs. Use list_sessions to see available session IDs before stopping.""")>]
+NOTE: Stopping the last (or only) session will leave no active session. Create a new one with create_project_session, create_solution_session, or create_bare_session, or restart SageFs. Use list_sessions to see available session IDs before stopping.""")>]
     member _.stop_session(
         [<Description("The session ID to stop (from list_sessions)")>] session_id: string
     ) : Task<string> =
@@ -1329,7 +1322,7 @@ NOTE: Stopping the last (or only) session will leave no active session. You will
     [<Description("""Switch the active FSI session. All subsequent tool calls that accept working_directory will route to this session.
 
 WHEN TO USE:
-- After create_session to make the new session the active target for tool calls.
+- After an explicit session-creation tool to make the new session the active target for tool calls.
 - In multi-project workflows when switching context between two loaded sessions.
 - REQUIRED when multiple sessions share the same working directory — the daemon will not guess which one you want. Call switch_session first, then proceed with other tools.
 
@@ -2223,7 +2216,7 @@ OUTPUT: Plain-text summary of members, claims, the test matrix, AND the landing 
     member _.get_cohort_status() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_cohort_status called")
         task {
-          let! result = SageFs.McpTools.getCohortStatus ctx
+          let! result = SageFs.McpCohortIntegration.getCohortStatus ctx
           return
             match result with
             | Ok text -> text, None
@@ -2247,7 +2240,7 @@ OUTPUT: Confirmation text naming the resolved head sha, worktree path, branch, a
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: set_integration_ref called by {AgentName}, ref={Ref}", agentName, integrationRef)
         task {
-          let! result = SageFs.McpTools.setIntegrationRef ctx agentName integrationRef
+          let! result = SageFs.McpCohortIntegration.setIntegrationRef ctx agentName integrationRef
           return
             match result with
             | Ok text -> text, None

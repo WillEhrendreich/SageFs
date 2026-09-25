@@ -2156,7 +2156,7 @@ let run
   // request_landing actually run git and tests instead of parking forever
   // in Rebasing/Verifying against `LandingPerformer.stub`). Every field
   // reads the daemon-held integration binding
-  // (`McpTools.cohortIntegrationRef`, written by the `set_integration_ref`
+  // (`SageFs.McpCohortIntegration.cohortIntegrationRef`, written by the `set_integration_ref`
   // MCP tool) fresh on every call, so a landing dispatched before
   // `set_integration_ref` has ever run — or after a restart, since the
   // binding is process-local, see its own doc comment — fails closed with
@@ -2395,7 +2395,7 @@ let run
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
     { Rebase = fun _landingId onto commits ->
         async {
-          match McpTools.cohortIntegrationRef.Value with
+          match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error(cohortIntegrationNotConfigured ())
           | Some binding ->
             Log.info "[cohort-landing] Rebase worktree=%s onto=%s commits=%A" binding.WorktreePath onto commits
@@ -2417,11 +2417,11 @@ let run
       // optimization — deferred, not this item.
       ComputeAffected = fun _landingId baseSha headSha ->
         async {
-          match McpTools.cohortIntegrationRef.Value with
+          match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
-          | Some { Session = McpTools.IntegrationSession.Failed reason } -> return Error (sprintf "integration session failed to start: %s" reason)
-          | Some { Session = McpTools.IntegrationSession.Pending } -> return Error "integration session not started yet — retry set_integration_ref"
-          | Some ({ Session = McpTools.IntegrationSession.Started sessionId } as binding) ->
+          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Failed reason } -> return Error (sprintf "integration session failed to start: %s" reason)
+          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Pending } -> return Error "integration session not started yet — retry set_integration_ref"
+          | Some ({ Session = SageFs.McpCohortIntegration.IntegrationSession.Started sessionId } as binding) ->
             // (Gap 3) Settle first: the rebase that just ran retriggered the
             // session's rebuild, and reading discovery mid-rebuild can see it
             // transiently empty — which would compute an EMPTY affected set and
@@ -2497,11 +2497,11 @@ let run
       // sessionId regardless of the active pointer, so the switch is gone.
       RunTests = fun _landingId tests ->
         async {
-          match McpTools.cohortIntegrationRef.Value with
+          match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
-          | Some { Session = McpTools.IntegrationSession.Failed reason } -> return Error (sprintf "integration session failed to start: %s" reason)
-          | Some { Session = McpTools.IntegrationSession.Pending } -> return Error "integration session not started yet — retry set_integration_ref"
-          | Some ({ Session = McpTools.IntegrationSession.Started sessionId } as binding) ->
+          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Failed reason } -> return Error (sprintf "integration session failed to start: %s" reason)
+          | Some { Session = SageFs.McpCohortIntegration.IntegrationSession.Pending } -> return Error "integration session not started yet — retry set_integration_ref"
+          | Some ({ Session = SageFs.McpCohortIntegration.IntegrationSession.Started sessionId } as binding) ->
             // (Gap 3) Settle first, then verify against the SETTLED observation.
             // Verifying while the rebase-triggered rebuild is still in flight is
             // exactly what made a good landing block on "session still warming
@@ -2573,7 +2573,7 @@ let run
       // and rebasedHead separately). Fast-forward the integration branch to it.
       FastForward = fun _landingId toSha ->
         async {
-          match McpTools.cohortIntegrationRef.Value with
+          match SageFs.McpCohortIntegration.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
           | Some binding -> return! Features.CohortGit.fastForwardBranch workingDir binding.Branch toSha
         }
