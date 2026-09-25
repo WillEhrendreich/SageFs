@@ -226,6 +226,7 @@
          <Compile Include="LiveTestingGoldenFixtureTests.fs" />
          <Compile Include="LiveTestingCycleTests.fs" />
         <Compile Include="LiveTestingCoverageTests.fs" />
+        <Compile Include="TestSummaryCompletenessTests.fs" />
          <Compile Include="LiveTestingElmTests.fs" />
         <Compile Include="LiveTestActivityWiringTests.fs" />
          <Compile Include="CoverageViewTests.fs" />

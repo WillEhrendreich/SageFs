@@ -1119,7 +1119,16 @@ let fileSizeBudgets =
       // 4380 -> 4341: execution-integrity and SSE batch payload contracts
       // moved to TestExecutionContracts.fs, preserving their public namespace.
       // Exact post-split size.
-      "SageFs.Core/Features/LiveTestingTypes.fs", 4341
+      // 4341 -> 4355: the TestSummary tally fix. `bucketOf` replaces a
+      // catch-all that silently dropped Detected/Queued/Skipped, so a suite of
+      // three detected tests reported Total=3 with every other counter 0 — a
+      // false green that made a dispatched-but-unrun live-testing run look
+      // like a silent zero. Paying with a private Bucket DU and an exhaustive
+      // match buys exhaustiveness; splitting the whole module out is not
+      // possible without inverting the dependency, because TestSummary and
+      // TestRunStatus live in this same file. Ratchet back DOWN when the file
+      // is split; never bump to paper over drift.
+      "SageFs.Core/Features/LiveTestingTypes.fs", 4355
       // 2900 -> 2950: a one-time bump for the roast UX-6 keystone (per-session
       // live-testing enable/disable — EnableLiveTestingForSession /
       // DisableLiveTestingForSession, resolveOrCreateLiveTestingTarget) — a

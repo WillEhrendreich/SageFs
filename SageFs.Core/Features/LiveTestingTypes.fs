@@ -1851,18 +1851,33 @@ module StatusToGutter =
 module TestSummary =
   let empty = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
 
+  // Exhaustive over TestRunStatus: the old catch-all dropped
+  // Detected/Queued/Skipped, so three detected tests reported Total=3 with
+  // every other counter 0 — a claim with nothing behind it.
+  type private Bucket = Passed | Failed | Stale | Running | Disabled
+
+  let private bucketOf (status: TestRunStatus) =
+    match status with
+    | TestRunStatus.Passed _ -> Bucket.Passed
+    | TestRunStatus.Failed _ -> Bucket.Failed
+    | TestRunStatus.Stale
+    | TestRunStatus.Detected
+    | TestRunStatus.Skipped _ -> Bucket.Stale
+    | TestRunStatus.Running
+    | TestRunStatus.Queued -> Bucket.Running
+    | TestRunStatus.PolicyDisabled -> Bucket.Disabled
+
   let private applyStatusCountDelta
     (delta: int)
     (status: TestRunStatus)
     (summary: TestSummary)
     : TestSummary =
-    match status with
-    | TestRunStatus.Passed _ -> { summary with Passed = summary.Passed + delta }
-    | TestRunStatus.Failed _ -> { summary with Failed = summary.Failed + delta }
-    | TestRunStatus.Stale -> { summary with Stale = summary.Stale + delta }
-    | TestRunStatus.Running -> { summary with Running = summary.Running + delta }
-    | TestRunStatus.PolicyDisabled -> { summary with Disabled = summary.Disabled + delta }
-    | _ -> summary
+    match bucketOf status with
+    | Bucket.Passed -> { summary with Passed = summary.Passed + delta }
+    | Bucket.Failed -> { summary with Failed = summary.Failed + delta }
+    | Bucket.Stale -> { summary with Stale = summary.Stale + delta }
+    | Bucket.Running -> { summary with Running = summary.Running + delta }
+    | Bucket.Disabled -> { summary with Disabled = summary.Disabled + delta }
 
   let fromStatuses (activation: LiveTestingActivation) (statuses: TestRunStatus array) : TestSummary =
     let mutable passed = 0
@@ -1871,13 +1886,12 @@ module TestSummary =
     let mutable running = 0
     let mutable disabled = 0
     for s in statuses do
-      match s with
-      | TestRunStatus.Passed _ -> passed <- passed + 1
-      | TestRunStatus.Failed _ -> failed <- failed + 1
-      | TestRunStatus.Stale -> stale <- stale + 1
-      | TestRunStatus.Running -> running <- running + 1
-      | TestRunStatus.PolicyDisabled -> disabled <- disabled + 1
-      | _ -> ()
+      match bucketOf s with
+      | Bucket.Passed -> passed <- passed + 1
+      | Bucket.Failed -> failed <- failed + 1
+      | Bucket.Stale -> stale <- stale + 1
+      | Bucket.Running -> running <- running + 1
+      | Bucket.Disabled -> disabled <- disabled + 1
     { Total = statuses.Length
       Passed = passed
       Failed = failed

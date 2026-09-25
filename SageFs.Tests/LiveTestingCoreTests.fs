@@ -621,9 +621,14 @@ let testSummaryDetailTests = testList "TestSummary" [
     summary.Total |> Expect.equal "total" 7
     summary.Passed |> Expect.equal "passed" 2
     summary.Failed |> Expect.equal "failed" 1
-    summary.Stale |> Expect.equal "stale" 1
     summary.Running |> Expect.equal "running" 1
     summary.Disabled |> Expect.equal "disabled" 1
+    // A Detected test has no result yet, so it is stale — NOT dropped. It used
+    // to fall through a catch-all and vanish from every bucket, which is how a
+    // suite of detected tests reported Total=7 with the buckets summing to 6.
+    summary.Stale |> Expect.equal "stale counts the Detected one, which has no result" 2
+    let accounted = summary.Passed + summary.Failed + summary.Stale + summary.Running + summary.Disabled
+    accounted |> Expect.equal "every status lands in a bucket" summary.Total
   }
 
   test "toStatusBar shows all passing" {
