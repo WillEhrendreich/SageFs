@@ -117,6 +117,8 @@
         <Compile Include="TypeShapeMigrationInvariants.fs" />
         <Compile Include="HolderRewriteSim.fs" />
         <Compile Include="HolderRewriteInvariants.fs" />
+        <Compile Include="RewriteValidationSim.fs" />
+        <Compile Include="RewriteValidationInvariants.fs" />
         <Compile Include="RetentionSim.fs" />
         <Compile Include="RetentionSimInvariants.fs" />
         <!-- sagefs mcp stdio bridge: startup-race DST folding the real

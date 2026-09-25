@@ -92,6 +92,7 @@
         <Compile Include="Holder.fs" />
         <Compile Include="TypeShapeMigration.fs" />
         <Compile Include="HolderRewrite.fs" />
+        <Compile Include="TranslationValidation.fs" />
         <Compile Include="BuildPreflight.fs" />
         <Compile Include="Middleware\ValueReads.fs" />
         <Compile Include="Features\RestartScope.fs" />
