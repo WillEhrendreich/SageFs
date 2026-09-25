@@ -261,7 +261,7 @@ let private runToolOutcomeBody
         createBody
         |> Expect.isNotEmpty "create_project_session should report something"
 
-        let! ready, sessionsBody = Http.waitForReadySession httpClient fixtureDir (TimeSpan.FromSeconds 60.0)
+        let! ready, sessionsBody = Http.waitForReadySession httpClient fixtureDir LiveTestingBudgets.baselineRun
         ready
         |> Expect.isTrue (
           sprintf "fixture session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
@@ -274,7 +274,7 @@ let private runToolOutcomeBody
         policyStatus |> Expect.equal "policy update should succeed" 200
 
         let! discovered, discoveredSnapshot, discoveredBody =
-          Http.waitForLiveTestingStatus httpClient None (TimeSpan.FromSeconds 60.0) (fun s ->
+          Http.waitForLiveTestingStatus httpClient None LiveTestingBudgets.baselineRun (fun s ->
             s.DiscoveryState = "ready_with_tests" && s.Total >= 3)
         discovered
         |> Expect.isTrue (
@@ -292,7 +292,7 @@ let private runToolOutcomeBody
         // snapshot. A fallback explicit /run stays here for resilience, but
         // is not expected to fire.
         let! (autoReady: bool), (autoSnapshot: Http.LiveTestingStatusSnapshot), (autoBody: string) =
-          Http.waitForLiveTestingStatus httpClient None (TimeSpan.FromSeconds 60.0) (fun s ->
+          Http.waitForLiveTestingStatus httpClient None LiveTestingBudgets.baselineRun (fun s ->
             s.Total >= 3 && s.Passed >= 3 && s.Failed = 0 && s.Running = 0 && s.Stale = 0)
 
         let! (baselineReady: bool), (baselineSnapshot: Http.LiveTestingStatusSnapshot), (baselineBody: string) =
@@ -303,7 +303,7 @@ let private runToolOutcomeBody
               let! runStatus, runBody = Http.postJson httpClient "/api/live-testing/run" {| pattern = ""; category = "" |}
               runStatus |> Expect.equal "baseline run request should succeed" 200
               return!
-                Http.waitForLiveTestingStatus httpClient None (TimeSpan.FromSeconds 60.0) (fun s ->
+                Http.waitForLiveTestingStatus httpClient None LiveTestingBudgets.baselineRun (fun s ->
                   s.Total >= 3 && s.Passed >= 3 && s.Failed = 0 && s.Running = 0 && s.Stale = 0)
             }
 
@@ -343,7 +343,7 @@ let private runToolOutcomeBody
         File.WriteAllText(samplePath, editedSample, Http.utf8NoBom)
 
         let! failedAfterEdit, failedSnapshot, failedBody =
-          Http.waitForLiveTestingStatus httpClient None (TimeSpan.FromSeconds 60.0) (fun s ->
+          Http.waitForLiveTestingStatus httpClient None LiveTestingBudgets.baselineRun (fun s ->
             s.FailedTests |> List.exists (fun name -> name = "subtract computes the difference"))
         failedAfterEdit
         |> Expect.isTrue (

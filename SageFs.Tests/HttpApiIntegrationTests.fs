@@ -253,7 +253,7 @@ let ensureSession (client: HttpClient) (projectPath: string) (targetDir: string)
     let! status, body = postJson client "/api/sessions/create" payload
     if status <> 200 then
       failwith (sprintf "session create failed: %d %s" status body)
-    let! ready, _ = waitForReadySession client targetDir (TimeSpan.FromSeconds 60.0)
+    let! ready, _ = waitForReadySession client targetDir LiveTestingBudgets.baselineRun
     if not ready then
       failwith "session did not reach Ready"
 }
@@ -863,7 +863,7 @@ let httpApiRoutingTests =
         createStatus |> Expect.equal "session create should succeed" 200
 
         let! ready, sessionsBody =
-          waitForReadySession client testProjectDir (TimeSpan.FromSeconds 60.0)
+          waitForReadySession client testProjectDir LiveTestingBudgets.baselineRun
         ready
         |> Expect.isTrue (sprintf "session should reach Ready before buffer ingress. Create: %s Sessions: %s" createBody sessionsBody)
 
