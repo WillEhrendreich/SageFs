@@ -276,7 +276,7 @@ module ProjectDiscoveryTests =
         result |> Expect.stringContains "Should have solutions section" "Solutions"
         result |> Expect.stringContains "Should mention project extension" ".fsproj"
         result |> Expect.stringContains "Should mention solution extension" ".sln"
-        result |> Expect.stringContains "Should guide users toward explicit session creation" "create_session"
+        result |> Expect.stringContains "Should guide users toward explicit session creation" "create_project_session"
         result |> Expect.stringContains "Should show working directory" workingDir
       }
       |> Async.AwaitTask

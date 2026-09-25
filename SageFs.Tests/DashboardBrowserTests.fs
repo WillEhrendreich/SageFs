@@ -1518,6 +1518,7 @@ let tests =
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
+    do! PlaywrightExpect.waitForCount 15_000 panel 1
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
     let summary = panel.Locator("summary")
     do! PlaywrightExpect.waitForText 15_000 summary "Friction"
@@ -1572,6 +1573,7 @@ let tests =
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
+    do! PlaywrightExpect.waitForCount 15_000 panel 1
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
     // Record ONE explicit feedback through the product's recorder API into
     // the daemon's local SQLite store (the same store the MCP report_friction
@@ -1600,6 +1602,7 @@ let tests =
     let! _ = page.ReloadAsync()
     // The reload reset expanded mode too — re-enable so the panel is visible.
     do! DashboardDom.ensureExpanded page
+    do! PlaywrightExpect.waitForCount 15_000 panel 1
     do! PlaywrightExpect.waitForText 15_000 (page.Locator("#friction-panel summary")) "1 feedback"
     // The reload reset the <details> to closed — open it for role queries.
     let! isOpen =
@@ -1621,6 +1624,7 @@ let tests =
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
+    do! PlaywrightExpect.waitForCount 15_000 panel 1
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
     // Open the <details> so the send form is in the accessibility tree.
     do! DashboardDom.openFrictionPanel page
