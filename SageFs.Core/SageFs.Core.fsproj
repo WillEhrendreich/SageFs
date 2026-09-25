@@ -256,6 +256,7 @@
         <Compile Include="HostCoreAdoption.fs" />
         <Compile Include="Supervisor.fs" />
         <Compile Include="RestartPolicy.fs" />
+        <Compile Include="GranularRestart.fs" />
         <Compile Include="SmartReset.fs" />
         <Compile Include="Watchdog.fs" />
         <Compile Include="SessionLifecycle.fs" />
