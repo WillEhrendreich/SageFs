@@ -446,8 +446,13 @@ let private runToolOutcomeGate () : Task<unit> =
   }
 [<Tests>]
 let mcpToolOutcomeTests =
-  Integration.hostList "MCP tool outcome gates" [
-    testTask "WHY — list_tests, explain_test_failure and diagnose report what live testing actually found (Gap D: the documented agent read-path had zero tool-level callers)" {
-      do! runToolOutcomeGate ()
-    }
-  ]
+  // Sequenced, for the reason recorded in LiveTestingWorkerSuites.fs: this
+  // suite waits on a live worker, and the tier's 58 parallel daemons starve
+  // that wait. The group is shared with HttpApiIntegrationTests' live-testing
+  // suite so the two never overlap each other.
+  testSequencedGroup LiveTestingWorkerSuites.groupName <|
+    Integration.hostList "MCP tool outcome gates" [
+      testTask "WHY — list_tests, explain_test_failure and diagnose report what live testing actually found (Gap D: the documented agent read-path had zero tool-level callers)" {
+        do! runToolOutcomeGate ()
+      }
+    ]
