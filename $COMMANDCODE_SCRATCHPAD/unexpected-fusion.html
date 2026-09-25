@@ -1,0 +1,1338 @@
+{
+  "title": "Unexpected Fusion – Clef Programming Language",
+  "text": "Clef Programming Language\nSpecification\nDocs\nBlog\nCTRL K\nAtlas\nBlog\nUnexpected Fusion\nUnexpected Fusion\n\nRecasting F#'s Extensions of OCaml and Erlang into an Agentic Systems Architecture\n\nSeptember 29, 2025\n·\nSpeakEZ\n·\n11 min read\nARCHITECTURE\nDESIGN\nANALYSIS\nDISTRIBUTED-SYSTEMS\nFUNCTIONAL-PROGRAMMING\nACTOR-MODEL\nFORMAL-VERIFICATION\n\nThe story of distributed systems in F# begins with two distinct programming traditions that converge in F# in unique ways. From OCaml came the functional programming foundation and type system rigor. From Erlang came the mailboxprocessor and with it an approach to fault-tolerant distributed systems. Don Syme’s work fused concurrency into the primitives of a high-level programming language. What emerged in F# was a language that could express actor-based concurrency with type safety, integrate with existing ecosystems, and compile to multiple target platforms.\n\nThis convergence wasn’t immediately obvious. When Don Syme first presented F# to Erlang developers at the 2010 Erlang Factory conference in London, he described it as “a pragmatic functional language which the Erlang programmer will find both familiar and foreign.” That duality, familiar yet foreign, captures something essential about F#’s approach to actors. It borrowed wisdom from both traditions while creating space for innovations that neither OCaml nor Erlang had contemplated.\n\nThe OCaml Foundation: More Than Just Syntax\n \n\nF# began its life in 2002 as what was informally called “Caml for .NET”, an attempt to bring OCaml’s ML-style functional programming to Microsoft’s new runtime. But from the beginning, F# was more than a transliteration of OCaml to a new platform. It enhanced that ML foundation with features that would prove essential for building concurrent systems.\n\nThe divergences from OCaml were deliberate and thoughtful. Where OCaml required explicit type annotations in many contexts, F# pushed type inference further. Where OCaml used semicolons and explicit delimiters, F# adopted Python’s significant whitespace, making the code cleaner and more approachable. These might seem like surface-level changes, but they reflected a deeper philosophy: F# would be pragmatic where OCaml was purist, accessible where OCaml was opinionated.\n\nBeyond syntax, F# introduced semantic innovations that OCaml hadn’t explored. Units of measure brought dimensional analysis to the type system, allowing developers to catch unit conversion errors at compile time. Computation expressions provided a general framework for defining domain-specific languages within F#, from async workflows to query expressions. These features would later prove essential for expressing complex behaviors.\n\nThe Critical Addition: MailboxProcessor in the Core Library\n \n\nPerhaps the most significant departure from OCaml was F#’s inclusion of the MailboxProcessor in its core library, FSharp.Core. Shipping it with the language gave message-passing concurrency a first-class, type-safe form that OCaml’s standard distribution had no equivalent for. The MailboxProcessor brought Erlang’s actor model directly into F#’s type-safe world:\n\ntype Message =\n\n    | Increment of int\n\n    | GetValue of AsyncReplyChannel<int>\n\n\n\nlet counter = MailboxProcessor.Start(fun inbox ->\n\n    let rec loop value = async {\n\n        let! msg = inbox.Receive()\n\n        match msg with\n\n        | Increment delta ->\n\n            return! loop (value + delta)\n\n        | GetValue channel ->\n\n            channel.Reply value\n\n            return! loop value\n\n    }\n\n    loop 0)\n\nThis primitive opened a range of possibilities. Beyond Erlang’s dynamically typed messages, F#’s discriminated unions provided compile-time guarantees about message protocols. Inside the confines of the traditional .NET threading models, the MailboxProcessor offered isolation and safety through message passing. It was a bridge between worlds, bringing actor-model thinking to developers who had never encountered Erlang while remaining familiar to those with distributed systems experience.\n\nThe inclusion of MailboxProcessor wasn’t accidental. Don Syme’s engagement with the Erlang community, including that 2010 presentation, demonstrates a deliberate connection between OCaml and Erlang ecosystems.\n\nThe Fable Connection: OCaml’s Web Legacy\n \n\nThere’s another thread in F#’s relationship with OCaml: the path to the web. Alfonso Garcia-Caro created the Fable compiler, and in later interviews he explicitly acknowledged the inspiration he took from js_of_ocaml (jsoo), OCaml’s solution for compiling to JavaScript. Where jsoo operated as a library extension within OCaml’s ecosystem, Fable forged a different path.\n\nThe challenge was architectural. F# was deeply entwined with the .NET runtime, its type system integrated with the Common Language Infrastructure. Translating F# to JavaScript the way jsoo translated OCaml wouldn’t work. Fable needed to become a distinct compilation path, one that could understand the necessary superset of F# semantics at a deep level and regenerate them in type-safe way within the JavaScript ecosystem. An early “slug line” for Fable was “JavaScript you could be proud of” which pointed to its ability to place type ‘hints’ in JavaScript that increased its runtime safety over standard JS code.\n\nOur Fidelity.CloudEdge toolkit builds directly on this foundation. By leveraging Fable’s JavaScript targeting, we intend a library to compile and deploy F# actors as lightweight JavaScript functions. The MailboxProcessor abstractions that developers write would compile down to Workers and Queues, maintaining the actor model’s semantics while taking up the platform’s distribution capabilities.\n\nThis synthesis draws OCaml’s web compilation legacy through jsoo, Fable’s reimagining for F#, and Fidelity.CloudEdge’s platform integration into one convergence of functional programming traditions adapted for modern computing. At first glimpse it may seem strange to “re-converge” OCaml’s and Erlang’s influences in the Fidelity framework and CloudEdge toolkit, but we hope the interested reader will follow us along a path we consider rewarding.\n\nExtending the Actor Vision\n \n\nOur Fidelity Framework extends F#’s actor model when unconstrained by the .NET SDK and runtime. By building on the MailboxProcessor model, the framework introduces an actor system with the potential for supervision hierarchies, distributed message passing, and deterministic resource management.\n\nWhere F#’s standard MailboxProcessor operates within the CLR’s managed environment, our Olivier actor model is designed to compile directly to native code. By operating outside a managed runtime, the framework can provide guarantees about memory usage, execution timing, and resource consumption that would be difficult to reach in managed runtime environments.\n\nFidelity Olivier Model\n\nOlivier Actor\n\nArena Allocator\n\nProspero Supervisor\n\nZero-Copy, IPC\n& Sentinels\n\n.NET F# MailboxProcessor\n\nMailboxProcessor\n\nCLR Thread Pool\n\nGarbage Collector\n\nOur Prospero supervision layer, detailed in our exploration of RAII in Olivier and Prospero, is designed to bring Erlang-style supervision trees to F#. Where Erlang’s process-per-actor model gives each actor an isolated heap, Prospero uses arena allocation within shared process memory. This design choice reflects modern hardware realities: cache coherence has advanced, memory is abundant, and the cost of message copying often exceeds the benefit of complete isolation.\n\nmodule Olivier =\n\n    type SupervisorStrategy =\n\n        | OneForOne of maxRetries: int * withinTimeSpan: TimeSpan\n\n        | AllForOne of maxRetries: int * withinTimeSpan: TimeSpan\n\n        | RestForOne of maxRetries: int * withinTimeSpan: TimeSpan\n\n\n\n    let supervise strategy children =\n\n        // Arena allocated per supervision tree\n\n        use arena = Arena.create (64 * 1024 * 1024) // 64MB\n\n\n\n        let supervisor =\n\n            Supervisor.create strategy arena\n\n            |> Supervisor.withChildren children\n\n\n\n        supervisor.Start()\n\nOur framework’s design aspires to maintain compatibility with Akka.NET’s cluster communication protocols, because real-world systems need “paved” paths to interoperate. Organizations with existing Akka.NET deployments would be able to gradually include Fidelity components where they show particular advantage. The actor-oriented architecture we advocate is designed to provide process-level protection without runtime overhead, a balance between isolation and native efficiency. We expect this awareness to grow as “agentic systems” become the norm in enterprise environments.\n\nActors at The Cloud’s Edge\n \n\nWhile our Fidelity framework re-imagines actors for native execution, Fidelity.CloudEdge takes a different path, one shaped by the constraints and capabilities of edge computing. In our CloudEdge design, developers write standard F# MailboxProcessor-style actors, and the Fable compiler and CloudEdge toolkit would transform these into compositions of Cloudflare’s platform services. A Worker provides the execution context, a Queue provides the mailbox, and Cloudflare’s global network provides the distribution mechanism, all handled during compilation:\n\n// Developer writes standard F# actor code\n\ntype OrderProcessor() =\n\n    inherit MailboxProcessor<OrderMessage>()\n\n\n\n    override this.Receive() = async {\n\n        let! msg = this.Receive()\n\n        match msg with\n\n        | ProcessOrder order ->\n\n            // Standard F# async workflow\n\n            let! inventory = checkInventory order.items\n\n            let! payment = processPayment order.payment\n\n            this.Post(UpdateState OrderConfirmed)\n\n\n\n        | CancelOrder id ->\n\n            do! refundPayment id\n\n            this.Post(UpdateState OrderCancelled)\n\n    }\n\n\n\n// Fidelity.CloudEdge compiles this to:\n\n// - Worker with Queue binding for message handling\n\n// - Durable Object for state management\n\n// - Service bindings for actor communication\n\nThis model makes different trade-offs than our native actor model. Where the native model provides fine-grained control over memory and execution, our CloudEdge design accepts platform constraints in exchange for global scale. A CloudEdge actor would handle a high volume of messages per second across hundreds of edge locations and scale horizontally using standard Cloudflare management. The platform handles distribution and scaling, and we design fault response to route through our Prospero supervision hierarchy.\n\nThe supervision model in our CloudEdge design differs from both Akka and the native Fidelity model. Where the native model provides inter-process supervision, CloudEdge would distribute fully across Cloudflare’s edge network, with Durable Objects managing hierarchy state and coordinating workers:\n\n// Fidelity.CloudEdge Supervisor actor\n\nmodule Supervisor =\n\n    type State = {\n\n        ChildActors: Map<string, ActorRef>\n\n        RestartSchedule: Map<string, DateTime>\n\n    }\n\n\n\n    let handleMessage (state: State) = function\n\n        | RegisterChild (name, actorRef) ->\n\n            { state with ChildActors = Map.add name actorRef state.ChildActors }\n\n\n\n        | ChildFailed (name, error) ->\n\n            match Map.tryFind name state.ChildActors with\n\n            | Some ref ->\n\n                // Schedule restart through platform retry\n\n                let restartTime = DateTime.UtcNow.AddSeconds(5.0)\n\n                { state with RestartSchedule = Map.add name restartTime state.RestartSchedule }\n\n            | None -> state\n\n\n\n        | CheckRestarts ->\n\n            // Platform handles actual restarts via Queue retry mechanism\n\n            state\n\nAn edge-to-native path also runs between our Fidelity framework and CloudEdge design through Cloudflare’s Container support. As explored in our vision for distributed intelligence, our future design for Fidelity-compiled unikernels would run within Cloudflare’s Container infrastructure, bringing native performance to edge computing. This forms a hybrid: CloudEdge actors for coordination and integration, Fidelity unikernels for compute-intensive operations. A distributed global deployment that runs without Kubernetes is a direction we intend to explore with our customers.\n\nThe F* Connection: Proofs Through Shared Heritage\n \n\nThe story of F#’s OCaml influence in our Fidelity framework extends to formal verification. Here, the shared OCaml heritage between F# and F* matters. F* (pronounced F-star) is a proof-oriented language with an extensive pedigree in critical systems verification. Its syntax and semantics are close enough to F# that verification can be integrated into the development process, and the artifacts it produces can support verification with global certification labs.\n\nBecause F# and F* share their OCaml lineage, this verification capability integrates through our proof-aware compilation pipeline.\n\nVerification properties guide optimization, not only correctness checks.\n\nWhen the compiler knows that certain message orderings are impossible, it can eliminate defensive code. When it proves that an actor never exceeds certain memory bounds, it can adjust memory strategies to improve speed. Many such optimizations can improve execution efficiency and memory safety while supporting the developer experience.\n\nErlang Lessons, F# Innovations\n \n\nThe influence of Erlang on our actor implementations beyond the mailboxprocessor runs deep, and we have weighed it critically. As examined in our analysis of Erlang lessons in Fidelity, we have taken up several of Erlang’s positions while adapting our technical approach to modern technology.\n\nErlang’s “let it crash” philosophy appears in both Fidelity and Fidelity.CloudEdge but with type-safe refinements. Where Erlang relies on dynamic pattern matching to handle failures, F# uses exhaustive pattern matching with compile-time verification:\n\ntype FailureDirective =\n\n    | Restart\n\n    | Stop\n\n    | Escalate\n\n\n\nlet decideFailureAction (error: exn) : FailureDirective =\n\n    match error with\n\n    | :? TransientException -> Restart\n\n    | :? ConfigurationException -> Stop\n\n    | _ -> Escalate\n\n    // Compiler ensures all cases handled\n\nThe supervision hierarchy concept transfers, with architectural adaptations. Erlang’s isolated process model made sense for 1980s hardware where memory protection was expensive. Modern systems offer different trade-offs. Our Olivier actor model, with Prospero’s sentinels and arena allocation, is designed to provide similar fault isolation with better cache utilization. Our CloudEdge design uses platform-managed distribution to reach global scale without direct process marshaling.\n\nPerhaps most significantly, our actor implementations benefit from decades of evolution in type theory and compiler technology. Where Erlang must check message types at runtime, F# verifies them at compile time. Where Erlang’s hot code reloading requires careful coordination, F#’s immutable actors enable blue-green deployments. Where Erlang’s distribution requires EPMD and careful network configuration, Fidelity.CloudEdge leverages Cloudflare’s global infrastructure resiliency.\n\nThe Agentic Future: Actors for AI\n \n\nThis principled adaptation carries over to AI agents. As explored in our piece on actors taking center stage, the patterns that Erlang pioneered for telecom systems map onto what modern AI systems need.\n\nA well designed AI agent works as an actor: it maintains state, processes messages (prompts), and interacts with other agents (tools, knowledge bases, other inference sources). The supervision hierarchies that Erlang pioneered to manage telecom switches can orchestrate multi-agent AI systems. The fault tolerance that kept phone networks running for decades can serve AI services that need to operate with high performance and reliability.\n\ntype AIAgentMessage =\n\n    | Query of prompt: string * reply: AsyncReplyChannel<Response>\n\n    | UpdateKnowledge of facts: KnowledgeGraph\n\n    | Collaborate of agent: AgentRef * task: Task\n\n\n\ntype AIAgent() =\n\n    inherit Actor<AIAgentMessage>()\n\n\n\n    let knowledgeBase = KnowledgeGraph.create()\n\n    let collaborators = ResizeArray<AgentRef>()\n\n\n\n    override this.Receive(msg) = async {\n\n        match msg with\n\n        | Query(prompt, reply) ->\n\n            let! response = this.Reason prompt knowledgeBase\n\n            reply.Reply response\n\n\n\n        | UpdateKnowledge facts ->\n\n            knowledgeBase.Merge facts\n\n\n\n        | Collaborate(agent, task) ->\n\n            collaborators.Add agent\n\n            let! result = this.CollaborateOn task agent\n\n            return result\n\n    }\n\nThese are emerging practices built on proven technologies. The patterns we are designing into our Fidelity framework and CloudEdge toolkit are meant to support agentic architectures. The type safety holds agents to a correct communication protocol. The supervision hierarchies manage agent lifecycles. The distribution mechanisms are designed to carry globally distributed systems with millisecond timing.\n\nPractical Convergence: Theory Meets Implementation\n \n\nActor models matter when they translate to practical benefits. Through our designs and conversations with customers we are seeing several convergence patterns.\n\nFirst, a hybrid architecture pairs our CloudEdge coordination layer with a native framework that handles compute-intensive operations. A CloudEdge supervisor actor might orchestrate dozens of Fidelity-compiled workers running in containers. The supervisor handles routing, load balancing, and fault recovery while the workers perform specialized computations.\n\nSecond, the ability to verify actor interactions through F* reshapes how we think about distributed system correctness. Rather than hoping our message protocols are correct, we aim to prove the memory patterns are safe. Rather than testing for race conditions, we aim to prove they cannot occur. The intent is practical engineering that reduces production incidents.\n\nThird, actor-based architectures open up a new economic model. Our CloudEdge actors would scale “to zero” and extend with load. Cloudflare charges for actual message processing through scaling controls it has honed over nearly a decade of global production use. Fidelity unikernel actors can run with minimal resource overhead, allowing dense deployment. Together, they point to a cost model that recasts previously uneconomical applications in terms of both speed and operational integrity.\n\nThe Synthesis of Traditions\n \n\nThe path from OCaml’s functional design and Erlang’s actor pragmatism, through F#’s implementations, into our Fidelity framework and CloudEdge toolkit traces a line of convergence across programming traditions and modern technologies.\n\nF# adopted the MailboxProcessor and reimagined it with type safety. Our Fidelity framework is designed to compile actors to native code with deterministic resource management. Our CloudEdge design aims at a development model that carries global deployment. Each step builds on previous insights while adding new capabilities.\n\nAs the field takes on agentic challenges in AI orchestration, the patterns established by OCaml and Erlang, refined through F#, and carried into our Fidelity framework and CloudEdge toolkit, give us a foundation to build on.\n\nErlang pioneered the actor model for telephone switches in the 1980s. OCaml championed type safety and functional design patterns in the same era. Don Syme synthesized those precepts through F#’s pragmatic design in the 2000s. We intend to carry that lineage forward into actor systems design for 2030 and beyond, and we will keep building toward it as the rest of the framework comes into place.\n\nBreaking the P vs NP Mystique\nA Vision For Unified Cognitive Architecture\n© 2025-2026 SpeakEZ Technologies, Inc.",
+  "links": [
+    {
+      "text": "Clef Programming Language",
+      "href": "https://clef-lang.com/"
+    },
+    {
+      "text": "Specification",
+      "href": "https://clef-lang.com/spec"
+    },
+    {
+      "text": "Docs",
+      "href": "https://clef-lang.com/docs"
+    },
+    {
+      "text": "Blog",
+      "href": "https://clef-lang.com/blog"
+    },
+    {
+      "text": "Blog\n",
+      "href": "https://clef-lang.com/blog/"
+    },
+    {
+      "text": "Retrieving Fidelity",
+      "href": "https://clef-lang.com/blog/retrieving-fidelity/"
+    },
+    {
+      "text": "A Path Less Traveled",
+      "href": "https://clef-lang.com/blog/a-path-less-traveled/"
+    },
+    {
+      "text": "Pitch, slew and demand",
+      "href": "https://clef-lang.com/blog/pitch-slew-and-demand/"
+    },
+    {
+      "text": "Carrying Proofs into JavaScript",
+      "href": "https://clef-lang.com/blog/carrying-proofs-into-javascript/"
+    },
+    {
+      "text": "Pondering Fearless Parallelism",
+      "href": "https://clef-lang.com/blog/pondering-fearless-parallelism/"
+    },
+    {
+      "text": "Flight-Qualified Bytecode",
+      "href": "https://clef-lang.com/blog/flight-qualified-bytecode/"
+    },
+    {
+      "text": "The Web on Native Terms",
+      "href": "https://clef-lang.com/blog/the-web-on-native-terms/"
+    },
+    {
+      "text": "An Emergent File System Model",
+      "href": "https://clef-lang.com/blog/an-emergent-file-system-model/"
+    },
+    {
+      "text": "Beyond the Bitter Lesson",
+      "href": "https://clef-lang.com/blog/beyond-the-bitter-lesson-structural-convergence/"
+    },
+    {
+      "text": "Fixing on Falcon",
+      "href": "https://clef-lang.com/blog/fixing-on-falcon/"
+    },
+    {
+      "text": "Another Moog Enters the Conversation",
+      "href": "https://clef-lang.com/blog/another-moog-enters-the-conversation/"
+    },
+    {
+      "text": "The Cold Half of Concurrency",
+      "href": "https://clef-lang.com/blog/cold-half-of-concurrency/"
+    },
+    {
+      "text": "Surfacing The Scheduler",
+      "href": "https://clef-lang.com/blog/surfacing-the-scheduler/"
+    },
+    {
+      "text": "Opining Upon Reflection",
+      "href": "https://clef-lang.com/blog/opining-upon-reflection/"
+    },
+    {
+      "text": "Building Bulletproof eBPF Programs",
+      "href": "https://clef-lang.com/blog/building-bulletproof-ebpf-programs/"
+    },
+    {
+      "text": "Getting to the Heart of Unikernels",
+      "href": "https://clef-lang.com/blog/getting-to-the-heart-of-unikernels/"
+    },
+    {
+      "text": "Weaving the Braid",
+      "href": "https://clef-lang.com/blog/weaving-the-braid/"
+    },
+    {
+      "text": "A Lesson in Memory Safety",
+      "href": "https://clef-lang.com/blog/a-lesson-in-memory-safety/"
+    },
+    {
+      "text": "The Gift of Deferred Inference",
+      "href": "https://clef-lang.com/blog/deferred-inference/"
+    },
+    {
+      "text": "Going Deep with Flow Loss Analysis",
+      "href": "https://clef-lang.com/blog/going-deep-with-flow-loss-analysis/"
+    },
+    {
+      "text": "Between Rocq & A Hard Case",
+      "href": "https://clef-lang.com/blog/between-a-rocq-and-a-hard-case/"
+    },
+    {
+      "text": "Counting the Cost of Coordination",
+      "href": "https://clef-lang.com/blog/counting-the-cost-of-coordination/"
+    },
+    {
+      "text": "Fearless Concurrency Gets Real",
+      "href": "https://clef-lang.com/blog/fearless-concurrency-gets-real/"
+    },
+    {
+      "text": "Where Native Goes, Mobile Follows",
+      "href": "https://clef-lang.com/blog/where-native-goes-mobile-follows/"
+    },
+    {
+      "text": "Don't Assume All Proofs Are Bulletproof",
+      "href": "https://clef-lang.com/blog/dont-assume/"
+    },
+    {
+      "text": "A Triangle Without Mystery",
+      "href": "https://clef-lang.com/blog/a-triangle-without-mystery/"
+    },
+    {
+      "text": "Runtime Revolution",
+      "href": "https://clef-lang.com/blog/runtime-revolution-fidelity/"
+    },
+    {
+      "text": "Proofs for the Real World",
+      "href": "https://clef-lang.com/blog/proofs-for-the-real-world/"
+    },
+    {
+      "text": "'Free' Proofs from Dimensional Types",
+      "href": "https://clef-lang.com/blog/proofs-from-dimensional-types/"
+    },
+    {
+      "text": "Hardware Inference",
+      "href": "https://clef-lang.com/blog/fpga-and-hardware-inference/"
+    },
+    {
+      "text": "DMM and DTS",
+      "href": "https://clef-lang.com/blog/doubling-down-dmm-dts/"
+    },
+    {
+      "text": "WREN Stack",
+      "href": "https://clef-lang.com/blog/wren-stack/"
+    },
+    {
+      "text": "XOR Post-Quantum Case Study",
+      "href": "https://clef-lang.com/blog/xor-a-post-quantum-case-study/"
+    },
+    {
+      "text": "Unified Actor Architecture",
+      "href": "https://clef-lang.com/blog/unified-actor-architecture/"
+    },
+    {
+      "text": "Getting the Signal with BAREWire",
+      "href": "https://clef-lang.com/blog/getting-the-signal-with-barewire/"
+    },
+    {
+      "text": "A Vision For Unified Cognitive Architecture",
+      "href": "https://clef-lang.com/blog/unified-cognitive-architecture/"
+    },
+    {
+      "text": "Unexpected Fusion",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/"
+    },
+    {
+      "text": "The OCaml Foundation: More Than Just Syntax",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-ocaml-foundation-more-than-just-syntax"
+    },
+    {
+      "text": "The Critical Addition: MailboxProcessor in the Core Library",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-critical-addition-mailboxprocessor-in-the-core-library"
+    },
+    {
+      "text": "The Fable Connection: OCaml’s Web Legacy",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-fable-connection-ocamls-web-legacy"
+    },
+    {
+      "text": "Extending the Actor Vision",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#extending-the-actor-vision"
+    },
+    {
+      "text": "Actors at The Cloud’s Edge",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#actors-at-the-clouds-edge"
+    },
+    {
+      "text": "The F* Connection: Proofs Through Shared Heritage",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-f-connection-proofs-through-shared-heritage"
+    },
+    {
+      "text": "Erlang Lessons, F# Innovations",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#erlang-lessons-f-innovations"
+    },
+    {
+      "text": "The Agentic Future: Actors for AI",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-agentic-future-actors-for-ai"
+    },
+    {
+      "text": "Practical Convergence: Theory Meets Implementation",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#practical-convergence-theory-meets-implementation"
+    },
+    {
+      "text": "The Synthesis of Traditions",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-synthesis-of-traditions"
+    },
+    {
+      "text": "Breaking the P vs NP Mystique",
+      "href": "https://clef-lang.com/blog/breaking-the-p-vs-np-mystique/"
+    },
+    {
+      "text": "Abstract Machine Model Paradox",
+      "href": "https://clef-lang.com/blog/abstract-machine-model-paradox/"
+    },
+    {
+      "text": "The Advent of Neuromorphic AI",
+      "href": "https://clef-lang.com/blog/advent-of-neuromorphic-ai/"
+    },
+    {
+      "text": "Categorical Deep Learning",
+      "href": "https://clef-lang.com/blog/categorical-deep-learning/"
+    },
+    {
+      "text": "Fewer Tests; Greater Safety",
+      "href": "https://clef-lang.com/blog/fewer-tests-greater-safety/"
+    },
+    {
+      "text": "Quantum Optionality",
+      "href": "https://clef-lang.com/blog/quantum-optionality/"
+    },
+    {
+      "text": "Native Reactivity in Clef",
+      "href": "https://clef-lang.com/blog/native-reactivity-in-clef/"
+    },
+    {
+      "text": "Hardware Lessons from LISP",
+      "href": "https://clef-lang.com/blog/hardware-lessons-from-lisp/"
+    },
+    {
+      "text": "Why Types Matter",
+      "href": "https://clef-lang.com/blog/danger-close-why-types-matter/"
+    },
+    {
+      "text": "Ternary Models Vision",
+      "href": "https://clef-lang.com/blog/unified-vision-ternary-models/"
+    },
+    {
+      "text": "DUs in Post-Transformer AI",
+      "href": "https://clef-lang.com/blog/discriminated-unions-post-transformer-ai/"
+    },
+    {
+      "text": "Wrapping C and C++",
+      "href": "https://clef-lang.com/blog/wrapping-c-and-cpp/"
+    },
+    {
+      "text": "HKTs Dialectic Analysis",
+      "href": "https://clef-lang.com/blog/hkts-dialectic-analysis/"
+    },
+    {
+      "text": "Scaling Fidelity.UI",
+      "href": "https://clef-lang.com/blog/scaling-fidelityui/"
+    },
+    {
+      "text": "Leveraging Fabulous for Native UI",
+      "href": "https://clef-lang.com/blog/leveraging-fabulous-for-native-ui/"
+    },
+    {
+      "text": "High Speed Inference",
+      "href": "https://clef-lang.com/blog/high-speed-inference/"
+    },
+    {
+      "text": "Fidelity UI Model",
+      "href": "https://clef-lang.com/blog/fidelity-ui-model/"
+    },
+    {
+      "text": "Dotnet to Fidelity Concurrency",
+      "href": "https://clef-lang.com/blog/dotnet-to-fidelity-concurrency/"
+    },
+    {
+      "text": "Return of the Compiler",
+      "href": "https://clef-lang.com/blog/the-return-of-the-compiler/"
+    },
+    {
+      "text": "Farscape Bridge",
+      "href": "https://clef-lang.com/blog/the-farscape-bridge/"
+    },
+    {
+      "text": "Window Layout System",
+      "href": "https://clef-lang.com/blog/window-layout-with-fidelity/"
+    },
+    {
+      "text": "Fidelity Primer",
+      "href": "https://clef-lang.com/blog/fidelity-framework-primer/"
+    },
+    {
+      "text": "Ode to Erlang",
+      "href": "https://clef-lang.com/blog/ode-to-erlang/"
+    },
+    {
+      "text": "CNN to TopOC Transfer Learning",
+      "href": "https://clef-lang.com/blog/cnn-to-topoc-transfer-learning/"
+    },
+    {
+      "text": "Beyond Transformers",
+      "href": "https://clef-lang.com/blog/beyond-transformers/"
+    },
+    {
+      "text": "The Case for Actor-Oriented Architecture",
+      "href": "https://clef-lang.com/blog/the-case-for-actor-oriented-architecture/"
+    },
+    {
+      "text": "Musings on Mojo: Partially Parallel Paths",
+      "href": "https://clef-lang.com/blog/musing-on-mojo/"
+    },
+    {
+      "text": "Fidelity as AI Refinery",
+      "href": "https://clef-lang.com/blog/fidelity-as-ai-refinery/"
+    },
+    {
+      "text": "Pondering Python",
+      "href": "https://clef-lang.com/blog/pondering-python/"
+    },
+    {
+      "text": "The Hidden Dominance of Functional Programming",
+      "href": "https://clef-lang.com/blog/hidden-dominance-of-functional-programming/"
+    },
+    {
+      "text": "Rust Revisited",
+      "href": "https://clef-lang.com/blog/rust-revisited/"
+    },
+    {
+      "text": "Beyond Assemblies",
+      "href": "https://clef-lang.com/blog/seeing-beyond-assemblies/"
+    },
+    {
+      "text": "Cryptographic Certainty",
+      "href": "https://clef-lang.com/blog/cryptographic-certainty/"
+    },
+    {
+      "text": "Documentation\n",
+      "href": "https://clef-lang.com/docs/"
+    },
+    {
+      "text": "Guides\n",
+      "href": "https://clef-lang.com/docs/guides/"
+    },
+    {
+      "text": "Getting Started",
+      "href": "https://clef-lang.com/docs/guides/getting-started/"
+    },
+    {
+      "text": "Design\n",
+      "href": "https://clef-lang.com/docs/design/"
+    },
+    {
+      "text": "Language Semantics\n",
+      "href": "https://clef-lang.com/docs/design/language/"
+    },
+    {
+      "text": "Null-Free by Construction",
+      "href": "https://clef-lang.com/docs/design/language/null-free-by-construction/"
+    },
+    {
+      "text": "Managed Mutability",
+      "href": "https://clef-lang.com/docs/design/language/managed-mutability/"
+    },
+    {
+      "text": "Collect Yourself",
+      "href": "https://clef-lang.com/docs/design/language/collect-yourself/"
+    },
+    {
+      "text": "Absorbing Alloy",
+      "href": "https://clef-lang.com/docs/design/language/absorbing-alloy/"
+    },
+    {
+      "text": "Clef Metaprogramming",
+      "href": "https://clef-lang.com/docs/design/language/standing-art-clef-metaprogramming/"
+    },
+    {
+      "text": "Type System\n",
+      "href": "https://clef-lang.com/docs/design/types/"
+    },
+    {
+      "text": "From BCL to NTU",
+      "href": "https://clef-lang.com/docs/design/types/bcl-to-ntu/"
+    },
+    {
+      "text": "Negative & Fractional Types",
+      "href": "https://clef-lang.com/docs/design/types/negative-fractional-types/"
+    },
+    {
+      "text": "Structural Polymorphism",
+      "href": "https://clef-lang.com/docs/design/types/structural-polymorphism/"
+    },
+    {
+      "text": "ByRef Resolved",
+      "href": "https://clef-lang.com/docs/design/types/byref-resolved/"
+    },
+    {
+      "text": "Dimensional Type Safety",
+      "href": "https://clef-lang.com/docs/design/types/dimensional-type-safety/"
+    },
+    {
+      "text": "Posit Arithmetic",
+      "href": "https://clef-lang.com/docs/design/types/posit-arithmetic/"
+    },
+    {
+      "text": "Rounding on Real Hardware",
+      "href": "https://clef-lang.com/docs/design/types/rounding-on-real-hardware/"
+    },
+    {
+      "text": "The Lyapunov Window",
+      "href": "https://clef-lang.com/docs/design/types/lyapunov-window/"
+    },
+    {
+      "text": "Concurrency\n",
+      "href": "https://clef-lang.com/docs/design/concurrency/"
+    },
+    {
+      "text": "Continuation Preservation",
+      "href": "https://clef-lang.com/docs/design/concurrency/the-continuation-preservation-paradox/"
+    },
+    {
+      "text": "Delimited Continuations",
+      "href": "https://clef-lang.com/docs/design/concurrency/delimited-continuations/"
+    },
+    {
+      "text": "DCont/Inet Duality",
+      "href": "https://clef-lang.com/docs/design/concurrency/dcont-inet-duality/"
+    },
+    {
+      "text": "Graph-Direct Parallelism",
+      "href": "https://clef-lang.com/docs/design/concurrency/graph-direct-parallelism/"
+    },
+    {
+      "text": "Deadlock Freedom",
+      "href": "https://clef-lang.com/docs/design/concurrency/deadlock-freedom-as-an-obligation/"
+    },
+    {
+      "text": "Ariel Under Prospero",
+      "href": "https://clef-lang.com/docs/design/concurrency/ariel-under-prospero/"
+    },
+    {
+      "text": "Three-Layer Actor Contract",
+      "href": "https://clef-lang.com/docs/design/concurrency/the-three-layer-actor-contract/"
+    },
+    {
+      "text": "Memory Model\n",
+      "href": "https://clef-lang.com/docs/design/memory/"
+    },
+    {
+      "text": "Arena Hoisting",
+      "href": "https://clef-lang.com/docs/design/memory/arena-hoisting/"
+    },
+    {
+      "text": "Spatial Mechanics",
+      "href": "https://clef-lang.com/docs/design/memory/spatial-mechanics/"
+    },
+    {
+      "text": "Gaining Closure",
+      "href": "https://clef-lang.com/docs/design/memory/gaining-closure/"
+    },
+    {
+      "text": "Inferring Memory Lifetimes",
+      "href": "https://clef-lang.com/docs/design/memory/inferring-memory-lifetimes/"
+    },
+    {
+      "text": "Beyond Zero-Allocation",
+      "href": "https://clef-lang.com/docs/design/memory/beyond-zero-allocation/"
+    },
+    {
+      "text": "Memory Management by Choice",
+      "href": "https://clef-lang.com/docs/design/memory/memory-management-by-choice/"
+    },
+    {
+      "text": "RAII in Olivier and Prospero",
+      "href": "https://clef-lang.com/docs/design/memory/raii-in-olivier-and-prospero/"
+    },
+    {
+      "text": "Native Memory Management",
+      "href": "https://clef-lang.com/docs/design/memory/native-memory-management/"
+    },
+    {
+      "text": "Structure and Performance\n",
+      "href": "https://clef-lang.com/docs/design/structure-and-performance/"
+    },
+    {
+      "text": "Why Clef Fits MLIR",
+      "href": "https://clef-lang.com/docs/design/structure-and-performance/why-clef-fits-mlir/"
+    },
+    {
+      "text": "Information Accrual",
+      "href": "https://clef-lang.com/docs/design/structure-and-performance/information-is-not-discarded/"
+    },
+    {
+      "text": "Coupling & Cohesion",
+      "href": "https://clef-lang.com/docs/design/structure-and-performance/coupling-and-cohesion/"
+    },
+    {
+      "text": "Arity and Caution",
+      "href": "https://clef-lang.com/docs/design/structure-and-performance/arity-on-the-side-of-caution/"
+    },
+    {
+      "text": "Getting Inline",
+      "href": "https://clef-lang.com/docs/design/structure-and-performance/getting-inline/"
+    },
+    {
+      "text": "Lazy Evaluation",
+      "href": "https://clef-lang.com/docs/design/structure-and-performance/why-lazy-is-hard/"
+    },
+    {
+      "text": "Source-Level Dependencies",
+      "href": "https://clef-lang.com/docs/design/structure-and-performance/source-level-dependency-resolution/"
+    },
+    {
+      "text": "Flow Loss",
+      "href": "https://clef-lang.com/docs/design/structure-and-performance/flow-loss-analysis/"
+    },
+    {
+      "text": "Categorical Foundations\n",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/"
+    },
+    {
+      "text": "CDL Adjoint Correspondence",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/categorical-deep-learning-adjoint-correspondence/"
+    },
+    {
+      "text": "Posit Arithmetic & DTS",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/posit-arithmetic-dimensional-type-systems/"
+    },
+    {
+      "text": "Forward Gradients & Exact Accumulation",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/forward-gradients-exact-accumulation/"
+    },
+    {
+      "text": "Target Architectures",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/target-architectures-compilation-strategy/"
+    },
+    {
+      "text": "Quantum Substrate",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/quantum-substrate-categorical-structure/"
+    },
+    {
+      "text": "Verification as Byproduct",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/formal-verification-compilation-byproduct/"
+    },
+    {
+      "text": "Continuous Learning",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/continuous-learning-inference-training-boundary/"
+    },
+    {
+      "text": "The Braid as a Fourth Sheaf",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/braid-as-a-fourth-sheaf/"
+    },
+    {
+      "text": "The Compilation Sheaf",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/the-compilation-sheaf/"
+    },
+    {
+      "text": "Structured Recurrence",
+      "href": "https://clef-lang.com/docs/design/categorical-foundations/structured-recurrence/"
+    },
+    {
+      "text": "Constrained Machine Learning\n",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/"
+    },
+    {
+      "text": "Utility of Adaptive Domain Models",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/adaptive-domain-models/"
+    },
+    {
+      "text": "A Scaffold for Constrained Models",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/scaffold-for-constrained-models/"
+    },
+    {
+      "text": "Building a Constrained Language Model",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/building-the-model/"
+    },
+    {
+      "text": "Architecture and Arithmetic",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/architecture-and-arithmetic/"
+    },
+    {
+      "text": "Forward-Mode Efficiency",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/forward-mode-and-adaptation/"
+    },
+    {
+      "text": "The Constellation",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/the-constellation/"
+    },
+    {
+      "text": "Reversible Cores",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/reversible-cores/"
+    },
+    {
+      "text": "Adapting Inference on a Gradient",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/adapting-inference-on-a-gradient/"
+    },
+    {
+      "text": "Managing Context",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/managing-context/"
+    },
+    {
+      "text": "The Ultimate Constraint",
+      "href": "https://clef-lang.com/docs/design/constrained-machine-learning/the-ultimate-constraint/"
+    },
+    {
+      "text": "JavaScript Targeting\n",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/"
+    },
+    {
+      "text": "JSIR",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/jsir-javascript-as-mlir-backend/"
+    },
+    {
+      "text": "JS / JSX Toolchain",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/javascript-jsx-toolchain/"
+    },
+    {
+      "text": "Design-Time Spec",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/design-time-spec-runtime-reliability/"
+    },
+    {
+      "text": "The Foreign Pair",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/the-foreign-pair/"
+    },
+    {
+      "text": "Constructed Witnesses",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/constructed-witnesses/"
+    },
+    {
+      "text": "Fable and Composer",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/from-fable-to-jsir/"
+    },
+    {
+      "text": "Fully Informed Bindings",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/fully-informed-bindings/"
+    },
+    {
+      "text": "Cloudflare Agents",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/cloudflare-agents-and-the-boundary-map/"
+    },
+    {
+      "text": "Ledger Lowering",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/the-ledger-lowering/"
+    },
+    {
+      "text": "Actor and Workflow Proofs",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/proof-preservation-across-actors-and-workflows/"
+    },
+    {
+      "text": "Streaming Inference",
+      "href": "https://clef-lang.com/docs/design/javascript-targeting/streaming-inference-through-the-actor-pipeline/"
+    },
+    {
+      "text": "WebAssembly Targeting\n",
+      "href": "https://clef-lang.com/docs/design/wasm-targeting/"
+    },
+    {
+      "text": "Coroutines vs Stack Switching",
+      "href": "https://clef-lang.com/docs/design/wasm-targeting/coroutine-versus-stack-switching/"
+    },
+    {
+      "text": "Linear Memory Mapping",
+      "href": "https://clef-lang.com/docs/design/wasm-targeting/linear-memory-mapping/"
+    },
+    {
+      "text": "One Module, Many Hosts",
+      "href": "https://clef-lang.com/docs/design/wasm-targeting/one-module-many-hosts/"
+    },
+    {
+      "text": "The Component Half-Step",
+      "href": "https://clef-lang.com/docs/design/wasm-targeting/the-component-half-step/"
+    },
+    {
+      "text": "Threads Without a Scheduler",
+      "href": "https://clef-lang.com/docs/design/wasm-targeting/threads-without-a-scheduler/"
+    },
+    {
+      "text": "The Clef Use Case For Multi-Threaded WASM hosting",
+      "href": "https://clef-lang.com/docs/design/wasm-targeting/being-the-use-case/"
+    },
+    {
+      "text": "User Interfaces",
+      "href": "https://clef-lang.com/docs/design/user-interfaces/"
+    },
+    {
+      "text": "FFI\n",
+      "href": "https://clef-lang.com/docs/design/interop/"
+    },
+    {
+      "text": "TypeScript Binding (Xantham)",
+      "href": "https://clef-lang.com/docs/design/interop/typescript-binding-via-xantham/"
+    },
+    {
+      "text": "C & Cpp Binding",
+      "href": "https://clef-lang.com/docs/design/interop/library-binding/"
+    },
+    {
+      "text": "Compiler Internals\n",
+      "href": "https://clef-lang.com/docs/internals/"
+    },
+    {
+      "text": "Concepts\n",
+      "href": "https://clef-lang.com/docs/internals/concepts/"
+    },
+    {
+      "text": "Coeffects and Codata",
+      "href": "https://clef-lang.com/docs/internals/concepts/coeffects-and-codata/"
+    },
+    {
+      "text": "Nanopass Navigation",
+      "href": "https://clef-lang.com/docs/internals/concepts/nanopass-navigation/"
+    },
+    {
+      "text": "Seq'ing Simplicity",
+      "href": "https://clef-lang.com/docs/internals/concepts/seqing-simplicity/"
+    },
+    {
+      "text": "Referential Transparency",
+      "href": "https://clef-lang.com/docs/internals/concepts/seeking-referential-transparency/"
+    },
+    {
+      "text": "Compiler Pipeline\n",
+      "href": "https://clef-lang.com/docs/internals/pipeline/"
+    },
+    {
+      "text": "Proof-Aware Compilation",
+      "href": "https://clef-lang.com/docs/internals/pipeline/proof-aware-compilation/"
+    },
+    {
+      "text": "Learning to Walk",
+      "href": "https://clef-lang.com/docs/internals/pipeline/learning-to-walk/"
+    },
+    {
+      "text": "Baker Saturation Engine",
+      "href": "https://clef-lang.com/docs/internals/pipeline/baker-saturation-engine/"
+    },
+    {
+      "text": "Hyping Hypergraphs",
+      "href": "https://clef-lang.com/docs/internals/pipeline/hyping-hypergraphs/"
+    },
+    {
+      "text": "Graph Coloring",
+      "href": "https://clef-lang.com/docs/internals/pipeline/speed-and-safety-with-graph-coloring/"
+    },
+    {
+      "text": "Intelligent Tree Shaking",
+      "href": "https://clef-lang.com/docs/internals/pipeline/intelligent-tree-shaking/"
+    },
+    {
+      "text": "Transparent Verification\n",
+      "href": "https://clef-lang.com/docs/internals/verification/"
+    },
+    {
+      "text": "From Double Annotation to Discovery",
+      "href": "https://clef-lang.com/docs/internals/verification/double-annotation-discovery/"
+    },
+    {
+      "text": "The Decidability Sweet Spot",
+      "href": "https://clef-lang.com/docs/internals/verification/decidability-sweet-spot/"
+    },
+    {
+      "text": "Memory Coeffect Algebra",
+      "href": "https://clef-lang.com/docs/internals/verification/memory-coeffect-algebra/"
+    },
+    {
+      "text": "From Proofs to Silicon",
+      "href": "https://clef-lang.com/docs/internals/verification/proofs-to-silicon/"
+    },
+    {
+      "text": "Mode Shifts In Fidelity Verification",
+      "href": "https://clef-lang.com/docs/internals/verification/mode-shifts/"
+    },
+    {
+      "text": "Proof Composition and Tooling",
+      "href": "https://clef-lang.com/docs/internals/verification/proof-composition-and-tooling/"
+    },
+    {
+      "text": "MLIR Integration\n",
+      "href": "https://clef-lang.com/docs/internals/mlir/"
+    },
+    {
+      "text": "MLIR Testing with Teeth",
+      "href": "https://clef-lang.com/docs/internals/mlir/mlir-testing-with-teeth/"
+    },
+    {
+      "text": "Hello World Goes Native",
+      "href": "https://clef-lang.com/docs/internals/mlir/hello-world-goes-native/"
+    },
+    {
+      "text": "Context-Aware Compilation",
+      "href": "https://clef-lang.com/docs/internals/mlir/context-aware-compilation/"
+    },
+    {
+      "text": "Farscape Interop\n",
+      "href": "https://clef-lang.com/docs/internals/farscape/"
+    },
+    {
+      "text": "C++ Binding via Farscape",
+      "href": "https://clef-lang.com/docs/internals/farscape/binding-cpp-to-clef-in-farscape/"
+    },
+    {
+      "text": "Farscape Entry Points",
+      "href": "https://clef-lang.com/docs/internals/farscape/farscape-modular-entry-points/"
+    },
+    {
+      "text": "Numerics\n",
+      "href": "https://clef-lang.com/docs/internals/numerics/"
+    },
+    {
+      "text": "Arithmetic Construction",
+      "href": "https://clef-lang.com/docs/internals/numerics/arithmetic-construction-and-placement/"
+    },
+    {
+      "text": "On Hardware\n",
+      "href": "https://clef-lang.com/docs/internals/hardware/"
+    },
+    {
+      "text": "Fidelity on MCU",
+      "href": "https://clef-lang.com/docs/internals/hardware/fidelity-on-mcu/"
+    },
+    {
+      "text": "On Metal Extended",
+      "href": "https://clef-lang.com/docs/internals/hardware/on-metal-extended/"
+    },
+    {
+      "text": "Cache-Conscious Memory: CPU",
+      "href": "https://clef-lang.com/docs/internals/hardware/cache-aware-compilation-cpu/"
+    },
+    {
+      "text": "GPU Cache-Aware Compilation",
+      "href": "https://clef-lang.com/docs/internals/hardware/cache-aware-compilation-gpu/"
+    },
+    {
+      "text": "Scheduling on Metal",
+      "href": "https://clef-lang.com/docs/internals/hardware/scheduling-on-metal/"
+    },
+    {
+      "text": "Storage on Metal",
+      "href": "https://clef-lang.com/docs/internals/hardware/storage-on-metal/"
+    },
+    {
+      "text": "Bring-Up Beyond the CPU",
+      "href": "https://clef-lang.com/docs/internals/hardware/bring-up-beyond-the-cpu/"
+    },
+    {
+      "text": "Memory Fabrics\n",
+      "href": "https://clef-lang.com/docs/internals/memory-fabrics/"
+    },
+    {
+      "text": "The KV Cache as a Shared Fabric Region",
+      "href": "https://clef-lang.com/docs/internals/memory-fabrics/the-kv-cache-as-a-shared-fabric-region/"
+    },
+    {
+      "text": "RDNA and the Unified Memory Desktop",
+      "href": "https://clef-lang.com/docs/internals/memory-fabrics/rdna-unified-memory-desktop/"
+    },
+    {
+      "text": "Accelerating Network Communication",
+      "href": "https://clef-lang.com/docs/internals/memory-fabrics/rdma-accelerating-network-comms/"
+    },
+    {
+      "text": "Next-Generation Memory Coherence",
+      "href": "https://clef-lang.com/docs/internals/memory-fabrics/next-generation-memory-coherence/"
+    },
+    {
+      "text": "Tooling\n",
+      "href": "https://clef-lang.com/docs/tooling/"
+    },
+    {
+      "text": "Editor Integration",
+      "href": "https://clef-lang.com/docs/tooling/clef-editor-integration/"
+    },
+    {
+      "text": "Leveling Up With Lattice",
+      "href": "https://clef-lang.com/docs/tooling/leveling-up-with-lattice/"
+    },
+    {
+      "text": "ClefPak",
+      "href": "https://clef-lang.com/docs/tooling/clefpak-source-based-package-management/"
+    },
+    {
+      "text": "Atelier",
+      "href": "https://clef-lang.com/docs/tooling/atelier-the-fidelity-workshop/"
+    },
+    {
+      "text": "Language Specification\n",
+      "href": "https://clef-lang.com/spec/"
+    },
+    {
+      "text": "Front Matter",
+      "href": "https://clef-lang.com/spec/draft/front-matter/"
+    },
+    {
+      "text": "Change Process and Specification Management",
+      "href": "https://clef-lang.com/spec/draft/change-process-management/"
+    },
+    {
+      "text": "Scope",
+      "href": "https://clef-lang.com/spec/draft/scope/"
+    },
+    {
+      "text": "Normative References",
+      "href": "https://clef-lang.com/spec/draft/normative-references/"
+    },
+    {
+      "text": "Terms and Definitions",
+      "href": "https://clef-lang.com/spec/draft/terms-and-definitions/"
+    },
+    {
+      "text": "Conformance",
+      "href": "https://clef-lang.com/spec/draft/conformance/"
+    },
+    {
+      "text": "Behavior Classification",
+      "href": "https://clef-lang.com/spec/draft/behavior-classification/"
+    },
+    {
+      "text": "Introduction",
+      "href": "https://clef-lang.com/spec/draft/introduction/"
+    },
+    {
+      "text": "Program Structure",
+      "href": "https://clef-lang.com/spec/draft/program-structure/"
+    },
+    {
+      "text": "Lexical Analysis",
+      "href": "https://clef-lang.com/spec/draft/lexical-analysis/"
+    },
+    {
+      "text": "Basic Grammar Elements",
+      "href": "https://clef-lang.com/spec/draft/basic-grammar-elements/"
+    },
+    {
+      "text": "Lexical Filtering",
+      "href": "https://clef-lang.com/spec/draft/lexical-filtering/"
+    },
+    {
+      "text": "Types and Type Constraints",
+      "href": "https://clef-lang.com/spec/draft/types-and-type-constraints/"
+    },
+    {
+      "text": "Type Representation Architecture",
+      "href": "https://clef-lang.com/spec/draft/type-representation-architecture/"
+    },
+    {
+      "text": "Clef Type Universe Specification",
+      "href": "https://clef-lang.com/spec/draft/native-type-universe/"
+    },
+    {
+      "text": "Native Type Mappings",
+      "href": "https://clef-lang.com/spec/draft/native-type-mappings/"
+    },
+    {
+      "text": "NTU Type Nomenclature Specification",
+      "href": "https://clef-lang.com/spec/draft/ntu-types/"
+    },
+    {
+      "text": "NTU Dimensional Type Architecture",
+      "href": "https://clef-lang.com/spec/draft/ntu-dimensional-architecture/"
+    },
+    {
+      "text": "Units of Measure",
+      "href": "https://clef-lang.com/spec/draft/units-of-measure/"
+    },
+    {
+      "text": "Grade Discipline",
+      "href": "https://clef-lang.com/spec/draft/grade-discipline/"
+    },
+    {
+      "text": "Special Attributes and Types",
+      "href": "https://clef-lang.com/spec/draft/special-attributes-and-types/"
+    },
+    {
+      "text": "Type Definitions",
+      "href": "https://clef-lang.com/spec/draft/type-definitions/"
+    },
+    {
+      "text": "Expressions",
+      "href": "https://clef-lang.com/spec/draft/expressions/"
+    },
+    {
+      "text": "Patterns",
+      "href": "https://clef-lang.com/spec/draft/patterns/"
+    },
+    {
+      "text": "Namespaces and Modules",
+      "href": "https://clef-lang.com/spec/draft/namespaces-and-modules/"
+    },
+    {
+      "text": "Namespace and Module Signatures",
+      "href": "https://clef-lang.com/spec/draft/namespace-and-module-signatures/"
+    },
+    {
+      "text": "Error Handling",
+      "href": "https://clef-lang.com/spec/draft/error-handling/"
+    },
+    {
+      "text": "Program Semantic Graph",
+      "href": "https://clef-lang.com/spec/draft/program-semantic-graph/"
+    },
+    {
+      "text": "Program Hypergraph",
+      "href": "https://clef-lang.com/spec/draft/program-hypergraph/"
+    },
+    {
+      "text": "Closure Representation",
+      "href": "https://clef-lang.com/spec/draft/closure-representation/"
+    },
+    {
+      "text": "Lazy Value Representation",
+      "href": "https://clef-lang.com/spec/draft/lazy-representation/"
+    },
+    {
+      "text": "Discriminated Union Representation",
+      "href": "https://clef-lang.com/spec/draft/discriminated-union-representation/"
+    },
+    {
+      "text": "Sequence Expression Representation",
+      "href": "https://clef-lang.com/spec/draft/seq-representation/"
+    },
+    {
+      "text": "Delimited Continuation Representation",
+      "href": "https://clef-lang.com/spec/draft/dcont-representation/"
+    },
+    {
+      "text": "Sequence Operations Representation",
+      "href": "https://clef-lang.com/spec/draft/seq-operations-representation/"
+    },
+    {
+      "text": "List Operations Representation",
+      "href": "https://clef-lang.com/spec/draft/list-operations-representation/"
+    },
+    {
+      "text": "Map Representation",
+      "href": "https://clef-lang.com/spec/draft/map-representation/"
+    },
+    {
+      "text": "Set Representation",
+      "href": "https://clef-lang.com/spec/draft/set-representation/"
+    },
+    {
+      "text": "Option Operations Representation",
+      "href": "https://clef-lang.com/spec/draft/option-operations-representation/"
+    },
+    {
+      "text": "Incremental Computation",
+      "href": "https://clef-lang.com/spec/draft/incremental-computation/"
+    },
+    {
+      "text": "Observable Computation",
+      "href": "https://clef-lang.com/spec/draft/observable-computation/"
+    },
+    {
+      "text": "Reactive Signals",
+      "href": "https://clef-lang.com/spec/draft/reactive-signals/"
+    },
+    {
+      "text": "Width Inference",
+      "href": "https://clef-lang.com/spec/draft/width-inference/"
+    },
+    {
+      "text": "Numeric Selection",
+      "href": "https://clef-lang.com/spec/draft/numeric-selection/"
+    },
+    {
+      "text": "Rounding and Directed Rounding",
+      "href": "https://clef-lang.com/spec/draft/rounding/"
+    },
+    {
+      "text": "Memory Regions",
+      "href": "https://clef-lang.com/spec/draft/memory-regions/"
+    },
+    {
+      "text": "Access Kinds",
+      "href": "https://clef-lang.com/spec/draft/access-kinds/"
+    },
+    {
+      "text": "Modular Blob Storage",
+      "href": "https://clef-lang.com/spec/draft/modular-blob-storage/"
+    },
+    {
+      "text": "Credential Authority",
+      "href": "https://clef-lang.com/spec/draft/credential-authority/"
+    },
+    {
+      "text": "Namespace Storage",
+      "href": "https://clef-lang.com/spec/draft/namespace-storage/"
+    },
+    {
+      "text": "Cryptography and Bits Intrinsic Modules Specification",
+      "href": "https://clef-lang.com/spec/draft/intrinsics-cryptography-bits/"
+    },
+    {
+      "text": "Program Structure and Execution",
+      "href": "https://clef-lang.com/spec/draft/program-structure-and-execution/"
+    },
+    {
+      "text": "Atomic Operations and Memory Ordering",
+      "href": "https://clef-lang.com/spec/draft/atomic-operations/"
+    },
+    {
+      "text": "Synchronous RPC and Wait Classification",
+      "href": "https://clef-lang.com/spec/draft/synchronous-rpc-liveness/"
+    },
+    {
+      "text": "Scheduler Contract",
+      "href": "https://clef-lang.com/spec/draft/scheduler-contract/"
+    },
+    {
+      "text": "Platform Bindings and System Intrinsics",
+      "href": "https://clef-lang.com/spec/draft/platform-bindings/"
+    },
+    {
+      "text": "Platform Predicates Specification",
+      "href": "https://clef-lang.com/spec/draft/platform-predicates/"
+    },
+    {
+      "text": "ClefExpr: CCS Typed Expression Representation",
+      "href": "https://clef-lang.com/spec/draft/clef-expr/"
+    },
+    {
+      "text": "Inference Procedures",
+      "href": "https://clef-lang.com/spec/draft/inference-procedures/"
+    },
+    {
+      "text": "Application Resolution",
+      "href": "https://clef-lang.com/spec/draft/inference-application-resolution/"
+    },
+    {
+      "text": "Constraint Solving and Definition Checking",
+      "href": "https://clef-lang.com/spec/draft/inference-constraint-solving/"
+    },
+    {
+      "text": "Name Resolution",
+      "href": "https://clef-lang.com/spec/draft/inference-name-resolution/"
+    },
+    {
+      "text": "Supplementary Inference Procedures",
+      "href": "https://clef-lang.com/spec/draft/inference-supplementary/"
+    },
+    {
+      "text": "Backend Lowering Architecture",
+      "href": "https://clef-lang.com/spec/draft/backend-lowering-architecture/"
+    },
+    {
+      "text": "FFI Boundary Semantics",
+      "href": "https://clef-lang.com/spec/draft/ffi-boundary/"
+    },
+    {
+      "text": "Interactive Development",
+      "href": "https://clef-lang.com/spec/draft/interactive-development/"
+    },
+    {
+      "text": "JavaScript Boundary Semantics",
+      "href": "https://clef-lang.com/spec/draft/javascript-boundary/"
+    },
+    {
+      "text": "The OCaml Foundation: More Than Just Syntax",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-ocaml-foundation-more-than-just-syntax"
+    },
+    {
+      "text": "The Critical Addition: MailboxProcessor in the Core Library",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-critical-addition-mailboxprocessor-in-the-core-library"
+    },
+    {
+      "text": "The Fable Connection: OCaml’s Web Legacy",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-fable-connection-ocamls-web-legacy"
+    },
+    {
+      "text": "Extending the Actor Vision",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#extending-the-actor-vision"
+    },
+    {
+      "text": "Actors at The Cloud’s Edge",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#actors-at-the-clouds-edge"
+    },
+    {
+      "text": "The F* Connection: Proofs Through Shared Heritage",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-f-connection-proofs-through-shared-heritage"
+    },
+    {
+      "text": "Erlang Lessons, F# Innovations",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#erlang-lessons-f-innovations"
+    },
+    {
+      "text": "The Agentic Future: Actors for AI",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-agentic-future-actors-for-ai"
+    },
+    {
+      "text": "Practical Convergence: Theory Meets Implementation",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#practical-convergence-theory-meets-implementation"
+    },
+    {
+      "text": "The Synthesis of Traditions",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-synthesis-of-traditions"
+    },
+    {
+      "text": "Blog",
+      "href": "https://clef-lang.com/blog/"
+    },
+    {
+      "text": "ARCHITECTURE",
+      "href": "https://clef-lang.com/tags/architecture/"
+    },
+    {
+      "text": "DESIGN",
+      "href": "https://clef-lang.com/tags/design/"
+    },
+    {
+      "text": "ANALYSIS",
+      "href": "https://clef-lang.com/tags/analysis/"
+    },
+    {
+      "text": "DISTRIBUTED-SYSTEMS",
+      "href": "https://clef-lang.com/tags/distributed-systems/"
+    },
+    {
+      "text": "FUNCTIONAL-PROGRAMMING",
+      "href": "https://clef-lang.com/tags/functional-programming/"
+    },
+    {
+      "text": "ACTOR-MODEL",
+      "href": "https://clef-lang.com/tags/actor-model/"
+    },
+    {
+      "text": "FORMAL-VERIFICATION",
+      "href": "https://clef-lang.com/tags/formal-verification/"
+    },
+    {
+      "text": "at the 2010 Erlang Factory conference in London",
+      "href": "https://www.erlang-factory.com/conference/London2010/speakers/donsyme"
+    },
+    {
+      "text": "",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-ocaml-foundation-more-than-just-syntax"
+    },
+    {
+      "text": "Microsoft’s new runtime",
+      "href": "https://clef-lang.com/blog/the-return-of-the-compiler/"
+    },
+    {
+      "text": "",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-critical-addition-mailboxprocessor-in-the-core-library"
+    },
+    {
+      "text": "",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-fable-connection-ocamls-web-legacy"
+    },
+    {
+      "text": "the Fable compiler",
+      "href": "https://fable.io/"
+    },
+    {
+      "text": "",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#extending-the-actor-vision"
+    },
+    {
+      "text": "Fidelity Framework",
+      "href": "https://clef-lang.com/blog/fidelity-framework-primer/"
+    },
+    {
+      "text": "RAII in Olivier and Prospero",
+      "href": "https://clef-lang.com/docs/design/memory/raii-in-olivier-and-prospero/"
+    },
+    {
+      "text": "actor-oriented architecture",
+      "href": "https://clef-lang.com/blog/the-case-for-actor-oriented-architecture/"
+    },
+    {
+      "text": "",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#actors-at-the-clouds-edge"
+    },
+    {
+      "text": "Fidelity.CloudEdge",
+      "href": "https://speakez.tech/proposals/cloudflare-fs-toolkit/"
+    },
+    {
+      "text": "distributed intelligence",
+      "href": "https://speakez.tech/proposals/distributed-intelligence/"
+    },
+    {
+      "text": "Fidelity-compiled unikernels",
+      "href": "https://clef-lang.com/blog/getting-to-the-heart-of-unikernels/"
+    },
+    {
+      "text": "",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-f-connection-proofs-through-shared-heritage"
+    },
+    {
+      "text": "verification can be integrated",
+      "href": "https://clef-lang.com/docs/internals/verification/"
+    },
+    {
+      "text": "proof-aware compilation",
+      "href": "https://clef-lang.com/docs/internals/pipeline/proof-aware-compilation/"
+    },
+    {
+      "text": "",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#erlang-lessons-f-innovations"
+    },
+    {
+      "text": "Erlang lessons in Fidelity",
+      "href": "https://clef-lang.com/blog/ode-to-erlang/"
+    },
+    {
+      "text": "",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-agentic-future-actors-for-ai"
+    },
+    {
+      "text": "actors taking center stage",
+      "href": "https://speakez.tech/blog/actors-take-center-stage/"
+    },
+    {
+      "text": "",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#practical-convergence-theory-meets-implementation"
+    },
+    {
+      "text": "",
+      "href": "https://clef-lang.com/blog/unexpected-fusion/#the-synthesis-of-traditions"
+    },
+    {
+      "text": "Breaking the P vs NP Mystique",
+      "href": "https://clef-lang.com/blog/breaking-the-p-vs-np-mystique/"
+    },
+    {
+      "text": "A Vision For Unified Cognitive Architecture",
+      "href": "https://clef-lang.com/blog/unified-cognitive-architecture/"
+    }
+  ]
+}
