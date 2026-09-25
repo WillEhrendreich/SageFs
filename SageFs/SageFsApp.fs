@@ -2951,15 +2951,15 @@ module SageFsEffectHandler =
                 match deps.ResolveSession targetSid with
                 | Ok resolution ->
                   let sid = SessionOperations.sessionId resolution
-                  // Retry proxy lookup — worker URL may not be registered yet at startup
-                  // Short backoff: 50, 100, 200, 400ms (750ms total vs old 10s)
+                  // Bounded by a DEADLINE, not an attempt count: four fixed
+                  // attempts (750ms) stranded every run under load. See
+                  // WorkerProxyWait.fs.
                   let mutable proxy = deps.GetStreamingTestProxy sid
-                  let mutable retries = 0
-                  let mutable delay = 50
-                  while proxy.IsNone && retries < 4 do
-                    retries <- retries + 1
+                  let mutable delays = WorkerProxyWait.delaysByDefault
+                  while proxy.IsNone && not (List.isEmpty delays) do
+                    let delay = List.head delays
+                    delays <- List.tail delays
                     do! Async.Sleep delay
-                    delay <- delay * 2
                     proxy <- deps.GetStreamingTestProxy sid
                   match proxy with
                   | Some streamProxy ->

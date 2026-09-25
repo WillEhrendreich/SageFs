@@ -51,6 +51,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="WorkerProxyWait.fs" />
         <Compile Include="DaemonState.fs" />
         <Compile Include="UpdateCheckService.fs" />
         <Compile Include="DaemonTelemetry.fs" />
