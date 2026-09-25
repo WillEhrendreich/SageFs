@@ -44,27 +44,33 @@ Both die on their baseline assertion with
 5. **The mechanism is not broken.** Both tests pass alone in ~10 seconds, on
    the current tree, repeatedly.
 
-## What is left
+## What is left — ANSWERED: cross-suite contention
 
-The two tests depend on a live worker reaching a registered `WorkerBaseUrls`
-entry inside a 60s window, while the tier runs 250 real-daemon suites in
-parallel. Something in that contention keeps the worker's test proxy from
-becoming available in time. The two candidate causes, neither yet confirmed:
+The isolation experiment settles it. Three runs:
 
-- the worker's *first* run is the expensive one (compile + instrument), so under
-  contention 60s is genuinely not enough; or
-- the worker is failing to register at all under contention, and the 15s proxy
-  wait added in `5a7be2c7` simply expires.
+| Run | Result |
+|---|---|
+| test 1 alone (`--filter-test-case`) | **passed**, 10.7s |
+| test 2 alone (`--filter-test-case`) | **passed**, 9.8s |
+| test 1 via `--filter-test-list` (its own suite only) | **passed**, 10.9s |
 
-`5a7be2c7` (proxy wait 750ms → a 15s deadline) is a correct change on its own
-terms and is measured, but it did **not** turn these two green, so the
-contention cause is elsewhere. It is kept because a fixed 750ms attempt count
-was demonstrably the wrong shape; it is not claimed as the fix.
+Both tests pass when the other 248 suites are excluded. They fail only when all
+250 run together. So the cause is **contention from the other suites**, not
+either test, and not the port race already fixed in `ed9220c1`.
+
+Expecto runs test LISTS in parallel, and this tier starts 58 daemons across 62
+ports. The two live-testing suites are the ones that wait on a worker reaching
+a ready state, so they are the ones that lose. The remaining work belongs in
+the tier's **scheduling** — sequencing the suites that wait on a worker, or
+bounding the tier's parallelism — not in either test and not in the product.
+
+`5a7be2c7` (the 15s proxy deadline) is a correct change on its own terms and is
+kept, but it did not turn these green and is not claimed as the fix.
 
 ## How to re-check
 
 ```bash
-# passes alone (~10s) — the isolation result is the honest one
+# passes alone (~10s)
 dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll \
   --integration-host \
   --filter-test-case "editing a compiled F# file reruns tests against rebuilt output without an explicit rerun"
@@ -72,7 +78,3 @@ dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll \
 # fails under the full tier
 dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary
 ```
-
-A targeted next step: run the tier with the two live-testing suites isolated
-from the other 248 and see whether they still fail. If they pass, the cause is
-cross-suite contention and belongs in the tier's scheduling, not in either test.
