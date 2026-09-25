@@ -1378,30 +1378,17 @@ module McpTools =
           // "lifecycle: Starting" and "loadedProjects: []" — an agent gating
           // on `state == Ready` walked straight into a session that was not
           // loaded. Dogfooded live: the exact contradiction the roast reported.
-          let sessionState = WorkerProtocol.SessionLifecycleStatus.toSessionState reconciledStatus
-          let label = WorkerProtocol.SessionLifecycleStatus.label reconciledStatus
-          let stateLabel =
-            match sessionState with
-            | SageFs.SessionState.Ready -> "Ready"
-            | SageFs.SessionState.WarmingUp -> "WarmingUp"
-            | SageFs.SessionState.Faulted -> "Faulted"
-            | SageFs.SessionState.Evaluating -> "Ready"
-            | SageFs.SessionState.Uninitialized -> "WarmingUp"
-          return System.Text.Json.JsonSerializer.Serialize(
-            {| state = stateLabel
-               scope = "Session"
-               sessionId = sid
-               target = targets
-               loadedProjects = sessionInfo.ProjectRoles |> List.map _.Path
-               lifecycle = label
-               workerPid = WorkerProtocol.SessionLifecycleStatus.workerPid reconciledStatus
-               workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort reconciledStatus
-               workflow = WorkflowTypes.SessionWorkflow.label sessionInfo.Workflow
-               coreVersion = snapshot.CoreVersion
-               evalCount = snapshot.EvalCount
-               averageDurationMs = snapshot.AvgDurationMs
-               health = SessionHealth.toJson health
-               available = SageFs.Affordances.availableTools sessionState |})
+          return SessionStatusPayload.serialize
+            { SessionState = WorkerProtocol.SessionLifecycleStatus.toSessionState reconciledStatus
+              SessionId = sid
+              Target = targets
+              LoadedProjects = sessionInfo.ProjectRoles |> List.map _.Path
+              ReconciledStatus = reconciledStatus
+              Workflow = sessionInfo.Workflow
+              CoreVersion = snapshot.CoreVersion
+              EvalCount = snapshot.EvalCount
+              AverageDurationMs = snapshot.AvgDurationMs
+              Health = SessionHealth.toJson health }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }

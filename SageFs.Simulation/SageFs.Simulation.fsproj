@@ -111,6 +111,8 @@
              age only and ignores the version. -->
         <Compile Include="GranularRestartSim.fs" />
         <Compile Include="GranularRestartInvariants.fs" />
+        <Compile Include="HolderSim.fs" />
+        <Compile Include="HolderInvariants.fs" />
         <Compile Include="RetentionSim.fs" />
         <Compile Include="RetentionSimInvariants.fs" />
         <!-- sagefs mcp stdio bridge: startup-race DST folding the real

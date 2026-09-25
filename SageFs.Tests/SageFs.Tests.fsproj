@@ -553,6 +553,8 @@
         <Compile Include="RetiredToolNameTests.fs" />
         <Compile Include="TestAccountingHonestyTests.fs" />
         <Compile Include="SessionStatusTruthTests.fs" />
+        <Compile Include="HolderTests.fs" />
+        <Compile Include="HolderSimTests.fs" />
         <Compile Include="GranularRestartTests.fs" />
         <Compile Include="GranularRestartSimTests.fs" />
         <Compile Include="RestartScopeTests.fs" />

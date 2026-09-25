@@ -1082,7 +1082,14 @@ let fileSizeBudgets =
       // McpCohortIntegration.fs. The MCP surface keeps the same tools, while
       // the process-global binding now has one explicit owner and the landing
       // performer reads that same binding. Exact post-split size.
-      "SageFs/Mcp.fs", 4385
+      // 4385 -> 4388: ratcheted DOWN (never up) after moving the
+      // session-status payload serialization and the Ready/WarmingUp state
+      // rule out into SessionStatusPayload.fs. The payload is pure
+      // serialization of facts the caller already computed, and taking it out
+      // is what let the state/lifecycle/loadedProjects agreement become one
+      // testable rule instead of an inline record. The remaining growth is the
+      // call site; the rule itself now lives where the DST can fold it.
+      "SageFs/Mcp.fs", 4388
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

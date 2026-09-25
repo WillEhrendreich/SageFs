@@ -104,7 +104,10 @@
         <Compile Include="McpSessionRouting.fs" />
         <Compile Include="McpRouteError.fs" />
         <Compile Include="CreateSessionUx.fs" />
+        <Compile Include="SessionStatusPayload.fs" />
         <Compile Include="Mcp.fs" />
+
+
         <Compile Include="McpCohortIntegration.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />
