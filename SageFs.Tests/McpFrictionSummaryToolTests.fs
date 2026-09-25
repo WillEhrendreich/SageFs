@@ -33,9 +33,20 @@ let private mkEvent (tool: string) (outcome: FrictionOutcome) (atUtcOffsetSecond
     ContextCost = ContextCost.Focused
     SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
+/// The tool the recorded harvest burst was captured under, read from the
+/// product's retired-tool vocabulary so this copy cannot name something the
+/// other replay tests do not. `reportDirect` uses the LIVE default, so the two
+/// B7 tests below pass the matching config explicitly via `reportDirectWith`.
+let private historicalPollingTool =
+  SageFs.Affordances.RetiredTool.toToolName SageFs.Affordances.RetiredTool.GetFsiStatus
+
+let private harvestReplayConfig : DetectorConfig =
+  { DetectorConfig.defaults with PollingTools = Set.ofList [ historicalPollingTool ] }
+
 /// The harvest replay pattern (observed-friction-plan.md §e /
 /// ObservedFrictionAcceptanceTests.fs): 4x "unknown (missing argument)"
-/// unattributed failures + a 72x get_fsi_status polling burst. Reused here
+/// unattributed failures + a 72x polling burst under the tool name the
+/// harvest was recorded under. Reused here
 /// to prove the SAME signals reach the daemon's `reportDirect` read model
 /// (Brief B7), not just the pure `detectAll` engine.
 let private harvestReplayEvents : FrictionEvent list =
@@ -43,7 +54,7 @@ let private harvestReplayEvents : FrictionEvent list =
     List.init 4 (fun i ->
       mkEvent "unknown (missing argument)" (FrictionOutcome.EncounteredBlocker BlockerKind.InvalidRequest) (float i))
   let polling =
-    List.init 72 (fun i -> mkEvent "get_fsi_status" FrictionOutcome.CompletedCleanly (10.0 + float i))
+    List.init 72 (fun i -> mkEvent historicalPollingTool FrictionOutcome.CompletedCleanly (10.0 + float i))
   unattributed @ polling
 
 let private seedStore (store: SageFs.Features.FrictionSqlite.FrictionStore) (events: FrictionEvent list) = task {
@@ -118,7 +129,7 @@ let tests =
       let store = tempFrictionStore ()
       do! seedStore store harvestReplayEvents
 
-      let! bundleResult = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store None
+      let! bundleResult = SageFs.Features.McpFrictionRecorder.Recorder.reportDirectWith store None harvestReplayConfig
       match bundleResult with
       | Error err -> failwithf "reportDirect failed: %s" err
       | Ok bundle ->
@@ -132,7 +143,7 @@ let tests =
         bundle.ObservedSignals
         |> List.exists (fun d ->
           match d.Signal with
-          | FrictionSignal.ExcessivePolling(tool, 72, _, _) -> ToolName.value tool = "get_fsi_status"
+          | FrictionSignal.ExcessivePolling(tool, 72, _, _) -> ToolName.value tool = historicalPollingTool
           | _ -> false)
         |> Expect.isTrue "reportDirect's read model should carry the ExcessivePolling(72) observed signal"
     }
@@ -141,7 +152,7 @@ let tests =
       let store = tempFrictionStore ()
       do! seedStore store harvestReplayEvents
 
-      let! bundleResult = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store None
+      let! bundleResult = SageFs.Features.McpFrictionRecorder.Recorder.reportDirectWith store None harvestReplayConfig
       match bundleResult with
       | Error err -> failwithf "reportDirect failed: %s" err
       | Ok bundle ->
@@ -160,6 +171,8 @@ let tests =
     testCaseTask "reportDirect yields no observed signals for an empty store — no phantom signals (B7)" <| fun () -> task {
       let store = tempFrictionStore ()
 
+      // Live defaults on purpose: this is not a harvest replay, it is the
+      // production path with nothing in it.
       let! bundleResult = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store None
       match bundleResult with
       | Error err -> failwithf "reportDirect failed: %s" err

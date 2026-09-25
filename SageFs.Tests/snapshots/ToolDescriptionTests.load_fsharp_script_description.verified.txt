@@ -1,7 +1,12 @@
 ﻿Load and execute an F# script file (.fsx). The file is parsed into individual statements and each statement is sent to the FSI session separately, so partial progress is preserved if one statement fails.
 
+RETIRED — this is not a registered MCP tool. There is no `load_fsharp_script`
+in `tools/list`, and a call to it is refused. To run a script, read the file and
+send its contents through send_fsharp_code, or send the file's statements
+directly. This formatter is kept only as an internal compatibility path.
+
 WHEN TO USE vs send_fsharp_code:
-- Use load_fsharp_script when you have a complete .fsx file on disk that sets up state, runs a scenario, or installs packages via #r directives.
+- send_fsharp_code handles both cases: a complete .fsx on disk, or small code snippets.
 - Use send_fsharp_code when you are writing/iterating on small code snippets interactively.
 
 BEHAVIOR:

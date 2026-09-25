@@ -12,11 +12,13 @@ open SageFs.Tests.ObservedFrictionTypesTests
 /// the harvest's real pattern (observed-friction-harvest.md):
 ///   - 4x "unknown (missing argument)" / EncounteredBlocker InvalidRequest
 ///     (the arg-parse sentinel class, McpServer.fs:175-179).
-///   - a 72x get_fsi_status burst, all CompletedCleanly.
+///   - a 72x burst of the tool the harvest was recorded under
+///     (`historicalPollingTool`; the harvest predates the rename), all
+///     CompletedCleanly.
 ///   - baseline create_session x8, diagnose x1 (no friction).
 /// through `ObservedFriction.detectAll DetectorConfig.defaults` must
 /// produce EXACTLY UnattributedFailure("unknown (missing argument)", 4)
-/// and ExcessivePolling(get_fsi_status, 72, _, _), and must NOT emit
+/// and ExcessivePolling(historicalPollingTool, 72, _, _), and must NOT emit
 /// ResetThrash/RetryLoop/Abandonment (false-positive guard — the pattern
 /// has no reset/retry/abandon events at all).
 let private harvestReplayEvents : FrictionEvent list =
@@ -24,7 +26,7 @@ let private harvestReplayEvents : FrictionEvent list =
     List.init 4 (fun i ->
       event "unknown (missing argument)" (FrictionOutcome.EncounteredBlocker BlockerKind.InvalidRequest) (float i))
   let polling =
-    List.init 72 (fun i -> event "get_fsi_status" FrictionOutcome.CompletedCleanly (10.0 + float i))
+    List.init 72 (fun i -> event historicalPollingTool FrictionOutcome.CompletedCleanly (10.0 + float i))
   let baseline =
     List.init 8 (fun i -> event "create_session" FrictionOutcome.CompletedCleanly (200.0 + float i))
     @ [ event "diagnose" FrictionOutcome.CompletedCleanly 300.0 ]
@@ -44,7 +46,7 @@ let tests =
     testCase
       "harvest replay yields UnattributedFailure(4) + ExcessivePolling(72) and no false positives"
     <| fun _ ->
-      let signals = detectAll DetectorConfig.defaults harvestReplayEvents
+      let signals = detectAll harvestReplayConfig harvestReplayEvents
 
       signals
       |> List.exists (fun d ->
@@ -56,9 +58,9 @@ let tests =
       signals
       |> List.exists (fun d ->
         match d.Signal with
-        | FrictionSignal.ExcessivePolling(tool, 72, _, _) -> ToolName.value tool = "get_fsi_status"
+        | FrictionSignal.ExcessivePolling(tool, 72, _, _) -> ToolName.value tool = historicalPollingTool
         | _ -> false)
-      |> Expect.isTrue "should detect the 72x get_fsi_status excessive-polling burst"
+      |> Expect.isTrue "should detect the 72x excessive-polling burst on the historical tool"
 
       signals
       |> List.exists (fun d ->

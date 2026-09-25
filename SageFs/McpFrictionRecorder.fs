@@ -369,7 +369,16 @@ module Recorder =
   /// the same version-filtered event stream (Brief B7). See
   /// `FrictionReportWithSignals`'s doc comment for why this bundle lives
   /// here rather than as a field on Core's `FrictionReport`.
-  let reportDirect (store: FrictionSqlite.FrictionStore) (versionFilter: string option) =
+  ///
+  /// `detectorConfig` defaults to the live defaults. It is injectable so a
+  /// test replaying a HISTORICAL harvest — recorded before a tool rename —
+  /// can pin the name that harvest was actually captured under instead of
+  /// silently producing no polling signal. Production always uses the default.
+  let reportDirectWith
+    (store: FrictionSqlite.FrictionStore)
+    (versionFilter: string option)
+    (detectorConfig: DetectorConfig)
+    =
     task {
       let! envelopeResult = readEnvelopeDirect store
       return
@@ -377,10 +386,13 @@ module Recorder =
         | Ok envelope ->
           let filtered = filterByVersion versionFilter envelope
           let report = Summaries.frictionReport filtered.Events filtered.Feedback
-          let observedSignals = ObservedFriction.detectAll DetectorConfig.defaults filtered.Events
+          let observedSignals = ObservedFriction.detectAll detectorConfig filtered.Events
           Ok ({ Report = report; ObservedSignals = observedSignals } : FrictionReportWithSignals)
         | Error err -> Error (sprintf "Friction store read failed: %s" err)
     }
+
+  let reportDirect (store: FrictionSqlite.FrictionStore) (versionFilter: string option) =
+    reportDirectWith store versionFilter DetectorConfig.defaults
 
   // ── Friction signals -> action queue (roast §1/§3: `ObservedFriction.
   // detectAll` was computed and shown by read-model tools, but nothing fed

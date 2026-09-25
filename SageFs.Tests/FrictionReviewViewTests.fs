@@ -68,8 +68,22 @@ let private sampleReport () =
 /// McpFrictionSummaryToolTests.fs documents: SageFs.Tests.fsproj compiles
 /// this file before ObservedFrictionTypesTests.fs, so sharing its `event`
 /// builder here is a compile-order landmine. 4x "unknown (missing
-/// argument)" unattributed failures + a 72x get_fsi_status polling burst.
+/// argument)" unattributed failures + a 72x polling burst under the
+/// historical tool name.
 let private baseTimeUtc = DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+
+/// The tool the recorded harvest burst was captured under. Duplicated from
+/// `ObservedFrictionTypesTests.historicalPollingTool` for the same
+/// compile-order reason the `event` builder is: SageFs.Tests.fsproj compiles
+/// this file first. Both sides read the value from the product's retired-tool
+/// vocabulary, so the two copies cannot name different things.
+let private historicalPollingTool =
+  SageFs.Affordances.RetiredTool.toToolName SageFs.Affordances.RetiredTool.GetFsiStatus
+
+/// Defaults with the polling watch pinned back to the historical name, so a
+/// harvest replay stays a replay of what was actually recorded.
+let private harvestReplayConfig : DetectorConfig =
+  { DetectorConfig.defaults with PollingTools = Set.ofList [ historicalPollingTool ] }
 
 let private mkEvent (toolName: string) (outcome: FrictionOutcome) (atUtcOffsetSeconds: float) : FrictionEvent =
   { OccurredAtUtc = baseTimeUtc.AddSeconds atUtcOffsetSeconds
@@ -87,7 +101,7 @@ let private harvestReplayEvents : FrictionEvent list =
     List.init 4 (fun i ->
       mkEvent "unknown (missing argument)" (FrictionOutcome.EncounteredBlocker BlockerKind.InvalidRequest) (float i))
   let polling =
-    List.init 72 (fun i -> mkEvent "get_fsi_status" FrictionOutcome.CompletedCleanly (10.0 + float i))
+    List.init 72 (fun i -> mkEvent historicalPollingTool FrictionOutcome.CompletedCleanly (10.0 + float i))
   unattributed @ polling
 
 let private sampleSentReports () = [
@@ -171,7 +185,7 @@ let tests =
 
     testCase "build exposes observed signals computed from the harvest replay pattern (B8)" <| fun _ ->
       let report = Summaries.frictionReport harvestReplayEvents []
-      let observedSignals = detectAll DetectorConfig.defaults harvestReplayEvents
+      let observedSignals = detectAll harvestReplayConfig harvestReplayEvents
       let snap = build report observedSignals []
 
       snap.ObservedSignals
@@ -198,7 +212,7 @@ let tests =
 
     testCase "renderFrictionPanel renders the observed-friction section with one row per signal" <| fun _ ->
       let report = Summaries.frictionReport harvestReplayEvents []
-      let observedSignals = detectAll DetectorConfig.defaults harvestReplayEvents
+      let observedSignals = detectAll harvestReplayConfig harvestReplayEvents
       let snap = build report observedSignals []
       let html = DashboardFragments.renderFrictionPanel snap |> renderNode
 

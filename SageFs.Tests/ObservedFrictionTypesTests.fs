@@ -36,6 +36,20 @@ let private sampleWindow = { FirstAtUtc = baseTimeUtc; LastAtUtc = baseTimeUtc; 
 let private sampleTool = ToolName.create "send_fsharp_code" |> ok
 let private sampleDuration = DurationMs.create 1 |> ok
 
+/// The tool the ORIGINAL harvest burst was recorded against. That harvest
+/// predates the `get_fsi_status` → `get_session_status` rename, so a test that
+/// replays it must ask for the historical name explicitly rather than inherit
+/// whatever the live default happens to be. Data, not a literal at each site.
+let historicalPollingTool = SageFs.Affordances.RetiredTool.toToolName SageFs.Affordances.RetiredTool.GetFsiStatus
+
+/// `DetectorConfig.defaults` with the polling watch set back to the historical
+/// name, for tests that deliberately replay the recorded harvest. The live
+/// default watches the current status tool; without this, a correct rename
+/// silently disables the replay (and, worse, would make a real regression in
+/// the current name invisible to these tests).
+let harvestReplayConfig : DetectorConfig =
+  { DetectorConfig.defaults with PollingTools = Set.ofList [ historicalPollingTool ] }
+
 /// Golden set: every `FrictionSignal` case paired with its documented
 /// stable id. A case rename or a new unmapped case breaks this test —
 /// that is the point (repo convention: no magic strings anywhere).
