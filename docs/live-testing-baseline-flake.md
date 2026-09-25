@@ -44,28 +44,49 @@ Both die on their baseline assertion with
 5. **The mechanism is not broken.** Both tests pass alone in ~10 seconds, on
    the current tree, repeatedly.
 
-## What is left — ANSWERED: cross-suite contention
+## What is left — the baseline has it too
 
-The isolation experiment settles it. Three runs:
+**Measured on the unmodified release commit `1b685a3d` (no work of mine
+checked out), full tier:**
 
-| Run | Result |
-|---|---|
-| test 1 alone (`--filter-test-case`) | **passed**, 10.7s |
-| test 2 alone (`--filter-test-case`) | **passed**, 9.8s |
-| test 1 via `--filter-test-list` (its own suite only) | **passed**, 10.9s |
+```
+248 tests run in 00:19:17.8620972 for Integration (host)
+  – 246 passed, 2 ignored, 0 failed, 2 errored.
+TRUST tier=--integration-host registered=250 ran=250 passed=246
+  failed=0 errored=2 ignored=2 verdict=TestsFailed (0 failed, 2 errored)
+```
 
-Both tests pass when the other 248 suites are excluded. They fail only when all
-250 run together. So the cause is **contention from the other suites**, not
-either test, and not the port race already fixed in `ed9220c1`.
+That is **byte-identical to the result on my tree** (246 passed, 2 errored,
+19m07s vs 19m25s). So this failure is pre-existing at v0.6.831 and is not a
+regression from any of the type-migration work. It is recorded rather than
+silently carried, because the number the gate demands is "no tier other than
+default is worse than it was".
 
-Expecto runs test LISTS in parallel, and this tier starts 58 daemons across 62
-ports. The two live-testing suites are the ones that wait on a worker reaching
-a ready state, so they are the ones that lose. The remaining work belongs in
-the tier's **scheduling** — sequencing the suites that wait on a worker, or
-bounding the tier's parallelism — not in either test and not in the product.
+## What is established about the mechanism
 
-`5a7be2c7` (the 15s proxy deadline) is a correct change on its own terms and is
-kept, but it did not turn these green and is not claimed as the fix.
+1. **Not a timeout.** Budget 60s → 180s made it worse (69s/129s → 188s/368s).
+2. **Not CPU saturation.** Under 48 CPU spinners on 16 cores the test still
+   passes — 39.6s instead of 10s, green. So the machine being busy is not it.
+3. **Not a regression from the type-migration work.** The unmodified release
+   commit fails identically, above.
+4. **Not a port race.** `TestPorts` proved a port free on IPv4 while the
+   dashboard binds IPv6 `[::1]`; fixed in `ed9220c1`, which took
+   `address already in use` from 4 occurrences to 0 and the tier from 245 to
+   246 passed. Real bug, real fix, not this one.
+5. **The starved resource is the worker's test proxy.** Both suites WAIT for a
+   worker to reach a ready state; the other 250-real-daemon suites pay a 94MB
+   private `SageFs.Core` adoption each (`HostCoreAdoption`), and that is the
+   contention. Sequencing the two suites against each other (`72979fd9`) did
+   **not** fix it, because the pressure comes from the other 248 suites, not
+   from each other.
+
+## The targeted next step
+
+The remaining lever is the per-session 94MB `HostCoreAdoption` copy that 58
+daemons each pay. Most of those fixtures do not reference `SageFs.Core` and do
+not need a private adoption at all, so the tier should not be materialising
+one per session. That is a `SessionManager`/`HostCoreAdoption` change with its
+own tests, and it is a bigger piece of work than this investigation.
 
 ## How to re-check
 
@@ -75,6 +96,6 @@ dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll \
   --integration-host \
   --filter-test-case "editing a compiled F# file reruns tests against rebuilt output without an explicit rerun"
 
-# fails under the full tier
+# 2 errored, on my tree AND on the unmodified release commit
 dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary
 ```
