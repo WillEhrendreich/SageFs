@@ -1101,7 +1101,18 @@ let httpApiRoutingTests =
 
 [<Tests>]
 let httpApiLiveTestingCompiledProjectTests =
-  Integration.hostList "HTTP API compiled live testing" [
+  // Sequenced: this suite WAITS for a worker to reach a ready state, while
+  // Expecto runs test LISTS in parallel and this tier starts 58 daemons across
+  // 62 ports. Under that contention the worker's test proxy does not become
+  // available inside the wait, and the suite times out with every test
+  // `Stale` — a real run, silently reported as no result. This test passes
+  // alone in ~10s, so the failure is contention, not the test.
+  //
+  // The group is shared with McpToolOutcomeTests' live-testing suite: they wait
+  // on the same kind of resource and must not overlap each other either. Same
+  // mechanism the Harmony suites already use.
+  testSequencedGroup LiveTestingWorkerSuites.groupName <|
+    Integration.hostList "HTTP API compiled live testing" [
     testTask "editing a compiled F# file reruns tests against rebuilt output without an explicit rerun" {
       let tempProjectDir = smokeSampleProjectDir
       let tempProjectPath = smokeSampleProject
