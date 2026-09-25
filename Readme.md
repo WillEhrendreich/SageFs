@@ -296,7 +296,7 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | History browser | ✅ | ✅ | ✅ | ✅ |
 | Test trace | ✅ | ✅ | ✅ | — |
 
-A ✅ in the MCP column means a tool in the [50-tool surface](docs/mcp-tools.md) does it. Five rows used to claim ✅ and didn't have one, so I fixed the row instead of the code, since the code was already the right call: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (the `get_completions` / `explore_type` members in `SageFs/McpTools.fs` carry a `[<Description>]` but no `[<McpServerTool>]`, so they aren't exposed at all); the call graph is `GET /api/dependency-graph` (the MCP `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells*, not source symbols); run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
+A ✅ in the MCP column means a tool in the [60-tool surface](docs/mcp-tools.md) does it. Five rows used to claim ✅ and didn't have one, so I fixed the row instead of the code, since the code was already the right call: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (the `get_completions` / `explore_type` members in `SageFs/McpTools.fs` carry a `[<Description>]` but no `[<McpServerTool>]`, so they aren't exposed at all); the call graph is `GET /api/dependency-graph` (the MCP `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells*, not source symbols); run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
 
 <details>
 <summary><strong>Editor setup guides</strong></summary>
@@ -320,7 +320,7 @@ Features: Cell eval, inline results, gutter signs, SSE live updates, live test p
 
 #### AI Agent (MCP)
 
-SageFs exposes about 50 MCP tools, from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time; calling one that doesn't apply to the current session state gets rejected with a structured error rather than being hidden. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
+SageFs exposes 60 MCP tools, from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time; calling one that doesn't apply to the current session state gets rejected with a structured error rather than being hidden. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
 
 **Streamable HTTP** (recommended: auto-reconnects, no session drops):
 ```json
@@ -429,7 +429,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 
 **Multi-Session**: Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
-**MCP Tools**: about 50 tools for session trust, code execution, test listing and verification, failure explanation, analysis, and local friction reporting. They're affordance-gated at call time: the list is always complete, but a call to a tool that doesn't apply to the current session state is rejected with a structured error. [Full reference →](docs/mcp-tools.md)
+**MCP Tools**: 60 tools for session trust, code execution, test listing and verification, failure explanation, analysis, and local friction reporting. They're affordance-gated at call time: the list is always complete, but a call to a tool that doesn't apply to the current session state is rejected with a structured error. [Full reference →](docs/mcp-tools.md)
 
 **SSE Events**: All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 

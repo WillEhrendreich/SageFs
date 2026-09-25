@@ -113,6 +113,6 @@ each row pinned by an executable test; this page deliberately doesn't duplicate 
 ## MCP
 
 MCP gives programmatic access for session-aware F# evaluation, test discovery and execution, failure
-explanation, targeted verification, and diagnostics. The daemon advertises all ~50 tools regardless of session
+explanation, targeted verification, and diagnostics. The daemon advertises all 60 tools regardless of session
 state; calling one that doesn't apply yet is rejected with a structured error instead of the tool being hidden.
-Call `get_fsi_status` to see which tools currently apply.
+Call `get_session_status` to see which tools currently apply.

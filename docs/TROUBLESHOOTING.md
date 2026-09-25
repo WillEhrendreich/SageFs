@@ -242,11 +242,11 @@ progress. A session that's genuinely still working (a big repo resolving many
 projects) keeps that inactivity clock reset by its own progress and can run up
 to the absolute ceiling; a session that's gone quiet is faulted within the
 inactivity window, with a stated reason — never left reading "Starting" with
-nothing to show for it. `get_session_status` on a warming session reports
-`elapsedSeconds`, `boundSeconds`, and the last progress line so you can see
-which regime you're in. `stop_session` returns promptly in every case,
-including on an already-faulted or still-warming session — it does not wait
-for warmup to finish or fail first.
+nothing to show for it. `get_session_status` on a warming session reports the
+structured `WarmingUp` state, lifecycle, target, loaded projects, and worker
+facts. Use the daemon or worker logs for detailed warmup timing. `stop_session`
+returns promptly in every case, including on an already-faulted or still-warming
+session — it does not wait for warmup to finish or fail first.
 
 ---
 

@@ -51,7 +51,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Module**: SageFs.Features.DaemonHealth
 - **Types**: SessionHealthStatus, OverallHealth, HealthSnapshot
 - **Functions**: aggregateHealth, sessionStatusLabel, etc.
-- **MCP Tool**: ❌ No (health query is in get_fsi_status)
+- **MCP Tool**: ❌ No (health query is in get_session_status)
 - **SSE Emission**: ❌ No (health is pull-based)
 - **Tests**: ✅ DaemonHealthTests.fs
 - **Status**: DARK (pure domain model, no external wiring)

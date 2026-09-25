@@ -18,7 +18,7 @@ still listed. I went back and forth on filtering the list itself. For now
 the call-time gate is what's actually wired up, so that's what this doc
 promises.
 
-The full advertised set is about 50 tools, grouped below. This is separate
+The full advertised set is 60 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those
 HTTP endpoints are not MCP tools.

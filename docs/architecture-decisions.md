@@ -128,7 +128,7 @@ positioning. This limitation is accepted for the sake of parity, and Raylib-only
 
 ## ADR-6: MCP as the AI Interface
 
-**Decision**: SageFs exposes about 50 tools via [Model Context Protocol](https://modelcontextprotocol.io/).
+**Decision**: SageFs exposes 60 tools via [Model Context Protocol](https://modelcontextprotocol.io/).
 A state machine decides which tools are valid to *call* in the current session state.
 
 **Why**: AI agents (Copilot, Claude, and others) need structured interfaces instead of
@@ -136,12 +136,12 @@ parsing CLI output. MCP provides tool discovery with typed schemas and no need f
 terminal emulation.
 
 **Current status — call-time gate, not a filtered list**: the `tools/list` response is
-static and unfiltered — an agent always sees the full ~50-tool catalog, in every session
+static and unfiltered — an agent always sees the full 60-tool catalog, in every session
 state. What the state machine actually gates is *calling* a tool: `enforceToolCallGate`
 rejects a call to a tool that doesn't apply to the current state with a structured error
 ([`SageFs/Mcp.fs:614`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/Mcp.fs#L614),
 wired in [`SageFs/McpServer.fs:433`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/McpServer.fs#L433)).
-`get_fsi_status` reports which tools currently apply, but that's a self-service hint an
+`get_session_status` reports which tools currently apply, but that's a self-service hint an
 agent has to read — not an enforced visibility filter. There is no `AddListToolsFilter`
 wired anywhere in the codebase. See [MCP Tools](mcp-tools.md) for the accurate framing.
 

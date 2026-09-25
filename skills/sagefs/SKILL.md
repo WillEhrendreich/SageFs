@@ -143,26 +143,20 @@ One night, five agents each did one of these against a single daemon, all at
 once. Nobody was misbehaving; nothing coordinated. The daemon had no way to
 know until its RSS was already at 55GB of a 62GB box.
 
-**SageFs is the coordination point for this.** Before you run any of the five
-things above, ask `POST /api/lease/request` (`{ holder, kind }`, where `kind`
-is one of `session_create_or_warmup`, `rebuild`, `full_build`,
-`test_suite_run`, `run_app`, and `holder` identifies YOU — the same value
-every retry, never a fresh id per call) on the daemon's MCP port. You get back
-one of three things:
+SageFs-managed session creation and `hard_reset_fsi_session rebuild=true`
+acquire their own coordination leases. Do not manually lease those operations.
 
-- **`granted`** — go ahead. You get a `leaseId` and an `expiresAt`; call
-  `POST /api/lease/release` with the `leaseId` when you're done (a crashed or
-  forgetful caller just loses it at `expiresAt` — no need to release on every
-  exit path, but do release the normal one).
-- **`wait`** — a `retryAfterSeconds` and a `reason`. Sleep that long and ask
-  again with the SAME `holder`+`kind`. This is not a rejection of your
-  request, it's your place in a fair, first-come queue.
-- **`refused`** — you already hold a lease. Finish and release it before
-  asking for another; waiting won't help here, releasing will.
+Before a caller-owned full `dotnet build`, unfiltered test suite, or app run,
+use the matching MCP tool:
 
-This applies even to a `dotnet build` you run yourself outside the REPL (see
-below) — the whole point is that the daemon's accounting has to include
-memory it never spent a single byte of itself, or the accounting lies.
+- `acquire_full_build_lease` for a build you start yourself;
+- `acquire_test_suite_lease` for a test-suite process you start yourself;
+- `acquire_run_app_lease` for a run-app process you start yourself.
+
+A granted tool returns an opaque `leaseId`. Call `release_work_lease` with that
+exact id on the normal exit path. If a lease tool denies or delays the work,
+follow the decision it returns; do not shell around the daemon and spend the
+same memory outside its accounting.
 
 ## Busy versus broken — the distinction that matters most
 
