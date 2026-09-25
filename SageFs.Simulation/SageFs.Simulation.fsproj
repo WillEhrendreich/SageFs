@@ -113,6 +113,8 @@
         <Compile Include="GranularRestartInvariants.fs" />
         <Compile Include="HolderSim.fs" />
         <Compile Include="HolderInvariants.fs" />
+        <Compile Include="TypeShapeMigrationSim.fs" />
+        <Compile Include="TypeShapeMigrationInvariants.fs" />
         <Compile Include="RetentionSim.fs" />
         <Compile Include="RetentionSimInvariants.fs" />
         <!-- sagefs mcp stdio bridge: startup-race DST folding the real

@@ -90,6 +90,7 @@
         <EmbeddedResource Include="../SageFs.FsiHost/Program.fs" LogicalName="FsiHost/Program.fs" />
         <Compile Include="ProjectLoading.fs" />
         <Compile Include="Holder.fs" />
+        <Compile Include="TypeShapeMigration.fs" />
         <Compile Include="BuildPreflight.fs" />
         <Compile Include="Middleware\ValueReads.fs" />
         <Compile Include="Features\RestartScope.fs" />

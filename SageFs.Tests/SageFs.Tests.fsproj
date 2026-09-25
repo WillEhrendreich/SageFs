@@ -555,6 +555,8 @@
         <Compile Include="SessionStatusTruthTests.fs" />
         <Compile Include="HolderTests.fs" />
         <Compile Include="HolderSimTests.fs" />
+        <Compile Include="TypeShapeMigrationTests.fs" />
+        <Compile Include="TypeShapeMigrationSimTests.fs" />
         <Compile Include="GranularRestartTests.fs" />
         <Compile Include="GranularRestartSimTests.fs" />
         <Compile Include="RestartScopeTests.fs" />
