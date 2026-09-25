@@ -91,6 +91,7 @@
         <Compile Include="ProjectLoading.fs" />
         <Compile Include="BuildPreflight.fs" />
         <Compile Include="Middleware\ValueReads.fs" />
+        <Compile Include="Features\RestartScope.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
         <!-- Phase 3 (live tweaking): pure address/edit/classification/transaction

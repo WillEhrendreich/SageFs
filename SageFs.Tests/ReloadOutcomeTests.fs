@@ -10,6 +10,7 @@ module SageFs.Tests.ReloadOutcomeTests
 
 open Expecto
 open Expecto.Flip
+open SageFs.Features.RestartScope
 open FsCheck
 open SageFs.Features.ReloadOutcome
 // The type and its companion module share a name, so the module's functions
@@ -20,7 +21,7 @@ let private allReasons =
   [ RestartReason.StartupComputedValue "routes"
     RestartReason.MutableModuleState "counter"
     RestartReason.SignatureChanged "Program.handle"
-    RestartReason.TypeShapeChanged "TodoItem"
+    RestartReason.TypeShapeChanged("TodoItem", SageFs.Features.RestartScope.Everything)
     RestartReason.NewDeclaration "Program.newThing"
     RestartReason.NotYetSupported "a static member"
     RestartReason.UnverifiedCopy "Program.greeting" ]

@@ -27,6 +27,10 @@ module SageFs.Features.ReloadOutcome
 /// Named after the shape of the change the user made, because that is what they
 /// can act on. "The detour planner found no matching parameter types" is true
 /// and useless; "`routes` is computed once at startup" is actionable.
+///
+/// `RestartScope` lives in its own file (`Features/RestartScope.fs`) so the
+/// pure scope decision can be folded by the DST harness on its own, without
+/// this file's outcome algebra.
 [<RequireQualifiedAccess>]
 type RestartReason =
   /// A binding whose VALUE was computed during module initialisation, so the
@@ -47,7 +51,12 @@ type RestartReason =
   | SignatureChanged of declaration: string
   /// A type's shape changed. Existing instances in the running process were
   /// laid out by the old definition.
-  | TypeShapeChanged of typeName: string
+  ///
+  /// The scope says how wide the restart has to be. It defaults to
+  /// `Everything` at every construction site that cannot attribute the change,
+  /// which is the only safe default: a restart that is too wide costs time,
+  /// while one that is too narrow strands old instances in the process.
+  | TypeShapeChanged of typeName: string * scope: RestartScope
   /// Something that did not exist when the process started. There is no
   /// original to re-point.
   | NewDeclaration of name: string
@@ -102,8 +111,15 @@ module RestartReason =
       sprintf "'%s' changed type from %s to %s, so its live value can't carry over" binding was now
     | RestartReason.SignatureChanged decl ->
       sprintf "'%s' changed signature, so it is no longer the same method the running app calls" decl
-    | RestartReason.TypeShapeChanged typeName ->
-      sprintf "the shape of type '%s' changed, and the running app holds values laid out by the old definition" typeName
+    | RestartReason.TypeShapeChanged(typeName, scope) ->
+      match scope with
+      | RestartScope.Scoped unitName ->
+        sprintf
+          "the shape of type '%s' changed, and only unit '%s' can hold values laid out by the old definition"
+          typeName
+          unitName
+      | RestartScope.Everything ->
+        sprintf "the shape of type '%s' changed, and the running app holds values laid out by the old definition" typeName
     | RestartReason.NewDeclaration name ->
       sprintf "'%s' did not exist when the app started, so there is nothing running to re-point" name
     | RestartReason.NotYetSupported shape ->
@@ -135,8 +151,17 @@ module RestartReason =
         binding
     | RestartReason.MutableStateTypeChanged(binding, _, _) ->
       sprintf "Restart the app to start '%s' over with its new type. The running app is left exactly as it was until you do." binding
-    | RestartReason.SignatureChanged _
-    | RestartReason.TypeShapeChanged _
+    | RestartReason.SignatureChanged _ ->
+      "Restart the app — this change takes effect when the process starts."
+    | RestartReason.TypeShapeChanged(typeName, scope) ->
+      match scope with
+      | RestartScope.Scoped unitName ->
+        sprintf
+          "Restart unit '%s' to pick up the new shape of '%s'. Nothing outside it can hold an old instance, so the rest of the app keeps running."
+          unitName
+          typeName
+      | RestartScope.Everything ->
+        sprintf "Restart the app to pick up the new shape of '%s'." typeName
     | RestartReason.NewDeclaration _ ->
       "Restart the app — this change takes effect when the process starts."
     | RestartReason.NotYetSupported _ ->

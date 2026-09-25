@@ -555,6 +555,7 @@
         <Compile Include="SessionStatusTruthTests.fs" />
         <Compile Include="GranularRestartTests.fs" />
         <Compile Include="GranularRestartSimTests.fs" />
+        <Compile Include="RestartScopeTests.fs" />
         <Compile Include="../tools/agent-hooks/ReplGuard.fs" Link="AgentHooks/ReplGuard.fs" />
         <Compile Include="ReplGuardTests.fs" />
         <Compile Include="CohortLedgerSqliteTests.fs" />

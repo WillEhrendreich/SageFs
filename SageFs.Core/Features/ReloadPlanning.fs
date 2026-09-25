@@ -170,7 +170,10 @@ module ReloadChange =
   let restartReason (change: ReloadChange) : RestartReason =
     match change with
     // Live objects in the running process were laid out by the old definition.
-    | ReloadChange.TypeChanged name -> RestartReason.TypeShapeChanged name
+    // The planner has no unit attribution at this point, so the scope is the
+    // coarse `Everything`. Narrowing it is a separate, evidence-gated step
+    // (`RestartScope.infer`), never a guess made here.
+    | ReloadChange.TypeChanged name -> RestartReason.TypeShapeChanged(name, RestartScope.Everything)
     // The case users actually hit: `let routes = [ get "/" home ]`, or
     // `let getHome : HttpHandler = Response.ofHtml (...)`. The value was
     // computed during module initialisation and the app captured the result.

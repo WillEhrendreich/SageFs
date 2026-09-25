@@ -11,6 +11,7 @@ open System
 open System.Threading
 open Expecto
 open Expecto.Flip
+open SageFs.Features.RestartScope
 open SageFs.DevReload
 open SageFs.Features.ReloadOutcome
 
@@ -338,7 +339,7 @@ let reloadBroadcastTests =
         [ DevReloadEvent.Compiling None
           DevReloadEvent.Compiling(Some "A\"B.fs")
           Broadcast.eventOf (ReloadOutcome.Patched(1, 2))
-          Broadcast.eventOf (ReloadOutcome.Restarted [ RestartReason.TypeShapeChanged "T" ])
+          Broadcast.eventOf (ReloadOutcome.Restarted [ RestartReason.TypeShapeChanged("T", SageFs.Features.RestartScope.Everything) ])
           Broadcast.unchanged "A.fs"
           Broadcast.eventOf (ReloadOutcome.NoEffect(2, [ RestartReason.MutableModuleState "x" ]))
           Broadcast.eventOf (ReloadOutcome.CompileFailed "boom\nsecond line") ]

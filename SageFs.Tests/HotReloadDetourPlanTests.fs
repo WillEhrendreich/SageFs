@@ -3,6 +3,7 @@ module SageFs.Tests.HotReloadDetourPlanTests
 open System
 open Expecto
 open Expecto.Flip
+open SageFs.Features.RestartScope
 open SageFs.Middleware.HotReloading
 open SageFs.Middleware.HotReloadCore
 open SageFs.Features.ReloadOutcome
@@ -424,10 +425,10 @@ let withExtraMissesTests =
         (ReloadOutcome.NoEffect(3, [ RestartReason.SignatureChanged "f"; RestartReason.MutableModuleState "counter" ]))
 
     testCase "WHY — ReloadOutcome.withExtraMisses — RestartRequired appends without touching any count because it never carried one" <| fun _ ->
-      ReloadOutcome.RestartRequired [ RestartReason.TypeShapeChanged "Todo" ]
+      ReloadOutcome.RestartRequired [ RestartReason.TypeShapeChanged("Todo", SageFs.Features.RestartScope.Everything) ]
       |> ReloadOutcome.withExtraMisses [ RestartReason.MutableModuleState "counter" ]
       |> Expect.equal "both reasons"
-        (ReloadOutcome.RestartRequired [ RestartReason.TypeShapeChanged "Todo"; RestartReason.MutableModuleState "counter" ])
+        (ReloadOutcome.RestartRequired [ RestartReason.TypeShapeChanged("Todo", SageFs.Features.RestartScope.Everything); RestartReason.MutableModuleState "counter" ])
 
     testCase "WHY — ReloadOutcome.withExtraMisses — Patched has nowhere to put a reason and is left exactly as it was, the same partial-visibility limit an ordinary missed function already has" <| fun _ ->
       let outcome = ReloadOutcome.Patched(2, 2)
@@ -437,9 +438,9 @@ let withExtraMissesTests =
 
     testCase "WHY — ReloadOutcome.withExtraMisses — Restarted and CompileFailed are also left alone because neither is a place a missed binding belongs" <| fun _ ->
       let extra = [ RestartReason.MutableModuleState "counter" ]
-      ReloadOutcome.Restarted [ RestartReason.TypeShapeChanged "Todo" ]
+      ReloadOutcome.Restarted [ RestartReason.TypeShapeChanged("Todo", SageFs.Features.RestartScope.Everything) ]
       |> ReloadOutcome.withExtraMisses extra
-      |> Expect.equal "restarted unchanged" (ReloadOutcome.Restarted [ RestartReason.TypeShapeChanged "Todo" ])
+      |> Expect.equal "restarted unchanged" (ReloadOutcome.Restarted [ RestartReason.TypeShapeChanged("Todo", SageFs.Features.RestartScope.Everything) ])
       ReloadOutcome.CompileFailed "boom"
       |> ReloadOutcome.withExtraMisses extra
       |> Expect.equal "compile-failed unchanged" (ReloadOutcome.CompileFailed "boom")
