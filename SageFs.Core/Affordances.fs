@@ -333,6 +333,54 @@ module CohortTool =
       CohortTool.GetStatus
       CohortTool.SetIntegrationRef ]
 
+/// MCP tool names SageFs has RETIRED. Nothing may call these, and — the reason
+/// this type exists at all — no LIVE agent-facing string may tell an agent to.
+/// A retired name surviving in a daemon response is worse than a stale doc: the
+/// product itself sends the agent to a tool that no longer exists. The
+/// Lemmings roast proved it: every successful run was told to poll
+/// `get_fsi_status`, which was no longer registered.
+///
+/// Modelled as a DU with one exhaustive to-string function so the forbidden set
+/// is DATA — a future rename cannot quietly satisfy a test that only asserts a
+/// literal is absent, because the literal lives here and is checked against
+/// the real registered catalog. Historical prose (CHANGELOG, trial reports,
+/// archived internal notes) may still name these; that is history, not
+/// guidance.
+[<RequireQualifiedAccess>]
+type RetiredTool =
+  | CreateSession
+  | GetFsiStatus
+  | GetStartupInfo
+  | LoadFsharpScript
+
+module RetiredTool =
+  /// The exact `tools/list` name each tool was registered under, before it
+  /// was retired.
+  let toToolName =
+    function
+    | RetiredTool.CreateSession -> "create_session"
+    | RetiredTool.GetFsiStatus -> "get_fsi_status"
+    | RetiredTool.GetStartupInfo -> "get_startup_info"
+    | RetiredTool.LoadFsharpScript -> "load_fsharp_script"
+
+  let all: RetiredTool list =
+    [ RetiredTool.CreateSession
+      RetiredTool.GetFsiStatus
+      RetiredTool.GetStartupInfo
+      RetiredTool.LoadFsharpScript ]
+
+  let toolNames: string list = all |> List.map toToolName
+
+  /// The live name that replaced a retired one, where a direct replacement
+  /// exists. A retired tool with no single successor is absent on purpose, so
+  /// a caller cannot invent a mapping the product never defined.
+  let replacement =
+    function
+    | RetiredTool.GetFsiStatus -> Some "get_session_status"
+    | RetiredTool.GetStartupInfo -> Some "get_daemon_status"
+    | RetiredTool.LoadFsharpScript -> None
+    | RetiredTool.CreateSession -> None
+
 /// Total over `Cohort.Authority<'m>` (property 9, cohort-integration-plan.md
 /// Slice 3) — the compiler checks the `match` is exhaustive, so no
 /// registration-integrity test is needed for this one (unlike the

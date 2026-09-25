@@ -341,7 +341,7 @@ module McpTools =
                          | WorkerProtocol.SessionLifecycleStatus.Starting _
                          | WorkerProtocol.SessionLifecycleStatus.Restarting _ -> true
                          | _ -> false) ->
-            return Result.Error (Message (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
+            return Result.Error (Message (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_session_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
           | _ ->
             return Result.Error (Message (sprintf "Session '%s' not found" sessionId))
         | Some send ->
@@ -374,7 +374,7 @@ module McpTools =
               let! info = ctx.SessionOps.GetSessionInfo validId
               match info with
               | Some i when (match i.Status with WorkerProtocol.SessionLifecycleStatus.Restarting None -> true | _ -> false) ->
-                return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Poll get_fsi_status every 5-10s; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
+                return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Poll get_session_status every 5-10s; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
               | _ ->
                 ctx.SessionOps.NotifyWorkerDied validId
                 do! ctx.SessionOps.UpdateSessionStatus validId (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (routeErrorMessage transportError)))
@@ -415,7 +415,7 @@ module McpTools =
       | _ ->
         Unroutable (WorkerProtocol.SessionId.value i.Id, i.Status)
     | None ->
-      Gone "Session is no longer running. Use create_session to start a new one."
+      Gone "Session is no longer running. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session to start a new one."
 
   /// Pure guidance: the agent-facing message for a resolution.
   /// INVARIANT: "create_session" and "no longer running" appear only in the
@@ -423,9 +423,9 @@ module McpTools =
   let formatSessionResolution = function
     | Routable _ -> ""
     | WarmingUp (sid, status) ->
-      sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
+      sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_session_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | Unroutable (sid, status) ->
-      sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_fsi_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionLifecycleStatus.label status)
+      sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_session_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | FaultedSession (sid, cause) ->
       sprintf "Session '%s' is faulted. Why: %s\nRun reset_fsi_session or hard_reset_fsi_session to recover." sid (FaultCause.describe cause)
     | Gone msg -> msg
@@ -456,7 +456,7 @@ module McpTools =
                 setActiveSessionId ctx agent matchedId
                 return Ok matchedId
               | [] ->
-                return Error (sprintf "No sessions match workingDirectory '%s'. Running sessions: %s. Use create_session with that directory, or switch_session to an existing matching session." wd (formatExistingSessionsHint sessions))
+                return Error (sprintf "No sessions match workingDirectory '%s'. Running sessions: %s. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session for that directory, or switch_session to an existing matching session." wd (formatExistingSessionsHint sessions))
               | matches ->
                 return Error (formatWorkingDirectoryAmbiguity "Multiple sessions match workingDirectory" wd matches)
             | _ ->
@@ -504,7 +504,7 @@ module McpTools =
               // and purged by any path) — nothing left to route to, so this
               // IS the one case where the mapping must be cleared.
               setActiveSessionId ctx agent ""
-              return Gone "Session is no longer running. Use create_session to start a new one."
+              return Gone "Session is no longer running. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session to start a new one."
         | Ok _ ->
           let! sessions = ctx.SessionOps.GetAllSessions()
           let currentDir = Environment.CurrentDirectory
@@ -533,7 +533,7 @@ module McpTools =
                 let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
                 return classifySessionAvailability info false
             | _ ->
-              return Gone "No active session. Use create_session to create one first."
+              return Gone "No active session. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session to create one first."
     }
 
   /// Helper: run a function with the resolved session ID, or return the error message.
@@ -1415,7 +1415,7 @@ module McpTools =
             {| state = "NoSession"
                message =
                  (match sessionCount with
-                  | 0 -> "No sessions exist. Create one with create_session (args are snake_case): working_directory=<dir> projects=[\"<path>.fsproj\"] to load a specific project, or projects=[] to let the worker auto-discover whatever project/solution sits directly in working_directory (this is NOT a guaranteed-empty REPL — it only comes out empty if the directory has nothing to discover). Use get_available_projects to discover .fsproj files (pass working_directory to narrow a large tree)."
+                  | 0 -> "No sessions exist. Call get_available_projects to discover .fsproj/.sln/.slnx files (pass working_directory to narrow a large tree), then create_project_session for one .fsproj, create_solution_session for one .sln/.slnx, or create_bare_session for a project-free REPL."
                   | _ -> sprintf "%d session(s) exist but none matched the working directory. Use list_sessions to see them, or switch_session to select one." sessionCount)
                  + staleLine
                available = availableTools |})
@@ -1721,7 +1721,7 @@ module McpTools =
             return! resetTask.WaitAsync(Timeouts.softResetCancellation)
           with
           | :? OperationCanceledException ->
-            return Result.Error (Message (sprintf "Session '%s' did not respond to reset after %A. The session may be stuck. Try recovery: use stop_session followed by create_session to force a fresh start." sid Timeouts.softResetCancellation))
+            return Result.Error (Message (sprintf "Session '%s' did not respond to reset after %A. The session may be stuck. Try recovery: use stop_session followed by one of the explicit create tools (create_project_session, create_solution_session, create_bare_session) to force a fresh start." sid Timeouts.softResetCancellation))
         }
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
@@ -1781,7 +1781,7 @@ module McpTools =
             return! resetTask.WaitAsync(Timeouts.softResetCancellation)
           with
           | :? OperationCanceledException ->
-            return Result.Error (Message (sprintf "Session '%s' did not respond to reset after %A. The session may be stuck. Try recovery: use stop_session followed by create_session to force a fresh start." sid Timeouts.softResetCancellation))
+            return Result.Error (Message (sprintf "Session '%s' did not respond to reset after %A. The session may be stuck. Try recovery: use stop_session followed by one of the explicit create tools (create_project_session, create_solution_session, create_bare_session) to force a fresh start." sid Timeouts.softResetCancellation))
         }
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
@@ -1882,7 +1882,7 @@ module McpTools =
             | _, None -> SessionDisplayStatus.Faulted "Session is no longer registered"
           notifyElm ctx (TuiEvent.SessionStatusChanged (sid, display))
         } |> ignore
-        return "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_fsi_status reports the rebuild's progress and outcome."
+        return "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_session_status reports the rebuild's progress and outcome."
       | false ->
         // A hard reset without a rebuild must still replace the worker
         // PROCESS: an in-process FSI rebuild keeps whatever the worker's
@@ -1942,7 +1942,7 @@ module McpTools =
             | _, None -> SessionDisplayStatus.Faulted "Session is no longer registered"
           notifyElm ctx (TuiEvent.SessionStatusChanged (sid, display))
         } |> ignore
-        return Ok "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_fsi_status reports the rebuild's progress and outcome."
+        return Ok "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_session_status reports the rebuild's progress and outcome."
       | false ->
         compilationStates.TryRemove(sid) |> ignore
         typeIdentityDiagnostics.TryRemove(sid) |> ignore
@@ -2313,7 +2313,7 @@ module McpTools =
             match sessionInfo.Status with
             | WorkerProtocol.SessionLifecycleStatus.Starting _
             | WorkerProtocol.SessionLifecycleStatus.Restarting _ ->
-              sprintf " — still warming up (%s). The switch holds: poll get_fsi_status until it reports Ready before send_fsharp_code." (WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status)
+              sprintf " — still warming up (%s). The switch holds: poll get_session_status until it reports Ready before send_fsharp_code." (WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status)
             | _ -> ""
           return sprintf "Switched to session '%s'%s" sessionId warmupNote
         | None ->

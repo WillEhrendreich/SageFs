@@ -79,9 +79,9 @@ type DetectedSignal = {
 
 /// All thresholds in one place — no literals scattered in detectors.
 type DetectorConfig = {
-  PollingMinCalls: int                       // default 20  (harvest: 72 get_fsi_status)
+  PollingMinCalls: int                       // default 20  (harvest: 72 status polls)
   PollingMinCallsPerSuccess: int              // default 8   (calls:successes ratio gate)
-  PollingTools: Set<string>                   // default { "get_fsi_status" }
+  PollingTools: Set<string>                   // default { "get_session_status" }
   ResetThrashCount: int                       // default 3   resets within the window
   ResetThrashWindow: TimeSpan                 // default 60s
   HardResetAfterCreateWindow: TimeSpan        // default 30s
@@ -95,7 +95,7 @@ module DetectorConfig =
   let defaults : DetectorConfig = {
     PollingMinCalls = 20
     PollingMinCallsPerSuccess = 8
-    PollingTools = Set.ofList [ "get_fsi_status" ]
+    PollingTools = Set.ofList [ "get_session_status" ]
     ResetThrashCount = 3
     ResetThrashWindow = TimeSpan.FromSeconds 60.0
     HardResetAfterCreateWindow = TimeSpan.FromSeconds 30.0

@@ -466,6 +466,95 @@ module Signal =
   let testRunCompleted = Signal.TestRunCompleted
   let sessionReady = Signal.SessionReady
 
+/// The live MCP tools a demo drives. Declared before `McpTool` because F#
+/// needs a case type before a union can carry it.
+[<RequireQualifiedAccess>]
+type CurrentMcpTool =
+  | CreateProjectSession
+  | GetSessionStatus
+  | SendFsharpCode
+  | JoinCohort
+  | AcquireClaim
+  | ReleaseClaim
+  | SetIntegrationRef
+  | RequestLanding
+  | GetCohortStatus
+
+/// MCP tool names SageFs has retired. A demo may never call one, and — the
+/// reason the type exists — no live agent-facing string may tell an agent to.
+/// Modelled as a DU with one exhaustive to-string function so the forbidden
+/// set is DATA, not a string literal a future rename could quietly satisfy.
+///
+/// Self-contained on purpose: this project must NOT reference SageFs.Core
+/// (see `SageFs.Demos.fsproj`'s own host-closure note), so it cannot reuse
+/// `SageFs.Affordances.RetiredTool`. `SageFs.Tests/RetiredToolNameTests.fs`
+/// asserts these names really are absent from the registered catalog, so the
+/// two lists cannot silently drift.
+[<RequireQualifiedAccess>]
+type RetiredMcpTool =
+  | CreateSession
+  | GetFsiStatus
+  | GetStartupInfo
+  | LoadFsharpScript
+
+/// A SageFs MCP tool name, for demo scenarios and their actors. `Current` is
+/// the live catalog a demo may call; `Retired` is the forbidden vocabulary,
+/// kept so the "no retired name reaches a wire" contract is expressed as data.
+[<RequireQualifiedAccess>]
+type McpTool =
+  | Current of CurrentMcpTool
+  | Retired of RetiredMcpTool
+
+module McpTool =
+
+  /// The exact `tools/list` name, live or retired.
+  let value (tool: McpTool) : string =
+    match tool with
+    | McpTool.Current current ->
+      match current with
+      | CurrentMcpTool.CreateProjectSession -> "create_project_session"
+      | CurrentMcpTool.GetSessionStatus -> "get_session_status"
+      | CurrentMcpTool.SendFsharpCode -> "send_fsharp_code"
+      | CurrentMcpTool.JoinCohort -> "join_cohort"
+      | CurrentMcpTool.AcquireClaim -> "acquire_claim"
+      | CurrentMcpTool.ReleaseClaim -> "release_claim"
+      | CurrentMcpTool.SetIntegrationRef -> "set_integration_ref"
+      | CurrentMcpTool.RequestLanding -> "request_landing"
+      | CurrentMcpTool.GetCohortStatus -> "get_cohort_status"
+    | McpTool.Retired retired ->
+      match retired with
+      | RetiredMcpTool.CreateSession -> "create_session"
+      | RetiredMcpTool.GetFsiStatus -> "get_fsi_status"
+      | RetiredMcpTool.GetStartupInfo -> "get_startup_info"
+      | RetiredMcpTool.LoadFsharpScript -> "load_fsharp_script"
+
+  let current (tool: CurrentMcpTool) = McpTool.Current tool
+
+  let allCurrent : CurrentMcpTool list =
+    [ CurrentMcpTool.CreateProjectSession
+      CurrentMcpTool.GetSessionStatus
+      CurrentMcpTool.SendFsharpCode
+      CurrentMcpTool.JoinCohort
+      CurrentMcpTool.AcquireClaim
+      CurrentMcpTool.ReleaseClaim
+      CurrentMcpTool.SetIntegrationRef
+      CurrentMcpTool.RequestLanding
+      CurrentMcpTool.GetCohortStatus ]
+
+  let retiredValues : string list =
+    [ RetiredMcpTool.CreateSession
+      RetiredMcpTool.GetFsiStatus
+      RetiredMcpTool.GetStartupInfo
+      RetiredMcpTool.LoadFsharpScript ]
+    |> List.map (fun tool -> value (McpTool.Retired tool))
+
+  /// Parse a wire name back to a live tool, or `None` when it is retired or
+  /// misspelled. Closed on purpose: an unknown name must never be guessed into
+  /// a working call.
+  let tryParseCurrent (name: string) : CurrentMcpTool option =
+    allCurrent
+    |> List.tryFind (fun tool -> value (McpTool.Current tool) = name)
+
 /// An API-level setup action (`Action.Setup`) — not filmed, used to get a
 /// scenario into its starting state (e.g. opening a file before the story
 /// begins).

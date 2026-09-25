@@ -1,6 +1,7 @@
 /// The Agent/MCP actor (demo-actors-plan.md §2.4): drives SageFs over its
 /// REAL Model Context Protocol surface — the exact tool vocabulary an AI
-/// agent sees (`create_session`, `get_fsi_status`, `send_fsharp_code`, ...)
+/// agent sees (`create_project_session`, `get_session_status`,
+/// `send_fsharp_code`, ...)
 /// — against the cell's own daemon on its fixed MCP HTTP port, and renders
 /// the GENUINE request/response transcript into a small, self-contained
 /// on-screen page the recorder captures. No faked chat: every transcript
@@ -859,23 +860,23 @@ let private sampleDir (repoRoot: string) : string =
 /// `AgentTests.fs` proves these are real, resolved paths (never a leaked
 /// `{{REPO_ROOT}}` token) against the REAL repo root this checkout's own
 /// tests run from.
-let argumentsFor (repoRoot: string) (toolName: string) : Result<(string * string) list, string> =
+let argumentsFor (repoRoot: string) (tool: McpTool) : Result<(string * string) list, string> =
   let dir = sampleDir repoRoot
 
-  match toolName with
-  | "create_session" ->
+  match tool with
+  | McpTool.Current CurrentMcpTool.CreateProjectSession ->
     match RepoRoot.findFsproj dir with
     | None -> Error(sprintf "no .fsproj found under %s" dir)
-    | Some proj -> Ok [ "projects", proj; "working_directory", dir; "agentName", "sagefs-demos-agent" ]
-  | "get_fsi_status" -> Ok [ "working_directory", dir ]
-  | "send_fsharp_code" ->
+    | Some proj -> Ok [ "project", proj; "working_directory", dir ]
+  | McpTool.Current CurrentMcpTool.GetSessionStatus -> Ok [ "working_directory", dir ]
+  | McpTool.Current CurrentMcpTool.SendFsharpCode ->
     // Deliberately `List.sum [ 1 .. 10 ]` — the SAME expression
     // `repl-dashboard` already proves live — and NOT the project's own
     // qualified `SageFs.Samples.WebappDatastar.Program.todos.Length`
     // (evaluated successfully by dashboard-driven scenarios elsewhere).
     // Confirmed directly, live, against this exact sample+daemon: a
-    // `get_fsi_status` "State: Ready" reply can land a moment BEFORE the
-    // project's own compiled assembly is reliably resolvable for a
+    // `get_session_status` `"state":"Ready"` reply can land a moment BEFORE
+    // the project's own compiled assembly is reliably resolvable for a
     // fully-qualified reference — a real `record agent-mcp` run reproduced
     // this once (the qualified expression failed "not defined" on every
     // retry for the full 90s ceiling), while a lighter, unsandboxed manual
@@ -888,18 +889,18 @@ let argumentsFor (repoRoot: string) (toolName: string) : Result<(string * string
     // (AGENTS.md: don't chase product bugs from a demo island — mirrors
     // `lt-dashboard`'s own documented, out-of-scope discovery race).
     Ok [ "agentName", "sagefs-demos-agent"; "code", "List.sum [ 1 .. 10 ]"; "working_directory", dir ]
-  | other -> Error(sprintf "the agent-mcp scenario has no arguments recipe for tool '%s'" other)
+  | other -> Error(sprintf "the agent-mcp scenario has no arguments recipe for tool '%s'" (McpTool.value other))
 
-/// The real response check per tool — a fresh `create_session` reply is an
-/// unpredictable 8-hex session id, so only "the daemon answered without
-/// erroring" is checked for it; `get_fsi_status`/`send_fsharp_code` have a
-/// real, specific, evidence-backed expected substring (the tool's own
-/// documented "State: Ready" wording; `repl-dashboard`'s own proven
-/// "int = 55" for this exact expression).
-let private expectedSubstringFor (toolName: string) : string =
-  match toolName with
-  | "get_fsi_status" -> "State: Ready"
-  | "send_fsharp_code" -> "int = 55"
+/// The real response check per tool — a fresh `create_project_session` reply
+/// is an unpredictable 8-hex session id, so only "the daemon answered
+/// without erroring" is checked for it; `get_session_status`/
+/// `send_fsharp_code` have a real, specific, evidence-backed expected
+/// substring (the status tool's own structured `"state":"Ready"` payload;
+/// `repl-dashboard`'s own proven "int = 55" for this exact expression).
+let private expectedSubstringFor (tool: McpTool) : string =
+  match tool with
+  | McpTool.Current CurrentMcpTool.GetSessionStatus -> "\"state\":\"Ready\""
+  | McpTool.Current CurrentMcpTool.SendFsharpCode -> "int = 55"
   | _ -> ""
 
 let private looksLikeFailure (response: string) : bool =
@@ -915,7 +916,7 @@ let private looksLikeFailure (response: string) : bool =
 /// `expected = ""`, as soon as it doesn't look like a failure
 /// (`looksLikeFailure`, the legacy form's own fallback, preserved
 /// exactly). Never a fabricated "waiting..." line: a real poll loop, not
-/// a single shot, because `get_fsi_status` genuinely needs to be asked
+/// a single shot, because `get_session_status` genuinely needs to be asked
 /// more than once while a real cold FSI warmup finishes (§9's own "a real
 /// session warmup can genuinely take longer than a UI-click expectation
 /// ever needed to" — the exact reasoning `CellAgent.fs`'s own 90s
@@ -1134,7 +1135,10 @@ let toLiveActor (handle: Handle) : LiveActor =
       | None -> return false
       | Some(stepLabel, toolName) ->
 
-      match RepoRoot.find () with
+      // A wire tool name must resolve to a live MCP tool. A retired or
+      // misspelled name fails closed HERE, with the transcript entry, rather
+      // than being sent to the daemon as a call that can never work.
+      match McpTool.tryParseCurrent toolName with
       | None ->
         do!
           pushEntry
@@ -1142,12 +1146,25 @@ let toLiveActor (handle: Handle) : LiveActor =
             { Step = stepLabel
               Tool = toolName
               Ok = false
+              Response = sprintf "'%s' is not a live SageFs MCP tool — refusing to call it" toolName }
+
+        return false
+      | Some tool ->
+
+      match RepoRoot.find () with
+      | None ->
+        do!
+          pushEntry
+            handle.Page
+            { Step = stepLabel
+              Tool = McpTool.value (McpTool.Current tool)
+              Ok = false
               Response = "could not locate the repo checkout bound into this cell (SageFs.slnx not found)" }
 
         return false
       | Some repoRoot ->
 
-      match argumentsFor repoRoot toolName with
+      match argumentsFor repoRoot (McpTool.Current tool) with
       | Error msg ->
         do! pushEntry handle.Page { Step = stepLabel; Tool = toolName; Ok = false; Response = msg }
         return false
@@ -1159,8 +1176,8 @@ let toLiveActor (handle: Handle) : LiveActor =
         return false
       | Ok() ->
 
-      let expected = expectedSubstringFor toolName
-      return! pollTool handle.Page handle.Session stepLabel toolName arguments expected timeoutMs ignore
+      let expected = expectedSubstringFor (McpTool.Current tool)
+      return! pollTool handle.Page handle.Session stepLabel (McpTool.value (McpTool.Current tool)) arguments expected timeoutMs ignore
     }
 
   { Id = ActorId.Agent

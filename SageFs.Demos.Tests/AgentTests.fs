@@ -35,10 +35,32 @@ let tests =
       scenario.Sample |> Expect.equal "opens the real webapp sample, not a bare session" Sample.WebappDatastar
       scenario.Steps
       |> List.length
-      |> Expect.equal "three real tool calls: create_session, get_fsi_status, send_fsharp_code" 3
+      |> Expect.equal "three real tool calls: create_project_session, get_session_status, send_fsharp_code" 3
+
+    testCase "WHY — the agent-mcp demo calls only tools that are actually registered, because a retired name on the wire makes the demo unreproducible" <| fun _ ->
+      SageFs.Demos.Scenarios.Agent.agentMcp.Steps
+      |> List.iter (fun s ->
+        match s.Expect with
+        | Expectation.PageTextContains(selector, _) ->
+          let wire = Agent.parseWire (selector + ":has-text(\"\")")
+          match wire with
+          | Some (_, tool) ->
+            match McpTool.tryParseCurrent tool with
+            | Some _ -> ()
+            | None ->
+              failtestf
+                "the agent-mcp scenario put '%s' on the wire, which is not a live SageFs MCP tool (retired: %A)"
+                tool
+                McpTool.retiredValues
+          | None -> ()
+        | other -> failtestf "expected PageTextContains, got %A" other)
 
     testCase "every step's Expectation packs a real MCP tool name onto the wire, in order, never a canned expected string" <| fun _ ->
-      let expectedTools = [ "create_session"; "get_fsi_status"; "send_fsharp_code" ]
+      let expectedTools =
+        [ CurrentMcpTool.CreateProjectSession
+          CurrentMcpTool.GetSessionStatus
+          CurrentMcpTool.SendFsharpCode ]
+        |> List.map (fun tool -> McpTool.value (McpTool.Current tool))
 
       SageFs.Demos.Scenarios.Agent.agentMcp.Steps
       |> List.iter (fun s ->
@@ -97,30 +119,44 @@ let tests =
       | None -> failtest "could not find this checkout's own repo root (SageFs.slnx) — test environment is broken"
       | Some repoRoot ->
 
-      match Agent.argumentsFor repoRoot "create_session" with
+      match Agent.argumentsFor repoRoot (McpTool.current CurrentMcpTool.CreateProjectSession) with
       | Error e -> failtestf "expected Ok arguments for a real repo root, got Error %s" e
       | Ok args ->
         args
         |> List.iter (fun (_, v) -> v.Contains "{{" |> Expect.isFalse (sprintf "no unresolved template token in '%s'" v))
 
         args
-        |> List.tryFind (fun (k, _) -> k = "projects")
+        |> List.tryFind (fun (k, _) -> k = "project")
         |> Option.map snd
         |> Expect.equal
           "passes the real, existing .fsproj for the WebappDatastar sample"
           (Some(Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.WebappDatastar", "SageFs.Samples.WebappDatastar.fsproj")))
 
         args
-        |> List.tryFind (fun (k, _) -> k = "projects")
+        |> List.tryFind (fun (k, _) -> k = "project")
         |> Option.map snd
         |> Option.iter (fun p -> File.Exists p |> Expect.isTrue "the resolved .fsproj genuinely exists on disk")
 
-    testCase "argumentsFor reports an unknown tool by name — fails loud, never a silent empty-args no-op" <| fun _ ->
+    testCase "argumentsFor reports a tool with no recipe by name — fails loud, never a silent empty-args no-op" <| fun _ ->
       match SageFs.Demos.Runtime.Core.findRepoRoot AppContext.BaseDirectory with
       | None -> failtest "could not find this checkout's own repo root — test environment is broken"
       | Some repoRoot ->
 
-      match Agent.argumentsFor repoRoot "not_a_real_tool" with
-      | Ok args -> failtestf "expected Error for an unrecognized tool, got Ok %A" args
-      | Error msg -> msg |> Expect.stringContains "names the unrecognized tool" "not_a_real_tool"
+      // `request_landing` is a live tool this legacy agent-mcp actor has no
+      // argument recipe for, so it must fail loudly rather than call through
+      // with no arguments.
+      match Agent.argumentsFor repoRoot (McpTool.current CurrentMcpTool.RequestLanding) with
+      | Ok args -> failtestf "expected Error for a tool with no recipe, got Ok %A" args
+      | Error msg ->
+        msg
+        |> Expect.stringContains
+          "names the tool it has no recipe for"
+          (McpTool.value (McpTool.current CurrentMcpTool.RequestLanding))
+
+    testCase "WHY — a retired tool name never parses as a live tool, so the wire can't carry one" <| fun _ ->
+      McpTool.retiredValues
+      |> List.iter (fun name ->
+        McpTool.tryParseCurrent name
+        |> Option.isNone
+        |> Expect.isTrue (sprintf "retired tool '%s' must not resolve to a live MCP tool" name))
   ]
