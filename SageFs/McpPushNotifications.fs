@@ -109,7 +109,23 @@ module PushEvent =
         |> Option.defaultValue ""
       sprintf "🧪 tests: %d total, %d passed, %d failed, %d stale, %d running%s" s.Total s.Passed s.Failed s.Stale s.Running suffix
     | PushEvent.TestResultsBatch payload ->
-      sprintf "🧪 %d test result(s) received (%A)" payload.Entries.Length payload.Freshness
+      // Report the real execution accounting, never a bare "N results
+      // received (Fresh)". A discovery-only batch has zero passed and zero
+      // failed while carrying thousands of entries, and a model reading
+      // "12605 test result(s) received (Fresh)" next to "0 passed, 0 failed"
+      // concludes a fully green suite that never ran. The summary already
+      // knows the difference; say it.
+      let s = payload.Summary
+      let notRun = max 0 (s.Total - s.Passed - s.Failed)
+      sprintf
+        "🧪 %d test(s) discovered: %d passed, %d failed, %d not run, %d stale, %d running (%A)"
+        s.Total
+        s.Passed
+        s.Failed
+        notRun
+        s.Stale
+        s.Running
+        payload.Freshness
     | PushEvent.FileAnnotationsUpdated ann ->
       sprintf "📝 file annotations for %s (%d tests, %d lenses, %d failures)"
         (IO.Path.GetFileName ann.FilePath) ann.TestAnnotations.Length ann.CodeLenses.Length ann.InlineFailures.Length
