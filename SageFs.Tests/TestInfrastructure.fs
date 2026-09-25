@@ -150,13 +150,31 @@ module TestPorts =
   /// Both the mcp port and its dashboard neighbour (port + 1) bind — held
   /// only long enough to prove they are free right now, then released so the
   /// daemon can bind them itself.
+  ///
+  /// BOTH stacks are checked. The dashboard binds `http://[::1]:PORT` — IPv6
+  /// loopback — while this check used to bind only `IPAddress.Loopback`
+  /// (IPv4). Different address, same port number, so a port held by another
+  /// daemon's IPv6 dashboard passed the check and was then handed to a second
+  /// daemon, which died with
+  ///
+  ///   Failed to bind to address http://[::1]:PORT: address already in use.
+  ///   Dashboard failed to start: the dashboard listener did not stay up.
+  ///
+  /// Checking both stacks is what makes a port safe to hand out, because the
+  /// OS tracks them separately.
   let private tryReservePair (port: int) =
     try
-      use mcp = new TcpListener(IPAddress.Loopback, port)
+      use mcp = new TcpListener(IPAddress.IPv6Loopback, port)
       mcp.Start()
       let bound = (mcp.LocalEndpoint :?> IPEndPoint).Port
-      use dashboard = new TcpListener(IPAddress.Loopback, bound + 1)
+      use dashboard = new TcpListener(IPAddress.IPv6Loopback, bound + 1)
       dashboard.Start()
+      // The mcp socket must ALSO be bindable on IPv4, or a daemon that dials
+      // 127.0.0.1 will find nothing there.
+      use mcpV4 = new TcpListener(IPAddress.Loopback, bound)
+      mcpV4.Start()
+      use dashboardV4 = new TcpListener(IPAddress.Loopback, bound + 1)
+      dashboardV4.Start()
       Some bound
     with :? SocketException -> None
 
