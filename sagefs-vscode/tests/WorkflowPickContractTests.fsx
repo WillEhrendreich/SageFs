@@ -18,6 +18,7 @@
 //
 // Runs under plain `dotnet fsi` (no Fable), mirroring AppRunContractTests.fsx.
 #r "nuget: Expecto, 11.0.0-alpha8"
+#load "../../SageFs.Core/TestProviderTypes.fs"
 #load "../../SageFs.Core/WorkflowTypes.fs"
 #load "../src/WorkflowPickPure.fs"
 
