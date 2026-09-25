@@ -1,5 +1,6 @@
 namespace SageFs.Simulation
 
+open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Simulation.FsiDiscoveryIdentitySim
 

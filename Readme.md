@@ -69,7 +69,7 @@ Your app's live state survives a save. A `let mutable` you didn't touch keeps it
 
 ### 🤖 AI Agent Support
 
-SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an affordance-driven state machine: the full tool catalog is always listed, but calling a tool that doesn't apply to the current session state gets rejected with a structured error instead of a raw failure, and `get_fsi_status` reports which tools currently apply. The core MCP path is session trust, F# evaluation, exact test execution, and failure explanation. Copilot, Claude, and any MCP client can execute F# code, type-check it, verify a changed behavior, and run tests against your real project.
+SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an affordance-driven state machine: the full tool catalog is always listed, but calling a tool that doesn't apply to the current session state gets rejected with a structured error instead of a raw failure. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. The core MCP path is session trust, F# evaluation, exact test execution, and failure explanation. Copilot, Claude, and any MCP client can execute F# code, type-check it, verify a changed behavior, and run tests against your real project.
 
 Agents left alone will happily pile on complexity. Give one a fast, type-checked REPL with tests re-running on every change and it gets caught the same way I do, right away.
 
@@ -320,7 +320,7 @@ Features: Cell eval, inline results, gutter signs, SSE live updates, live test p
 
 #### AI Agent (MCP)
 
-SageFs exposes about 50 MCP tools, from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time; calling one that doesn't apply to the current session state gets rejected with a structured error rather than being hidden. `get_fsi_status` reports which tools apply right now. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
+SageFs exposes about 50 MCP tools, from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time; calling one that doesn't apply to the current session state gets rejected with a structured error rather than being hidden. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
 
 **Streamable HTTP** (recommended: auto-reconnects, no session drops):
 ```json
@@ -543,7 +543,7 @@ Full options: `sagefs --help`
 The `DirectoryConfig` record also has `InitScript`, `DefaultArgs`, `IsRoot`, and `SessionName` fields ([`SageFs.Core/DirectoryConfigTypes.fs`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs.Core/DirectoryConfigTypes.fs)), but today only two of the six fields do anything. I'd rather tell you that plainly than let you write config that silently gets ignored:
 
 - `AutoOpenNamespaces = false` skips warmup auto-opening of namespaces and modules. This is honored everywhere, because every client's session-creation path bottoms out in the one place that reads it ([`SageFs/DaemonMode.fs:297`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/DaemonMode.fs#L297)).
-- `Load` picks which projects or solution a session loads, but **only the web dashboard's own Create-session flow reads it** ([`SageFs/DashboardTypes.fs:1119`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/DashboardTypes.fs#L1119)). MCP's `create_session` and the HTTP API that VS Code (and Neovim) use both take an explicit project list and never consult this file, so `Load` has no effect on sessions created from an editor or an agent.
+- `Load` picks which projects or solution a session loads, but **only the web dashboard's own Create-session flow reads it** ([`SageFs/DashboardTypes.fs:1119`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/DashboardTypes.fs#L1119)). MCP and the editor HTTP API take an explicit project, solution, or bare target and never consult this file, so `Load` has no effect on sessions created from an editor or an agent.
 - `InitScript`, `DefaultArgs`, `IsRoot`, and `SessionName` are parsed and stored but **not wired to anything yet**. Setting them has no effect today.
 
 Built-in ways to create or edit the auto-open setting:
@@ -579,7 +579,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 | Port already in use | `sagefs stop` or `--mcp-port 8080` |
 | Wrong project selected | "SageFs: Switch Project" in command palette |
 | Stale REPL after code changes | Save the file first — source edits auto-reload. Use hard reset only for `.fsproj` / package changes. |
-| Session stuck warming up on a big repo | Name an explicit project instead of letting it auto-discover — see [Large repos](docs/TROUBLESHOOTING.md#warmup-progress-phases) |
+| Session stuck warming up on a big repo | Name one project or solution, or choose a bare session explicitly. SageFs builds missing generated state itself. See [Large repos](docs/TROUBLESHOOTING.md#warmup-progress-phases) |
 
 📖 **[Full Troubleshooting Guide →](docs/TROUBLESHOOTING.md)**: covers first-run issues, runtime problems, platform-specific fixes, and diagnostic tools.
 

@@ -186,6 +186,8 @@
         <Compile Include="TestTreeSitterTests.fs" />
         <Compile Include="PluginContractTests.fs" />
         <Compile Include="ProjectLoadingTests.fs" />
+        <Compile Include="BuildPreflightTests.fs" />
+        <Compile Include="BuildPreflightBoundaryTests.fs" />
         <Compile Include="ProjectLoadProgressTests.fs" />
         <Compile Include="ReferenceFrameworkTests.fs" />
         <Compile Include="RuntimeCompatTests.fs" />
@@ -213,6 +215,9 @@
         <Compile Include="LiveTestingTestHelpers.fs" />
          <Compile Include="LiveTestingDecompositionTests.fs" />
          <Compile Include="LiveTestingCoreTests.fs" />
+        <Compile Include="TestProviderCatalogTests.fs" />
+        <Compile Include="TestExecutionReportTests.fs" />
+        <Compile Include="TestingPlatformAdapterTests.fs" />
          <Compile Include="LiveTestingDecisionScenarioTests.fs" />
          <Compile Include="LiveTestingDecisionPropertyTests.fs" />
          <Compile Include="LiveTestingOrchestrationScenarioTests.fs" />

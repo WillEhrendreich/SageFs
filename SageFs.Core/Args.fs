@@ -75,9 +75,9 @@ module UnimplementedFlag =
 type WorkerConfig = {
   SessionId: string
   HttpPort: int
-  Projects: string list
+  /// The closed create-session target carried by this worker.
+  Targets: SessionProjectTarget list
   WorkingDir: string
-  IsBare: bool
   NoWatch: bool
   AutoOpenNamespaces: bool
   /// The session workflow — determines FSI flags, REPL capability, and hot reload.
@@ -96,6 +96,10 @@ type WorkerConfig = {
   with
     /// Backward-compatible accessor.
     member this.HotReloadEnabled = WorkflowTypes.SessionWorkflow.isHotReloadActive this.Workflow
+    /// Worker project/solution paths derived from the explicit target set.
+    member this.Projects = SessionProjectTarget.projects this.Targets
+    member this.Solutions = SessionProjectTarget.solutions this.Targets
+    member this.IsBare = SessionProjectTarget.isBare this.Targets
 
 module WorkerConfig =
   let envVar = "SAGEFS_SESSION_PROJECTS"
@@ -118,14 +122,23 @@ module WorkerConfig =
     (sessionId: string)
     (httpPort: int)
     =
-    let projects =
+    let paths =
       match getEnv envVar with
       | null | "" -> []
-      | s -> s.Split(';', StringSplitOptions.RemoveEmptyEntries) |> Array.toList
-    let isBare =
+      | raw -> raw.Split(';', StringSplitOptions.RemoveEmptyEntries) |> Array.toList
+    let explicitlyBare =
       match getEnv bareEnvVar with
       | "1" | "true" -> true
       | _ -> false
+    let targets =
+      match explicitlyBare, paths with
+      | true, [] -> [ SessionProjectTarget.Bare ]
+      | true, _ -> invalidOp "SAGEFS_BARE_SESSION cannot be combined with a project or solution target."
+      | false, [] -> invalidOp "SAGEFS_SESSION_PROJECTS is missing; session creation must name a project/solution or set Bare explicitly."
+      | false, _ ->
+        match SessionProjectTarget.tryCreateMany paths with
+        | Ok targets -> targets
+        | Error err -> invalidOp err
     let noWatch =
       match getEnv noWatchEnvVar with
       | "1" | "true" -> true
@@ -154,9 +167,8 @@ module WorkerConfig =
         | _ -> None
     { SessionId = sessionId
       HttpPort = httpPort
-      Projects = projects
+      Targets = targets
       WorkingDir = Environment.CurrentDirectory
-      IsBare = isBare
       NoWatch = noWatch
       AutoOpenNamespaces = autoOpenNamespaces
       Workflow = WorkflowTypes.SessionWorkflow.fromHotReloadBool hotReloadEnabled
@@ -169,22 +181,21 @@ module WorkerConfig =
 
 /// What ProjectLoading needs — replaces the old Arguments list.
 type ProjectLoadConfig = {
-  Projects: string list
-  Solutions: string list
+  Targets: SessionProjectTarget list
   WorkingDir: string
-}
+} with
+  member this.Projects = SessionProjectTarget.projects this.Targets
+  member this.Solutions = SessionProjectTarget.solutions this.Targets
+  member this.IsBare = SessionProjectTarget.isBare this.Targets
 
 module ProjectLoadConfig =
-  let empty = { Projects = []; Solutions = []; WorkingDir = "." }
+  /// A bare REPL is now an explicit domain value. There is no empty target
+  /// list whose meaning can fall through to directory auto-discovery.
+  let bare (workingDir: string) = { Targets = [ SessionProjectTarget.Bare ]; WorkingDir = workingDir }
+  let empty = bare "."
 
   let fromWorkerConfig (wc: WorkerConfig) =
-    let solutions, projects =
-      wc.Projects
-      |> List.partition (fun p ->
-        let ext = Path.GetExtension(p).ToLowerInvariant()
-        ext = ".sln" || ext = ".slnx")
-    { Projects = projects
-      Solutions = solutions
+    { Targets = wc.Targets
       WorkingDir = wc.WorkingDir }
 
 /// Pure function: builds worker spawn arguments + env vars.
@@ -197,18 +208,17 @@ module ProjectLoadConfig =
 /// host prints `WORKER_PORT=<url>` on stdout and the supervisor validates it.
 let buildWorkerSpawnConfig
   (sessionId: string)
-  (projects: string list)
-  (isBare: bool)
+  (targets: SessionProjectTarget list)
   (noWatch: bool)
   (autoOpenNamespaces: bool)
   (workflow: WorkflowTypes.SessionWorkflow)
   : string * (string * string) list =
   let args = sprintf "%s 0" sessionId
   let envVars = [
-    WorkerConfig.envVar, (projects |> String.concat ";")
+    WorkerConfig.envVar, (SessionProjectTarget.paths targets |> String.concat ";")
     WorkerConfig.daemonPidEnvVar, string Environment.ProcessId
     WorkerConfig.daemonStartTicksEnvVar, string (System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks)
-    if isBare then WorkerConfig.bareEnvVar, "1"
+    if SessionProjectTarget.isBare targets then WorkerConfig.bareEnvVar, "1"
     if noWatch then WorkerConfig.noWatchEnvVar, "1"
     if not autoOpenNamespaces then WorkerConfig.autoOpenNamespacesEnvVar, "0"
     if WorkflowTypes.SessionWorkflow.isHotReloadActive workflow then WorkerConfig.hotReloadEnvVar, "1"

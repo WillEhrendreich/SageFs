@@ -10,8 +10,9 @@ SageFs gates tools when you call them. `tools/list` always advertises the
 full catalog below, and SageFs doesn't filter what an MCP client sees there.
 Calling one is different: a call that doesn't apply to the current session
 state gets rejected with a structured error (`SageFs/Mcp.fs:686`,
-`enforceToolCallGate`), instead of a raw failure. Call `get_fsi_status` to
-see which tools currently apply. In a warming-up session, for example, it
+`enforceToolCallGate`), instead of a raw failure. Call `get_daemon_status`
+for daemon health, then `get_session_status` to see which tools currently
+apply. In a warming-up session, for example, it
 reports `send_fsharp_code` as not yet available, even though the tool is
 still listed. I went back and forth on filtering the list itself. For now
 the call-time gate is what's actually wired up, so that's what this doc
@@ -72,17 +73,20 @@ check `sagefs status` — if it says no daemon is running, start one with
 | `send_fsharp_code` | Evaluate F# code in the session. Each `;;` is a transaction boundary: a failure discards that one statement and keeps everything before it. |
 | `check_fsharp_code` | Type-check a snippet without running it, in the current FSI context. Earlier `send_fsharp_code` definitions are in scope, but namespaces still need an explicit `open`. A "not defined" error here almost always just means you forgot the `open`, nothing more sinister. |
 | `cancel_eval` | Cancel a running evaluation. |
-| `get_fsi_status` | Session health, loaded projects, and the tools available in the current state. |
+| `get_daemon_status` | Daemon version, health, memory, process telemetry, and session counts, including with no active session. |
+| `get_session_status` | The selected session's lifecycle, loaded projects, progress, and tools available in the current state. |
 | `get_recent_fsi_events` | Recent evals, errors, and loads with timestamps. |
 
 ## Sessions and lifecycle
 
 | Tool | What it does |
 |:---|:---|
-| `create_session` | Create an isolated FSI session for a project or working directory. Name an explicit `.fsproj` — an empty `projects` list auto-discovers whatever is in the directory, which on a large repo (dozens of projects) can take minutes with no explicit project loaded to show for it. Use `get_available_projects` to find the one you want first. |
+| `create_project_session` | Create an isolated session for one explicit `.fsproj`. Missing generated build state is rebuilt before the session is registered. |
+| `create_solution_session` | Create an isolated session for one explicit `.sln` or `.slnx`. |
+| `create_bare_session` | Create an isolated project-free REPL. It never auto-discovers. |
 | `list_sessions` | List active sessions. |
 | `switch_session` | Change which session your calls route to. |
-| `stop_session` | Stop a session by id. |
+| `stop_session` | Stop a session by id. MCP-bound sessions can only be stopped by the connection that created them. |
 | `reset_fsi_session` | Soft reset: clears definitions, keeps loaded DLLs. |
 | `hard_reset_fsi_session` | Full reset: rebuilds the project, reloads, starts fresh. Needed after `.fsproj` or package changes. |
 | `get_available_projects` | Discover `.fsproj` / `.sln` / `.slnx` files under a directory. |

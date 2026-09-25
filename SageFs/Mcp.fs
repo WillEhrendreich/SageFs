@@ -8,6 +8,7 @@ open System.Text.Json
 open System.Text.Json.Serialization
 open System.Threading.Tasks
 open System.Xml.Linq
+open SageFs
 open SageFs.AppState
 open SageFs.WarmUp
 open SageFs.Features.CellDependenciesReport
@@ -28,7 +29,7 @@ module McpTools =
     /// Fires serialized JSON whenever the Elm model changes.
     StateChanged: IEvent<string> option
     SessionOps: SessionManagementOps
-    /// Per-connection session tracking, keyed by agent/client name.
+    /// Per-connection session tracking, keyed by bound MemberId.
     SessionMap: Collections.Concurrent.ConcurrentDictionary<string, string>
     /// MCP port for status display.
     McpPort: int
@@ -61,6 +62,8 @@ module McpTools =
     /// tests, which predate cohort support and never construct one) — cohort
     /// tools report a structured error rather than throwing in that case.
     CohortOwner: Features.CohortOwner.Handle option
+    GetDaemonHealth: unit -> Features.HealthSnapshot option
+    GetProcessTelemetry: unit -> SageFs.Server.DaemonTelemetry.Snapshot option
   }
 
   /// The MCP transport's per-connection identity, bound by the request
@@ -96,11 +99,62 @@ module McpTools =
   let resolvedKey (agentName: string) : string =
     MemberTable.MemberId.display (memberIdFor agentName)
 
+  /// Sessions created by MCP, keyed by session id and owned by the bound
+  /// transport MemberId. This is separate from SessionMap: switching a
+  /// connection to an existing session must not transfer ownership.
+  let sessionOwners = Collections.Concurrent.ConcurrentDictionary<string, string>()
+
+  let claimSessionOwner (agent: string) (sessionId: string) =
+    sessionOwners.TryAdd(sessionId, resolvedKey agent) |> ignore
+
+  let releaseSessionOwner (sessionId: string) =
+    let mutable removed = Unchecked.defaultof<string>
+    sessionOwners.TryRemove(sessionId, &removed) |> ignore
+
+  let ownsMcpSession sessionId =
+    match currentTransportSessionId.Value with
+    | None -> None
+    | Some _ ->
+      match sessionOwners.TryGetValue sessionId with
+      | true, owner when owner = resolvedKey "mcp" -> Some true
+      | _ -> Some false
+
   /// Get the active session ID for a specific agent/client.
   let activeSessionId (ctx: McpContext) (agent: string) =
     match ctx.SessionMap.TryGetValue(resolvedKey agent) with
     | true, sid -> sid
     | _ -> ""
+
+  let featureStates = Collections.Concurrent.ConcurrentDictionary<string, Features.FeatureHooks.FeaturePushState ref>()
+
+  let featureStateForSession (ctx: McpContext) sessionId =
+    match currentTransportSessionId.Value with
+    | Some _ ->
+      match featureStates.TryGetValue sessionId with
+      | true, state -> Some state.Value
+      | false, _ ->
+        let state = ref Features.FeatureHooks.FeaturePushState.empty
+        featureStates.TryAdd(sessionId, state) |> ignore
+        Some state.Value
+    | None ->
+      ctx.GetFeatureState |> Option.map (fun getState -> getState ())
+
+  let featureStateForCaller (ctx: McpContext) =
+    let key =
+      match currentTransportSessionId.Value with
+      | Some _ -> resolvedKey "mcp"
+      | None -> "mcp"
+    match ctx.SessionMap.TryGetValue key with
+    | true, sessionId -> featureStateForSession ctx sessionId
+    | false, _ -> ctx.GetFeatureState |> Option.map (fun getState -> getState ())
+
+  let recordEvalForSession (ctx: McpContext) sessionId code result durationMs =
+    match currentTransportSessionId.Value with
+    | Some _ ->
+      let state = featureStates.GetOrAdd(sessionId, fun _ -> ref Features.FeatureHooks.FeaturePushState.empty)
+      state.Value <- Features.FeatureHooks.recordEval code result durationMs state.Value
+    | None ->
+      ctx.RecordEval |> Option.iter (fun record -> record code result durationMs)
 
   /// Set the active session ID for a specific agent/client.
   /// An empty session id CLEARS the agent's mapping instead of storing an
@@ -1038,7 +1092,7 @@ module McpTools =
           // exactly as the /exec bridge already does (roast-7 §2/§3). None in
           // tests. Uses the raw finalOutput (not the advisory-enriched text) to
           // match what /exec stores.
-          ctx.RecordEval |> Option.iter (fun record -> record code finalOutput evalSw.ElapsedMilliseconds)
+          recordEvalForSession ctx sid code finalOutput evalSw.ElapsedMilliseconds
           Instrumentation.succeedSpan span
           // Compute file-overlap advisory AFTER caching raw output
           let enrichedOutput =
@@ -1083,12 +1137,11 @@ module McpTools =
   /// either way: real events when they exist, a plain "no events yet" when they
   /// do not — never a lie.
   let getRecentEvents (ctx: McpContext) (agent: string) (count: int) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun _sid -> task {
-      match ctx.GetFeatureState with
+    withSessionWd ctx agent workingDirectory (fun sid -> task {
+      match featureStateForSession ctx sid with
       | None ->
         return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         match Features.FeatureHooks.recentEvals count state with
         | [] ->
           return "No FSI events recorded yet for this session."
@@ -1162,6 +1215,181 @@ module McpTools =
         return System.Text.Json.JsonSerializer.Serialize({| state = "NoSession"; message = msg |})
     }
 
+  let getDaemonStatus (ctx: McpContext) : Task<string> =
+    task {
+      let machineMemory = SageFs.Features.MachineMemory.current ()
+      let health = ctx.GetDaemonHealth ()
+      let telemetry = ctx.GetProcessTelemetry ()
+      let leases = SageFs.Features.LeaseWatch.snapshot ()
+      let anomalyRows =
+        health
+        |> Option.bind (fun h -> Some h.Anomalies)
+        |> Option.defaultValue []
+        |> List.choose (fun verdict ->
+          SageFs.Features.HealthAnomaly.evidenceOf verdict
+          |> Option.map (fun evidence ->
+            {| signal = SageFs.Features.HealthAnomaly.signalName evidence.Signal
+               state = SageFs.Features.HealthAnomaly.verdictName verdict
+               message = SageFs.Features.HealthAnomaly.describe verdict |> Option.defaultValue ""
+               observedValue = evidence.ObservedValue
+               baselineMean = evidence.BaselineMean
+               baselineStdDev = evidence.BaselineStdDev
+               deviationInSigmas = evidence.DeviationInSigmas
+               sustainedForSeconds = evidence.SustainedFor.TotalSeconds
+               samplesSustained = evidence.SamplesSustained |}))
+      let sessionSummaries =
+        health |> Option.map (fun h -> h.SessionSummaries) |> Option.defaultValue []
+      let countStatus status =
+        sessionSummaries |> List.filter (fun session -> session.Status = status) |> List.length
+      let payload = {|
+        state = "Ready"
+        scope = "Daemon"
+        daemonVersion = health |> Option.map (fun h -> h.Version) |> Option.defaultValue SageFs.Server.DaemonInfo.version
+        coreVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current ()
+        daemonPid = health |> Option.map (fun h -> h.DaemonPid) |> Option.defaultValue Environment.ProcessId
+        mcpPort = health |> Option.map (fun h -> h.DaemonPort) |> Option.defaultValue ctx.McpPort
+        uptimeSeconds =
+          health |> Option.map (fun h -> h.Uptime.TotalSeconds) |> Option.defaultValue 0.0
+        overall = health |> Option.map (fun h -> SageFs.Features.DaemonHealth.healthLabel (SageFs.Features.DaemonHealth.overallStatus h)) |> Option.defaultValue "Unknown"
+        memoryPressure =
+          health |> Option.map (fun h -> SageFs.MemoryPressure.describe h.MemoryPressure) |> Option.defaultValue (SageFs.MemoryPressure.describe SageFs.MemoryPressure.Normal)
+        memoryPressureNote =
+          health |> Option.map (fun h -> SageFs.MemoryPressure.explain h.MemoryPressure) |> Option.defaultValue ""
+        machineMemory =
+          {| totalBytes = machineMemory.TotalBytes
+             availableBytes = machineMemory.AvailableBytes |}
+        daemonResidentBytes = health |> Option.map (fun h -> int64 h.MemoryMB * 1_048_576L) |> Option.defaultValue 0L
+        aggregateResidentBytes = telemetry |> Option.map (fun t -> t.AggregateResidentBytes) |> Option.defaultValue 0L
+        aggregateCpuPercent = telemetry |> Option.map (fun t -> t.AggregateCpuPercent) |> Option.defaultValue 0.0
+        telemetrySampledAt = telemetry |> Option.map (fun t -> t.SampledAt) |> Option.defaultValue DateTimeOffset.UtcNow
+        processes = telemetry |> Option.map (fun t -> t.Processes) |> Option.defaultValue []
+        sessions = {|
+          total = sessionSummaries |> List.length
+          ready = countStatus SageFs.Features.SessionHealthStatus.Ready
+          evaluating = countStatus SageFs.Features.SessionHealthStatus.Evaluating
+          warmingUp = countStatus SageFs.Features.SessionHealthStatus.WarmingUp
+          faulted = countStatus SageFs.Features.SessionHealthStatus.Faulted
+          stopped = countStatus SageFs.Features.SessionHealthStatus.Stopped
+        |}
+        leases = {| activeCount = leases.ActiveCount
+                    queueDepth = leases.QueueDepth
+                    active = leases.Active
+                    queue = leases.Queue |}
+        anomalies = anomalyRows
+        available = SageFs.Affordances.availableTools SageFs.SessionState.Uninitialized
+      |}
+      return System.Text.Json.JsonSerializer.Serialize payload
+    }
+
+  let private leaseDecisionJson kind decision : string =
+    let kindName = SageFs.ExpensiveWorkLease.Kind.toToken kind
+    match decision with
+    | SageFs.ExpensiveWorkLease.Decision.Granted(leaseId, expiresAt) ->
+      System.Text.Json.JsonSerializer.Serialize(
+        {| kind = kindName
+           decision = "granted"
+           leaseId = SageFs.ExpensiveWorkLease.LeaseId.value leaseId
+           expiresAt = expiresAt |})
+    | SageFs.ExpensiveWorkLease.Decision.Wait(retryAfter, reason) ->
+      System.Text.Json.JsonSerializer.Serialize(
+        {| kind = kindName
+           decision = "wait"
+           retryAfterSeconds = retryAfter.TotalSeconds
+           reason = reason |})
+    | SageFs.ExpensiveWorkLease.Decision.Refused reason ->
+      System.Text.Json.JsonSerializer.Serialize(
+        {| kind = kindName
+           decision = "refused"
+           reason = reason |})
+
+  let acquireWorkLease (agent: string) (kind: SageFs.ExpensiveWorkLease.Kind) : string =
+    let holder = resolvedKey agent
+    let decision = SageFs.Features.LeaseWatch.request holder kind
+    leaseDecisionJson kind decision
+
+  let releaseWorkLease (agent: string) (leaseId: string) : Result<string, SageFsError> =
+    match String.IsNullOrWhiteSpace leaseId with
+    | true -> Error (SageFsError.JsonParseError("release_work_lease", "lease_id is required"))
+    | false ->
+      let id = SageFs.ExpensiveWorkLease.LeaseId.ofWire leaseId
+      let holder = resolvedKey agent
+      match SageFs.Features.LeaseWatch.releaseOwned holder id with
+      | SageFs.ExpensiveWorkLease.ReleaseOutcome.Released -> Ok "released"
+      | SageFs.ExpensiveWorkLease.ReleaseOutcome.AlreadyGone -> Ok "already_gone_or_not_owned"
+
+  let getSessionStatus
+    (ctx: McpContext)
+    (agent: string)
+    (sessionId: string option)
+    (workingDirectory: string option)
+    : Task<string> =
+    task {
+      let! resolution = resolveSessionId ctx agent sessionId workingDirectory
+      match resolution with
+      | Gone message ->
+        return System.Text.Json.JsonSerializer.Serialize(
+          {| state = "NoSession"
+             scope = "Session"
+             message = message |})
+      | WarmingUp (sid, status) | Unroutable (sid, status) ->
+        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+        let targets = info |> Option.bind (fun value -> SessionProjectTarget.tryCreateMany value.Projects |> Result.toOption) |> Option.defaultValue []
+        return System.Text.Json.JsonSerializer.Serialize(
+          {| state = "WarmingUp"
+             scope = "Session"
+             sessionId = sid
+             lifecycle = WorkerProtocol.SessionLifecycleStatus.label status
+             target = targets
+             loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
+             workerPid = WorkerProtocol.SessionLifecycleStatus.workerPid status
+             workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status
+             available = SageFs.Affordances.availableTools SageFs.SessionState.WarmingUp |})
+      | FaultedSession (sid, cause) ->
+        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+        let targets = info |> Option.bind (fun value -> SessionProjectTarget.tryCreateMany value.Projects |> Result.toOption) |> Option.defaultValue []
+        return System.Text.Json.JsonSerializer.Serialize(
+          {| state = "Faulted"
+             scope = "Session"
+             sessionId = sid
+             faultReason = FaultCause.describe cause
+             target = targets
+             loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
+             available = SageFs.Affordances.availableTools SageFs.SessionState.Faulted |})
+      | Routable sid ->
+        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+        let! routeResult =
+          routeToSession ctx sid (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
+        match info, routeResult with
+        | Some sessionInfo, Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
+          let targets = SessionProjectTarget.tryCreateMany sessionInfo.Projects |> Result.defaultValue []
+          let reconciledStatus =
+            match SageFs.ProjectResolution.reconcile targets sessionInfo.ProjectRoles.Length sessionInfo.Status snapshot.Status with
+            | SageFs.ProjectResolution.ReconciledStatus.Reconciled status -> status
+            | SageFs.ProjectResolution.ReconciledStatus.NotYetEarned current -> current
+          let! warmup =
+            match ctx.GetWarmupContext with
+            | Some getCtx -> getCtx sid
+            | None -> Task.FromResult None
+          let health = SessionHealth.classify reconciledStatus sessionInfo.ProjectRoles warmup
+          return System.Text.Json.JsonSerializer.Serialize(
+            {| state = "Ready"
+               scope = "Session"
+               sessionId = sid
+               target = targets
+               loadedProjects = sessionInfo.ProjectRoles |> List.map _.Path
+               lifecycle = WorkerProtocol.SessionLifecycleStatus.label reconciledStatus
+               workerPid = WorkerProtocol.SessionLifecycleStatus.workerPid reconciledStatus
+               workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort reconciledStatus
+               workflow = WorkflowTypes.SessionWorkflow.label sessionInfo.Workflow
+               coreVersion = snapshot.CoreVersion
+               evalCount = snapshot.EvalCount
+               averageDurationMs = snapshot.AvgDurationMs
+               health = SessionHealth.toJson health
+               available = SageFs.Affordances.availableTools (WorkerProtocol.SessionLifecycleStatus.toSessionState reconciledStatus) |})
+        | _, _ ->
+          return! renderWarmingOrFaulted ctx resolution
+    }
+
   let getStatus (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     task {
       let! resolution = resolveSessionId ctx agent sessionId workingDirectory
@@ -1207,7 +1435,7 @@ module McpTools =
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
           let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-          let reconciliation = info |> Option.map (fun i -> SageFs.ProjectResolution.reconcile i.Projects i.ProjectRoles.Length i.Status snapshot.Status)
+          let reconciliation = info |> Option.map (fun i -> SageFs.ProjectResolution.reconcile (SessionProjectTarget.tryCreateMany i.Projects |> Result.defaultValue []) i.ProjectRoles.Length i.Status snapshot.Status)
           let reconciled = reconciliation |> Option.map (function SageFs.ProjectResolution.ReconciledStatus.Reconciled s | SageFs.ProjectResolution.ReconciledStatus.NotYetEarned s -> s)
           match info, reconciliation with
           | Some sessionInfo, Some (SageFs.ProjectResolution.ReconciledStatus.Reconciled newStatus) when sessionInfo.Status <> newStatus ->
@@ -1968,90 +2196,49 @@ module McpTools =
     @ WorkflowTypes.PaketReferences.readForProject path
     @ WorkflowTypes.ProjectFileMarkers.read path
 
-  /// A repo where `projects=[]` would auto-discover more than this many
-  /// `.fsproj` files gets a heads-up instead of silence. Three onboarding
-  /// trials (fcs-trial-a/b/c, 2026-09-22) independently hit this exact wall
-  /// on FSharp.Compiler.Service (60+ projects): `projects=[]` warmed up for
-  /// 20+ minutes with nothing to show for it, while the SAME repo with ONE
-  /// named project was Ready in ~10s. The check is a plain filesystem walk
-  /// (`walkProjectFiles`, already used by get_available_projects) — not a
-  /// build, not MSBuild evaluation — so it costs milliseconds and lands in
-  /// the SAME reply an agent about to wait 20 minutes would read.
+  /// A target containing more than this many project paths is likely a
+  /// repository-sized load and should be named narrowly by the caller.
   let largeRepoAutoDiscoveryWarningThreshold = 15
 
-  let private formatLargeRepoWarning (workingDir: string) (projectCount: int) : string option =
-    match projectCount > largeRepoAutoDiscoveryWarningThreshold with
-    | true ->
-      Some (
-        sprintf
-          "⚠️ %d .fsproj files found under %s and projects=[] was passed. The worker will try to auto-discover and load the project or solution it finds there — on a repo this size that can take minutes, with nothing shown until warmup ends or fails. Prefer naming one explicit project: create_session with projects=[\"path/to/One.fsproj\"]. Use get_available_projects to list candidates first."
-          projectCount workingDir)
-    | false -> None
-
-  /// Create a new session and bind it to the requesting agent.
-  let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflowRaw: string) : Task<string> =
+  let createSession (ctx: McpContext) (agent: string) (targets: SessionProjectTarget list) (workingDir: string) (workflowRaw: string) : Task<string> =
     task {
-      // Reject an unsafe working directory / escaping project path with the
-      // SAME rule `/api/sessions/create` enforces (SessionPathValidation.validateSessionCreateRequest)
-      // — before this, the MCP tool applied no path validation at all while
-      // the HTTP route did (sagefs-roast.md Finding #1).
-      match SessionPathValidation.validateSessionCreateRequest workingDir projects with
+      match SessionProjectTarget.validate targets with
+      | Error reason -> return sprintf "Error: %s" reason
+      | Ok () ->
+      match SessionPathValidation.validateSessionCreateRequest workingDir (SessionProjectTarget.paths targets) with
       | Error err -> return SageFsError.describeForAgent err
       | Ok () ->
-      // Reject an unrecognized workflow instead of silently defaulting
-      // (Finding #6) — before checking for duplicates, since a bad
-      // workflow argument is a request error independent of what sessions
-      // already exist.
       match CreateSessionUx.parseCreateSessionWorkflow workflowRaw with
       | Error msg -> return msg
       | Ok workflow ->
-      // Guard: warn if a session for the SAME project set and working
-      // directory already exists — using the exact rule the manager
-      // enforces at the single owner, not a broader "any overlap" rule
-      // (Finding #7).
       let! existing = ctx.SessionOps.GetAllSessions()
       let duplicates =
         existing
-        |> List.filter (fun s -> CreateSessionUx.isExactDuplicateSession projects workingDir s.Projects s.WorkingDirectory)
+        |> List.filter (fun s -> CreateSessionUx.isExactDuplicateSession (SessionProjectTarget.paths targets) workingDir s.Projects s.WorkingDirectory)
       match duplicates with
       | dup :: _ ->
         let sid = WorkerProtocol.SessionId.value dup.Id
         let status = WorkerProtocol.SessionLifecycleStatus.label dup.Status
-        return sprintf "⚠️ A session with this exact project set and working directory already exists (session '%s', status: %s) — the daemon would refuse an identical create_session request anyway. Use switch_session to target it instead. If the existing session is stuck, use stop_session to remove it first, then retry create_session." sid status
+        return sprintf "A session with this exact target and working directory already exists (session '%s', status: %s). Use switch_session to target it instead." sid status
       | [] ->
-      let! result = ctx.SessionOps.CreateSession projects workingDir workflow
-      // Refresh Elm model so dashboard SSE pushes updated session list
+      let! result = ctx.SessionOps.CreateSession targets workingDir workflow
       ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
       match result with
       | Result.Ok sid ->
         setActiveSessionId ctx agent sid
-        // Surface workflow detection hint (non-blocking, informational only).
-        let perProject = projects |> List.map (fun p -> p, readFsprojPackageRefs p)
-        let packageRefs =
-          perProject
-          |> List.map snd
-          |> WorkflowTypes.WorkflowDetection.extractPackageNames
-        // The hot-reload nudge, plus a truthful note for any project whose
-        // toolchain means only part of it is SageFs's job (a Fable client).
-        let largeRepoWarning =
-          match projects with
-          | [] ->
-            try
-              walkProjectFiles workingDir
-              |> Seq.filter McpAdapter.isProjectFile
-              |> Seq.length
-              |> formatLargeRepoWarning workingDir
-            with _ -> None
-          | _ -> None
+        claimSessionOwner agent sid
+        let perProject =
+          targets
+          |> List.choose (function
+            | SessionProjectTarget.Project path -> Some(path, readFsprojPackageRefs path)
+            | SessionProjectTarget.Solution _
+            | SessionProjectTarget.Bare -> None)
+        let packageRefs = perProject |> List.map snd |> WorkflowTypes.WorkflowDetection.extractPackageNames
         let lines =
-          Option.toList largeRepoWarning
-          @ Option.toList (formatDetectionHint packageRefs workflow)
+          Option.toList (formatDetectionHint packageRefs workflow)
           @ ProjectCompatibility.formatToolchainAdvisories perProject
-        let hint =
-          match lines with
-          | [] -> None
-          | ls -> Some(String.concat "\n\n" ls)
-        return CreateSessionUx.formatCreateSessionReply sid projects hint
+        let hint = match lines with [] -> None | ls -> Some(String.concat "\n\n" ls)
+        return CreateSessionUx.formatCreateSessionReply sid targets hint
       | Result.Error err -> return SageFsError.describeForAgent err
     }
 
@@ -2083,8 +2270,19 @@ module McpTools =
         // The session is gone from the registry — release every agent that
         // was routed to it so it no longer claims occupancy.
         evictSessionEntries ctx sessionId
+        releaseSessionOwner sessionId
         return msg
       | Result.Error err -> return SageFsError.describeForAgent err
+    }
+
+  let stopSessionOwned (ctx: McpContext) (sessionId: string) : Task<string> =
+    task {
+      match ownsMcpSession sessionId with
+      | Some false ->
+        return SageFsError.describeForAgent (
+          SageFsError.SessionStopFailed (sessionId, "the session is owned by another bound MCP connection; use the connection that created it or stop it through a privileged daemon control"))
+      | Some true
+      | None -> return! stopSession ctx sessionId
     }
 
   /// Switch the active session for a specific agent. Validates the target exists.
@@ -2198,7 +2396,7 @@ module McpTools =
       | false ->
       // 6. Execute: create new session with target workflow, stop old
       let! createResult =
-        ctx.SessionOps.CreateSession sessionInfo.Projects sessionInfo.WorkingDirectory target
+        ctx.SessionOps.CreateSession (SessionProjectTarget.tryCreateMany sessionInfo.Projects |> Result.defaultValue []) sessionInfo.WorkingDirectory target
       match createResult with
       | Result.Error err ->
         return sprintf "Error switching workflow: %s" (SageFsError.describeForAgent err)
@@ -2544,8 +2742,8 @@ module McpTools =
         Timing = timing |> Option.map Features.LiveTesting.TestCycleTiming.toStatusBar |> Option.defaultValue "no timing yet"
         Providers = state.DetectedProviders |> List.map (fun p ->
           match p with
-          | Features.LiveTesting.ProviderDescription.AttributeBased a -> Features.LiveTesting.TestFramework.toString a.Name
-          | Features.LiveTesting.ProviderDescription.Custom c -> Features.LiveTesting.TestFramework.toString c.Name)
+          | Features.LiveTesting.ProviderDescription.AttributeBased a -> SageFs.TestFramework.toString a.Name
+          | Features.LiveTesting.ProviderDescription.Custom c -> SageFs.TestFramework.toString c.Name)
         Policies = state.RunPolicies |> Map.toList |> List.map (fun (c, p) -> sprintf "%A: %A" c p)
         Hint = match isActive with
                | true -> None
@@ -3046,10 +3244,9 @@ module McpTools =
 
   let planRipple (ctx: McpContext) (changedCellIds: string) : Task<string> =
     task {
-      match ctx.GetFeatureState with
+      match featureStateForCaller ctx with
       | None -> return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         match state.EvalHistory with
         | [] -> return "No eval history — evaluate some cells first."
         | _ ->
@@ -3081,10 +3278,9 @@ module McpTools =
 
   let previewWhatIf (ctx: McpContext) (bindingName: string) (newCode: string) : Task<string> =
     task {
-      match ctx.GetFeatureState with
+      match featureStateForCaller ctx with
       | None -> return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         match state.EvalHistory with
         | [] -> return "No eval history — evaluate some cells first."
         | _ ->
@@ -3115,10 +3311,9 @@ module McpTools =
 
   let suggestNextCell (ctx: McpContext) : Task<string> =
     task {
-      match ctx.GetFeatureState with
+      match featureStateForCaller ctx with
       | None -> return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         let scope =
           Features.FeatureHooks.scope state
         let bindings = toScopeBindings scope
@@ -3139,10 +3334,9 @@ module McpTools =
 
   let getSessionFilmstrip (ctx: McpContext) (filter: string option) : Task<string> =
     task {
-      match ctx.GetFeatureState with
+      match featureStateForCaller ctx with
       | None -> return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         let events = toFilmstripEvents state
         match events with
         | [] -> return "No eval history — the session filmstrip is empty."
@@ -3166,10 +3360,9 @@ module McpTools =
   /// MCP Tool: Export session as notebook (.fsx with cell metadata)
   let exportNotebook (ctx: McpContext) (projectName: string option) : Task<string> =
     task {
-      match ctx.GetFeatureState with
+      match featureStateForCaller ctx with
       | None -> return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         match state.EvalHistory with
         | [] -> return "No eval history — nothing to export."
         | history ->
@@ -3191,10 +3384,9 @@ module McpTools =
   /// MCP Tool: Export session as clean .fsx transcript
   let exportSessionTranscript (ctx: McpContext) (projectName: string option) : Task<string> =
     task {
-      match ctx.GetFeatureState with
+      match featureStateForCaller ctx with
       | None -> return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         match state.EvalHistory with
         | [] -> return "No eval history — nothing to export."
         | _ ->
@@ -3207,10 +3399,9 @@ module McpTools =
   /// MCP Tool: Get message journal (synthesized from eval history)
   let getMessageJournal (ctx: McpContext) (minLevel: string option) (source: string option) : Task<string> =
     task {
-      match ctx.GetFeatureState with
+      match featureStateForCaller ctx with
       | None -> return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         match state.EvalHistory with
         | [] -> return "No eval history — journal is empty."
         | history ->
@@ -3260,10 +3451,9 @@ module McpTools =
   /// MCP Tool: Get eval timeline with sparkline and percentiles
   let getEvalTimeline (ctx: McpContext) (sparklineWidth: int option) : Task<string> =
     task {
-      match ctx.GetFeatureState with
+      match featureStateForCaller ctx with
       | None -> return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         let timeline = state.CachedTimeline
         match timeline.Entries with
         | [] -> return "No eval timeline — evaluate some cells first."
@@ -3293,10 +3483,9 @@ module McpTools =
   /// MCP Tool: Manage scratch pad (ephemeral code snippets)
   let manageScratchPad (ctx: McpContext) (action: string) (code: string option) (snippetId: int option) : Task<string> =
     task {
-      match ctx.GetFeatureState with
+      match featureStateForCaller ctx with
       | None -> return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         match action.ToLowerInvariant() with
         | "list" ->
           let pad = Features.ScratchPad.create "session"
@@ -3354,10 +3543,9 @@ module McpTools =
   /// MCP Tool: Get eval diff (before/after output comparison)
   let getEvalDiff (ctx: McpContext) (cellIndex: int option) : Task<string> =
     task {
-      match ctx.GetFeatureState with
+      match featureStateForCaller ctx with
       | None -> return "Feature state not available — no active session."
-      | Some getState ->
-        let state = getState ()
+      | Some state ->
         match state.EvalHistory with
         | [] -> return "No eval history — nothing to diff."
         | [_single] -> return "Only one eval in history — nothing to diff against."
@@ -4359,7 +4547,8 @@ module McpTools =
                   "Integration configured: head=%s worktree=%s branch=%s. WARNING: the worktree build failed (%s) — landings will report this reason until it is retried."
                   sha worktreePath branch reason)
             | Features.CohortIntegrationScope.WorktreeBuildOutcome.ReadyForSession ->
-              let! sessionResult = ctx.SessionOps.CreateSession projects worktreePath WorkflowTypes.SessionWorkflow.Interactive
+              let targets = SessionProjectTarget.tryCreateMany projects |> Result.defaultValue []
+              let! sessionResult = ctx.SessionOps.CreateSession targets worktreePath WorkflowTypes.SessionWorkflow.Interactive
               match sessionResult with
               | Ok sessionId ->
                 cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; Session = IntegrationSession.Started sessionId }

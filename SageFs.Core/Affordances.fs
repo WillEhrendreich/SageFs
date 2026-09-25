@@ -45,15 +45,18 @@ let availableTools (state: SessionState) : string list =
     // uninitialized/absent but OTHER sessions exist and are Ready, selecting one
     // is exactly the recovery the "N sessions exist... switch_session to select
     // one" hint points at — omitting it was a catch-22 (roast UX / affordances).
-    [ "get_fsi_status"; "get_friction_report"; "get_available_projects"
-      "list_sessions"; "switch_session"; "create_session"; "decompose_pipeline" ]
+    [ "get_daemon_status"; "get_session_status"; "get_friction_report"; "get_available_projects"
+      "list_sessions"; "switch_session"; "create_project_session"; "create_solution_session"; "create_bare_session"
+      "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"; "decompose_pipeline" ]
   | WarmingUp ->
-    [ "get_fsi_status"; "get_recent_fsi_events"; "get_friction_report"
-      "get_available_projects"; "list_sessions"; "switch_session"; "create_session"
+    [ "get_session_status"; "get_recent_fsi_events"; "get_friction_report"
+      "get_available_projects"; "list_sessions"; "switch_session"
+      "create_project_session"; "create_solution_session"; "create_bare_session"
+      "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"
       "decompose_pipeline" ]
   | Ready ->
     [ "send_fsharp_code"
-      "get_fsi_status"
+      "get_session_status"
       "get_recent_fsi_events"
       "get_friction_report"
       "check_fsharp_code"
@@ -62,7 +65,10 @@ let availableTools (state: SessionState) : string list =
       "explain_test_failure"
       "list_sessions"
       "switch_session"
-      "create_session"
+      "create_project_session"
+      "create_solution_session"
+      "create_bare_session"
+      "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"
       "get_available_projects"
       "reset_fsi_session"
       "hard_reset_fsi_session"
@@ -95,10 +101,11 @@ let availableTools (state: SessionState) : string list =
       "stop_app" ]
   | Evaluating ->
     [ "cancel_eval"
-      "get_fsi_status"
+      "get_session_status"
       "get_recent_fsi_events"
       "get_friction_report"
       "get_available_projects"
+      "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"
       "list_sessions"
       // switch_session is always callable (navigation, not execution) — advertise
       // it so an agent whose active session is mid-eval knows it can switch away.
@@ -106,7 +113,7 @@ let availableTools (state: SessionState) : string list =
       "check_fsharp_code"
       "decompose_pipeline" ]
   | Faulted ->
-    [ "get_fsi_status"
+    [ "get_session_status"
       "get_recent_fsi_events"
       "get_friction_report"
       "get_available_projects"
@@ -114,7 +121,10 @@ let availableTools (state: SessionState) : string list =
       // switch_session is always callable — advertise it so an agent on a
       // faulted session knows it can switch to a healthy one.
       "switch_session"
-      "create_session"
+      "create_project_session"
+      "create_solution_session"
+      "create_bare_session"
+      "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"
       "reset_fsi_session"
       "hard_reset_fsi_session"
       "decompose_pipeline" ]
@@ -153,9 +163,14 @@ type ToolGate =
 let private gatingDomain : Map<string, ToolGate> =
   Map.ofList [
     // Tools with no session-state dependence.
-    "get_fsi_status", ToolGate.AlwaysAvailable
+    "get_daemon_status", ToolGate.AlwaysAvailable
+    "get_session_status", ToolGate.AlwaysAvailable
     "get_friction_report", ToolGate.AlwaysAvailable
     "get_available_projects", ToolGate.AlwaysAvailable
+    "acquire_full_build_lease", ToolGate.AlwaysAvailable
+    "acquire_test_suite_lease", ToolGate.AlwaysAvailable
+    "acquire_run_app_lease", ToolGate.AlwaysAvailable
+    "release_work_lease", ToolGate.AlwaysAvailable
     "list_sessions", ToolGate.AlwaysAvailable
     "get_friction_summary", ToolGate.AlwaysAvailable
     // Reads and clears SageFs's own files under its data dir. No session involved.
@@ -207,7 +222,9 @@ let private gatingDomain : Map<string, ToolGate> =
     "targeted_verify", ToolGate.StateGated
     "list_tests", ToolGate.StateGated
     "explain_test_failure", ToolGate.StateGated
-    "create_session", ToolGate.StateGated
+    "create_project_session", ToolGate.StateGated
+    "create_solution_session", ToolGate.StateGated
+    "create_bare_session", ToolGate.StateGated
     "reset_fsi_session", ToolGate.StateGated
     "hard_reset_fsi_session", ToolGate.StateGated
     "switch_workflow", ToolGate.StateGated

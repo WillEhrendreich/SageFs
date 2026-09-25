@@ -11,7 +11,7 @@ let private quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 
 let private createFaultedActorResult () : System.Threading.Tasks.Task<SageFs.ActorCreation.ActorResult> =
   let args =
-    { SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty true with
+    { SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty with
         OutStream = null :> TextWriter }
   SageFs.ActorCreation.createActor args
 

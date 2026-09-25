@@ -168,7 +168,7 @@ let private buildAsSageFsDoes (runDir: string) (project: string) = task {
 let private spawnHost (runtime: HostRuntime) (runDir: string) (project: string) (hostLog: StringBuilder) = task {
   let sessionId = sprintf "state-%s" (Guid.NewGuid().ToString("N"))
   let args, envVars =
-    Args.buildWorkerSpawnConfig sessionId [] false false true
+    Args.buildWorkerSpawnConfig sessionId [ SageFs.SessionProjectTarget.Project project ] false true
       (WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults)
   let psi = ProcessStartInfo(hostExePath runtime, args)
   psi.UseShellExecute <- false

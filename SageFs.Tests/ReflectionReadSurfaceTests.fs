@@ -175,7 +175,9 @@ let private toolsFor (port: int) : SageFsTools =
       RecordEval = None
       ActivityTracker = AgentActivityTracker.create ()
       LiveSnapshotSink = None
-      CohortOwner = None }
+      CohortOwner = None
+      GetDaemonHealth = fun () -> None
+      GetProcessTelemetry = fun () -> None }
   SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
 
 let private http = new Net.Http.HttpClient()

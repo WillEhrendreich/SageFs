@@ -46,7 +46,7 @@ let tests =
         let! created =
           mgr.PostAndAsyncReply(fun reply ->
             SageFs.SessionManager.SessionCommand.CreateSession(
-              [ testsProject ], testsDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+              [ SageFs.SessionProjectTarget.Project testsProject ], testsDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
 
         match created with
         | Error err -> failtestf "create failed: %s" (SageFsError.describe err)

@@ -11,7 +11,7 @@ open System.Collections.Concurrent
 /// Dedicated FSI actor for cross-submission tests — isolated from globalActorResult
 /// to avoid output contention with other integration tests.
 let private dedicatedActor = lazy(
-  let args = SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty true
+  let args = SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty
   SageFs.ActorCreation.createActor args |> Async.AwaitTask |> Async.RunSynchronously
 )
 
@@ -33,7 +33,9 @@ let private isolatedCtx (sessionId: SageFs.WorkerProtocol.SessionId) =
     GetFeatureState = None; RecordEval = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
     LiveSnapshotSink = None
-    CohortOwner = None } : McpContext
+    CohortOwner = None
+    GetDaemonHealth = fun () -> None
+    GetProcessTelemetry = fun () -> None } : McpContext
 
 /// Unique ID per test invocation — prevents type name collisions
 /// when --multiemit- puts all types in one assembly across re-runs.

@@ -702,7 +702,7 @@ let awaitTcs (timeoutMs: int) (tcs: System.Threading.Tasks.TaskCompletionSource<
 /// Single shared actor result for all read-only tests across the entire test suite.
 /// Created once on first access, reused everywhere.
 let globalActorResult = lazy(
-  let args = mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty true
+  let args = mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty
   createActor args |> Async.AwaitTask |> Async.RunSynchronously
 )
 
@@ -767,7 +767,9 @@ let sharedCtx () =
     GetFeatureState = None; RecordEval = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
     LiveSnapshotSink = None
-    CohortOwner = None } : McpContext
+    CohortOwner = None
+    GetDaemonHealth = fun () -> None
+    GetProcessTelemetry = fun () -> None } : McpContext
 
 /// Create a McpContext with a custom session ID backed by the global shared actor
 let sharedCtxWith (sessionId: SageFs.WorkerProtocol.SessionId) =
@@ -787,4 +789,6 @@ let sharedCtxWith (sessionId: SageFs.WorkerProtocol.SessionId) =
     GetFeatureState = None; RecordEval = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
     LiveSnapshotSink = None
-    CohortOwner = None } : McpContext
+    CohortOwner = None
+    GetDaemonHealth = fun () -> None
+    GetProcessTelemetry = fun () -> None } : McpContext

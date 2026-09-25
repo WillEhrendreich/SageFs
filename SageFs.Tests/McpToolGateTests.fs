@@ -274,6 +274,8 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     ActivityTracker = AgentActivityTracker.create ()
     LiveSnapshotSink = None
     CohortOwner = None
+    GetDaemonHealth = fun () -> None
+    GetProcessTelemetry = fun () -> None
   }
   ctx, workingDir
 

@@ -132,7 +132,9 @@ let private mkPushbackCtx (restartResult: Result<string, SageFsError>) =
       GetFeatureState = None; RecordEval = None
       ActivityTracker = AgentActivityTracker.create()
       LiveSnapshotSink = None
-      CohortOwner = None }
+      CohortOwner = None
+      GetDaemonHealth = fun () -> None
+      GetProcessTelemetry = fun () -> None }
   ctx, restartCalls, statusEvents
 
 /// Both cases below build `mkPushbackCtx` — a fully stubbed McpContext

@@ -83,6 +83,21 @@ module SessionHealth =
     | SessionHealth.Unknown -> false
 
 /// What the daemon reports about one session, in the terms this module needs.
+type SessionTarget =
+  | ProjectSession of path: string
+  | SolutionSession of path: string
+  | BareSession
+
+module SessionTarget =
+  let ofPath (path: string) =
+    let isSolution =
+      path.EndsWith(".sln", System.StringComparison.OrdinalIgnoreCase)
+      || path.EndsWith(".slnx", System.StringComparison.OrdinalIgnoreCase)
+    if isSolution then
+      SolutionSession path
+    else
+      ProjectSession path
+
 type SessionRowInput = {
   Id: string
   Status: string
@@ -127,6 +142,11 @@ let effectiveProjects (input: SessionRowInput) : string array =
 
 /// Whether the session has finished starting, i.e. whether "it loaded nothing"
 /// is knowable yet.
+let isReadyStatus (status: string) =
+  match status with
+  | "Ready" | "Evaluating" | "Building" -> true
+  | _ -> false
+
 let private isSettled (status: string) =
   match status with
   | "Starting" | "Restarting" -> false

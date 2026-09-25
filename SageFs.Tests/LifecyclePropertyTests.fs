@@ -148,7 +148,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
           }
           Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
-          Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
+          Targets = [ SessionProjectTarget.Project "p.fsproj" ]; WorkingDir = "C:\\test"
           AutoOpenNamespaces = false
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           RestartState = RestartPolicy.emptyState
@@ -183,7 +183,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
         }
         Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
-        Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
+        Targets = [ SessionProjectTarget.Project "p.fsproj" ]; WorkingDir = "C:\\test"
         AutoOpenNamespaces = false
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = RestartPolicy.emptyState
@@ -218,7 +218,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = url
-      Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
+      Targets = [ SessionProjectTarget.Project "p.fsproj" ]; WorkingDir = "C:\\test"
       AutoOpenNamespaces = false
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       RestartState = RestartPolicy.emptyState
@@ -256,7 +256,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
-      Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
+      Targets = [ SessionProjectTarget.Project "p.fsproj" ]; WorkingDir = "C:\\test"
       AutoOpenNamespaces = false
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       RestartState = RestartPolicy.emptyState

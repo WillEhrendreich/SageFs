@@ -68,7 +68,7 @@ let private sharedSession =
     let created =
       mgr.PostAndAsyncReply(fun reply ->
         SageFs.SessionManager.SessionCommand.CreateSession(
-          [ testsProject ], testsDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+          [ SageFs.SessionProjectTarget.Project testsProject ], testsDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
       |> fun ask -> Async.RunSynchronously(ask, setupBudgetMs)
     match created with
     | Error err -> Error(sprintf "create failed: %s" (SageFsError.describe err))
@@ -204,19 +204,20 @@ let dogfoodReplTests =
         s.AdoptedCore
         |> Expect.isSome "a session on SageFs.Tests adopts its own SageFs.Core, so AdoptedCore is recorded"
         // (b) At spawn, the adopted build IS the newest on disk -> Current.
-        let newestAtSpawn = HostCoreAdoption.newestCandidateIdentity s.Projects
+        let projectPaths = SageFs.SessionProjectTarget.paths s.Targets
+        let newestAtSpawn = HostCoreAdoption.newestCandidateIdentity projectPaths
         newestAtSpawn |> Expect.isSome "the project ships a SageFs.Core build on disk"
         HostCoreAdoption.selfHostFreshness s.AdoptedCore newestAtSpawn
         |> Expect.equal "a freshly adopted build is Current" HostCoreAdoption.SelfHostFreshness.Current
         // (c) Simulate a rebuild landing: bump the candidate's write time
         // past the epsilon, then restore it so the build output is unchanged.
-        match HostCoreAdoption.findCandidates (HostCoreAdoption.projectDirsOf s.Projects) with
+        match HostCoreAdoption.findCandidates (HostCoreAdoption.projectDirsOf projectPaths) with
         | [] -> failtest "no SageFs.Core candidate found on disk for the self-host session"
         | candidate :: _ ->
           let original = File.GetLastWriteTimeUtc candidate
           try
             File.SetLastWriteTimeUtc(candidate, original.AddSeconds 30.0)
-            let newestAfterRebuild = HostCoreAdoption.newestCandidateIdentity s.Projects
+            let newestAfterRebuild = HostCoreAdoption.newestCandidateIdentity projectPaths
             let freshness = HostCoreAdoption.selfHostFreshness s.AdoptedCore newestAfterRebuild
             match freshness with
             | HostCoreAdoption.SelfHostFreshness.Stale _ ->
@@ -253,7 +254,7 @@ let private fsharpCoreSessionTask =
           mgr.PostAndAsyncReply(
             (fun reply ->
               SageFs.SessionManager.SessionCommand.CreateSession(
-                [ fsharpCoreFixtureProject ], fsharpCoreFixtureDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply)),
+                [ SageFs.SessionProjectTarget.Project fsharpCoreFixtureProject ], fsharpCoreFixtureDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply)),
             setupBudgetMs)
         match created with
         | Error err -> return Error(sprintf "create failed: %s" (SageFsError.describe err))

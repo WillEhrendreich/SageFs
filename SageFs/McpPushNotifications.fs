@@ -185,6 +185,18 @@ type EventAccumulator() =
         while events.Count > maxEvents do
           events.TryDequeue() |> ignore)
 
+  /// Remove every accumulated event produced by a stopped session. Daemon-level
+  /// events remain visible; other sessions remain untouched.
+  member _.RemoveSession(sessionId: string) =
+    lock replaceLock (fun () ->
+      let kept = ResizeArray()
+      let mutable item = Unchecked.defaultof<AccumulatedEvent>
+      while events.TryDequeue(&item) do
+        match item.SessionId with
+        | Some origin when origin = sessionId -> ()
+        | _ -> kept.Add(item)
+      for e in kept do events.Enqueue(e))
+
   /// Drain every accumulated event, regardless of session.
   member _.Drain() =
     lock replaceLock (fun () ->
@@ -209,7 +221,7 @@ type EventAccumulator() =
         let forCaller =
           match activeSessionId, item.SessionId with
           | _, None -> true               // daemon-level events go to everyone
-          | None, _ -> true               // no active session -> show all (labeled)
+          | None, _ -> false              // no active session -> keep session events for their owner
           | Some active, Some origin -> active = origin
         match forCaller with
         | true -> taken.Add(item)

@@ -97,7 +97,7 @@ let mkHangingSession (proc: Process) =
       do! Async.Sleep 60000
       return WorkerProtocol.WorkerResponse.WorkerReady }
     WorkerBaseUrl = ""
-    Projects = []
+    Targets = [ SageFs.SessionProjectTarget.Bare ]
     WorkingDir = ""
     AutoOpenNamespaces = false
     Workflow = WorkflowTypes.SessionWorkflow.Interactive

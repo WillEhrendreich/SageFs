@@ -129,11 +129,16 @@ let noWatchFlagTests =
   testList "NoWatch config" [
     testCase "WorkerConfig.NoWatch=true disables file watching" <| fun () ->
       let config = SageFs.Args.WorkerConfig.fromEnvironmentWith
-                     (fun k -> match k with "SAGEFS_NO_WATCH" -> "1" | _ -> null) "test" 0
+                     (fun k ->
+                       match k with
+                       | "SAGEFS_NO_WATCH" -> "1"
+                       | "SAGEFS_BARE_SESSION" -> "1"
+                       | _ -> null)
+                     "test" 0
       config.NoWatch |> Flip.Expect.isTrue "should detect NoWatch"
 
     testCase "WorkerConfig.NoWatch=false means file watching enabled" <| fun () ->
-      let config = SageFs.Args.WorkerConfig.fromEnvironmentWith (fun _ -> null) "test" 0
+      let config = SageFs.Args.WorkerConfig.fromEnvironmentWith (fun k -> match k with "SAGEFS_BARE_SESSION" -> "1" | _ -> null) "test" 0
       config.NoWatch |> Flip.Expect.isFalse "should not find NoWatch"
 
     testCase "empty project directories skips file watcher" <| fun () ->

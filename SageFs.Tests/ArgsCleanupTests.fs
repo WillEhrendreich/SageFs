@@ -4,6 +4,7 @@ open System.Collections.Generic
 open System.IO
 open Expecto
 open Expecto.Flip
+open SageFs
 open SageFs.Args
 open SageFs.WorkflowTypes
 
@@ -63,15 +64,18 @@ let workerConfigTests =
       config.Projects
       |> Expect.equal "should have two projects" ["A.fsproj"; "B.fsproj"]
 
-    testCase "empty env var gives empty project list" <| fun () ->
-      let getEnv = fakeEnv [ WorkerConfig.envVar, "" ]
+    testCase "empty env var gives an explicit bare target with no project paths" <| fun () ->
+      let getEnv = fakeEnv [ WorkerConfig.envVar, ""; WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
-      config.Projects |> Expect.isEmpty "should be empty"
+      config.Targets |> Expect.equal "bare target" [ SessionProjectTarget.Bare ]
+      config.Projects |> Expect.isEmpty "bare has no project paths"
+      config.IsBare |> Expect.isTrue "bare target is retained"
 
-    testCase "missing env var gives empty project list" <| fun () ->
-      let getEnv = fakeEnv []
+    testCase "missing project env var with explicit bare gives an empty project list" <| fun () ->
+      let getEnv = fakeEnv [ WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
-      config.Projects |> Expect.isEmpty "should be empty"
+      config.Targets |> Expect.equal "bare target" [ SessionProjectTarget.Bare ]
+      config.Projects |> Expect.isEmpty "bare has no project paths"
 
     testCase "SAGEFS_BARE_SESSION=1 sets IsBare" <| fun () ->
       let getEnv = fakeEnv [ WorkerConfig.bareEnvVar, "1" ]
@@ -84,38 +88,38 @@ let workerConfigTests =
       config.IsBare |> Expect.isTrue "should be bare"
 
     testCase "SAGEFS_NO_WATCH=1 sets NoWatch" <| fun () ->
-      let getEnv = fakeEnv [ WorkerConfig.noWatchEnvVar, "1" ]
+      let getEnv = fakeEnv [ WorkerConfig.noWatchEnvVar, "1"; WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.NoWatch |> Expect.isTrue "should disable watch"
 
     testCase "missing auto-open env var defaults to enabled" <| fun () ->
-      let getEnv = fakeEnv []
+      let getEnv = fakeEnv [ WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.AutoOpenNamespaces |> Expect.isTrue "should default to enabled"
 
     testCase "SAGEFS_AUTO_OPEN_NAMESPACES=0 disables auto-open" <| fun () ->
-      let getEnv = fakeEnv [ WorkerConfig.autoOpenNamespacesEnvVar, "0" ]
+      let getEnv = fakeEnv [ WorkerConfig.bareEnvVar, "1"; WorkerConfig.autoOpenNamespacesEnvVar, "0" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.AutoOpenNamespaces |> Expect.isFalse "should disable auto-open"
 
     testCase "session id and port pass through" <| fun () ->
-      let getEnv = fakeEnv []
+      let getEnv = fakeEnv [ WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "abc123" 5050
       config.SessionId |> Expect.equal "should pass session id" "abc123"
       config.HttpPort |> Expect.equal "should pass port" 5050
 
     testCase "SAGEFS_DAEMON_PID parses to Some" <| fun () ->
-      let getEnv = fakeEnv [ WorkerConfig.daemonPidEnvVar, "4242" ]
+      let getEnv = fakeEnv [ WorkerConfig.daemonPidEnvVar, "4242"; WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.DaemonPid |> Expect.equal "should parse daemon pid" (Some 4242)
 
     testCase "missing SAGEFS_DAEMON_PID defaults to None" <| fun () ->
-      let getEnv = fakeEnv []
+      let getEnv = fakeEnv [ WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.DaemonPid |> Expect.equal "should default to None" None
 
     testCase "invalid SAGEFS_DAEMON_PID defaults to None" <| fun () ->
-      let getEnv = fakeEnv [ WorkerConfig.daemonPidEnvVar, "not-a-pid" ]
+      let getEnv = fakeEnv [ WorkerConfig.daemonPidEnvVar, "not-a-pid"; WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.DaemonPid |> Expect.equal "should default to None on garbage" None
   ]
@@ -127,9 +131,14 @@ let projectLoadConfigTests =
 
     testCase "separates .sln/.slnx from .fsproj" <| fun () ->
       let wc = {
-        SessionId = "x"; HttpPort = 0; IsBare = false; NoWatch = false; AutoOpenNamespaces = true
+        SessionId = "x"; HttpPort = 0; NoWatch = false; AutoOpenNamespaces = true
         WorkingDir = "."
-        Projects = ["MyApp.fsproj"; "Solution.sln"; "Other.slnx"; "Lib.fsproj"]
+        Targets = [
+          SageFs.SessionProjectTarget.Project "MyApp.fsproj"
+          SageFs.SessionProjectTarget.Solution "Solution.sln"
+          SageFs.SessionProjectTarget.Solution "Other.slnx"
+          SageFs.SessionProjectTarget.Project "Lib.fsproj"
+        ]
         Workflow = SessionWorkflow.Interactive
         DaemonPid = None
         DaemonStartTicks = None
@@ -140,17 +149,20 @@ let projectLoadConfigTests =
       plc.Projects
       |> Expect.equal "projects" ["MyApp.fsproj"; "Lib.fsproj"]
 
-    testCase "empty projects gives empty config" <| fun () ->
+    testCase "bare targets give an empty project and solution config" <| fun () ->
       let wc = {
-        SessionId = "x"; HttpPort = 0; IsBare = false; NoWatch = false; AutoOpenNamespaces = true
-        WorkingDir = "/tmp"; Projects = []
+        SessionId = "x"; HttpPort = 0; NoWatch = false; AutoOpenNamespaces = true
+        WorkingDir = "/tmp"
+        Targets = [ SageFs.SessionProjectTarget.Bare ]
         Workflow = SessionWorkflow.Interactive
         DaemonPid = None
         DaemonStartTicks = None
       }
       let plc = ProjectLoadConfig.fromWorkerConfig wc
+      plc.Targets |> Expect.equal "bare target is retained" [ SageFs.SessionProjectTarget.Bare ]
       plc.Projects |> Expect.isEmpty "no projects"
       plc.Solutions |> Expect.isEmpty "no solutions"
+      plc.IsBare |> Expect.isTrue "bare is derived from targets"
       plc.WorkingDir |> Expect.equal "working dir" "/tmp"
   ]
 
@@ -160,7 +172,7 @@ let workerSpawnConfigTests =
   testList "worker spawn config" [
 
     testCase "single project sets env var" <| fun () ->
-      let args, envVars = buildWorkerSpawnConfig "sess1" ["MyApp.fsproj"] false false true SessionWorkflow.Interactive
+      let args, envVars = buildWorkerSpawnConfig "sess1" [ SageFs.SessionProjectTarget.Project "MyApp.fsproj" ] false true SessionWorkflow.Interactive
       args |> Expect.stringContains "should have session id" "sess1"
       (args.Contains "--proj")
       |> Expect.isFalse "no --proj in args"
@@ -208,39 +220,39 @@ let workerSpawnConfigTests =
       muxerFromRuntimeDir runtimeDir true |> Expect.equal "windows muxer" (Path.Combine(root, "dotnet.exe"))
 
     testCase "sets SAGEFS_DAEMON_PID to the spawning process id" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" [] false false true SessionWorkflow.Interactive
+      let _, envVars = buildWorkerSpawnConfig "s" [ SageFs.SessionProjectTarget.Bare ] false true SessionWorkflow.Interactive
       envVars
       |> List.tryFind (fun (k, _) -> k = WorkerConfig.daemonPidEnvVar)
       |> Option.map snd
       |> Expect.equal "daemon pid env" (Some (string System.Environment.ProcessId))
 
     testCase "multiple projects semicolon-separated" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" ["A.fsproj"; "B.sln"] false false true SessionWorkflow.Interactive
+      let _, envVars = buildWorkerSpawnConfig "s" [ SageFs.SessionProjectTarget.Project "A.fsproj"; SageFs.SessionProjectTarget.Solution "B.sln" ] false true SessionWorkflow.Interactive
       envVars
       |> List.tryFind (fun (k, _) -> k = WorkerConfig.envVar)
       |> Option.map snd
       |> Expect.equal "projects" (Some "A.fsproj;B.sln")
 
     testCase "bare session sets SAGEFS_BARE_SESSION" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" [] true false true SessionWorkflow.Interactive
+      let _, envVars = buildWorkerSpawnConfig "s" [ SageFs.SessionProjectTarget.Bare ] false true SessionWorkflow.Interactive
       envVars
       |> List.exists (fun (k, v) -> k = WorkerConfig.bareEnvVar && v = "1")
       |> Expect.isTrue "bare env var set"
 
     testCase "no-watch sets SAGEFS_NO_WATCH" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" [] false true true SessionWorkflow.Interactive
+      let _, envVars = buildWorkerSpawnConfig "s" [ SageFs.SessionProjectTarget.Bare ] true true SessionWorkflow.Interactive
       envVars
       |> List.exists (fun (k, v) -> k = WorkerConfig.noWatchEnvVar && v = "1")
       |> Expect.isTrue "no-watch env var set"
 
     testCase "auto-open disabled sets SAGEFS_AUTO_OPEN_NAMESPACES" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" [] false false false SessionWorkflow.Interactive
+      let _, envVars = buildWorkerSpawnConfig "s" [ SageFs.SessionProjectTarget.Bare ] false false SessionWorkflow.Interactive
       envVars
       |> List.exists (fun (k, v) -> k = WorkerConfig.autoOpenNamespacesEnvVar && v = "0")
       |> Expect.isTrue "auto-open env var set"
 
     testCase "no bare/no-watch omits those env vars" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" ["A.fsproj"] false false true SessionWorkflow.Interactive
+      let _, envVars = buildWorkerSpawnConfig "s" [ SageFs.SessionProjectTarget.Project "A.fsproj" ] false true SessionWorkflow.Interactive
       envVars
       |> List.exists (fun (k, _) -> k = WorkerConfig.bareEnvVar)
       |> Expect.isFalse "no bare env var"
@@ -256,22 +268,22 @@ let hotReloadWorkerConfigTests =
   testList "WorkerConfig hot-reload env var" [
 
     testCase "SAGEFS_HOT_RELOAD=1 enables hot-reload" <| fun () ->
-      let getEnv = fakeEnv [ WorkerConfig.hotReloadEnvVar, "1" ]
+      let getEnv = fakeEnv [ WorkerConfig.hotReloadEnvVar, "1"; WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.HotReloadEnabled |> Expect.isTrue "should enable hot-reload"
 
     testCase "SAGEFS_HOT_RELOAD=true enables hot-reload" <| fun () ->
-      let getEnv = fakeEnv [ WorkerConfig.hotReloadEnvVar, "true" ]
+      let getEnv = fakeEnv [ WorkerConfig.hotReloadEnvVar, "true"; WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.HotReloadEnabled |> Expect.isTrue "should enable hot-reload"
 
     testCase "missing SAGEFS_HOT_RELOAD defaults to disabled" <| fun () ->
-      let getEnv = fakeEnv []
+      let getEnv = fakeEnv [ WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.HotReloadEnabled |> Expect.isFalse "should default to disabled"
 
     testCase "SAGEFS_HOT_RELOAD=0 disables hot-reload" <| fun () ->
-      let getEnv = fakeEnv [ WorkerConfig.hotReloadEnvVar, "0" ]
+      let getEnv = fakeEnv [ WorkerConfig.hotReloadEnvVar, "0"; WorkerConfig.bareEnvVar, "1" ]
       let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
       config.HotReloadEnabled |> Expect.isFalse "should be disabled"
   ]
@@ -280,13 +292,13 @@ let hotReloadSpawnConfigTests =
   testList "worker spawn config hot-reload" [
 
     testCase "HotReload workflow sets SAGEFS_HOT_RELOAD env var" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" [] false false true (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
+      let _, envVars = buildWorkerSpawnConfig "s" [ SageFs.SessionProjectTarget.Bare ] false true (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
       envVars
       |> List.exists (fun (k, v) -> k = WorkerConfig.hotReloadEnvVar && v = "1")
       |> Expect.isTrue "hot-reload env var set"
 
     testCase "Interactive workflow omits SAGEFS_HOT_RELOAD env var" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" [] false false true SessionWorkflow.Interactive
+      let _, envVars = buildWorkerSpawnConfig "s" [ SageFs.SessionProjectTarget.Bare ] false true SessionWorkflow.Interactive
       envVars
       |> List.exists (fun (k, _) -> k = WorkerConfig.hotReloadEnvVar)
       |> Expect.isFalse "no hot-reload env var"

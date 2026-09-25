@@ -282,59 +282,44 @@ module AttributeDiscovery =
 
 module BuiltInExecutors =
 
+  let private attributeDescription (capability: TestProviderCapability) =
+    { Name = capability.Framework
+      TestAttributes = capability.ExecutableAttributes
+      AssemblyMarker = capability.AssemblyMarkers.Head }
+
   let xunit : TestExecutor =
     TestExecutor.AttributeBased {
-      Description = {
-        Name = TestFramework.XUnit
-        TestAttributes = ["Fact"; "Theory"; "Property"]
-        AssemblyMarker = "xunit.core"
-      }
+      Description = attributeDescription TestProviderCatalog.xunitV2
       Execute = ReflectionExecutor.executeMethod
-      TheoryAttributes = ["Theory"]
+      TheoryAttributes = TestProviderCatalog.xunitV2.TheoryAttributes
     }
 
   let xunitV3 : TestExecutor =
     TestExecutor.AttributeBased {
-      Description = {
-        Name = TestFramework.XUnit
-        TestAttributes = ["Fact"; "Theory"; "Property"]
-        AssemblyMarker = "xunit.v3.core"
-      }
+      Description = attributeDescription TestProviderCatalog.xunitV3
       Execute = ReflectionExecutor.executeMethod
-      TheoryAttributes = ["Theory"]
+      TheoryAttributes = TestProviderCatalog.xunitV3.TheoryAttributes
     }
 
   let nunit : TestExecutor =
     TestExecutor.AttributeBased {
-      Description = {
-        Name = TestFramework.NUnit
-        TestAttributes = ["Test"]
-        AssemblyMarker = "nunit.framework"
-      }
+      Description = attributeDescription TestProviderCatalog.nunit
       Execute = ReflectionExecutor.executeMethod
-      TheoryAttributes = []
+      TheoryAttributes = TestProviderCatalog.nunit.TheoryAttributes
     }
 
   let mstest : TestExecutor =
     TestExecutor.AttributeBased {
-      Description = {
-        Name = TestFramework.MSTest
-        TestAttributes = ["TestMethod"]
-        AssemblyMarker = "Microsoft.VisualStudio.TestPlatform.TestFramework"
-      }
+      Description = attributeDescription TestProviderCatalog.mstest
       Execute = ReflectionExecutor.executeMethod
-      TheoryAttributes = []
+      TheoryAttributes = TestProviderCatalog.mstest.TheoryAttributes
     }
 
   let tunit : TestExecutor =
     TestExecutor.AttributeBased {
-      Description = {
-        Name = TestFramework.TUnit
-        TestAttributes = ["Test"]
-        AssemblyMarker = "TUnit.Core"
-      }
+      Description = attributeDescription TestProviderCatalog.tunit
       Execute = ReflectionExecutor.executeMethod
-      TheoryAttributes = []
+      TheoryAttributes = TestProviderCatalog.tunit.TheoryAttributes
     }
 
   /// Reflection-based Expecto executor — no compile-time Expecto dependency.
@@ -663,8 +648,8 @@ module BuiltInExecutors =
   let expecto : TestExecutor =
     TestExecutor.Custom {
       Description = {
-        Name = TestFramework.Expecto
-        AssemblyMarker = "Expecto"
+        Name = TestProviderCatalog.expecto.Framework
+        AssemblyMarker = TestProviderCatalog.expecto.AssemblyMarkers.Head
       }
       Discover = fun asm ->
         let sw = Stopwatch.StartNew()

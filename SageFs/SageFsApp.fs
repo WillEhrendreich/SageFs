@@ -2271,7 +2271,7 @@ type EffectDeps = {
   /// The proxy streams test results and IL coverage hits.
   GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> (bool array -> unit) -> System.Threading.CancellationToken -> Async<HttpWorkerClient.StreamOutcome>) option
   /// Create a new session
-  CreateSession: string list -> string -> WorkflowTypes.SessionWorkflow -> Async<Result<SessionInfo, SageFsError>>
+  CreateSession: SessionProjectTarget list -> string -> WorkflowTypes.SessionWorkflow -> Async<Result<SessionInfo, SageFsError>>
   /// Ensure the working directory has warmup auto-open disabled.
   ConfigureWarmupAutoOpen: string -> Async<Result<OutputLine, string>>
   /// Stop a session
@@ -2472,21 +2472,26 @@ module SageFsEffectHandler =
             match projects with
             | [dir] when System.IO.Directory.Exists(dir) -> dir
             | _ -> "."
-          let projectList =
+          let targetResult =
             match projects with
-            | [dir] when System.IO.Directory.Exists(dir) -> []
-            | other -> other
-          let! result = deps.CreateSession projectList workingDir WorkflowTypes.SessionWorkflow.Interactive
-          match result with
-          | Ok info ->
+            | [dir] when System.IO.Directory.Exists(dir) -> Ok [ SessionProjectTarget.Bare ]
+            | other -> SessionProjectTarget.tryCreateMany other
+          match targetResult with
+          | Error reason ->
             dispatch (SageFsMsg.Event (
-              TuiEvent.SessionCreated (sessionInfoToSnapshot info)))
-            dispatch (SageFsMsg.Event (
-              TuiEvent.SessionSwitched (None, SessionId.value info.Id)))
-          | Error err ->
-            dispatch (SageFsMsg.Event (
-              TuiEvent.EvalFailed (
-                "", sprintf "Create failed: %s" (SageFsError.describe err))))
+              TuiEvent.EvalFailed ("", sprintf "Create failed: %s" reason)))
+          | Ok targets ->
+            let! result = deps.CreateSession targets workingDir WorkflowTypes.SessionWorkflow.Interactive
+            match result with
+            | Ok info ->
+              dispatch (SageFsMsg.Event (
+                TuiEvent.SessionCreated (sessionInfoToSnapshot info)))
+              dispatch (SageFsMsg.Event (
+                TuiEvent.SessionSwitched (None, SessionId.value info.Id)))
+            | Error err ->
+              dispatch (SageFsMsg.Event (
+                TuiEvent.EvalFailed (
+                  "", sprintf "Create failed: %s" (SageFsError.describe err))))
         }
 
       | EditorEffect.RequestConfigureWarmupAutoOpen workingDir ->

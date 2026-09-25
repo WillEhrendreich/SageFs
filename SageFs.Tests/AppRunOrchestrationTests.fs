@@ -621,7 +621,7 @@ let ownerMailboxTests =
       let mailbox, _ =
         SessionManager.createWith runtime cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
       let ask (build: AsyncReplyChannel<'r> -> SessionManager.SessionCommand) = mailbox.PostAndAsyncReply build |> Async.StartAsTask
-      let! created = ask (fun reply -> SessionManager.SessionCommand.CreateSession ([ web ], "/src", true, webLive, reply))
+      let! created = ask (fun reply -> SessionManager.SessionCommand.CreateSession ([ SessionProjectTarget.Project web ], "/src", true, webLive, reply))
       let id =
         match created with
         | Ok info -> info.Id

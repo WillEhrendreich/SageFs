@@ -1,6 +1,5 @@
 module SageFs.Tests.ProjectResolutionTests
 
-open System.IO
 open Expecto
 open Expecto.Flip
 open FsCheck
@@ -9,79 +8,45 @@ open SageFs.WorkerProtocol
 
 let private handle = { Pid = 4242; Port = Some 5000 }
 
+let private projectTarget (path: string) = SessionProjectTarget.Project path
+let private projectTargets (paths: string list) = paths |> List.map projectTarget
+
 [<Tests>]
 let projectResolutionClassifyTests =
   testList "ProjectResolution.classify" [
-    testCase "WHY — nothing named and nothing on disk is a genuine scratch session, not a broken one" <| fun _ ->
-      ProjectResolution.classify (fun _ -> []) "/scratch" [] 0
-      |> Expect.equal "no request, no candidates, nothing resolved: fine" ProjectResolution.NoneRequested
+    testCase "WHY — an explicit bare target is a genuine scratch session, not a broken one" <| fun _ ->
+      ProjectResolution.classify [ SessionProjectTarget.Bare ] 0
+      |> Expect.equal "bare target, no resolved projects: fine" ProjectResolution.NoneRequested
 
     testCase "WHY — an explicit project that resolves to nothing is the exact bug that shipped Ready with loadedProjects: []" <| fun _ ->
-      ProjectResolution.classify (fun _ -> failwith "must not glob when a project was named explicitly") "/repo" [ "Foo.fsproj" ] 0
+      ProjectResolution.classify (projectTargets [ "Foo.fsproj" ]) 0
       |> Expect.equal "named but unresolved" (ProjectResolution.RequestedButUnresolved [ "Foo.fsproj" ])
 
     testCase "WHY — an explicit project that DOES resolve is the ordinary, quiet case" <| fun _ ->
-      ProjectResolution.classify (fun _ -> failwith "must not glob when a project was named explicitly") "/repo" [ "Foo.fsproj" ] 1
+      ProjectResolution.classify (projectTargets [ "Foo.fsproj" ]) 1
       |> Expect.equal "named and resolved" ProjectResolution.Resolved
 
-    testCase "WHY — projects=[] with real candidates sitting on disk means auto-discover was implicitly requested; resolving zero of them is still a real failure, not a scratch session" <| fun _ ->
-      ProjectResolution.classify (fun _ -> [ "/repo/Found.fsproj" ]) "/repo" [] 0
-      |> Expect.equal "auto-discover found candidates, none resolved" (ProjectResolution.RequestedButUnresolved [ "/repo/Found.fsproj" ])
-
-    testCase "WHY — projects=[] with real candidates that DO resolve is the ordinary auto-discover happy path" <| fun _ ->
-      ProjectResolution.classify (fun _ -> [ "/repo/Found.fsproj" ]) "/repo" [] 1
-      |> Expect.equal "auto-discover found candidates, resolved" ProjectResolution.Resolved
-
-    testCase "WHY — an explicit non-empty request always wins over what's on disk, even if the glob disagrees" <| fun _ ->
-      ProjectResolution.classify (fun _ -> []) "/repo" [ "Foo.fsproj"; "Bar.fsproj" ] 0
+    testCase "WHY — an explicit non-empty request is authoritative even if it resolves to zero" <| fun _ ->
+      ProjectResolution.classify (projectTargets [ "Foo.fsproj"; "Bar.fsproj" ]) 0
       |> Expect.equal "explicit request is authoritative" (ProjectResolution.RequestedButUnresolved [ "Foo.fsproj"; "Bar.fsproj" ])
 
-    testPropertyWithConfig FsCheckConfig.defaultConfig "PROPERTY — resolvedCount > 0 is never RequestedButUnresolved, whatever was asked for or found" <|
-      fun (explicit: string list) (candidates: string list) (PositiveInt resolvedCount) ->
-        match ProjectResolution.classify (fun _ -> candidates) "/repo" explicit resolvedCount with
+    testPropertyWithConfig FsCheckConfig.defaultConfig "PROPERTY — resolvedCount > 0 is never RequestedButUnresolved" <|
+      fun (paths: NonEmptyArray<string>) (PositiveInt resolvedCount) ->
+        match ProjectResolution.classify (projectTargets (paths.Get |> Array.toList)) resolvedCount with
         | ProjectResolution.RequestedButUnresolved _ -> false
         | ProjectResolution.NoneRequested
         | ProjectResolution.Resolved -> true
 
-    testPropertyWithConfig FsCheckConfig.defaultConfig "PROPERTY — an empty explicit request with nothing on disk is always NoneRequested, regardless of resolvedCount" <|
+    testPropertyWithConfig FsCheckConfig.defaultConfig "PROPERTY — an explicit bare target is always NoneRequested" <|
       fun (resolvedCount: int) ->
-        ProjectResolution.classify (fun _ -> []) "/repo" [] resolvedCount = ProjectResolution.NoneRequested
+        ProjectResolution.classify [ SessionProjectTarget.Bare ] resolvedCount = ProjectResolution.NoneRequested
 
     testPropertyWithConfig FsCheckConfig.defaultConfig "PROPERTY — a non-empty explicit request that resolves to zero always names exactly what was requested" <|
       fun (explicitNonEmpty: NonEmptyArray<string>) ->
         let explicit = explicitNonEmpty.Get |> Array.toList
-        match ProjectResolution.classify (fun _ -> failwith "must not consult disk") "/repo" explicit 0 with
+        match ProjectResolution.classify (projectTargets explicit) 0 with
         | ProjectResolution.RequestedButUnresolved requested -> requested = explicit
         | _ -> false
-  ]
-
-[<Tests>]
-let projectResolutionListCandidatesOnDiskTests =
-  testList "ProjectResolution.listCandidatesOnDisk" [
-    testCase "WHY — a genuinely empty directory has no candidates, backing the real scratch-session case" <| fun _ ->
-      let dir = Path.Combine(Path.GetTempPath(), "sagefs-test-" + System.Guid.NewGuid().ToString("N"))
-      Directory.CreateDirectory dir |> ignore
-      try
-        ProjectResolution.listCandidatesOnDisk dir
-        |> Expect.equal "no fsproj/sln/slnx in an empty directory" []
-      finally
-        Directory.Delete(dir, true)
-
-    testCase "WHY — a directory with an .fsproj IS a candidate — auto-discover found something" <| fun _ ->
-      let dir = Path.Combine(Path.GetTempPath(), "sagefs-test-" + System.Guid.NewGuid().ToString("N"))
-      Directory.CreateDirectory dir |> ignore
-      try
-        let proj = Path.Combine(dir, "Found.fsproj")
-        File.WriteAllText(proj, "<Project />")
-        ProjectResolution.listCandidatesOnDisk dir
-        |> Expect.equal "the fsproj is a candidate" [ proj ]
-      finally
-        Directory.Delete(dir, true)
-
-    testCase "WHY — a directory that cannot be listed fails open to no candidates rather than crashing the readiness decision" <| fun _ ->
-      let missing = Path.Combine(Path.GetTempPath(), "sagefs-test-does-not-exist-" + System.Guid.NewGuid().ToString("N"))
-      ProjectResolution.listCandidatesOnDisk missing
-      |> Expect.equal "a missing directory has no candidates" []
   ]
 
 [<Tests>]
@@ -120,41 +85,41 @@ let earnedReadyTests =
   testList "ProjectResolution.earnedReady / reconcile — Ready must not be observable before loadedProjects is" [
 
     testCase "WHY — the exact repro: an explicit request, zero resolved yet, worker says Ready — not earned" <| fun _ ->
-      ProjectResolution.earnedReady [ "src/Compiler/FSharp.Compiler.Service.fsproj" ] 0 SessionStatus.Ready
+      ProjectResolution.earnedReady (projectTargets [ "src/Compiler/FSharp.Compiler.Service.fsproj" ]) 0 SessionStatus.Ready
       |> Expect.isFalse "a live Ready report for an explicit request with nothing resolved yet must not be trusted"
 
     testCase "WHY — once resolvedCount catches up, the SAME report is earned" <| fun _ ->
-      ProjectResolution.earnedReady [ "src/Compiler/FSharp.Compiler.Service.fsproj" ] 1 SessionStatus.Ready
+      ProjectResolution.earnedReady (projectTargets [ "src/Compiler/FSharp.Compiler.Service.fsproj" ]) 1 SessionStatus.Ready
       |> Expect.isTrue "resolvedCount > 0 means WorkerReportedReady's gate has already run and paired ProjectRoles"
 
-    testCase "WHY — a bare/auto-discover request (nothing named) is never gated here — classifyOnDisk owns that case" <| fun _ ->
-      ProjectResolution.earnedReady [] 0 SessionStatus.Ready
-      |> Expect.isTrue "an empty explicit request must not be blocked by this no-IO guard"
+    testCase "WHY — an explicit bare target is never gated here" <| fun _ ->
+      ProjectResolution.earnedReady [ SessionProjectTarget.Bare ] 0 SessionStatus.Ready
+      |> Expect.isTrue "an explicit bare target must not be blocked by this no-IO guard"
 
     testCase "WHY — non-Ready reports are never gated — only a Ready claim can be premature" <| fun _ ->
       [ SessionStatus.Starting; SessionStatus.Evaluating; SessionStatus.Building "restoring"
         SessionStatus.Faulted; SessionStatus.Restarting; SessionStatus.Stopped ]
       |> List.iter (fun reported ->
-        ProjectResolution.earnedReady [ "Foo.fsproj" ] 0 reported
+        ProjectResolution.earnedReady (projectTargets [ "Foo.fsproj" ]) 0 reported
         |> Expect.isTrue (sprintf "%A is not a Ready claim and must pass through" reported))
 
     testCase "WHY — reconcile refuses to promote an unearned Ready, keeping the registry's current status" <| fun _ ->
       let current = SessionLifecycleStatus.Starting handle
-      match ProjectResolution.reconcile [ "Foo.fsproj" ] 0 current SessionStatus.Ready with
+      match ProjectResolution.reconcile (projectTargets [ "Foo.fsproj" ]) 0 current SessionStatus.Ready with
       | ProjectResolution.ReconciledStatus.NotYetEarned kept ->
         kept |> Expect.equal "the registry's own current status is kept, not the raw worker report" current
       | other -> failtestf "an unearned Ready must be refused, got %A" other
 
     testCase "WHY — reconcile promotes normally once Ready is earned" <| fun _ ->
       let current = SessionLifecycleStatus.Starting handle
-      match ProjectResolution.reconcile [ "Foo.fsproj" ] 1 current SessionStatus.Ready with
+      match ProjectResolution.reconcile (projectTargets [ "Foo.fsproj" ]) 1 current SessionStatus.Ready with
       | ProjectResolution.ReconciledStatus.Reconciled (SessionLifecycleStatus.Ready h) ->
         h |> Expect.equal "pid/port carry over exactly as ofWorkerReport already guarantees" handle
       | other -> failtestf "an earned Ready must reconcile to Ready, got %A" other
 
     testCase "WHY — reconcile still lets a genuine worker-reported fault through even when unearned" <| fun _ ->
       let current = SessionLifecycleStatus.Starting handle
-      match ProjectResolution.reconcile [ "Foo.fsproj" ] 0 current SessionStatus.Faulted with
+      match ProjectResolution.reconcile (projectTargets [ "Foo.fsproj" ]) 0 current SessionStatus.Faulted with
       | ProjectResolution.ReconciledStatus.Reconciled (SessionLifecycleStatus.Faulted _) -> ()
       | other -> failtestf "a worker-reported fault must never be swallowed by the earned-Ready guard, got %A" other
 
@@ -163,7 +128,7 @@ let earnedReadyTests =
       fun (explicitNonEmpty: NonEmptyArray<string>) (current: int) ->
         let requested = explicitNonEmpty.Get |> Array.toList
         let currentStatus = SessionLifecycleStatus.Starting { Pid = current; Port = None }
-        match ProjectResolution.reconcile requested 0 currentStatus SessionStatus.Ready with
+        match ProjectResolution.reconcile (projectTargets requested) 0 currentStatus SessionStatus.Ready with
         | ProjectResolution.ReconciledStatus.Reconciled (SessionLifecycleStatus.Ready _) -> false
         | ProjectResolution.ReconciledStatus.NotYetEarned _ -> true
         | ProjectResolution.ReconciledStatus.Reconciled _ -> true

@@ -4,6 +4,9 @@ open System
 open Expecto
 open Expecto.Flip
 open FsCheck
+open System.Collections.Concurrent
+open System.Threading
+open System.Threading.Tasks
 open SageFs
 
 let private mkLine text = {
@@ -74,4 +77,37 @@ let outputRingBufferTests = testList "OutputRingBuffer" [
     let r2 = buf.RenderAllCached()
     r2 |> Expect.equal "empty after clear" ""
     (r1 = r2) |> Expect.isFalse "should differ after clear"
+
+  testCase "SessionOutputStore survives concurrent mixed operations" <| fun _ ->
+    let store = SessionOutputStore(64)
+    let errors = System.Collections.Concurrent.ConcurrentQueue<Exception>()
+    let start = new ManualResetEventSlim(false)
+    let sessions = [| "a"; "b"; "c"; "d"; "e" |]
+    let run kind index =
+      start.Wait()
+      for i in 0..199 do
+        try
+          match kind, i % 4 with
+          | 0, _ -> store.Add({ mkLine (sprintf "s%d" index) with SessionId = sessions[index % sessions.Length] })
+          | 1, _ -> store.Add({ mkLine (sprintf "g%d" i) with SessionId = "" })
+          | 2, _ ->
+              let buffer = store.GetBuffer sessions[(index + 1) % sessions.Length]
+              let _ = buffer.RenderAllCached()
+              let _ = buffer.FilterToList (fun line -> line.Text.Contains "s")
+              let _ = store.LiveSessionIds
+              let _ = store.SessionCount
+              ()
+          | _ ->
+            let id = sessions[index % sessions.Length]
+            if i % 8 = 0 then store.Remove id else store.Clear id
+        with ex -> errors.Enqueue ex
+    let tasks : Task array =
+      [| for kind in 0..4 do
+           for index in 0..sessions.Length - 1 do
+             yield Task.Run(fun () -> run kind index) |]
+    start.Set()
+    Task.WaitAll tasks
+    errors |> Seq.toList |> List.iter (fun ex -> raise ex)
+    store.Version >= 0L |> Expect.isTrue "version remains monotonic"
+    store.SessionCount >= 0 |> Expect.isTrue "session count is coherent"
 ]

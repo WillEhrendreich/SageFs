@@ -61,7 +61,9 @@ let private mkCtxWithWorkerResponse (workerResponse: WorkerProtocol.WorkerRespon
     GetFeatureState = None; RecordEval = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
     LiveSnapshotSink = None
-    CohortOwner = None } : McpContext
+    CohortOwner = None
+    GetDaemonHealth = fun () -> None
+    GetProcessTelemetry = fun () -> None } : McpContext
 
 [<Tests>]
 let completionsContractTests =

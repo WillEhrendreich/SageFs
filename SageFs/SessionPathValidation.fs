@@ -84,4 +84,7 @@ module SessionPathValidation =
           || canonical.Equals(canonicalDir, System.StringComparison.OrdinalIgnoreCase))
     match projects |> List.tryFind (isContained >> not) with
     | Some escaping -> Error (SageFsError.UnsafeSessionPath(escaping, "project path escapes the session working directory"))
-    | None -> Ok ()
+    | None ->
+      match SessionProjectTarget.tryCreateMany projects with
+      | Error reason -> Error (SageFsError.SessionCreationFailed reason)
+      | Ok targets -> SessionProjectTarget.validate targets |> Result.mapError SageFsError.SessionCreationFailed

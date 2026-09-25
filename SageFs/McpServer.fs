@@ -162,6 +162,7 @@ type McpServerTracker() =
 
   member _.Count = servers.Count
   member _.PendingEvents = accumulator.Count
+  member _.RemoveSession(sessionId: string) = accumulator.RemoveSession(sessionId)
 
 /// Brief B9 (observed-friction-plan.md §B9) — the resolved SageFs FSI
 /// session id for the CALLING connection, or the pre-B9 "mcp" sentinel when
@@ -838,6 +839,7 @@ type McpServerConfig = {
   /// The single per-daemon cohort owner (cohort-integration-plan.md Slice 2).
   /// `None` when the caller wires no cohort support (most existing tests).
   CohortOwner: SageFs.Features.CohortOwner.Handle option
+  GetDaemonHealth: unit -> SageFs.Features.HealthSnapshot option
 }
 
 // Create shared MCP context (private — called only by startMcpServer)
@@ -845,7 +847,7 @@ let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> op
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; RecordEval = recordEval; ActivityTracker = cfg.ActivityTracker; LiveSnapshotSink = cfg.LiveSnapshotSink; CohortOwner = cfg.CohortOwner }
+  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; RecordEval = recordEval; ActivityTracker = cfg.ActivityTracker; LiveSnapshotSink = cfg.LiveSnapshotSink; CohortOwner = cfg.CohortOwner; GetDaemonHealth = cfg.GetDaemonHealth; GetProcessTelemetry = DaemonTelemetry.current }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 
@@ -2190,7 +2192,7 @@ let resolveSessionStatus
           // showing the registry's OWN current status, never the worker's
           // raw claim, so `/health` can never say "Ready" a beat before
           // `/api/sessions`' `loadedProjects` agrees.
-          match SageFs.ProjectResolution.reconcile session.Projects (List.length session.ProjectRoles) session.Status snap.Status with
+          match SageFs.ProjectResolution.reconcile (SessionProjectTarget.tryCreateMany session.Projects |> Result.defaultValue []) (List.length session.ProjectRoles) session.Status snap.Status with
           | SageFs.ProjectResolution.ReconciledStatus.NotYetEarned current ->
             return fallbackSessionStatusLabel current, sessionHealthStatusOfLifecycleFallback current
           | SageFs.ProjectResolution.ReconciledStatus.Reconciled (SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted _ as reconciled)
@@ -2710,7 +2712,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
                 // `loadedProjects` is still empty (see
                 // ProjectResolution.reconcile).
                 let label =
-                  match SageFs.ProjectResolution.reconcile sess.Projects (List.length sess.ProjectRoles) sess.Status snap.Status with
+                  match SageFs.ProjectResolution.reconcile (SessionProjectTarget.tryCreateMany sess.Projects |> Result.defaultValue []) (List.length sess.ProjectRoles) sess.Status snap.Status with
                   | SageFs.ProjectResolution.ReconciledStatus.NotYetEarned current -> fallbackSessionStatusLabel current
                   | SageFs.ProjectResolution.ReconciledStatus.Reconciled _ -> SageFs.WorkerProtocol.SessionStatus.label snap.Status
                 return snap.EvalCount, float snap.AvgDurationMs, label
@@ -2919,19 +2921,13 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
             projProp.EnumerateArray()
             |> Seq.map (fun e -> e.GetString())
             |> Seq.toList
-            // A well-formed client sends a real array. But a client that stuffed
-            // the JSON-array TEXT into one element (["[\"a.fsproj\"]"]) would
-            // otherwise get that text as a bogus project path — the same
-            // double-encoding that broke create_session. Re-parse a lone
-            // bracket-looking element through the tolerant parser.
-            |> function
-               | [ single ] -> SageFs.McpAdapter.parseProjectsArg single
-               | many -> many |> List.filter (System.String.IsNullOrWhiteSpace >> not)
+            |> List.filter (System.String.IsNullOrWhiteSpace >> not)
           | System.Text.Json.JsonValueKind.String ->
-            // JSON array or comma-separated text arriving as a string.
-            SageFs.McpAdapter.parseProjectsArg (projProp.GetString())
+            [ projProp.GetString() ]
+            |> List.filter (System.String.IsNullOrWhiteSpace >> not)
           | _ -> []
         | false -> []
+      let targetResult = SessionProjectTarget.tryCreateMany projects
       let workflow =
         let mutable wfProp = Unchecked.defaultof<System.Text.Json.JsonElement>
         match root.TryGetProperty("workflow", &wfProp) with
@@ -2942,11 +2938,11 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
       // workingDirectory/projects straight into CreateSession with no path
       // safety check at all. Reject a bad request before ever touching
       // SessionOps.
-      match validateSessionCreateRequest workingDir projects with
+      match validateSessionCreateRequest workingDir (SessionProjectTarget.paths (Result.defaultValue [] targetResult)) with
       | Error err ->
         do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
       | Ok () ->
-      let! result = rctx.Config.SessionOps.CreateSession projects workingDir workflow
+      let! result = rctx.Config.SessionOps.CreateSession (Result.defaultValue [] targetResult) workingDir workflow
       match result with
       | Ok msg ->
         SageFs.McpTools.setActiveSessionId rctx.McpContext "cli-integrated" msg

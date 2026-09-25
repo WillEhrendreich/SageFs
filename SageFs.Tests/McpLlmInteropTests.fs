@@ -107,7 +107,9 @@ module GetStartupInfoTests =
       GetFeatureState = None; RecordEval = None
       ActivityTracker = SageFs.AgentActivityTracker.create()
       LiveSnapshotSink = None
-      CohortOwner = None } : McpContext
+      CohortOwner = None
+      GetDaemonHealth = fun () -> None
+      GetProcessTelemetry = fun () -> None } : McpContext
 
   let tests =
     testList "get_startup_info tool" [

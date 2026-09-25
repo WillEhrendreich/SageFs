@@ -3,6 +3,7 @@
 /// from counts.
 module SageFs.Features.LiveTestActivity
 
+open SageFs
 open SageFs.Features.LiveTesting
 
 /// Every test in exactly one bucket, so the counts always add up to the total.

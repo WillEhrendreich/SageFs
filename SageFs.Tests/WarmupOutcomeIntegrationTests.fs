@@ -64,7 +64,7 @@ let tests =
         let! createResult =
           mgr.PostAndAsyncReply(fun reply ->
             SageFs.SessionManager.SessionCommand.CreateSession(
-              [ unresolvableProject ], workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+              [ SageFs.SessionProjectTarget.Project unresolvableProject ], workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
           |> Async.StartAsTask
 
         match createResult with

@@ -53,6 +53,8 @@
     <ItemGroup>
         <Compile Include="DaemonState.fs" />
         <Compile Include="UpdateCheckService.fs" />
+        <Compile Include="DaemonTelemetry.fs" />
+        <Compile Include="TestingPlatformAdapter.fs" />
         <Compile Include="SseEvent.fs" />
         <!-- The daemon's Elm kernel + render stack (moved out of SageFs.Core so the
              FSI host closure ships the session engine only). Order is dependency-driven:

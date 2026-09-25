@@ -40,6 +40,7 @@
     <Compile Include="DirectoryConfigTypes.fs" />
     <Compile Include="ConfigDsl.fs" />
     <Compile Include="LiveValueTree.fs" />
+    <Compile Include="TestProviderTypes.fs" />
     <Compile Include="LiveTestingTypes.fs" />
     <Compile Include="CoverageProbes.fs" />
     <Compile Include="LiveTestingInstrumentation.fs" />

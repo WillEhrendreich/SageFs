@@ -81,17 +81,17 @@ let tests =
       let loadConfig = SageFs.Args.ProjectLoadConfig.empty
 
       test "sets IsBare correctly" {
-        let args = mkCommonActorArgs logger false onEvent loadConfig true
-        args.IsBare |> Expect.isTrue "IsBare should be true when passed true"
+        let args = mkCommonActorArgs logger false onEvent loadConfig
+        args.LoadConfig.IsBare |> Expect.isTrue "IsBare should be true for the explicit bare config"
       }
 
       test "sets AutoOpenNamespaces to true" {
-        let args = mkCommonActorArgs logger false onEvent loadConfig false
+        let args = mkCommonActorArgs logger false onEvent loadConfig
         args.AutoOpenNamespaces |> Expect.isTrue "AutoOpenNamespaces should default to true"
       }
 
       test "sets HotReloadEnabled to false" {
-        let args = mkCommonActorArgs logger false onEvent loadConfig false
+        let args = mkCommonActorArgs logger false onEvent loadConfig
         args.HotReloadEnabled |> Expect.isFalse "HotReloadEnabled should be false"
       }
     ]

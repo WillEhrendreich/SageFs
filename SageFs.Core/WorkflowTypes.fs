@@ -646,17 +646,8 @@ module WorkflowDetection =
   // ── Package extraction (pure) ─────────────────────────────
 
   /// Package names that indicate a test project.
-  let private testPackageNames =
-    [ "Expecto"; "xunit"; "xunit.v3"; "NUnit"
-      "MSTest.TestFramework"; "Microsoft.NET.Test.Sdk" ]
-
-  /// True when the package list looks like a test project.
   let isTestPackageSet (packages: string list) =
-    packages
-    |> List.exists (fun pkg ->
-      testPackageNames
-      |> List.exists (fun tp ->
-        pkg.StartsWith(tp, System.StringComparison.OrdinalIgnoreCase)))
+    packages |> List.exists TestProviderCatalog.isTestPackageName
 
   /// Extract package reference names from grouped per-project packages,
   /// filtering out test projects. Returns a distinct union of all names.

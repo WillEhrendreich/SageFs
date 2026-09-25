@@ -57,9 +57,10 @@ let createTestActor () =
 
     printfn "Loading test project from: %s" fullPath
     let loadConfig : SageFs.Args.ProjectLoadConfig = {
-      Projects = [fullPath]; Solutions = []; WorkingDir = System.IO.Path.GetDirectoryName(fullPath)
+      Targets = [ SageFs.SessionProjectTarget.Project fullPath ]
+      WorkingDir = System.IO.Path.GetDirectoryName fullPath
     }
-    let args = mkCommonActorArgs logger true ignore loadConfig false
+    let args = mkCommonActorArgs logger true ignore loadConfig
     let! result = createActor args
     return result.Actor
   }

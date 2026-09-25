@@ -143,7 +143,8 @@ let private startTestServer (ops: SessionManagementOps) = task {
       SharedFeatureState = None
       ActivityTracker = SageFs.AgentActivityTracker.create ()
       LiveSnapshotSink = None
-      CohortOwner = None }
+      CohortOwner = None
+      GetDaemonHealth = fun () -> None }
 
   let mcpContext : McpContext =
     { FrictionStore = None
@@ -159,7 +160,9 @@ let private startTestServer (ops: SessionManagementOps) = task {
       GetFeatureState = None; RecordEval = None
       ActivityTracker = config.ActivityTracker
       LiveSnapshotSink = None
-      CohortOwner = None }
+      CohortOwner = None
+      GetDaemonHealth = fun () -> None
+      GetProcessTelemetry = fun () -> None }
 
   let sseContext : SageFs.Server.McpServer.SseContext =
     { GetElmModel = None

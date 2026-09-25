@@ -55,20 +55,17 @@ module CreateSessionUx =
     System.String.Equals(existingWorkingDir, requestedWorkingDir, System.StringComparison.OrdinalIgnoreCase)
     && List.sort existingProjects = List.sort requestedProjects
 
-  /// The `create_session` success reply. Previously a bare session id
-  /// (Finding #3) — an agent could not tell whether its project loaded,
-  /// whether a solution pulled in 30 projects, or whether nothing loaded at
-  /// all. At CREATION time the worker has not finished resolving projects
-  /// yet (warmup takes 15-30s), so this cannot claim what actually loaded —
-  /// it states what was REQUESTED and points at get_fsi_status (which
-  /// reports the resolved `ProjectRoles` once ready) to confirm what
-  /// actually loaded, since that can differ from the request (most visibly
-  /// with `projects=[]`, which still auto-discovers).
-  let formatCreateSessionReply (sid: string) (requestedProjects: string list) (detectionHint: string option) : string =
-    let requestedLine =
-      match requestedProjects with
-      | [] -> "Requested projects: none — the worker will auto-discover whatever project(s) sit directly in the working directory, if any."
-      | ps -> sprintf "Requested projects: %s" (String.concat ", " ps)
+  let tryCreateTarget (paths: string list) : Result<SessionProjectTarget list, string> =
+    SessionProjectTarget.tryCreateMany paths
+
+  /// The `create_session` success reply. At CREATION time the worker has not
+  /// finished resolving projects yet, so this states exactly what was requested
+  /// and points at get_fsi_status to confirm what actually loaded.
+  let formatCreateSessionReply
+    (sid: string)
+    (targets: SessionProjectTarget list)
+    (detectionHint: string option) : string =
+    let requestedLine = sprintf "Requested target: %s" (SessionProjectTarget.describe targets)
     let hintLine = detectionHint |> Option.map (sprintf "\n\n%s") |> Option.defaultValue ""
-    sprintf "%s\n%s\nSession is warming up (typically 15-30s). Call get_fsi_status once it reports State='Ready' to confirm what actually loaded — the 'Loaded:' field there reflects the worker's own resolution, which can differ from what was requested.%s"
+    sprintf "%s\n%s\nSession is warming up (typically 15-30s). Call get_fsi_status once it reports State='Ready' to confirm what actually loaded — the 'Loaded:' field there reflects the worker's own resolution.%s"
       sid requestedLine hintLine

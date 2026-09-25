@@ -47,9 +47,9 @@ let private withHarness (run: Harness -> unit) =
     try mailbox.PostAndReply(fun reply -> SessionCommand.StopAll reply) with _ -> ()
     cancellation.Cancel()
 
-let private createSession (harness: Harness) (projects: string list) (workingDir: string) =
+let private createSession (harness: Harness) (targets: SessionProjectTarget list) (workingDir: string) =
   match harness.Mailbox.PostAndReply(fun reply ->
-    SessionCommand.CreateSession(projects, workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
+    SessionCommand.CreateSession(targets, workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
   | Ok info -> info
   | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
 
@@ -102,7 +102,7 @@ let earnedReadyTests =
   testList "SessionManager earned Ready (WorkerReportedReady)" [
     testCase "WHY — a session that named a project and resolved none of it is not Ready: this is the exact bug that shipped Ready with loadedProjects: []" <| fun _ ->
       withHarness <| fun harness ->
-        let info = createSession harness [ "Foo.fsproj" ] "/nonexistent/does-not-matter"
+        let info = createSession harness [ SageFs.SessionProjectTarget.Project "Foo.fsproj" ] "/nonexistent/does-not-matter"
         let pid = installTransport harness info
         harness.Mailbox.Post(SessionCommand.WorkerReportedReady(info.Id, pid, []))
         let session = getManagedSession harness info.Id
@@ -118,7 +118,7 @@ let earnedReadyTests =
     testCase "WHY — a session created with no projects asked for, in a directory with nothing to auto-discover, is a genuine scratch REPL and stays Ready" <| fun _ ->
       withEmptyTempDir <| fun dir ->
         withHarness <| fun harness ->
-          let info = createSession harness [] dir
+          let info = createSession harness [ SageFs.SessionProjectTarget.Bare ] dir
           let pid = installTransport harness info
           harness.Mailbox.Post(SessionCommand.WorkerReportedReady(info.Id, pid, []))
           let session = getManagedSession harness info.Id
@@ -126,7 +126,7 @@ let earnedReadyTests =
 
     testCase "WHY — a session that named a project and DID resolve it is unaffected by the gate" <| fun _ ->
       withHarness <| fun harness ->
-        let info = createSession harness [ "Foo.fsproj" ] "/nonexistent/does-not-matter"
+        let info = createSession harness [ SageFs.SessionProjectTarget.Project "Foo.fsproj" ] "/nonexistent/does-not-matter"
         let pid = installTransport harness info
         let role : ProjectLoading.ClassifiedProject =
           { Path = "/repo/Foo.fsproj"; Role = ProjectLoading.ProjectRole.Library; PackageRefs = [] }
@@ -137,7 +137,7 @@ let earnedReadyTests =
 
     testCase "WHY — SessionHealth agrees with the gate: a Faulted-by-the-gate session classifies as Failed everywhere that reads SessionHealth.classify (get_fsi_status, /api/sessions, /health, the dashboard all derive from this one function)" <| fun _ ->
       withHarness <| fun harness ->
-        let info = createSession harness [ "Foo.fsproj" ] "/nonexistent/does-not-matter"
+        let info = createSession harness [ SageFs.SessionProjectTarget.Project "Foo.fsproj" ] "/nonexistent/does-not-matter"
         let pid = installTransport harness info
         harness.Mailbox.Post(SessionCommand.WorkerReportedReady(info.Id, pid, []))
         let session = getManagedSession harness info.Id

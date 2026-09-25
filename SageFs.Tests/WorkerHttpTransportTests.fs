@@ -190,16 +190,23 @@ let httpRoundTripTests =
         disposeServer server
     }
 
-    testTask "Shutdown round-trips through HTTP" {
-      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
+    testTask "Shutdown acknowledges before invoking shutdown callback" {
+      let callbackCalled = ref false
+      let! (server: WorkerHttpTransport.HttpWorkerServer) =
+        WorkerHttpTransport.startServerWithShutdown
+          (fun () -> callbackCalled.Value <- true)
+          testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
         let! resp = proxy WorkerMessage.Shutdown |> Async.StartAsTask
         resp
-        |> Expect.equal "shutdown response" WorkerResponse.WorkerShuttingDown
+        |> Expect.equal "shutdown response precedes callback" WorkerResponse.WorkerShuttingDown
+        callbackCalled.Value
+        |> Expect.isTrue "shutdown callback runs after response"
       finally
         disposeServer server
     }
+
   ]
 
 // ─── THE critical test: concurrent status during eval ──────────────

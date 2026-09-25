@@ -4,6 +4,7 @@ open System
 open System.IO
 open Expecto
 open Expecto.Flip
+open SageFs
 open SageFs.ProjectLoading
 open SageFs.Args
 open SageFs.WorkflowTypes
@@ -70,14 +71,18 @@ let tests =
     ]
 
     testList "WorkerConfig.fromEnvironmentWith" [
-      let emptyEnv (_: string) = null
+      let bareEnv (name: string) =
+        match name with
+        | "SAGEFS_BARE_SESSION" -> "1"
+        | _ -> null
 
-      test "all-empty returns defaults" {
-        let wc = WorkerConfig.fromEnvironmentWith emptyEnv "s1" 5000
+      test "bare environment returns the explicit bare target" {
+        let wc = WorkerConfig.fromEnvironmentWith bareEnv "s1" 5000
         wc.SessionId |> Expect.equal "session id" "s1"
         wc.HttpPort |> Expect.equal "http port" 5000
-        wc.Projects |> Expect.isEmpty "projects should be empty"
-        wc.IsBare |> Expect.isFalse "IsBare should be false"
+        wc.Targets |> Expect.equal "explicit bare target" [ SessionProjectTarget.Bare ]
+        wc.Projects |> Expect.isEmpty "a bare target has no project paths"
+        wc.IsBare |> Expect.isTrue "IsBare is derived from Targets"
       }
 
       test "parses SAGEFS_SESSION_PROJECTS" {
@@ -99,13 +104,18 @@ let tests =
       }
 
       test "auto_open defaults to true" {
-        let wc = WorkerConfig.fromEnvironmentWith emptyEnv "s4" 0
+        let getEnv name =
+          match name with
+          | "SAGEFS_BARE_SESSION" -> "1"
+          | _ -> null
+        let wc = WorkerConfig.fromEnvironmentWith getEnv "s4" 0
         wc.AutoOpenNamespaces |> Expect.isTrue "AutoOpenNamespaces should default to true"
       }
 
       test "auto_open false when SAGEFS_AUTO_OPEN_NAMESPACES=false" {
         let getEnv name =
           match name with
+          | "SAGEFS_BARE_SESSION" -> "1"
           | "SAGEFS_AUTO_OPEN_NAMESPACES" -> "false"
           | _ -> null
         let wc = WorkerConfig.fromEnvironmentWith getEnv "s5" 0
@@ -130,12 +140,12 @@ let tests =
 
     testList "buildWorkerSpawnConfig" [
       test "includes session ID in args" {
-        let args, _ = buildWorkerSpawnConfig "abc-123" [] false false true SessionWorkflow.Interactive
+        let args, _ = buildWorkerSpawnConfig "abc-123" [ SageFs.SessionProjectTarget.Bare ] false true SessionWorkflow.Interactive
         args |> Expect.stringContains "should contain session id" "abc-123"
       }
 
       test "isBare=true includes SAGEFS_BARE_SESSION=1" {
-        let _, envVars = buildWorkerSpawnConfig "s1" [] true false true SessionWorkflow.Interactive
+        let _, envVars = buildWorkerSpawnConfig "s1" [ SageFs.SessionProjectTarget.Bare ] false true SessionWorkflow.Interactive
         envVars
         |> List.exists (fun (k, v) -> k = "SAGEFS_BARE_SESSION" && v = "1")
         |> Expect.isTrue "should include SAGEFS_BARE_SESSION=1"

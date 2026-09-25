@@ -102,4 +102,6 @@ let tryParseDaemonJsonMcpPort (json: string) =
 /// may one day take a workspace hint; it is deliberately not passed on today.
 let buildDaemonStartArgs (_projectOrSln: string) (mcpPort: int) =
   [| "--mcp-port"
-     string mcpPort |]
+     string mcpPort
+     "--ttl"
+     "4h" |]

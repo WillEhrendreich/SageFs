@@ -306,25 +306,6 @@ let getStatus (c: Client) =
       return { connected = false; healthy = None; status = None; apiVersion = None; features = []; error = None; sessionCount = None; sessionStates = None; diagnosticSummary = None }
   }
 
-let isReady (c: Client) =
-  promise {
-    let! s = getStatus c
-    match s.connected, s.sessionStates with
-    | true, Some states ->
-      let hasHealthyOrStarting =
-        states
-        |> Array.exists (fun ss ->
-          match ss.health.status with
-          | "Healthy" | "Starting" -> true
-          | _ -> false)
-      return hasHealthyOrStarting
-    | true, None ->
-      match s.status with
-      | Some ("Ready" | "Evaluating") -> return true
-      | _ -> return false
-    | _ -> return false
-  }
-
 /// Returns the features list from the daemon health endpoint, or empty list if unreachable.
 let getFeatures (c: Client) =
   promise {
@@ -332,12 +313,11 @@ let getFeatures (c: Client) =
     return s.features
   }
 
-let evalCode (code: string) (workingDirectory: string option) (filePath: string option) (evalMode: string option) (blockStartLine: int option) (c: Client) =
-  let wd = workingDirectory |> Option.defaultValue ""
+let evalCode (sessionId: string) (code: string) (workingDirectory: string) (filePath: string option) (evalMode: string option) (blockStartLine: int option) (c: Client) =
   let fp = filePath |> Option.defaultValue ""
   let em = evalMode |> Option.defaultValue ""
   let bsl = blockStartLine |> Option.defaultValue 0
-  postCommand c "/exec" (jsonStringify {| code = code; working_directory = wd; file_path = fp; eval_mode = em; block_start_line = bsl |}) 30000
+  postCommand c "/exec" (jsonStringify {| code = code; sessionId = sessionId; working_directory = workingDirectory; file_path = fp; eval_mode = em; block_start_line = bsl |}) 30000
 
 let resetSession (c: Client) =
   postCommand c "/reset" "{}" 15000
@@ -376,11 +356,26 @@ let listSessions (c: Client) =
     return result |> Option.defaultValue [||]
   }
 
-let createSession (projects: string) (workingDirectory: string) (c: Client) =
-  postCommand c "/api/sessions/create" (jsonStringify {| projects = [| projects |]; workingDirectory = workingDirectory |}) 30000
+let isReady (c: Client) (sessionId: string option) =
+  promise {
+    match sessionId with
+    | None -> return false
+    | Some id ->
+      let! sessions = listSessions c
+      return sessions |> Array.exists (fun s -> s.id = id && SessionsTreePure.isReadyStatus s.status)
+  }
 
-let createSessionWithWorkflow (projects: string) (workingDirectory: string) (workflow: string) (c: Client) =
-  postCommand c "/api/sessions/create" (jsonStringify {| projects = [| projects |]; workingDirectory = workingDirectory; workflow = workflow |}) 30000
+let private targetPaths (target: SessionsTreePure.SessionTarget) =
+  match target with
+  | SessionsTreePure.SessionTarget.BareSession -> [||]
+  | SessionsTreePure.SessionTarget.ProjectSession path
+  | SessionsTreePure.SessionTarget.SolutionSession path -> [| path |]
+
+let createSession (target: SessionsTreePure.SessionTarget) (workingDirectory: string) (c: Client) =
+  postCommand c "/api/sessions/create" (jsonStringify {| projects = targetPaths target; workingDirectory = workingDirectory |}) 30000
+
+let createSessionWithWorkflow (target: SessionsTreePure.SessionTarget) (workingDirectory: string) (workflow: string) (c: Client) =
+  postCommand c "/api/sessions/create" (jsonStringify {| projects = targetPaths target; workingDirectory = workingDirectory; workflow = workflow |}) 30000
 
 /// Switch an EXISTING session into another workflow, keeping its id.
 ///
@@ -403,7 +398,7 @@ let switchSession (sessionId: string) (c: Client) =
   postCommand c "/api/sessions/switch" (jsonStringify {| sessionId = sessionId |}) 5000
 
 let stopSession (sessionId: string) (c: Client) =
-  postCommand c "/api/sessions/stop" (jsonStringify {| sessionId = sessionId |}) 10000
+  postCommand c "/api/sessions/stop" (jsonStringify {| sessionId = sessionId |}) 30000
 
 /// Ask the daemon to shut itself down.
 ///

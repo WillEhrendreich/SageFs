@@ -36,6 +36,19 @@ let private session id status projects loaded evals : SessionRowInput =
 let tests =
   testList "VS Code Sessions tree - pure row shaping" [
 
+    testCase "only a usable selected-session lifecycle is ready" <| fun _ ->
+      isReadyStatus "Ready" |> Expect.isTrue "ready"
+      isReadyStatus "Evaluating" |> Expect.isTrue "evaluating worker remains usable"
+      isReadyStatus "Building" |> Expect.isTrue "building worker remains routable"
+      isReadyStatus "Starting" |> Expect.isFalse "starting is not ready"
+      isReadyStatus "Faulted" |> Expect.isFalse "faulted is not ready"
+      isReadyStatus "Stopped" |> Expect.isFalse "stopped is not ready"
+
+    testCase "session targets classify projects and solutions without discovery" <| fun _ ->
+      SessionTarget.ofPath @"C:\repo\App.fsproj" |> Expect.equal "project" (ProjectSession @"C:\repo\App.fsproj")
+      SessionTarget.ofPath @"C:\repo\App.slnx" |> Expect.equal "slnx" (SolutionSession @"C:\repo\App.slnx")
+      SessionTarget.ofPath @"C:\repo\App.sln" |> Expect.equal "sln" (SolutionSession @"C:\repo\App.sln")
+
     testCase "WHY - a codicon token never reaches the label, because VS Code prints it literally there" <| fun _ ->
       let row = renderRow (session "abc" "Ready" [| "/w/Foo.fsproj" |] [||] 0)
       Expect.isFalse "label carries no $( token" (row.Label.Contains "$(")

@@ -146,24 +146,43 @@ let eventAccumulatorSessionScopingTests =
       |> Array.map (fun e -> e.SessionId)
       |> Expect.equal "B still receives its own event on its own call" [| Some "bbbb2222" |]
 
-    testCase "DrainFor None (no session in view) drains everything" <| fun _ ->
+    testCase "DrainFor None returns only daemon-level events and keeps session events queued" <| fun _ ->
       let acc = EventAccumulator()
       acc.Add(Some "aaaa1111", PushEvent.FileReloaded "a.fs")
       acc.Add(Some "bbbb2222", PushEvent.FileReloaded "b.fs")
+      acc.Add(None, PushEvent.SystemAlarm("boot", "up"))
       acc.DrainFor(None)
+      |> Array.map (fun e -> e.SessionId)
+      |> Expect.equal "no active session sees daemon-level events only" [| None |]
+      acc.DrainFor(Some "aaaa1111")
+      |> Array.map (fun e -> e.SessionId)
+      |> Expect.equal "A's event remains available to A" [| Some "aaaa1111" |]
+
+    testCase "RemoveSession drops only that session's events" <| fun _ ->
+      let acc = EventAccumulator()
+      acc.Add(Some "aaaa1111", PushEvent.FileReloaded "a.fs")
+      acc.Add(Some "bbbb2222", PushEvent.FileReloaded "b.fs")
+      acc.Add(None, PushEvent.SystemAlarm("boot", "up"))
+      acc.RemoveSession "aaaa1111"
+      acc.DrainFor(None)
+      |> Array.map (fun e -> e.SessionId)
+      |> Expect.equal "only the daemon event remains after A is removed" [| None |]
+      acc.DrainFor(Some "bbbb2222")
       |> Array.length
-      |> Expect.equal "with no active session, all events drain (labeled by the formatter)" 2
+      |> Expect.equal "B's event is preserved" 1
 
     testCase "Replace dedup is per-session — one session's state change never clobbers another's" <| fun _ ->
       let acc = EventAccumulator()
       acc.Add(Some "aaaa1111", PushEvent.StateChanged(1, 0))
       acc.Add(Some "bbbb2222", PushEvent.StateChanged(2, 0))
       acc.Add(Some "aaaa1111", PushEvent.StateChanged(3, 0))  // replaces A's own, not B's
-      let all = acc.DrainFor(None)
-      all |> Array.length |> Expect.equal "A deduped to one, B untouched -> 2 events total" 2
-      all |> Array.filter (fun e -> e.SessionId = Some "bbbb2222") |> Array.length
+      let aEvents = acc.DrainFor(Some "aaaa1111")
+      let bEvents = acc.DrainFor(Some "bbbb2222")
+      aEvents |> Array.filter (fun e -> e.SessionId = Some "aaaa1111") |> Array.length
+      |> Expect.equal "A's StateChanged survives A's replace" 1
+      bEvents |> Array.filter (fun e -> e.SessionId = Some "bbbb2222") |> Array.length
       |> Expect.equal "B's StateChanged survives A's replace" 1
-      all
+      aEvents
       |> Array.tryPick (fun e -> match e.SessionId, e.Event with Some "aaaa1111", PushEvent.StateChanged(o, _) -> Some o | _ -> None)
       |> Expect.equal "A's surviving event is its latest (3), not the replaced 1" (Some 3)
   ]

@@ -303,9 +303,38 @@ module ExpensiveWorkLease =
     | false -> state, ReleaseOutcome.AlreadyGone
     | true -> { state with Active = state.Active |> List.filter (fun l -> l.Id <> leaseId) }, ReleaseOutcome.Released
 
+  /// Release only when the lease is still held by the supplied member. This
+  /// is the ownership boundary for MCP callers: a guessed/stolen lease id
+  /// must not let one connection release another connection's work.
+  let releaseOwned (holder: string) (leaseId: LeaseId) (state: PoolState) : PoolState * ReleaseOutcome =
+    match state.Active |> List.tryFind (fun l -> l.Id = leaseId) with
+    | Some lease when lease.Holder = holder -> release leaseId state
+    | _ -> state, ReleaseOutcome.AlreadyGone
+
   /// For observability — `get_fsi_status`/a health payload's own view of
   /// the pool: how many leases are out and how deep the queue is, after
   /// reclaiming anything expired.
   let snapshot (now: DateTimeOffset) (state: PoolState) =
     let live = reapExpired now state
-    {| ActiveCount = List.length live.Active; QueueDepth = List.length live.Queue |}
+    {|
+      ActiveCount = List.length live.Active
+      QueueDepth = List.length live.Queue
+      Active =
+        live.Active
+        |> List.sortBy (fun lease -> lease.Holder, Kind.toToken lease.Kind)
+        |> List.map (fun lease ->
+          {|
+            Holder = lease.Holder
+            Kind = Kind.toToken lease.Kind
+            ExpiresAt = lease.ExpiresAt
+          |})
+      Queue =
+        live.Queue
+        |> List.sortBy (fun request -> request.Seq)
+        |> List.map (fun request ->
+          {|
+            Holder = request.Holder
+            Kind = Kind.toToken request.Kind
+            RequestedAt = request.FirstAskedAt
+          |})
+    |}

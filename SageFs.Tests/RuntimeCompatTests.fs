@@ -114,7 +114,7 @@ let tests =
 
     testList "SessionKinds (isolation is unconditional)" [
       testCase "the test constructor pins the in-process reference implementation, so tests never depend on the environment" <| fun _ ->
-        let args = SageFs.ActorCreation.mkCommonActorArgs (SageFs.Utils.Log.asILogger ()) false ignore SageFs.Args.ProjectLoadConfig.empty true
+        let args = SageFs.ActorCreation.mkCommonActorArgs (SageFs.Utils.Log.asILogger ()) false ignore SageFs.Args.ProjectLoadConfig.empty
         Expect.equal "in-process" SageFs.SessionKinds.InProcess args.FsiKind
     ]
   ]

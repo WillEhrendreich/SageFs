@@ -103,7 +103,7 @@ let private withHarness runtime run =
 
 let private createSession (harness: Harness) =
   match harness.Mailbox.PostAndReply(fun reply ->
-    SessionCommand.CreateSession(["Test.fsproj"], @"C:\Test", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
+    SessionCommand.CreateSession([ SageFs.SessionProjectTarget.Project "Test.fsproj" ], @"C:\Test", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
   | Ok info -> info
   | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
 
@@ -591,7 +591,7 @@ let sessionManagerProjectRolesTests =
       try
         let! created =
           mailbox.PostAndAsyncReply(fun reply ->
-            SessionCommand.CreateSession([ app.Path ], "/src/App", true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+            SessionCommand.CreateSession([ SageFs.SessionProjectTarget.Project app.Path ], "/src/App", true, WorkflowTypes.SessionWorkflow.Interactive, reply))
         let info =
           match created with
           | Ok info -> info
@@ -715,7 +715,7 @@ let workerFaultReportTests =
       try
         let! created =
           mailbox.PostAndAsyncReply(fun reply ->
-            SessionCommand.CreateSession([ "/src/App/App.fsproj" ], "/src/App", true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+            SessionCommand.CreateSession([ SageFs.SessionProjectTarget.Project "/src/App/App.fsproj" ], "/src/App", true, WorkflowTypes.SessionWorkflow.Interactive, reply))
         let info =
           match created with
           | Ok info -> info

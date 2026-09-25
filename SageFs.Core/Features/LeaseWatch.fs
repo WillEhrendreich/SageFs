@@ -37,6 +37,12 @@ module LeaseWatch =
       pool <- pool'
       outcome)
 
+  let releaseOwned (holder: string) (leaseId: ExpensiveWorkLease.LeaseId) : ExpensiveWorkLease.ReleaseOutcome =
+    lock gate (fun () ->
+      let pool', outcome = ExpensiveWorkLease.releaseOwned holder leaseId pool
+      pool <- pool'
+      outcome)
+
   /// For observability — `get_fsi_status`/a health payload's own view.
   let snapshot () = lock gate (fun () -> ExpensiveWorkLease.snapshot DateTimeOffset.UtcNow pool)
 

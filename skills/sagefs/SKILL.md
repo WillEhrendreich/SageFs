@@ -22,15 +22,15 @@ you" below.
 
 ## The first minute
 
-1. **Is SageFs up?** Call `get_fsi_status` (or `list_sessions`). If the tools
-   aren't there at all, SageFs isn't connected. Tell the user; don't work
+1. **Is SageFs up?** Call `get_daemon_status` (or `list_sessions`). If the
+   tools aren't there at all, SageFs isn't connected. Tell the user. Don't work
    around it silently.
 2. **Is the daemon current?** Do this before you trust a single result. A stale
    daemon serves old code and gives you wrong answers that look right, and it
-   is the most expensive failure in this whole document — see "a stale daemon"
+   is the most expensive failure in this whole document. See "a stale daemon"
    under "Things that will bite you" for the disguises it wears.
 
-   Read its version from `get_fsi_status`, `sagefs status`, or the dashboard's
+   Read its version from `get_daemon_status`, `sagefs status`, or the dashboard's
    `/api/daemon-info`, and compare it against the code you're about to work on.
    In the SageFs repo itself that's `Directory.Build.props`; anywhere else it's
    "was this daemon started after the last build of this project?" If you can't
@@ -38,45 +38,30 @@ you" below.
    session.
 
    If it's behind, **tell the user and ask them to restart it**. Don't stop,
-   restart or reinstall it yourself — it's theirs, and other agents may be on
+   restart or reinstall it yourself. It's theirs, and other agents may be on
    it. If they ask you how: `dotnet tool update -g sagefs`, then restart. If
    that reports "already installed" while a newer version is on NuGet, pass
-   `--version X.Y.Z` explicitly — `dotnet tool update` resolves through NuGet's
+   `--version X.Y.Z` explicitly. `dotnet tool update` resolves through NuGet's
    search index, which lags the package store by a few minutes.
 3. **Do you have a session for where you're working?** Sessions are tied to a
    working directory, and **a git worktree is its own routing boundary**. A
    session for the main checkout is not yours if you're in
-   `.claude/worktrees/whatever`. Don't create a duplicate either: check
-   `list_sessions` first.
-4. **Build once, and wait for it to actually finish, before you create the
-   session.** A session loads your project's compiled output, so build
-   first — and "started a build" is not "built". A background build that
-   hasn't finished yet is the single most common cause of a session that
-   faults immediately with "Not all DLLs are found": SageFs looked for the
-   output before your build wrote it. If you see that message right after
-   creating a session, check whether a build is still running before
-   assuming anything else is wrong — then recover with `hard_reset_fsi_session
-   rebuild=true`, which builds and reloads in one step. If the message
-   still appears after a build you've confirmed finished, that's a SageFs
-   bug: report it with the paths the message names.
-5. **Name a project. Don't pass `projects: []` on anything but a small,
-   one-project directory.** `create_session` with `projects: []` doesn't
-   give you an empty REPL — it auto-discovers and loads whatever project or
-   solution sits in that directory, which on a large repo (a solution with
-   dozens of projects) can take minutes and used to give you nothing to
-   look at while it did. Call `get_available_projects` first, pick the one
-   project you actually need, and pass it explicitly:
-   `create_session(projects=["path/to/One.fsproj"], working_directory=...)`.
-   That is what actually gets you to `Ready` fast — auto-discovery is the
-   exception, for small directories, not the default.
-6. `create_session` returns immediately; the session then warms up. Call
-   `get_fsi_status` until it says `Ready`. Don't sleep in a loop — a
-   `WarmingUp`/"Rebuilding" response now carries `elapsedSeconds`,
-   `boundSeconds`, and the worker's own last-reported progress line, so you
-   can tell "large repo, still working" from "actually stuck" without
-   guessing. If it reports `Faulted` with a reason, that reason is real —
-   don't keep polling hoping it changes; act on it (usually
-   `hard_reset_fsi_session rebuild=true`).
+   `.claude/worktrees/whatever`. Check `list_sessions` before creating one.
+4. **Choose the session target explicitly.** Call `get_available_projects`,
+   then use exactly one of these:
+   - `create_project_session` for one `.fsproj`
+   - `create_solution_session` for one `.sln` or `.slnx`
+   - `create_bare_session` for a project-free REPL
+
+   There is no auto-discovery on these tools. If generated build state is
+   missing, SageFs takes a rebuild lease, runs the build itself, rechecks the
+   generated files, and only then creates the session. You don't need a shell
+   build before session creation, and you shouldn't race one against it.
+5. **The create tool returns before warmup finishes.** Poll
+   `get_session_status` for that exact session until it says `Ready`. Don't
+   sleep in a loop. Warming responses carry elapsed time, work time, and the
+   worker's last progress line. If it says `Faulted`, act on the reason rather
+   than polling hoping it changes.
 
 ## The loop
 
@@ -134,7 +119,8 @@ you need the details, use `explain_test_failure`.
   - No error at all: evals that quietly disagree with the code in front of you.
 
   **Check the daemon's version before you believe anything else.**
-  `get_fsi_status`, `sagefs status`, or `/health`. If it's behind the code
+  `get_daemon_status` or `get_session_status`, `sagefs status`, or
+  `/health`. If the daemon is behind the code
   you're working on, say so and ask the user to restart it — that is the fix,
   and no amount of `hard_reset_fsi_session` will substitute for it, because the
   daemon process itself is the stale thing. Don't restart it yourself; it's
@@ -244,7 +230,7 @@ reason to stay on it.
   checked piece by piece, so `cd x && dotnet build && ...` needs every piece
   approved. Use absolute paths instead of `cd`.
 - **Don't wait with sleep.** A `sleep N; check` pattern gets blocked. For a
-  session, poll `get_fsi_status`. For a long command, run it in the background
+  session, poll `get_session_status`. For a long command, run it in the background
   and let it tell you when it's done.
 - **Kill only by exact PID, never by name.** Mass kills look destructive, and
   they can take down the user's daemon.
@@ -264,12 +250,16 @@ argue it, and don't finish the slow way first.
 Sub-agents don't inherit any of this. Every brief for F# work must include the
 loop explicitly:
 
-1. `create_session` for the agent's own worktree (after one build)
-2. RED and GREEN via `send_fsharp_code`
-3. persist to the file
-4. `hard_reset_fsi_session` with `rebuild=true`
-5. re-verify, then commit
-6. `dotnet` only as the final gate
-7. report REPL friction instead of silently falling back
+1. `get_daemon_status`, then `get_available_projects` and the matching
+   `create_project_session` / `create_solution_session` /
+   `create_bare_session` for the agent's own worktree
+2. Wait for that session's `get_session_status` to say Ready
+3. show the failure with `send_fsharp_code`
+4. make it pass with `send_fsharp_code`
+5. persist to the file
+6. `hard_reset_fsi_session` with `rebuild=true`
+7. re-verify, then commit
+8. `dotnet` only as the final gate
+9. report REPL friction instead of silently falling back
 
 The easiest way is to tell it to load this skill.

@@ -1184,7 +1184,7 @@ type EvalResult =
 
 /// Wait for session to reach Ready state (up to ~60s with 2s intervals).
 /// Returns true if ready, false if timed out.
-let waitForSessionReady () : JS.Promise<bool> =
+let waitForSessionReady (sessionId: string) : JS.Promise<bool> =
   promise {
     match client with
     | None -> return false
@@ -1192,7 +1192,7 @@ let waitForSessionReady () : JS.Promise<bool> =
     let mutable ready = false
     let mutable attempts = 0
     while not ready && attempts < 30 do
-      let! r = Client.isReady c
+      let! r = Client.isReady c (Some sessionId)
       ready <- r
       if not ready then
         do! sleep 2000
@@ -1200,44 +1200,50 @@ let waitForSessionReady () : JS.Promise<bool> =
     return ready
   }
 
+let awaitSelectedSessionReady (c: Client.Client) (sessionId: string) : JS.Promise<bool> =
+  promise {
+    let! initiallyReady = Client.isReady c (Some sessionId)
+    if initiallyReady then
+      return true
+    else
+      (getOutput()).appendLine "Session not ready, waiting for warmup..."
+      let! becameReady = waitForSessionReady sessionId
+      if not becameReady then
+        return false
+      else
+        (getOutput()).appendLine "Session ready, evaluating..."
+        return true
+  }
+
 let evalCore (code: string) (filePath: string option) (evalMode: string option) (blockStartLine: int option) : JS.Promise<EvalResult> =
   promise {
     evalId <- evalId + 1
     let myId = evalId
     try
-      match client with
-      | None ->
+      match client, activeSessionId, activeSessionWorkingDirectory with
+      | None, _, _ ->
         if evalId = myId then evalId <- 0
         return EvalConnectionError "SageFs not activated"
-      | Some c ->
-      let! ready = Client.isReady c
-      if not ready then
-        (getOutput()).appendLine "Session not ready, waiting for warmup..."
-        let! becameReady = waitForSessionReady ()
-        if not becameReady then
+      | Some _, None, _ ->
+        if evalId = myId then evalId <- 0
+        return EvalError "No active session selected"
+      | Some _, Some _, None ->
+        if evalId = myId then evalId <- 0
+        return EvalError "The active session has no working directory"
+      | Some c, Some sessionId, Some workDir ->
+        let! ready = awaitSelectedSessionReady c sessionId
+        if not ready then
           if evalId = myId then evalId <- 0
           return EvalError "Session did not become ready in time. Check the dashboard for status."
         else
           (getOutput()).appendLine "Session ready, evaluating..."
-          let workDir = getWorkingDirectory ()
           let startTime = performanceNow ()
-          let! result = Client.evalCode code workDir filePath evalMode blockStartLine c
+          let! result = Client.evalCode sessionId code workDir filePath evalMode blockStartLine c
           if evalId = myId then evalId <- 0
           let elapsed = performanceNow () - startTime
           match result with
           | Client.Failed errMsg -> return EvalError errMsg
-          | Client.Succeeded msg ->
-            return EvalOk (msg |> Option.defaultValue "", elapsed)
-      else
-        let workDir = getWorkingDirectory ()
-        let startTime = performanceNow ()
-        let! result = Client.evalCode code workDir filePath evalMode blockStartLine c
-        if evalId = myId then evalId <- 0
-        let elapsed = performanceNow () - startTime
-        match result with
-        | Client.Failed errMsg -> return EvalError errMsg
-        | Client.Succeeded msg ->
-          return EvalOk (msg |> Option.defaultValue "", elapsed)
+          | Client.Succeeded msg -> return EvalOk (msg |> Option.defaultValue "", elapsed)
     with err ->
       if evalId = myId then evalId <- 0
       return EvalConnectionError (string err)
@@ -1563,7 +1569,7 @@ let createSessionCmd () =
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
         do! Window.withProgress ProgressLocation.Notification "SageFs: Creating session..." (fun _p _t ->
           promise {
-            let! result = Client.createSession proj workDir c
+            let! result = Client.createSession (SessionsTreePure.SessionTarget.ofPath proj) workDir c
             match result with
             | Client.Succeeded _ ->
               Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore
@@ -3188,7 +3194,7 @@ let activate (context: ExtensionContext) =
                 [| "Create Session"; "Not Now" |]
             match choice with
             | Some "Create Session" ->
-              let! result = Client.createSession proj workDir c
+              let! result = Client.createSession (SessionsTreePure.SessionTarget.ofPath proj) workDir c
               match result with
               | Client.Succeeded _ ->
                 Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore

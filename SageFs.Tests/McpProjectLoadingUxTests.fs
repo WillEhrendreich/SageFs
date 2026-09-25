@@ -112,28 +112,28 @@ module FormatCreateSessionReplyTests =
     testList "CreateSessionUx.formatCreateSessionReply" [
 
       testCase "WHY — the session id is always present so callers can still extract it" <| fun _ ->
-        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ "App.fsproj" ] None
+        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj" ] None
         reply |> Expect.stringContains "should include the session id" "abcd1234"
 
       testCase "WHY — a non-empty request states exactly what was requested" <| fun _ ->
-        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ "App.fsproj"; "Tests.fsproj" ] None
+        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj"; SessionProjectTarget.Project "Tests.fsproj" ] None
         reply |> Expect.stringContains "should list the requested projects" "App.fsproj, Tests.fsproj"
 
       testCase "WHY — an empty request (projects=[]) says auto-discovery will run, NOT that the REPL is guaranteed empty (Finding #2/#3)" <| fun _ ->
-        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [] None
+        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Bare ] None
         reply |> Expect.stringContains "should mention auto-discovery" "auto-discover"
         Expect.isFalse "must not claim a guaranteed-empty/no-project REPL" (reply.Contains("no project") || reply.Contains("scratch REPL"))
 
       testCase "WHY — always points at get_fsi_status to confirm what actually loaded, since the reply cannot know that yet" <| fun _ ->
-        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ "App.fsproj" ] None
+        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj" ] None
         reply |> Expect.stringContains "should direct the agent to confirm via get_fsi_status" "get_fsi_status"
 
       testCase "WHY — a detection hint, when present, is appended rather than dropped" <| fun _ ->
-        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ "App.fsproj" ] (Some "💡 some hint")
+        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj" ] (Some "💡 some hint")
         reply |> Expect.stringContains "should include the hint" "💡 some hint"
 
       testCase "WHY — no hint means no stray hint text appears" <| fun _ ->
-        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ "App.fsproj" ] None
+        let reply = CreateSessionUx.formatCreateSessionReply "abcd1234" [ SessionProjectTarget.Project "App.fsproj" ] None
         Expect.isFalse "should not contain a hint marker with no hint supplied" (reply.Contains("💡"))
     ]
 

@@ -642,7 +642,6 @@ let run (sessionId: string) (port: int) = async {
     OutStream = IO.TextWriter.Null
     UseAsp = false
     LoadConfig = loadConfig
-    IsBare = workerConfig.IsBare
     AutoOpenNamespaces = workerConfig.AutoOpenNamespaces
     OnEvent = onEvent
     Workflow = workerConfig.Workflow
@@ -1652,7 +1651,9 @@ let run (sessionId: string) (port: int) = async {
     | _ ->
       Log.info "Hot reload: off by default (0 files watched)"
     let! server =
-      WorkerHttpTransport.startServer readyHandler result.HotReloadStateRef keptStateAccess projectFiles result.GetWarmupContext getRunTest result.Agent.TakeCoverage port
+      WorkerHttpTransport.startServerWithShutdown
+        (fun () -> try cts.Cancel() with :? ObjectDisposedException -> ())
+        readyHandler result.HotReloadStateRef keptStateAccess projectFiles result.GetWarmupContext getRunTest result.Agent.TakeCoverage port
       |> Async.AwaitTask
     // Print actual port to stdout so daemon can discover it
     printfn "WORKER_PORT=%s" server.BaseUrl

@@ -82,7 +82,9 @@ let tests =
           GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveSnapshotSink = None
-          CohortOwner = None }
+          CohortOwner = None
+          GetDaemonHealth = fun () -> None
+          GetProcessTelemetry = fun () -> None }
 
       let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
       let toolTask = tools.hard_reset_fsi_session(true, "")

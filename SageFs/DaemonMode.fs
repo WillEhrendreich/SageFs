@@ -457,17 +457,73 @@ let private checkMemoryAdmission (readSnapshot: unit -> SessionManager.QuerySnap
        Result.Error(SageFsError.MemoryPressureRefused reason)
      | None -> Result.Ok ()
 
+let private productionBuildRecovery
+  (targets: SessionProjectTarget list)
+  (workingDir: string)
+  : Task<Result<unit, SageFsError>> =
+  task {
+    let projects = SessionProjectTarget.projects targets
+    let holder = "create:" + (System.IO.Path.GetFullPath workingDir).ToLowerInvariant() + ":" + String.concat "|" (projects |> List.map (fun p -> p.ToLowerInvariant()) |> List.sort)
+    match Features.LeaseWatch.request holder ExpensiveWorkLease.Kind.Rebuild with
+    | ExpensiveWorkLease.Decision.Granted(leaseId, _) ->
+      try
+        let! built = SessionBuild.runBuildAsync projects workingDir |> Async.StartAsTask
+        match built with
+        | Error err -> return Result.Error err
+        | Ok _ ->
+          let missing =
+            targets
+            |> List.collect (fun target ->
+              match BuildPreflight.checkIn System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
+              | BuildPreflight.NeedsRebuild missing -> missing
+              | BuildPreflight.Ready
+              | BuildPreflight.Unknown _ -> [])
+            |> List.distinct
+          return
+            match missing with
+            | [] -> Result.Ok ()
+            | missing -> Result.Error (SageFsError.NeedsRebuild missing)
+      finally
+        Features.LeaseWatch.release leaseId |> ignore
+    | ExpensiveWorkLease.Decision.Wait(_, reason)
+    | ExpensiveWorkLease.Decision.Refused reason -> return Result.Error (SageFsError.NeedsRebuild [ reason ])
+  }
+
+let private sessionManifestRecord (info: WorkerProtocol.SessionInfo) : Features.DaemonManifest.DaemonSessionRecord =
+  { SessionId = WorkerProtocol.SessionId.value info.Id
+    Projects = info.Projects
+    WorkingDir = info.WorkingDirectory
+    CreatedAt = DateTimeOffset(info.CreatedAt, TimeSpan.Zero)
+    StoppedAt = None }
+
 /// Build SessionManagementOps record from mailbox + snapshot reader.
 /// Session lifecycle events are recorded directly in the daemon.sagefm binary
 /// manifest (the sole source of truth for session resume) — there is no
 /// separate event-append step or per-session event stream.
-let createSessionOps
+let createSessionOpsWithRecovery
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (manifestOwner: Features.ManifestOwner.Handle)
+  (recover: (SessionProjectTarget list -> string -> Task<Result<unit, SageFsError>>) option)
   : SessionManagementOps =
+  let recordCreated
+    (info: WorkerProtocol.SessionInfo)
+    : Task<Result<WorkerProtocol.SessionId, SageFsError>> = task {
+    let! committed =
+      manifestOwner.Commit (
+        Features.DaemonManifest.ManifestMutation.RecordCreated (sessionManifestRecord info))
+    match committed with
+    | Ok _ -> return Ok info.Id
+    | Error err ->
+      let sessionId = WorkerProtocol.SessionId.value info.Id
+      let! stopResult = sessionManager.PostAndAsyncReply(fun reply -> SessionManager.SessionCommand.StopSession(info.Id, reply)) |> Async.StartAsTask
+      match stopResult with
+      | Ok () -> ()
+      | Error stopError -> Log.warn "[manifest] rollback stop failed for %s: %s" sessionId (SageFsError.describe stopError)
+      return Error (SageFsError.SessionCreationFailed(Features.ManifestOwner.CommitError.describe err))
+  }
   {
-    CreateSession = fun projects workingDir workflow ->
+    CreateSession = fun targets workingDir workflow ->
       task {
         match checkMailboxAdmission sessionManager with
         | Result.Error busy -> return Result.Error busy
@@ -475,14 +531,55 @@ let createSessionOps
         match checkMemoryAdmission readSnapshot with
         | Result.Error refused -> return Result.Error refused
         | Result.Ok () ->
-        let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
-        let! result =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, workflow, reply))
-          |> Async.StartAsTask
-        return
-          result
-          |> Result.map (fun info -> WorkerProtocol.SessionId.value info.Id)
+          let missing =
+            targets
+            |> List.collect (fun target ->
+              match BuildPreflight.checkIn System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
+              | BuildPreflight.NeedsRebuild missing -> missing
+              | BuildPreflight.Ready
+              | BuildPreflight.Unknown _ -> [])
+            |> List.distinct
+          match missing with
+          | _ :: _ ->
+            match recover with
+            | None -> return Result.Error (SageFsError.NeedsRebuild missing)
+            | Some recover ->
+              let! recovered = recover targets workingDir
+              match recovered with
+              | Error err -> return Result.Error err
+              | Ok () ->
+                let stillMissing =
+                  targets
+                  |> List.collect (fun target ->
+                    match BuildPreflight.checkIn System.IO.File.Exists System.IO.File.ReadAllText workingDir target with
+                    | BuildPreflight.NeedsRebuild missing -> missing
+                    | BuildPreflight.Ready
+                    | BuildPreflight.Unknown _ -> [])
+                  |> List.distinct
+                match stillMissing with
+                | _ :: _ -> return Result.Error (SageFsError.NeedsRebuild stillMissing)
+                | [] ->
+                  let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
+                  let! result =
+                    sessionManager.PostAndAsyncReply(fun reply ->
+                      SessionManager.SessionCommand.CreateSession(targets, workingDir, autoOpenNamespaces, workflow, reply))
+                    |> Async.StartAsTask
+                  match result with
+                  | Error err -> return Result.Error err
+                  | Ok info ->
+                    let! recorded = recordCreated info
+                    return Result.map WorkerProtocol.SessionId.value recorded
+          | [] ->
+            let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
+            let! result =
+              sessionManager.PostAndAsyncReply(fun reply ->
+                SessionManager.SessionCommand.CreateSession(targets, workingDir, autoOpenNamespaces, workflow, reply))
+              |> Async.StartAsTask
+            match result with
+            | Error err -> return Result.Error err
+            | Ok info ->
+              let! recorded = recordCreated info
+              return Result.map WorkerProtocol.SessionId.value recorded
       }
     ListSessions = fun () ->
       task {
@@ -503,10 +600,14 @@ let createSessionOps
               (fun reply -> SessionManager.SessionCommand.StopSession(toSessionId sessionId, reply)),
               timeout = int Timeouts.stopSessionMailboxTimeout.TotalMilliseconds)
             |> Async.StartAsTask
-          return
-            result
-            |> Result.map (fun () ->
-              sprintf "Session '%s' stopped." sessionId)
+          match result with
+          | Ok () ->
+            let! committed = manifestOwner.Commit (Features.DaemonManifest.ManifestMutation.MarkStopped (sessionId, DateTimeOffset.UtcNow))
+            return
+              match committed with
+              | Ok _ -> Result.Ok (sprintf "Session '%s' stopped." sessionId)
+              | Error err -> Result.Error (SageFsError.SessionStopFailed (sessionId, Features.ManifestOwner.CommitError.describe err))
+          | Error err -> return Result.Error err
         with :? System.TimeoutException ->
           return
             Result.Error (
@@ -615,6 +716,14 @@ let createSessionOps
         return result
       }
   }
+
+/// Test/public adapter: preflight only; it never starts a build implicitly.
+let createSessionOps
+  (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
+  (readSnapshot: unit -> SessionManager.QuerySnapshot)
+  (manifestOwner: Features.ManifestOwner.Handle)
+  : SessionManagementOps =
+  createSessionOpsWithRecovery sessionManager readSnapshot manifestOwner None
 
 /// Look up worker HTTP base URL for a session from CQRS snapshot.
 let getWorkerBaseUrl (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: WorkerProtocol.SessionId) =
@@ -1617,7 +1726,13 @@ let resumePreviousSessions
       relevant
       |> List.map (fun prev -> task {
         log.LogInformation("Resuming session for {WorkingDir}", prev.WorkingDir)
-        let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir WorkflowTypes.SessionWorkflow.Interactive
+        let targetResult = SessionProjectTarget.tryCreateMany prev.Projects
+        let! result =
+          match targetResult with
+          | Ok targets -> sessionOps.CreateSession targets prev.WorkingDir WorkflowTypes.SessionWorkflow.Interactive
+          | Error reason ->
+            log.LogWarning("Forgetting invalid resumed session target for {WorkingDir}: {Reason}", prev.WorkingDir, reason)
+            Task.FromResult (Result.Error (SageFsError.SessionCreationFailed reason))
         match result with
         | Ok info ->
           Instrumentation.daemonSessionsResumed.Add(1L)
@@ -1948,7 +2063,8 @@ let run
       (fun sid error -> stateChangedEvent.Trigger (SessionFaulted (sid, error)))
       (fun sid line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) line)
 
-  let sessionOps = createSessionOps sessionManager readSnapshot manifestOwner
+  let sessionOps =
+    createSessionOpsWithRecovery sessionManager readSnapshot manifestOwner (Some productionBuildRecovery)
   // String-to-SessionId adapters for proxyToSession (which takes string callbacks)
   let getProxyStr s = sessionOps.GetProxy (toSessionId s)
   let notifyWorkerDiedStr s = sessionOps.NotifyWorkerDied (toSessionId s)
@@ -2655,6 +2771,80 @@ let run
   // Create the multi-agent coordination tracker (in-memory, daemon-lifetime)
   let activityTracker = AgentActivityTracker.create ()
 
+  let getDaemonHealth () : SageFs.Features.HealthSnapshot option =
+    let model = elmRuntime.GetModel()
+    let sessions =
+      model.Sessions.Sessions
+      |> List.map (fun s ->
+        let healthStatus : SageFs.Features.SessionHealthStatus =
+          match s.Status with
+          | SageFs.SessionDisplayStatus.Running -> SageFs.Features.SessionHealthStatus.Ready
+          | SageFs.SessionDisplayStatus.Starting -> SageFs.Features.SessionHealthStatus.WarmingUp
+          | SageFs.SessionDisplayStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
+          | SageFs.SessionDisplayStatus.Faulted _ -> SageFs.Features.SessionHealthStatus.Faulted
+          | SageFs.SessionDisplayStatus.Lost -> SageFs.Features.SessionHealthStatus.Faulted
+          | SageFs.SessionDisplayStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
+          | SageFs.SessionDisplayStatus.Idle -> SageFs.Features.SessionHealthStatus.Ready
+        let projectName =
+          match s.Projects with
+          | p :: _ -> System.IO.Path.GetFileName p
+          | [] -> s.Name |> Option.defaultValue (WorkerProtocol.SessionId.value s.Id)
+        ({ SessionId = WorkerProtocol.SessionId.value s.Id
+           ProjectName = projectName
+           Status = healthStatus
+           EvalCount = s.EvalCount
+           LastActivity = System.DateTimeOffset(s.LastActivity, System.TimeSpan.Zero) }
+         : SageFs.Features.SessionHealthSummary))
+    let testingSummary =
+      let ts = model.LiveTesting.TestState
+      match ts.Activation with
+      | SageFs.Features.LiveTesting.LiveTestingActivation.Inactive -> None
+      | SageFs.Features.LiveTesting.LiveTestingActivation.Active ->
+        let entries = SageFs.Features.LiveTesting.LiveTestState.statusEntriesForSession "" ts
+        match entries.Length with
+        | 0 -> None
+        | _ ->
+          let summary = SageFs.Features.LiveTesting.TestSummary.fromStatuses ts.Activation (entries |> Array.map (fun e -> e.Status))
+          Some ({ TotalTests = summary.Total
+                  Passed = summary.Passed
+                  Failed = summary.Failed
+                  Running = summary.Running }
+                : SageFs.Features.LiveTestHealthSummary)
+    let machineMemory = SageFs.Features.MachineMemory.current ()
+    let telemetry =
+      SageFs.Server.DaemonTelemetry.sample (
+        (System.Diagnostics.Process.GetCurrentProcess().Id, "daemon")
+        :: (SessionManager.QuerySnapshot.allSessions (readSnapshot ())
+           |> List.choose (fun session ->
+             WorkerProtocol.SessionLifecycleStatus.workerPid session.Status
+             |> Option.map (fun pid -> pid, "worker:" + WorkerProtocol.SessionId.value session.Id))))
+    let rssBytes = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64
+    let memoryMB = int (rssBytes / 1_048_576L)
+    let rssVerdict =
+      SageFs.Features.HealthWatch.observe
+        SageFs.Features.HealthAnomaly.SignalId.WorkerRss
+        (float memoryMB)
+        System.DateTimeOffset.UtcNow
+    SageFs.Features.GcDumpWatch.maybeCapture
+      (System.Diagnostics.Process.GetCurrentProcess().Id)
+      (System.IO.Path.Combine(DaemonState.SageFsDir, "diagnostics"))
+      rssBytes
+      machineMemory.AvailableBytes
+      SageFs.Features.HealthAnomaly.SignalId.WorkerRss
+      rssVerdict
+    sampleMailboxQueueDepth observeMailboxQueueDepthToHealthWatch (fun () -> sessionManager.CurrentQueueLength)
+    Some ({ DaemonPid = System.Diagnostics.Process.GetCurrentProcess().Id
+            DaemonPort = mcpPort
+            Uptime = System.DateTimeOffset.UtcNow - daemonStartTime
+            Version = version
+            SessionSummaries = sessions
+            LiveTestingSummary = testingSummary
+            MemoryMB = memoryMB
+            Anomalies = SageFs.Features.HealthWatch.troubled ()
+            GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome ()
+            MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel () }
+      : SageFs.Features.HealthSnapshot)
+
   // Both listeners share one origin set: the dashboard page (mcpPort + 1, see
   // dashboardPort below) calls MCP-port endpoints as a same-site own origin.
   let daemonOrigins = SageFs.Server.HttpOriginGuard.OwnOrigins.ofPorts [ mcpPort; mcpPort + 1 ]
@@ -2683,6 +2873,7 @@ let run
       LiveSnapshotSink = Some (fun sid snap ->
         SageFs.Features.LiveBindingsAdaptive.update liveBindingsAdaptive sid snap)
       CohortOwner = Some cohortOwner
+      GetDaemonHealth = getDaemonHealth
     } cts.Token
 
   let liveTestTickMs = 25
@@ -3324,91 +3515,7 @@ let run
     GetEvalTimeline = fun () ->
       let state = System.Threading.Volatile.Read(&sharedFeatureState.contents)
       SageFs.Features.EvalTimeline.timelineStats 20 state.CachedTimeline
-    GetDaemonHealth = fun () ->
-      let model = elmRuntime.GetModel()
-      let sessions =
-        model.Sessions.Sessions
-        |> List.map (fun s ->
-          let healthStatus : SageFs.Features.SessionHealthStatus =
-            match s.Status with
-            | SageFs.SessionDisplayStatus.Running -> SageFs.Features.SessionHealthStatus.Ready
-            | SageFs.SessionDisplayStatus.Starting -> SageFs.Features.SessionHealthStatus.WarmingUp
-            | SageFs.SessionDisplayStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
-            | SageFs.SessionDisplayStatus.Faulted _ -> SageFs.Features.SessionHealthStatus.Faulted
-            | SageFs.SessionDisplayStatus.Lost -> SageFs.Features.SessionHealthStatus.Faulted
-            | SageFs.SessionDisplayStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
-            // Idle is a normal, connected, working session that just hasn't
-            // been used in a while — it is Ready, not Stopped.
-            | SageFs.SessionDisplayStatus.Idle -> SageFs.Features.SessionHealthStatus.Ready
-          let projectName =
-            match s.Projects with
-            | p :: _ -> System.IO.Path.GetFileName p
-            | [] -> s.Name |> Option.defaultValue (WorkerProtocol.SessionId.value s.Id)
-          ({ SessionId = WorkerProtocol.SessionId.value s.Id
-             ProjectName = projectName
-             Status = healthStatus
-             EvalCount = s.EvalCount
-             LastActivity = System.DateTimeOffset(s.LastActivity, System.TimeSpan.Zero) }
-           : SageFs.Features.SessionHealthSummary))
-      let testingSummary =
-        let ts = model.LiveTesting.TestState
-        match ts.Activation with
-        | SageFs.Features.LiveTesting.LiveTestingActivation.Inactive -> None
-        | SageFs.Features.LiveTesting.LiveTestingActivation.Active ->
-          let entries = SageFs.Features.LiveTesting.LiveTestState.statusEntriesForSession "" ts
-          match entries.Length with
-          | 0 -> None
-          | _ ->
-            let summary = SageFs.Features.LiveTesting.TestSummary.fromStatuses ts.Activation (entries |> Array.map (fun e -> e.Status))
-            Some ({ TotalTests = summary.Total
-                    Passed = summary.Passed
-                    Failed = summary.Failed
-                    Running = summary.Running }
-                  : SageFs.Features.LiveTestHealthSummary)
-      // Resident memory, not the managed heap: the daemon that ate 51.7GB of a
-      // 62GB machine looked fine by GC.GetTotalMemory. Every reading also
-      // teaches the detector what this daemon's normal is.
-      let rssBytes = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64
-      let memoryMB = int (rssBytes / 1_048_576L)
-      let rssVerdict =
-        SageFs.Features.HealthWatch.observe
-          SageFs.Features.HealthAnomaly.SignalId.WorkerRss
-          (float memoryMB)
-          System.DateTimeOffset.UtcNow
-      // The moment RSS is first confirmed Broken (not every sample after) —
-      // capture the evidence both incidents died without: by the time
-      // anyone noticed the daemon was eating the machine, there was no
-      // memory left to safely take a dump with. Off the hot path
-      // (GcDumpWatch.maybeCapture backgrounds the actual capture), at most
-      // once per daemon run, and only with enough machine headroom to try
-      // safely — see GcDumpCapture's own doc comment.
-      SageFs.Features.GcDumpWatch.maybeCapture
-        (System.Diagnostics.Process.GetCurrentProcess().Id)
-        (System.IO.Path.Combine(DaemonState.SageFsDir, "diagnostics"))
-        rssBytes
-        (SageFs.Features.MachineMemory.current ()).AvailableBytes
-        SageFs.Features.HealthAnomaly.SignalId.WorkerRss
-        rssVerdict
-      // Same tick, same cheap in-memory read: CurrentQueueLength is a counter
-      // the mailbox already maintains (checkMailboxAdmission reads the same
-      // one), so this can never itself become the thing that starves the
-      // daemon.
-      sampleMailboxQueueDepth observeMailboxQueueDepthToHealthWatch (fun () -> sessionManager.CurrentQueueLength)
-      Some ({ DaemonPid = System.Diagnostics.Process.GetCurrentProcess().Id
-              DaemonPort = mcpPort
-              Uptime = System.DateTimeOffset.UtcNow - daemonStartTime
-              Version = version
-              SessionSummaries = sessions
-              LiveTestingSummary = testingSummary
-              MemoryMB = memoryMB
-              Anomalies = SageFs.Features.HealthWatch.troubled ()
-              GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome ()
-              // The same hysteresis-tracked level `shedIdleSessionsIfNeeded`
-              // (watcherSyncTimer, every 5s) already maintains — reading it
-              // here rather than recomputing keeps ONE authoritative level
-              // instead of two that could disagree.
-              MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel () }
-            : SageFs.Features.HealthSnapshot)
+    GetDaemonHealth = getDaemonHealth
     GetFailureNarratives = fun () ->
       let model = elmRuntime.GetModel()
       let testState = model.LiveTesting.TestState
@@ -3618,8 +3725,8 @@ let run
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
       return result |> Result.mapError SageFsError.describe
     }
-    CreateSession = fun projects workingDir -> task {
-      let! result = sessionOps.CreateSession projects workingDir WorkflowTypes.SessionWorkflow.Interactive
+    CreateSession = fun targets workingDir -> task {
+      let! result = sessionOps.CreateSession targets workingDir WorkflowTypes.SessionWorkflow.Interactive
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
       return result
         |> Result.map (fun sidStr -> WorkerProtocol.SessionId.validate sidStr |> Result.defaultValue (WorkerProtocol.SessionId.newId ()))

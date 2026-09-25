@@ -36,8 +36,9 @@ module SessionManager =
     Proxy: SessionProxy
     /// Worker HTTP base URL for direct endpoint access.
     WorkerBaseUrl: string
-    /// Original spawn config — needed for restart.
-    Projects: string list
+    /// Original spawn target — needed for restart. `Bare` is explicit here;
+    /// there is no empty target list meaning discovery.
+    Targets: SessionProjectTarget list
     WorkingDir: string
     AutoOpenNamespaces: bool
     /// Session workflow — preserved across restarts and standby swaps.
@@ -74,7 +75,7 @@ module SessionManager =
   [<RequireQualifiedAccess>]
   type SessionCommand =
     | CreateSession of
-        projects: string list *
+        targets: SessionProjectTarget list *
         workingDir: string *
         autoOpenNamespaces: bool *
         workflow: WorkflowTypes.SessionWorkflow *
@@ -199,15 +200,13 @@ module SessionManager =
     /// set. Uniqueness is enforced HERE at the single owner (the mailbox) —
     /// the CQRS advisory guard in Mcp.fs is check-then-act and cannot prevent
     /// two concurrent create_session calls from both passing it.
-    let tryFindDuplicate (projects: string list) (workingDir: string) state =
+    let tryFindDuplicate (targets: SessionProjectTarget list) (workingDir: string) state =
       state.Sessions
       |> Map.toList
       |> List.tryFind (fun (_, s) ->
         let sameDir =
           String.Equals(s.Info.WorkingDirectory, workingDir, StringComparison.OrdinalIgnoreCase)
-        let sameProjects =
-          List.sort s.Info.Projects = List.sort projects
-        sameDir && sameProjects)
+        sameDir && SessionProjectTarget.same s.Targets targets)
       |> Option.map fst
 
   /// Immutable snapshot of ManagerState for lock-free CQRS reads.
@@ -256,7 +255,7 @@ module SessionManager =
     let empty = { Sessions = Map.empty; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty; AdoptedCore = Map.empty }
 
   type SessionManagerRuntime = {
-    StartWorkerProcess: SessionId -> string list -> string -> bool -> WorkflowTypes.SessionWorkflow -> (int -> int -> unit) -> Result<SpawnedWorker, SageFsError>
+    StartWorkerProcess: SessionId -> SessionProjectTarget list -> string -> bool -> WorkflowTypes.SessionWorkflow -> (int -> int -> unit) -> Result<SpawnedWorker, SageFsError>
     AwaitWorkerPort: SessionId -> Process -> MailboxProcessor<SessionCommand> -> CancellationToken -> unit
     StopWorker: ManagedSession -> Async<unit>
     RunBuildAsync: string list -> string -> Async<Result<string, SageFsError>>
@@ -309,13 +308,14 @@ module SessionManager =
   /// (does NOT wait for the worker to report its port).
   let startWorkerProcess
     (sessionId: SessionId)
-    (projects: string list)
+    (targets: SessionProjectTarget list)
     (workingDir: string)
     (autoOpenNamespaces: bool)
     (workflow: WorkflowTypes.SessionWorkflow)
     (onExited: int -> int -> unit)
     : Result<SpawnedWorker, SageFsError> =
-    let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) projects false false autoOpenNamespaces workflow
+    let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) targets false autoOpenNamespaces workflow
+    let projects = SessionProjectTarget.paths targets
     // A project built for a newer runtime than the worker host's needs that runtime (roll-forward);
     // one that needs a runtime nobody installed is refused with what to install, not left to fail
     // warmup with a bare "assembly not referenced".
@@ -740,13 +740,13 @@ module SessionManager =
       : ManagerState * Result<unit, SageFsError> =
       let onExited workerPid exitCode =
         inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-      match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
+      match runtime.StartWorkerProcess id session.Targets session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
       | Ok spawned ->
         let proc = spawned.Process
         let info : SessionInfo = {
           Id = id
           Name = session.Info.Name
-          Projects = session.Projects
+          Projects = SessionProjectTarget.paths session.Targets
           WorkingDirectory = session.WorkingDir
           SolutionRoot = session.Info.SolutionRoot
           CreatedAt = session.Info.CreatedAt
@@ -762,7 +762,7 @@ module SessionManager =
           Process = proc
           Proxy = pendingProxy
           WorkerBaseUrl = ""
-          Projects = session.Projects
+          Targets = session.Targets
           WorkingDir = session.WorkingDir
           AutoOpenNamespaces = session.AutoOpenNamespaces
           Workflow = session.Workflow
@@ -811,7 +811,7 @@ module SessionManager =
         | true -> ()
         let onExited workerPid exitCode =
           inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-        match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces workflow onExited with
+        match runtime.StartWorkerProcess id session.Targets session.WorkingDir session.AutoOpenNamespaces workflow onExited with
         | Error err ->
           reply.Reply(Error err)
           Instrumentation.failSpan span (SageFsError.describe err)
@@ -894,17 +894,21 @@ module SessionManager =
       }
       and step (state: ManagerState) (cmd: SessionCommand) : Async<ManagerState> = async {
         match cmd with
-        | SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, workflow, reply) ->
-          // Enforce one session per (projects, workingDir) AT THE OWNER — the
+        | SessionCommand.CreateSession(targets, workingDir, autoOpenNamespaces, workflow, reply) ->
+          // Enforce one session per (target, workingDir) AT THE OWNER — the
           // mailbox is the only place that can make this atomic. Two
           // concurrent create_session calls both passing the CQRS advisory
           // guard would otherwise spawn duplicate workers, breaking the
           // "Multiple sessions match workingDirectory" routing invariant.
-          match ManagerState.tryFindDuplicate projects workingDir state with
-          | Some existingId ->
+          match SessionProjectTarget.validate targets, ManagerState.tryFindDuplicate targets workingDir state with
+          | Error reason, _ ->
+            reply.Reply(Error (SageFsError.SessionCreationFailed reason))
+            return state
+          | Ok (), Some existingId ->
             reply.Reply(Error (SageFsError.DuplicateSession (SessionId.value existingId, workingDir)))
             return state
-          | None ->
+          | Ok (), None ->
+            let projects = SessionProjectTarget.paths targets
             // Refuse a project SageFs's FSI host cannot load — e.g. .NET
             // Framework — HERE, at the single owner of session creation, so
             // every on-ramp (MCP, HTTP, dashboard) inherits the refusal for
@@ -913,7 +917,7 @@ module SessionManager =
             // Conservative by construction: ProjectCompatibility.findUnhostable
             // only returns Some for a CONFIDENTLY unhostable project; anything
             // unreadable or unrecognised is None and falls through unchanged.
-            match ProjectCompatibility.findUnhostable projects with
+            match ProjectCompatibility.findUnhostable (SessionProjectTarget.projects targets) with
             | Some(project, targetFrameworks, reason) ->
               reply.Reply(Error(SageFsError.ProjectFrameworkNotHostable(project, targetFrameworks, reason)))
               return state
@@ -923,7 +927,7 @@ module SessionManager =
                            [("session.id", box sessionId); ("session.projects", box (String.concat "," projects)); ("session.working_dir", box workingDir)]
               let onExited workerPid exitCode =
                 inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
-              match runtime.StartWorkerProcess sessionId projects workingDir autoOpenNamespaces workflow onExited with
+              match runtime.StartWorkerProcess sessionId targets workingDir autoOpenNamespaces workflow onExited with
               | Ok spawned ->
                 let proc = spawned.Process
                 // Register session immediately with pending proxy — don't block
@@ -946,7 +950,7 @@ module SessionManager =
                   Process = proc
                   Proxy = pendingProxy
                   WorkerBaseUrl = ""
-                  Projects = projects
+                  Targets = targets
                   WorkingDir = workingDir
                   AutoOpenNamespaces = autoOpenNamespaces
                   Workflow = workflow
@@ -973,7 +977,9 @@ module SessionManager =
           match ManagerState.tryGetSession id state with
           | Some session ->
             try
-              do! runtime.StopWorker session
+              let workersToStop =
+                session :: (ManagerState.tryGetPendingSwap id state |> Option.toList)
+              do! workersToStop |> List.map runtime.StopWorker |> Async.Parallel |> Async.Ignore
               let newState = ManagerState.removeSession id state
               reply.Reply(Ok ())
               Instrumentation.sessionsStopped.Add(1L)
@@ -1018,7 +1024,7 @@ module SessionManager =
               // point).
               let buildInBackground stateInFlight =
                 Async.Start(async {
-                  let! buildResult = runtime.RunBuildAsync session.Projects session.WorkingDir
+                  let! buildResult = runtime.RunBuildAsync (SessionProjectTarget.paths session.Targets) session.WorkingDir
                   inbox.Post(SessionCommand.RebuildCompleted(id, buildResult, reply))
                 }, ct)
                 stateInFlight
@@ -1494,7 +1500,7 @@ module SessionManager =
           | Some session when isRestarting session.Info.Status ->
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-            match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
+            match runtime.StartWorkerProcess id session.Targets session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
             | Ok spawned ->
               let proc = spawned.Process
               let restarted =
@@ -1567,7 +1573,8 @@ module SessionManager =
           // Graceful shutdown of all sessions — run in parallel to avoid N×5s
           // sequential timeout during shutdown.
           let sessionTasks =
-            [ for KeyValue(_, session) in state.Sessions -> runtime.StopWorker session ]
+            [ for KeyValue(_, session) in state.Sessions -> runtime.StopWorker session
+              for KeyValue(_, session) in state.PendingSwap -> runtime.StopWorker session ]
           do! sessionTasks |> Async.Parallel |> Async.Ignore
           reply.Reply(())
           return ManagerState.empty
@@ -1626,26 +1633,15 @@ module SessionManager =
             match ManagerState.tryGetSession id state, ManagerState.tryGetPendingSwap id state with
             | Some session, None when SessionLifecycleStatus.workerPid session.Info.Status = Some workerPid -> Some session
             | _ -> None
-          // Earned Ready (roast: "Ready" used to mean only "the worker
-          // process answered", not "what was asked for actually loaded").
-          // The worker's own SessionStatus.Ready is a self-report — trust it
-          // only when it isn't lying by omission. `session.Projects` is
-          // exactly what create_session asked for; an empty list means
-          // "auto-discover", so a directory listing (mirroring
-          // ProjectLoading.loadSolution's own auto-discovery glob, never
-          // MSBuild) stands in for "was there something to find". A session
-          // that asked for nothing, or found nothing to auto-discover, stays
-          // Ready — a bare scratch REPL is not broken. A session that named
-          // something, or had something to auto-discover, and resolved zero
-          // of it is not Ready: it is Faulted, with the exact request named,
-          // so a reader can act on it instead of discovering it eval-by-eval
-          // ("Expecto is not defined").
+          // Earned Ready: a named target must actually resolve; Bare is
+          // intentionally empty. `SessionProjectTarget` makes the old
+          // empty-list ambiguity unrepresentable at the create boundary.
           match current with
           | None ->
             Log.warn "[SessionManager] Ignoring Ready from worker pid %d for session %s: it is no longer the session's worker" workerPid (SessionId.value id)
             return state
           | Some session ->
-          match ProjectResolution.classifyOnDisk session.WorkingDir session.Projects roles.Length with
+          match ProjectResolution.classify session.Targets roles.Length with
           | ProjectResolution.RequestedButUnresolved requested ->
             let reason = ProjectResolution.unresolvedReason requested
             Log.warn "[SessionManager] Session %s reported Ready but resolved none of its requested projects: %s" (SessionId.value id) reason

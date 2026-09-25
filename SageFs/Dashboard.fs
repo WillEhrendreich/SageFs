@@ -2424,7 +2424,7 @@ let createDirSuggestHandler : HttpHandler =
 let createCreateSessionHandler
   (q: DashboardQueries)
   (infra: DashboardInfra)
-  (createSession: string list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>)
+  (createSession: SessionProjectTarget list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>)
   (switchSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
@@ -2453,10 +2453,10 @@ let createCreateSessionHandler
           // instead of quietly creating a session missing a project.
           do! ssePatchNode ctx (sessionCreateResultError (SageFs.SageFsError.describe err))
         | Ok projects ->
-          match projects.IsEmpty with
-          | true ->
-            do! ssePatchNode ctx (sessionCreateResultError "No projects found. Enter paths manually or check the directory.")
-          | false ->
+          match SessionProjectTarget.tryCreateMany projects with
+          | Error reason ->
+            do! ssePatchNode ctx (sessionCreateResultError (sprintf "Invalid session target: %s" reason))
+          | Ok targets ->
             // Immediate feedback: show the in-flight state before the
             // 15-30s warmup resolves — mirrors the teardown path's
             // immediate "⏳ Stopping…" card swap (roast UX-8: session
@@ -2464,7 +2464,7 @@ let createCreateSessionHandler
             let! preCards = buildSessionCards q
             do! ssePatchNode ctx (renderSessionsForSession "" preCards true)
             do! ssePatchNode ctx (sessionCreateResultInfo (sprintf "Creating session in %s… (warmup can take up to 30s)" dir))
-            let! result = createSession projects dir
+            let! result = createSession targets dir
             match result with
             | Ok newSessionId ->
               // Switch to the new session so the SSE stream picks it up.
@@ -2543,16 +2543,14 @@ let createToggleWarmupAutoOpenHandler
           | Error _ -> ()
           // 3) Re-create: bare (no projects) when disabled — nothing loads and
           //    no warmup happens. With projects (auto-detected) when enabled.
-          let projects =
+          let targets =
             match enable with
-            | false -> []
+            | false -> [ SessionProjectTarget.Bare ]
             | true ->
-              // Empty manual input => auto-detect, which is always Ok; the
-              // Error arm keeps the match total (it cannot fire here).
               match resolveSessionProjects dir "" with
-              | Ok ps -> ps |> List.truncate 1
-              | Error _ -> []
-          let! result = a.CreateSession projects dir
+              | Ok ps -> SessionProjectTarget.tryCreateMany (ps |> List.truncate 1) |> Result.defaultValue [ SessionProjectTarget.Bare ]
+              | Error _ -> [ SessionProjectTarget.Bare ]
+          let! result = a.CreateSession targets dir
           match result with
           | Ok newSessionId ->
             let! _ = a.SwitchSession newSessionId in ()
@@ -3039,7 +3037,7 @@ let createEndpoints
       let tempDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-%s" (Guid.NewGuid().ToString("N").[..7]))
       Directory.CreateDirectory(tempDir) |> ignore
       Response.sseStartResponse ctx |> ignore
-      let! result = a.CreateSession [] tempDir
+      let! result = a.CreateSession [ SessionProjectTarget.Bare ] tempDir
       match result with
       | Ok sessionId ->
         a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
@@ -3065,22 +3063,27 @@ let createEndpoints
         match previous |> List.tryFind (fun s -> s.Id = sessionId) with
         | Some prev ->
           Response.sseStartResponse ctx |> ignore
-          let! result = a.CreateSession prev.Projects prev.WorkingDir
-          match result with
-          | Ok newSessionId ->
-            a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-            // Show and select the resumed session — patch the signal AND retarget
-            // this page's SSE stream to it (signal-driven; no URL query param).
-            retargetStream infra channelClientId (Some newSessionId)
-            do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
-            do! ssePatchNode ctx (
-              Elem.div [ Attr.id DomIds.EvalResult ] [
-                Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-                  textEnc (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value newSessionId))
-                ]
-              ])
-          | Error err ->
-            do! ssePatchNode ctx (evalResultError err)
+          match SessionProjectTarget.tryCreateMany prev.Projects with
+          | Error reason ->
+            Log.warn "[Dashboard] Could not reopen previous session for %s: %s" prev.WorkingDir reason
+            do! ssePatchNode ctx (evalResultError (sprintf "Could not reopen previous session: %s" reason))
+          | Ok targets ->
+            let! result = a.CreateSession targets prev.WorkingDir
+            match result with
+            | Ok newSessionId ->
+              a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+              // Show and select the resumed session — patch the signal AND retarget
+              // this page's SSE stream to it (signal-driven; no URL query param).
+              retargetStream infra channelClientId (Some newSessionId)
+              do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
+              do! ssePatchNode ctx (
+                Elem.div [ Attr.id DomIds.EvalResult ] [
+                  Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+                    textEnc (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value newSessionId))
+                  ]
+                ])
+            | Error err ->
+              do! ssePatchNode ctx (evalResultError err)
         | None ->
           Response.sseStartResponse ctx |> ignore
           do! ssePatchNode ctx (evalResultError (sprintf "Previous session '%s' not found" sessionId))
@@ -3135,8 +3138,9 @@ let createEndpoints
             match DashboardTypes.resolveSessionProjects dir project with
             | Error err -> do! say (SageFsError.describe err)
             | Ok resolved ->
+              let targets = SessionProjectTarget.tryCreateMany resolved |> Result.defaultValue [ SessionProjectTarget.Bare ]
               do! say (sprintf "Loading %s… (the previous session's REPL bindings are discarded)" project)
-              let! created = a.CreateSession resolved dir
+              let! created = a.CreateSession targets dir
               match created with
               | Error err -> do! say (sprintf "Could not load %s: %s" project err)
               | Ok newId ->

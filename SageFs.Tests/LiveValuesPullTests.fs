@@ -12,7 +12,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 let private quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 
 let private createActorResult () =
-  let args = SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty true
+  let args = SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty
   SageFs.ActorCreation.createActor args |> Async.AwaitTask |> Async.RunSynchronously
 
 let private caseNames (t: System.Type) =

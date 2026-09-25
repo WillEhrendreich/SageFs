@@ -87,7 +87,7 @@ let private resolvedTestProject : ClassifiedProject =
 
 let private createSession (harness: Harness) : SessionInfo =
   match harness.Mailbox.PostAndReply(fun reply ->
-    SessionCommand.CreateSession(["Test.fsproj"], @"C:\Test", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
+    SessionCommand.CreateSession([ SageFs.SessionProjectTarget.Project "Test.fsproj" ], @"C:\Test", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
   | Ok info -> info
   | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
 

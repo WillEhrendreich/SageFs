@@ -18,7 +18,7 @@ module TestDeps =
     mutable CompletionCalls: (string * string * int) list
     mutable TestDiscoveryCalls: string list
     mutable SessionListCalls: int
-    mutable SessionCreateCalls: (string list * string) list
+    mutable SessionCreateCalls: (SessionProjectTarget list * string) list
     mutable SessionStopCalls: SessionId list
     mutable ConfigureAutoOpenCalls: string list
   }
@@ -78,10 +78,10 @@ module TestDeps =
       GetProxy = fun id ->
         if id = testSessionId "a1b2c3d4" then Some proxy else None
       GetStreamingTestProxy = fun _ -> None
-      CreateSession = fun projects dir _workflow ->
+      CreateSession = fun targets dir _workflow ->
         async {
           log.SessionCreateCalls <-
-            log.SessionCreateCalls @ [projects, dir]
+            log.SessionCreateCalls @ [targets, dir]
           return Result.Ok sessionInfo
         }
       ConfigureWarmupAutoOpen = fun dir ->
@@ -119,12 +119,12 @@ module TestDeps =
         Result.Error (SageFsError.NoActiveSessions)
       GetProxy = fun _ -> None
       GetStreamingTestProxy = fun _ -> None
-      CreateSession = fun projects dir _workflow ->
+      CreateSession = fun targets dir _workflow ->
         async {
           let info : SessionInfo = {
             Id = testSessionId "b2c3d4e5"
             Name = None
-            Projects = projects
+            Projects = SessionProjectTarget.projects targets
             WorkingDirectory = dir
             SolutionRoot = None
             CreatedAt = DateTime.UtcNow

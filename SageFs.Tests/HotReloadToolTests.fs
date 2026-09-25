@@ -68,6 +68,8 @@ let private mkToolsWf
     ActivityTracker = AgentActivityTracker.create ()
     LiveSnapshotSink = None
     CohortOwner = None
+    GetDaemonHealth = fun () -> None
+    GetProcessTelemetry = fun () -> None
   }
   SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
 

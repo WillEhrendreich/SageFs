@@ -79,6 +79,7 @@ type SageFsError =
   | NoActiveSessions
   | AmbiguousSessions of sessionDescriptions: string list
   | SessionCreationFailed of reason: string
+  | NeedsRebuild of missing: string list
   | DuplicateSession of existingSessionId: string * workingDirectory: string
   /// A session-create request's `workingDirectory` or a `projects` entry
   /// failed path-safety validation — missing/non-existent directory, a UNC
@@ -193,6 +194,8 @@ module SageFsError =
       sprintf "Multiple sessions active. Specify sessionId:\n%s" (descriptions |> String.concat "\n")
     | SageFsError.SessionCreationFailed reason ->
       sprintf "Failed to create session: %s. Check the project path exists and contains a valid .fsproj." reason
+    | SageFsError.NeedsRebuild missing ->
+      sprintf "Session not created: generated build state is missing (%s)." (String.concat ", " missing)
     | SageFsError.DuplicateSession(existingId, dir) ->
       sprintf "A session for this project already exists (session %s, working directory %s). Use switch_session to select it instead of creating a duplicate." existingId dir
     | SageFsError.UnsafeSessionPath(path, reason) ->
@@ -277,6 +280,7 @@ module SageFsError =
     | SageFsError.WorkerHttpError _ -> LogLevel.Error
     | SageFsError.PipeClosed -> LogLevel.Error
     | SageFsError.SessionCreationFailed _ -> LogLevel.Error
+    | SageFsError.NeedsRebuild _ -> LogLevel.Information
     | SageFsError.DuplicateSession _ -> LogLevel.Information
     | SageFsError.UnsafeSessionPath _ -> LogLevel.Warning
     | SageFsError.ProjectFrameworkNotHostable _ -> LogLevel.Information
@@ -331,6 +335,7 @@ module SageFsError =
     | SageFsError.PortInUse _ -> 409
     | SageFsError.RestartLimitExceeded _ -> 409
     | SageFsError.DuplicateSession _ -> 409
+    | SageFsError.NeedsRebuild _ -> 409
     // 503 Service Unavailable — overloaded, retry later (not the caller's fault)
     | SageFsError.SupervisorBusy _ -> 503
     | SageFsError.MemoryPressureRefused _ -> 503
@@ -374,6 +379,7 @@ module SageFsError =
     | SageFsError.ToolNotAvailable _ -> true
     | SageFsError.UnsafeSessionPath _ -> true
     | SageFsError.ProjectFrameworkNotHostable _ -> true
+    | SageFsError.NeedsRebuild _ -> true
     | SageFsError.CohortActionFailed _ -> true
     | SageFsError.AppRunFailed _
     | SageFsError.DuplicateSession _
@@ -409,6 +415,7 @@ module SageFsError =
   /// Server errors: 500 — internal failures not caused by the client.
   let isServerError = function
     | SageFsError.SessionCreationFailed _ -> true
+    | SageFsError.NeedsRebuild _ -> false
     | SageFsError.SessionStopFailed _ -> true
     | SageFsError.SessionSwitchFailed _ -> true
     | SageFsError.EvalFailed _ -> true
@@ -431,6 +438,7 @@ module SageFsError =
     | SageFsError.ToolNotAvailable _
     | SageFsError.UnsafeSessionPath _
     | SageFsError.ProjectFrameworkNotHostable _
+    | SageFsError.NeedsRebuild _
     | SageFsError.SessionNotFound _
     | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
@@ -462,6 +470,7 @@ module SageFsError =
     | SageFsError.ToolNotAvailable _
     | SageFsError.UnsafeSessionPath _
     | SageFsError.ProjectFrameworkNotHostable _
+    | SageFsError.NeedsRebuild _
     | SageFsError.SessionNotFound _
     | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
@@ -497,6 +506,7 @@ module SageFsError =
     | SageFsError.PortInUse _ -> true
     | SageFsError.RestartLimitExceeded _ -> true
     | SageFsError.DuplicateSession _ -> true
+    | SageFsError.NeedsRebuild _ -> true
     | SageFsError.SupervisorBusy _ -> false
     | SageFsError.MemoryPressureRefused _ -> false
     | SageFsError.CohortActionFailed _
@@ -552,6 +562,7 @@ module SageFsError =
     | SageFsError.DuplicateSession _
     | SageFsError.UnsafeSessionPath _
     | SageFsError.ProjectFrameworkNotHostable _
+    | SageFsError.NeedsRebuild _
     | SageFsError.SessionStopFailed _
     | SageFsError.SessionSwitchFailed _
     | SageFsError.SessionNotRoutable _
@@ -590,6 +601,7 @@ module SageFsError =
     | SageFsError.NoActiveSessions -> "Run create_session to start one"
     | SageFsError.AmbiguousSessions _ -> "Specify a sessionId explicitly"
     | SageFsError.SessionCreationFailed _ -> "Check the project path and run 'dotnet build'"
+    | SageFsError.NeedsRebuild _ -> "Build the project, then retry creating the session"
     | SageFsError.DuplicateSession _ -> "Run switch_session to select the existing session"
     | SageFsError.UnsafeSessionPath _ -> "Use an existing directory and keep project paths inside it — no UNC paths or '..' escapes"
     | SageFsError.ProjectFrameworkNotHostable _ -> "Point SageFs at a .NET (Core) project (net5.0 or newer) for now — .NET Framework support is not shipped yet, and the message names the issue tracking it"

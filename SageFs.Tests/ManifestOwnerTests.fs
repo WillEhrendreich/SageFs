@@ -58,6 +58,54 @@ let private runningSync (live: string list) (at: DateTimeOffset) =
 [<Tests>]
 let concurrentWriterTests = testList "ManifestOwner concurrent writers" [
 
+  testTask "a create then stop is durable without a periodic sync" {
+    let dir = tempDir ()
+    try
+      use owner = ManifestOwner.start silentLogger dir
+      let created =
+        { record "quick" with
+            CreatedAt = DateTimeOffset.FromUnixTimeMilliseconds(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) }
+      let stoppedAt = created.CreatedAt.AddSeconds 1.0
+      let! createdResult = owner.Commit (ManifestMutation.RecordCreated created)
+      createdResult |> Result.isOk |> Expect.isTrue "create record commits"
+      let! stoppedResult = owner.Commit (ManifestMutation.MarkStopped ("quick", stoppedAt))
+      stoppedResult |> Result.isOk |> Expect.isTrue "stop record commits"
+      let loaded = loadOrFail dir
+      loaded.Sessions |> Map.containsKey "quick" |> Expect.isTrue "short-lived session remains visible"
+      loaded.Sessions |> Map.tryFind "quick" |> Option.bind (fun r -> r.StoppedAt)
+      |> Expect.equal "short-lived session is stopped" (Some stoppedAt)
+      DaemonManifestState.aliveSessions loaded |> Expect.isEmpty "short-lived session is not resumed"
+    finally
+      cleanup dir
+  }
+
+  testTask "MarkStopped persists before restart and is idempotent" {
+    let dir = tempDir ()
+    try
+      let currentRecord id = { record id with CreatedAt = DateTimeOffset.UtcNow }
+      let seeded =
+        { Sessions = Map.ofList [ "stop-me", currentRecord "stop-me"; "keep-me", currentRecord "keep-me" ]
+          ActiveSessionId = Some "stop-me" }
+      DaemonPersistence.saveManifest dir seeded |> ignore
+      use owner = ManifestOwner.start silentLogger dir
+      let firstAt = recentAt ()
+      let secondAt = firstAt.AddMinutes 1.0
+      let! first = owner.Commit (ManifestMutation.MarkStopped ("stop-me", firstAt))
+      first |> Result.isOk |> Expect.isTrue "first stop commits"
+      let! second = owner.Commit (ManifestMutation.MarkStopped ("stop-me", secondAt))
+      second |> Result.isOk |> Expect.isTrue "second stop commits idempotently"
+      let loaded = loadOrFail dir
+      loaded.Sessions |> Map.containsKey "stop-me"
+      |> Expect.isTrue "the stopped record remains persisted for the retention window"
+      loaded.Sessions |> Map.tryFind "stop-me" |> Option.bind (fun record -> record.StoppedAt)
+      |> Expect.equal "original stop timestamp is preserved" (Some firstAt)
+      DaemonManifestState.aliveSessions loaded
+      |> List.map (fun record -> record.SessionId)
+      |> Expect.equal "stopped session is not resumed" [ "keep-me" ]
+    finally
+      cleanup dir
+  }
+
   testTask "concurrent purges and live syncs never lose an update" {
     let dir = tempDir ()
     try

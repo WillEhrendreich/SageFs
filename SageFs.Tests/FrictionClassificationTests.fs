@@ -65,7 +65,9 @@ let private mkCtx (sessions: SessionInfo list) (elmModel: (unit -> SageFsModel) 
     GetFeatureState = None; RecordEval = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
     LiveSnapshotSink = None
-    CohortOwner = None }
+    CohortOwner = None
+    GetDaemonHealth = fun () -> None
+    GetProcessTelemetry = fun () -> None }
 
 let private noSessions = mkCtx [] None
 

@@ -54,7 +54,6 @@ type ActorArgs = {
   OutStream: TextWriter
   UseAsp: bool
   LoadConfig: Args.ProjectLoadConfig
-  IsBare: bool
   AutoOpenNamespaces: bool
   OnEvent: Features.Events.SageFsEvent -> unit
   Workflow: WorkflowTypes.SessionWorkflow
@@ -102,12 +101,12 @@ let createActorImmediate a =
   let emitWarmupProgress step total message =
     a.OnEvent(Features.Events.SageFsEvent.SessionWarmUpProgress {| Step = step; Total = total; Message = message |})
   let originalSln =
-    match a.IsBare with
-    | true ->
-      a.Logger.LogInfo "Bare session — skipping project discovery"
+    match a.LoadConfig.Targets with
+    | [ SessionProjectTarget.Bare ] ->
+      a.Logger.LogInfo "Bare session — skipping project loading"
       ProjectLoading.emptySolution
-    | false ->
-      a.Logger.LogInfo "Discovering projects..."
+    | targets ->
+      a.Logger.LogInfo (sprintf "Loading explicit session target: %s" (SessionProjectTarget.describe targets))
       let sln = loadSolution a.Logger a.LoadConfig emitWarmupProgress
       a.Logger.LogInfo "Project loading complete."
       sln
@@ -186,12 +185,11 @@ let createActor a =
     return result
   }
 
-let mkCommonActorArgs logger useAsp (onEvent: Features.Events.SageFsEvent -> unit) (loadConfig: Args.ProjectLoadConfig) (isBare: bool) = {
+let mkCommonActorArgs logger useAsp (onEvent: Features.Events.SageFsEvent -> unit) (loadConfig: Args.ProjectLoadConfig) = {
   Middleware = commonMiddleware
   InitFunctions = commonInitFunctions
   UseAsp = useAsp
   LoadConfig = loadConfig
-  IsBare = isBare
   AutoOpenNamespaces = true
   OutStream = stdout
   Logger = logger

@@ -54,8 +54,12 @@ loop. `dotnet build` / `dotnet test` is only the final gate.
 Before any F# change, read and follow
 https://github.com/WillEhrendreich/SageFs/blob/master/skills/sagefs/SKILL.md
 
-- Build once, then `create_session` for your working directory (a git worktree
-  is its own boundary), then wait for `get_fsi_status` to say Ready.
+- Read `get_daemon_status`, use `get_available_projects`, then create the
+  agent's own worktree session with `create_project_session`,
+  `create_solution_session`, or `create_bare_session`. A worktree is its own
+  routing boundary. Wait for that session's `get_session_status` to say Ready.
+  If generated build state is missing, SageFs builds it before creating the
+  session.
 - Show the problem with `send_fsharp_code`, fix it there, write the fix to the
   file, run `hard_reset_fsi_session rebuild=true`, check it again, commit.
 - If the REPL fights you, report the exact error. Don't quietly switch to

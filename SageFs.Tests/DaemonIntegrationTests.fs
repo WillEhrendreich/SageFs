@@ -90,7 +90,7 @@ let managerStateTests =
         Process = new Process()
         Proxy = fun _ -> async { return WorkerResponse.WorkerError (SageFsError.Unexpected (exn "mock")) }
         WorkerBaseUrl = ""
-        Projects = ["Foo.fsproj"]
+        Targets = [ SageFs.SessionProjectTarget.Project "Foo.fsproj" ]
         WorkingDir = @"C:\test"
         AutoOpenNamespaces = true
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
@@ -132,7 +132,7 @@ let managerStateTests =
         Process = new Process()
         Proxy = fun _ -> async { return WorkerResponse.WorkerError (SageFsError.Unexpected (exn "mock")) }
         WorkerBaseUrl = ""
-        Projects = []
+        Targets = [ SageFs.SessionProjectTarget.Bare ]
         WorkingDir = @"C:\test"
         AutoOpenNamespaces = true
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
@@ -174,7 +174,7 @@ let managerStateTests =
           Process = new Process()
           Proxy = fun _ -> async { return WorkerResponse.WorkerError (SageFsError.Unexpected (exn "mock")) }
           WorkerBaseUrl = ""
-          Projects = []
+          Targets = [ SageFs.SessionProjectTarget.Bare ]
           WorkingDir = @"C:\test"
           AutoOpenNamespaces = true
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
@@ -456,7 +456,7 @@ let sessionManagerLifecycleTests =
       let! createResult =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
-            [], sampleProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+            [ SageFs.SessionProjectTarget.Bare ], sampleProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
         |> Async.StartAsTask
 
       match createResult with
@@ -553,7 +553,7 @@ let sessionManagerLifecycleTests =
       let create (dir: string) =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
-            [], dir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+            [ SageFs.SessionProjectTarget.Bare ], dir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
         |> Async.StartAsTask
 
       let result1 = create sampleProjectDir

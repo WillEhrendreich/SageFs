@@ -6,7 +6,7 @@ open SageFs.WorkerProtocol
 /// Functions a daemon provides for managing worker sessions.
 /// Pure data — no actor, no transport, just function signatures.
 type SessionManagementOps = {
-  CreateSession: string list -> string -> WorkflowTypes.SessionWorkflow -> Task<Result<string, SageFsError>>
+  CreateSession: SessionProjectTarget list -> string -> WorkflowTypes.SessionWorkflow -> Task<Result<string, SageFsError>>
   ListSessions: unit -> Task<string>
   StopSession: string -> Task<Result<string, SageFsError>>
   /// Purge — stop the session AND remove its entry from the .sagefm manifest (gone from the resume picker too).

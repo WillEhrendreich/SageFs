@@ -102,6 +102,23 @@ let tests =
         printfn "getRecentEvents tool test passed"
       }
 
+    testTask "getRecentEvents keeps eval history per session" {
+        let ctx = agentCtx ()
+        let sessionA = SessionId.newId ()
+        let sessionB = SessionId.newId ()
+        ctx.SessionMap.["test-agent"] <- SessionId.value sessionA
+        ctx.SessionMap.["claude"] <- SessionId.value sessionB
+        let! _ = sendFSharpCode ctx "test-agent" "let sessionAValue = 1" OutputFormat.Text None None None None None None
+        let! _ = sendFSharpCode ctx "claude" "let sessionBValue = 2" OutputFormat.Text None None None None None None
+        let! aEvents = getRecentEvents ctx "test-agent" 20 None
+        let! bEvents = getRecentEvents ctx "claude" 20 None
+        aEvents |> Expect.stringContains "A sees its own eval" "sessionAValue"
+        Expect.isFalse "A must not see B's eval" (aEvents.Contains("sessionBValue"))
+        bEvents |> Expect.stringContains "B sees its own eval" "sessionBValue"
+        Expect.isFalse "B must not see A's eval" (bEvents.Contains("sessionAValue"))
+      }
+
+
     testTask "getRecentEvents tool says so honestly when history is genuinely empty" {
         printfn "Testing getRecentEvents tool (real but empty feature state)..."
         let ctx = agentCtx ()

@@ -293,7 +293,8 @@ module WorkerHttpTransport =
 
   /// Start a Kestrel HTTP server dispatching to the given handler.
   /// Pass port=0 for OS-assigned dynamic port.
-  let startServer
+  let startServerWithShutdown
+    (onShutdown: unit -> unit)
     (handler: WorkerMessage -> Async<WorkerResponse>)
     (hotReloadStateRef: HotReloadState.T ref)
     (keptState: Features.KeptState.Access)
@@ -593,8 +594,10 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.AwaitAppChange(runId, rid))
       })) |> ignore
 
-      map Routes.shutdown (Func<HttpContext, Task>(fun ctx ->
-        respond' ctx WorkerMessage.Shutdown)) |> ignore
+      map Routes.shutdown (Func<HttpContext, Task>(fun ctx -> task {
+        do! respond' ctx WorkerMessage.Shutdown
+        onShutdown ()
+      })) |> ignore
 
       // Session context endpoint
       map Routes.warmupContext (Func<HttpContext, Task>(fun ctx -> task {
@@ -808,6 +811,18 @@ module WorkerHttpTransport =
       | Some actualUrl -> return new HttpWorkerServer(actualUrl, app)
       | None -> return failwith "Worker server started but reported no addresses"
     }
+
+  let startServer
+    (handler: WorkerMessage -> Async<WorkerResponse>)
+    (hotReloadStateRef: HotReloadState.T ref)
+    (keptState: Features.KeptState.Access)
+    (projectFiles: string list)
+    (getWarmupContext: unit -> WarmupContext)
+    (getRunTest: unit -> Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>)
+    (takeCoverage: unit -> HostAgent.AgentReply<HostAgent.CoverageReading>)
+    (port: int)
+    : Task<HttpWorkerServer> =
+    startServerWithShutdown (fun () -> ()) handler hotReloadStateRef keptState projectFiles getWarmupContext getRunTest takeCoverage port
 
   /// Create a SessionProxy backed by HTTP to the given base URL.
   /// Delegates to HttpWorkerClient in SageFs.Core.

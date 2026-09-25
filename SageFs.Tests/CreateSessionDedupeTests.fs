@@ -37,6 +37,9 @@ let private propConfig = { FsCheckConfig.defaultConfig with maxTest = 300 }
 /// (SessionManager.fs:202).
 type private CreateRequest = { Dir: string; Projects: string list }
 
+let private targetsOfProjects (projects: string list) =
+  projects |> List.map (fun path -> SessionProjectTarget.Project path)
+
 /// Mirrors `tryFindDuplicate`'s own equivalence (SessionManager.fs:206-209):
 /// case-insensitive directory, order-independent project set.
 let private key (r: CreateRequest) = r.Dir.ToLowerInvariant(), List.sort r.Projects
@@ -62,7 +65,7 @@ let private mkManagedSession (id: SessionId) (r: CreateRequest) (status: Session
     Process = Process.GetCurrentProcess()
     Proxy = proxy
     WorkerBaseUrl = ""
-    Projects = r.Projects
+    Targets = targetsOfProjects r.Projects
     WorkingDir = r.Dir
     AutoOpenNamespaces = true
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
@@ -130,7 +133,7 @@ let private buildState (entries: (CreateRequest * SessionStatus) list) =
 /// A rejected request leaves the state unchanged — mirroring
 /// `reply.Reply(Error (SageFsError.DuplicateSession ...)); return state`.
 let private applyCreateSerialized (st: ManagerState) (i: int, r: CreateRequest) : ManagerState =
-  match ManagerState.tryFindDuplicate r.Projects r.Dir st with
+  match ManagerState.tryFindDuplicate (targetsOfProjects r.Projects) r.Dir st with
   | Some _existingId -> st
   | None ->
     let id = testSessionId (sprintf "%08x" (1000 + i))
@@ -147,7 +150,7 @@ let tests =
       fun (seed: int) ->
         let entries, query = fromSeed seed
         let state = buildState entries
-        let found = ManagerState.tryFindDuplicate query.Projects query.Dir state
+        let found = ManagerState.tryFindDuplicate (targetsOfProjects query.Projects) query.Dir state
         let expectedCollision = entries |> List.exists (fun (r, _) -> key r = key query)
         match found with
         | Some _ -> expectedCollision
@@ -158,7 +161,7 @@ let tests =
       fun (seed: int) ->
         let entries, query = fromSeed seed
         let state = buildState entries
-        match ManagerState.tryFindDuplicate query.Projects query.Dir state with
+        match ManagerState.tryFindDuplicate (targetsOfProjects query.Projects) query.Dir state with
         | None -> true
         | Some foundId ->
           match ManagerState.tryGetSession foundId state with
@@ -205,7 +208,7 @@ let tests =
         ManagerState.addSession existingId (mkManagedSession existingId existing SessionStatus.Ready) ManagerState.empty
       // Case-different dir, reordered projects — still the same dedupe key.
       let dupe = { Dir = "/REPO/A"; Projects = [ "A.fsproj" ] }
-      match ManagerState.tryFindDuplicate dupe.Projects dupe.Dir state with
+      match ManagerState.tryFindDuplicate (targetsOfProjects dupe.Projects) dupe.Dir state with
       | None -> failtest "expected tryFindDuplicate to find the existing session"
       | Some foundId ->
         match SageFsError.DuplicateSession(SessionId.value foundId, dupe.Dir) with
@@ -226,6 +229,6 @@ let tests =
       let r = { Dir = "/repo/stopped"; Projects = [ "A.fsproj" ] }
       let id = testSessionId "deadbeef"
       let state = ManagerState.addSession id (mkManagedSession id r SessionStatus.Stopped) ManagerState.empty
-      ManagerState.tryFindDuplicate r.Projects r.Dir state
+      ManagerState.tryFindDuplicate (targetsOfProjects r.Projects) r.Dir state
       |> Expect.equal "tryFindDuplicate matches by (dir, projects) alone, regardless of Status" (Some id)
   ]

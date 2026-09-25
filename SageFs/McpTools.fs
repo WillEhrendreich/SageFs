@@ -37,6 +37,7 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   | SageFs.SageFsError.NoActiveSessions -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionMissing
   | SageFs.SageFsError.AmbiguousSessions _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionAmbiguous
   | SageFs.SageFsError.SessionCreationFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.NeedsRebuild _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.DuplicateSession _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   | SageFs.SageFsError.UnsafeSessionPath _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   | SageFs.SageFsError.ProjectFrameworkNotHostable _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
@@ -633,47 +634,49 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
         getRecentEvents ctx "mcp" eventCount wd |> withEcho ctx "get_recent_fsi_events"
     
     [<McpServerTool>]
-    [<Description("""Get the current FSI session status: live worker readiness, loaded projects, session statistics, and active affordances. Use this to verify whether you can route new work to a session right now.
+    [<Description("Get daemon-wide status: versions, health, memory pressure, machine memory, daemon/worker RSS and CPU, session counts, health anomalies, and safe lease summaries. Use this before trusting a session or starting expensive work.")>]
+    member _.get_daemon_status() : Task<string> =
+        getDaemonStatus ctx |> withEcho ctx "get_daemon_status"
 
-WHAT THIS TOOL REPRESENTS:
-- This reports the FSI worker session state, NOT the live-testing subsystem state.
-- Session registry states like Starting / Restarting collapse to 'WarmingUp' here.
-- Worker status 'Building (...)' collapses to 'Evaluating' here because the worker is alive but busy.
-
-WHEN TO USE:
-- First thing to call when setting up a new session — confirms what projects are loaded and what capabilities are active.
-- After hard_reset_fsi_session with rebuild=true, re-check this until it reports State='Ready'. During the restart window it may instead return an error saying the session is still warming up — that is normal.
-- When you get unexpected 'type not defined' errors — check that the expected project is loaded and the session is warmed up.
-- To discover the active session ID needed for routing commands when multiple sessions exist.
-
-KEY SIGNALS IN OUTPUT:
-- State: WarmingUp | Ready | Evaluating | Faulted.
-  - WarmingUp = session exists but the worker proxy is not routable yet.
-  - Ready = safe to submit code.
-  - Evaluating = worker is alive but busy (this also covers worker-side 'Building (...)' states).
-  - Faulted = investigate warmup/runtime errors before proceeding.
-- Projects: what the session was REQUESTED with — can be empty even when something loaded, because `projects=[]` still auto-discovers.
-- Loaded: what the worker actually resolved and loaded (from its own project classification) — this is the field to trust for "did my project load," not Projects. Can read as not-yet-resolved if the session only just reached Ready.
-- Available: which MCP tools/affordances are currently active for this session.
-- Session: the stable session ID shown at the start of the response.
-
-IMPORTANT:
-- This is the MCP-facing worker/session readiness tool.
-- Use this to decide whether explicit MCP actions like send_fsharp_code or targeted_verify are safe to route right now.""")>]
-    member _.get_fsi_status(
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+    [<McpServerTool>]
+    [<Description("Get one session's status: explicit target, loaded projects, lifecycle, worker, workflow, evaluation state, health, and session-scoped facts. Use this to decide whether session-scoped work is safe; machine-wide facts are available from get_daemon_status.")>]
+    member _.get_session_status(
+        [<Description("Working directory of the MCP client. Routes to the matching session when exactly one session uses it; if multiple sessions match, switch_session first.")>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        logger.LogDebug("MCP-TOOL: get_fsi_status called: workingDir={Dir}", working_directory)
-        // get_fsi_status deliberately reports a missing/warming/faulted
-        // session as informational JSON, not an error (see its own "This
-        // prevents SessionMissing friction on the most-called tool" comment)
-        // — so it keeps plain withEcho rather than classifying that as a
-        // blocker, which would undo that deliberate choice.
-        getStatus ctx "mcp" None wd |> withEcho ctx "get_fsi_status"
+        getSessionStatus ctx "mcp" None wd |> withEcho ctx "get_session_status"
+    [<McpServerTool>]
+    [<Description("Acquire a lease for a caller-owned full build. The lease kind is fixed by this tool; use it only when SageFs will not run the build itself.")>]
+    member _.acquire_full_build_lease() : Task<string> =
+        Task.FromResult(acquireWorkLease "mcp" SageFs.ExpensiveWorkLease.Kind.FullBuild) |> withEcho ctx "acquire_full_build_lease"
 
+    [<McpServerTool>]
+    [<Description("Acquire a lease for a caller-owned external test-suite run. SageFs runs built-in tests through run_project_tests instead.")>]
+    member _.acquire_test_suite_lease() : Task<string> =
+        Task.FromResult(acquireWorkLease "mcp" SageFs.ExpensiveWorkLease.Kind.TestSuiteRun) |> withEcho ctx "acquire_test_suite_lease"
+
+    [<McpServerTool>]
+    [<Description("Acquire a lease for a caller-owned external run-app process. SageFs runs built-in applications through run_app instead.")>]
+    member _.acquire_run_app_lease() : Task<string> =
+        Task.FromResult(acquireWorkLease "mcp" SageFs.ExpensiveWorkLease.Kind.RunApp) |> withEcho ctx "acquire_run_app_lease"
+
+    [<McpServerTool>]
+    [<Description("Release a caller-owned lease returned by one of the acquisition tools. A lease held by another connection is never released.")>]
+    member _.release_work_lease(
+        [<Description("Opaque lease id returned by a granted acquisition tool")>] lease_id: string
+    ) : Task<string> =
+        task {
+          let result = releaseWorkLease "mcp" lease_id
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> SageFs.SageFsError.describeForAgent err, Some err
+        }
+        |> withEchoOutcome ctx "release_work_lease"
+
+    [<McpServerTool>]
     [<Description("""Get detailed startup information: loaded projects, enabled features, and command-line arguments. Use to understand what capabilities are available in the current session.
 
 DIFFERENCE FROM get_fsi_status:
@@ -1260,46 +1263,39 @@ OUTPUT: JSON containing case names, fields per case, which cases are entry point
     // ── Session Management Tools ──────────────
 
     [<McpServerTool>]
-    [<Description("""Create a new isolated FSI session with the specified project(s). Each session runs in its own worker process with full type isolation.
-
-⚠️ WARNING: Do NOT create a new session if one already exists for the same project. Use list_sessions first to check. Creating duplicate sessions causes resource starvation — sessions compete for CPU/memory during warmup, making ALL sessions slower or causing them to crash.
-
-WHEN TO USE:
-- When you need to load a different project than the current session has loaded.
-- When you want to test something in a clean environment without affecting the shared session.
-- For running tests that require specific project DLLs (e.g., a test project with Expecto or xUnit).
-- Multi-project workflows where isolation between session contexts is important.
-
-AFTER CREATION:
-- The session warms up asynchronously (typically 15-30s for a single small project — see the LARGE REPOS note below for anything bigger).
-- Re-check get_fsi_status until it reports State='Ready'. Before that it returns a 'Rebuilding' status carrying elapsedSeconds, boundSeconds, and the worker's own last-reported progress line — use those to tell "still working" from "actually stuck" instead of guessing. Do NOT create another session while waiting.
-- If it reports 'Faulted' with a reason, that reason is real: act on it (usually hard_reset_fsi_session with rebuild=true), don't keep polling hoping it changes.
-- Use the returned session ID with switch_session to route subsequent tool calls to the new session.
-- Use stop_session when finished to free the worker process.
-
-LARGE REPOS: name an explicit project. projects=[] on a repo with dozens of projects (a big solution) makes the worker try to discover and load all of them, which can take minutes. The SAME repo with ONE named project is typically Ready in seconds. Call get_available_projects first and pass the specific .fsproj you need — don't default to projects=[] on anything but a small, single-project directory.
-
-WORKTREES: a session's working directory is checkout-aware. If working_directory sits inside a git worktree (e.g. `.claude/worktrees/agent-x`), the session is bound to THAT worktree, not to the main checkout, and list_sessions/the dashboard show its branch. A request from inside a worktree never silently routes into the main checkout's session — create a session for the worktree instead of assuming one exists.
-
-BUILD TIMING: if warmup faults with "Not all DLLs are found" right after you created the session, the most likely cause is that a build was still running when the worker looked for its output — not a broken project. Confirm the build finished, then recover with hard_reset_fsi_session rebuild=true, which builds and reloads in one step.
-
-projects: A JSON array of .fsproj paths — projects=["path/to/Foo.fsproj"] — or a comma-separated list. Passing [] (or "") does NOT guarantee an empty REPL: the worker still auto-discovers and loads whatever project/solution sits directly in working_directory, if one exists there (verified: a lone .fsproj in the working directory IS loaded and its types ARE usable, even though the session's reported `projects` stays []). You get a genuinely empty scratch REPL only when the working directory itself has nothing directly in it to discover. On a directory with many .fsproj files, create_session's own reply includes a heads-up before you wait on it. Check get_fsi_status's 'Loaded:' field after creation to see what was actually resolved. Both absolute and relative paths work.
-
-workflow: an unrecognized value (anything other than the aliases listed below, case-insensitive) is REJECTED with an error — it is never silently defaulted to interactive.""")>]
-    member _.create_session(
-        [<Description("Projects to load: a JSON array like [\"Foo.fsproj\"], or a comma-separated list. [] does not force an empty REPL — the worker still auto-discovers a project/solution sitting directly in working_directory, if one exists.")>] projects: string,
+    [<Description("Create a new isolated FSI session for one explicit .fsproj project. The project path is a primitive string; empty arrays and auto-discovery are not accepted. Use get_available_projects first, then get_session_status until the session is Ready or Faulted.")>]
+    member _.create_project_session(
+        [<Description("Absolute or working-directory-relative path to one .fsproj project")>] project: string,
         [<Description("Working directory for the session")>] working_directory: string,
-        [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Used for session routing and multi-agent coordination. Defaults to 'mcp' if omitted.")>]
-        [<Optional; DefaultParameterValue("")>]
-        agentName: string,
-        [<Description("Session mode (case-insensitive): 'interactive' (default) for a full REPL; 'livetesting' for a full REPL that also re-runs the affected tests as you type (debounced keystrokes streamed from the editor, not save-driven — no hot reload); or 'hotreload'/'live' for a web/app session with hot reload (browser auto-refresh on save; the REPL is restricted to expressions). Anything unrecognized is rejected with an error, not silently defaulted.")>]
+        [<Description("Session mode: 'interactive' (default), 'livetesting', or 'hotreload'")>]
         [<Optional; DefaultParameterValue("")>]
         workflow: string
     ) : Task<string> =
-        let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "mcp" | false -> agentName
-        logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}, agent={Agent}, workflow={Workflow}", projects, working_directory, agent, workflow)
-        let projectList = SageFs.McpAdapter.parseProjectsArg projects
-        createSession ctx agent projectList working_directory workflow |> withEcho ctx "create_session"
+        logger.LogDebug("MCP-TOOL: create_project_session called: project={Project}, dir={Dir}, workflow={Workflow}", project, working_directory, workflow)
+        createSession ctx "mcp" [ SageFs.SessionProjectTarget.Project project ] working_directory workflow |> withEcho ctx "create_project_session"
+
+    [<McpServerTool>]
+    [<Description("Create a new isolated FSI session for one explicit .sln or .slnx solution. The solution path is a primitive string; empty arrays and auto-discovery are not accepted. Use get_available_projects first, then get_session_status until the session is Ready or Faulted.")>]
+    member _.create_solution_session(
+        [<Description("Absolute or working-directory-relative path to one .sln or .slnx solution")>] solution: string,
+        [<Description("Working directory for the session")>] working_directory: string,
+        [<Description("Session mode: 'interactive' (default), 'livetesting', or 'hotreload'")>]
+        [<Optional; DefaultParameterValue("")>]
+        workflow: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: create_solution_session called: solution={Solution}, dir={Dir}, workflow={Workflow}", solution, working_directory, workflow)
+        createSession ctx "mcp" [ SageFs.SessionProjectTarget.Solution solution ] working_directory workflow |> withEcho ctx "create_solution_session"
+
+    [<McpServerTool>]
+    [<Description("Create a new isolated FSI session with no project or solution loaded. Bare is explicit and never triggers project discovery. Use get_session_status until the session is Ready or Faulted.")>]
+    member _.create_bare_session(
+        [<Description("Working directory for the session")>] working_directory: string,
+        [<Description("Session mode: 'interactive' (default), 'livetesting', or 'hotreload'")>]
+        [<Optional; DefaultParameterValue("")>]
+        workflow: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: create_bare_session called: dir={Dir}, workflow={Workflow}", working_directory, workflow)
+        createSession ctx "mcp" [ SageFs.SessionProjectTarget.Bare ] working_directory workflow |> withEcho ctx "create_bare_session"
 
     [<McpServerTool>]
     [<Description("""List all active FSI sessions with their metadata: session ID, project names, current status, working directory, and last activity timestamp.
@@ -1327,7 +1323,7 @@ NOTE: Stopping the last (or only) session will leave no active session. You will
         [<Description("The session ID to stop (from list_sessions)")>] session_id: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: stop_session called: id={Id}", session_id)
-        stopSession ctx session_id |> withEcho ctx "stop_session"
+        stopSessionOwned ctx session_id |> withEcho ctx "stop_session"
 
     [<McpServerTool>]
     [<Description("""Switch the active FSI session. All subsequent tool calls that accept working_directory will route to this session.

@@ -574,33 +574,15 @@ let classifyProjectLoaderFailure (hostMajor: int) (exceptionMessage: string) : s
 let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress: int -> int -> string -> unit) =
   let directory = config.WorkingDir
 
-  let explicitProjects = config.Projects
-  let explicitSolutions = config.Solutions
-
-  // When projects are given explicitly, don't auto-discover .sln files.
-  // Only auto-discover when neither projects nor solutions is specified.
-  let solutions =
-    match explicitSolutions with
-    | _ :: _ -> explicitSolutions |> List.map Path.GetFullPath
-    | [] when not explicitProjects.IsEmpty -> []
-    | [] ->
-      Directory.EnumerateFiles directory
-      |> Seq.filter (fun s -> s.EndsWith(".sln", System.StringComparison.Ordinal) || s.EndsWith(".slnx", System.StringComparison.Ordinal))
-      |> Seq.toList
-
-  let projects =
-    match explicitProjects with
-    | _ :: _ -> explicitProjects |> List.map Path.GetFullPath
-    | [] when not explicitSolutions.IsEmpty -> [] // solutions handle their own projects
-    | [] ->
-      Directory.EnumerateFiles directory
-      |> Seq.filter (fun s -> s.EndsWith(".fsproj", System.StringComparison.Ordinal))
-      |> Seq.toList
+  // Closed target: an explicit target set is authoritative. Bare has no paths
+  // and therefore creates an empty solution. No branch here enumerates the
+  // working directory to discover a project or solution.
+  let solutions = config.Solutions |> List.map Path.GetFullPath
+  let projects = config.Projects |> List.map Path.GetFullPath
 
   match solutions, projects with
   | [], [] ->
-    logger.LogWarning "Couldnt find any solution or project"
-
+    if not config.IsBare then logger.LogWarning "Couldnt load the requested project or solution"
     {
       FsProjects = []
       Projects = []
@@ -767,10 +749,7 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
 /// fallback path (`classifyFallbackProject`, matching raw
 /// `<PackageReference Include="...">` names read straight from the fsproj
 /// XML) so the two paths can never drift on what counts as a test package.
-let private testPackageNames = [ "Expecto"; "xunit"; "xunit.v3"; "NUnit"; "MSTest.TestFramework"; "Microsoft.NET.Test.Sdk" ]
-
-let private isTestPackageName (name: string) =
-  testPackageNames |> List.exists (fun tp -> name.StartsWith(tp, StringComparison.OrdinalIgnoreCase))
+let private isTestPackageName = TestProviderCatalog.isTestPackageName
 
 /// Detect if a project is a test project via MSBuild property or package references.
 let isTestProject (proj: ProjectOptions) : bool =

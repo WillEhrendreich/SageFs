@@ -82,6 +82,10 @@ type ManifestMutation =
   | SyncLive of live: DaemonSessionRecord list * activeSessionId: string option * at: DateTimeOffset * mode: LiveSync
   /// Purge, or forget a session that can never resume: delete its entry entirely.
   | Remove of sessionId: string
+  /// Record a newly created session before its worker is exposed.
+  | RecordCreated of record: DaemonSessionRecord
+  /// Mark one live session stopped without deleting its history.
+  | MarkStopped of sessionId: string * at: DateTimeOffset
   /// `--prune`: stamp every still-alive entry stopped.
   | StampAllStopped of at: DateTimeOffset
 
@@ -132,8 +136,18 @@ module ManifestMutation =
           | false -> state.ActiveSessionId }
 
   /// The manifest after one mutation. Pure: the owner's only decision logic.
+  let private recordCreated (record: DaemonSessionRecord) (state: DaemonManifestState) =
+    { state with Sessions = Map.add record.SessionId record state.Sessions }
+
+  let private markStopped (sessionId: string) (at: DateTimeOffset) (state: DaemonManifestState) : DaemonManifestState =
+    match Map.tryFind sessionId state.Sessions with
+    | Some record -> { state with Sessions = Map.add sessionId (stopAt at record) state.Sessions }
+    | None -> state
+
   let apply (mutation: ManifestMutation) (state: DaemonManifestState) : DaemonManifestState =
     match mutation with
     | ManifestMutation.SyncLive (live, activeSessionId, at, mode) -> syncLive live activeSessionId at mode state
     | ManifestMutation.Remove sessionId -> remove sessionId state
+    | ManifestMutation.RecordCreated record -> recordCreated record state
+    | ManifestMutation.MarkStopped (sessionId, at) -> markStopped sessionId at state
     | ManifestMutation.StampAllStopped at -> { state with Sessions = state.Sessions |> Map.map (fun _ r -> stopAt at r) }

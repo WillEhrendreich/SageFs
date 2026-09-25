@@ -1117,7 +1117,7 @@ type DashboardActions = {
   StopSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   /// Purge — stop the session + remove its .sagefm manifest entry (gone from resume picker).
   PurgeSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
-  CreateSession: string list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>
+  CreateSession: SessionProjectTarget list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>
   ShutdownCallback: (unit -> unit) option
   /// Run the session's executable project (see AppRunOrchestration).
   RunApp: WorkerProtocol.SessionId -> AppRun.RunRequest -> Threading.Tasks.Task<Result<string, string>>

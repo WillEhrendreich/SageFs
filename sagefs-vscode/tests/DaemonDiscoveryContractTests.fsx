@@ -69,9 +69,9 @@ let tests =
     // startup for a long time: it always starts bare and a session is created
     // afterwards. Emitting those flags here therefore meant "Start Daemon" could not
     // start a daemon at all. Only flags the daemon actually accepts may appear.
-    testCase "daemon start arguments carry the mcp port and nothing the daemon would refuse" <| fun _ ->
+    testCase "daemon start arguments carry the mcp port and a valid bounded lifetime" <| fun _ ->
       buildDaemonStartArgs @"C:\repo\App.slnx" 38123
-      |> Expect.equal "only the port" [| "--mcp-port"; "38123" |]
+      |> Expect.equal "port plus TTL" [| "--mcp-port"; "38123"; "--ttl"; "4h" |]
 
     testCase "a project path is never passed to the daemon, because it refuses --proj" <| fun _ ->
       let args = buildDaemonStartArgs @"C:\repo\App.fsproj" 38124

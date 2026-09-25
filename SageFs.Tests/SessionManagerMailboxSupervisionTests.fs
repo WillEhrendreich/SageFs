@@ -104,18 +104,18 @@ let private withHarness runtime (run: Harness -> Task<unit>) : Task<unit> =
     | None -> ()
   }
 
-let private createSessionFor (projects: string list) (workingDir: string) (harness: Harness) : Task<SessionInfo> =
+let private createSessionFor (targets: SessionProjectTarget list) (workingDir: string) (harness: Harness) : Task<SessionInfo> =
   task {
     let! created =
       postAndReply harness.Mailbox (fun reply ->
-        SessionCommand.CreateSession(projects, workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+        SessionCommand.CreateSession(targets, workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
     match created with
     | Ok info -> return info
     | Error err -> return failtestf "create session failed: %s" (SageFsError.describe err)
   }
 
 let private createSession (harness: Harness) =
-  createSessionFor [ "Test.fsproj" ] @"C:\Test" harness
+  createSessionFor [ SageFs.SessionProjectTarget.Project "Test.fsproj" ] @"C:\Test" harness
 
 let private okStart (_call: int) : Result<Process, SageFsError> =
   Ok (Process.GetCurrentProcess())
@@ -177,8 +177,8 @@ let sessionManagerMailboxSupervisionTests =
           (fun () -> async { return Ok "build ok" })
 
       do! withHarness runtime.Runtime (fun harness -> task {
-        let! infoA = createSessionFor [ "A.fsproj" ] @"C:\A" harness
-        let! infoB = createSessionFor [ "B.fsproj" ] @"C:\B" harness
+        let! infoA = createSessionFor [ SageFs.SessionProjectTarget.Project "A.fsproj" ] @"C:\A" harness
+        let! infoB = createSessionFor [ SageFs.SessionProjectTarget.Project "B.fsproj" ] @"C:\B" harness
 
         stopFailure.Value <- true
         match! tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.StopSession(infoA.Id, reply)) with
@@ -195,6 +195,37 @@ let sessionManagerMailboxSupervisionTests =
         match! postAndReply harness.Mailbox (fun reply -> SessionCommand.StopSession(infoB.Id, reply)) with
         | Ok () -> ()
         | Error err -> failtestf "clean stop of unaffected session failed: %s" (SageFsError.describe err)
+      })
+    }
+
+    testTask "StopSession stops the current and parked replacement workers" {
+      let stopCalls = ref 0
+      let runtime =
+        mkRuntime
+          okStart
+          (fun () -> async {
+            stopCalls.Value <- stopCalls.Value + 1
+            return ()
+          })
+          (fun () -> async { return Ok "build ok" })
+
+      do! withHarness runtime.Runtime (fun harness -> task {
+        let! info = createSession harness
+
+        match! postAndReply harness.Mailbox (fun reply ->
+          SessionCommand.SwitchWorkflow(info.Id, WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults, reply)) with
+        | Ok _ -> ()
+        | Error err -> failtestf "spawn-first workflow switch failed: %s" (SageFsError.describe err)
+
+        stopCalls.Value
+        |> Expect.equal "switch does not stop parked worker yet" 0
+
+        match! postAndReply harness.Mailbox (fun reply -> SessionCommand.StopSession(info.Id, reply)) with
+        | Ok () -> ()
+        | Error err -> failtestf "stop failed: %s" (SageFsError.describe err)
+
+        stopCalls.Value
+        |> Expect.equal "stop covers current and parked workers" 2
       })
     }
 
@@ -301,7 +332,7 @@ let sessionManagerOffMailboxBuildTests =
 
           // A brand-new session (different dir) must be creatable during the build.
           match! tryPostAndReply 1500 harness.Mailbox (fun reply ->
-            SessionCommand.CreateSession([ "C.fsproj" ], @"C:\C", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
+            SessionCommand.CreateSession([ SageFs.SessionProjectTarget.Project "C.fsproj" ], @"C:\C", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
           | Some (Ok second) -> second.Id |> Expect.notEqual "second session has its own id" info.Id
           | Some (Error err) -> failtestf "create_session during build failed: %s" (SageFsError.describe err)
           | None -> failtest "create_session blocked behind the cold build"

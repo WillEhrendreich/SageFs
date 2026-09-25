@@ -1,5 +1,6 @@
 namespace SageFs.Features.LiveTesting
 
+open SageFs
 open System
 open System.IO
 open System.Numerics
@@ -8,6 +9,12 @@ open System.Security.Cryptography
 open System.Text
 open System.Text.RegularExpressions
 open SageFs.Measures
+
+type TestFramework = SageFs.TestFramework
+
+module TestFramework =
+  let toString = SageFs.TestFramework.toString
+  let parse = SageFs.TestFramework.parse
 
 // --- Assembly Load Diagnostics ---
 
@@ -48,34 +55,6 @@ module AssemblyLoadError =
       Error(AssemblyLoadError.LoadFailed(path, ex.Message))
     | :? BadImageFormatException as ex ->
       Error(AssemblyLoadError.BadImage(path, ex.Message))
-
-// --- Test Framework ---
-
-[<RequireQualifiedAccess>]
-type TestFramework =
-  | Expecto
-  | XUnit
-  | NUnit
-  | MSTest
-  | TUnit
-  | Unknown of string
-
-module TestFramework =
-  let toString = function
-    | TestFramework.Expecto -> "expecto"
-    | TestFramework.XUnit -> "xunit"
-    | TestFramework.NUnit -> "nunit"
-    | TestFramework.MSTest -> "mstest"
-    | TestFramework.TUnit -> "tunit"
-    | TestFramework.Unknown s -> s
-
-  let parse = function
-    | "expecto" -> TestFramework.Expecto
-    | "xunit" -> TestFramework.XUnit
-    | "nunit" -> TestFramework.NUnit
-    | "mstest" -> TestFramework.MSTest
-    | "tunit" -> TestFramework.TUnit
-    | s -> TestFramework.Unknown s
 
 /// Configuration constants for the live testing cycle.
 [<RequireQualifiedAccess>]
@@ -358,6 +337,83 @@ module TestRunResult =
         Result = TestResult.NoResult reason
         Timestamp = at
         Output = None })
+
+[<RequireQualifiedAccess>]
+type TestExecutionTermination =
+  | StreamCompleted
+  | StreamStalled of after: TimeSpan
+  | StreamCancelled of reason: string
+  | TransportFailed of message: string
+
+module TestExecutionTermination =
+  let noResultReason = function
+    | TestExecutionTermination.StreamCompleted -> NoResultReason.StreamEnded
+    | TestExecutionTermination.StreamStalled after -> NoResultReason.StreamStalled after
+    | TestExecutionTermination.StreamCancelled _ -> NoResultReason.RunCancelled
+    | TestExecutionTermination.TransportFailed message -> NoResultReason.TransportFailed message
+
+[<RequireQualifiedAccess>]
+type TestExecutionIssue =
+  | MissingResults of testIds: TestId list
+  | DuplicateResults of testIds: TestId list
+  | UnrequestedResults of testIds: TestId list
+
+[<RequireQualifiedAccess>]
+type TestExecutionIntegrity =
+  | Complete
+  | Invalid of issues: TestExecutionIssue list
+
+type TestExecutionReport = {
+  RequestedTestIds: TestId list
+  Termination: TestExecutionTermination
+  Results: TestRunResult array
+  Integrity: TestExecutionIntegrity
+}
+
+module TestExecutionReport =
+  let create
+    (requestedTestIds: TestId list)
+    (termination: TestExecutionTermination)
+    (results: TestRunResult array)
+    : TestExecutionReport =
+    let requested = Set.ofList requestedTestIds
+    let grouped =
+      results
+      |> Array.groupBy (fun result -> result.TestId)
+      |> Map.ofArray
+    let reported = grouped |> Map.toList |> List.map fst |> Set.ofList
+    let missing = Set.difference requested reported |> Set.toList
+    let duplicates =
+      grouped
+      |> Map.toList
+      |> List.choose (fun (testId, entries) ->
+        match Array.length entries with
+        | 1 -> None
+        | _ -> Some testId)
+      |> List.sort
+    let unrequested = Set.difference reported requested |> Set.toList
+    let issues =
+      [ if missing |> List.isEmpty then None else Some (TestExecutionIssue.MissingResults missing)
+        if duplicates |> List.isEmpty then None else Some (TestExecutionIssue.DuplicateResults duplicates)
+        if unrequested |> List.isEmpty then None else Some (TestExecutionIssue.UnrequestedResults unrequested) ]
+      |> List.choose id
+    { RequestedTestIds = requestedTestIds
+      Termination = termination
+      Results = results
+      Integrity =
+        match issues with
+        | [] -> TestExecutionIntegrity.Complete
+        | issues -> TestExecutionIntegrity.Invalid issues }
+
+  let isComplete report =
+    match report.Integrity with
+    | TestExecutionIntegrity.Complete -> true
+    | TestExecutionIntegrity.Invalid _ -> false
+
+  let issues report =
+    match report.Integrity with
+    | TestExecutionIntegrity.Complete -> []
+    | TestExecutionIntegrity.Invalid issues -> issues
 
 // --- Run History ---
 
@@ -987,6 +1043,13 @@ type RunRequestId = RunRequestId of System.Guid
 
 module RunRequestId =
   let fresh () = RunRequestId (System.Guid.NewGuid())
+  let value (RunRequestId value) = value
+
+type TestRunIdentity = {
+  SessionId: string option
+  Generation: RunGeneration
+  RequestId: RunRequestId
+}
 
 /// Where an explicitly requested run stands. Durable in the model, because a
 /// waiter re-evaluates only on (batched) model-changed notifications and can
@@ -1062,6 +1125,31 @@ module TestRunPhase =
     match phase with
     | Idle -> lastGen
     | Running gen | RunningButEdited gen -> gen
+
+module TestRunIdentity =
+  let matches (left: TestRunIdentity) (right: TestRunIdentity) =
+    left.SessionId = right.SessionId
+    && left.Generation = right.Generation
+    && left.RequestId = right.RequestId
+
+  let acceptsPhase (incoming: TestRunIdentity) (phase: TestRunPhase) =
+    match phase with
+    | TestRunPhase.Running generation
+    | TestRunPhase.RunningButEdited generation -> incoming.Generation = generation
+    | TestRunPhase.Idle -> false
+
+  let phaseFor (identity: TestRunIdentity) (phases: Map<string, TestRunPhase>) =
+    match identity.SessionId with
+    | Some sessionId -> phases |> Map.tryFind sessionId
+    | None ->
+      match phases |> Map.tryFindKey (fun _ phase -> TestRunPhase.isRunning phase) with
+      | Some sessionId -> phases |> Map.tryFind sessionId
+      | None -> Some TestRunPhase.Idle
+
+  let accepts (incoming: TestRunIdentity) (phases: Map<string, TestRunPhase>) =
+    match phaseFor incoming phases with
+    | Some phase -> acceptsPhase incoming phase
+    | None -> false
 
 // --- Live Test State (Elm model aggregate) ---
 
@@ -2968,49 +3056,49 @@ module TestCycleTiming =
         ts.TotalMilliseconds fcs.TotalMilliseconds exec.TotalMilliseconds t.AffectedTests
 
 module TestProviderDescriptions =
-  let builtInDescriptions : ProviderDescription list = [
-    ProviderDescription.AttributeBased {
-      Name = TestFramework.XUnit; TestAttributes = ["Fact"; "Theory"]
-      AssemblyMarker = "xunit.core"
-    }
-    ProviderDescription.AttributeBased {
-      Name = TestFramework.XUnit; TestAttributes = ["Fact"; "Theory"]
-      AssemblyMarker = "xunit.v3.core"
-    }
-    ProviderDescription.AttributeBased {
-      Name = TestFramework.NUnit; TestAttributes = ["Test"; "TestCase"; "TestCaseSource"]
-      AssemblyMarker = "nunit.framework"
-    }
-    ProviderDescription.AttributeBased {
-      Name = TestFramework.MSTest; TestAttributes = ["TestMethod"; "DataTestMethod"]
-      AssemblyMarker = "Microsoft.VisualStudio.TestPlatform.TestFramework"
-    }
-    ProviderDescription.AttributeBased {
-      Name = TestFramework.TUnit; TestAttributes = ["Test"]
-      AssemblyMarker = "TUnit.Core"
-    }
-    ProviderDescription.Custom {
-      Name = TestFramework.Expecto; AssemblyMarker = "Expecto"
-    }
-  ]
+  let builtInDescriptions : ProviderDescription list =
+    TestProviderCatalog.all
+    |> List.map (fun capability ->
+      match capability.Framework with
+      | TestFramework.Expecto ->
+        ProviderDescription.Custom {
+          Name = capability.Framework
+          AssemblyMarker = capability.AssemblyMarkers.Head
+        }
+      | _ ->
+        ProviderDescription.AttributeBased {
+          Name = capability.Framework
+          TestAttributes = capability.ExecutableAttributes
+          AssemblyMarker = capability.AssemblyMarkers.Head
+        })
 
   let detectProviders
     (assemblies: AssemblyInfo list)
     : ProviderDescription list =
-    let refNames =
+    let evidence =
       assemblies
       |> List.collect (fun asm ->
         asm.ReferencedAssemblies
-        |> Array.map (fun r -> r.Name)
+        |> Array.map (fun reference -> reference.Name)
         |> Array.toList)
-      |> Set.ofList
-    builtInDescriptions
-    |> List.filter (fun desc ->
-      let marker =
-        match desc with
-        | ProviderDescription.AttributeBased d -> d.AssemblyMarker
-        | ProviderDescription.Custom d -> d.AssemblyMarker
-      Set.contains marker refNames)
+      |> fun referenced ->
+        { ReferencedAssemblies = referenced
+          LoadedAssemblies = assemblies |> List.map (fun asm -> asm.Name) }
+    TestProviderCatalog.detect evidence
+    |> List.choose (fun availability ->
+      match availability with
+      | ProviderAvailability.Referenced capability
+      | ProviderAvailability.Loaded capability ->
+        let description =
+          builtInDescriptions
+          |> List.tryFind (fun desc ->
+            let marker =
+              match desc with
+              | ProviderDescription.AttributeBased value -> value.AssemblyMarker
+              | ProviderDescription.Custom value -> value.AssemblyMarker
+            marker = capability.AssemblyMarkers.Head)
+        description
+      )
 
 // --- Policy Filter ---
 

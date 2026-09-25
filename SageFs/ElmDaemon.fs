@@ -27,13 +27,13 @@ let createEffectDeps
       HttpWorkerClient.proxyFromUrls (WorkerProtocol.SessionId.value sessionId) urls
       |> Option.map (WorkerProtocol.SessionProxy.touching (fun () ->
         sessionManager.Post(SessionManager.SessionCommand.TouchSession sessionId)))
-    CreateSession = fun projects workingDir workflow ->
+    CreateSession = fun targets workingDir workflow ->
       async {
         let autoOpenNamespaces = autoOpenNamespacesForDirectory workingDir
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.CreateSession(
-              projects, workingDir, autoOpenNamespaces, workflow, reply))
+              targets, workingDir, autoOpenNamespaces, workflow, reply))
         return result
       }
     ConfigureWarmupAutoOpen = fun workingDir ->

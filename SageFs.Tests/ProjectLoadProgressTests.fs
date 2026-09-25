@@ -102,7 +102,7 @@ let loadSolutionProgressTests =
       let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
       let fixture = Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "TestWorkspace", "TestWorkspace.fsproj")
       let reported = ResizeArray<int * int * string>()
-      let config = { SageFs.Args.ProjectLoadConfig.empty with Projects = [ fixture ]; WorkingDir = Path.GetDirectoryName fixture }
+      let config = { SageFs.Args.ProjectLoadConfig.empty with Targets = [ SageFs.SessionProjectTarget.Project fixture ]; WorkingDir = Path.GetDirectoryName fixture }
       let solution = loadSolution quietLogger config (fun step total message -> reported.Add(step, total, message))
       solution.Projects |> Expect.isNonEmpty "the fixture project should actually load"
       reported |> Expect.isNonEmpty "loading a real project should report at least one step"
