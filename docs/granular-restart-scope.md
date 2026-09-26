@@ -161,7 +161,7 @@ Each was found by reading what the daemon actually said rather than inferring
 from a boolean. A driver that prints "not ready" without saying which state it
 saw cannot tell warmup from breakage.
 
-## The `AppContext.BaseDirectory` trap, in one line
+## The `AppContext.BaseDirectory` trap, and the mechanism that works
 
 | Approach | Result |
 |---|---|
