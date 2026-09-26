@@ -88,12 +88,56 @@ That is a real build, and it is the honest next piece. It is not started here
 rather than half-built and claimed — and the note records WHY, so the next
 person does not spend a day on the reflection probe that cannot work.
 
+## The reachability blocker, measured
+
+A user's `Run App` project references **only** `FSharp.Core`:
+
+```
+$ grep -E 'PackageReference|ProjectReference' samples/demos/SageFs.Samples.ConsoleTicker/*.fsproj
+    <PackageReference Include="FSharp.Core" />
+```
+
+`SageFs.Core.dll` *does* ship beside the tool (verified: present in
+`SageFs/bin/Release/net10.0`), so the assembly is available — but nothing puts
+it on a user app's compile path, so `SageFs.HolderRegistry` does not resolve
+in user code.
+
+I attempted exactly the change a user would want — turning the ticker's
+`let mutable n = 0` into a registered holder — and reverted it rather than
+leave the tree unbuildable. The shape works, verified in a live SageFs
+session first:
+
+```
+RESULT ticks 1 2 3 -> [1; 2; 3]
+RESULT the restart now sees: HeldBy ["TickerState"]
+```
+
+**So every "opt in" design in this document is currently unreachable from user
+code.** That is why every restart honestly answers
+`LiveCount.Unconsulted` — the mechanism is not wrong, a user has no way to
+hold anything.
+
+**The next piece is packaging, not refactoring**: a small `SageFs.Runtime`
+package carrying `Holder`, `HolderRegistry` and `RegisteredHolder`, and
+nothing else, plus the Run App path that makes it referenceable.
+
+## What each piece is worth, and its reach
+
+| Piece | Reachable from a save? |
+|---|---|
+| granular restart, attribution, subject, `RestartPlan` | yes |
+| build-cost decision (`LiveCount`) | yes — but always `Unconsulted` today |
+| `Holder` / `HolderRegistry` / `RegisteredHolder` | no — no user-visible package |
+
 ## How to verify
 
 ```bash
-# the decision, on real parsed source
-dotnet fsi .roastscratch/eval.fsx file:.roastscratch/dogfood-rebuild.fsx
-dotnet fsi .roastscratch/eval.fsx file:.roastscratch/dogfood-prec.fsx
+# the decision, proven in a live SageFs session
+dotnet fsi .roastscratch/eval.fsx file:.roastscratch/proof2.fsx
+#   held by a boundary    rebuild=true    evidence: something holds it
+#   asked, found nothing  rebuild=false   evidence: nothing does -> SKIP
+#   never consulted       rebuild=true    not evidence: pay
+#   source failed         rebuild=true    not evidence: pay
 
 # the full default tier
 dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary
