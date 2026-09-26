@@ -94,12 +94,17 @@ SageFs.Tests/fixtures/HotReloadStateFixture/.runs/
 
 # Agent scratch. NEVER a product artifact.
 #
-# 21 files from here were committed by accident at 53ae96d0, including
-# screenshots and one-off shell reproducers. Scratch is evidence FOR a decision,
-# not a deliverable: it is unversioned, unreviewed, and has no owner, so
-# checking it in only widens the surface someone has to keep correct. If a
-# script is worth keeping it belongs in `scripts/` and earns a test; if a
+# 21 files from .roastscratch were committed by accident at 53ae96d0, and 6
+# from a $COMMANDCODE_SCRATCHPAD directory at c86c3402. Scratch is evidence
+# FOR a decision, not a deliverable: it is unversioned, unreviewed, and has no
+# owner, so checking it in only widens the surface someone has to keep correct.
+# If a script is worth keeping it belongs in `scripts/` and earns a test; if a
 # finding is worth keeping it belongs in a document.
+#
+# The harness path is literally `$COMMANDCODE_SCRATCHPAD` — a SHELL VARIABLE,
+# not a placeholder. A pattern reading `commandcode_scratchpad` does not match
+# it, and six files got committed because the rule looked correct and was not.
 .roastscratch/
 commandcode_scratchpad/
 **/commandcode_scratchpad/
+**/\$COMMANDCODE_SCRATCHPAD/
