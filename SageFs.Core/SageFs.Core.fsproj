@@ -98,6 +98,13 @@
         <Compile Include="Middleware\ValueReads.fs" />
         <Compile Include="HolderRegistry.fs" />
         <Compile Include="RestartCost.fs" />
+        <!-- After TypeShapeMigration (compiledShapeOf/decideRecord), after
+             HolderRegistry (LiveCount), and after RestartCost (MigrationWorth,
+             RestartAction). All three are load-bearing: placed above them, this
+             file produced "The type 'LiveCount' is not defined" and then
+             "The namespace or module 'RestartCost' is not defined". The order is
+             the fix, and the comment is here so nobody re-derives it. -->
+        <Compile Include="MigrationPlan.fs" />
         <Compile Include="Features\RegisteredHolder.fs" />
         <Compile Include="Features\RestartScope.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
