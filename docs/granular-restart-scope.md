@@ -677,3 +677,57 @@ So the next piece is: `Boundary` gains an optional migration hook, and the live
 path calls `MigrationPlan.decide` with whatever the boundary supplies —
 `NoValueToMigrate` when it supplies nothing, which is the honest answer for every
 boundary today.
+## The boundary subsystem is built, tested, and entirely unwired
+
+Measured, not estimated:
+
+```
+restartReasonWithBoundary: 0 production refs
+RestartBoundaries:         0 production refs
+Registry.For:              0 production refs
+declaredBoundary:          0 production refs
+```
+
+So the state of the whole granular-restart effort, honestly:
+
+| Piece | Reachable from a save? |
+|---|---|
+| granular restart, attribution, subject, `RestartPlan` | **yes** |
+| build-cost decision (`LiveCount`, `RestartAction`) | **yes** |
+| `Holder` / `HolderRegistry` / `RegisteredHolder` | **yes** — ConsoleTicker uses it |
+| `RestartBoundaries.Registry` | no — nothing constructs one |
+| `restartReasonWithBoundary` | no — nothing calls it |
+| `MigrateAndRespawn` / `MigrationPlan` | no — no live caller supplies a value |
+
+`WorkerMain.fs:1020` gets a type's boundary from the HOLDER REGISTRY
+(`holderRegistry.LiveCountOf typeName`), not from a declared boundary. So the
+two mechanisms are parallel: the holder registry counts what the app actually
+did, while a declared boundary is the opt-in a user writes to say what should
+be restartable in principle.
+
+### Why the boundary registry is not wired, and what it would take
+
+`Registry.For` needs a `WorkerProtocol.SessionId`. The worker has one — it is
+`AppRunner`'s — so the registry is constructible there. What is missing is the
+DECISION to construct it and the threading of a `MigrationWorth` from a
+boundary's hook into `requireRestart`, which currently takes `(first, rest,
+subject, liveness)`.
+
+That is a real seam, not a one-liner:
+
+1. the worker constructs `RestartBoundaries.Registry.For sessionId` once, and
+   the app can declare boundaries into it (that API needs surfacing through MCP
+   or a startup hook — today there is no way for an APP to declare one);
+2. `requireRestart` gains a `migrationWorth` parameter, alongside `liveness`
+   rather than folded into it, because they answer different questions;
+3. `AppRunState.RestartRequired` and `RunEnd.RebuildForChanges` carry it, the
+   same way they carry `liveness` now;
+4. `AppRunOrchestration.restartForChanges` uses
+   `decideFromLivenessAndMigration` instead of `decideFromLiveCount`, and the
+   `MigrateAndRespawn` arm it already has stops being a fallback.
+
+Step 1 is the one with a product decision in it: **how does an app declare a
+boundary?** The holder registry needs no declaration — the app opts in by
+holding something. A boundary currently needs an explicit call, and there is
+no path for a user's app to make one. Until there is, the honest state is what
+the table says.
