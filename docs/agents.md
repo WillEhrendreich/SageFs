@@ -65,6 +65,28 @@ https://github.com/WillEhrendreich/SageFs/blob/master/skills/sagefs/SKILL.md
 - If the REPL fights you, report the exact error. Don't quietly switch to
   dotnet.
 - Never stop, restart or reinstall the SageFs daemon without asking.
+- Run the slow gate in a background agent and keep working. Don't await it,
+  don't poll it, and don't re-roll a full run to escape a flake.
+- Never `#load` a file belonging to a project the session already has loaded.
+  You get two copies of every type, and the error points at a type
+  incompatibility rather than at the real cause. `#load` only a *pure* file.
+
+**Changing code: prove it, then write it.** This is the rule that saves the
+most time, and the easiest one to break under pressure.
+
+- Prove the change in the REPL before you write it to a file. An eval takes
+  under a second; a build that catches your misread of a type takes two
+  minutes, and catches it *after* you have already edited.
+- Edit with exact, targeted calls — read the region, replace that exact text.
+  Not `sed -i`, not a `python3 -c` file rewrite, not a broad regex bulk edit. A
+  scripted edit that silently matches nothing looks exactly like one that
+  worked, and you find out at the worst possible moment.
+- For a repeated mechanical change, write an `.fsx` and run it through SageFs,
+  so the script is F# that reports its own result — and have it assert that
+  each replacement matched, out loud, rather than exiting quietly.
+  `SageFs.Editing.applyInOrder` is the built-in version: each replacement
+  either applies or tells you why it didn't, and an ambiguous match refuses
+  rather than guessing.
 ```
 
 ## 2. Let the agent call SageFs without asking every time

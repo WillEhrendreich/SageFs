@@ -65,7 +65,33 @@ silent no-op reads exactly like a successful one.
   prevent.
 - **Gates run in a background agent you do not block on.** The release gate is
   a decision, not an iteration tool; re-rolling it to escape a flake costs
-  minutes and proves nothing.
+  minutes and proves nothing. Launch it, keep working, read the result when you
+  need it. Never poll it in a loop — that is the same waste as blocking.
+- **Never `#load` an already-loaded project.** `#load`ing a Core file into a
+  session that has Core loaded produces two copies of every type, and the
+  symptom is a misleading incompatibility error
+  (`The type 'FSI_0035.SageFs.H' is not compatible with the type 'SageFs.H'`),
+  not a load failure. Use the loaded types directly; `#load` only a PURE file
+  with no dependency on the loaded project.
+- **Prove the change in the REPL before you write it to a file.** An eval is
+  under a second; a build that catches your misread type is two minutes, and it
+  catches it *after* you have edited. The full sequence — prove, persist, then
+  `hard_reset_fsi_session rebuild=true` to re-verify — is in
+  [`skills/sagefs/SKILL.md`](skills/sagefs/SKILL.md) under "Editing: prove it,
+  then write it". Read that section before your first edit in a session.
+- **`Editing.fs` is the executable form of the rules above.** If you are about
+  to do a repeated mechanical change, `SageFs.Editing.applyInOrder` is the
+  total-or-reported version: a replacement either applies or says why it did
+  not, an ambiguous find refuses rather than guessing, and the find text
+  travels with the refusal. Prefer it to a hand-rolled loop.
+
+## Instructions for agents in this repo
+
+- **`AGENTS.md` is the single source of truth.** `CLAUDE.md` is `@AGENTS.md`
+  plus an auto-synced taste mirror; the `@` import means the live instructions
+  always arrive. Do not duplicate rules between the two — that is how they
+  drift. The skill, not this file, is what loads automatically on an F# task,
+  so anything an agent must obey *before its first edit* belongs there.
 
 
 ## Project Overview
