@@ -134,4 +134,73 @@ let registeredHolderTests =
       |> Expect.isTrue "the other app sees no evidence"
       holdsSomething (RegisteredHolder.liveCountOf (Some a) "Order")
       |> Expect.isTrue "and its own is visible"
+    ]
+
+/// WHY — the app and the worker run in the SAME process, and each used to build
+/// its own `HolderRegistry`. They are therefore two unrelated objects, so the
+/// worker's `LiveCountOf` read a registry the app never wrote to and answered 0
+/// for every type — producing a cheap `RespawnOnly` on the strength of nothing.
+///
+/// Every test above passed while that was true, because every one of them
+/// registers into and reads back from the SAME instance. These are the tests
+/// that would have caught it: they go through the ambient handle exactly as app
+/// code does, and they are the only ones that can see the two-registry failure
+/// at all.
+[<Tests>]
+let currentRegistryTests =
+  testList "the registry the restart actually reads" [
+
+    testCase "WHY — a value held through the ambient handle is visible to whoever reads Current" <| fun _ ->
+      // The shape of the real bug, written down as an assertion: register
+      // through the handle a RESTART reads, and read back through the SAME
+      // handle a restart would use.
+      let published = HolderRegistry.New ()
+      HolderRegistry.Current <- Some published
+      try
+        let held =
+          match RegisteredHolder.holdInCurrent "Order" 1 with
+          | RegisteredHolder.HeldOrUnseen.Visible h -> h
+          | RegisteredHolder.HeldOrUnseen.NoRegistryPublished why ->
+            failtestf "the worker published a registry, so this must succeed: %s" why
+        (Holder.read (RegisteredHolder.cellOf held))
+        |> Expect.equal "the value is the one that was held" 1
+        // AND the registry the restart reads now knows about it. `Current` is
+        // already the `option` `liveCountOf` takes, and it answers with a
+        // `LiveCount` — so the assertion is on the CASE, which is the claim.
+        // Asserting a count here would be asserting the wrong fact: `HeldBy` is
+        // the claim, and it is the one the restart acts on.
+        (RegisteredHolder.liveCountOf HolderRegistry.Current "Order")
+        |> function
+        | SageFs.LiveCount.HeldBy _ -> ()
+        | other -> failtestf "a value held through the handle must be evidence, got %A" other
+      finally
+        HolderRegistry.Current <- None
+
+    testCase "WHY — with NO published registry, holding REFUSES rather than creating an invisible one" <| fun _ ->
+      // The honest answer when the app is not under SageFs. Silently falling
+      // back to a private registry is the defect: the value would be held and
+      // no restart could ever see it.
+      //
+      // `Current` is reset first because it is a mutable STATIC, and another
+      // test in this suite publishes one. That was not a theoretical concern:
+      // this case failed until it cleared the handle explicitly, which is the
+      // cheapest possible demonstration of why ambient state and tests sharing a
+      // process are a bad pair.
+      HolderRegistry.Current <- None
+      match RegisteredHolder.holdInCurrent "Order" 1 with
+      | RegisteredHolder.HeldOrUnseen.Visible _ -> failtest "an unpublished registry must not accept a value nothing can see"
+      | RegisteredHolder.HeldOrUnseen.NoRegistryPublished why ->
+        (why.Length > 0) |> Expect.isTrue "and it must say why"
+
+    testCase "WHY — publishing a registry does NOT make two apps share cells: the explicit-registry form is still isolated" <| fun _ ->
+      // The property that must survive the fix. `Current` is one ambient handle,
+      // not a global switch that dissolves the per-registry isolation the whole
+      // design rests on.
+      let mine = HolderRegistry.New ()
+      let theirs = HolderRegistry.New ()
+      RegisteredHolder.holdRegistered theirs "Order" 1 |> ignore
+      (mine.LiveHolding "Order")
+      |> Expect.equal "an explicitly-passed registry still sees nothing of another's" 0
+      (theirs.LiveHolding "Order")
+      |> Expect.equal "and its own" 1
   ]

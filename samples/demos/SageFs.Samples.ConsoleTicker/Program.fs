@@ -44,9 +44,26 @@ let main _args =
   //
   // The cell's value is a `ref`, so a write through it is seen by every reader
   // — verified by running this app: 1 2 3, then a read back of 3.
-  let registry = HolderRegistry.New ()
-  let heldTicks = RegisteredHolder.holdRegistered registry "TickerState" 0
+  //
+  // `holdInCurrent` registers into the registry the RESTART reads, which the
+  // worker publishes. Constructing a private `HolderRegistry.New ()` here is the
+  // bug this form exists to prevent: the app and the worker run in the same
+  // process, two unrelated registries, and the restart would be told nothing is
+  // alive while a live value sits in the cell.
+  //
+  // Outside a worker the refusal is HONOURED, not worked around: the cell falls
+  // back to a plain `Holder.hold`, which still counts correctly and is still
+  // simply invisible to a restart — and the app says so on stderr, because
+  // silently degrading to a state nobody can see is the defect itself.
+  let runningUnderSageFs, heldTicks =
+    match RegisteredHolder.holdInCurrent "TickerState" 0 with
+    | RegisteredHolder.HeldOrUnseen.Visible h -> true, h
+    | RegisteredHolder.HeldOrUnseen.NoRegistryPublished why ->
+      Console.Error.WriteLine(sprintf "not running under SageFs: %s" why)
+      false, Held.Held(Holder.hold 0, 0L)
   let ticks = RegisteredHolder.cellOf heldTicks
+  if not runningUnderSageFs then
+    Console.Error.WriteLine("this counter is not visible to a hot-reload restart")
 
   let nextTick () =
     let current = Holder.read ticks

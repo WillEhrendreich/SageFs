@@ -80,6 +80,27 @@ type HolderRegistry private (cells: ResizeArray<LiveCell>, nextId: int64 ref) =
 
   static member New () = HolderRegistry(ResizeArray(), ref 1L)
 
+  /// The registry the RESTART reads, if one has been published.
+  ///
+  /// WHY THIS EXISTS, and it is a bug fix rather than a convenience. The app and
+  /// the worker run in the SAME process (SageFs.Host/AppRunner.fs loads the
+  /// assembly and invokes its entry point in-process), and each constructed its
+  /// OWN registry. They are therefore two unrelated objects, so the worker's
+  /// `LiveCountOf` read a registry the app never wrote to and answered `0` for
+  /// every type — producing `HeldByNothing`, and with it a cheap `RespawnOnly`
+  /// on the strength of nothing. Every test passed, because every test
+  /// registers into and reads back from the SAME instance.
+  ///
+  /// `Current` is the handle that closes that gap. The worker publishes the
+  /// registry it will read from; an app that holds values registers into it.
+  ///
+  /// IT IS NOT A REPLACEMENT FOR THE INSTANCE. Isolation is unchanged and still
+  /// the point: this is a single ambient handle per PROCESS, and the existing
+  /// "two registries never see each other" property is untouched for anyone who
+  /// passes an explicit registry. What changes is that the worker's registry is
+  /// now reachable from app code at all.
+  static member val Current: HolderRegistry option = None with get, set
+
   /// Register a cell that now holds `holds`. This is the moment liveness
   /// becomes knowable, so it is the only moment a cell has to be recorded.
   member this.Register (holds: string) : CellId =

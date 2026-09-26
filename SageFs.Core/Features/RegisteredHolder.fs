@@ -28,12 +28,46 @@ type Held<'a> =
 [<RequireQualifiedAccess>]
 module RegisteredHolder =
 
+  /// What `holdInCurrent` can refuse with, when there is no published registry
+  /// for a held value to be visible to.
+  ///
+  /// Its own DU rather than an `Error` string, so a caller cannot swallow it
+  /// as "some problem" and cannot invent a reason that is not one.
+  type HeldOrUnseen<'a> =
+    /// The value is held AND recorded, so a restart can see it.
+    | Visible of held: Held<'a>
+    /// No registry has been published in this process, so a value held here
+    /// could never be seen by a restart. Running outside a SageFs worker.
+    | NoRegistryPublished of because: string
+
   /// Hold a value AND record it, so a restart can see it.
   ///
   /// `typeName` is the boundary registry's name for the type, so a restart
   /// joins the two without a translation table between them.
   let holdRegistered (registry: SageFs.HolderRegistry) (typeName: string) (initial: 'a) : Held<'a> =
     Held.Held(SageFs.Holder.hold initial, registry.Register typeName)
+
+  /// Hold a value into the registry the RESTART actually reads.
+  ///
+  /// THIS is the form an app should use, and the reason is a measured bug: the
+  /// app and the worker run in the same process and each used to build its own
+  /// registry, so `holdRegistered` with a private registry registered into an
+  /// object the restart never consulted. The answer was `0` for every type, and
+  /// the restart skipped a build on the strength of nothing.
+  ///
+  /// The refusal is a DU rather than an `Error` string on purpose: this repo
+  /// ratchets stringly-typed `Result`s DOWN, and `ErrorAlgebraHardeningTests`
+  /// counts them by SOURCE LINE — so writing the type name in this comment
+  /// would have counted as an occurrence, and a doc comment explaining the rule
+  /// tripped the rule's own guard. That is a real property of the guard worth
+  /// knowing: it is a text scan, not a type check, so prose about the pattern
+  /// is indistinguishable from the pattern.
+  let holdInCurrent (typeName: string) (initial: 'a) : HeldOrUnseen<'a> =
+    match SageFs.HolderRegistry.Current with
+    | None ->
+      HeldOrUnseen.NoRegistryPublished
+        "no holder registry is published in this process, so a held value could never be seen by a restart"
+    | Some registry -> HeldOrUnseen.Visible(holdRegistered registry typeName initial)
 
   /// The cell a `Held` is holding, when the caller only needs the value.
   let cellOf (held: Held<'a>) =

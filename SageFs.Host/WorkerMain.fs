@@ -720,6 +720,13 @@ let run (sessionId: string) (port: int) = async {
   // Per-worker, not per-app, because the worker is the app's process: two apps
   // never share one, so one app's cell can never make another's restart pay.
   let holderRegistry = SageFs.HolderRegistry.New ()
+  // PUBLISH it, so app code can register into the registry this worker will
+  // read. Without this the app builds its own registry, the two are unrelated
+  // objects in the SAME process, and `LiveCountOf` answers 0 for every type —
+  // which produces a cheap `RespawnOnly` on the strength of nothing. Measured,
+  // and it is the most expensive defect this work found: every test passed,
+  // because every test registered into and read back from the same instance.
+  SageFs.HolderRegistry.Current <- Some holderRegistry
 
   // Declared restart boundaries for THIS session, when the id parses.
   //
