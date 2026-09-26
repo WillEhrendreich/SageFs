@@ -162,15 +162,16 @@ and private restartForChanges
   (project: string)
   (previous: PreviousAddress)
   (subject: GranularRestart.RestartSubject)
-  (liveness: SageFs.Liveness)
+  (liveness: SageFs.LiveCount)
   : Task<unit> =
   task {
     // Whether a BUILD is needed is a different question from how WIDE the
-    // restart is, so it is decided here from evidence rather than assumed. A
-    // boundary holding no live instance of the changed type has nothing laid
-    // out by the old definition, so the worker is respawned and the expensive
-    // `dotnet build` is skipped. Anything we cannot establish pays the build.
-    let action = SageFs.RestartCost.decide liveness
+    // restart is, so it is decided here from the LIVENESS ANSWER rather than
+    // assumed. The answer is a DU that carries its own provenance: a registry
+    // that was asked and found nothing is EVIDENCE, and one that was never
+    // consulted is not — which is the whole difference between skipping the
+    // `dotnet build` and paying it.
+    let action = SageFs.RestartCost.decideFromLiveCount liveness
 
     let! restarted =
       match action with

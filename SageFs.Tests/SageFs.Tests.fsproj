@@ -73,6 +73,7 @@
         <Compile Include="EvalStatsWorkerReadTests.fs" />
         <Compile Include="HotReloadDetourPlanTests.fs" />
         <Compile Include="RestartScopeAttributionTests.fs" />
+        <Compile Include="EditingRuleTests.fs" />
         <Compile Include="RestartAttributionRegistryTests.fs" />
         <Compile Include="RestartSubjectDecisionTests.fs" />
         <Compile Include="StaleSessionRecoveryTests.fs" />
@@ -572,6 +573,7 @@
         <Compile Include="RestartBoundariesTests.fs" />
         <Compile Include="RestartCostTests.fs" />
         <Compile Include="HolderRegistryTests.fs" />
+        <Compile Include="RegisteredHolderTests.fs" />
         <Compile Include="GranularRestartTests.fs" />
         <Compile Include="GranularRestartSimTests.fs" />
         <Compile Include="RestartScopeTests.fs" />

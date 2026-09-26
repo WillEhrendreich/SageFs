@@ -711,6 +711,15 @@ let run (sessionId: string) (port: int) = async {
     mkLiveTestEvalSupport actor initialDiscoveredTests initialProviders setDynamicRunTest
 
   let appRunner = AppRunner.create AppRunner.defaultTimeouts AppRunner.processEnv
+
+  // Holder cells the RUNNING APP has created, in THIS process. It is the only
+  // place a liveness answer can come from: .NET exposes no per-type instance
+  // count, so a probe at restart time cannot answer, whereas a cell registered
+  // at construction is a record SageFs holds.
+  //
+  // Per-worker, not per-app, because the worker is the app's process: two apps
+  // never share one, so one app's cell can never make another's restart pay.
+  let holderRegistry = SageFs.HolderRegistry.New ()
   // The source each running app's DLL was built from, advanced after every
   // applied patch: what a save is compared with to decide patch vs restart.
   let reloadBaselines = System.Collections.Concurrent.ConcurrentDictionary<string, Features.ReloadPlanning.FileDecls>()
@@ -1000,9 +1009,28 @@ let run (sessionId: string) (port: int) = async {
           // than a missing argument: `Unknown` is a claim, and a future
           // boundary that can answer it plugs in here without changing any
           // other signature.
-          let liveness =
-            SageFs.Liveness.Unknown(
-              "SageFs cannot yet tell whether the running app holds an instance laid out by the old definition")
+          // The running app's holder registry, when there is one. A holder cell
+          // is registered when it is CREATED, so this is a lookup rather than a
+          // question the runtime refuses to answer — which is what reflection
+          // would be, and why the reflection probe was not taken.
+          //
+          // A process with no registry is `Unknown`, not "none": "no holder was
+          // used here" is evidence of nothing, and reading it as "nothing holds
+          // the old shape" would skip a build for no reason.
+          let changedTypeName =
+            match first with
+            | Features.ReloadPlanning.ReloadChange.TypeChanged name -> Some name
+            | _ -> None
+
+          // A liveness ANSWER, carrying its provenance. `HeldByNothing` is a
+          // CLAIM — a registry was consulted and found nothing — which is not
+          // the same claim as `Unconsulted`, where nothing here could tell us.
+          // Collapsing the two is exactly what would let a missing registry
+          // skip a build for no reason.
+          let liveCount: SageFs.LiveCount =
+            match changedTypeName with
+            | Some typeName -> holderRegistry.LiveCountOf typeName
+            | None -> SageFs.LiveCount.Unconsulted "this change is not a type change"
 
           let! _ =
             AppRunner.requireRestart
@@ -1010,7 +1038,7 @@ let run (sessionId: string) (port: int) = async {
               first
               rest
               (SageFs.Core.Features.RestartSubjectDecision.toSubject subject)
-              liveness
+              liveCount
             |> Async.AwaitTask
           Features.ReloadBroadcast.broadcastOutcome (Features.ReloadOutcome.ReloadOutcome.Restarted reasons)
           return SaveHandling.Reported

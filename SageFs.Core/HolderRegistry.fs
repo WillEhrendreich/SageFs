@@ -42,6 +42,37 @@ type LiveCell =
     /// evidence for its old type.
     Superseded: bool }
 
+/// WHAT A LIVENESS SOURCE FOUND, carrying the intent of the answer.
+///
+/// The design rule this type exists to honour: "the intent is intelligence,
+/// context determines content". A count is only meaningful with its provenance,
+/// so provenance is not a wrapper around it — it IS the answer. Every case is
+/// something a source can genuinely mean, and a caller cannot manufacture one
+/// it did not observe:
+///
+///   - `HeldBy`      — these boundaries hold a value of the old shape. EVIDENCE.
+///   - `HeldByNothing` — a source looked and found none. ALSO EVIDENCE, and a
+///     different claim from "nobody looked". Conflating the two is what would
+///     let a failed probe skip a build.
+///   - `Unconsulted`  — there is no source here. Not evidence; the caller must
+///                     be able to tell this from a real zero.
+///   - `SourceFailed` — a source exists and refused or broke. Distinct from
+///     `Unconsulted` because the USER ACTION differs: one needs a source
+///     installed, the other needs a bug fixed.
+///
+/// `Boundaries` rather than an `int`, so a message can name WHICH boundary
+/// holds the old value — which is the thing a user can act on.
+[<RequireQualifiedAccess>]
+type LiveCount =
+  /// These boundaries hold values of the old shape.
+  | HeldBy of boundaries: string list
+  /// A source was consulted and it holds nothing.
+  | HeldByNothing
+  /// No liveness source exists here, so nothing was established.
+  | Unconsulted of because: string
+  /// A source exists and could not answer.
+  | SourceFailed of because: string
+
 /// Cells as they are created and swapped. Per-process by construction, because
 /// liveness is a fact about ONE running process; two apps must never share
 /// this, or one app's cell would make the other app's restart pay for a build.
@@ -83,6 +114,24 @@ type HolderRegistry private (cells: ResizeArray<LiveCell>, nextId: int64 ref) =
   /// Everything registered, for a user asking "what does SageFs think is
   /// alive?".
   member this.Cells = List.ofSeq cells
+
+  /// WHICH live boundaries hold this type, by name. A LIST rather than a
+  /// count, because a message naming the boundary is something a user can act
+  /// on, and a bare `2` is not.
+  member this.BoundariesHolding (typeName: string) : string list =
+    cells
+    |> Seq.filter (fun c -> not c.Superseded && c.Holds = typeName)
+    |> Seq.map (fun c -> c.Holds)
+    |> Seq.distinct
+    |> List.ofSeq
+
+  /// The answer, carrying its provenance. A registry that HOLDS something says
+  /// which boundary; one that holds nothing says so as a CLAIM, which is what
+  /// lets the cost decision skip a build on evidence rather than on absence.
+  member this.LiveCountOf (typeName: string) : LiveCount =
+    match this.BoundariesHolding typeName with
+    | [] -> LiveCount.HeldByNothing
+    | held -> LiveCount.HeldBy held
 
   /// How many live (never superseded, never released) cells hold this type.
   member this.LiveHolding (typeName: string) =

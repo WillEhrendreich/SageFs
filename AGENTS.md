@@ -44,6 +44,30 @@ Working on SageFs itself has two extra catches:
   can be `#load`ed into any session), and only then fall back to `dotnet` for
   that step. Never silently.
 
+## Editing: exact calls, and never a bulk rewrite
+
+The loop above is for CODE. This is for CHANGING it, and the rule is narrow on
+purpose: a scripted edit that might land wrong is worse than no edit, because a
+silent no-op reads exactly like a successful one.
+
+- **No `sed -i`, no `python3 -c` file rewrites, no regex bulk edits.** They
+  rewrite what they did not read, they swallow the one file that differed, and
+  they cannot tell you which of thirty call sites they actually changed.
+- **Use the editor tool for a specific change** — read the region, then replace
+  that exact text. A call that did not match is a bug to investigate, not
+  something to widen until something sticks.
+- **Scripting is F#, and it is dogfooded.** A repeated mechanical change goes
+  in an `.fsx` run through SageFs, because the script is then F# you can
+  evaluate, and it reports its own result. It MUST assert that each
+  replacement matched — and say so out loud — rather than exiting quietly.
+- **Verify the diff after any scripted change.** A pattern that matched in
+  4 files and silently missed a 5th is the failure mode this rule exists to
+  prevent.
+- **Gates run in a background agent you do not block on.** The release gate is
+  a decision, not an iteration tool; re-rolling it to escape a flake costs
+  minutes and proves nothing.
+
+
 ## Project Overview
 
 SageFs is an F# live development environment with editor integrations for VS Code and Neovim, a web dashboard, and an MCP server for agent and programmatic access. Its daemon architecture hosts persistent, isolated F# Interactive sessions.

@@ -65,20 +65,22 @@ let holderRegistryTests =
       |> List.length
       |> Expect.equal "but the history is still inspectable" 1
 
-    testCase "WHY — the liveness answer separates NONE, SOME and UNKNOWN" <| fun _ ->
+    testCase "WHY — the answer separates ASKED-AND-FOUND-NOTHING from NEVER-ASKED, because only one is evidence" <| fun _ ->
       let r = fresh ()
-      RestartCost.rebuilds (RestartCost.decideFromCount (fun t -> Some (r.LiveHolding t)) "Todo")
-      |> Expect.isFalse "nothing holds it, so no rebuild"
+      // A registry that was consulted and found nothing: a CLAIM, and the
+      // evidence that licenses skipping a build.
+      RestartCost.rebuilds (RestartCost.decideFromLiveCount (r.LiveCountOf "Todo"))
+      |> Expect.isFalse "asked, and nothing holds it"
+
+      // A registry that was NEVER consulted is a different claim entirely, and
+      // must not be readable as the one above.
+      let neverAsked = SageFs.LiveCount.Unconsulted "no registry in this process"
+      RestartCost.rebuilds (RestartCost.decideFromLiveCount neverAsked)
+      |> Expect.isTrue "never asked, so nothing was established, so pay the build"
+
       r.Register "Order" |> ignore
-      RestartCost.rebuilds (RestartCost.decideFromCount (fun t -> Some (r.LiveHolding t)) "Order")
-      |> Expect.isTrue "one cell holds it, so a rebuild"
-      // A registry that was never asked cannot answer for a type in another
-      // process; that is a refusal, not a count of zero.
-      SageFs.Liveness.Unknown "no registry in this process"
-      |> fun l ->
-        match l with
-        | SageFs.Liveness.Unknown _ -> ()
-        | _ -> failtest "unknown must stay distinct from none"
+      RestartCost.rebuilds (RestartCost.decideFromLiveCount (r.LiveCountOf "Order"))
+      |> Expect.isTrue "asked, and something holds it"
 
     testCase "WHY — cells are PER-REGISTRY, so one app's cell cannot make another's restart pay" <| fun _ ->
       let a = fresh ()
@@ -105,6 +107,6 @@ let holderRegistryTests =
       // decision actually uses: the count, and whether it is a live answer.
       let count = r.LiveHolding "Order"
       count |> Expect.equal "the registry counts what it registered" 2
-      RestartCost.rebuilds (RestartCost.decideFromCount (fun t -> Some (r.LiveHolding t)) "Order")
-      |> Expect.isTrue "and the decision reads that count as live"
+      RestartCost.rebuilds (RestartCost.decideFromLiveCount (r.LiveCountOf "Order"))
+      |> Expect.isTrue "and the decision reads that registry as live"
   ]

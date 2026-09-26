@@ -266,7 +266,7 @@ type AppRunState =
     // Whether anything alive still holds the OLD shape. Carried because the
     // CALLER is the only place that can know, and a respawn that skips the
     // build must be justified by evidence rather than assumed.
-    * liveness: SageFs.Liveness
+    * liveness: SageFs.LiveCount
     * at: DateTime
   /// A rebuild of the app failed: the code did not compile, the app did not crash.
   | BuildFailed of project: string * reason: string * at: DateTime * lastAddress: PreviousAddress
@@ -359,7 +359,7 @@ type RunEnd =
       project: string
     * previous: PreviousAddress
     * subject: SageFs.GranularRestart.RestartSubject
-    * liveness: SageFs.Liveness
+    * liveness: SageFs.LiveCount
   /// Not the current run (stopped, replaced, or its worker is gone): nothing changed.
   | NotCurrent
 

@@ -279,7 +279,7 @@ type internal Msg =
       first: SageFs.Features.ReloadPlanning.ReloadChange
     * rest: SageFs.Features.ReloadPlanning.ReloadChange list
     * subject: SageFs.GranularRestart.RestartSubject
-    * liveness: SageFs.Liveness
+    * liveness: SageFs.LiveCount
     * AsyncReplyChannel<AppRunState>
   | Shutdown of AsyncReplyChannel<unit>
 
@@ -548,7 +548,7 @@ let requireRestart
     (first: SageFs.Features.ReloadPlanning.ReloadChange)
     (rest: SageFs.Features.ReloadPlanning.ReloadChange list)
     (subject: SageFs.GranularRestart.RestartSubject)
-    (liveness: SageFs.Liveness)
+    (liveness: SageFs.LiveCount)
     : Task<AppRunState> =
   runner.Agent.PostAndAsyncReply(fun reply -> RequireRestart(first, rest, subject, liveness, reply)) |> Async.StartAsTask
 

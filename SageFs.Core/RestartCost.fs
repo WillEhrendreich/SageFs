@@ -84,27 +84,39 @@ module RestartCost =
     | Liveness.Unknown why ->
       RestartAction.RebuildProject(sprintf "liveness is unknown (%s), so pay the build rather than risk a stale value" why)
 
-  /// Decide from a source that COUNTS live holders of a type.
+  /// Decide from a LIVENESS ANSWER — the primary seam.
   ///
-  /// It takes a COUNT FUNCTION, not a registry, so this decision does not know
-  /// what a registry is — a decision that needs a collaborator is a lookup, and
-  /// the caller composes the two. It is also what lets a second liveness source
-  /// (a DI container, an agent registry) plug in without changing this.
+  /// This exists because the earlier one took `string -> int option`, and that
+  /// was wrong in a way this repo's own rules forbid: `None` collapsed "there
+  /// is no registry", "nothing holds it" and "the source could not answer" into
+  /// one absence. A railway result with a single `Error` is not a railway
+  /// result — it is an option with a doc comment.
   ///
-  /// `None` means "no source could answer", which is NOT the same as zero: a
-  /// process with no holder registry has told us nothing about whether anything
-  /// holds the old shape, and reading it as "nothing does" would skip a build.
-  let decideFromCount
-      (liveHolders: string -> int option)
-      (typeName: string)
-      : RestartAction =
-    match liveHolders typeName with
-    | None ->
-      decide (Liveness.Unknown(sprintf "no liveness source could answer for '%s'" typeName))
-    | Some 0 ->
-      decide (Liveness.NoLiveInstances(sprintf "no holder holds '%s'" typeName))
-    | Some n ->
-      decide (Liveness.HoldsLiveInstances(sprintf "%d holder(s) still hold '%s'" n typeName))
+  /// It does NOT funnel through `decide`/`Liveness`, on purpose. Round-tripping
+  /// an intent-carrying answer through a narrower type and back would throw away
+  /// exactly the provenance that made the answer worth carrying, and would let
+  /// the two drift apart. The domain states each case and acts on it directly.
+  ///
+  /// The restart's WIDTH is deliberately not consulted: how wide a restart is
+  /// and whether it needs a build are different questions, and conflating them
+  /// is how a "scoped restart" ends up claiming a cheaper build than the
+  /// toolchain can perform.
+  let decideFromLiveCount (answer: LiveCount) : RestartAction =
+    match answer with
+    | LiveCount.HeldBy boundaries ->
+      RestartAction.RebuildProject(
+        sprintf
+          "%d boundary/boundaries still hold a value of the old shape (%s), so the assembly must be rebuilt"
+          boundaries.Length
+          (String.concat ", " boundaries))
+    | LiveCount.HeldByNothing ->
+      RestartAction.RespawnOnly "a liveness source was consulted and nothing holds the old shape, so respawning is enough"
+    | LiveCount.Unconsulted because ->
+      RestartAction.RebuildProject(
+        sprintf "liveness was never established (%s), so pay the build rather than risk a stale value" because)
+    | LiveCount.SourceFailed because ->
+      RestartAction.RebuildProject(
+        sprintf "the liveness source could not answer (%s), so pay the build rather than risk a stale value" because)
 
   /// Whether the action rebuilds. One question, so a caller cannot ask it two
   /// ways and get two answers.

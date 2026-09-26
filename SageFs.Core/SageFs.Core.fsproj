@@ -18,6 +18,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="Editing.fs" />
         <Compile Include="TestProviderTypes.fs" />
         <Compile Include="WorkflowTypes.fs" />
         <Compile Include="SessionProjectTarget.fs" />
@@ -95,8 +96,9 @@
         <Compile Include="TranslationValidation.fs" />
         <Compile Include="BuildPreflight.fs" />
         <Compile Include="Middleware\ValueReads.fs" />
-        <Compile Include="RestartCost.fs" />
         <Compile Include="HolderRegistry.fs" />
+        <Compile Include="RestartCost.fs" />
+        <Compile Include="Features\RegisteredHolder.fs" />
         <Compile Include="Features\RestartScope.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
