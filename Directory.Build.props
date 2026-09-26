@@ -35,6 +35,39 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RestoreLockedMode Condition="'$(CI)' == 'true' or '$(GITHUB_ACTIONS)' == 'true'">true</RestoreLockedMode>
   </PropertyGroup>
+
+  <!-- The path to SageFs.Core.dll for a sample that wants the holder API
+       (Holder / HolderRegistry / RegisteredHolder), so a sample can demonstrate
+       registered live state without hand-writing a HintPath to a build output.
+
+       Resolved HERE, in the repo's own props, rather than in each sample: a
+       per-sample HintPath into SageFs.Core/bin is a build-order dependency on a
+       path that may not exist yet, and the local gate proved it — in a clean
+       checkout the ConsoleTicker failed with FS0039 `HolderRegistry is not
+       defined`, because SageFs.Core had not been built into that Configuration.
+
+       A path that does not exist yet simply leaves the property empty, and the
+       sample's Reference is conditioned on it being non-empty, so this is safe
+       on a machine where Core has never been built.
+
+       This is a stepping stone, not the answer. The answer is SageFs injecting
+       the reference at build time for a RUN APP, via
+       `-p:CustomAfterMicrosoftCommonTargets=<generated>.targets` — verified to
+       build a project with no Reference at all. `-p:ReferencePath=` does NOT
+       work for that: it only tells MSBuild where to look for references that
+       already exist, so it can never add one.
+
+       The default is set FIRST, because `Configuration` is not yet defined when
+       a .props file is evaluated — it arrives later from the SDK. Without this
+       default the `Exists(...)` below tests the literal path
+       `bin//net10.0/...`, which never exists, the property silently stays
+       empty, and the sample fails with FS0039 rather than a clear diagnostic. -->
+  <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
+  </PropertyGroup>
+  <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory)SageFs.Core/bin/$(Configuration)/net10.0/SageFs.Core.dll')">
+    <SageFsCoreAssembly>$(MSBuildThisFileDirectory)SageFs.Core/bin/$(Configuration)/net10.0/SageFs.Core.dll</SageFsCoreAssembly>
+  </PropertyGroup>
 </Project>
 
 
