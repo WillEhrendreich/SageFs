@@ -80,13 +80,41 @@ default is worse than it was".
    **not** fix it, because the pressure comes from the other 248 suites, not
    from each other.
 
-## The targeted next step
+## The targeted next step, and what has been ELIMINATED since
 
-The remaining lever is the per-session 94MB `HostCoreAdoption` copy that 58
-daemons each pay. Most of those fixtures do not reference `SageFs.Core` and do
-not need a private adoption at all, so the tier should not be materialising
-one per session. That is a `SessionManager`/`HostCoreAdoption` change with its
-own tests, and it is a bigger piece of work than this investigation.
+Measured on real paths and real logs, in the live REPL where possible:
+
+- **Not a timeout.** Budget 60s → 180s made it worse (69s/129s → 188s/368s).
+- **Not CPU saturation.** 48 CPU spinners on 16 cores: still passes, 39.6s.
+- **Not a regression from this work.** Unmodified `1b685a3d` fails identically.
+- **Not a port race.** `ed9220c1` took `address already in use` from 4 → 0.
+- **Not `HostCoreAdoption`.** This was my next hypothesis and it is wrong.
+  Replaying `findCandidates`' exact predicate in the REPL: **0 of the 4 fixture
+  projects have a `SageFs.Core.dll` under their `bin`**, including both failing
+  suites' fixtures. Only **2 adoptions happen in the entire tier** (not 58), and
+  the machine has 38GB RAM free. Adoption is a rounding error here, not the cause.
+- **Not the session being unready.** The test's own earlier waits succeed in the
+  failing run: `waitForReadySession` passes and discovery reports
+  `ready_with_tests`, `Total=3`, `DiscoveryRequiresEval=false`,
+  `CoverageBitmapStats.TestsWithCoverage=3`. The worker IS up and the tests ARE
+  instrumented and runnable.
+
+So the gap is narrow and specific: the session is Ready, the three tests are
+discovered and instrumented, `RunRequestedTests` is dispatched (the API replies
+`Queued 3 test(s)`, `success: true`), and the status then sits at
+`Passed=0 Stale=3 Running=0` — nothing in flight, nothing ever reported.
+
+`SageFsApp.fs:2919` handles the effect and calls
+`deps.GetStreamingTestProxy sid`; on `None` it dispatches every test as
+`NotRun`, which is exactly the observed state. So the proxy is absent (not
+slow — the 15s deadline in `5a7be2c7` did not help), and
+`DaemonMode.fs:1845` resolves it from `snapshot.WorkerBaseUrls`. **The open
+question is why that map does not contain the session's worker under
+concurrency**, and it needs one instrumented failing run to answer: log the
+`WorkerBaseUrls` keys and the proxy lookup at the moment the effect is handled.
+
+That is a targeted change to `SageFsApp`/`DaemonMode` plus one run, not a
+guess. Until then this is a recorded, bounded open item rather than a claim.
 
 ## How to re-check
 
