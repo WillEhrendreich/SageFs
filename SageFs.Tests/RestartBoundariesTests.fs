@@ -92,4 +92,77 @@ let restartBoundariesTests =
       r.Declare "store3" "Cart" |> ignore
       (r.TryRestartScopeFor "Cart", r.RestartScopeFor "Cart")
       |> Expect.equal "ambiguous is None AND Ambiguous" (None, Error(SageFs.Unscoped.Ambiguous [ "store2"; "store3" ]))
+    ]
+
+/// WHY — a boundary is the one place that ALREADY holds the value, so it is
+/// the only place a migration can happen without the liveness registry taking a
+/// strong reference to live state. A registry that holds a value reports
+/// `HeldBy` for an object nothing else uses, which is the same lie as a
+/// reflection probe: live because we are holding it, not because anything wants
+/// it.
+///
+/// So `Migrate` lives on the boundary. These pin the three claims that make it
+/// safe, and the negative controls that would fail against a stub.
+[<Tests>]
+let boundaryMigrationHookTests =
+  testList "a boundary's migration hook" [
+
+    testCase "WHY — a boundary WITH a hook is consulted, and its verdict is the one the decision sees" <| fun _ ->
+      let r = fresh ()
+      r.DeclareWithMigration
+        "order-store"
+        "Order"
+        (Some(fun _value _newType -> SageFs.MigrationWorth.WorthCarrying 3))
+      |> ignore
+      match r.MigrationVerdictFor "Order" (box 1) typeof<int> with
+      | Some v -> v |> Expect.equal "the hook's own answer travels" (SageFs.MigrationWorth.WorthCarrying 3)
+      | None -> failtest "a declared hook must be consulted"
+
+    testCase "WHY — a boundary with NO hook answers 'I said nothing', which is NOT 'nothing is live'" <| fun _ ->
+      // The distinction the whole hook rests on. `None` here means a boundary's
+      // silence; a caller that read it as `HeldByNothing` would skip a build
+      // with no evidence — the exact defect `LiveCount` was introduced to end.
+      let r = fresh ()
+      r.Declare "order-store" "Order" |> ignore
+      (r.MigrationVerdictFor "Order" (box 1) typeof<int>)
+      |> Expect.equal "a silent boundary is not a migration verdict" None
+      // And the liveness answer is unaffected by the hook's absence.
+      r.RestartScopeFor "Order"
+      |> Expect.equal "the boundary still scopes the restart" (Ok "order-store")
+
+    testCase "WHY — a REPEAT registration must not silently drop a hook, or an accepted repeat is a downgrade" <| fun _ ->
+      let r = fresh ()
+      r.DeclareWithMigration
+        "order-store"
+        "Order"
+        (Some(fun _value _newType -> SageFs.MigrationWorth.WorthCarrying 3))
+      |> ignore
+      // The same claim again, with NO hook — the ordinary `Declare` a
+      // second startup path would call.
+      r.Declare "order-store" "Order" |> ignore
+      match r.MigrationVerdictFor "Order" (box 1) typeof<int> with
+      | Some v -> v |> Expect.equal "the hook survives the repeat" (SageFs.MigrationWorth.WorthCarrying 3)
+      | None -> failtest "a repeat must not clear a hook it did not supply"
+
+    testCase "WHY — a hook on an UNDECLARED type is not reachable, because there is no boundary to ask" <| fun _ ->
+      let r = fresh ()
+      r.DeclareWithMigration
+        "order-store"
+        "Order"
+        (Some(fun _ _ -> SageFs.MigrationWorth.WorthCarrying 1))
+      |> ignore
+      (r.MigrationVerdictFor "Todo" (box 1) typeof<int>)
+      |> Expect.equal "a type no boundary holds has no hook to consult" None
+
+    testCase "WHY — a REFUSING hook is believed, because a boundary that says 'cannot' is evidence the way liveness is" <| fun _ ->
+      let r = fresh ()
+      r.DeclareWithMigration
+        "order-store"
+        "Order"
+        (Some(fun _ _ -> SageFs.MigrationWorth.NotWorthCarrying "'Payload': no carry rule"))
+      |> ignore
+      // The refusal must reach the decision, not be swallowed into a None.
+      match r.MigrationVerdictFor "Order" (box 1) typeof<int> with
+      | Some v -> v |> Expect.equal "the refusal travels intact" (SageFs.MigrationWorth.NotWorthCarrying "'Payload': no carry rule")
+      | None -> failtest "a refusal must NOT be reported as silence"
   ]

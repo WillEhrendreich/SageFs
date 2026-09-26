@@ -41,14 +41,34 @@ open System.Collections.Generic
 /// restart message.
 type BoundaryId = string
 
-/// One declared boundary: the unit that can be restarted, and the type whose
-/// instances it holds.
+/// One declared boundary: the unit that can be restarted, the type whose
+/// instances it holds, and — optionally — how to carry those instances when the
+/// shape changes.
+///
+/// `Migrate` is the third reason this is not simply a dictionary of names. A
+/// boundary is the one place that ALREADY holds the value, so it is the only
+/// place a migration can be performed without the liveness registry holding a
+/// strong reference to live state — which would make it report `HeldBy` for an
+/// object nothing else uses, the same lie as a reflection probe.
+///
+/// It is a function field, and that is a cost worth naming: F# records with
+/// function fields do not give structural equality. Nothing here compares
+/// `Boundary` values — `Declare` compares `Id` and `Holds` field-wise, which is
+/// exactly why a repeat of the same claim is recognised — so the cost is
+/// theoretical. If a future caller needs `boundary1 = boundary2`, this becomes a
+/// DU over (Id, Holds) + a separate hook table.
 type Boundary =
   { Id: BoundaryId
     /// The type whose shape, when it changes, makes a restart scoped to THIS
     /// boundary. Naming a type nothing holds is a user error with a clear
     /// consequence: the restart stays app-wide, which is safe.
-    Holds: string }
+    Holds: string
+    /// How to carry a live instance into the new shape. `None` is the honest
+    /// default for every boundary today: the boundary does not know how, so a
+    /// type change under it falls back to a rebuild. `None` is NOT "nothing is
+    /// live" — that claim belongs to the liveness answer, and conflating them
+    /// is how a cheap restart gets granted without evidence.
+    Migrate: (obj -> System.Type -> MigrationWorth) option }
 
 /// A boundary declaration that conflicts with one already registered.
 type DeclarationConflict =
@@ -93,18 +113,63 @@ type Registry private (state: RegistryState) =
   /// Declare that `id` holds instances of `holds`. Idempotent for a
   /// REPEATED identical declaration, because startup code may legitimately
   /// run twice; a CONFLICTING one is refused.
-  member _.Declare (id: BoundaryId) (holds: string) : Declared =
+  ///
+  /// The 2-argument form declares a boundary with NO migration hook, which is
+  /// the honest default: the boundary does not know how, so a type change under
+  /// it falls back to a rebuild. It is kept rather than replaced so the common
+  /// case stays a two-word call, and so a caller that has never heard of
+  /// migration keeps compiling.
+  member this.Declare (id: BoundaryId) (holds: string) : Declared =
+    this.DeclareWithMigration id holds None
+
+  /// Declare with an explicit migration hook. See `Boundary.Migrate` for why the
+  /// hook lives on the boundary rather than in the liveness registry.
+  member _.DeclareWithMigration
+      (id: BoundaryId)
+      (holds: string)
+      (migrate: (obj -> System.Type -> MigrationWorth) option)
+      : Declared =
     match state.Boundaries |> Seq.tryFind (fun b -> b.Id = id) with
     | Some existing when existing.Holds = holds ->
       // A repeat of the same claim. Accept it rather than making every caller
       // guard against a double-initialise.
-      Declared.Accepted existing
+      //
+      // The hook is NOT overwritten by a repeat that supplies none: a boundary
+      // registered without a migration hook and then re-registered without one
+      // keeps whatever it had. Silently clearing a hook would turn a repeat
+      // into a downgrade, which is the opposite of what "accept it" means.
+      let merged =
+        match existing.Migrate, migrate with
+        | Some hook, _ -> { existing with Migrate = Some hook }
+        | None, hook -> { existing with Migrate = hook }
+      state.Boundaries[state.Boundaries.IndexOf existing] <- merged
+      Declared.Accepted merged
     | Some existing ->
       Declared.Conflicted { Boundary = id; AlreadyHolds = existing.Holds; TriedToHold = holds }
     | None ->
-      let boundary = { Id = id; Holds = holds }
+      let boundary = { Id = id; Holds = holds; Migrate = migrate }
       state.Boundaries.Add boundary
       Declared.Accepted boundary
+
+  /// What a boundary says a live value would be worth migrating as, or
+  /// `None` when it declared no hook.
+  ///
+  /// `None` here is NOT "nothing is live" and NOT "cannot migrate" — it is "this
+  /// boundary said nothing", and the caller must decide what an unanswered
+  /// question costs. It costs a rebuild, because that is the direction we
+  /// already take and a boundary's silence is not evidence.
+  member this.MigrationVerdictFor (typeName: string) (oldValue: obj) (newType: System.Type) =
+    // Zero or several boundaries both mean "nobody to ask", and they are
+    // different facts: an UNDECLARED type is a user action, an AMBIGUOUS one is
+    // a choice. Neither is answered here — the caller reads the ambiguity from
+    // `RestartScopeFor` — so both are simply "no hook to consult".
+    match this.BoundariesHolding typeName with
+    | [ boundary ] ->
+      match boundary.Migrate with
+      | None -> None
+      | Some migrate -> Some(migrate oldValue newType)
+    | [] -> None
+    | _ -> None
 
   /// Everything declared, so a user can inspect what they opted into.
   member this.Declared = List.ofSeq state.Boundaries
