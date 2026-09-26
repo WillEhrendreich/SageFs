@@ -17,4 +17,20 @@
     <PackageReference Include="FSharp.Core" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The counter below is held in a REGISTERED holder, which is what makes
+         the app's live state visible to a hot-reload restart.
+
+         This is a plain assembly Reference, NOT a ProjectReference, and the
+         distinction is forced by a measured NU1605: referencing the project
+         pulls FSharp.Core 11.0.101-preview7.26381.103 transitively through
+         FSharp.Compiler.Service, which the sample's own pinned FSharp.Core
+         (…26359.118) reads as a downgrade, and the repo treats warnings as
+         errors. The sample stays package-free and only needs the types. -->
+    <Reference Include="SageFs.Core">
+      <HintPath>$(MSBuildThisFileDirectory)../../../SageFs.Core/bin/$(Configuration)/net10.0/SageFs.Core.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
 </Project>
