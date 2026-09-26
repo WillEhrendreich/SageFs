@@ -47,16 +47,30 @@ What `UnitScope` *does* buy today:
 
 ## The remaining step, stated precisely
 
-A genuinely narrower restart needs a boundary SageFs can actually restart: a
-DI container registration, an `IOptionsMonitor`, an agent mailbox, or a
-separate process. `type-migration-direction.md` says this itself — the holder
-is "hooked to boundaries that already exist (DI singletons, `IOptionsMonitor`,
-agents) before asking anyone to change source".
+A genuinely narrower restart needs a boundary SageFs can actually restart. Two
+were considered and one is ruled out by the code:
 
-Until such a boundary exists and is registered, `UnitScope` is a diagnosis, not
-a cheaper restart. Claiming otherwise would be exactly the defect class this
-work has been removing: a scope in the message with no consequence in the
-action.
+- **A DI container or `IOptionsMonitor` per unit.** `Run App` launches the
+  user's app as a PROCESS (`AppRunner`'s `ThreadOnly` / `HostHandle` are for
+  SageFs's own dashboard apps, not the user's). There is no in-process
+  per-unit object for SageFs to restart, because there is no in-process user
+  app at all.
+- **The holder (`SageFs.Core/Holder.fs`).** It provides `Cell<'a>` and a typed
+  `Swap<'before, 'after>`, which is exactly the right SHAPE for a per-unit
+  restart — but nothing in a user's app is a holder yet, because the holder
+  requires the source rewrite (`HolderRewrite`) that step 4 gates and no
+  boundary has opted in.
+
+So the missing piece is a **registration** step: a user (or a framework
+adapter) declaring "this unit is a holder boundary", after which
+`UnitScope unit` has something to act on. `type-migration-direction.md` says
+the same thing — the holder is "hooked to boundaries that already exist (DI
+singletons, `IOptionsMonitor`, agents) before asking anyone to change source".
+
+That is a design step, not a wiring fix, and it needs a decision about which
+boundary is first. Claiming `UnitScope` is already a narrower restart would be
+exactly the defect class this release has been removing: a scope in the
+message with no consequence in the action.
 
 ## How to verify
 
