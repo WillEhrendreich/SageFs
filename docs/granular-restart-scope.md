@@ -127,7 +127,41 @@ So neither fallback is load-bearing for the Run App path. "It compiled" and
 without it the app dies at RUN time with a missing assembly, long after a green
 build.
 
-### The mechanism, and what does NOT work
+## Dogfooded on the 0.6.835 daemon, not in a test fixture
+
+The decision evaluated in a live session on the installed daemon, over its real
+MCP transport:
+
+```
+PROBE held      rebuild=true     evidence: something holds it
+PROBE empty     rebuild=false    evidence: nothing does  -> SKIP the build
+PROBE unchecked rebuild=true     not evidence: pay
+```
+
+Line two is the entire point of `LiveCount`. Before it, "a registry was asked
+and found nothing" and "no registry was consulted" were both `None`, and
+`rebuilds` collapsed the answer to a bool — so the two claims that must differ
+most were the two that could not.
+
+### Three mistakes that were the DRIVER's, not the product's
+
+Worth recording, because the cheapest explanation of each was a product bug and
+none of them was:
+
+1. **`Uninitialized` was a real state, not an error.** The tool refused and
+   named exactly what *was* available. That is the recovery-from-a-state fix
+   working: escaping it never required leaving it first.
+2. **Tool arguments are snake_case.** `working_directory`, not
+   `workingDirectory`. The tool answered with the exact missing parameter name.
+3. **The transport replies as SSE.** A JSON-RPC result arrives on a `data:`
+   line, so searching the raw body finds nothing *even on success* — a driver
+   that reports that as a failure is reporting a failure that is not one.
+
+Each was found by reading what the daemon actually said rather than inferring
+from a boolean. A driver that prints "not ready" without saying which state it
+saw cannot tell warmup from breakage.
+
+## The `AppContext.BaseDirectory` trap, in one line
 
 | Approach | Result |
 |---|---|
