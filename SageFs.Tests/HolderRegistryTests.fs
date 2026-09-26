@@ -67,12 +67,11 @@ let holderRegistryTests =
 
     testCase "WHY — the liveness answer separates NONE, SOME and UNKNOWN" <| fun _ ->
       let r = fresh ()
-      r.LivenessOf "Todo"
-      |> Expect.equal "nothing holds it" (SageFs.Liveness.NoLiveInstances "Todo")
+      RestartCost.rebuilds (RestartCost.decideFromCount (fun t -> Some (r.LiveHolding t)) "Todo")
+      |> Expect.isFalse "nothing holds it, so no rebuild"
       r.Register "Order" |> ignore
-      match r.LivenessOf "Order" with
-      | SageFs.Liveness.HoldsLiveInstances _ -> ()   // the shape is the claim
-      | other -> failtestf "one cell holds it, got %A" other
+      RestartCost.rebuilds (RestartCost.decideFromCount (fun t -> Some (r.LiveHolding t)) "Order")
+      |> Expect.isTrue "one cell holds it, so a rebuild"
       // A registry that was never asked cannot answer for a type in another
       // process; that is a refusal, not a count of zero.
       SageFs.Liveness.Unknown "no registry in this process"
@@ -105,8 +104,7 @@ let holderRegistryTests =
       // The answer's TEXT is not the count, so compare the two facts the
       // decision actually uses: the count, and whether it is a live answer.
       let count = r.LiveHolding "Order"
-      match r.LivenessOf "Order" with
-      | SageFs.Liveness.HoldsLiveInstances _ ->
-        count |> Expect.equal "count and answer agree" 2
-      | other -> failtestf "expected live instances, got %A" other
+      count |> Expect.equal "the registry counts what it registered" 2
+      RestartCost.rebuilds (RestartCost.decideFromCount (fun t -> Some (r.LiveHolding t)) "Order")
+      |> Expect.isTrue "and the decision reads that count as live"
   ]

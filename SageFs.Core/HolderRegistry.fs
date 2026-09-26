@@ -89,13 +89,3 @@ type HolderRegistry private (cells: ResizeArray<LiveCell>, nextId: int64 ref) =
     cells
     |> Seq.filter (fun c -> not c.Superseded && c.Holds = typeName)
     |> Seq.length
-
-  /// The liveness answer for the cost decision, in one call so a caller
-  /// cannot count cells one way and describe them another. It PRODUCES the
-  /// decision's own `Liveness` rather than defining a second one: a distinct
-  /// type with the same name in one namespace would shadow at a call site, and
-  /// the two drifting apart is exactly how a wrong answer would ship.
-  member this.LivenessOf (typeName: string) : Liveness =
-    match this.LiveHolding typeName with
-    | 0 -> Liveness.NoLiveInstances typeName
-    | n -> Liveness.HoldsLiveInstances(sprintf "a holder cell still holds %s" typeName)

@@ -84,6 +84,28 @@ module RestartCost =
     | Liveness.Unknown why ->
       RestartAction.RebuildProject(sprintf "liveness is unknown (%s), so pay the build rather than risk a stale value" why)
 
+  /// Decide from a source that COUNTS live holders of a type.
+  ///
+  /// It takes a COUNT FUNCTION, not a registry, so this decision does not know
+  /// what a registry is — a decision that needs a collaborator is a lookup, and
+  /// the caller composes the two. It is also what lets a second liveness source
+  /// (a DI container, an agent registry) plug in without changing this.
+  ///
+  /// `None` means "no source could answer", which is NOT the same as zero: a
+  /// process with no holder registry has told us nothing about whether anything
+  /// holds the old shape, and reading it as "nothing does" would skip a build.
+  let decideFromCount
+      (liveHolders: string -> int option)
+      (typeName: string)
+      : RestartAction =
+    match liveHolders typeName with
+    | None ->
+      decide (Liveness.Unknown(sprintf "no liveness source could answer for '%s'" typeName))
+    | Some 0 ->
+      decide (Liveness.NoLiveInstances(sprintf "no holder holds '%s'" typeName))
+    | Some n ->
+      decide (Liveness.HoldsLiveInstances(sprintf "%d holder(s) still hold '%s'" n typeName))
+
   /// Whether the action rebuilds. One question, so a caller cannot ask it two
   /// ways and get two answers.
   let rebuilds (action: RestartAction) =
