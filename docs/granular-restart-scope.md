@@ -88,7 +88,7 @@ That is a real build, and it is the honest next piece. It is not started here
 rather than half-built and claimed — and the note records WHY, so the next
 person does not spend a day on the reflection probe that cannot work.
 
-## The reachability blocker, measured
+## The reachability question, settled by measurement
 
 A user's `Run App` project references **only** `FSharp.Core`:
 
@@ -97,37 +97,59 @@ $ grep -E 'PackageReference|ProjectReference' samples/demos/SageFs.Samples.Conso
     <PackageReference Include="FSharp.Core" />
 ```
 
-`SageFs.Core.dll` *does* ship beside the tool (verified: present in
-`SageFs/bin/Release/net10.0`), so the assembly is available — but nothing puts
-it on a user app's compile path, so `SageFs.HolderRegistry` does not resolve
-in user code.
+Nothing adds a SageFs reference, so a sample cannot simply use the holder API
+as it stands. **But the API is reachable** — proven by a real external project
+outside this repo, compiled and run against the built `SageFs.Core.dll`:
 
-I attempted exactly the change a user would want — turning the ticker's
-`let mutable n = 0` into a registered holder — and reverted it rather than
-leave the tree unbuildable. The shape works, verified in a live SageFs
-session first:
-
-```
-RESULT ticks 1 2 3 -> [1; 2; 3]
-RESULT the restart now sees: HeldBy ["TickerState"]
+```xml
+<Reference Include="SageFs.Core">
+  <HintPath>.../SageFs.Core/bin/Release/net10.0/SageFs.Core.dll</HintPath>
+</Reference>
 ```
 
-**So every "opt in" design in this document is currently unreachable from user
-code.** That is why every restart honestly answers
-`LiveCount.Unconsulted` — the mechanism is not wrong, a user has no way to
-hold anything.
+```fsharp
+open SageFs
+let registry = HolderRegistry.New ()
+let ticks = RegisteredHolder.holdRegistered registry "TickerState" 0
+let cell = RegisteredHolder.cellOf ticks
+let next () =
+  let current = Holder.read cell
+  cell.Value.Value <- current + 1
+  current + 1
+printfn "ticks: %d %d %d" (next ()) (next ()) (next ())
+printfn "the restart sees: %A" (registry.LiveCountOf "TickerState")
+```
 
-**The next piece is packaging, not refactoring**: a small `SageFs.Runtime`
-package carrying `Holder`, `HolderRegistry` and `RegisteredHolder`, and
-nothing else, plus the Run App path that makes it referenceable.
+```
+ticks: 1 2 3
+read back: 3
+the restart sees: HeldBy ["TickerState"]
+```
+
+So the earlier claim in this file — that the opt-in design is unreachable from
+user code — **was wrong**, and is corrected here rather than quietly dropped.
+`SageFs.Core` is a `Library`, so a user project can reference it; what is
+missing is only the ergonomic step of the reference being added for them.
+
+**A correction worth recording.** The first version of that app printed
+`ticks: 1 1 1` and it looked like a holder defect. It was not: the app *read*
+the cell and never *wrote* it. Proved by asking the product in a live SageFs
+session before touching the code — writes then reads through the same cell give
+`[1; 2; 3]`. SageFs was right and the test app was wrong.
+
+### What still needs doing
+
+- Add the `SageFs.Core` reference to a Run App project automatically, or ship
+  a small `SageFs.Runtime` package carrying just `Holder`, `HolderRegistry`
+  and `RegisteredHolder`. Until then a user must hand-write a `HintPath`.
 
 ## What each piece is worth, and its reach
 
 | Piece | Reachable from a save? |
 |---|---|
 | granular restart, attribution, subject, `RestartPlan` | yes |
-| build-cost decision (`LiveCount`) | yes — but always `Unconsulted` today |
-| `Holder` / `HolderRegistry` / `RegisteredHolder` | no — no user-visible package |
+| build-cost decision (`LiveCount`) | yes — answers `Unconsulted` unless an app registers a holder |
+| `Holder` / `HolderRegistry` / `RegisteredHolder` | yes, by reference; ergonomics still missing |
 
 ## How to verify
 
@@ -138,6 +160,9 @@ dotnet fsi .roastscratch/eval.fsx file:.roastscratch/proof2.fsx
 #   asked, found nothing  rebuild=false   evidence: nothing does -> SKIP
 #   never consulted       rebuild=true    not evidence: pay
 #   source failed         rebuild=true    not evidence: pay
+
+# a real external app
+cd /tmp/holdertest && dotnet run
 
 # the full default tier
 dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary
