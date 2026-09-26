@@ -96,6 +96,7 @@
         <Compile Include="BuildPreflight.fs" />
         <Compile Include="Middleware\ValueReads.fs" />
         <Compile Include="RestartCost.fs" />
+        <Compile Include="HolderRegistry.fs" />
         <Compile Include="Features\RestartScope.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
