@@ -106,15 +106,44 @@ discovered and instrumented, `RunRequestedTests` is dispatched (the API replies
 
 `SageFsApp.fs:2919` handles the effect and calls
 `deps.GetStreamingTestProxy sid`; on `None` it dispatches every test as
-`NotRun`, which is exactly the observed state. So the proxy is absent (not
-slow — the 15s deadline in `5a7be2c7` did not help), and
-`DaemonMode.fs:1845` resolves it from `snapshot.WorkerBaseUrls`. **The open
-question is why that map does not contain the session's worker under
-concurrency**, and it needs one instrumented failing run to answer: log the
-`WorkerBaseUrls` keys and the proxy lookup at the moment the effect is handled.
+`NotRun`, which is what the state LOOKS like. **So I instrumented that branch
+and the hypothesis is wrong**: the new `Log.warn` in `DaemonMode.fs:1845`
+fired **zero times** across a full failing tier run. The proxy is never absent.
+Whatever happens, it happens after the proxy resolves.
 
-That is a targeted change to `SageFsApp`/`DaemonMode` plus one run, not a
-guess. Until then this is a recorded, bounded open item rather than a claim.
+## What the instrumentation actually showed
+
+The failing test is NOT the same test every run. Six full `--integration-host`
+runs, same command, same tree:
+
+| Run | Result |
+|---|---|
+| 18:48 | 246 passed, 0 failed, 2 errored — live testing + MCP outcome gates |
+| 19:13 | 246 passed, 0 failed, 2 errored — same two |
+| 19:42 | 246 passed, 0 failed, 2 errored — same two |
+| 22:00 | 246 passed, 0 failed, 2 errored — same two |
+| 23:01 | 246 passed, 0 failed, 2 errored — same two |
+| 00:50 | 246 passed, **1 failed, 1 errored** — live testing + **Daemon lifecycle** |
+
+The COUNT is rock stable at 246 passed / 2 failed. The IDENTITY of the second
+failure is not: it changed to a completely different suite in the last run.
+That is the signature of **load-ordering**, not one deterministic bug — the
+same two things are always being starved, but which of them loses the race
+depends on scheduling.
+
+## What this means for the fix
+
+So the right target is the tier's concurrency, not any one test:
+
+- `--integration-host` runs 250 real-daemon suites in parallel on a 16-core
+  box, and exactly two of them consistently lose. Both are the ones that must
+  wait on a worker rather than assert on in-memory state.
+- `testSequencedGroup` (`72979fd9`) only sequenced those two against EACH
+  OTHER, which cannot help when the pressure is the other 248.
+- The fix belongs in how the tier schedules worker-dependent suites — bound the
+  tier's parallelism, or run the worker-waiting suites in a low-contention
+  phase. Expecto exposes no parallelism CLI flag, so this is a code change in
+  the tier's composition, with its own test.
 
 ## How to re-check
 
@@ -124,6 +153,6 @@ dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll \
   --integration-host \
   --filter-test-case "editing a compiled F# file reruns tests against rebuilt output without an explicit rerun"
 
-# 2 errored, on my tree AND on the unmodified release commit
+# 246 passed / 2 failed, on my tree AND on the unmodified release commit
 dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary
 ```
