@@ -127,6 +127,53 @@ So neither fallback is load-bearing for the Run App path. "It compiled" and
 without it the app dies at RUN time with a missing assembly, long after a green
 build.
 
+## What is still NOT wired — measured, not estimated
+
+Three modules are built, tested and DST'd, and have **zero production callers**:
+
+```
+$ for m in HolderRewrite TypeShapeMigration TranslationValidation; do
+    echo "$m: $(grep -rl "$m" --include='*.fs' SageFs/ SageFs.Host/ | grep -v obj | wc -l) production files"
+  done
+HolderRewrite: 0 production files
+TypeShapeMigration: 0 production files
+TranslationValidation: 0 production files
+```
+
+A decision function with no live caller is a lookup nobody performs. They are
+not dead code to be deleted — they are the next seam.
+
+### The seam, precisely
+
+`RestartAction` has two cases today:
+
+```fsharp
+| RespawnOnly of because: string
+| RebuildProject of because: string
+```
+
+The missing third is **migrate the value**: `TypeShapeMigration.decideRecord`
+already answers "can this old value be carried into the new shape?", and it
+answers it as a DU with a refusal per field rather than a partial migration. A
+`Migration<_, _>` that is not a migration is an error, not a degraded success.
+
+So the shape of the next piece is:
+
+1. When liveness says a live value of the old shape EXISTS, build the old and
+   new `RecordShape` from the type's own definition.
+2. Ask `decideRecord`. If it migrates, take a **third** action — rewrite the
+   value in place and respawn, with no `dotnet build` at all.
+3. If it refuses, fall to today's `RebuildProject`, carrying the refusal as the
+   `because` so the user learns *which field* was undecidable rather than that
+   something was.
+4. Run every use site of the rewritten binding through `TranslationValidation`
+   before believing the result — that is what `Undecidable` is for, and it is
+   the check that makes a migration safe rather than merely possible.
+
+The hard part is step 1, and it is honest to say so: SageFs does not currently
+retain the old shape of a type across an edit, so the old `RecordShape` has to
+come from the last known parse. That is a real build, not a wiring exercise.
+
 ## Dogfooded on the 0.6.835 daemon, not in a test fixture
 
 The decision evaluated in a live session on the installed daemon, over its real
@@ -161,7 +208,7 @@ Each was found by reading what the daemon actually said rather than inferring
 from a boolean. A driver that prints "not ready" without saying which state it
 saw cannot tell warmup from breakage.
 
-## The `AppContext.BaseDirectory` trap, and the mechanism that works
+### The mechanism, and what does NOT work
 
 | Approach | Result |
 |---|---|
