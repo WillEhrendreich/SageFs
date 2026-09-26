@@ -41,8 +41,33 @@ type RestartAction =
   /// only width a build can have.
   | RebuildProject of because: string
 
+/// What a probe of the RUNNING APP came back with. The distinction that
+/// matters is `Counted 0` versus `CouldNotCount`: "the app says it holds none"
+/// skips a build, while "the probe could not tell" must pay one. Collapsing
+/// them into an int would make a failed probe look like a free restart.
+[<RequireQualifiedAccess>]
+type ProbeOutcome =
+  /// The app answered and the count is real.
+  | Counted of live: int
+  /// The probe could not run, or the type is not present in the running app.
+  /// NOT zero, and never treated as zero.
+  | CouldNotCount of because: string
+
 [<RequireQualifiedAccess>]
 module RestartCost =
+
+  /// Map what the running app said into the liveness the cost decision wants.
+  /// Named so the mapping is one auditable place rather than scattered
+  /// conversions, and so a fourth probe source (a DI container, an agent
+  /// registry) plugs in here.
+  let livenessFromProbe (typeName: string) (outcome: ProbeOutcome) : Liveness =
+    match outcome with
+    | ProbeOutcome.Counted 0 ->
+      Liveness.NoLiveInstances(sprintf "the running app reports no live %s" typeName)
+    | ProbeOutcome.Counted n ->
+      Liveness.HoldsLiveInstances(sprintf "the running app reports %d live %s" n typeName)
+    | ProbeOutcome.CouldNotCount why ->
+      Liveness.Unknown(sprintf "the probe for '%s' could not answer: %s" typeName why)
 
   /// Decide the action. The `subject` is deliberately NOT consulted: how wide
   /// the restart is and whether it needs a build are different questions, and

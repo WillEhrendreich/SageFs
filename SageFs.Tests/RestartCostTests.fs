@@ -60,6 +60,29 @@ let restartCostTests =
         RestartCost.rebuilds (RestartCost.decide (Liveness.HoldsLiveInstances "b"))
         |> Expect.isTrue "width never buys a narrower build")
 
+    testCase "WHY — a probe that COUNTED zero skips the build, because the app says it holds none" <| fun _ ->
+      let l = RestartCost.livenessFromProbe "Order" (SageFs.ProbeOutcome.Counted 0)
+      RestartCost.rebuilds (RestartCost.decide l)
+      |> Expect.isFalse "the app answered, and the answer was none"
+
+    testCase "WHY — a probe that COULD NOT COUNT is NOT zero, and pays the build" <| fun _ ->
+      // The distinction that would silently skip a build if collapsed: a
+      // failed probe is not an answer of zero.
+      let l = RestartCost.livenessFromProbe "Order" (SageFs.ProbeOutcome.CouldNotCount "the type is not loaded")
+      RestartCost.rebuilds (RestartCost.decide l)
+      |> Expect.isTrue "unknown is not zero"
+      match l with
+      | Liveness.Unknown why -> (why.Contains "not loaded") |> Expect.isTrue "it carries the reason"
+      | _ -> failtest "a failed probe must be Unknown"
+
+    testCase "WHY — a probe that counted some instances rebuilds, and says how many" <| fun _ ->
+      let l = RestartCost.livenessFromProbe "Order" ((SageFs.ProbeOutcome.Counted 3))
+      RestartCost.rebuilds (RestartCost.decide l)
+      |> Expect.isTrue "live old-layout values are only fixed by a rebuild"
+      match l with
+      | Liveness.HoldsLiveInstances why -> (why.Contains "3") |> Expect.isTrue "it reports the count"
+      | _ -> failtest "expected live instances"
+
     testCase "WHY — the boolean and the DU never disagree" <| fun _ ->
       [ Liveness.NoLiveInstances "b"; Liveness.HoldsLiveInstances "b"; Liveness.Unknown "why" ]
       |> List.iter (fun l ->
