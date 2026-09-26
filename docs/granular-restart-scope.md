@@ -731,3 +731,53 @@ boundary?** The holder registry needs no declaration — the app opts in by
 holding something. A boundary currently needs an explicit call, and there is
 no path for a user's app to make one. Until there is, the honest state is what
 the table says.
+## The liveness registry the restart reads is not the one the app writes to
+
+Measured, and it invalidates a claim this document has been making.
+
+    HolderRegistry statics = [ "New" ]          <- only a constructor
+    WorkerMain.fs:722   let holderRegistry = SageFs.HolderRegistry.New ()
+    Program.fs:47       let registry        = SageFs.HolderRegistry.New ()
+    WorkerMain.fs:1080  holderRegistry.LiveCountOf typeName
+
+The app runs **in-process** — `SageFs.Host/AppRunner.fs:197` is
+`Assembly.LoadFrom target` followed by an entry-point invoke, not a process
+launch. So both registries live in the SAME process, in the SAME AppDomain,
+and they are still **two unrelated objects**: `HolderRegistry` has no static or
+ambient accessor, only `New`.
+
+Which means `holderRegistry.LiveCountOf typeName` at the restart site is
+reading a registry the app never touched. It reports `0` for every type, always.
+So:
+
+- `LiveCount.HeldByNothing` is produced for every live holder in a real app, and
+- the restart takes `RespawnOnly` — a cheap action — on the strength of a
+  registry nothing wrote to.
+
+**That is the most expensive defect in this whole series, and it is invisible
+from the outside**: it fails in the CHEAP direction, a stale live value survives
+a restart that was told nothing was alive, and every test passes because the
+tests construct a registry, register into it, and read it back from the SAME
+instance. The isolation tests make it look deliberate — "one app's cell cannot
+make another's restart pay" — while the real behaviour is "no app's cell can make
+any restart pay, ever".
+
+### Why the per-registry design was right, and what that implies
+
+Per-registry isolation is the correct property and should not be traded away: it
+is what stops one app's state from narrowing another app's restart. The bug is
+not the design, it is that **the worker holds a registry nothing can write to**.
+
+The fix is the same ambient handle pattern the app already uses for holders, and
+it has to be a handle the APP obtains rather than one SageFs guesses at:
+
+- `HolderRegistry` gains a per-process `Current`, set by the worker when it
+  starts the app, and `RegisteredHolder`/`holdRegistered` register into
+  `Current` when the app gives no registry of its own;
+- a boundary registry follows the same rule, which is what makes a DECLARED
+  boundary reachable at all — today the app has no way to declare one, and this
+  is the channel that would let it.
+
+The moment that exists, `LiveCount` stops being decorative. Until then, the
+honest reading of the live path is `Unconsulted`, not `HeldByNothing` — and
+that distinction is the entire reason `LiveCount` was built.
