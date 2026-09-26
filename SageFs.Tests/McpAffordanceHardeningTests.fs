@@ -448,8 +448,14 @@ let affordanceSupersetSubsetTests =
       let uninitTools = availableTools Uninitialized |> Set.ofList
       (Set.difference uninitTools warmingTools,
        Set.difference warmingTools uninitTools)
-      |> Expect.equal "the two states are peers with two honest scope differences"
-        (Set.singleton "get_daemon_status", Set.singleton "get_recent_fsi_events")
+      // Three honest differences now, not two: Uninitialized keeps
+      // get_daemon_status (nothing is starting yet), WarmingUp offers
+      // get_recent_fsi_events (something is), and Uninitialized can
+      // hard_reset_fsi_session while a session that is already warming up
+      // cannot usefully do so — the worker it would reset is mid-start.
+      |> Expect.equal "the two states are peers with three honest scope differences"
+        (Set.ofList [ "get_daemon_status"; "hard_reset_fsi_session" ],
+         Set.singleton "get_recent_fsi_events")
 
     testCase "Ready ⊋ WarmingUp (strict)" <| fun _ ->
       let readyTools = availableTools Ready |> Set.ofList
@@ -480,10 +486,20 @@ let affordanceSupersetSubsetTests =
       evalTools.Contains "hard_reset_fsi_session"
       |> Expect.isFalse "cannot hard_reset while evaluating"
 
-    testCase "Uninitialized and WarmingUp are peer-size states" <| fun _ ->
+    testCase "Uninitialized and WarmingUp are peer states, and Uninitialized can reset itself" <| fun _ ->
+      // They were once exactly the same size. Uninitialized now also offers
+      // hard_reset_fsi_session, because a session that never finished warmup
+      // had no other way back — every other tool is refused, and the state told
+      // you to use a tool the gate would not let you call. The honest
+      // difference between the peers is that one can recover and the other is
+      // already starting up, so they are no longer the same length.
       (availableTools Uninitialized |> List.length,
        availableTools WarmingUp |> List.length)
-      |> Expect.equal "neither peer is a partial subset of the other" (14, 14)
+      |> Expect.equal "peers, differing by the one tool that recovers" (15, 14)
+
+      (availableTools Uninitialized)
+      |> List.contains "hard_reset_fsi_session"
+      |> Expect.isTrue "an Uninitialized session must be able to reset itself"
 
     testCase "Faulted does not include mutation tools" <| fun _ ->
       let faultedTools = availableTools Faulted |> Set.ofList

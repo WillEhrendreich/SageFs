@@ -51,6 +51,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="StaleSessionRecovery.fs" />
         <Compile Include="WorkerProxyWait.fs" />
         <Compile Include="DaemonState.fs" />
         <Compile Include="UpdateCheckService.fs" />

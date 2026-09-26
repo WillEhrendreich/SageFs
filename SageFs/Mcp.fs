@@ -450,54 +450,23 @@ module McpTools =
           // value.
           | Some _ -> return classifySessionAvailability info false
           | None ->
-            // The client's session id no longer exists. That happens on EVERY
-            // daemon restart, and this branch used to give up here — so a
-            // client that outlived a restart was permanently bricked, and the
-            // error told it to call create_project_session through a tool
-            // surface that could not resolve a session at all.
-            //
-            // A stale id is RECOVERABLE whenever a working directory was also
-            // supplied and names exactly one live session, which is precisely
-            // what an agent has. So fall back to the same working-directory
-            // resolution the no-id branch uses, and re-bind. Only when there is
-            // no such evidence do we report Gone.
-            //
-            // Deliberately NOT a silent rebind: an ambiguous directory is
-            // refused, because guessing which session to attach to is the same
-            // class of error as guessing a restart scope.
-            match workingDirectory with
-            | Some wd when not (System.String.IsNullOrWhiteSpace wd) ->
-              let! sessions = ctx.SessionOps.GetAllSessions()
-              match sessionsMatchingWorkingDirDeep sessions wd with
-              | [ matched ] ->
-                let matchedId = WorkerProtocol.SessionId.value matched.Id
-                setActiveSessionId ctx agent matchedId
-                Log.info
-                  "session '%s' is gone; re-bound to '%s', which serves the same working directory"
-                  sid
-                  matchedId
-                return Routable matchedId
-              | [] ->
-                return
-                  Gone
-                    (sprintf
-                      "Session '%s' is gone and no session serves workingDirectory '%s'. Use get_available_projects, then create_project_session, create_solution_session, or create_bare_session for that directory. Running sessions: %s"
-                      sid
-                      wd
-                      (formatExistingSessionsHint sessions))
-              | matches ->
-                return
-                  Gone
-                    (sprintf
-                      "Session '%s' is gone and the working directory is ambiguous, so SageFs will not guess which session to use. %s"
-                      sid
-                      (formatWorkingDirectoryAmbiguity "Multiple sessions match workingDirectory" wd matches))
-            | _ ->
-              return
-                Gone
-                  (sprintf
-                    "Session '%s' is gone. Pass working_directory (or omit the session id) so SageFs can re-bind you to a live session, or use get_available_projects then create_project_session."
-                    sid)
+            // Recovery from a dead session id is a POLICY, extracted to
+            // `StaleSessionRecovery` (several honest outcomes, and this file
+            // is a 4,400-line hub). A client that outlived a daemon restart
+            // used to be bricked here: the no-id branch resolved by working
+            // directory and re-bound, this branch checked only the given id.
+            let! sessions = ctx.SessionOps.GetAllSessions()
+            let candidatesFor wd =
+              sessionsMatchingWorkingDirDeep sessions wd
+              |> List.map (fun s -> s.Id)
+
+            match StaleSessionRecovery.decide sid workingDirectory candidatesFor with
+            | StaleSessionRecovery.Recovery.ReBind(matchedId, why) ->
+              setActiveSessionId ctx agent matchedId
+              Log.info "session '%s' is gone; re-bound to '%s' (%s)" sid matchedId why
+              return Routable matchedId
+            | StaleSessionRecovery.Recovery.Gone why -> return Gone why
+
       | None ->
         let! candidateResult =
           task {

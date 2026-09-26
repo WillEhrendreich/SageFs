@@ -54,7 +54,7 @@ type Resolution =
   /// The client's own session, used as-is.
   | UseIt of sessionId: string
   /// A different session that serves the same working directory.
-  | Rebind to sessionId: string * because: string
+  | Rebind of sessionId: string * because: string
   /// Nothing matched, and the message says what to do.
   | Gone of because: string
 
@@ -62,20 +62,20 @@ type Resolution =
 let resolve (intent: ClientIntent) (registry: RegistryView) : Resolution =
   let sessionsServing wd =
     match registry with
-    | Empty -> []
-    | Sessions byDir -> byDir |> List.tryFind (fun (dir, _) -> dir = wd) |> Option.map snd |> Option.defaultValue []
+    | RegistryView.Empty -> []
+    | RegistryView.Sessions byDir -> byDir |> List.tryFind (fun (dir, _) -> dir = wd) |> Option.map snd |> Option.defaultValue []
 
   match intent with
-  | ClientIntent.LiveId sid -> UseIt sid
+  | ClientIntent.LiveId sid -> Resolution.UseIt sid
   | ClientIntent.NoId wd ->
     // Unchanged: a client with no id resolves by working directory.
     match wd with
     | Some w ->
       match sessionsServing w with
-      | [ only ] -> UseIt only
-      | [] -> Gone "no session serves that working directory"
-      | many -> Gone(sprintf "several sessions serve that directory (%s)" (String.concat ", " many))
-    | None -> Gone "no session id and no working directory to resolve by"
+      | [ only ] -> Resolution.UseIt only
+      | [] -> Resolution.Gone "no session serves that working directory"
+      | many -> Resolution.Gone(sprintf "several sessions serve that directory (%s)" (String.concat ", " many))
+    | None -> Resolution.Gone "no session id and no working directory to resolve by"
   | ClientIntent.StaleId (stale, wd) ->
     // THE FIX. A stale id is recoverable exactly when a working directory was
     // also supplied and names exactly one live session. Previously this
@@ -84,15 +84,15 @@ let resolve (intent: ClientIntent) (registry: RegistryView) : Resolution =
     | Some w ->
       match sessionsServing w with
       | [ only ] when only <> stale ->
-        Rebind(only, sprintf "session '%s' is gone; '%s' serves the same working directory" stale only)
+        Resolution.Rebind(only, sprintf "session '%s' is gone; '%s' serves the same working directory" stale only)
       | [ only ] when only = stale ->
-        Gone(sprintf "session '%s' is gone and nothing else serves that working directory" stale)
-      | [] -> Gone(sprintf "session '%s' is gone and no session serves that working directory" stale)
-      | many -> Gone(sprintf "session '%s' is gone and several sessions serve that directory (%s)" stale (String.concat ", " many))
+        Resolution.Gone(sprintf "session '%s' is gone and nothing else serves that working directory" stale)
+      | [] -> Resolution.Gone(sprintf "session '%s' is gone and no session serves that working directory" stale)
+      | many -> Resolution.Gone(sprintf "session '%s' is gone and several sessions serve that directory (%s)" stale (String.concat ", " many))
     | None ->
       // No fallback is possible. Say so specifically rather than pretending
       // the working directory was never part of the request.
-      Gone(sprintf "session '%s' is gone; pass a working_directory to be re-bound to a live session" stale)
+      Resolution.Gone(sprintf "session '%s' is gone; pass a working_directory to be re-bound to a live session" stale)
 
 [<Tests>]
 let staleSessionRecoveryTests =
@@ -139,4 +139,8 @@ let staleSessionRecoveryTests =
       match resolve (ClientIntent.StaleId("gone", Some "/x")) (RegistryView.Sessions [ "/x", [ "gone" ] ]) with
       | Resolution.Rebind _ -> failtest "rebound to itself would be a no-op pretending to be a recovery"
       | Resolution.Gone _ -> ()
+      // Unreachable by construction: a stale id is never live, so `UseIt`
+      // cannot be the answer. Stated rather than left to exhaustiveness, so
+      // adding a case later does not silently widen the recovery.
+      | Resolution.UseIt _ -> failtest "a stale id must never resolve to itself"
   ]
