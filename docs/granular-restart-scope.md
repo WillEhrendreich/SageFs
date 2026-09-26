@@ -48,19 +48,45 @@ two boundaries  -> Ambiguous ["store-a"; "store-b"]
 - **The holder is not in anyone's app yet.** Nothing is a `Cell<'a>` because
   nothing has opted in.
 
-## The one thing that would make it cheaper
+## The one thing that would make it cheaper — and why it is blocked
 
-A boundary that can establish liveness. The signature is now in place
+A boundary that can establish LIVENESS. The signature is in place
 (`Liveness` travels with the restart), so establishing it is one value in one
-place — `WorkerMain.fs`, where the live path currently says `Unknown` with its
-reason.
+place — `WorkerMain.fs`, where the live path currently says `Unknown`.
 
-The natural source: the running app is a process SageFs launched, so the
-question "does anything hold an instance of this type" is answerable only from
-inside it. That needs a probe — a tiny generated expression that reports the
-live instances of a type, sent to the app's own session. That is the next
-buildable piece, and it is deliberately not started here rather than
-half-built and claimed.
+**And the obvious probe does not work, measured.** .NET exposes no per-type
+instance count. Checked rather than assumed:
+
+- `GC.GetGCMemoryInfo()` — total bytes, no per-type count
+- `GC.GetGeneration()` — per-thread, no per-type count
+- `AppDomain.GetAssemblies()` — types **LOADED**, not instances
+- `GC.GetTotalMemory()` — total bytes
+
+And the decisive check:
+
+```fsharp
+type NeverInstantiated = class end
+// LOADED as a type : true
+// instances ever made: 0
+```
+
+So any reflection-based probe reports "live" for a type nobody holds. That is
+a lie, and it fails in the EXPENSIVE-LOOKING direction: it would report
+liveness, pay a rebuild every time, and look like a working probe while
+answering nothing. `Liveness.Unknown` is therefore the CORRECT answer today,
+not a placeholder waiting to be filled in.
+
+**What would actually answer it.** Not reflection — instrumentation. SageFs
+already knows where values live for a *kept binding*: `HotReloadCore.AppHolds`
+records which `MethodInfo` the app captured, and `LiveStateEmit.probeCode` asks
+the app directly about a specific field. A liveness probe for a TYPE change
+needs the same machinery pointed at a type rather than a binding: either the
+holder owning the instances (steps 2–5, which have no caller yet), or a
+runtime hook SageFs installs that counts constructions of a named type.
+
+That is a real build, and it is the honest next piece. It is not started here
+rather than half-built and claimed — and the note records WHY, so the next
+person does not spend a day on the reflection probe that cannot work.
 
 ## How to verify
 
