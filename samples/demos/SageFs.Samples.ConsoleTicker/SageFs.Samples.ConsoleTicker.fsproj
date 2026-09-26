@@ -21,33 +21,25 @@
     <!-- The counter below is held in a REGISTERED holder, which is what makes
          the app's live state visible to a hot-reload restart.
 
-         This is a plain assembly Reference, NOT a ProjectReference, and both
-         choices are forced by MEASURED failures, recorded here so neither is
-         "simplified" back:
+         A USER NEEDS NOTHING HERE. When SageFs builds this project — the Run
+         App path, any session rebuild, a cold restart — it injects its own
+         reference itself (`SessionBuild.prepareCoreReference` writes a
+         .targets and passes -p:CustomAfterMicrosoftCommonTargets), so the
+         holder API resolves with no Reference in this file. Proven end to end
+         on a project with zero Reference elements.
 
-           1. A ProjectReference fails with NU1605 — it pulls FSharp.Core
-              11.0.101-preview7.26381.103 transitively through
-              FSharp.Compiler.Service, which the sample's own pinned
-              FSharp.Core (…26359.118) reads as a downgrade, and the repo
-              treats warnings as errors.
+         This Reference exists for ONE case: CI builds the samples with a raw
+         `dotnet build` (ci-pipeline.fsx "build samples for integration suites"),
+         which is not a SageFs build and therefore gets no injection. It resolves
+         the assembly from `$(SageFsCoreAssembly)`, defined in the repo-root
+         Directory.Build.props and guarded by Exists so a machine that has never
+         built Core just gets no Reference at all.
 
-           2. A HintPath into SageFs.Core/bin is WRONG TOO, and the local gate
-              caught it: it assumes SageFs.Core has already been built into
-              that exact Configuration/TFM. In a clean checkout on a machine
-              that has, the sample fails with FS0039 `HolderRegistry is not
-              defined`. Building an assembly a sample points at is a build-
-              order dependency on a path that may not exist yet.
-
-         A user should write NEITHER. SageFs injects the reference at build
-         time with `-p:CustomAfterMicrosoftCommonTargets=<generated>.targets`,
-         which resolves the tool's own assembly at run time rather than
-         guessing a path now. Verified to build and run this exact project with
-         this Reference deleted. `-p:ReferencePath=` does NOT work for this: it
-         only tells MSBuild where to look for references that already exist, so
-         it can never add one.
-
-         Until that injection lands, this Reference is here so the solution
-         still builds, and it is the LAST thing to remove. -->
+         A ProjectReference is NOT an option here, and that was measured: it
+         pulls FSharp.Core 11.0.101-preview7.26381.103 transitively through
+         FSharp.Compiler.Service, which this sample's own pinned FSharp.Core
+         (…26359.118) reads as a downgrade, and the repo treats warnings as
+         errors. Do not "simplify" this into one. -->
     <Reference Include="SageFs.Core" Condition="'$(SageFsCoreAssembly)' != ''">
       <HintPath>$(SageFsCoreAssembly)</HintPath>
       <Private>true</Private>
