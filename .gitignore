@@ -91,3 +91,15 @@ release/
 
 # Scratch copies the hot-reload state tests build per runtime (HotReloadStateHarness).
 SageFs.Tests/fixtures/HotReloadStateFixture/.runs/
+
+# Agent scratch. NEVER a product artifact.
+#
+# 21 files from here were committed by accident at 53ae96d0, including
+# screenshots and one-off shell reproducers. Scratch is evidence FOR a decision,
+# not a deliverable: it is unversioned, unreviewed, and has no owner, so
+# checking it in only widens the surface someone has to keep correct. If a
+# script is worth keeping it belongs in `scripts/` and earns a test; if a
+# finding is worth keeping it belongs in a document.
+.roastscratch/
+commandcode_scratchpad/
+**/commandcode_scratchpad/
