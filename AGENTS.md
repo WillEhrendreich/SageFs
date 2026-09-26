@@ -79,6 +79,20 @@ silent no-op reads exactly like a successful one.
   `hard_reset_fsi_session rebuild=true` to re-verify — is in
   [`skills/sagefs/SKILL.md`](skills/sagefs/SKILL.md) under "Editing: prove it,
   then write it". Read that section before your first edit in a session.
+- **"I can't verify that in the session" is a conclusion you have not earned
+  yet.** A session that loads `SageFs.Core` has Core's whole dependency closure
+  loaded with it. A Fantomas/FCS type that Core walks is in the live session, and
+  `AppDomain.CurrentDomain.GetAssemblies()` will name it:
+
+  ```
+  PROBE Fantomas SynField = Range:Range | ... | fieldType:SynType | idOpt:...
+  ```
+
+  That answer took **seven `dotnet build` cycles** to get by fighting the
+  compiler about it, and **one `send_fsharp_code` eval** to get by asking. If
+  you catch yourself reaching for a build to find out what a type looks like,
+  stop: reflect over the loaded assemblies instead. Use `dotnet build` to check
+  that an edit COMPILES, never to discover what a type IS.
 - **`Editing.fs` is the executable form of the rules above.** If you are about
   to do a repeated mechanical change, `SageFs.Editing.applyInOrder` is the
   total-or-reported version: a replacement either applies or says why it did
