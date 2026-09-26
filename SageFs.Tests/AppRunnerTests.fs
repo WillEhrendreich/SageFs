@@ -240,9 +240,9 @@ let requireRestartTests =
       let project = tempProject ()
       let! state = AppRunner.start runner project (serving "old code") (plan project)
       let url = primaryUrl state
-      let! ended = AppRunner.requireRestart runner typeChange [] SageFs.GranularRestart.RestartSubject.Worker
+      let! ended = AppRunner.requireRestart runner typeChange [] SageFs.GranularRestart.RestartSubject.Worker (SageFs.Liveness.Unknown "test")
       match ended with
-      | AppRunState.RestartRequired (p, first, rest, subject, _) ->
+      | AppRunState.RestartRequired (p, first, rest, subject, _, _) ->
         subject
         |> Expect.equal "the subject the caller decided" SageFs.GranularRestart.RestartSubject.Worker
         p |> Expect.equal "the project" project
@@ -265,7 +265,7 @@ let requireRestartTests =
         | AppRunState.Running app -> app.RunId
         | other -> failtestf "expected Running, got %A" other
       let waiting = AppRunner.awaitChange runner runId CancellationToken.None
-      let! _ = AppRunner.requireRestart runner typeChange [] SageFs.GranularRestart.RestartSubject.Worker
+      let! _ = AppRunner.requireRestart runner typeChange [] SageFs.GranularRestart.RestartSubject.Worker (SageFs.Liveness.Unknown "test")
       let! first = Task.WhenAny(waiting :> Task, Task.Delay(TimeSpan.FromSeconds 10.))
       (first = (waiting :> Task)) |> Expect.isTrue "the long-poll settles instead of waiting forever"
       match waiting.Result with
@@ -275,7 +275,7 @@ let requireRestartTests =
 
     testTask "WHY — AppRunner.requireRestart — with nothing running changes nothing because only a running app restarts" {
       use runner = AppRunner.create timeouts noEnv
-      let! state = AppRunner.requireRestart runner typeChange [] SageFs.GranularRestart.RestartSubject.Worker
+      let! state = AppRunner.requireRestart runner typeChange [] SageFs.GranularRestart.RestartSubject.Worker (SageFs.Liveness.Unknown "test")
       state |> Expect.equal "still not running" AppRunState.NotRunning
     }
   ]

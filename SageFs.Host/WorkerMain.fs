@@ -993,8 +993,24 @@ let run (sessionId: string) (port: int) = async {
           // and relaunch (AppRun.endRun → RunEnd.RebuildForChanges). SageFs
           // started this app, so SageFs brings it back: the user is told what
           // happened, not asked to do anything.
+          // Is a BUILD needed? Only the code that owns the app knows whether
+          // anything alive still holds the old shape, and today that is not
+          // established — so it says so, and the decision pays the build. That
+          // is the deliberate safe direction, and it is a NAMED value rather
+          // than a missing argument: `Unknown` is a claim, and a future
+          // boundary that can answer it plugs in here without changing any
+          // other signature.
+          let liveness =
+            SageFs.Liveness.Unknown(
+              "SageFs cannot yet tell whether the running app holds an instance laid out by the old definition")
+
           let! _ =
-            AppRunner.requireRestart appRunner first rest (SageFs.Core.Features.RestartSubjectDecision.toSubject subject)
+            AppRunner.requireRestart
+              appRunner
+              first
+              rest
+              (SageFs.Core.Features.RestartSubjectDecision.toSubject subject)
+              liveness
             |> Async.AwaitTask
           Features.ReloadBroadcast.broadcastOutcome (Features.ReloadOutcome.ReloadOutcome.Restarted reasons)
           return SaveHandling.Reported

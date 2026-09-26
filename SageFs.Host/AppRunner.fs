@@ -279,6 +279,7 @@ type internal Msg =
       first: SageFs.Features.ReloadPlanning.ReloadChange
     * rest: SageFs.Features.ReloadPlanning.ReloadChange list
     * subject: SageFs.GranularRestart.RestartSubject
+    * liveness: SageFs.Liveness
     * AsyncReplyChannel<AppRunState>
   | Shutdown of AsyncReplyChannel<unit>
 
@@ -482,14 +483,14 @@ type Runner(timeouts: StartTimeouts, setEnv: SetEnv) =
           | _ ->
             waiter.TrySetResult(stateOf owned) |> ignore
             return! loop owned waiters
-        | RequireRestart (first, rest, subject, reply) ->
+        | RequireRestart (first, rest, subject, liveness, reply) ->
           match owned with
           | Idle _ ->
             reply.Reply(stateOf owned)
             return! loop owned waiters
           | Live (app, handle, restoreEnv) ->
             // A console app has no host to stop; the rebuild's worker restart ends it.
-            let final = AppRunState.RestartRequired (app.Project, first, rest, subject, DateTime.UtcNow)
+            let final = AppRunState.RestartRequired (app.Project, first, rest, subject, liveness, DateTime.UtcNow)
             let next = Idle final
             publish next
             match handle with
@@ -547,8 +548,9 @@ let requireRestart
     (first: SageFs.Features.ReloadPlanning.ReloadChange)
     (rest: SageFs.Features.ReloadPlanning.ReloadChange list)
     (subject: SageFs.GranularRestart.RestartSubject)
+    (liveness: SageFs.Liveness)
     : Task<AppRunState> =
-  runner.Agent.PostAndAsyncReply(fun reply -> RequireRestart(first, rest, subject, reply)) |> Async.StartAsTask
+  runner.Agent.PostAndAsyncReply(fun reply -> RequireRestart(first, rest, subject, liveness, reply)) |> Async.StartAsTask
 
 /// Completes when the app is no longer Running with this run id (or when
 /// the token cancels, with whatever the state is then).

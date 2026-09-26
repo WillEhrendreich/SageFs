@@ -113,7 +113,7 @@ and private watchRun
       | Ok (AppRunState.Running current) when current.RunId = app.RunId -> return! poll ()
       | Ok final ->
         match! ops.EndAppRun sessionId generation app.RunId final with
-        | RunEnd.RebuildForChanges (project, previous, subject) ->
+        | RunEnd.RebuildForChanges (project, previous, subject, liveness) ->
           // The subject is threaded through rather than assumed: this is where
           // "how much to restart" finally reaches the action, instead of being
           // computed, logged, and then discarded one layer up.
@@ -127,6 +127,7 @@ and private watchRun
               project
               previous
               subject
+              liveness
         | RunEnd.Recorded
         | RunEnd.NotCurrent -> ()
       | Error reason -> do! lostTrack reason
@@ -161,14 +162,28 @@ and private restartForChanges
   (project: string)
   (previous: PreviousAddress)
   (subject: GranularRestart.RestartSubject)
+  (liveness: SageFs.Liveness)
   : Task<unit> =
   task {
+    // Whether a BUILD is needed is a different question from how WIDE the
+    // restart is, so it is decided here from evidence rather than assumed. A
+    // boundary holding no live instance of the changed type has nothing laid
+    // out by the old definition, so the worker is respawned and the expensive
+    // `dotnet build` is skipped. Anything we cannot establish pays the build.
+    let action = SageFs.RestartCost.decide liveness
+
     let! restarted =
-      ops.RestartSession sessionId (RestartPlan.Rebuild subject)
+      match action with
+      | SageFs.RestartAction.RespawnOnly _ ->
+        ops.RestartSession sessionId RestartPlan.RespawnOnly
+      | SageFs.RestartAction.RebuildProject _ ->
+        ops.RestartSession sessionId (RestartPlan.Rebuild subject)
+
     let! ready =
       match restarted with
       | Error e -> Task.FromResult(Error e)
       | Ok _ -> ops.AwaitReady sessionId readyTimeout
+
     match ready with
     | Error e ->
       let! _ = ops.AdvanceRun sessionId generation (failedState project previous e (clock ()))

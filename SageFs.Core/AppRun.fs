@@ -263,6 +263,10 @@ type AppRunState =
     * first: SageFs.Features.ReloadPlanning.ReloadChange
     * rest: SageFs.Features.ReloadPlanning.ReloadChange list
     * subject: SageFs.GranularRestart.RestartSubject
+    // Whether anything alive still holds the OLD shape. Carried because the
+    // CALLER is the only place that can know, and a respawn that skips the
+    // build must be justified by evidence rather than assumed.
+    * liveness: SageFs.Liveness
     * at: DateTime
   /// A rebuild of the app failed: the code did not compile, the app did not crash.
   | BuildFailed of project: string * reason: string * at: DateTime * lastAddress: PreviousAddress
@@ -355,6 +359,7 @@ type RunEnd =
       project: string
     * previous: PreviousAddress
     * subject: SageFs.GranularRestart.RestartSubject
+    * liveness: SageFs.Liveness
   /// Not the current run (stopped, replaced, or its worker is gone): nothing changed.
   | NotCurrent
 
@@ -419,8 +424,8 @@ module AppSlot =
     match slot.State with
     | AppRunState.Running app when app.RunId = runId ->
       match final with
-      | AppRunState.RestartRequired (project, first, rest, subject, at) when generation = slot.Generation ->
-        RunEnd.RebuildForChanges (project, addressOf app, subject),
+      | AppRunState.RestartRequired (project, first, rest, subject, liveness, at) when generation = slot.Generation ->
+        RunEnd.RebuildForChanges (project, addressOf app, subject, liveness),
         { slot with State = AppRunState.Starting (project, StartPhase.RebuildingForChanges (first, rest), at) }
       | _ -> RunEnd.Recorded, { slot with State = final }
     | _ -> RunEnd.NotCurrent, slot
@@ -455,7 +460,7 @@ let describeState (state: AppRunState) : string =
   | AppRunState.LostTrack (project, reason, _) ->
     sprintf "Lost track of %s: %s. → It may still be serving: press Run to take it over again, or Stop to end it."
       (projectName project) (SageFsError.describe reason)
-  | AppRunState.RestartRequired (project, first, rest, subject, _) ->
+  | AppRunState.RestartRequired (project, first, rest, subject, _, _) ->
     // Say WHICH subject, so a scoped restart is visibly different from a whole
     // app restart rather than two identical messages.
     let what =
