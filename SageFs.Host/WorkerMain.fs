@@ -973,9 +973,21 @@ let run (sessionId: string) (port: int) = async {
         // restart would leave a half-restarted app holding a value laid out by
         // the old type, which is strictly worse.
         let reasons = Features.RestartAttribution.restartReasonsFor (knownUnits ()) first rest
+        // Which subject the restart must act on. `restartsWholeWorker` is the
+        // question that matters, and it is asked ONCE here so the log, the
+        // broadcast and the action cannot disagree about how wide the restart
+        // was — the disagreement that made the scope cosmetic.
+        let subject = SageFs.Core.Features.RestartSubjectDecision.ofReasons reasons
         match AppRunner.state appRunner with
         | AppRun.AppRunState.Running _ ->
-          Log.info "Run App: %s — %s; restarting the app" fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
+          if SageFs.Core.Features.RestartSubjectDecision.restartsWholeWorker subject then
+            Log.info "Run App: %s — %s; restarting the app" fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
+          else
+            Log.info
+              "Run App: %s — %s; %s"
+              fileName
+              (Features.ReloadPlanning.ReloadChange.describeAll first rest)
+              (SageFs.Core.Features.RestartSubjectDecision.describe subject)
           // `requireRestart` ends the run with AppRunState.RestartRequired,
           // which the daemon's run-ended handler turns straight into a rebuild
           // and relaunch (AppRun.endRun → RunEnd.RebuildForChanges). SageFs

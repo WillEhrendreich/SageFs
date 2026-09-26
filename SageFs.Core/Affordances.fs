@@ -45,8 +45,15 @@ let availableTools (state: SessionState) : string list =
     // uninitialized/absent but OTHER sessions exist and are Ready, selecting one
     // is exactly the recovery the "N sessions exist... switch_session to select
     // one" hint points at — omitting it was a catch-22 (roast UX / affordances).
+    //
+    // The RESET tools belong here for the same reason, and were the same bug:
+    // a session that never finished warmup is Uninitialized, and without these
+    // there is no way back — every other tool is refused, and the state says to
+    // use a tool the gate will not let anyone call. Recovering FROM a state
+    // must never require leaving that state first.
     [ "get_daemon_status"; "get_session_status"; "get_friction_report"; "get_available_projects"
       "list_sessions"; "switch_session"; "create_project_session"; "create_solution_session"; "create_bare_session"
+      "reset_fsi_session"; "hard_reset_fsi_session"; "cancel_eval"
       "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"; "decompose_pipeline" ]
   | WarmingUp ->
     [ "get_session_status"; "get_recent_fsi_events"; "get_friction_report"
