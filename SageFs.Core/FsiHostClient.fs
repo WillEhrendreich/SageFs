@@ -404,7 +404,13 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
     // daemon that spawned it, or from loading the session's own projects) so
     // that child sees the project's own SDK, not SageFs's. See
     // SageFs.ProcessEnvironment.
-    applyTo psi options.Environment
+    //
+    // `applyToWithForwarding` also forwards any environment a tool has asked to
+    // pass through to every spawn (SAGEFS_FORWARD_PREFIXES). This is the host
+    // that runs the USER's own code, so it is the seam that matters most for an
+    // external agent: a fault-injection or determinism shim reaches the code
+    // under test here, not just the worker that supervises it.
+    applyToWithForwarding psi options.Environment
     let fail (proc: Process) (error: StartError) : Result<FsiHostSession, StartError> =
       (try proc.Kill true with _ -> ())
       deleteArgsFile ()

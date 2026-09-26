@@ -17,6 +17,8 @@
 /// user's own code runs in, a session's `dotnet build` — uses this one instead.
 module SageFs.ProcessEnvironment
 
+open System
+open System.Collections
 open System.Diagnostics
 
 /// The variable names to strip from every spawned process's environment, unless
@@ -50,3 +52,86 @@ let applyTo (psi: ProcessStartInfo) (overrides: (string * string) seq) : unit =
     psi.Environment.Remove key |> ignore
   for key, value in overrides do
     psi.Environment[key] <- value
+
+/// The environment variables an external tool has asked to have forwarded into
+/// every process SageFs spawns.
+///
+/// A tool that needs to affect a worker it does not launch — a profiler, a
+/// tracer, a deterministic execution or fault-injection agent — has no seam
+/// today: it cannot reach `psi.Environment`, and the worker's variables are a
+/// closed, hand-maintained list in `Args.buildWorkerSpawnConfig`. This is that
+/// seam, and it is deliberately the smallest thing that can work: forward the
+/// variables whose name starts with a prefix a tool declares, and nothing else.
+///
+/// The prefixes are read from the SageFs process's own environment, so a tool
+/// opts in by being on the machine when the daemon starts, and opts out by not
+/// being there. SageFs does not interpret, validate, or own any of it: the
+/// variables are opaque strings, and a tool that wants its own is the only
+/// thing that can add one.
+///
+/// Declared as `SAGEFS_FORWARD_PREFIXES`, a `;`-separated (Windows) or `:`
+/// -separated (POSIX) list. Both separators are always accepted so a single
+/// declaration works on either platform.
+let forwardPrefixesEnvVar = "SAGEFS_FORWARD_PREFIXES"
+
+let splitPrefixes (raw: string) : string list =
+  if String.IsNullOrWhiteSpace raw then
+    []
+  else
+  raw
+    .Split([| ';'; ':' |], StringSplitOptions.RemoveEmptyEntries)
+    |> Array.map (fun p -> p.Trim())
+    |> Array.filter (fun p -> p.Length > 0)
+    |> Array.toList
+
+/// The prefixes the current process was asked to forward.
+let forwardPrefixes () : string list =
+  Environment.GetEnvironmentVariable forwardPrefixesEnvVar |> splitPrefixes
+
+/// From a parent environment, the variables a tool asked to forward. A variable
+/// is forwarded only if its name starts with one of `prefixes` AND it is not a
+/// poisoned key — the poison list stays authoritative, because a forwarded
+/// `DOTNET_ROOT` would reintroduce exactly the SDK-pinning bug above.
+///
+/// Pure, so a caller can reason about the result without spawning anything.
+let forwarded
+  (parentEnvironment: Map<string, string>)
+  (overrides: (string * string) list)
+  (prefixes: string list)
+  : (string * string) list =
+  if List.isEmpty prefixes then
+    []
+  else
+  let poisoned = poisonedVariables |> Set.ofList
+  let wanted =
+    parentEnvironment
+    |> Map.toList
+    |> List.filter (fun (key, _) ->
+      not (Set.contains key poisoned)
+      && prefixes |> List.exists (fun p -> key.StartsWith(p, StringComparison.Ordinal)))
+
+  // An explicit override wins over an inherited value, exactly as in `sanitize`.
+  let explicitKeys = overrides |> List.map fst |> Set.ofList
+  let inherited = wanted |> List.filter (fun (key, _) -> not (Set.contains key explicitKeys))
+  inherited @ List.filter (fun (k, _) -> prefixes |> List.exists (fun p -> k.StartsWith(p, StringComparison.Ordinal))) overrides
+
+/// Read the forwarding prefixes from the environment and return the variables to
+/// add to a spawn. Kept separate from `forwarded` so the pure part stays pure.
+let forwardingFor (parentEnvironment: Map<string, string>) (overrides: (string * string) list) : (string * string) list =
+  forwarded parentEnvironment overrides (forwardPrefixes ())
+
+/// `applyTo`, plus anything a tool asked to forward. The environment a child
+/// already inherits is not read back out of `psi` (which would be lossy on some
+/// platforms); the caller's own process environment is the parent of record.
+let applyToWithForwarding
+  (psi: ProcessStartInfo)
+  (overrides: (string * string) seq)
+  : unit =
+  applyTo psi overrides
+  let parent =
+    Environment.GetEnvironmentVariables()
+    |> Seq.cast<DictionaryEntry>
+    |> Seq.map (fun (e: DictionaryEntry) -> string e.Key, string e.Value)
+    |> Map.ofSeq
+  forwardingFor parent (List.ofSeq overrides)
+  |> List.iter (fun (key, value) -> psi.Environment[key] <- value)

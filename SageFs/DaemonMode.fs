@@ -1847,7 +1847,20 @@ let createElmRuntime
           match Map.tryFind sid snapshot.WorkerBaseUrls with
           | Some url when url.Length > 0 ->
             Some (HttpWorkerClient.streamingTestProxyWithCoverage Timeouts.workerHttpRead url)
-          | _ -> None
+          | _ ->
+            // The run is dispatched and then every test comes back NotRun,
+            // which reads downstream as "0 passed, 0 failed" — indistinguishable
+            // from "nothing happened". Name the session that was asked for and
+            // what the map actually held, so the failure says WHICH piece is
+            // missing instead of leaving it to be inferred from a summary.
+            Log.warn
+              "[LiveTesting] no streaming test proxy for session %s: WorkerBaseUrls holds [%s]"
+              (WorkerProtocol.SessionId.value sid)
+              (snapshot.WorkerBaseUrls
+               |> Seq.map (fun (kv: System.Collections.Generic.KeyValuePair<WorkerProtocol.SessionId, string>) ->
+                 sprintf "%s=%s" (WorkerProtocol.SessionId.value kv.Key) kv.Value)
+               |> String.concat ", ")
+            None
         RegisterFileWatcher = fun sessionIdStr directory ->
           match !watcherManagerRef with
           | Some mgr ->
