@@ -485,3 +485,35 @@ counter, which was my test app's bug, not the product's.
 
 `recordShapeOf` remains unexcluded by argument, not only by measurement: it has
 zero production callers and no reference from `FeatureHooks.recordEval`.
+feat(reload): read a record shape from the COMPILED type, not the text AST
+
+Revises the answer recorded one commit ago. The text AST is a dead end — the
+information is on the node and unreachable — and the compiled type carries the
+same information through a supported public API the repo ALREADY uses at
+SageFs.Core/Features/LiveValueTree.fs:161.
+
+  SHAPE Order isRecord=true
+  SHAPE   Id       Int32     -> IntField
+  SHAPE   Name     String    -> StringField
+  SHAPE   Paid     Boolean   -> BoolField
+  SHAPE   Payload  Byte[]    -> Undecidable(Byte[])
+  SHAPE   Meta     FSharpMap -> Undecidable(FSharpMap)
+  READ live Order -> [|7; "x"; true|]
+
+Two things this buys, both measured:
+
+1. DECIDABLE KINDS. The text route produced `Undecidable` for every field,
+   because `SynField` exposes `fieldType: SynType` but has no nameable case
+   field. Here the kind is a real `System.Type`, so `int`/`string`/`bool` are
+   decidable and everything else is still `Undecidable` — and refuses, which is
+   the right direction for a `byte[]` or a `Map`.
+
+2. THE OLD VALUE, not just its description. `PreComputeRecordReader` reads a
+   live instance, so a migration can CARRY state rather than only describe it.
+   The text AST could never do this at all; it is not a lesser route, it is a
+   different capability.
+
+The `byte[]` and `Map` rows are the point, not an aside: they show the refusal
+is still discriminating rather than a blanket "everything is undecidable", and a
+field that cannot be carried refuses the whole migration instead of silently
+losing its value.
