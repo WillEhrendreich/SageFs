@@ -157,6 +157,34 @@ the repo-root `Directory.Build.props` and guarded by `Exists` so a machine that
 has never built Core simply gets no `Reference`. That fallback is a CI
 convenience, not something a user needs.
 
+## Gate parallelism, and the one tier that is not concurrency-tolerant
+
+`SAGEFS_TIER_PARALLEL` overrides the default. The default is derived, not
+constant: `build/TierPlan.fs` returns `max 1 (min 6 (cores / 3))`, which is **5
+on a 16-core machine**.
+
+At parallelism 5 a gate run produced 7 errored host-integration tests. All were
+timeouts, 0 were failures, and the evidence that they were contention rather
+than defects:
+
+- every affected test's net11.0 twin passed in the SAME run, while the net10.0
+  twin took 75–79s against a 60s budget;
+- the same tests pass serially and at a clean baseline commit;
+- the repo already documents it — `SageFs.Tests/HttpApiIntegrationTests.fs`
+  says the worker's test proxy "does not become available inside the wait" under
+  contention and "passes alone in ~10s".
+
+**At `SAGEFS_TIER_PARALLEL=2` all 11 tiers were `Trusted`**, 0 failed, 0
+errored, and the previously-erroring test ran in 12.3s against its 60s budget.
+
+One caveat measured rather than assumed: `--integration-browser` is the
+sensitive tier. It errored once at parallelism 2 while ten other tiers passed,
+on a 15s UI-wait assertion, then passed on 4 consecutive runs on an idle
+machine. A single green run of one tier is not evidence that the tier is
+sound — only the repetition is. So: **run the gate at `SAGEFS_TIER_PARALLEL=2`
+or lower**, and treat a lone browser-tier error as contention until a repeat
+run says otherwise.
+
 So the earlier claim in this file — that the opt-in design is unreachable from
 user code — **was wrong**, and is corrected here rather than quietly dropped.
 `SageFs.Core` is a `Library`, so a user project can reference it; what is
