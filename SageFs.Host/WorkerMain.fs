@@ -720,6 +720,30 @@ let run (sessionId: string) (port: int) = async {
   // Per-worker, not per-app, because the worker is the app's process: two apps
   // never share one, so one app's cell can never make another's restart pay.
   let holderRegistry = SageFs.HolderRegistry.New ()
+
+  // Declared restart boundaries for THIS session, when the id parses.
+  //
+  // The holder registry above answers "what did the app actually do"; a
+  // boundary is the app's statement of "this is what should be restartable".
+  // They are parallel on purpose: one is measured, the other is declared, and
+  // conflating them would let a declaration stand in for evidence.
+  //
+  // `sessionId` arrives as a raw string from the environment, and `SessionId`
+  // is a private DU — so a malformed id yields `None` rather than a guessed
+  // registry. An unparseable id means we cannot key a per-session registry, and
+  // inventing one would put one session's boundaries in another's namespace,
+  // which is the exact isolation property the registry exists to provide.
+  //
+  // `validate` is the same check the HTTP and MCP layers use, so an id that
+  // reaches here has already been through it once and this is a cheap
+  // confirmation rather than a second policy.
+  let boundaryRegistry: SageFs.Registry option =
+    SageFs.WorkerProtocol.SessionId.validate sessionId
+    |> Result.toOption
+    |> Option.map SageFs.Registry.For
+
+  let declaredBoundaryFor (typeName: string) =
+    boundaryRegistry |> Option.bind (fun r -> r.TryRestartScopeFor typeName)
   // The source each running app's DLL was built from, advanced after every
   // applied patch: what a save is compared with to decide patch vs restart.
   let reloadBaselines = System.Collections.Concurrent.ConcurrentDictionary<string, Features.ReloadPlanning.FileDecls>()
@@ -982,6 +1006,30 @@ let run (sessionId: string) (port: int) = async {
         // restart would leave a half-restarted app holding a value laid out by
         // the old type, which is strictly worse.
         let reasons = Features.RestartAttribution.restartReasonsFor (knownUnits ()) first rest
+
+        // A DECLARED boundary overrides module attribution for a type change,
+        // because a boundary is a statement of intent and module attribution is
+        // an inference from source. Intent beats inference.
+        //
+        // Delegated to `restartReasonWithBoundary` rather than rebuilt here, so
+        // the precedence rule lives in exactly one place and the live path
+        // cannot drift from what the attribution tests pin.
+        //
+        // `changedTypeName` is defined further down, so the name is read from
+        // `first` directly rather than threaded backwards. The match is on the
+        // DU case itself — no predicate — so it cannot silently stop applying.
+        //
+        // Applies ONLY to a type change, and only where a boundary actually
+        // claims that type. An undeclared or ambiguous type keeps the inferred
+        // reason, which fails safe at `Everything`.
+        let reasons =
+          match first with
+          | Features.ReloadPlanning.ReloadChange.TypeChanged typeName ->
+            [ Features.RestartAttribution.restartReasonWithBoundary
+                (declaredBoundaryFor typeName)
+                (knownUnits ())
+                first ]
+          | _ -> reasons
         // Which subject the restart must act on. `restartsWholeWorker` is the
         // question that matters, and it is asked ONCE here so the log, the
         // broadcast and the action cannot disagree about how wide the restart
