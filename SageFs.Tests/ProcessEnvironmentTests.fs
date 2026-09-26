@@ -130,3 +130,101 @@ let realSpawnTests =
         try Directory.Delete(workDir, true) with _ -> ()
     }
   ]
+
+/// A seam for tools that must reach a worker they do not launch.
+///
+/// `forwarded` is pure, so these assert the contract exactly: only names
+/// matching a declared prefix travel, a poisoned key NEVER travels even when
+/// the prefix would match, and an explicit override wins over an inherited
+/// value without being duplicated.
+[<Tests>]
+let forwardingTests =
+  testList "ProcessEnvironment forwarding" [
+    test "a prefix forwards exactly the variables that match it, and nothing else" {
+      let parent =
+        [ "SAGEFS_FOO", "1"; "SAGEFS_BAR", "2"; "OTHER", "3" ] |> Map.ofList
+      ProcessEnvironment.forwarded parent [] [ "SAGEFS_" ]
+      |> List.sortBy fst
+      |> Expect.equal "only the matching keys" (List.sortBy fst [ "SAGEFS_FOO", "1"; "SAGEFS_BAR", "2" ])
+    }
+
+    test "no declared prefixes forwards nothing" {
+      let parent = [ "SAGEFS_FOO", "1" ] |> Map.ofList
+      ProcessEnvironment.forwarded parent [] []
+      |> Expect.equal "nothing travels without a prefix" []
+    }
+
+    test "a prefix is a PREFIX, not a substring" {
+      let parent = [ "SAGEFS_FOO", "1"; "X_SAGEFS_BAR", "2" ] |> Map.ofList
+      ProcessEnvironment.forwarded parent [] [ "SAGEFS_" ]
+      |> List.sortBy fst
+      |> Expect.equal "X_SAGEFS_BAR does not start with the prefix" [ "SAGEFS_FOO", "1" ]
+    }
+
+    test "WHY — a poisoned key is never forwarded, even when the prefix matches it" {
+      // The safety property, and the reason forwarding is not just "copy
+      // whatever the tool declared". Forwarding DOTNET_ROOT would reintroduce
+      // exactly the SDK-pinning failure this module exists to prevent, and a
+      // tool cannot be trusted to know that.
+      let parent = allPoisoned |> Map.add "SAGEFS_ROOT" "/poisoned"
+      ProcessEnvironment.forwarded parent [] [ "SAGEFS_" ]
+      |> List.exists (fun (k, _) -> ProcessEnvironment.poisonedVariables |> List.contains k)
+      |> Expect.isFalse "a poisoned key must never be forwarded"
+    }
+
+    test "an explicit override wins over an inherited value, and is not duplicated" {
+      let parent = [ "SAGEFS_FOO", "inherited" ] |> Map.ofList
+      ProcessEnvironment.forwarded parent [ "SAGEFS_FOO", "explicit" ] [ "SAGEFS_" ]
+      |> List.filter (fun (k, _) -> k = "SAGEFS_FOO")
+      |> Expect.equal "the override appears exactly once" [ "SAGEFS_FOO", "explicit" ]
+    }
+
+    testList "splitPrefixes" [
+      test "both separators parse, so one declaration works on either platform" {
+        ProcessEnvironment.splitPrefixes "A;B"
+        |> Expect.equal "semicolon (Windows)" [ "A"; "B" ]
+        ProcessEnvironment.splitPrefixes "A:B"
+        |> Expect.equal "colon (POSIX)" [ "A"; "B" ]
+      }
+
+      test "whitespace and empties are discarded" {
+        ProcessEnvironment.splitPrefixes " A ; ; B "
+        |> Expect.equal "trimmed, empties dropped" [ "A"; "B" ]
+        ProcessEnvironment.splitPrefixes ""
+        |> Expect.equal "empty declares nothing" []
+      }
+    ]
+
+    // The end-to-end claim: a process SageFs SPAWNS receives a tool's variable,
+    // even though SageFs knows nothing about that variable. A pure test of
+    // `forwarded` is not that claim -- this is, and it calls the same function
+    // the worker spawn site calls.
+    testCase "a process spawned through applyToWithForwarding receives a declared tool variable" <| fun _ ->
+      let workDir = Directory.CreateTempSubdirectory("sagefs-forward-").FullName
+      let script = Path.Combine(workDir, "child.sh")
+      File.WriteAllText(script, "#!/bin/sh\necho \"SEEN=$SAGEFS_DETERMINISM_POLICY\"\n")
+      File.SetUnixFileMode(script, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
+
+      let saved =
+        [ ProcessEnvironment.forwardPrefixesEnvVar; "SAGEFS_DETERMINISM_POLICY" ]
+        |> List.map (fun k -> k, Environment.GetEnvironmentVariable k)
+      try
+        Environment.SetEnvironmentVariable(ProcessEnvironment.forwardPrefixesEnvVar, "SAGEFS_DETERMINISM_")
+        Environment.SetEnvironmentVariable("SAGEFS_DETERMINISM_POLICY", "loss=40;latency=250ms")
+
+        let psi = new ProcessStartInfo()
+        psi.FileName <- "bash"
+        psi.ArgumentList.Add(script)
+        psi.UseShellExecute <- false
+        psi.RedirectStandardOutput <- true
+        // EXACTLY the call the worker spawn site makes (SessionManager.startWorkerProcess).
+        ProcessEnvironment.applyToWithForwarding psi []
+
+        use proc = Process.Start psi
+        let out = proc.StandardOutput.ReadToEnd()
+        proc.WaitForExit 30000 |> ignore
+        out |> Expect.stringContains "the tool's variable reached the spawned process" "loss=40;latency=250ms"
+      finally
+        saved |> List.iter (fun (k, v) -> Environment.SetEnvironmentVariable(k, v))
+        try Directory.Delete(workDir, true) with _ -> ()
+  ]

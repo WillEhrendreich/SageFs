@@ -392,7 +392,11 @@ module SessionManager =
     // of daemon CLI flags, and strip MSBuild-resolution variables this daemon
     // may have picked up so the worker and the isolated FSI host it spawns
     // never inherit them (SageFs.ProcessEnvironment).
-    SageFs.ProcessEnvironment.applyTo psi (envVars @ RuntimeCompat.rollForwardEnv runtimeChoice)
+    //
+    // `applyToWithForwarding` also forwards any environment a tool has asked to
+    // pass through to every spawn (SAGEFS_FORWARD_PREFIXES), so an external
+    // agent can reach a worker it does not launch.
+    SageFs.ProcessEnvironment.applyToWithForwarding psi (envVars @ RuntimeCompat.rollForwardEnv runtimeChoice)
 
     let proc = new Process()
     proc.StartInfo <- psi
