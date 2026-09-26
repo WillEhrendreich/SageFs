@@ -570,6 +570,7 @@
         <Compile Include="TranslationValidationTests.fs" />
         <Compile Include="RewriteValidationSimTests.fs" />
         <Compile Include="RestartBoundariesTests.fs" />
+        <Compile Include="RestartCostTests.fs" />
         <Compile Include="GranularRestartTests.fs" />
         <Compile Include="GranularRestartSimTests.fs" />
         <Compile Include="RestartScopeTests.fs" />
