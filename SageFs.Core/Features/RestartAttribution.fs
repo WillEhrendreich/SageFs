@@ -63,6 +63,29 @@ module RestartAttribution =
       with _ -> None)
     |> knownUnitsOf
 
+  /// Translate a change, with an optional DECLARED boundary taking precedence
+  /// over module attribution.
+  ///
+  /// A declared boundary is the strongest evidence available — the user said
+  /// this unit holds instances of this type — so it wins over the module the
+  /// parser found the declaration in. Module attribution is derived from
+  /// source; a boundary is a statement of intent, and intent beats inference.
+  ///
+  /// The boundary arrives as an already-resolved id rather than a registry,
+  /// which keeps this module free of a dependency the registry introduces (and
+  /// keeps the decision here pure). `None` means the user declared nothing for
+  /// this type, and the module path is used exactly as before — so the opt-in is
+  /// genuinely optional and nothing regresses for a user who has not opted in.
+  let restartReasonWithBoundary
+      (declaredBoundary: string option)
+      (knownUnits: KnownUnit list)
+      (change: ReloadPlanning.ReloadChange)
+      =
+    match declaredBoundary, change with
+    | Some boundaryId, ReloadPlanning.ReloadChange.TypeChanged typeName ->
+      ReloadOutcome.RestartReason.TypeShapeChanged(typeName, RestartScope.Scoped boundaryId)
+    | _ -> ReloadPlanning.ReloadChange.restartReasonAttributed knownUnits change
+
   /// Translate a change with whatever attribution the caller actually has.
   ///
   /// The caller is expected to pass a REAL registry. An empty one is
