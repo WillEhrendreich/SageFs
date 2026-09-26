@@ -113,8 +113,20 @@ and private watchRun
       | Ok (AppRunState.Running current) when current.RunId = app.RunId -> return! poll ()
       | Ok final ->
         match! ops.EndAppRun sessionId generation app.RunId final with
-        | RunEnd.RebuildForChanges (project, previous) ->
-          do! restartForChanges ops clock readyTimeout sessionId generation project previous
+        | RunEnd.RebuildForChanges (project, previous, subject) ->
+          // The subject is threaded through rather than assumed: this is where
+          // "how much to restart" finally reaches the action, instead of being
+          // computed, logged, and then discarded one layer up.
+          do!
+            restartForChanges
+              ops
+              clock
+              readyTimeout
+              sessionId
+              generation
+              project
+              previous
+              subject
         | RunEnd.Recorded
         | RunEnd.NotCurrent -> ()
       | Error reason -> do! lostTrack reason
@@ -148,9 +160,11 @@ and private restartForChanges
   (generation: RunGeneration)
   (project: string)
   (previous: PreviousAddress)
+  (subject: GranularRestart.RestartSubject)
   : Task<unit> =
   task {
-    let! restarted = ops.RestartSession sessionId true
+    let! restarted =
+      ops.RestartSession sessionId (RestartPlan.Rebuild subject)
     let! ready =
       match restarted with
       | Error e -> Task.FromResult(Error e)
@@ -214,7 +228,7 @@ let runApp
             match phase with
             | StartPhase.RebuildingSession ->
               task {
-                match! ops.RestartSession sessionId true with
+                match! ops.RestartSession sessionId (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker) with
                 | Error e -> return Error e
                 | Ok _ -> return! ops.AwaitReady sessionId readyTimeout
               }

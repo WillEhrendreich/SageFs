@@ -301,7 +301,7 @@ let restartForChangesTests =
     | WorkerMessage.RunApp (_, PreviousAddress.ReuseAddress _, rid) ->
       async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.Running (running "run2"))) }
     | WorkerMessage.AwaitAppChange ("run1", rid) ->
-      async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.RestartRequired (web, typeChange, [], at))) }
+      async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.RestartRequired (web, typeChange, [], SageFs.GranularRestart.RestartSubject.Worker, at))) }
     | other -> worker never.Task other
   let settleOn (pick: AppRunState -> bool) (r: Recorded) (ops: SessionManagementOps) =
     ops, settleOn pick r
@@ -316,8 +316,8 @@ let restartForChangesTests =
       let r = record ()
       let baseOps =
         { fakeOps (session webLive [ exe web ] AppRunState.NotRunning) restarting r with
-            RestartSession = fun _ rebuild ->
-              r.Calls.Enqueue (sprintf "restart rebuild=%b" rebuild)
+            RestartSession = fun _ plan ->
+              r.Calls.Enqueue (sprintf "restart plan=%A" plan)
               Task.FromResult(Ok "restarted") }
       let ops, relaunched =
         settleOn (function AppRunState.Running app -> app.RunId = "run2" | _ -> false) r baseOps
@@ -326,7 +326,7 @@ let restartForChangesTests =
       calls r
       |> List.filter (fun c -> not (c.StartsWith("worker:await", StringComparison.Ordinal)))
       |> Expect.equal "run, rebuild, wait for Ready, relaunch at the old address"
-        [ sprintf "worker:run %s" web; "restart rebuild=true"; "await-ready"; sprintf "worker:run %s at http://127.0.0.1:5123" web ]
+        [ sprintf "worker:run %s" web; "restart plan=Rebuild Worker"; "await-ready"; sprintf "worker:run %s at http://127.0.0.1:5123" web ]
       states r
       |> List.exists (function
         | AppRunState.Starting (_, StartPhase.RebuildingForChanges (c, []), _) -> c = typeChange
@@ -375,14 +375,14 @@ let faultedSessionRunTests =
       let faulted = { session webLive [ exe web ] AppRunState.NotRunning with Status = SessionLifecycleStatus.Faulted None }
       let ops =
         { fakeOps faulted (worker never.Task) r with
-            RestartSession = fun _ rebuild ->
-              r.Calls.Enqueue (sprintf "restart rebuild=%b" rebuild)
+            RestartSession = fun _ plan ->
+              r.Calls.Enqueue (sprintf "restart plan=%A" plan)
               Task.FromResult(Ok "restarted") }
       let! result = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
       result |> Expect.equal "the relaunched app" (Ok (AppRunState.Running (running "run1")))
       calls r
       |> List.filter (fun c -> not (c.StartsWith("worker:await", StringComparison.Ordinal)))
-      |> Expect.equal "rebuild, wait for Ready, then run" [ "restart rebuild=true"; "await-ready"; sprintf "worker:run %s" web ]
+      |> Expect.equal "rebuild, wait for Ready, then run" [ "restart plan=Rebuild Worker"; "await-ready"; sprintf "worker:run %s" web ]
       states r |> List.head
       |> Expect.equal "the card says it is rebuilding" (AppRunState.Starting (web, StartPhase.RebuildingSession, at))
     }
@@ -398,14 +398,14 @@ let runAfterFailedRebuildTests =
             Status = SessionLifecycleStatus.Faulted None }
       let ops =
         { fakeOps failed (worker never.Task) r with
-            RestartSession = fun _ rebuild ->
-              r.Calls.Enqueue (sprintf "restart rebuild=%b" rebuild)
+            RestartSession = fun _ plan ->
+              r.Calls.Enqueue (sprintf "restart plan=%A" plan)
               Task.FromResult(Ok "restarted") }
       let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
       calls r
       |> List.filter (fun c -> not (c.StartsWith("worker:await", StringComparison.Ordinal)))
       |> Expect.equal "rebuild, wait for Ready, relaunch at the old address"
-        [ "restart rebuild=true"; "await-ready"; sprintf "worker:run %s at http://127.0.0.1:5123" web ]
+        [ "restart plan=Rebuild Worker"; "await-ready"; sprintf "worker:run %s at http://127.0.0.1:5123" web ]
     }
   ]
 
@@ -431,7 +431,7 @@ let runOwnershipTests =
           relaunched.TrySetResult() |> ignore
           async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.Running (running "run2"))) }
         | WorkerMessage.AwaitAppChange ("run1", rid) ->
-          async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.RestartRequired (web, typeChange, [], at))) }
+          async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.RestartRequired (web, typeChange, [], SageFs.GranularRestart.RestartSubject.Worker, at))) }
         | other -> worker never.Task other
       let ops =
         { fakeOps (session webLive [ exe web ] AppRunState.NotRunning) restarting r with
@@ -595,15 +595,15 @@ let appSlotTests =
 
     testCase "WHY — AppSlot.endRun — a run that ends for changes moves straight to rebuilding because a Run pressed in between would launch on the worker being retired" <| fun _ ->
       let change = SageFs.Features.ReloadPlanning.ReloadChange.TypeChanged "TodoItem"
-      let ended, rebuilding = AppSlot.endRun (RunGeneration 1L) "run1" (AppRunState.RestartRequired (web, change, [], at)) (runningSlot 1L)
-      ended |> Expect.equal "the watcher rebuilds where the app listened" (RunEnd.RebuildForChanges (web, PreviousAddress.ReuseAddress "http://127.0.0.1:5123"))
+      let ended, rebuilding = AppSlot.endRun (RunGeneration 1L) "run1" (AppRunState.RestartRequired (web, change, [], SageFs.GranularRestart.RestartSubject.Worker, at)) (runningSlot 1L)
+      ended |> Expect.equal "the watcher rebuilds where the app listened" (RunEnd.RebuildForChanges (web, PreviousAddress.ReuseAddress "http://127.0.0.1:5123", SageFs.GranularRestart.RestartSubject.Worker))
       AppSlot.claimRun web StartPhase.LaunchingEntryPoint at rebuilding
       |> fst
       |> Expect.equal "a Run in that moment is told the app is rebuilding" (RunClaim.AlreadyStarting (web, StartPhase.RebuildingForChanges (change, [])))
 
     testCase "WHY — AppSlot.endRun — a run ended for changes after Stop claimed it is recorded, not rebuilt, because the user stopped it" <| fun _ ->
       let change = SageFs.Features.ReloadPlanning.ReloadChange.TypeChanged "TodoItem"
-      let final = AppRunState.RestartRequired (web, change, [], at)
+      let final = AppRunState.RestartRequired (web, change, [], SageFs.GranularRestart.RestartSubject.Worker, at)
       AppSlot.endRun (RunGeneration 1L) "run1" final (runningSlot 2L)
       |> Expect.equal "recorded as it ended" (RunEnd.Recorded, { runningSlot 2L with State = final })
   ]

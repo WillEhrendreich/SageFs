@@ -638,14 +638,14 @@ let createSessionOpsWithRecovery
           |> Result.map (fun () ->
             sprintf "Session '%s' purged — manifest entry removed." sessionId)
       }
-    RestartSession = fun sessionId rebuild ->
+    RestartSession = fun sessionId plan ->
       task {
         match checkMailboxAdmission sessionManager with
         | Result.Error busy -> return Result.Error busy
         | Result.Ok () ->
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.RestartSession(sessionId, rebuild, reply))
+            SessionManager.SessionCommand.RestartSession(sessionId, plan, reply))
           |> Async.StartAsTask
         return result
       }
@@ -3713,7 +3713,7 @@ let run
         | Error e -> Error (SageFsError.describe e)
     }
     HardResetSession = fun sid -> task {
-      let! result = sessionOps.RestartSession sid true
+      let! result = sessionOps.RestartSession sid (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker)
       return
         result
         |> Result.map (sprintf "Hard reset: %s")

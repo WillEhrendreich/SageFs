@@ -5,6 +5,15 @@ open SageFs.WorkerProtocol
 
 /// Functions a daemon provides for managing worker sessions.
 /// Pure data — no actor, no transport, just function signatures.
+/// What a restart must cover, and whether it rebuilds. See
+/// `SessionManagementOps.RestartSession` for why this replaced a bare bool.
+type RestartPlan =
+  /// Respawn the worker, rebuilding the project first.
+  | Rebuild of subject: GranularRestart.RestartSubject
+  /// Respawn the worker WITHOUT rebuilding — a soft reset that must not pay
+  /// for a build, and must not be confused with a rebuild.
+  | RespawnOnly
+
 type SessionManagementOps = {
   CreateSession: SessionProjectTarget list -> string -> WorkflowTypes.SessionWorkflow -> Task<Result<string, SageFsError>>
   ListSessions: unit -> Task<string>
@@ -14,7 +23,20 @@ type SessionManagementOps = {
   PurgeSession: string -> Task<Result<string, SageFsError>>
   /// Stop worker, optionally rebuild, respawn with same session ID.
   /// Solves CLR assembly identity cache: fresh process = fresh assemblies.
-  RestartSession: SessionId -> bool -> Task<Result<string, SageFsError>>
+  ///
+  /// HOW MUCH to restart, and whether to REBUILD. This was one `bool` that
+  /// silently carried two decisions, and it is now both of them named:
+  ///
+  ///  - the bool said "rebuild the project?" (`false` was a real, used path:
+  ///    reset_fsi_session respawns the worker WITHOUT rebuilding)
+  ///  - nothing said WHICH subject, which is why a type change the planner had
+  ///    already scoped to one unit could not reach here — the scope was
+  ///    computed, carried in the reason, logged, and then had nowhere to go.
+  ///
+  /// A bool cannot grow a second meaning without every caller's meaning
+  /// silently changing; two named values can, and the compiler forces each
+  /// caller to say which it means.
+  RestartSession: SessionId -> RestartPlan -> Task<Result<string, SageFsError>>
   /// Get the session proxy for routing commands to a specific worker.
   GetProxy: SessionId -> Task<SessionProxy option>
   /// Get the SessionInfo for a specific session.

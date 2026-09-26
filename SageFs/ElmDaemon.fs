@@ -46,12 +46,12 @@ let createEffectDeps
               sessionId, reply))
         return result
       }
-    RestartSession = fun sessionId rebuild ->
+    RestartSession = fun sessionId plan ->
       async {
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.RestartSession(
-              sessionId, rebuild, reply))
+              sessionId, plan, reply))
         return result
       }
     ListSessions = fun () ->

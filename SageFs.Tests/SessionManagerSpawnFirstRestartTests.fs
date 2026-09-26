@@ -188,7 +188,7 @@ let sessionManagerSpawnFirstRestartTests =
         let info = createSession harness
         makeSessionReady harness info
 
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
         | Ok _ -> ()
         | Error err -> failtestf "restart failed: %s" (SageFsError.describe err)
 
@@ -223,7 +223,7 @@ let sessionManagerSpawnFirstRestartTests =
           getManagedSession harness info.Id
           |> getWorkerPid
 
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
         | Error (SageFsError.WorkerSpawnFailed reason) ->
           reason |> Expect.equal "spawn failure should bubble through" "spawn boom"
         | other ->
@@ -250,7 +250,7 @@ let sessionManagerSpawnFirstRestartTests =
         let info = createSession harness
         makeSessionReady harness info
 
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply)) with
         | Ok _ -> ()
         | Error err -> failtestf "rebuild restart failed: %s" (SageFsError.describe err)
 
@@ -276,7 +276,7 @@ let sessionManagerSpawnFirstRestartTests =
         makeSessionReady harness info
         let originalPid = getManagedSession harness info.Id |> getWorkerPid
 
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply)) with
         | Error (SageFsError.BuildFailed(_, diagnostics)) ->
           BuildDiagnostic.describe diagnostics
           |> Expect.equal "the caller gets the build error" "Hello.fs(3,5): error FS0001: expected int"
@@ -305,7 +305,7 @@ let sessionManagerSpawnFirstRestartTests =
 
         // Accept a non-rebuild restart: the new worker is spawning (Start
         // recorded), the old worker still registered.
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
         | Ok _ -> ()
         | Error err -> failtestf "restart failed: %s" (SageFsError.describe err)
 
@@ -350,7 +350,7 @@ let sessionManagerSpawnFirstRestartTests =
           |> getWorkerPid
 
         // Accept the spawn-first restart (new worker warming).
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
         | Ok _ -> ()
         | Error err -> failtestf "restart failed: %s" (SageFsError.describe err)
 
@@ -390,7 +390,7 @@ let sessionManagerSpawnFirstRestartTests =
         makeSessionReady harness info
 
         // Accept the spawn-first restart.
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
         | Ok _ -> ()
         | Error err -> failtestf "restart failed: %s" (SageFsError.describe err)
 
@@ -438,7 +438,7 @@ let sessionManagerSpawnFirstRestartTests =
         // Accept the spawn-first restart: the old session is parked in
         // PendingSwap (still registered with the OLD pid), the new worker is
         // warming.
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
         | Ok _ -> ()
         | Error err -> failtestf "restart failed: %s" (SageFsError.describe err)
 
@@ -518,7 +518,7 @@ let sessionManagerSpawnFirstRestartTests =
           |> getWorkerPid
 
         // Swap #1: worker0 -> worker1.
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
         | Ok _ -> ()
         | Error err -> failtestf "restart #1 failed: %s" (SageFsError.describe err)
         harness.Mailbox.Post(
@@ -543,7 +543,7 @@ let sessionManagerSpawnFirstRestartTests =
         |> Expect.equal "the registered session's own Process must be the NEW worker after a committed swap" worker1Process.Id
 
         // Swap #2: worker1 -> worker2.
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
         | Ok _ -> ()
         | Error err -> failtestf "restart #2 failed: %s" (SageFsError.describe err)
         harness.Mailbox.Post(

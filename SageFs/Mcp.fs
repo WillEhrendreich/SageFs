@@ -1894,7 +1894,7 @@ module McpTools =
         task {
           let! result =
             task {
-              try return! ctx.SessionOps.RestartSession (toSessionId sid) true
+              try return! ctx.SessionOps.RestartSession (toSessionId sid) (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker)
               with ex -> return Error (SageFsError.Unexpected ex)
             }
           let now = DateTime.UtcNow
@@ -1923,7 +1923,7 @@ module McpTools =
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         let! result =
           task {
-            try return! ctx.SessionOps.RestartSession (toSessionId sid) false
+            try return! ctx.SessionOps.RestartSession (toSessionId sid) RestartPlan.RespawnOnly
             with ex -> return Error (SageFsError.Unexpected ex)
           }
         match result with
@@ -1954,7 +1954,7 @@ module McpTools =
         task {
           let! result =
             task {
-              try return! ctx.SessionOps.RestartSession (toSessionId sid) true
+              try return! ctx.SessionOps.RestartSession (toSessionId sid) (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker)
               with ex -> return Error (SageFsError.Unexpected ex)
             }
           let now = DateTime.UtcNow
@@ -1975,7 +1975,7 @@ module McpTools =
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         let! result =
           task {
-            try return! ctx.SessionOps.RestartSession (toSessionId sid) false
+            try return! ctx.SessionOps.RestartSession (toSessionId sid) RestartPlan.RespawnOnly
             with ex -> return Error (SageFsError.Unexpected ex)
           }
         match result with

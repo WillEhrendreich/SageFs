@@ -181,7 +181,7 @@ let sessionManagerRestartTombstoneTests =
         harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
         |> ignore
 
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
         | Ok message ->
           message
           |> Expect.stringContains
@@ -208,7 +208,7 @@ let sessionManagerRestartTombstoneTests =
         let info = createSession harness
         let before = getManagedSession harness info.Id
 
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply)) with
         | Error (SageFsError.BuildFailed(_, diagnostics)) ->
           BuildDiagnostic.describe diagnostics |> Expect.equal "build failure should surface the build error" "build boom"
         | other ->
@@ -239,7 +239,7 @@ let sessionManagerRestartTombstoneTests =
         let info = createSession harness
         let before = getManagedSession harness info.Id
 
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply)) with
         | Error (SageFsError.WorkerSpawnFailed reason) ->
           reason |> Expect.equal "spawn failure should bubble through" "spawn boom"
         | other ->
@@ -289,7 +289,7 @@ let sessionManagerRestartTombstoneTests =
         let faultsBefore = harness.FaultedEvents.Count
 
         // Cold restart registers the replacement worker (new pid).
-        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply))
         |> ignore
 
         let afterRestart = getManagedSession harness info.Id
@@ -324,7 +324,7 @@ let sessionManagerRestartTombstoneTests =
           SessionLifecycleStatus.workerPid info.Status
           |> Option.defaultWith (fun () -> failtest "expected worker pid")
 
-        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply))
         |> ignore
 
         harness.Mailbox.Post(SessionCommand.WorkerExited(info.Id, originalPid, 1))
@@ -410,11 +410,11 @@ let sessionManagerRestartTombstoneTests =
       withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
 
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply)) with
         | Error (SageFsError.BuildFailed _) -> ()
         | other -> failtestf "expected the first rebuild to fail, got %A" other
 
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply)) with
         | Ok message ->
           message
           |> Expect.stringContains "successful retry should acknowledge respawn"

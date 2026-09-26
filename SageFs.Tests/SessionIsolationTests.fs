@@ -635,15 +635,15 @@ module ResetIsolation =
     let sessionMap = ConcurrentDictionary<string, string>()
     sessionMap.["agent1"] <- "aaa00001"
     sessionMap.["agent2"] <- "bbb00002"
-    let restartLog = System.Collections.Generic.List<string * bool>()
+    let restartLog = System.Collections.Generic.List<string * SageFs.RestartPlan>()
     let routedSessions = System.Collections.Generic.List<string>()
     let ops : SessionManagementOps = {
       CreateSession = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(Ok "new-session")
       ListSessions = fun () -> System.Threading.Tasks.Task.FromResult("No sessions")
       StopSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "stopped")
       PurgeSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "purged")
-      RestartSession = fun sid rebuild ->
-        restartLog.Add((WorkerProtocol.SessionId.value sid, rebuild))
+      RestartSession = fun sid plan ->
+        restartLog.Add((WorkerProtocol.SessionId.value sid, plan))
         System.Threading.Tasks.Task.FromResult(Ok "restarted")
       GetProxy = fun sid ->
         routedSessions.Add(WorkerProtocol.SessionId.value sid)
@@ -798,7 +798,7 @@ module ResetIsolation =
       let! _ = hardResetSession ctx "agent1" true (Some "aaa00001") None
 
       restartLog |> Seq.toList
-      |> Expect.equal "only session-AAA restarted" [("aaa00001", true)]
+      |> Expect.equal "only session-AAA restarted" [("aaa00001", SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker)]
 
       ctx.SessionMap.["agent2"]
       |> Expect.equal "agent2 session untouched" "bbb00002"
@@ -905,7 +905,7 @@ module ResetIsolation =
       |> Expect.equal "only session-AAA's proxy was consulted, once" ["aaa00001"]
 
       restartLog |> Seq.toList
-      |> Expect.equal "the owner restarts session-AAA without a rebuild" [("aaa00001", false)]
+      |> Expect.equal "the owner restarts session-AAA without a rebuild" [("aaa00001", SageFs.RestartPlan.RespawnOnly)]
 
       ctx.SessionMap.["agent2"]
       |> Expect.equal "agent2 session untouched" "bbb00002"
@@ -1164,7 +1164,7 @@ module ResetIsolation =
       let! _ = resetSession ctx "agent2" (Some "bbb00002") None
 
       restartLog |> Seq.toList
-      |> Expect.equal "only AAA was restarted" [("aaa00001", true)]
+      |> Expect.equal "only AAA was restarted" [("aaa00001", SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker)]
 
       // Lookup pattern per operation, with the typed resolver in play:
       // agent1's rebuild hard reset consults the proxy once during session

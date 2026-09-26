@@ -85,7 +85,7 @@ module SessionManager =
         AsyncReplyChannel<Result<unit, SageFsError>>
     | RestartSession of
         SessionId *
-        rebuild: bool *
+        plan: RestartPlan *
         AsyncReplyChannel<Result<string, SageFsError>>
     /// Internal: a cold rebuild started off the mailbox loop has finished.
     /// The carrying reply channel is replied to here so the original caller
@@ -1003,9 +1003,9 @@ module SessionManager =
             Instrumentation.failSpan span (sprintf "Session %s not found" (SessionId.value id))
             return state
 
-        | SessionCommand.RestartSession(id, rebuild, reply) ->
+        | SessionCommand.RestartSession(id, plan, reply) ->
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.restart"
-                       [("session.id", box id); ("rebuild", box rebuild)]
+                       [("session.id", box id); ("restart.plan", box plan)]
           match ManagerState.tryGetSession id state with
           | Some session when ManagerState.tryGetRebuildChannel id state |> Option.isSome ->
             // Reject another hard reset while a cold rebuild of this session is
@@ -1016,6 +1016,13 @@ module SessionManager =
             Instrumentation.failSpan span "Hard reset already in progress for this session"
             return state
           | Some session ->
+            // A unit scope still rebuilds: SageFs rebuilds a PROJECT, so
+            // there is no narrower build to ask for today.
+            let rebuild =
+              match plan with
+              | SageFs.RestartPlan.Rebuild _ -> true
+              | SageFs.RestartPlan.RespawnOnly -> false
+
             match rebuild with
             | false ->
               return spawnFirst state id session session.Workflow reply "Hard reset accepted — replacement worker spawning." span

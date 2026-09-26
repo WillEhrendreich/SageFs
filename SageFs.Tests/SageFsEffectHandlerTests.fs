@@ -511,7 +511,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     let sid = testSessionId "a1b2c3d4"
     let mutable dispatched : SageFsMsg list = []
     let completed = TaskCompletionSource<bool>()
-    let mutable restartCalls : (SessionId * bool) list = []
+    let mutable restartCalls : (SessionId * SageFs.RestartPlan) list = []
     let mutable listCalls = 0
     let mutable proxyCalls = 0
     let tc : Features.LiveTesting.TestCase = {
@@ -551,9 +551,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
         async { return Result.Error SageFsError.NoActiveSessions }
-      RestartSession = fun sessionId rebuild ->
+      RestartSession = fun sessionId plan ->
         async {
-          restartCalls <- restartCalls @ [sessionId, rebuild]
+          restartCalls <- restartCalls @ [sessionId, plan]
           return Result.Ok "restarted"
         }
       ListSessions = fun () ->
@@ -592,7 +592,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     restartCalls
     |> Expect.hasLength "should restart the targeted session once" 1
     restartCalls.Head
-    |> Expect.equal "should request rebuild restart" (sid, true)
+    |> Expect.equal "should request a rebuild restart" (sid, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker)
     (listCalls > 1)
     |> Expect.isTrue "should poll session readiness before completing rebuild"
     (proxyCalls > 1)
@@ -605,7 +605,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     let sid = testSessionId "d4c3b2a1"
     let mutable dispatched : SageFsMsg list = []
     let completed = TaskCompletionSource<bool>()
-    let mutable restartCalls : (SessionId * bool) list = []
+    let mutable restartCalls : (SessionId * SageFs.RestartPlan) list = []
     let mutable listCalls = 0
     let mutable proxyCalls = 0
     let tc : Features.LiveTesting.TestCase = {
@@ -645,9 +645,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
         async { return Result.Error SageFsError.NoActiveSessions }
-      RestartSession = fun sessionId rebuild ->
+      RestartSession = fun sessionId plan ->
         async {
-          restartCalls <- restartCalls @ [sessionId, rebuild]
+          restartCalls <- restartCalls @ [sessionId, plan]
           return Result.Ok "restarted"
         }
       ListSessions = fun () ->
@@ -686,7 +686,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     restartCalls
     |> Expect.hasLength "should restart the targeted session once" 1
     restartCalls.Head
-    |> Expect.equal "should request rebuild restart" (sid, true)
+    |> Expect.equal "should request a rebuild restart" (sid, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker)
     (listCalls >= 12)
     |> Expect.isTrue "should keep polling until the restarted session is finally ready"
     (proxyCalls >= 12)
@@ -880,7 +880,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     let sid = testSessionId "c0ffee03"
     let mutable dispatched : SageFsMsg list = []
     let completed = TaskCompletionSource<bool>()
-    let mutable restartCalls : (SessionId * bool) list = []
+    let mutable restartCalls : (SessionId * SageFs.RestartPlan) list = []
     let gate = obj()
     let mutable rebuildGeneration = 0
     let mutable readyGeneration = 0
@@ -922,10 +922,10 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
       StopSession = fun _ ->
         async { return Result.Error SageFsError.NoActiveSessions }
-      RestartSession = fun sessionId rebuild ->
+      RestartSession = fun sessionId plan ->
         async {
           lock gate (fun () ->
-            restartCalls <- restartCalls @ [sessionId, rebuild]
+            restartCalls <- restartCalls @ [sessionId, plan]
             rebuildGeneration <- rebuildGeneration + 1)
           return Result.Ok "restarted"
         }

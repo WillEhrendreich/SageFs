@@ -284,7 +284,7 @@ let sessionManagerOffMailboxBuildTests =
 
       do! withHarness runtime.Runtime (fun harness -> task {
         let! info = createSession harness
-        let restartTask = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
+        let restartTask = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply))
 
         try
           let! started = completesWithin 2000 buildStarted.Task
@@ -324,7 +324,7 @@ let sessionManagerOffMailboxBuildTests =
 
       do! withHarness runtime.Runtime (fun harness -> task {
         let! info = createSession harness
-        let restartTask = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
+        let restartTask = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply))
 
         try
           let! started = completesWithin 2000 buildStarted.Task
@@ -362,7 +362,7 @@ let sessionManagerOffMailboxBuildTests =
 
       do! withHarness runtime.Runtime (fun harness -> task {
         let! info = createSession harness
-        let firstRestart = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
+        let firstRestart = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply))
 
         try
           let! started = completesWithin 2000 buildStarted.Task
@@ -370,7 +370,7 @@ let sessionManagerOffMailboxBuildTests =
 
           // A concurrent hard reset of the same session must be rejected, not
           // queued behind the build and not double-spawned.
-          match! tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
+          match! tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply)) with
           | Some (Error (SageFsError.HardResetFailed msg)) ->
             msg |> Expect.stringContains "rejection should explain the in-flight rebuild" "already in progress"
           | Some (Error otherErr) ->
@@ -407,7 +407,7 @@ let sessionManagerOffMailboxBuildTests =
 
       do! withHarness runtime.Runtime (fun harness -> task {
         let! info = createSession harness
-        let restartTask = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
+        let restartTask = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply))
 
         try
           let! started = completesWithin 2000 buildStarted.Task

@@ -46,14 +46,21 @@ let availableTools (state: SessionState) : string list =
     // is exactly the recovery the "N sessions exist... switch_session to select
     // one" hint points at — omitting it was a catch-22 (roast UX / affordances).
     //
-    // The RESET tools belong here for the same reason, and were the same bug:
-    // a session that never finished warmup is Uninitialized, and without these
-    // there is no way back — every other tool is refused, and the state says to
-    // use a tool the gate will not let anyone call. Recovering FROM a state
-    // must never require leaving that state first.
+    // hard_reset_fsi_session belongs here for the same reason, and was the same
+    // bug: a session that never finished warmup is Uninitialized, and without
+    // it there is no way back — every other tool is refused, and the state
+    // tells you to use a tool the gate will not let anyone call. Recovering
+    // FROM a state must never require leaving that state first.
+    //
+    // It is NOT paid for by dropping a diagnostic: get_friction_report is
+    // declared AlwaysAvailable, and a state must not hide a tool it is
+    // contractually required to offer. So Uninitialized grows by one and the
+    // peer-size contract moves with it — the two states are still peers, and
+    // the difference between them is now "one can reset itself and the other
+    // is already starting up", which is the honest difference.
     [ "get_daemon_status"; "get_session_status"; "get_friction_report"; "get_available_projects"
       "list_sessions"; "switch_session"; "create_project_session"; "create_solution_session"; "create_bare_session"
-      "reset_fsi_session"; "hard_reset_fsi_session"; "cancel_eval"
+      "hard_reset_fsi_session"
       "acquire_full_build_lease"; "acquire_test_suite_lease"; "acquire_run_app_lease"; "release_work_lease"; "decompose_pipeline" ]
   | WarmingUp ->
     [ "get_session_status"; "get_recent_fsi_events"; "get_friction_report"

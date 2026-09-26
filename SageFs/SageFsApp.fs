@@ -2276,8 +2276,9 @@ type EffectDeps = {
   ConfigureWarmupAutoOpen: string -> Async<Result<OutputLine, string>>
   /// Stop a session
   StopSession: SessionId -> Async<Result<unit, SageFsError>>
-  /// Restart a session, optionally rebuilding first.
-  RestartSession: SessionId -> bool -> Async<Result<string, SageFsError>>
+  /// Restart a session: what to cover, and whether to rebuild. See
+  /// `SageFs.RestartPlan` — this was a bare bool carrying both decisions.
+  RestartSession: SessionId -> RestartPlan -> Async<Result<string, SageFsError>>
   /// List all sessions
   ListSessions: unit -> Async<SessionInfo list>
   /// Sleep for the requested number of milliseconds.
@@ -2785,7 +2786,7 @@ module SageFsEffectHandler =
                   let sid = SessionOperations.sessionId resolution
                   let sidStr = SessionId.value sid
                   let restartStopwatch = System.Diagnostics.Stopwatch.StartNew()
-                  match! deps.RestartSession sid true with
+                  match! deps.RestartSession sid (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) with
                   | Error err ->
                     match ct.IsCancellationRequested with
                     | true ->

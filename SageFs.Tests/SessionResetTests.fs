@@ -106,14 +106,14 @@ let private mkPushbackCtx (restartResult: Result<string, SageFsError>) =
   let sid = SessionId.newId()
   let sessionMap = ConcurrentDictionary<string, string>()
   sessionMap.["test"] <- SessionId.value sid
-  let restartCalls = ResizeArray<SessionId * bool>()
+  let restartCalls = ResizeArray<SessionId * SageFs.RestartPlan>()
   let statusEvents = ResizeArray<SessionDisplayStatus>()
   let dummyProxy : SessionProxy = fun _ -> async { return WorkerResponse.WorkerReady }
   let ops =
     { SessionManagementOps.stub with
         GetProxy = fun _ -> Task.FromResult(Some dummyProxy)
-        RestartSession = fun sessionId rebuild ->
-          restartCalls.Add(sessionId, rebuild)
+        RestartSession = fun sessionId plan ->
+          restartCalls.Add(sessionId, plan)
           Task.FromResult restartResult }
   let ctx : McpContext =
     { FrictionStore = None
@@ -167,8 +167,10 @@ let resetPushbackStubTests =
       |> Expect.equal
         "the session's owner (not an in-process rebuild) is asked to restart the worker process, exactly once"
         1
+      // reset_fsi_session asks for a RESPAWN ONLY — no rebuild. The distinction
+      // matters: a rebuild would pay for a build the user did not ask for.
       snd restartCalls.[0]
-      |> Expect.isFalse "rebuild=false must be passed through unchanged"
+      |> Expect.equal "respawn-only must be passed through unchanged" SageFs.RestartPlan.RespawnOnly
 
       statusEvents |> Seq.toList
       |> Expect.contains

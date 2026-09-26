@@ -254,7 +254,16 @@ type AppRunState =
   /// start that could not happen at all.
   | CouldNotStart of project: string * reason: SageFsError * at: DateTime
   /// The run was stopped because a save changed something that only takes effect at startup.
-  | RestartRequired of project: string * first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list * at: DateTime
+  /// `subject` says HOW MUCH has to restart. It was absent, which is why a
+  /// type change the planner had already scoped to one unit still restarted
+  /// the whole worker: the scope was computed, carried in the reason, logged,
+  /// and then had nowhere to go.
+  | RestartRequired of
+      project: string
+    * first: SageFs.Features.ReloadPlanning.ReloadChange
+    * rest: SageFs.Features.ReloadPlanning.ReloadChange list
+    * subject: SageFs.GranularRestart.RestartSubject
+    * at: DateTime
   /// A rebuild of the app failed: the code did not compile, the app did not crash.
   | BuildFailed of project: string * reason: string * at: DateTime * lastAddress: PreviousAddress
   /// Watching the run failed, so what the app is doing is no longer known: it
@@ -338,7 +347,14 @@ type RunEnd =
   | Recorded
   /// The run ended for changes and its generation still owns the app: the
   /// owner now says it is rebuilding, and the watcher rebuilds and relaunches.
-  | RebuildForChanges of project: string * previous: PreviousAddress
+  /// `subject` rides along so the orchestrator can restart the right amount
+  /// rather than assuming the whole worker. It is a DU, not a flag: a flag
+  /// here could only say yes/no, and "yes, but just this unit" is the case
+  /// the whole design exists for.
+  | RebuildForChanges of
+      project: string
+    * previous: PreviousAddress
+    * subject: SageFs.GranularRestart.RestartSubject
   /// Not the current run (stopped, replaced, or its worker is gone): nothing changed.
   | NotCurrent
 
@@ -403,8 +419,8 @@ module AppSlot =
     match slot.State with
     | AppRunState.Running app when app.RunId = runId ->
       match final with
-      | AppRunState.RestartRequired (project, first, rest, at) when generation = slot.Generation ->
-        RunEnd.RebuildForChanges (project, addressOf app),
+      | AppRunState.RestartRequired (project, first, rest, subject, at) when generation = slot.Generation ->
+        RunEnd.RebuildForChanges (project, addressOf app, subject),
         { slot with State = AppRunState.Starting (project, StartPhase.RebuildingForChanges (first, rest), at) }
       | _ -> RunEnd.Recorded, { slot with State = final }
     | _ -> RunEnd.NotCurrent, slot
@@ -439,8 +455,15 @@ let describeState (state: AppRunState) : string =
   | AppRunState.LostTrack (project, reason, _) ->
     sprintf "Lost track of %s: %s. → It may still be serving: press Run to take it over again, or Stop to end it."
       (projectName project) (SageFsError.describe reason)
-  | AppRunState.RestartRequired (project, first, rest, _) ->
-    sprintf "%s must restart: %s" (projectName project) (SageFs.Features.ReloadPlanning.ReloadChange.describeAll first rest)
+  | AppRunState.RestartRequired (project, first, rest, subject, _) ->
+    // Say WHICH subject, so a scoped restart is visibly different from a whole
+    // app restart rather than two identical messages.
+    let what =
+      match subject with
+      | SageFs.GranularRestart.RestartSubject.Worker -> "must restart"
+      | SageFs.GranularRestart.RestartSubject.UnitScope unit ->
+        sprintf "must restart (unit '%s'; the rest keeps running)" unit
+    sprintf "%s %s: %s" (projectName project) what (SageFs.Features.ReloadPlanning.ReloadChange.describeAll first rest)
 
 /// The app state as HTTP and MCP clients read it.
 type AppStateView = {

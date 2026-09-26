@@ -13,7 +13,7 @@ open SageFs.McpTools
 type private Probe = {
   SessionId: string
   Ctx: McpContext
-  Restarts: ResizeArray<bool>
+  Restarts: ResizeArray<SageFs.RestartPlan>
   StatusWrites: ResizeArray<WorkerProtocol.SessionLifecycleStatus>
   /// Every message routed to the session's worker.
   Routed: ResizeArray<WorkerProtocol.WorkerMessage>
@@ -24,7 +24,7 @@ type private Probe = {
 /// run in parallel.
 let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsError>) (statusAfter: WorkerProtocol.SessionStatus) : Probe =
   let status = ref (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 42; Port = Some 1 })
-  let restarts = ResizeArray<bool>()
+  let restarts = ResizeArray<SageFs.RestartPlan>()
   let writes = ResizeArray<WorkerProtocol.SessionLifecycleStatus>()
   let routed = ResizeArray<WorkerProtocol.WorkerMessage>()
   let finished = TaskCompletionSource<SessionDisplayStatus>(TaskCreationOptions.RunContinuationsAsynchronously)
@@ -48,8 +48,8 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
           writes.Add s
           status.Value <- s
           Task.FromResult(())
-        RestartSession = fun _ rebuild ->
-          restarts.Add rebuild
+        RestartSession = fun _ plan ->
+          restarts.Add plan
           status.Value <- WorkerProtocol.SessionLifecycleStatus.ofWorkerReport status.Value statusAfter
           Task.FromResult restartResult }
   let sessionMap = Collections.Concurrent.ConcurrentDictionary<string, string>()
@@ -86,7 +86,7 @@ let tests = testList "MCP hard reset rebuild" [
     let p = mkProbe "aaa00001" (Ok "Hard reset complete") WorkerProtocol.SessionStatus.Ready
     let! _ = hardReset p
     let! _ = awaitOutcome p
-    p.Restarts |> Seq.toList |> Expect.equal "RestartSession(rebuild=true) called exactly once" [ true ]
+    p.Restarts |> Seq.toList |> Expect.equal "RestartSession(rebuild) called exactly once" [ SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker ]
   }
 
   testTask "WHY — hard_reset rebuild=true — the MCP layer never writes session status because the SessionManager mailbox is the single owner of the registry" {
@@ -116,7 +116,7 @@ let tests = testList "MCP hard reset rebuild" [
   testTask "WHY — hard_reset rebuild=false — the owner recycles the worker process, because an in-process FSI rebuild keeps the project assemblies already loaded in the worker's default load context and never sees new code" {
     let p = mkProbe "aaa00005" (Ok "Hard reset accepted — replacement worker spawning.") WorkerProtocol.SessionStatus.Ready
     let! _ = hardResetSession p.Ctx "agent1" false (Some p.SessionId) None
-    p.Restarts |> Seq.toList |> Expect.equal "RestartSession(rebuild=false) called exactly once" [ false ]
+    p.Restarts |> Seq.toList |> Expect.equal "RestartSession(respawn-only) called exactly once" [ SageFs.RestartPlan.RespawnOnly ]
     p.Routed
     |> Seq.exists (function WorkerProtocol.WorkerMessage.HardResetSession _ -> true | _ -> false)
     |> Expect.isFalse "no in-process hard reset is routed to the old worker"
