@@ -234,6 +234,53 @@ What the budget test is actually guarding is worth stating plainly: an
 `O(n²)` rescan of eval scope on every eval, which is invisible at small history
 and catastrophic at 10x. It is a real invariant with a real failure mode.
 
+## The red gate at parallel 2, measured rather than excused
+
+Three tiers went red while verification ran in parallel. Isolating each on the
+machine as it actually stood:
+
+| Tier | Isolated result | Rate |
+|---|---|---|
+| `default` perf budget (`recordEval` scaled 11.0x, budget 8x) | **11 passed, 0 failed** | 11/11 |
+| `--integration-browser` | **3 clean, 36/36 each** | 0/3 red |
+| `--integration-host[1/5]` keep-tiering | not reproduced; a *different* test errors in isolation | **unresolved** |
+
+Load average during all of it: **18.6 / 24.6 / 23.4, peaking at 43.0** on 16
+logical cores — 1.4x to 2.7x oversubscribed for the entire window, because the
+verification was competing with the gate. The runner was loaded *by
+construction*, which is the condition a wall-clock budget is least able to
+survive.
+
+### What the perf budget really measures
+
+`SageFs.Tests/PerfTests.fs:62-71` — ceiling 8x against a stated baseline of
+~1.1x. Wall-clock via `Stopwatch.GetTimestamp`, but deliberately hardened:
+min-of-15 after 2 warmups, with a forced `GC.Collect` and
+`WaitForPendingFinalizers` before each timed block, so GC pauses and a loaded
+machine only ever ADD time and the fastest observed run is closest to real cost.
+
+So the margin is **7.3x**, and an observed 11.0x is close enough to 8x to trip
+it and close enough to 1.1x to be noise — the same test being marginal on a
+loaded box, twice over. It is not a quadratic signal: the guard separates an
+O(n) rescan (~10x) from the O(n^2) it watches for (~100x).
+
+`recordShapeOf` cannot be implicated on the merits either: **zero production
+callers**, and no reference from `FeatureHooks.recordEval` or anything it
+reaches, so `recordEval` cannot execute the new code at all.
+
+### The one left unresolved, and why
+
+`--integration-host[1/5]`'s keep-tiering errored in **25.0s**, and that duration
+is arithmetically inconsistent with the test. Its only failure path is
+`saveWithinBudget (TimeSpan.FromSeconds 150.0)`, which cannot expire before
+150s; its other guards are 180s and 120s. So 25.0s is not its assertion timing
+out — it is harness or host-spawn startup. Called **unresolved** rather than
+exempted, because it did not reproduce. The test also skips itself when the
+watch never lapses, on documented grounds that some runs never get there.
+
+Recorded unresolved deliberately: a measurement that exonerates a change and a
+measurement that never happened are different, and only the first is evidence.
+
 ## Dogfooded on the 0.6.835 daemon, not in a test fixture
 
 The decision evaluated in a live session on the installed daemon, over its real
