@@ -121,3 +121,64 @@ module TypeShapeMigration =
     match refusals with
     | [] -> Holder.Migration.Carried(oldShape, newShape)
     | reasons -> Holder.Migration.Refused(String.concat "; " reasons)
+
+  /// The shape of a record, read from its COMPILED type.
+  ///
+  /// This is the route that works, and it is not a fallback. The text AST
+  /// carries a field's declared type (`SynField.fieldType: SynType`) but has no
+  /// nameable case field, so a field's KIND is unreachable from source — every
+  /// field comes back `Undecidable` and every migration refuses. The compiled
+  /// type carries the same information through a supported public API, and the
+  /// repo already uses it at `LiveValueTree.fs:161`.
+  ///
+  /// The rule set is deliberately the same three kinds the source-side
+  /// `FieldKind` admits, so the two producers cannot drift into disagreeing
+  /// about what is carryable. Anything else — a `byte[]`, a `Map`, a nested
+  /// record, an undecidable type — is `Undecidable` and refuses the whole
+  /// migration, which is the direction we already rebuild in.
+  ///
+  /// Returns `None` for a type that is not a record, because a caller asking
+  /// about a union or a class is asking a different question and must not be
+  /// handed an empty shape that looks like a record with no fields.
+  let compiledShapeOf (t: System.Type) : RecordShape option =
+    if Microsoft.FSharp.Reflection.FSharpType.IsRecord t then
+      let fieldKind (p: System.Reflection.PropertyInfo) : FieldKind =
+        let ft = p.PropertyType
+        if ft = typeof<int>
+           || ft = typeof<int64>
+           || ft = typeof<int32>
+           || ft = typeof<uint32>
+           || ft = typeof<uint64>
+           || ft = typeof<byte>
+           || ft = typeof<sbyte>
+           || ft = typeof<int16>
+           || ft = typeof<uint16> then
+          FieldKind.IntField
+        elif ft = typeof<string> || ft = typeof<char> then
+          FieldKind.StringField
+        elif ft = typeof<bool> then
+          FieldKind.BoolField
+        else
+          FieldKind.Undecidable (sprintf "no carry rule for '%s'" ft.Name)
+      let fields =
+        Microsoft.FSharp.Reflection.FSharpType.GetRecordFields t
+        |> Array.map (fun p -> { Name = p.Name; Kind = fieldKind p })
+        |> List.ofArray
+      Some { TypeName = t.Name; Fields = fields }
+    else
+      None
+
+  /// Read a LIVE instance's fields, or `None` when it is not a record.
+  ///
+  /// This is what makes migration a carry rather than a description: the shape
+  /// says whether it is possible, and this says what is actually there. A
+  /// migration that could describe but never read would be a decision with no
+  /// payload, which is the shape of a module that has never been wired up.
+  let compiledFieldsOf (t: System.Type) (value: obj) : obj[] option =
+    if Microsoft.FSharp.Reflection.FSharpType.IsRecord t then
+      let read = Microsoft.FSharp.Reflection.FSharpValue.PreComputeRecordReader t
+      try
+        Some(read value)
+      with _ -> None
+    else
+      None

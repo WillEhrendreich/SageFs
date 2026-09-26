@@ -574,6 +574,7 @@
         <Compile Include="RestartCostTests.fs" />
         <Compile Include="HolderRegistryTests.fs" />
         <Compile Include="RegisteredHolderTests.fs" />
+        <Compile Include="CompiledShapeTests.fs" />
         <Compile Include="GranularRestartTests.fs" />
         <Compile Include="GranularRestartSimTests.fs" />
         <Compile Include="RestartScopeTests.fs" />

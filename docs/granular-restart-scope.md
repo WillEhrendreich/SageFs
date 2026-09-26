@@ -517,3 +517,53 @@ The `byte[]` and `Map` rows are the point, not an aside: they show the refusal
 is still discriminating rather than a blanket "everything is undecidable", and a
 field that cannot be carried refuses the whole migration instead of silently
 losing its value.
+feat(reload): a migration is now DECIDABLE, not always a refusal
+
+`decideRecord` has existed, tested and DST'd, and could never succeed: every
+field came back `Undecidable`, because the text-AST route cannot reach a field's
+declared type (`SynField` exposes `fieldType: SynType` but has no nameable case
+field — measured, one commit ago). A decision that can only ever return
+`Refused` is a stub wearing a decision's clothes.
+
+`compiledShapeOf` reads the same information from the COMPILED type, through
+`FSharpType.GetRecordFields` — a supported public API the repo already uses at
+`LiveValueTree.fs:161`. The rule set is deliberately the same three kinds, so
+the two producers cannot drift into disagreeing about what is carryable.
+
+Measured, before writing it:
+
+  SHAPE Order isRecord=true
+  SHAPE   Id       Int32     -> IntField
+  SHAPE   Name     String    -> StringField
+  SHAPE   Paid     Boolean   -> BoolField
+  SHAPE   Payload  Byte[]    -> Undecidable(Byte[])
+  SHAPE   Meta     FSharpMap -> Undecidable(FSharpMap)
+  READ live Order -> [|7; "x"; true|]
+
+Two things this buys, and the second is the larger one:
+
+1. DECIDABLE KINDS, so `decideRecord` over two identical shapes now returns
+   `Carried` — asserted directly, because "the path can succeed" is the whole
+   claim and a test that only checked the refusal would not have proven it.
+
+2. THE OLD VALUE, not just its description. `compiledFieldsOf` reads a live
+   instance, so a migration can CARRY state. The text AST could never do this
+   at all: it is not a lesser route, it is a different capability, and that is
+   why the AST was the wrong route to spend more cycles on.
+
+`compiledShapeOf` returns `None` for a non-record rather than an empty shape,
+because an empty field list is indistinguishable from a record with no fields
+and would be read as "nothing to carry" rather than "wrong question".
+
+The `byte[]` and `Map` rows are the load-bearing part of the test, not an
+aside: they prove the refusal is DISCRIMINATING. A test asserting only that
+undecidable fields refuse would also pass against a blanket
+`Undecidable "unsupported"`, which is a stub and must not be able to.
+
+Six tests. The full default tier: 9844 registered, 9844 ran, 0 failed,
+verdict=Trusted.
+
+One test was wrong on first run and the correction is the instructive part:
+it compared whole `FieldKind` values for equality, which fails because
+`Undecidable` carries a reason string and the two routes legitimately word it
+differently. The check is over the CASE, not the value.
