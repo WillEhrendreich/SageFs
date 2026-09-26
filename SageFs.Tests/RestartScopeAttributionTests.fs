@@ -82,3 +82,98 @@ let restartScopeAttributionTests =
         (s = RestartScope.Scoped "cart" || s = RestartScope.Everything || s = RestartScope.Scoped "order-store")
         |> Expect.isTrue (sprintf "infer returned a valid scope for '%s'" t))
   ]
+
+/// WHY — a value migration needs the OLD shape of a type, and nothing retained
+/// it across an edit. `recordShapeOf` is the producer, and it reads the field
+/// NAMES from the type's own parsed source rather than from reflection, because
+/// reflection describes the NEW assembly and the whole question is what the
+/// shape was BEFORE.
+///
+/// Every field it produces is `Undecidable` today, and that is the CORRECT
+/// answer rather than a stub: the AST binding that carries a field's name does
+/// not carry its type, and a guessed kind would carry a wrongly-typed value
+/// into a live object. The undecidable answer refuses the migration, which is
+/// the direction we already rebuild in.
+[<Tests>]
+let recordShapeTests =
+  testList "a type's field shape, read from its own source" [
+
+    testCase "WHY — the fields of a real record are read from real parsed source" <| fun _ ->
+      let source = "module Shop\ntype Order = { Id: int; Name: string; Paid: bool }\n"
+      let shapeOpt =
+        match extractDecls source with
+        | Error e -> failtestf "the fixture must parse: %s" e
+        | Ok decls ->
+          decls.Decls
+          |> List.filter (fun d -> d.Name = "Order")
+          |> List.map recordShapeOf
+          |> List.tryHead
+      match shapeOpt with
+      | None -> failtest "the fixture must declare Order"
+      | Some shape ->
+        (shape.Fields |> List.map _.Name)
+        |> Expect.equal "all three fields, in source order" [ "Id"; "Name"; "Paid" ]
+
+    testCase "WHY — every field is Undecidable, which REFUSES the migration rather than guessing a kind" <| fun _ ->
+      // The negative control that makes the refusal meaningful: if this passed
+      // with a real IntField, a migration would carry an int into a value whose
+      // kind we never established.
+      let source = "module Shop\ntype Order = { Id: int; Name: string }\n"
+      match extractDecls source with
+      | Error e -> failtestf "the fixture must parse: %s" e
+      | Ok decls ->
+        let kindsOpt =
+          decls.Decls |> List.filter (fun d -> d.Name = "Order")
+          |> List.map recordShapeOf |> List.tryHead
+          |> Option.map (fun s -> s.Fields |> List.map _.Kind)
+        match kindsOpt with
+        | None -> failtest "the fixture must declare Order"
+        | Some fields ->
+          fields
+          |> List.iter (fun k ->
+            match k with
+            | SageFs.TypeShapeMigration.FieldKind.Undecidable _ -> ()
+            | other -> failtestf "a field must not claim a kind we cannot read, got %A" other)
+
+    testCase "WHY — and that refusal really does block the migration, so Undecidable is load-bearing" <| fun _ ->
+      let source = "module Shop\ntype Order = { Id: int; Name: string }\n"
+      let shapeOpt =
+        match extractDecls source with
+        | Error e -> failtestf "the fixture must parse: %s" e
+        | Ok decls ->
+          decls.Decls |> List.filter (fun d -> d.Name = "Order")
+          |> List.map recordShapeOf |> List.tryHead
+      match shapeOpt with
+      | None -> failtest "the fixture must declare Order"
+      | Some shape ->
+        // A migration over UNCHANGED shapes with undecidable fields must refuse.
+        // If it did not, "undecidable" would be decorative and a wrong-typed
+        // value could be carried into a live object.
+        let reported = SageFs.TypeShapeMigration.decideRecord shape shape (fun _ -> false)
+        match reported with
+        | SageFs.Holder.Migration.Carried _ -> failtest "an undecidable field must not report a carried value"
+        | SageFs.Holder.Migration.Refused _ -> ()
+
+    testCase "WHY — a type that is not a record yields NO fields, never an exception" <| fun _ ->
+      let source = "module Shop\ntype Marker = class end\ntype Order = { Id: int }\n"
+      match extractDecls source with
+      | Error e -> failtestf "the fixture must parse: %s" e
+      | Ok decls ->
+        let marker =
+          decls.Decls
+          |> List.filter (fun d -> d.Name = "Marker")
+          |> List.map recordShapeOf
+        match marker with
+        | [] -> failtest "the fixture must declare Marker"
+        | [ shape ] ->
+          (shape.TypeName, shape.Fields)
+          |> Expect.equal "a class declares no record fields" ("Marker", [])
+        | many -> failtestf "expected exactly one Marker, got %d" many.Length
+
+    testCase "WHY — text that does not parse yields an empty shape, because a caller asking about one type must not fail on another" <| fun _ ->
+      let bogus = { Name = "Broken"; Kind = DeclKind.TypeDecl; Access = DeclAccess.Public
+                    Container = []; Header = ""; Text = "this is ((( not F#"; StartLine = 0; EndLine = 0 }
+      let shape = recordShapeOf bogus
+      (shape.TypeName, shape.Fields)
+      |> Expect.equal "total, not partial" ("Broken", [])
+  ]

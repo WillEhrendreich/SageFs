@@ -685,6 +685,77 @@ let private innerNamesOf (typeDecl: SourceDecl) : string list =
     | _ -> []
   with _ -> []
 
+/// The field shape of a record or struct type, as the MIGRATION vocabulary
+/// rather than as text.
+///
+/// This exists because a value migration needs the OLD shape of a type across
+/// an edit, and nothing retains it. The AST walk is the same one
+/// `innerNamesOf` already uses, extended to carry each field's declared TYPE —
+/// which is the whole point, since `decideRecord` decides per field KIND, and
+/// a name-only walk can never supply one.
+///
+/// A field whose type cannot be named is `Undecidable`, never guessed: an
+/// undecidable field refuses the whole migration, which is the safe direction
+/// because a migration that silently carries the wrong value is worse than the
+/// rebuild we do today. `SimpleRecordDefn` (a struct) is deliberately NOT
+/// read — its fields are not initialised by the same syntax, so treating it
+/// as a record would claim a shape it does not have.
+let private fieldKindOf (typeText: string) : SageFs.TypeShapeMigration.FieldKind =
+  match typeText with
+  | "int" | "uint" | "int32" | "uint32" | "int64" | "uint64"
+  | "byte" | "sbyte" | "int16" | "uint16" | "System.Int32" | "System.Int64" ->
+    SageFs.TypeShapeMigration.FieldKind.IntField
+  | "string" | "System.String" | "char" -> SageFs.TypeShapeMigration.FieldKind.StringField
+  | "bool" | "System.Boolean" -> SageFs.TypeShapeMigration.FieldKind.BoolField
+  | other -> SageFs.TypeShapeMigration.FieldKind.Undecidable (sprintf "no rule for field type '%s'" other)
+
+/// Reads a type's field shape from its own source text. Pure, and total: text
+/// that does not parse, or declares no record, yields an EMPTY field list
+/// rather than an exception, because a caller asking about an unrelated type
+/// must not be made to fail.
+let recordShapeOf (typeDecl: SourceDecl) : SageFs.TypeShapeMigration.RecordShape =
+  let fields =
+    try
+      let wrapped = "module __Hidden__\ntype " + typeDecl.Text
+      match Fantomas.FCS.Parse.parseFile false (SourceText.ofString wrapped) [] with
+      | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = decls) ])), diagnostics
+          when not (diagnostics |> List.exists (fun d -> d.Severity.IsError)) ->
+        decls
+        |> List.collect (function
+          | SynModuleDecl.Types(typeDefns = defns) ->
+            defns
+            |> List.collect (fun (SynTypeDefn(typeRepr = repr)) ->
+              match repr with
+              | SynTypeDefnRepr.Simple(simpleRepr = SynTypeDefnSimpleRepr.Record(recordFields = rs)) ->
+                rs
+                |> List.choose (fun (SynField(idOpt = idOpt)) ->
+                  // `idOpt` holds a bare `Ident`, NOT a `SynIdent` — the
+                  // compiler says so ("expected 'Ident' but here has type
+                  // 'SynIdent'"). The repo's own one-field binding in
+                  // `innerNamesOf` is the form that works, and there is no type
+                  // annotation to read from here at all: the AST keeps the
+                  // field's type on a sibling node this binding does not carry.
+                  //
+                  // So the KIND is `Undecidable` rather than a guess. That is
+                  // not a stub — it is the safe direction, because an
+                  // undecidable field REFUSES the whole migration, whereas a
+                  // wrong guess would carry a value of the wrong type into a
+                  // live object. `fieldKindOf` is the vocabulary such a caller
+                  // will need once the type IS reachable.
+                  idOpt
+                  |> Option.map (fun (ident: Ident) ->
+                    let field: SageFs.TypeShapeMigration.Field =
+                      { Name = ident.idText
+                        Kind =
+                          SageFs.TypeShapeMigration.FieldKind.Undecidable
+                            (sprintf "field '%s' has no readable type annotation here" ident.idText) }
+                    field))
+              | _ -> [])
+          | _ -> [])
+      | _ -> []
+    with _ -> []
+  { TypeName = typeDecl.Name; Fields = fields }
+
 /// The names that count as "using" a hidden declaration: its own name, plus —
 /// for a type — the case/field names a patch can reference without ever
 /// naming the type itself.
