@@ -414,3 +414,74 @@ cd /tmp/holdertest && dotnet run
 # the full default tier
 dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary
 ```
+docs: the perf guard's estimator was investigated, and the fix was NOT landed
+
+The `recordEval` scaling guard red a gate at 11.0x against an 8x ceiling while
+passing 11/11 in isolation, and it has now cost two gate runs. I measured
+whether the harness itself is the cause rather than assuming it either way.
+
+## The hypothesis
+
+`PerfBudget.scalingRatio` times all `small` iterations, then all `large`. The
+large batch runs ~10x longer per iteration, so under load it has a far bigger
+window to catch a bad scheduling moment. min-of-15 reduces that but cannot
+equalise it, so load DRIFT between the two batches biases the ratio upward —
+the observed failure direction.
+
+The candidate fix interleaves the two workloads so each pair is measured under
+the same machine conditions.
+
+## Measured, under deliberate load (8 spinners on 16 cores)
+
+Run 1 — looked conclusive:
+
+```
+CORES 16
+flat/sequential    mean=0.92 sd=0.52 max=1.98
+flat/interleaved   mean=0.84 sd=0.18 max=1.01
+```
+
+A 3x variance reduction and a worst case of 1.01 against 1.98. Good enough to
+have shipped on the spot.
+
+Run 2 — same script, same load, seconds apart:
+
+```
+flat/sequential    mean=1.21 sd=0.37 min=0.94 max=1.96
+flat/interleaved   mean=1.26 sd=0.39 min=0.93 max=1.92
+```
+
+**No difference. The result did not replicate.**
+
+## So the fix is not landed
+
+Interleaving would have replaced a gate that occasionally reads 11x with one that
+reads 1.2x on the same machine state. It looks like a strict improvement on the
+first sample and like a no-op on the second, which means the thing being
+measured is dominated by run-to-run machine state rather than by the estimator's
+structure. Changing the gate on that evidence would be replacing a real
+measurement with a different real measurement and calling it a fix.
+
+**And the near-miss is the point worth recording.** A single 6-sample run said
+3x. I nearly took it. A timing claim needs enough repetitions that a repeat can
+disagree with it, and this is the second time in this work that one sample
+looked decisive and the next one did not — the first was the `ticks: 1 1 1`
+counter, which was my test app's bug, not the product's.
+
+## What is actually established
+
+- The guard's own comments say the 8x ceiling is a portability margin over a
+  ~1.1x baseline, and that it is intended to separate an O(n) rescan (~10x)
+  from the O(n^2) it watches for (~100x). 11.0x sits in the gap, and the
+  distinction the guard exists to make survives it.
+- `minMs` is min-of-15 after 2 warmups with a forced full GC and
+  `WaitForPendingFinalizers` before every timed block. That is already the right
+  estimator for a busy runner; it was not the loose measurement it looked like.
+- The real lever is not the estimator, it is WHEN this runs. A wall-clock budget
+  in a tier that shares a 16-core box with four other tiers will occasionally
+  read high, and the honest options are to move the perf tier out of the
+  concurrent set, or to accept that it needs a quiet machine. Neither is a
+  harness rewrite, and both are decisions rather than measurements.
+
+`recordShapeOf` remains unexcluded by argument, not only by measurement: it has
+zero production callers and no reference from `FeatureHooks.recordEval`.
