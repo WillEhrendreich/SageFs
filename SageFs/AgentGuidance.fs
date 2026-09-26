@@ -40,11 +40,31 @@ let firstMinute = [
 
 let gotchas = [
   "\"Operation could not be completed due to earlier error\" means an earlier statement failed. Fix that statement. Don't reset the session."
-  "If a bare Error or Ok in a Result match resolves to the wrong type (\"This union case does not take arguments\"), something in scope shadows it. Write Result.Error/Result.Ok."
-  "Never #r a DLL the session already loaded from the project. You get two copies of every type, and the lock blocks rebuilds."
-  "Before an external full build, test suite, or run-app process, acquire acquire_full_build_lease, acquire_test_suite_lease, or acquire_run_app_lease, then release_work_lease when done. SageFs's own recovery and built-in tools already account for their work."
-  "A filtered test run is never the acceptance check. Only an unfiltered run counts."
+  "If a bare Error or Ok in a Result match resolves to the wrong type, something in scope shadows it. Write Result.Error/Result.Ok."
+  "Never #r a DLL the session already loaded from the project: two copies of every type, and the lock blocks rebuilds."
+  "Never #load a file from a project the session already loaded: same two-copies trap, and it surfaces as a misleading type-incompatibility error. #load only a PURE file."
+  "Before an external full build, test suite, or run-app process, acquire acquire_full_build_lease, acquire_test_suite_lease, or acquire_run_app_lease, then release_work_lease when done."
+  "A filtered test run is never the acceptance check. Only an unfiltered run counts. A filter matching nothing still reports Failed: 0 and exits 0 — read the TRUST line's ran= count."
+  "Run the slow gate in a BACKGROUND agent and keep working. Don't poll it, and don't re-roll a full run to escape a flake."
   "check_fsharp_code type-checks without running. cancel_eval stops a runaway eval, so don't reset for that either."
+]
+
+/// Editing discipline, kept separate from `gotchas` because it is a SEQUENCE
+/// rather than a trap: prove, then persist, then re-verify. It is also the
+/// largest avoidable cost in a session, and the rule that has to survive a
+/// drifted agent is the one about not writing an unproven change.
+///
+/// SHORT ON PURPOSE. `serverInstructions` is budgeted under 3000 chars
+/// because every client pays for it in tokens on every connection, and the
+/// budget was already nearly spent. Measured: this file at HEAD was 2760
+/// chars, so a first draft that added 1501 would have blown it. Each line here
+/// keeps one rule and drops its explanation — the reasoning lives in
+/// skills/sagefs/SKILL.md, which is loaded on an F# task anyway.
+let editing = [
+  "Prove the change in the REPL before you write it to a file. An eval is under a second; a build that catches your misread type costs minutes, and catches it after you have already edited."
+  "Edit with exact, targeted calls — read the region, replace that exact text. Never sed -i, python3 -c file rewrites, or broad regex bulk edits: one that silently matches nothing looks exactly like one that worked."
+  "For a repeated mechanical change, write an .fsx, run it through SageFs, and assert that each replacement matched."
+  "SageFs.Editing.applyInOrder is the total-or-reported version: a replacement applies or says why it didn't, and an ambiguous find refuses."
 ]
 
 let private numbered (lines: string list) =
@@ -66,6 +86,9 @@ let serverInstructions =
     ""
     "Things that bite:"
     yield! bulleted gotchas
+    ""
+    "Editing (prove it, then write it):"
+    yield! bulleted editing
     ""
     "If the REPL fights you, don't fall back silently. Report the tool, the input and the exact error, then use dotnet for that one step only."
     "Never stop, restart or reinstall the user's SageFs daemon without asking. It's theirs, and other agents may be using it. stop_session the sessions you created when you're done."

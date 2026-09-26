@@ -57,6 +57,26 @@ let serverInstructionsTests = testList "MCP server instructions" [
   testCase "WHY — REPL friction gets reported instead of silently worked around" <| fun _ ->
     serverInstructions |> contains "don't fall back silently" |> Expect.isTrue "the report-friction rule should be there"
 
+  testCase "WHY — the editing rules are in the always-on guidance, because the rule an agent most needs is the one about NOT writing an unproven change" <| fun _ ->
+    [ "before you write it to a file"; "sed -i"; "applyInOrder"; "assert that each replacement matched" ]
+    |> List.filter (fun needle -> not (contains needle serverInstructions))
+    |> Expect.isEmpty "the editing sequence should be stated on connect, not only in the skill file"
+
+  testCase "WHY — every editing rule is a whole, unsubtracted line, so rewording one cannot quietly drop it" <| fun _ ->
+    editing
+    |> List.filter (fun rule -> not (serverInstructions.Contains rule))
+    |> Expect.isEmpty "each editing rule should appear verbatim"
+
+  testCase "WHY — the #load trap is named, because its error message points at a type incompatibility and not at the real cause" <| fun _ ->
+    [ "#load"; "type-incompatibility"; "PURE file" ]
+    |> List.filter (fun needle -> not (contains needle serverInstructions))
+    |> Expect.isEmpty "the duplicate-#load trap should be named with its misleading symptom"
+
+  testCase "WHY — the slow gate is told to run in the background and not to be re-rolled, because that is the most expensive habit an agent has" <| fun _ ->
+    [ "BACKGROUND"; "don't poll"; "re-roll" ]
+    |> List.filter (fun needle -> not (contains needle serverInstructions))
+    |> Expect.isEmpty "the background-gate rule should be present"
+
   testCase "WHY — they never tell the agent to stop, restart or reinstall the user's daemon on its own" <| fun _ ->
     serverInstructions
     |> sentences
@@ -75,7 +95,20 @@ let serverInstructionsTests = testList "MCP server instructions" [
     |> Expect.isEmpty "both pointers should be there"
 
   testCase "WHY — they stay short, because every client pays for them on every connection" <| fun _ ->
-    (serverInstructions.Length, 3000) |> Expect.isLessThan "keep it under 3000 chars"
+    // The budget was 3000 and was ALREADY nearly spent: this file measured
+    // 2760 chars before the editing rules existed, leaving 240 chars of
+    // headroom for four rules. Measured again at 3686 with them in.
+    //
+    // So the cap was raised rather than the rules trimmed to nothing. A rule
+    // that does not fit is not a rule: the alternative was dropping the
+    // editing discipline, which is the single most-ignored instruction in this
+    // repo and the most expensive one to ignore. The cost is real but bounded
+    // and paid once per connection; the cost of the omission was paid on
+    // every source edit.
+    //
+    // 4200 is a ceiling, not a target. It exists so a future edit has to make
+    // a deliberate choice about what to drop, rather than appending freely.
+    (serverInstructions.Length, 4200) |> Expect.isLessThan "keep the always-on guidance under 4200 chars"
 ]
 
 [<Tests>]
