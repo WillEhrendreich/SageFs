@@ -174,6 +174,39 @@ The hard part is step 1, and it is honest to say so: SageFs does not currently
 retain the old shape of a type across an edit, so the old `RecordShape` has to
 come from the last known parse. That is a real build, not a wiring exercise.
 
+### The AST, measured — and where the cycle stopped
+
+Reaching a field's KIND from source took several build cycles, so the findings
+are recorded rather than left for the next person to rediscover. All of it
+measured with a temporary reflection probe inside the test tier, which is the
+only context where `Fantomas.FCS` is in scope (`check_fsharp_code` and a bare
+`dotnet fsi` both lack it):
+
+| Question | Measured answer |
+|---|---|
+| namespace | `Fantomas.FCS.Syntax`, NOT `FSharp.Compiler.Ast` |
+| `SynField` members | `idOpt: FSharpOption<FSharpOption<Ident>>`, `fieldType: SynType`, plus `isMutable`, `isStatic`, `attributes` |
+| `SynField` destructuring | takes **ONE** binding; naming two members in the pattern is a syntax error |
+| `SynField` case field | **no public constructor and no nameable case field** — `GetConstructors()` returns empty |
+| `idOpt` element | a bare `Ident`, NOT a `SynIdent` (the compiler says so) |
+| `SynType` | only `Is*` predicates; a type's NAME lives on `typeInfo` |
+
+So the declared type *is* on the node as `fieldType: SynType` — the information
+is present — but it cannot be reached from a pattern that names it, because the
+DU's single case field has no discoverable name. That is why every field is
+`Undecidable`.
+
+**This is the correct place to stop, and stopping is safe.** An undecidable
+field refuses the migration, so the answer falls back to the rebuild we already
+do — no wrong-typed value can reach a live object. The alternative was a guess,
+and the guess is what this whole refactor exists to remove.
+
+The next step is a decision, not more archaeology: either Fantomas gains a
+readable accessor (a small change in Fantomas's own AST, not a private-field
+hack from here), or the shape comes from a *compiled* symbol rather than the
+text AST. Both are worth doing deliberately. Neither is worth a
+reflection-into-private-fields hack in the middle of a hot-reload path.
+
 ## Dogfooded on the 0.6.835 daemon, not in a test fixture
 
 The decision evaluated in a live session on the installed daemon, over its real
