@@ -108,3 +108,11 @@ SageFs.Tests/fixtures/HotReloadStateFixture/.runs/
 commandcode_scratchpad/
 **/commandcode_scratchpad/
 **/\$COMMANDCODE_SCRATCHPAD/
+
+# GENERATED at build time into $(TargetDir) by the GenerateHostManifest target
+# in SageFs.Host.fsproj — which is `bin/`, not here. The copy at the project ROOT
+# is a build artifact that leaked into tracking, and it records whatever version
+# happened to be current when it was written, so a tracked copy ships a stale
+# version claim. The real manifest is the one in the build output, and the host
+# reads that one. Untracked in ce63f746; this rule stops it coming back.
+SageFs.Host/host-manifest.json
