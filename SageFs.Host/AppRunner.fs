@@ -275,7 +275,11 @@ type internal Msg =
   | Stop of StopScope * AsyncReplyChannel<Result<AppRunState, string>>
   | Finished of runId: string * AppRunState
   | Await of runId: string * TaskCompletionSource<AppRunState>
-  | RequireRestart of first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list * AsyncReplyChannel<AppRunState>
+  | RequireRestart of
+      first: SageFs.Features.ReloadPlanning.ReloadChange
+    * rest: SageFs.Features.ReloadPlanning.ReloadChange list
+    * subject: SageFs.GranularRestart.RestartSubject
+    * AsyncReplyChannel<AppRunState>
   | Shutdown of AsyncReplyChannel<unit>
 
 let private finishedState (project: string) (outcome: Result<int, exn>) =
@@ -478,14 +482,14 @@ type Runner(timeouts: StartTimeouts, setEnv: SetEnv) =
           | _ ->
             waiter.TrySetResult(stateOf owned) |> ignore
             return! loop owned waiters
-        | RequireRestart (first, rest, reply) ->
+        | RequireRestart (first, rest, subject, reply) ->
           match owned with
           | Idle _ ->
             reply.Reply(stateOf owned)
             return! loop owned waiters
           | Live (app, handle, restoreEnv) ->
             // A console app has no host to stop; the rebuild's worker restart ends it.
-            let final = AppRunState.RestartRequired (app.Project, first, rest, DateTime.UtcNow)
+            let final = AppRunState.RestartRequired (app.Project, first, rest, subject, DateTime.UtcNow)
             let next = Idle final
             publish next
             match handle with
@@ -535,8 +539,16 @@ let stop (runner: Runner) (scope: StopScope) : Task<Result<AppRunState, string>>
 let state (runner: Runner) = runner.State
 
 /// Ends a running app because a save changed something only a rebuild can apply.
-let requireRestart (runner: Runner) (first: SageFs.Features.ReloadPlanning.ReloadChange) (rest: SageFs.Features.ReloadPlanning.ReloadChange list) : Task<AppRunState> =
-  runner.Agent.PostAndAsyncReply(fun reply -> RequireRestart(first, rest, reply)) |> Async.StartAsTask
+/// `subject` says how much to restart. The caller DECIDES it (the reload
+/// planner owns that policy) and this only carries it, so the decision is made
+/// once and every layer below acts on the same answer.
+let requireRestart
+    (runner: Runner)
+    (first: SageFs.Features.ReloadPlanning.ReloadChange)
+    (rest: SageFs.Features.ReloadPlanning.ReloadChange list)
+    (subject: SageFs.GranularRestart.RestartSubject)
+    : Task<AppRunState> =
+  runner.Agent.PostAndAsyncReply(fun reply -> RequireRestart(first, rest, subject, reply)) |> Async.StartAsTask
 
 /// Completes when the app is no longer Running with this run id (or when
 /// the token cancels, with whatever the state is then).

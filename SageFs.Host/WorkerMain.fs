@@ -993,7 +993,9 @@ let run (sessionId: string) (port: int) = async {
           // and relaunch (AppRun.endRun → RunEnd.RebuildForChanges). SageFs
           // started this app, so SageFs brings it back: the user is told what
           // happened, not asked to do anything.
-          let! _ = AppRunner.requireRestart appRunner first rest |> Async.AwaitTask
+          let! _ =
+            AppRunner.requireRestart appRunner first rest (SageFs.Core.Features.RestartSubjectDecision.toSubject subject)
+            |> Async.AwaitTask
           Features.ReloadBroadcast.broadcastOutcome (Features.ReloadOutcome.ReloadOutcome.Restarted reasons)
           return SaveHandling.Reported
         | _ ->
