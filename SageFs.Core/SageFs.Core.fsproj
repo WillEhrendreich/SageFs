@@ -98,6 +98,7 @@
         <Compile Include="Features\RestartScope.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
+        <Compile Include="Features\RestartAttribution.fs" />
         <!-- Phase 3 (live tweaking): pure address/edit/classification/transaction
              modules. Self-contained, no dependency on ReloadPlanning/ReloadOutcome
              above (deliberately, since those are owned by a parallel change),

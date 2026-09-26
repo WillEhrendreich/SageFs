@@ -714,6 +714,23 @@ let run (sessionId: string) (port: int) = async {
   // The source each running app's DLL was built from, advanced after every
   // applied patch: what a save is compared with to decide patch vs restart.
   let reloadBaselines = System.Collections.Concurrent.ConcurrentDictionary<string, Features.ReloadPlanning.FileDecls>()
+
+  // The unit→type registry, derived from the baselines on demand rather than
+  // cached: `reloadBaselines` is a live concurrent map that every save advances,
+  // so a cached registry would go stale and could attribute a type to a module
+  // that no longer declares it. Deriving is cheap (a list walk over what is
+  // already in memory) and cannot be wrong out of date.
+  //
+  // A module is the unit because it is an observable F# boundary that owns
+  // types, and it is what a DI singleton / IOptionsMonitor registration / agent
+  // boundary wraps. Empty means "nothing attributed", which resolves to
+  // `Everything` — the safe direction.
+  let knownUnits () =
+    // ConcurrentDictionary enumerates as KeyValuePair, so project the values.
+    Features.RestartAttribution.knownUnitsOf
+      (reloadBaselines
+       |> Seq.map (fun (kv: System.Collections.Generic.KeyValuePair<string, Features.ReloadPlanning.FileDecls>) -> kv.Value)
+       |> Seq.toList)
   // Initializers a save KEPT the live value for (rule 3 of the state spec),
   // keyed by qualified binding, waiting for someone to reset them.
   let keptPending = System.Collections.Concurrent.ConcurrentDictionary<string, Features.KeptState.Pending>()
@@ -942,7 +959,20 @@ let run (sessionId: string) (port: int) = async {
         // The planner owns the change → reason translation
         // (`ReloadChange.restartReasons`); this pipeline only decides who acts
         // on it.
-        let reasons = Features.ReloadPlanning.ReloadChange.restartReasons first rest
+        //
+        // Attribution comes from `reloadBaselines`, which already holds the
+        // parse of every watched file — so the module that owns each type is in
+        // hand and was simply never read. Without this, every type change
+        // resolved to `RestartScope.Everything` and a type edit restarted the
+        // whole app, which is what made granular restart (holder, derived
+        // migration, rewrite side conditions, translation validation)
+        // unreachable no matter how well it was built.
+        //
+        // Fails safe: a type no watched file declares, and an empty baseline
+        // set, both yield `Everything` — a full restart. A wrongly-narrowed
+        // restart would leave a half-restarted app holding a value laid out by
+        // the old type, which is strictly worse.
+        let reasons = Features.RestartAttribution.restartReasonsFor (knownUnits ()) first rest
         match AppRunner.state appRunner with
         | AppRun.AppRunState.Running _ ->
           Log.info "Run App: %s — %s; restarting the app" fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
@@ -1227,7 +1257,8 @@ let run (sessionId: string) (port: int) = async {
               // file order, so a function that uses one compiles against it.
               let emitted = functions @ redefined |> List.sortBy _.StartLine
               let recheck () =
-                redefinitionRefusals current redefined |> List.map Features.ReloadPlanning.ReloadChange.restartReason
+                redefinitionRefusals current redefined
+                |> List.map (Features.RestartAttribution.restartReasonFor (knownUnits ()))
               return! patchInPlace fileName filePath baseline current emitted carried kept recheck
           | Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest) ->
             return! restartOrFallBack fileName first rest }
@@ -1449,7 +1480,7 @@ let run (sessionId: string) (port: int) = async {
                       // as any other startup-only change on this path, never
                       // a Patched success that buries the danger.
                       Features.ReloadOutcome.ReloadOutcome.RestartRequired(
-                        Features.ReloadPlanning.ReloadChange.restartReasons first rest @ restartReasons)
+                        Features.RestartAttribution.restartReasonsFor (knownUnits ()) first rest @ restartReasons)
                     | BindingEscalation.ExtraReasons extraReasons ->
                       match restartReasons, extraReasons with
                       | [], [] -> baseOutcome
