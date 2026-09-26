@@ -569,6 +569,7 @@
         <Compile Include="HolderRewriteSimTests.fs" />
         <Compile Include="TranslationValidationTests.fs" />
         <Compile Include="RewriteValidationSimTests.fs" />
+        <Compile Include="RestartBoundariesTests.fs" />
         <Compile Include="GranularRestartTests.fs" />
         <Compile Include="GranularRestartSimTests.fs" />
         <Compile Include="RestartScopeTests.fs" />

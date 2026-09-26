@@ -251,6 +251,7 @@
         <Compile Include="EvalPipeline.fs" />
         <Compile Include="Affordances.fs" />
         <Compile Include="WorkerProtocol.fs" />
+        <Compile Include="RestartBoundaries.fs" />
         <Compile Include="Features\CohortLedgerExport.fs" />
         <Compile Include="CrossCheckoutOverlap.fs" />
         <Compile Include="Features\Verification.fs" />
