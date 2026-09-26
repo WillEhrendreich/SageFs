@@ -210,6 +210,36 @@ module ReloadChange =
   let restartReasons (first: ReloadChange) (rest: ReloadChange list) : RestartReason list =
     first :: rest |> List.map restartReason
 
+  /// The same translation, but with the unit attribution that `restartReason`
+  /// has no way to receive.
+  ///
+  /// A `TypeChanged name` already carries the type NAME, which is precisely
+  /// what `RestartScope.infer` needs, and `restartReason` discards it — so
+  /// every type change restarts everything and the granular-restart work
+  /// (holder, derived migration, rewrite side conditions, translation
+  /// validation) can never be reached. Proven in the live REPL on this
+  /// function: `restartReason (TypeChanged "Order")` is
+  /// `TypeShapeChanged ("Order", Everything)`.
+  ///
+  /// Deliberately a SEPARATE function rather than an optional parameter
+  /// defaulting to `[]`: a default would make "the planner knows no units" and
+  /// "the planner looked and found none" the same call, so a caller who forgot
+  /// to thread attribution through would get a plausible `Everything` and no
+  /// signal that the narrowing had been silently skipped.
+  ///
+  /// Fails safe in both directions: an undeclared type, and an EMPTY unit list,
+  /// both yield `Everything`. A wrongly-narrowed restart would leave a
+  /// half-restarted app holding a value laid out by the old type, which is
+  /// strictly worse than a full restart.
+  let restartReasonAttributed (knownUnits: KnownUnit list) (change: ReloadChange) : RestartReason =
+    match change with
+    | ReloadChange.TypeChanged name ->
+      RestartReason.TypeShapeChanged(name, RestartScope.infer knownUnits name)
+    | other -> restartReason other
+
+  let restartReasonsAttributed (knownUnits: KnownUnit list) (first: ReloadChange) (rest: ReloadChange list) =
+    first :: rest |> List.map (restartReasonAttributed knownUnits)
+
 /// A binding whose head takes arguments compiles to a method; anything else is a value.
 let isFunctionHead (pat: SynPat) =
   match pat with

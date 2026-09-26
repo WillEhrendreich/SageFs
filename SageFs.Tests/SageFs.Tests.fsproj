@@ -72,6 +72,7 @@
         <Compile Include="WorkflowRouteHttpTests.fs" />
         <Compile Include="EvalStatsWorkerReadTests.fs" />
         <Compile Include="HotReloadDetourPlanTests.fs" />
+        <Compile Include="RestartScopeAttributionTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="McpBridgeTests.fs" />
         <Compile Include="HttpOriginGuardTests.fs" />
