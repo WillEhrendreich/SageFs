@@ -207,6 +207,33 @@ hack from here), or the shape comes from a *compiled* symbol rather than the
 text AST. Both are worth doing deliberately. Neither is worth a
 reflection-into-private-fields hack in the middle of a hot-reload path.
 
+## Gate parallel 2 is better, not yet sufficient
+
+At `SAGEFS_TIER_PARALLEL=5` seven host tests errored as timeouts. At 2 the first
+run was all-green. At 2 on a *busier* run, three tiers went red again — and that
+second run is the more informative one, because it separates the two classes:
+
+| Tier | Symptom | Isolated re-run |
+|---|---|---|
+| `--integration-host[1/5]` | 1 errored, hot-reload keep-tiering | a *different* test errors in isolation |
+| `--integration-browser` | 1 errored | **variable: 1 run 1 failed + 1 errored, next run clean** |
+| `default` | 1 **failed** — `recordEval` scaled 11.0x for 10x history (budget 8x) | **5 of 5 passed** |
+
+`--integration-host` naming a *different* failing test on each run is the
+signature of contention, and the repo already documents it for the
+live-testing tests. `--integration-browser` is variable, so a single verdict
+there is not evidence of anything — only the rate is.
+
+`recordEval` is a **wall-clock budget**, and it passed 5 of 5 in isolation
+against a gate run that failed it. That is not proof of innocence, so the
+isolation is being pushed to 6+ runs and its source read; a timing budget on a
+loaded box is exactly the thing that produces a false red, and equally exactly
+the thing that hides a real regression.
+
+What the budget test is actually guarding is worth stating plainly: an
+`O(n²)` rescan of eval scope on every eval, which is invisible at small history
+and catastrophic at 10x. It is a real invariant with a real failure mode.
+
 ## Dogfooded on the 0.6.835 daemon, not in a test fixture
 
 The decision evaluated in a live session on the installed daemon, over its real
