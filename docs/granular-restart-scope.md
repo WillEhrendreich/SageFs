@@ -97,34 +97,65 @@ $ grep -E 'PackageReference|ProjectReference' samples/demos/SageFs.Samples.Conso
     <PackageReference Include="FSharp.Core" />
 ```
 
-Nothing adds a SageFs reference, so a sample cannot simply use the holder API
-as it stands. **But the API is reachable** — proven by a real external project
-outside this repo, compiled and run against the built `SageFs.Core.dll`:
+**A user now needs to write nothing at all.** `SessionBuild.runBuildAsync`
+locates the running `SageFs.Core.dll`, writes a `.targets` that adds the
+`Reference`, and passes it to `dotnet build` as
+`-p:CustomAfterMicrosoftCommonTargets=<temp>.targets`.
 
-```xml
-<Reference Include="SageFs.Core">
-  <HintPath>.../SageFs.Core/bin/Release/net10.0/SageFs.Core.dll</HintPath>
-</Reference>
-```
-
-```fsharp
-open SageFs
-let registry = HolderRegistry.New ()
-let ticks = RegisteredHolder.holdRegistered registry "TickerState" 0
-let cell = RegisteredHolder.cellOf ticks
-let next () =
-  let current = Holder.read cell
-  cell.Value.Value <- current + 1
-  current + 1
-printfn "ticks: %d %d %d" (next ()) (next ()) (next ())
-printfn "the restart sees: %A" (registry.LiveCountOf "TickerState")
-```
+Proven end to end through the real product path — a project with **zero**
+`Reference` elements, no `SageFsCoreAssembly` property, using the holder API:
 
 ```
-ticks: 1 2 3
-read back: 3
-the restart sees: HeldBy ["TickerState"]
+BUILD OK: Build succeeded
+read=0 live=HeldBy ["Order"]
+bin/Debug/net11.0/SageFs.Core.dll    <- 7,495,168 bytes, copied
+/tmp/sagefs-inject-*.targets         <- gone; cleanup ran
 ```
+
+And again on the **real ConsoleTicker** with both fallbacks removed — the
+fsproj `Reference` block and the `SageFsCoreAssembly` property — through
+`SessionBuild.runBuildAsync` itself:
+
+```
+BUILD OK: Build succeeded
+12:57:35.4  #1  SageFs keeps ticking
+12:57:35.5  #2  SageFs keeps ticking
+```
+
+So neither fallback is load-bearing for the Run App path. "It compiled" and
+"it runs" are separate claims, and only the second proves `Private=true` —
+without it the app dies at RUN time with a missing assembly, long after a green
+build.
+
+### The mechanism, and what does NOT work
+
+| Approach | Result |
+|---|---|
+| `-p:CustomAfterMicrosoftCommonTargets=<file>` | **works** — the file can ADD a `Reference` |
+| `-p:ReferencePath=<dir>` | **does not work** — it only tells MSBuild where to SEARCH for references that already exist, so it can never introduce one |
+| `<ProjectReference>` to `SageFs.Core` | fails with NU1605 — pulls a newer `FSharp.Core` transitively, read as a downgrade, and the repo treats warnings as errors |
+
+The `ReferencePath` row is the load-bearing one. I assumed the property form
+would work before measuring, and it produced a clean FS0039 on `HolderRegistry`
+that looked exactly like a missing assembly. That is why the injection is a
+`.targets` file and not a property.
+
+### Where the assembly is found, and where it must not be
+
+`typeof<HolderRegistry>.Assembly.Location` — **not** `AppContext.BaseDirectory`.
+The latter is deliberately overridden to the *user project's* build output
+inside the FSI host, so it points at the app rather than at the tool: a lookup
+that would have found the wrong DLL and looked correct.
+
+### The one case that still needs a fallback
+
+CI builds the samples with a raw `dotnet build`
+(`ci-pipeline.fsx`, "build samples for integration suites"), which is not a
+SageFs build and therefore gets no injection. The ConsoleTicker keeps a
+`Reference` for that one path, resolved from a `SageFsCoreAssembly` property in
+the repo-root `Directory.Build.props` and guarded by `Exists` so a machine that
+has never built Core simply gets no `Reference`. That fallback is a CI
+convenience, not something a user needs.
 
 So the earlier claim in this file — that the opt-in design is unreachable from
 user code — **was wrong**, and is corrected here rather than quietly dropped.
