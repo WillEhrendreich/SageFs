@@ -249,6 +249,61 @@ module SessionBuild =
   let buildConcurrencyLimit = max 1 (Environment.ProcessorCount / 4)
   let private buildSemaphore = new SemaphoreSlim(buildConcurrencyLimit, buildConcurrencyLimit)
 
+  /// Where the running Core actually is, or `None` when that cannot be
+  /// established.
+  ///
+  /// `AppContext.BaseDirectory` is NOT used: inside the FSI host it is
+  /// deliberately overridden to the USER PROJECT's build output
+  /// (`SageFs.FsiHost/Program.fs` sets `APP_CONTEXT_BASE_DIRECTORY`), so it
+  /// points at the app, not at the tool. The executing assembly's own location
+  /// is the one source that is not overridden, and it is the assembly whose
+  /// types the user is about to bind to.
+  let private runningCoreAssembly () : string option =
+    try
+      // `SessionBuild` is a MODULE, so there is no `typeof<SessionBuild>` to
+      // name. `HolderRegistry` is a real type declared in this same assembly,
+      // which is exactly the point: its location IS the Core we want to inject,
+      // so there is no indirection through a path that could be wrong.
+      let dir = Path.GetDirectoryName typeof<HolderRegistry>.Assembly.Location
+      let candidate = Path.Combine(dir, "SageFs.Core.dll")
+      match File.Exists candidate with
+      | true -> Some candidate
+      | false -> None
+    with _ -> None
+
+  /// Prepares the reference injection for one build, and hands back the extra
+  /// MSBuild property plus a cleanup to run afterwards.
+  ///
+  /// The .targets file must OUTLIVE the build process, so it is written to the
+  /// system temp directory rather than next to the project: a project-local
+  /// file would be picked up by the user's own git status, and would be a file
+  /// SageFs created inside a directory it does not own.
+  ///
+  /// Returns `Ok (property, cleanup)` when the reference will be injected, and
+  /// `Ok (None, id)` when it will not — with the reason already recorded on
+  /// `CoreReference` rather than swallowed here. A build that cannot inject
+  /// still builds; it simply does not offer the holder API.
+  let private prepareCoreReference () : string option * (unit -> unit) =
+    match decideCoreReference (runningCoreAssembly ()) with
+    | CoreReference.Available assembly ->
+      let targetsFile =
+        Path.Combine(Path.GetTempPath(), sprintf "sagefs-inject-%d.targets" (Environment.ProcessId))
+      try
+        File.WriteAllText(targetsFile, coreReferenceTargetsContent assembly)
+        Some(coreReferenceProperty targetsFile), (fun () ->
+          try File.Delete targetsFile with _ -> ())
+      with ex ->
+        // A failure HERE must not fail the build: the injection is an
+        // enhancement, and a user's project that does not use the holder API
+        // has no need of it. Say why and carry on.
+        Log.warn "[SessionBuild] could not prepare the Core reference injection: %s" ex.Message
+        None, id
+    | CoreReference.Absent why ->
+      Log.debug "[SessionBuild] no Core reference injected: %s" why
+      None, id
+    | CoreReference.NotChecked ->
+      None, id
+
   /// Free build slots right now — full capacity when no build is in flight.
   /// Lets a test observe the semaphore exists at the right capacity without
   /// spawning a real (multi-second) `dotnet build` in the default suite.
@@ -270,6 +325,15 @@ module SessionBuild =
         let buildProject = resolveBuildProjectPath workingDir projFile
         let! ct = Async.CancellationToken
         do! buildSemaphore.WaitAsync(ct) |> Async.AwaitTask
+        // Prepared INSIDE the try so the .targets file is removed on every
+        // path, including a cancellation between here and the build. It is
+        // keyed by process id, so a second build in the same process reuses
+        // the same file and must not delete it out from under the first.
+        let injectionProperty, cleanupInjection = prepareCoreReference ()
+        let withInjection (args: string list) =
+          match injectionProperty with
+          | Some p -> args @ [ p ]
+          | None -> args
         try
           // Run one `dotnet` invocation. Ok on success; Error carries the exit
           // code (None = timed out) plus stdout/stderr for diagnostics/retry.
@@ -339,15 +403,16 @@ module SessionBuild =
           // NuGet restore is needed (fresh .fsproj → NETSDK1004, or a changed
           // package list), self-heal by retrying WITH a restore rather than
           // reporting a restore gap as a compile failure.
-          let! first = runOnce (buildArguments false buildProject)
+          let! first = runOnce (withInjection (buildArguments false buildProject))
           match first with
           | Ok msg -> return Ok msg
           | Error ((Some _, stdout, stderr) as failure) when buildOutputNeedsRestore (stdout @ stderr) ->
-            let! second = runOnce (buildArguments true buildProject)
+            let! second = runOnce (withInjection (buildArguments true buildProject))
             match second with
             | Ok msg -> return Ok msg
             | Error failure2 -> return Error (toBuildError failure2)
           | Error failure -> return Error (toBuildError failure)
         finally
+          cleanupInjection ()
           buildSemaphore.Release() |> ignore
     }
