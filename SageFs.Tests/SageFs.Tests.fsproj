@@ -75,6 +75,7 @@
         <Compile Include="RestartScopeAttributionTests.fs" />
         <Compile Include="RestartAttributionRegistryTests.fs" />
         <Compile Include="RestartSubjectDecisionTests.fs" />
+        <Compile Include="StaleSessionRecoveryTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="McpBridgeTests.fs" />
         <Compile Include="HttpOriginGuardTests.fs" />
