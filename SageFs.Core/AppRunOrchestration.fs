@@ -179,6 +179,20 @@ and private restartForChanges
         ops.RestartSession sessionId RestartPlan.RespawnOnly
       | SageFs.RestartAction.RebuildProject _ ->
         ops.RestartSession sessionId (RestartPlan.Rebuild subject)
+      | SageFs.RestartAction.MigrateAndRespawn _ ->
+        // The decision says a live value CAN be carried, and this path cannot yet
+        // carry it — no caller supplies a `MigrationWorth`, so the action is never
+        // produced here today. The branch exists rather than being left implicit
+        // so that when a caller DOES produce it, the compiler points at this line
+        // instead of the failure surfacing as discarded live state.
+        //
+        // Falling back to the REBUILD is the safe direction: a build loses the
+        // value but does so correctly, whereas treating this as a respawn would
+        // drop it silently. The reason the action carried is DISCARDED here
+        // rather than logged, because this module has no logger and adding one
+        // for a branch that cannot execute yet would be instrumentation for a
+        // path that does not exist.
+        ops.RestartSession sessionId (RestartPlan.Rebuild subject)
 
     let! ready =
       match restarted with

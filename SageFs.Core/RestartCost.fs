@@ -37,9 +37,38 @@ type RestartAction =
   /// Respawn the worker without rebuilding. Correct only when nothing alive
   /// holds the old shape.
   | RespawnOnly of because: string
-  /// Rebuild the project and relaunch. F# is whole-assembly, so this is the
-  /// only width a build can have.
+  /// Rebuild the project and relaunch. F# is whole-assembly, so this is
+  /// the only width a build can have.
   | RebuildProject of because: string
+  /// CARRY the live value across the shape change, then respawn — no build at
+  /// all, and not merely a cheaper rebuild.
+  ///
+  /// This is the case that only a real migration can produce. It is
+  /// deliberately separate from `RespawnOnly`: that one is correct when there
+  /// is NO live value to lose, and this one is correct when there IS one and
+  /// every field of it can be carried. Collapsing them would make a restart that
+  /// discards live state indistinguishable from one that does not, which is the
+  /// difference a user cannot see and would have to discover.
+  | MigrateAndRespawn of because: string
+
+/// What a type-shape change is actually worth doing, when a value is live.
+///
+/// Three outcomes, not two, and the middle one is the whole point: a live value
+/// whose every field can be carried does not need a build, and a decision that
+/// only says "rebuild or not" cannot express that.
+///
+/// `NoValueToMigrate` is NOT a failure — it is the case where nothing alive
+/// holds the old shape, and it is distinct from a migration being impossible
+/// because that would send a caller looking for a bug that is not there.
+[<RequireQualifiedAccess>]
+type MigrationWorth =
+  /// Nothing alive holds the old shape, so respawning is enough.
+  | NoValueToMigrate of because: string
+  /// Every field of the live value can be carried into the new shape.
+  | WorthCarrying of fields: int
+  /// A live value exists and cannot be carried. Carries the reason, so the
+  /// message names WHICH field blocked it rather than that something did.
+  | NotWorthCarrying of because: string
 
 /// What a probe of the RUNNING APP came back with. The distinction that
 /// matters is `Counted 0` versus `CouldNotCount`: "the app says it holds none"
@@ -118,9 +147,57 @@ module RestartCost =
       RestartAction.RebuildProject(
         sprintf "the liveness source could not answer (%s), so pay the build rather than risk a stale value" because)
 
+  /// Decide the action, given BOTH the liveness answer and what a migration of
+  /// any live value would be worth.
+  ///
+  /// The liveness answer is the authority on WHETHER there is a live value, and
+  /// the migration verdict only ever speaks about one that exists. Passing both
+  /// is what keeps the two facts from being conflated: a caller that reports
+  /// "worth carrying" while also reporting "nothing is live" gets the honest
+  /// answer, not the cheaper one it asked for.
+  ///
+  /// The order of the cases is the safety property. A live value that CANNOT be
+  /// carried pays the build, and a liveness answer that was never established
+  /// pays the build — neither is reachable by a caller that merely wants a
+  /// cheaper restart.
+  let decideFromLivenessAndMigration (answer: LiveCount) (worth: MigrationWorth) : RestartAction =
+    match answer, worth with
+    | LiveCount.HeldByNothing, _ ->
+      // Nothing alive holds the old shape, so a migration verdict about a live
+      // value is vacuous. The respawn is right regardless, and saying so
+      // explicitly is why this case is not simply the fallthrough.
+      RestartAction.RespawnOnly(
+        match worth with
+        | MigrationWorth.NoValueToMigrate why -> why
+        | _ -> "a liveness source was consulted and nothing holds the old shape, so respawning is enough")
+    | LiveCount.HeldBy _, MigrationWorth.WorthCarrying n ->
+      RestartAction.MigrateAndRespawn(
+        sprintf
+          "all %d field(s) of the live value can be carried into the new shape, so the value survives and no build is needed"
+          n)
+    | LiveCount.HeldBy _, MigrationWorth.NotWorthCarrying why ->
+      RestartAction.RebuildProject(
+        sprintf "a live value cannot be carried into the new shape (%s), so pay the build" why)
+    | LiveCount.HeldBy _, _ ->
+      // A live value exists but nobody said whether it can be carried. That is
+      // an ABSENCE of evidence, and it is priced like one.
+      RestartAction.RebuildProject(
+        "a live value of the old shape exists but nothing established whether it can be carried, so pay the build rather than discard it")
+    | LiveCount.Unconsulted because, _ ->
+      RestartAction.RebuildProject(
+        sprintf "liveness was never established (%s), so pay the build rather than risk a stale value" because)
+    | LiveCount.SourceFailed because, _ ->
+      RestartAction.RebuildProject(
+        sprintf "the liveness source could not answer (%s), so pay the build rather than risk a stale value" because)
+
   /// Whether the action rebuilds. One question, so a caller cannot ask it two
   /// ways and get two answers.
   let rebuilds (action: RestartAction) =
     match action with
     | RestartAction.RebuildProject _ -> true
     | RestartAction.RespawnOnly _ -> false
+    // A migration is the ONE case that keeps a live value AND skips the build.
+    // Were that `true` the value would be silently discarded by a rebuild; were
+    // it folded into `RespawnOnly` the difference between keeping live state and
+    // throwing it away would stop being visible to the caller.
+    | RestartAction.MigrateAndRespawn _ -> false

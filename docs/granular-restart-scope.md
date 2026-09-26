@@ -567,3 +567,49 @@ One test was wrong on first run and the correction is the instructive part:
 it compared whole `FieldKind` values for equality, which fails because
 `Undecidable` carries a reason string and the two routes legitimately word it
 differently. The check is over the CASE, not the value.
+feat(reload): a third restart outcome — carry the live value, skip the build
+
+`RestartAction` had two cases and neither is the one a live value deserves.
+`RespawnOnly` is right when NOTHING holds the old shape. `RebuildProject` is
+right when a live value cannot be carried. Neither can express "a live value
+exists, and every field of it can be carried" — which needs no build AND must
+not lose the value.
+
+`MigrateAndRespawn` is that third outcome, and it is deliberately NOT folded
+into `RespawnOnly`: collapsing them would make a restart that keeps live state
+indistinguishable from one that discards it, which is exactly the difference a
+user cannot see and would have to discover by losing state.
+
+`decideFromLivenessAndMigration` takes BOTH facts rather than merging them,
+because merging is how the cheap answer wins. A caller that reports "worth
+carrying" while also reporting "nothing is live" gets the honest answer, not the
+cheaper one it asked for — asserted directly, with all three verdicts paired
+against an empty liveness answer.
+
+The safety properties are the ordering of the cases:
+
+- a live value that CANNOT be carried pays the build, and the message carries
+  the refusal so the user learns WHICH field blocked it;
+- a live value with NO verdict about carrying ALSO pays, because absence of
+  evidence is not evidence. This is the two-sided invariant: a rule that only
+  refuses when told to is satisfied by an implementation that never carries
+  anything, so the un-answered case must be priced too;
+- liveness that was never established, or could not answer, pays the build
+  REGARDLESS of a carryable verdict.
+
+The compiler found both non-exhaustive matches when the case was added —
+`AppRunOrchestration.fs` and a pre-existing `RestartCostTests` — which is the
+DU doing its job. Both are now explicit, and both say why.
+
+In `AppRunOrchestration` the new case falls back to a REBUILD, and the reason is
+worth stating: no caller supplies a `MigrationWorth` today, so the action is
+never produced on the live path. Rebuilding loses the value correctly; treating
+it as a respawn would drop it silently. The branch exists so that when a caller
+DOES produce the action, the compiler points at that line rather than the
+failure surfacing as discarded state.
+
+`decideFromLiveCount` is untouched and asserted unchanged, so no shipped
+behaviour moved — the addition is a new function, not a rewrite wearing one.
+
+7 new tests, 7 passed. Full default tier: 9851 registered, 9851 ran, 0 failed,
+verdict=Trusted.

@@ -90,5 +90,12 @@ let restartCostTests =
         let viaBool = RestartCost.rebuilds a
         match a with
         | RestartAction.RebuildProject _ -> viaBool |> Expect.isTrue "RebuildProject rebuilds"
-        | RestartAction.RespawnOnly _ -> viaBool |> Expect.isFalse "RespawnOnly does not")
+        | RestartAction.RespawnOnly _ -> viaBool |> Expect.isFalse "RespawnOnly does not"
+        // `decide` is the TWO-case liveness path and has no migration input, so
+        // it cannot reach the third case — but the DU now has three, and this
+        // match is the compiler's standing reminder of that. Should `decide`
+        // ever grow a migration case, this arm FAILS at runtime instead of the
+        // test quietly covering only two.
+        | RestartAction.MigrateAndRespawn _ ->
+          failtest "decide has no migration input, so it cannot reach this case")
   ]
