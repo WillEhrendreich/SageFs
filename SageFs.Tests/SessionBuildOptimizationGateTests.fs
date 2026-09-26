@@ -47,6 +47,77 @@ let fastGateTests =
       |> Expect.equal "one property, used in both places" ([ SessionBuild.optimizationDisablingProperty ], [ SessionBuild.optimizationDisablingProperty ])
   ]
 
+/// WHY — SageFs's own assembly has to reach a user's project for the holder API
+/// (`Holder` / `HolderRegistry` / `RegisteredHolder`) to be usable at all, and
+/// nothing about a user's .fsproj mentions it. The decision is a DU because the
+/// cheap-direction mistake is invisible: inject a `Reference` to a file that is
+/// not there and MSBuild blames a path the user never wrote.
+[<Tests>]
+let coreReferencePolicyTests =
+  testList "SageFs injects its own assembly as a build reference" [
+
+    testCase "WHY — a KNOWN assembly is Available, which is the only case that may inject a Reference" <| fun _ ->
+      SessionBuild.decideCoreReference (Some "/opt/tools/net10.0/SageFs.Core.dll")
+      |> Expect.equal "the exact path, carried through" (SessionBuild.CoreReference.Available "/opt/tools/net10.0/SageFs.Core.dll")
+
+    testCase "WHY — a BLANK path is a refusal, not a path — MSBuild reads '' as the current directory and fails with a missing-assembly error at a location the user never wrote" <| fun _ ->
+      match SessionBuild.decideCoreReference (Some "   ") with
+      | SessionBuild.CoreReference.Available p -> failtestf "a blank path must never be Available, got '%s'" p
+      | SessionBuild.CoreReference.Absent why -> (System.String.IsNullOrWhiteSpace why) |> Expect.isFalse "a refusal must say WHY, not just refuse"
+      | SessionBuild.CoreReference.NotChecked -> failtest "it was asked, so this is Absent, not NotChecked"
+
+    testCase "WHY — 'never looked' is NOT the same claim as 'looked and absent' — the second is evidence and the first is not, exactly like LiveCount" <| fun _ ->
+      let notChecked = SessionBuild.decideCoreReference None
+      let absent = SessionBuild.decideCoreReference (Some "")
+      (match notChecked with
+       | SessionBuild.CoreReference.NotChecked -> true
+       | _ -> false)
+      |> Expect.isTrue "None means nobody checked"
+      // The two must be distinguishable, which a bool could never do.
+      (absent = notChecked) |> Expect.isFalse "and they are not the same value"
+
+    testCase "WHY — the property is CustomAfterMicrosoftCommonTargets, NOT ReferencePath — measured: ReferencePath only tells MSBuild where to SEARCH for references that already exist, so it can never ADD one" <| fun _ ->
+      let property = SessionBuild.coreReferenceProperty "/tmp/sagefs-inject.targets"
+      (property)
+      |> Expect.equal "the exact MSBuild spelling that was verified to build a project with no Reference" "-p:CustomAfterMicrosoftCommonTargets=/tmp/sagefs-inject.targets"
+      (property.Contains "ReferencePath")
+      |> Expect.isFalse "the search-only property must never be used for this"
+
+    testCase "WHY — every build argument list still carries the optimization flag — the reference injection must not displace it, since -p:Optimize=false is structurally load-bearing for hot reload" <| fun _ ->
+      for restore in [ false; true ] do
+        SessionBuild.buildArguments restore "/x.fsproj"
+        |> List.contains SessionBuild.optimizationDisablingProperty
+        |> Expect.isTrue (sprintf "restore=%b keeps -p:Optimize=false" restore)
+
+    testCase "WHY — the generated .targets file is WELL-FORMED XML, because MSBuild rejects a malformed one with a parse error that names no recognisable cause" <| fun _ ->
+      // Parsed for real, not string-matched. A path containing XML metacharacters
+      // is the case that would break: & and < are legal in a filesystem path.
+      for path in [ "/opt/tools/SageFs.Core.dll"; "/a&b/<c>/SageFs.Core.dll"; "C:\\Program Files\\SageFs\\SageFs.Core.dll" ] do
+        let doc = System.Xml.XmlDocument()
+        try
+          doc.LoadXml (SessionBuild.coreReferenceTargetsContent path)
+        with ex -> failtestf "the generated file must parse for path '%s': %s" path ex.Message
+        doc.DocumentElement.Name |> Expect.equal "and it is a Project" "Project"
+        // The escaped path must survive the round trip as the ORIGINAL text,
+        // not the escaped one — a double-escaped path would reference a file
+        // that does not exist.
+        let hint = doc.DocumentElement.InnerXml
+        (hint.Contains "&amp;amp;") |> Expect.isFalse "the path must not be double-escaped"
+
+    testCase "WHY — Private=true is present, because without it the reference is compile-time only and the app dies at RUN time with a missing assembly" <| fun _ ->
+      (SessionBuild.coreReferenceTargetsContent "/opt/SageFs.Core.dll").Contains "<Private>true</Private>"
+      |> Expect.isTrue "the generated file must mark the reference Private"
+
+    testCase "WHY — injecting the reference is ADDITIVE and cannot displace the optimization flag" <| fun _ ->
+      let plain = SessionBuild.buildArguments false "/x.fsproj"
+      let injected =
+        plain @ [ SessionBuild.coreReferenceProperty "/tmp/sagefs-inject.targets" ]
+      (injected |> List.filter ((=) SessionBuild.optimizationDisablingProperty))
+      |> Expect.equal "the optimization flag survives" [ SessionBuild.optimizationDisablingProperty ]
+      (injected |> List.contains "-p:CustomAfterMicrosoftCommonTargets=/tmp/sagefs-inject.targets")
+      |> Expect.isTrue "and the injection is present"
+  ]
+
 /// Reads the assembly-level `System.Diagnostics.DebuggableAttribute` off a
 /// built DLL via Mono.Cecil (already a SageFs.Core dependency — see
 /// FsiHostBuildTests for the same pattern) rather than `Assembly.LoadFrom`,
