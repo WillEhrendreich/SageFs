@@ -613,3 +613,67 @@ behaviour moved — the addition is a new function, not a rewrite wearing one.
 
 7 new tests, 7 passed. Full default tier: 9851 registered, 9851 ran, 0 failed,
 verdict=Trusted.
+## What is still NOT wired — the boundary is now measured, not guessed
+
+`MigrationPlan.decide` is the producer, and it is proven reachable end to end:
+
+```
+PROBE shape  = Some { TypeName = "Order"; Fields = [Id: IntField; Name: StringField; Paid: BoolField] }
+PROBE fields = Some [|7; "x"; true|]
+PROBE VERDICT: worth carrying
+```
+
+and in the test tier, 9/9, including `MigrateAndRespawn` for a carryable value
+and `RebuildProject` for an uncarryable one.
+
+**The live path still cannot call it, and that is a structural fact rather than
+an oversight.** `WorkerMain.fs:1030-1032` has the registry and nothing else:
+
+```fsharp
+let liveCount =
+  match changedTypeName with
+  | Some typeName -> holderRegistry.LiveCountOf typeName
+  | None -> SageFs.LiveCount.Unconsulted "this change is not a type change"
+```
+
+and the registry cannot hand back a value:
+
+```
+LiveCell = Holds:String | Id:Int64 | Superseded:Boolean
+Cell     = Value:FSharpRef`1
+```
+
+A migration needs the old VALUE. The only holder of that value is the `Cell`,
+and the registry never sees a `Cell` — it records an id, a type NAME and a
+superseded flag. So the value cannot be recovered from the registry by any
+change confined to the decision layer; it has to be captured where the value
+is held.
+
+That is a real design decision rather than a wiring chore, and there are two
+honest shapes:
+
+1. **`HolderRegistry` gains a value-carrying entry.** `holdRegistered` already
+   receives the value; storing `obj` alongside the id makes the registry able to
+   answer "is this carryable?" directly. Cost: the registry becomes a strong
+   reference to live state, which is exactly what a "liveness source" should
+   NOT be — it would keep an object alive that the app has otherwise released,
+   turning an honest `Release` into a lie.
+
+2. **The app's own boundary declares a migration hook.** A boundary already
+   exists (`RestartBoundaries.Boundary`) and already says "I hold instances of
+   this type". Giving it an optional `migrate : obj -> Type -> MigrationWorth`
+   puts the value where it is already in scope — the app — and keeps the
+   registry a pure index. Cost: the user writes a small function, and a
+   boundary that does not supply one migrates nothing.
+
+**The second is the better shape, and the reason is the first's cost.** A
+liveness source that holds strong references to live state will report
+`HeldBy` for an object nothing else holds, which is the same class of bug as
+the reflection probe this work already rejected: it looks live because we are
+holding it, not because anything uses it. The measure has to be a by-product of
+the owner, not a shadow copy the measure keeps alive.
+
+So the next piece is: `Boundary` gains an optional migration hook, and the live
+path calls `MigrationPlan.decide` with whatever the boundary supplies —
+`NoValueToMigrate` when it supplies nothing, which is the honest answer for every
+boundary today.
