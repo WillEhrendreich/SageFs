@@ -997,3 +997,51 @@ migration produces the new value — and it belongs at the point where the
 restart actually acts, which is `SessionManager.RestartSession`. Doing it before
 a decision reaches it would be a decision with an executor and no producer, which
 is the shape this series has been removing in the other direction.
+## The migration executor has a process boundary in the way
+
+Chasing the executor — the piece that writes a carried value back into the
+holder's `ref` — turned up a constraint that changes its shape, and it is worth
+recording before anyone writes it.
+
+Measured:
+
+    HolderRegistry.New appears in:  SageFs.Host/WorkerMain.fs   (and nowhere else)
+    SessionManagementOps.RestartSession:  SessionId -> RestartPlan -> ...   (daemon)
+
+The app runs INSIDE the worker, so the live cell and the `ref` a migration must
+write are in the WORKER's process. `RestartSession` is handled by
+`SessionManager`, which runs in the DAEMON. So a `RestartPlan` carrying the
+carried value — or a `System.Type` — would be carrying an object across a
+process boundary, and the daemon cannot even name the app's types: they are
+loaded in the worker, in an AppDomain SageFs does not own.
+
+That is why `RestartPlan` is deliberately pure data with no type on it, and why
+the worker publishes a `Migrate` hook on the BOUNDARY rather than handing the
+daemon a function it could never call.
+
+So the executor has to be worker-side, and the plan has to carry a COMMAND:
+
+    RestartPlan.Migrate boundaryId
+
+and the worker, on receiving it, does the work it is the only process that can:
+re-read the live cell, build the new value, and write it back through the same
+`ref` the app holds. The boundary id is the only thing that needs to cross,
+because it names a thing the worker already has.
+
+This also explains why the boundary HOOK, added earlier, is the right shape and
+not merely one option among several: it runs in the worker, with the value in
+hand. A migration that had to be planned in the daemon and executed there could
+never work, and no amount of correct pure-domain code would change that.
+
+### Which is why nothing should be wired until the worker path is built
+
+The decision chain is now complete and correct end to end — `LiveCount` ->
+`migrationWorthFor` -> `decideFromLivenessAndMigration` -> `RestartAction` — and
+every step is tested. What it feeds is a `RestartSession` that cannot yet carry
+the instruction across the boundary that matters.
+
+Landing that is one message the daemon sends and one branch the worker takes,
+and it is the next piece rather than a detail. Its correctness property is
+already pinned by the tests above: whatever the plan says, an UNANSWERED
+question costs a build, and only a positive `MigrateAndRespawn` with a hook's
+`Carried` may skip one.
