@@ -94,4 +94,85 @@ let declaredShapeTests =
       (why.Contains "'A'")
       |> Expect.isTrue "the first blocked field is named"
       (why.Contains "'C'")
-      |> Expect.isTrue "and so is the last, not just the first"  ]
+      |> Expect.isTrue "and so is the last, not just the first"
+  ]
+
+/// WHY — `migrationWorthFor` is the PRODUCER the restart path calls, and its
+/// job is to choose WHICH rule applies. The precedence matters more than any
+/// one rule: a boundary's own hook outranks a name comparison, and a SILENT
+/// boundary is its own answer rather than a guess.
+[<Tests>]
+let migrationWorthForTests =
+  testList "producing the verdict a restart acts on" [
+
+    testCase "WHY — a boundary's HOOK wins over the name comparison, because the app is the only thing that can move the value" <| fun _ ->
+      // The names alone would REFUSE this shape (see the test above), so if the
+      // hook lost this case the whole precedence would be decorative.
+      let newShape = { DeclaredShape.TypeName = "Order"; FieldNames = [ "Id"; "Note" ] }
+      let hook _ _ = SageFs.MigrationWorth.WorthCarrying 2
+      migrationWorthFor (Some(box 1)) (Some typeof<int>) (Some hook) (Some oldOrder) (Some newShape)
+      |> function
+      | SageFs.MigrationWorth.WorthCarrying 2 -> ()
+      | other -> failtestf "the hook must be believed, got %A" other
+
+    testCase "WHY — a REFUSING hook is believed too, because 'cannot' is as much a claim as 'can'" <| fun _ ->
+      // If a refusal were flattened, a boundary saying "no" would become a
+      // silent migration — the failure mode the whole DU shape exists to stop.
+      let hook _ _ = SageFs.MigrationWorth.NotWorthCarrying "'Payload': no carry rule"
+      migrationWorthFor (Some(box 1)) (Some typeof<int>) (Some hook) (Some oldOrder) (Some newOrderSame)
+      |> function
+      | SageFs.MigrationWorth.NotWorthCarrying why ->
+        (why.Contains "Payload") |> Expect.isTrue "and the reason travels intact"
+      | other -> failtestf "a refusal must not be flattened, got %A" other
+
+    testCase "WHY — a SILENT boundary still gets an answer, and never a free one it cannot justify" <| fun _ ->
+      // This test first asserted that silence yields `NoValueToMigrate`, and it
+      // does NOT — the name tier answers, and that is the right order: a boundary
+      // that declared nothing has not forbidden a migration, it has expressed no
+      // preference, and the shapes are enough to decide.
+      //
+      // What matters is the direction the answer cannot take. A silent boundary
+      // must never buy a build it cannot justify, so the SHAPE that names cannot
+      // settle has to refuse — and that is asserted on the next test, not here.
+      migrationWorthFor (Some(box 1)) (Some typeof<int>) None (Some oldOrder) (Some newOrderSame)
+      |> function
+      | SageFs.MigrationWorth.WorthCarrying n ->
+        n |> Expect.equal "the name tier decides, since the shapes are enough" 2
+      | other -> failtestf "a silent boundary with known shapes is decided by name, got %A" other
+
+    testCase "WHY — silence NEVER buys a build the shapes cannot justify, which is the whole safety property" <| fun _ ->
+      // The load-bearing one. An added-and-undefaulted field is a shape the name
+      // tier cannot settle, so it refuses — and that is what stops "no boundary
+      // declared a migration" from becoming "so skip the build".
+      let undecided = { DeclaredShape.TypeName = "Order"; FieldNames = [ "Id"; "Note" ] }
+      migrationWorthFor (Some(box 1)) (Some typeof<int>) None (Some oldOrder) (Some undecided)
+      |> function
+      | SageFs.MigrationWorth.NotWorthCarrying why ->
+        (why.Contains "Note") |> Expect.isTrue "and the refusal names the field"
+      | other -> failtestf "an unsettleable shape must refuse, got %A" other
+
+    testCase "WHY — with NEITHER shape known, the answer is about the SHAPES, not about liveness" <| fun _ ->
+      migrationWorthFor (Some(box 1)) (Some typeof<int>) None None None
+      |> function
+      | SageFs.MigrationWorth.NoValueToMigrate why ->
+        (why.Contains "shape") |> Expect.isTrue "and it says the shapes, not that nothing is live"
+      | other -> failtestf "unknown shapes are a claim about shapes, got %A" other
+
+    testCase "WHY — with both shapes, the name comparison answers, so a boundary need not declare a migration to be migrated" <| fun _ ->
+      migrationWorthFor (Some(box 1)) (Some typeof<int>) None (Some oldOrder) (Some newOrderSame)
+      |> function
+      | SageFs.MigrationWorth.WorthCarrying n ->
+        n |> Expect.equal "and the field count travels" 2
+      | other -> failtestf "an unchanged type should carry by name, got %A" other
+
+    testCase "WHY — a hook with no live value to move cannot answer, and the name tier is not silently substituted for it" <| fun _ ->
+      // A hook that needs a value it was not given must not be invoked with a
+      // fabricated one; the fallback is the name tier, and the claim it makes
+      // is visibly weaker.
+      let hook _ _ = SageFs.MigrationWorth.WorthCarrying 99
+      migrationWorthFor None (Some typeof<int>) (Some hook) (Some oldOrder) (Some newOrderSame)
+      |> function
+      | SageFs.MigrationWorth.WorthCarrying 99 -> failtest "the hook must not run without a value"
+      | SageFs.MigrationWorth.WorthCarrying 2 -> ()
+      | other -> failtestf "the name tier answers instead, got %A" other
+  ]

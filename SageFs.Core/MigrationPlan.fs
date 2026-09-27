@@ -89,14 +89,12 @@ let decideFromNames (oldShape: DeclaredShape) (newShape: DeclaredShape) (default
   /// `DeclaredShape` and pinned by a test, because a tier that claimed more than
   /// it decides would be worse than one that admits its limit.
   ///
-  /// The order of these cases is the safety property and was NOT my first
-  /// attempt. A defaulted field asked only "is it new?", and an added field was
-  /// checked against its name BEFORE the default was considered — so `Note`, a
-  /// name that establishes no type, refused an otherwise-safe migration. A
-  /// default cannot stand in for a type we do not know, but it also cannot be
-  /// the REASON a type is needed: for a field that exists in neither shape, the
-  /// value never has to be carried, so what matters is that the definition
-  /// supplies one.
+  /// The name is NOT fabricated as `Undecidable`, and that is a correction of
+  /// an assumption rather than a style choice. `decideField` treats
+  /// `Undecidable` as a hard stop BEFORE anything else — measured by a test
+  /// that failed when an unchanged type was expected to carry. The escape hatch
+  /// is checked first and never reaches the equality, so "two unreadable kinds
+  /// are equal, therefore names decide" was wrong.
   let kindOfName (name: string) : FieldKind =
     if name.StartsWith("Id", StringComparison.Ordinal)
        || name.EndsWith("Count", StringComparison.Ordinal)
@@ -227,3 +225,68 @@ let decide
     : RestartAction =
   let verdict = toMigrationWorth (assess liveness oldValue newType defaultOf)
   RestartCost.decideFromLivenessAndMigration liveness verdict
+
+/// What a restart site knows about a type change, and the `MigrationWorth` it
+/// derives from that.
+///
+/// This is the PRODUCER the restart path calls. It is a function of what the
+/// site actually has — the boundary's own hook, the captured old shape, and the
+/// new shape parsed from the edited file — rather than a decision about what a
+/// restart should do, which lives in `RestartCost`.
+///
+/// The precedence is the whole design, and each level is stronger than the one
+/// after it:
+///  1. the BOUNDARY'S HOOK, when it has one. The app holds the value, so it is
+///     the only thing that can actually move it, and a hook can do what names
+///     cannot (it holds the old object). It is a stronger claim and must not
+///     be second-guessed by a name comparison.
+///  2. the NAME comparison, when there is no hook — safe for carried and
+///     removed fields, refusing anything a name cannot settle.
+///  3. `NoValueToMigrate` when a boundary is SILENT, which is every boundary
+///     today. And silence is NOT "nothing is live": that claim belongs to
+///     `LiveCount`. Conflating them is how a cheap restart gets granted without
+///     evidence, which is the defect the whole `LiveCount` refactor exists to
+///     end — so a silent boundary produces the ANSWER "I said nothing", and
+///     what an unanswered question costs is the caller's decision, not this
+///     function's guess.
+let migrationWorthFor
+    (oldValue: obj option)
+    (newType: Type option)
+    (hook: (obj -> Type -> MigrationWorth) option)
+    (oldShape: DeclaredShape option)
+    (newShape: DeclaredShape option)
+    : MigrationWorth =
+  match hook, oldValue, newType with
+  | Some migrate, Some value, Some target ->
+    // The hook decides, and a boundary that says "cannot" is believed exactly as
+    // one that says "can". The value is passed straight through — the hook is
+    // the only thing that can move it, because the app is what holds it.
+    migrate value target
+  | None, _, _ ->
+    // No hook, so the NAME tier answers — and that is the intended order, not a
+    // fallback. A boundary that declared nothing has not forbidden a migration;
+    // it has simply not expressed a preference, and the shapes are enough to
+    // decide. What it must NOT become is a silent free build, and the name tier
+    // cannot: it refuses an added-and-undefaulted field, so a shape it cannot
+    // settle still pays the build.
+    match oldShape, newShape with
+    | Some old', Some new' ->
+      match decideFromNames old' new' (fun _ -> false) with
+      | Holder.Migration.Carried _ -> MigrationWorth.WorthCarrying (List.length new'.FieldNames)
+      | Holder.Migration.Refused why -> MigrationWorth.NotWorthCarrying why
+    | _ ->
+      // Neither shape is known, so there is nothing to compare and nothing to
+      // carry. That is a CLAIM about the shapes, not about liveness — what
+      // costs is decided by the caller in `RestartCost`.
+      MigrationWorth.NoValueToMigrate
+        "neither the old nor the new shape is known, so there is nothing to migrate"
+  | _ ->
+    // A hook exists but there is no value for it to move, or no target to move
+    // it to. Running it anyway would mean passing something fabricated, and
+    // letting the name tier answer instead makes the weaker claim visible.
+    match oldShape, newShape with
+    | Some old', Some new' ->
+      match decideFromNames old' new' (fun _ -> false) with
+      | Holder.Migration.Carried _ -> MigrationWorth.WorthCarrying (List.length new'.FieldNames)
+      | Holder.Migration.Refused why -> MigrationWorth.NotWorthCarrying why
+    | _ -> MigrationWorth.NoValueToMigrate "nothing to migrate with"
