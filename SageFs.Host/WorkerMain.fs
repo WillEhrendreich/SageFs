@@ -766,7 +766,45 @@ let run (sessionId: string) (port: int) = async {
   /// Everything else is SILENCE, and silence is not consent — an app that has
   /// declared no migration has not authorised skipping a build, so the answer is
   /// `NoValueToMigrate` and `RestartCost` prices it against the liveness.
-  let migrationWorthFor (change: Features.ReloadPlanning.ReloadChange) : SageFs.MigrationWorth =
+  /// Decide whether the change is worth carrying, and carry out the type-change
+  /// half of that.
+  ///
+  /// `migrationSubject` is the live value and the NEW type a boundary hook needs.
+  /// It is a PARAMETER, not something this function goes looking for, because
+  /// only the caller that holds the app's cell has the value and only code that
+  /// has just evaluated the patch has the new type — and a decision that needs a
+  /// collaborator is a lookup, not a decision.
+  ///
+  /// `None` is a refusal, not an absence: it means the app never handed over the
+  /// value, or the patch has not been evaluated. Calling a hook with a fabricated
+  /// argument is the "invent it and hope" move this design refuses.
+  /// The live value and the NEW type for a changed type, as the boundary that
+  /// CLAIMS it supplies them.
+  ///
+  /// This is the seam that makes a type change migrateable, and it is honest
+  /// about its two inputs. The live value exists only in the app's own cell; the
+  /// new type exists only after the patch is evaluated. Only the boundary has
+  /// both, so it is asked — rather than the worker resolving a type NAME by
+  /// reflection, which cannot tell a live value from a merely-loaded type. That
+  /// is the same reason the reflection probe was rejected earlier, and it is why
+  /// this is a lookup on the boundary and not a name sweep.
+  ///
+  /// `None` is a REFUSAL, not an absence: nothing was claimed, so nothing is
+  /// migrated, and `RestartCost` prices that against liveness.
+  let migrationSubjectFor (typeName: string) : (obj * System.Type) option =
+    boundaryRegistry
+    |> Option.bind (fun registry ->
+      registry.Declared
+      |> List.tryFind (fun b -> b.Holds = typeName)
+      // A thunk, not a value: the live value must be READ at the moment the
+      // decision is made, not captured when the boundary was declared.
+      |> Option.bind (fun b -> b.Subject)
+      |> Option.bind (fun get -> get ()))
+
+  let migrationWorthFor
+    (migrationSubject: string -> (obj * System.Type) option)
+    (change: Features.ReloadPlanning.ReloadChange)
+    : SageFs.MigrationWorth =
     match change with
     // An IMPLEMENTATION change is the case that can actually pay off, and it
     // needs no new type: a `let` whose body moved leaves the object's LAYOUT
@@ -774,9 +812,24 @@ let run (sessionId: string) (port: int) = async {
     // two identical shapes answers `Carried` (proven on the real function), and
     // the write is one assignment through `Cell.Value`.
     //
-    // This is the reachable win. A TYPE change is not: a `Migrate` plan skips
-    // the build, so the new type has no compiled form, and there is nothing to
-    // call a constructor on. See docs/granular-restart-scope.md.
+    // A TYPE change is the case this used to give up on, on a premise that was
+    // wrong. A `Migrate` plan skips the build, so it was asserted that the new
+    // type had no compiled form and there was nothing to construct. But a
+    // patched type is compiled by the FSI session at RUNTIME, so it is a real
+    // `System.Type` the moment the patch lands, and a record's constructor takes
+    // one argument per field — so it CAN be built, with no build. Proven in a
+    // live session and pinned by ShapeMigrationTests:
+    //
+    //   MIGRATE the migrated value = { Id = 42; Name = "widget"; Note = "added" }
+    //
+    // The boundary's `Migrate` hook is already typed `obj -> System.Type ->
+    // MigrationWorth`, which is exactly what the executor needs. What was missing
+    // was a CALLER, so this branch now makes one.
+    //
+    // An unanswered question is still a refusal, not a cheap answer: a boundary
+    // that declared no hook prices a rebuild. What changed is that a boundary
+    // which DID declare a hook and DID hand over a value is consulted rather
+    // than discarded.
     | Features.ReloadPlanning.ReloadChange.ValueChanged name ->
       SageFs.MigrationWorth.WorthCarrying 1
     | Features.ReloadPlanning.ReloadChange.TypeChanged typeName ->
@@ -794,14 +847,18 @@ let run (sessionId: string) (port: int) = async {
           | None ->
             SageFs.MigrationWorth.NoValueToMigrate
               (sprintf "boundary '%s' declared no migration hook" boundary.Id)
-          | Some _ ->
-            // A hook EXISTS, and it is not invoked — because it needs a live value
-            // and a target type, and this path has neither: the app has not handed
-            // over its cell, and the new type does not exist until a build.
-            // Calling it with a fabricated value is the "invent it and hope" move
-            // the whole migration design refuses.
-            SageFs.MigrationWorth.NotWorthCarrying
-              (sprintf "boundary '%s' supplied a migration, but no live value was available to migrate" boundary.Id)
+          | Some hook ->
+            // The hook needs the live value AND the new type. Either missing is a
+            // refusal that says WHICH, because the two have different fixes: a
+            // missing value means the app has not handed over its cell, and a
+            // missing type means the patch has not been evaluated yet.
+            match migrationSubject typeName with
+            | None ->
+              SageFs.MigrationWorth.NoValueToMigrate
+                (sprintf
+                  "boundary '%s' supplied a migration for '%s', but the live value and the new type are not both available here, so there is nothing honest to migrate"
+                  boundary.Id typeName)
+            | Some (oldValue, newType) -> hook oldValue newType
     | _ ->
       SageFs.MigrationWorth.NoValueToMigrate
         "this change alters a type or a signature, so the value cannot simply be kept"
@@ -1148,7 +1205,20 @@ let run (sessionId: string) (port: int) = async {
               rest
               (SageFs.Core.Features.RestartSubjectDecision.toSubject subject)
               liveCount
-              (migrationWorthFor first)
+              // The boundary that claims the changed type is asked for the
+              // migration subject it was DECLARED with. The hook travels on the
+              // boundary rather than being looked up by name, because the app is
+              // the only side that holds its own cell and the only side that
+              // knows what the new type became — and a worker-side reflection
+              // sweep by type name cannot tell a live value from a type that is
+              // merely loaded.
+              //
+              // A boundary that declared no hook, or one that cannot produce the
+              // pair, answers `None`, and `migrationWorthFor` prices that as a
+              // rebuild. That is the safe direction and it is the SAME answer as
+              // before — what changed is that a boundary which DID hand over a
+              // value is now consulted instead of discarded.
+              (migrationWorthFor migrationSubjectFor first)
             |> Async.AwaitTask
           Features.ReloadBroadcast.broadcastOutcome (Features.ReloadOutcome.ReloadOutcome.Restarted reasons)
           return SaveHandling.Reported

@@ -68,7 +68,22 @@ type Boundary =
     /// type change under it falls back to a rebuild. `None` is NOT "nothing is
     /// live" — that claim belongs to the liveness answer, and conflating them
     /// is how a cheap restart gets granted without evidence.
-    Migrate: (obj -> System.Type -> MigrationWorth) option }
+    Migrate: (obj -> System.Type -> MigrationWorth) option
+    /// The LIVE value this boundary holds, and the type it should become.
+    ///
+    /// `Migrate` answers "if you have a value and a type, is it worth carrying".
+    /// This answers the prior question — "do you HAVE them" — and it is separate
+    /// because the two fail differently. A missing `Migrate` is the app not
+    /// knowing how; a missing `Subject` is the app having nothing to migrate or
+    /// not yet knowing what the new type is. Collapsing them would report a
+    /// migration opportunity the app never offered, and a boundary that reports
+    /// one it cannot honour is worse than one that reports nothing.
+    ///
+    /// It travels ON the boundary for the same reason `Migrate` does: the
+    /// boundary is the only side that holds the app's own cell, so a
+    /// worker-side lookup by type name could only ever be a guess about which
+    /// loaded type is the live one.
+    Subject: (unit -> (obj * System.Type) option) option }
 
 /// A boundary declaration that conflicts with one already registered.
 type DeclarationConflict =
@@ -150,14 +165,30 @@ type Registry private (state: RegistryState) =
   /// case stays a two-word call, and so a caller that has never heard of
   /// migration keeps compiling.
   member this.Declare (id: BoundaryId) (holds: string) : Declared =
-    this.DeclareWithMigration id holds None
+    this.DeclareWithSubject id holds None None
 
   /// Declare with an explicit migration hook. See `Boundary.Migrate` for why the
   /// hook lives on the boundary rather than in the liveness registry.
-  member _.DeclareWithMigration
+  member this.DeclareWithMigration
       (id: BoundaryId)
       (holds: string)
       (migrate: (obj -> System.Type -> MigrationWorth) option)
+      : Declared =
+    this.DeclareWithSubject id holds migrate None
+
+  /// Declare with a migration hook AND the subject it migrates.
+  ///
+  /// This is the form that makes a type change actually hot-reloadable: the
+  /// `migrate` hook alone answers "is this worth carrying", and still leaves
+  /// "over what value, and to what type" unanswered. Only the app holds its own
+  /// cell and only it knows what the new type became, so both travel with the
+  /// declaration. A boundary without a `subject` is not a broken declaration —
+  /// it is an app that has not offered one, and it pays a rebuild.
+  member _.DeclareWithSubject
+      (id: BoundaryId)
+      (holds: string)
+      (migrate: (obj -> System.Type -> MigrationWorth) option)
+      (subject: (unit -> (obj * System.Type) option) option)
       : Declared =
     match state.Boundaries |> Seq.tryFind (fun b -> b.Id = id) with
     | Some existing when existing.Holds = holds ->
@@ -168,26 +199,46 @@ type Registry private (state: RegistryState) =
       // registered without a migration hook and then re-registered without one
       // keeps whatever it had. Silently clearing a hook would turn a repeat
       // into a downgrade, which is the opposite of what "accept it" means.
+      //
+      // The same rule applies to `Subject` for the same reason: a repeat that
+      // cannot see a value is not a claim that there is no value.
       let merged =
-        match existing.Migrate, migrate with
-        | Some hook, _ -> { existing with Migrate = Some hook }
-        | None, hook -> { existing with Migrate = hook }
+        let withMigrate =
+          match existing.Migrate, migrate with
+          | Some hook, _ -> { existing with Migrate = Some hook }
+          | None, hook -> { existing with Migrate = hook }
+        match withMigrate.Subject, subject with
+        | Some s, _ -> { withMigrate with Subject = Some s }
+        | None, s -> { withMigrate with Subject = s }
       state.Boundaries[state.Boundaries.IndexOf existing] <- merged
       Declared.Accepted merged
     | Some existing ->
       Declared.Conflicted { Boundary = id; AlreadyHolds = existing.Holds; TriedToHold = holds }
     | None ->
-      let boundary = { Id = id; Holds = holds; Migrate = migrate }
+      let boundary =
+        { Id = id
+          Holds = holds
+          Migrate = migrate
+          Subject = subject }
       state.Boundaries.Add boundary
       Declared.Accepted boundary
 
-  /// What a boundary says a live value would be worth migrating as, or
-  /// `None` when it declared no hook.
+  /// What a boundary says a live value would be worth migrating as, or `None`
+  /// when it declined to answer.
   ///
   /// `None` here is NOT "nothing is live" and NOT "cannot migrate" — it is "this
   /// boundary said nothing", and the caller must decide what an unanswered
   /// question costs. It costs a rebuild, because that is the direction we
   /// already take and a boundary's silence is not evidence.
+  ///
+  /// The boundary's OWN `Subject` is the authority on the pair it migrates, not
+  /// the caller's arguments. That is deliberate: a caller can hand over a type it
+  /// resolved by name, which is how a merely-loaded type gets mistaken for the
+  /// live one, and it can hand over a value it read at a different moment than
+  /// the boundary would. So the subject is read here, at decision time, and the
+  /// arguments are used only where no subject was declared — a boundary that
+  /// offers no subject has not claimed a value, and `None` is the honest answer
+  /// rather than the caller's guess.
   member this.MigrationVerdictFor (typeName: string) (oldValue: obj) (newType: System.Type) =
     // Zero or several boundaries both mean "nobody to ask", and they are
     // different facts: an UNDECLARED type is a user action, an AMBIGUOUS one is
@@ -195,10 +246,20 @@ type Registry private (state: RegistryState) =
     // `RestartScopeFor` — so both are simply "no hook to consult".
     match this.BoundariesHolding typeName with
     | [ boundary ] ->
-      match boundary.Migrate with
-      | None -> None
-      | Some migrate -> Some(migrate oldValue newType)
-    | [] -> None
+      match boundary.Migrate, boundary.Subject with
+      | None, _ -> None
+      | Some migrate, Some subject ->
+        // The boundary's own pair wins. A `None` from it means the app has not
+        // produced a value or a type yet, and that is a refusal — NOT a reason
+        // to fall back to the caller's arguments, which is the guess this whole
+        // design refuses.
+        subject ()
+        |> Option.map (fun (subjectValue, subjectType) -> migrate subjectValue subjectType)
+      | Some migrate, None -> Some(migrate oldValue newType)
+    // Zero or several boundaries both mean "nobody to ask", and they are
+    // different facts: an UNDECLARED type is a user action, an AMBIGUOUS one is
+    // a choice. Neither is answered here — the caller reads the ambiguity from
+    // `RestartScopeFor` — so both are simply "no hook to consult".
     | _ -> None
 
   /// Everything declared, so a user can inspect what they opted into.

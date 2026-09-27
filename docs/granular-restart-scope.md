@@ -955,12 +955,15 @@ anyone worse, and it is exercised end to end by the tests rather than by hope.
 
 ### The thing that is still missing afterwards
 
-Even with a hook, carrying the value needs to WRITE the new value back into the
-holder's `ref`. `HolderRewrite` has the `Swap<'before,'after>` machinery for
-exactly that and is still unwired. So the migration is a decision and a plan
-today, and the execution is the next seam — and it must not be wired before the
-decision is, because a decision with no executor is what the last three commits
-have been removing.
+**This is now closed.** Carrying the value used to stop at a decision, because
+the executor did not exist. It does: `ShapeMigration.migrate` constructs the new
+value (see "The premise behind that conclusion was WRONG" above), and an app
+reaches it by declaring two hooks — `ShapeMigration.hook` and
+`ShapeMigration.subjectFor` — through `Registry.DeclareWithSubject`.
+
+One correction to what this section used to say, because it was wrong and would
+have sent the next reader to the wrong file: `Swap<'before,'after>` is in
+**`Holder.fs:61`** (`Holder.swapIfMigrated`), NOT in `HolderRewrite.fs`.
 ## HolderRewrite is NOT the migration executor, and wiring it would be wrong
 
 Chased this because `HolderRewrite` is the last module with zero production
@@ -986,9 +989,42 @@ tempting name to invite the next reader into the same wrong wiring:
 
 | module | its question | status |
 |---|---|---|
-| `TranslationValidation` | "is every USE SITE of a rewritten binding safe?" | needs the rewrite it validates; wired after a rewrite exists |
+| `TranslationValidation` | "is every USE SITE of a rewritten binding safe?" | needs the rewrite it validates; nothing rewrites yet |
 | `HolderRewrite` | "may this binding be rewritten in place at all?" | a gate for a REWRITE, not a migration; nothing rewrites yet |
-| `TypeShapeMigration` | "can this value cross into the new shape?" | **wired** — the name tier answers it |
+| `MigrationPlan` | "is it worth carrying, and should we restart?" | **superseded** by `WorkerMain.migrationWorthFor` + `RestartCost` |
+| `TypeShapeMigration` | "can this value cross into the new shape?" | **wired** |
+| `ShapeMigration` | "build the new value from the live one" | **wired** — `migrate`, reached via `ShapeMigration.hook` |
+
+### `MigrationPlan` is the one to be careful with, because it is not merely redundant
+
+It is a second implementation of a question the live path already answers, with
+real inputs. `WorkerMain.migrationWorthFor` (:804) is the one with a caller
+(:1221); `MigrationPlan.migrationWorthFor` (:252) has the same name, the same
+return type and no caller, and `MigrationPlan.decide` reaches the same
+`RestartCost` function through a different route.
+
+What makes it more than duplication is `decideFromNames` (:82), which derives a
+field's KIND from its NAME:
+
+    if name.StartsWith "Id" || name.EndsWith "Count"   -> IntField
+    elif name.EndsWith "Name" || name.EndsWith "Label" -> StringField
+    else                                                -> Undecidable
+
+`RetryCount: string` is therefore carried as an int, `decideRecord` sees two
+equal kinds and reports `Carried`, and the value that reaches the constructor is
+a string in an int slot. Nothing in the product reads that verdict, so it is not
+a live defect — but it is a THIRD opinion about what a field is, and the other
+two (`TypeShapeMigration.compiledShapeOf` and `ReloadPlanning.fieldKindOf`) both
+read real types and both return `Undecidable` when they cannot tell. A guess
+from English naming is the weakest of the three and is the only one with a
+consumer that would trust it.
+
+Deleting it is a separate decision and has not been made here — it touches the
+`SageFs.Core` and `SageFs.Simulation` compile lists and four test files. What is
+settled is that it must not be WIRED, and that its one genuinely missing
+contribution — a name tier for a boundary that declared no hook — belongs in
+`WorkerMain.migrationWorthFor` built on `ReloadPlanning.recordShapeOf`, never on
+`decideFromNames`.
 
 The one that is genuinely still missing is the executor for a migration: given
 `MigrateAndRespawn`, write the carried value back into the holder's `ref`. That
@@ -1086,7 +1122,13 @@ because the thing being constructed does not exist yet.
    type change. A type change cannot avoid the build by carrying the value,
    because the value's type is what the build produces.
 
-### Which means the honest conclusion
+### Which means the honest conclusion — and the conclusion is now OUTDATED
+
+**This section concluded that `MigrateAndRespawn` could not pay off for a type
+change. That conclusion was wrong, and the correction is above**: a patched type
+is compiled at runtime, so it can be constructed, and `ShapeMigration.migrate`
+does it. The text below is kept because the reasoning that produced the wrong
+answer is the reasoning to recognise — a premise asserted rather than measured.
 
 **`MigrateAndRespawn` as designed cannot pay off for a type change**, and the
 right move is to say so rather than wire an executor that fabricates a value or
@@ -1121,7 +1163,36 @@ So the case that can actually pay off needs NO new type construction: when a
 record's SHAPE is unchanged and only its implementation changed, the old object
 IS the new type, the value carries trivially, and there is nothing to fabricate.
 
-## Why this is the reachable win, not a retreat
+### How this was proved, and the one thing that will bite the next person
+
+Measured in a live SageFs session:
+
+    E2E live value before = { Count = 7; Label = "live" }
+    E2E verdict = WorthCarrying 1
+    E2E migrated Count = 7  Label = live  Note = ''
+    E2E is a real TickerStateV2 = true
+
+Then run against the **shipped artifact** rather than a test fixture, which is
+the more honest target — it is what a consumer actually gets:
+
+    E2E ShapeMigration type = true
+    E2E DeclareWithSubject = true
+
+The artifact run is also a workaround, and the reason is worth recording because
+it cost a session. A `SageFs.Core` session loads a **shadow copy** of Core taken
+when the session started, so a module added since will not resolve there — not
+even after `hard_reset_fsi_session rebuild=true`, which re-adopts the shadow
+rather than rebuilding it. Measured:
+
+    built  SageFs.Core/bin/Release/net11.0/SageFs.Core.dll   mtime=02:28:55
+    shadow /tmp/sagefs-shadow-14965-69cfc769/SageFs.Core.dll  mtime=16:58:29
+
+A day stale. The tell is the assembly's own `Location` — when it points into
+`/tmp/sagefs-shadow-...`, the session cannot see new Core and no amount of
+rebuilding in place will change that; a fresh session is the fix. Comparing
+those two timestamps is the one-command version of the diagnosis.
+
+## The premise behind that conclusion was WRONG — and testing it is what proved it
 
 The previous commit established that a TYPE change cannot migrate cheaply: a
 `Migrate` plan skips the build, so the new type has no compiled form, so there
@@ -1130,10 +1201,58 @@ either paying the build the action exists to avoid, or passing
 `Unchecked.defaultof` into a live value and calling it carried — the "silently
 wrong value" this whole design refuses.
 
-An implementation change is different in exactly the way that matters. The
-object's layout did not change, so the value is already correct, and the win is
-real: a save that used to restart the worker can now respawn without paying a
-build. Nothing about it is a compromise.
+**That premise did not survive being tested.** A patched type is compiled by the
+FSI session at RUNTIME, so it is a real `System.Type` the moment the patch
+lands. Measured in a live session, with no build anywhere:
+
+```
+PROBE ctor count = 1
+PROBE ctor arg counts = [|3|]      <- one argument PER FIELD
+PROBE backing fields = [||]        <- no backing fields to write
+PARAM ctor parameters = [|"id:Int32"; "name:String"; "note:String"|]
+PARAM field names      = [|"Id"; "Name"; "Note"|]
+MIGRATE the migrated value = { Id = 42; Name = "widget"; Note = "added by the edit" }
+```
+
+A type change IS hot-reloadable without a build. `ShapeMigration.migrate`
+(`SageFs.Core/ShapeMigration.fs`) is the executor, and the live path is now
+built on it rather than on the retreat described above.
+
+### The three measured facts it depends on, and the two bugs they hid
+
+None of these are obvious, and each was a bug before it was a fact:
+
+1. **The constructor takes one argument per field.** So a migration is a
+   constructor call, not a setter-based rewrite — a record's properties are
+   read-only to reflection, so copying field-by-field is not available at all.
+2. **Constructor parameters are lower-cased (`id`, `name`) while fields are
+   Pascal-cased (`Id`, `Name`).** Name-matching must be case-insensitive.
+3. **Constructor order is not field order.** `RecordShape` declares
+   `TypeName: string; Fields: list` and takes them the other way round, so
+   position alone is not sufficient either. Name first, position only as
+   fallback.
+
+The bug that cost the most rounds was neither of those. `defaultOf` had a
+`| None -> box 0` fallback, so an added `string` field received an `Int32` and
+the constructor rejected it — reported as `NoConstructor`, which named the wrong
+cause entirely. Reporting the given and wanted types is what located it:
+
+```
+given [#0=Int32, #1=String, #2=Int32] wanted [Int32, String, String]
+```
+
+And the same fallback was *silently wrong* rather than merely broken: an F#
+`Map` has no parameterless constructor, so a field the edit added would receive
+`null` and the migration would report success. That is now a refusal naming the
+type, because inventing a value is worse than rebuilding.
+
+### What the win still costs, honestly
+
+The `Map` case above is the real limit: a migration can only supply a field the
+edit added when that field's type has a genuine default. For an F# `Map` or a
+`list`-bearing record, the safe answer is a rebuild. So the reachable win is
+"an added field of a defaultable kind carries across; anything else rebuilds" —
+which is a real and common case, not a retreat, but it is not every case.
 
 ## What makes it reachable
 
@@ -1161,14 +1280,23 @@ to fabricate. Proven on the real functions before building:
     VALUE before = 7
     VALUE after a write = 99
 
-## Why a type change cannot get the same treatment
+## A type change gets the same treatment, by a different route
 
-A `Migrate` plan skips the build — that is the whole point — so the new type has
-no compiled form and there is nothing to construct. Wiring an executor anyway
-would mean either paying the build the action exists to avoid, or writing
-`Unchecked.defaultof` into a live value and reporting it carried: the "silently
-wrong value" the entire design refuses. So the honest answer for a type change
-stays what it is, and the reachable win is the implementation case.
+This section previously argued a type change was impossible. It was wrong, and
+the correction is above: a patched type is compiled at runtime, so it can be
+constructed, and `ShapeMigration.migrate` does it.
+
+The route is different because a record's properties are read-only to
+reflection — there is no setter to write a changed field through. So:
+
+- an **implementation** change is carried by a single `ref` write, because the
+  old object already *is* the new type;
+- a **shape** change is carried by a constructor call, because the old object is
+  a *different* type and the only honest route is to build a new one.
+
+Two different mechanisms, one decision (`Carried`), and the same rule
+throughout: if a value cannot be produced honestly, the answer is a refusal that
+names why, never a default.
 
 ## A verdict cannot buy a build on its own
 

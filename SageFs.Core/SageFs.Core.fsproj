@@ -105,6 +105,11 @@
              "The namespace or module 'RestartCost' is not defined". The order is
              the fix, and the comment is here so nobody re-derives it. -->
         <Compile Include="MigrationPlan.fs" />
+        <!-- After MigrationPlan: it answers the WORTH question, and this one
+             performs it. Kept separate so the decision and the executor can be
+             reviewed — and so a wrong premise in either cannot silently
+             compensate for the other. -->
+        <Compile Include="ShapeMigration.fs" />
         <Compile Include="Features\RegisteredHolder.fs" />
         <Compile Include="Features\RestartScope.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
