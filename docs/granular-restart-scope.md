@@ -913,3 +913,51 @@ and one missing call. What it will NOT give is a field KIND for a genuinely new
 field, because the AST binding cannot reach one (measured). So a new field is
 either defaulted-and-added or refused, decided by the caller — which is the
 honest, safe answer and is already what `decideRecord` expects.
+## The last seam: nothing supplies a `MigrationWorth`
+
+Measured: `AppRunOrchestration.fs:174` calls `decideFromLiveCount`, which
+ignores migration entirely, and `MigrationPlan.decide` — which does use it —
+has no production caller. So `MigrateAndRespawn` is a real, tested, reachable-by-
+construction outcome that no save can produce.
+
+What the restart site already has, in `restartOrFallBack (fileName: string)`:
+
+- `fileName` — the edited path, so the NEW shape is one `extractDecls` away
+  (sub-millisecond, and the file is already on disk in its edited state);
+- `reloadBaselines` — via `knownUnits()`, which now carries `DeclaresFields`,
+  so the OLD shape is already there;
+- `declaredBoundaryFor typeName` — the boundary, which may also carry a
+  `Migrate` hook (a boundary that knows how to migrate outranks a name-only
+  comparison, because the app is the only thing that can actually move the
+  value);
+- `holderRegistry` — the liveness answer.
+
+So the producer is four lines and every input is present. The precedence it
+should follow, and the reason each level wins:
+
+1. **The boundary's own hook, if it has one.** The app holds the value; nothing
+   else can move it, and a hook can do things names cannot (it knows the old
+   object). A hook is a stronger claim than a name comparison and must not be
+   second-guessed by it.
+2. **The name comparison**, when there is no hook. Safe for carried and removed
+   fields, refusing anything a name cannot settle.
+3. **`NoValueToMigrate`**, when the boundary is silent — which is every
+   boundary today. And silence is NOT "nothing is live": that claim belongs to
+   `LiveCount`, and conflating them is how a cheap restart gets granted without
+   evidence, which is the defect the whole `LiveCount` refactor exists to end.
+
+The honest consequence: with no boundary hook anywhere, the name comparison runs
+and answers the ADDED-AND-UNDEFAULTED case by refusing — which lands on today's
+`RebuildProject`. So wiring this changes **no** behaviour for any existing user,
+and turns into a real saving the moment an app supplies a hook. That is a
+deliberate property: a change that can only ever pay a build today cannot make
+anyone worse, and it is exercised end to end by the tests rather than by hope.
+
+### The thing that is still missing afterwards
+
+Even with a hook, carrying the value needs to WRITE the new value back into the
+holder's `ref`. `HolderRewrite` has the `Swap<'before,'after>` machinery for
+exactly that and is still unwired. So the migration is a decision and a plan
+today, and the execution is the next seam — and it must not be wired before the
+decision is, because a decision with no executor is what the last three commits
+have been removing.
