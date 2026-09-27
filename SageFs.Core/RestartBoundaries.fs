@@ -288,3 +288,14 @@ module Declare =
       match registry.DeclareWithMigration id holds migrate with
       | Declared.Accepted b -> Declaration.DeclaredBoundary b
       | Declared.Conflicted c -> Declaration.ConflictedWith c
+
+/// The shape a boundary's type declared, as captured at parse time.
+///
+/// `None` means the declaration is not a record, or nothing captured it — a
+/// different claim from "a record with no fields", and the same distinction
+/// `DeclaredShape.DeclaresFields` makes.
+type DeclaredShapeResult =
+  /// The type is a record and its fields were captured.
+  | ShapeKnown of fields: string list
+  /// Not captured, and not to be assumed empty.
+  | ShapeUnknown of because: string

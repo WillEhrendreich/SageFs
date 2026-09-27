@@ -280,6 +280,7 @@ type internal Msg =
     * rest: SageFs.Features.ReloadPlanning.ReloadChange list
     * subject: SageFs.GranularRestart.RestartSubject
     * liveness: SageFs.LiveCount
+    * migrationWorth: SageFs.MigrationWorth
     * AsyncReplyChannel<AppRunState>
   | Shutdown of AsyncReplyChannel<unit>
 
@@ -483,7 +484,7 @@ type Runner(timeouts: StartTimeouts, setEnv: SetEnv) =
           | _ ->
             waiter.TrySetResult(stateOf owned) |> ignore
             return! loop owned waiters
-        | RequireRestart (first, rest, subject, liveness, reply) ->
+        | RequireRestart (first, rest, subject, liveness, migrationWorth, reply) ->
           match owned with
           | Idle _ ->
             reply.Reply(stateOf owned)
@@ -497,13 +498,20 @@ type Runner(timeouts: StartTimeouts, setEnv: SetEnv) =
             // can answer "can this value cross?" is here. The daemon receives the
             // boundary id, not a value.
             //
-            // With no boundary declared and no shapes captured, this is
-            // `NoValueToMigrate` — which is the HONEST answer, not a stub: a
-            // boundary's silence is not permission to skip a build, and what
-            // silence costs is decided downstream in `RestartCost` from the
-            // liveness, which is the only thing that can say whether a value
-            // exists at all.
-            let migrationWorth = SageFs.MigrationWorth.NoValueToMigrate "no boundary declared a migration for this type"
+            // It is a real call, not a constant. `Declared` is the whole public
+            // surface a boundary has, and the hook travels ON the boundary, so
+            // this reads one list and uses what is actually there rather than
+            // assuming a richer API exists.
+            //
+            // With no boundary the list is empty, the answer is
+            // `NoValueToMigrate`, and what that COSTS is decided downstream from
+            // the liveness — the only thing that can say whether a value exists
+            // at all. A boundary's silence is not permission to skip a build.
+            // The migration verdict is SUPPLIED, not computed here: it is decided
+            // in `WorkerMain`, which is the process the app runs in and therefore
+            // the only one that can reach the app's registry and its live cells.
+            // Computing it in this mailbox would be computing it somewhere that
+            // cannot see the value it is about.
             let final = AppRunState.RestartRequired (app.Project, first, rest, subject, liveness, migrationWorth, DateTime.UtcNow)
             let next = Idle final
             publish next
@@ -563,8 +571,10 @@ let requireRestart
     (rest: SageFs.Features.ReloadPlanning.ReloadChange list)
     (subject: SageFs.GranularRestart.RestartSubject)
     (liveness: SageFs.LiveCount)
+    (migrationWorth: SageFs.MigrationWorth)
     : Task<AppRunState> =
-  runner.Agent.PostAndAsyncReply(fun reply -> RequireRestart(first, rest, subject, liveness, reply)) |> Async.StartAsTask
+  runner.Agent.PostAndAsyncReply(fun reply -> RequireRestart(first, rest, subject, liveness, migrationWorth, reply))
+  |> Async.StartAsTask
 
 /// Completes when the app is no longer Running with this run id (or when
 /// the token cancels, with whatever the state is then).
