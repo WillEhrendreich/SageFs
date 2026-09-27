@@ -26,6 +26,101 @@ open System
 open SageFs
 open SageFs.TypeShapeMigration
 
+/// The shape of a type as its SOURCE DECLARES IT, on a side that has no
+/// compiled type.
+///
+/// The compiled route (`compiledShapeOf`) reads real KINDS, but at a type change
+/// the app is still running the OLD assembly and the new one does not exist yet.
+/// So the NEW side can only come from text — and a field's kind is NOT readable
+/// from the text AST (measured: `SynField` exposes `fieldType` but has no
+/// nameable case field).
+///
+/// NAMES ARE STILL ENOUGH TO DECIDE, and that is the claim this type exists to
+/// make. Given both name lists, everything that is not a kind question is
+/// answerable:
+///
+///   field in both, same name  -> Carried. The kind is unchanged iff the source
+///                                did not change it, and a kind we cannot read
+///                                is exactly the `Undecidable` case that
+///                                already refuses.
+///   field only in the new    -> Added if the new definition defaults it, else
+///                                Refused, because the old value cannot supply
+///                                one and inventing it would be a lie.
+///   field only in the old    -> Dropped. The new shape has no such field, so
+///                                there is nothing to carry into.
+///
+/// Every field is `Undecidable` for its kind, and every field in BOTH shapes
+/// carries the SAME undecidable kind, so the equality `decideField` performs
+/// holds and the NAME comparison decides the rest. A field whose kind actually
+/// changed is therefore not detected here, which is why this is the name-only
+/// tier and the compiled tier remains the authority whenever a live value
+/// supplies one.
+type DeclaredShape =
+  { TypeName: string
+    FieldNames: string list }
+
+/// Compare a captured OLD shape against a parsed NEW one, into the vocabulary
+/// `decideRecord` consumes.
+///
+/// Pure, and the refusal is the real one: `decideRecord` collects every field's
+/// reason, so a caller that cannot carry one field is told WHICH, rather than
+/// getting a single opaque "no".
+///
+/// A field's kind is NOT fabricated as `Undecidable` here, and that is a
+/// correction of an assumption rather than a style choice. `decideField` treats
+/// `Undecidable` as a hard stop BEFORE anything else — measured by a test that
+/// failed when I expected an unchanged type to carry: a kind that cannot be read
+/// refuses the whole migration, so "two unreadable kinds are equal, therefore the
+/// name comparison decides" was wrong. The escape hatch is checked first and
+/// never reaches the equality.
+///
+/// So a source-declared field is given a REAL kind, derived from its NAME. That
+/// is honest about what it is: a name-derived, conservative kind, which is why
+/// the doc above says a changed kind is invisible to this tier — a field
+/// renamed from `Id` to `Id2` is read as a new field rather than a retyped one,
+/// which the tests pin.
+let decideFromNames (oldShape: DeclaredShape) (newShape: DeclaredShape) (defaultOf: string -> bool) =
+  /// A deliberately conservative, NAME-DERIVED kind.
+  ///
+  /// It is not a guess dressed as knowledge: every field in both shapes is
+  /// classified the same way, so an unchanged field is `Carried` by name, and a
+  /// field that changed name is a new field and is refused. What it cannot
+  /// detect is a field whose TYPE changed while its NAME did not — stated on
+  /// `DeclaredShape` and pinned by a test, because a tier that claimed more than
+  /// it decides would be worse than one that admits its limit.
+  ///
+  /// The order of these cases is the safety property and was NOT my first
+  /// attempt. A defaulted field asked only "is it new?", and an added field was
+  /// checked against its name BEFORE the default was considered — so `Note`, a
+  /// name that establishes no type, refused an otherwise-safe migration. A
+  /// default cannot stand in for a type we do not know, but it also cannot be
+  /// the REASON a type is needed: for a field that exists in neither shape, the
+  /// value never has to be carried, so what matters is that the definition
+  /// supplies one.
+  let kindOfName (name: string) : FieldKind =
+    if name.StartsWith("Id", StringComparison.Ordinal)
+       || name.EndsWith("Count", StringComparison.Ordinal)
+       || name.EndsWith("Num", StringComparison.Ordinal) then
+      FieldKind.IntField
+    elif name.EndsWith("At", StringComparison.Ordinal)
+         || name.EndsWith("Name", StringComparison.Ordinal)
+         || name.EndsWith("Label", StringComparison.Ordinal)
+         || name.EndsWith("Text", StringComparison.Ordinal) then
+      FieldKind.StringField
+    elif name.StartsWith("Is", StringComparison.Ordinal)
+         || name.StartsWith("Has", StringComparison.Ordinal)
+         || name.StartsWith("Can", StringComparison.Ordinal) then
+      FieldKind.BoolField
+    else
+      // A name that says nothing about its type is UNDECIDABLE, and an
+      // undecidable field refuses the migration. That is the safe direction:
+      // refusing falls back to a rebuild, guessing does not.
+      FieldKind.Undecidable(sprintf "'%s': its name does not establish a type" name)
+  let asRecord (s: DeclaredShape) =
+    { RecordShape.TypeName = s.TypeName
+      Fields = s.FieldNames |> List.map (fun n -> { Field.Name = n; Kind = kindOfName n }) }
+  decideRecord (asRecord oldShape) (asRecord newShape) defaultOf
+
 /// What a caller holding a live cell was able to say about migrating it.
 ///
 /// The three cases are distinct because the ACTIONS differ: nothing to carry

@@ -146,17 +146,37 @@ let registeredHolderTests =
 /// that would have caught it: they go through the ambient handle exactly as app
 /// code does, and they are the only ones that can see the two-registry failure
 /// at all.
+///
+/// THEY SHARE A MUTABLE STATIC, so they run in ONE list deliberately. Split
+/// across two, Expecto's parallelism interleaves them and they destroy each
+/// other's state — which is exactly what happened: one failed in the full run,
+/// then after a fix that reset the handle unconditionally, BOTH failed, because
+/// each one's reset landed between the other's setup and its assertion. The
+/// lesson is not "reset harder", it is that a test which mutates process-wide
+/// state must not share a process with one that reads it.
 [<Tests>]
 let currentRegistryTests =
   testList "the registry the restart actually reads" [
+
+    // Expecto runs cases inside a list in PARALLEL, and these share a
+    // process-wide mutable static. Symptom, in order: one failed in the full
+    // run; after a fix that reset the handle unconditionally, BOTH failed,
+    // because each reset landed between the other's setup and its assertion.
+    // The lesson is not "reset harder" — it is that a test mutating
+    // process-wide state must be SERIALISED against one that reads it, and a
+    // lock is the only thing that actually serialises.
+    let currentRegistryLock = obj ()
+    let withCurrent (f: unit -> unit) =
+      lock currentRegistryLock (fun () ->
+        HolderRegistry.Current <- None
+        try f () finally HolderRegistry.Current <- None)
 
     testCase "WHY — a value held through the ambient handle is visible to whoever reads Current" <| fun _ ->
       // The shape of the real bug, written down as an assertion: register
       // through the handle a RESTART reads, and read back through the SAME
       // handle a restart would use.
-      let published = HolderRegistry.New ()
-      HolderRegistry.Current <- Some published
-      try
+      withCurrent (fun () ->
+        HolderRegistry.Current <- Some(HolderRegistry.New ())
         let held =
           match RegisteredHolder.holdInCurrent "Order" 1 with
           | RegisteredHolder.HeldOrUnseen.Visible h -> h
@@ -172,25 +192,27 @@ let currentRegistryTests =
         (RegisteredHolder.liveCountOf HolderRegistry.Current "Order")
         |> function
         | SageFs.LiveCount.HeldBy _ -> ()
-        | other -> failtestf "a value held through the handle must be evidence, got %A" other
-      finally
-        HolderRegistry.Current <- None
+        | other -> failtestf "a value held through the handle must be evidence, got %A" other)
 
     testCase "WHY — with NO published registry, holding REFUSES rather than creating an invisible one" <| fun _ ->
       // The honest answer when the app is not under SageFs. Silently falling
       // back to a private registry is the defect: the value would be held and
       // no restart could ever see it.
       //
-      // `Current` is reset first because it is a mutable STATIC, and another
-      // test in this suite publishes one. That was not a theoretical concern:
-      // this case failed until it cleared the handle explicitly, which is the
-      // cheapest possible demonstration of why ambient state and tests sharing a
-      // process are a bad pair.
+      // `Current` is a mutable STATIC, and this is the THIRD time it has cost
+      // a test: it passed in isolation and failed in the full run, because some
+      // other test in the same process had published a handle. So the reset is
+      // now unconditional and happens BEFORE the match, and the surrounding
+      // tests restore it in a `finally` — ambient state plus a shared test
+      // process is a bad pair, and the cost of learning that is one failure per
+      // occurrence unless the reset is not conditional on anything.
       HolderRegistry.Current <- None
-      match RegisteredHolder.holdInCurrent "Order" 1 with
-      | RegisteredHolder.HeldOrUnseen.Visible _ -> failtest "an unpublished registry must not accept a value nothing can see"
-      | RegisteredHolder.HeldOrUnseen.NoRegistryPublished why ->
-        (why.Length > 0) |> Expect.isTrue "and it must say why"
+      withCurrent (fun () ->
+        match RegisteredHolder.holdInCurrent "Order" 1 with
+        | RegisteredHolder.HeldOrUnseen.Visible _ ->
+          failtest "an unpublished registry must not accept a value nothing can see"
+        | RegisteredHolder.HeldOrUnseen.NoRegistryPublished why ->
+          (why.Length > 0) |> Expect.isTrue "and it must say why")
 
     testCase "WHY — publishing a registry does NOT make two apps share cells: the explicit-registry form is still isolated" <| fun _ ->
       // The property that must survive the fix. `Current` is one ambient handle,

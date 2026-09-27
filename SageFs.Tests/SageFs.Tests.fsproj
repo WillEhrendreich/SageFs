@@ -577,6 +577,7 @@
         <Compile Include="CompiledShapeTests.fs" />
         <Compile Include="MigrationWorthTests.fs" />
         <Compile Include="MigrationPlanTests.fs" />
+        <Compile Include="DeclaredShapeTests.fs" />
         <Compile Include="GranularRestartTests.fs" />
         <Compile Include="GranularRestartSimTests.fs" />
         <Compile Include="RestartScopeTests.fs" />

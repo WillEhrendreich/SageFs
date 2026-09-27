@@ -70,6 +70,14 @@ module TypeShapeMigration =
     // DST found this: a shape with an undecidable-but-defaulted field was
     // reported as carried, which is exactly the "silently wrong value" the
     // design's refuse-everything-else rule exists to prevent.
+    //
+    // I relaxed this once — an undecidable field that is NEW and defaulted was
+    // let through, on the argument that its value never has to be carried. Two
+    // existing tests correctly refused that: the safety invariant "no migration
+    // ever claims a carry over something undecidable" and the DST that found the
+    // original bug. The relaxation was wrong, and it was wrong in the direction
+    // that matters: it made a migration claim a value it could not type. The
+    // rule stands as it was.
     match field.Kind with
     | FieldKind.Undecidable why ->
       FieldTier.Refused(sprintf "the field's kind is undecidable (%s), and a default cannot stand in for it" why)

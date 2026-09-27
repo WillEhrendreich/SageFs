@@ -28,22 +28,37 @@
          holder API resolves with no Reference in this file. Proven end to end
          on a project with zero Reference elements.
 
-         This Reference exists for ONE case: CI builds the samples with a raw
-         `dotnet build` (ci-pipeline.fsx "build samples for integration suites"),
-         which is not a SageFs build and therefore gets no injection. It resolves
-         the assembly from `$(SageFsCoreAssembly)`, defined in the repo-root
-         Directory.Build.props and guarded by Exists so a machine that has never
-         built Core just gets no Reference at all.
+         This Reference exists only for a RAW `dotnet build`, which is not a
+         SageFs build and therefore gets no injection. It resolves through
+         `$(SageFsCoreAssembly)`, which `Directory.Build.props` points at
+         `SageFs.Core/bin/$(Configuration)/net10.0/`.
 
-         A ProjectReference is NOT an option here, and that was measured: it
-         pulls FSharp.Core 11.0.101-preview7.26381.103 transitively through
-         FSharp.Compiler.Service, which this sample's own pinned FSharp.Core
-         (…26359.118) reads as a downgrade, and the repo treats warnings as
-         errors. Do not "simplify" this into one. -->
+         THE GATE CAUGHT A REAL FAILURE HERE, and it is worth recording rather
+         than just fixing. That path points at a BUILD OUTPUT, and a solution
+         build has no ordering guarantee between projects — so the sample can
+         compile against whatever `SageFs.Core.dll` happens to be on disk. In a
+         clean checkout that is a STALE one, and the sample fails with
+         "The value, constructor, namespace or type 'holdInCurrent' is not
+         defined" while passing locally, where the DLL happens to be current.
+
+         The honest fix is not a better path, it is to make the ORDERING
+         explicit so this cannot compile against a stale assembly again. -->
     <Reference Include="SageFs.Core" Condition="'$(SageFsCoreAssembly)' != ''">
       <HintPath>$(SageFsCoreAssembly)</HintPath>
       <Private>true</Private>
     </Reference>
   </ItemGroup>
+
+  <!-- Make the ordering explicit rather than relying on MSBuild's project
+       traversal: the sample needs a Core that contains `holdInCurrent`, so it
+       must not compile until Core has been rebuilt in this configuration. -->
+  <Target Name="BuildSageFsCoreFirst" BeforeTargets="ResolveAssemblyReferences" Condition="'$(SageFsCoreAssembly)' != ''">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../../../SageFs.Core/SageFs.Core.fsproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration)"
+             BuildInParallel="false">
+      <Output TaskParameter="TargetOutputs" ItemName="_SageFsCoreOutput" />
+    </MSBuild>
+  </Target>
 
 </Project>
