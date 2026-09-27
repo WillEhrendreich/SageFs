@@ -781,3 +781,78 @@ it has to be a handle the APP obtains rather than one SageFs guesses at:
 The moment that exists, `LiveCount` stops being decorative. Until then, the
 honest reading of the live path is `Unconsulted`, not `HeldByNothing` — and
 that distinction is the entire reason `LiveCount` was built.
+## What a migration can and cannot do at a type change
+
+Measured from the shapes rather than assumed, because this decides whether the
+`MigrateAndRespawn` action can ever fire for a real edit.
+
+`decideRecord` takes `(oldShape, newShape)`. The restart site has:
+
+    WorkerMain.fs:1034   ReloadChange.TypeChanged typeName
+    LiveCell            = { Id; Holds: string; Superseded: bool }
+
+So the question is what the old and new shapes can be, at the moment a type
+changes.
+
+### The new shape does not exist yet
+
+The app is running the OLD assembly, and the new one is what a `dotnet build`
+would produce. Before that build runs there is no `System.Type` for the edited
+record — only the source text. So `newShape` is **not available as a compiled
+type at decision time**; it is at best derivable from the edited source, and
+the text-AST route was measured to be a dead end for field KINDS (the one
+question a migration needs answered).
+
+That is not a small obstacle. It inverts the assumption the whole feature rests
+on.
+
+### The old shape is only a name away from useless
+
+`LiveCell.Holds` is a string. `compiledShapeOf` takes a `System.Type`. A
+`TypeShapeMigration.Field` is `{ Name: string; Kind: FieldKind }`, and nothing
+on the cell can produce a `FieldKind` — the name "Order" carries no field list,
+no defaults, and no kinds. Resolving a name back to a `System.Type` would mean
+searching loaded assemblies, which is reflection dressed up: it reports what
+happens to be LOADED, not what was there before the edit, and it is the same
+move this work already rejected in `LiveValueTree`.
+
+### The consequence, stated plainly
+
+A type change cannot currently be migrated, and no amount of wiring the pieces
+together changes that. The honest options are:
+
+1. **Migrate on a shape comparison the source can answer.** Keep the record's
+   declared field list in the BASELINE parse — `ReloadPlanning` already keeps a
+   `FileDecls` per watched file and a `Header` per type decl — and diff the
+   baseline shape against the new one. Field KINDS come from the compiled type
+   for fields that exist in both, and from the AST only for a field that is
+   genuinely new. That splits the question: a carried field's kind is known
+   from the live value, and only an ADDED field needs the AST, which is the one
+   case a text parse can answer (`fieldType: SynType` is unreadable, but a new
+   field's *name* and whether the new definition gives it a default are not).
+
+2. **Narrow the claim.** A migration is provably safe for the *carried* fields
+   — same name, same kind, value copied across — and provably unsafe for a field
+   whose kind changed or whose value cannot be produced. So the decidable
+   subset is "same fields, same kinds, everything else refused", and the
+   *baseline* is where the old shape must be kept.
+
+The second is a correction to what this document has implied. The shape
+producer (`compiledShapeOf`) is real, proven and correct — it reads a *live*
+value's type. What is missing is the OLD shape of a type across an edit, and no
+producer of that exists. `LiveCell.Holds: string` is not it.
+
+### What this means for the current state
+
+`MigrateAndRespawn` is reachable and correct as a DECISION, and it fires today
+for a caller that supplies a live value and a target type that already exist.
+What is not reachable is the case it was built for: a watched-file type edit
+with a live value. That case still takes `RebuildProject`, and that is the
+correct answer until the old shape is retained.
+
+Retaining it is a small, well-scoped piece: `RestartAttribution.KnownUnit`
+carries `{ Name; DeclaresType }` and is derived from `FileDecls`, which is
+already retained per watched file. Extending it with the declared shape at the
+point the parse happens would give the decision the old side for free — the
+parse is already running, the data is already there, and nothing in the current
+design depends on the old shape not existing.
