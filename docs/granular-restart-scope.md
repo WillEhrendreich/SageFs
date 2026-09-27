@@ -1045,3 +1045,67 @@ and it is the next piece rather than a detail. Its correctness property is
 already pinned by the tests above: whatever the plan says, an UNANSWERED
 question costs a build, and only a positive `MigrateAndRespawn` with a hook's
 `Carried` may skip one.
+## The executor cannot be a constructor call, and the reason is the no-build decision
+
+Measured, and it is the reason the last gap is not just "wire the writer".
+
+A `Migrate` plan takes the `rebuild = false` arm in `SessionManager`, so no
+`dotnet build` runs. That is the whole point — it is the cheap action. But it
+means:
+
+    the new type has NO compiled form at migration time
+
+so there is nothing to call a constructor on. The new shape exists only as
+SOURCE TEXT, and the old value exists as an object laid out by the OLD type.
+A migration therefore cannot be "construct the new value and write it back",
+because the thing being constructed does not exist yet.
+
+### What that rules out, concretely
+
+- **Reflection over a new assembly.** There is no new assembly until a build, and
+  a build is what the action avoids. Asking reflection for a type it cannot find
+  would produce a "cannot migrate" — honest, but it is the same answer the
+  refusal already gives, reached expensively.
+- **A fabricated value.** Passing `Unchecked.defaultof` into the old cell would
+  make a migration LOOK carried while the value is now nonsense. That is
+  precisely the "silently wrong value" the entire migration design exists to
+  refuse, and it would be worse than rebuilding because it would be invisible.
+
+### The two shapes that actually work
+
+1. **Structural, not nominal.** Carry the old value's FIELDS into a new
+   representation rather than into a new type. That is what
+   `compiledFieldsOf` already reads and what `decideField` already decides, and
+   it needs no new assembly: the new shape is a record of the same field names
+   and kinds, which the *edited source* supplies. The cost is that the app's own
+   code still references the OLD type, so the win is a preserved value rather
+   than a running new type — real, but not the feature.
+
+2. **Build first, then migrate.** Reverse the order: the rebuild is what makes
+   the migration possible, so `MigrateAndRespawn` is the WRONG shape for a
+   type change. A type change cannot avoid the build by carrying the value,
+   because the value's type is what the build produces.
+
+### Which means the honest conclusion
+
+**`MigrateAndRespawn` as designed cannot pay off for a type change**, and the
+right move is to say so rather than wire an executor that fabricates a value or
+pays a build it claimed to avoid.
+
+What is genuinely achievable, and is a real improvement over a whole-app
+rebuild:
+
+- a type change scoped to its declaring BOUNDARY, which already works and needs
+  no build saving — it is about not restarting unrelated state;
+- a VALUE carried across a change that does NOT alter the type's shape, e.g. a
+  pure function or a changed implementation behind an unchanged signature. There
+  the old object is still the right type, the value carries trivially, and no
+  build is needed. That is a genuinely cheap case, and the current machinery is
+  already correct for it — it is simply not reachable because a type change is
+  the only trigger wired.
+
+So the next piece is a TRIGGER, not an executor: apply the same liveness-and-
+migration decision to a changed IMPLEMENTATION of an unchanged shape, where
+`decideRecord` over two identical shapes says `Carried` and there is nothing to
+fabricate. That is a smaller, honest, and genuinely useful win — and it is
+reachable with what is already built and tested.
