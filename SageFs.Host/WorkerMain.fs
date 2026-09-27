@@ -749,6 +749,12 @@ let run (sessionId: string) (port: int) = async {
     |> Result.toOption
     |> Option.map SageFs.Registry.For
 
+  // PUBLISH it, so an app can declare a boundary the restart will actually see.
+  // Without this, `boundaryRegistry` is a local nobody can reach, every
+  // declaration an app makes is invisible, and every type change falls back to
+  // the module-inferred scope — which is exactly what happened before.
+  SageFs.Registry.Current <- boundaryRegistry
+
   let declaredBoundaryFor (typeName: string) =
     boundaryRegistry |> Option.bind (fun r -> r.TryRestartScopeFor typeName)
   // The source each running app's DLL was built from, advanced after every

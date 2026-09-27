@@ -93,6 +93,22 @@ type Unscoped =
   /// Several boundaries claim it, so SageFs will not choose between them.
   | Ambiguous of boundaries: BoundaryId list
 
+/// What an app-side declaration can refuse with, when no worker has published a
+/// registry for it to land in.
+///
+/// A DU rather than an error string, for the reason every refusal in this file
+/// is a DU: "no registry" and "conflicted" are different facts with different
+/// user actions, and a caller must be able to tell them apart rather than read a
+/// message and guess.
+type NoRegistry =
+  /// No registry has been published, so a declaration here would be invisible to
+  /// every restart. Running outside a SageFs worker.
+  ///
+  /// Named `Unpublished` rather than repeating the type's name, because F#
+  /// cannot distinguish `NoRegistry.NoRegistryPublished` from using the TYPE
+  /// (FS0800), and a case that cannot be named is a case nobody writes.
+  | Unpublished of because: string
+
 type private RegistryState =
   { Session: WorkerProtocol.SessionId
     Boundaries: ResizeArray<Boundary> }
@@ -109,6 +125,20 @@ type Registry private (state: RegistryState) =
   /// The session this registry belongs to, so a caller holding two of them
   /// can never mix their answers up.
   member _.Session = state.Session
+
+  /// The registry the APP declares into, published by the worker that reads it.
+  ///
+  /// The same shape as `HolderRegistry.Current`, and for the same reason. An
+  /// app runs INSIDE the worker, so a boundary the app declares and a boundary
+  /// the restart reads are the same question asked of two objects — and if they
+  /// are two objects, every declaration is invisible and every type change falls
+  /// back to a whole-app restart. Measured: `boundaryRegistry` was a local `let`
+  /// in `WorkerMain.run`, reachable by nothing.
+  ///
+  /// `None` means no worker has published one, and that is a real state an app
+  /// can detect: running outside SageFs, declaring is a no-op rather than a
+  /// silent success, which is the same refusal `holdInCurrent` makes.
+  static member val Current: Registry option = None with get, set
 
   /// Declare that `id` holds instances of `holds`. Idempotent for a
   /// REPEATED identical declaration, because startup code may legitimately
@@ -202,3 +232,59 @@ type Registry private (state: RegistryState) =
   member this.Describe (boundary: Boundary) =
     sprintf "'%s' holds %s; changing %s restarts this boundary and leaves the rest running"
       boundary.Id boundary.Holds boundary.Holds
+
+/// The outcome of an app-side `Declare.inCurrent`.
+///
+/// ONE DU, and the shape is forced. A `(Declared * NoRegistry option)` pair
+/// needs a `Declared` even when nothing was declared — and there is no honest
+/// one to give, because a fabricated `Accepted` reads to a caller that checks
+/// only the first slot as a live guarantee that does not exist. So the refusal
+/// is a case of the result, not a second value beside it.
+///
+/// The cases are named distinctly from the internal `Declared` DU on purpose:
+/// reusing `Accepted` here made `Declared.Accepted` ambiguous at every call site
+/// (the compiler caught it), and an ambiguous case is a case nobody can read.
+///
+/// The two refusals stay separate because their USER ACTIONS differ: nothing was
+/// published means the app is not running under SageFs, while a conflict means
+/// it is, and it declared the same id twice for different types.
+[<RequireQualifiedAccess>]
+type Declaration =
+  /// Declared, and the restart will scope to this boundary.
+  | DeclaredBoundary of boundary: Boundary
+  /// Nothing was published, so a declaration here would be invisible.
+  | Unpublished of because: string
+  /// The same id already claims a DIFFERENT type, so the scope would be a coin
+  /// flip. The existing claim stands.
+  | ConflictedWith of conflict: DeclarationConflict
+
+/// The app-facing boundary API. A module because a `namespace` cannot hold
+/// values, and an app needs to CALL this.
+[<RequireQualifiedAccess>]
+module Declare =
+
+  /// Declare a boundary the restart will actually see.
+  ///
+  /// The registry the worker READS and the registry an app DECLARES INTO were
+  /// two objects, so every declaration an app made was invisible and every type
+  /// change fell back to the module-inferred scope. This goes through the
+  /// published one.
+  ///
+  /// The refusal is deliberate. Silently accepting a declaration no restart can
+  /// see would hand a user a scoped-restart guarantee that does not exist —
+  /// worse than refusing, because they would then trust a restart that stays
+  /// whole-app. It is the same refusal `RegisteredHolder.holdInCurrent` makes,
+  /// for the same reason.
+  let inCurrent
+      (id: BoundaryId)
+      (holds: string)
+      (migrate: (obj -> System.Type -> MigrationWorth) option)
+      : Declaration =
+    match Registry.Current with
+    | None ->
+      Declaration.Unpublished
+        "no boundary registry is published in this process, so a declared boundary would be invisible to every restart"
+    | Some registry ->
+      match registry.DeclareWithMigration id holds migrate with
+      | Declared.Accepted b -> Declaration.DeclaredBoundary b
+      | Declared.Conflicted c -> Declaration.ConflictedWith c
