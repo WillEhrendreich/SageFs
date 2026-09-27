@@ -856,3 +856,60 @@ already retained per watched file. Extending it with the declared shape at the
 point the parse happens would give the decision the old side for free — the
 parse is already running, the data is already there, and nothing in the current
 design depends on the old shape not existing.
+## Both shapes exist, and the baseline is frozen
+
+Following the previous commit's "the remaining work is the new side" turned up
+something better and something worse, both measured.
+
+### The good: the old shape is genuinely there
+
+`WorkerMain.fs:1669-1671`
+
+    match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText source) with
+    | Ok decls -> reloadBaselines.TryAdd(IO.Path.GetFullPath source, decls) |> ignore
+
+`TryAdd`, not `AddOrUpdate` — the baseline is written ONCE, at build time, from
+the source the assembly was BUILT FROM. So `KnownUnit.DeclaresFields`, derived
+from those baselines, is the OLD shape. Correct, and the previous commit's
+capture is capturing the right thing.
+
+### The worse: `baselineIsTrustworthy` says every save after the first is unpatchable
+
+    SageFs.Tests/HttpApiIntegrationTests.fs:1104  (and the code it tests)
+    match baselineIsTrustworthy assemblyWriteTimeUtc sourceWriteTimeUtc with
+    | false -> Log.warn "was modified after the build — it will be fully re-evaluated
+                        (not diff-patched) on its next save. → Rebuild the project"
+
+Saving a watched file makes it NEWER than the assembly, so
+`baselineIsTrustworthy` is false, so the baseline is never (re)written, so it
+keeps describing the pre-save source forever. That is self-consistent for
+patching — a file newer than its build genuinely cannot be diff-patched — but
+it means `reloadBaselines` is a snapshot of the BUILD, not a running record, and
+the comment at `WorkerMain.fs:758` ("every save advances") is wrong about what
+the code does.
+
+It is not a correctness bug for the decision, because the whole thing fails
+safe: an untrustworthy baseline means the change is re-evaluated rather than
+patched, and a type no watched file declares yields `Everything`. But it IS why
+the NEW shape is unreachable, and it is a comment that will mislead the next
+reader exactly as it briefly misled me.
+
+### So what a migration has, and what it still lacks
+
+| side | available? | from |
+|---|---|---|
+| OLD shape | **yes** | `KnownUnit.DeclaresFields`, from the build-time baseline |
+| NEW shape | **no** | would need a parse of the edited source at decision time |
+| field KINDS | partly | compiled type for a live value; not from source |
+
+The new side is obtainable without a build: `extractDecls` runs on any file in
+under a millisecond, and the restart site already has the file path. So the
+missing producer is a `declaredRecordFields` over the EDITED text — which is the
+same function that just proved it can read a record's fields, pointed at the
+new file rather than the baseline.
+
+That is the whole remaining seam, and it is narrow: both shapes, both parsers,
+and one missing call. What it will NOT give is a field KIND for a genuinely new
+field, because the AST binding cannot reach one (measured). So a new field is
+either defaulted-and-added or refused, decided by the caller — which is the
+honest, safe answer and is already what `decideRecord` expects.
