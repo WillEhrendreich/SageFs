@@ -1315,8 +1315,69 @@ specifically BECAUSE the trigger was widened.
 
 ## What a user actually gets
 
-- a type change scoped to its declaring boundary, no build saved (a build is
-  unavoidable — the new type must exist);
+- a type change whose live value carries across, with **no build** — the
+  measured limit is whether a field the edit ADDED has an honest default, and
+  when it does not the answer is a rebuild that says so;
+- a type change scoped to its declaring boundary, whether or not it carries;
 - an implementation change that skips the build and keeps the value.
 
-The second is new and real. The first was already working.
+The second is new and real. The third was already working.
+
+## Gate result on 67af6421, and the one red in it
+
+The full 11-tier gate is **RED**, on exactly one assertion out of 10,466:
+
+    Tier:      --integration-browser  (ran=36 passed=35 failed=1 verdict=TestsFailed)
+    Test:      Dashboard browser: output panel scrolls like a chat: ... counts unseen evals
+    Assert:    "scrolling back to the bottom yourself hides the pill.
+                Actual value was true but had expected it to be false."
+    Site:      SageFs.Tests/DashboardBrowserTests.fs:963
+
+Every other tier was `Trusted` with `ran == registered`.
+
+**This is a pre-existing flake, measured rather than assumed.** The change in
+`67af6421` touches no dashboard file at all (0 of 7 files), so the first
+question is whether the test fails without it. It does. Interleaved A/B, both
+trees on the same machine, same `--filter "Dashboard browser"`, run back to
+back so both see the same load:
+
+| run | baseline `2a92a6d0` (pre-change) | HEAD `67af6421` |
+|---|---|---|
+| 1 | 36 passed, 0 failed | 36 passed, 0 failed |
+| 2 | 36 passed, 0 failed | 36 passed, **1 failed** |
+| 3 | 36 passed, 0 failed | 36 passed, 0 failed |
+| earlier | 36 passed, **1 failed** | (11-tier gate) **1 failed** |
+
+BASELINE **4 pass / 1 fail**. HEAD **2 pass / 2 fail**. Neither side is
+deterministic, and the side WITHOUT the change fails it too — so the honest
+verdict is *flaky, pre-existing, not caused by 67af6421*. Reporting 2/4 as a
+regression, or 4/5 as a flake, would both be rounding a 1-in-5 event into a
+story.
+
+The mechanism is in the product, not the assertion. `DashboardTypes.scrollExpr`
+pins on a `scroll` EVENT firing:
+
+    el.scrollHeight - t - el.clientHeight <= <tol> ? (_outputPinned = true)
+                                                     : (t < _outputScrollTop - 1
+                                                        && (_outputPinned = false));
+
+The test drives the scroll from the page with `el.scrollTop = el.scrollHeight`
+and then waits a fixed 400 ms. Whether the browser has dispatched and the
+Datastar effect has re-evaluated by then is a scheduling race — and a slow
+machine makes the pill still visible, which is exactly the observed failure. The
+fix is to wait for the pill to hide rather than for a wall-clock duration, but
+that is dashboard work, unrelated to this series, and it is not being changed
+here.
+
+### A filter note, because it cost a run
+
+`--filter-test-case "scrolling back to the bottom"` and `--filter-test-case
+"hides the pill"` both returned
+
+    TRUST ... ran=0 passed=0 failed=0 verdict=NothingRan (zero tests executed)
+
+three times over, while exiting 0. This is the documented filter trap: the leaf
+case name does not contain those substrings, and a filter matching nothing still
+reports zero failures. `--filter "Dashboard browser"` (list level) is what
+actually selects it, and the `ran=36` in its TRUST line is the evidence that
+something executed at all.
