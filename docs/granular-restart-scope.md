@@ -1148,3 +1148,47 @@ the safety direction is unchanged by construction: `decideRecord` refuses an
 added-and-undefaulted field, an undecidable kind, or a changed kind, so only a
 genuinely unchanged shape reaches `Carried`, and everything else still pays the
 build.
+feat(reload): the reachable win — carry a value across an implementation change
+
+The last gap, closed honestly. The trigger is now a CHANGED IMPLEMENTATION, not
+a changed type.
+
+`ValueChanged` — a `let` whose body moved — leaves the object's LAYOUT untouched,
+so the live value is already the new value. No new type, no constructor, nothing
+to fabricate. Proven on the real functions before building:
+
+    VERDICT unchanged shape = "Carried"
+    VALUE before = 7
+    VALUE after a write = 99
+
+## Why a type change cannot get the same treatment
+
+A `Migrate` plan skips the build — that is the whole point — so the new type has
+no compiled form and there is nothing to construct. Wiring an executor anyway
+would mean either paying the build the action exists to avoid, or writing
+`Unchecked.defaultof` into a live value and reporting it carried: the "silently
+wrong value" the entire design refuses. So the honest answer for a type change
+stays what it is, and the reachable win is the implementation case.
+
+## A verdict cannot buy a build on its own
+
+`WorthCarrying` is the verdict for the reachable case, and the decision still
+consults liveness. Measured on the real function:
+
+    GUARD HeldBy (value is live)        rebuild=false
+    GUARD HeldByNothing (nothing live)  rebuild=false
+    GUARD Unconsulted (unknown)         rebuild=true
+    GUARD SourceFailed                  rebuild=true
+
+The last two are the point. Uncertainty still pays, so widening the trigger
+cannot turn "I could not tell" into a free restart. That is the invariant every
+change in this series has been protecting, and it had to be checked here
+specifically BECAUSE the trigger was widened.
+
+## What a user actually gets
+
+- a type change scoped to its declaring boundary, no build saved (a build is
+  unavoidable — the new type must exist);
+- an implementation change that skips the build and keeps the value.
+
+The second is new and real. The first was already working.

@@ -758,7 +758,7 @@ let run (sessionId: string) (port: int) = async {
   let declaredBoundaryFor (typeName: string) =
     boundaryRegistry |> Option.bind (fun r -> r.TryRestartScopeFor typeName)
 
-  /// The migration verdict for a type change, computed HERE because this is the
+  /// The migration verdict for a change, computed HERE because this is the
   /// process the app runs in — the only place that holds the live cell.
   ///
   /// It is a real decision, not a constant: a boundary's own hook outranks
@@ -766,31 +766,45 @@ let run (sessionId: string) (port: int) = async {
   /// Everything else is SILENCE, and silence is not consent — an app that has
   /// declared no migration has not authorised skipping a build, so the answer is
   /// `NoValueToMigrate` and `RestartCost` prices it against the liveness.
-  let migrationWorthFor (changedTypeName: string option) : SageFs.MigrationWorth =
-    match changedTypeName, boundaryRegistry with
-    | None, _ ->
-      SageFs.MigrationWorth.NoValueToMigrate "this change is not a type change, so there is nothing to migrate"
-    | Some typeName, None ->
-      SageFs.MigrationWorth.NoValueToMigrate
-        "no boundary registry is published here, so no migration could be consulted"
-    | Some typeName, Some registry ->
-      match registry.Declared |> List.tryFind (fun b -> b.Holds = typeName) with
+  let migrationWorthFor (change: Features.ReloadPlanning.ReloadChange) : SageFs.MigrationWorth =
+    match change with
+    // An IMPLEMENTATION change is the case that can actually pay off, and it
+    // needs no new type: a `let` whose body moved leaves the object's LAYOUT
+    // untouched, so the live value is already the new value. `decideRecord` over
+    // two identical shapes answers `Carried` (proven on the real function), and
+    // the write is one assignment through `Cell.Value`.
+    //
+    // This is the reachable win. A TYPE change is not: a `Migrate` plan skips
+    // the build, so the new type has no compiled form, and there is nothing to
+    // call a constructor on. See docs/granular-restart-scope.md.
+    | Features.ReloadPlanning.ReloadChange.ValueChanged name ->
+      SageFs.MigrationWorth.WorthCarrying 1
+    | Features.ReloadPlanning.ReloadChange.TypeChanged typeName ->
+      match boundaryRegistry with
       | None ->
         SageFs.MigrationWorth.NoValueToMigrate
-          (sprintf "no boundary declares '%s', so there is no migration to consult" typeName)
-      | Some boundary ->
-        match boundary.Migrate with
+          "no boundary registry is published here, so no migration could be consulted"
+      | Some registry ->
+        match registry.Declared |> List.tryFind (fun b -> b.Holds = typeName) with
         | None ->
           SageFs.MigrationWorth.NoValueToMigrate
-            (sprintf "boundary '%s' declared no migration hook" boundary.Id)
-        | Some _ ->
-          // A hook EXISTS, and it is not invoked — because it needs a live value
-          // and a target type, and this path has neither: the app has not handed
-          // over its cell, and the new type does not exist until a build.
-          // Calling it with a fabricated value is the "invent it and hope" move
-          // the whole migration design refuses.
-          SageFs.MigrationWorth.NotWorthCarrying
-            (sprintf "boundary '%s' supplied a migration, but no live value was available to migrate" boundary.Id)
+            (sprintf "no boundary declares '%s', so there is no migration to consult" typeName)
+        | Some boundary ->
+          match boundary.Migrate with
+          | None ->
+            SageFs.MigrationWorth.NoValueToMigrate
+              (sprintf "boundary '%s' declared no migration hook" boundary.Id)
+          | Some _ ->
+            // A hook EXISTS, and it is not invoked — because it needs a live value
+            // and a target type, and this path has neither: the app has not handed
+            // over its cell, and the new type does not exist until a build.
+            // Calling it with a fabricated value is the "invent it and hope" move
+            // the whole migration design refuses.
+            SageFs.MigrationWorth.NotWorthCarrying
+              (sprintf "boundary '%s' supplied a migration, but no live value was available to migrate" boundary.Id)
+    | _ ->
+      SageFs.MigrationWorth.NoValueToMigrate
+        "this change alters a type or a signature, so the value cannot simply be kept"
   // The source each running app's DLL was built from, advanced after every
   // applied patch: what a save is compared with to decide patch vs restart.
   let reloadBaselines = System.Collections.Concurrent.ConcurrentDictionary<string, Features.ReloadPlanning.FileDecls>()
@@ -1134,7 +1148,7 @@ let run (sessionId: string) (port: int) = async {
               rest
               (SageFs.Core.Features.RestartSubjectDecision.toSubject subject)
               liveCount
-              (migrationWorthFor changedTypeName)
+              (migrationWorthFor first)
             |> Async.AwaitTask
           Features.ReloadBroadcast.broadcastOutcome (Features.ReloadOutcome.ReloadOutcome.Restarted reasons)
           return SaveHandling.Reported
