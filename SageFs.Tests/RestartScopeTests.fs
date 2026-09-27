@@ -22,8 +22,8 @@ open SageFs.GranularRestart
 /// A unit that is known to hold values of a given type. The pair is the whole
 /// attribution input: we never guess beyond what is declared here.
 let private units =
-  [ { Name = "order-store"; DeclaresType = "UserRecord" }
-    { Name = "session-cache"; DeclaresType = "Session" } ]
+  [ { Name = "order-store"; DeclaresType = "UserRecord"; DeclaresFields = None }
+    { Name = "session-cache"; DeclaresType = "Session"; DeclaresFields = None } ]
 
 [<Tests>]
 let restartScopeTests = testList "restart scope" [

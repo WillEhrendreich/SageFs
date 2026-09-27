@@ -74,10 +74,37 @@ let restartAttributionRegistryTests =
       let good = knownUnitsOf [ parsed shopOrders ]
       let withBad = knownUnitsOfSources [ shopOrders; "this is not F# at all {{{" ]
       good
-      |> Expect.equal "the good file still attributes" [ { Name = "Shop.Orders"; DeclaresType = "Order" } ]
+      |> Expect.equal
+           "the good file still attributes, with the shape it declared"
+           [ { Name = "Shop.Orders"
+               DeclaresType = "Order"
+               DeclaresFields = Some [ "Id" ] } ]
       withBad
       |> List.exists (fun u -> u.DeclaresType = "Order")
       |> Expect.isTrue "a bad file must not erase the good attribution"
+
+    testCase "WHY — the OLD shape is captured at parse time, because afterwards there is none to migrate" <| fun _ ->
+      // A build replaces the assembly, and a type's NAME carries no field list,
+      // so a value migration has nothing to compare against unless the parse
+      // kept the field NAMES while they were still visible. This is that
+      // capture, asserted on real parsed source rather than a literal — the
+      // fixture is `type Order = { Id: int }`, so `Some ["Id"]` is the whole
+      // claim and a two-field expectation here would have been a guess.
+      match knownUnitsOf [ parsed shopOrders ] with
+      | [ u ] ->
+        u.DeclaresFields
+        |> Expect.equal "the record's fields, in source order" (Some [ "Id" ])
+      | many -> failtestf "expected exactly one unit, got %d" many.Length
+
+    testCase "WHY — a type that is NOT a record carries no shape, which is a different claim from 'no fields'" <| fun _ ->
+      // A union has fields in the everyday sense but no record shape, and a
+      // caller that conflated the two would "migrate" it into an empty record.
+      let unionSource = parsed "namespace Shop\n\nmodule Shapes =\n  type Shape = Circle of float | Square of float\n"
+      match knownUnitsOf [ unionSource ] with
+      | [ u ] ->
+        u.DeclaresFields
+        |> Expect.equal "not a record, so there is no shape" None
+      | many -> failtestf "expected exactly one unit, got %d" many.Length
 
     testCase "WHY — the same type declared in two files yields BOTH units, never a silent pick" <| fun _ ->
       let dup = "namespace Shop\n\nmodule Orders2 =\n  type Order = { Id: int }\n"

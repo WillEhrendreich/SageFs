@@ -45,7 +45,12 @@ module RestartAttribution =
       |> List.filter (fun d -> d.Kind = ReloadPlanning.DeclKind.TypeDecl)
       |> List.map (fun d ->
         { Name = unitNameOf decls d
-          DeclaresType = d.Name }))
+          DeclaresType = d.Name
+          // Captured HERE, at the one moment the old shape is still visible.
+          // A build overwrites the assembly, and the type's name carries no
+          // field list, so a value migration has nothing to compare against
+          // unless the parse kept this.
+          DeclaresFields = ReloadPlanning.declaredRecordFields d }))
     |> List.distinct
 
   /// Parse sources into a registry. Kept as a function of TEXT so a caller can

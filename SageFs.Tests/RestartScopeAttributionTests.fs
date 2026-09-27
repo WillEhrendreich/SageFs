@@ -27,8 +27,8 @@ open SageFs.Features.ReloadOutcome
 open SageFs.Features.ReloadPlanning
 
 let private orderUnits =
-  [ { Name = "order-store"; DeclaresType = "Order" }
-    { Name = "cart"; DeclaresType = "Cart" } ]
+  [ { Name = "order-store"; DeclaresType = "Order"; DeclaresFields = None }
+    { Name = "cart"; DeclaresType = "Cart"; DeclaresFields = None } ]
 
 [<Tests>]
 let restartScopeAttributionTests =

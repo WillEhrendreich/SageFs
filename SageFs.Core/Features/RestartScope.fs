@@ -29,7 +29,19 @@ type RestartScope =
 /// input: nothing beyond what is declared here can narrow a restart.
 type KnownUnit =
   { Name: string
-    DeclaresType: string }
+    DeclaresType: string
+    /// The record fields this type DECLARED AT PARSE TIME, in source order.
+    ///
+    /// This is the OLD shape, captured when the file was parsed, and it exists
+    /// because a type change cannot be migrated without it: the new shape has no
+    /// compiled type until a build produces one, and a name like "Order" carries
+    /// no field list. So the old side has to be RETAINED, and the parse that
+    /// sees it is already running.
+    ///
+    /// `None` means the declaration is not a record, or has no fields — which
+    /// is a different claim from "we did not look", and a type carrying a
+    /// migration is refused rather than assumed empty.
+    DeclaresFields: string list option }
 
 module RestartScope =
 

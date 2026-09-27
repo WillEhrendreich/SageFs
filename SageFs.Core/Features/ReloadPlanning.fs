@@ -685,6 +685,43 @@ let private innerNamesOf (typeDecl: SourceDecl) : string list =
     | _ -> []
   with _ -> []
 
+/// The record fields a type declaration has, in SOURCE ORDER.
+///
+/// This is the OLD shape of a type, captured while the file is parsed, and it
+/// has to be captured here because afterwards it is gone: the new definition
+/// has no compiled type until a build produces one, and the type's NAME carries
+/// no field list. A type change therefore cannot be migrated without the parse
+/// having kept this.
+///
+/// `None` means the declaration is NOT a record — a different claim from "no
+/// fields", and a caller that conflated them would treat a union as an empty
+/// record and "migrate" it into nothing.
+///
+/// Field NAMES only, deliberately. A field's KIND is not recoverable from this
+/// binding (measured: `SynField` exposes `fieldType` but has no nameable case
+/// field), and a name is still worth keeping — a carried field is recognised by
+/// name, and anything the names cannot settle is refused.
+let declaredRecordFields (typeDecl: SourceDecl) : string list option =
+  try
+    let wrapped = "module __Hidden__\ntype " + typeDecl.Text
+    match Fantomas.FCS.Parse.parseFile false (SourceText.ofString wrapped) [] with
+    | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = decls) ])), diagnostics
+        when not (diagnostics |> List.exists (fun d -> d.Severity.IsError)) ->
+      let recordFields repr =
+        match repr with
+        | SynTypeDefnRepr.Simple(simpleRepr = SynTypeDefnSimpleRepr.Record(recordFields = rs)) ->
+          Some(rs |> List.choose (fun (SynField(idOpt = idOpt)) -> idOpt |> Option.map _.idText))
+        | _ -> None
+      decls
+      |> List.collect (function
+        | SynModuleDecl.Types(typeDefns = defns) ->
+          defns
+          |> List.choose (fun (SynTypeDefn(typeRepr = repr)) -> recordFields repr)
+        | _ -> [])
+      |> List.tryLast
+    | _ -> None
+  with _ -> None
+
 /// The field shape of a record or struct type, as the MIGRATION vocabulary
 /// rather than as text.
 ///
