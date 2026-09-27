@@ -1016,12 +1016,14 @@ module SessionManager =
             Instrumentation.failSpan span "Hard reset already in progress for this session"
             return state
           | Some session ->
-            // A unit scope still rebuilds: SageFs rebuilds a PROJECT, so
-            // there is no narrower build to ask for today.
+            // A unit scope still rebuilds — SageFs rebuilds a PROJECT, so there
+            // is no narrower build today. `Migrate` respawns too, and stays
+            // distinct because it keeps live state. See `RestartPlan.Migrate`.
             let rebuild =
               match plan with
               | SageFs.RestartPlan.Rebuild _ -> true
-              | SageFs.RestartPlan.RespawnOnly -> false
+              | SageFs.RestartPlan.RespawnOnly
+              | SageFs.RestartPlan.Migrate _ -> false
 
             match rebuild with
             | false ->

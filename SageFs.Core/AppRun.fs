@@ -267,6 +267,12 @@ type AppRunState =
     // CALLER is the only place that can know, and a respawn that skips the
     // build must be justified by evidence rather than assumed.
     * liveness: SageFs.LiveCount
+    // Whether a live value can CROSS into the new shape. A SEPARATE field from
+    // liveness because they answer different questions: liveness says whether a
+    // value EXISTS, this says whether it can be carried. Merged, one would
+    // stand in for the other — and a silent boundary would read as a skipped
+    // build.
+    * migrationWorth: SageFs.MigrationWorth
     * at: DateTime
   /// A rebuild of the app failed: the code did not compile, the app did not crash.
   | BuildFailed of project: string * reason: string * at: DateTime * lastAddress: PreviousAddress
@@ -360,6 +366,7 @@ type RunEnd =
     * previous: PreviousAddress
     * subject: SageFs.GranularRestart.RestartSubject
     * liveness: SageFs.LiveCount
+    * migrationWorth: SageFs.MigrationWorth
   /// Not the current run (stopped, replaced, or its worker is gone): nothing changed.
   | NotCurrent
 
@@ -424,8 +431,8 @@ module AppSlot =
     match slot.State with
     | AppRunState.Running app when app.RunId = runId ->
       match final with
-      | AppRunState.RestartRequired (project, first, rest, subject, liveness, at) when generation = slot.Generation ->
-        RunEnd.RebuildForChanges (project, addressOf app, subject, liveness),
+      | AppRunState.RestartRequired (project, first, rest, subject, liveness, migrationWorth, at) when generation = slot.Generation ->
+        RunEnd.RebuildForChanges (project, addressOf app, subject, liveness, migrationWorth),
         { slot with State = AppRunState.Starting (project, StartPhase.RebuildingForChanges (first, rest), at) }
       | _ -> RunEnd.Recorded, { slot with State = final }
     | _ -> RunEnd.NotCurrent, slot
@@ -460,7 +467,7 @@ let describeState (state: AppRunState) : string =
   | AppRunState.LostTrack (project, reason, _) ->
     sprintf "Lost track of %s: %s. → It may still be serving: press Run to take it over again, or Stop to end it."
       (projectName project) (SageFsError.describe reason)
-  | AppRunState.RestartRequired (project, first, rest, subject, _, _) ->
+  | AppRunState.RestartRequired (project, first, rest, subject, _, _, _) ->
     // Say WHICH subject, so a scoped restart is visibly different from a whole
     // app restart rather than two identical messages.
     let what =

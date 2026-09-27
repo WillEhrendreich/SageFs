@@ -490,7 +490,21 @@ type Runner(timeouts: StartTimeouts, setEnv: SetEnv) =
             return! loop owned waiters
           | Live (app, handle, restoreEnv) ->
             // A console app has no host to stop; the rebuild's worker restart ends it.
-            let final = AppRunState.RestartRequired (app.Project, first, rest, subject, liveness, DateTime.UtcNow)
+            //
+            // The migration verdict is produced HERE, in the worker, and that is
+            // forced rather than chosen: the app's live cell and the `ref` a
+            // migration must write are in THIS process, so the only place that
+            // can answer "can this value cross?" is here. The daemon receives the
+            // boundary id, not a value.
+            //
+            // With no boundary declared and no shapes captured, this is
+            // `NoValueToMigrate` — which is the HONEST answer, not a stub: a
+            // boundary's silence is not permission to skip a build, and what
+            // silence costs is decided downstream in `RestartCost` from the
+            // liveness, which is the only thing that can say whether a value
+            // exists at all.
+            let migrationWorth = SageFs.MigrationWorth.NoValueToMigrate "no boundary declared a migration for this type"
+            let final = AppRunState.RestartRequired (app.Project, first, rest, subject, liveness, migrationWorth, DateTime.UtcNow)
             let next = Idle final
             publish next
             match handle with

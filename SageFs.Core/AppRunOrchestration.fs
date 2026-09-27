@@ -113,10 +113,16 @@ and private watchRun
       | Ok (AppRunState.Running current) when current.RunId = app.RunId -> return! poll ()
       | Ok final ->
         match! ops.EndAppRun sessionId generation app.RunId final with
-        | RunEnd.RebuildForChanges (project, previous, subject, liveness) ->
+        | RunEnd.RebuildForChanges (project, previous, subject, liveness, migrationWorth) ->
           // The subject is threaded through rather than assumed: this is where
           // "how much to restart" finally reaches the action, instead of being
           // computed, logged, and then discarded one layer up.
+          //
+          // The migration verdict rides alongside the liveness rather than
+          // inside it, because they answer different questions: liveness says
+          // whether a value EXISTS, the migration says whether it can CROSS.
+          // Merging them would make one answer stand in for the other, which is
+          // how a silent boundary becomes a skipped build.
           do!
             restartForChanges
               ops
@@ -128,6 +134,7 @@ and private watchRun
               previous
               subject
               liveness
+              migrationWorth
         | RunEnd.Recorded
         | RunEnd.NotCurrent -> ()
       | Error reason -> do! lostTrack reason
@@ -163,6 +170,7 @@ and private restartForChanges
   (previous: PreviousAddress)
   (subject: GranularRestart.RestartSubject)
   (liveness: SageFs.LiveCount)
+  (migrationWorth: MigrationWorth)
   : Task<unit> =
   task {
     // Whether a BUILD is needed is a different question from how WIDE the
@@ -171,7 +179,7 @@ and private restartForChanges
     // that was asked and found nothing is EVIDENCE, and one that was never
     // consulted is not — which is the whole difference between skipping the
     // `dotnet build` and paying it.
-    let action = SageFs.RestartCost.decideFromLiveCount liveness
+    let action = SageFs.RestartCost.decideFromLivenessAndMigration liveness migrationWorth
 
     let! restarted =
       match action with
@@ -180,19 +188,22 @@ and private restartForChanges
       | SageFs.RestartAction.RebuildProject _ ->
         ops.RestartSession sessionId (RestartPlan.Rebuild subject)
       | SageFs.RestartAction.MigrateAndRespawn _ ->
-        // The decision says a live value CAN be carried, and this path cannot yet
-        // carry it — no caller supplies a `MigrationWorth`, so the action is never
-        // produced here today. The branch exists rather than being left implicit
-        // so that when a caller DOES produce it, the compiler points at this line
-        // instead of the failure surfacing as discarded live state.
+        // The third action, and the one this series existed to make reachable.
+        // It carries a BOUNDARY ID and not a value: the app's live cell is in
+        // the WORKER's process, this code is in the DAEMON's, and the value
+        // cannot cross between them. The worker receives the id and does the
+        // write-back it is the only process that can.
         //
-        // Falling back to the REBUILD is the safe direction: a build loses the
-        // value but does so correctly, whereas treating this as a respawn would
-        // drop it silently. The reason the action carried is DISCARDED here
-        // rather than logged, because this module has no logger and adding one
-        // for a branch that cannot execute yet would be instrumentation for a
-        // path that does not exist.
-        ops.RestartSession sessionId (RestartPlan.Rebuild subject)
+        // The boundary is named by the SUBJECT, which is the unit the restart is
+        // scoped to. A migration with no scope names nothing the worker could
+        // write back to, so it falls back to a REBUILD rather than claiming a
+        // carry it cannot perform — and it says so, because "silently not
+        // migrated" is the failure this whole path exists to prevent.
+        match subject with
+        | GranularRestart.RestartSubject.UnitScope boundaryId ->
+          ops.RestartSession sessionId (RestartPlan.Migrate boundaryId)
+        | GranularRestart.RestartSubject.Worker ->
+          ops.RestartSession sessionId (RestartPlan.Rebuild subject)
 
     let! ready =
       match restarted with

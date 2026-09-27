@@ -1190,7 +1190,13 @@ let fileSizeBudgets =
       // silently held both decisions. Net +4 after trimming the surrounding
       // comments. Ratchet back DOWN when the file is split; never bump to paper
       // over drift.
-      "SageFs.Core/SessionManager.fs", 1913 ]
+      // 1913 -> 1915: RestartPlan gained a THIRD case, `Migrate` — a respawn
+      // that keeps a live value instead of rebuilding. The dispatch here is net
+      // +1 (`Migrate` shares the no-build arm with `RespawnOnly`, because a
+      // rebuild is still what an unscoped migration falls back to) and the rest
+      // is the comment naming the distinction. Ratchet back DOWN when the file
+      // is split; never bump to paper over drift.
+      "SageFs.Core/SessionManager.fs", 1915 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->

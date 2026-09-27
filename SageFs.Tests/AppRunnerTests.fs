@@ -242,7 +242,7 @@ let requireRestartTests =
       let url = primaryUrl state
       let! ended = AppRunner.requireRestart runner typeChange [] SageFs.GranularRestart.RestartSubject.Worker (SageFs.LiveCount.Unconsulted "no liveness source in this test")
       match ended with
-      | AppRunState.RestartRequired (p, first, rest, subject, _, _) ->
+      | AppRunState.RestartRequired (p, first, rest, subject, _, _, _) ->
         subject
         |> Expect.equal "the subject the caller decided" SageFs.GranularRestart.RestartSubject.Worker
         p |> Expect.equal "the project" project
