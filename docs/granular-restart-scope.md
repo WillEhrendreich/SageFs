@@ -961,3 +961,39 @@ exactly that and is still unwired. So the migration is a decision and a plan
 today, and the execution is the next seam — and it must not be wired before the
 decision is, because a decision with no executor is what the last three commits
 have been removing.
+## HolderRewrite is NOT the migration executor, and wiring it would be wrong
+
+Chased this because `HolderRewrite` is the last module with zero production
+callers, and its name reads like the thing a migration needs. It is not.
+
+`HolderRewrite.classify` takes `BindingFacts` — `IsModuleLevel`, `Inline`,
+`LiteralAttr`, `AddressTaken`, `ByRefUsage`, `InQuotation`, `PinnedStorage`,
+`Visibility`, `CopySemantics` — and answers whether a BINDING can be rewritten
+in place. That is the question "may SageFs redefine this `let` in the running
+process at all?", and the refusals are about that: a public field, an address
+taken, copy semantics unverified.
+
+A value migration is a different question: "given a live value laid out by the
+old shape, can I produce one of the new shape?" Its inputs are two SHAPES and
+the value — which is `TypeShapeMigration` plus `Holder.Cell`, both of which are
+wired. None of `BindingFacts` is needed for it, and asking whether a field is
+`PublicAcrossAssembly` before copying its value would refuse cases that are
+perfectly safe, and permit nothing that `decideRecord` had not already decided.
+
+So the three unwired modules are unwired for three DIFFERENT and individually
+correct reasons, and it is worth writing that down rather than leaving a
+tempting name to invite the next reader into the same wrong wiring:
+
+| module | its question | status |
+|---|---|---|
+| `TranslationValidation` | "is every USE SITE of a rewritten binding safe?" | needs the rewrite it validates; wired after a rewrite exists |
+| `HolderRewrite` | "may this binding be rewritten in place at all?" | a gate for a REWRITE, not a migration; nothing rewrites yet |
+| `TypeShapeMigration` | "can this value cross into the new shape?" | **wired** — the name tier answers it |
+
+The one that is genuinely still missing is the executor for a migration: given
+`MigrateAndRespawn`, write the carried value back into the holder's `ref`. That
+is a small, honest piece — `Holder.Cell` already exposes `Value: 'a ref`, and a
+migration produces the new value — and it belongs at the point where the
+restart actually acts, which is `SessionManager.RestartSession`. Doing it before
+a decision reaches it would be a decision with an executor and no producer, which
+is the shape this series has been removing in the other direction.
