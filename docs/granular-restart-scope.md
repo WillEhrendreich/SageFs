@@ -1109,3 +1109,42 @@ migration decision to a changed IMPLEMENTATION of an unchanged shape, where
 `decideRecord` over two identical shapes says `Carried` and there is nothing to
 fabricate. That is a smaller, honest, and genuinely useful win — and it is
 reachable with what is already built and tested.
+feat(reload): carry a value across a changed IMPLEMENTATION of an unchanged shape
+
+Proven before building, on the real product functions:
+
+    VERDICT unchanged shape = "Carried"
+    VALUE before = 7
+    VALUE after a write = 99
+
+So the case that can actually pay off needs NO new type construction: when a
+record's SHAPE is unchanged and only its implementation changed, the old object
+IS the new type, the value carries trivially, and there is nothing to fabricate.
+
+## Why this is the reachable win, not a retreat
+
+The previous commit established that a TYPE change cannot migrate cheaply: a
+`Migrate` plan skips the build, so the new type has no compiled form, so there
+is nothing to call a constructor on. Building an executor for that would mean
+either paying the build the action exists to avoid, or passing
+`Unchecked.defaultof` into a live value and calling it carried — the "silently
+wrong value" this whole design refuses.
+
+An implementation change is different in exactly the way that matters. The
+object's layout did not change, so the value is already correct, and the win is
+real: a save that used to restart the worker can now respawn without paying a
+build. Nothing about it is a compromise.
+
+## What makes it reachable
+
+The decision machinery was already correct for it — `decideRecord` over two
+identical shapes answers `Carried` — and `Holder.Cell` already exposes
+`Value: 'a ref`, so the write is a single assignment. The only thing missing was
+a TRIGGER: today the wired trigger is `TypeChanged`, and an implementation-only
+change is not a type change.
+
+So the next piece is widening WHEN the decision runs, not adding machinery. And
+the safety direction is unchanged by construction: `decideRecord` refuses an
+added-and-undefaulted field, an undecidable kind, or a changed kind, so only a
+genuinely unchanged shape reaches `Carried`, and everything else still pays the
+build.
