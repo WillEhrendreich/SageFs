@@ -6,6 +6,10 @@ open VerifyTests
 
 [<EntryPoint>]
 let main argv =
+  // Before any tier starts Expecto: its default logger swaps the console writers for an
+  // ANSI writer whose two paths lock in opposite orders, which hung gate runs (see
+  // RunnerLogging). One plain logger for every entry point below.
+  SageFs.Tests.RunnerLogging.install argv (new SageFs.Tests.RunnerLogging.ConsoleOutWriter())
   // Restamp the README test-count badge + property count from the live source.
   let isUpdateBadge = argv |> Array.exists (fun a -> a = "--update-badge")
   match isUpdateBadge with
