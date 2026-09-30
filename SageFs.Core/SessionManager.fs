@@ -224,6 +224,9 @@ module SessionManager =
     /// for sessions that self-host SageFs.Core. Compared against the newest
     /// build on disk to surface the self-host staleness affordance.
     AdoptedCore: Map<SessionId, string * DateTime>
+    /// The manager's own health (a wedged or restarting loop), for the
+    /// daemon-level health surface. Healthy unless the supervisor said otherwise.
+    SupervisorHealth: SupervisorWatchdog.SupervisorHealth
   }
 
   module QuerySnapshot =
@@ -243,7 +246,8 @@ module SessionManager =
           match ms.AdoptedCore with
           | Some identity -> Map.add id identity acc
           | None -> acc) Map.empty
-      { Sessions = sessions; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls; AdoptedCore = adoptedCore }
+      { Sessions = sessions; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls; AdoptedCore = adoptedCore
+        SupervisorHealth = SupervisorWatchdog.SupervisorHealth.Healthy }
 
     let fromManagerState (state: ManagerState) : QuerySnapshot =
       fromState state
@@ -254,7 +258,7 @@ module SessionManager =
     let allSessions (snap: QuerySnapshot) : SessionInfo list =
       snap.Sessions |> Map.toList |> List.map snd
 
-    let empty = { Sessions = Map.empty; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty; AdoptedCore = Map.empty }
+    let empty = { Sessions = Map.empty; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty; AdoptedCore = Map.empty; SupervisorHealth = SupervisorWatchdog.SupervisorHealth.Healthy }
 
   type SessionManagerRuntime = {
     StartWorkerProcess: SessionId -> SessionProjectTarget list -> string -> bool -> WorkflowTypes.SessionWorkflow -> (int -> int -> unit) -> Result<SpawnedWorker, SageFsError>
@@ -269,28 +273,8 @@ module SessionManager =
       return WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed "Session is still starting up")
     }
 
-  /// Real health probe: one `GetStatus` round-trip over the worker's own
-  /// proxy, hard-timed out via `Async.StartChild`'s timeout overload. Any
-  /// answer at all — regardless of the worker's self-reported status — means
-  /// the worker is alive and responsive; only a timeout or a transport
-  /// exception counts as `Missed` (fail-closed, per `WorkerHealthProbe`'s own
-  /// doctrine). Not a `SessionManagerRuntime` field — like
-  /// `OwnerMonitor.getProcessById`, the injection seam tests actually use is
-  /// one level down, in `WorkerHealthProbe.run`'s own `probe` parameter; this
-  /// is production's real implementation of it, called directly where the
-  /// probe loop is started so `SessionManagerRuntime`'s shape (and every
-  /// existing literal construction of it, several outside this file) stays
-  /// unchanged.
-  let probeWorkerHealthOnce (timeoutMs: int) (proxy: SessionProxy) : Async<WorkerHealthProbe.ProbeOutcome> =
-    async {
-      try
-        let rid = Guid.NewGuid().ToString("N")
-        let! child = Async.StartChild(proxy (WorkerMessage.GetStatus rid), timeoutMs)
-        let! _resp = child
-        return WorkerHealthProbe.ProbeOutcome.Healthy
-      with _ ->
-        return WorkerHealthProbe.ProbeOutcome.Missed
-    }
+  /// Production's real `WorkerHealthProbe.run` probe (see WorkerPostReady).
+  let probeWorkerHealthOnce = WorkerPostReady.probeWorkerHealthOnce
 
   let startWorkerProcess = WorkerSpawn.startWorkerProcess
 
@@ -536,19 +520,60 @@ module SessionManager =
     RunBuildAsync = SessionBuild.runBuildAsync
   }
 
-  /// Create the supervisor MailboxProcessor.
+  /// Everything the manager tells the outside world, plus the supervisor's alarm.
+  type SessionManagerCallbacks =
+    { OnSessionProgressChanged: unit -> unit
+      OnTestDiscovery: SessionId -> TestDiscoveryReport -> unit
+      OnInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit
+      OnSessionReady: SessionId -> unit
+      OnWarmupProgress: SessionId -> string -> unit
+      OnSessionFaulted: SessionId -> string -> unit
+      OnAppOutput: SessionId -> string -> unit
+      /// The loop is wedged, restarted, or failed a command (see SupervisorWatchdog).
+      OnSupervisorAlarm: SupervisorWatchdog.SupervisorAlarm -> unit
+      /// Runs on the loop thread as each command starts, outside the per-command
+      /// guard, so a throw here restarts the loop. An observability hook and the
+      /// seam that lets a test drive the loop-restart path.
+      OnCommandStart: string -> unit
+      Watchdog: SupervisorWatchdog.Settings }
+
+  module SessionManagerCallbacks =
+    let silent : SessionManagerCallbacks =
+      { OnSessionProgressChanged = ignore
+        OnTestDiscovery = fun _ _ -> ()
+        OnInstrumentationMaps = fun _ _ -> ()
+        OnSessionReady = ignore
+        OnWarmupProgress = fun _ _ -> ()
+        OnSessionFaulted = fun _ _ -> ()
+        OnAppOutput = fun _ _ -> ()
+        OnSupervisorAlarm = ignore
+        OnCommandStart = ignore
+        Watchdog = SupervisorWatchdog.defaultSettings }
+
+  /// Create the supervisor MailboxProcessor, with an alarm for its own trouble.
   /// Returns (mailbox, readSnapshot) where readSnapshot is a lock-free CQRS query function.
-  let internal createWith
+  let internal createWithAlarm
     (runtime: SessionManagerRuntime)
     (ct: CancellationToken)
-    (onSessionProgressChanged: unit -> unit)
-    (onTestDiscovery: SessionId -> TestDiscoveryReport -> unit)
-    (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit)
-    (onSessionReady: SessionId -> unit)
-    (onWarmupProgress: SessionId -> string -> unit)
-    (onSessionFaulted: SessionId -> string -> unit)
-    (onAppOutput: SessionId -> string -> unit) =
+    (callbacks: SessionManagerCallbacks) =
+    let onSessionProgressChanged = callbacks.OnSessionProgressChanged
+    let onTestDiscovery = callbacks.OnTestDiscovery
+    let onInstrumentationMaps = callbacks.OnInstrumentationMaps
+    let onSessionReady = callbacks.OnSessionReady
+    let onWarmupProgress = callbacks.OnWarmupProgress
+    let onSessionFaulted = callbacks.OnSessionFaulted
+    let onAppOutput = callbacks.OnAppOutput
     let snapshotRef = ref QuerySnapshot.empty
+    // A health change republishes the current snapshot. Compare-and-swap, so a
+    // republish from the watchdog thread never overwrites a newer loop snapshot.
+    let publishHealth (health: SupervisorWatchdog.SupervisorHealth) =
+      let rec swap () =
+        let current = snapshotRef.Value
+        match obj.ReferenceEquals(Interlocked.CompareExchange(snapshotRef, { current with SupervisorHealth = health }, current), current) with
+        | true -> ()
+        | false -> swap ()
+      swap ()
+    let beat = SupervisorWatchdog.Beat((fun () -> DateTime.UtcNow), callbacks.Watchdog, callbacks.OnSupervisorAlarm, publishHealth)
     // default policy: this predicate is defined as "true iff Restarting" — every
     // other SessionLifecycleStatus (present or future) is false by that same
     // definition, so there is nothing here for a new case to silently absorb.
@@ -616,7 +641,7 @@ module SessionManager =
         (newState, Error err)
     let mailbox = MailboxProcessor<SessionCommand>.Start((fun inbox ->
       let publishSnapshot (state: ManagerState) =
-        System.Threading.Interlocked.Exchange(snapshotRef, QuerySnapshot.fromManagerState state) |> ignore
+        System.Threading.Interlocked.Exchange(snapshotRef, { QuerySnapshot.fromManagerState state with SupervisorHealth = beat.Health }) |> ignore
       /// Single dispatch step of the mailbox loop, wrapped in the supervise step.
       /// Keeps the giant existing match; callers must end with `return state` for
       /// the untouched case and `return nextState` after a transition.
@@ -738,6 +763,8 @@ module SessionManager =
         lastGoodState.Value <- state
         publishSnapshotSafe state
         let! cmd = inbox.Receive()
+        beat.BeginCommand (cmd.GetType().Name)
+        callbacks.OnCommandStart (cmd.GetType().Name)
         let! state' = superviseStep state cmd
         return! loop (settleReadyWaitersSafe state')
       }
@@ -1504,7 +1531,9 @@ module SessionManager =
       /// consistent and nothing is silently orphaned.
       and superviseStep (state: ManagerState) (cmd: SessionCommand) : Async<ManagerState> = async {
         try
-          return! step state cmd
+          let! next = step state cmd
+          beat.CommandSucceeded()
+          return next
         with
         | :? OperationCanceledException -> return! raise (OperationCanceledException())
         | ex ->
@@ -1513,6 +1542,7 @@ module SessionManager =
           Instrumentation.actorErrors.Add(
             1L,
             System.Collections.Generic.KeyValuePair("actor.name", "session-manager" :> obj))
+          beat.CommandFailed (cmd.GetType().Name)
           // Fail-closed: if the crashing handler owned a reply channel, answer
           // it with a SageFsError so the caller never hangs forever waiting on
           // a mailbox that has moved on. Each reply is guarded: a handler that
@@ -1589,11 +1619,33 @@ module SessionManager =
         | ex ->
           Log.error "[SessionManager] Mailbox loop threw unexpectedly; restarting from last-good state (sessions preserved): %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
           Instrumentation.actorErrors.Add(1L, System.Collections.Generic.KeyValuePair("actor.name", "session-manager-loop" :> obj))
+          beat.LoopRestarted()
           return! supervise ()
       }
+      beat.Run ct
       supervise ()
     ), cancellationToken = ct)
     (mailbox, fun () -> snapshotRef.Value)
+
+  let internal createWith
+    (runtime: SessionManagerRuntime)
+    (ct: CancellationToken)
+    (onSessionProgressChanged: unit -> unit)
+    (onTestDiscovery: SessionId -> TestDiscoveryReport -> unit)
+    (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit)
+    (onSessionReady: SessionId -> unit)
+    (onWarmupProgress: SessionId -> string -> unit)
+    (onSessionFaulted: SessionId -> string -> unit)
+    (onAppOutput: SessionId -> string -> unit) =
+    createWithAlarm runtime ct
+      { SessionManagerCallbacks.silent with
+          OnSessionProgressChanged = onSessionProgressChanged
+          OnTestDiscovery = onTestDiscovery
+          OnInstrumentationMaps = onInstrumentationMaps
+          OnSessionReady = onSessionReady
+          OnWarmupProgress = onWarmupProgress
+          OnSessionFaulted = onSessionFaulted
+          OnAppOutput = onAppOutput }
 
   let create
     (ct: CancellationToken)
@@ -1614,3 +1666,7 @@ module SessionManager =
       onWarmupProgress
       onSessionFaulted
       onAppOutput
+
+  /// The daemon entry point that also wants the supervisor's alarms.
+  let createMonitored (ct: CancellationToken) (callbacks: SessionManagerCallbacks) =
+    createWithAlarm defaultRuntime ct callbacks

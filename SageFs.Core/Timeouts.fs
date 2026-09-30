@@ -155,6 +155,13 @@ module Timeouts =
   /// completes" is an invariant this bound exists to guarantee even if
   /// everything upstream of it were somehow wrong.
   let stopSessionMailboxTimeout = envOrDefault "SAGEFS_STOP_SESSION_TIMEOUT_SECONDS" 20.0
+  /// How long one command may hold the session manager's loop before the
+  /// supervisor calls it wedged. Above the slowest honest handler (a parallel
+  /// stop of every session waits seconds) and below `stopSessionMailboxTimeout`
+  /// doubled, so a wedge is named before callers give up on it.
+  let supervisorWedgeAfter = envOrDefault "SAGEFS_SUPERVISOR_WEDGE_SECONDS" 30.0
+  /// How often the supervisor's watchdog thread looks at the loop.
+  let supervisorCheckInterval = TimeSpan.FromSeconds(2.0)
 
   // -- Persistence --
   /// Cadence of the daemon's periodic manifest save (`periodicManifestSave`,

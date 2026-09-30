@@ -145,6 +145,24 @@ module WorkerPostReady =
         Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s\n%s" label ex.Message (stackOf ex)
     }
 
+  /// Real health probe: one `GetStatus` round-trip over the worker's own
+  /// proxy, hard-timed out via `Async.StartChild`'s timeout overload. Any
+  /// answer at all, whatever the worker's self-reported status, means it is
+  /// alive and responsive; only a timeout or a transport exception counts as
+  /// `Missed` (fail-closed, per `WorkerHealthProbe`'s doctrine). Production's
+  /// implementation of the `probe` parameter of `WorkerHealthProbe.run`, which
+  /// is the seam tests use, so `SessionManagerRuntime`'s shape is unchanged.
+  let probeWorkerHealthOnce (timeoutMs: int) (proxy: SessionProxy) : Async<WorkerHealthProbe.ProbeOutcome> =
+    async {
+      try
+        let rid = Guid.NewGuid().ToString("N")
+        let! child = Async.StartChild(proxy (WorkerMessage.GetStatus rid), timeoutMs)
+        let! _resp = child
+        return WorkerHealthProbe.ProbeOutcome.Healthy
+      with _ ->
+        return WorkerHealthProbe.ProbeOutcome.Missed
+    }
+
   /// Everything a just-ready worker needs started.
   type Launch =
     { Label: string

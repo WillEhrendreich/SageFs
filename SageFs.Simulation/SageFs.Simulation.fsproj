@@ -163,6 +163,10 @@
         <Compile Include="MemoryShedInvariants.fs" />
         <Compile Include="LeaseSim.fs" />
         <Compile Include="LeaseSimInvariants.fs" />
+        <!-- Wedge watchdog DST: the REAL SupervisorWatchdog.decide folded against
+             a virtual clock; twins that never alarm / alarm on every tick. -->
+        <Compile Include="SupervisorWatchdogSim.fs" />
+        <Compile Include="SupervisorWatchdogInvariants.fs" />
     </ItemGroup>
 
     <ItemGroup>

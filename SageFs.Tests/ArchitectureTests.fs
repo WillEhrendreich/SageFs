@@ -1216,7 +1216,10 @@ let fileSizeBudgets =
       // reload verdict (`ReloadObserved`).
       // 1740 -> 1616: the WorkerReady decision moved to WorkerReadyCommit.fs and
       // the ready-poll watchdog and two post-ready fetches to WorkerPostReady.fs.
-      "SageFs.Core/SessionManager.fs", 1616 ]
+      // 1616 -> 1672: the supervisor alarm (the callbacks record, createWithAlarm
+      // and the loop's beat stamps), net of probeWorkerHealthOnce moving to
+      // WorkerPostReady.fs. Still 68 under where the WorkerReady split started.
+      "SageFs.Core/SessionManager.fs", 1672 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->
