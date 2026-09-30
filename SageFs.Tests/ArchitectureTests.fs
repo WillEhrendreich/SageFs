@@ -1101,7 +1101,9 @@ let fileSizeBudgets =
       // 4365 -> 4298: the cohort error mapping (a pure 76-line function of one
       // DU) moved to CohortErrorMapping.fs, and the two copies of the rebuild
       // block became one helper. Net of the lastRestart lookup and helper.
-      "SageFs/Mcp.fs", 4298
+      // 4298 -> 4280: the eval dedup cache is gone (lookup, record and five
+      // clearSession calls).
+      "SageFs/Mcp.fs", 4280
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

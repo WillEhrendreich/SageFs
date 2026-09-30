@@ -152,4 +152,23 @@ let tests =
       root.TryGetProperty("message") |> fst |> Expect.isTrue "must carry a message"
       root.TryGetProperty("suggestedAction") |> fst |> Expect.isTrue "must carry a suggestedAction"
     }
+
+    testTask "WHY — the same side-effecting code sent twice in a row RUNS twice, because a REPL runs what it is sent and a 2 second dedup window silently returned the first result for the second call" {
+      // ghci, `dotnet fsi` and Jupyter all run every submission. An agent that
+      // double-submits by accident gets the effect twice, visibly, not a cached
+      // answer that says the effect happened once. The tool used to keep the last
+      // result per (session, code) for 2 seconds and return it without running.
+      let ctx = sharedCtx ()
+      let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
+      let bump = "dedupProbeCounter.Value <- dedupProbeCounter.Value + 1; dedupProbeCounter.Value"
+
+      let! (_: ModelContextProtocol.Protocol.CallToolResult) =
+        tools.send_fsharp_code("test", "let dedupProbeCounter = ref 0", "", "", "", 0, "")
+      let! (first: ModelContextProtocol.Protocol.CallToolResult) = tools.send_fsharp_code("test", bump, "", "", "", 0, "")
+      let! (second: ModelContextProtocol.Protocol.CallToolResult) = tools.send_fsharp_code("test", bump, "", "", "", 0, "")
+
+      let resultOf (r: ModelContextProtocol.Protocol.CallToolResult) = r.StructuredContent.Value.GetProperty("result").GetString()
+      resultOf first |> Expect.stringContains "the first submission ran and counted 1" "1"
+      resultOf second |> Expect.stringContains "the second, identical submission ran too and counted 2" "2"
+    }
   ]

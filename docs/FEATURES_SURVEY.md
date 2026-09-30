@@ -92,14 +92,12 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ DomainModelVizTests.fs, DomainModelSseTests.fs
 - **Status**: LIT (MCP tool + SSE emission)
 
-### 10. **EvalDedup** — Hash-based temporal dedup for repeated evals.
-- **Module**: SageFs.Features.EvalDedup
-- **Types**: DedupEntry, DedupCache
-- **Functions**: tryGet, addEntry, isStale
-- **MCP Tool**: ❌ No (internal optimization)
-- **SSE Emission**: ❌ No
-- **Tests**: ✅ EvalDedupTests.fs
-- **Status**: DARK (pure caching, not exposed)
+### 10. **EvalDedup** — REMOVED.
+- It returned the previous result for identical code sent within 2 seconds, without
+  running it. A REPL runs what it is sent, and the cache also stored failures as
+  results, matched on a 32-bit hash, and never evicted. Sending the same
+  side-effecting snippet twice now runs it twice
+  (`McpToolExecutionTests`, "the same side-effecting code sent twice in a row RUNS twice").
 
 ### 11. **EvalDiff** — Line-by-line diff of eval outputs.
 - **Module**: SageFs.Features.EvalDiff
@@ -370,7 +368,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 3. **DaemonHealth** (exposed via get_fsi_status)
 4. **DaemonPersistence** (internal I/O)
 5. **Diagnostics** (exposed via check_fsharp_code)
-6. **EvalDedup** (internal optimization)
+6. ~~EvalDedup~~ (removed)
 7. **EvalProvenance** (used by EvalRipple)
 8. **LiveTestingExecutors** (exposed via run_tests)
 9. **LiveTestingInstrumentation** (OTEL only)
@@ -405,7 +403,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 2. **SSE Hub**: Most SSE events generated via **FeatureHooks.fs**, which wraps feature modules (EvalDiff, CellDependencyGraph, EvalTimeline, BindingExplorer).
 
 3. **Three-Tier Architecture**:
-   - **Tier 1 (Pure)**: EvalDedup, Diagnostics, EvalLens, CoverageInstrumenter
+   - **Tier 1 (Pure)**: Diagnostics, EvalLens, CoverageInstrumenter
    - **Tier 2 (MCP)**: Exposed as tools (decompose_pipeline, plan_ripple, etc.)
    - **Tier 3 (SSE)**: Pushed server-side (test results, eval diffs, bindings)
 

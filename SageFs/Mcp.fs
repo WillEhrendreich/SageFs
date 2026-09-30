@@ -253,9 +253,6 @@ module McpTools =
         RebuildOutcome.describe DateTime.UtcNow coreVersion outcome)
     | false, _ -> SessionStatusPayload.LastRestart.NoneRecorded
 
-  /// Temporal dedup cache — prevents re-evaluating identical code within 2s window.
-  let evalDedupCache = Features.EvalDedup.DedupCache.defaultCache ()
-
 
   // Session working-directory routing/matching helpers moved to
   // SageFs/McpSessionRouting.fs (pure, testable; roast-8 §2 god-file split).
@@ -988,15 +985,6 @@ module McpTools =
       match resolution with
       | Routable sid ->
         return! task {
-          // Temporal dedup: skip re-evaluation if identical code was just evaluated
-          let now = DateTimeOffset.UtcNow
-          match Features.EvalDedup.DedupCache.tryGet evalDedupCache sid code now with
-          | Some cached ->
-            Log.debug "Eval dedup hit for session %s (code hash %08x)" sid (code.GetHashCode())
-            Instrumentation.fsiEvals.Add(1L)
-            return (cached, Evaluated false, [], None)
-          | None ->
-
           let state =
             compilationStates.GetOrAdd(sid, fun _ -> Middleware.CompilationContext.CompilationState.empty)
 
@@ -1062,7 +1050,6 @@ module McpTools =
               String.concat "\n\n" (List.rev allOutputs)
             | _ -> allOutputs |> List.tryHead |> Option.defaultValue ""
 
-          Features.EvalDedup.DedupCache.record evalDedupCache sid code finalOutput (DateTimeOffset.UtcNow)
           evalSw.Stop()
           // Record the eval into the shared feature push-state history so the
           // pure-MCP path feeds get_recent_fsi_events/filmstrip/impact_forecast,
@@ -1713,7 +1700,6 @@ module McpTools =
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
         do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Ready handle)
         compilationStates.TryRemove(sid) |> ignore
-        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         notifyElm ctx (
           TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
         // Pushback: resetting a healthy (Ready) session destroys live REPL
@@ -1773,7 +1759,6 @@ module McpTools =
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
         do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Ready handle)
         compilationStates.TryRemove(sid) |> ignore
-        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         notifyElm ctx (
           TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
         let warning =
@@ -1857,7 +1842,6 @@ module McpTools =
   let private startTrackedRebuild (ctx: McpContext) (sid: string) : unit =
     compilationStates.TryRemove(sid) |> ignore
     typeIdentityDiagnostics.TryRemove(sid) |> ignore
-    Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
     match rebuildOutcomes.TryGetValue sid with
     | true, RebuildOutcome.InProgress _ -> ()
     | _ -> rebuildOutcomes.[sid] <- RebuildOutcome.InProgress DateTime.UtcNow
@@ -1908,7 +1892,6 @@ module McpTools =
         // rebuild=true path does, so this call writes no session status.
         compilationStates.TryRemove(sid) |> ignore
         typeIdentityDiagnostics.TryRemove(sid) |> ignore
-        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         let! result =
           task {
             try return! ctx.SessionOps.RestartSession (toSessionId sid) RestartPlan.RespawnOnly
@@ -1938,7 +1921,6 @@ module McpTools =
       | false ->
         compilationStates.TryRemove(sid) |> ignore
         typeIdentityDiagnostics.TryRemove(sid) |> ignore
-        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         let! result =
           task {
             try return! ctx.SessionOps.RestartSession (toSessionId sid) RestartPlan.RespawnOnly
