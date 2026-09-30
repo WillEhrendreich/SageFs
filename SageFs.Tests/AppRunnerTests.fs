@@ -480,3 +480,26 @@ let managedDependencyResolutionIntegrationTests =
           finally
             try Directory.Delete(harnessDir, true) with _ -> ()
   ]
+
+[<Tests>]
+let projectNotLoadedRefusalTests =
+  // "X is not loaded in this session" told the reader nothing about what the
+  // session DID hold, which is the one fact you need to tell a wrong path from
+  // a session that is missing its project. The release gate hit this refusal
+  // once and left no way to tell which of the two it was.
+  testList "AppRunner.resolveProjectAssembly refusal" [
+    testCase "a refusal names the project that was asked for and every project the session does hold" <| fun _ ->
+      let held = [ ("/repo/a/A.fsproj", "/shadow/A.dll"); ("/repo/b/B.fsproj", "/shadow/B.dll") ]
+      match AppRunner.resolveProjectAssembly held "/repo/c/C.fsproj" with
+      | Ok _ -> failtest "C is not in the session, so this must be a refusal"
+      | Error reason ->
+        reason |> Expect.stringContains "the asked-for project is named" "/repo/c/C.fsproj"
+        reason |> Expect.stringContains "the first held project is named" "/repo/a/A.fsproj"
+        reason |> Expect.stringContains "the second held project is named" "/repo/b/B.fsproj"
+
+    testCase "a session that holds nothing says so, instead of listing nothing" <| fun _ ->
+      match AppRunner.resolveProjectAssembly [] "/repo/c/C.fsproj" with
+      | Ok _ -> failtest "an empty session cannot resolve anything"
+      | Error reason ->
+        reason |> Expect.stringContains "the empty case is stated in words" "no projects"
+  ]

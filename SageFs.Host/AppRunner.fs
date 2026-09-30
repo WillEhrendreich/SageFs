@@ -176,7 +176,15 @@ let private pathComparison =
 let resolveProjectAssembly (projectTargets: (string * string) list) (projectPath: string) : Result<Assembly, string> =
   let samePath (a: string) (b: string) = String.Equals(Path.GetFullPath a, Path.GetFullPath b, pathComparison)
   match projectTargets |> List.tryFind (fun (project, _) -> samePath project projectPath) with
-  | None -> Error (sprintf "%s is not loaded in this session. → Create a session that includes it." projectPath)
+  | None ->
+    // Say what the session DOES hold. Without it the reader can't tell a wrong
+    // path from a worker that came up with no projects at all, and those need
+    // different fixes.
+    let held =
+      match projectTargets with
+      | [] -> "this session holds no projects"
+      | targets -> sprintf "this session holds: %s" (targets |> List.map fst |> String.concat ", ")
+    Error (sprintf "%s is not loaded in this session (%s). → Create a session that includes it." projectPath held)
   | Some (_, target) ->
     let alreadyLoaded =
       AppDomain.CurrentDomain.GetAssemblies()
