@@ -73,6 +73,58 @@ jobs:
         echo "DOTNET_ROOT=$root" >> "$GITHUB_ENV"
         "$root/dotnet" --list-sdks
 
+    # Node for the VS Code extension stages. This is here because the runner's
+    # PATH does NOT contain a usable npm, and the failure is unreadable without
+    # it — stage 5 died with
+    #
+    #   System.ComponentModel.Win32Exception: An error occurred trying to start
+    #   process      (in 162ms, i.e. nothing ran)
+    #
+    # which looks like a compile failure and is not. Measured on this machine:
+    #
+    #   /usr/bin/node        v22.23.2   present, and has NO npm beside it
+    #   /usr/bin/npm         MISSING
+    #   mise 26.7.0/bin/npm  present, and NOT on the runner's PATH
+    #
+    # So `npm run compile` resolved `node` to the old /usr/bin one and then had
+    # no npm to execute. NUGET_NODE_BIN lets a machine point at its own mise
+    # install; the fallback walks mise's install tree rather than hardcoding a
+    # version.
+    #
+    # The walk selects the HIGHEST NUMERIC version, and that detail is load
+    # bearing: mise's tree also holds `lts`, `latest` and bare-major aliases
+    # (`24`, `26`, `24.14`), and `sort -V | tail -1` picks `lts` — an alias for
+    # 24.14.0 — over the real 26.8.2. Measured on this machine:
+    #
+    #   24.14.0 -> v24.14.0     lts        -> v24.14.0   <- what sort -V chose
+    #   26.8.2  -> v26.8.2      latest     -> v26.8.2
+    #
+    # So only directories whose name is purely numeric qualify, and they are
+    # ordered by the number rather than by name.
+    - name: Use this machine's Node (npm) for the extension stages
+      shell: bash
+      run: |
+        candidate="${NUGET_NODE_BIN:-}"
+        if [ -z "$candidate" ]; then
+          candidate=$(ls -d "$HOME"/.local/share/mise/installs/node/*/bin 2>/dev/null \
+            | while read -r d; do
+                v=$(basename "$(dirname "$d")")
+                case "$v" in
+                  *[!0-9.]*|'') ;;                       # skip lts, latest, 24, 24.14
+                  *) echo "$v $d" ;;
+                esac
+              done \
+            | sort -t. -k1,1n -k2,2n -k3,3n \
+            | tail -1 | cut -d' ' -f2-)
+        fi
+        if [ -z "$candidate" ] || [ ! -x "$candidate/npm" ]; then
+          echo "::error::No npm found. Set NUGET_NODE_BIN in the runner's .env to a bin/ containing npm, or install mise node."
+          exit 1
+        fi
+        echo "$candidate" >> "$GITHUB_PATH"
+        "$candidate/node" --version
+        npm --version
+
     - name: Local gate (instant when this commit already passed on this machine)
       shell: bash
       env:
