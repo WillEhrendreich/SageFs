@@ -5,8 +5,50 @@
 /// rules the pipeline runs on are the rules the tests check.
 module SageFs.Build.TierPlan
 
-/// One invocation of the test assembly (`dotnet SageFs.Tests.dll <Args>`).
-type Tier = { Name: string; Args: string }
+/// A target framework the test assembly is built for and run on. One case per
+/// entry of Directory.Build.props' SageFsTargetFrameworks (a test pins that), so
+/// a framework the tool ships for cannot be left without a tier.
+type Framework =
+  | Net10
+  | Net11
+
+module Framework =
+  let all = [ Net10; Net11 ]
+
+  /// The framework the gate's own `dotnet build` targets (Directory.Build.props
+  /// TargetFramework). Its tiers keep their unqualified names.
+  let primary = Net11
+
+  let tfm (framework: Framework) =
+    match framework with
+    | Net10 -> "net10.0"
+    | Net11 -> "net11.0"
+
+  /// The label a ledger row carries for a non-primary framework.
+  let label (framework: Framework) =
+    match framework with
+    | Net10 -> "net10"
+    | Net11 -> "net11"
+
+  let ofTfm (name: string) : Result<Framework, string> =
+    match all |> List.tryFind (fun f -> tfm f = name) with
+    | Some f -> Result.Ok f
+    | None -> Result.Error (sprintf "no test tier exists for the framework %s" name)
+
+  /// From `AppContext.TargetFrameworkName` (".NETCoreApp,Version=v10.0"), which
+  /// a process reads from its own entry assembly, so a test process names the
+  /// framework it was built for rather than trusting what the pipeline said.
+  let ofTargetFrameworkName (name: string | null) : Result<Framework, string> =
+    match name with
+    | null -> Result.Error "the assembly declares no target framework"
+    | name ->
+      match name.Split(',') with
+      | [| ".NETCoreApp"; version |] when version.StartsWith "Version=v" ->
+        ofTfm (sprintf "net%s" (version.Substring "Version=v".Length))
+      | _ -> Result.Error (sprintf "not a .NET target framework name: %s" name)
+
+/// One invocation of the test assembly (`dotnet <dll> <Args>`), on one framework.
+type Tier = { Name: string; Args: string; Framework: Framework }
 
 /// One slice of a sharded tier: shard `Index` (1-based) of `Count`.
 type Shard = { Index: int; Count: int }
@@ -63,7 +105,47 @@ let assign (count: int) (durations: Map<string, float>) (suites: string list) : 
     load[i] <- load[i] + weight s
     acc.Add(s, i + 1)) Map.empty
 
-let tier (args: string) = { Name = nameOfArgs args; Args = args }
+/// A tier's ledger name on `framework`: the plain name on the primary
+/// framework (so recorded durations and every existing row keep matching), the
+/// name plus the framework's label elsewhere. Distinct for every framework, so
+/// two frameworks never share a ledger row, a log, a clone or a duration.
+let qualify (framework: Framework) (name: string) =
+  match framework = Framework.primary with
+  | true -> name
+  | false -> sprintf "%s-%s" name (Framework.label framework)
+
+/// A tier running `args` on `framework`.
+let tierOn (framework: Framework) (args: string) =
+  { Name = qualify framework (nameOfArgs args); Args = args; Framework = framework }
+
+/// A tier on the primary framework.
+let tier (args: string) = tierOn Framework.primary args
+
+/// Where a framework's test assembly is built, relative to the checkout.
+let testBinDirOf (framework: Framework) =
+  sprintf "SageFs.Tests/bin/Release/%s" (Framework.tfm framework)
+
+let dllOf (framework: Framework) = sprintf "%s/SageFs.Tests.dll" (testBinDirOf framework)
+
+/// The command that builds the test assembly for `framework`, for a framework
+/// the whole-solution `dotnet build` did not already build it for.
+///
+/// `-p:TargetFramework=` picks the framework (the test project is single-target;
+/// Core, Host and Simulation multi-target and follow it). Three more properties
+/// keep it from disturbing the gate's own tree:
+///  * RestorePackagesWithLockFile=false: the restore would otherwise REWRITE the
+///    tracked packages.lock.json files with only this framework's section.
+///  * RestoreLockedMode=false: CI turns locked restore on, which refuses a
+///    graph that differs from the committed (all-frameworks) lock file.
+///  * BaseIntermediateOutputPath: a restore writes obj/project.assets.json, and
+///    the primary build's copy lists net11.0 only; sharing it would leave every
+///    later `--no-restore` net11 build failing NETSDK1005. A private obj
+///    directory per framework keeps the two restores apart. bin/ is already
+///    per-framework.
+let testBuildCommand (framework: Framework) =
+  sprintf
+    "dotnet build SageFs.Tests -c Release -p:TargetFramework=%s -p:RestorePackagesWithLockFile=false -p:RestoreLockedMode=false -p:BaseIntermediateOutputPath=obj/tier-%s/"
+    (Framework.tfm framework) (Framework.tfm framework)
 
 /// Whether tiers can be given private copies of the checkout.
 type Isolation =

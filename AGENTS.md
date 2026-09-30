@@ -195,6 +195,23 @@ died before reporting (`NoReport`). `TrustSignalTests` fails the fast suite if a
 registered tier is not invoked by `ci-pipeline.fsx`, or if a test run there
 bypasses the ledgered `testTier` step. Read the table, not a stage colour.
 
+The default suite runs on every framework the tool ships for, because the net10
+tool asset is the one most users install and a bug that exists on .NET 10 only
+(a raw F# union reaching System.Text.Json, which .NET 11 writes and .NET 10
+throws on) is invisible to a net11 run. Each framework is its own tier and its
+own trust row: `default` on net11, `default-net10` on net10. The `build` stage
+builds the net10 test assembly with `TierPlan.testBuildCommand`, which leaves the
+tracked lock files and the net11 `obj/` alone. To run it by hand:
+
+```
+dotnet build SageFs.Tests -c Release -p:TargetFramework=net10.0 -p:RestorePackagesWithLockFile=false -p:RestoreLockedMode=false -p:BaseIntermediateOutputPath=obj/tier-net10.0/
+dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --summary
+```
+
+Do not run `dotnet restore -p:TargetFramework=net10.0` in a working tree: it
+rewrites `packages.lock.json` with only the net10.0 sections. Only the default
+suite runs on net10; the integration, mutation and browser tiers stay on net11.
+
 Consequences, in order of importance:
 
 1. **A filtered run is never the acceptance check.** A gate is done when its own test

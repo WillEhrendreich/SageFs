@@ -8,7 +8,7 @@ open FsCheck
 open SageFs.Build.TierPlan
 
 let private tiersOf (names: string list) =
-  names |> List.distinct |> List.map (fun n -> { Name = n; Args = n })
+  names |> List.distinct |> List.map (fun n -> { Name = n; Args = n; Framework = Framework.primary })
 
 let planTests =
   testList "TierPlan" [
@@ -20,7 +20,7 @@ let planTests =
 
     testProperty "a tier's timeout stays between ten minutes and an hour, and never undercuts its own history" <|
       fun (name: NonEmptyString) (recorded: PositiveInt) ->
-        let t = { Name = name.Get; Args = name.Get }
+        let t = { Name = name.Get; Args = name.Get; Framework = Framework.primary }
         let seconds = float recorded.Get
         let timeout = (timeoutOf (Map.ofList [ name.Get, seconds ]) t).TotalSeconds
         timeout >= tierTimeoutFloorSeconds
@@ -28,7 +28,7 @@ let planTests =
         && (seconds * 4.0 > tierTimeoutCeilingSeconds || timeout >= seconds * 4.0)
 
     testCase "a tier nobody has timed gets the full hour" <| fun _ ->
-      (timeoutOf Map.empty { Name = "new"; Args = "new" }).TotalSeconds
+      (timeoutOf Map.empty { Name = "new"; Args = "new"; Framework = Framework.primary }).TotalSeconds
       |> Expect.equal "a first run might just be long" tierTimeoutCeilingSeconds
 
     testProperty "a tier with no recorded duration starts before every timed tier" <|
@@ -85,7 +85,7 @@ let planTests =
     testProperty "the modelled wall clock is bounded by the longest tier and by an even split" <|
       fun (PositiveInt slots) (durations: PositiveInt list) ->
         let slots = min slots 8
-        let tiers = durations |> List.mapi (fun i _ -> { Name = string i; Args = string i })
+        let tiers = durations |> List.mapi (fun i _ -> { Name = string i; Args = string i; Framework = Framework.primary })
         let d = durations |> List.mapi (fun i s -> string i, float s.Get) |> Map.ofList
         let span = makespan slots (fun t -> d[t.Name]) tiers
         let total = d |> Map.fold (fun acc _ v -> acc + v) 0.0

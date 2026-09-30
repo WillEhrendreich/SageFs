@@ -73,9 +73,6 @@ let mcpSdkClientDir = mcpSdkProjectDir "ModelContextProtocol"
 let mcpSdkAspNetCoreDir = mcpSdkProjectDir "ModelContextProtocol.AspNetCore"
 let releaseDir = Path.Combine(rootDir, "release")
 let vscodeDir = Path.Combine(rootDir, "sagefs-vscode")
-// Every downstream check runs against this ONE Release build (see "build" stage).
-let testBinDir = "SageFs.Tests/bin/Release/net11.0"
-let testDll = $"{testBinDir}/SageFs.Tests.dll"
 
 // ---- release helpers (faithful F# translations of the old pwsh steps) --------
 
@@ -212,6 +209,13 @@ let writeReleaseManifest () =
 #load "build/TierPlan.fs"
 open SageFs.Build
 
+// Every downstream check runs against the ONE Release build of the primary
+// framework (see "build" stage). The default suite also runs on the other
+// frameworks the tool ships for (see `testTierOn`); the "build" stage builds
+// the test assembly for each of those too, before any tier starts.
+let testBinDir = TierPlan.testBinDirOf TierPlan.Framework.primary
+let testDll = TierPlan.dllOf TierPlan.Framework.primary
+
 let trustLedger = Path.Combine(rootDir, "test-results", "trust-ledger.jsonl")
 Directory.CreateDirectory(Path.GetDirectoryName trustLedger) |> ignore
 if File.Exists trustLedger then File.Delete trustLedger
@@ -223,6 +227,13 @@ let tierNameOf = TierPlan.nameOfArgs
 
 /// Declare a test tier: one `dotnet SageFs.Tests.dll <args>` invocation.
 let testTier (args: string) = TierPlan.tier args
+
+/// Declare a tier that runs on another framework than the primary one: the same
+/// argv against that framework's own build, under its own ledger row
+/// (`default-net10`), so a failure that exists on one runtime only is its own
+/// red row. `TrustSignalTests` requires the default suite on every framework in
+/// Directory.Build.props' SageFsTargetFrameworks.
+let testTierOn (framework: TierPlan.Framework) (args: string) = TierPlan.tierOn framework args
 
 /// Per-tier scratch, OUTSIDE the checkout: inside a tier's mount namespace the
 /// checkout path shows that tier's clone, so anything the parent must read back
@@ -362,7 +373,7 @@ let runTier (isolation: TierPlan.Isolation) (slots: int) (slotIndex: int) (t: Ti
         // build/TierPlan.fs `portRangeOf` for why disjoint-per-slot ranges
         // make a cross-tier port collision structurally impossible.
         "SAGEFS_TEST_PORT_RANGE", $"{portLo}-{portHi}" ]
-    let command = $"dotnet {testDll} {t.Args}"
+    let command = $"dotnet {TierPlan.dllOf t.Framework} {t.Args}"
     let tierTimeout = TierPlan.timeoutOf (readDurations ()) t
     let sw = Diagnostics.Stopwatch.StartNew()
     let! code =
@@ -587,6 +598,15 @@ pipeline "sagefs" {
     // --no-build against this exact output — the single build that used to be
     // repeated in build/integration-host/extensions/release-artifacts.
     run "dotnet build -c Release"
+    // The test assembly for every other framework a tier runs on. Built here,
+    // once, so the tiers (which run concurrently, each in a clone of this tree)
+    // never build. TierPlan.testBuildCommand explains why these builds leave the
+    // tracked lock files and the primary build's obj/ alone.
+    run (fun ctx ->
+      async {
+        let others = TierPlan.Framework.all |> List.filter (fun f -> f <> TierPlan.Framework.primary)
+        return! runSteps ctx.RunCommand [ for f in others -> TierPlan.testBuildCommand f ]
+      })
   }
 
   stage "format" {
@@ -669,6 +689,10 @@ pipeline "sagefs" {
           | _ -> 5
         let always =
           testTier "--summary"
+          // The default suite on the net10 tool asset too (built in the "build"
+          // stage). Concurrent with the other tiers, so it adds one slot's worth
+          // of load, not its duration, to the wall clock.
+          :: testTierOn TierPlan.Net10 "--summary"
           :: [ for k in 1 .. hostShards -> testTier $"--integration-host --shard {k}/{hostShards} --summary" ]
         let ciOnly =
           [ testTier "--mutation-score"

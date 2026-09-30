@@ -559,6 +559,18 @@ module TrustSignal =
     | Redirected -> [ Expecto.Tests.CLIArguments.No_Spinner ]
     | Interactive -> []
 
+  /// The ledger name of `tier` for a process built for `targetFrameworkName`
+  /// (what `AppContext.TargetFrameworkName` reports): the plain name on the
+  /// primary framework, the name plus the framework's label on another. The
+  /// pipeline computes the same name with `TierPlan.qualify` when it declares the
+  /// tier, so a row the process writes joins the tier the pipeline invoked. A
+  /// process that cannot name its framework writes a row under a name no tier
+  /// has, which the trust report shows as a tier that never reported.
+  let qualifiedTier (targetFrameworkName: string | null) (tier: string) : string =
+    match SageFs.Build.TierPlan.Framework.ofTargetFrameworkName targetFrameworkName with
+    | Result.Ok framework -> SageFs.Build.TierPlan.qualify framework tier
+    | Result.Error reason -> sprintf "%s-unknown-framework(%s)" tier reason
+
   /// Run `tests` as `tier` and return the exit code the verdict demands.
   /// `--list-tests` executes nothing by design, so it bypasses judgement.
   let runObserved
@@ -568,6 +580,7 @@ module TrustSignal =
     (argv: string array)
     (tests: Expecto.Test)
     : int =
+    let tier = qualifiedTier System.AppContext.TargetFrameworkName tier
     match argv |> Array.contains "--list-tests" with
     | true -> Expecto.Tests.runTestsWithCLIArgs (spinnerArgs (consoleKind ())) argv tests
     | false ->
@@ -615,9 +628,25 @@ module TrustSignal =
   /// runner" cannot mean two different things in two places.
   let pipelineTierArgs (pipelineText: string) : string list =
     System.Text.RegularExpressions.Regex.Matches(
-      pipelineText, "testTier(?:After\\s*\\[[^\\]]*\\])?\\s*\\$?\"([^\"]+)\"")
+      pipelineText, "testTier(?:On\\s+\\S+|After\\s*\\[[^\\]]*\\])?\\s*\\$?\"([^\"]+)\"")
     |> Seq.map (fun m -> m.Groups[1].Value)
     |> List.ofSeq
+
+  /// Every `testTier "<args>"` (primary framework) and `testTierOn
+  /// TierPlan.<Case> "<args>"` step in ci-pipeline.fsx text, with the framework
+  /// it runs on. A `testTierOn` naming a case that does not exist is skipped
+  /// here and fails the pipeline's own compile.
+  let pipelineFrameworkTiers (pipelineText: string) : (SageFs.Build.TierPlan.Framework * string) list =
+    let matches =
+      System.Text.RegularExpressions.Regex.Matches(
+        pipelineText, "testTier(On\\s+(?:TierPlan\\.)?(\\w+))?\\s*\\$?\"([^\"]+)\"")
+    [ for m in matches do
+        match m.Groups[1].Success with
+        | false -> yield SageFs.Build.TierPlan.Framework.primary, m.Groups[3].Value
+        | true ->
+          match SageFs.Build.TierPlan.Framework.all |> List.tryFind (fun f -> string f = m.Groups[2].Value) with
+          | Some framework -> yield framework, m.Groups[3].Value
+          | None -> () ]
 
   /// Tier name of an argument string: its first token, with the bare
   /// `--summary` default run named "default" (matches the ledger's Tier field).

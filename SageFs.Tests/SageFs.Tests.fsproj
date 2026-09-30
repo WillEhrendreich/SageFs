@@ -9,6 +9,8 @@
 
     <ItemGroup>
         <Compile Include="LiveTestingBudgets.fs" />
+        <!-- Before TestInfrastructure: the trust ledger names a tier by its framework. -->
+        <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="RunnerLogging.fs" />
         <Compile Include="TestCountBadge.fs" />
@@ -491,7 +493,6 @@
         <Compile Include="ArchitectureTests.fs" />
         <Compile Include="UnionCaseShadowingTests.fs" />
         <Compile Include="UnionCaseShadowingFsiRegressionTests.fs" />
-        <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
         <Compile Include="TierPlanTests.fs" />
         <Compile Include="TestPortsTests.fs" />
         <Compile Include="TrustSignalTests.fs" />
