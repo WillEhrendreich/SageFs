@@ -241,6 +241,7 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     ProjectRoles = []
     App = SageFs.AppRun.AppRunState.NotRunning
     Rebuild = LastRebuild.NeverRebuilt
+    Reload = SessionReload.NoReloadYet
   }
   let ops : SessionManagementOps = {
     CreateSession = fun _ _ _ -> Task.FromResult(Ok "stub")
@@ -378,6 +379,24 @@ let enforcementTests =
       match evalResult with
       | Error _ -> ()
       | Ok _ -> failtest "send_fsharp_code must be rejected when no session exists"
+    }
+
+    testTask "WHY — a code tool refused because no session matches its directory says why, not 'wait for Ready', because the session exists and waiting would never fix a wrong directory" {
+      let ctx, _ = mkContextForSession WorkerProtocol.SessionStatus.Ready
+      let wrongDirectory = "/definitely/not/a/session/dir"
+      let! result = SageFs.McpTools.enforceToolCallGate ctx "mcp" None (Some wrongDirectory) "send_fsharp_code"
+      match result with
+      | Error message ->
+        message |> Expect.stringContains "names the directory that matched nothing" wrongDirectory
+        message.Contains "Ready state" |> Expect.isFalse "and does not send the caller to wait"
+      | Ok _ -> failtest "no session matches the directory, so a code tool must be refused"
+    }
+
+    testTask "WHY — the tools that work with no session still pass for a directory that matches none" {
+      let ctx, _ = mkContextForSession WorkerProtocol.SessionStatus.Ready
+      for tool in [ "create_project_session"; "get_session_status"; "get_daemon_status" ] do
+        let! result = SageFs.McpTools.enforceToolCallGate ctx "mcp" None (Some "/definitely/not/a/session/dir") tool
+        Expect.isOk (sprintf "%s must not need a matching session" tool) result
     }
   ]
 

@@ -532,9 +532,13 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         block_start_line: int,
         [<Description("Optional description of what this code is for (e.g. 'refactoring warmup pipeline', 'writing property tests'). Shown in the dashboard so humans and other agents can see what you're working on. Preserved across calls until overwritten by a new non-empty value.")>]
         [<Optional; DefaultParameterValue("")>]
-        intent: string
+        intent: string,
+        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
     ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         let fp = match System.String.IsNullOrWhiteSpace file_path with | true -> None | false -> Some file_path
         let em = match System.String.IsNullOrWhiteSpace eval_mode with | true -> None | false -> Some eval_mode
         let bsl = match block_start_line with | 0 -> None | n -> Some n
@@ -549,7 +553,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         // reads plain text breaks — `structuredContent` is additive.
         task {
           let! text, _outcome, diags, errOpt =
-            evalFSharpCodeWithOutcome ctx agentName code OutputFormat.Text None wd fp em bsl intentOpt
+            evalFSharpCodeWithOutcome ctx agentName code OutputFormat.Text sid wd fp em bsl intentOpt
           // Outbound size cap (roast-7 §13) applies to the text agents
           // actually read; the same bounded text feeds the JSON `result`
           // field so the two never disagree about what was returned.
@@ -603,12 +607,16 @@ PATH:
         filePath: string,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
-        working_directory: string
+        working_directory: string,
+        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: load_fsharp_script called: {FilePath}", filePath)
         task {
-          let! result = loadFSharpScriptResult ctx agentName filePath None wd
+          let! result = loadFSharpScriptResult ctx agentName filePath sid wd
           return
             match result with
             | Ok text -> text, None
@@ -648,10 +656,14 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
     member _.get_session_status(
         [<Description("Working directory of the MCP client. Routes to the matching session when exactly one session uses it; if multiple sessions match, switch_session first.")>]
         [<Optional; DefaultParameterValue("")>]
-        working_directory: string
+        working_directory: string,
+        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        getSessionStatus ctx "mcp" None wd |> withEcho ctx "get_session_status"
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
+        getSessionStatus ctx "mcp" sid wd |> withEcho ctx "get_session_status"
     [<McpServerTool>]
     [<Description("Acquire a lease for a caller-owned full build. The lease kind is fixed by this tool; use it only when SageFs will not run the build itself.")>]
     member _.acquire_full_build_lease() : Task<string> =
@@ -740,12 +752,16 @@ This is a SOFT reset — DLL locks are retained. Use hard_reset_fsi_session only
     member _.reset_fsi_session(
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
-        working_directory: string
+        working_directory: string,
+        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: reset_fsi_session called")
         task {
-          let! result = resetSessionResult ctx "mcp" None wd
+          let! result = resetSessionResult ctx "mcp" sid wd
           return
             match result with
             | Ok text -> text, None
@@ -799,14 +815,18 @@ in-process trick gets a say) — rebuild+respawn is the real, honest mechanism."
         rebuild: bool,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
-        working_directory: string
+        working_directory: string,
+        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         let doRebuild = rebuild
         logger.LogDebug("MCP-TOOL: hard_reset_fsi_session called, rebuild={Rebuild}", doRebuild)
         let execute =
           task {
-            let! result = hardResetSessionResult ctx "mcp" doRebuild None wd
+            let! result = hardResetSessionResult ctx "mcp" doRebuild sid wd
             return
               match result with
               | Ok text -> text, None
@@ -836,12 +856,16 @@ WHEN NOT TO USE:
         code: string,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
-        working_directory: string
+        working_directory: string,
+        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: check_fsharp_code called")
         task {
-          let! text = checkFSharpCode ctx "mcp" code None wd
+          let! text = checkFSharpCode ctx "mcp" code sid wd
           // checkFSharpCode's own routing failure is plain "Error: <text>"
           // with no structured case behind it — resolve the session again
           // (read-only registry lookups; no side effect on the eval path)
@@ -849,8 +873,8 @@ WHEN NOT TO USE:
           // multiple sessions, missing) from the SAME typed resolution
           // resolveSessionId already computes, instead of leaving it
           // unclassified or re-parsing the "Error: ..." text.
-          let! resolution = resolveSessionId ctx "mcp" None wd
-          let! blocker = sessionRoutingError ctx None wd resolution
+          let! resolution = resolveSessionId ctx "mcp" sid wd
+          let! blocker = sessionRoutingError ctx sid wd resolution
           return text, blocker
         }
         |> withEchoOutcome ctx "check_fsharp_code"
@@ -1334,7 +1358,7 @@ WHEN TO USE:
 ROUTING BEHAVIOR:
 - working_directory auto-routes only when exactly ONE session matches that directory.
 - When multiple sessions match the same directory, the daemon returns an error listing the matches. Call switch_session with the session_id you want, then retry.
-- If you provide session_id directly on any tool call, that always wins over working_directory routing.
+- On the tools that take a session_id parameter (send_fsharp_code, load_fsharp_script, check_fsharp_code, get_session_status, reset_fsi_session, hard_reset_fsi_session), session_id always wins over working_directory routing. The other tools route by working_directory or the active session.
 - Use list_sessions to see available session IDs.""")>]
     member _.switch_session(
         [<Description("Session ID to switch to (from list_sessions)")>] session_id: string

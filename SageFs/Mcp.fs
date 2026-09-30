@@ -744,12 +744,11 @@ module McpTools =
           return
             Affordances.checkToolCallAllowed SessionState.Faulted toolName
             |> Result.mapError SageFsError.describeForAgent
-        | Gone _ ->
-          // No session reachable — the pre-session policy applies: session
-          // creation/status tools pass, code-execution tools fail closed.
+        | Gone message ->
+          // No session reachable: code tools are refused with the routing reason, not "wait for Ready".
           return
             Affordances.checkToolCallAllowed SessionState.Uninitialized toolName
-            |> Result.mapError SageFsError.describeForAgent
+            |> Result.mapError (fun _ -> message)
       | None ->
         return
           Affordances.checkToolCallAllowed SessionState.Uninitialized toolName
@@ -1608,6 +1607,10 @@ module McpTools =
           | _ -> return Environment.CurrentDirectory
       }
 
+      match Directory.Exists workingDir with
+      | false ->
+        return sprintf "Directory '%s' does not exist. Pass an existing directory as working_directory (an absolute path is safest)." workingDir
+      | true ->
       let shownProjects, totalProjects =
         try
           walkProjectFiles workingDir
