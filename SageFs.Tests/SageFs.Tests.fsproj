@@ -293,6 +293,8 @@
          <Compile Include="McpStdioBridgeOwnershipTests.fs" />
          <Compile Include="TestRunReceiptTests.fs" />
          <Compile Include="McpRunTestsTests.fs" />
+         <Compile Include="JsonTests.fs" />
+         <Compile Include="JsonCentralizationTests.fs" />
          <Compile Include="EvalPreflightTests.fs" />
          <Compile Include="McpSwitchWorkflowTests.fs" />
          <Compile Include="ListTestsSessionScopeTests.fs" />

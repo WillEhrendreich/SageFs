@@ -42,6 +42,7 @@
         <Compile Include="Tutorial.fs" />
         <Compile Include="SageFsConfig.fs" />
         <Compile Include="Timeouts.fs" />
+        <Compile Include="Json.fs" />
         <Compile Include="UpdateCheck.fs" />
         <Compile Include="Settings.fs" />
         <Compile Include="SettingsStore.fs" />
