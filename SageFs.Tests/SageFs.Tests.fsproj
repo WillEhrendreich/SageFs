@@ -287,6 +287,7 @@
          <Compile Include="TestRunReceiptTests.fs" />
          <Compile Include="McpRunTestsTests.fs" />
          <Compile Include="EvalPreflightTests.fs" />
+         <Compile Include="McpSwitchWorkflowTests.fs" />
          <Compile Include="ListTestsSessionScopeTests.fs" />
          <Compile Include="WorkerReadyCommitTests.fs" />
          <Compile Include="SupervisorWatchdogSimTests.fs" />

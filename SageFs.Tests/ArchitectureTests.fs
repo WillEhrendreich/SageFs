@@ -1115,7 +1115,7 @@ let fileSizeBudgets =
       // deleting getStartupInfoJson and the unused
       // largeRepoAutoDiscoveryWarningThreshold. Still under the 4258 this
       // started the series at; never bump to paper over drift.
-      "SageFs/Mcp.fs", 4231
+      "SageFs/Mcp.fs", 4226
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

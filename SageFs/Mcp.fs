@@ -2345,18 +2345,13 @@ module McpTools =
         let outcome = WorkflowTypes.WorkflowSwitchOutcome.preview current target cost
         return serializeOutcome outcome
       | false ->
-      // 6. Execute: create new session with target workflow, stop old
-      let! createResult =
-        ctx.SessionOps.CreateSession (SessionProjectTarget.tryCreateMany sessionInfo.Projects |> Result.defaultValue []) sessionInfo.WorkingDirectory target
-      match createResult with
-      | Result.Error err ->
-        return sprintf "Error switching workflow: %s" (SageFsError.describeForAgent err)
-      | Result.Ok newSid ->
-        let! _ = ctx.SessionOps.StopSession sid
-        setActiveSessionId ctx agent newSid
-        ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
-        let outcome = WorkflowTypes.WorkflowSwitchOutcome.switched current target cost newSid
-        return serializeOutcome outcome
+      // 6. Execute through the daemon's own switch: it restarts THIS session id spawn-first into
+      // the target workflow. Creating a second session here hit the duplicate-session guard.
+      let! switchResult = ctx.SessionOps.SwitchWorkflow sid target
+      ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
+      match switchResult with
+      | Result.Error err -> return sprintf "Error switching workflow: %s" (SageFsError.describeForAgent err)
+      | Result.Ok _ -> return serializeOutcome (WorkflowTypes.WorkflowSwitchOutcome.switched current target cost sid)
     }
 
   // ── Elm State Query ──────────────────────────────────────────────
