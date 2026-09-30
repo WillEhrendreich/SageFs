@@ -483,14 +483,16 @@ module SessionManager =
       let mutable timeoutReason : string option = None
       cts.CancelAfter(Timeouts.warmupInactivityLimit)
       let linkedCt = cts.Token
+      // Bounded: the last StderrTail.capacity lines, for the life of the worker.
+      // Read only when the worker exits or goes silent, to explain why.
+      let stderrTail = StderrTail.create ()
       try
-        let stderrLines = System.Collections.Concurrent.ConcurrentQueue<string>()
         let stderrTask =
           runOnDedicatedThread "sagefs-worker-stderr-reader" (fun () ->
             try
               let mutable line = proc.StandardError.ReadLine()
               while not (isNull line) do
-                stderrLines.Enqueue(line)
+                stderrTail.Push line
                 line <- proc.StandardError.ReadLine()
             with _ -> ())
         let mutable found = None
@@ -499,10 +501,10 @@ module SessionManager =
           match isNull line with
           | true ->
             let workerPid = proc.Id
-            let stderrSummary =
-              stderrLines.ToArray()
-              |> Array.truncate 20
-              |> String.concat "\n"
+            // stdout closed, so stderr is about to close too: let the reader
+            // finish (bounded) so the tail holds the worker's last words.
+            do! System.Threading.Tasks.Task.WhenAny(stderrTask, System.Threading.Tasks.Task.Delay StderrTail.drainGrace) |> Async.AwaitTask |> Async.Ignore
+            let stderrSummary = StderrTail.summary stderrTail
             try proc.EnableRaisingEvents <- false with _ -> ()
             try proc.Dispose() with _ -> ()
             inbox.Post(
@@ -517,7 +519,8 @@ module SessionManager =
             // The absolute ceiling tripped exactly as this line arrived —
             // treat it the same as the OperationCanceledException path below
             // rather than accepting one more line past the hard bound.
-            timeoutReason <- Some (WarmupSupervision.absoluteTimeoutReason (DateTime.UtcNow - started))
+            timeoutReason <-
+              Some (StderrTail.withTail stderrTail (WarmupSupervision.absoluteTimeoutReason (DateTime.UtcNow - started)))
             found <- Some ""
           | false ->
             match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
@@ -578,10 +581,6 @@ module SessionManager =
         // repo keeps resetting this clock by printing WARMUP_PROGRESS=
         // lines; a stuck one goes quiet and is caught within
         // Timeouts.warmupInactivityLimit of going quiet.
-        let stderrSummary =
-          try
-            proc.StandardError.ReadToEnd()
-          with _ -> ""
         try proc.Kill(entireProcessTree = true) with ex2 ->
           Log.warn "[SessionManager] Kill on startup timeout: %s" ex2.Message
         try proc.EnableRaisingEvents <- false with _ -> ()
@@ -590,17 +589,12 @@ module SessionManager =
           SessionCommand.WorkerSpawnFailed(
             sessionId,
             proc.Id,
-            sprintf
-              "%s (set SAGEFS_WARMUP_INACTIVITY_SECONDS to adjust)%s"
-              (WarmupSupervision.inactivityTimeoutReason Timeouts.warmupInactivityLimit)
-              (match String.IsNullOrWhiteSpace stderrSummary with
-               | true -> ""
-               | false -> sprintf "\nstderr:\n%s" stderrSummary)))
+            StderrTail.withTail
+              stderrTail
+              (sprintf
+                "%s (set SAGEFS_WARMUP_INACTIVITY_SECONDS to adjust)"
+                (WarmupSupervision.inactivityTimeoutReason Timeouts.warmupInactivityLimit))))
       | ex ->
-        let stderrSummary =
-          try
-            proc.StandardError.ReadToEnd()
-          with _ -> ""
         try proc.Kill(entireProcessTree = true) with ex2 ->
           Log.warn "[SessionManager] Kill on spawn failure: %s" ex2.Message
         try proc.EnableRaisingEvents <- false with _ -> ()
@@ -608,11 +602,7 @@ module SessionManager =
         inbox.Post(
           SessionCommand.WorkerSpawnFailed(
             sessionId, proc.Id,
-            sprintf "Failed to connect to worker: %s%s"
-              ex.Message
-              (match String.IsNullOrWhiteSpace stderrSummary with
-               | true -> ""
-               | false -> sprintf "\nstderr:\n%s" stderrSummary)))
+            StderrTail.withTail stderrTail (sprintf "Failed to connect to worker: %s" ex.Message)))
     }, ct)
 
   /// Stop a worker gracefully: send Shutdown with a bounded wait, then kill the

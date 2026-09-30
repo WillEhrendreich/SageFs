@@ -1201,7 +1201,8 @@ let fileSizeBudgets =
       // is split; never bump to paper over drift.
       // 1915 -> 1904: the ready-transport validity helpers moved to
       // ReadyTransport.fs, net of three log lines for the failed-rebuild paths.
-      "SageFs.Core/SessionManager.fs", 1904 ]
+      // 1904 -> 1894: the worker stderr queue became StderrTail (TailBuffer.fs).
+      "SageFs.Core/SessionManager.fs", 1894 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->

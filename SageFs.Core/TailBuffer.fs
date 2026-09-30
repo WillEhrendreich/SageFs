@@ -83,7 +83,19 @@ module StderrTail =
       // if someone ever edits it to a non-positive number.
       invalidOp (sprintf "StderrTail.capacity must be positive: %A" err)
 
+  /// How long the failure path waits for the stderr reader to reach EOF once
+  /// stdout has closed. stderr closes with the process, so this normally costs
+  /// nothing; the bound only matters when a grandchild holds the pipe open.
+  let drainGrace : System.TimeSpan = System.TimeSpan.FromSeconds 2.0
+
   /// The last `summaryLineCount` lines, newline-joined; "" when nothing was
   /// captured (callers use that to keep their "no stderr" wording).
   let summary (tail: TailBuffer<string>) : string =
     tail.SnapshotLast summaryLineCount |> String.concat "\n"
+
+  /// `reason` followed by the captured tail under a "stderr:" heading, or
+  /// `reason` unchanged when nothing was captured.
+  let withTail (tail: TailBuffer<string>) (reason: string) : string =
+    match System.String.IsNullOrWhiteSpace (summary tail) with
+    | true -> reason
+    | false -> sprintf "%s\nstderr:\n%s" reason (summary tail)

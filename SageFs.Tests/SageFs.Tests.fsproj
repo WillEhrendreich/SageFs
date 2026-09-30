@@ -399,6 +399,7 @@
         <Compile Include="EvalHeartbeatTests.fs" />
         <Compile Include="RingBufferTests.fs" />
         <Compile Include="TailBufferTests.fs" />
+        <Compile Include="WorkerStderrCaptureTests.fs" />
         <Compile Include="ModelSnapshotTests.fs" />
          <Compile Include="TimeTravelTests.fs" />
          <Compile Include="VerificationPlannerTests.fs" />
