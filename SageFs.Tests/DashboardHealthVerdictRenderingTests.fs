@@ -24,7 +24,7 @@ module private Fixtures =
     { Path = sprintf "/repo/%s/%s.fsproj" name name
       Role = SageFs.ProjectLoading.ProjectRole.Executable
       PackageRefs = []
-      LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated }
+      LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
 
   let info (id: string) (status: WorkerProtocol.SessionStatus) (projects: SageFs.ProjectLoading.ClassifiedProject list) : WorkerProtocol.SessionInfo =
     { Id = WorkerProtocol.SessionId.validate id |> Result.defaultValue (WorkerProtocol.SessionId.newId ())

@@ -65,6 +65,9 @@ and ClassifiedProject = {
   Role: ProjectRole
   PackageRefs: string list
   LoadMode: LoadMode
+  /// Whether the project's compiled assembly is one a hot-reload patch can be trusted
+  /// to reach, read from the assembly itself when the project was evaluated.
+  Build: BuildOptimization
 }
 
 /// Minimal manual .fsproj parse used as a fallback when Ionide's workspace
@@ -844,7 +847,8 @@ let classifyProject (proj: ProjectOptions) : ClassifiedProject =
       packageRefs
       @ activeUiPropertyMarkers proj
       @ WorkflowTypes.ProjectFileMarkers.read proj.ProjectFileName
-    LoadMode = LoadMode.Evaluated }
+    LoadMode = LoadMode.Evaluated
+    Build = BuildOptimization.ofAssemblyFile proj.TargetPath }
 
 /// Classify all projects in a solution, returning a map of path to classification.
 let classifyProjects (projects: ProjectOptions list) : ClassifiedProject list =
@@ -914,7 +918,9 @@ let classifyFallbackProject (mode: LoadMode) (fp: FSharpProjectOptions) : Classi
   { Path = fp.ProjectFileName
     Role = role
     PackageRefs = props.PackageRefs
-    LoadMode = mode }
+    LoadMode = mode
+    // Parsed by hand: there is no evaluated TargetPath, so nothing to inspect.
+    Build = BuildOptimization.Unknown "the project was parsed by hand, so there is no build output to inspect" }
 
 /// Classify every project a Solution actually loaded — covering BOTH the
 /// normal Ionide path (`Projects`) and the manual-parse fallback path

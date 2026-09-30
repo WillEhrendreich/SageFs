@@ -14,7 +14,7 @@ let private proj (role: ProjectRole) (name: string) : ClassifiedProject =
   { Path = Path.Combine(root, name, name + ".fsproj")
     Role = role
     PackageRefs = []
-    LoadMode = LoadMode.Evaluated }
+    LoadMode = LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
 
 let private web = proj ProjectRole.Executable "Web"
 let private api = proj ProjectRole.Executable "Api"

@@ -129,7 +129,7 @@ let earnedReadyTests =
         let info = createSession harness [ SageFs.SessionProjectTarget.Project "Foo.fsproj" ] "/nonexistent/does-not-matter"
         let pid = installTransport harness info
         let role : ProjectLoading.ClassifiedProject =
-          { Path = "/repo/Foo.fsproj"; Role = ProjectLoading.ProjectRole.Library; PackageRefs = []; LoadMode = ProjectLoading.LoadMode.Evaluated }
+          { Path = "/repo/Foo.fsproj"; Role = ProjectLoading.ProjectRole.Library; PackageRefs = []; LoadMode = ProjectLoading.LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
         harness.Mailbox.Post(SessionCommand.WorkerReportedReady(info.Id, pid, [ role ]))
         let session = getManagedSession harness info.Id
         session.Info.Status |> isReady |> Expect.isTrue "resolved projects must still reach Ready"

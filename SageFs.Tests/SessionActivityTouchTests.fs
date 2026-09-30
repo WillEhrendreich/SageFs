@@ -83,7 +83,7 @@ let private withHarness (run: Harness -> Threading.Tasks.Task<unit>) = task {
 /// real worker would. This test is about the touch mechanism, not project
 /// resolution.
 let private resolvedTestProject : ClassifiedProject =
-  { Path = "Test.fsproj"; Role = ProjectRole.Library; PackageRefs = []; LoadMode = LoadMode.Evaluated }
+  { Path = "Test.fsproj"; Role = ProjectRole.Library; PackageRefs = []; LoadMode = LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
 
 let private createSession (harness: Harness) : SessionInfo =
   match harness.Mailbox.PostAndReply(fun reply ->

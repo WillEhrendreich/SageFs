@@ -44,7 +44,7 @@ let private roleVia (mode: LoadMode) : ClassifiedProject =
   { Path = "/repo/App/App.fsproj"
     Role = ProjectRole.Executable
     PackageRefs = []
-    LoadMode = mode }
+    LoadMode = mode; Build = SageFs.BuildOptimization.Unoptimized }
 
 let private healthyWarmup : WarmupContext =
   { SourceFilesScanned = 3

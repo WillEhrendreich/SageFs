@@ -44,7 +44,7 @@ let private unknownSid =
   | Error e -> failwith e
 
 let private exeProject : ProjectLoading.ClassifiedProject =
-  { Path = "/src/Web.fsproj"; Role = ProjectLoading.ProjectRole.Executable; PackageRefs = []; LoadMode = ProjectLoading.LoadMode.Evaluated }
+  { Path = "/src/Web.fsproj"; Role = ProjectLoading.ProjectRole.Executable; PackageRefs = []; LoadMode = ProjectLoading.LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
 
 let private baseInfo (app: AppRunState) : SessionInfo =
   { Id = sid

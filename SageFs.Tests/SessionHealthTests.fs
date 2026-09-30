@@ -13,7 +13,7 @@ let private project (role: ProjectRole) (name: string) : ClassifiedProject =
   { Path = sprintf "/repo/%s/%s.fsproj" name name
     Role = role
     PackageRefs = []
-    LoadMode = LoadMode.Evaluated }
+    LoadMode = LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
 
 let private myApp = project ProjectRole.Executable "MyApp"
 

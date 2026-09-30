@@ -86,6 +86,14 @@ module SessionHealth =
         Some (sprintf "%s: %s" (System.IO.Path.GetFileName project.Path) (FallbackCause.describe cause))
       | LoadMode.Evaluated -> None)
 
+  /// Each project whose assembly was built with optimizations, worded once by
+  /// `BuildOptimization.warning`. The session evaluates fine, so it is Degraded, not
+  /// Failed: what it cannot promise is that a hot-reload patch reaches the caller.
+  let private optimizedReasons (projectRoles: ClassifiedProject list) : string list =
+    projectRoles
+    |> List.choose (fun project ->
+      BuildOptimization.warning (System.IO.Path.GetFileName project.Path) project.Build)
+
   let private nothingLoadedReason =
     "Session is Ready but nothing was loaded: 0 assemblies, 0 namespaces opened, though a project was resolved. " +
     "The project likely has never been built — run `dotnet build` on it, then hard_reset_fsi_session (rebuild=true)."
@@ -126,7 +134,7 @@ module SessionHealth =
       SessionHealth.Starting
     | SessionLifecycleStatus.Ready _
     | SessionLifecycleStatus.Evaluating _ ->
-      match fallbackReasons projectRoles with
+      match fallbackReasons projectRoles @ optimizedReasons projectRoles with
       | _ :: _ as reasons -> SessionHealth.Degraded (String.concat " " reasons)
       | [] ->
       match warmup with

@@ -1,4 +1,4 @@
-﻿module SageFs.Tests.WorkerProtocolTests // trigger discovery
+module SageFs.Tests.WorkerProtocolTests // trigger discovery
 
 open System
 open System.IO
@@ -263,7 +263,7 @@ let workerProtocolTests =
             [ { Path = "/src/App/App.fsproj"
                 Role = SageFs.ProjectLoading.ProjectRole.Executable
                 PackageRefs = [ "Falco" ]
-                LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated } ]
+                LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized } ]
           CoreVersion = "0.0.0-test"
         }
         let resp = WorkerResponse.StatusResult("r6", status)

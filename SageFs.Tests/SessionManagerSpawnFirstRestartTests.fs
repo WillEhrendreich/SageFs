@@ -573,7 +573,7 @@ let sessionManagerProjectRolesTests =
     testTask "WHY — SessionManager — a Ready worker's classified projects reach the session because Run App picks its target from them" {
       let runtime = mkRuntime (fun _ -> Ok "build ok") (fun _ -> Ok(Process.GetCurrentProcess()))
       let app : SageFs.ProjectLoading.ClassifiedProject =
-        { Path = "/src/App/App.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Executable; PackageRefs = []; LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated }
+        { Path = "/src/App/App.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Executable; PackageRefs = []; LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
       let proxy (msg: WorkerMessage) =
         async {
           match msg with

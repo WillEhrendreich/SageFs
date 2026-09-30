@@ -61,7 +61,7 @@ let private readyInfo : SessionInfo =
     { Path = "Thing.fsproj"
       Role = ProjectRole.Library
       PackageRefs = []
-      LoadMode = LoadMode.Evaluated }
+      LoadMode = LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
 
   { Id = SessionId.newId ()
     Name = Some "ready"
