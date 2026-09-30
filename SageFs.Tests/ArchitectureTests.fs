@@ -1214,7 +1214,9 @@ let fileSizeBudgets =
       // 1780 -> 1740: runOnDedicatedThread (a 25-line comment and its body) and
       // killWorkerPids moved to WorkerSpawn.fs, net of recording each worker's
       // reload verdict (`ReloadObserved`).
-      "SageFs.Core/SessionManager.fs", 1740 ]
+      // 1740 -> 1616: the WorkerReady decision moved to WorkerReadyCommit.fs and
+      // the ready-poll watchdog and two post-ready fetches to WorkerPostReady.fs.
+      "SageFs.Core/SessionManager.fs", 1616 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->
