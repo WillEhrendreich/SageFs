@@ -681,8 +681,20 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         // block below is UNCHANGED from before this change — nothing that
         // reads plain text breaks — `structuredContent` is additive.
         task {
+          // A file-opening line (`namespace X`, `module A.B`) is not an eval: FSI answers it with a
+          // parser error that points at nothing, so say what works instead and don't send it.
+          let declaration =
+            match fp with
+            | Some _ -> SageFs.TopLevelDeclaration.NoDeclaration
+            | None -> SageFs.EvalPreflight.topLevelDeclaration code
           let! text, _outcome, diags, errOpt =
-            evalFSharpCodeWithOutcome ctx agentName code OutputFormat.Text sid wd fp em bsl intentOpt
+            match declaration with
+            | SageFs.TopLevelDeclaration.NoDeclaration ->
+              evalFSharpCodeWithOutcome ctx agentName code OutputFormat.Text sid wd fp em bsl intentOpt
+            | found ->
+              let hint = SageFs.EvalPreflight.hint found
+              let err = SageFs.SageFsError.EvalFailed hint
+              Task.FromResult (sprintf "Error: %s" hint, InfraFailure err, [], Some err)
           // Outbound size cap (roast-7 §13) applies to the text agents
           // actually read; the same bounded text feeds the JSON `result`
           // field so the two never disagree about what was returned.
