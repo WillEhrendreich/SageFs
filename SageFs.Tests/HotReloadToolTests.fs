@@ -40,6 +40,7 @@ let private mkToolsWf
         ActiveProject = None
         ProjectRoles = []
         App = SageFs.AppRun.AppRunState.NotRunning
+        Rebuild = LastRebuild.NeverRebuilt
       })
     GetAllSessions = fun () -> Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())

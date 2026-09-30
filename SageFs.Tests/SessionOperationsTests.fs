@@ -23,6 +23,7 @@ let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo =
   ProjectRoles = []
 
   App = SageFs.AppRun.AppRunState.NotRunning
+  Rebuild = LastRebuild.NeverRebuilt
 
 }
 
@@ -172,6 +173,7 @@ let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) (pid: in
   ProjectRoles = []
 
   App = SageFs.AppRun.AppRunState.NotRunning
+  Rebuild = LastRebuild.NeverRebuilt
 
 }
 

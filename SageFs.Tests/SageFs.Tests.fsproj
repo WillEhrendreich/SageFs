@@ -272,6 +272,7 @@
          <Compile Include="SessionManagerRestartTombstoneTests.fs" />
          <Compile Include="SessionManagerSpawnFirstRestartTests.fs" />
          <Compile Include="SessionManagerEarnedReadyTests.fs" />
+         <Compile Include="SessionManagerRebuildOutcomeTests.fs" />
          <Compile Include="CreateSessionDedupeTests.fs" />
          <Compile Include="SessionManagerMailboxSupervisionTests.fs" />
          <Compile Include="SessionActivityTouchTests.fs" />

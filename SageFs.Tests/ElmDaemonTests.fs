@@ -31,6 +31,7 @@ module ElmDaemonTestHelpers =
       ProjectRoles = []
 
       App = SageFs.AppRun.AppRunState.NotRunning
+      Rebuild = LastRebuild.NeverRebuilt
 
     }
     let proxy (msg: WorkerMessage) =

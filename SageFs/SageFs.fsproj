@@ -108,7 +108,6 @@
         <Compile Include="McpRouteError.fs" />
         <Compile Include="CreateSessionUx.fs" />
         <Compile Include="SessionStatusPayload.fs" />
-        <Compile Include="RebuildOutcome.fs" />
         <Compile Include="CohortErrorMapping.fs" />
         <Compile Include="Mcp.fs" />
 

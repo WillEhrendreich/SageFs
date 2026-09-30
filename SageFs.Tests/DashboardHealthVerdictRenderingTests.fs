@@ -38,7 +38,7 @@ module private Fixtures =
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = projects
-      App = SageFs.AppRun.AppRunState.NotRunning }
+      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
 
   let nothingLoadedWarmup : SageFs.WarmupContext =
     { SourceFilesScanned = 1

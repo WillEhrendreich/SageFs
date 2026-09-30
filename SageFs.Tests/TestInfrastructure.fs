@@ -753,6 +753,7 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
+          Rebuild = SageFs.LastRebuild.NeverRebuilt
         })
     GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())

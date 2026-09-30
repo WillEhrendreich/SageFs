@@ -528,6 +528,9 @@ module WorkerProtocol =
     ProjectRoles: ClassifiedProject list
     /// The app this session runs ("Run App"), as the user should see it.
     App: AppRun.AppRunState
+    /// What the last rebuild of this session did, recorded by SessionManager
+    /// for every caller (MCP, dashboard, live testing, app run).
+    Rebuild: LastRebuild
   }
 
   /// Utilities for deriving display-friendly paths from session metadata.

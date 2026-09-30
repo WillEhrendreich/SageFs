@@ -44,7 +44,7 @@ module McpSessionIsolation =
                      LastActivity = System.DateTime.UtcNow
                      ActiveProject = None
                      ProjectRoles = []
-                     App = SageFs.AppRun.AppRunState.NotRunning })
+                     App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt })
           GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
           UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
           NotifyWorkerDied = fun _ -> ()
@@ -199,7 +199,7 @@ module SessionResolutionByWorkingDir =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning }
+      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
 
   let tests = testList "resolveSessionByWorkingDir" [
     test "returns None for empty session list" {
@@ -281,7 +281,7 @@ module WorkingDirDeepMatching =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning }
+      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
 
   let tests = testList "sessionsMatchingWorkingDirDeep" [
 
@@ -396,7 +396,7 @@ module WorkingDirRoutingPriority =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning }
+      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
 
   let dummyProxy : WorkerProtocol.SessionProxy =
     fun _msg -> async { return WorkerProtocol.WorkerResponse.WorkerReady }
@@ -655,7 +655,7 @@ module ResetIsolation =
                  Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 0; Port = None }
                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
                  CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow
-                 ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning })
+                 ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt })
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
       UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
       NotifyWorkerDied = fun _ -> ()
@@ -708,7 +708,7 @@ module ResetIsolation =
         LastActivity = DateTime.UtcNow
         ActiveProject = None
         ProjectRoles = []
-        App = SageFs.AppRun.AppRunState.NotRunning }
+        App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
 
     let statusSnapshot () : WorkerProtocol.WorkerStatusSnapshot =
       let status =
@@ -836,7 +836,7 @@ module ResetIsolation =
                    LastActivity = DateTime.UtcNow
                    ActiveProject = None
                    ProjectRoles = []
-                   App = SageFs.AppRun.AppRunState.NotRunning })
+                   App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
           statuses.Add(status)
@@ -975,7 +975,7 @@ module ResetIsolation =
         "Starting"
     }
 
-    testTask "WHY — hardResetSession with rebuild=true — a failed build is recorded as the rebuild outcome and never written to the registry, because the SessionManager owns session status and build-first keeps the worker serving" {
+    testTask "WHY — hardResetSession with rebuild=true — a failed build is reported and never written to the registry by the tool, because the SessionManager owns session status (and records the rebuild's outcome) and build-first keeps the worker serving" {
       // Create context where RestartSession can be controlled via TCS
       let sidStr = "bbb00011"
       let sessionMap = ConcurrentDictionary<string, string>()
@@ -1000,6 +1000,7 @@ module ResetIsolation =
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
             ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning
+            Rebuild = LastRebuild.NeverRebuilt
           })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
@@ -1058,13 +1059,9 @@ module ResetIsolation =
 
       statuses |> Seq.toList
       |> Expect.isEmpty "the tool writes no session status — the SessionManager owns it"
-
-      match rebuildOutcomes.TryGetValue sidStr with
-      | true, RebuildOutcome.FailedStillServing (SageFsError.HardResetFailed "build failed", _) -> ()
-      | _, other -> failtestf "expected FailedStillServing carrying the build error, got %A" other
     }
 
-    testTask "WHY — hardResetSession with rebuild=true — an exception from RestartSession is recorded as a failed rebuild and reported, never swallowed, because a fire-and-forget task must surface its failure" {
+    testTask "WHY — hardResetSession with rebuild=true — an exception from RestartSession is reported as a faulted status, never swallowed, because the owner never saw the call (so recorded nothing) and a fire-and-forget task must surface its failure" {
       let sidStr = "bbb00012"
       let finished = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
       let sessionMap = ConcurrentDictionary<string, string>()
@@ -1091,6 +1088,7 @@ module ResetIsolation =
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
             ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning
+            Rebuild = LastRebuild.NeverRebuilt
           })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
@@ -1128,11 +1126,14 @@ module ResetIsolation =
           GetProcessTelemetry = fun () -> None } : McpContext
 
       // The background rebuild reports its outcome as one final status event.
+      let displayed = ref SessionDisplayStatus.Running
       let ctx =
         { ctx with
             Dispatch = Some (fun msg ->
               match msg with
-              | SageFsMsg.Event (TuiEvent.SessionStatusChanged _) -> finished.TrySetResult(()) |> ignore
+              | SageFsMsg.Event (TuiEvent.SessionStatusChanged (_, display)) ->
+                displayed.Value <- display
+                finished.TrySetResult(()) |> ignore
               | _ -> ()) }
 
       let! message = hardResetSession ctx "agent1" true (Some sidStr) None
@@ -1149,10 +1150,10 @@ module ResetIsolation =
       statuses |> Seq.toList
       |> Expect.isEmpty "the tool writes no session status — the SessionManager owns it"
 
-      match rebuildOutcomes.TryGetValue sidStr with
-      | true, RebuildOutcome.FailedStillServing (SageFsError.Unexpected ex, _) ->
-        ex.Message |> Expect.stringContains "the outcome carries the exception" "unexpected crash in RestartSession"
-      | _, other -> failtestf "expected a failed rebuild carrying the exception, got %A" other
+      match displayed.Value with
+      | SessionDisplayStatus.Faulted reason ->
+        reason |> Expect.stringContains "the status carries the exception" "unexpected crash in RestartSession"
+      | other -> failtestf "expected a faulted status carrying the exception, got %A" other
     }
 
     testTask "concurrent agents: resetting one never touches the other's session" {
@@ -1539,7 +1540,7 @@ module SessionMapEviction =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning }
+      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
 
   let tests = testList "SessionMap eviction" [
     test "setActiveSessionId with empty id removes the agent entry" {

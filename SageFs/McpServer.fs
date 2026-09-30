@@ -2768,6 +2768,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
              status = status
              faultReason = (SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status |> Option.map SageFs.WorkerProtocol.FaultReason.describe)
              health = SageFs.SessionHealth.toJson health
+             lastRestart = SageFs.SessionStatusPayload.lastRestartJson (SageFs.SessionStatusPayload.lastRestartOfRebuild DateTime.UtcNow None sess.Rebuild)
              projects = sess.Projects
              // What the worker ACTUALLY resolved and loaded, which is not always what
              // was declared: a session created with `projects=[]` still loads whatever

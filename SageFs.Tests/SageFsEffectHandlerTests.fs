@@ -58,6 +58,7 @@ module TestDeps =
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
+      Rebuild = LastRebuild.NeverRebuilt
     }
     let proxy (msg: WorkerMessage) =
       async {
@@ -134,6 +135,7 @@ module TestDeps =
             ActiveProject = None
             ProjectRoles = []
             App = SageFs.AppRun.AppRunState.NotRunning
+            Rebuild = LastRebuild.NeverRebuilt
           }
           return Result.Ok info
         }
@@ -536,6 +538,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
+      Rebuild = LastRebuild.NeverRebuilt
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -630,6 +633,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
+      Rebuild = LastRebuild.NeverRebuilt
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -724,6 +728,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
+      Rebuild = LastRebuild.NeverRebuilt
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -812,6 +817,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
+      Rebuild = LastRebuild.NeverRebuilt
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -906,6 +912,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
+      Rebuild = LastRebuild.NeverRebuilt
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -1026,6 +1033,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
+      Rebuild = LastRebuild.NeverRebuilt
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -1124,6 +1132,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
+      Rebuild = LastRebuild.NeverRebuilt
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -1329,6 +1338,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
+      Rebuild = LastRebuild.NeverRebuilt
     }
     let warmup : WarmupContext = {
       AssembliesLoaded =
@@ -1398,7 +1408,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
                   Status = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive
-                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }]
+                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }]
       }
       SleepMs = fun _ -> async { return () }
       GetWarmupContext = None
@@ -1439,7 +1449,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
                   Status = SessionLifecycleStatus.Starting { Pid = 0; Port = None }
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive
-                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }]
+                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }]
       }
       SleepMs = fun _ -> async { return () }
       GetWarmupContext =

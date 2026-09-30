@@ -89,7 +89,7 @@ module GetStartupInfoTests =
         LastActivity = DateTime.UtcNow
         ActiveProject = None
         ProjectRoles = []
-        App = SageFs.AppRun.AppRunState.NotRunning }
+        App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
     let ops : SageFs.SessionManagementOps =
       { SageFs.SessionManagementOps.stub with
           GetProxy = fun _ -> Task.FromResult(Some (fun _ -> async { return WorkerResponse.WorkerReady }))

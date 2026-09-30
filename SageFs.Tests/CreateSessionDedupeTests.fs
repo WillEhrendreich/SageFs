@@ -56,7 +56,7 @@ let private mkSessionInfo (id: SessionId) (r: CreateRequest) (status: SessionSta
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = AppRun.AppRunState.NotRunning }
+    App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
 
 let private mkManagedSession (id: SessionId) (r: CreateRequest) (status: SessionStatus) : ManagedSession =
   let proxy : SessionProxy =

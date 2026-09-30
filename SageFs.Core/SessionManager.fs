@@ -180,6 +180,12 @@ module SessionManager =
     let clearRebuildInFlight id state =
       { state with RebuildsInFlight = Map.remove id state.RebuildsInFlight }
 
+    /// Record what a rebuild did on the session itself, so every reader sees it.
+    let recordRebuild id (outcome: RebuildOutcome) state =
+      match tryGetSession id state with
+      | Some session -> addSession id { session with Info = { session.Info with Rebuild = LastRebuild.Latest outcome } } state
+      | None -> state
+
     let setPendingSwap id oldSession state =
       { state with PendingSwap = Map.add id oldSession state.PendingSwap }
 
@@ -608,6 +614,7 @@ module SessionManager =
           ActiveProject = session.Info.ActiveProject
           ProjectRoles = session.ProjectRoles
           App = AppRun.acrossWorkerRestart session.Info.App
+          Rebuild = session.Info.Rebuild
         }
         let restarted = {
           Info = info
@@ -657,7 +664,7 @@ module SessionManager =
         (reply: AsyncReplyChannel<Result<string, SageFsError>>)
         (acceptedMessage: string)
         (span: Activity)
-        : ManagerState =
+        : ManagerState * Result<unit, SageFsError> =
         match isNull span with
         | false -> span.SetTag("restart.decision", "spawn_first") |> ignore
         | true -> ()
@@ -668,7 +675,7 @@ module SessionManager =
           Log.warn "[SessionManager] replacement worker for session %s could not start; the current worker keeps serving: %s" (SessionId.value id) (SageFsError.describe err)
           reply.Reply(Error err)
           Instrumentation.failSpan span (SageFsError.describe err)
-          state
+          state, Result.Error err
         | Ok spawned ->
           let proc = spawned.Process
           // Registry continuity (P7): the session stays registered for the
@@ -704,7 +711,7 @@ module SessionManager =
           reply.Reply(Ok acceptedMessage)
           Instrumentation.sessionsRestarted.Add(1L)
           Instrumentation.succeedSpan span
-          newState
+          newState, Ok ()
 
       // Answer callers parked by AwaitReady once their session is Ready or can
       // no longer become Ready — whichever step caused it.
@@ -797,6 +804,7 @@ module SessionManager =
                   ActiveProject = None
                   ProjectRoles = []
                   App = AppRun.AppRunState.NotRunning
+                  Rebuild = LastRebuild.NeverRebuilt
                 }
                 let managed = {
                   Info = info
@@ -876,7 +884,7 @@ module SessionManager =
 
             match rebuild with
             | false ->
-              return spawnFirst state id session session.Workflow reply "Hard reset accepted — replacement worker spawning." span
+              return fst (spawnFirst state id session session.Workflow reply "Hard reset accepted — replacement worker spawning." span)
             | true ->
               // rebuild=true runs `dotnet build` OFF the mailbox loop so other
               // session operations (list/create/stop) stay responsive for the
@@ -901,7 +909,7 @@ module SessionManager =
                 | false -> span.SetTag("restart.decision", "build_first") |> ignore
                 | true -> ()
                 Instrumentation.succeedSpan span
-                return buildInBackground (ManagerState.setRebuildInFlight id reply state)
+                return buildInBackground (ManagerState.recordRebuild id (RebuildOutcome.InProgress DateTime.UtcNow) (ManagerState.setRebuildInFlight id reply state))
               | None ->
               // No live worker (faulted or stopped): nothing to keep serving.
               match isNull span with
@@ -925,7 +933,7 @@ module SessionManager =
                 { afterMark with
                     WarmupProgress = Map.remove id afterMark.WarmupProgress }
               Instrumentation.succeedSpan span
-              return buildInBackground (ManagerState.setRebuildInFlight id reply stateAfterStop)
+              return buildInBackground (ManagerState.recordRebuild id (RebuildOutcome.InProgress DateTime.UtcNow) (ManagerState.setRebuildInFlight id reply stateAfterStop))
           | None ->
             reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
             Instrumentation.failSpan span (sprintf "Session %s not found" (SessionId.value id))
@@ -949,15 +957,19 @@ module SessionManager =
               Log.warn "[SessionManager] rebuild for session %s failed; the previous build keeps serving: %s" (SessionId.value id) msg
               reply.Reply(Error err)
               Instrumentation.failSpan rebuildSpan msg
-              return stateCleared
+              return ManagerState.recordRebuild id (RebuildOutcome.FailedStillServing (err, DateTime.UtcNow)) stateCleared
             | Ok _buildMsg, Some _ ->
-              return spawnFirst stateCleared id session session.Workflow reply "Hard reset complete — worker respawning with fresh assemblies." rebuildSpan
+              // The build is good; whether the replacement starts decides the outcome.
+              let swapped, spawn = spawnFirst stateCleared id session session.Workflow reply "Hard reset complete — worker respawning with fresh assemblies." rebuildSpan
+              match spawn with
+              | Ok () -> return ManagerState.recordRebuild id (RebuildOutcome.Succeeded DateTime.UtcNow) swapped
+              | Error spawnErr -> return ManagerState.recordRebuild id (RebuildOutcome.FailedStillServing (spawnErr, DateTime.UtcNow)) swapped
             | Error err, None ->
               // No worker to fall back to → faulted tombstone that says why.
               let msg = SageFsError.describe err
               Log.warn "[SessionManager] rebuild for session %s failed and no worker is serving it: %s" (SessionId.value id) msg
               let tombstone = faultedTombstone msg session
-              let newState = ManagerState.addSession id tombstone stateCleared
+              let newState = ManagerState.recordRebuild id (RebuildOutcome.FailedNotServing (err, DateTime.UtcNow)) (ManagerState.addSession id tombstone stateCleared)
               reply.Reply(Error err)
               onSessionReady id
               onSessionFaulted id msg
@@ -968,10 +980,10 @@ module SessionManager =
               match spawnResult with
               | Ok () ->
                 reply.Reply(Ok "Hard reset complete — worker respawning with fresh assemblies.")
-                return newState
+                return ManagerState.recordRebuild id (RebuildOutcome.Succeeded DateTime.UtcNow) newState
               | Error err ->
                 reply.Reply(Error err)
-                return newState
+                return ManagerState.recordRebuild id (RebuildOutcome.FailedNotServing (err, DateTime.UtcNow)) newState
           | None ->
             // Session was stopped while the build ran (StopSession/StopAll
             // removed it and cleared the in-flight flag). Answer the carried
@@ -1641,7 +1653,7 @@ module SessionManager =
             // switch never claims a workflow the serving worker does not have.
             let span =
               Instrumentation.startSpan Instrumentation.sessionSource "session.switch_workflow" [("session.id", box id)]
-            let newState = spawnFirst state id session workflow reply "Hard reset accepted — replacement worker spawning." span
+            let newState, _ = spawnFirst state id session workflow reply "Hard reset accepted — replacement worker spawning." span
             onSessionProgressChanged ()
             return newState
           | None ->

@@ -33,6 +33,7 @@ let mkSessionInfo (id: SessionId) status =
     ProjectRoles = []
 
     App = SageFs.AppRun.AppRunState.NotRunning
+    Rebuild = LastRebuild.NeverRebuilt
 
   }
 

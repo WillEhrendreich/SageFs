@@ -65,7 +65,7 @@ let private mkSessionInfo (id: SageFs.WorkerProtocol.SessionId) (workingDirector
     Workflow = SageFs.WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = SageFs.AppRun.AppRunState.NotRunning }
+    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = SageFs.LastRebuild.NeverRebuilt }
 
 /// A `MemberRecord` for `alice`, bound to `sid` — the `resolveSaveObserver`
 /// tests' cohort membership fixture.

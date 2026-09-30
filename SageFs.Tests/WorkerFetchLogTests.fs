@@ -28,7 +28,7 @@ let private sessionWith (status: SessionLifecycleStatus) : SessionInfo =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = SageFs.AppRun.AppRunState.NotRunning }
+    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
 
 /// A snapshot that still remembers the worker's URL, as the real one does for a
 /// session whose worker has just gone away.

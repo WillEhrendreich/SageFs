@@ -51,6 +51,15 @@ module SessionStatusPayload =
       | RestartKind.FailedStillServing -> "FailedStillServing"
       | RestartKind.FailedNotServing -> "FailedNotServing"
 
+  /// The payload's name for what a rebuild outcome is. Exhaustive, so a new
+  /// outcome cannot be added without deciding how it is reported.
+  let restartKindOf (outcome: RebuildOutcome) : RestartKind =
+    match outcome with
+    | RebuildOutcome.InProgress _ -> RestartKind.InProgress
+    | RebuildOutcome.Succeeded _ -> RestartKind.Succeeded
+    | RebuildOutcome.FailedStillServing _ -> RestartKind.FailedStillServing
+    | RebuildOutcome.FailedNotServing _ -> RestartKind.FailedNotServing
+
   /// Nothing recorded is its own case: a session nobody restarted must not be
   /// reported as a restart that succeeded.
   [<RequireQualifiedAccess>]
@@ -77,6 +86,15 @@ module SessionStatusPayload =
     /// The outcome of the last requested rebuild, in the caller's own words.
     LastRestart: LastRestart
   }
+
+  /// What a session's rebuild history says, in the payload's terms. The one
+  /// projection every surface uses (MCP status, /api/sessions), so none can read
+  /// the record differently. `coreVersion` is the session's own SageFs.Core when
+  /// the caller has asked its worker.
+  let lastRestartOfRebuild (now: System.DateTime)(coreVersion: string option) (rebuild: LastRebuild) : LastRestart =
+    match rebuild with
+    | LastRebuild.Latest outcome -> LastRestart.Recorded(restartKindOf outcome, RebuildOutcome.describe now coreVersion outcome)
+    | LastRebuild.NeverRebuilt -> LastRestart.NoneRecorded
 
   /// How `lastRestart` appears in EVERY status shape (routable, warming,
   /// faulted). One function, so a shape cannot forget it: the warming shape did,

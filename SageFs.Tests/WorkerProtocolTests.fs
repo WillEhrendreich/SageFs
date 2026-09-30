@@ -399,6 +399,7 @@ let workerProtocolTests =
           ProjectRoles = []
 
           App = SageFs.AppRun.AppRunState.NotRunning
+          Rebuild = LastRebuild.NeverRebuilt
 
         }
         SessionInfo.displayName info
@@ -421,6 +422,7 @@ let workerProtocolTests =
           ProjectRoles = []
 
           App = SageFs.AppRun.AppRunState.NotRunning
+          Rebuild = LastRebuild.NeverRebuilt
 
         }
         SessionInfo.displayName info
@@ -478,6 +480,7 @@ let workerProtocolTests =
           ProjectRoles = []
 
           App = SageFs.AppRun.AppRunState.NotRunning
+          Rebuild = LastRebuild.NeverRebuilt
 
         }
         let _, result = roundTrip<SessionInfo> info

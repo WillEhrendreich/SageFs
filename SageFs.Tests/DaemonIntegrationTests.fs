@@ -83,6 +83,7 @@ let managerStateTests =
         ProjectRoles = []
 
         App = SageFs.AppRun.AppRunState.NotRunning
+        Rebuild = LastRebuild.NeverRebuilt
 
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -125,6 +126,7 @@ let managerStateTests =
         ProjectRoles = []
 
         App = SageFs.AppRun.AppRunState.NotRunning
+        Rebuild = LastRebuild.NeverRebuilt
 
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -168,6 +170,7 @@ let managerStateTests =
           ProjectRoles = []
 
           App = SageFs.AppRun.AppRunState.NotRunning
+          Rebuild = LastRebuild.NeverRebuilt
 
         }
         { Info = info

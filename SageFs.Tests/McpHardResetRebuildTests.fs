@@ -18,12 +18,14 @@ type private Probe = {
   /// Every message routed to the session's worker.
   Routed: ResizeArray<WorkerProtocol.WorkerMessage>
   Finished: TaskCompletionSource<SessionDisplayStatus>
+  /// What the registry says the last rebuild did. The SessionManager records
+  /// it (see SessionManagerRebuildOutcomeTests); the tool only reads it.
+  Rebuild: LastRebuild ref
 }
 
-/// Each test owns its session id: rebuildOutcomes is daemon-global, and tests
-/// run in parallel.
 let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsError>) (statusAfter: WorkerProtocol.SessionStatus) : Probe =
   let status = ref (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 42; Port = Some 1 })
+  let rebuild = ref LastRebuild.NeverRebuilt
   let restarts = ResizeArray<SageFs.RestartPlan>()
   let writes = ResizeArray<WorkerProtocol.SessionLifecycleStatus>()
   let routed = ResizeArray<WorkerProtocol.WorkerMessage>()
@@ -33,7 +35,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
       Status = status.Value
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-      ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning }
+      ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning; Rebuild = rebuild.Value }
   let ops =
     { SessionManagementOps.stub with
         GetProxy = fun _ ->
@@ -51,6 +53,22 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
         RestartSession = fun _ plan ->
           restarts.Add plan
           status.Value <- WorkerProtocol.SessionLifecycleStatus.ofWorkerReport status.Value statusAfter
+          // This fake stands in for the owner, which records what a rebuild did
+          // (and records nothing for a refusal). The tool only reads it back.
+          let serving =
+            match status.Value with
+            | WorkerProtocol.SessionLifecycleStatus.Ready _ | WorkerProtocol.SessionLifecycleStatus.Evaluating _ | WorkerProtocol.SessionLifecycleStatus.Building _ -> true
+            | _ -> false
+          match plan, restartResult with
+          | SageFs.RestartPlan.Rebuild _, Error error when RestartRefusal.isAlreadyInProgress error -> ()
+          | SageFs.RestartPlan.Rebuild _, Error error ->
+            rebuild.Value <-
+              LastRebuild.Latest (
+                match serving with
+                | true -> RebuildOutcome.FailedStillServing (error, DateTime.UtcNow)
+                | false -> RebuildOutcome.FailedNotServing (error, DateTime.UtcNow))
+          | SageFs.RestartPlan.Rebuild _, Ok _ -> rebuild.Value <- LastRebuild.Latest (RebuildOutcome.Succeeded DateTime.UtcNow)
+          | _ -> ()
           Task.FromResult restartResult }
   let sessionMap = Collections.Concurrent.ConcurrentDictionary<string, string>()
   sessionMap.["agent1"] <- sessionId
@@ -66,7 +84,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
       ActivityTracker = AgentActivityTracker.create (); LiveSnapshotSink = None; CohortOwner = None
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }
-  { SessionId = sessionId; Ctx = ctx; Restarts = restarts; StatusWrites = writes; Routed = routed; Finished = finished }
+  { SessionId = sessionId; Ctx = ctx; Restarts = restarts; StatusWrites = writes; Routed = routed; Finished = finished; Rebuild = rebuild }
 
 /// Waits for the background rebuild's final status notification.
 let private awaitOutcome (p: Probe) = task {
@@ -76,6 +94,21 @@ let private awaitOutcome (p: Probe) = task {
 }
 
 let private hardReset (p: Probe) = hardResetSession p.Ctx "agent1" true (Some p.SessionId) None
+
+/// The probe's context as a session mid cold-restart sees it: Restarting, and
+/// with NO proxy installed yet, which is the shape get_session_status reports as
+/// warming (and the one that used to hide the rebuild behind it).
+let private whileRestarting (p: Probe) : McpContext =
+  let baseGet = p.Ctx.SessionOps.GetSessionInfo
+  { p.Ctx with
+      SessionOps =
+        { p.Ctx.SessionOps with
+            GetProxy = fun _ -> Task.FromResult None
+            GetSessionInfo = fun id ->
+              task {
+                let! info = baseGet id
+                return info |> Option.map (fun i -> { i with Status = WorkerProtocol.SessionLifecycleStatus.Restarting WorkerProtocol.PreviousWorker.ColdStart })
+              } } }
 
 /// `state` and `lastRestart.outcome` out of a get_session_status payload. A plain
 /// function, because `use` on a JsonDocument inside a task builder picks an
@@ -87,6 +120,15 @@ let private stateAndLastRestartOutcome (json: string) : string * string =
   | true, restart when restart.ValueKind = System.Text.Json.JsonValueKind.Object ->
     state, restart.GetProperty("outcome").GetString()
   | _ -> failtestf "no lastRestart object in the payload: %s" json
+
+/// `lastRestart.outcome` when the payload has one, and None when it is null. A
+/// plain function for the same reason as above.
+let private lastRestartLabel (json: string) : string option =
+  use doc = System.Text.Json.JsonDocument.Parse json
+  match doc.RootElement.TryGetProperty "lastRestart" with
+  | true, restart when restart.ValueKind = System.Text.Json.JsonValueKind.Object -> Some (restart.GetProperty("outcome").GetString())
+  | true, restart when restart.ValueKind = System.Text.Json.JsonValueKind.Null -> None
+  | _ -> failtestf "no lastRestart in the payload: %s" json
 
 let private buildFailed =
   SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "Program.fs(3,5): error FS0039: The value 'x' is not defined" ])
@@ -112,9 +154,6 @@ let tests = testList "MCP hard reset rebuild" [
     let! _ = hardReset p
     let! display = awaitOutcome p
     display |> Expect.equal "the session is still serving" SessionDisplayStatus.Running
-    match rebuildOutcomes.TryGetValue p.SessionId with
-    | true, RebuildOutcome.FailedStillServing (error, _) -> error |> Expect.equal "the compiler error is kept for get_fsi_status" buildFailed
-    | _, other -> failtestf "expected FailedStillServing, got %A" other
   }
 
   testTask "WHY — hard_reset rebuild=true — a failed cold rebuild shows the build error because no worker is left serving" {
@@ -127,31 +166,34 @@ let tests = testList "MCP hard reset rebuild" [
   testTask "WHY — hard_reset rebuild=true — a second reset the owner REFUSES as already in progress leaves the running rebuild's state alone, because status must not report a rebuild as FAILED while it is still running" {
     let refused = SageFsError.HardResetFailed "Hard reset already in progress for this session"
     let p = mkProbe "aaa00040" (Error refused) WorkerProtocol.SessionStatus.Ready
-    let startedAt = DateTime.UtcNow.AddSeconds -5.0
-    // A first rebuild is in flight: the tool recorded it as in progress.
-    rebuildOutcomes.[p.SessionId] <- RebuildOutcome.InProgress startedAt
+    // A first rebuild is in flight: the registry says so.
+    p.Rebuild.Value <- LastRebuild.Latest (RebuildOutcome.InProgress (DateTime.UtcNow.AddSeconds -5.0))
     let! _ = hardReset p
     let! _ = awaitOutcome p
-    rebuildOutcomes.[p.SessionId]
-    |> Expect.equal "still the FIRST rebuild, still in progress: a refusal is not an outcome" (RebuildOutcome.InProgress startedAt)
+    let! (json: string) = getSessionStatus (whileRestarting p) "agent1" (Some p.SessionId) None
+    stateAndLastRestartOutcome json |> snd
+    |> Expect.equal "still the FIRST rebuild, still in progress: the tool keeps no outcome, so a refusal cannot overwrite one" "InProgress"
+  }
+
+  testTask "WHY — get_session_status reports each thing the registry recorded about the last rebuild, and nothing when it recorded nothing" {
+    let at = DateTime(2026, 9, 30, 12, 0, 0, DateTimeKind.Utc)
+    let cases =
+      [ LastRebuild.Latest (RebuildOutcome.InProgress at), Some "InProgress"
+        LastRebuild.Latest (RebuildOutcome.Succeeded at), Some "Succeeded"
+        LastRebuild.Latest (RebuildOutcome.FailedStillServing (buildFailed, at)), Some "FailedStillServing"
+        LastRebuild.Latest (RebuildOutcome.FailedNotServing (buildFailed, at)), Some "FailedNotServing"
+        LastRebuild.NeverRebuilt, None ]
+    for index, (recorded, expected) in List.indexed cases do
+      let p = mkProbe (sprintf "aaa0005%d" index) (Ok "unused") WorkerProtocol.SessionStatus.Ready
+      p.Rebuild.Value <- recorded
+      let! (json: string) = getSessionStatus (whileRestarting p) "agent1" (Some p.SessionId) None
+      lastRestartLabel json |> Expect.equal (sprintf "%A" recorded) expected
   }
 
   testTask "WHY — get_session_status on a session that is restarting still reports the rebuild behind it, because a cold restart is exactly the shape that hid a failing or running rebuild" {
     let p = mkProbe "aaa00041" (Ok "Hard reset complete") WorkerProtocol.SessionStatus.Ready
-    let baseGet = p.Ctx.SessionOps.GetSessionInfo
-    // A session mid cold-restart is Restarting and has NO proxy installed yet.
-    let restarting =
-      { p.Ctx with
-          SessionOps =
-            { p.Ctx.SessionOps with
-                GetProxy = fun _ -> Task.FromResult None
-                GetSessionInfo = fun id ->
-                  task {
-                    let! info = baseGet id
-                    return info |> Option.map (fun i -> { i with Status = WorkerProtocol.SessionLifecycleStatus.Restarting WorkerProtocol.PreviousWorker.ColdStart })
-                  } } }
-    rebuildOutcomes.[p.SessionId] <- RebuildOutcome.InProgress DateTime.UtcNow
-    let! (json: string) = getSessionStatus restarting "agent1" (Some p.SessionId) None
+    p.Rebuild.Value <- LastRebuild.Latest (RebuildOutcome.InProgress DateTime.UtcNow)
+    let! (json: string) = getSessionStatus (whileRestarting p) "agent1" (Some p.SessionId) None
     let state, outcome = stateAndLastRestartOutcome json
     state |> Expect.equal "this is the warming shape" "WarmingUp"
     outcome |> Expect.equal "and it says the rebuild is in progress" "InProgress"
@@ -178,24 +220,4 @@ let tests = testList "MCP hard reset rebuild" [
     let! reply = hardResetSession p.Ctx "agent1" false (Some p.SessionId) None
     reply |> Expect.equal "the owner's refusal, with its next step" (sprintf "Error: %s" (SageFsError.describeForAgent refused))
   }
-
-  testProperty "WHY — RebuildOutcome.ofResult — a failure counts as still serving exactly when the owner left the session routable, because only the owner knows whether a worker survived" <|
-    fun (status: WorkerProtocol.SessionStatus) ->
-      let at = DateTime(2026, 9, 11, 12, 0, 0, DateTimeKind.Utc)
-      let lifecycleStatus =
-        WorkerProtocol.SessionLifecycleStatus.ofWorkerReport
-          (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None })
-          status
-      let serving =
-        match lifecycleStatus with
-        | WorkerProtocol.SessionLifecycleStatus.Ready _
-        | WorkerProtocol.SessionLifecycleStatus.Evaluating _
-        | WorkerProtocol.SessionLifecycleStatus.Building _ -> true
-        | _ -> false
-      let expected =
-        match serving with
-        | true -> RebuildOutcome.FailedStillServing (buildFailed, at)
-        | false -> RebuildOutcome.FailedNotServing (buildFailed, at)
-      RebuildOutcome.ofResult at (Error buildFailed) (Some lifecycleStatus) = expected
-      && RebuildOutcome.ofResult at (Ok "done") (Some lifecycleStatus) = RebuildOutcome.Succeeded at
 ]

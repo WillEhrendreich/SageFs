@@ -1103,7 +1103,9 @@ let fileSizeBudgets =
       // block became one helper. Net of the lastRestart lookup and helper.
       // 4298 -> 4280: the eval dedup cache is gone (lookup, record and five
       // clearSession calls).
-      "SageFs/Mcp.fs", 4280
+      // 4280 -> 4258: the rebuild outcome is recorded by the SessionManager now,
+      // so the tool's own store and its recording are gone.
+      "SageFs/Mcp.fs", 4258
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
@@ -1207,7 +1209,9 @@ let fileSizeBudgets =
       // 1915 -> 1904: the ready-transport validity helpers moved to
       // ReadyTransport.fs, net of three log lines for the failed-rebuild paths.
       // 1904 -> 1894: the worker stderr queue became StderrTail (TailBuffer.fs).
-      "SageFs.Core/SessionManager.fs", 1894 ]
+      // 1894 -> 1780: startWorkerProcess and SpawnedWorker moved to WorkerSpawn.fs
+      // (about 130 lines), net of recording every rebuild's outcome on the session.
+      "SageFs.Core/SessionManager.fs", 1780 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->

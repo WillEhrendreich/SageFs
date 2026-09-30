@@ -35,7 +35,7 @@ let private mkCtxWithWorkerResponse (workerResponse: WorkerProtocol.WorkerRespon
                LastActivity = DateTime.UtcNow
                ActiveProject = None
                ProjectRoles = []
-               App = SageFs.AppRun.AppRunState.NotRunning })
+               App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt })
     GetAllSessions = fun () -> Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
     NotifyWorkerDied = fun _ -> ()

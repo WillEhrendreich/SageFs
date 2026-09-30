@@ -240,18 +240,12 @@ module McpTools =
   let typeIdentityDiagnostics =
     Collections.Concurrent.ConcurrentDictionary<string, string>()
 
-  /// Per-session outcome of the last agent-requested rebuild (see RebuildOutcome).
-  let rebuildOutcomes =
-    Collections.Concurrent.ConcurrentDictionary<string, RebuildOutcome>()
-
-  /// What the last rebuild for this session did, in the status payload's terms.
-  let private lastRestartFor (sid: string) (coreVersion: string option) : SessionStatusPayload.LastRestart =
-    match rebuildOutcomes.TryGetValue sid with
-    | true, outcome ->
-      SessionStatusPayload.LastRestart.Recorded(
-        RebuildOutcome.kind outcome,
-        RebuildOutcome.describe DateTime.UtcNow coreVersion outcome)
-    | false, _ -> SessionStatusPayload.LastRestart.NoneRecorded
+  /// What the last rebuild of this session did, in the status payload's terms.
+  /// Read off the session itself: the manager records it for every caller.
+  let private lastRestartFor (info: WorkerProtocol.SessionInfo option) (coreVersion: string option) : SessionStatusPayload.LastRestart =
+    match info with
+    | Some session -> SessionStatusPayload.lastRestartOfRebuild DateTime.UtcNow coreVersion session.Rebuild
+    | None -> SessionStatusPayload.LastRestart.NoneRecorded
 
 
   // Session working-directory routing/matching helpers moved to
@@ -1309,7 +1303,7 @@ module McpTools =
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
              workerPid = WorkerProtocol.SessionLifecycleStatus.workerPid status
              workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status
-             lastRestart = SessionStatusPayload.lastRestartJson (lastRestartFor sid None)
+             lastRestart = SessionStatusPayload.lastRestartJson (lastRestartFor info None)
              available = SageFs.Affordances.availableTools SageFs.SessionState.WarmingUp |})
       | FaultedSession (sid, cause) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1321,7 +1315,7 @@ module McpTools =
              faultReason = FaultCause.describe cause
              target = targets
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
-             lastRestart = SessionStatusPayload.lastRestartJson (lastRestartFor sid None)
+             lastRestart = SessionStatusPayload.lastRestartJson (lastRestartFor info None)
              available = SageFs.Affordances.availableTools SageFs.SessionState.Faulted |})
       | Routable sid ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1360,7 +1354,7 @@ module McpTools =
               // The hard-reset tool answers "initiated" and points here for the
               // result. Without this a failed rebuild was recorded and then
               // never shown, so it read exactly like one still running.
-              LastRestart = lastRestartFor sid (Some snapshot.CoreVersion) }
+              LastRestart = lastRestartFor info (Some snapshot.CoreVersion) }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
@@ -1441,9 +1435,9 @@ module McpTools =
           // so Role comes from the bound MemberId case, not a re-parsed string.
           AgentActivityTracker.recordMemberActivity ctx.ActivityTracker (memberIdFor agent) sid None None DateTime.UtcNow
           let rebuildLine =
-            match rebuildOutcomes.TryGetValue sid with
-            | true, outcome -> "\n" + RebuildOutcome.describe DateTime.UtcNow (Some snapshot.CoreVersion) outcome
-            | false, _ -> ""
+            match info |> Option.map (fun i -> i.Rebuild) with
+            | Some (LastRebuild.Latest outcome) -> "\n" + RebuildOutcome.describe DateTime.UtcNow (Some snapshot.CoreVersion) outcome
+            | Some LastRebuild.NeverRebuilt | None -> ""
           // Self-host staleness (F5b): only sessions that adopted their own
           // SageFs.Core build carry an AdoptedCore identity, so the on-disk
           // scan runs ONLY for those (rare) sessions — never on the common
@@ -1821,57 +1815,41 @@ module McpTools =
   let private rebuildInitiatedMessage =
     "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_session_status reports the rebuild's progress and outcome."
 
-  /// Starts a rebuild=true hard reset in the background and records what it did.
-  /// The text tool and the Result tool each carried their own copy of this, so a
-  /// fix had to land twice.
+  /// Starts a rebuild=true hard reset in the background. The text tool and the
+  /// Result tool each carried their own copy of this, so a fix had to land twice.
   ///
   /// Fire-and-forget: the build runs in the background so the MCP call doesn't
   /// time out; get_session_status reports progress and the outcome.
   ///
-  /// The SessionManager mailbox is the single owner of both the session
-  /// registry and restart coalescing: it rejects a second hard reset while a
-  /// rebuild is in flight, keeps the live worker serving through a build-first
+  /// The SessionManager mailbox is the single owner of the session registry,
+  /// restart coalescing AND the record of what the rebuild did (`Info.Rebuild`),
+  /// so the dashboard button, the live-testing effect and app-run get the same
+  /// record this tool does. It rejects a second hard reset while a rebuild is in
+  /// flight (a refusal is not an outcome: the record of the rebuild that IS
+  /// running is left alone), keeps the live worker serving through a build-first
   /// rebuild, and marks a cold restart Restarting itself. So this tool writes NO
-  /// session status and runs no read-then-act pre-check — an earlier "competing
-  /// restart" check read back this call's own Restarting marker and silently
-  /// skipped the rebuild.
-  ///
-  /// A refusal is not an outcome. A second reset the owner refuses as "already in
-  /// progress" leaves the record of the rebuild that IS running alone, or status
-  /// would report a rebuild as failed while it was still building.
+  /// session status and keeps no outcome of its own.
   let private startTrackedRebuild (ctx: McpContext) (sid: string) : unit =
     compilationStates.TryRemove(sid) |> ignore
     typeIdentityDiagnostics.TryRemove(sid) |> ignore
-    match rebuildOutcomes.TryGetValue sid with
-    | true, RebuildOutcome.InProgress _ -> ()
-    | _ -> rebuildOutcomes.[sid] <- RebuildOutcome.InProgress DateTime.UtcNow
     notifyElm ctx (
       TuiEvent.WarmupProgress (1, 4, "Building project..."))
     task {
-      let! result =
+      let! threw =
         task {
-          try return! ctx.SessionOps.RestartSession (toSessionId sid) (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker)
-          with ex -> return Error (SageFsError.Unexpected ex)
+          try
+            let! _ = ctx.SessionOps.RestartSession (toSessionId sid) (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker)
+            return None
+          with ex -> return Some ex
         }
-      let now = DateTime.UtcNow
       let! after = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-      let fromRegistry () =
-        match after with
-        | Some info -> SessionDisplay.displayStatus now info
-        | None -> SessionDisplayStatus.Faulted "Session is no longer registered"
-      let refused =
-        match result with
-        | Error error -> RestartRefusal.isAlreadyInProgress error
-        | Ok _ -> false
       let display =
-        match refused with
-        | true -> fromRegistry ()
-        | false ->
-          let outcome = RebuildOutcome.ofResult now result (after |> Option.map (fun info -> info.Status))
-          rebuildOutcomes.[sid] <- outcome
-          match outcome with
-          | RebuildOutcome.FailedNotServing (error, _) -> SessionDisplayStatus.Faulted (SageFsError.describe error)
-          | _ -> fromRegistry ()
+        match threw, after |> Option.map (fun info -> info, info.Rebuild) with
+        // The owner never saw this call, so it recorded nothing: say what threw.
+        | Some ex, _ -> SessionDisplayStatus.Faulted (SageFsError.describe (SageFsError.Unexpected ex))
+        | None, Some (_, LastRebuild.Latest (RebuildOutcome.FailedNotServing (error, _))) -> SessionDisplayStatus.Faulted (SageFsError.describe error)
+        | None, Some (info, _) -> SessionDisplay.displayStatus DateTime.UtcNow info
+        | None, None -> SessionDisplayStatus.Faulted "Session is no longer registered"
       notifyElm ctx (TuiEvent.SessionStatusChanged (sid, display))
     } |> ignore
 

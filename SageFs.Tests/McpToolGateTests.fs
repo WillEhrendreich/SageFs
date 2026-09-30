@@ -240,6 +240,7 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     ActiveProject = None
     ProjectRoles = []
     App = SageFs.AppRun.AppRunState.NotRunning
+    Rebuild = LastRebuild.NeverRebuilt
   }
   let ops : SessionManagementOps = {
     CreateSession = fun _ _ _ -> Task.FromResult(Ok "stub")

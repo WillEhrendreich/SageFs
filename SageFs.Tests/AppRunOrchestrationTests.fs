@@ -43,7 +43,7 @@ let private session (workflow: WorkflowTypes.SessionWorkflow) (projects: Classif
     Workflow = workflow
     ActiveProject = None
     ProjectRoles = projects
-    App = app }
+    App = app; Rebuild = LastRebuild.NeverRebuilt }
 
 let private webLive = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults
 let private interactive = WorkflowTypes.SessionWorkflow.Interactive

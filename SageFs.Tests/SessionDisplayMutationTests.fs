@@ -30,6 +30,7 @@ let private mkInfo (status: SessionLifecycleStatus) (lastActivity: DateTime) : S
   ActiveProject = None
   ProjectRoles = []
   App = SageFs.AppRun.AppRunState.NotRunning
+  Rebuild = LastRebuild.NeverRebuilt
 }
 
 let private handle = { Pid = 100; Port = Some 5000 }

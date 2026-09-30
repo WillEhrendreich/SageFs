@@ -28,6 +28,7 @@ let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo =
   ActiveProject = None
   ProjectRoles = []
   App = SageFs.AppRun.AppRunState.NotRunning
+  Rebuild = LastRebuild.NeverRebuilt
 }
 
 let sessionOperationsMutationTests = testList "SessionOperations mutations" [

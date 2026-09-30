@@ -24,7 +24,7 @@ let private mkSessionInfo status =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = SageFs.AppRun.AppRunState.NotRunning }
+    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
 
 let private mkSessionContext sid files =
   { SessionId = sid
