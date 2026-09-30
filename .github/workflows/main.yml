@@ -101,26 +101,67 @@ jobs:
     #
     # So only directories whose name is purely numeric qualify, and they are
     # ordered by the number rather than by name.
+    #
+    # `$HOME` is NOT trusted. The first version resolved the tree through
+    # "$HOME"/.local/share/mise and failed ON THE RUNNER with exit 127 and
+    # "No npm found", while the identical script run by hand — with the runner
+    # listener's own HOME and its own PATH (/usr/local/bin:/usr/bin, no /bin) —
+    # resolved 26.8.2 correctly. The directory was present, world-readable and
+    # two weeks old, so the filesystem was not the difference. A self-hosted
+    # runner can execute a step with a different HOME than its listener, and
+    # the DOTNET_ROOT step only survives that because its default happens to
+    # resolve on this machine.
+    #
+    # So: probe the known roots explicitly, and print what was searched. A
+    # discovery step that fails silently is a discovery step that gets guessed
+    # at again — the same lesson as the test that could not read a refusal.
     - name: Use this machine's Node (npm) for the extension stages
       shell: bash
       run: |
-        candidate="${NUGET_NODE_BIN:-}"
-        if [ -z "$candidate" ]; then
-          candidate=$(ls -d "$HOME"/.local/share/mise/installs/node/*/bin 2>/dev/null \
-            | while read -r d; do
-                v=$(basename "$(dirname "$d")")
-                case "$v" in
-                  *[!0-9.]*|'') ;;                       # skip lts, latest, 24, 24.14
-                  *) echo "$v $d" ;;
-                esac
-              done \
-            | sort -t. -k1,1n -k2,2n -k3,3n \
-            | tail -1 | cut -d' ' -f2-)
-        fi
-        if [ -z "$candidate" ] || [ ! -x "$candidate/npm" ]; then
-          echo "::error::No npm found. Set NUGET_NODE_BIN in the runner's .env to a bin/ containing npm, or install mise node."
+        roots=""
+        for r in "${NUGET_NODE_BIN:-}" "$HOME/.local/share/mise/installs/node" \
+                 "/home/will/.local/share/mise/installs/node" \
+                 "$HOME/.nvm/versions/node"; do
+          if [ -n "$r" ] && [ -d "$r" ]; then roots="$roots $r"; fi
+        done
+        if [ -z "$roots" ]; then
+          echo "::error::No node install root. Searched NUGET_NODE_BIN, \$HOME/.local/share/mise/installs/node, /home/will/.local/share/mise/installs/node, \$HOME/.nvm/versions/node. HOME=[$HOME]."
           exit 1
         fi
+        echo "roots:$roots"
+
+        # Every directory that actually HAS an executable npm, ranked by the
+        # numeric version in its own name. A name that is not a version is kept
+        # but sorted last, so `lts` can never outrank 26.8.2.
+        #
+        # `-maxdepth 3`, not 2. npm sits at <root>/<version>/bin/npm, which is
+        # THREE levels down, and the first version of this step searched with
+        # `-maxdepth 2` and therefore found nothing — a discovery step that is
+        # silently wrong in the one direction that matters. Measured:
+        #
+        #   find … -maxdepth 2 -name npm   -> (nothing)
+        #   find … -maxdepth 3 -name npm   -> …/26.7.0/bin/npm, …/26.8.2/bin/npm
+        #
+        # `-name npm` without `-type f`, because npm is a symlink on some
+        # installs and `-type f` would skip it.
+        candidate=$(for r in $roots; do
+            find "$r" -maxdepth 3 -name npm -perm -u+x 2>/dev/null \
+              | while read -r npmPath; do echo "$(dirname "$npmPath")"; done
+          done \
+          | while read -r d; do
+              v=$(basename "$d")
+              case "$v" in
+                *[!0-9.]*|'') echo "999999 $d" ;;
+                *) echo "$v $d" ;;
+              esac
+            done \
+          | sort -k1,1n -k1,1V | tail -1 | cut -d' ' -f2-)
+
+        if [ -z "$candidate" ] || [ ! -x "$candidate/npm" ]; then
+          echo "::error::No npm under:$roots. Set NUGET_NODE_BIN in the runner's .env to the bin/ containing npm."
+          exit 1
+        fi
+        echo "using:$candidate"
         echo "$candidate" >> "$GITHUB_PATH"
         "$candidate/node" --version
         npm --version
