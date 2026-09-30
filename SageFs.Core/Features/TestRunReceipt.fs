@@ -220,7 +220,7 @@ module TestRunReceipt =
     | LineOutcome.DidNotReport reason -> sprintf "did not report: %s" reason
 
   let private waitAdvice (requestId: RunRequestId) : string =
-    sprintf "Ask again with run_tests request_id=%s (and wait_seconds) to see the result." ((RunRequestId.value requestId).ToString())
+    sprintf "Ask again with run_tests receipt_id=%s (and wait_seconds) to see the result." ((RunRequestId.value requestId).ToString())
 
   /// Plain-language receipt for the text block of the tool result.
   let summarize (receipt: RunReceipt) : string =
@@ -259,12 +259,12 @@ module TestRunReceipt =
       node["reason"] <- System.Text.Json.Nodes.JsonValue.Create(refusalToken refusal)
     | RunReceipt.Pending (requestId, requested)
     | RunReceipt.Started (requestId, requested) ->
-      node["requestId"] <- System.Text.Json.Nodes.JsonValue.Create((RunRequestId.value requestId).ToString())
+      node["receiptId"] <- System.Text.Json.Nodes.JsonValue.Create((RunRequestId.value requestId).ToString())
       node["requested"] <- System.Text.Json.Nodes.JsonValue.Create(requested)
     | RunReceipt.Unattributable requestId ->
-      node["requestId"] <- System.Text.Json.Nodes.JsonValue.Create((RunRequestId.value requestId).ToString())
+      node["receiptId"] <- System.Text.Json.Nodes.JsonValue.Create((RunRequestId.value requestId).ToString())
     | RunReceipt.Ran ran ->
-      node["requestId"] <- System.Text.Json.Nodes.JsonValue.Create((RunRequestId.value ran.RequestId).ToString())
+      node["receiptId"] <- System.Text.Json.Nodes.JsonValue.Create((RunRequestId.value ran.RequestId).ToString())
       node["session"] <- System.Text.Json.Nodes.JsonValue.Create(ran.Session)
       node["generation"] <- System.Text.Json.Nodes.JsonValue.Create(RunGeneration.value ran.Generation)
       node["verdict"] <- System.Text.Json.Nodes.JsonValue.Create(RunVerdict.token ran.Verdict)

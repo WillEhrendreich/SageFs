@@ -2119,14 +2119,14 @@ Parameters (all optional):
 - file_path: only tests from this source file
 - category: unit, integration, browser, benchmark, architecture, property, or a custom name
 - wait_seconds: how long to wait for the run to finish (default 30, at most 60)
-- request_id: a request_id from an earlier run_tests call that was still running. Re-reads that run instead of starting a new one.
+- receipt_id: a receipt_id from an earlier run_tests call that was still running. Re-reads that run instead of starting a new one.
 - session_id / working_directory: which session (see list_sessions)
 
 OUTPUT: text plus structured JSON with status (Refused, Pending, Started, Ran, Unattributable). A finished run has a verdict (AllPassed, SomeFailed, Incomplete), counts, and one line per requested test saying what happened to it IN THIS RUN.
 
 Incomplete is not green. It means nothing failed but not every test passed in this run: a test was skipped, was cut off, never reported, or only has a result from an earlier run. A pass from an earlier run is never counted. A refusal says why (session still warming up, nothing discovered, no test matched your filter) and what to do.
 
-If the run is still going when wait_seconds ends, the result carries a request_id. Call run_tests again with it (and wait_seconds) instead of polling anything else.""")>]
+If the run is still going when wait_seconds ends, the result carries a receipt_id. Call run_tests again with it (and wait_seconds) instead of polling anything else.""")>]
     member _.run_tests(
         [<Description("Optional substring filter on test name")>]
         [<Optional; DefaultParameterValue("")>]
@@ -2137,12 +2137,12 @@ If the run is still going when wait_seconds ends, the result carries a request_i
         [<Description("Optional category: unit, integration, browser, benchmark, architecture, property, or a custom name")>]
         [<Optional; DefaultParameterValue("")>]
         category: string,
-        [<Description("Seconds to wait for the run to finish (default 30, at most 60). When it runs out, the result carries a request_id to continue with.")>]
+        [<Description("Seconds to wait for the run to finish (default 30, at most 60). When it runs out, the result carries a receipt_id to continue with.")>]
         [<Optional; DefaultParameterValue(30)>]
         wait_seconds: int,
-        [<Description("A request_id from an earlier run_tests call that was still running. Re-reads that run instead of starting a new one.")>]
+        [<Description("A receipt_id from an earlier run_tests call that was still running. Re-reads that run instead of starting a new one.")>]
         [<Optional; DefaultParameterValue("")>]
-        request_id: string,
+        receipt_id: string,
         [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing.")>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string,
@@ -2153,12 +2153,12 @@ If the run is still going when wait_seconds ends, the result carries a request_i
         let opt (text: string) = match System.String.IsNullOrWhiteSpace text with | true -> None | false -> Some text
         logger.LogDebug("MCP-TOOL: run_tests called, pattern={Pattern}, file={File}, category={Category}", pattern, file_path, category)
         let continuation =
-            match opt request_id with
+            match opt receipt_id with
             | None -> Ok None
             | Some raw ->
                 match System.Guid.TryParse raw with
                 | true, guid -> Ok (Some (SageFs.Features.LiveTesting.RunRequestId guid))
-                | false, _ -> Error (sprintf "request_id '%s' is not a request id from an earlier run_tests call." raw)
+                | false, _ -> Error (sprintf "receipt_id '%s' is not a receipt_id from an earlier run_tests call." raw)
         match continuation with
         | Error message ->
             withEchoRunTests ctx (Task.FromResult (SageFs.McpRunTests.RunTestsOutcome.NotRoutable (message, None)))

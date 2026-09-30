@@ -195,10 +195,10 @@ let affordanceAlgebraTests =
 let toolRegistrationTests =
   testList "tool registration completeness" [
 
-    testCase "affordance module covers exactly 44 unique tool names" <| fun _ ->
+    testCase "affordance module covers exactly 45 unique tool names" <| fun _ ->
       allAffordanceTools
       |> List.length
-      |> Expect.equal "unique affordance tools" 44
+      |> Expect.equal "unique affordance tools" 45
 
     testCase "all affordance tool names are non-empty and non-whitespace"
     <| fun _ ->
@@ -217,7 +217,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 60 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 61 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -232,7 +232,7 @@ let toolRegistrationTests =
         // set_reflection_read_mode (rule 2's reflection read mode and its
         // hot-loop questions).
         methods.Length
-          |> Expect.equal "MCP tool method count" 60
+          |> Expect.equal "MCP tool method count" 61
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -305,7 +305,7 @@ let stateTransitionSafetyTests =
               "checkToolAvailability threw for (%A, %s): %s"
               state tool ex.Message))
       tested
-          |> Expect.equal "should test all 220 state×tool combos" 220
+          |> Expect.equal "should test all 225 state×tool combos" 225
 
     testCase "all rejections return ToolNotAvailable specifically" <| fun _ ->
       allStates
@@ -410,7 +410,7 @@ let stateTransitionSafetyTests =
         // set_reflection_read_mode = 53.
         tested
         |> Expect.equal
-          "should test 5 states × 60 tools = 300" 300
+          "should test 5 states × 61 tools = 305" 305
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

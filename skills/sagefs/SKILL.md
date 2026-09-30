@@ -44,7 +44,7 @@ you are done. Do not use them to probe what an API looks like.
    Run it in the background and keep working. To run tests, call
    `run_tests`. It asks the engine `list_tests` reads and returns a receipt:
    `Incomplete` is not green. Still running? Call again with the
-   `request_id`. Never `dotnet test` for that. Final gate: `dotnet run --project
+   `receipt_id`. Never `dotnet test` for that. Final gate: `dotnet run --project
    <tests>` (Expecto `Exe`).
 
 ## Rules that bite before your first edit

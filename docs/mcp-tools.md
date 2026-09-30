@@ -128,7 +128,7 @@ check `sagefs status` — if it says no daemon is running, start one with
 | Tool | What it does |
 |:---|:---|
 | `list_tests` | List discovered tests, grouped by file with source locations. A compiled-project session's tests are ReflectionOnly and carry no file/line, so those come back under a separate `WithoutSourceLocation` field instead of being dropped. Optional pattern or file filter. |
-| `run_tests` | Run the session's discovered tests through the live-testing engine and get a receipt. Filters: `pattern`, `file_path`, `category`. Waits up to `wait_seconds` (default 30, at most 60); a run still going hands back a `request_id` to call again with. |
+| `run_tests` | Run the session's discovered tests through the live-testing engine and get a receipt. Filters: `pattern`, `file_path`, `category`. Waits up to `wait_seconds` (default 30, at most 60); a run still going hands back a `receipt_id` to call again with. |
 | `targeted_verify` | Plan a trustworthy verification pass for one changed behavior. Refuses to claim green when session trust is ambiguous or loaded code is stale. It doesn't run tests itself. It returns the next trustworthy move. |
 | `explain_test_failure` | Enriched failure context for a test that recently went from passing to failing. |
 

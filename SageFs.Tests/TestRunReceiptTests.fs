@@ -246,8 +246,8 @@ let renderTests =
       let receipt = TestRunReceipt.observe requestId state
       let json = TestRunReceipt.toJson receipt
       json["status"].GetValue<string>() |> Expect.equal "status token" "Pending"
-      json["requestId"].GetValue<string>() |> Expect.equal "request id for the next call" ((RunRequestId.value requestId).ToString())
-      TestRunReceipt.summarize receipt |> Expect.stringContains "says how to wait" "request_id"
+      json["receiptId"].GetValue<string>() |> Expect.equal "request id for the next call" ((RunRequestId.value requestId).ToString())
+      TestRunReceipt.summarize receipt |> Expect.stringContains "says how to wait" "receipt_id"
 
     testCase "WHY — a refusal carries a stable token plus the actionable message" <| fun _ ->
       let receipt = RunReceipt.Refused RunRefusal.NothingDiscovered
