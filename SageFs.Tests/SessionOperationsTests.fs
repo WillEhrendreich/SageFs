@@ -155,7 +155,7 @@ let now = DateTime(2026, 2, 14, 12, 0, 0)
 let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) (pid: int option) : SessionInfo =
   let newStatus =
     match pid with
-    | None -> SessionLifecycleStatus.Restarting None
+    | None -> SessionLifecycleStatus.Restarting PreviousWorker.ColdStart
     | Some p -> SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = p; Port = None }) status
   {
   Id = id

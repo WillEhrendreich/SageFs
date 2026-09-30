@@ -42,13 +42,13 @@ let tests =
 
     testCase "WHY: a faulted session's recorded reason reaches the text every tool returns" <| fun _ ->
       let reason = "Initial warm-up failed: Not all DLLs are found (3 missing)."
-      let resolution = classifySessionAvailability (Some (sessionWith (SessionLifecycleStatus.Faulted (Some reason)))) false
+      let resolution = classifySessionAvailability (Some (sessionWith (SessionLifecycleStatus.Faulted (FaultReason.Reported reason)))) false
       reasonOf resolution |> Expect.equal "the cause carries the recorded reason" (FaultCause.Recorded reason)
       formatSessionResolution resolution
       |> Expect.stringContains "get_fsi_status and friends say why, not just 'faulted'" reason
 
     testCase "a fault with no recorded reason says so instead of pretending" <| fun _ ->
-      let resolution = classifySessionAvailability (Some (sessionWith (SessionLifecycleStatus.Faulted None))) false
+      let resolution = classifySessionAvailability (Some (sessionWith (SessionLifecycleStatus.Faulted (FaultReason.Unexplained FaultOrigin.NotRecorded)))) false
       reasonOf resolution |> Expect.equal "no reason to carry" FaultCause.NoReasonRecorded
       formatSessionResolution resolution
       |> Expect.stringContains "points at the daemon log" "daemon log"
@@ -59,11 +59,11 @@ let tests =
       |> Expect.equal "stopped is its own cause" FaultCause.Stopped
 
     testCase "a blank recorded reason counts as no reason" <| fun _ ->
-      FaultCause.ofStatus (SessionLifecycleStatus.Faulted (Some "  "))
+      FaultCause.ofStatus (SessionLifecycleStatus.Faulted (FaultReason.Reported "  "))
       |> Expect.equal "whitespace isn't a reason" FaultCause.NoReasonRecorded
 
     testProperty "PROPERTY: any non-blank recorded reason appears verbatim in the faulted message" <|
       fun (NonWhiteSpaceString reason) ->
-        let resolution = classifySessionAvailability (Some (sessionWith (SessionLifecycleStatus.Faulted (Some reason)))) false
+        let resolution = classifySessionAvailability (Some (sessionWith (SessionLifecycleStatus.Faulted (FaultReason.Reported reason)))) false
         (formatSessionResolution resolution).Contains reason
   ]

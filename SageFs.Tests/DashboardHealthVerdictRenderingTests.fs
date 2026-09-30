@@ -75,7 +75,7 @@ let liveSessionCardsClassificationTests =
       | _ -> failtest "expected exactly one card")
 
     testCase "a Faulted session is Failed regardless of warmup" (fun () ->
-      let faulted = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Faulted [] with Status = WorkerProtocol.SessionLifecycleStatus.Faulted (Some "warmup timed out") }
+      let faulted = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Faulted [] with Status = WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.Reported "warmup timed out") }
       let cards = liveSessionCards Fixtures.now (fun _ -> None) Map.empty (fun _ -> None) [ faulted ]
       match cards |> List.map (fun c -> c.Health) with
       | [ SessionHealth.Failed reason ] -> reason |> Expect.equal "the fault reason survives into Health" "warmup timed out"

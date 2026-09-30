@@ -319,16 +319,16 @@ module McpTools =
               // cold-restart path — see RestartSession/ScheduleRestart).
               // A caller-driven reset (resetSession / hardReset rebuild=false)
               // flips Status via UpdateSessionStatus, which PRESERVES the
-              // worker handle (see preservedHandle), so its pid is never None
+              // worker handle (see startingWhileReset), so its pid is never None
               // — a transport failure there is a real worker death and must
               // trigger NotifyWorkerDied recovery.
               let! info = ctx.SessionOps.GetSessionInfo validId
               match info with
-              | Some i when (match i.Status with WorkerProtocol.SessionLifecycleStatus.Restarting None -> true | _ -> false) ->
+              | Some i when (match i.Status with WorkerProtocol.SessionLifecycleStatus.Restarting WorkerProtocol.PreviousWorker.ColdStart -> true | _ -> false) ->
                 return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Poll get_session_status every 5-10s; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
               | _ ->
                 ctx.SessionOps.NotifyWorkerDied validId
-                do! ctx.SessionOps.UpdateSessionStatus validId (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (routeErrorMessage transportError)))
+                do! ctx.SessionOps.UpdateSessionStatus validId (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report (routeErrorMessage transportError)))
                 return Result.Error transportError
             | None ->
               return raise ex
@@ -623,15 +623,17 @@ module McpTools =
   let setSnapshotStatus (ctx: McpContext) (sid: string) (status: WorkerProtocol.SessionLifecycleStatus) =
     ctx.SessionOps.UpdateSessionStatus (toSessionId sid) status
 
-  /// The worker handle to carry across a caller-driven status flip (reset /
-  /// hard-reset rebuild=false) that does NOT respawn the worker process — its
-  /// pid/port are unchanged, so whatever the session already has is carried
-  /// forward. A session with no live handle yet (already Faulted) has no real
-  /// pid to preserve; 0 is a safe placeholder because it can never equal a
-  /// real OS pid, so no stale-pid guard elsewhere can ever match it.
-  let private preservedHandle (status: WorkerProtocol.SessionLifecycleStatus) : WorkerProtocol.WorkerHandle =
-    { Pid = WorkerProtocol.SessionLifecycleStatus.workerPid status |> Option.defaultValue 0
-      Port = WorkerProtocol.SessionLifecycleStatus.workerPort status }
+  /// The status to show while a caller-driven reset (reset / hard-reset
+  /// rebuild=false) runs. It does NOT respawn the worker, so its pid and port
+  /// carry forward. A session with no worker (Faulted) has none to carry, and a
+  /// made-up pid would be a worker that never existed, so its status stands.
+  let private withCarriedWorker (build: WorkerProtocol.WorkerHandle -> WorkerProtocol.SessionLifecycleStatus) (status: WorkerProtocol.SessionLifecycleStatus) =
+    match WorkerProtocol.SessionLifecycleStatus.workerPid status with
+    | Some pid -> build { Pid = pid; Port = WorkerProtocol.SessionLifecycleStatus.workerPort status }
+    | None -> status
+
+  let private startingWhileReset = withCarriedWorker WorkerProtocol.SessionLifecycleStatus.Starting
+  let private readyAfterReset = withCarriedWorker WorkerProtocol.SessionLifecycleStatus.Ready
 
   /// Get the session status via proxy, returning the SessionState.
   let getSessionState (ctx: McpContext) (sessionId: string) : Task<SessionState> =
@@ -1680,9 +1682,8 @@ module McpTools =
       let previousStatus =
         info
         |> Option.map (fun sessionInfo -> sessionInfo.Status)
-        |> Option.defaultValue (WorkerProtocol.SessionLifecycleStatus.Faulted None)
-      let handle = preservedHandle previousStatus
-      do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Starting handle)
+        |> Option.defaultValue (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.Unexplained WorkerProtocol.FaultOrigin.NotRecorded))
+      do! setSnapshotStatus ctx sid (startingWhileReset previousStatus)
       notifyElm ctx (
         TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
       let! routeResult =
@@ -1698,7 +1699,7 @@ module McpTools =
         }
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
-        do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Ready handle)
+        do! setSnapshotStatus ctx sid (readyAfterReset previousStatus)
         compilationStates.TryRemove(sid) |> ignore
         notifyElm ctx (
           TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
@@ -1711,7 +1712,7 @@ module McpTools =
           | _ -> ""
         return sprintf "%sSession reset successfully. All previous definitions have been cleared." warning
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
-        do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (SageFsError.describe err)))
+        do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report (SageFsError.describe err)))
         notifyElm ctx (
           TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
         return sprintf "Error: %s" (SageFsError.describeForAgent err)
@@ -1722,7 +1723,7 @@ module McpTools =
         let err = routeErrorMessage msg
         match routeErrorIsTransportFailure msg with
         | true ->
-          do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some err))
+          do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report err))
           notifyElm ctx (
             TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted err))
         | false ->
@@ -1739,9 +1740,8 @@ module McpTools =
       let previousStatus =
         info
         |> Option.map (fun sessionInfo -> sessionInfo.Status)
-        |> Option.defaultValue (WorkerProtocol.SessionLifecycleStatus.Faulted None)
-      let handle = preservedHandle previousStatus
-      do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Starting handle)
+        |> Option.defaultValue (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.Unexplained WorkerProtocol.FaultOrigin.NotRecorded))
+      do! setSnapshotStatus ctx sid (startingWhileReset previousStatus)
       notifyElm ctx (
         TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
       let! routeResult =
@@ -1757,7 +1757,7 @@ module McpTools =
         }
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
-        do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Ready handle)
+        do! setSnapshotStatus ctx sid (readyAfterReset previousStatus)
         compilationStates.TryRemove(sid) |> ignore
         notifyElm ctx (
           TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
@@ -1767,7 +1767,7 @@ module McpTools =
           | _ -> ""
         return Ok (sprintf "%sSession reset successfully. All previous definitions have been cleared." warning)
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
-        do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (SageFsError.describe err)))
+        do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report (SageFsError.describe err)))
         notifyElm ctx (
           TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
         return Error err
@@ -1778,7 +1778,7 @@ module McpTools =
         let reason = routeErrorMessage msg
         match routeErrorIsTransportFailure msg with
         | true ->
-          do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some reason))
+          do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report reason))
           notifyElm ctx (
             TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted reason))
           return Error (SageFsError.WorkerCommunicationFailed (sid, reason))

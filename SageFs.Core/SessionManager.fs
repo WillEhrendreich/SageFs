@@ -673,13 +673,13 @@ module SessionManager =
   let private withAppSlot (slot: AppRun.AppSlot) (session: ManagedSession) : ManagedSession =
     { session with AppGeneration = slot.Generation; Info = { session.Info with App = slot.State } }
 
-  let private faultedTombstone (reason: string option) (session: ManagedSession) =
+  let private faultedTombstone (message: string) (session: ManagedSession) =
     { session with
         Proxy = pendingProxy
         WorkerBaseUrl = ""
         Info =
           { session.Info with
-              Status = SessionLifecycleStatus.Faulted reason
+              Status = SessionLifecycleStatus.Faulted (FaultReason.report message)
               LastActivity = DateTime.UtcNow } }
 
   let internal defaultRuntime = {
@@ -759,7 +759,7 @@ module SessionManager =
         (newState, Ok ())
       | Error err ->
         let reason = SageFsError.describe err
-        let tombstone = faultedTombstone (Some reason) session
+        let tombstone = faultedTombstone reason session
         let newState = ManagerState.addSession id tombstone state
         onSessionReady id
         onSessionFaulted id reason
@@ -821,7 +821,7 @@ module SessionManager =
                 AdoptedCore = spawned.AdoptedCore
                 Info =
                   { session.Info with
-                      Status = SessionLifecycleStatus.Restarting (SessionLifecycleStatus.workerPid session.Info.Status)
+                      Status = SessionLifecycleStatus.Restarting (PreviousWorker.ofPid (SessionLifecycleStatus.workerPid session.Info.Status))
                       Workflow = workflow
                       LastActivity = DateTime.UtcNow } }
           let newState =
@@ -848,7 +848,7 @@ module SessionManager =
             match session.Info.Status with
             | SessionLifecycleStatus.Ready _ | SessionLifecycleStatus.Evaluating _ -> answer (Ok ())
             | SessionLifecycleStatus.Faulted reason ->
-              answer (Error (SageFsError.WorkerSpawnFailed (reason |> Option.defaultValue "the session stopped before it became Ready")))
+              answer (Error (SageFsError.WorkerSpawnFailed (FaultReason.describe reason)))
             | SessionLifecycleStatus.Stopped ->
               answer (Error (SageFsError.WorkerSpawnFailed "the session stopped before it became Ready"))
             | SessionLifecycleStatus.Starting _ | SessionLifecycleStatus.Restarting _ | SessionLifecycleStatus.Building _ -> acc) state
@@ -1046,7 +1046,7 @@ module SessionManager =
               let stateAfterStop =
                 let restarting =
                   { session with
-                      Info = { session.Info with Status = SessionLifecycleStatus.Restarting None }
+                      Info = { session.Info with Status = SessionLifecycleStatus.Restarting PreviousWorker.ColdStart }
                       Proxy = pendingProxy
                       WorkerBaseUrl = "" }
                 let afterMark = ManagerState.addSession id restarting state
@@ -1084,7 +1084,7 @@ module SessionManager =
               // No worker to fall back to → faulted tombstone that says why.
               let msg = SageFsError.describe err
               Log.warn "[SessionManager] rebuild for session %s failed and no worker is serving it: %s" (SessionId.value id) msg
-              let tombstone = faultedTombstone (Some msg) session
+              let tombstone = faultedTombstone msg session
               let newState = ManagerState.addSession id tombstone stateCleared
               reply.Reply(Error err)
               onSessionReady id
@@ -1157,7 +1157,7 @@ module SessionManager =
               | false ->
                 let msg = ReadyTransport.describeInvalid "Worker" baseUrl proxy
                 do! runtime.StopWorker session
-                let faulted = faultedTombstone (Some msg) session
+                let faulted = faultedTombstone msg session
                 let newState =
                   { ManagerState.addSession id faulted state with
                       WarmupProgress = Map.remove id state.WarmupProgress }
@@ -1296,7 +1296,7 @@ module SessionManager =
                       done' <- true
                     | WarmupSupervision.PollDecision.TimedOut reason ->
                       Log.warn "[SessionManager] %s (session %s)" reason (SessionId.value id)
-                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionLifecycleStatus.Faulted (Some reason)))
+                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionLifecycleStatus.Faulted (FaultReason.report reason)))
                       onSessionFaulted id reason
                       done' <- true
                     | WarmupSupervision.PollDecision.KeepPolling -> ()
@@ -1370,7 +1370,7 @@ module SessionManager =
               | None ->
                 // Unreachable: RevertSwap is only returned when a swap is pending.
                 Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
-                let updated = faultedTombstone (Some msg) session
+                let updated = faultedTombstone msg session
                 let newState = ManagerState.addSession id updated state
                 onSessionReady id
                 onSessionFaulted id msg
@@ -1380,7 +1380,7 @@ module SessionManager =
               return state
             | WorkerEventGuard.SpawnFailedDecision.Fault ->
               Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
-              let updated = faultedTombstone (Some msg) session
+              let updated = faultedTombstone msg session
               let newState = ManagerState.addSession id updated state
               onSessionReady id  // notify clients of Faulted state change
               onSessionFaulted id msg
@@ -1442,7 +1442,7 @@ module SessionManager =
               Instrumentation.activeSessions.Add(-1L)
               Instrumentation.succeedSpan span
               let reason = sprintf "Worker process exited with code %d (abandoned after max retries)" exitCode
-              let tombstone = faultedTombstone (Some reason) session
+              let tombstone = faultedTombstone reason session
               let newState = ManagerState.addSession id tombstone state
               onSessionReady id
               onSessionFaulted id reason
@@ -1527,7 +1527,7 @@ module SessionManager =
                 | true -> ()
                 Instrumentation.succeedSpan recoverySpan
                 let reason = SageFsError.describe err
-                let tombstone = faultedTombstone (Some reason) session
+                let tombstone = faultedTombstone reason session
                 let newState = ManagerState.addSession id tombstone state
                 onSessionReady id
                 onSessionFaulted id reason
@@ -1585,17 +1585,17 @@ module SessionManager =
         | SessionCommand.UpdateSessionStatus(id, newStatus) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
-            // Faulted None means "no explicit reason given" — keep whatever
-            // reason the session already carries, or fall back to a default.
+            // An Unexplained fault says nothing about why, so it must not replace a
+            // reason the session already carries. With none to keep it stands as
+            // given: the fault is real, the cause unknown, and nobody guesses one.
             let resolvedStatus =
-              match newStatus with
-              | SessionLifecycleStatus.Faulted None ->
-                let existing = SessionLifecycleStatus.faultReason session.Info.Status
-                SessionLifecycleStatus.Faulted (existing |> Option.orElse (Some "Session warmup timed out — worker did not reach Ready state."))
-              // default policy: every SessionLifecycleStatus other than
-              // `Faulted None` is used verbatim — the only special case this
-              // command handles is "faulted with no reason given"; any other
-              // status (present or future) is a plain pass-through by
+              match newStatus, SessionLifecycleStatus.faultReason session.Info.Status with
+              | SessionLifecycleStatus.Faulted (FaultReason.Unexplained _), Some (FaultReason.Reported _ as kept) ->
+                SessionLifecycleStatus.Faulted kept
+              // default policy: every other SessionLifecycleStatus is used
+              // verbatim — the only special case this command handles is a
+              // fault that gives no reason while one is already on record; any
+              // other status (present or future) is a plain pass-through by
               // definition, never a decision that needs re-review.
               | _ -> newStatus
             let updated =
@@ -1610,7 +1610,7 @@ module SessionManager =
           match ManagerState.tryGetSession id state, ManagerState.tryGetPendingSwap id state with
           | Some session, None when SessionLifecycleStatus.workerPid session.Info.Status = Some workerPid ->
             Log.warn "[SessionManager] Worker for session %s faulted during warmup: %s" (SessionId.value id) reason
-            let newState = ManagerState.addSession id (faultedTombstone (Some reason) session) state
+            let newState = ManagerState.addSession id (faultedTombstone reason session) state
             onSessionFaulted id reason
             onSessionProgressChanged ()
             return newState
@@ -1637,7 +1637,7 @@ module SessionManager =
           | ProjectResolution.RequestedButUnresolved requested ->
             let reason = ProjectResolution.unresolvedReason requested
             Log.warn "[SessionManager] Session %s reported Ready but resolved none of its requested projects: %s" (SessionId.value id) reason
-            let newState = ManagerState.addSession id (faultedTombstone (Some reason) session) state
+            let newState = ManagerState.addSession id (faultedTombstone reason session) state
             onSessionFaulted id reason
             onSessionProgressChanged ()
             return newState

@@ -125,11 +125,11 @@ let sessionLifecycleTests = testList "SessionLifecycle" [
       SessionLifecycle.statusAfterExit
         (Some 4242)
         (SessionLifecycle.ExitOutcome.RestartAfter(TimeSpan.FromSeconds 1.0, RestartPolicy.emptyState))
-      |> Expect.equal "restarting" (SessionLifecycleStatus.Restarting (Some 4242))
+      |> Expect.equal "restarting" (SessionLifecycleStatus.Restarting (PreviousWorker.Was 4242))
     }
     test "Abandoned maps to Faulted with the abandonment's own reason" {
       SessionLifecycle.statusAfterExit None (SessionLifecycle.ExitOutcome.Abandoned SageFsError.PipeClosed)
-      |> Expect.equal "faulted" (SessionLifecycleStatus.Faulted (Some (SageFsError.describe SageFsError.PipeClosed)))
+      |> Expect.equal "faulted" (SessionLifecycleStatus.Faulted (FaultReason.report (SageFsError.describe SageFsError.PipeClosed)))
     }
   ]
 ]

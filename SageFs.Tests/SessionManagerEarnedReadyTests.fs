@@ -108,9 +108,9 @@ let earnedReadyTests =
         let session = getManagedSession harness info.Id
         session.Info.Status |> isFaulted |> Expect.isTrue "requested-but-unresolved must fault, not Ready"
         match session.Info.Status with
-        | SessionLifecycleStatus.Faulted (Some reason) ->
+        | SessionLifecycleStatus.Faulted (FaultReason.Reported reason) ->
           reason.Contains "Foo.fsproj" |> Expect.isTrue "the fault names what was requested"
-        | other -> failtestf "expected Faulted(Some _), got %A" other
+        | other -> failtestf "expected Faulted(Reported _), got %A" other
         harness.FaultedEvents
         |> Seq.exists (fun (sid, msg) -> sid = info.Id && msg.Contains "Foo.fsproj")
         |> Expect.isTrue "onSessionFaulted fires with the same reason, so every subscriber (dashboard SSE included) sees it"
@@ -143,4 +143,34 @@ let earnedReadyTests =
         let session = getManagedSession harness info.Id
         SessionHealth.classify session.Info.Status session.Info.ProjectRoles None
         |> Expect.equal "the daemon's own status IS the input every surface classifies" (SessionHealth.Failed (ProjectResolution.unresolvedReason [ "Foo.fsproj" ]))
+  ]
+
+[<Tests>]
+let updateSessionStatusFaultTests =
+  testList "SessionManager UpdateSessionStatus — an unexplained fault" [
+    testCase "WHY — an unexplained fault does not overwrite the reason the session already carries" <| fun _ ->
+      withHarness <| fun harness ->
+        let info = createSession harness [ SageFs.SessionProjectTarget.Project "Foo.fsproj" ] "/nonexistent/does-not-matter"
+        let recorded = SessionLifecycleStatus.Faulted (FaultReason.Reported "Not all DLLs are found")
+        harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, recorded))
+        harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionLifecycleStatus.Faulted (FaultReason.Unexplained FaultOrigin.NotRecorded)))
+        (getManagedSession harness info.Id).Info.Status
+        |> Expect.equal "the recorded reason survives" recorded
+
+    testCase "WHY — with no reason on record an unexplained fault stands as unexplained, and nothing invents a cause for it" <| fun _ ->
+      withHarness <| fun harness ->
+        let info = createSession harness [ SageFs.SessionProjectTarget.Project "Foo.fsproj" ] "/nonexistent/does-not-matter"
+        let unexplained = SessionLifecycleStatus.Faulted (FaultReason.Unexplained FaultOrigin.NotRecorded)
+        harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, unexplained))
+        (getManagedSession harness info.Id).Info.Status
+        |> Expect.equal "stays unexplained, not 'warmup timed out'" unexplained
+
+    testCase "WHY — a fault that does give a reason replaces an older one, because it is newer information" <| fun _ ->
+      withHarness <| fun harness ->
+        let info = createSession harness [ SageFs.SessionProjectTarget.Project "Foo.fsproj" ] "/nonexistent/does-not-matter"
+        harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionLifecycleStatus.Faulted (FaultReason.Reported "first")))
+        let second = SessionLifecycleStatus.Faulted (FaultReason.Reported "second")
+        harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, second))
+        (getManagedSession harness info.Id).Info.Status
+        |> Expect.equal "the later reason wins" second
   ]

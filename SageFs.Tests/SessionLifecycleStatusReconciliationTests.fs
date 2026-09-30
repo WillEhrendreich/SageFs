@@ -35,12 +35,12 @@ let ofWorkerReportStickyTerminalTests =
   testList "SessionLifecycleStatus.ofWorkerReport — Faulted/Stopped are sticky" [
 
     testCase "WHY — a stale 'Starting' reply from a worker the daemon already faulted must not resurrect the session" <| fun _ ->
-      let current = SessionLifecycleStatus.Faulted (Some "boom")
+      let current = SessionLifecycleStatus.Faulted (FaultReason.Reported "boom")
       SessionLifecycleStatus.ofWorkerReport current SessionStatus.Starting
       |> Expect.equal "a live-sounding reply must not undo a recorded fault" current
 
     testCase "WHY — the same holds for every non-terminal reply a lagging worker could send" <| fun _ ->
-      let current = SessionLifecycleStatus.Faulted (Some "boom")
+      let current = SessionLifecycleStatus.Faulted (FaultReason.Reported "boom")
       [ SessionStatus.Starting; SessionStatus.Ready; SessionStatus.Evaluating
         SessionStatus.Building "restoring"; SessionStatus.Restarting ]
       |> List.iter (fun reported ->
@@ -64,13 +64,29 @@ let ofWorkerReportStickyTerminalTests =
       | SessionLifecycleStatus.Ready h -> h |> Expect.equal "pid/port carry over from the registry" handle
       | other -> failtestf "a Ready report on a Starting entry must reconcile to Ready, got %A" other
 
+    testCase "WHY — a live-sounding reply with no known worker to attribute it to never invents a pid of 0" <| fun _ ->
+      let coldRestart = SessionLifecycleStatus.Restarting PreviousWorker.ColdStart
+      [ SessionStatus.Starting; SessionStatus.Ready; SessionStatus.Evaluating; SessionStatus.Building "restoring" ]
+      |> List.iter (fun reported ->
+        SessionLifecycleStatus.ofWorkerReport coldRestart reported
+        |> Expect.equal (sprintf "a %A reply cannot say whose it is, so the restart stands" reported) coldRestart)
+
+    testCase "WHY — no status produced from a worker report ever carries pid 0" <| fun _ ->
+      let starts =
+        [ SessionLifecycleStatus.Starting handle; SessionLifecycleStatus.Ready handle
+          SessionLifecycleStatus.Restarting PreviousWorker.ColdStart; SessionLifecycleStatus.Restarting (PreviousWorker.Was 7) ]
+      for current in starts do
+        for reported in [ SessionStatus.Starting; SessionStatus.Ready; SessionStatus.Evaluating; SessionStatus.Building "x"; SessionStatus.Restarting ] do
+          SessionLifecycleStatus.workerPid (SessionLifecycleStatus.ofWorkerReport current reported)
+          |> Expect.notEqual (sprintf "%A after %A" current reported) (Some 0)
+
     // WHY — the invariant this whole function exists to protect: once the
     // registry status is a get_fsi_status-observable Failed verdict via
     // SessionHealth.classify, reconciling against ANY worker report must
     // keep it that way — health and the registry can never be made to
     // disagree by the one function that writes the registry back.
     testCase "WHY — health stays Failed no matter what a lagging worker reports afterward" <| fun _ ->
-      let current = SessionLifecycleStatus.Faulted (Some "boom")
+      let current = SessionLifecycleStatus.Faulted (FaultReason.Reported "boom")
       [ SessionStatus.Starting; SessionStatus.Ready; SessionStatus.Evaluating; SessionStatus.Stopped ]
       |> List.iter (fun reported ->
         let reconciled = SessionLifecycleStatus.ofWorkerReport current reported

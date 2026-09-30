@@ -70,17 +70,17 @@ let sessionDisplayMutationTests = testList "SessionDisplay mutations" [
     |> Expect.equal "Starting must display Starting even with old LastActivity" SessionDisplayStatus.Starting
 
   testCase "WHY — faulted_with_reason_carries_the_exact_reason_through — the reason must not be dropped or replaced with a generic string" <| fun () ->
-    let info = mkInfo (SessionLifecycleStatus.Faulted (Some "OutOfMemoryException")) now
+    let info = mkInfo (SessionLifecycleStatus.Faulted (FaultReason.Reported "OutOfMemoryException")) now
     SessionDisplay.displayStatus now info
     |> Expect.equal "Faulted(Some reason) must carry that EXACT reason into the display status" (SessionDisplayStatus.Faulted "OutOfMemoryException")
 
   testCase "WHY — faulted_with_no_reason_uses_the_fallback_text — a missing reason must use \"Session faulted\", not an empty string" <| fun () ->
-    let info = mkInfo (SessionLifecycleStatus.Faulted None) now
+    let info = mkInfo (SessionLifecycleStatus.Faulted (FaultReason.Unexplained FaultOrigin.NotRecorded)) now
     SessionDisplay.displayStatus now info
     |> Expect.equal "Faulted(None) must fall back to exactly \"Session faulted\"" (SessionDisplayStatus.Faulted "Session faulted")
 
   testCase "WHY — restarting_is_Restarting_not_Starting — these are visually and semantically distinct states" <| fun () ->
-    let info = mkInfo (SessionLifecycleStatus.Restarting (Some 42)) now
+    let info = mkInfo (SessionLifecycleStatus.Restarting (PreviousWorker.Was 42)) now
     SessionDisplay.displayStatus now info
     |> Expect.equal "Restarting must display Restarting, never collapse into Starting" SessionDisplayStatus.Restarting
 

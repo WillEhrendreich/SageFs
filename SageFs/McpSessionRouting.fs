@@ -137,7 +137,7 @@ module McpSessionRouting =
   module FaultCause =
     let ofStatus (status: WorkerProtocol.SessionLifecycleStatus) : FaultCause =
       match status with
-      | WorkerProtocol.SessionLifecycleStatus.Faulted (Some reason) when not (System.String.IsNullOrWhiteSpace reason) ->
+      | WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.Reported reason) when not (System.String.IsNullOrWhiteSpace reason) ->
         FaultCause.Recorded reason
       | WorkerProtocol.SessionLifecycleStatus.Stopped -> FaultCause.Stopped
       // default policy: this is only called for a status that's already been

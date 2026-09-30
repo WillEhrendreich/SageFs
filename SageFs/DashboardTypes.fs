@@ -894,7 +894,9 @@ let sessionCardOf
       match status with
       | SessionDisplayStatus.Starting -> warmupProgress
       | SessionDisplayStatus.Faulted reason -> Some reason
-      | SessionDisplayStatus.Lost -> WorkerProtocol.SessionLifecycleStatus.faultReason info.Status
+      | SessionDisplayStatus.Lost ->
+        WorkerProtocol.SessionLifecycleStatus.faultReason info.Status
+        |> Option.map WorkerProtocol.FaultReason.describe
       | SessionDisplayStatus.Running
       | SessionDisplayStatus.Restarting
       | SessionDisplayStatus.Idle

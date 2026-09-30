@@ -31,7 +31,7 @@ module SessionStatusReconciliationGenerators =
       [ for _ in 1 .. n ->
           match rnd.Next(0, 6) with
           | 0 | 1 | 2 -> Event.Poll (randomStatus rnd)
-          | 3 -> Event.DaemonFault (Some (sprintf "seed-%d fault" seed))
+          | 3 -> Event.DaemonFault (FaultReason.Reported (sprintf "seed-%d fault" seed))
           | 4 -> Event.DaemonStop
           | _ -> Event.Restarted handle ]
     { Seed = seed; Initial = SessionLifecycleStatus.Starting handle; Events = events }
@@ -47,7 +47,7 @@ module SessionStatusReconciliationGenerators =
       Initial = SessionLifecycleStatus.Starting handle
       Events =
         [ Event.Poll SessionStatus.Starting
-          Event.DaemonFault (Some "worker crashed loading the hot-reload workflow")
+          Event.DaemonFault (FaultReason.Reported "worker crashed loading the hot-reload workflow")
           Event.Poll SessionStatus.Starting ] }
 
   /// A save racing a fault: an eval reply that would normally reconcile to
@@ -58,7 +58,7 @@ module SessionStatusReconciliationGenerators =
       Initial = SessionLifecycleStatus.Ready handle
       Events =
         [ Event.Poll SessionStatus.Evaluating
-          Event.DaemonFault (Some "worker exited mid-eval")
+          Event.DaemonFault (FaultReason.Reported "worker exited mid-eval")
           Event.Poll SessionStatus.Evaluating
           Event.Poll SessionStatus.Ready ] }
 
@@ -71,7 +71,7 @@ module SessionStatusReconciliationGenerators =
       Initial = SessionLifecycleStatus.Evaluating handle
       Events =
         [ Event.Poll SessionStatus.Ready
-          Event.DaemonFault (Some "race")
+          Event.DaemonFault (FaultReason.Reported "race")
           Event.Poll SessionStatus.Starting
           Event.DaemonStop
           Event.Poll SessionStatus.Ready
@@ -83,7 +83,7 @@ module SessionStatusReconciliationGenerators =
     { Seed = 4
       Initial = SessionLifecycleStatus.Starting handle
       Events =
-        [ Event.DaemonFault (Some "boom")
+        [ Event.DaemonFault (FaultReason.Reported "boom")
           Event.Poll SessionStatus.Starting
           Event.Restarted { handle with Pid = 9999 }
           Event.Poll SessionStatus.Ready ] }

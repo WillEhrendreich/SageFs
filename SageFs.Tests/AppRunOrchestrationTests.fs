@@ -372,7 +372,7 @@ let faultedSessionRunTests =
   testList "AppRunOrchestration run on a faulted session" [
     testTask "WHY — AppRunOrchestration.runApp — Run on a session whose rebuild failed rebuilds it first because after fixing the code Run is the one button the user presses" {
       let r = record ()
-      let faulted = { session webLive [ exe web ] AppRunState.NotRunning with Status = SessionLifecycleStatus.Faulted None }
+      let faulted = { session webLive [ exe web ] AppRunState.NotRunning with Status = SessionLifecycleStatus.Faulted (FaultReason.Unexplained FaultOrigin.NotRecorded) }
       let ops =
         { fakeOps faulted (worker never.Task) r with
             RestartSession = fun _ plan ->
@@ -395,7 +395,7 @@ let runAfterFailedRebuildTests =
       let r = record ()
       let failed =
         { session webLive [ exe web ] (AppRunState.BuildFailed (web, "Build failed (exit 1)", at, PreviousAddress.ReuseAddress "http://127.0.0.1:5123")) with
-            Status = SessionLifecycleStatus.Faulted None }
+            Status = SessionLifecycleStatus.Faulted (FaultReason.Unexplained FaultOrigin.NotRecorded) }
       let ops =
         { fakeOps failed (worker never.Task) r with
             RestartSession = fun _ plan ->

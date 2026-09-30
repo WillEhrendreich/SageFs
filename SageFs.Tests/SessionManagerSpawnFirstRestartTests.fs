@@ -738,7 +738,7 @@ let workerFaultReportTests =
               return! faultReason ()
           }
         let! why = faultReason ()
-        why |> Expect.equal "the worker's own reason" (Some reason)
+        why |> Expect.equal "the worker's own reason" (FaultReason.Reported reason)
       finally
         cancellation.Cancel()
         cancellation.Dispose()

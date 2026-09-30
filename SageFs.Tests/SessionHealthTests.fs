@@ -70,17 +70,17 @@ let sessionHealthClassifyTests = testList "SessionHealth.classify" [
     |> Expect.equal "starting" SessionHealth.Starting
     SessionHealth.classify (SessionLifecycleStatus.Building("dotnet build", handle)) [ myApp ] None
     |> Expect.equal "building" SessionHealth.Starting
-    SessionHealth.classify (SessionLifecycleStatus.Restarting (Some 1)) [ myApp ] None
+    SessionHealth.classify (SessionLifecycleStatus.Restarting (PreviousWorker.Was 1)) [ myApp ] None
     |> Expect.equal "restarting" SessionHealth.Starting
 
   testCase "WHY — Faulted must carry the real fault reason, not a generic label"
   <| fun _ ->
-    SessionHealth.classify (SessionLifecycleStatus.Faulted (Some "boom")) [ myApp ] None
+    SessionHealth.classify (SessionLifecycleStatus.Faulted (FaultReason.Reported "boom")) [ myApp ] None
     |> Expect.equal "failed with reason" (SessionHealth.Failed "boom")
 
   testCase "WHY — a Faulted session with no recorded reason still reports Failed, not a blank verdict"
   <| fun _ ->
-    match SessionHealth.classify (SessionLifecycleStatus.Faulted None) [ myApp ] None with
+    match SessionHealth.classify (SessionLifecycleStatus.Faulted (FaultReason.Unexplained FaultOrigin.NotRecorded)) [ myApp ] None with
     | SessionHealth.Failed _ -> ()
     | other -> failwithf "expected Failed, got %A" other
 

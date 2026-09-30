@@ -148,7 +148,7 @@ let sidebarCardTests =
       (SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Evaluating [])).Status |> Expect.equal "Evaluating = running" SessionDisplayStatus.Running)
 
     testCase "WHY — sessionCardOf — a faulted session shows as faulted with its reason, because the regex fallback showed errored sessions as running" (fun () ->
-      let faulted = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Faulted [] with Status = WorkerProtocol.SessionLifecycleStatus.Faulted (Some "warmup timed out") }
+      let faulted = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Faulted [] with Status = WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.Reported "warmup timed out") }
       let c = SidebarCards.card faulted
       c.Status |> Expect.equal "Faulted = faulted" (SessionDisplayStatus.Faulted "warmup timed out")
       c.StatusMessage |> Expect.equal "the reason is shown" (Some "warmup timed out"))

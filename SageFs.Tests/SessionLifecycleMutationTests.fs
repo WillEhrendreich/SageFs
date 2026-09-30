@@ -46,12 +46,12 @@ let sessionLifecycleMutationTests = testList "SessionLifecycle mutations" [
 
   testCase "WHY — statusAfterExit_RestartAfter_is_Restarting_with_exited_pid — restart decision carries the exited worker's pid" <| fun () ->
     SessionLifecycle.statusAfterExit (Some 4242) (SessionLifecycle.ExitOutcome.RestartAfter (TimeSpan.FromSeconds(1.0), state0))
-    |> Expect.equal "RestartAfter must map to Restarting (Some 4242)" (SessionLifecycleStatus.Restarting (Some 4242))
+    |> Expect.equal "RestartAfter must map to Restarting (Was 4242)" (SessionLifecycleStatus.Restarting (PreviousWorker.Was 4242))
 
   testCase "WHY — statusAfterExit_Abandoned_is_Faulted_with_description — give-up means faulted, described" <| fun () ->
     let error = SageFsError.RestartLimitExceeded(5, 5.0)
     SessionLifecycle.statusAfterExit None (SessionLifecycle.ExitOutcome.Abandoned error)
-    |> Expect.equal "Abandoned must map to Faulted carrying the error's description" (SessionLifecycleStatus.Faulted (Some (SageFsError.describe error)))
+    |> Expect.equal "Abandoned must map to Faulted carrying the error's description" (SessionLifecycleStatus.Faulted (FaultReason.report (SageFsError.describe error)))
 
   // ── RestartPolicy.decide ──────────────────────────────────────────────────
 

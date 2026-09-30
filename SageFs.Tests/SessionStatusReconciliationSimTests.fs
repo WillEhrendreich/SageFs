@@ -103,7 +103,7 @@ let tests =
             { Seed = seed
               Initial = SessionLifecycleStatus.Starting handle
               Events =
-                [ Event.DaemonFault (Some (sprintf "seed-%d fault" seed))
+                [ Event.DaemonFault (FaultReason.Reported (sprintf "seed-%d fault" seed))
                   Event.Poll SessionStatus.Ready ] }
           let realT = run scenario
           let twinT = runNonStickyTwin scenario

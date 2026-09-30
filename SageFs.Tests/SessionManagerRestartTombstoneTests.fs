@@ -194,7 +194,7 @@ let sessionManagerRestartTombstoneTests =
         // until the replacement reports Ready.
         let restarting = getManagedSession harness info.Id
         restarting.Info.Status
-        |> Expect.equal "session should transition through Restarting under spawn-first, keeping the old worker's pid to guard against its late exit" (SessionLifecycleStatus.Restarting (Some pid))
+        |> Expect.equal "session should transition through Restarting under spawn-first, keeping the old worker's pid to guard against its late exit" (SessionLifecycleStatus.Restarting (PreviousWorker.Was pid))
         runtime.GetStartCalls()
         |> Expect.equal "spawn-first restart spawns one replacement worker" 2
 

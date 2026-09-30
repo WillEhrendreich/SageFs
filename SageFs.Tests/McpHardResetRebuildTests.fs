@@ -148,7 +148,7 @@ let tests = testList "MCP hard reset rebuild" [
                 GetSessionInfo = fun id ->
                   task {
                     let! info = baseGet id
-                    return info |> Option.map (fun i -> { i with Status = WorkerProtocol.SessionLifecycleStatus.Restarting None })
+                    return info |> Option.map (fun i -> { i with Status = WorkerProtocol.SessionLifecycleStatus.Restarting WorkerProtocol.PreviousWorker.ColdStart })
                   } } }
     rebuildOutcomes.[p.SessionId] <- RebuildOutcome.InProgress DateTime.UtcNow
     let! (json: string) = getSessionStatus restarting "agent1" (Some p.SessionId) None

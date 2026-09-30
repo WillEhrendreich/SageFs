@@ -42,5 +42,5 @@ module SessionLifecycle =
   let statusAfterExit (exitedWorkerPid: int option) (outcome: ExitOutcome) : SessionLifecycleStatus =
     match outcome with
     | ExitOutcome.Graceful -> SessionLifecycleStatus.Stopped
-    | ExitOutcome.RestartAfter _ -> SessionLifecycleStatus.Restarting exitedWorkerPid
-    | ExitOutcome.Abandoned err -> SessionLifecycleStatus.Faulted (Some (SageFsError.describe err))
+    | ExitOutcome.RestartAfter _ -> SessionLifecycleStatus.Restarting (PreviousWorker.ofPid exitedWorkerPid)
+    | ExitOutcome.Abandoned err -> SessionLifecycleStatus.Faulted (FaultReason.report (SageFsError.describe err))

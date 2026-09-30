@@ -2402,7 +2402,7 @@ module SageFsEffectHandler =
         | SessionLifecycleStatus.Starting _ -> SessionDisplayStatus.Starting
         | SessionLifecycleStatus.Evaluating _ -> SessionDisplayStatus.Running
         | SessionLifecycleStatus.Building _ -> SessionDisplayStatus.Running
-        | SessionLifecycleStatus.Faulted reason -> SessionDisplayStatus.Faulted (reason |> Option.defaultValue "faulted")
+        | SessionLifecycleStatus.Faulted reason -> SessionDisplayStatus.Faulted (FaultReason.describe reason)
         | SessionLifecycleStatus.Restarting _ -> SessionDisplayStatus.Restarting
         | SessionLifecycleStatus.Stopped -> SessionDisplayStatus.Stopped
       LastActivity = info.LastActivity

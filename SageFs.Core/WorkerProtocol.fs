@@ -116,6 +116,63 @@ module WorkerProtocol =
   /// A daemon-tracked worker process's id and, once it reports one, its HTTP port.
   type WorkerHandle = { Pid: int; Port: int option }
 
+  /// What a restart is replacing. `ColdStart` is a real case with its own name:
+  /// a Faulted or Stopped session has no worker to replace, so nothing can
+  /// arrive late from one.
+  [<RequireQualifiedAccess>]
+  type PreviousWorker =
+    /// The old worker's pid, kept ONLY so a late exit/ready event from that
+    /// dying process can be recognized as stale and ignored (see the stale-pid
+    /// guards in SessionManager). It is not a live worker.
+    | Was of pid: int
+    | ColdStart
+
+  module PreviousWorker =
+    let ofPid (pid: int option) : PreviousWorker =
+      match pid with
+      | Some p -> PreviousWorker.Was p
+      | None -> PreviousWorker.ColdStart
+
+    let pid (previous: PreviousWorker) : int option =
+      match previous with
+      | PreviousWorker.Was p -> Some p
+      | PreviousWorker.ColdStart -> None
+
+  /// Who faulted a session without saying why. Named, so a reader can tell
+  /// "the worker told us it faulted" from "nothing was recorded" instead of
+  /// each surface inventing its own sentence for a missing reason.
+  [<RequireQualifiedAccess>]
+  type FaultOrigin =
+    /// The worker's own status report said Faulted and carried no text.
+    | WorkerSelfReported
+    /// The fault reached the registry with no reason and no earlier one to keep.
+    | NotRecorded
+
+  /// Why a session is faulted: what was reported, or who faulted it silently.
+  /// Build a `Reported` with `FaultReason.report`, which turns blank text into
+  /// an `Unexplained`, so a reader is never handed an empty reason.
+  [<RequireQualifiedAccess>]
+  type FaultReason =
+    | Reported of message: string
+    | Unexplained of origin: FaultOrigin
+
+  module FaultReason =
+    /// The reason for `message`; blank text is no reason at all.
+    let report (message: string) : FaultReason =
+      match String.IsNullOrWhiteSpace message with
+      | true -> FaultReason.Unexplained FaultOrigin.NotRecorded
+      | false -> FaultReason.Reported message
+
+    /// The reason in words an agent or a person can act on. Never blank.
+    let describe (reason: FaultReason) : string =
+      match reason with
+      | FaultReason.Reported message when not (String.IsNullOrWhiteSpace message) -> message
+      | FaultReason.Reported _
+      | FaultReason.Unexplained FaultOrigin.NotRecorded ->
+        "No reason was recorded for this fault. The daemon log has the details."
+      | FaultReason.Unexplained FaultOrigin.WorkerSelfReported ->
+        "The worker reported a fault without saying why. The daemon log has the details."
+
   /// The daemon's own live status for one managed session (SessionInfo.Status).
   /// Distinct from the worker's simpler self-reported SessionStatus (used in
   /// WorkerStatusSnapshot) — a worker process has no notion of "my own pid as
@@ -133,13 +190,9 @@ module WorkerProtocol =
     | Evaluating of WorkerHandle
     /// Worker is running a dotnet build or similar multi-second compilation step.
     | Building of buildReason: string * worker: WorkerHandle
-    | Faulted of reason: string option
-    /// A restart in flight. Carries the OLD worker's pid ONLY so a late
-    /// exit/ready event from that dying process can be recognized as stale
-    /// and ignored (see the WorkerExited/WorkerReady stale-pid guards in
-    /// SessionManager) — it is not a live worker. None when there was no
-    /// prior worker (a cold restart after a Faulted/Stopped session).
-    | Restarting of previousWorkerPid: int option
+    | Faulted of reason: FaultReason
+    /// A restart in flight, and what it is replacing (see `PreviousWorker`).
+    | Restarting of previous: PreviousWorker
     | Stopped
 
   /// Conversion and query utilities for SessionLifecycleStatus.
@@ -149,7 +202,7 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Ready w
       | SessionLifecycleStatus.Evaluating w -> Some w.Pid
       | SessionLifecycleStatus.Building(_, w) -> Some w.Pid
-      | SessionLifecycleStatus.Restarting pid -> pid
+      | SessionLifecycleStatus.Restarting previous -> PreviousWorker.pid previous
       | SessionLifecycleStatus.Faulted _ | SessionLifecycleStatus.Stopped -> None
 
     let workerPort = function
@@ -162,7 +215,7 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Stopped -> None
 
     let faultReason = function
-      | SessionLifecycleStatus.Faulted reason -> reason
+      | SessionLifecycleStatus.Faulted reason -> Some reason
       | _ -> None
 
     /// True for a status with no live worker and nothing coming back on its
@@ -249,16 +302,20 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Faulted _
       | SessionLifecycleStatus.Stopped -> current
       | _ ->
-      let handle () : WorkerHandle =
-        { Pid = workerPid current |> Option.defaultValue 0
-          Port = workerPort current }
+      // A report that says a worker is alive needs a worker to attach it to. With
+      // no known pid (a cold restart) it cannot say whose it is, and a pid of 0
+      // would be a worker that never existed, so the status stands.
+      let attributed (build: WorkerHandle -> SessionLifecycleStatus) : SessionLifecycleStatus =
+        match workerPid current with
+        | Some pid -> build { Pid = pid; Port = workerPort current }
+        | None -> current
       match reported with
-      | SessionStatus.Starting -> SessionLifecycleStatus.Starting (handle ())
-      | SessionStatus.Ready -> SessionLifecycleStatus.Ready (handle ())
-      | SessionStatus.Evaluating -> SessionLifecycleStatus.Evaluating (handle ())
-      | SessionStatus.Building reason -> SessionLifecycleStatus.Building (reason, handle ())
-      | SessionStatus.Faulted -> SessionLifecycleStatus.Faulted (faultReason current)
-      | SessionStatus.Restarting -> SessionLifecycleStatus.Restarting (workerPid current)
+      | SessionStatus.Starting -> attributed SessionLifecycleStatus.Starting
+      | SessionStatus.Ready -> attributed SessionLifecycleStatus.Ready
+      | SessionStatus.Evaluating -> attributed SessionLifecycleStatus.Evaluating
+      | SessionStatus.Building reason -> attributed (fun handle -> SessionLifecycleStatus.Building (reason, handle))
+      | SessionStatus.Faulted -> SessionLifecycleStatus.Faulted (FaultReason.Unexplained FaultOrigin.WorkerSelfReported)
+      | SessionStatus.Restarting -> SessionLifecycleStatus.Restarting (PreviousWorker.ofPid (workerPid current))
       | SessionStatus.Stopped -> SessionLifecycleStatus.Stopped
 
   /// All messages the daemon can send to a worker process.

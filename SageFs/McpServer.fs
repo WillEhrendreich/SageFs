@@ -2326,7 +2326,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
                  projectName = projectName
                  status = statusLabel
                  health = SageFs.SessionHealth.toJson health
-                 faultReason = SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status
+                 faultReason = (SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status |> Option.map SageFs.WorkerProtocol.FaultReason.describe)
                  workingDirectory = sess.WorkingDirectory
                  workerPid = SageFs.WorkerProtocol.SessionLifecycleStatus.workerPid sess.Status
                  lastActivity = lastActivity
@@ -2766,7 +2766,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         results.Add(
           {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
              status = status
-             faultReason = SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status
+             faultReason = (SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status |> Option.map SageFs.WorkerProtocol.FaultReason.describe)
              health = SageFs.SessionHealth.toJson health
              projects = sess.Projects
              // What the worker ACTUALLY resolved and loaded, which is not always what

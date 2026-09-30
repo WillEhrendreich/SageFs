@@ -127,7 +127,7 @@ module SessionDisplay =
     | SessionLifecycleStatus.Starting _ ->
       SessionDisplayStatus.Starting
     | SessionLifecycleStatus.Faulted reason ->
-      SessionDisplayStatus.Faulted (reason |> Option.defaultValue "Session faulted")
+      SessionDisplayStatus.Faulted (FaultReason.describe reason)
     | SessionLifecycleStatus.Restarting _ ->
       SessionDisplayStatus.Restarting
     | SessionLifecycleStatus.Stopped ->

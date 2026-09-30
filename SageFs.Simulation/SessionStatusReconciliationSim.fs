@@ -43,7 +43,7 @@ module SessionStatusReconciliationSim =
     | Poll of SessionStatus
     /// The daemon learned of a fault through another channel entirely
     /// (WorkerExited, a spawn failure) and recorded it directly.
-    | DaemonFault of reason: string option
+    | DaemonFault of reason: FaultReason
     /// An explicit stop, recorded directly.
     | DaemonStop
     /// A genuine restart: the registry entry is replaced outright with a
@@ -98,8 +98,11 @@ module SessionStatusReconciliationSim =
     | SessionStatus.Ready -> SessionLifecycleStatus.Ready (handle ())
     | SessionStatus.Evaluating -> SessionLifecycleStatus.Evaluating (handle ())
     | SessionStatus.Building reason -> SessionLifecycleStatus.Building (reason, handle ())
-    | SessionStatus.Faulted -> SessionLifecycleStatus.Faulted (SessionLifecycleStatus.faultReason current)
-    | SessionStatus.Restarting -> SessionLifecycleStatus.Restarting (SessionLifecycleStatus.workerPid current)
+    | SessionStatus.Faulted ->
+      SessionLifecycleStatus.Faulted (
+        SessionLifecycleStatus.faultReason current
+        |> Option.defaultValue (FaultReason.Unexplained FaultOrigin.WorkerSelfReported))
+    | SessionStatus.Restarting -> SessionLifecycleStatus.Restarting (PreviousWorker.ofPid (SessionLifecycleStatus.workerPid current))
     | SessionStatus.Stopped -> SessionLifecycleStatus.Stopped
 
   let private applyTwin (current: SessionLifecycleStatus) (event: Event) : SessionLifecycleStatus =

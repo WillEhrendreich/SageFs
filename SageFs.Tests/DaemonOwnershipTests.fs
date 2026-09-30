@@ -210,12 +210,12 @@ let ttlClientActivityWindowTests = testList "ttlClientActivityWindow" [
 let isUsableSessionStatusTests = testList "isUsableSessionStatus" [
 
   testCase "WHY — a Faulted session is NOT usable (the exact bug: a dead tombstone must not block TTL)" <| fun _ ->
-    SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted (Some "worker exited")
+    SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted (SageFs.WorkerProtocol.FaultReason.Reported "worker exited")
     |> isUsableSessionStatus
     |> Expect.isFalse "a faulted, permanently-dead session must not count as live"
 
   testCase "WHY — a Faulted session with no reason is also NOT usable" <| fun _ ->
-    SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted None
+    SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted (SageFs.WorkerProtocol.FaultReason.Unexplained SageFs.WorkerProtocol.FaultOrigin.NotRecorded)
     |> isUsableSessionStatus
     |> Expect.isFalse "faulted is faulted regardless of whether a reason was recorded"
 
@@ -240,7 +240,7 @@ let isUsableSessionStatusTests = testList "isUsableSessionStatus" [
     |> Expect.isTrue "actively evaluating is definitely live"
 
   testCase "a Restarting session IS usable" <| fun _ ->
-    SageFs.WorkerProtocol.SessionLifecycleStatus.Restarting (Some 1)
+    SageFs.WorkerProtocol.SessionLifecycleStatus.Restarting (SageFs.WorkerProtocol.PreviousWorker.Was 1)
     |> isUsableSessionStatus
     |> Expect.isTrue "a restart in flight is not a dead end"
 ]

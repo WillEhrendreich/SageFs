@@ -100,8 +100,8 @@ module SessionHealth =
     (warmup: WarmupContext option)
     : SessionHealth =
     match status with
-    | SessionLifecycleStatus.Faulted reasonOpt ->
-      SessionHealth.Failed (reasonOpt |> Option.defaultValue "Session faulted for an unspecified reason.")
+    | SessionLifecycleStatus.Faulted reason ->
+      SessionHealth.Failed (FaultReason.describe reason)
     | SessionLifecycleStatus.Stopped ->
       SessionHealth.Failed "Session is stopped."
     | SessionLifecycleStatus.Starting _

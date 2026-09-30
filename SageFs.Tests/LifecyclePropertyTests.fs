@@ -89,9 +89,9 @@ let lifecyclePropertyTests = testList "SessionLifecycle properties" [
         | SessionLifecycle.ExitOutcome.Graceful ->
           status |> Expect.equal "Graceful→Stopped" SessionLifecycleStatus.Stopped
         | SessionLifecycle.ExitOutcome.RestartAfter _ ->
-          status |> Expect.equal "RestartAfter→Restarting, keeping the exited worker's pid" (SessionLifecycleStatus.Restarting (Some 4242))
+          status |> Expect.equal "RestartAfter→Restarting, keeping the exited worker's pid" (SessionLifecycleStatus.Restarting (PreviousWorker.Was 4242))
         | SessionLifecycle.ExitOutcome.Abandoned err ->
-          status |> Expect.equal "Abandoned→Faulted with the abandonment's own reason" (SessionLifecycleStatus.Faulted (Some (SageFsError.describe err)))
+          status |> Expect.equal "Abandoned→Faulted with the abandonment's own reason" (SessionLifecycleStatus.Faulted (FaultReason.report (SageFsError.describe err)))
 
   testPropertyWithConfig propConfig "exhausted policy always gives up" <|
     fun () ->
