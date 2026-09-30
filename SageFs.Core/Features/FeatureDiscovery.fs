@@ -61,8 +61,8 @@ module FeatureDiscovery =
       WhyNow = "When something feels wrong, start here for the complete picture"
       Relevance = FeatureRelevance.Essential }
     { ToolName = "run_tests"
-      ShortDescription = "Run tests and report pass/fail counts with failure messages"
-      ExampleUsage = """run_tests(pattern="", category="unit", timeout_seconds=30)"""
+      ShortDescription = "Run tests through the live-testing engine and get a receipt: what passed in this run, and what did not and why"
+      ExampleUsage = """run_tests(pattern="", category="unit", wait_seconds=30)"""
       WhyNow = "Re-validate your work after code changes"
       Relevance = FeatureRelevance.High }
     { ToolName = "explain_test_failure"

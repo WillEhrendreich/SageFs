@@ -3157,16 +3157,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       let targetSession = tryGetJsonStringAliases root [ "sessionId"; "session_id"; "session" ]
       let categoryFilter =
         tryGetJsonStringAliases root [ "category" ]
-        |> Option.bind (fun category ->
-          match category.Trim().ToLowerInvariant() with
-          | "" -> None
-          | "unit" -> Some TestCategory.Unit
-          | "integration" -> Some TestCategory.Integration
-          | "browser" -> Some TestCategory.Browser
-          | "benchmark" -> Some TestCategory.Benchmark
-          | "architecture" -> Some TestCategory.Architecture
-          | "property" -> Some TestCategory.Property
-          | other -> Some (TestCategory.Custom other))
+        |> Option.bind McpRunTests.parseCategory
 
       match rctx.Dispatch, rctx.SseContext.GetElmModel with
       | None, _ ->

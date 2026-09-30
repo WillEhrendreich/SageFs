@@ -563,6 +563,37 @@ let withEchoReply (ctx: McpContext) (toolName: string) (t: Task<HotReloadReply>)
     return HotReloadReply.toCallToolResult { reply with Text = text }
   }
 
+/// The MCP result for `run_tests`: the receipt's plain-language text in the text block and
+/// the receipt as data in StructuredContent, so an agent branches on a token, never on prose.
+/// A refusal or an unattributable request is an error result; an in-flight or finished run is not.
+let withEchoRunTests (ctx: McpContext) (t: Task<SageFs.McpRunTests.RunTestsOutcome>) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+  task {
+    let! outcome = t
+    let text, structured, isError =
+      match outcome with
+      | SageFs.McpRunTests.RunTestsOutcome.Receipt receipt ->
+        let failed =
+          match receipt with
+          | SageFs.Features.RunReceipts.RunReceipt.Refused _
+          | SageFs.Features.RunReceipts.RunReceipt.Unattributable _ -> true
+          | _ -> false
+        SageFs.Features.RunReceipts.TestRunReceipt.summarize receipt, Some (SageFs.Features.RunReceipts.TestRunReceipt.toJson receipt), failed
+      | SageFs.McpRunTests.RunTestsOutcome.NotRoutable (message, _) -> sprintf "Error: %s" message, None, true
+      | SageFs.McpRunTests.RunTestsOutcome.NoEngine ->
+        "Error: run_tests needs the SageFs daemon. This process has no live-testing engine to ask.", None, true
+    let! shown = withEcho ctx "run_tests" (Task.FromResult text)
+    let result = ModelContextProtocol.Protocol.CallToolResult()
+    result.Content.Add(ModelContextProtocol.Protocol.TextContentBlock(Text = shown))
+    structured
+    |> Option.iter (fun node ->
+      use doc = System.Text.Json.JsonDocument.Parse(node.ToJsonString())
+      result.StructuredContent <- System.Nullable(doc.RootElement.Clone()))
+    match isError with
+    | true -> result.IsError <- System.Nullable true
+    | false -> ()
+    return result
+  }
+
 /// `withSessionWd` for a tool that answers with a `HotReloadReply`: a call that
 /// does not resolve to a routable session gets the same "Error: ..." text.
 let withSessionReply (ctx: McpContext) (workingDirectory: string option) (f: string -> Task<HotReloadReply>) : Task<HotReloadReply> =
@@ -1520,7 +1551,7 @@ INPUTS:
 TRUST MODEL:
 - Refuses to claim green when session trust is ambiguous or loaded code is stale.
 - Uses warmup file status when available to detect stale definitions.
-- Does not run tests; it returns the next trustworthy verification move.""")>]
+- Does not run tests; it returns the next trustworthy verification move. Run the guard with run_tests.""")>]
     member _.targeted_verify(
         [<Description("Behavior or symbol under change (for example 'UserPreferences.loadFromFile').")>]
         behavior: string,
@@ -2065,6 +2096,70 @@ WORKFLOW: Use after re-evaluating a cell to see exactly what changed in the outp
         logger.LogDebug("MCP-TOOL: get_eval_diff called, cellIndex={Idx}", cell_index)
         let idxOpt = match cell_index with | 0 -> None | i -> Some i
         getEvalDiff ctx idxOpt |> withEcho ctx "get_eval_diff"
+
+    [<McpServerTool>]
+    [<Description("""Run the session's discovered tests and get a receipt for that run. This is the one way to run tests in a SageFs session: do not run 'dotnet test' from an agent, because that is a second engine whose answers can disagree with list_tests and the dashboard.
+
+It asks the same live-testing engine the dashboard and the editors use, so the answer is the engine's own record of this run, not a separate runner's guess.
+
+Parameters (all optional):
+- pattern: substring filter on test name
+- file_path: only tests from this source file
+- category: unit, integration, browser, benchmark, architecture, property, or a custom name
+- wait_seconds: how long to wait for the run to finish (default 30, at most 60)
+- request_id: a request_id from an earlier run_tests call that was still running. Re-reads that run instead of starting a new one.
+- session_id / working_directory: which session (see list_sessions)
+
+OUTPUT: text plus structured JSON with status (Refused, Pending, Started, Ran, Unattributable). A finished run has a verdict (AllPassed, SomeFailed, Incomplete), counts, and one line per requested test saying what happened to it IN THIS RUN.
+
+Incomplete is not green. It means nothing failed but not every test passed in this run: a test was skipped, was cut off, never reported, or only has a result from an earlier run. A pass from an earlier run is never counted. A refusal says why (session still warming up, nothing discovered, no test matched your filter) and what to do.
+
+If the run is still going when wait_seconds ends, the result carries a request_id. Call run_tests again with it (and wait_seconds) instead of polling anything else.""")>]
+    member _.run_tests(
+        [<Description("Optional substring filter on test name")>]
+        [<Optional; DefaultParameterValue("")>]
+        pattern: string,
+        [<Description("Optional source file path filter")>]
+        [<Optional; DefaultParameterValue("")>]
+        file_path: string,
+        [<Description("Optional category: unit, integration, browser, benchmark, architecture, property, or a custom name")>]
+        [<Optional; DefaultParameterValue("")>]
+        category: string,
+        [<Description("Seconds to wait for the run to finish (default 30, at most 60). When it runs out, the result carries a request_id to continue with.")>]
+        [<Optional; DefaultParameterValue(30)>]
+        wait_seconds: int,
+        [<Description("A request_id from an earlier run_tests call that was still running. Re-reads that run instead of starting a new one.")>]
+        [<Optional; DefaultParameterValue("")>]
+        request_id: string,
+        [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing.")>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string,
+        [<Description("Working directory of the MCP client, used to find the session when session_id is not given.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+        let opt (text: string) = match System.String.IsNullOrWhiteSpace text with | true -> None | false -> Some text
+        logger.LogDebug("MCP-TOOL: run_tests called, pattern={Pattern}, file={File}, category={Category}", pattern, file_path, category)
+        let continuation =
+            match opt request_id with
+            | None -> Ok None
+            | Some raw ->
+                match System.Guid.TryParse raw with
+                | true, guid -> Ok (Some (SageFs.Features.LiveTesting.RunRequestId guid))
+                | false, _ -> Error (sprintf "request_id '%s' is not a request id from an earlier run_tests call." raw)
+        match continuation with
+        | Error message ->
+            withEchoRunTests ctx (Task.FromResult (SageFs.McpRunTests.RunTestsOutcome.NotRoutable (message, None)))
+        | Ok continueWith ->
+            let request : SageFs.McpRunTests.RunTestsRequest =
+                { SessionId = opt session_id
+                  WorkingDirectory = opt working_directory
+                  Pattern = opt pattern
+                  File = opt file_path
+                  Category = SageFs.McpRunTests.parseCategory category
+                  Continue = continueWith
+                  Wait = SageFs.SessionStatusPayload.StatusWait.clampSeconds wait_seconds }
+            withEchoRunTests ctx (SageFs.McpRunTests.runTests ctx "mcp" request)
 
     [<McpServerTool>]
     [<Description("""List all discovered tests in the current session, optionally filtered by name pattern or file path.

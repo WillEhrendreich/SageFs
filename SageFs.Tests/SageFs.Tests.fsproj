@@ -285,6 +285,7 @@
          <Compile Include="FirstRunLinuxTests.fs" />
          <Compile Include="McpStdioBridgeOwnershipTests.fs" />
          <Compile Include="TestRunReceiptTests.fs" />
+         <Compile Include="McpRunTestsTests.fs" />
          <Compile Include="ListTestsSessionScopeTests.fs" />
          <Compile Include="WorkerReadyCommitTests.fs" />
          <Compile Include="SupervisorWatchdogSimTests.fs" />

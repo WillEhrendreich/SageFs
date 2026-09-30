@@ -3881,7 +3881,7 @@ module McpTools =
             || tc.DisplayName.Contains(testName, StringComparison.OrdinalIgnoreCase))
         match matchingTests with
         | [||] ->
-          return sprintf "No test found matching '%s'. Use run_tests to see available tests." testName
+          return sprintf "No test found matching '%s'. Use list_tests to see available tests." testName
         | tests ->
           let narrativeOpt =
             tests |> Array.tryPick (fun tc -> Map.tryFind tc.Id testState.Cached.FailureNarratives)

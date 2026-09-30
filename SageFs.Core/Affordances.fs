@@ -76,6 +76,7 @@ let availableTools (state: SessionState) : string list =
       "check_fsharp_code"
       "targeted_verify"
       "list_tests"
+      "run_tests"
       "explain_test_failure"
       "list_sessions"
       "switch_session"
@@ -235,6 +236,7 @@ let private gatingDomain : Map<string, ToolGate> =
     "check_fsharp_code", ToolGate.StateGated
     "targeted_verify", ToolGate.StateGated
     "list_tests", ToolGate.StateGated
+    "run_tests", ToolGate.StateGated
     "explain_test_failure", ToolGate.StateGated
     "create_project_session", ToolGate.StateGated
     "create_solution_session", ToolGate.StateGated
