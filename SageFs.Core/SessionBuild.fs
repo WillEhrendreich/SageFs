@@ -172,6 +172,20 @@ module SessionBuild =
   let coreReferenceProperty (targetsFile: string) =
     sprintf "-p:CustomAfterMicrosoftCommonTargets=%s" targetsFile
 
+  /// Says "SageFs is the one building this". Sent whenever the reference is
+  /// injected, so a project that builds SageFs.Core ITSELF (the ConsoleTicker
+  /// sample orders Core first for a raw `dotnet build`) can yield to the
+  /// injection instead of adding a second, conflicting one. A project cannot
+  /// tell from CustomAfterMicrosoftCommonTargets: the SDK defaults that property
+  /// to a path of its own, so it is never empty, and a nested MSBuild task
+  /// INHERITS it, which is how Core came to be compiled against itself.
+  let managedBuildProperty = "-p:SageFsManagedBuild=true"
+
+  /// Every argument a build that injects Core carries, in one place so the
+  /// injection and its marker can never be sent apart.
+  let injectionArguments (targetsFile: string) : string list =
+    [ coreReferenceProperty targetsFile; managedBuildProperty ]
+
   /// The CONTENT of the generated .targets file. Pure, so the exact text is
   /// testable without touching a filesystem.
   ///
@@ -283,26 +297,26 @@ module SessionBuild =
   /// `Ok (None, id)` when it will not — with the reason already recorded on
   /// `CoreReference` rather than swallowed here. A build that cannot inject
   /// still builds; it simply does not offer the holder API.
-  let private prepareCoreReference () : string option * (unit -> unit) =
+  let private prepareCoreReference () : string list * (unit -> unit) =
     match decideCoreReference (runningCoreAssembly ()) with
     | CoreReference.Available assembly ->
       let targetsFile =
         Path.Combine(Path.GetTempPath(), sprintf "sagefs-inject-%d.targets" (Environment.ProcessId))
       try
         File.WriteAllText(targetsFile, coreReferenceTargetsContent assembly)
-        Some(coreReferenceProperty targetsFile), (fun () ->
+        injectionArguments targetsFile, (fun () ->
           try File.Delete targetsFile with _ -> ())
       with ex ->
         // A failure HERE must not fail the build: the injection is an
         // enhancement, and a user's project that does not use the holder API
         // has no need of it. Say why and carry on.
         Log.warn "[SessionBuild] could not prepare the Core reference injection: %s" ex.Message
-        None, id
+        [], id
     | CoreReference.Absent why ->
       Log.debug "[SessionBuild] no Core reference injected: %s" why
-      None, id
+      [], id
     | CoreReference.NotChecked ->
-      None, id
+      [], id
 
   /// Free build slots right now — full capacity when no build is in flight.
   /// Lets a test observe the semaphore exists at the right capacity without
@@ -330,10 +344,7 @@ module SessionBuild =
         // keyed by process id, so a second build in the same process reuses
         // the same file and must not delete it out from under the first.
         let injectionProperty, cleanupInjection = prepareCoreReference ()
-        let withInjection (args: string list) =
-          match injectionProperty with
-          | Some p -> args @ [ p ]
-          | None -> args
+        let withInjection (args: string list) = args @ injectionProperty
         try
           // Run one `dotnet` invocation. Ok on success; Error carries the exit
           // code (None = timed out) plus stdout/stderr for diagnostics/retry.

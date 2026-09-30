@@ -83,6 +83,13 @@ let coreReferencePolicyTests =
       (property.Contains "ReferencePath")
       |> Expect.isFalse "the search-only property must never be used for this"
 
+    testCase "WHY — a build that injects Core also says so, in a property NAMED for it, because a project that builds Core itself (the ConsoleTicker sample) has to yield to the injection and cannot tell from CustomAfterMicrosoftCommonTargets: the SDK gives that property a default of its own, so it is never empty" <| fun _ ->
+      let args = SessionBuild.injectionArguments "/tmp/sagefs-inject.targets"
+      args |> Expect.contains "the reference injection itself" (SessionBuild.coreReferenceProperty "/tmp/sagefs-inject.targets")
+      args |> Expect.contains "and the marker that says SageFs is the one building" SessionBuild.managedBuildProperty
+      SessionBuild.managedBuildProperty
+      |> Expect.equal "exact MSBuild global-property syntax, the spelling a project's Condition reads" "-p:SageFsManagedBuild=true"
+
     testCase "WHY — every build argument list still carries the optimization flag — the reference injection must not displace it, since -p:Optimize=false is structurally load-bearing for hot reload" <| fun _ ->
       for restore in [ false; true ] do
         SessionBuild.buildArguments restore "/x.fsproj"
@@ -182,5 +189,34 @@ let structuralOverrideGuaranteeTests =
               disableOptimizationsBit
       finally
         try Directory.Delete(workDir, true) with _ -> ()
+    }
+  ]
+
+/// WHY — the sample the hot-reload docs point people at has to survive the
+/// rebuild SageFs runs itself. That rebuild hands MSBuild a global property
+/// (`CustomAfterMicrosoftCommonTargets`) that injects SageFs.Core as a
+/// reference. The ticker's own `BuildSageFsCoreFirst` target builds SageFs.Core
+/// through a nested MSBuild task, which INHERITS that property, so Core was
+/// compiled with a reference to itself and every type in it became ambiguous.
+/// The rebuild failed, and nothing said so: the old worker just kept serving.
+/// Run through `SessionBuild.runBuildAsync`, because that is the exact function
+/// the daemon's hard reset calls.
+[<Tests>]
+let referenceSampleRebuildTests =
+  Integration.hostList "SessionBuild rebuilds the reference sample (real build)" [
+    testAsync "WHY — the ConsoleTicker sample builds through SageFs's own rebuild path, because a hard reset on the documented hot-reload demo used to fail silently and leave the old worker serving" {
+      let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+      let sampleDir = Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker")
+      let project = Path.Combine(sampleDir, "SageFs.Samples.ConsoleTicker.fsproj")
+
+      let! result = SessionBuild.runBuildAsync [ project ] sampleDir
+
+      match result with
+      | Error err ->
+        failtestf "the reference sample must build through SageFs's rebuild path, got: %s" (SageFsError.describe err)
+      | Ok _ ->
+        Directory.EnumerateFiles(Path.Combine(sampleDir, "bin", "Debug"), "SageFs.Samples.ConsoleTicker.dll", SearchOption.AllDirectories)
+        |> Seq.isEmpty
+        |> Expect.isFalse "the rebuild must produce the sample's assembly"
     }
   ]

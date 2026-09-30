@@ -43,7 +43,7 @@
 
          The honest fix is not a better path, it is to make the ORDERING
          explicit so this cannot compile against a stale assembly again. -->
-    <Reference Include="SageFs.Core" Condition="'$(SageFsCoreAssembly)' != ''">
+    <Reference Include="SageFs.Core" Condition="'$(SageFsCoreAssembly)' != '' And '$(SageFsManagedBuild)' != 'true'">
       <HintPath>$(SageFsCoreAssembly)</HintPath>
       <Private>true</Private>
     </Reference>
@@ -74,8 +74,20 @@
        and fail on the gate (where they do not) — the same local-green/CI-red
        shape as the property condition this target was added to fix. Both halves
        of that trap had the same shape: something that only holds in a dirty
-       checkout. -->
-  <Target Name="BuildSageFsCoreFirst" BeforeTargets="ResolveAssemblyReferences" Condition="'$(SageFsCoreAssembly)' != '' And '$(DesignTimeBuild)' != 'true'">
+       checkout.
+
+       This target and the Reference above are for a RAW `dotnet build` only.
+       When SageFs builds the project (a hard reset, run_app) it injects its own
+       Core reference and passes SageFsManagedBuild=true alongside it. The
+       nested `<MSBuild>` below inherits every global property, so under SageFs
+       it compiled Core WITH that injected reference to Core, every type in Core
+       became ambiguous, and the rebuild failed without telling anyone. So both
+       are skipped whenever SageFsManagedBuild is true. (Testing
+       CustomAfterMicrosoftCommonTargets instead does not work: the SDK gives it a
+       default of its own, so it is never empty.) The target is also skipped during
+       a design-time load (Ionide evaluates the project that way), where a
+       nested Restore and Build of Core made the loader return zero projects. -->
+  <Target Name="BuildSageFsCoreFirst" BeforeTargets="ResolveAssemblyReferences" Condition="'$(SageFsCoreAssembly)' != '' And '$(DesignTimeBuild)' != 'true' And '$(SageFsManagedBuild)' != 'true'">
     <MSBuild Projects="$(MSBuildThisFileDirectory)../../../SageFs.Core/SageFs.Core.fsproj"
              Targets="Restore"
              Properties="Configuration=$(Configuration)"
