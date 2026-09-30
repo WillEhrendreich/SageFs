@@ -417,13 +417,14 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
       /// never executes the tool body).
       let enforceToolGate (toolName: string) =
         task {
-          // MCP tool handlers all route as agent "mcp" and take no session_id
-          // parameter; working_directory is the only routing argument.
-          let workingDirectoryArg =
+          // MCP tool handlers all route as agent "mcp". The routing arguments
+          // are working_directory and, on the tools that take it, session_id:
+          // the gate must look at the same session the tool body will.
+          let stringArg (name: string) =
             match ctx.Params.Arguments with
             | null -> None
             | args ->
-              match args.TryGetValue("working_directory") with
+              match args.TryGetValue(name) with
               | true, v when v.ValueKind = System.Text.Json.JsonValueKind.String ->
                 let s = v.GetString()
                 match String.IsNullOrWhiteSpace s with
@@ -431,8 +432,9 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
                 | false -> Some s
               | _ -> None
           return!
-            SageFs.McpTools.enforceToolCallGate
-              mcpCtx "mcp" None workingDirectoryArg toolName
+            SageFs.McpTools.admitToolCallWithin
+              SageFs.Timeouts.gateStatusProbe
+              mcpCtx "mcp" (stringArg "session_id") (stringArg "working_directory") toolName
         }
 
       let buildGateErrorResult (toolName: string) (gateError: string) =
@@ -460,8 +462,10 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
               match gateResult with
               | Error gateError ->
                 return buildGateErrorResult requestName gateError
-              | Ok _ ->
-                let! result = next.Invoke(ctx, ct).AsTask()
+              | Ok admission ->
+                // The tool body reuses the session the gate resolved.
+                let! result =
+                  SageFs.McpTools.runAdmitted admission (fun () -> next.Invoke(ctx, ct).AsTask())
                 return appendEvents result
             | true ->
               let! result = next.Invoke(ctx, ct).AsTask()

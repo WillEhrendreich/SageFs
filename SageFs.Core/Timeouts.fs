@@ -56,6 +56,11 @@ module Timeouts =
   /// legitimately long evals still complete while a wedged worker eventually
   /// surfaces as a timeout error instead of an infinite hang.
   let workerHttpRequest = envOrDefaultMinutes "SAGEFS_WORKER_HTTP_REQUEST_MINUTES" 10.0
+  /// How long the tool-call gate waits for a worker's /status answer before it
+  /// refuses the call. The worker answers status while it evaluates, so a probe
+  /// that takes this long means a hung or starved worker, and the caller should
+  /// hear that now, not after workerHttpRequest's ten minutes.
+  let gateStatusProbe = TimeSpan.FromSeconds(5.0)
   /// The longest `wait_seconds` get_session_status will park a caller for.
   /// A larger request is clamped to this, never refused.
   let statusWaitCap = TimeSpan.FromSeconds(60.0)

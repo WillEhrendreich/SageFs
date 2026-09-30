@@ -260,9 +260,14 @@ module McpTools =
   // (roast-8 §2 god-file split), re-exposed via `open SageFs.McpRouteError`
   // above so routeToSession and its consumers here are unchanged.
 
-  /// Route a WorkerMessage to a specific session via proxy.
-  let routeToSession
+  /// Route a WorkerMessage to a specific session via proxy, abandoning the
+  /// worker call when `cancellation` fires. A cancelled call is re-raised as an
+  /// OperationCanceledException and is never mapped to a transport failure, so
+  /// it cannot mark the session Faulted or tell the SessionManager the worker
+  /// died: abandoning a call says nothing about the worker.
+  let routeToSessionWithin
     (ctx: McpContext)
+    (cancellation: System.Threading.CancellationToken)
     (sessionId: string)
     (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage)
     : Task<Result<WorkerProtocol.WorkerResponse, RouteError>> =
@@ -285,7 +290,7 @@ module McpTools =
         | Some send ->
           let replyId = WorkerProtocol.SessionId.newId()
           try
-            let! response = send (msg replyId) |> Async.StartAsTask
+            let! response = Async.StartAsTask(send (msg replyId), cancellationToken = cancellation)
             return Result.Ok response
           with
           | :? OperationCanceledException as cancellation ->
@@ -320,6 +325,14 @@ module McpTools =
             | None ->
               return raise ex
     }
+
+  /// Route a WorkerMessage to a specific session via proxy.
+  let routeToSession
+    (ctx: McpContext)
+    (sessionId: string)
+    (msg: WorkerProtocol.SessionId -> WorkerProtocol.WorkerMessage)
+    : Task<Result<WorkerProtocol.WorkerResponse, RouteError>> =
+    routeToSessionWithin ctx System.Threading.CancellationToken.None sessionId msg
 
   /// Typed outcome of resolving which session a tool call should target.
   /// Guidance text is a pure function of this union: a session that exists in
@@ -622,26 +635,70 @@ module McpTools =
   let private startingWhileReset = withCarriedWorker WorkerProtocol.SessionLifecycleStatus.Starting
   let private readyAfterReset = withCarriedWorker WorkerProtocol.SessionLifecycleStatus.Ready
 
-  /// Get the session status via proxy, returning the SessionState.
-  let getSessionState (ctx: McpContext) (sessionId: string) : Task<SessionState> =
+  /// What the gate resolved for a tool call. `NotResolved` for a tool that
+  /// needs no session (monitoring, cohort tools) or was refused before any
+  /// session was looked up.
+  [<RequireQualifiedAccess>]
+  type GateResolution =
+    | NotResolved
+    | Resolved of SessionResolution
+
+  /// What the gate admitted: the call as the tool body will receive it, and the
+  /// session the gate resolved for it.
+  type GateAdmission =
+    { ToolName: string
+      SessionId: string option
+      WorkingDirectory: string option
+      Resolution: GateResolution }
+
+  /// What the gate's status probe learned from the worker.
+  [<RequireQualifiedAccess>]
+  type GateProbe =
+    /// The worker answered, and this is its state.
+    | Answered of SessionState
+    /// The worker did not answer within `bound`: it is busy or hung.
+    | TimedOut of bound: TimeSpan
+
+  /// Ask the worker for its status, waiting at most `bound`. Only the worker
+  /// can say whether an eval is running (the registry maps Ready and Evaluating
+  /// to one state). A probe that runs out of time is abandoned, not reported as
+  /// a worker failure: it neither marks the session Faulted nor tells the
+  /// SessionManager the worker died.
+  let probeSessionState (ctx: McpContext) (sessionId: string) (bound: TimeSpan) : Task<GateProbe> =
     task {
-      let! routeResult =
-        routeToSession ctx sessionId
+      use abandon = new System.Threading.CancellationTokenSource()
+      let probe =
+        routeToSessionWithin ctx abandon.Token sessionId
           (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
-      return
-        match routeResult with
-        | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
-          WorkerProtocol.SessionStatus.toSessionState snapshot.Status
-        | _ -> SessionState.Faulted
+      let! first = Task.WhenAny(probe :> Task, Task.Delay(bound, abandon.Token))
+      abandon.Cancel()
+      match obj.ReferenceEquals(first, probe) with
+      | true ->
+        let! routeResult = probe
+        return
+          match routeResult with
+          | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
+            GateProbe.Answered (WorkerProtocol.SessionStatus.toSessionState snapshot.Status)
+          | _ -> GateProbe.Answered SessionState.Faulted
+      | false ->
+        // The abandoned call was cancelled above; observe how it ends so it
+        // cannot surface later as an unobserved task exception.
+        probe.ContinueWith((fun (finished: Task) -> finished.Exception |> ignore), TaskContinuationOptions.OnlyOnFaulted)
+        |> ignore
+        return GateProbe.TimedOut bound
     }
 
-  /// Check tool availability against the active session's state.
-  let requireTool (ctx: McpContext) (sessionId: string) (toolName: string) : Task<Result<unit, string>> =
+  /// Check tool availability against the session's live state.
+  let requireTool (ctx: McpContext) (sessionId: string) (toolName: string) (bound: TimeSpan) : Task<Result<unit, string>> =
     task {
-      let! state = getSessionState ctx sessionId
+      let! probe = probeSessionState ctx sessionId bound
       return
-        Affordances.checkToolAvailability state toolName
-        |> Result.mapError SageFsError.describeForAgent
+        match probe with
+        | GateProbe.Answered state ->
+          Affordances.checkToolAvailability state toolName
+          |> Result.mapError SageFsError.describeForAgent
+        | GateProbe.TimedOut waited ->
+          Error (SageFsError.describeForAgent (SageFsError.WorkerTimeout (sessionId, "status check", waited.TotalSeconds)))
     }
 
   /// Reverse lookup from MCP tool name to `Affordances.CohortTool` — built
@@ -707,7 +764,45 @@ module McpTools =
   ///
   /// Cohort tools additionally pass through `checkCohortAuthorityGate` FIRST
   /// (Slice 3, item 11) — a role-based dimension the session-state gate below
-  /// has no concept of.
+  /// has no concept of. `admitToolCallWithin` is the gate itself; it returns
+  /// what it resolved, so the tool body need not resolve a second time.
+  let admitToolCallWithin
+    (probeBound: TimeSpan)
+    (ctx: McpContext)
+    (agent: string)
+    (sessionId: string option)
+    (workingDirectory: string option)
+    (toolName: string)
+    : Task<Result<GateAdmission, string>> =
+    let admission (resolution: GateResolution) : GateAdmission =
+      { ToolName = toolName; SessionId = sessionId; WorkingDirectory = workingDirectory; Resolution = resolution }
+    let allowedIn (state: SessionState) =
+      Affordances.checkToolCallAllowed state toolName |> Result.mapError SageFsError.describeForAgent
+    task {
+      match checkCohortAuthorityGate ctx agent toolName with
+      | Some result -> return result |> Result.map (fun () -> admission GateResolution.NotResolved)
+      | None ->
+      match Affordances.toolGate toolName with
+      | Some Affordances.ToolGate.AlwaysAvailable ->
+        return Ok (admission GateResolution.NotResolved)
+      | Some Affordances.ToolGate.StateGated ->
+        let! resolution = resolveSessionId ctx agent sessionId workingDirectory
+        let! verdict =
+          match resolution with
+          // Worker-authoritative state for the routable session.
+          | Routable sid -> requireTool ctx sid toolName probeBound
+          | WarmingUp (_, status) | Unroutable (_, status) ->
+            Task.FromResult (allowedIn (WorkerProtocol.SessionLifecycleStatus.toSessionState status))
+          | FaultedSession _ -> Task.FromResult (allowedIn SessionState.Faulted)
+          // No session reachable: code tools are refused with the routing reason, not "wait for Ready".
+          | Gone message ->
+            Task.FromResult (allowedIn SessionState.Uninitialized |> Result.mapError (fun _ -> message))
+        return verdict |> Result.map (fun () -> admission (GateResolution.Resolved resolution))
+      | None ->
+        return allowedIn SessionState.Uninitialized |> Result.map (fun () -> admission GateResolution.NotResolved)
+    }
+
+  /// The gate, answering only whether the call may run.
   let enforceToolCallGate
     (ctx: McpContext)
     (agent: string)
@@ -716,37 +811,43 @@ module McpTools =
     (toolName: string)
     : Task<Result<unit, string>> =
     task {
-      match checkCohortAuthorityGate ctx agent toolName with
-      | Some result -> return result
-      | None ->
-      match Affordances.toolGate toolName with
-      | Some Affordances.ToolGate.AlwaysAvailable ->
-        return Ok ()
-      | Some Affordances.ToolGate.StateGated ->
-        let! resolution = resolveSessionId ctx agent sessionId workingDirectory
-        match resolution with
-        | Routable sid ->
-          // Worker-authoritative state for the routable session.
-          return! requireTool ctx sid toolName
-        | WarmingUp (_, status) | Unroutable (_, status) ->
-          let state = WorkerProtocol.SessionLifecycleStatus.toSessionState status
-          return
-            Affordances.checkToolCallAllowed state toolName
-            |> Result.mapError SageFsError.describeForAgent
-        | FaultedSession _ ->
-          return
-            Affordances.checkToolCallAllowed SessionState.Faulted toolName
-            |> Result.mapError SageFsError.describeForAgent
-        | Gone message ->
-          // No session reachable: code tools are refused with the routing reason, not "wait for Ready".
-          return
-            Affordances.checkToolCallAllowed SessionState.Uninitialized toolName
-            |> Result.mapError (fun _ -> message)
-      | None ->
-        return
-          Affordances.checkToolCallAllowed SessionState.Uninitialized toolName
-          |> Result.mapError SageFsError.describeForAgent
+      let! verdict = admitToolCallWithin Timeouts.gateStatusProbe ctx agent sessionId workingDirectory toolName
+      return verdict |> Result.map ignore
     }
+
+  /// The admission for the tool call running on this async flow, set by
+  /// `runAdmitted` around the tool body and cleared after it.
+  let private currentAdmission = new System.Threading.AsyncLocal<GateAdmission option>()
+
+  /// Run a tool body with the gate's admission in scope, so `resolveAdmitted`
+  /// can hand it the session the gate already resolved.
+  let runAdmitted (admission: GateAdmission) (run: unit -> Task<'a>) : Task<'a> =
+    task {
+      currentAdmission.Value <- Some admission
+      try
+        return! run ()
+      finally
+        currentAdmission.Value <- None
+    }
+
+  /// The session a tool body should use. When the gate resolved this same call
+  /// (same tool, same session id and working directory), that resolution is
+  /// returned as it is; anything else resolves now, as it always did.
+  let resolveAdmitted
+    (ctx: McpContext)
+    (toolName: string)
+    (agent: string)
+    (sessionId: string option)
+    (workingDirectory: string option)
+    : Task<SessionResolution> =
+    match currentAdmission.Value with
+    | Some { ToolName = admittedTool
+             SessionId = admittedSession
+             WorkingDirectory = admittedDirectory
+             Resolution = GateResolution.Resolved resolution }
+      when admittedTool = toolName && admittedSession = sessionId && admittedDirectory = workingDirectory ->
+      Task.FromResult resolution
+    | _ -> resolveSessionId ctx agent sessionId workingDirectory
 
   /// Look up the workflow for a session from the Elm model.
   /// Falls back to Interactive (identity for enhancement) when the model is unavailable.
@@ -969,7 +1070,8 @@ module McpTools =
       (intent: string option)
       : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option> =
     task {
-      let! resolution = resolveSessionId ctx agentName sessionId workingDirectory
+      // The session the gate already resolved for this very call, if any.
+      let! resolution = resolveAdmitted ctx "send_fsharp_code" agentName sessionId workingDirectory
       match resolution with
       | Routable sid ->
         return! task {
@@ -1466,22 +1568,6 @@ module McpTools =
         return header + warmupDetail
       | None ->
         return "SageFs startup information not available yet — session is still initializing"
-    })
-
-  let getStartupInfoJson (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
-      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-      match info with
-      | Some sessionInfo ->
-        return
-          System.Text.Json.JsonSerializer.Serialize(
-            {| sessionId = sid
-               workingDirectory = sessionInfo.WorkingDirectory
-               projects = sessionInfo.Projects
-               mcpPort = ctx.McpPort
-               status = WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status |})
-      | None ->
-        return """{"status": "initializing", "message": "Session is still warming up. This typically takes 15-30s. Use get_recent_fsi_events to monitor warmup progress. Do NOT sleep-poll or create a new session."}"""
     })
 
   /// Recursively find `.fsproj` under `root`, PRUNING noise directories
@@ -2064,10 +2150,6 @@ module McpTools =
     packageRefs
     @ WorkflowTypes.PaketReferences.readForProject path
     @ WorkflowTypes.ProjectFileMarkers.read path
-
-  /// A target containing more than this many project paths is likely a
-  /// repository-sized load and should be named narrowly by the caller.
-  let largeRepoAutoDiscoveryWarningThreshold = 15
 
   let createSession (ctx: McpContext) (agent: string) (targets: SessionProjectTarget list) (workingDir: string) (workflowRaw: string) : Task<string> =
     task {

@@ -68,7 +68,7 @@ module StartupConfigTests =
 
 module GetStartupInfoTests =
 
-  /// getStartupInfo/getStartupInfoJson only ever read the SessionInfo
+  /// getStartupInfo only ever reads the SessionInfo
   /// SessionOps.GetSessionInfo hands back — a static stub below — and never
   /// route a message through GetProxy's proxy. globalActorResult was forced
   /// only for the DiagnosticsChanged handle these tools never touch; a bare
@@ -139,25 +139,6 @@ module GetStartupInfoTests =
           
           // Should always return something, even if no config
           result |> Expect.isNotNull "Should return result"
-        }
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
-      
-      testCase "get_startup_info should return parseable JSON format"
-      <| fun _ ->
-        task {
-          let ctx = mkFormattingCtx ()
-          
-          let! result = getStartupInfoJson ctx "test" None
-
-          // Startup info is per-session since the session-architecture
-          // unification (the daemon no longer holds one global StartupConfig):
-          // the JSON carries the session identity, not FSI command-line args.
-          use doc = System.Text.Json.JsonDocument.Parse result
-          let root = doc.RootElement
-          (root.GetProperty("sessionId").GetString()) |> Expect.equal "Should identify the session" ctx.SessionMap.["test"]
-          (root.TryGetProperty("workingDirectory") |> fst) |> Expect.isTrue "Should carry the working directory"
-          (root.TryGetProperty("status") |> fst) |> Expect.isTrue "Should carry the session status"
         }
         |> Async.AwaitTask
         |> Async.RunSynchronously
