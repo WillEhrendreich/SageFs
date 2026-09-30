@@ -63,6 +63,67 @@ let private consoleTickerDir =
   | null -> failwith "consoleTickerProject has no directory"
   | dir -> dir
 
+/// Wait until the session for `targetDir` actually HOLDS its project — the
+/// precondition `run_app` enforces and `status = "Ready"` does not imply.
+///
+/// A session is Ready while its project targets are still loading, so waiting
+/// for Ready alone is waiting for a weaker condition than the one the action
+/// needs. The test bound is the project being listed, never a wall-clock sleep,
+/// and never the mechanism under test: this polls the same `/api/sessions` the
+/// action will consult, so a fast load finishes fast.
+let private waitForProjectLoaded (client: System.Net.Http.HttpClient) (targetDir: string) (timeout: TimeSpan) = task {
+  let started = DateTime.UtcNow
+  let mutable loaded = false
+  let mutable lastBody = ""
+  let expectedDir = targetDir.TrimEnd('/')
+
+  while not loaded && DateTime.UtcNow - started < timeout do
+    do! Task.Delay(500)
+    let! status, body = Http.getJson client "/api/sessions"
+    lastBody <- body
+    if status = 200 then
+      use doc = JsonDocument.Parse(body)
+      loaded <-
+        doc.RootElement.GetProperty("sessions").EnumerateArray()
+        |> Seq.exists (fun session ->
+          let dirOf (e: JsonElement) =
+            let s = e.GetProperty("workingDirectory").GetString()
+            if isNull s then "" else s.TrimEnd('/')
+          let sessionDir = dirOf session
+
+          if sessionDir <> expectedDir then
+            false
+          else
+            // The project is loaded when the session reports any target under it.
+            // An ABSENT Target reads as NOT loaded — that is the bug being fixed,
+            // and reading it as loaded would reintroduce the race.
+            let targets =
+              match session.TryGetProperty "Target" with
+              | true, prop -> prop
+              | _ -> Unchecked.defaultof<JsonElement>
+
+            let pathOf (t: JsonElement) =
+              // `TryGetProperty` returns the JsonElement itself, not a wrapper,
+              // so there is no `.Value` to unwrap.
+              match t.TryGetProperty "path" with
+              | true, p ->
+                let s = p.GetString()
+                if isNull s then "" else s
+              | _ -> ""
+
+            match targets.ValueKind with
+            | JsonValueKind.Array ->
+              targets.EnumerateArray() |> Seq.exists (fun t -> (pathOf t).StartsWith expectedDir)
+            | JsonValueKind.String ->
+              let s = targets.GetString()
+              (if isNull s then "" else s).StartsWith expectedDir
+            | _ -> false)
+
+  if not loaded then
+    printfn "project never loaded for %s; sessions were: %s" expectedDir lastBody
+  return loaded
+}
+
 /// Extract the tool's OWN answer — the FIRST TextContentBlock only.
 /// Verified live (see McpToolOutcomeTests.fs's textOf for the full story):
 /// McpServer.fs's createServerCaptureFilter appends a SECOND
@@ -113,6 +174,22 @@ let mcpAppRunOutcomeTests =
         ready
         |> Expect.isTrue (
           sprintf "console ticker session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
+
+        // The session must be Ready AND hold this project, not merely Ready.
+        //
+        // `waitForReadySession` (HttpApiIntegrationTests.fs:222) only checks
+        // `status = "Ready"`, and a session reports Ready before its project
+        // targets have finished loading. `run_app` then refuses with
+        // "'…ConsoleTicker.fsproj' is not loaded in this session" — which is
+        // what this test was hitting, twice, on two different shards, wearing a
+        // JsonReaderException because the prose refusal was being parsed as JSON.
+        //
+        // So wait for the condition the action actually needs. Under load the
+        // load takes longer than the state flip, which is why Ready alone was
+        // not enough and why it moved between shards.
+        let! loaded = waitForProjectLoaded httpClient consoleTickerDir (TimeSpan.FromSeconds 90.0)
+        loaded
+        |> Expect.isTrue "the console ticker session should hold its project before run_app is called"
 
         use! client = connect port
 
