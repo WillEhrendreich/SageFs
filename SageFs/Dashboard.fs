@@ -3226,6 +3226,7 @@ let createEndpoints
           Environment.CurrentDirectory
           infra.McpPort
           sessionCount
+          (DaemonLog.currentFile ())
       do! ctx.Response.WriteAsJsonAsync(data)
     })
     // Graceful shutdown endpoint

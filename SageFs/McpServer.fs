@@ -499,10 +499,51 @@ let structuredErrorBody (err: SageFsError) =
          error = SageFsError.describe err
          errorDetails = details |}
 
-/// Build the structured body for an unexpected exception, logging the full
-/// details server-side while the wire carries the algebra-safe description.
-let unexpectedErrorBody (ex: exn) =
-  structuredErrorBody (SageFsError.Unexpected ex)
+/// Longest request id we mint: short enough to read out loud or paste into a
+/// bug report, long enough that two in one log are never confused.
+[<Literal>]
+let private requestIdLength = 8
+
+/// A short id tying one 500 response to the one log entry that holds its stack.
+let newRequestId () : string =
+  Guid.NewGuid().ToString("N").Substring(0, requestIdLength)
+
+/// Logger category for exceptions that escaped an HTTP handler.
+[<Literal>]
+let private unhandledErrorCategory = "SageFs.Http"
+
+/// Build the structured body for an unexpected exception. The wire carries the
+/// algebra-safe description and the request id; the details (stack) stay in the
+/// log, under the same id (see `respondUnexpected`).
+let unexpectedErrorBody (requestId: string) (ex: exn) =
+  let err = SageFsError.Unexpected ex
+  box {| success = false
+         error = sprintf "%s (request id %s)" (SageFsError.describe err) requestId
+         errorDetails = SageFsError.toJson err
+         requestId = requestId |}
+
+/// Log an exception no handler dealt with, with its stack and a fresh request
+/// id, and return that id. Without a logger factory on the request (a bare test
+/// context) the entry goes to the core log hook instead of vanishing.
+let logUnexpected (ctx: Microsoft.AspNetCore.Http.HttpContext) (ex: exn) : string =
+  let requestId = newRequestId ()
+  let message = "Unhandled exception in {Method} {Path} (request id {RequestId})"
+  let factory =
+    Option.ofObj ctx.RequestServices
+    |> Option.bind (fun services -> Option.ofObj (services.GetService(typeof<ILoggerFactory>)))
+  match factory with
+  | Some (:? ILoggerFactory as f) ->
+    f.CreateLogger(unhandledErrorCategory).LogError(ex, message, ctx.Request.Method, ctx.Request.Path.Value, requestId)
+  | _ ->
+    Log.error "Unhandled exception in %s %s (request id %s): %s" ctx.Request.Method (string ctx.Request.Path) requestId (string ex)
+  requestId
+
+/// Answer 500 for an exception no handler dealt with: log it, and echo the log
+/// entry's request id in the body so a user can quote it.
+let respondUnexpected (ctx: Microsoft.AspNetCore.Http.HttpContext) (ex: exn) = task {
+  let requestId = logUnexpected ctx ex
+  do! jsonResponse ctx 500 (unexpectedErrorBody requestId ex)
+}
 
 /// Run a `SageFsIO` computation and translate it straight to an HTTP
 /// response through the `SageFsError` algebra: `Ok v` writes `okStatus`
@@ -577,7 +618,7 @@ let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: uni
   | :? System.Text.Json.JsonException as je ->
     do! jsonResponse ctx 400 (structuredErrorBody (SageFsError.JsonParseError ("request body", je.Message)))
   | ex ->
-    do! jsonResponse ctx 500 (unexpectedErrorBody ex)
+    do! respondUnexpected ctx ex
 }
 
 /// Global error-handling middleware — catches unhandled exceptions from all endpoints.
@@ -593,10 +634,11 @@ let errorHandlingMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: 
     match ctx.Response.HasStarted with
     | true -> ()  // SSE or streaming response already committed
     | false -> do! jsonResponse ctx 400 (structuredErrorBody (SageFsError.JsonParseError ("request body", je.Message)))
+  | :? OperationCanceledException when ctx.RequestAborted.IsCancellationRequested -> ()  // the client went away; not a fault
   | ex ->
     match ctx.Response.HasStarted with
-    | true -> ()  // SSE or streaming response already committed
-    | false -> do! jsonResponse ctx 500 (unexpectedErrorBody ex)
+    | true -> logUnexpected ctx ex |> ignore  // committed: no body to change, but the stack must not vanish
+    | false -> do! respondUnexpected ctx ex
 }
 
 /// Runs a daemon web host until the daemon's stop token is cancelled.
@@ -1818,26 +1860,6 @@ let configureOtel (builder: WebApplicationBuilder) (port: int) (version: string)
       | false -> ()
     )
   |> ignore
-
-let configureLogging (builder: WebApplicationBuilder) (logPath: string) (otelConfigured: bool) =
-  builder.WebHost.ConfigureLogging(fun logging ->
-    logging.AddConsole() |> ignore
-    logging.AddFile(logPath, minimumLevel = LogLevel.Information) |> ignore
-    logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning) |> ignore
-    logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Warning) |> ignore
-    logging.AddFilter("Microsoft.Hosting", LogLevel.Warning) |> ignore
-    logging.AddFilter("ModelContextProtocol.Server.McpServer", fun level -> level > LogLevel.Information) |> ignore
-    logging.AddFilter("ModelContextProtocol.AspNetCore.SseHandler", LogLevel.Warning) |> ignore
-    logging.AddFilter("SageFs", LogLevel.Information) |> ignore
-    match otelConfigured with
-    | true ->
-      logging.AddOpenTelemetry(fun otel ->
-        otel.IncludeFormattedMessage <- true
-        otel.IncludeScopes <- true
-        otel.AddOtlpExporter() |> ignore
-      ) |> ignore
-    | false -> ()
-  ) |> ignore
 
 let configureCompression (builder: WebApplicationBuilder) =
   builder.Services.AddResponseCompression(fun opts ->
@@ -3351,12 +3373,18 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
     // Computed outside the try so a failure anywhere inside it can still
     // point a reader (and ComponentWatch — see the `with` branches below)
     // at the right log file, instead of "logPath" being out of scope
-    // exactly where it would be most useful.
-    let logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "SageFs", "mcp-server.log")
+    // exactly where it would be most useful. The directory follows
+    // SAGEFS_DATA_DIR (as the manifest does), so an isolated daemon never
+    // writes into the user's real log directory.
+    let logDir = DaemonLog.currentDirectory ()
+    let logPath = DaemonLog.sinkPath logDir
+    // The file that exists today (the sink date-suffixes `logPath`), which is
+    // the path a human can open.
+    let logFile = DaemonLog.fileOn logDir (DateOnly.FromDateTime DateTime.Now)
     try
       let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
       let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-      System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)) |> ignore
+      System.IO.Directory.CreateDirectory logDir |> ignore
       let version = DaemonInfo.version
       let otelConfigured = DaemonInfo.otelConfigured
 
@@ -3365,7 +3393,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
 
       // Phase 1: Infrastructure
       configureOtel builder cfg.Port version otelConfigured
-      configureLogging builder logPath otelConfigured
+      DaemonLogging.configure builder logPath DaemonLog.defaultBounds otelConfigured
       configureCompression builder
 
       // Phase 2: Services + MCP protocol
@@ -3458,7 +3486,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
         cfg.StateChanged |> Option.map (fun evt ->
           wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount cfg.SharedBindingScope lastEvalContext cfg.FrictionStore)
 
-      logStartup app cfg.Port logPath otelConfigured
+      logStartup app cfg.Port logFile otelConfigured
       do! runUntilCancelled app stopping
     with
     | :? System.IO.IOException as ex when ex.Message.Contains("address") || ex.Message.Contains("already") ->
@@ -3482,5 +3510,5 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       SageFs.Features.ComponentWatch.reportFailure
         { Component = "mcp-server"
           Reason = sprintf "%s: %s" (ex.GetType().Name) ex.Message
-          Hint = sprintf "See %s for the stack trace, then run 'sagefs status'." logPath }
+          Hint = sprintf "See %s for the stack trace, then run 'sagefs status'." logFile }
   }

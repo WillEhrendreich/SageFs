@@ -1360,6 +1360,9 @@ type DaemonInfoContract = {
   DashboardPort: int
   ApiVersion: int
   SessionCount: int
+  // The file this daemon is writing its log to today (the sink date-suffixes
+  // its base name, so this is the path that exists). Follows SAGEFS_DATA_DIR.
+  LogPath: string
   // A failed component (the MCP server itself, a session's file watcher)
   // reported into SageFs.Features.ComponentWatch — one line per failure,
   // "component: reason — hint". This endpoint is served by the DASHBOARD's
@@ -1374,7 +1377,7 @@ type DaemonInfoContract = {
 
 [<RequireQualifiedAccess>]
 module DaemonInfoContract =
-  let create pid version startedAt workingDirectory mcpPort sessionCount : DaemonInfoContract =
+  let create pid version startedAt workingDirectory mcpPort sessionCount logPath : DaemonInfoContract =
     { Pid = pid
       Version = version
       StartedAt = startedAt
@@ -1383,6 +1386,7 @@ module DaemonInfoContract =
       DashboardPort = mcpPort + 1
       ApiVersion = EndpointContracts.apiVersion
       SessionCount = sessionCount
+      LogPath = logPath
       ComponentFailures =
         SageFs.Features.ComponentWatch.current ()
         |> List.map (fun f -> sprintf "%s: %s — %s" f.Component f.Reason f.Hint) }
