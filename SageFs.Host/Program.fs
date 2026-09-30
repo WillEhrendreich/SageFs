@@ -38,6 +38,18 @@ let main args =
     eprintfn "SageFs.Host: REFUSING TO START — %s" msg
     exit 3
 
+  // Give `Log.*` a real destination before anything runs. The host has no
+  // ILogger provider, so without this every Log call after startup (project
+  // loading, hot reload, warmup) was dropped and a degraded session left no
+  // trace. Fail-open: a worker that cannot open its log still serves, and says
+  // why on stderr, which the daemon keeps a bounded tail of.
+  use _workerLog =
+    match SageFs.WorkerLogFile.tryInstall SageFs.DaemonState.SageFsDir sessionId with
+    | Ok writer -> writer :> System.IDisposable
+    | Error err ->
+      eprintfn "SageFs.Host: worker log file unavailable, Log goes to stderr only: %A" err
+      { new System.IDisposable with member _.Dispose() = () }
+
   SageFs.Server.WorkerMain.run sessionId httpPort
   |> Async.RunSynchronously
   0

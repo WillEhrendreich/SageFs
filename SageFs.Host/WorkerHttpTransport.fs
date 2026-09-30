@@ -307,6 +307,14 @@ module WorkerHttpTransport =
     task {
       let builder = WebApplication.CreateBuilder([||])
       builder.WebHost.UseUrls(sprintf "http://127.0.0.1:%d" port) |> ignore
+      // This host deliberately has NO ILogger provider: the worker's stdout
+      // carries the WORKER_PORT=/WARMUP_PROGRESS=/APP_OUTPUT= protocol and
+      // ASP.NET's own console logging would interleave with it. So anything
+      // written through `ILogger` (ASP.NET plumbing) goes nowhere. SageFs's own
+      // diagnostics do NOT go through `ILogger`: they go through `SageFs.Utils.Log`,
+      // whose sinks the process entry point points at
+      // `<data dir>/workers/<sessionId>.log` (`WorkerLogFile.tryInstall`) and at
+      // stderr. This function must leave those sinks alone.
       builder.Logging.ClearProviders() |> ignore
       // Silence ASP.NET plumbing but allow SageFs logs
       builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning) |> ignore
@@ -327,13 +335,6 @@ module WorkerHttpTransport =
       // see plan: fsi-host-supervisor-isolation). The daemon owns OTel.
 
       let app = builder.Build()
-
-      // Wire SageFs.Core Log module to OTEL-connected ILogger in worker process
-      let workerLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SageFs.Worker")
-      SageFs.Utils.Log.logInfo <- fun msg -> workerLogger.LogInformation(msg)
-      SageFs.Utils.Log.logDebug <- fun msg -> workerLogger.LogDebug(msg)
-      SageFs.Utils.Log.logWarn <- fun msg -> workerLogger.LogWarning(msg)
-      SageFs.Utils.Log.logError <- fun msg -> workerLogger.LogError(msg)
 
       app.UseResponseCompression() |> ignore
 
