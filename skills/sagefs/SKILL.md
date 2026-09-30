@@ -26,9 +26,9 @@ you are done. Do not use them to probe what an API looks like.
    `create_project_session` (one `.fsproj`), `create_solution_session` (a
    `.sln` or `.slnx`) or `create_bare_session` (no project). SageFs builds
    missing generated state itself, so do not run a shell build first.
-4. Warmup takes 15-30s. Do not sleep: read the files you need meanwhile, then
-   call `get_session_status` for that session until it says `Ready`. If it says
-   `Faulted`, act on the reason it names.
+4. Warmup takes 15-30s. Call `get_session_status` with `wait_seconds=60`: it
+   returns once the session is `Ready`, so no sleeping or polling. If `wait`
+   says `TimedOut`, call again. If it says `Faulted`, act on the reason it names.
 
 ## The loop
 
@@ -43,9 +43,9 @@ you are done. Do not use them to probe what an API looks like.
 6. Final gate: the full build and the unfiltered test suite, once, at the end.
    Run it in the background and keep working. To run tests, evaluate
    `Expecto.Tests.runTestsWithCLIArgs [] [||] MyTests.tests` in the session, or
-   in a shell read the test project's `OutputType`: `Exe` (most Expecto
-   projects) runs with `dotnet run --project <tests>`, and `dotnet test` finds
-   nothing there.
+   in a shell run an `Exe` Expecto project with `dotnet run --project <tests>`.
+   `dotnet test` finds nothing there unless the project references
+   `YoloDev.Expecto.TestSdk` 0.15 or later.
 
 ## Rules that bite before your first edit
 

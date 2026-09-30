@@ -39,8 +39,9 @@ Read this when you are starting on a repo, creating or choosing a session, check
    missing, SageFs takes a rebuild lease, runs the build itself, rechecks the
    generated files, and only then creates the session. You don't need a shell
    build before session creation, and you shouldn't race one against it.
-5. **The create tool returns before warmup finishes.** Poll
-   `get_session_status` for that exact session until it says `Ready`. Don't
-   sleep in a loop. Warming responses carry elapsed time, work time, and the
-   worker's last progress line. If it says `Faulted`, act on the reason rather
-   than polling hoping it changes.
+5. **The create tool returns before warmup finishes.** Call
+   `get_session_status` for that exact session with `wait_seconds=60`: it
+   returns once the session is `Ready`. Don't sleep in a loop. Warming
+   responses carry elapsed time, work time, and the worker's last progress
+   line, and the `wait` field says how the wait ended. If it says `Faulted`,
+   act on the reason rather than waiting for it to change.
