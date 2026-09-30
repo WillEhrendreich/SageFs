@@ -70,7 +70,11 @@ let tests =
       testCase "guard blocks start when daemon responds" <| fun _ ->
         // Start a minimal HTTP listener to simulate a running daemon
         use listener = new System.Net.HttpListener()
-        let port = 39995
+        // A pair the OS says is free right now. A fixed 39995/39996 sits inside Linux's
+        // ephemeral range (32768-60999), so under a loaded gate an outgoing connection
+        // could be handed 39996 as its source port first and this bind died with
+        // "Address already in use" (seen in a gate run, unrelated to any change).
+        let port, _ = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
         let dashboardPort = port + 1
         let prefix = sprintf "http://localhost:%d/" dashboardPort
         listener.Prefixes.Add(prefix)
@@ -80,7 +84,7 @@ let tests =
         let respondTask = async {
           let! ctx = listener.GetContextAsync() |> Async.AwaitTask
           let response = ctx.Response
-          let body = System.Text.Encoding.UTF8.GetBytes("""{"pid":99999,"port":39995,"version":"test"}""")
+          let body = System.Text.Encoding.UTF8.GetBytes(sprintf """{"pid":99999,"port":%d,"version":"test"}""" port)
           response.ContentType <- "application/json"
           response.ContentLength64 <- int64 body.Length
           response.OutputStream.Write(body, 0, body.Length)
@@ -98,8 +102,9 @@ let tests =
         info.Value.Pid |> Expect.equal "pid matches" 99999
 
       testCase "guard allows start when daemon not responding" <| fun _ ->
-        // No listener on this port — guard should allow start
-        let port = 39994
+        // No listener on this port — guard should allow start. Reserved, not assumed:
+        // a fixed number could be a live listener on a machine that runs daemons.
+        let port, _ = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
         let info = DaemonState.readOnPort port
         info |> Expect.isNone "no daemon on port"
 
