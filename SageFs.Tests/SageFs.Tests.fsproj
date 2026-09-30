@@ -483,6 +483,7 @@
         <Compile Include="SessionBuildTotalityTests.fs" />
         <Compile Include="RunAppSaveOutcomeTests.fs" />
         <Compile Include="AppPlacementTests.fs" />
+        <Compile Include="PageChoicesTests.fs" />
         <Compile Include="MemorySupervisorTests.fs" />
         <Compile Include="MemoryShedSimTests.fs" />
         <Compile Include="ExpensiveWorkLeaseTests.fs" />

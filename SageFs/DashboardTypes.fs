@@ -206,6 +206,11 @@ module Signals =
   /// Browser: the panel's scrollTop at the last scroll event, so the scroll
   /// handler can tell you moving up from the layout moving under you.
   let [<Literal>] OutputScrollTop = "_outputScrollTop"
+  /// Browser: the panel's scrollHeight at the last scroll event. A morph that
+  /// replaces the panel's content makes it briefly shorter, the browser clamps
+  /// scrollTop down to fit, and that scroll event looks exactly like you
+  /// scrolling up. The one thing that tells them apart is the height shrinking.
+  let [<Literal>] OutputScrollHeight = "_outputScrollHeight"
 
 /// Pure logic for the dashboard's workflow switcher (sagefs-ux-roast.md
 /// Island A item 3 / this session's Island B item 2 — "the dashboard cannot
@@ -421,10 +426,18 @@ module OutputFollow =
   /// keys, touch and scrollbar drags all move scrollTop up; a layout change
   /// under you doesn't. Our own jump to the bottom lands here and confirms the
   /// pin.
+  ///
+  /// Moving up only unpins when the panel did not get SHORTER. A morph that
+  /// replaces the panel's content shrinks it for a moment, the browser clamps
+  /// scrollTop down to fit, and that scroll event reads as "moved up". It is
+  /// not: nobody touched the panel. Measured in the gate: after a fill the panel
+  /// sat 370px, then 109px, from the bottom and stayed there, because the
+  /// follow was already off. A real scroll up leaves scrollHeight the same or
+  /// bigger, so it still unpins.
   let scrollExpr =
     sprintf
-      "var t = el.scrollTop; el.scrollHeight - t - el.clientHeight <= %d ? ($%s = true) : (t < $%s - 1 && ($%s = false)); $%s = t"
-      atBottomTolerancePx Signals.OutputPinned Signals.OutputScrollTop Signals.OutputPinned Signals.OutputScrollTop
+      "var t = el.scrollTop, h = el.scrollHeight; h - t - el.clientHeight <= %d ? ($%s = true) : (t < $%s - 1 && h >= $%s && ($%s = false)); $%s = t; $%s = h"
+      atBottomTolerancePx Signals.OutputPinned Signals.OutputScrollTop Signals.OutputScrollHeight Signals.OutputPinned Signals.OutputScrollTop Signals.OutputScrollHeight
 
   /// Runs on #output-panel whenever the server's feed signals or the pin
   /// change. A different session starts over pinned. Pinned, it records the

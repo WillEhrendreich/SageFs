@@ -363,7 +363,7 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
                 // own state lives here, outside #main, so no morph resets it;
                 // the server's feed signals are seeded here too and then
                 // re-rendered onto #output-panel by every push.
-                Ds.signal (Signals.OutputPinned, true); Ds.signal (Signals.OutputSeenEvals, 0); Ds.signal (Signals.OutputFollowSession, ""); Ds.signal (Signals.OutputScrollTop, 0);
+                Ds.signal (Signals.OutputPinned, true); Ds.signal (Signals.OutputSeenEvals, 0); Ds.signal (Signals.OutputFollowSession, ""); Ds.signal (Signals.OutputScrollTop, 0); Ds.signal (Signals.OutputScrollHeight, 0);
                 Ds.signal (Signals.OutputFeedSession, ""); Ds.signal (Signals.OutputFeedEvals, 0); Ds.signal (Signals.OutputFeedRev, 0);
                 // Disconnect-indicator heartbeat (todo-dashboard-disconnect-indicator.md):
                 // seeded to "now" so the very first client-side staleness check
@@ -788,25 +788,33 @@ let private applyCohortViewing
             renderCohortLanesPanel prefixLedger
           ] }
 
-/// This CONNECTION's "Resume Previous" sort choice, keyed by page client id
+/// How many pages' choices are held before the oldest is evicted. A daemon that
+/// runs for weeks sees far more page loads than that, and only recent pages can
+/// still be connected.
+[<Literal>]
+let private pageChoiceCapacity = 4096
+
+/// This page's "Resume Previous" sort choice, keyed by page client id
 /// — the same per-tab convention as `currentSessionOpt`/`ConnectionChannels`
 /// (a sort choice belongs to one browser tab, never a daemon global). Unlike
 /// the cohort scrubber's per-tab state, this needs no push-loop command: the
 /// stream loop already knows its own `clientId` and can read this shared
 /// dictionary directly on its next tick, so a change made by the POST
 /// handler below is picked up naturally without a forced re-render — the
-/// POST's own response morph already shows it immediately. Removed when the
-/// connection closes (`createStreamHandler`'s `finally`), same as
-/// `ConnectionChannels`.
-let private previousSessionSortByClient =
-  Collections.Concurrent.ConcurrentDictionary<string, PreviousSessionSort>()
+/// POST's own response morph already shows it immediately.
+///
+/// NOT removed when the connection closes. Datastar reconnects to the same URL
+/// after any drop, and the new connection can start before the old one's cleanup
+/// runs, so a cleanup that removed it deleted the choice the reconnect needed.
+/// It belongs to the page, so `PageChoices` has no remove and is bounded instead.
+let private previousSessionSortByClient = PageChoices<PreviousSessionSort>(pageChoiceCapacity)
 
 /// This tab's friction opt-in (`/dashboard?panels=friction`), keyed by page
-/// client id like the sort choice above: the GET records it, the stream reads
-/// it on every push, and it's removed when the connection closes. A tab that
-/// never asked gets the default layout, which has no friction panel.
-let private frictionOptInByClient =
-  Collections.Concurrent.ConcurrentDictionary<string, FrictionPanelOptIn>()
+/// client id like the sort choice above: the GET records it and the stream reads
+/// it on every push, for as long as the page lives (see the note above on why a
+/// closing connection must not clear it). A tab that never asked gets the
+/// default layout, which has no friction panel.
+let private frictionOptInByClient = PageChoices<FrictionPanelOptIn>(pageChoiceCapacity)
 
 /// Everything panel visibility needs, read fresh on every push, so the
 /// panels follow the session: switch to Hot Reload and its panel appears on
@@ -825,10 +833,7 @@ let private panelFactsFor
     Friction =
       match clientId with
       | null | "" -> FrictionPanelOptIn.NotOptedIn
-      | id ->
-        match frictionOptInByClient.TryGetValue id with
-        | true, optIn -> optIn
-        | false, _ -> FrictionPanelOptIn.NotOptedIn }
+      | id -> frictionOptInByClient.Find(id, FrictionPanelOptIn.NotOptedIn) }
 
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
@@ -1332,7 +1337,7 @@ let createStreamHandler
         // it here instead of paying for a second GetAllSessions read.
         // This connection's own "Resume Previous" sort choice, if it has
         // ever made one — defaults to Recent for a tab that hasn't.
-        let previousSort = previousSessionSortByClient.GetOrAdd(clientId, PreviousSessionSort.Recent)
+        let previousSort = previousSessionSortByClient.Find(clientId, PreviousSessionSort.Recent)
         let! snapRaw = buildNoSessionSnapshotWithSessionsSorted q infra liveSessions previousSort
         let snap =
           applyCohortViewing infra currentCohortViewingSeq snapRaw
@@ -1429,6 +1434,11 @@ let createStreamHandler
           EvalLatencyTrace.shared.StampMorphWritten()
     }
 
+    // The push channel THIS connection registered, so its cleanup removes only
+    // that one. A reconnect registers a new channel under the same client id, and
+    // the old connection's cleanup can run after it: removing by id alone would
+    // delete the newer connection's channel and leave it unable to receive pushes.
+    let ownChannel = ref (Unchecked.defaultof<MailboxProcessor<DashboardStreamCommand>>)
     try
       // Push initial state (catch all exceptions — don't let a transient failure kill the stream)
       try
@@ -1560,6 +1570,7 @@ let createStreamHandler
         }
         loop ()), ctx.RequestAborted)
       infra.ConnectionChannels.[clientId] <- pushAgent
+      ownChannel.Value <- pushAgent
       use _sub = infra.StateChanged.Subscribe(fun change ->
         try pushAgent.Post(DashboardStreamCommand.StateChange change)
         with :? ObjectDisposedException -> ())
@@ -1577,9 +1588,9 @@ let createStreamHandler
       infra.ActivityTracker
       |> Option.iter (fun tracker ->
         AgentActivityTracker.forget tracker (MemberTable.MemberId.display (MemberTable.MemberId.Browser clientId)))
-      infra.ConnectionChannels.TryRemove(clientId) |> ignore
-      previousSessionSortByClient.TryRemove(clientId) |> ignore
-      frictionOptInByClient.TryRemove(clientId) |> ignore
+      match isNull (box ownChannel.Value) with
+      | true -> ()
+      | false -> infra.ConnectionChannels.TryRemove(Collections.Generic.KeyValuePair(clientId, ownChannel.Value)) |> ignore
   }
 
 /// Create the eval POST handler.
@@ -2139,7 +2150,7 @@ let createSessionActionHandler
         // honoring this same connection's earlier sort choice if it made one.
         retargetStream infra channelClientId None
         let! previous = q.GetPreviousSessions ()
-        let previousSort = previousSessionSortByClient.GetOrAdd(channelClientId, PreviousSessionSort.Recent)
+        let previousSort = previousSessionSortByClient.Find(channelClientId, PreviousSessionSort.Recent)
         do! ssePatchNode ctx (renderSessionPickerSorted previousSort previous)
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | None ->
@@ -2863,7 +2874,7 @@ let createEndpoints
         // `?panels=friction` is the deliberate way into the friction panel,
         // which the default layout leaves out. Recorded per tab so the
         // stream keeps honoring it.
-        frictionOptInByClient.[clientId] <- PanelFacts.frictionOptInOfQuery (string ctx.Request.Query.[PanelFacts.panelsQueryKey])
+        frictionOptInByClient.Set(clientId, PanelFacts.frictionOptInOfQuery (string ctx.Request.Query.[PanelFacts.panelsQueryKey]))
         // Default to the first LIVE session (never a Stopped/dead one); the
         // picker shows only when there are zero live sessions to display.
         match firstLiveSession sessions with
@@ -3018,7 +3029,7 @@ let createEndpoints
         let clientId = clientIdFromSignals doc
         match clientId with
         | "" -> ()
-        | id -> previousSessionSortByClient.[id] <- order
+        | id -> previousSessionSortByClient.Set(id, order)
         let! previous = q.GetPreviousSessions ()
         Response.sseStartResponse ctx |> ignore
         do! ssePatchNode ctx (renderSessionPickerSorted order previous)

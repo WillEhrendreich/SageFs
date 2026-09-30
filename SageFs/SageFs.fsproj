@@ -93,6 +93,7 @@
         <Compile Include="CohortGit.fs" />
         <Compile Include="FrictionReviewView.fs" />
         <Compile Include="McpFrictionRecorder.fs" />
+        <Compile Include="PageChoices.fs" />
         <Compile Include="DashboardTypes.fs" />
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="CohortInspector.fs" />
