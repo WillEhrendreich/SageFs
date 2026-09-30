@@ -51,8 +51,35 @@
 
   <!-- Make the ordering explicit rather than relying on MSBuild's project
        traversal: the sample needs a Core that contains `holdInCurrent`, so it
-       must not compile until Core has been rebuilt in this configuration. -->
+       must not compile until Core has been rebuilt in this configuration.
+
+       `Targets="Restore;Build"` because `Build` alone is not enough in a clean
+       checkout: Core has no `obj/project.assets.json` there, so a Build-only
+       invocation fails with
+
+         error NETSDK1004: Assets file '…/SageFs.Core/obj/project.assets.json'
+         not found. Run a NuGet package restore to generate this file.
+
+       Restore is a SEPARATE task, not `Targets="Restore;Build"`. A semicolon in
+       `Targets` means "run these", and MSBuild is free to run them in parallel —
+       so Build starts before Restore has written the assets file and fails with
+
+         error NETSDK1004: Assets file '…/SageFs.Core/obj/project.assets.json'
+         not found.
+
+       Two `<MSBuild>` tasks in sequence is what actually orders them, and
+       restore is idempotent so the incremental case costs nothing.
+
+       Passing only `Build` is what made this work locally (where assets exist)
+       and fail on the gate (where they do not) — the same local-green/CI-red
+       shape as the property condition this target was added to fix. Both halves
+       of that trap had the same shape: something that only holds in a dirty
+       checkout. -->
   <Target Name="BuildSageFsCoreFirst" BeforeTargets="ResolveAssemblyReferences" Condition="'$(SageFsCoreAssembly)' != ''">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../../../SageFs.Core/SageFs.Core.fsproj"
+             Targets="Restore"
+             Properties="Configuration=$(Configuration)"
+             BuildInParallel="false" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)../../../SageFs.Core/SageFs.Core.fsproj"
              Targets="Build"
              Properties="Configuration=$(Configuration)"

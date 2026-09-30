@@ -61,11 +61,38 @@
        a .props file is evaluated — it arrives later from the SDK. Without this
        default the `Exists(...)` below tests the literal path
        `bin//net10.0/...`, which never exists, the property silently stays
-       empty, and the sample fails with FS0039 rather than a clear diagnostic. -->
+       empty, and the sample fails with FS0039 rather than a clear diagnostic.
+
+       THE PROPERTY IS NOT CONDITIONED ON THE FILE EXISTING. It used to be, and
+       that made the whole mechanism a no-op on a clean checkout — which is the
+       ONLY place that matters:
+
+         <PropertyGroup Condition="Exists('…/SageFs.Core.dll')">
+           <SageFsCoreAssembly>…</SageFsCoreAssembly>
+         </PropertyGroup>
+
+       With that condition, a clean checkout has no `SageFs.Core.dll`, so the
+       property is empty, so the sample's `<Reference Condition="…!=''">` is
+       skipped, and so the `BuildSageFsCoreFirst` target that would BUILD Core
+       is skipped by the very same condition. Nothing builds Core and nothing
+       references it, and the sample fails with
+
+         error FS0039: The value, namespace, type or module
+         'RegisteredHolder' is not defined
+
+       Reproduced in ~6s from a clean checkout, and it took the release gate
+       down. It was invisible locally for the obvious reason: a local checkout
+       always has a stale `SageFs.Core.dll` on disk, so the condition was true
+       and the stale assembly satisfied the reference.
+
+       So the property states the PATH unconditionally and lets the build decide
+       whether the file is there. The ordering target then builds Core when it
+       is missing, and a missing HintPath after that is a real error rather than
+       a silently-skipped reference. -->
   <PropertyGroup>
     <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
   </PropertyGroup>
-  <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory)SageFs.Core/bin/$(Configuration)/net10.0/SageFs.Core.dll')">
+  <PropertyGroup>
     <SageFsCoreAssembly>$(MSBuildThisFileDirectory)SageFs.Core/bin/$(Configuration)/net10.0/SageFs.Core.dll</SageFsCoreAssembly>
   </PropertyGroup>
 </Project>
