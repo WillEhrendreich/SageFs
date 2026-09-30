@@ -108,6 +108,54 @@ let planTests =
       nameOfArgs "--summary" |> Expect.equal "default run" "default"
       nameOfArgs "--integration-host --summary" |> Expect.equal "flag tier" "--integration-host"
 
+    // ── frameworks: the default suite also runs on the net10 tool asset ──
+    testCase "a tier on the primary framework keeps its unqualified name, so recorded durations still match" <| fun _ ->
+      let t = tier "--summary"
+      t.Name |> Expect.equal "the existing default row" "default"
+      t.Framework |> Expect.equal "the gate's own build framework" Net11
+
+    testCase "the default suite on net10 is its own tier, with its own ledger row and the same argv" <| fun _ ->
+      let t = tierOn Net10 "--summary"
+      t.Name |> Expect.equal "a separate ledger row from the net11 default" "default-net10"
+      t.Args |> Expect.equal "the same argument string" "--summary"
+      t.Framework |> Expect.equal "runs the net10 build" Net10
+      fileNameOf t.Name |> Expect.equal "its log, clone and ledger files never collide with the net11 default's" "default-net10"
+
+    testProperty "a tier name identifies its framework: no two frameworks share a name" <|
+      fun (name: NonEmptyString) ->
+        let n = name.Get
+        qualify Net10 n <> qualify Net11 n
+
+    testProperty "qualifying with the primary framework changes nothing" <|
+      fun (name: NonEmptyString) -> qualify Framework.primary name.Get = name.Get
+
+    testCase "each framework runs the assembly built for it" <| fun _ ->
+      Framework.all
+      |> List.iter (fun f ->
+        dllOf f
+        |> Expect.equal "the dll sits under the framework's own bin directory"
+             (sprintf "SageFs.Tests/bin/Release/%s/SageFs.Tests.dll" (Framework.tfm f)))
+
+    testProperty "a framework's name round-trips" <|
+      fun (pick: bool) ->
+        let f = match pick with true -> Net10 | false -> Net11
+        Framework.ofTfm (Framework.tfm f) = Result.Ok f
+
+    testCase "the test process names its framework from its own target framework attribute" <| fun _ ->
+      Framework.ofTargetFrameworkName ".NETCoreApp,Version=v10.0" |> Expect.equal "net10" (Result.Ok Net10)
+      Framework.ofTargetFrameworkName ".NETCoreApp,Version=v11.0" |> Expect.equal "net11" (Result.Ok Net11)
+      Framework.ofTargetFrameworkName ".NETFramework,Version=v4.8" |> Expect.isError "not a .NET (Core) framework"
+      Framework.ofTargetFrameworkName ".NETCoreApp,Version=v9.0" |> Expect.isError "a framework the gate has no tier for"
+      Framework.ofTargetFrameworkName null |> Expect.isError "no attribute at all"
+
+    testCase "a secondary framework is built without touching the tracked lock files or the primary build's obj" <| fun _ ->
+      let cmd = testBuildCommand Net10
+      cmd |> Expect.stringContains "builds the test project for that framework" "-p:TargetFramework=net10.0"
+      cmd |> Expect.stringContains "never rewrites packages.lock.json" "-p:RestorePackagesWithLockFile=false"
+      cmd |> Expect.stringContains "a locked restore would refuse the net10-only graph" "-p:RestoreLockedMode=false"
+      cmd |> Expect.stringContains "its restore output stays out of the primary build's project.assets.json" "-p:BaseIntermediateOutputPath=obj/tier-net10.0/"
+      testBuildCommand Net11 |> Expect.notEqual "each framework gets its own obj directory" cmd
+
     // ── port ranges: the fix for cross-tier daemon-port collisions ──
     testProperty "portRangeOf partitions the pool: in bounds, disjoint, and clear of the live daemon" <|
       fun (PositiveInt slotsArg) ->

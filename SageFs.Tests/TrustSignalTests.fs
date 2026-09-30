@@ -120,6 +120,48 @@ let ciWiringTests =
       |> Expect.equal "a raw `run $\"dotnet {testDll} ...\"` bypasses the trust ledger and stops the pipeline on red" 0
   ]
 
+/// The default suite has to run on every framework the tool ships for. It ran
+/// on net11 only, and a net10-only failure (a raw F# union reaching
+/// System.Text.Json, which .NET 11 writes and .NET 10 throws on) reached the
+/// net10 tool asset without any gate seeing it. Each framework's default run is
+/// its own tier, so a net10-only failure is its own red row in the trust report.
+let frameworkTierTests =
+  let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let pipeline = lazy (File.ReadAllText(Path.Combine(repoRoot, "ci-pipeline.fsx")))
+
+  testList "TrustSignal framework tiers" [
+    testCase "the frameworks the gate can run are exactly the frameworks the repo ships" <| fun _ ->
+      let props = File.ReadAllText(Path.Combine(repoRoot, "Directory.Build.props"))
+      let shipped =
+        Regex.Match(props, "<SageFsTargetFrameworks>([^<]+)</SageFsTargetFrameworks>").Groups[1].Value.Split(';')
+        |> Array.map (fun s -> s.Trim())
+        |> Set.ofArray
+      SageFs.Build.TierPlan.Framework.all
+      |> List.map SageFs.Build.TierPlan.Framework.tfm
+      |> Set.ofList
+      |> Expect.equal "a new shipped framework needs a Framework case, a build and a tier before the gate can pass" shipped
+
+    testCase "CI runs the default suite once per framework" <| fun _ ->
+      let declared = pipelineFrameworkTiers pipeline.Value
+      SageFs.Build.TierPlan.Framework.all
+      |> List.filter (fun f -> not (declared |> List.contains (f, "--summary")))
+      |> Expect.isEmpty "frameworks with no default-suite tier in ci-pipeline.fsx (a dark framework)"
+
+    testCase "the pipeline builds the test assembly for every framework it runs a tier on" <| fun _ ->
+      Regex.IsMatch(pipeline.Value, "TierPlan\\.testBuildCommand")
+      |> Expect.isTrue "a tier on a framework nobody built runs a stale or missing dll"
+
+    testCase "a tier's ledger row carries the framework the process really ran on" <| fun _ ->
+      qualifiedTier ".NETCoreApp,Version=v11.0" "default" |> Expect.equal "the primary framework keeps the plain name" "default"
+      qualifiedTier ".NETCoreApp,Version=v10.0" "default" |> Expect.equal "net10 is its own row" "default-net10"
+      qualifiedTier ".NETCoreApp,Version=v10.0" "--integration-host[2/5]"
+      |> Expect.equal "the suffix goes on the whole name" "--integration-host[2/5]-net10"
+
+    testCase "a process that cannot tell its framework cannot pass for the primary one" <| fun _ ->
+      qualifiedTier null "default" |> Expect.notEqual "an unidentified framework is never the plain default row" "default"
+      qualifiedTier ".NETFramework,Version=v4.8" "default" |> Expect.notEqual "nor is a framework with no tier" "default"
+  ]
+
 /// The repo is PUBLIC and both the main build and the release publish run on
 /// this developer machine through a self-hosted runner. A `pull_request` job is
 /// executed from the PR's OWN copy of the workflow, so a fork PR reaching a
@@ -268,4 +310,4 @@ let selfHostedSafetyTests =
   ]
 
 [<Tests>]
-let tests = testList "TrustSignal" [ verdictTests; ciWiringTests; selfHostedSafetyTests ]
+let tests = testList "TrustSignal" [ verdictTests; ciWiringTests; frameworkTierTests; selfHostedSafetyTests ]
