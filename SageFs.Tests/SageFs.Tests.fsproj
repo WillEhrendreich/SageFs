@@ -282,6 +282,7 @@
          <Compile Include="RunnerLoggingTests.fs" />
          <Compile Include="BuildOptimizationTests.fs" />
          <Compile Include="WarmupCacheGitIgnoreTests.fs" />
+         <Compile Include="ToolNameReferenceTests.fs" />
          <Compile Include="CreateSessionDedupeTests.fs" />
          <Compile Include="SessionManagerMailboxSupervisionTests.fs" />
          <Compile Include="SessionActivityTouchTests.fs" />

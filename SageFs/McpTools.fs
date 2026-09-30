@@ -670,7 +670,7 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
         Task.FromResult(acquireWorkLease "mcp" SageFs.ExpensiveWorkLease.Kind.FullBuild) |> withEcho ctx "acquire_full_build_lease"
 
     [<McpServerTool>]
-    [<Description("Acquire a lease for a caller-owned external test-suite run. SageFs runs built-in tests through run_project_tests instead.")>]
+    [<Description("Acquire a lease for a test-suite run you start yourself, such as `dotnet run --project <tests>` for an Expecto project (OutputType Exe) or `dotnet test`. SageFs has no tool that runs tests for you: it runs its own through the live-testing engine, and you read results with list_tests. Release the lease with release_work_lease when your run finishes.")>]
     member _.acquire_test_suite_lease() : Task<string> =
         Task.FromResult(acquireWorkLease "mcp" SageFs.ExpensiveWorkLease.Kind.TestSuiteRun) |> withEcho ctx "acquire_test_suite_lease"
 
@@ -1590,7 +1590,7 @@ Matches by substring on FullName or DisplayName — returns explanations for all
 TRIGGER REASON TYPES:
 - SymbolCoverage: One or more symbols that changed are covered by this test (the hot-path, most informative).
 - NewTest: The test was newly discovered and has no prior run data.
-- ExplicitRun: Test was triggered via run_tests, not automatically.
+- ExplicitRun: Test was run on request (an editor or dashboard run control), not automatically.
 - DepGraphFallback: Dependency graph data was unavailable; the test ran as a precaution.
 
 FLAKY STATUS:
@@ -2036,7 +2036,7 @@ Steps performed automatically:
 INPUT: test_name — substring to match against test FullName or DisplayName.
 OUTPUT: JSON with TestName, Summary, TimeSinceLastPass, CausalChanges, PrimarySymbol, RipplePlan (Symbol, CurrentCode, TypeSig, AffectedCellCount, RippleSteps), and Suggestion.
 
-WORKFLOW: When run_tests shows a failure, call suggest_repair with the test name. Read PrimarySymbol and RipplePlan. Call preview_what_if with your candidate fix before applying it.""")>]
+WORKFLOW: When list_tests shows a failure, call suggest_repair with the test name. Read PrimarySymbol and RipplePlan. Call preview_what_if with your candidate fix before applying it.""")>]
     member _.suggest_repair(
         [<Description("Test name or substring to match against FullName or DisplayName")>]
         test_name: string
