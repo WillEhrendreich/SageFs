@@ -94,29 +94,33 @@ let private waitForProjectLoaded (client: System.Net.Http.HttpClient) (targetDir
           if sessionDir <> expectedDir then
             false
           else
-            // The project is loaded when the session reports any target under it.
-            // An ABSENT Target reads as NOT loaded — that is the bug being fixed,
-            // and reading it as loaded would reintroduce the race.
-            let targets =
-              match session.TryGetProperty "Target" with
-              | true, prop -> prop
+            // The project is loaded when the session reports it. MEASURED from a
+            // real /api/sessions payload — the field is `projects` (mirrored by
+            // `loadedProjects`), NOT `Target`:
+            //
+            //   {"sessions":[{"status":"Ready","workflowLabel":"REPL",
+            //     "projects":["/…/SageFs.Samples.ConsoleTicker.fsproj"],
+            //     "loadedProjects":["/…/SageFs.Samples.ConsoleTicker.fsproj"],
+            //     "workingDirectory":"/…/SageFs.Samples.ConsoleTicker", …}]}
+            //
+            // An earlier version of this helper looked for `Target` and therefore
+            // read an ABSENT field as not-loaded, so it waited the full 90s and
+            // then failed on a session that had been Ready the whole time. A
+            // predicate that can only return "not loaded" is a wait that always
+            // times out, which is what happened.
+            let projectOf (e: JsonElement) =
+              let s = e.GetString()
+              if isNull s then "" else s
+
+            let projects =
+              match session.TryGetProperty "projects" with
+              | true, p -> p
               | _ -> Unchecked.defaultof<JsonElement>
 
-            let pathOf (t: JsonElement) =
-              // `TryGetProperty` returns the JsonElement itself, not a wrapper,
-              // so there is no `.Value` to unwrap.
-              match t.TryGetProperty "path" with
-              | true, p ->
-                let s = p.GetString()
-                if isNull s then "" else s
-              | _ -> ""
-
-            match targets.ValueKind with
+            match projects.ValueKind with
             | JsonValueKind.Array ->
-              targets.EnumerateArray() |> Seq.exists (fun t -> (pathOf t).StartsWith expectedDir)
-            | JsonValueKind.String ->
-              let s = targets.GetString()
-              (if isNull s then "" else s).StartsWith expectedDir
+              projects.EnumerateArray() |> Seq.exists (fun p -> (projectOf p).StartsWith expectedDir)
+            | JsonValueKind.String -> (projectOf projects).StartsWith expectedDir
             | _ -> false)
 
   if not loaded then
