@@ -173,13 +173,19 @@ let cleanupShadowDir (shadowDir: string) : unit =
       pendingCleanups.Add(shadowDir)
   | false -> ()
 
+/// Retries every deferred delete. A dir that is gone leaves the bag; one that
+/// still cannot be deleted goes back in, so the next sweep tries it again.
 let cleanupAllPending () : unit =
-  for dir in pendingCleanups do
+  let stillStuck = ResizeArray<string>()
+  let mutable dir = Unchecked.defaultof<string>
+  while pendingCleanups.TryTake(&dir) do
     try
       match Directory.Exists dir with
       | true -> Directory.Delete(dir, true)
       | false -> ()
-    with _ -> ()
+    with _ -> stillStuck.Add dir
+  for d in stillStuck do
+    pendingCleanups.Add d
 
 /// Removes the sagefs-shadow-* directories under `tempDir` whose owning
 /// process is gone (see staleShadowDirs). Best-effort: locked dirs are skipped.
@@ -200,3 +206,13 @@ let cleanupStaleDirsIn (tempDir: string) (liveness: int -> OwnerLiveness) : unit
 let cleanupStaleDirs () : unit =
   cleanupStaleDirsIn (Path.GetTempPath()) processLiveness
 
+
+/// Reclaims every shadow directory the daemon can prove is garbage: dirs of
+/// dead owners under `tempDir`, then any delete that was deferred earlier.
+let sweepShadowDirsIn (tempDir: string) (liveness: int -> OwnerLiveness) : unit =
+  cleanupStaleDirsIn tempDir liveness
+  cleanupAllPending ()
+
+/// The production sweep: startup, the periodic timer and shutdown all call this.
+let sweepShadowDirs () : unit =
+  sweepShadowDirsIn (Path.GetTempPath()) processLiveness

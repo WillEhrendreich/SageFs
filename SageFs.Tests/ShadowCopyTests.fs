@@ -352,4 +352,39 @@ let staleSweepTests =
         Directory.Exists gone |> Expect.isFalse "a dead owner's shadow dir is swept"
       finally
         safeDelete root
+
+    testCase "WHY — sweepShadowDirsIn — a shadow dir whose delete was deferred is gone after the sweep and no longer pending, because cleanupAllPending was only ever called from a test so the bag grew for the daemon's whole uptime" <| fun _ ->
+      let root = Directory.CreateTempSubdirectory("sagefs-sweep-").FullName
+      let deferred = Directory.CreateDirectory(Path.Combine(root, "deferred")).FullName
+      try
+        SageFs.ShadowCopy.pendingCleanups.Add deferred
+        SageFs.ShadowCopy.sweepShadowDirsIn root (fun _ -> SageFs.ShadowCopy.OwnerLiveness.Running)
+        Directory.Exists deferred |> Expect.isFalse "the deferred dir is deleted by the sweep"
+        SageFs.ShadowCopy.pendingCleanups
+        |> Seq.contains deferred
+        |> Expect.isFalse "a deleted dir is drained from the pending bag"
+      finally
+        safeDelete root
+
+    testCase "WHY — sweepShadowDirsIn — a deferred dir that still cannot be deleted stays pending, because dropping it would leak it for good" <| fun _ ->
+      match OperatingSystem.IsWindows() || Environment.UserName = "root" with
+      | true -> skiptest "needs POSIX permissions and a non-root user to make a delete fail"
+      | false ->
+        let root = Directory.CreateTempSubdirectory("sagefs-sweep-").FullName
+        let lockedParent = Directory.CreateDirectory(Path.Combine(root, "locked")).FullName
+        let stuck = Directory.CreateDirectory(Path.Combine(lockedParent, "stuck")).FullName
+        File.WriteAllText(Path.Combine(stuck, "f.txt"), "x")
+        try
+          File.SetUnixFileMode(stuck, UnixFileMode.UserRead ||| UnixFileMode.UserExecute)
+          SageFs.ShadowCopy.pendingCleanups.Add stuck
+          SageFs.ShadowCopy.sweepShadowDirsIn root (fun _ -> SageFs.ShadowCopy.OwnerLiveness.Running)
+          Directory.Exists stuck |> Expect.isTrue "the locked dir is still there"
+          SageFs.ShadowCopy.pendingCleanups
+          |> Seq.contains stuck
+          |> Expect.isTrue "the failed delete stays pending for the next sweep"
+        finally
+          File.SetUnixFileMode(stuck, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
+          // Drain our own entry so the shared bag is clean for other tests.
+          SageFs.ShadowCopy.cleanupAllPending ()
+          safeDelete root
   ]

@@ -162,6 +162,10 @@ let private testDataDirRoot () =
 /// sit next to another dead process's leak for its whole uptime.
 let sweepOrphanedTempDirs (log: ILogger) : unit =
   try
+    ShadowCopy.sweepShadowDirs ()
+  with ex ->
+    log.LogWarning("Shadow-copy directory sweep failed: {Error}", ex.Message)
+  try
     match HostCoreAdoption.sweepStaleAdoptedRoots () with
     | [] -> ()
     | removed ->
@@ -732,6 +736,66 @@ let getWorkerBaseUrl (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: 
   | Some url when url.Length > 0 -> Some url
   | _ -> None
 
+[<RequireQualifiedAccess>]
+type WorkerFetchPlan =
+  | FetchFrom of baseUrl: string
+  | SessionAbsent
+  | NoLiveWorker of WorkerProtocol.SessionLifecycleStatus
+  | NoEndpointYet of WorkerProtocol.SessionLifecycleStatus
+
+[<RequireQualifiedAccess>]
+type WorkerFetchLogLevel =
+  | DebugLevel
+  | ErrorLevel
+
+/// Whether the daemon should ask this session's worker anything. The snapshot
+/// can still hold a worker URL for a session that is Stopped, Faulted or
+/// Restarting (the worker is gone or about to be replaced), so the URL alone
+/// is not proof that anything is listening. Only the status is.
+let planWorkerFetch (snapshot: SessionManager.QuerySnapshot) (sid: WorkerProtocol.SessionId) : WorkerFetchPlan =
+  match SessionManager.QuerySnapshot.tryGetSession sid snapshot with
+  | None -> WorkerFetchPlan.SessionAbsent
+  | Some info ->
+    match info.Status with
+    | WorkerProtocol.SessionLifecycleStatus.Stopped
+    | WorkerProtocol.SessionLifecycleStatus.Faulted _
+    | WorkerProtocol.SessionLifecycleStatus.Restarting _ -> WorkerFetchPlan.NoLiveWorker info.Status
+    | WorkerProtocol.SessionLifecycleStatus.Starting _
+    | WorkerProtocol.SessionLifecycleStatus.Ready _
+    | WorkerProtocol.SessionLifecycleStatus.Evaluating _
+    | WorkerProtocol.SessionLifecycleStatus.Building _ ->
+      match Map.tryFind sid snapshot.WorkerBaseUrls with
+      | Some url when url.Length > 0 -> WorkerFetchPlan.FetchFrom url
+      | _ -> WorkerFetchPlan.NoEndpointYet info.Status
+
+/// How loudly to log a refused connection. A worker that is Ready should be
+/// listening, so a refusal there is a real fault. In every other state
+/// (starting, restarting, stopped, absent) a refusal is what normal stop and
+/// lease sequencing looks like.
+let connectionRefusedLogLevel (snapshot: SessionManager.QuerySnapshot) (sid: WorkerProtocol.SessionId) : WorkerFetchLogLevel =
+  match SessionManager.QuerySnapshot.tryGetSession sid snapshot with
+  | Some { Status = WorkerProtocol.SessionLifecycleStatus.Ready _ } -> WorkerFetchLogLevel.ErrorLevel
+  | _ -> WorkerFetchLogLevel.DebugLevel
+
+let isConnectionRefused (ex: Net.Http.HttpRequestException) : bool =
+  ex.HttpRequestError = Net.Http.HttpRequestError.ConnectionError
+
+/// Log an HTTP failure talking to a worker. A refused connection takes the
+/// level the session's state calls for and carries no stack; anything else is
+/// an error with its stack.
+let logWorkerHttpFailure
+  (readSnapshot: unit -> SessionManager.QuerySnapshot)
+  (sid: WorkerProtocol.SessionId)
+  (origin: string)
+  (ex: Net.Http.HttpRequestException)
+  : unit =
+  let sidText = WorkerProtocol.SessionId.value sid
+  match isConnectionRefused ex, connectionRefusedLogLevel (readSnapshot()) sid with
+  | true, WorkerFetchLogLevel.DebugLevel ->
+    Log.debug "[%s] worker for session %s refused the connection (session is not Ready): %s" origin sidText ex.Message
+  | _ ->
+    Log.error "[%s] HTTP error for session %s: %s\n%s" origin sidText ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+
 /// Fetch JSON from a worker endpoint with timeout, returning None on failure.
 let fetchWorkerEndpoint
   (httpClient: Net.Http.HttpClient)
@@ -741,8 +805,8 @@ let fetchWorkerEndpoint
   (timeout: float)
   (parse: string -> 'T)
   : Threading.Tasks.Task<'T option> = task {
-  match getWorkerBaseUrl readSnapshot sessionId with
-  | Some baseUrl ->
+  match planWorkerFetch (readSnapshot()) sessionId with
+  | WorkerFetchPlan.FetchFrom baseUrl ->
     try
       use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout))
       let! resp = httpClient.GetStringAsync(sprintf "%s%s" baseUrl path, cts.Token)
@@ -752,12 +816,14 @@ let fetchWorkerEndpoint
       Log.warn "[fetchWorkerEndpoint] Timeout (%.0fs) fetching %s for session %s" timeout path (WorkerProtocol.SessionId.value sessionId)
       return None
     | :? Net.Http.HttpRequestException as ex ->
-      Log.error "[fetchWorkerEndpoint] HTTP error fetching %s for session %s: %s\n%s" path (WorkerProtocol.SessionId.value sessionId) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      logWorkerHttpFailure readSnapshot sessionId (sprintf "fetchWorkerEndpoint %s" path) ex
       return None
     | ex ->
       Log.error "[fetchWorkerEndpoint] Unexpected error fetching %s for session %s: %s" path (WorkerProtocol.SessionId.value sessionId) (ex.GetType().Name)
       return None
-  | None -> return None
+  | WorkerFetchPlan.SessionAbsent
+  | WorkerFetchPlan.NoLiveWorker _
+  | WorkerFetchPlan.NoEndpointYet _ -> return None
 }
 
 /// Build DaemonManifestState from active sessions (used in periodic save + shutdown).
@@ -1068,6 +1134,11 @@ let performGracefulShutdown
   match System.Object.ReferenceEquals(stop_winner, stopTask) with
   | false -> log.LogWarning("StopAll timed out — some workers may not have stopped cleanly")
   | true -> ()
+
+  // The workers are stopped, so their shadow dirs and any deferred deletes can
+  // go now. Otherwise pendingCleanups is never drained in production.
+  try ShadowCopy.sweepShadowDirs ()
+  with ex -> log.LogWarning("Shadow-copy sweep at shutdown failed: {Error}", ex.Message)
 }
 
 /// Scans project source files with tree-sitter, then dispatches
@@ -1781,8 +1852,10 @@ let createElmRuntime
         match WorkerProtocol.SessionId.validate sessionId with
         | Error _ -> return None
         | Ok sidTyped ->
-        match Map.tryFind sidTyped snapshot.WorkerBaseUrls with
-        | Some url when url.Length > 0 ->
+        // A Stopped, Faulted or Restarting session has no worker to ask, and
+        // asking anyway just logs a refused connection with a stack.
+        match planWorkerFetch snapshot sidTyped with
+        | WorkerFetchPlan.FetchFrom url ->
           use timeoutCts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(5.0))
           use linkedCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token)
           let! resp =
@@ -1806,13 +1879,17 @@ let createElmRuntime
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             AutoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory (info |> Option.map (fun i -> i.WorkingDirectory) |> Option.defaultValue "")
           }
-        | _ -> return None
+        | WorkerFetchPlan.SessionAbsent
+        | WorkerFetchPlan.NoLiveWorker _
+        | WorkerFetchPlan.NoEndpointYet _ -> return None
       with
       | :? System.IO.IOException as ex ->
         Log.error "[getWarmupContextForElm] IO error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         return None
       | :? System.Net.Http.HttpRequestException as ex ->
-        Log.error "[getWarmupContextForElm] HTTP error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        match WorkerProtocol.SessionId.validate sessionId with
+        | Ok sidTyped -> logWorkerHttpFailure readSnapshot sidTyped "getWarmupContextForElm" ex
+        | Error _ -> Log.error "[getWarmupContextForElm] HTTP error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         return None
       | :? System.Threading.Tasks.TaskCanceledException ->
         return None
