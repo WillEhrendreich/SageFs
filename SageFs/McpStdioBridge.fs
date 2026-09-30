@@ -261,11 +261,23 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
   post mailbox Event.Probe
   exitCode.Task
 
+/// The arguments that make a bridge the owner of the daemon it starts. The
+/// daemon's home port is shared: other agents connect to the same daemon, so
+/// its life must not hang on whichever client happened to start it. A daemon on
+/// any other port is refused unless it names an owner (or a ttl), so there the
+/// bridge is the owner and the daemon goes when its client does. This is the
+/// same split `decideCustomPortOwnership` makes on the daemon's side.
+let ownerArguments (homePort: int) (mcpPort: int) (bridgePid: int) : string list =
+  match mcpPort = homePort with
+  | true -> []
+  | false -> [ "--owner-pid"; string bridgePid ]
+
 /// The daemon-spawn IO edge: start it exactly the way plain `sagefs` does —
 /// same executable, same args, detached. We never wait on it and never tie
-/// its lifetime to ours: other clients share it. Its own stdout/stderr are
-/// redirected and drained to OUR stderr so nothing from it ever reaches our
-/// stdout, which is the protocol stream.
+/// its lifetime to ours unless we were asked for a port of our own (see
+/// `ownerArguments`). Its own stdout/stderr are redirected and drained to OUR
+/// stderr so nothing from it ever reaches our stdout, which is the protocol
+/// stream.
 let startDaemonProcess (mcpPort: int) : Task<Result<unit, string>> =
   task {
     try
@@ -280,12 +292,8 @@ let startDaemonProcess (mcpPort: int) : Task<Result<unit, string>> =
         )
       psi.ArgumentList.Add("--mcp-port")
       psi.ArgumentList.Add(string mcpPort)
-      // A daemon on a custom port has to name an owner, or it is refused. Ours
-      // is this bridge: the client spawned us, so a daemon we started for it
-      // should not outlive us. The default port is shared and exempt, which is
-      // why this only matters for a bridge asked for a port of its own.
-      psi.ArgumentList.Add("--owner-pid")
-      psi.ArgumentList.Add(string (Process.GetCurrentProcess().Id))
+      ownerArguments SageFsConfig.McpPortFromEnv mcpPort (Process.GetCurrentProcess().Id)
+      |> List.iter psi.ArgumentList.Add
       let proc = Process.Start(psi)
       proc.OutputDataReceived.Add(fun e ->
         match e.Data with
