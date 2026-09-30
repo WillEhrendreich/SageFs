@@ -1861,26 +1861,6 @@ let configureOtel (builder: WebApplicationBuilder) (port: int) (version: string)
     )
   |> ignore
 
-let configureLogging (builder: WebApplicationBuilder) (logPath: string) (otelConfigured: bool) =
-  builder.WebHost.ConfigureLogging(fun logging ->
-    logging.AddConsole() |> ignore
-    logging.AddFile(logPath, minimumLevel = LogLevel.Information) |> ignore
-    logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning) |> ignore
-    logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Warning) |> ignore
-    logging.AddFilter("Microsoft.Hosting", LogLevel.Warning) |> ignore
-    logging.AddFilter("ModelContextProtocol.Server.McpServer", fun level -> level > LogLevel.Information) |> ignore
-    logging.AddFilter("ModelContextProtocol.AspNetCore.SseHandler", LogLevel.Warning) |> ignore
-    logging.AddFilter("SageFs", LogLevel.Information) |> ignore
-    match otelConfigured with
-    | true ->
-      logging.AddOpenTelemetry(fun otel ->
-        otel.IncludeFormattedMessage <- true
-        otel.IncludeScopes <- true
-        otel.AddOtlpExporter() |> ignore
-      ) |> ignore
-    | false -> ()
-  ) |> ignore
-
 let configureCompression (builder: WebApplicationBuilder) =
   builder.Services.AddResponseCompression(fun opts ->
     opts.EnableForHttps <- true
@@ -3393,12 +3373,18 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
     // Computed outside the try so a failure anywhere inside it can still
     // point a reader (and ComponentWatch — see the `with` branches below)
     // at the right log file, instead of "logPath" being out of scope
-    // exactly where it would be most useful.
-    let logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "SageFs", "mcp-server.log")
+    // exactly where it would be most useful. The directory follows
+    // SAGEFS_DATA_DIR (as the manifest does), so an isolated daemon never
+    // writes into the user's real log directory.
+    let logDir = DaemonLog.currentDirectory ()
+    let logPath = DaemonLog.sinkPath logDir
+    // The file that exists today (the sink date-suffixes `logPath`), which is
+    // the path a human can open.
+    let logFile = DaemonLog.fileOn logDir (DateOnly.FromDateTime DateTime.Now)
     try
       let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
       let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-      System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)) |> ignore
+      System.IO.Directory.CreateDirectory logDir |> ignore
       let version = DaemonInfo.version
       let otelConfigured = DaemonInfo.otelConfigured
 
@@ -3407,7 +3393,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
 
       // Phase 1: Infrastructure
       configureOtel builder cfg.Port version otelConfigured
-      configureLogging builder logPath otelConfigured
+      DaemonLogging.configure builder logPath DaemonLog.defaultBounds otelConfigured
       configureCompression builder
 
       // Phase 2: Services + MCP protocol
@@ -3500,7 +3486,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
         cfg.StateChanged |> Option.map (fun evt ->
           wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount cfg.SharedBindingScope lastEvalContext cfg.FrictionStore)
 
-      logStartup app cfg.Port logPath otelConfigured
+      logStartup app cfg.Port logFile otelConfigured
       do! runUntilCancelled app stopping
     with
     | :? System.IO.IOException as ex when ex.Message.Contains("address") || ex.Message.Contains("already") ->
@@ -3524,5 +3510,5 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       SageFs.Features.ComponentWatch.reportFailure
         { Component = "mcp-server"
           Reason = sprintf "%s: %s" (ex.GetType().Name) ex.Message
-          Hint = sprintf "See %s for the stack trace, then run 'sagefs status'." logPath }
+          Hint = sprintf "See %s for the stack trace, then run 'sagefs status'." logFile }
   }

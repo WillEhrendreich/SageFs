@@ -54,15 +54,87 @@ module DaemonPresence =
     | DaemonPresence.Running info -> sprintf "daemon running (PID %d, port %d)" info.Pid info.Port
     | DaemonPresence.Wedged pid -> sprintf "daemon process %d is holding the port but not answering — it is wedged" pid
 
+/// Whose state a daemon owns: the user's own, or an isolated directory named by
+/// SAGEFS_DATA_DIR (tests, throwaway daemons). The manifest dir and the log dir
+/// both read this one decision, so a daemon that is isolated for one is isolated
+/// for the other.
+[<RequireQualifiedAccess>]
+type DataDirChoice =
+  | Isolated of dir: string
+  | UserDefault
+
+module DataDirChoice =
+  /// The environment variable that requests isolation.
+  [<Literal>]
+  let envVar = "SAGEFS_DATA_DIR"
+
+  /// Unset, empty and blank all mean "not isolated".
+  let ofEnvValue (value: string | null) : DataDirChoice =
+    match value with
+    | null -> DataDirChoice.UserDefault
+    | v when String.IsNullOrWhiteSpace v -> DataDirChoice.UserDefault
+    | v -> DataDirChoice.Isolated (Path.GetFullPath v)
+
+  let current () : DataDirChoice =
+    ofEnvValue (Environment.GetEnvironmentVariable envVar)
+
+/// How much log a daemon may keep. Finite by construction: a chatty day costs
+/// at most `MaxFileBytes` per file and `RetainedFiles` files in total.
+type LogBounds = { MaxFileBytes: int64; RetainedFiles: int }
+
+/// Where the daemon's log file lives, and what it is called. Pure: the sink
+/// inserts the date before the extension, and `fileOn` says what that yields,
+/// so the path we print is the file that exists.
+module DaemonLog =
+  [<Literal>]
+  let private fileStem = "mcp-server"
+
+  [<Literal>]
+  let private fileExtension = ".log"
+
+  /// 50 MB a file, 7 files: at most 350 MB, where the library default was
+  /// 1 GiB a day for 31 days.
+  let defaultBounds : LogBounds =
+    { MaxFileBytes = 50L * 1024L * 1024L
+      RetainedFiles = 7 }
+
+  /// Where a non-isolated daemon has always logged, kept so existing users'
+  /// logs stay where they look for them.
+  let userLogDirectory () : string =
+    Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.LocalApplicationData, "SageFs")
+
+  /// An isolated daemon logs inside its own data dir, never the user's.
+  let directory (choice: DataDirChoice) (userLogDir: string) : string =
+    match choice with
+    | DataDirChoice.Isolated dir -> dir
+    | DataDirChoice.UserDefault -> userLogDir
+
+  /// The path handed to the file sink.
+  let sinkPath (dir: string) : string =
+    Path.Combine(dir, fileStem + fileExtension)
+
+  /// The file the sink writes on `day`. A day that outgrows `MaxFileBytes`
+  /// rolls to `_001`, `_002`, ... beside it.
+  let fileOn (dir: string) (day: DateOnly) : string =
+    Path.Combine(dir, fileStem + day.ToString("yyyyMMdd") + fileExtension)
+
+  /// This process's log directory, from SAGEFS_DATA_DIR or the user default.
+  let currentDirectory () : string =
+    directory (DataDirChoice.current ()) (userLogDirectory ())
+
+  /// The file this process is writing today.
+  let currentFile () : string =
+    fileOn (currentDirectory ()) (DateOnly.FromDateTime DateTime.Now)
+
 module DaemonState =
 
   let SageFsDir =
     // SAGEFS_DATA_DIR isolates the daemon's persisted state (manifest, test
     // cache, themes, friction store). Tests use it to avoid polluting and
     // being polluted by the real ~/.SageFs state.
-    match Environment.GetEnvironmentVariable("SAGEFS_DATA_DIR") with
-    | value when not (String.IsNullOrWhiteSpace value) -> Path.GetFullPath value
-    | _ ->
+    match DataDirChoice.current () with
+    | DataDirChoice.Isolated dir -> dir
+    | DataDirChoice.UserDefault ->
       let home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
       Path.Combine(home, ".SageFs")
 
