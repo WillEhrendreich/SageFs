@@ -3,10 +3,13 @@
     <PropertyGroup>
         <OutputType>Library</OutputType>
         <IsPackable>false</IsPackable>
+        <!-- Multi-targets like SageFs.Core so the test project can be built for net10
+             too (`-p:TargetFramework=net10.0`): the net10 tool asset is the one most
+             users install, and the suite only ever ran on net11. -->
+        <TargetFramework></TargetFramework>
+        <TargetFrameworks>$(SageFsTargetFrameworks)</TargetFrameworks>
         <!-- Deterministic Simulation Testing (DST) harness for the pure
-             supervision core. Only used by SageFs.Tests, so it takes the repo
-             default TargetFramework (net11.0, Directory.Build.props) rather
-             than multi-targeting like SageFs.Core does. Pure F#, no IO, no
+             supervision core. Only used by SageFs.Tests. Pure F#, no IO, no
              third-party deps — only SageFs.Core, so the harness folds through
              the REAL policy. -->
     </PropertyGroup>

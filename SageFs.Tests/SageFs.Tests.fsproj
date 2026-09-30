@@ -706,6 +706,7 @@
              ReferenceOutputAssembly=false so the fixture DLL is built (and its
              bin/ populated) without polluting the test project's references. -->
         <ProjectReference Include="fixtures\WebAppFixture\WebAppFixture.fsproj"
+                          Condition="'$(TargetFramework)' == 'net11.0'"
                           PrivateAssets="all"
                           ReferenceOutputAssembly="false" />
         <!-- #141/#142's outcome gate needs a REAL compiled project with no package references (the SDK's
