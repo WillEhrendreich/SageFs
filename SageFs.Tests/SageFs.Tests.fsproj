@@ -573,6 +573,7 @@
         <Compile Include="McpResourcesTests.fs" />
         <Compile Include="AgentGuidanceTests.fs" />
         <Compile Include="RetiredToolNameTests.fs" />
+        <Compile Include="SkillLayoutTests.fs" />
         <Compile Include="TestAccountingHonestyTests.fs" />
         <Compile Include="SessionStatusTruthTests.fs" />
         <Compile Include="HolderTests.fs" />

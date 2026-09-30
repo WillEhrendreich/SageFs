@@ -26,21 +26,28 @@ The loop:
 
 ## 1. Install the skill
 
-The whole playbook is one file: [`skills/sagefs/SKILL.md`](../skills/sagefs/SKILL.md).
-It covers:
-- the first-minute checklist
-- the loop
-- the gotchas
-- what to do when the REPL fights you
-- how to brief a sub-agent
+The skill is a folder, [`skills/sagefs/`](../skills/sagefs/). The agent loads
+[`SKILL.md`](../skills/sagefs/SKILL.md) on every F# task. It is short: the
+first-minute checklist, the loop, and the rules that bite before a first edit.
+The other files in the folder are read only when their trigger comes up:
+- `sessions.md`: choosing a session, checking the daemon version
+- `loop.md`: why the REPL is the loop, and which tool answers what
+- `editing.md`: proving a change before writing it, and the `#load` trap
+- `testing.md`: running tests and slow gates
+- `leases.md`: leases before a full build, test run or app run
+- `troubleshooting.md`: stale daemons, busy versus broken, when the REPL fights you
+- `claude-code.md`: permission prompts and auto mode
+- `agents.md`: briefing a sub-agent
 
 **Claude Code:**
 ```bash
 mkdir -p ~/.claude/skills/sagefs
-curl -fsSL https://raw.githubusercontent.com/WillEhrendreich/SageFs/master/skills/sagefs/SKILL.md \
-  -o ~/.claude/skills/sagefs/SKILL.md
+for f in SKILL sessions loop editing testing leases troubleshooting claude-code agents; do
+  curl -fsSL "https://raw.githubusercontent.com/WillEhrendreich/SageFs/master/skills/sagefs/$f.md" \
+    -o ~/.claude/skills/sagefs/$f.md
+done
 ```
-For one repo only, put it in that repo's `.claude/skills/sagefs/SKILL.md`
+For one repo only, put the folder in that repo's `.claude/skills/sagefs/`
 instead.
 
 **Other agents (Codex, Copilot, Cursor, OpenCode and so on):** most of them read

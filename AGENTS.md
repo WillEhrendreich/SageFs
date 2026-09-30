@@ -77,8 +77,8 @@ silent no-op reads exactly like a successful one.
   under a second; a build that catches your misread type is two minutes, and it
   catches it *after* you have edited. The full sequence — prove, persist, then
   `hard_reset_fsi_session rebuild=true` to re-verify — is in
-  [`skills/sagefs/SKILL.md`](skills/sagefs/SKILL.md) under "Editing: prove it,
-  then write it". Read that section before your first edit in a session.
+  [`skills/sagefs/editing.md`](skills/sagefs/editing.md) under "Editing: prove
+  it, then write it". Read that section before your first edit in a session.
 - **"I can't verify that in the session" is a conclusion you have not earned
   yet.** A session that loads `SageFs.Core` has Core's whole dependency closure
   loaded with it. A Fantomas/FCS type that Core walks is in the live session, and

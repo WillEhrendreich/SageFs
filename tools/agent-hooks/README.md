@@ -58,9 +58,10 @@ final gate now asks the daemon for an expensive-work lease
 
 The hook does not release the lease afterward (a `PreToolUse` hook can't wrap
 the command's own execution) — it relies on the lease's own TTL (10-15
-minutes for a build/test run) to expire it. See `skills/sagefs/SKILL.md`'s
+minutes for a build/test run) to expire it. See `skills/sagefs/leases.md`'s
 "Before anything expensive: ask" section for the full lease contract, and
-"Busy versus broken" for why this distinction is the whole point.
+`skills/sagefs/troubleshooting.md`'s "Busy versus broken" for why this
+distinction is the whole point.
 
 ### Install
 

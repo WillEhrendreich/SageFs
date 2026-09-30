@@ -46,14 +46,23 @@ let private registeredToolNames : Set<string> =
   |> Array.map (fun m -> m.Name)
   |> Set.ofArray
 
+/// Every markdown file of the skill: SKILL.md plus the reference files it
+/// points at. Scanned as a set, so a sentence moved between them cannot
+/// escape the check.
+let private skillSurfaces : (string * string) list =
+  Directory.GetFiles(Path.Combine(repoRoot, "skills", "sagefs"), "*.md")
+  |> Array.sort
+  |> Array.map (fun path -> "skills/sagefs/" + Path.GetFileName path, File.ReadAllText path)
+  |> List.ofArray
+
 /// Live agent-facing surfaces: what a running agent is actually told.
 let private liveSurfaces : (string * string) list =
   [ "SageFs/Mcp.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs", "Mcp.fs"))
     "SageFs/McpTools.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs", "McpTools.fs"))
-    "SageFs/AgentGuidance.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs", "AgentGuidance.fs"))
-    "skills/sagefs/SKILL.md", File.ReadAllText(Path.Combine(repoRoot, "skills", "sagefs", "SKILL.md"))
-    "docs/agents.md", File.ReadAllText(Path.Combine(repoRoot, "docs", "agents.md"))
-    "docs/mcp-tools.md", File.ReadAllText(Path.Combine(repoRoot, "docs", "mcp-tools.md")) ]
+    "SageFs/AgentGuidance.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs", "AgentGuidance.fs")) ]
+  @ skillSurfaces
+  @ [ "docs/agents.md", File.ReadAllText(Path.Combine(repoRoot, "docs", "agents.md"))
+      "docs/mcp-tools.md", File.ReadAllText(Path.Combine(repoRoot, "docs", "mcp-tools.md")) ]
 
 /// Strip `//` and `(* *)` comments so an internal note that mentions a retired
 /// name does not masquerade as agent-facing guidance. String literals are kept

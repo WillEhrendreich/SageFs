@@ -6,340 +6,79 @@ license: MIT
 
 # Working in F# with SageFs
 
-SageFs gives you a live F# REPL that already has the project loaded. An eval
-takes milliseconds. A `dotnet build` takes tens of seconds to minutes, and a
-test run takes longer. If you iterate by rebuilding, you spend almost all your
-time waiting. So:
+SageFs gives you a live F# REPL with the project already loaded. An eval takes
+milliseconds. A `dotnet build` takes minutes. So the REPL is the inner loop, and
+`dotnet build` / `dotnet test` / `dotnet run` is the final gate, run once when
+you are done. Do not use them to probe what an API looks like.
 
-**The REPL is the inner loop. `dotnet build` / `dotnet test` / `dotnet run` is
-the final gate, run once, when you're done.** Not a fallback, not "just to
-check quickly", not for probing what an API looks like.
+## First minute
 
-Agents drift back to the slow loop the moment the REPL feels awkward. That drift
-is the failure this skill exists to stop. If you catch yourself typing
-`dotnet build` in the middle of a task, stop and read "When the REPL fights
-you" below.
-
-## The first minute
-
-1. **Is SageFs up?** Call `get_daemon_status` (or `list_sessions`). If the
-   tools aren't there at all, SageFs isn't connected. Tell the user. Don't work
-   around it silently.
-2. **Is the daemon current?** Do this before you trust a single result. A stale
-   daemon serves old code and gives you wrong answers that look right, and it
-   is the most expensive failure in this whole document. See "a stale daemon"
-   under "Things that will bite you" for the disguises it wears.
-
-   Read its version from `get_daemon_status`, `sagefs status`, or the dashboard's
-   `/api/daemon-info`, and compare it against the code you're about to work on.
-   In the SageFs repo itself that's `Directory.Build.props`; anywhere else it's
-   "was this daemon started after the last build of this project?" If you can't
-   tell, the cheap tell is whether a symbol you just added is visible in the
-   session.
-
-   If it's behind, **tell the user and ask them to restart it**. Don't stop,
-   restart or reinstall it yourself. It's theirs, and other agents may be on
-   it. If they ask you how: `dotnet tool update -g sagefs`, then restart. If
-   that reports "already installed" while a newer version is on NuGet, pass
-   `--version X.Y.Z` explicitly. `dotnet tool update` resolves through NuGet's
-   search index, which lags the package store by a few minutes.
-3. **Do you have a session for where you're working?** Sessions are tied to a
-   working directory, and **a git worktree is its own routing boundary**. A
-   session for the main checkout is not yours if you're in
-   `.claude/worktrees/whatever`. Check `list_sessions` before creating one.
-4. **Choose the session target explicitly.** Call `get_available_projects`,
-   then use exactly one of these:
-   - `create_project_session` for one `.fsproj`
-   - `create_solution_session` for one `.sln` or `.slnx`
-   - `create_bare_session` for a project-free REPL
-
-   There is no auto-discovery on these tools. If generated build state is
-   missing, SageFs takes a rebuild lease, runs the build itself, rechecks the
-   generated files, and only then creates the session. You don't need a shell
-   build before session creation, and you shouldn't race one against it.
-5. **The create tool returns before warmup finishes.** Poll
-   `get_session_status` for that exact session until it says `Ready`. Don't
-   sleep in a loop. Warming responses carry elapsed time, work time, and the
-   worker's last progress line. If it says `Faulted`, act on the reason rather
-   than polling hoping it changes.
+1. Call `get_daemon_status`. If the tools are missing, SageFs is not connected,
+   so tell the user. Compare the daemon's version with the code you are about
+   to work on. If it is behind, tell the user and ask them to restart it. Do
+   not restart it yourself: it is theirs and other agents may be on it.
+2. Call `list_sessions`. A session belongs to a working directory, and a git
+   worktree is its own boundary. Use your own session and do not create a
+   duplicate.
+3. Call `get_available_projects`, then create one session with
+   `create_project_session` (one `.fsproj`), `create_solution_session` (a
+   `.sln` or `.slnx`) or `create_bare_session` (no project). SageFs builds
+   missing generated state itself, so do not run a shell build first.
+4. Call `get_session_status` for that session until it says `Ready`. If it says
+   `Faulted`, act on the reason it names. Do not poll hoping it changes.
 
 ## The loop
 
-1. **RED in the REPL.** `send_fsharp_code` with the smallest thing that shows
-   the problem: the failing case, the wrong value, the bad parse. Watch it fail.
-2. **GREEN in the REPL.** Redefine the function in the session until the case
-   passes. Small blocks, each statement ending in `;;`.
-3. **Persist.** Write the working code into the `.fs` file.
-4. **Reload what you persisted.** `hard_reset_fsi_session` with `rebuild=true`
-   rebuilds and reloads, so the session runs the real file. Only do this after
-   persisting, or when an `.fsproj` changed (new files, new packages). Don't do
-   it after every eval.
-5. **Re-verify in the session**, then commit.
-6. **Final gate:** the full build and the unfiltered test suite, once, at the
-   end.
+1. RED: `send_fsharp_code` with the smallest thing that shows the problem, and
+   watch it fail.
+2. GREEN: redefine it in the session until it passes. Small blocks, each
+   statement ending in `;;`.
+3. Persist the working code to the `.fs` file.
+4. `hard_reset_fsi_session` with `rebuild=true`, so the session runs the real
+   file. Only after persisting or an `.fsproj` change, not after every eval.
+5. Re-verify in the session, then commit.
+6. Final gate: the full build and the unfiltered test suite, once, at the end.
+   Run it in the background and keep working.
 
-Useful tools while you're in the loop:
-- `check_fsharp_code` type-checks without running anything. It's great for "does
-  this compile" questions.
-- `cancel_eval` stops a runaway eval. Don't reset the session for it.
-- `explain_test_failure` and `targeted_verify` exercise real tests without
-  building.
-- **Want to know an API's or an AST's shape?** Ask the session: reflect over the
-  type, parse a sample and print it. Never guess, and never spin up a
-  throwaway `dotnet fsi` script to find out.
+## Rules that bite before your first edit
 
-Running tests from the session: evaluate
-`Expecto.Tests.runTestsWithCLIArgs [] [| "--filter-test-case"; "name" |] MyTests.tests`.
-It returns the exit code. The runner's console output goes to the worker, so if
-you need the details, use `explain_test_failure`.
+- Prove a change in the REPL before you write it to a file. Eval the new logic
+  on real input and read the output first.
+- Edit with exact editor calls: read the region, replace that exact text. Never
+  `sed -i`, `python3 -c` rewrites or bulk regex edits. One that silently
+  matches nothing looks exactly like one that worked. A repeated mechanical
+  change is an `.fsx` run through SageFs that asserts every replacement matched.
+- Never `#load` a file from a project the session already loaded. You get two
+  copies of every type and a misleading "type is not compatible" error. `#load`
+  only a pure file with no dependency on the loaded project.
+- Never `#r` a DLL the session already loaded from the project. Same two-copies
+  trap, and the lock blocks rebuilds.
+- To learn an API's or an AST's shape, ask the session: reflect over the type or
+  parse a sample and print it. Never guess, and never start a `dotnet fsi`
+  script for it.
+- "Operation could not be completed due to earlier error" means an earlier
+  statement failed. Fix that statement. Do not reset the session.
+- A bare `Error` or `Ok` that resolves to the wrong type is shadowed by a union
+  case in scope. Write `Result.Error` / `Result.Ok`.
+- A filtered test run is never the acceptance check. A filter that matches
+  nothing still prints `0 failed` and exits 0. Only an unfiltered run counts,
+  and its `TRUST` line must say `ran=` the number you expect.
+- Before a full build, test suite or app run that you start yourself, acquire
+  the matching lease (see leases.md).
+- If the REPL fights you, do not fall back silently. Write down the tool, the
+  input and the full error, then see troubleshooting.md.
+- Clean up. `stop_session` on every session you created. Kill only processes
+  you started, by exact PID, never by name.
 
-## Things that will bite you
+## Read more only when you need it
 
-- **"Operation could not be completed due to earlier error"** means a previous
-  statement failed. Read the diagnostics and fix that statement. The session is
-  fine, so don't reset it.
-- **A bare `Error` or `Ok` that resolves to the wrong type.** If a match on a
-  `Result` fails with "This union case does not take arguments" or names some
-  other type, a union case in scope is shadowing `Result.Error` / `Result.Ok`.
-  Write `Result.Error` / `Result.Ok`. SageFs's own types can't do this anymore:
-  no SageFs union has a case named `Ok`, `Error`, `Some` or `None`, and a test
-  enforces that. A library you open still might.
-- **Never `#r` a DLL the session already loaded from the project.** It creates a
-  second copy of every type ("type X is not compatible with type X"). `#r` also
-  locks the DLL, so a later rebuild can't overwrite it.
-- **A stale daemon is the most expensive failure here, because it looks like
-  every other failure.** A daemon that has been running since before your code
-  changed keeps serving the assemblies it started with. Nothing warns you. It
-  wears at least three disguises:
-  - `"type not found, Version=..."` or a Core version mismatch.
-  - `Could not load file or assembly 'System.Runtime, Version=N.0.0.0'` in
-    worker stderr, on a project that builds fine on its own. That one means the
-    daemon's worker is on an older .NET than your project targets — it starts
-    fine and then chokes the moment it loads your DLLs.
-  - No error at all: evals that quietly disagree with the code in front of you.
-
-  **Check the daemon's version before you believe anything else.**
-  `get_daemon_status` or `get_session_status`, `sagefs status`, or
-  `/health`. If the daemon is behind the code
-  you're working on, say so and ask the user to restart it — that is the fix,
-  and no amount of `hard_reset_fsi_session` will substitute for it, because the
-  daemon process itself is the stale thing. Don't restart it yourself; it's
-  theirs and other agents may be on it.
-
-  An agent lost an entire session to this: it read the load error as "SageFs is
-  broken", spent hours working around it with `dotnet`, and the daemon was
-  simply old. Checking the version first would have cost one tool call.
-- **A filtered test run is never the acceptance check.** A filter that matches
-  nothing prints `0 failed` and exits 0 in plain Expecto. SageFs's trust line
-  says `NothingRan` or `NarrowedRun`. Only an unfiltered run counts.
-- **Clean up.** `stop_session` on every session you created. Kill only
-  processes you started, by exact PID, never by name.
-
-## Before anything expensive: ask
-
-Session create/warmup, `hard_reset_fsi_session rebuild=true`, a full `dotnet
-build`, a test-suite run, starting an app — these cost real machine memory.
-One night, five agents each did one of these against a single daemon, all at
-once. Nobody was misbehaving; nothing coordinated. The daemon had no way to
-know until its RSS was already at 55GB of a 62GB box.
-
-SageFs-managed session creation and `hard_reset_fsi_session rebuild=true`
-acquire their own coordination leases. Do not manually lease those operations.
-
-Before a caller-owned full `dotnet build`, unfiltered test suite, or app run,
-use the matching MCP tool:
-
-- `acquire_full_build_lease` for a build you start yourself;
-- `acquire_test_suite_lease` for a test-suite process you start yourself;
-- `acquire_run_app_lease` for a run-app process you start yourself.
-
-A granted tool returns an opaque `leaseId`. Call `release_work_lease` with that
-exact id on the normal exit path. If a lease tool denies or delays the work,
-follow the decision it returns; do not shell around the daemon and spend the
-same memory outside its accounting.
-
-## Busy versus broken — the distinction that matters most
-
-When SageFs refuses or delays something, figure out which of these you're in
-before you do anything else. Getting this backwards is exactly how the
-incident above happened: every agent read "the REPL is fighting me" and
-reached for `dotnet`, when the REPL wasn't broken — the daemon was busy, and
-`dotnet` spent the same memory anyway, outside its accounting, at the exact
-moment it was trying to shed load.
-
-- **BROKEN**: a real bug, a version skew, a tool erroring for reasons that
-  aren't your code, the REPL genuinely not doing what it says. The escape
-  hatch below is correct: use `dotnet` for that one step, and report it,
-  because the report is how it gets fixed.
-- **BUSY**: SageFs (or the `sagefs-repl-guard` hook, if it's installed) tells
-  you pressure is `tight` or `critical`, a lease request came back `wait` or
-  `refused`, or a declared final-gate `dotnet build`/`test`/`run` gets denied
-  with a message that says "BUSY, not broken." The escape hatch is exactly
-  the WRONG move here. **Wait the time it names, then retry the identical
-  command or lease request.** Shelling out anyway, or spinning up your own
-  daemon to get around a busy one, spends the exact memory SageFs is trying
-  to reclaim — invisibly to it. That is the whole mechanism of the incident
-  this section exists to prevent.
-
-If you genuinely cannot tell which one you're in, that itself is a bug: report
-it exactly like a BROKEN case (tool, input, full error) rather than guessing.
-
-## When the REPL fights you (this means BROKEN, not busy)
-
-Sometimes it will. A version skew, a load error, a tool that errors for reasons
-that aren't your code — this is the BROKEN case above, not the BUSY one. When
-that happens:
-
-1. **Don't fall back silently.** Write down exactly what broke: the tool, the
-   input, the full error.
-2. Try the obvious fix once: build first, qualify `Result.Ok`, create the
-   session in the right worktree, check the daemon version.
-3. If it still fights you, use `dotnet` for **that one step only** — after
-   taking a lease for it if SageFs is up (see above) — and say so in your
-   report with the error from step 1. That report is how SageFs gets fixed.
-   Silent fallbacks are how it stays broken.
-4. **Never spin up your own daemon to get around a busy one.** A second
-   daemon spends the same machine memory the first one is trying to protect,
-   completely outside anyone's accounting. Only spawn a second daemon when
-   you are testing daemon code itself that the running daemon predates — see
-   AGENTS.md's multi-agent section — and give it an explicit owner/TTL.
-
-## Permissions and auto mode (Claude Code)
-
-The REPL also gets you out of most permission friction, which is one more
-reason to stay on it.
-
-- **Allow SageFs once.** Add `"mcp__sagefs__*"` (or `"mcp__sagefs"`) to
-  `permissions.allow` in settings.json. An action that matches an allow rule
-  resolves right away, so SageFs calls never wait on a prompt or on auto mode's
-  classifier. See the
-  [permissions docs](https://code.claude.com/docs/en/permissions.md).
-- **Shell commands mostly don't get that.** In auto mode, broad Bash allow rules
-  (`Bash(*)`, wildcarded interpreters, package-manager run commands) are
-  dropped, so most `dotnet` commands go through the classifier one at a time.
-  That's slower, and every one is another chance of a block or a "cannot
-  determine the safety" denial. See the
-  [permission modes docs](https://code.claude.com/docs/en/permission-modes.md).
-- **Keep shell commands narrow and single-purpose.** A compound command is
-  checked piece by piece, so `cd x && dotnet build && ...` needs every piece
-  approved. Use absolute paths instead of `cd`.
-- **Don't wait with sleep.** A `sleep N; check` pattern gets blocked. For a
-  session, poll `get_session_status`. For a long command, run it in the background
-  and let it tell you when it's done.
-- **Kill only by exact PID, never by name.** Mass kills look destructive, and
-  they can take down the user's daemon.
-- **If the classifier times out** ("cannot determine the safety of ... right
-  now"), it isn't a verdict on your command. Do the read-only work you can,
-  then retry. Don't rewrite the command to sneak past it.
-
-## Editing: prove it, then write it
-
-The loop above is for CODE. This is for CHANGING it, and it is the second
-biggest source of wasted time after drifting back to `dotnet`.
-
-**The rule: never write a change you have not already seen work.** Not "seen
-work somewhere similar" — seen *this* change, on *this* code, produce *this*
-result. A `send_fsharp_code` eval of the new logic takes under a second. The
-`edit_file` that persists it is instant. The `dotnet build` that finds out you
-misread the type is two minutes, and it finds out after you have already edited.
-
-So, in order:
-
-1. **Prove the behaviour in the REPL.** Write the new function, call it on real
-   input, and *read the output* before it touches a file.
-2. **Then persist it** with the editor tool — read the region, replace that
-   exact text.
-3. **Then re-verify** with `hard_reset_fsi_session rebuild=true`.
-
-### No `sed -i`, no `python3 -c`, no bulk regex rewrites
-
-This is not a style preference. A scripted edit rewrites what it did not read,
-swallows the one file that differed, and cannot tell you which of thirty call
-sites it actually changed. **A silent no-op reads exactly like a successful
-one**, which is the worst possible failure: you go on to build, the build is
-green, and the thing you meant to change is unchanged.
-
-- **Use the editor tool for a specific change.** A call that did not match is a
-  bug to investigate, not something to widen until something sticks.
-- **Scripting is F#, and it is dogfooded.** A genuinely repeated mechanical
-  change goes in an `.fsx` run through SageFs — then the script is F# you can
-  evaluate, and it reports its own result. It MUST assert that each
-  replacement matched, and say so out loud, rather than exiting quietly.
-- **Verify the diff after any scripted change.** A pattern that matched in 4
-  files and silently missed a 5th is exactly what this rule exists to prevent.
-
-### The `#load` duplicate trap
-
-`#load` a Core file into a session that **already has Core loaded**, and you
-get two copies of every type. The symptom is not a load error:
-
-```
-The type 'FSI_0035.SageFs.HolderRegistry' is not compatible with the type 'SageFs.HolderRegistry'
-```
-
-That is not a version mismatch and not a bug in the code — it is your own
-`#load`. The rule:
-
-- **Core (or any already-loaded project) is never `#load`ed.** Use the loaded
-  types directly. If the session's Core predates your change, that is *skew*,
-  not a reason to `#load` — see "a stale daemon" above.
-- **`#load` a PURE file** — one with no dependency on the loaded project. That
-  is the reliable way to evaluate a pure decision function fast, and it is how
-  you prototype a new module before it is wired in.
-
-### Don't await a slow gate
-
-A full test suite, a build, or `scripts/local-gate` takes minutes. Blocking on
-one — or polling it in a loop — is the same waste as having run it inline, and
-it blocks the actual work.
-
-- **Launch it, then keep working.** Use a background agent or a background
-  shell task, and read the result when you need it.
-- **The release gate is a decision, not an iteration tool.** Do not re-roll it
-  to escape a flake; that costs minutes and proves nothing. Isolate the
-  suspicion once with a cheap filtered run, and report the evidence.
-- **A filtered run is never the acceptance check.** `--filter` matching nothing
-  still prints `Failed: 0` and **exits 0**. Read the `TRUST` line's
-  `ran=` count, not the absence of red.
-
-### F# syntax that costs a build cycle
-
-Cheaper to know up front than to discover in a 90-second build:
-
-- `///` is not valid between DU fields — use `//`.
-- A DU case carrying an inline value needs parens (`Case 0`), or F# reads it as
-  function application.
-- Cases under `[<RequireQualifiedAccess>]` must be qualified at the call site.
-- `_.X` does not chain — use an explicit `this` parameter.
-- `let mutable` bindings must precede members in a type.
-- Two types with the same name in one namespace collide at every call site.
-- A case with two fields wants one tuple, not a bare `*` list.
-- `ResizeArray.Remove` returns a `bool` that must be explicitly discarded.
-
-## Getting back on track
-
-If the user says "back to the REPL", "mandate 1", or invokes the SageFs
-`back_to_the_repl` prompt, you've drifted. Stop what you're doing, name the
-step where you left the loop, and pick the loop back up from the REPL. Don't
-argue it, and don't finish the slow way first.
-
-## Briefing another agent
-
-Sub-agents don't inherit any of this. Every brief for F# work must include the
-loop explicitly:
-
-1. `get_daemon_status`, then `get_available_projects` and the matching
-   `create_project_session` / `create_solution_session` /
-   `create_bare_session` for the agent's own worktree
-2. Wait for that session's `get_session_status` to say Ready
-3. show the failure with `send_fsharp_code`
-4. make it pass with `send_fsharp_code`
-5. persist to the file
-6. `hard_reset_fsi_session` with `rebuild=true`
-7. re-verify, then commit
-8. `dotnet` only as the final gate, run in the BACKGROUND — do not block on it
-9. report REPL friction instead of silently falling back
-10. edit with exact editor calls, never `sed`/python/bulk regex; prove the
-    change in the REPL before persisting it
-
-The easiest way is to tell it to load this skill.
+| Read | When |
+|---|---|
+| sessions.md | choosing or creating a session, checking the daemon version, a session stuck warming or Faulted |
+| loop.md | the loop is unclear, or you are tempted to run `dotnet build` mid-task |
+| editing.md | before your first edit, on a `#load` error, or on F# syntax that costs a build |
+| testing.md | running tests from the session, waiting on a slow gate, judging whether a green run covered anything |
+| leases.md | starting a full build, test suite or app run yourself, or a lease came back denied |
+| troubleshooting.md | a tool errors, an eval disagrees with your code, or SageFs seems busy or broken (a stale daemon is the usual cause) |
+| claude-code.md | shell commands hit permission prompts in Claude Code |
+| agents.md | writing a brief for a sub-agent, or the user says you have drifted off the REPL |
