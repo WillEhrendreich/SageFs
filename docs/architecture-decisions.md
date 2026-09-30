@@ -128,7 +128,7 @@ positioning. This limitation is accepted for the sake of parity, and Raylib-only
 
 ## ADR-6: MCP as the AI Interface
 
-**Decision**: SageFs exposes 60 tools via [Model Context Protocol](https://modelcontextprotocol.io/).
+**Decision**: SageFs exposes 61 tools via [Model Context Protocol](https://modelcontextprotocol.io/).
 A state machine decides which tools are valid to *call* in the current session state.
 
 **Why**: AI agents (Copilot, Claude, and others) need structured interfaces instead of

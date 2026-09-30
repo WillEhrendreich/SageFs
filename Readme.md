@@ -65,13 +65,15 @@ Apps started by a `.SageFs/init.fsx` that `#load`s your sources patch in place t
 
 How you start the app matters, and I'd rather tell you than have you find out. An app started from FSI or an `init.fsx` lives in the same process as the reload agent, so a save patches it in place and its state stays put. An app started with `run_app` runs in the worker, out of the agent's reach, so a save **restarts it with your change** and says why (about six seconds for the ticker demo on my machine). Until 0.6.845 that second path reported `Patched` and changed nothing, which I caught by editing the demo and watching the output not move. It's fixed, and there's a test that starts an app with `run_app`, saves an edit and checks what the running app prints. The table and the source links are in [docs/hot-reload.md](docs/hot-reload.md#how-you-start-the-app-decides-which-of-two-things-happens).
 
+A detour landing isn't reported as live. A patched function stays `PatchPending` (the browser still refreshes, because the change may well be live) until its new body has been seen running, and then it becomes `Patched`. If ten seconds go by and it never ran, it's `NeverEntered`, and the message says to exercise it. A function the JIT inlined looks exactly like that, and so does an app nobody has clicked on yet, so the wording stays at "unconfirmed". Nothing is claimed that wasn't observed.
+
 Your app's live state survives a save. A `let mutable` you didn't touch keeps its value, private ones included. Edit a mutable's initializer and the app keeps its live value, SageFs tells you what it kept, and the dashboard's Hot Reload panel (or the `reset_hot_reload_state` MCP tool) has a Reset for when you want the new initializer to run. Redefine a plain `let` value and it gets its new value, as long as nothing in the running app kept a copy of the old one. The app tells SageFs where every read of it went, so if startup put it in a closure, or a `lazy` cached it, or a handler that hands it on already ran, it's a restart that names who kept it, never a fake Patched. The details, and where that falls short, are in [docs/hot-reload.md](docs/hot-reload.md#values).
 
 > **[docs/hot-reload.md](docs/hot-reload.md) is the authority.** It carries the full what-reloads / what-restarts table, each row pinned by an executable test. This README deliberately doesn't duplicate it, so the two can't drift apart. (No test measures reload latency, so no figure is quoted here.)
 
 ### 🤖 AI Agent Support
 
-SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an affordance-driven state machine: the full tool catalog is always listed, but calling a tool that doesn't apply to the current session state gets rejected with a structured error instead of a raw failure. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. The core MCP path is session trust, F# evaluation, exact test execution, and failure explanation. Copilot, Claude, and any MCP client can execute F# code, type-check it, verify a changed behavior, and run tests against your real project.
+SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an affordance-driven state machine: the full tool catalog is always listed, but calling a tool that doesn't apply to the current session state gets rejected with a structured error instead of a raw failure. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. The core MCP path is session trust, F# evaluation, running tests, and failure explanation. `run_tests` asks the same live-testing engine the dashboard and the editors use and hands back a receipt: a pass left over from an earlier run never counts, and `Incomplete` is not green. Copilot, Claude, and any MCP client can execute F# code, type-check it, verify a changed behavior, and run tests against your real project.
 
 Agents left alone will happily pile on complexity. Give one a fast, type-checked REPL with tests re-running on every change and it gets caught the same way I do, right away.
 
@@ -344,7 +346,7 @@ Features: Cell eval, inline results, gutter signs, SSE live updates, live test p
 
 #### AI Agent (MCP)
 
-SageFs exposes 60 MCP tools, from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time; calling one that doesn't apply to the current session state gets rejected with a structured error rather than being hidden. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
+SageFs exposes 61 MCP tools, from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time; calling one that doesn't apply to the current session state gets rejected with a structured error rather than being hidden. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
 
 **Streamable HTTP** (recommended: auto-reconnects, no session drops):
 ```json
@@ -453,7 +455,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 
 **Multi-Session**: Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
-**MCP Tools**: 60 tools for session trust, code execution, test listing and verification, failure explanation, analysis, and local friction reporting. They're affordance-gated at call time: the list is always complete, but a call to a tool that doesn't apply to the current session state is rejected with a structured error. [Full reference →](docs/mcp-tools.md)
+**MCP Tools**: 61 tools for session trust, code execution, running and listing tests, verification, failure explanation, analysis, and local friction reporting. They're affordance-gated at call time: the list is always complete, but a call to a tool that doesn't apply to the current session state is rejected with a structured error. [Full reference →](docs/mcp-tools.md)
 
 **SSE Events**: All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 
