@@ -34,13 +34,13 @@ module RequestedRuns =
   /// request id, record the run as Pending. The phase is NOT set here: until
   /// the worker actually starts this run, another run's results may still be
   /// arriving and must not be stamped with this generation.
-  let request (requestId: RunRequestId option) (session: string) (state: LiveTestState) : LiveTestState * RunGeneration =
+  let request (requestId: RunRequestId option) (session: string) (tests: TestId list) (state: LiveTestState) : LiveTestState * RunGeneration =
     let generation = RunGeneration.next state.LastGeneration
     let requests =
       match requestId with
       | Some rid ->
         state.RunRequests
-        |> Map.add rid { RequestedSession = session; RequestedGeneration = generation; RequestedStatus = RequestedRunStatus.Pending }
+        |> Map.add rid { RequestedSession = session; RequestedGeneration = generation; RequestedStatus = RequestedRunStatus.Pending; RequestedTests = tests }
         |> bounded
       | None -> state.RunRequests
     { state with LastGeneration = generation; RunRequests = requests }, generation

@@ -1637,7 +1637,7 @@ module SageFsUpdate =
               let allocated = ref (Features.LiveTesting.RunGeneration 0)
               let lt =
                 refreshStatusesForChangedIds cycle changedIds (fun s ->
-                  let s', gen = Features.LiveTesting.RequestedRuns.request requestId sid s
+                  let s', gen = Features.LiveTesting.RequestedRuns.request requestId sid (List.ofArray testIds) s
                   allocated.Value <- gen
                   { s' with AffectedTests = changedIds })
               lt,

@@ -137,33 +137,6 @@ let awaitBudget () : TimeSpan =
 
 let private pollDelayMs = 200
 
-/// Human-readable reason a session isn't trustworthy enough to believe a
-/// landing verdict from it. Mirrors the wording pattern in
-/// `Verification.TargetedVerification.summarize`'s blocked-session cases,
-/// specialized to this primitive's caller rather than reusing that function
-/// directly (its message is phrased for a `targeted_verify` report, not for
-/// "refusing to run tests").
-let private describeUntrustworthy (trust: SessionTrust) : string =
-  match trust with
-  | SessionTrust.Trusted sessionId ->
-    // Unreachable in practice — callers only reach this path when
-    // `SessionTrust.isTrusted` is false — kept total rather than partial.
-    sprintf "session '%s' is trusted" sessionId
-  | SessionTrust.Ambiguous candidateSessionIds ->
-    sprintf
-      "multiple sessions match (%s) — pin one before trusting a landing verdict"
-      (String.concat ", " candidateSessionIds)
-  | SessionTrust.WarmingUp sessionId ->
-    sprintf "session '%s' is still warming up" sessionId
-  | SessionTrust.Unavailable (sessionId, status) ->
-    sprintf "session '%s' is not available (%s)" sessionId status
-  | SessionTrust.StaleDefinitions filePath ->
-    sprintf "session still carries stale definitions for '%s'" filePath
-  | SessionTrust.TypeIdentityCompromised diagnostic ->
-    sprintf "type identity is compromised (%s)" diagnostic
-  | SessionTrust.Missing ->
-    "no matching session was found"
-
 /// Run exactly `tests` in `sessionId` and AWAIT the pass/fail verdict — the
 /// blocking async-readback primitive cohort landing needs; the existing
 /// `/api/live-testing/run` path only queues and returns immediately.
@@ -193,7 +166,7 @@ let runTestsInSession
     let trust = SessionTrust.classify sessionObservation
     match SessionTrust.isTrusted trust with
     | false ->
-      return Error (sprintf "Refusing to run tests in session '%s': %s" sessionId (describeUntrustworthy trust))
+      return Error (sprintf "Refusing to run tests in session '%s': %s" sessionId (SessionTrust.describe trust))
     | true ->
 
     let stateNow () = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState

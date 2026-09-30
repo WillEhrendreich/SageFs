@@ -281,6 +281,8 @@
         <Compile Include="Features\CohortLedgerExport.fs" />
         <Compile Include="CrossCheckoutOverlap.fs" />
         <Compile Include="Features\Verification.fs" />
+        <!-- run_tests's receipt: a pure read of the engine's own request record. -->
+        <Compile Include="Features\TestRunReceipt.fs" />
         <Compile Include="SessionMode.fs" />
         <Compile Include="AppRunOrchestration.fs" />
         <Compile Include="HttpWorkerClient.fs" />

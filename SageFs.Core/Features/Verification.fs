@@ -97,6 +97,20 @@ module SessionTrust =
     | SessionTrust.Trusted _ -> true
     | _ -> false
 
+  /// Why a session's answer cannot be believed, in words an agent can act on.
+  /// One wording for every caller that refuses on trust (the cohort landing
+  /// gate, `run_tests`), so they cannot drift apart.
+  let describe (trust: SessionTrust) : string =
+    match trust with
+    | SessionTrust.Trusted sessionId -> sprintf "session '%s' is trusted" sessionId
+    | SessionTrust.Ambiguous candidateSessionIds ->
+      sprintf "multiple sessions match (%s), so name one with session_id" (String.concat ", " candidateSessionIds)
+    | SessionTrust.WarmingUp sessionId -> sprintf "session '%s' is still warming up" sessionId
+    | SessionTrust.Unavailable (sessionId, status) -> sprintf "session '%s' is not available (%s)" sessionId status
+    | SessionTrust.StaleDefinitions filePath -> sprintf "session still carries stale definitions for '%s'" filePath
+    | SessionTrust.TypeIdentityCompromised diagnostic -> sprintf "type identity is compromised (%s)" diagnostic
+    | SessionTrust.Missing -> "no matching session was found"
+
   /// What a bounded "wait for the session to settle" loop should do with a
   /// single sampled trust reading. A settle-wait that only proceeds on `Trusted`
   /// and retries on *everything else* (the shape `awaitIntegrationSessionTrusted`

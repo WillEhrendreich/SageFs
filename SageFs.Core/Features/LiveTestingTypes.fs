@@ -986,13 +986,13 @@ type RequestedRunStatus =
   /// The run's completion arrived.
   | Completed
 
-/// An explicitly requested run: its one generation, allocated at request time
-/// and carried by the run itself (never re-bumped when the worker starts it),
-/// and its status.
+/// An explicitly requested run: its one generation (allocated at request time, never
+/// re-bumped), its status, and the tests it named, so a later read can list every one.
 type RequestedRun =
   { RequestedSession: string
     RequestedGeneration: RunGeneration
-    RequestedStatus: RequestedRunStatus }
+    RequestedStatus: RequestedRunStatus
+    RequestedTests: TestId list }
 
 [<Struct>]
 type TestRunPhase =
