@@ -181,6 +181,26 @@ type SageFsError =
   | CohortActionFailed of reason: string * suggestion: string
   | Unexpected of exn
 
+/// The family a `SageFsError` belongs to, which decides its HTTP status class and how a
+/// client should react. Derived in ONE place (`SageFsError.category`).
+[<RequireQualifiedAccess>]
+type ErrorCategory =
+  /// 4xx: the request was malformed or referred to missing resources, or the caller
+  /// asked for something that cannot be done as asked.
+  | Client
+  /// 500: an internal failure not caused by the client.
+  | Internal
+  /// 502/504: the worker (upstream) is unreachable or timed out.
+  | Gateway
+  /// 409: a system-level conflict (port in use, restart limit, duplicate session).
+  | Infra
+  /// 503: a real, bounded capacity limit was hit (`SupervisorBusy`, the SessionManager
+  /// mailbox's admission ceiling; `MemoryPressureRefused`). Nothing about the REQUEST
+  /// conflicts with anything: the daemon is handling more concurrent work than its
+  /// configured ceiling right now, and the fix is "wait and retry", not "resolve a
+  /// conflict".
+  | Overload
+
 module SageFsError =
   let describe = function
     | SageFsError.ToolNotAvailable(toolName, state, available) ->
@@ -368,29 +388,26 @@ module SageFsError =
     | SageFsError.DaemonStartFailed _ -> 500
     | SageFsError.Unexpected _ -> 500
 
-  /// Client errors: 4xx — the request was malformed or referred to missing resources.
-  let isClientError = function
-    | SageFsError.SessionNotFound _ -> true
-    | SageFsError.SessionNotRoutable _ -> true
-    | SageFsError.NoActiveSessions -> true
-    | SageFsError.DaemonNotRunning -> true
-    | SageFsError.AmbiguousSessions _ -> true
-    | SageFsError.JsonParseError _ -> true
-    | SageFsError.ToolNotAvailable _ -> true
-    | SageFsError.UnsafeSessionPath _ -> true
-    | SageFsError.ProjectFrameworkNotHostable _ -> true
-    | SageFsError.NeedsRebuild _ -> true
-    | SageFsError.CohortActionFailed _ -> true
-    | SageFsError.AppRunFailed _
-    | SageFsError.DuplicateSession _
+  /// The family an error belongs to. ONE exhaustive match: a case is in exactly one
+  /// family, and a new case cannot be left out (the compiler refuses the incomplete
+  /// match). The predicates below are derived from it, where they used to be five
+  /// separate matches kept consistent by a test.
+  let category (err: SageFsError) : ErrorCategory =
+    match err with
+    | SageFsError.SessionNotFound _
+    | SageFsError.SessionNotRoutable _
+    | SageFsError.NoActiveSessions
+    | SageFsError.DaemonNotRunning
+    | SageFsError.AmbiguousSessions _
+    | SageFsError.JsonParseError _
+    | SageFsError.ToolNotAvailable _
+    | SageFsError.UnsafeSessionPath _
+    | SageFsError.ProjectFrameworkNotHostable _
+    | SageFsError.NeedsRebuild _
+    | SageFsError.CohortActionFailed _ -> ErrorCategory.Client
     | SageFsError.SessionCreationFailed _
     | SageFsError.SessionStopFailed _
     | SageFsError.SessionSwitchFailed _
-    | SageFsError.WorkerCommunicationFailed _
-    | SageFsError.WorkerSpawnFailed _
-    | SageFsError.WorkerTimeout _
-    | SageFsError.WorkerHttpError _
-    | SageFsError.PipeClosed
     | SageFsError.EvalFailed _
     | SageFsError.ResetFailed _
     | SageFsError.HardResetFailed _
@@ -404,195 +421,35 @@ module SageFsError =
     | SageFsError.WarmupContextFailed _
     | SageFsError.HotReloadFailed _
     | SageFsError.HotReloadStateError _
-    | SageFsError.RestartLimitExceeded _
     | SageFsError.DaemonStartFailed _
+    | SageFsError.AppRunFailed _
+    | SageFsError.Unexpected _ -> ErrorCategory.Internal
+    | SageFsError.WorkerCommunicationFailed _
+    | SageFsError.WorkerSpawnFailed _
+    | SageFsError.WorkerTimeout _
+    | SageFsError.WorkerHttpError _
+    | SageFsError.PipeClosed
+    | SageFsError.SseConnectionError _ -> ErrorCategory.Gateway
     | SageFsError.PortInUse _
-    | SageFsError.SseConnectionError _
+    | SageFsError.RestartLimitExceeded _
+    | SageFsError.DuplicateSession _ -> ErrorCategory.Infra
     | SageFsError.SupervisorBusy _
-    | SageFsError.MemoryPressureRefused _
-    | SageFsError.Unexpected _ -> false
+    | SageFsError.MemoryPressureRefused _ -> ErrorCategory.Overload
+
+  /// Client errors: 4xx — the request was malformed or referred to missing resources.
+  let isClientError (err: SageFsError) = category err = ErrorCategory.Client
 
   /// Server errors: 500 — internal failures not caused by the client.
-  let isServerError = function
-    | SageFsError.SessionCreationFailed _ -> true
-    | SageFsError.NeedsRebuild _ -> false
-    | SageFsError.SessionStopFailed _ -> true
-    | SageFsError.SessionSwitchFailed _ -> true
-    | SageFsError.EvalFailed _ -> true
-    | SageFsError.ResetFailed _ -> true
-    | SageFsError.HardResetFailed _ -> true
-    | SageFsError.BuildFailed _ -> true
-    | SageFsError.ScriptLoadFailed _ -> true
-    | SageFsError.CheckFailed _ -> true
-    | SageFsError.CompletionFailed _ -> true
-    | SageFsError.CancelFailed _ -> true
-    | SageFsError.EvalSupersededByReset -> true
-    | SageFsError.WarmupOpenFailed _ -> true
-    | SageFsError.WarmupContextFailed _ -> true
-    | SageFsError.HotReloadFailed _ -> true
-    | SageFsError.HotReloadStateError _ -> true
-    | SageFsError.DaemonStartFailed _ -> true
-    | SageFsError.AppRunFailed _ -> true
-    | SageFsError.Unexpected _ -> true
-    | SageFsError.CohortActionFailed _
-    | SageFsError.ToolNotAvailable _
-    | SageFsError.UnsafeSessionPath _
-    | SageFsError.ProjectFrameworkNotHostable _
-    | SageFsError.NeedsRebuild _
-    | SageFsError.SessionNotFound _
-    | SageFsError.SessionNotRoutable _
-    | SageFsError.NoActiveSessions
-    | SageFsError.AmbiguousSessions _
-    | SageFsError.JsonParseError _
-    | SageFsError.DaemonNotRunning
-    | SageFsError.DuplicateSession _
-    | SageFsError.WorkerCommunicationFailed _
-    | SageFsError.WorkerSpawnFailed _
-    | SageFsError.WorkerTimeout _
-    | SageFsError.WorkerHttpError _
-    | SageFsError.PipeClosed
-    | SageFsError.SseConnectionError _
-    | SageFsError.RestartLimitExceeded _
-    | SageFsError.PortInUse _
-    | SageFsError.SupervisorBusy _
-    | SageFsError.MemoryPressureRefused _ -> false
+  let isServerError (err: SageFsError) = category err = ErrorCategory.Internal
 
   /// Gateway errors: 502/504 — the worker (upstream) is unreachable or timed out.
-  let isGatewayError = function
-    | SageFsError.WorkerCommunicationFailed _ -> true
-    | SageFsError.WorkerSpawnFailed _ -> true
-    | SageFsError.WorkerTimeout _ -> true
-    | SageFsError.WorkerHttpError _ -> true
-    | SageFsError.PipeClosed -> true
-    | SageFsError.SseConnectionError _ -> true
-    | SageFsError.CohortActionFailed _
-    | SageFsError.AppRunFailed _
-    | SageFsError.ToolNotAvailable _
-    | SageFsError.UnsafeSessionPath _
-    | SageFsError.ProjectFrameworkNotHostable _
-    | SageFsError.NeedsRebuild _
-    | SageFsError.SessionNotFound _
-    | SageFsError.SessionNotRoutable _
-    | SageFsError.NoActiveSessions
-    | SageFsError.AmbiguousSessions _
-    | SageFsError.JsonParseError _
-    | SageFsError.DaemonNotRunning
-    | SageFsError.DuplicateSession _
-    | SageFsError.SessionCreationFailed _
-    | SageFsError.SessionStopFailed _
-    | SageFsError.SessionSwitchFailed _
-    | SageFsError.EvalFailed _
-    | SageFsError.ResetFailed _
-    | SageFsError.HardResetFailed _
-    | SageFsError.BuildFailed _
-    | SageFsError.ScriptLoadFailed _
-    | SageFsError.CheckFailed _
-    | SageFsError.CompletionFailed _
-    | SageFsError.CancelFailed _
-    | SageFsError.EvalSupersededByReset
-    | SageFsError.WarmupOpenFailed _
-    | SageFsError.WarmupContextFailed _
-    | SageFsError.HotReloadFailed _
-    | SageFsError.HotReloadStateError _
-    | SageFsError.RestartLimitExceeded _
-    | SageFsError.DaemonStartFailed _
-    | SageFsError.PortInUse _
-    | SageFsError.SupervisorBusy _
-    | SageFsError.MemoryPressureRefused _
-    | SageFsError.Unexpected _ -> false
+  let isGatewayError (err: SageFsError) = category err = ErrorCategory.Gateway
 
   /// Infrastructure errors: 409 — system-level conflicts (port in use, restart limit, duplicate session).
-  let isInfraError = function
-    | SageFsError.PortInUse _ -> true
-    | SageFsError.RestartLimitExceeded _ -> true
-    | SageFsError.DuplicateSession _ -> true
-    | SageFsError.NeedsRebuild _ -> false
-    | SageFsError.SupervisorBusy _ -> false
-    | SageFsError.MemoryPressureRefused _ -> false
-    | SageFsError.CohortActionFailed _
-    | SageFsError.AppRunFailed _
-    | SageFsError.ToolNotAvailable _
-    | SageFsError.UnsafeSessionPath _
-    | SageFsError.ProjectFrameworkNotHostable _
-    | SageFsError.SessionNotFound _
-    | SageFsError.SessionNotRoutable _
-    | SageFsError.NoActiveSessions
-    | SageFsError.AmbiguousSessions _
-    | SageFsError.JsonParseError _
-    | SageFsError.DaemonNotRunning
-    | SageFsError.SessionCreationFailed _
-    | SageFsError.SessionStopFailed _
-    | SageFsError.SessionSwitchFailed _
-    | SageFsError.WorkerCommunicationFailed _
-    | SageFsError.WorkerSpawnFailed _
-    | SageFsError.WorkerTimeout _
-    | SageFsError.WorkerHttpError _
-    | SageFsError.PipeClosed
-    | SageFsError.EvalFailed _
-    | SageFsError.ResetFailed _
-    | SageFsError.HardResetFailed _
-    | SageFsError.BuildFailed _
-    | SageFsError.ScriptLoadFailed _
-    | SageFsError.CheckFailed _
-    | SageFsError.CompletionFailed _
-    | SageFsError.CancelFailed _
-    | SageFsError.EvalSupersededByReset
-    | SageFsError.WarmupOpenFailed _
-    | SageFsError.WarmupContextFailed _
-    | SageFsError.HotReloadFailed _
-    | SageFsError.HotReloadStateError _
-    | SageFsError.DaemonStartFailed _
-    | SageFsError.SseConnectionError _
-    | SageFsError.Unexpected _ -> false
+  let isInfraError (err: SageFsError) = category err = ErrorCategory.Infra
 
-  /// Overload errors: 503 — a real, bounded capacity limit was hit
-  /// (`SupervisorBusy`, the SessionManager mailbox's admission ceiling).
-  /// Distinct from `isInfraError`'s 409 conflicts: nothing about the
-  /// REQUEST conflicts with anything — the daemon is just handling more
-  /// concurrent work than its configured ceiling right now, and the fix is
-  /// "wait and retry," not "resolve a conflict."
-  let isOverloadError = function
-    | SageFsError.SupervisorBusy _ -> true
-    | SageFsError.MemoryPressureRefused _ -> true
-    | SageFsError.ToolNotAvailable _
-    | SageFsError.SessionNotFound _
-    | SageFsError.NoActiveSessions
-    | SageFsError.AmbiguousSessions _
-    | SageFsError.SessionCreationFailed _
-    | SageFsError.DuplicateSession _
-    | SageFsError.UnsafeSessionPath _
-    | SageFsError.ProjectFrameworkNotHostable _
-    | SageFsError.NeedsRebuild _
-    | SageFsError.SessionStopFailed _
-    | SageFsError.SessionSwitchFailed _
-    | SageFsError.SessionNotRoutable _
-    | SageFsError.WorkerCommunicationFailed _
-    | SageFsError.WorkerSpawnFailed _
-    | SageFsError.WorkerTimeout _
-    | SageFsError.WorkerHttpError _
-    | SageFsError.PipeClosed
-    | SageFsError.EvalFailed _
-    | SageFsError.ResetFailed _
-    | SageFsError.HardResetFailed _
-    | SageFsError.BuildFailed _
-    | SageFsError.ScriptLoadFailed _
-    | SageFsError.CheckFailed _
-    | SageFsError.CompletionFailed _
-    | SageFsError.CancelFailed _
-    | SageFsError.EvalSupersededByReset
-    | SageFsError.WarmupOpenFailed _
-    | SageFsError.WarmupContextFailed _
-    | SageFsError.HotReloadFailed _
-    | SageFsError.HotReloadStateError _
-    | SageFsError.AppRunFailed _
-    | SageFsError.RestartLimitExceeded _
-    | SageFsError.DaemonStartFailed _
-    | SageFsError.DaemonNotRunning
-    | SageFsError.PortInUse _
-    | SageFsError.SseConnectionError _
-    | SageFsError.JsonParseError _
-    | SageFsError.CohortActionFailed _
-    | SageFsError.Unexpected _ -> false
+  /// Overload errors: 503 — a real, bounded capacity limit was hit. See `ErrorCategory.Overload`.
+  let isOverloadError (err: SageFsError) = category err = ErrorCategory.Overload
 
   /// Actionable suggestion for each error case.
   let suggestedAction = function
