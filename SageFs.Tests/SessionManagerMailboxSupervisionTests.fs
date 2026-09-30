@@ -204,7 +204,10 @@ let sessionManagerMailboxSupervisionTests =
         mkRuntime
           okStart
           (fun () -> async {
-            stopCalls.Value <- stopCalls.Value + 1
+            // Atomic: StopSession stops the current and the parked worker through
+            // Async.Parallel, so a plain read-modify-write here loses an update
+            // whenever the two calls interleave (it read 1 instead of 2).
+            Interlocked.Increment(&stopCalls.contents) |> ignore
             return ()
           })
           (fun () -> async { return Ok "build ok" })
