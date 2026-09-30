@@ -81,4 +81,38 @@ let testAccountingHonestyTests = testList "test-result accounting is honest" [
 
     line.Contains "-"
     |> Expect.isFalse "a negative count would be nonsense to an agent"
+
+  testCase "WHY — a zero-execution summary line says not run, never reads like fresh passes" <| fun _ ->
+    let line : string =
+      SageFs.McpPushNotifications.PushEvent.formatForLlm
+        (SageFs.McpPushNotifications.PushEvent.TestSummaryChanged (summary 15 0 0 0 0, None))
+
+    line |> Expect.stringContains "total stays visible" "15 total"
+    line |> Expect.stringContains "un-run count stated in words" "15 not run"
+    line |> Expect.stringContains "passed count stays explicit" "0 passed"
+
+  testProperty "WHY — the summary line and the batch line report the same not-run figure" <| fun (total: int) (passed: int) (failed: int) ->
+    let notRunIn (line: string) : int =
+      let m = System.Text.RegularExpressions.Regex.Match(line, @"(\d+) not run")
+      Expect.isTrue "line must carry a not-run figure" m.Success
+      int m.Groups.[1].Value
+    let check () : bool =
+      let s = summary (abs total % 500) (abs passed % 500) (abs failed % 500) 0 0
+      let batch : TestResultsBatchPayload =
+        { Generation = RunGeneration 1
+          Freshness = ResultFreshness.Fresh
+          Completion = BatchCompletion.Complete(0, 0)
+          Entries = Array.empty
+          Summary = s
+          LastDecision = None }
+      let fromSummary =
+        SageFs.McpPushNotifications.PushEvent.formatForLlm
+          (SageFs.McpPushNotifications.PushEvent.TestSummaryChanged (s, None))
+        |> notRunIn
+      let fromBatch =
+        SageFs.McpPushNotifications.PushEvent.formatForLlm
+          (SageFs.McpPushNotifications.PushEvent.TestResultsBatch batch)
+        |> notRunIn
+      fromSummary = fromBatch && fromSummary >= 0
+    check ()
 ]

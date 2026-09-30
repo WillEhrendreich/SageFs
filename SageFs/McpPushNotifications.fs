@@ -78,6 +78,13 @@ module PushEvent =
     | PushEvent.FailureNarrativesUpdated _ -> 13
     | PushEvent.SystemAlarm _ -> 12
 
+  /// Tests the summary counts but never executed to a verdict. A concurrent
+  /// summary can momentarily report more passed+failed than the total it was
+  /// captured with, so this clamps at zero rather than printing a negative.
+  /// The summary line and the batch line both say this figure; one copy.
+  let private notRun (s: TestSummary) : int =
+    max 0 (s.Total - s.Passed - s.Failed)
+
   /// Format a single event for LLM consumption — actionable, concise.
   let formatForLlm = function
     | PushEvent.DiagnosticsChanged errors when errors.IsEmpty ->
@@ -107,7 +114,9 @@ module PushEvent =
         lastDecision
         |> Option.map (fun decision -> sprintf " — %s" (LiveTestingDecision.statusBarHint decision))
         |> Option.defaultValue ""
-      sprintf "🧪 tests: %d total, %d passed, %d failed, %d stale, %d running%s" s.Total s.Passed s.Failed s.Stale s.Running suffix
+      // Say how many have not run, so "15 total, 0 passed" never reads like a
+      // suite that ran clean (same accounting as the batch line below).
+      sprintf "🧪 tests: %d total, %d passed, %d failed, %d not run, %d stale, %d running%s" s.Total s.Passed s.Failed (notRun s) s.Stale s.Running suffix
     | PushEvent.TestResultsBatch payload ->
       // Report the real execution accounting, never a bare "N results
       // received (Fresh)". A discovery-only batch has zero passed and zero
@@ -116,13 +125,12 @@ module PushEvent =
       // concludes a fully green suite that never ran. The summary already
       // knows the difference; say it.
       let s = payload.Summary
-      let notRun = max 0 (s.Total - s.Passed - s.Failed)
       sprintf
         "🧪 %d test(s) discovered: %d passed, %d failed, %d not run, %d stale, %d running (%A)"
         s.Total
         s.Passed
         s.Failed
-        notRun
+        (notRun s)
         s.Stale
         s.Running
         payload.Freshness
