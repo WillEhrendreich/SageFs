@@ -239,9 +239,23 @@ module SessionBuild =
   /// compile failure. Covers the fresh-project assets-missing error (NETSDK1004)
   /// and a newly-added/removed package reference (NU1101/NU1102 and the generic
   /// "run a NuGet package restore" guidance MSBuild emits).
+  ///
+  /// It also covers a cold tree whose own props import something restore
+  /// generates: MSB4019 ("imported project ... was not found") on
+  /// `obj/<proj>.nuget.g.props` or on a path under `$(NuGetPackageRoot)`, both
+  /// of which only restore creates or defines. The bare code is NOT enough:
+  /// MSB4019 is also what a typo'd import prints, and restore cannot create a
+  /// file its author never wrote, so that one is reported as it is.
   let buildOutputNeedsRestore (lines: string list) : bool =
+    let importedProjectNotFound = "MSB4019"
+    let restoreGeneratedImportMarkers = [ ".nuget.g."; "$(NuGetPackageRoot)" ]
+    let missingRestoreGeneratedImport (l: string) =
+      l.Contains(importedProjectNotFound, StringComparison.OrdinalIgnoreCase)
+      && restoreGeneratedImportMarkers
+         |> List.exists (fun marker -> l.Contains(marker, StringComparison.OrdinalIgnoreCase))
     let needle (l: string) =
-      l.Contains("NETSDK1004", StringComparison.OrdinalIgnoreCase)
+      missingRestoreGeneratedImport l
+      || l.Contains("NETSDK1004", StringComparison.OrdinalIgnoreCase)
       || l.Contains("run a nuget package restore", StringComparison.OrdinalIgnoreCase)
       || l.Contains("project.assets.json", StringComparison.OrdinalIgnoreCase)
       || l.Contains("NU1101", StringComparison.OrdinalIgnoreCase)

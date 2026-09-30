@@ -630,6 +630,7 @@
         <Compile Include="CohortLinearizabilityTests.fs" />
         <Compile Include="UsabilityFixesTests.fs" />
         <Compile Include="SessionBuildOptimizationGateTests.fs" />
+        <Compile Include="SessionBuildColdTreeTests.fs" />
         <Compile Include="ProcessEnvironmentTests.fs" />
         <Compile Include="UpdateCheckTests.fs" />
         <Compile Include="UpdateCheckServiceTests.fs" />
