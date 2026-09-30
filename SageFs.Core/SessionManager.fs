@@ -1292,7 +1292,8 @@ module SessionManager =
               return state
             | WorkerEventGuard.ExitDecision.Apply ->
             let outcome =
-              SessionLifecycle.onWorkerExited
+              SessionLifecycle.onWorkerExitedJittered
+                (SessionLifecycle.jitterSeedFor (SessionId.value id) DateTime.UtcNow)
                 state.RestartPolicy
                 session.RestartState
                 exitCode
@@ -1387,7 +1388,8 @@ module SessionManager =
             | Error err ->
               // Spawn failed — treat as another crash
               let outcome =
-                SessionLifecycle.onWorkerExited
+                SessionLifecycle.onWorkerExitedJittered
+                  (SessionLifecycle.jitterSeedFor (SessionId.value id) DateTime.UtcNow)
                   state.RestartPolicy
                   session.RestartState
                   1

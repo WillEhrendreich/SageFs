@@ -21,6 +21,9 @@ let private restartDelay (decision: RestartPolicy.Decision) : TimeSpan =
 /// The widest spread the jitter is allowed, as a fraction of the delay.
 let private fraction = RestartPolicy.MaxJitterFraction
 
+let private sessionIds =
+  [ "a1b2c3d4"; "b1c2d3e4"; "c1d2e3f4"; "d1e2f3a4"; "e1f2a3b4"; "f1a2b3c4"; "0a1b2c3d"; "1b2c3d4e" ]
+
 [<Tests>]
 let tests =
   testList "RestartPolicy jitter" [
@@ -119,4 +122,22 @@ let tests =
           |> fst
           |> restartDelay)
       Expect.isGreaterThan "not all identical" (delays |> List.distinct |> List.length, 1)
+
+    testCase "WHY — a session's jitter seed is the same for the same session and time, and different across sessions" <| fun _ ->
+      SessionLifecycle.jitterSeedFor sessionIds.Head now
+      |> Expect.equal "stable, so a replay by seed gives the same delay" (SessionLifecycle.jitterSeedFor sessionIds.Head now)
+      sessionIds
+      |> List.map (fun id -> SessionLifecycle.jitterSeedFor id now)
+      |> List.distinct
+      |> List.length
+      |> Expect.equal "every session gets its own seed" sessionIds.Length
+
+    testCase "WHY — sessions whose workers die at the same instant do not all retry at the same instant" <| fun _ ->
+      let delays =
+        sessionIds
+        |> List.map (fun id ->
+          match SessionLifecycle.onWorkerExitedJittered (SessionLifecycle.jitterSeedFor id now) policy RestartPolicy.emptyState 1 now with
+          | SessionLifecycle.ExitOutcome.RestartAfter (delay, _) -> delay
+          | other -> failtestf "expected a restart, got %A" other)
+      Expect.isGreaterThan "the retries are spread out" (delays |> List.distinct |> List.length, 1)
   ]
