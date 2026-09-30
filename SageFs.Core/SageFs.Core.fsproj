@@ -28,10 +28,12 @@
         <Compile Include="Measures.fs" />
         <Compile Include="Cohort.fs" />
         <Compile Include="RingBuffer.fs" />
+        <Compile Include="TailBuffer.fs" />
         <Compile Include="SseReplayBuffer.fs" />
         <Compile Include="ModelSnapshot.fs" />
         <Compile Include="TimeTravel.fs" />
         <Compile Include="Utils.fs" />
+        <Compile Include="WorkerLogFile.fs" />
         <Compile Include="FsiNaming.fs" />
         <Compile Include="NativeResolution.fs" />
         <Compile Include="AppOutput.fs" />
