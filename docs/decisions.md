@@ -148,6 +148,11 @@ don't build a runner beside it.
 
 ### Still to do under this decision
 
-The live loop picks affected tests by test name, which misses body-only edits, and the cohort landing
-gate picks them from coverage bitmaps and fails closed. That's two selection rules over one engine.
-They should be one, and the fail-closed one is the only acceptable choice.
+Two functions pick "which tests does this change affect", and they do not share a floor.
+The live loop (`TestCycleEffects.decideAfterTypeCheck`) uses the symbol graph, coverage, and on a
+save a file-scope narrow for body-only edits, and falls back to the whole suite only for a compiled
+file whose dependency graph is empty. The cohort landing gate (`AffectedTests.verificationTestSet`)
+uses coverage with a no-empty-escape floor. The code states the residual gap itself: if the
+dependency graph has not yet seen the test file that covers a symbol, the live narrow finds nothing,
+and only the landing gate's floor catches it. One selection rule with one floor, fail closed, is the
+goal. Nothing has been changed here yet.
