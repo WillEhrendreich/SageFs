@@ -640,6 +640,39 @@ let quietLogger =
       member _.LogWarning msg = ()
   }
 
+/// A write-only stream that passes everything to `inner` and keeps a decoded copy
+/// in `capture`. It is how the test runner keeps a plain-text copy of its console
+/// output: ONE level down, on the byte stream under a single `Console.Out`,
+/// instead of a second `Console.Out` that forwards to the first. On Unix a console
+/// write takes `lock (Console.Out)`, so two writers nested one inside the other
+/// take their locks in opposite orders for different threads, and a release-gate
+/// run hung on exactly that. The decoder is stateful, so a character split across
+/// two writes is kept whole.
+type CaptureTeeStream(inner: System.IO.Stream, capture: System.Text.StringBuilder, encoding: System.Text.Encoding) =
+  inherit System.IO.Stream()
+  let decoder = encoding.GetDecoder()
+  let keep (bytes: System.ReadOnlySpan<byte>) =
+    let chars = Array.zeroCreate<char> (encoding.GetMaxCharCount bytes.Length)
+    let count = decoder.GetChars(bytes, System.Span<char>(chars), false)
+    lock capture (fun () -> capture.Append(chars, 0, count) |> ignore)
+  override _.CanRead = false
+  override _.CanSeek = false
+  override _.CanWrite = true
+  override _.Length = raise (System.NotSupportedException())
+  override _.Position
+    with get () = raise (System.NotSupportedException())
+    and set (_: int64) = raise (System.NotSupportedException())
+  override _.Flush() = inner.Flush()
+  override _.Read(_: byte[], _: int, _: int) : int = raise (System.NotSupportedException())
+  override _.Seek(_: int64, _: System.IO.SeekOrigin) : int64 = raise (System.NotSupportedException())
+  override _.SetLength(_: int64) = raise (System.NotSupportedException())
+  override _.Write(buffer: byte[], offset: int, count: int) =
+    inner.Write(buffer, offset, count)
+    keep (System.ReadOnlySpan<byte>(buffer, offset, count))
+  override _.Write(buffer: System.ReadOnlySpan<byte>) =
+    inner.Write buffer
+    keep buffer
+
 /// Serialize process-global environment-variable mutations across test lists.
 /// Expecto runs test LISTS in parallel, so two lists mutating the same env
 /// var (SAGEFS_DEVRELOAD kill-switch tests + HotReloadTool env-reading tests)

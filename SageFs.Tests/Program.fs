@@ -360,18 +360,21 @@ let main argv =
   // Capture this run's console output to a bounded, ANSI-stripped last-run log
   // so the summary and failures can be re-read (or re-grepped) WITHOUT re-running
   // the suite. The real console still gets everything, colors included; the file
-  // is the plain copy. Overwritten each run (bounded to one run) and skipped in
-  // CI. Born from the friction of losing a 55s run to a grep that missed on ANSI.
+  // is the plain copy. Overwritten each run (bounded to one run). Born from the
+  // friction of losing a 55s run to a grep that missed on ANSI.
+  //
+  // Only for a person at a terminal. When output is piped (the release gate, CI, a
+  // redirect) whoever holds the pipe already has the text, and this used to nest a
+  // second console writer inside the first, which hung a gate run (see
+  // `CaptureTeeStream`). It now copies on the byte stream, under ONE `Console.Out`.
   let inCi = match Environment.GetEnvironmentVariable "CI" with | null | "" -> false | _ -> true
+  let capturing = not inCi && not Console.IsOutputRedirected
   let runCapture = System.Text.StringBuilder()
   let originalOut = Console.Out
-  if not inCi then
-    let tee =
-      { new System.IO.TextWriter() with
-          member _.Encoding = originalOut.Encoding
-          member _.Write(c: char) = originalOut.Write c; runCapture.Append c |> ignore
-          member _.Write(s: string) = originalOut.Write s; runCapture.Append s |> ignore }
-    Console.SetOut tee
+  if capturing then
+    let encoding = System.Text.UTF8Encoding(false)
+    let tee = new SageFs.Tests.TestInfrastructure.CaptureTeeStream(Console.OpenStandardOutput(), runCapture, encoding)
+    Console.SetOut(new System.IO.StreamWriter(tee, encoding, AutoFlush = true))
 
   let result =
     match complianceOnly with
@@ -400,7 +403,8 @@ let main argv =
         1
 
   // Flush the captured output to the bounded, ANSI-stripped last-run log.
-  if not inCi then
+  if capturing then
+    Console.Out.Flush()
     Console.SetOut originalOut
     try
       let stripped = System.Text.RegularExpressions.Regex.Replace(runCapture.ToString(), "\\[[0-9;?]*[a-zA-Z]", "")
