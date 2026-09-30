@@ -24,7 +24,9 @@ type WorkerLogLevel =
   | Info
   | Debug
   | Warn
-  | Error
+  // Not `Error`: a bare Error case shadows Result.Error wherever this type's
+  // module is opened (a repo test enforces it).
+  | Errored
 
 /// The four sinks `SageFs.Utils.Log` routes to.
 type LogSinks =
@@ -180,7 +182,7 @@ module WorkerLogFile =
     | WorkerLogLevel.Info -> "INF"
     | WorkerLogLevel.Debug -> "DBG"
     | WorkerLogLevel.Warn -> "WRN"
-    | WorkerLogLevel.Error -> "ERR"
+    | WorkerLogLevel.Errored -> "ERR"
 
   /// `<UTC ISO-8601 with milliseconds> [<tag>] <message>`.
   let formatLine (at: DateTimeOffset) (level: WorkerLogLevel) (message: string) : string =
@@ -197,7 +199,7 @@ module WorkerLogFile =
     { Info = emit WorkerLogLevel.Info
       Debug = emit WorkerLogLevel.Debug
       Warn = emit WorkerLogLevel.Warn
-      Error = emit WorkerLogLevel.Error }
+      Error = emit WorkerLogLevel.Errored }
 
   /// The sinks `Log` currently routes to.
   let currentSinks () : LogSinks =

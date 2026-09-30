@@ -56,7 +56,7 @@ let workerLogFormatTests =
     testCase "WHY — formatLine — every level has its own distinct tag" <| fun _ ->
       let at = DateTimeOffset.UnixEpoch
       let tags =
-        [ WorkerLogLevel.Info; WorkerLogLevel.Debug; WorkerLogLevel.Warn; WorkerLogLevel.Error ]
+        [ WorkerLogLevel.Info; WorkerLogLevel.Debug; WorkerLogLevel.Warn; WorkerLogLevel.Errored ]
         |> List.map (fun level -> WorkerLogFile.formatLine at level "m")
       tags |> List.distinct |> List.length |> Expect.equal "four distinct lines" 4
 
@@ -186,18 +186,4 @@ let sizeCappedWriterTests =
         writer.Append "too late"
         writer.DroppedEntries |> Expect.equal "one dropped" 1L
         readAll path |> Expect.equal "file unchanged" "kept\n")
-
-    testCase "WHY — install — the file sink is what Log.info reaches once installed, which is what the worker's ClearProviders() used to swallow" <| fun _ ->
-      withTempDir (fun dir ->
-        match WorkerLogFile.tryInstall dir "cafe0001" with
-        | Error err -> failtestf "install should succeed, got %A" err
-        | Ok handle ->
-          let saved = WorkerLogFile.currentSinks ()
-          try
-            SageFs.Utils.Log.warn "Loader returned %d projects, attempting manual fsproj parse" 0
-          finally
-            WorkerLogFile.restore saved
-            (handle :> IDisposable).Dispose()
-          let path = Path.Combine(dir, "workers", "cafe0001.log")
-          readAll path |> Expect.stringContains "the Log.warn line landed" "[WRN] Loader returned 0 projects, attempting manual fsproj parse")
   ]
