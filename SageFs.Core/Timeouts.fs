@@ -121,6 +121,14 @@ module Timeouts =
   let processKillVerify = TimeSpan.FromSeconds(2.0)
   let stdioFlush = TimeSpan.FromSeconds(5.0)
 
+  // -- Hot reload --
+  /// How long a patched function may go without its new body running before the
+  /// save reports it as never entered. A page that refreshes on the pending
+  /// report usually runs the function within a second; a function nothing
+  /// calls (an idle app, or a caller that kept its own copy of the old body)
+  /// reads the same, so the report says "unconfirmed, exercise it".
+  let patchConfirmation = envOrDefault "SAGEFS_PATCH_CONFIRM_SECONDS" 10.0
+
   // -- Restart / Backoff --
   let restartBaseBackoff = TimeSpan.FromSeconds(1.0)
   let restartMaxBackoff = TimeSpan.FromSeconds(30.0)

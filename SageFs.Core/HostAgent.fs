@@ -288,6 +288,12 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
           LiveTest = LiveTestHookResultDto.fromResult step.Hook
           AssemblyLoadErrors = step.State.AssemblyLoadErrors })
 
+  /// Wait until every probe has been sighted (the patched function's new body ran, or a newer save replaced it) or the
+  /// bound passes, then say what is known. Runs beside the eval thread and takes no lock, so a wait never holds up a
+  /// save: the probes are thread-safe, and the stubs enter them on whatever thread runs the patched code.
+  member _.AwaitEntries(probes: int64 list, bound: TimeSpan) : Async<SageFs.Middleware.EntryProbes.EntryReading> =
+    SageFs.Middleware.EntryProbes.ProbeRegistry.Shared.Await(probes, bound)
+
   /// Where each value's reads went, and which of the readers ran (rule 2).
   member _.ValueReads(values: string list) : SageFs.Middleware.ValueReads.ValueEvidence list =
     lock gate (fun () ->

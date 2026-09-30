@@ -279,9 +279,28 @@ let hotReloadingMiddleware next (request, st: AppState) =
         | true, _ -> ()
         | false, false -> ()
         | false, true ->
+          // Re-pointing is not the new body running, so this is announced as pending and
+          // resolved when the host has seen the new code run (or the bound passes). Only a
+          // function with a probe can be watched; a mutable binding's accessors have none,
+          // and are counted as considered, never as applied.
           let updated = List.length report.UpdatedMethods
-          SageFs.Features.ReloadBroadcast.broadcastOutcome
-            (SageFs.Features.ReloadOutcome.ReloadOutcome.ofPatchCounts updated updated [])
+          let watched =
+            SageFs.Features.PatchConfirmation.watchedOfRedirected report.UpdatedMethods report.DetourReport.Probes
+            |> List.filter (fun w -> not (List.isEmpty w.Probes))
+          let outcome = SageFs.Features.ReloadOutcome.ReloadOutcome.ofPatchCounts (List.length watched) updated []
+          let session = st.Session
+          let waiter : SageFs.Features.PatchAnnouncer.EntryWaiter =
+            fun probes bound ->
+              async {
+                match! session.AwaitEntries(probes, bound) with
+                | SageFs.HostAgent.AgentAnswered reading -> return SageFs.Features.PatchAnnouncer.EntryAnswer.HostSaw reading
+                | SageFs.HostAgent.AgentUnavailable reason -> return SageFs.Features.PatchAnnouncer.EntryAnswer.HostUnreachable reason
+              }
+          SageFs.Features.PatchAnnouncer.announce
+            waiter
+            SageFs.Timeouts.patchConfirmation
+            (SageFs.Features.PatchConfirmation.start watched outcome)
+          |> Async.Start
 
         // Tests run where they live: the runner asks the session's agent, which tries interactively defined tests
         // first and the project's after.
@@ -309,6 +328,7 @@ let hotReloadingMiddleware next (request, st: AppState) =
               // landed, and reports "Hot reloaded 1 of 1" for a save the
               // running process ignored.
               .Add("hotReloadReachedRunningProcess", report.DetourReport.ReachedRunningProcess)
+              .Add("hotReloadEntryProbes", report.DetourReport.Probes)
               .Add("hotReloadIneffectiveMethods", report.DetourReport.Ineffective)
               .Add("hotReloadRedirectedFromCompiled", report.DetourReport.RedirectedFromCompiled)
               .Add("hotReloadCompiledCandidates", report.DetourReport.CompiledCandidates)

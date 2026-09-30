@@ -58,6 +58,7 @@ module FsiEmitInvariants =
     |> List.indexed
     |> List.choose (fun (i, o) ->
       match o.Reported with
+      | ReloadOutcome.PatchPending(patched, _, _)
       | ReloadOutcome.Patched(patched, _) when patched <= 0 ->
         Some
           { Index = i

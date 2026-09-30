@@ -84,6 +84,7 @@
         <EmbeddedResource Include="Features\ReflectionDiscovery.fs" LogicalName="FsiHost/ReflectionDiscovery.fs" />
         <EmbeddedResource Include="Features\LiveTestingExecutors.fs" LogicalName="FsiHost/LiveTestingExecutors.fs" />
         <EmbeddedResource Include="DevReload.fs" LogicalName="FsiHost/DevReload.fs" />
+        <EmbeddedResource Include="Middleware\EntryProbes.fs" LogicalName="FsiHost/EntryProbes.fs" />
         <EmbeddedResource Include="Middleware\ValueReads.fs" LogicalName="FsiHost/ValueReads.fs" />
         <EmbeddedResource Include="Middleware\ValueReadTracking.fs" LogicalName="FsiHost/ValueReadTracking.fs" />
         <EmbeddedResource Include="Middleware\HotReloadCore.fs" LogicalName="FsiHost/HotReloadCore.fs" />
@@ -99,6 +100,10 @@
         <Compile Include="TranslationValidation.fs" />
         <Compile Include="BuildPreflight.fs" />
         <Compile Include="Middleware\ValueReads.fs" />
+        <!-- BCL only and also compiled into the isolated FSI host: the probes that
+             show a patched function's new body running. The planner-side
+             PatchConfirmation (below ReloadPlanning) reads its types. -->
+        <Compile Include="Middleware\EntryProbes.fs" />
         <Compile Include="HolderRegistry.fs" />
         <Compile Include="RestartCost.fs" />
         <!-- After TypeShapeMigration (compiledShapeOf/decideRecord), after
@@ -117,6 +122,9 @@
         <Compile Include="Features\RestartScope.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
+        <!-- Pure: when a patch is live (its new body has been seen running). After ReloadPlanning
+             (it matches probes to the declarations the planner landed) and EntryProbes. -->
+        <Compile Include="Features\PatchConfirmation.fs" />
         <Compile Include="Features\RestartAttribution.fs" />
         <!-- Phase 3 (live tweaking): pure address/edit/classification/transaction
              modules. Self-contained, no dependency on ReloadPlanning/ReloadOutcome
@@ -339,6 +347,8 @@
              the other Features/ files. Deliberately NOT embedded into the isolated FSI host: DevReload.fs is,
              and keeping that closure free of the planner is why the translation lives in its own module. -->
         <Compile Include="Features\ReloadBroadcast.fs" />
+        <!-- Tells clients `pending` now and what the host saw later; broadcasts through ReloadBroadcast. -->
+        <Compile Include="Features\PatchAnnouncer.fs" />
         <Compile Include="Middleware\ValueReadTracking.fs" />
         <Compile Include="Middleware\HotReloadCore.fs" />
         <Compile Include="HostAgent.fs" />

@@ -111,7 +111,7 @@ let tests =
       testCase "WHY — calling the stub runs the new body and records that it was entered" <| fun _ ->
         let probe = ProbeRegistry.Shared.Allocate "ProbeTargets.Double"
         match stubFor probe (method' "Double") with
-        | Result.Error reason -> failtestf "a plain static method must get a stub: %s" reason
+        | Result.Error failure -> failtestf "a plain static method must get a stub: %s" (StubFailure.describe failure)
         | Result.Ok stub ->
           statusOf (ProbeRegistry.Shared.Read [ probe.Id ]) probe.Id |> Expect.equal "not called yet" ProbeStatus.NotEntered
           stub.Invoke(null, [| box 21 |]) |> Expect.equal "the new body's result passes through" (box 42)
@@ -120,7 +120,7 @@ let tests =
       testCase "WHY — the stub has the target's exact signature, so a detour can point at it in place of the target" <| fun _ ->
         let probe = ProbeRegistry.Shared.Allocate "ProbeTargets.Join"
         match stubFor probe (method' "Join") with
-        | Result.Error reason -> failtestf "a plain static method must get a stub: %s" reason
+        | Result.Error failure -> failtestf "a plain static method must get a stub: %s" (StubFailure.describe failure)
         | Result.Ok stub ->
           stub.ReturnType |> Expect.equal "same return type" typeof<string>
           stub.GetParameters() |> Array.map _.ParameterType |> Expect.equal "same parameters" [| typeof<string>; typeof<string> |]

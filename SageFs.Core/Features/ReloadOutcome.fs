@@ -200,9 +200,10 @@ type KeptValue = {
 /// unrepresentable.
 [<RequireQualifiedAccess>]
 type ReloadOutcome =
-  /// At least one method was re-pointed; the running process now serves the new
-  /// code for those. Both numbers are reported so a partial reload is visible
-  /// as partial rather than as success.
+  /// At least one method was re-pointed AND its new body has been seen
+  /// running, so the running process serves the new code for those. Both
+  /// numbers are reported so a partial reload is visible as partial rather than
+  /// as success. Only `PatchConfirmation` produces this, after a `PatchPending`.
   | Patched of patched: int * considered: int
   /// The save was processed, nothing could be re-pointed, and SageFs does not
   /// own the app's lifetime — so the user has to act. This is the case that
@@ -223,15 +224,34 @@ type ReloadOutcome =
   /// Head and rest: there's always at least one kept binding, or this is some
   /// other outcome.
   | KeptLiveState of patched: int * considered: int * first: KeptValue * rest: KeptValue list
+  /// The detours landed, and nobody has seen the new code run yet. Whether the
+  /// app now serves the new code is unknown: a function the compiler or the JIT
+  /// inlined into its caller keeps running the caller's own copy of the old
+  /// body while every other signal reads as success. Only the new body running
+  /// shows the patch is live. `applied` of `considered` changed definitions
+  /// are waiting to be seen; `kept` are live values the save kept.
+  ///
+  /// The page refreshes on this (the change may well be live), and the outcome
+  /// resolves into `Patched` or `NeverEntered`.
+  | PatchPending of applied: int * considered: int * kept: KeptValue list
+  /// The bound passed and these changed definitions' new bodies have not run:
+  /// `first` and `rest` are the ones still silent, `entered` counts the ones
+  /// that have run (and so are live). Not a claim that the patch failed. An
+  /// idle app looks exactly like one that never calls the function, so this
+  /// says "unconfirmed, exercise it" and never names a cause.
+  | NeverEntered of first: string * rest: string list * entered: int * considered: int * kept: KeptValue list
 
 module ReloadOutcome =
 
-  /// The only way to build a patch result. A patch count of zero is not a
-  /// success with a small number in it — it is a different outcome, and gets a
-  /// different case.
+  /// The only way to build a patch result from what a save did. A patch count
+  /// of zero is not a success with a small number in it: it is a different
+  /// outcome, and gets a different case. A patch count above zero is PENDING,
+  /// never `Patched`: re-pointing a function says nothing about whether the
+  /// app runs the new body, so `Patched` is reached only through
+  /// `PatchConfirmation`, after the new body has been seen running.
   let ofPatchCounts (patched: int) (considered: int) (reasons: RestartReason list) : ReloadOutcome =
     match patched > 0 with
-    | true -> ReloadOutcome.Patched(patched, considered)
+    | true -> ReloadOutcome.PatchPending(patched, considered, [])
     | false -> ReloadOutcome.NoEffect(considered, reasons)
 
   /// Did the running process change? The single question every caller actually
@@ -240,17 +260,34 @@ module ReloadOutcome =
   let processChanged =
     function
     | ReloadOutcome.Patched _
+    | ReloadOutcome.PatchPending _
     | ReloadOutcome.Restarted _ -> true
     // Keeping a value changes nothing the app serves. Only a patch alongside it does.
     | ReloadOutcome.KeptLiveState(patched, _, _, _) -> patched > 0
+    // Some of the new bodies ran, so the process changed for those.
+    | ReloadOutcome.NeverEntered(_, _, entered, _, _) -> entered > 0
     | ReloadOutcome.NoEffect _
     | ReloadOutcome.RestartRequired _
     | ReloadOutcome.CompileFailed _ -> false
 
-  /// A browser reload is honest only when the bytes it will fetch are new.
+  /// A browser reload is honest only when the bytes it will fetch may be new.
   /// Telling a page to refresh into identical code is the failure users read as
   /// "the tool is broken".
-  let shouldRefreshBrowser = processChanged
+  ///
+  /// A pending patch refreshes: the change may well be live, and the refresh is
+  /// usually what makes the new body run. The confirmation that follows does
+  /// not refresh again, and neither does never-entered, which has nothing new
+  /// to fetch.
+  let shouldRefreshBrowser =
+    function
+    | ReloadOutcome.PatchPending _
+    | ReloadOutcome.Restarted _ -> true
+    | ReloadOutcome.Patched _
+    | ReloadOutcome.KeptLiveState _
+    | ReloadOutcome.NeverEntered _
+    | ReloadOutcome.NoEffect _
+    | ReloadOutcome.RestartRequired _
+    | ReloadOutcome.CompileFailed _ -> false
 
   /// One line, always carrying the count when there was one — the
   /// "Reloaded 1 of 448 libraries" discipline, so a no-op is visible.
@@ -286,6 +323,27 @@ module ReloadOutcome =
       match patched with
       | 0 -> sprintf "Live state kept: %s" kept
       | n -> sprintf "Hot reloaded %d of %d changed definition(s), and %s" n considered kept
+    | ReloadOutcome.PatchPending(applied, considered, kept) ->
+      let keptText =
+        match kept with
+        | [] -> ""
+        | ks ->
+          ks
+          |> List.map (fun k -> sprintf "kept '%s' = %s (your new initializer %s applies when you reset it)" k.Binding k.KeptValue k.NewInitializer)
+          |> String.concat "; "
+          |> sprintf ", and %s"
+      sprintf
+        "Applied %d of %d changed definition(s), not confirmed yet: the new code has not run%s"
+        applied
+        considered
+        keptText
+    | ReloadOutcome.NeverEntered(first, rest, entered, considered, _) ->
+      let silent = first :: rest |> String.concat ", "
+      sprintf
+        "Not confirmed: the new code for %s has not run since the save (%d of %d changed definition(s) seen running)"
+        silent
+        entered
+        considered
 
   /// What to do next, when there is something to do. `None` means the outcome
   /// is already resolved and the user needs no instruction.
@@ -301,6 +359,10 @@ module ReloadOutcome =
     | ReloadOutcome.CompileFailed _ -> Some "Fix the compile error; the app reloads automatically once it builds."
     | ReloadOutcome.KeptLiveState _ ->
       Some "To run the new initializer, reset it from the Hot Reload panel on the dashboard or with the reset_hot_reload_state MCP tool. Otherwise there's nothing to do, the app kept going."
+    | ReloadOutcome.PatchPending _ ->
+      Some "Exercise the changed code, for example by loading the page or calling the endpoint. This updates when the new code runs. If it never does, the running app is not calling the patched function, and restarting the app picks the change up."
+    | ReloadOutcome.NeverEntered _ ->
+      Some "Exercise that code path. If the new code still does not run, the running app is not calling the patched function, so restart the app to pick the change up."
 
   /// The whole user-facing message: what happened, and what to do about it.
   let describeForUser (outcome: ReloadOutcome) : string =
@@ -327,6 +389,8 @@ module ReloadOutcome =
         ReloadOutcome.NoEffect(considered + List.length extra, reasons @ extra)
       | ReloadOutcome.RestartRequired reasons -> ReloadOutcome.RestartRequired(reasons @ extra)
       | ReloadOutcome.Patched _
+      | ReloadOutcome.PatchPending _
+      | ReloadOutcome.NeverEntered _
       | ReloadOutcome.Restarted _
       | ReloadOutcome.KeptLiveState _
       | ReloadOutcome.CompileFailed _ -> outcome
@@ -342,6 +406,11 @@ module ReloadOutcome =
     | first :: rest, ReloadOutcome.Patched(patched, considered) ->
       ReloadOutcome.KeptLiveState(patched, considered + List.length kept, first, rest)
     | first :: rest, ReloadOutcome.NoEffect(0, []) -> ReloadOutcome.KeptLiveState(0, List.length kept, first, rest)
+    // Not confirmed yet: the kept values wait with the patch and appear in whatever it resolves into.
+    | _ :: _, ReloadOutcome.PatchPending(applied, considered, already) ->
+      ReloadOutcome.PatchPending(applied, considered + List.length kept, already @ kept)
+    | _ :: _, ReloadOutcome.NeverEntered(first, rest, entered, considered, already) ->
+      ReloadOutcome.NeverEntered(first, rest, entered, considered + List.length kept, already @ kept)
     | _ :: _, ReloadOutcome.NoEffect _
     | _ :: _, ReloadOutcome.Restarted _
     | _ :: _, ReloadOutcome.RestartRequired _

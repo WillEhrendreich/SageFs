@@ -75,12 +75,12 @@ let confirmWholeFileReevalTests =
     // WHY — the fix must not just refuse to ever patch again: a redirect
     // PROVEN (by reachedRunningProcess, the AppHolds-verified evidence) to
     // reach the copy the app calls still reports Patched.
-    testCase "WHY — a redirect proven to reach the running process still reports Patched" <| fun _ ->
+    testCase "WHY — a redirect proven to reach the running process is applied, and pending until its new code has been seen running" <| fun _ ->
       match confirmWholeFileReeval [ fn "greeting" ] [ "Demo.Program.greeting" ] [ "Demo.Program.greeting" ] with
-      | ReloadOutcome.Patched(patched, considered) ->
+      | ReloadOutcome.PatchPending(patched, considered, _) ->
         patched |> Expect.equal "the one genuinely-reached function landed" 1
         considered |> Expect.equal "one candidate was in front of the process" 1
-      | other -> failtestf "a proven redirect must be Patched(1, 1), got %A" other
+      | other -> failtestf "a proven redirect must be PatchPending(1, 1), got %A" other
 
     testCase "WHY — a mixed save reports the partial truth: proven functions land, unproven ones don't inflate the count" <| fun _ ->
       let candidates = [ fn "greeting"; fn "farewell" ]
@@ -90,10 +90,10 @@ let confirmWholeFileReevalTests =
       // doc comment): a landed patch is reported, and the specific reason a
       // sibling candidate missed is not attached to it.
       match confirmWholeFileReeval candidates [ "Demo.Program.greeting"; "Demo.Program.farewell" ] [ "Demo.Program.greeting" ] with
-      | ReloadOutcome.Patched(patched, considered) ->
+      | ReloadOutcome.PatchPending(patched, considered, _) ->
         patched |> Expect.equal "only the proven redirect counts as landed" 1
         considered |> Expect.equal "both candidates were considered" 2
-      | other -> failtestf "a mixed save must be Patched(1, 2), got %A" other
+      | other -> failtestf "a mixed save must be PatchPending(1, 2), got %A" other
 
     testCase "WHY — types, mutable bindings, the entry point and nested modules are never counted as patch candidates" <| fun _ ->
       // These kinds have their own dedicated handling elsewhere (types force

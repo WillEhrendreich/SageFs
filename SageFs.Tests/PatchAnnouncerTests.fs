@@ -29,8 +29,8 @@ let private begunFor (names: (string * int64 list) list) : Begun =
   let watched = names |> List.map (fun (name, probes) -> { Declaration = name; Probes = probes })
   PatchConfirmation.start watched (Outcome.PatchPending(List.length names, List.length names, []))
 
-let private reading (statuses: (int64 * ProbeStatus) list) : Result<EntryReading, string> =
-  Result.Ok { Sightings = statuses |> List.map (fun (probe, status) -> { Probe = probe; Status = status }) }
+let private reading (statuses: (int64 * ProbeStatus) list) : EntryAnswer =
+  EntryAnswer.HostSaw { Sightings = statuses |> List.map (fun (probe, status) -> { Probe = probe; Status = status }) }
 
 let private bound = TimeSpan.FromSeconds 10.0
 
@@ -74,7 +74,7 @@ let tests =
     }
 
     testTask "WHY — a host that cannot be asked means nothing was observed, so the patch is never-entered, not confirmed" {
-      let waiter : EntryWaiter = fun _ _ -> async { return Result.Error "the host went away" }
+      let waiter : EntryWaiter = fun _ _ -> async { return EntryAnswer.HostUnreachable "the host went away" }
       do! PatchAnnouncer.announce waiter bound (begunFor [ "A.f", [ 1L ] ]) |> Async.StartAsTask
       lastType () |> Expect.equal "fail closed" "neverentered"
     }

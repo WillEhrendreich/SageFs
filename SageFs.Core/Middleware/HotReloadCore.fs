@@ -10,6 +10,7 @@ open System.Reflection
 open System.Runtime.CompilerServices
 open SageFs.Utils
 open SageFs.DevReload
+open SageFs.Middleware.EntryProbes
 open SageFs.Features.LiveTesting
 
 type Method = {
@@ -560,6 +561,12 @@ type DetourReport = {
   /// what reaches it. Without this, that entirely legitimate reload gets
   /// reported as no effect.
   CompiledCandidates: string list
+  /// One probe per new body a detour was pointed at (through a stub) and that
+  /// landed. The redirect is not the evidence that the app runs the new code:
+  /// the new body running is, and these are how the host sees it. A caller
+  /// that had the old function inlined never enters it, so its probe never
+  /// fires.
+  Probes: EntryProbe list
   Bindings: BindingOutcome list
   Declined: DeclinedBinding list
   /// Detours that were planned and did not happen.
@@ -570,7 +577,7 @@ module DetourReport =
   /// The report of an eval that touched nothing — no new assembly, or hot
   /// reload disabled. Named so callers never hand-roll the all-empty record.
   let empty : DetourReport =
-    { Redirected = []; ReachedRunningProcess = []; Ineffective = []; RedirectedFromCompiled = []; CompiledCandidates = []; Bindings = []; Declined = []; Failures = [] }
+    { Redirected = []; ReachedRunningProcess = []; Ineffective = []; RedirectedFromCompiled = []; CompiledCandidates = []; Probes = []; Bindings = []; Declined = []; Failures = [] }
 
 /// Forces everything a detour will touch to resolve BEFORE any leg is written:
 /// the parameter and return types (which throw `TypeLoadException` for a stale
@@ -634,12 +641,47 @@ let private applyBindingDetour (logger: ILogger) (unit: AccessorPairDetour) : Bi
       detourMethod logger older.MethodInfo newer.MethodInfo)
     |> classifyBindingApplication unit.Binding
 
+/// The probe for one new body, and what a detour should point at in place of
+/// it: a stub that records an entry and then calls the body. When no stub can be
+/// built the detour points straight at the body and the probe can never fire,
+/// so that function ends as never-entered rather than as a claim nobody can check.
+let private probeTarget (logger: ILogger) (newer: Method) : EntryProbe * MethodBase =
+  let probe = ProbeRegistry.Shared.Allocate newer.FullName
+  match stubFor probe newer.MethodInfo with
+  | Result.Ok stub -> probe, stub :> MethodBase
+  | Result.Error failure ->
+    logger.LogWarning(sprintf "Hot reload cannot watch %s run, so its patch cannot be confirmed: %s" newer.FullName (StubFailure.describe failure))
+    probe, newer.MethodInfo :> MethodBase
+
 let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan: DetourPlan) : DetourReport =
+  // One stub per new body, shared by every older copy that is pointed at it.
+  let targets = Collections.Generic.Dictionary<MethodInfo, EntryProbe * MethodBase>()
+  let targetFor (newer: Method) : EntryProbe * MethodBase =
+    match targets.TryGetValue newer.MethodInfo with
+    | true, found -> found
+    | false, _ ->
+      let made = probeTarget logger newer
+      targets.[newer.MethodInfo] <- made
+      made
   let functionResults =
     plan.Functions
     |> List.map (fun (older, newer) ->
       logger.LogDebug("Updating method " + older.FullName)
-      older, detourMethod logger older.MethodInfo newer.MethodInfo)
+      let _, target = targetFor newer
+      older, detourMethod logger older.MethodInfo target)
+  // A probe counts once its body is what some old entry point now reaches. It
+  // supersedes the earlier probe of the same function that never ran.
+  let landedProbes =
+    List.zip plan.Functions functionResults
+    |> List.choose (fun ((_, newer), (_, applied)) ->
+      match applied with
+      | DetourApplied.Redirected
+      | DetourApplied.Ineffective _ -> Some(fst (targetFor newer))
+      | DetourApplied.Superseded _
+      | DetourApplied.Failed _ -> None)
+    |> List.distinctBy _.Id
+  for probe in landedProbes do
+    ProbeRegistry.Shared.Commit probe
   // `Ineffective` IS still counted as redirected, and the comment on
   // `DetourApplied.Ineffective` calling the canary "a warning signal, not a
   // verdict" is load-bearing — MEASURED, after trying the opposite.
@@ -792,6 +834,7 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
     Ineffective = ineffectiveFunctions
     RedirectedFromCompiled = redirectedFromCompiled
     CompiledCandidates = compiledCandidates
+    Probes = landedProbes
     Bindings = outcomes
     Declined = plan.Declined
     Failures = functionFailures @ bindingFailures }

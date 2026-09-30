@@ -1005,6 +1005,30 @@ let run (sessionId: string) (port: int) = async {
           | :? (string list) as methods -> Some methods
           | _ -> None)
         |> Option.defaultValue []
+      /// The probes the host put on the new bodies this eval detoured onto: how
+      /// the host sees a patched function's new code run.
+      let entryProbesOf (response: EvalResponse) : Middleware.EntryProbes.EntryProbe list =
+        response.Metadata
+        |> Map.tryFind "hotReloadEntryProbes"
+        |> Option.bind (fun v ->
+          match v with
+          | :? (Middleware.EntryProbes.EntryProbe list) as probes -> Some probes
+          | _ -> None)
+        |> Option.defaultValue []
+      /// Say what a save did. A patch is announced as PENDING and resolved once
+      /// the host has seen the new code run (or the bound passes): re-pointing a
+      /// function says nothing about whether the app runs its new body. The
+      /// wait runs in the background, so a save is never held up by it.
+      let announce (watched: Features.PatchConfirmation.WatchedDecl list) (outcome: Features.ReloadOutcome.ReloadOutcome) =
+        let waiter : Features.PatchAnnouncer.EntryWaiter =
+          fun probes bound ->
+            async {
+              match! result.Agent.AwaitEntries probes bound with
+              | HostAgent.AgentAnswered reading -> return Features.PatchAnnouncer.EntryAnswer.HostSaw reading
+              | HostAgent.AgentUnavailable reason -> return Features.PatchAnnouncer.EntryAnswer.HostUnreachable reason
+            }
+        Features.PatchAnnouncer.announce waiter Timeouts.patchConfirmation (Features.PatchConfirmation.start watched outcome)
+        |> Async.Start
       /// Names that HAD a compiled copy among the detour candidates. When a name
       /// is absent there is no compiled copy to reach — every copy is an FSI one
       /// (a `#load`ed file), so the running app holds an FSI copy and an
@@ -1371,12 +1395,14 @@ let run (sessionId: string) (port: int) = async {
                   // absent here, so `confirmPatchAsOutcome` cannot count it as
                   // landed: no evidence means never `Patched`, by construction.
                   let reachedRunningProcess = reachedRunningProcessOf response
-                  let patched =
-                    Features.ReloadPlanning.confirmPatchAsOutcome
+                  let landed, planned =
+                    Features.ReloadPlanning.confirmPatchLanding
                       baseline
                       functions
                       reloaded
                       reachedRunningProcess
+                  let patched =
+                    planned
                     |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses
                          (extraReasons @ ineffectiveReasons)
                     |> Features.ReloadOutcome.ReloadOutcome.withKept keptValues
@@ -1391,7 +1417,7 @@ let run (sessionId: string) (port: int) = async {
                     | [] -> patched
                     | raced -> Features.ReloadOutcome.ReloadOutcome.RestartRequired raced
                   recordKept ()
-                  Features.ReloadBroadcast.broadcastOutcome outcome
+                  announce (Features.PatchConfirmation.watchedOfLanded landed (entryProbesOf response)) outcome
                   Log.info "Hot reload: %s — %s (%s)"
                     fileName
                     (Features.ReloadOutcome.ReloadOutcome.describe outcome)
@@ -1711,10 +1737,20 @@ let run (sessionId: string) (port: int) = async {
                   // no-baseline route during warmup) could get "Hot reloaded
                   // 1 of 1" for a body edit that redirected some OTHER copy
                   // of the function than the one the running app calls.
-                  let baseOutcome =
+                  let probes = entryProbesOf response
+                  let watched, baseOutcome =
                     match declsOnDisk with
-                    | Ok decls -> Features.ReloadPlanning.confirmWholeFileReeval decls.Decls reloaded reachedRunningProcess
-                    | Error _ -> Features.ReloadOutcome.ReloadOutcome.ofPatchCounts (List.length reloaded) (List.length reloaded) []
+                    | Ok decls ->
+                      let landed, planned = Features.ReloadPlanning.confirmWholeFileLanding decls.Decls reloaded reachedRunningProcess
+                      Features.PatchConfirmation.watchedOfLanded landed probes, planned
+                    | Error _ ->
+                      // Nothing was diffed, so the functions watched are the ones the
+                      // detours reached. A function with no probe cannot be watched
+                      // and is counted as considered, never as applied.
+                      let observable =
+                        Features.PatchConfirmation.watchedOfRedirected reloaded probes
+                        |> List.filter (fun w -> not (List.isEmpty w.Probes))
+                      observable, Features.ReloadOutcome.ReloadOutcome.ofPatchCounts (List.length observable) (List.length reloaded) []
                   //
                   // `restartReasons` is non-empty exactly when the planner
                   // already established that the user's change takes effect at
@@ -1741,7 +1777,8 @@ let run (sessionId: string) (port: int) = async {
                         match baseOutcome with
                         | Features.ReloadOutcome.ReloadOutcome.NoEffect _ ->
                           baseOutcome |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses extraReasons
-                        | Features.ReloadOutcome.ReloadOutcome.Patched _ ->
+                        | Features.ReloadOutcome.ReloadOutcome.Patched _
+                        | Features.ReloadOutcome.ReloadOutcome.PatchPending _ ->
                           // `Patched` has no reasons field to carry a decline
                           // in (see `ReloadOutcome.withExtraMisses`) — a save
                           // that patched some functions cleanly while a
@@ -1751,7 +1788,7 @@ let run (sessionId: string) (port: int) = async {
                           Features.ReloadOutcome.ReloadOutcome.RestartRequired extraReasons
                         | other -> other
                       | reasons, extra -> Features.ReloadOutcome.ReloadOutcome.RestartRequired (reasons @ extra)
-                  Features.ReloadBroadcast.broadcastOutcome outcome
+                  announce watched outcome
                   Log.info "Hot reload: %s — %s" fileName (Features.ReloadOutcome.ReloadOutcome.describe outcome)
                 | Error ex -> broadcastEvalFailure filePath preprocessed.LineOffset response ex
               | FileWatcher.FileChangeAction.SoftReset ->

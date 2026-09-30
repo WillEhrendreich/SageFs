@@ -1,5 +1,6 @@
 namespace SageFs.Simulation
 
+open SageFs.Features
 open SageFs.Features.ReloadOutcome
 open SageFs.Features.PatchConfirmation
 open SageFs.Middleware.EntryProbes
@@ -23,6 +24,8 @@ open SageFs.Middleware.EntryProbes
 ///     were really replaced by a newer save.
 ///   * Twins reintroduce the bugs the invariants exist to catch.
 module PatchConfirmationSim =
+
+  type private Outcome = SageFs.Features.ReloadOutcome.ReloadOutcome
 
   /// Function indices 0..2 have a probe. Index 3 is a function that could not
   /// be given one (its stub could not be built), so it can never be observed.
@@ -171,13 +174,13 @@ module PatchConfirmationSim =
       | Policy.ClaimsAtSave ->
         let settlement =
           { Save = index
-            Step = WatchStep.Settled(ReloadOutcome.Patched(n, n))
+            Step = WatchStep.Settled(Outcome.Patched(n, n))
             EnteredAtSettle = truth.Entered
             SupersededAtSettle = truth.Superseded }
         { state' with Watches = Map.add index WatchState.Done state'.Watches; Settlements = settlement :: state'.Settlements }
       | Policy.Real
       | Policy.BoundNeverFires ->
-        match PatchConfirmation.start watched (ReloadOutcome.PatchPending(n, n, [])) with
+        match PatchConfirmation.start watched (Outcome.PatchPending(n, n, [])) with
         | Begun.Watching(_, watch) -> settleReady registry { state' with Watches = Map.add index (WatchState.Waiting watch) state'.Watches }
         | Begun.NothingToWatch _ -> { state' with Watches = Map.add index WatchState.Done state'.Watches }
     | Op.Enter decl ->

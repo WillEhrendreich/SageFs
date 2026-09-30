@@ -28,6 +28,8 @@ let private allReasons =
 
 let private allOutcomes =
   [ ReloadOutcome.Patched(1, 3)
+    ReloadOutcome.PatchPending(1, 3, [])
+    ReloadOutcome.NeverEntered("Program.handle", [], 0, 3, [])
     ReloadOutcome.NoEffect(3, [ RestartReason.StartupComputedValue "routes" ])
     ReloadOutcome.NoEffect(3, [])
     ReloadOutcome.Restarted [ RestartReason.SignatureChanged "Program.handle" ]
@@ -50,16 +52,17 @@ let reloadOutcomeTests =
         | other -> failtestf "0 patched must not be a Patched outcome, got %A" other
     }
 
-    test "WHY — patching something is a patch, and keeps both numbers" {
+    test "WHY — patching something is a pending patch, and keeps both numbers" {
       ofPatchCounts 2 7 []
-      |> Expect.equal "a partial reload must read as partial, not as success" (ReloadOutcome.Patched(2, 7))
+      |> Expect.equal "a partial reload must read as partial, and as unconfirmed until the new code runs" (ReloadOutcome.PatchPending(2, 7, []))
     }
 
     // WHY — the shipped bug was a browser reload broadcast for a save that
     // changed nothing in the process. Whether to refresh must be derived from
     // one place, not re-decided by each surface.
     test "WHY — the browser is only told to refresh when the running code actually changed" {
-      ReloadOutcome.Patched(1, 1) |> shouldRefreshBrowser |> Expect.isTrue "patched code is new code"
+      ReloadOutcome.PatchPending(1, 1, []) |> shouldRefreshBrowser |> Expect.isTrue "applied code may be new code, and the refresh is what usually runs it"
+      ReloadOutcome.Patched(1, 1) |> shouldRefreshBrowser |> Expect.isFalse "it already refreshed when it was pending"
       ReloadOutcome.Restarted [] |> shouldRefreshBrowser |> Expect.isTrue "a restarted app is current"
       ReloadOutcome.NoEffect(4, []) |> shouldRefreshBrowser |> Expect.isFalse "refreshing into identical code is the bug"
       ReloadOutcome.RestartRequired [] |> shouldRefreshBrowser |> Expect.isFalse "nothing changed yet"

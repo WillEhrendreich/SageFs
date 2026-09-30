@@ -133,6 +133,7 @@ type FsiHostSession
           | Result.Ok(AgentCoverageResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentValueReadsResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentReflectionReadsResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentEntriesResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentRefused(id, _) as answer) -> complete id answer
     with ex ->
       onLog (sprintf "[fsihost] read loop ended: %s" ex.Message)
@@ -313,6 +314,16 @@ type FsiHostSession
       | Got(AgentReflectionReadsResult(_, report)) -> return Answered report
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent set reflection mode" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Wait in the host until every probe has been sighted or the bound passes. Runs beside the session thread.
+  member _.AgentAwaitEntries(probes: int64 list, bound: TimeSpan) : Async<HostCall<SageFs.Middleware.EntryProbes.EntryReading>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentAwaitEntries(id, probes, bound)) with
+      | Got(AgentEntriesResult(_, reading)) -> return Answered reading
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent await entries" other)
       | Gone reason -> return HostGone reason
     }
 

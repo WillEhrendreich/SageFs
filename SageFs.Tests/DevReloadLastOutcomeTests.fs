@@ -78,8 +78,8 @@ let devReloadLastOutcomeTests =
     test "WHY — a later terminal event replaces the earlier one for a poller" {
       Broadcast.broadcastOutcome (ReloadOutcome.NoEffect(4, []))
       LastReload.json () |> Expect.stringContains "sees the first verdict" "\"type\":\"noeffect\""
-      Broadcast.broadcastOutcome (ReloadOutcome.Patched(1, 1))
-      LastReload.json () |> Expect.stringContains "and then the newer one, not a merge of both" "\"type\":\"reload\""
+      Broadcast.broadcastOutcome (ReloadOutcome.PatchPending(1, 1, []))
+      LastReload.json () |> Expect.stringContains "and then the newer one, not a merge of both" "\"type\":\"pending\""
     }
 
     // WHY — a save that reached nothing must poll the same as it pushes: a

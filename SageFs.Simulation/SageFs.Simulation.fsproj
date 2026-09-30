@@ -82,6 +82,12 @@
         <Compile Include="FileReloadRoutingInvariants.fs" />
         <Compile Include="FsiEmitSim.fs" />
         <Compile Include="FsiEmitInvariants.fs" />
+        <!-- Patch confirmation DST: folds the real PatchConfirmation decision over the
+             real ProbeRegistry through saves, calls, replacements and bounds firing
+             in every order; twins claim Patched at save time and never fire the bound. -->
+        <Compile Include="PatchConfirmationSim.fs" />
+        <Compile Include="PatchConfirmationInvariants.fs" />
+        <Compile Include="PatchConfirmationGenerators.fs" />
         <!-- Rule 2 read-provenance DST: folds the real ValueReads classifier,
              ledger and save check through every interleaving of reads, the
              startup window closing, probes coming off and saves; twins put

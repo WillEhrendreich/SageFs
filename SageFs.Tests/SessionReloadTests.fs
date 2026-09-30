@@ -21,6 +21,8 @@ let private kept : KeptValue = { Binding = "Counter.count"; KeptValue = "41"; Ne
 /// One real outcome of every case, with the reasons a worker would give.
 let private everyOutcome : (ReloadCase * Outcome) list =
   [ ReloadCase.Patched, Outcome.Patched (3, 5)
+    ReloadCase.PatchPending, Outcome.PatchPending (3, 5, [])
+    ReloadCase.NeverEntered, Outcome.NeverEntered ("Ticker.renderLine", [], 2, 5, [])
     ReloadCase.Restarted, Outcome.Restarted [ RestartReason.NewDeclaration "Ticker.extra" ]
     ReloadCase.NoEffect, Outcome.NoEffect (4, [ RestartReason.SignatureChanged "Ticker.renderLine" ])
     ReloadCase.RestartRequired, Outcome.RestartRequired [ RestartReason.StartupComputedValue "Program.routes" ]
@@ -64,8 +66,8 @@ let tests =
       for payload, expected in
         [ "not json at all", isNotJson
           """{"type":"mystery"}""", (fun e -> e = ReloadPayloadError.UnknownEventType "mystery")
-          """{"type":"reload"}""", (fun e -> e = ReloadPayloadError.NoOutcome)
-          """{"type":"reload","outcome":"Exploded"}""", (fun e -> e = ReloadPayloadError.UnknownOutcome "Exploded")
+          """{"type":"patched"}""", (fun e -> e = ReloadPayloadError.NoOutcome)
+          """{"type":"patched","outcome":"Exploded"}""", (fun e -> e = ReloadPayloadError.UnknownOutcome "Exploded")
           "", isNotJson ] do
         match SessionReload.ofPayloadJson payload with
         | Result.Ok parsed -> failtestf "%s should not parse, got %A" payload parsed

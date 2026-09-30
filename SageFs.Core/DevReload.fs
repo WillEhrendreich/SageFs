@@ -175,11 +175,11 @@ type KeptStateReport = {
 /// what blocked the reload, and `Message`/`SuggestedAction` so nobody has to
 /// reconstruct the wording.
 type ReloadReport = {
-  /// The `ReloadOutcome` case name: Patched | Restarted | NoEffect |
-  /// RestartRequired | CompileFailed.
+  /// The `ReloadOutcome` case name: Patched | PatchPending | NeverEntered |
+  /// Restarted | NoEffect | RestartRequired | CompileFailed | KeptLiveState.
   Outcome: string
-  /// How many of the definitions this save changed are now live in the running
-  /// process. Zero is meaningful and is never reported as a refresh.
+  /// How many of the definitions this save changed have been SEEN RUNNING their
+  /// new code. A pending patch says 0: applied is not live. Zero is meaningful.
   Patched: int
   /// How many definitions the save put in front of the process. Flutter prints
   /// "Reloaded 1 of 448 libraries" precisely so "0 of 448" is visible.
@@ -214,9 +214,17 @@ type ReloadReport = {
 /// caller that tries.
 type DevReloadEvent =
   | Compiling of fileName: string option
-  /// Definitions were re-pointed into the running process, so the bytes a page
-  /// would fetch are genuinely new.
+  /// Definitions were re-pointed into the running process and their new code
+  /// has NOT been seen running yet. The page refreshes (the change may well be
+  /// live, and the refresh is usually what makes the new code run), and a
+  /// `Patched` or `NeverEntered` follows for the same save.
+  | Applied of report: ReloadReport
+  /// The new code has been seen running, so the running process does serve it.
+  /// Follows a `PatchPending`, and does not refresh the page a second time.
   | Patched of report: ReloadReport
+  /// The bound passed and some re-pointed definitions' new code has not run.
+  /// Not a refusal: the report names which, and what to do.
+  | NeverEntered of report: ReloadReport
   /// SageFs restarted the app it started. The process IS current; the user is
   /// told what happened rather than asked to do anything.
   | Restarted of report: ReloadReport
@@ -238,16 +246,20 @@ module DevReloadEvent =
   /// count is exactly how the shipped bug happened.
   let refreshes =
     function
-    | Patched _
+    | Applied _
     | Restarted _ -> true
     | Compiling _
+    | Patched _
+    | NeverEntered _
     | NotApplied _
     | CompilationFailed _ -> false
 
   /// The outcome a client renders. `Compiling` has none — it is not terminal.
   let report =
     function
+    | Applied r
     | Patched r
+    | NeverEntered r
     | Restarted r
     | NotApplied r
     | CompilationFailed(_, r, _) -> r
@@ -291,7 +303,9 @@ module DevReloadEvent =
     match evt with
     | Compiling None -> """{"type":"compiling"}"""
     | Compiling (Some file) -> sprintf """{"type":"compiling","file":%s}""" (json file)
-    | Patched r -> sprintf """{"type":"reload",%s}""" (reportFields r)
+    | Applied r -> sprintf """{"type":"pending",%s}""" (reportFields r)
+    | Patched r -> sprintf """{"type":"patched",%s}""" (reportFields r)
+    | NeverEntered r -> sprintf """{"type":"neverentered",%s}""" (reportFields r)
     | Restarted r -> sprintf """{"type":"restarted",%s}""" (reportFields r)
     | NotApplied r -> sprintf """{"type":"noeffect",%s}""" (reportFields r)
     | CompilationFailed(summary, r, diagnostics) ->
@@ -379,7 +393,9 @@ let private eventLabel (evt: DevReloadEvent) =
   match evt with
   | Compiling None -> "Compiling"
   | Compiling (Some f) -> sprintf "Compiling(%s)" f
+  | Applied r -> sprintf "Applied(%d of %d)" r.Patched r.Considered
   | Patched r -> sprintf "Patched(%d of %d)" r.Patched r.Considered
+  | NeverEntered r -> sprintf "NeverEntered(%d of %d)" r.Patched r.Considered
   | Restarted _ -> "Restarted"
   | NotApplied r -> sprintf "NotApplied(0 of %d)" r.Considered
   | CompilationFailed _ -> "CompilationFailed"
@@ -401,7 +417,16 @@ let private broadcast (evt: DevReloadEvent) =
 /// Pass the filename for richer UI: "⟳ Recompiling Handlers.fs..."
 let broadcastCompiling (fileName: string option) = broadcast (Compiling fileName)
 
-/// Signal every client that the running process now serves new code.
+/// Signal every client that a patch is applied and its new code has not been
+/// seen running yet. The page refreshes on this one.
+let broadcastApplied (report: ReloadReport) = broadcast (Applied report)
+
+/// Signal every client that some re-pointed definitions' new code has not run
+/// within the bound. Closes the overlay WITHOUT a refresh.
+let broadcastNeverEntered (report: ReloadReport) = broadcast (NeverEntered report)
+
+/// Signal every client that the running process has been SEEN running new code.
+/// It follows a pending patch, so it does not refresh the page again.
 ///
 /// Chesterton's fence — the demotion below is the whole point of this function.
 /// The shipped bug was a caller that had re-pointed nothing (or only incidental

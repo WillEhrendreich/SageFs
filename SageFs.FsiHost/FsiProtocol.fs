@@ -128,6 +128,9 @@ type Request =
   | AgentReflectionReads of id: int64
   /// Switch the reflection read mode of the running app. Answered beside the session thread.
   | AgentSetReflectionMode of id: int64 * mode: SageFs.Middleware.ValueReads.ReflectionReadMode
+  /// Wait until every probe has been sighted (the patched function's new body ran, or a newer save replaced it) or the
+  /// bound passes, then say what is known. Answered beside the session thread: a wait must never hold up a save.
+  | AgentAwaitEntries of id: int64 * probes: int64 list * bound: TimeSpan
   | Interrupt
   | Shutdown
 
@@ -150,6 +153,7 @@ type Response =
   | AgentCoverageResult of id: int64 * coverage: HostAgent.CoverageReading
   | AgentValueReadsResult of id: int64 * evidence: SageFs.Middleware.ValueReads.ValueEvidence list
   | AgentReflectionReadsResult of id: int64 * report: SageFs.Middleware.ValueReads.ReflectionReadsReport
+  | AgentEntriesResult of id: int64 * reading: SageFs.Middleware.EntryProbes.EntryReading
   /// An agent request the host cannot serve (it was not started, or the request failed): the reason, never a guess.
   | AgentRefused of id: int64 * reason: string
   | Output of stream: OutputStream * text: string

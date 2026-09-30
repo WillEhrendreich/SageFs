@@ -172,6 +172,13 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
       | Answered discovery -> HostAgent.AgentAnswered discovery
       | HostGone reason -> HostAgent.AgentUnavailable reason
 
+    member _.AwaitEntries(probes, bound) =
+      async {
+        match! host.AgentAwaitEntries(probes, bound) with
+        | Answered reading -> return HostAgent.AgentAnswered reading
+        | HostGone reason -> return HostAgent.AgentUnavailable reason
+      }
+
     member _.RunTest(test) =
       async {
         match! host.AgentRunTest test with

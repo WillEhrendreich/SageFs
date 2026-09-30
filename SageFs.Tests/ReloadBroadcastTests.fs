@@ -304,9 +304,11 @@ let reloadBroadcastTests =
     // WHY — the SSE payload is the actual contract with the page. A refresh
     // must be a refresh on the wire and a non-event must not be.
     test "WHY — the wire distinguishes a refresh from a non-event" {
-      DevReloadEvent.sseData (Broadcast.eventOf (ReloadOutcome.Patched(1, 3)))
-      |> Expect.stringContains "a patch is the page's cue to refetch" "\"type\":\"reload\""
-      (DevReloadEvent.sseData (Broadcast.eventOf (ReloadOutcome.NoEffect(3, [])))).Contains "\"type\":\"reload\""
+      DevReloadEvent.sseData (Broadcast.eventOf (ReloadOutcome.PatchPending(1, 3, [])))
+      |> Expect.stringContains "an applied patch is the page's cue to refetch" "\"type\":\"pending\""
+      (DevReloadEvent.sseData (Broadcast.eventOf (ReloadOutcome.Patched(1, 3)))).Contains "\"type\":\"pending\""
+      |> Expect.isFalse "the confirmation after it must not ask the page to refetch a second time"
+      (DevReloadEvent.sseData (Broadcast.eventOf (ReloadOutcome.NoEffect(3, [])))).Contains "\"type\":\"pending\""
       |> Expect.isFalse "a non-event must never carry the refresh cue"
       DevReloadEvent.sseData (Broadcast.eventOf (ReloadOutcome.Restarted []))
       |> Expect.stringContains "a restart has its own cue: wait for the app, then refetch" "\"type\":\"restarted\""

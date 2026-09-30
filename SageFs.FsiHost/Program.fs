@@ -296,6 +296,19 @@ let private run (fsiArgs: string list) : int =
         | AgentRunning agent ->
           try send (AgentReflectionReadsResult(id, agent.SetReflectionMode mode))
           with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+      | Result.Ok(AgentAwaitEntries(id, probes, bound)) ->
+        // Beside the session thread, and never on it: a wait that holds it would hold up the very save it is waiting on.
+        match Volatile.Read(&agentState.contents) with
+        | AgentNotStarted -> refuse id "the agent was not started: send AgentStart first"
+        | AgentRunning agent ->
+          Async.Start(
+            async {
+              try
+                let! reading = agent.AwaitEntries(probes, bound)
+                send (AgentEntriesResult(id, reading))
+              with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+            }
+          )
       | Result.Ok(AgentRunTest(id, test)) ->
         // Beside the session thread, not on it: a long test must never freeze evals, checks or completions.
         match Volatile.Read(&agentState.contents) with

@@ -998,7 +998,7 @@ type PatchOutcome =
 /// own method (`…Shapes.render`); a type's members are methods nested UNDER it
 /// (`…Shapes.Renderer.Render`), which do not end with the type's name — so a
 /// type patch needs its own test or every member-body reload reads as missed.
-let private reachedBy (names: string list) (f: SourceDecl) =
+let reachedBy (names: string list) (f: SourceDecl) =
   match f.Kind with
   | DeclKind.TypeDecl ->
     names
@@ -1052,12 +1052,12 @@ let confirmPatch (before: FileDecls) (patched: SourceDecl list) (reloadedMethods
 /// copies to pair with, and pairing one of those re-points code that nothing
 /// outside that eval ever calls. Counting it as landed is how a save was
 /// reported "Hot reloaded 1 of 1" while the app went on serving the old body.
-let confirmPatchAsOutcome
+let confirmPatchLanding
   (before: FileDecls)
   (patched: SourceDecl list)
   (reloadedMethods: string list)
   (reachedRunningProcess: string list)
-  : ReloadOutcome =
+  : SourceDecl list * ReloadOutcome =
   let nameMatches = reachedBy
   let existed = existedIn before
   // A declaration that did NOT exist in the running build has no compiled entry
@@ -1078,7 +1078,18 @@ let confirmPatchAsOutcome
       | true, true -> RestartReason.PatchIneffective f.Name
       | true, false -> RestartReason.SignatureChanged f.Name
       | false, _ -> RestartReason.NewDeclaration f.Name)
-  ReloadOutcome.ofPatchCounts (List.length landed) (List.length patched) reasons
+  landed, ReloadOutcome.ofPatchCounts (List.length landed) (List.length patched) reasons
+
+/// `confirmPatchLanding`'s outcome alone, for callers that only need the
+/// verdict. Patching at least one declaration is PENDING (see
+/// `ReloadOutcome.ofPatchCounts`): re-pointing is not the new body running.
+let confirmPatchAsOutcome
+  (before: FileDecls)
+  (patched: SourceDecl list)
+  (reloadedMethods: string list)
+  (reachedRunningProcess: string list)
+  : ReloadOutcome =
+  confirmPatchLanding before patched reloadedMethods reachedRunningProcess |> snd
 
 /// Fail-closed patch confirmation for `ReloadRoute.ReevaluateWholeFile`: a
 /// save with no known-good baseline to diff against (the file was edited
@@ -1102,11 +1113,11 @@ let confirmPatchAsOutcome
 /// did not exist before; here it means "this save can't tell you whether it's
 /// new or just unmatched, but either way nothing proves it reached the
 /// process."
-let confirmWholeFileReeval
+let confirmWholeFileLanding
   (declsOnDisk: SourceDecl list)
   (reloadedMethods: string list)
   (reachedRunningProcess: string list)
-  : ReloadOutcome =
+  : SourceDecl list * ReloadOutcome =
   let candidates =
     declsOnDisk
     |> List.filter (fun d ->
@@ -1127,7 +1138,15 @@ let confirmWholeFileReeval
       match reachedBy reloadedMethods f with
       | true -> RestartReason.UnverifiedCopy f.Name
       | false -> RestartReason.NewDeclaration f.Name)
-  ReloadOutcome.ofPatchCounts (List.length landed) (List.length candidates) reasons
+  landed, ReloadOutcome.ofPatchCounts (List.length landed) (List.length candidates) reasons
+
+/// `confirmWholeFileLanding`'s outcome alone.
+let confirmWholeFileReeval
+  (declsOnDisk: SourceDecl list)
+  (reloadedMethods: string list)
+  (reachedRunningProcess: string list)
+  : ReloadOutcome =
+  confirmWholeFileLanding declsOnDisk reloadedMethods reachedRunningProcess |> snd
 
 /// A plan that refused before any patch was attempted, reported in the same
 /// vocabulary. SageFs does not own the app's lifetime here, so the user is the

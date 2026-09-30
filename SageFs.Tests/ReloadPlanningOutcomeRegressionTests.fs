@@ -92,8 +92,8 @@ let patchedNNResidualTests =
       // Only `render` existed before, and only `render` was actually
       // detoured — Harmony has nothing to redirect `helper` onto.
       match confirmAllReached before patched [ "Demo.Web.Program.render" ] with
-      | ReloadOutcome.Patched(patchedCount, considered) ->
+      | ReloadOutcome.PatchPending(patchedCount, considered, _) ->
         patchedCount |> Expect.equal "only the existing, detoured function landed" 1
         considered |> Expect.equal "both candidates were considered" 2
-      | other -> failtestf "a mixed save must be Patched(1, 2), not %A" other
+      | other -> failtestf "a mixed save must be PatchPending(1, 2), not %A" other
   ]

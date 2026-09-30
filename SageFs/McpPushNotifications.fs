@@ -183,6 +183,9 @@ module PushEvent =
         match facts.Case with
         | SageFs.ReloadCase.Patched | SageFs.ReloadCase.Restarted -> "🔥"
         | SageFs.ReloadCase.KeptLiveState when facts.Patched > 0 -> "🔥"
+        // Applied, and nobody has seen the new code run yet: neither a landing nor a refusal.
+        | SageFs.ReloadCase.PatchPending -> "⏳"
+        | SageFs.ReloadCase.NeverEntered -> "⚠️"
         | SageFs.ReloadCase.KeptLiveState | SageFs.ReloadCase.NoEffect | SageFs.ReloadCase.RestartRequired -> "⚠️"
         | SageFs.ReloadCase.CompileFailed -> "🔴"
       sprintf "%s hot reload: %s" icon facts.Message

@@ -42,6 +42,8 @@ let private caseName (outcome: ReloadOutcome) =
   | ReloadOutcome.RestartRequired _ -> "RestartRequired"
   | ReloadOutcome.CompileFailed _ -> "CompileFailed"
   | ReloadOutcome.KeptLiveState _ -> "KeptLiveState"
+  | ReloadOutcome.PatchPending _ -> "PatchPending"
+  | ReloadOutcome.NeverEntered _ -> "NeverEntered"
 
 let private refusalCaseName (reason: RestartReason) =
   match reason with
@@ -68,14 +70,19 @@ let private reasonsIn (outcome: ReloadOutcome) =
   | ReloadOutcome.Restarted reasons
   | ReloadOutcome.RestartRequired reasons -> reasons
   | ReloadOutcome.Patched _
+  | ReloadOutcome.PatchPending _
+  | ReloadOutcome.NeverEntered _
   | ReloadOutcome.KeptLiveState _
   | ReloadOutcome.CompileFailed _ -> []
 
+let private keptReport (k: KeptValue) : DevReload.KeptStateReport =
+  { Binding = k.Binding; KeptValue = k.KeptValue; NewInitializer = k.NewInitializer }
+
 let private keptIn (outcome: ReloadOutcome) : DevReload.KeptStateReport list =
   match outcome with
-  | ReloadOutcome.KeptLiveState(_, _, first, rest) ->
-    first :: rest
-    |> List.map (fun k -> ({ Binding = k.Binding; KeptValue = k.KeptValue; NewInitializer = k.NewInitializer } : DevReload.KeptStateReport))
+  | ReloadOutcome.KeptLiveState(_, _, first, rest) -> first :: rest |> List.map keptReport
+  | ReloadOutcome.PatchPending(_, _, kept)
+  | ReloadOutcome.NeverEntered(_, _, _, _, kept) -> kept |> List.map keptReport
   | ReloadOutcome.Patched _
   | ReloadOutcome.NoEffect _
   | ReloadOutcome.Restarted _
@@ -94,6 +101,9 @@ let reportOf (outcome: ReloadOutcome) : DevReload.ReloadReport =
     | ReloadOutcome.RestartRequired reasons -> 0, consideredFor reasons
     | ReloadOutcome.CompileFailed _ -> 0, 0
     | ReloadOutcome.KeptLiveState(patched, considered, _, _) -> patched, considered
+    // Applied is not live: a pending patch has had nothing confirmed yet.
+    | ReloadOutcome.PatchPending(_, considered, _) -> 0, considered
+    | ReloadOutcome.NeverEntered(_, _, entered, considered, _) -> entered, considered
   { Outcome = caseName outcome
     Patched = patched
     Considered = considered
@@ -108,6 +118,8 @@ let reportOf (outcome: ReloadOutcome) : DevReload.ReloadReport =
 let eventOf (outcome: ReloadOutcome) : DevReload.DevReloadEvent =
   let report = reportOf outcome
   match outcome with
+  | ReloadOutcome.PatchPending _ -> DevReload.Applied report
+  | ReloadOutcome.NeverEntered _ -> DevReload.NeverEntered report
   | ReloadOutcome.Patched _ -> DevReload.Patched report
   | ReloadOutcome.Restarted _ -> DevReload.Restarted report
   | ReloadOutcome.NoEffect _
@@ -127,7 +139,9 @@ let eventOf (outcome: ReloadOutcome) : DevReload.DevReloadEvent =
 let broadcastEvent (evt: DevReload.DevReloadEvent) =
   match evt with
   | DevReload.Compiling fileName -> DevReload.broadcastCompiling fileName
+  | DevReload.Applied report -> DevReload.broadcastApplied report
   | DevReload.Patched report -> DevReload.broadcastPatched report
+  | DevReload.NeverEntered report -> DevReload.broadcastNeverEntered report
   | DevReload.Restarted report -> DevReload.broadcastRestarted report
   | DevReload.NotApplied report -> DevReload.broadcastNotApplied report
   | DevReload.CompilationFailed(summary, report, diagnostics) ->

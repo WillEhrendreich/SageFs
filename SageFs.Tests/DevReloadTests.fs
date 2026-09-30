@@ -54,6 +54,8 @@ let private genDevReloadEvent =
     Gen.elements [ "App.fs"; "Handlers.fs"; "Domain.fs"; "Views.fs" ]
     |> Gen.map (fun s -> Compiling (Some s))
     Gen.constant aReload
+    Gen.constant (Applied { ReloadReport.none with Outcome = "PatchPending"; Considered = 1; Message = "Applied 1 of 1" })
+    Gen.constant (NeverEntered { ReloadReport.none with Outcome = "NeverEntered"; Considered = 1; Message = "Not confirmed" })
     Gen.constant (Restarted { ReloadReport.none with Outcome = "Restarted"; Message = "Restarted the app" })
     Gen.constant (NotApplied { ReloadReport.none with Outcome = "NoEffect"; Considered = 3; Message = "No effect: 0 of 3" })
     Gen.elements [ "FS0001: type mismatch"; "FS0010: unexpected"; "FS0039: undefined" ]
@@ -64,7 +66,9 @@ let private genDevReloadEvent =
 let private broadcastAny (evt: DevReloadEvent) =
   match evt with
   | Compiling fileName -> broadcastCompiling fileName
+  | Applied report -> DevReload.broadcastApplied report
   | Patched report -> broadcastPatched report
+  | NeverEntered report -> DevReload.broadcastNeverEntered report
   | Restarted report -> broadcastRestarted report
   | NotApplied report -> broadcastNotApplied report
   | CompilationFailed(err, report, diags) -> DevReload.broadcastCompilationFailed err report diags
@@ -134,7 +138,9 @@ let propertyTests = testSequenced <| testList "DevReload.Properties" [
     Prop.forAll (Arb.fromGen genDevReloadEvent) (fun evt ->
       match evt with
       | Compiling _ -> true
+      | Applied _ -> true
       | Patched _ -> true
+      | NeverEntered _ -> true
       | Restarted _ -> true
       | NotApplied _ -> true
       | CompilationFailed _ -> true)
@@ -143,9 +149,13 @@ let propertyTests = testSequenced <| testList "DevReload.Properties" [
     "only an event that changed the running process asks a page to refresh" <|
     Prop.forAll (Arb.fromGen genDevReloadEvent) (fun evt ->
       match evt with
-      | Patched report -> DevReloadEvent.refreshes evt && report.Patched > 0
+      // A pending patch refreshes (the change may be live); the confirmation that
+      // follows it does not refresh a second time.
+      | Applied _
       | Restarted _ -> DevReloadEvent.refreshes evt
       | Compiling _
+      | Patched _
+      | NeverEntered _
       | NotApplied _
       | CompilationFailed _ -> not (DevReloadEvent.refreshes evt))
 ]

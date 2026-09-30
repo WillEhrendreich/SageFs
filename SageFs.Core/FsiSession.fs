@@ -60,6 +60,9 @@ type IFsiSession =
   abstract ReflectionReads: unit -> AgentReply<SageFs.Middleware.ValueReads.ReflectionReadsReport>
   /// Switch the reflection read mode of the running app.
   abstract SetReflectionMode: mode: SageFs.Middleware.ValueReads.ReflectionReadMode -> AgentReply<SageFs.Middleware.ValueReads.ReflectionReadsReport>
+  /// Wait until every probe has been sighted (the patched function's new body ran, or a newer save replaced it) or the
+  /// bound passes, then say what is known. Where the user's code runs, like every other agent call.
+  abstract AwaitEntries: probes: int64 list * bound: TimeSpan -> Async<AgentReply<SageFs.Middleware.EntryProbes.EntryReading>>
   /// Run one discovered test where it lives.
   abstract RunTest: test: LiveTesting.TestCase -> Async<AgentReply<LiveTesting.TestResult>>
 
@@ -153,6 +156,12 @@ type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
     member _.ReflectionReads() = AgentAnswered(agent.ReflectionReads())
 
     member _.SetReflectionMode(mode) = AgentAnswered(agent.SetReflectionMode mode)
+
+    member _.AwaitEntries(probes, bound) =
+      async {
+        let! reading = agent.AwaitEntries(probes, bound)
+        return AgentAnswered reading
+      }
 
     member _.RunTest(test) =
       async {

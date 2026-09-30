@@ -21,7 +21,13 @@ open System.Text.Json
 /// and a contract test pins the two together.
 [<RequireQualifiedAccess>]
 type ReloadCase =
+  /// The new code has been seen running.
   | Patched
+  /// Applied, and the new code has not been seen running yet. Resolves into
+  /// `Patched` or `NeverEntered` for the same save.
+  | PatchPending
+  /// The bound passed and some re-pointed definitions' new code has not run.
+  | NeverEntered
   | Restarted
   /// Processed, and nothing in the running process changed.
   | NoEffect
@@ -78,6 +84,8 @@ module ReloadCase =
   let token (case: ReloadCase) : string =
     match case with
     | ReloadCase.Patched -> "Patched"
+    | ReloadCase.PatchPending -> "PatchPending"
+    | ReloadCase.NeverEntered -> "NeverEntered"
     | ReloadCase.Restarted -> "Restarted"
     | ReloadCase.NoEffect -> "NoEffect"
     | ReloadCase.RestartRequired -> "RestartRequired"
@@ -87,7 +95,7 @@ module ReloadCase =
   /// Every case, so a parser and a test can walk them. The token function above
   /// is exhaustive, so a new case cannot be added without a token.
   let all : ReloadCase list =
-    [ ReloadCase.Patched; ReloadCase.Restarted; ReloadCase.NoEffect
+    [ ReloadCase.Patched; ReloadCase.PatchPending; ReloadCase.NeverEntered; ReloadCase.Restarted; ReloadCase.NoEffect
       ReloadCase.RestartRequired; ReloadCase.CompileFailed; ReloadCase.KeptLiveState ]
 
   let ofToken (text: string) : Result<ReloadCase, ReloadPayloadError> =
@@ -110,9 +118,11 @@ module SessionReload =
 
   /// The worker's SSE `data:` payload for one reload event (`{"type":...}`).
   ///
-  /// The `type` cue is the browser overlay's: `compiling`, `reload`, `restarted`,
-  /// `noeffect` and `failed` are the five events a save can produce, and `none`
-  /// is what a poll returns before the first save resolves. Anything else, or a
+  /// The `type` cue is the browser overlay's: `compiling`, `pending`, `patched`,
+  /// `neverentered`, `restarted`, `noeffect` and `failed` are the events a save
+  /// can produce, and `none` is what a poll returns before the first save
+  /// resolves. A patch is `pending` until its new code has been seen running,
+  /// then `patched` or `neverentered`. Anything else, or a
   /// terminal event without the outcome token, is an Error that says why, so a
   /// worker that changes the shape is noticed rather than silently ignored.
   let ofPayloadJson (json: string) : Result<SessionReload, ReloadPayloadError> =
@@ -145,7 +155,7 @@ module SessionReload =
         (match text "file" with
          | "" -> Result.Ok (SessionReload.Compiling None)
          | file -> Result.Ok (SessionReload.Compiling (Some file)))
-      | "reload" | "restarted" | "noeffect" | "failed" -> finished ()
+      | "pending" | "patched" | "neverentered" | "restarted" | "noeffect" | "failed" -> finished ()
       | other -> Result.Error (ReloadPayloadError.UnknownEventType other)
     with :? JsonException as ex -> Result.Error (ReloadPayloadError.NotJson ex.Message)
 

@@ -116,6 +116,8 @@ type SessionAgent =
     TakeCoverage: unit -> HostAgent.AgentReply<HostAgent.CoverageReading>
     RunTest: LiveTesting.TestCase -> Async<HostAgent.AgentReply<LiveTesting.TestResult>>
     ValueReads: string list -> HostAgent.AgentReply<SageFs.Middleware.ValueReads.ValueEvidence list>
+    /// Wait until every probe has been sighted or the bound passes, then say what is known.
+    AwaitEntries: int64 list -> System.TimeSpan -> Async<HostAgent.AgentReply<SageFs.Middleware.EntryProbes.EntryReading>>
     ReflectionReads: unit -> HostAgent.AgentReply<ReflectionReadsReport>
     SetReflectionMode: ReflectionReadMode -> HostAgent.AgentReply<ReflectionReadsReport> }
 
@@ -131,5 +133,6 @@ let ofCurrentSession (current: unit -> FsiSession.IFsiSession) : SessionAgent =
     TakeCoverage = fun () -> withSession (fun s -> s.TakeCoverage()) inactive
     RunTest = fun test -> withSession (fun s -> s.RunTest test) (async { return inactive })
     ValueReads = fun values -> withSession (fun s -> s.ValueReads values) (HostAgent.AgentUnavailable "the session is not active")
+    AwaitEntries = fun probes bound -> withSession (fun s -> s.AwaitEntries(probes, bound)) (async { return HostAgent.AgentUnavailable "the session is not active" })
     ReflectionReads = fun () -> withSession (fun s -> s.ReflectionReads()) (HostAgent.AgentUnavailable "the session is not active")
     SetReflectionMode = fun mode -> withSession (fun s -> s.SetReflectionMode mode) (HostAgent.AgentUnavailable "the session is not active") }

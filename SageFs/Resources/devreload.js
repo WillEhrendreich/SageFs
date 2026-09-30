@@ -228,15 +228,20 @@
             });
         };
         setTimeout(waitForApp, 500);
-      } else if (msg.type === 'reload') {
+      } else if (msg.type === 'pending') {
+        // A patch is applied and its new code has not been seen running yet. The
+        // change may well be live, and the refresh is usually what makes the new
+        // code run, so the page refreshes. The verdict follows on this stream for
+        // the same save: 'patched' (the new code ran) or 'neverentered' (it did not
+        // within the bound). Nothing here claims the change is live.
         clearInterval(compilingTimer);
         failureCount = 0;
         const durMs = compilingStart ? (Date.now() - compilingStart) : 0;
         const durText = durMs ? ' in ' + (durMs / 1000).toFixed(1) + 's' : '';
-        // "Updated 1 of 3" — a partial reload reads as partial, never as
-        // unqualified success.
-        const patchText = (typeof msg.patched === 'number' && typeof msg.considered === 'number' && msg.considered > 0)
-          ? ' ' + msg.patched + ' of ' + msg.considered : '';
+        // "Applied 3" — what was put in front of the process, not what has been
+        // seen running. A pending patch reports 0 confirmed, so no "0 of 3" here.
+        const patchText = (typeof msg.considered === 'number' && msg.considered > 0)
+          ? ' ' + msg.considered : '';
         d.id = 'sagefs-reload-indicator';
         d.setAttribute('role', 'status');
         d.setAttribute('aria-live', 'polite');
@@ -245,12 +250,12 @@
         document.title = originalTitle;
         if (msg.warnings && msg.warnings.length) {
           d.style.pointerEvents = 'auto';
-          d.innerHTML = '✓ Updated' + patchText + durText + ' <span style="color:#fbbf24;font-size:12px">⚠ ' + msg.warnings.length + ' warning' + (msg.warnings.length > 1 ? 's' : '') + '</span>';
+          d.innerHTML = '◐ Applied' + patchText + durText + ' <span style="color:#fbbf24;font-size:12px">⚠ ' + msg.warnings.length + ' warning' + (msg.warnings.length > 1 ? 's' : '') + '</span>';
           setTimeout(function(){ saveFormState(); safeReload(); }, 1500);
         } else if (durMs > autoReloadThresholdMs) {
           d.style.pointerEvents = 'auto';
           d.style.cursor = 'pointer';
-          d.textContent = '✓ Ready' + patchText + durText + ' — click to reload';
+          d.textContent = '◐ Applied' + patchText + durText + ' — click to reload';
           d.onclick = function() {
             d.onclick = null;
             d.style.cursor = '';
@@ -258,10 +263,38 @@
             safeReload();
           };
         } else {
-          d.textContent = '✓ Updated' + patchText + durText;
+          d.textContent = '◐ Applied' + patchText + durText;
           saveFormState();
           safeReload();
         }
+      } else if (msg.type === 'patched') {
+        // The new code has been seen running, so the running process does serve it.
+        // The page already refreshed on 'pending', so this never reloads it again.
+        clearInterval(compilingTimer);
+        failureCount = 0;
+        d.id = 'sagefs-reload-indicator';
+        d.setAttribute('role', 'status');
+        d.setAttribute('aria-live', 'polite');
+        d.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483647;padding:8px 16px;border-radius:8px;font:13px/1.5 system-ui,sans-serif;color:#fff;background:#15803d;opacity:1;pointer-events:none;transition:opacity .2s;box-shadow:0 2px 12px rgba(0,0,0,.2);max-width:480px;white-space:pre-wrap;word-break:break-word';
+        d.style.animation = '';
+        document.title = originalTitle;
+        d.textContent = '✓ ' + (msg.message || 'The new code is running');
+        setTimeout(function(){ d.style.opacity = '0'; }, 2000);
+      } else if (msg.type === 'neverentered') {
+        // The bound passed and some of the patched code has not run. Not a failure
+        // and not a claim: the panel says which code, and what to do. It stays up
+        // and dismissable because it carries a remedy the user has to read.
+        clearInterval(compilingTimer);
+        compilingStart = null;
+        document.title = originalTitle;
+        d.id = 'sagefs-reload-indicator';
+        d.setAttribute('role', 'status');
+        d.setAttribute('aria-live', 'polite');
+        d.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483647;padding:8px 16px;border-radius:8px;font:13px/1.5 system-ui,sans-serif;color:#fff;background:#b45309;opacity:1;pointer-events:auto;transition:opacity .2s;box-shadow:0 2px 12px rgba(0,0,0,.2);max-width:480px;white-space:pre-wrap;word-break:break-word';
+        d.style.animation = '';
+        d.textContent = '● ' + (msg.message || 'The patched code has not run yet.');
+        d.onclick = dismissPanel;
+        console.info('[SageFs] Not confirmed:', msg.outcome, msg.message);
       } else if (msg.type === 'failed') {
         clearInterval(compilingTimer);
         failureCount++;

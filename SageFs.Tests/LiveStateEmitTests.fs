@@ -86,12 +86,12 @@ let keptOutcomeTests =
       |> SageFs.DevReload.DevReloadEvent.payloadJson
       |> Expect.stringContains "the payload names what it kept" "\"kept\":[{\"binding\":\"M.tuned\",\"keptValue\":\"13\",\"newInitializer\":\"25\"}]"
 
-    testCase "WHY — ReloadOutcome.withKept — a patch that landed next to a kept value still refreshes, and still says what it kept" <| fun _ ->
+    testCase "WHY — ReloadOutcome.withKept — a patch applied next to a kept value is pending, still refreshes, and still says what it kept" <| fun _ ->
       let outcome =
         SageFs.Features.ReloadOutcome.ReloadOutcome.ofPatchCounts 1 1 []
         |> SageFs.Features.ReloadOutcome.ReloadOutcome.withKept [ kept ]
-      outcome |> Expect.equal "patched and kept" (SageFs.Features.ReloadOutcome.ReloadOutcome.KeptLiveState(1, 2, kept, []))
-      SageFs.Features.ReloadOutcome.ReloadOutcome.shouldRefreshBrowser outcome |> Expect.isTrue "the patch refreshes"
+      outcome |> Expect.equal "applied and kept" (SageFs.Features.ReloadOutcome.ReloadOutcome.PatchPending(1, 2, [ kept ]))
+      SageFs.Features.ReloadOutcome.ReloadOutcome.shouldRefreshBrowser outcome |> Expect.isTrue "the pending patch refreshes"
       SageFs.Features.ReloadOutcome.ReloadOutcome.describeForUser outcome
       |> Expect.stringContains "the notice carries the kept value and the pending initializer" "kept 'M.tuned' = 13 (your new initializer 25 applies when you reset it)"
 

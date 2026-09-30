@@ -176,6 +176,7 @@ let fsiEmitSimTests =
       run scenario
       |> List.iter (fun o ->
         match o.Reported with
+        | SageFs.Features.ReloadOutcome.ReloadOutcome.PatchPending(patched, _, _)
         | SageFs.Features.ReloadOutcome.ReloadOutcome.Patched(patched, _) ->
           (patched > 0)
           |> Expect.isTrue "Patched(0, _) must be unrepresentable"

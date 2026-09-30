@@ -2,6 +2,7 @@ module SageFs.Tests.PatchConfirmationSimTests
 
 open Expecto
 open Expecto.Flip
+open SageFs.Features
 open SageFs.Features.ReloadOutcome
 open SageFs.Features.PatchConfirmation
 open SageFs.Simulation

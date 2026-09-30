@@ -373,7 +373,7 @@ let confirmPatchOutcomeTests =
 
     testCase "WHY — ReloadPlanning.confirmPatchAsOutcome — a partial patch reports BOTH numbers because a partial reload must read as partial" <| fun _ ->
       confirmAllReached (beforeWith [ "f"; "g" ]) [ fnDecl "f"; fnDecl "g" ] [ "M.f" ]
-      |> Expect.equal "one of two" (ReloadOutcome.Patched(1, 2))
+      |> Expect.equal "one of two" (ReloadOutcome.PatchPending(1, 2, []))
 
     testCase "WHY — ReloadPlanning.confirmPatchAsOutcome — a function that existed and was not detoured is a SIGNATURE change because that is the only reason the matcher could not pair it" <| fun _ ->
       confirmAllReached (beforeWith [ "f" ]) [ fnDecl "f" ] []
@@ -391,18 +391,18 @@ let confirmPatchOutcomeTests =
       |> Expect.isFalse "nothing reached the running app"
       confirmAllReached (beforeWith [ "f" ]) [ fnDecl "f" ] [ "M.f" ]
       |> ReloadOutcome.shouldRefreshBrowser
-      |> Expect.isTrue "the running app serves new code"
+      |> Expect.isTrue "the running app may serve new code, and the refresh is what usually runs it"
 
     testProperty "WHY — ReloadPlanning.confirmPatchAsOutcome — the reported count never exceeds what was considered and is zero exactly when nothing was detoured, because the numbers are the whole claim" <| fun (detouredFlags: bool list) ->
       let names = detouredFlags |> List.mapi (fun i _ -> sprintf "fn%d" i)
       let decls = names |> List.map fnDecl
       let reloaded = List.zip names detouredFlags |> List.choose (fun (n, d) -> match d with | true -> Some ("M." + n) | false -> None)
       match confirmAllReached (beforeWith names) decls reloaded with
-      | ReloadOutcome.Patched(patched, considered) ->
+      | ReloadOutcome.PatchPending(patched, considered, _) ->
         patched > 0 && patched <= considered && considered = List.length decls && patched = List.length reloaded
       | ReloadOutcome.NoEffect(considered, reasons) ->
         List.isEmpty reloaded && considered = List.length decls && List.length reasons = List.length decls
-      | other -> failtestf "confirmPatchAsOutcome must only ever produce Patched or NoEffect, got %A" other
+      | other -> failtestf "confirmPatchAsOutcome must only ever produce PatchPending or NoEffect, got %A" other
   ]
 
 // ── ReloadOutcome.withExtraMisses ─────────────────────────────────────────────
