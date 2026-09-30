@@ -35,7 +35,17 @@ module PlaywrightExpect =
       count <- c
       if count <> expected then
         do! Task.Delay(200)
-    Expect.equal count expected (sprintf "expected %d elements matching the locator within %dms, found %d" expected ms count)
+    match count = expected with
+    | true -> ()
+    | false ->
+      // Say what the page looked like. "found 0" alone does not tell a panel that
+      // never rendered from one that rendered and was replaced, or from a page
+      // that is not the one the test thinks it is on.
+      let page = locator.Page
+      let! ids =
+        try page.EvaluateAsync<string>("() => Array.from(document.querySelectorAll('[id]')).map(e => e.id).slice(0, 80).join(',')")
+        with ex -> Task.FromResult(sprintf "(could not read ids: %s)" ex.Message)
+      Expect.equal count expected (sprintf "expected %d elements matching %O within %dms, found %d. Page: %s. Element ids present: %s" expected locator ms count page.Url ids)
   }
 
   let waitForText (ms: int) (locator: ILocator) (text: string) = task {

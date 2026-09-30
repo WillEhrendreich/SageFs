@@ -106,8 +106,12 @@ let runBrowserJourneys (cliArgs: string array) : int =
     use content = new StringContent(json, Text.Encoding.UTF8, "application/json")
     let resp = client.PostAsync(path, content).GetAwaiter().GetResult()
     let status = int resp.StatusCode
+    // The body says WHY: a refused session create was reported as a bare status.
+    let body =
+      use reader = new StreamReader(resp.Content.ReadAsStream())
+      reader.ReadToEnd()
     resp.Dispose()
-    status
+    status, body
 
   let exitWith (code: int) =
     stopDaemon ()
@@ -141,9 +145,9 @@ let runBrowserJourneys (cliArgs: string array) : int =
           {| projects = [| sampleProject |]
              workingDirectory = sampleDir |})
 
-      let createStatus = syncPost "/api/sessions/create" payload
+      let createStatus, createBody = syncPost "/api/sessions/create" payload
       if createStatus <> 200 then
-        eprintfn "Browser runner: session create failed (HTTP %d)" createStatus
+        eprintfn "Browser runner: session create failed (HTTP %d): %s" createStatus createBody
         exitWith 1
       else
         let mutable ready = false
@@ -421,8 +425,12 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
     use content = new StringContent(json, Text.Encoding.UTF8, "application/json")
     let resp = client.PostAsync(path, content).GetAwaiter().GetResult()
     let status = int resp.StatusCode
+    // The body says WHY: a refused session create was reported as a bare status.
+    let body =
+      use reader = new StreamReader(resp.Content.ReadAsStream())
+      reader.ReadToEnd()
     resp.Dispose()
-    status
+    status, body
 
   let exitWith (code: int) =
     stopDaemon ()
@@ -451,9 +459,9 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
           {| projects = [| fixtureProj |]
              workingDirectory = fixtureDir
              workflow = "HotReload" |})
-      let createStatus = syncPost "/api/sessions/create" payload
+      let createStatus, createBody = syncPost "/api/sessions/create" payload
       if createStatus <> 200 then
-        eprintfn "HR runner: session create failed (HTTP %d)" createStatus
+        eprintfn "HR runner: session create failed (HTTP %d): %s" createStatus createBody
         dumpDaemonLogs ()
         exitWith 1
       else
@@ -630,8 +638,12 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
     use content = new StringContent(json, Text.Encoding.UTF8, "application/json")
     let resp = client.PostAsync(path, content).GetAwaiter().GetResult()
     let status = int resp.StatusCode
+    // The body says WHY: a refused session create was reported as a bare status.
+    let body =
+      use reader = new StreamReader(resp.Content.ReadAsStream())
+      reader.ReadToEnd()
     resp.Dispose()
-    status
+    status, body
 
   let exitWith (code: int) =
     stopDaemon ()
@@ -674,9 +686,9 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
         System.Text.Json.JsonSerializer.Serialize(
           {| projects = [| sampleProject |]
              workingDirectory = sampleDir |})
-      let createStatus = syncPost "/api/sessions/create" payload
+      let createStatus, createBody = syncPost "/api/sessions/create" payload
       if createStatus <> 200 then
-        eprintfn "LT runner: session create failed (HTTP %d)" createStatus
+        eprintfn "LT runner: session create failed (HTTP %d): %s" createStatus createBody
         dumpDaemonLogs ()
         exitWith 1
       else
