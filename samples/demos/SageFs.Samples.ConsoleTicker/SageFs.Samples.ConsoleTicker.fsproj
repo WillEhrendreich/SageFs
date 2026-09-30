@@ -75,7 +75,7 @@
        shape as the property condition this target was added to fix. Both halves
        of that trap had the same shape: something that only holds in a dirty
        checkout. -->
-  <Target Name="BuildSageFsCoreFirst" BeforeTargets="ResolveAssemblyReferences" Condition="'$(SageFsCoreAssembly)' != ''">
+  <Target Name="BuildSageFsCoreFirst" BeforeTargets="ResolveAssemblyReferences" Condition="'$(SageFsCoreAssembly)' != '' And '$(DesignTimeBuild)' != 'true'">
     <MSBuild Projects="$(MSBuildThisFileDirectory)../../../SageFs.Core/SageFs.Core.fsproj"
              Targets="Restore"
              Properties="Configuration=$(Configuration)"
