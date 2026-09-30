@@ -3011,14 +3011,12 @@ module McpTools =
 
 
 
-  let targetedVerify
-    (ctx: McpContext)
-    (agent: string)
-    (workingDirectory: string option)
-    (behavior: string)
-    (exactGuard: string option)
-    : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
+  /// What a session's trustworthiness is judged from: its status, whether its loaded
+  /// files are stale, and any type-identity diagnostic. Shared by `targeted_verify`
+  /// and `run_tests` so both judge trust from one place. `artifact` names what was
+  /// loaded when the session reports no file list.
+  let sessionTrustObservation (ctx: McpContext) (sid: string) (artifact: string) =
+    task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       let status = info |> Option.map (fun session -> session.Status)
       let loadedState,
@@ -3035,25 +3033,19 @@ module McpTools =
             let state = Features.Verification.LoadedDefinitionState.ConfirmedStale (stale.Path, lastLoaded)
             state, Some state
           | None ->
-            let artifact =
+            let loaded =
               statuses
               |> List.filter (fun file -> file.Readiness = FileReadiness.Loaded)
               |> List.map (fun file -> file.Path)
               |> function
-                 | [] -> behavior
+                 | [] -> artifact
                  | files -> String.concat ", " files
-            let state = Features.Verification.LoadedDefinitionState.ConfirmedCurrent artifact
+            let state = Features.Verification.LoadedDefinitionState.ConfirmedCurrent loaded
             state, Some state
         | None ->
           let state = Features.Verification.LoadedDefinitionState.UnknownLoadState "warmup file status unavailable"
           state, None
-      let exactGuardRef =
-        exactGuard
-        |> Option.bind (fun raw ->
-          match Features.Verification.ExactTestRef.create raw with
-          | Ok exact -> Some exact
-          | Error _ -> None)
-      let sessionObservation : Features.Verification.SessionTrust.SessionObservation =
+      let observation : Features.Verification.SessionTrust.SessionObservation =
         { MatchingSessionIds = [ sid ]
           SessionStatus = status
           LoadedState = sessionLoadedState
@@ -3061,6 +3053,24 @@ module McpTools =
             match typeIdentityDiagnostics.TryGetValue(sid) with
             | true, diag -> Some diag
             | _ -> None }
+      return loadedState, observation
+    }
+
+  let targetedVerify
+    (ctx: McpContext)
+    (agent: string)
+    (workingDirectory: string option)
+    (behavior: string)
+    (exactGuard: string option)
+    : Task<string> =
+    withSessionWd ctx agent workingDirectory (fun sid -> task {
+      let! loadedState, sessionObservation = sessionTrustObservation ctx sid behavior
+      let exactGuardRef =
+        exactGuard
+        |> Option.bind (fun raw ->
+          match Features.Verification.ExactTestRef.create raw with
+          | Ok exact -> Some exact
+          | Error _ -> None)
       let request : Features.Verification.TargetedVerificationRequest =
         { Intent =
             Features.Verification.VerificationIntent.VerifyChangedBehavior (behavior, Features.Verification.RegressionRisk.SharedContract)
@@ -3093,48 +3103,13 @@ module McpTools =
       let! resolution = resolveSessionId ctx agent None workingDirectory
       match resolution with
       | Routable sid ->
-        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-        let status = info |> Option.map (fun session -> session.Status)
-        let loadedState,
-            sessionLoadedState =
-          match ctx.GetElmModel |> Option.map (fun getModel -> (getModel ()).SessionContext) |> Option.flatten with
-          | Some sessionCtx ->
-            let statuses =
-              match sessionCtx.SessionId = sid with
-              | true -> sessionCtx.FileStatuses
-              | false -> []
-            match statuses |> List.tryFind (fun file -> file.Readiness = FileReadiness.Stale) with
-            | Some stale ->
-              let lastLoaded = stale.LastLoadedAt |> Option.map string |> Option.defaultValue "unknown-loaded-version"
-              let state = Features.Verification.LoadedDefinitionState.ConfirmedStale (stale.Path, lastLoaded)
-              state, Some state
-            | None ->
-              let artifact =
-                statuses
-                |> List.filter (fun file -> file.Readiness = FileReadiness.Loaded)
-                |> List.map (fun file -> file.Path)
-                |> function
-                   | [] -> behavior
-                   | files -> String.concat ", " files
-              let state = Features.Verification.LoadedDefinitionState.ConfirmedCurrent artifact
-              state, Some state
-          | None ->
-            let state = Features.Verification.LoadedDefinitionState.UnknownLoadState "warmup file status unavailable"
-            state, None
+        let! loadedState, sessionObservation = sessionTrustObservation ctx sid behavior
         let exactGuardRef =
           exactGuard
           |> Option.bind (fun raw ->
             match Features.Verification.ExactTestRef.create raw with
             | Ok exact -> Some exact
             | Error _ -> None)
-        let sessionObservation : Features.Verification.SessionTrust.SessionObservation =
-          { MatchingSessionIds = [ sid ]
-            SessionStatus = status
-            LoadedState = sessionLoadedState
-            TypeIdentityDiagnostic =
-              match typeIdentityDiagnostics.TryGetValue(sid) with
-              | true, diag -> Some diag
-              | _ -> None }
         let request : Features.Verification.TargetedVerificationRequest =
           { Intent =
               Features.Verification.VerificationIntent.VerifyChangedBehavior (behavior, Features.Verification.RegressionRisk.SharedContract)

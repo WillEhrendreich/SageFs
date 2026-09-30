@@ -22,6 +22,12 @@ type RunRefusal =
   /// Named tests that are not among the session's discovered tests.
   | NotDiscovered
 
+/// What `run_tests` decided before dispatching anything.
+[<RequireQualifiedAccess>]
+type RunPlan =
+  | Refuse of RunRefusal
+  | Run of TestCase array
+
 /// What one requested test did in THIS run, and only this run.
 [<RequireQualifiedAccess>]
 type LineOutcome =
@@ -178,3 +184,103 @@ module TestRunReceipt =
       | LineOutcome.Passed _ -> false
       | _ -> true)
     |> List.map (fun line -> line.Id)
+
+  /// The decision made before anything is dispatched. Trust first (a session that
+  /// cannot be believed never runs anything), then whether there is anything to run.
+  /// `discovered` is the session's own test list, `matched` what the caller's filters
+  /// left of it, `filters` how to name those filters in a refusal.
+  let plan (trust: SessionTrust) (discovered: TestCase array) (matched: TestCase array) (filters: string) : RunPlan =
+    match SessionTrust.isTrusted trust, discovered.Length, matched.Length with
+    | false, _, _ -> RunPlan.Refuse (RunRefusal.SessionNotTrusted trust)
+    | true, 0, _ -> RunPlan.Refuse RunRefusal.NothingDiscovered
+    | true, _, 0 -> RunPlan.Refuse (RunRefusal.NoTestMatched filters)
+    | true, _, _ -> RunPlan.Run matched
+
+  let private statusToken (receipt: RunReceipt) : string =
+    match receipt with
+    | RunReceipt.Refused _ -> "Refused"
+    | RunReceipt.Pending _ -> "Pending"
+    | RunReceipt.Started _ -> "Started"
+    | RunReceipt.Ran _ -> "Ran"
+    | RunReceipt.Unattributable _ -> "Unattributable"
+
+  let private refusalToken (refusal: RunRefusal) : string =
+    match refusal with
+    | RunRefusal.SessionNotTrusted _ -> "SessionNotTrusted"
+    | RunRefusal.NothingDiscovered -> "NothingDiscovered"
+    | RunRefusal.NoTestMatched _ -> "NoTestMatched"
+    | RunRefusal.NotAttributed _ -> "NotAttributed"
+    | RunRefusal.NotDiscovered -> "NotDiscovered"
+
+  let private lineDetail (outcome: LineOutcome) : string =
+    match outcome with
+    | LineOutcome.Passed duration -> sprintf "passed in %.0fms" duration.TotalMilliseconds
+    | LineOutcome.Failed reason -> sprintf "failed: %s" reason
+    | LineOutcome.Skipped reason -> sprintf "skipped: %s" reason
+    | LineOutcome.DidNotReport reason -> sprintf "did not report: %s" reason
+
+  let private waitAdvice (requestId: RunRequestId) : string =
+    sprintf "Ask again with run_tests request_id=%s (and wait_seconds) to see the result." ((RunRequestId.value requestId).ToString())
+
+  /// Plain-language receipt for the text block of the tool result.
+  let summarize (receipt: RunReceipt) : string =
+    match receipt with
+    | RunReceipt.Refused refusal -> RunRefusal.describe refusal
+    | RunReceipt.Pending (requestId, requested) ->
+      sprintf "Queued %d test(s); the worker has not started them. %s" requested (waitAdvice requestId)
+    | RunReceipt.Started (requestId, requested) ->
+      sprintf "Running %d test(s). %s" requested (waitAdvice requestId)
+    | RunReceipt.Unattributable requestId ->
+      sprintf "Request %s cannot be attributed: it was never made, or it aged out of the engine's bounded record. Run run_tests again." ((RunRequestId.value requestId).ToString())
+    | RunReceipt.Ran ran ->
+      let c = ran.Counts
+      let head =
+        sprintf "%d passed, %d failed, %d skipped, %d did not report (session %s, run %d)."
+          c.Passing c.Failing c.Skipping c.Unreported ran.Session (RunGeneration.value ran.Generation)
+      let verdict =
+        match ran.Verdict with
+        | RunVerdict.AllPassed -> "Every requested test passed in this run."
+        | RunVerdict.SomeFailed -> "Some tests failed:"
+        | RunVerdict.Incomplete -> "This is not green: not every test passed in this run."
+      let problems =
+        ran.Lines
+        |> List.filter (fun line -> match line.Outcome with LineOutcome.Passed _ -> false | _ -> true)
+        |> List.map (fun line -> sprintf "  %s: %s" line.Name (lineDetail line.Outcome))
+      String.concat "\n" (head :: verdict :: problems)
+
+  /// The receipt as data, with a stable token for every case so an agent branches on
+  /// the token and never parses the text.
+  let toJson (receipt: RunReceipt) : System.Text.Json.Nodes.JsonObject =
+    let node = System.Text.Json.Nodes.JsonObject()
+    node["status"] <- System.Text.Json.Nodes.JsonValue.Create(statusToken receipt)
+    node["message"] <- System.Text.Json.Nodes.JsonValue.Create(summarize receipt)
+    match receipt with
+    | RunReceipt.Refused refusal ->
+      node["reason"] <- System.Text.Json.Nodes.JsonValue.Create(refusalToken refusal)
+    | RunReceipt.Pending (requestId, requested)
+    | RunReceipt.Started (requestId, requested) ->
+      node["requestId"] <- System.Text.Json.Nodes.JsonValue.Create((RunRequestId.value requestId).ToString())
+      node["requested"] <- System.Text.Json.Nodes.JsonValue.Create(requested)
+    | RunReceipt.Unattributable requestId ->
+      node["requestId"] <- System.Text.Json.Nodes.JsonValue.Create((RunRequestId.value requestId).ToString())
+    | RunReceipt.Ran ran ->
+      node["requestId"] <- System.Text.Json.Nodes.JsonValue.Create((RunRequestId.value ran.RequestId).ToString())
+      node["session"] <- System.Text.Json.Nodes.JsonValue.Create(ran.Session)
+      node["generation"] <- System.Text.Json.Nodes.JsonValue.Create(RunGeneration.value ran.Generation)
+      node["verdict"] <- System.Text.Json.Nodes.JsonValue.Create(RunVerdict.token ran.Verdict)
+      let counts = System.Text.Json.Nodes.JsonObject()
+      counts["passing"] <- System.Text.Json.Nodes.JsonValue.Create(ran.Counts.Passing)
+      counts["failing"] <- System.Text.Json.Nodes.JsonValue.Create(ran.Counts.Failing)
+      counts["skipping"] <- System.Text.Json.Nodes.JsonValue.Create(ran.Counts.Skipping)
+      counts["unreported"] <- System.Text.Json.Nodes.JsonValue.Create(ran.Counts.Unreported)
+      node["counts"] <- counts
+      let lines = System.Text.Json.Nodes.JsonArray()
+      for line in ran.Lines do
+        let item = System.Text.Json.Nodes.JsonObject()
+        item["id"] <- System.Text.Json.Nodes.JsonValue.Create(TestId.value line.Id)
+        item["name"] <- System.Text.Json.Nodes.JsonValue.Create(line.Name)
+        item["outcome"] <- System.Text.Json.Nodes.JsonValue.Create(LineOutcome.token line.Outcome)
+        item["detail"] <- System.Text.Json.Nodes.JsonValue.Create(lineDetail line.Outcome)
+        lines.Add item
+      node["lines"] <- lines
+    node

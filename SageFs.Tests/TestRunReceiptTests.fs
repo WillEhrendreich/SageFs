@@ -16,6 +16,7 @@ open FsCheck
 open SageFs
 open SageFs.Features
 open SageFs.Features.RunReceipts
+open SageFs.Features.Verification
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 
@@ -190,4 +191,71 @@ let propertyTests =
       | CohortLandingVerify.RunProgress.Finished failing ->
         Set.ofList failing = Set.ofList (TestRunReceipt.notPassed receipt)
       | _ -> false
+  ]
+
+let private sessionTrusted = SessionTrust.Trusted session
+let private someCases = [| caseOf "A.one"; caseOf "A.two" |]
+
+[<Tests>]
+let planTests =
+  testList "RunReceipts.plan" [
+
+    testCase "WHY — a session that cannot be believed refuses before anything is dispatched, and says why" <| fun _ ->
+      match TestRunReceipt.plan (SessionTrust.WarmingUp session) someCases someCases "no filters" with
+      | RunPlan.Refuse (RunRefusal.SessionNotTrusted (SessionTrust.WarmingUp s)) -> s |> Expect.equal "names the session" session
+      | other -> failtestf "expected a trust refusal, got %A" other
+
+    testCase "WHY — a trusted session with nothing discovered says so instead of running nothing" <| fun _ ->
+      match TestRunReceipt.plan sessionTrusted [||] [||] "no filters" with
+      | RunPlan.Refuse RunRefusal.NothingDiscovered -> ()
+      | other -> failtestf "expected NothingDiscovered, got %A" other
+
+    testCase "WHY — filters that match nothing are a refusal that names the filters, never a zero-test pass" <| fun _ ->
+      match TestRunReceipt.plan sessionTrusted someCases [||] "pattern=zzz" with
+      | RunPlan.Refuse (RunRefusal.NoTestMatched filters) -> filters |> Expect.stringContains "names the filter" "pattern=zzz"
+      | other -> failtestf "expected NoTestMatched, got %A" other
+
+    testCase "WHY — a trusted session with matching tests runs exactly the matched ones" <| fun _ ->
+      match TestRunReceipt.plan sessionTrusted someCases [| someCases[0] |] "pattern=one" with
+      | RunPlan.Run cases -> cases |> Expect.equal "only the matched test" [| someCases[0] |]
+      | other -> failtestf "expected Run, got %A" other
+  ]
+
+[<Tests>]
+let renderTests =
+  testList "RunReceipts rendering" [
+
+    testCase "WHY — an all-passed receipt says how many passed and in which run, and its JSON carries the tokens an agent branches on" <| fun _ ->
+      let receipt = finishedState [ "a", PassedHere; "b", PassedHere ] |> TestRunReceipt.observe requestId
+      TestRunReceipt.summarize receipt |> Expect.stringContains "counts" "2 passed"
+      let json = TestRunReceipt.toJson receipt
+      json["status"].GetValue<string>() |> Expect.equal "status token" "Ran"
+      json["verdict"].GetValue<string>() |> Expect.equal "verdict token" "AllPassed"
+      json["lines"].AsArray().Count |> Expect.equal "a line per requested test" 2
+
+    testCase "WHY — an incomplete receipt never reads as a pass: its text says not every test passed and names what did not" <| fun _ ->
+      let receipt = finishedState [ "a", PassedHere; "b", Silent ] |> TestRunReceipt.observe requestId
+      let text = TestRunReceipt.summarize receipt
+      text |> Expect.stringContains "says it is not green" "not every test passed"
+      text |> Expect.stringContains "names the test that did not report" "b"
+      let json = TestRunReceipt.toJson receipt
+      json["verdict"].GetValue<string>() |> Expect.equal "verdict token" "Incomplete"
+
+    testCase "WHY — a run still in flight hands back the request id and how to keep waiting, so the agent never has to guess" <| fun _ ->
+      let state, _ = RequestedRuns.request (Some requestId) session [ idOf "a" ] LiveTestState.empty
+      let receipt = TestRunReceipt.observe requestId state
+      let json = TestRunReceipt.toJson receipt
+      json["status"].GetValue<string>() |> Expect.equal "status token" "Pending"
+      json["requestId"].GetValue<string>() |> Expect.equal "request id for the next call" ((RunRequestId.value requestId).ToString())
+      TestRunReceipt.summarize receipt |> Expect.stringContains "says how to wait" "request_id"
+
+    testCase "WHY — a refusal carries a stable token plus the actionable message" <| fun _ ->
+      let receipt = RunReceipt.Refused RunRefusal.NothingDiscovered
+      let json = TestRunReceipt.toJson receipt
+      json["status"].GetValue<string>() |> Expect.equal "status token" "Refused"
+      json["reason"].GetValue<string>() |> Expect.equal "reason token" "NothingDiscovered"
+      json["message"].GetValue<string>() |> Expect.stringContains "actionable" "live testing"
+
+    testCase "WHY — a request nobody can account for says it cannot claim anything about it" <| fun _ ->
+      TestRunReceipt.summarize (RunReceipt.Unattributable requestId) |> Expect.stringContains "no claim" "cannot"
   ]
