@@ -330,6 +330,41 @@ module SessionBuild =
         Message = "Build timed out (10 min limit)" }
     SageFsError.BuildFailed(-1, [ timeoutDiagnostic ])
 
+  /// How one `dotnet build` invocation failed. `TimedOut` used to be the `None`
+  /// of an `int option` exit code, which is why "could not start" had nowhere to
+  /// go and escaped as an exception instead.
+  [<RequireQualifiedAccess>]
+  type private BuildFailure =
+    | TimedOut
+    /// The process never ran: dotnet is not on the daemon's PATH, or the working
+    /// directory does not exist.
+    | CouldNotStart of reason: string
+    | ExitedWith of exitCode: int * stdout: string list * stderr: string list
+
+  /// A build that could not start, in the shape every caller already handles,
+  /// carrying what to check.
+  let private couldNotStartError (workingDir: string) (reason: string) =
+    let diagnostic =
+      { File = None; Line = None; Column = None; Code = None
+        Severity = BuildDiagnosticSeverity.Blocking
+        Message =
+          sprintf "Could not start `dotnet build` in '%s': %s. → Check that the .NET SDK is installed and on the daemon's PATH, and that the directory exists." workingDir reason }
+    SageFsError.BuildFailed(-1, [ diagnostic ])
+
+  /// Runs a build so that it ALWAYS yields a result. A rebuild is started in the
+  /// background and answers through a reply channel that only its completion
+  /// can release, so a build that throws must come back as an `Error` like any
+  /// other failure. Left to throw, the exception is rethrown on a thread-pool
+  /// thread (which ends the process), and if it did not, the caller would never
+  /// be answered and the session would count a finished rebuild as in flight.
+  let answeringAlways (build: unit -> Async<Result<string, SageFsError>>) : Async<Result<string, SageFsError>> =
+    async {
+      try return! build ()
+      with ex ->
+        Log.warn "[SessionBuild] a build threw instead of answering: %s" ex.Message
+        return Error (SageFsError.Unexpected ex)
+    }
+
   let runBuildAsync (projects: string list) (workingDir: string) : Async<Result<string, SageFsError>> =
     async {
       let primaryProject = projects |> List.tryHead
@@ -346,9 +381,9 @@ module SessionBuild =
         let injectionProperty, cleanupInjection = prepareCoreReference ()
         let withInjection (args: string list) = args @ injectionProperty
         try
-          // Run one `dotnet` invocation. Ok on success; Error carries the exit
-          // code (None = timed out) plus stdout/stderr for diagnostics/retry.
-          let runOnce (args: string list) : Async<Result<string, int option * string list * string list>> =
+          // Run one `dotnet` invocation. Ok on success; Error says how it failed
+          // (`BuildFailure`), with stdout/stderr for diagnostics and the retry.
+          let runOnce (args: string list) : Async<Result<string, BuildFailure>> =
             async {
               let psi = ProcessStartInfo(
                 "dotnet",
@@ -364,7 +399,16 @@ module SessionBuild =
               // from whichever project SageFs last loaded internally. See
               // SageFs.ProcessEnvironment.
               applyTo psi []
-              let proc = Process.Start(psi)
+              // Starting the process can throw (dotnet not on the daemon's PATH,
+              // or the working directory is gone). That is a build that did not
+              // run, and it has to come back as one: the caller answers through a
+              // parked reply channel that only a completion can release.
+              let started =
+                try Ok (Process.Start(psi))
+                with ex -> Error (BuildFailure.CouldNotStart ex.Message)
+              match started with
+              | Error failure -> return Error failure
+              | Ok proc ->
               let stderrLines = System.Collections.Generic.List<string>()
               let stderrTask =
                 runOnDedicatedThread "sagefs-build-stderr-reader" (fun () ->
@@ -394,20 +438,21 @@ module SessionBuild =
               | true ->
                 try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionBuild] Kill build process on timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
                 proc.Dispose()
-                return Error (None, [], [])
+                return Error BuildFailure.TimedOut
               | false ->
                 let! _ = System.Threading.Tasks.Task.WhenAll(stderrTask, stdoutTask) |> Async.AwaitTask
                 let exitCode = proc.ExitCode
                 proc.Dispose()
                 match exitCode <> 0 with
-                | true -> return Error (Some exitCode, List.ofSeq stdoutLines, List.ofSeq stderrLines)
+                | true -> return Error (BuildFailure.ExitedWith(exitCode, List.ofSeq stdoutLines, List.ofSeq stderrLines))
                 | false -> return Ok "Build succeeded"
             }
 
-          let toBuildError (failure: int option * string list * string list) : SageFsError =
+          let toBuildError (failure: BuildFailure) : SageFsError =
             match failure with
-            | None, _, _ -> buildTimeoutError ()
-            | Some exitCode, stdout, stderr ->
+            | BuildFailure.TimedOut -> buildTimeoutError ()
+            | BuildFailure.CouldNotStart reason -> couldNotStartError workingDir reason
+            | BuildFailure.ExitedWith (exitCode, stdout, stderr) ->
               SageFsError.BuildFailed(exitCode, CompileOrderInsight.enrich buildProject (buildDiagnosticsOf stdout stderr))
 
           // Fast path: incremental, no restore. If it fails only because a
@@ -417,7 +462,7 @@ module SessionBuild =
           let! first = runOnce (withInjection (buildArguments false buildProject))
           match first with
           | Ok msg -> return Ok msg
-          | Error ((Some _, stdout, stderr) as failure) when buildOutputNeedsRestore (stdout @ stderr) ->
+          | Error (BuildFailure.ExitedWith (_, stdout, stderr)) when buildOutputNeedsRestore (stdout @ stderr) ->
             let! second = runOnce (withInjection (buildArguments true buildProject))
             match second with
             | Ok msg -> return Ok msg

@@ -1024,7 +1024,7 @@ module SessionManager =
               // point).
               let buildInBackground stateInFlight =
                 Async.Start(async {
-                  let! buildResult = runtime.RunBuildAsync (SessionProjectTarget.paths session.Targets) session.WorkingDir
+                  let! buildResult = SessionBuild.answeringAlways (fun () -> runtime.RunBuildAsync (SessionProjectTarget.paths session.Targets) session.WorkingDir)
                   inbox.Post(SessionCommand.RebuildCompleted(id, buildResult, reply))
                 }, ct)
                 stateInFlight

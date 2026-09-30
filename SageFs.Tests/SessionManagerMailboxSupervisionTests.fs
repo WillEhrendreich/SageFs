@@ -435,4 +435,41 @@ let sessionManagerOffMailboxBuildTests =
           releaseBuild.TrySetResult(true) |> ignore
       })
     }
+
+    testTask "a build that THROWS answers the reset with an error, and the session can be reset again" {
+      // The rebuild runs in a background async and answers through a reply
+      // channel parked until RebuildCompleted. A throw inside it used to escape
+      // (Async.Start rethrows on a pool thread, which ends the process), and if
+      // it did not end the process, RebuildCompleted was never posted: the caller
+      // hung and every later reset was refused as "already in progress".
+      let buildCalls = ref 0
+      let runtime =
+        mkRuntime
+          okStart
+          (fun () -> async { return () })
+          (fun () -> async {
+            buildCalls.Value <- buildCalls.Value + 1
+            match buildCalls.Value with
+            | 1 -> return failwith "dotnet vanished mid-build"
+            | _ -> return Ok "build ok"
+          })
+
+      do! withHarness runtime.Runtime (fun harness -> task {
+        let! info = createSession harness
+        let rebuild = SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker
+
+        match! tryPostAndReply 3000 harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, rebuild, reply)) with
+        | Some (Error _) -> ()
+        | Some (Ok _) -> failtest "a build that threw must not be reported as a successful reset"
+        | None -> failtest "the reset was never answered: the throw escaped the background build and the reply channel stayed parked"
+
+        // Not wedged: the next reset is ACCEPTED, not refused as still in flight.
+        match! tryPostAndReply 3000 harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, rebuild, reply)) with
+        | Some (Ok _) -> ()
+        | Some (Error (SageFsError.HardResetFailed msg)) when msg.Contains "already in progress" ->
+          failtest "the session is wedged: a finished (failed) rebuild is still counted as in flight"
+        | Some (Error err) -> failtestf "second reset failed: %s" (SageFsError.describe err)
+        | None -> failtest "the second reset was never answered"
+      })
+    }
   ]
