@@ -499,10 +499,51 @@ let structuredErrorBody (err: SageFsError) =
          error = SageFsError.describe err
          errorDetails = details |}
 
-/// Build the structured body for an unexpected exception, logging the full
-/// details server-side while the wire carries the algebra-safe description.
-let unexpectedErrorBody (ex: exn) =
-  structuredErrorBody (SageFsError.Unexpected ex)
+/// Longest request id we mint: short enough to read out loud or paste into a
+/// bug report, long enough that two in one log are never confused.
+[<Literal>]
+let private requestIdLength = 8
+
+/// A short id tying one 500 response to the one log entry that holds its stack.
+let newRequestId () : string =
+  Guid.NewGuid().ToString("N").Substring(0, requestIdLength)
+
+/// Logger category for exceptions that escaped an HTTP handler.
+[<Literal>]
+let private unhandledErrorCategory = "SageFs.Http"
+
+/// Build the structured body for an unexpected exception. The wire carries the
+/// algebra-safe description and the request id; the details (stack) stay in the
+/// log, under the same id (see `respondUnexpected`).
+let unexpectedErrorBody (requestId: string) (ex: exn) =
+  let err = SageFsError.Unexpected ex
+  box {| success = false
+         error = sprintf "%s (request id %s)" (SageFsError.describe err) requestId
+         errorDetails = SageFsError.toJson err
+         requestId = requestId |}
+
+/// Log an exception no handler dealt with, with its stack and a fresh request
+/// id, and return that id. Without a logger factory on the request (a bare test
+/// context) the entry goes to the core log hook instead of vanishing.
+let logUnexpected (ctx: Microsoft.AspNetCore.Http.HttpContext) (ex: exn) : string =
+  let requestId = newRequestId ()
+  let message = "Unhandled exception in {Method} {Path} (request id {RequestId})"
+  let factory =
+    Option.ofObj ctx.RequestServices
+    |> Option.bind (fun services -> Option.ofObj (services.GetService(typeof<ILoggerFactory>)))
+  match factory with
+  | Some (:? ILoggerFactory as f) ->
+    f.CreateLogger(unhandledErrorCategory).LogError(ex, message, ctx.Request.Method, ctx.Request.Path.Value, requestId)
+  | _ ->
+    Log.error "Unhandled exception in %s %s (request id %s): %s" ctx.Request.Method (string ctx.Request.Path) requestId (string ex)
+  requestId
+
+/// Answer 500 for an exception no handler dealt with: log it, and echo the log
+/// entry's request id in the body so a user can quote it.
+let respondUnexpected (ctx: Microsoft.AspNetCore.Http.HttpContext) (ex: exn) = task {
+  let requestId = logUnexpected ctx ex
+  do! jsonResponse ctx 500 (unexpectedErrorBody requestId ex)
+}
 
 /// Run a `SageFsIO` computation and translate it straight to an HTTP
 /// response through the `SageFsError` algebra: `Ok v` writes `okStatus`
@@ -577,7 +618,7 @@ let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: uni
   | :? System.Text.Json.JsonException as je ->
     do! jsonResponse ctx 400 (structuredErrorBody (SageFsError.JsonParseError ("request body", je.Message)))
   | ex ->
-    do! jsonResponse ctx 500 (unexpectedErrorBody ex)
+    do! respondUnexpected ctx ex
 }
 
 /// Global error-handling middleware — catches unhandled exceptions from all endpoints.
@@ -593,10 +634,11 @@ let errorHandlingMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: 
     match ctx.Response.HasStarted with
     | true -> ()  // SSE or streaming response already committed
     | false -> do! jsonResponse ctx 400 (structuredErrorBody (SageFsError.JsonParseError ("request body", je.Message)))
+  | :? OperationCanceledException when ctx.RequestAborted.IsCancellationRequested -> ()  // the client went away; not a fault
   | ex ->
     match ctx.Response.HasStarted with
-    | true -> ()  // SSE or streaming response already committed
-    | false -> do! jsonResponse ctx 500 (unexpectedErrorBody ex)
+    | true -> logUnexpected ctx ex |> ignore  // committed: no body to change, but the stack must not vanish
+    | false -> do! respondUnexpected ctx ex
 }
 
 /// Runs a daemon web host until the daemon's stop token is cancelled.

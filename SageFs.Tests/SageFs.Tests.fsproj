@@ -497,6 +497,7 @@
         <Compile Include="DashboardSparklineTests.fs" />
         <Compile Include="DashboardHealthTests.fs" />
         <Compile Include="DaemonInfoContractTests.fs" />
+        <Compile Include="UnexpectedErrorLoggingTests.fs" />
         <Compile Include="DashboardFailureNarrativesTests.fs" />
         <Compile Include="DashboardDiagnosticsTests.fs" />
     <Compile Include="DashboardFilmstripTests.fs" />
