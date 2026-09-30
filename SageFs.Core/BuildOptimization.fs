@@ -25,10 +25,17 @@ module BuildOptimization =
   /// `DebuggableAttribute.DebuggingModes.DisableOptimizations`.
   let private disableOptimizations = 0x100
 
+  /// What an assembly's `DebuggableAttribute` says. Three different facts, so three
+  /// cases: a missing attribute is a finding (the compiler's default), not an error.
+  [<RequireQualifiedAccess>]
+  type private Stamp =
+    | NoAttribute
+    | Modes of debuggingModes: int
+    | Unreadable of why: string
+
   /// The DebuggingModes the assembly's `DebuggableAttribute` was built with, read from
-  /// the metadata tables without loading the assembly. `None` when it has no such
-  /// attribute at all.
-  let private modesOf (md: MetadataReader) : Result<int option, string> =
+  /// the metadata tables without loading the assembly.
+  let private stampOf (md: MetadataReader) : Stamp =
     let debuggable =
       md.GetAssemblyDefinition().GetCustomAttributes()
       |> Seq.map md.GetCustomAttribute
@@ -42,15 +49,15 @@ module BuildOptimization =
            | _ -> false)
         | _ -> false)
     match debuggable with
-    | None -> Result.Ok None
+    | None -> Stamp.NoAttribute
     | Some attr ->
       let blob = md.GetBlobBytes attr.Value
       match blob.Length with
       // (DebuggingModes): prolog, int32, no named arguments.
-      | 8 -> Result.Ok (Some (BitConverter.ToInt32(blob, 2)))
+      | 8 -> Stamp.Modes (BitConverter.ToInt32(blob, 2))
       // (isJITTrackingEnabled, isJITOptimizerDisabled): prolog, bool, bool, no named arguments.
-      | 6 -> Result.Ok (Some (if blob.[3] = 1uy then disableOptimizations else 0))
-      | n -> Result.Error (sprintf "its DebuggableAttribute blob is %d bytes, which is neither of the two known shapes" n)
+      | 6 -> Stamp.Modes (if blob.[3] = 1uy then disableOptimizations else 0)
+      | n -> Stamp.Unreadable (sprintf "its DebuggableAttribute blob is %d bytes, which is neither of the two known shapes" n)
 
   /// Classify the assembly at `path`. Never throws: anything unreadable is `Unknown`
   /// with the reason, and a missing file says so rather than being called optimized.
@@ -64,12 +71,12 @@ module BuildOptimization =
         match pe.HasMetadata with
         | false -> BuildOptimization.Unknown (sprintf "%s has no .NET metadata" path)
         | true ->
-          match modesOf (pe.GetMetadataReader()) with
-          | Result.Error why -> BuildOptimization.Unknown why
+          match stampOf (pe.GetMetadataReader()) with
+          | Stamp.Unreadable why -> BuildOptimization.Unknown why
           // No DebuggableAttribute at all is the compiler's default, which is optimized.
-          | Result.Ok None -> BuildOptimization.Optimized
-          | Result.Ok (Some modes) when modes &&& disableOptimizations <> 0 -> BuildOptimization.Unoptimized
-          | Result.Ok (Some _) -> BuildOptimization.Optimized
+          | Stamp.NoAttribute -> BuildOptimization.Optimized
+          | Stamp.Modes modes when modes &&& disableOptimizations <> 0 -> BuildOptimization.Unoptimized
+          | Stamp.Modes _ -> BuildOptimization.Optimized
       with ex -> BuildOptimization.Unknown (sprintf "could not read %s: %s" path ex.Message)
 
   /// The words for a project whose build is optimized, with what to do about it.
