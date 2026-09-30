@@ -79,6 +79,26 @@ let private mkToolsWf
 let private mkTools (workerPort: int option) : SageFsTools =
   mkToolsWf workerPort SessionWorkflow.Interactive
 
+/// Invoke a hot reload tool by name, the way the MCP SDK does. Every one of
+/// them returns a CallToolResult: a text block for people and StructuredContent
+/// for agents.
+let private invokeTool (tools: SageFsTools) (name: string) (args: obj[]) : ModelContextProtocol.Protocol.CallToolResult =
+  let m = tools.GetType().GetMethod(name)
+  (m.Invoke(tools, args) :?> Task<ModelContextProtocol.Protocol.CallToolResult>).Result
+
+/// The JSON the text block carries (today's payload, unchanged).
+let private textJson (result: ModelContextProtocol.Protocol.CallToolResult) : System.Text.Json.JsonElement =
+  match result.Content |> Seq.tryHead with
+  | Some (:? ModelContextProtocol.Protocol.TextContentBlock as block) ->
+    System.Text.Json.JsonDocument.Parse(block.Text).RootElement.Clone()
+  | other -> failtestf "expected a text block first, got %A" other
+
+/// The closed-set outcome token in StructuredContent.
+let private outcomeOf (result: ModelContextProtocol.Protocol.CallToolResult) : string =
+  match result.StructuredContent.HasValue with
+  | true -> result.StructuredContent.Value.GetProperty("outcome").GetString()
+  | false -> failtest "StructuredContent is missing"
+
 [<Tests>]
 let hotReloadToolTests =
   testList "HotReloadTool" [
@@ -90,9 +110,9 @@ let hotReloadToolTests =
     testCase "enable_hot_reload on an Interactive session directs to Live mode instead of a false patch" <| fun _ ->
       SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" None (fun () ->
         let tools = mkTools (Some 40000)
-        let m = tools.GetType().GetMethod("enable_hot_reload")
-        let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
-        let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
+        let result = invokeTool tools "enable_hot_reload" [| box "" |]
+        let n = textJson result
+        Expect.equal (outcomeOf result) "RequiresLiveMode" "structured outcome names why nothing was patched"
         Expect.isFalse (n.GetProperty("patched").GetBoolean()) "an Interactive session is not patched"
         Expect.stringContains (n.GetProperty("health").GetString()) "REPL" "health names the REPL (Interactive) mode by its label"
         let steps =
@@ -103,9 +123,9 @@ let hotReloadToolTests =
     testCase "enable_hot_reload respects SAGEFS_DEVRELOAD=0" <| fun _ ->
       SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" (Some "0") (fun () ->
         let tools = mkTools (Some 40000)
-        let m = tools.GetType().GetMethod("enable_hot_reload")
-        let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
-        let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
+        let result = invokeTool tools "enable_hot_reload" [| box "" |]
+        let n = textJson result
+        Expect.equal (outcomeOf result) "DisabledByEnvVar" "structured outcome names the env var kill switch"
         // When the env var is set, the tool short-circuits to Disabled before
         // calling the reflection-based install. patched=false and health mentions
         // the env var. disabledByEnvVar is not set (it's only true when
@@ -123,29 +143,48 @@ let hotReloadToolTests =
     testCase "enable_hot_reload on a Live session reports hot reload is already active" <| fun _ ->
       SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" None (fun () ->
         let tools = mkToolsWf (Some 40000) (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
-        let m = tools.GetType().GetMethod("enable_hot_reload")
-        let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
-        let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
+        let result = invokeTool tools "enable_hot_reload" [| box "" |]
+        let n = textJson result
+        Expect.equal (outcomeOf result) "AlreadyActive" "structured outcome says hot reload is already on"
         Expect.isTrue (n.GetProperty("patched").GetBoolean()) "a Live session already has hot reload"
         Expect.stringContains (n.GetProperty("health").GetString()) "Live" "health says the session is in Live mode")
 
     testCase "disable_hot_reload on an Interactive session reports hot reload was never active" <| fun _ ->
       let tools = mkTools (Some 40000)
-      let m = tools.GetType().GetMethod("disable_hot_reload")
-      let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
-      let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
+      let result = invokeTool tools "disable_hot_reload" [| box "" |]
+      let n = textJson result
+      Expect.equal (outcomeOf result) "NeverActive" "structured outcome says hot reload was never on"
       Expect.isTrue (n.GetProperty("disabled").GetBoolean()) "an Interactive session has hot reload off already"
       Expect.stringContains (n.GetProperty("health").GetString()) "REPL" "health explains REPL mode by its label"
 
     testCase "disable_hot_reload on a Live session is honest that runtime disable is not wired up" <| fun _ ->
       let tools = mkToolsWf (Some 40000) (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
-      let m = tools.GetType().GetMethod("disable_hot_reload")
-      let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
-      let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
+      let result = invokeTool tools "disable_hot_reload" [| box "" |]
+      let n = textJson result
+      Expect.equal (outcomeOf result) "RuntimeDisableUnavailable" "structured outcome says the runtime off-switch is not wired up"
       Expect.isFalse (n.GetProperty("disabled").GetBoolean()) "it does not falsely claim to have disabled a Live session"
       let steps =
         n.GetProperty("nextSteps").EnumerateArray() |> Seq.map (fun x -> x.GetString()) |> String.concat " "
       Expect.stringContains steps "switch_workflow" "nextSteps directs to switch_workflow"
+
+    testCase "every hot reload outcome renders to its own stable token" <| fun _ ->
+      let tokens =
+        Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<HotReloadOutcome>)
+        |> Array.map (fun case ->
+          let outcome = Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, [||]) :?> HotReloadOutcome
+          case.Name, HotReloadOutcome.token outcome)
+      for (caseName, token) in tokens do
+        Expect.equal token caseName "the token is the case name, one spelling for the wire"
+      Expect.equal (tokens |> Array.distinctBy snd |> Array.length) tokens.Length "no two outcomes share a token"
+
+    testCase "reset_hot_reload_state on a session with no worker reports NoRunningWorker in structured content" <| fun _ ->
+      let tools = mkTools None
+      let result = invokeTool tools "reset_hot_reload_state" [| box ""; box "" |]
+      Expect.equal (outcomeOf result) "NoRunningWorker" "structured outcome says there is no worker to ask"
+      match result.Content |> Seq.tryHead with
+      | Some (:? ModelContextProtocol.Protocol.TextContentBlock as block) ->
+        Expect.stringContains block.Text "no running worker" "the text block still says why"
+      | other -> failtestf "expected a text block first, got %A" other
 
     // WHY — When the tool is invoked correctly, its body must not throw. The
     // AIFunctionFactory reflection wrapper may throw on argument-type mismatch
@@ -167,8 +206,8 @@ let hotReloadToolTests =
       // types never throws an unhandled exception.
       let tools = mkTools (Some 40000)
       let m = tools.GetType().GetMethod("enable_hot_reload")
-      let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
-      // The raw invocation returns a Task<string>. Verify the task itself
+      let raw = m.Invoke(tools, [| box "" |]) :?> Task<ModelContextProtocol.Protocol.CallToolResult>
+      // The raw invocation returns a Task<CallToolResult>. Verify the task itself
       // is in a non-faulted state (i.e. the tool's async workflow did not throw
       // synchronously).
       Expect.equal raw.Status System.Threading.Tasks.TaskStatus.RanToCompletion "tool's async workflow must not throw synchronously"
@@ -190,9 +229,7 @@ let hotReloadToolTests =
         // Test env: skip the actual reflection check but verify the tool's
         // error path mentions this.
         let tools = mkTools (Some 40000)
-        let m = tools.GetType().GetMethod("enable_hot_reload")
-        let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
-        let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
+        let n = textJson (invokeTool tools "enable_hot_reload" [| box "" |])
         n.GetProperty("health").GetString()
         |> Expect.stringContains "should mention host not loaded" "host"
       | Some asm ->

@@ -475,6 +475,104 @@ let withEchoOutcomeNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<s
         return raise (SageFs.SageFsErrorException(err))
   }
 
+/// What a hot reload tool call decided. A closed set, so an agent branches on
+/// a token instead of reading the `health` prose.
+[<RequireQualifiedAccess>]
+type HotReloadOutcome =
+  /// enable_hot_reload on a Live session: it is already on.
+  | AlreadyActive
+  /// enable_hot_reload on an Interactive or LiveTesting session.
+  | RequiresLiveMode
+  /// enable_hot_reload with SAGEFS_DEVRELOAD=0 set.
+  | DisabledByEnvVar
+  /// disable_hot_reload on a session that never had it.
+  | NeverActive
+  /// disable_hot_reload on a Live session: no per-session off-switch.
+  | RuntimeDisableUnavailable
+  /// reset_hot_reload_state with no binding: the kept list was returned.
+  | Listed
+  /// reset_hot_reload_state with no binding: nothing is kept.
+  | NothingKept
+  /// reset_hot_reload_state with a binding: its initializer ran.
+  | StateReset
+  /// reset_hot_reload_state with a binding: the worker refused it.
+  | ResetRejected
+  /// The session has no running worker to ask.
+  | NoRunningWorker
+  /// The session id did not validate.
+  | UnknownSessionId
+  /// The call did not resolve to a routable session.
+  | SessionNotRoutable
+
+module HotReloadOutcome =
+  /// The one spelling of each outcome on the wire.
+  let token (outcome: HotReloadOutcome) : string =
+    match outcome with
+    | HotReloadOutcome.AlreadyActive -> "AlreadyActive"
+    | HotReloadOutcome.RequiresLiveMode -> "RequiresLiveMode"
+    | HotReloadOutcome.DisabledByEnvVar -> "DisabledByEnvVar"
+    | HotReloadOutcome.NeverActive -> "NeverActive"
+    | HotReloadOutcome.RuntimeDisableUnavailable -> "RuntimeDisableUnavailable"
+    | HotReloadOutcome.Listed -> "Listed"
+    | HotReloadOutcome.NothingKept -> "NothingKept"
+    | HotReloadOutcome.StateReset -> "StateReset"
+    | HotReloadOutcome.ResetRejected -> "ResetRejected"
+    | HotReloadOutcome.NoRunningWorker -> "NoRunningWorker"
+    | HotReloadOutcome.UnknownSessionId -> "UnknownSessionId"
+    | HotReloadOutcome.SessionNotRoutable -> "SessionNotRoutable"
+
+/// A hot reload tool's reply. `Text` is the block people read (the same text
+/// the tool returned before it had a structured result). `Fields` carries the
+/// facts for StructuredContent next to the outcome token.
+type HotReloadReply =
+  { Text: string
+    Outcome: HotReloadOutcome
+    Fields: JsonObject }
+
+module HotReloadReply =
+  /// A reply whose text is the JSON of `fields`, as enable_hot_reload and
+  /// disable_hot_reload have always returned it.
+  let ofJson (outcome: HotReloadOutcome) (fields: JsonObject) : HotReloadReply =
+    { Text = fields.ToJsonString(); Outcome = outcome; Fields = fields }
+
+  /// A reply whose text is a plain message.
+  let ofMessage (outcome: HotReloadOutcome) (text: string) : HotReloadReply =
+    let fields = JsonObject()
+    fields["message"] <- JsonValue.Create(text)
+    { Text = text; Outcome = outcome; Fields = fields }
+
+  /// The MCP result: the text block plus StructuredContent = fields + outcome.
+  let toCallToolResult (reply: HotReloadReply) : ModelContextProtocol.Protocol.CallToolResult =
+    let result = ModelContextProtocol.Protocol.CallToolResult()
+    result.Content.Add(ModelContextProtocol.Protocol.TextContentBlock(Text = reply.Text))
+    let structured = JsonObject()
+    structured["outcome"] <- JsonValue.Create(HotReloadOutcome.token reply.Outcome)
+    for KeyValue(name, value) in reply.Fields do
+      structured[name] <- (match value with | null -> null | node -> node.DeepClone())
+    use doc = JsonDocument.Parse(structured.ToJsonString())
+    result.StructuredContent <- System.Nullable(doc.RootElement.Clone())
+    result
+
+/// `withEcho` for a tool that answers with a `HotReloadReply`: the same
+/// instrumentation, friction record and outbound size cap on the text, then the
+/// structured result around it.
+let withEchoReply (ctx: McpContext) (toolName: string) (t: Task<HotReloadReply>) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+  task {
+    let! text = withEcho ctx toolName (task { let! reply = t in return reply.Text })
+    let! reply = t
+    return HotReloadReply.toCallToolResult { reply with Text = text }
+  }
+
+/// `withSessionWd` for a tool that answers with a `HotReloadReply`: a call that
+/// does not resolve to a routable session gets the same "Error: ..." text.
+let withSessionReply (ctx: McpContext) (workingDirectory: string option) (f: string -> Task<HotReloadReply>) : Task<HotReloadReply> =
+  task {
+    let! resolution = resolveSessionId ctx "mcp" None workingDirectory
+    match resolution with
+    | Routable sid -> return! f sid
+    | other -> return HotReloadReply.ofMessage HotReloadOutcome.SessionNotRoutable (sprintf "Error: %s" (formatSessionResolution other))
+  }
+
 /// One client for reset_hot_reload_state's calls to the worker (the list and
 /// the reset). A reset runs one initializer, so it gets the same budget as a
 /// hot-reload compile.
@@ -935,16 +1033,16 @@ process-wide kill switch for hot reload.""")>]
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
-    ) : Task<string> =
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        let resultJson (patched: bool) (workerPort: int) (health: string) (disabledByEnvVar: bool) (nextSteps: string[]) =
+        let resultJson (outcome: HotReloadOutcome) (patched: bool) (workerPort: int) (health: string) (disabledByEnvVar: bool) (nextSteps: string[]) =
             let result = JsonObject()
             result.["patched"] <- JsonValue.Create(patched)
             result.["workerPort"] <- JsonValue.Create(workerPort)
             result.["health"] <- JsonValue.Create(health)
             result.["disabledByEnvVar"] <- JsonValue.Create(disabledByEnvVar)
             result.["nextSteps"] <- JsonValue.Create(nextSteps)
-            result.ToJsonString()
+            HotReloadReply.ofJson outcome result
         let disabledByEnvVar =
             match System.Environment.GetEnvironmentVariable("SAGEFS_DEVRELOAD") with
             | "0" | "false" -> true
@@ -968,7 +1066,7 @@ process-wide kill switch for hot reload.""")>]
         // could never work — DevReloadInjector lives in the worker process, not
         // the daemon — and reported a misleading "architecture is broken" error.
         logger.LogDebug("MCP-TOOL: enable_hot_reload called")
-        withSessionWd ctx "mcp" wd (fun sidStr -> task {
+        withSessionReply ctx wd (fun sidStr -> task {
             let sid = match SageFs.WorkerProtocol.SessionId.validate sidStr with
                        | Ok s -> s
                        | Error _ -> SageFs.WorkerProtocol.SessionId.newId ()
@@ -977,24 +1075,24 @@ process-wide kill switch for hot reload.""")>]
             let workflow = infoOpt |> Option.map (fun i -> i.Workflow) |> Option.defaultValue SageFs.WorkflowTypes.SessionWorkflow.Interactive
             if disabledByEnvVar then
                 SageFs.DevReload.DevReloadHealthTracker.transition SageFs.DevReload.Disabled
-                return resultJson false workerPort "Disabled (SAGEFS_DEVRELOAD env var)" true
+                return resultJson HotReloadOutcome.DisabledByEnvVar false workerPort "Disabled (SAGEFS_DEVRELOAD env var)" true
                     [| "unset SAGEFS_DEVRELOAD or set it to '1', then start the session in Live mode" |]
             else
                 match workflow with
                 | SageFs.WorkflowTypes.SessionWorkflow.HotReload _ ->
-                    return resultJson true workerPort "Active (session is in Live mode)" false
+                    return resultJson HotReloadOutcome.AlreadyActive true workerPort "Active (session is in Live mode)" false
                         [| "Hot reload is already on — this session was created in Live mode."
                            "Start your web app (run_app, or eval webapp.Run()); connected browsers auto-refresh on save."
                            "Edit any watched .fs file to see the reload fire." |]
                 | SageFs.WorkflowTypes.SessionWorkflow.Interactive
                 | SageFs.WorkflowTypes.SessionWorkflow.LiveTesting ->
                     let modeLabel = SageFs.WorkflowTypes.SessionWorkflow.label workflow
-                    return resultJson false workerPort (sprintf "Not available: this session is in %s mode" modeLabel) false
+                    return resultJson HotReloadOutcome.RequiresLiveMode false workerPort (sprintf "Not available: this session is in %s mode" modeLabel) false
                         [| "Hot reload requires Live mode, which is configured when the session's FSI process starts and cannot be turned on afterward."
                            "Switch this session to Live mode: switch_workflow target=live (this recreates the session, so REPL definitions and cell state are lost)."
                            "Or start a fresh Live session: create_project_session or create_solution_session with workflow=live." |]
         })
-        |> withEcho ctx "enable_hot_reload"
+        |> withEchoReply ctx "enable_hot_reload"
 
     [<McpServerTool>]
     [<Description("""Disable hot reload for this session.
@@ -1016,7 +1114,7 @@ var, this is per-session and reversible. The env var, if set, takes precedence."
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
-    ) : Task<string> =
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: disable_hot_reload called")
         // The per-session runtime toggle (DevReloadInjector.disableForSession)
@@ -1024,13 +1122,13 @@ var, this is per-session and reversible. The env var, if set, takes precedence."
         // the old reflection-into-the-daemon call silently found nothing and
         // reported disabled=true anyway. Answer honestly by the session's real
         // workflow instead of claiming a no-op succeeded.
-        let resultJson (disabled: bool) (health: string) (nextSteps: string[]) =
+        let resultJson (outcome: HotReloadOutcome) (disabled: bool) (health: string) (nextSteps: string[]) =
             let result = JsonObject()
             result.["disabled"] <- JsonValue.Create(disabled)
             result.["health"] <- JsonValue.Create(health)
             result.["nextSteps"] <- JsonValue.Create(nextSteps)
-            result.ToJsonString()
-        withSessionWd ctx "mcp" wd (fun sidStr -> task {
+            HotReloadReply.ofJson outcome result
+        withSessionReply ctx wd (fun sidStr -> task {
             let sid = match SageFs.WorkerProtocol.SessionId.validate sidStr with
                        | Ok s -> s
                        | Error _ -> SageFs.WorkerProtocol.SessionId.newId ()
@@ -1040,13 +1138,13 @@ var, this is per-session and reversible. The env var, if set, takes precedence."
             | SageFs.WorkflowTypes.SessionWorkflow.Interactive
             | SageFs.WorkflowTypes.SessionWorkflow.LiveTesting ->
                 let modeLabel = SageFs.WorkflowTypes.SessionWorkflow.label workflow
-                return resultJson true (sprintf "Not active: this session is in %s mode, so hot reload was never on" modeLabel) [||]
+                return resultJson HotReloadOutcome.NeverActive true (sprintf "Not active: this session is in %s mode, so hot reload was never on" modeLabel) [||]
             | SageFs.WorkflowTypes.SessionWorkflow.HotReload _ ->
-                return resultJson false "Active: this session is in Live mode; a per-session runtime off-switch is not wired up"
+                return resultJson HotReloadOutcome.RuntimeDisableUnavailable false "Active: this session is in Live mode; a per-session runtime off-switch is not wired up"
                     [| "To turn hot reload off, switch this session to Interactive mode: switch_workflow target=interactive (recreates the session; REPL state is lost)."
                        "To disable hot reload daemon-wide, start the daemon with SAGEFS_DEVRELOAD=0." |]
         })
-        |> withEcho ctx "disable_hot_reload"
+        |> withEchoReply ctx "disable_hot_reload"
 
     [<McpServerTool>]
     [<Description("""List or reset live state that hot reload KEPT.
@@ -1072,16 +1170,16 @@ to reset. The dashboard's Hot Reload panel shows the same list with a Reset butt
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
-    ) : Task<string> =
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: reset_hot_reload_state called: binding={Binding}", binding)
-        withSessionWd ctx "mcp" wd (fun sidStr -> task {
+        withSessionReply ctx wd (fun sidStr -> task {
             match SageFs.WorkerProtocol.SessionId.validate sidStr with
-            | Error _ -> return sprintf "Error: '%s' isn't a session id I know." sidStr
+            | Error _ -> return HotReloadReply.ofMessage HotReloadOutcome.UnknownSessionId (sprintf "Error: '%s' isn't a session id I know." sidStr)
             | Ok sid ->
             let! infoOpt = ctx.SessionOps.GetSessionInfo sid
             match infoOpt |> Option.bind (fun i -> SageFs.WorkerProtocol.SessionLifecycleStatus.workerPort i.Status) with
-            | None -> return "Error: the session has no running worker, so there's no live state to list or reset. Check get_session_status."
+            | None -> return HotReloadReply.ofMessage HotReloadOutcome.NoRunningWorker "Error: the session has no running worker, so there's no live state to list or reset. Check get_session_status."
             | Some port ->
             let workerUrl = sprintf "http://127.0.0.1:%d" port
             match System.String.IsNullOrWhiteSpace binding with
@@ -1098,11 +1196,12 @@ to reset. The dashboard's Hot Reload panel shows the same list with a Reset butt
                               (k.GetProperty("newInitializer").GetString()) ]
                     | _ -> []
                 match kept with
-                | [] -> return "Nothing is kept. No save has held on to live state waiting for a reset."
+                | [] -> return HotReloadReply.ofMessage HotReloadOutcome.NothingKept "Nothing is kept. No save has held on to live state waiting for a reset."
                 | lines ->
                     return
-                        "Kept live state (each initializer runs when you reset it; pass its binding to this tool):\n"
-                        + (lines |> List.map (sprintf "- %s") |> String.concat "\n")
+                        HotReloadReply.ofMessage HotReloadOutcome.Listed
+                            ("Kept live state (each initializer runs when you reset it; pass its binding to this tool):\n"
+                             + (lines |> List.map (sprintf "- %s") |> String.concat "\n"))
             | false ->
                 use content = new System.Net.Http.StringContent(System.Text.Json.JsonSerializer.Serialize({| binding = binding |}), System.Text.Encoding.UTF8, "application/json")
                 let! resp = keptStateClient.PostAsync(workerUrl + "/hotreload/reset-state", content)
@@ -1110,10 +1209,10 @@ to reset. The dashboard's Hot Reload panel shows the same list with a Reset butt
                 use doc = System.Text.Json.JsonDocument.Parse body
                 let message = doc.RootElement.GetProperty("message").GetString()
                 match resp.IsSuccessStatusCode with
-                | true -> return message
-                | false -> return "Error: " + message
+                | true -> return HotReloadReply.ofMessage HotReloadOutcome.StateReset message
+                | false -> return HotReloadReply.ofMessage HotReloadOutcome.ResetRejected ("Error: " + message)
         })
-        |> withEcho ctx "reset_hot_reload_state"
+        |> withEchoReply ctx "reset_hot_reload_state"
 
     [<McpServerTool>]
     [<Description("""List or switch how hot reload watches module values read through REFLECTION.

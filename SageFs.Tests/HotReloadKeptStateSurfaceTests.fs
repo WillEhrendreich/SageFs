@@ -22,6 +22,12 @@ let private kept : Features.ReloadOutcome.KeptValue =
 
 let private decoded (node: XmlNode) = Net.WebUtility.HtmlDecode(renderNode node)
 
+/// The text block a tool result carries.
+let private replyText (result: ModelContextProtocol.Protocol.CallToolResult) : string =
+  match result.Content |> Seq.tryHead with
+  | Some (:? ModelContextProtocol.Protocol.TextContentBlock as block) -> block.Text
+  | other -> failwithf "expected a text block first, got %A" other
+
 /// A real worker HTTP server whose kept state is a fake: it lists `kept` and
 /// records what it was asked to reset.
 let private startWorker (resets: Collections.Concurrent.ConcurrentBag<string>) =
@@ -111,7 +117,10 @@ let keptStateSurfaceTests =
       let resets = Collections.Concurrent.ConcurrentBag<string>()
       use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker resets
       let tools = toolsFor (Uri(server.BaseUrl).Port)
-      let! reply = tools.reset_hot_reload_state("", "")
+      let! result = tools.reset_hot_reload_state("", "")
+      let reply = replyText result
+      result.StructuredContent.Value.GetProperty("outcome").GetString()
+      |> Expect.equal "structured content says a list came back" "Listed"
       reply |> Expect.stringContains "names the binding" "StateFixture.State.tuned"
       reply |> Expect.stringContains "and the value it kept" "13"
       reply |> Expect.stringContains "and the initializer waiting" "25"
@@ -122,7 +131,10 @@ let keptStateSurfaceTests =
       let resets = Collections.Concurrent.ConcurrentBag<string>()
       use! (server: WorkerHttpTransport.HttpWorkerServer) = startWorker resets
       let tools = toolsFor (Uri(server.BaseUrl).Port)
-      let! reply = tools.reset_hot_reload_state(kept.Binding, "")
+      let! result = tools.reset_hot_reload_state(kept.Binding, "")
+      let reply = replyText result
+      result.StructuredContent.Value.GetProperty("outcome").GetString()
+      |> Expect.equal "structured content says the state was reset" "StateReset"
       reply |> Expect.stringContains "says what it's worth now" "Reset 'StateFixture.State.tuned': it's 25 now."
       resets |> Seq.toList |> Expect.equal "exactly that binding went to the worker" [ kept.Binding ]
     }
