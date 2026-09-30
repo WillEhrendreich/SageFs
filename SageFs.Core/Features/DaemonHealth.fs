@@ -64,6 +64,10 @@ type HealthSnapshot = {
   /// `overallStatus` also reads, so a smooth climb is caught by "the machine
   /// is almost out of memory" even when nothing LOOKS anomalous in shape.
   MemoryPressure: SageFs.MemoryPressure
+  /// Whether the session manager's own loop is keeping up. A wedged loop stops
+  /// session commands draining while reads still answer from the snapshot, so
+  /// every session can look Ready on a daemon that can no longer act on them.
+  SupervisorHealth: SageFs.SupervisorHealth
 }
 
 module DaemonHealth =
@@ -109,7 +113,11 @@ module DaemonHealth =
       snap.SessionSummaries |> List.exists (fun s -> s.Status = SessionHealthStatus.Faulted)
     let memoryCritical = snap.MemoryPressure = SageFs.MemoryPressure.Critical
     let memoryTight = snap.MemoryPressure = SageFs.MemoryPressure.Tight
-    match broken || memoryCritical, hasFaulted || memoryTight with
+    let supervisorDegraded =
+      match snap.SupervisorHealth with
+      | SageFs.SupervisorHealth.Healthy -> false
+      | SageFs.SupervisorHealth.Degraded _ -> true
+    match broken || memoryCritical, hasFaulted || memoryTight || supervisorDegraded with
     | true, _ -> OverallHealth.Unhealthy
     | false, true -> OverallHealth.Degraded
     | false, false -> OverallHealth.Healthy
@@ -176,7 +184,12 @@ module DaemonHealth =
             t.TotalTests t.Passed t.Failed t.Running ]
       | None -> []
 
-    [ [header]; sessionLines; testLine ]
+    let supervisorLine =
+      match snap.SupervisorHealth with
+      | SageFs.SupervisorHealth.Healthy -> []
+      | SageFs.SupervisorHealth.Degraded reason -> [ sprintf "  ⚠️ %s" reason ]
+
+    [ [header]; supervisorLine; sessionLines; testLine ]
     |> List.concat
     |> String.concat "\n"
 

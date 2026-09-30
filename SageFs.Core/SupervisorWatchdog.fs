@@ -29,11 +29,6 @@ module SupervisorWatchdog =
     /// A command has held the loop for longer than the bound.
     | Wedged of command: string * since: DateTime
 
-  [<RequireQualifiedAccess>]
-  type SupervisorHealth =
-    | Healthy
-    | Degraded of reason: string
-
   /// What the loop is doing right now, stamped by the loop itself.
   [<RequireQualifiedAccess>]
   type Activity =

@@ -226,7 +226,7 @@ module SessionManager =
     AdoptedCore: Map<SessionId, string * DateTime>
     /// The manager's own health (a wedged or restarting loop), for the
     /// daemon-level health surface. Healthy unless the supervisor said otherwise.
-    SupervisorHealth: SupervisorWatchdog.SupervisorHealth
+    SupervisorHealth: SupervisorHealth
   }
 
   module QuerySnapshot =
@@ -247,7 +247,7 @@ module SessionManager =
           | Some identity -> Map.add id identity acc
           | None -> acc) Map.empty
       { Sessions = sessions; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls; AdoptedCore = adoptedCore
-        SupervisorHealth = SupervisorWatchdog.SupervisorHealth.Healthy }
+        SupervisorHealth = SupervisorHealth.Healthy }
 
     let fromManagerState (state: ManagerState) : QuerySnapshot =
       fromState state
@@ -258,7 +258,7 @@ module SessionManager =
     let allSessions (snap: QuerySnapshot) : SessionInfo list =
       snap.Sessions |> Map.toList |> List.map snd
 
-    let empty = { Sessions = Map.empty; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty; AdoptedCore = Map.empty; SupervisorHealth = SupervisorWatchdog.SupervisorHealth.Healthy }
+    let empty = { Sessions = Map.empty; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty; AdoptedCore = Map.empty; SupervisorHealth = SupervisorHealth.Healthy }
 
   type SessionManagerRuntime = {
     StartWorkerProcess: SessionId -> SessionProjectTarget list -> string -> bool -> WorkflowTypes.SessionWorkflow -> (int -> int -> unit) -> Result<SpawnedWorker, SageFsError>
@@ -531,9 +531,10 @@ module SessionManager =
       OnAppOutput: SessionId -> string -> unit
       /// The loop is wedged, restarted, or failed a command (see SupervisorWatchdog).
       OnSupervisorAlarm: SupervisorWatchdog.SupervisorAlarm -> unit
+      /// Health changed (an alarm degraded it, or a good command cleared it); the daemon feeds SupervisorHealthWatch.
+      OnSupervisorHealth: SupervisorHealth -> unit
       /// Runs on the loop thread as each command starts, outside the per-command
-      /// guard, so a throw here restarts the loop. An observability hook and the
-      /// seam that lets a test drive the loop-restart path.
+      /// guard, so a throw restarts the loop: an observability hook and a test seam.
       OnCommandStart: string -> unit
       Watchdog: SupervisorWatchdog.Settings }
 
@@ -547,6 +548,7 @@ module SessionManager =
         OnSessionFaulted = fun _ _ -> ()
         OnAppOutput = fun _ _ -> ()
         OnSupervisorAlarm = ignore
+        OnSupervisorHealth = ignore
         OnCommandStart = ignore
         Watchdog = SupervisorWatchdog.defaultSettings }
 
@@ -564,19 +566,17 @@ module SessionManager =
     let onSessionFaulted = callbacks.OnSessionFaulted
     let onAppOutput = callbacks.OnAppOutput
     let snapshotRef = ref QuerySnapshot.empty
-    // A health change republishes the current snapshot. Compare-and-swap, so a
-    // republish from the watchdog thread never overwrites a newer loop snapshot.
-    let publishHealth (health: SupervisorWatchdog.SupervisorHealth) =
+    // Republish with the new health by compare-and-swap, so the watchdog thread never overwrites a newer loop snapshot.
+    let publishHealth (health: SupervisorHealth) =
       let rec swap () =
         let current = snapshotRef.Value
         match obj.ReferenceEquals(Interlocked.CompareExchange(snapshotRef, { current with SupervisorHealth = health }, current), current) with
         | true -> ()
         | false -> swap ()
       swap ()
-    let beat = SupervisorWatchdog.Beat((fun () -> DateTime.UtcNow), callbacks.Watchdog, callbacks.OnSupervisorAlarm, publishHealth)
-    // default policy: this predicate is defined as "true iff Restarting" — every
-    // other SessionLifecycleStatus (present or future) is false by that same
-    // definition, so there is nothing here for a new case to silently absorb.
+    let beat = SupervisorWatchdog.Beat((fun () -> DateTime.UtcNow), callbacks.Watchdog, callbacks.OnSupervisorAlarm, (fun health -> callbacks.OnSupervisorHealth health; publishHealth health))
+    // default policy: "true iff Restarting"; every other SessionLifecycleStatus
+    // (present or future) is false by definition, so no new case is silently absorbed.
     let isRestarting = function SessionLifecycleStatus.Restarting _ -> true | _ -> false
     /// Spawn a cold replacement worker for a session whose old worker was
     /// already stopped. Used by the plain rebuild=false restart (inline) and by

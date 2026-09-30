@@ -2346,7 +2346,9 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
           // Same authoritative, hysteresis-tracked level DaemonMode's own
           // health tick reads — see the field's doc comment on why shape
           // alone (`Anomalies`) missed both real incidents.
-          MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel () }
+          MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel ()
+          // Written by the daemon when the session manager's watchdog reports.
+          SupervisorHealth = SageFs.SupervisorHealthWatch.current () }
       let sessionStatus =
         SageFs.Features.DaemonHealth.primarySessionStatusLabel healthSnapshot.SessionSummaries
       let healthy = healthyForSessions healthSnapshot.SessionSummaries

@@ -23,6 +23,7 @@ let healthSnapshotTests =
         Anomalies = []
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
+        SupervisorHealth = SageFs.SupervisorHealth.Healthy
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "should be healthy" OverallHealth.Healthy
@@ -42,6 +43,7 @@ let healthSnapshotTests =
         Anomalies = []
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
+        SupervisorHealth = SageFs.SupervisorHealth.Healthy
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "should be degraded" OverallHealth.Degraded
@@ -58,6 +60,7 @@ let healthSnapshotTests =
         Anomalies = []
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
+        SupervisorHealth = SageFs.SupervisorHealth.Healthy
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "no sessions = healthy (idle)" OverallHealth.Healthy
@@ -79,6 +82,7 @@ let healthSnapshotTests =
         Anomalies = []
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Critical
+        SupervisorHealth = SageFs.SupervisorHealth.Healthy
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "the machine is almost out of memory, whatever the shape detector says" OverallHealth.Unhealthy
@@ -97,6 +101,7 @@ let healthSnapshotTests =
         Anomalies = []
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Tight
+        SupervisorHealth = SageFs.SupervisorHealth.Healthy
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "the machine is short on memory — worth degrading for, not staying silent about" OverallHealth.Degraded
@@ -115,9 +120,31 @@ let healthSnapshotTests =
         Anomalies = []
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
+        SupervisorHealth = SageFs.SupervisorHealth.Healthy
       }
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "plenty of machine memory, nothing anomalous, nothing faulted" OverallHealth.Healthy
+
+    testCase "WHY — overallStatus — a wedged session manager degrades the daemon even with every session Ready, because reads keep answering while commands hang" <| fun _ ->
+      let snapshot = {
+        DaemonPid = 1234
+        DaemonPort = 37749
+        Uptime = TimeSpan.FromMinutes 10.0
+        Version = "0.6.820"
+        SessionSummaries = [
+          { SessionId = "abc123"; ProjectName = "MyLib"; Status = SessionHealthStatus.Ready; EvalCount = 5; LastActivity = DateTimeOffset.UtcNow }
+        ]
+        LiveTestingSummary = None
+        MemoryMB = 300
+        Anomalies = []
+        GcDumpOutcome = None
+        MemoryPressure = SageFs.MemoryPressure.Normal
+        SupervisorHealth = SageFs.SupervisorHealth.Degraded "stuck on StopWorker"
+      }
+      DaemonHealth.overallStatus snapshot
+      |> Expect.equal "Ready sessions do not hide a stuck supervisor" OverallHealth.Degraded
+      DaemonHealth.formatSummary snapshot
+      |> Expect.stringContains "the summary says why" "stuck on StopWorker"
   ]
 
 [<Tests>]
@@ -138,6 +165,7 @@ let healthFormatTests =
         Anomalies = []
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
+        SupervisorHealth = SageFs.SupervisorHealth.Healthy
       }
       let text = DaemonHealth.formatSummary snapshot
       text |> Expect.stringContains "has pid" "5678"
@@ -166,6 +194,7 @@ let healthFormatTests =
         Anomalies = []
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
+        SupervisorHealth = SageFs.SupervisorHealth.Healthy
       }
       let text = DaemonHealth.diagnosticSummary snapshot
       text |> Expect.equal "should explain the missing session state" "No sessions registered with the daemon."
@@ -186,6 +215,7 @@ let healthFormatTests =
         Anomalies = []
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Normal
+        SupervisorHealth = SageFs.SupervisorHealth.Healthy
       }
       let text = DaemonHealth.diagnosticSummary snapshot
       text |> Expect.stringContains "should mention the faulted project" "FaultedProject"

@@ -24,7 +24,8 @@ let private makeHealthSnapshot
     MemoryMB = memoryMB
     Anomalies = []
     GcDumpOutcome = None
-    MemoryPressure = SageFs.MemoryPressure.Normal }
+    MemoryPressure = SageFs.MemoryPressure.Normal
+    SupervisorHealth = SageFs.SupervisorHealth.Healthy }
 
 let private defaultSnap () =
   makeHealthSnapshot [] None (TimeSpan.FromMinutes 5.0) 128

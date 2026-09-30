@@ -30,7 +30,9 @@ type private Harness =
   { Mailbox: MailboxProcessor<SessionCommand>
     ReadSnapshot: unit -> QuerySnapshot
     Alarms: ConcurrentQueue<SupervisorAlarm>
-    AlarmSeen: SemaphoreSlim }
+    AlarmSeen: SemaphoreSlim
+    /// Every health change the daemon's OnSupervisorHealth hook was told about, in order.
+    HealthChanges: ConcurrentQueue<SupervisorHealth> }
 
 let private okStart (_call: int) : Result<Process, SageFsError> = Ok (Process.GetCurrentProcess())
 
@@ -50,14 +52,16 @@ let private withHarness (runtime: SessionManagerRuntime) (onCommandStart: string
     use cancellation = new CancellationTokenSource()
     let alarms = ConcurrentQueue<SupervisorAlarm>()
     let seen = new SemaphoreSlim(0)
+    let healthChanges = ConcurrentQueue<SupervisorHealth>()
     let callbacks =
       { SessionManagerCallbacks.silent with
           OnSupervisorAlarm = fun alarm -> alarms.Enqueue alarm; seen.Release() |> ignore
+          OnSupervisorHealth = healthChanges.Enqueue
           OnCommandStart = onCommandStart
           Watchdog = fastWatchdog }
     let mailbox, readSnapshot = createWithAlarm runtime cancellation.Token callbacks
     try
-      do! run { Mailbox = mailbox; ReadSnapshot = readSnapshot; Alarms = alarms; AlarmSeen = seen }
+      do! run { Mailbox = mailbox; ReadSnapshot = readSnapshot; Alarms = alarms; AlarmSeen = seen; HealthChanges = healthChanges }
     finally
       cancellation.Cancel()
   }
@@ -122,6 +126,10 @@ let sessionManagerSupervisorAlarmTests =
         do! loopAnswers harness
         do! loopAnswers harness
         harness.ReadSnapshot() |> isDegraded |> Expect.isFalse "health is Healthy again once the loop drains"
+        harness.HealthChanges
+        |> Seq.map (function SupervisorHealth.Degraded _ -> "Degraded" | SupervisorHealth.Healthy -> "Healthy")
+        |> List.ofSeq
+        |> Expect.equal "the daemon's hook hears the degrade and then the recovery, once each" [ "Degraded"; "Healthy" ]
       })
     }
 

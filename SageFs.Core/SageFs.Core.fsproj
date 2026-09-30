@@ -207,6 +207,11 @@
              (its learned baseline rises right along with it), so shape alone
              reported Healthy through two real incidents that ate the machine. -->
         <Compile Include="MemoryPressure.fs" />
+        <!-- The supervisor's health DU and the daemon's reading of it, ahead
+             of DaemonHealth.fs so overallStatus can degrade the daemon for a
+             wedged session manager. The watchdog itself needs WorkerSpawn and
+             compiles with SessionManager.fs. -->
+        <Compile Include="SupervisorHealth.fs" />
         <Compile Include="Features\DaemonHealth.fs" />
         <Compile Include="Features\ScratchPad.fs" />
         <Compile Include="Features\EvalRipple.fs" />

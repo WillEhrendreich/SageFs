@@ -2145,14 +2145,17 @@ let run
   // Create SessionManager — the single source of truth for all sessions
   // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
   let sessionManager, readSnapshot =
-    SessionManager.create cts.Token
-      (fun () -> stateChangedEvent.Trigger SessionProgress)
-      (fun sid report -> onTestDiscoveryCallback sid report)
-      (fun sid maps -> onInstrumentationMapsCallback sid maps)
-      (fun sid -> stateChangedEvent.Trigger (SessionReady sid); onSessionReadyExtra sid)
-      (fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress)
-      (fun sid error -> stateChangedEvent.Trigger (SessionFaulted (sid, error)))
-      (fun sid line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) line)
+    SessionManager.createMonitored cts.Token
+      { SessionManager.SessionManagerCallbacks.silent with
+          OnSessionProgressChanged = fun () -> stateChangedEvent.Trigger SessionProgress
+          OnTestDiscovery = fun sid report -> onTestDiscoveryCallback sid report
+          OnInstrumentationMaps = fun sid maps -> onInstrumentationMapsCallback sid maps
+          OnSessionReady = fun sid -> stateChangedEvent.Trigger (SessionReady sid); onSessionReadyExtra sid
+          OnWarmupProgress = fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress
+          OnSessionFaulted = fun sid error -> stateChangedEvent.Trigger (SessionFaulted (sid, error))
+          OnAppOutput = fun sid line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) line
+          OnSupervisorAlarm = fun alarm -> Log.warn "[SessionManager] %s" (SupervisorWatchdog.describe alarm)
+          OnSupervisorHealth = SupervisorHealthWatch.report }
 
   let sessionOps =
     createSessionOpsWithRecovery sessionManager readSnapshot manifestOwner (Some productionBuildRecovery)
@@ -2945,7 +2948,8 @@ let run
             MemoryMB = memoryMB
             Anomalies = SageFs.Features.HealthWatch.troubled ()
             GcDumpOutcome = SageFs.Features.GcDumpWatch.lastCaptureOutcome ()
-            MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel () }
+            MemoryPressure = SageFs.Features.MemoryPressureWatch.currentLevel ()
+            SupervisorHealth = SupervisorHealthWatch.current () }
       : SageFs.Features.HealthSnapshot)
 
   // Both listeners share one origin set: the dashboard page (mcpPort + 1, see
