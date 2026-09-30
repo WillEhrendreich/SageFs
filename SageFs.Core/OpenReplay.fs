@@ -176,3 +176,16 @@ let resolveWarmupOpens
     Replayable = results |> List.choose (function Choice1Of2 n -> Some n | _ -> None)
     Dropped = results |> List.choose (function Choice2Of2 (n, r) -> Some (n, r) | _ -> None)
   |}
+
+/// What to tell the user when auto-open found nothing to open. A session with no
+/// project (a bare session) was never expected to open anything, so it gets no
+/// warning: saying "check that the project path is correct" to a session that
+/// has no project read as a failed warmup in the dashboard.
+let emptyDiscoveryWarnings (autoOpen: bool) (projectCount: int) (namesToOpen: int) (filesScanned: int) : string list =
+  match autoOpen, projectCount, namesToOpen, filesScanned with
+  | true, projects, 0, 0 when projects > 0 ->
+    [ "Auto-open was enabled but no source files were found for this project. " +
+      "Nothing could be auto-opened — check that the project path is correct and the .fs/.fsx files exist." ]
+  | true, projects, 0, scanned when projects > 0 && scanned > 0 ->
+    [ sprintf "Auto-open was enabled and %d source file(s) were scanned, but no namespaces/modules were found to open. If the project defines modules, ensure they are compiled into the project assembly (dotnet build) and are not hidden behind RequireQualifiedAccess." scanned ]
+  | _ -> []

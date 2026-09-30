@@ -643,15 +643,8 @@ let private discoverWarmupReplayPlan
     // project with genuinely no namespaces/modules (bare/empty) or a discovery
     // problem. The user must see WHICH, so surface it as a warning instead of
     // silently reporting a "successful" warmup that opened nothing.
-    match autoOpenNamespaces, namesToOpen.Count, fileCount with
-    | true, 0, 0 ->
-      discoveryWarnings.Add(
-        "Auto-open was enabled but no source files were found for this project. " +
-        "Nothing could be auto-opened — check that the project path is correct and the .fs/.fsx files exist.")
-    | true, 0, n when n > 0 ->
-      discoveryWarnings.Add(
-        sprintf "Auto-open was enabled and %d source file(s) were scanned, but no namespaces/modules were found to open. If the project defines modules, ensure they are compiled into the project assembly (dotnet build) and are not hidden behind RequireQualifiedAccess." n)
-    | _ -> ()
+    discoveryWarnings.AddRange(
+      emptyDiscoveryWarnings autoOpenNamespaces (Seq.length originalSln.Projects) namesToOpen.Count fileCount)
 
     // Drop opens that cannot possibly resolve from the FSI session — internal
     // top-level modules (roast-7 F7) and nested modules, public or not

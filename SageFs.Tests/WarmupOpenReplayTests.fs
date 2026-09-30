@@ -323,3 +323,30 @@ let warmupOpenFailureSuggestedActionTests =
       | None -> failtest "expected a concrete suggestion"
     }
   ]
+
+[<Tests>]
+let emptyDiscoveryTests =
+  testList "OpenReplay.emptyDiscoveryWarnings" [
+
+    test "WHY — a bare session has no project, so nothing was expected to open and no warning is owed (it used to print a red 'no source files for this project' line and count it as a failed warmup)" {
+      emptyDiscoveryWarnings true 0 0 0
+      |> Expect.isEmpty "bare session: nothing to report"
+    }
+
+    test "WHY — a real project with no source files is still a finding, and it says to check the project path" {
+      match emptyDiscoveryWarnings true 1 0 0 with
+      | [ message ] -> message |> Expect.stringContains "points at the project path" "project path"
+      | other -> failtestf "expected one warning, got %A" other
+    }
+
+    test "WHY — scanned files with nothing to open is a different finding from no files at all, and names the file count" {
+      match emptyDiscoveryWarnings true 1 0 7 with
+      | [ message ] -> message |> Expect.stringContains "names how many files were scanned" "7 source file(s)"
+      | other -> failtestf "expected one warning, got %A" other
+    }
+
+    test "WHY — auto-open off, or something found to open, is silent" {
+      emptyDiscoveryWarnings false 1 0 0 |> Expect.isEmpty "auto-open off"
+      emptyDiscoveryWarnings true 1 3 7 |> Expect.isEmpty "names were found"
+    }
+  ]
