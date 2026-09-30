@@ -220,3 +220,48 @@ let referenceSampleRebuildTests =
         |> Expect.isFalse "the rebuild must produce the sample's assembly"
     }
   ]
+
+/// What MSBuild really evaluates for a project called `assemblyName` that imports the
+/// generated targets file: the include of every Reference item. A bare project file
+/// that imports the targets is enough, because the file only adds an item.
+let private referencesFor (assemblyName: string) : System.Threading.Tasks.Task<string list> =
+  task {
+    let dir = Directory.CreateTempSubdirectory("sagefs-targets-").FullName
+    try
+      let targets = Path.Combine(dir, "inject.targets")
+      let proj = Path.Combine(dir, "p.proj")
+      File.WriteAllText(targets, SessionBuild.coreReferenceTargetsContent "/opt/SageFs.Core.dll")
+      File.WriteAllText(proj, sprintf "<Project><Import Project=\"%s\" /></Project>" targets)
+      let psi = System.Diagnostics.ProcessStartInfo("dotnet")
+      for arg in [ "msbuild"; proj; "-getItem:Reference"; sprintf "-p:AssemblyName=%s" assemblyName ] do
+        psi.ArgumentList.Add arg
+      psi.RedirectStandardOutput <- true
+      psi.RedirectStandardError <- true
+      use p = System.Diagnostics.Process.Start psi
+      let! output = p.StandardOutput.ReadToEndAsync()
+      let! error = p.StandardError.ReadToEndAsync()
+      do! p.WaitForExitAsync()
+      match p.ExitCode with
+      | 0 ->
+        use doc = System.Text.Json.JsonDocument.Parse output
+        match doc.RootElement.GetProperty("Items").TryGetProperty "Reference" with
+        | true, items -> return [ for item in items.EnumerateArray() -> item.GetProperty("Identity").GetString() ]
+        | false, _ -> return []
+      | code -> return failtestf "msbuild exited %d evaluating the injected targets: %s%s" code output error
+    finally
+      Directory.Delete(dir, true)
+  }
+
+[<Tests>]
+let injectedReferenceGuardTests =
+  testList "The injected SageFs.Core reference" [
+    testTask "WHY — a project that is not SageFs.Core gets the reference, because that is the whole point of injecting it" {
+      let! references = referencesFor "MyApp"
+      references |> Expect.contains "MyApp compiles against the daemon's SageFs.Core" "SageFs.Core"
+    }
+
+    testTask "WHY — the project whose AssemblyName IS SageFs.Core gets none, because a session on SageFs itself compiled Core against a copy of itself and failed with impossible type errors while dotnet build passed" {
+      let! references = referencesFor "SageFs.Core"
+      references |> Expect.isEmpty "SageFs.Core does not reference itself"
+    }
+  ]

@@ -198,6 +198,16 @@ module SessionBuild =
   /// The XML value is escaped, not trusted: the path comes from the process's
   /// own assembly location, and a raw `&` or `<` in it would produce a .targets
   /// file MSBuild rejects with a parse error that names no recognisable cause.
+  ///
+  /// The reference is skipped for the project whose AssemblyName IS SageFs.Core.
+  /// A session on SageFs.Core itself (working on SageFs with SageFs) rebuilds that
+  /// project, and without the guard it compiled against the daemon's copy of
+  /// itself: every type in Checkout.fs and ReloadOutcome.fs "expected type
+  /// SageFs.Checkout.Checkout but here has type SageFs.Checkout.Checkout
+  /// (SageFs.Core, Version=...)", in files nobody had touched, while a plain
+  /// `dotnet build` of the same project passed. The condition reads AssemblyName
+  /// at import time, which is after the project body, and a nested build of Core
+  /// (a ProjectReference to it) inherits this file and is covered the same way.
   let coreReferenceTargetsContent (assembly: string) =
     let escaped =
       (assembly
@@ -210,7 +220,7 @@ module SessionBuild =
        file on every build so a user project can use the registered-holder API
        (SageFs.Holder / HolderRegistry / RegisteredHolder) without adding a
        dependency to its own .fsproj. It is deleted with the build's temp dir. -->
-  <ItemGroup>
+  <ItemGroup Condition="'$(AssemblyName)' != 'SageFs.Core'">
     <Reference Include="SageFs.Core">
       <HintPath>{escaped}</HintPath>
       <Private>true</Private>
