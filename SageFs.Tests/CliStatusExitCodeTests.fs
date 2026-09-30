@@ -30,15 +30,28 @@ let private daemonOnPort = mkDaemonInfo 4242
 
 let private noWedgedPid : int -> int option = fun _ -> None
 
-let private runStatusWedged readOnPort wedgedPid fetchSessionCount =
+let private runStatusAt mcpPort readOnPort wedgedPid fetchSessionCount =
   let origOut = Console.Out
   use outWriter = new StringWriter()
   Console.SetOut(outWriter)
   try
-    let code = Program.statusCommand readOnPort wedgedPid fetchSessionCount 37749
+    let code = Program.statusCommand readOnPort wedgedPid fetchSessionCount mcpPort
     code, outWriter.ToString()
   finally
     Console.SetOut(origOut)
+
+let private runStatusWedged readOnPort wedgedPid fetchSessionCount =
+  runStatusAt 37749 readOnPort wedgedPid fetchSessionCount
+
+/// The real probe against a port nothing listens on. The probe asks the
+/// dashboard port (mcpPort + 1), so that is the port the OS hands back free.
+let private runStatusOnPort readOnPort mcpPort =
+  runStatusAt mcpPort readOnPort noWedgedPid (fun _ -> failtest "no daemon, so the session count must never be fetched")
+
+let private freePort () =
+  use listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0)
+  listener.Start()
+  (listener.LocalEndpoint :?> System.Net.IPEndPoint).Port
 
 let private runStatus readOnPort fetchSessionCount =
   runStatusWedged readOnPort noWedgedPid fetchSessionCount
@@ -51,6 +64,34 @@ let cliStatusExitCodeTests =
         runStatus (fun _ -> None) (fun _ -> failtest "no daemon, so the session count must never be fetched")
       Expect.isTrue "no-daemon status must exit non-zero" (code <> 0)
       stdout |> Expect.stringContains "stdout keeps the no-daemon message" "No daemon running"
+    }
+
+    test "no daemon running says what to do next: start it, or register it with an agent, and where the docs are" {
+      let code, stdout =
+        runStatus (fun _ -> None) (fun _ -> failtest "no daemon, so the session count must never be fetched")
+      Expect.equal "still exit 1" 1 code
+      stdout |> Expect.stringContains "says how to start it" "run `sagefs`"
+      stdout |> Expect.stringContains "says how to register it with an agent" "claude mcp add sagefs -- sagefs mcp"
+      stdout |> Expect.stringContains "says how to make that registration global" "-s user"
+      stdout |> Expect.stringContains "points at the tool docs" "docs/mcp-tools.md"
+    }
+
+    test "a refused connection is the expected answer to is-it-running, so the real probe logs no warning and status still exits 1" {
+      let port = freePort ()
+      let mcpPort = port - 1
+      let warnings = System.Collections.Concurrent.ConcurrentQueue<string>()
+      let origWarn = Utils.Log.logWarn
+      Utils.Log.logWarn <- fun s -> warnings.Enqueue s
+      try
+        let code, stdout = runStatusOnPort DaemonState.readOnPort mcpPort
+        Expect.equal "no daemon exits 1" 1 code
+        stdout |> Expect.stringContains "still says no daemon" "No daemon running"
+        warnings
+        |> Seq.filter (fun w -> w.Contains(string port))
+        |> List.ofSeq
+        |> Expect.isEmpty "a refused connection must not warn"
+      finally
+        Utils.Log.logWarn <- origWarn
     }
 
     test "WHY — Program.statusCommand — a running daemon reports its info and exits 0 whether or not the session count could be fetched" {

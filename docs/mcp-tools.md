@@ -35,6 +35,25 @@ for it, then bridges your client's stdin/stdout to it.
 claude mcp add sagefs -- sagefs mcp
 ```
 
+### How long the daemon lives
+
+If `sagefs mcp` has to start the daemon, it starts it with
+`--owner-pid <the pid of that bridge>` (`startDaemonProcess` in
+`SageFs/McpStdioBridge.fs`). The daemon polls that pid every 2 seconds
+(`OwnerMonitor`, `SageFs.Core/OwnerMonitor.fs`) and shuts down when the owner
+is gone. So a daemon that an agent started lives exactly as long as that agent
+session: when the client exits, the daemon goes within about ten seconds, and
+the dashboard and every session go with it. Two agents sharing that daemon
+share its fate, too. The one that started it leaving takes it down for the
+other.
+
+Good for a throwaway session, bad if you want the REPL, the dashboard and the
+warm sessions to still be there tomorrow. To get a daemon that outlives the
+agent, start it yourself before the agent does: run `sagefs` in a terminal, or
+run it as a service (see "Run it as a service (Linux)" in the
+[README](../Readme.md)). `sagefs mcp` checks for a running daemon first, so
+it just bridges to yours and never becomes its owner.
+
 For clients that take raw JSON config:
 ```json
 { "mcpServers": { "sagefs": { "command": "sagefs", "args": [ "mcp" ] } } }
@@ -185,10 +204,16 @@ requires the daemon already running) for the reason above.
 ```
 claude mcp add sagefs -- sagefs mcp
 ```
-or in `~/.claude/claude_desktop_config.json`:
+That lands in local scope by default: it goes into the entry for your current
+project inside `~/.claude.json`, and only loads in that project. Add `-s user`
+(`--scope user`) and it's written to `~/.claude.json` for every project on the
+machine. For a team, `-s project` writes a `.mcp.json` at the project root,
+which you can commit:
 ```json
 { "mcpServers": { "sagefs": { "command": "sagefs", "args": [ "mcp" ] } } }
 ```
+(Claude Desktop is a different app with its own `claude_desktop_config.json`.
+Claude Code doesn't read it.)
 
 **GitHub Copilot (CLI)**, `~/.copilot/github-copilot/mcp.json`:
 ```json

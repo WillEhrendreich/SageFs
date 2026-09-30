@@ -103,6 +103,14 @@ flowchart TB
 
 ## Get Started
 
+The short version, for people who read the last page of the book first:
+
+1. `dotnet tool install --global SageFs`, then make sure `~/.dotnet/tools` is on your `PATH`.
+2. `sagefs check` tells you what's missing, with a fix next to each failure.
+3. Run `sagefs` in a terminal and leave it there, or run it as a [service](#run-it-as-a-service-linux).
+4. Open `http://localhost:37750/dashboard`, or point your editor or agent at it (step 4 below).
+5. `sagefs status` says whether the daemon is up. Exit code 1 means it isn't.
+
 ### 1. Install SageFs (30 seconds)
 
 You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or the .NET 11 SDK. The tool ships a build for each and `dotnet` picks the one that matches yours. Nothing else.
@@ -131,6 +139,20 @@ SageFs runs in the foreground, streaming daemon logs to that terminal. It's not 
 
 > No project? Just run `sagefs` with no arguments. The daemon starts bare and waits for clients. Your editor will create sessions on demand.
 
+SageFs writes `<project>/.SageFs/warmup-replay-cache.json` the first time it warms a project up, and a `.gitignore` right beside it. That cache is machine-generated and ignores itself, so your `git status` stays clean. `config.fsx` and `init.fsx` in the same folder are yours. Those two you commit.
+
+### Run it as a service (Linux)
+
+The daemon that `sagefs mcp` starts for an agent is owned by that agent (see [how long the daemon lives](docs/mcp-tools.md#how-long-the-daemon-lives)). When the agent exits, the daemon, its sessions and the dashboard go with it. If you'd rather have one that's just there, let systemd babysit it:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp contrib/systemd/sagefs.service ~/.config/systemd/user/
+systemctl --user enable --now sagefs
+```
+
+[`contrib/systemd/sagefs.service`](contrib/systemd/sagefs.service) is a user unit. It runs `~/.dotnet/tools/sagefs --supervised`, restarts it on failure, and starts it at login (`loginctl enable-linger $USER` if you want it at boot). `systemctl --user status sagefs` shows it, `journalctl --user -u sagefs` has its logs. When an agent then runs `sagefs mcp`, it finds your daemon already up and just bridges to it, so nothing it does can take the daemon down.
+
 ### 4. Connect your editor
 
 **VS Code**: Install **SageFs** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) or [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs) (or the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases)), open an F# file, and press `Alt+Enter` on any expression. The result appears inline.
@@ -139,7 +161,7 @@ SageFs runs in the foreground, streaming daemon logs to that terminal. It's not 
 
 **Web dashboard**: Open `http://localhost:37750/dashboard` for session management, evaluation, output, test state, and diagnostics without an editor extension.
 
-**AI agent** (Claude Code, Copilot, Codex, Cursor, anything that speaks MCP): `claude mcp add sagefs -- sagefs mcp` (or your client's equivalent for a stdio server). It starts the daemon for you if one isn't already running, so there's no ordering to get wrong. **Then install the [SageFs skill](skills/sagefs/SKILL.md)**. Without the skill your agent will iterate with `dotnet build` and never touch the REPL. [docs/agents.md](docs/agents.md) has the one-line install, an `AGENTS.md` snippet for other agents, and what to do when an agent drifts. Clients that only speak HTTP can still point at `http://localhost:37749/` — see [docs/mcp-tools.md](docs/mcp-tools.md#connect).
+**AI agent** (Claude Code, Copilot, Codex, Cursor, anything that speaks MCP): `claude mcp add sagefs -- sagefs mcp` (or your client's equivalent for a stdio server). It starts the daemon for you if one isn't already running, so there's no ordering to get wrong. A daemon started that way lives as long as that agent session does. Start `sagefs` yourself first (or run it as a [service](#run-it-as-a-service-linux)) if you want it to stick around. `claude mcp add` defaults to local scope, meaning this project only. Add `-s user` to get it everywhere. **Then install the [SageFs skill](skills/sagefs/SKILL.md)**. Without the skill your agent will iterate with `dotnet build` and never touch the REPL. [docs/agents.md](docs/agents.md) has the one-line install, an `AGENTS.md` snippet for other agents, and what to do when an agent drifts. Clients that only speak HTTP can still point at `http://localhost:37749/` — see [docs/mcp-tools.md](docs/mcp-tools.md#connect).
 
 ### 5. Enable live testing
 

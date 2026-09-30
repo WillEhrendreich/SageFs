@@ -261,6 +261,28 @@ module DaemonState =
     with _ ->
       None
 
+  /// Why a probe of the daemon's port threw. A refused connection is the
+  /// expected answer to "is it running" when it is not, so it is a case of its
+  /// own rather than a string to sniff.
+  [<RequireQualifiedAccess>]
+  type ProbeFailure =
+    | Refused
+    | Unexpected of message: string
+
+  let classifyProbeFailure (ex: exn) : ProbeFailure =
+    let rec refused (e: exn) =
+      match isNull e with
+      | true -> false
+      | false ->
+        match e with
+        | :? System.Net.Sockets.SocketException as s ->
+          s.SocketErrorCode = System.Net.Sockets.SocketError.ConnectionRefused
+        | :? AggregateException as a -> a.InnerExceptions |> Seq.exists refused
+        | _ -> refused e.InnerException
+    match refused ex with
+    | true -> ProbeFailure.Refused
+    | false -> ProbeFailure.Unexpected ex.Message
+
   /// Probe the daemon's /api/daemon-info endpoint on the dashboard port.
   /// Falls back to probing /dashboard if /api/daemon-info isn't available
   /// (e.g. older daemon versions).
@@ -283,18 +305,27 @@ module DaemonState =
           return Some (fallbackInfo mcpPort dashboardPort)
         | false -> return None
     with ex ->
-      Utils.Log.warn "[DaemonState] MCP status probe failed on port %d: %s" mcpPort ex.Message
-      try
-        let! fallbackResp =
-          httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
-          |> Async.AwaitTask
-        match fallbackResp.IsSuccessStatusCode with
-        | true ->
-          return Some (fallbackInfo mcpPort dashboardPort)
-        | false -> return None
-      with ex2 ->
-        Utils.Log.warn "[DaemonState] Dashboard fallback also failed on port %d: %s" dashboardPort ex2.Message
+      match classifyProbeFailure ex with
+      | ProbeFailure.Refused ->
+        // Nothing is listening. That is the answer, not a fault, and the
+        // fallback would knock on the same port and get the same answer.
         return None
+      | ProbeFailure.Unexpected message ->
+        Utils.Log.warn "[DaemonState] MCP status probe failed on port %d: %s" mcpPort message
+        try
+          let! fallbackResp =
+            httpClient.GetAsync(sprintf "http://localhost:%d/dashboard" dashboardPort)
+            |> Async.AwaitTask
+          match fallbackResp.IsSuccessStatusCode with
+          | true ->
+            return Some (fallbackInfo mcpPort dashboardPort)
+          | false -> return None
+        with ex2 ->
+          match classifyProbeFailure ex2 with
+          | ProbeFailure.Refused -> return None
+          | ProbeFailure.Unexpected message2 ->
+            Utils.Log.warn "[DaemonState] Dashboard fallback also failed on port %d: %s" dashboardPort message2
+            return None
   }
 
   /// Synchronous wrapper for callers that can't be async yet.

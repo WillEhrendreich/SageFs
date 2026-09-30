@@ -1,0 +1,30 @@
+# SageFs as a systemd USER unit.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/systemd/sagefs.service ~/.config/systemd/user/
+#   systemctl --user enable --now sagefs
+#
+# The daemon then outlives every agent, terminal and editor, and comes back at
+# login. Add `loginctl enable-linger $USER` if it should also start at boot,
+# before you log in.
+#
+# ExecStart assumes `dotnet tool install --global SageFs`, which puts the
+# executable at ~/.dotnet/tools/sagefs (%h is your home directory). The tool's
+# launcher finds the runtime through DOTNET_ROOT, and a user unit does not read
+# your shell profile, so it is set here. Change both lines if dotnet lives
+# somewhere else.
+
+[Unit]
+Description=SageFs daemon (F# REPL, MCP server, dashboard)
+After=network.target
+
+[Service]
+Type=simple
+Environment=DOTNET_ROOT=%h/.dotnet
+WorkingDirectory=%h
+ExecStart=%h/.dotnet/tools/sagefs --supervised
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

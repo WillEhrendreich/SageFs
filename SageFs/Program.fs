@@ -435,6 +435,12 @@ let statusCommand
     1
   | DaemonPresence.NotRunning ->
     printfn "No daemon running"
+    printfn ""
+    printfn "  To start one, run `sagefs` in a terminal and leave it there."
+    printfn "  Or register it with an agent and let the agent start it:"
+    printfn "    claude mcp add sagefs -- sagefs mcp"
+    printfn "  That is local scope (this project only). Add -s user to make it global."
+    printfn "  A daemon an agent starts exits when that agent does. More in docs/mcp-tools.md."
     1
 
 /// The pid a wedged-daemon recovery targets: a daemon-info file recorded
