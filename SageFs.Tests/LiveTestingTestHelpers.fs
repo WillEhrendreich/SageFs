@@ -51,5 +51,20 @@ let mkAssemblyInfo name (refs: string list) =
       refs |> List.map (fun r -> AssemblyName(r)) |> Array.ofList }
 
 
+/// A model that knows one session working in `dir`, and that session's id.
+/// Live-testing source mapping claims only files under a KNOWN session's
+/// directories, so a fixture that discovers tests with source positions needs
+/// the session registered first.
+let withKnownSession (dir: string) (model: SageFsModel) : SageFsModel * string =
+  let id = WorkerProtocol.SessionId.newId ()
+  let snap : SessionSnapshot =
+    { Id = id; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow
+      EvalCount = 0
+      UpSince = DateTime.UtcNow
+      WorkingDirectory = dir }
+  fst (SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap)) model), WorkerProtocol.SessionId.value id
+
 // Alias to avoid FsCheck.TestResult collision
 type LTTestResult = TestResult

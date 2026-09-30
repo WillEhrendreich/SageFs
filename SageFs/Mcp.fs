@@ -3805,13 +3805,12 @@ module McpTools =
         let state = getState ()
         let graph = buildCellGraphFromState state
         // partitionForListing, not resolveTestLocations: the latter silently
-        // drops every ReflectionOnly test, which is ALL of them for a
-        // compiled-project session — list_tests reported TotalCount 0 while the
-        // REST status endpoint reported three passing tests for that session.
+        // drops every ReflectionOnly test (see ResolvedTest). The caller's OWN
+        // session's tests, never Primary's (SessionTestAttribution.listable).
         let locations, unlocated =
           Features.TestSourceResolver.partitionForListing
             graph
-            (Array.toList model.LiveTesting.TestState.DiscoveredTests)
+            (Array.toList (SessionTestAttribution.listable (fun sid -> SageFsModel.cycleForSession sid model) model.Sessions (activeSessionId ctx "mcp")))
             patternOpt
             fileOpt
         let query : Features.TestDiscovery.TestDiscoveryQuery = {

@@ -828,6 +828,12 @@ module SageFsUpdate =
     |> Option.toList
     |> List.map SageFsEffect.TestCycle
 
+  /// Drop a gone or stopped session's live-testing state (see `SessionTestAttribution.retire`).
+  let private retireSessionLiveTesting (sessionId: string) (newActive: ActiveSession) (model: SageFsModel) =
+    SessionTestAttribution.retire sessionId (ActiveSession.sessionId newActive |> Option.map SessionId.value) model.LiveTesting model.PerSessionLiveTesting
+    |> Option.map (fun (primary, background) -> { model with LiveTesting = primary; PerSessionLiveTesting = background })
+    |> Option.defaultValue model
+
   let private switchActiveLiveTestingState
     (fromId: string option)
     (toId: string)
@@ -1129,18 +1135,25 @@ module SageFsUpdate =
       | TuiEvent.SessionsRefreshed snaps ->
         let activeId = model.Sessions.ActiveSessionId
         let merged = snaps
+        let activeVanished =
+          ActiveSession.sessionId activeId
+          |> Option.exists (fun id -> not (List.exists (fun (s: SessionSnapshot) -> s.Id = id) merged))
         let activeId' =
-          match activeId with
-          | ActiveSession.AwaitingSession when not (List.isEmpty merged) ->
-            ActiveSession.Viewing merged.Head.Id
+          match activeId, merged with
+          | ActiveSession.AwaitingSession, head :: _ -> ActiveSession.Viewing head.Id
+          | ActiveSession.Viewing _, head :: _ when activeVanished -> ActiveSession.Viewing head.Id
+          | ActiveSession.Viewing _, [] when activeVanished -> ActiveSession.AwaitingSession
           | _ -> activeId
+        let retired =
+          SessionTestAttribution.retiring model.Sessions.Sessions merged
+          |> List.fold (fun m sid -> retireSessionLiveTesting sid activeId' m) model
         // Short-circuit: if sessions and active ID are unchanged, return same model (no render)
-        match merged = model.Sessions.Sessions && activeId' = activeId with
+        match merged = model.Sessions.Sessions && activeId' = activeId && obj.ReferenceEquals(retired, model) with
         | true -> model, []
         | false ->
-          { model with
+          { retired with
               Sessions = {
-                model.Sessions with
+                retired.Sessions with
                   Sessions = merged
                   ActiveSessionId = activeId' } }, []
 
@@ -1222,17 +1235,13 @@ module SageFsUpdate =
             [ SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.DisposeFileWatcher
                 (sessionId, s.WorkingDirectory)) ]
           | None -> []
-        { model with
+        // Discards the stopped session's tests, including from Primary if it owned it.
+        let retired = retireSessionLiveTesting sessionId newActive model
+        { retired with
             Sessions = {
-              model.Sessions with
+              retired.Sessions with
                 Sessions = remaining
                 ActiveSessionId = newActive }
-            // Background cycles are owned per-session, so removing the map entry
-            // fully discards the stopped session's tests. When the stopped session
-            // instead owned `model.LiveTesting` (Primary), its stale cycle is left
-            // as-is — it is superseded the moment another session's own routing
-            // (`tryResolveLiveTestingTarget`) claims Primary next, same as before.
-            PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.remove sessionId
             Diagnostics = model.Diagnostics |> Map.remove sessionId }, watcherEffects
 
       | TuiEvent.SessionStale (sessionId, _) ->
@@ -1306,7 +1315,7 @@ module SageFsUpdate =
             | None -> WarmupBanner.toOutputLines ctx
             | Some _ -> []
           // Re-map any ReflectionOnly tests now that we have source file paths
-          let sourceFiles = ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
+          let sourceFiles = SessionTestAttribution.warmupFilesFor model.Sessions.Sessions model.LiveTesting.TestState ctx
           let lt =
             match Array.isEmpty sourceFiles with
             | true -> model.LiveTesting
@@ -1324,18 +1333,24 @@ module SageFsUpdate =
               RecentOutput = output }, []
 
       // ── Live testing events ──
-      | TuiEvent.TestLocationsDetected (_, locations) ->
-        let state = model.LiveTesting.TestState
-        let merged =
-          match Array.isEmpty state.DiscoveredTests with
-          | true -> state.DiscoveredTests
-          | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations locations state.DiscoveredTests
-        match state.SourceLocations = locations && state.DiscoveredTests = merged with
-        | true -> model, []
-        | false ->
-          let lt = recomputeStatuses model.LiveTesting (fun s ->
-            { s with SourceLocations = locations; DiscoveredTests = merged })
-          { model with LiveTesting = lt }, []
+      | TuiEvent.TestLocationsDetected (sessionId, detected) ->
+        // Routed to the session that found them, not always Primary.
+        let locations = SessionTestAttribution.locationsFor model.Sessions.Sessions sessionId detected
+        let model', changed =
+          tryUpdateLiveTestingState (Some sessionId) (fun cycle ->
+            let state = cycle.TestState
+            let merged =
+              match Array.isEmpty state.DiscoveredTests with
+              | true -> state.DiscoveredTests
+              | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations locations state.DiscoveredTests
+            match state.SourceLocations = locations && state.DiscoveredTests = merged with
+            | true -> cycle, false
+            | false ->
+              recomputeStatuses cycle (fun s ->
+                { s with SourceLocations = locations; DiscoveredTests = merged }), true) model
+        match changed with
+        | Some true -> model', []
+        | _ -> model, []
 
       | TuiEvent.TestsDiscovered (sessionId, tests) ->
         // Discovery is routed to THIS session's own cycle (Primary when it's the
@@ -1355,17 +1370,9 @@ module SageFsUpdate =
             // TestId and never expires anything, so passing `[||]` as
             // "existing" is what makes a renamed/removed test actually
             // disappear instead of accumulating forever.
-            let disc = Features.LiveTesting.LiveTesting.mergeDiscoveredTests [||] tests
             let withSourceMap =
-              match Array.isEmpty state.SourceLocations with
-              | true ->
-                // No tree-sitter yet — map tests to files using module name → file name heuristic
-                let sourceFiles =
-                  match model.SessionContext with
-                  | Some ctx -> ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
-                  | None -> [||]
-                Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles disc
-              | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations state.SourceLocations disc
+              SessionTestAttribution.mapDiscovered model.Sessions.Sessions sessionId model.SessionContext state.SourceLocations
+                (Features.LiveTesting.LiveTesting.mergeDiscoveredTests [||] tests)
             let sessionDiscovery =
               Map.add sessionId Features.LiveTesting.DiscoveryProgress.Completed state.SessionDiscovery
             let locs =
@@ -1419,16 +1426,9 @@ module SageFsUpdate =
         let model', outcome =
           tryUpdateLiveTestingState (Some sessionId) (fun cycle ->
             let state = cycle.TestState
-            let disc = Features.LiveTesting.LiveTesting.mergeDiscoveredTests [||] tests
             let withSourceMap =
-              match Array.isEmpty state.SourceLocations with
-              | true ->
-                let sourceFiles =
-                  match model.SessionContext with
-                  | Some ctx -> ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
-                  | None -> [||]
-                Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles disc
-              | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations state.SourceLocations disc
+              SessionTestAttribution.mapDiscovered model.Sessions.Sessions sessionId model.SessionContext state.SourceLocations
+                (Features.LiveTesting.LiveTesting.mergeDiscoveredTests [||] tests)
             let sessionDiscovery =
               Map.add sessionId Features.LiveTesting.DiscoveryProgress.Completed state.SessionDiscovery
             let locs =

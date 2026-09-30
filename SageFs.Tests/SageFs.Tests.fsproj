@@ -284,6 +284,7 @@
          <Compile Include="WatchdogRunnerSeedTests.fs" />
          <Compile Include="FirstRunLinuxTests.fs" />
          <Compile Include="McpStdioBridgeOwnershipTests.fs" />
+         <Compile Include="ListTestsSessionScopeTests.fs" />
          <Compile Include="BuildOptimizationTests.fs" />
          <Compile Include="WarmupCacheGitIgnoreTests.fs" />
          <Compile Include="ToolNameReferenceTests.fs" />

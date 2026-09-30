@@ -1463,14 +1463,15 @@ module SessionCycleIsolation =
       // B discovers in the background (never active) — its discovery lands in
       // B's own PerSessionLiveTesting cycle.
       let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sidBStr, [| tcB |]))) m4
-      // A (the active session) is stopped: the pointer advances to B, but the
-      // Primary cycle is deliberately left as A's stale data.
-      let final, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionStopped sidAStr)) m5
+      // The active pointer moves to B without a SessionSwitched (a stop used to
+      // do this by leaving A's stale data in Primary; a stop now hands Primary to
+      // B, but the pointer and Primary can still diverge, e.g. mid-rebuild).
+      let final = { m5 with Sessions = { m5.Sessions with ActiveSessionId = ActiveSession.Viewing sidB } }
 
       // The divergence is real: Primary is still owned by A even though B is the
       // active session now.
       Features.LiveTesting.LiveTestState.ownerSessionId final.LiveTesting.TestState
-      |> Expect.equal "Primary cycle must still be owned by the stopped session A (the divergence)" (Some sidAStr)
+      |> Expect.equal "Primary cycle must still be owned by session A (the divergence)" (Some sidAStr)
 
       // The OLD resolver (`cycleForSession`) returns the wrong cycle for B — it
       // hands back Primary (A's data) because B is the session-active one, so an

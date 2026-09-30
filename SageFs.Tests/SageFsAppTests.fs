@@ -487,10 +487,18 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       existingCtx with
         FileStatuses = [{ existingFile with Readiness = Stale }]
     }
-    let model = {
-      SageFsModel.initial() with
-        SessionContext = Some existingCtx
-    }
+    // The remap only claims files under the Primary cycle's own session, so
+    // the model needs a session that owns a discovered test and the file.
+    let sid = WorkerProtocol.SessionId.newId ()
+    let snap : SessionSnapshot =
+      { Id = sid; Name = None; Projects = []; Status = SessionDisplayStatus.Running
+        LastActivity = DateTime.UtcNow; EvalCount = 0; UpSince = DateTime.UtcNow
+        WorkingDirectory = "/work/warmup-session" }
+    let discovered =
+      SageFsModel.initial()
+      |> SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap)) |> fst
+      |> SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (WorkerProtocol.SessionId.value sid, [| mkLiveTestCase "t1" "Domain.tests/one" "one" |]))) |> fst
+    let model = { discovered with SessionContext = Some existingCtx }
     let updated, effects =
       SageFsUpdate.update
         (SageFsMsg.Event (TuiEvent.WarmupContextUpdated incomingCtx))
@@ -500,7 +508,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     updated.SessionContext
     |> Expect.equal "should store the new warmup context" (Some incomingCtx)
     updated.LiveTesting.TestState.Cached.StateVersion
-    |> Expect.equal "should rerun live-testing remap work for a real change" 1L
+    |> Expect.equal "should rerun live-testing remap work for a real change" (model.LiveTesting.TestState.Cached.StateVersion + 1L)
     effects |> Expect.isEmpty "warmup updates still do not produce effects"
 
   testCase "FileReloaded success adds info line" <| fun _ ->

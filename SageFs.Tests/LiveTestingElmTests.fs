@@ -1430,9 +1430,9 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
 
-    let model0 = (SageFsModel.initial())
+    let model0, sid = withKnownSession "/work/editor-session" (SageFsModel.initial())
     let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered ("test-session", tests))) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sid, tests))) model1
 
     let annotations = LiveTesting.annotationsForFile "editor" model2.LiveTesting.TestState
     annotations
@@ -1496,10 +1496,10 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
         Timestamp = DateTimeOffset.UtcNow; Output = None }
     |]
 
-    let model0 = (SageFsModel.initial())
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid1; tid2 |], Some "test-session"))) m1
-    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some "test-session", results))) m2
+    let model0, sid = withKnownSession "/work/editor-session" (SageFsModel.initial())
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sid, tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid1; tid2 |], Some sid))) m1
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some sid, results))) m2
 
     let annotations = LiveTesting.annotationsForFile "editor" m3.LiveTesting.TestState
     annotations |> Array.length |> Expect.equal "should have 2 annotations" 2
