@@ -58,6 +58,14 @@ let safeDelete dir =
   | true -> Directory.Delete(dir, true)
   | false -> ()
 
+/// `pendingCleanups` is one process-wide bag and `cleanupAllPending` drains all of it,
+/// so a test that puts a dir in the bag and then asserts it is still there loses to any
+/// other test that drains it in between (the "still cannot be deleted stays pending"
+/// case failed that way under load). Every test that reads or drains the bag runs in
+/// this one exclusive group, so none of them can overlap another or a parallel test.
+let private bagTestCase (name: string) (body: unit -> unit) =
+  testSequencedGroup "shadow-pending-bag" (testCase name body)
+
 [<Tests>]
 let tests =
   testList "ShadowCopy" [
@@ -284,7 +292,7 @@ let tests =
       SageFs.ShadowCopy.cleanupShadowDir fakePath
       Directory.Exists fakePath |> Expect.isFalse "cleanup of a missing dir should leave nothing behind"
 
-    testCase "cleanupAllPending clears pendingCleanups" <| fun _ ->
+    bagTestCase "cleanupAllPending clears pendingCleanups" <| fun _ ->
       let dir1 = createTestDir ()
       let dir2 = createTestDir ()
       try
@@ -353,7 +361,7 @@ let staleSweepTests =
       finally
         safeDelete root
 
-    testCase "WHY — sweepShadowDirsIn — a shadow dir whose delete was deferred is gone after the sweep and no longer pending, because cleanupAllPending was only ever called from a test so the bag grew for the daemon's whole uptime" <| fun _ ->
+    bagTestCase "WHY — sweepShadowDirsIn — a shadow dir whose delete was deferred is gone after the sweep and no longer pending, because cleanupAllPending was only ever called from a test so the bag grew for the daemon's whole uptime" <| fun _ ->
       let root = Directory.CreateTempSubdirectory("sagefs-sweep-").FullName
       let deferred = Directory.CreateDirectory(Path.Combine(root, "deferred")).FullName
       try
@@ -366,7 +374,7 @@ let staleSweepTests =
       finally
         safeDelete root
 
-    testCase "WHY — sweepShadowDirsIn — a deferred dir that still cannot be deleted stays pending, because dropping it would leak it for good" <| fun _ ->
+    bagTestCase "WHY — sweepShadowDirsIn — a deferred dir that still cannot be deleted stays pending, because dropping it would leak it for good" <| fun _ ->
       match OperatingSystem.IsWindows() || Environment.UserName = "root" with
       | true -> skiptest "needs POSIX permissions and a non-root user to make a delete fail"
       | false ->
