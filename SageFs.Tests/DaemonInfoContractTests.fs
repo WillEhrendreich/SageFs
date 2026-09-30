@@ -17,8 +17,10 @@ let daemonInfoContractTests =
           @"C:\Code\Repos\SageFs"
           37749
           3
+          "/logs/mcp-server20260930.log"
 
       contract.Pid |> Expect.equal "pid round-trips" 4242
+      contract.LogPath |> Expect.equal "the log path is served, so 'where are the logs' has an answer" "/logs/mcp-server20260930.log"
       contract.DashboardPort |> Expect.equal "dashboard port derived from mcp" 37750
       contract.ApiVersion |> Expect.equal "apiVersion matches endpoint contract" EndpointContracts.apiVersion
 
@@ -31,6 +33,7 @@ let daemonInfoContractTests =
           @"C:\repo"
           38000
           0
+          "/logs/a.log"
 
       contract.WorkingDirectory |> Expect.equal "working directory round-trips" @"C:\repo"
       contract.SessionCount |> Expect.equal "session count round-trips" 0
@@ -44,6 +47,7 @@ let daemonInfoContractTests =
           @"C:\repo"
           37851
           1
+          "/logs/b.log"
 
       contract.McpPort |> Expect.equal "custom mcp port round-trips" 37851
       contract.DashboardPort |> Expect.equal "dashboard port stays offset from custom mcp port" 37852
