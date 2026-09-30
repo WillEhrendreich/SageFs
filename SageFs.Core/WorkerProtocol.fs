@@ -531,6 +531,9 @@ module WorkerProtocol =
     /// What the last rebuild of this session did, recorded by SessionManager
     /// for every caller (MCP, dashboard, live testing, app run).
     Rebuild: LastRebuild
+    /// What the worker last said a save did to the running process, recorded
+    /// by SessionManager from the worker's reload stream.
+    Reload: SessionReload
   }
 
   /// Utilities for deriving display-friendly paths from session metadata.

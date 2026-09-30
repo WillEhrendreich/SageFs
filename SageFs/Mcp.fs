@@ -240,13 +240,6 @@ module McpTools =
   let typeIdentityDiagnostics =
     Collections.Concurrent.ConcurrentDictionary<string, string>()
 
-  /// What the last rebuild of this session did, in the status payload's terms.
-  /// Read off the session itself: the manager records it for every caller.
-  let private lastRestartFor (info: WorkerProtocol.SessionInfo option) (coreVersion: string option) : SessionStatusPayload.LastRestart =
-    match info with
-    | Some session -> SessionStatusPayload.lastRestartOfRebuild DateTime.UtcNow coreVersion session.Rebuild
-    | None -> SessionStatusPayload.LastRestart.NoneRecorded
-
 
   // Session working-directory routing/matching helpers moved to
   // SageFs/McpSessionRouting.fs (pure, testable; roast-8 §2 god-file split).
@@ -1302,7 +1295,8 @@ module McpTools =
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
              workerPid = WorkerProtocol.SessionLifecycleStatus.workerPid status
              workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status
-             lastRestart = SessionStatusPayload.lastRestartJson (lastRestartFor info None)
+             lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
+             lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              available = SageFs.Affordances.availableTools SageFs.SessionState.WarmingUp |})
       | FaultedSession (sid, cause) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1314,7 +1308,8 @@ module McpTools =
              faultReason = FaultCause.describe cause
              target = targets
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
-             lastRestart = SessionStatusPayload.lastRestartJson (lastRestartFor info None)
+             lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
+             lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              available = SageFs.Affordances.availableTools SageFs.SessionState.Faulted |})
       | Routable sid ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1353,7 +1348,8 @@ module McpTools =
               // The hard-reset tool answers "initiated" and points here for the
               // result. Without this a failed rebuild was recorded and then
               // never shown, so it read exactly like one still running.
-              LastRestart = lastRestartFor info (Some snapshot.CoreVersion) }
+              LastRestart = SessionStatusPayload.lastRestartOfSession info (Some snapshot.CoreVersion)
+              LastReload = sessionInfo.Reload }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
@@ -1437,6 +1433,7 @@ module McpTools =
             match info |> Option.map (fun i -> i.Rebuild) with
             | Some (LastRebuild.Latest outcome) -> "\n" + RebuildOutcome.describe DateTime.UtcNow (Some snapshot.CoreVersion) outcome
             | Some LastRebuild.NeverRebuilt | None -> ""
+          let reloadLine = SessionReload.statusLine (SessionStatusPayload.lastReloadOfSession info)
           // Self-host staleness (F5b): only sessions that adopted their own
           // SageFs.Core build carry an AdoptedCore identity, so the on-disk
           // scan runs ONLY for those (rare) sessions — never on the common
@@ -1482,7 +1479,7 @@ module McpTools =
             |> UpdateCheck.describe
             |> Option.map (fun line -> "\n" + line)
             |> Option.defaultValue ""
-          return enriched + rebuildLine + selfHostLine + healthLine + staleLine
+          return enriched + rebuildLine + reloadLine + selfHostLine + healthLine + staleLine
         | Ok other ->
           return sprintf "Unexpected response: %A" other
         | Error (RestartInProgress msg) ->

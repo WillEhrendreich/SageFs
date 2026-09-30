@@ -17,7 +17,7 @@ let private info (i: int) (status: WorkerProtocol.SessionStatus) : WorkerProtoco
     CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
     Status = WorkerProtocol.SessionLifecycleStatus.ofWorkerReport (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None }) status
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
-    ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+    ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
 let private ready i = info i WorkerProtocol.SessionStatus.Ready
 

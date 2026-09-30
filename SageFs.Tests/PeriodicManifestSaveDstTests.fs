@@ -77,7 +77,7 @@ let private mkSessionInfo (sid: string) (createdAt: float) : SessionInfo =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
 /// The `QuerySnapshot` a periodic-save tick would read at this instant, for
 /// exactly the sessions currently live (`sid -> createdAt`).

@@ -20,8 +20,9 @@ let private factsWith (restart: SessionStatusPayload.LastRestart) : SessionStatu
     CoreVersion = "0.0.0"
     EvalCount = 0
     AverageDurationMs = 0L
-    Health = box "healthy"
-    LastRestart = restart }
+    Health = SessionHealth.toJson SessionHealth.Healthy
+    LastRestart = restart
+    LastReload = SessionReload.NoReloadYet }
 
 let private allKinds =
   [ SessionStatusPayload.RestartKind.InProgress
@@ -54,4 +55,35 @@ let lastRestartTests =
       |> List.distinct
       |> List.length
       |> Expect.equal "four kinds, four labels" (List.length allKinds)
+  ]
+
+[<Tests>]
+let lastReloadTests =
+  testList "SessionStatusPayload.lastReload" [
+
+    testCase "WHY — a save that could not be applied is IN the payload, with the worker's wording and the remedy, because a console app has no browser tab to tell it" <| fun _ ->
+      let reload =
+        SessionReload.Finished
+          { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 3; Message = "3 changed definitions cannot be patched"; SuggestedAction = "restart the app" }
+      let json = SessionStatusPayload.serialize { factsWith SessionStatusPayload.LastRestart.NoneRecorded with LastReload = reload }
+      use doc = JsonDocument.Parse json
+      let payload = doc.RootElement.GetProperty "lastReload"
+      payload.GetProperty("state").GetString() |> Expect.equal "finished" "finished"
+      payload.GetProperty("outcome").GetString() |> Expect.equal "the outcome token" "RestartRequired"
+      payload.GetProperty("patched").GetInt32() |> Expect.equal "none patched" 0
+      payload.GetProperty("considered").GetInt32() |> Expect.equal "of three" 3
+      payload.GetProperty("suggestedAction").GetString() |> Expect.equal "the remedy" "restart the app"
+
+    testCase "WHY — a save still compiling says so, with the file" <| fun _ ->
+      let json = SessionStatusPayload.serialize { factsWith SessionStatusPayload.LastRestart.NoneRecorded with LastReload = SessionReload.Compiling (Some "/src/Ticker.fs") }
+      use doc = JsonDocument.Parse json
+      let payload = doc.RootElement.GetProperty "lastReload"
+      payload.GetProperty("state").GetString() |> Expect.equal "compiling" "compiling"
+      payload.GetProperty("file").GetString() |> Expect.equal "which file" "/src/Ticker.fs"
+
+    testCase "WHY — a session nobody has saved to reports no lastReload, rather than an invented success" <| fun _ ->
+      let json = SessionStatusPayload.serialize (factsWith SessionStatusPayload.LastRestart.NoneRecorded)
+      use doc = JsonDocument.Parse json
+      doc.RootElement.GetProperty("lastReload").ValueKind
+      |> Expect.equal "null, not a made-up outcome" JsonValueKind.Null
   ]

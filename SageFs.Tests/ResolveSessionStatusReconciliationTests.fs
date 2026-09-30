@@ -51,7 +51,7 @@ let private faultedSession : SessionInfo =
     Workflow = SageFs.WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
 [<Tests>]
 let resolveSessionStatusReconciliationTests =

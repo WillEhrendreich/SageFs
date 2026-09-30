@@ -72,7 +72,7 @@ let tests =
         Status = SessionLifecycleStatus.Starting { Pid = 123; Port = None }
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-        ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+        ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
       let mailbox =
         MailboxProcessor<SessionManager.SessionCommand>.Start(fun inbox ->
           let rec loop () = async {

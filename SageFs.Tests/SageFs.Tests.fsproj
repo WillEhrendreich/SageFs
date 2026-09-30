@@ -273,6 +273,7 @@
          <Compile Include="SessionManagerSpawnFirstRestartTests.fs" />
          <Compile Include="SessionManagerEarnedReadyTests.fs" />
          <Compile Include="SessionManagerRebuildOutcomeTests.fs" />
+         <Compile Include="SessionReloadTests.fs" />
          <Compile Include="AvailableProjectsDirectoryTests.fs" />
          <Compile Include="ToolSessionHandleTests.fs" />
          <Compile Include="ErrorCategoryTests.fs" />

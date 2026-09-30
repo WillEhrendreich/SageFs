@@ -34,6 +34,7 @@ let mkSessionInfo (id: SessionId) status =
 
     App = SageFs.AppRun.AppRunState.NotRunning
     Rebuild = LastRebuild.NeverRebuilt
+    Reload = SessionReload.NoReloadYet
 
   }
 

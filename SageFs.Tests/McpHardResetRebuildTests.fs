@@ -35,7 +35,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
       Status = status.Value
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-      ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning; Rebuild = rebuild.Value }
+      ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning; Rebuild = rebuild.Value; Reload = SessionReload.NoReloadYet }
   let ops =
     { SessionManagementOps.stub with
         GetProxy = fun _ ->

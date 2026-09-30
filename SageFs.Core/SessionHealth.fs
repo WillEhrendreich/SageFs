@@ -31,6 +31,11 @@ type SessionHealth =
   /// Worker is not usable at all (faulted or stopped). `reason` names why.
   | Failed of reason: string
 
+/// The verdict as the HTTP APIs send it. A named record, not an anonymous one, so
+/// a payload in another assembly can carry it with its shape checked. The
+/// lowercase field names are the wire names.
+type HealthView = { status: string; reason: string option }
+
 module SessionHealth =
 
   let label = function
@@ -57,8 +62,8 @@ module SessionHealth =
     | SessionHealth.Failed r -> Some (sprintf "❌ Health: Failed — %s" r)
 
   /// JSON-friendly projection for HTTP APIs (`/api/sessions`).
-  let toJson (health: SessionHealth) =
-    {| status = label health; reason = reason health |}
+  let toJson (health: SessionHealth) : HealthView =
+    { status = label health; reason = reason health }
 
   /// Reuses the real warmup failure data (name + the actual error message
   /// warmup recorded) rather than inventing new prose that could drift from

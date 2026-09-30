@@ -104,6 +104,9 @@ module SessionManager =
     /// One APP_OUTPUT= line of a run_app'd app's stdout, routed to the session
     /// output stream so the dashboard shows a running console/game app (#82).
     | WorkerAppOutput of SessionId * line: string
+    /// The worker said what a save did (its `/__sagefs__/reload` stream), so the
+    /// session records it and every surface reads it from there.
+    | ReloadObserved of SessionId * SessionReload
     | UpdateSessionStatus of SessionId * WorkerProtocol.SessionLifecycleStatus
     /// A worker's ready poll saw Ready; it carries the worker's pid and its classified projects.
     | WorkerReportedReady of SessionId * workerPid: int * ClassifiedProject list
@@ -291,44 +294,7 @@ module SessionManager =
 
   let startWorkerProcess = WorkerSpawn.startWorkerProcess
 
-  /// Run a blocking action on a dedicated background thread, never a
-  /// thread-pool thread. Returns a Task that completes when the action
-  /// returns, so a caller can `Async.AwaitTask` it exactly like a
-  /// `Task.Run` result — without pinning a pool thread for the action's
-  /// entire lifetime.
-  ///
-  /// WHY: a long-lived blocking `proc.StandardError/Output.ReadLine()` loop
-  /// wrapped in `Task.Run` pins a real thread-pool thread for as long as
-  /// the loop runs — for a live session's stderr/stdout reader, that is the
-  /// session's ENTIRE lifetime. `SessionManager.fs:1126-1145`'s old-worker
-  /// retirement already uses a dedicated thread for exactly this reason
-  /// (its own comment: "under pool saturation / memory pressure a
-  /// pool-queued retirement can be starved indefinitely"); this generalizes
-  /// the same fix to `awaitWorkerPort`'s two readers and
-  /// `SessionBuild.runOnce`'s two readers, which were the ones actually
-  /// observed starving the pool under 5 concurrent session warmups on
-  /// 2026-09-22 (`/health`/`/api/sessions` — lock-free, no I/O — timing out
-  /// for a full minute; Kestrel logging `heartbeat has been running for
-  /// "00:01:00"`). Two pool threads pinned per live session, scaling with
-  /// session count and bounded by nothing, is the actual mechanism behind
-  /// that lockup and very plausibly behind the onboarding trials' "stuck
-  /// for 20 minutes" / "stop_session timed out at 300s" reports too: the
-  /// daemon's own 120s safety-net timers are themselves pool continuations,
-  /// and a starved pool can delay the very watchdogs meant to catch a stuck
-  /// session.
-  let private runOnDedicatedThread (name: string) (action: unit -> unit) : System.Threading.Tasks.Task =
-    let tcs = System.Threading.Tasks.TaskCompletionSource()
-    let thread =
-      System.Threading.Thread(fun () ->
-        try
-          action ()
-          tcs.SetResult()
-        with ex ->
-          tcs.SetException(ex))
-    thread.IsBackground <- true
-    thread.Name <- name
-    thread.Start()
-    tcs.Task
+  let private runOnDedicatedThread = WorkerSpawn.runOnDedicatedThread
 
   /// Read the worker's stdout until WORKER_PORT is reported, then post
   /// a WorkerReady (or WorkerSpawnFailed) message back to the agent.
@@ -527,22 +493,7 @@ module SessionManager =
       try proc.Dispose() with _ -> ()
   }
 
-  /// Force-kill a set of worker process trees by PID, tolerating already-exited
-  /// or reaped PIDs. Used by the daemon's force-exit watchdog so a shutdown that
-  /// exceeds the graceful budget still kills every worker (issue #126: "sessions
-  /// not ending when main SageFs exit").
-  let killWorkerPids (pids: int list) : unit =
-    for pid in pids do
-      if pid > 0 then
-        try
-          use proc = Process.GetProcessById(pid)
-          if not proc.HasExited then
-            proc.Kill(entireProcessTree = true)
-        with
-        | :? ArgumentException -> ()   // no such process
-        | :? InvalidOperationException -> () // already exited
-        | ex ->
-          Log.warn "[SessionManager] KillWorkerPids failed for pid %d: %s\n%s" pid ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+  let killWorkerPids = WorkerSpawn.killWorkerPids
 
 
   let private appSlotOf (session: ManagedSession) : AppRun.AppSlot =
@@ -615,6 +566,7 @@ module SessionManager =
           ProjectRoles = session.ProjectRoles
           App = AppRun.acrossWorkerRestart session.Info.App
           Rebuild = session.Info.Rebuild
+          Reload = SessionReload.NoReloadYet
         }
         let restarted = {
           Info = info
@@ -702,6 +654,7 @@ module SessionManager =
                   { session.Info with
                       Status = SessionLifecycleStatus.Restarting (PreviousWorker.ofPid (SessionLifecycleStatus.workerPid session.Info.Status))
                       Workflow = workflow
+                      Reload = SessionReload.NoReloadYet
                       LastActivity = DateTime.UtcNow } }
           let newState =
             ManagerState.setPendingSwap id session
@@ -805,6 +758,7 @@ module SessionManager =
                   ProjectRoles = []
                   App = AppRun.AppRunState.NotRunning
                   Rebuild = LastRebuild.NeverRebuilt
+                  Reload = SessionReload.NoReloadYet
                 }
                 let managed = {
                   Info = info
@@ -1468,6 +1422,11 @@ module SessionManager =
           onAppOutput id line  // route a running app's stdout to session output (#82)
           return state
 
+        | SessionCommand.ReloadObserved(id, reload) ->
+          match ManagerState.tryGetSession id state with
+          | Some session -> return ManagerState.addSession id { session with Info = { session.Info with Reload = reload } } state
+          | None -> return state
+
         | SessionCommand.UpdateSessionStatus(id, newStatus) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
@@ -1736,6 +1695,7 @@ module SessionManager =
           | SessionCommand.ScheduleRestart _
           | SessionCommand.WorkerWarmupProgress _
           | SessionCommand.WorkerAppOutput _
+          | SessionCommand.ReloadObserved _
           | SessionCommand.UpdateSessionStatus _
           | SessionCommand.WorkerReportedReady _
           | SessionCommand.WorkerReportedFaulted _ -> ()

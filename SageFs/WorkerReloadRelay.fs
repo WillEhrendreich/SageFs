@@ -32,6 +32,19 @@ let reloadStreamPath = "/__sagefs__/reload"
 /// `retry:` line don't.
 let private sseDataPrefix = "data:"
 
+/// One line of the worker's stream: an event's payload, or something that is
+/// not an event.
+[<RequireQualifiedAccess>]
+type SseLine =
+  | Data of payload: string
+  | NotAnEvent
+
+module SseLine =
+  let ofLine (line: string) : SseLine =
+    match line.StartsWith(sseDataPrefix, StringComparison.Ordinal) with
+    | true -> SseLine.Data (line.Substring(sseDataPrefix.Length).Trim())
+    | false -> SseLine.NotAnEvent
+
 /// What the relay is doing for one session.
 [<RequireQualifiedAccess>]
 type Held =
@@ -84,8 +97,8 @@ type private Command =
   | Ended of WorkerProtocol.SessionId * workerUrl: string
 
 /// Read one worker's reload stream until it closes or `stop` fires, calling
-/// `heard` for every event on it.
-let private listen (http: HttpClient) (workerUrl: string) (stop: CancellationToken) (heard: unit -> unit) : Task<unit> = task {
+/// `heard` with the payload of every event on it.
+let private listen (http: HttpClient) (workerUrl: string) (stop: CancellationToken) (heard: string -> unit) : Task<unit> = task {
   try
     use req = new HttpRequestMessage(HttpMethod.Get, workerUrl.TrimEnd('/') + reloadStreamPath)
     req.Headers.Accept.ParseAdd "text/event-stream"
@@ -98,8 +111,10 @@ let private listen (http: HttpClient) (workerUrl: string) (stop: CancellationTok
       let! line = reader.ReadLineAsync(stop)
       match line with
       | null -> closed <- true
-      | l when l.StartsWith(sseDataPrefix, StringComparison.Ordinal) -> heard ()
-      | _ -> ()
+      | l ->
+        match SseLine.ofLine l with
+        | SseLine.Data payload -> heard payload
+        | SseLine.NotAnEvent -> ()
   with
   | :? OperationCanceledException -> ()
   | :? HttpRequestException as ex -> Log.debug "[WorkerReloadRelay] %s: %s" workerUrl ex.Message
@@ -107,12 +122,13 @@ let private listen (http: HttpClient) (workerUrl: string) (stop: CancellationTok
 }
 
 /// Start the relay. `workerUrlOf` reads the session snapshot, `onEvent` is
-/// called (from a background task) for every event a session's worker sends.
+/// called (from a background task) with the payload of every event a session's
+/// worker sends.
 /// Returns `ensure`: call it whenever a session may have a new worker, or may
 /// have lost one. It's idempotent, and cheap when nothing changed.
 let start
   (workerUrlOf: WorkerProtocol.SessionId -> string option)
-  (onEvent: WorkerProtocol.SessionId -> unit)
+  (onEvent: WorkerProtocol.SessionId -> string -> unit)
   (shutdown: CancellationToken)
   : WorkerProtocol.SessionId -> unit =
   // Its own client: the shared one has a request timeout, and this stream is
@@ -136,8 +152,8 @@ let start
           let cts = CancellationTokenSource.CreateLinkedTokenSource shutdown
           let token = cts.Token
           task {
-            do! listen http url token (fun () ->
-              try onEvent sid
+            do! listen http url token (fun payload ->
+              try onEvent sid payload
               with ex -> Log.warn "[WorkerReloadRelay] handling an event from %s threw: %s" url ex.Message)
             match token.IsCancellationRequested with
             | true -> ()

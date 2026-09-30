@@ -28,6 +28,9 @@ type SseEvent =
   | SessionReady of sessionId: WorkerProtocol.SessionId
   | SessionSwitched of sessionId: WorkerProtocol.SessionId
   | HotReloadChanged of sessionId: WorkerProtocol.SessionId
+  /// The worker said what a save did (patched, needs a restart, did not
+  /// compile...). The daemon has already recorded it on the session.
+  | ReloadReported of sessionId: WorkerProtocol.SessionId * reload: SessionReload
   | FileReloaded of sessionId: WorkerProtocol.SessionId * path: string
   | SessionFaulted of sessionId: WorkerProtocol.SessionId * error: string
   | ModelChanged of outputCount: int * diagCount: int
@@ -66,6 +69,7 @@ module SseEvent =
     | SessionReady _
     | SessionSwitched _
     | HotReloadChanged _
+    | ReloadReported _
     | FileReloaded _
     | SessionFaulted _
     | ModelChanged _
@@ -169,6 +173,8 @@ module SseEvent =
       JsonSerializer.Serialize({| sessionSwitched = sid s |}, jsonOpts)
     | HotReloadChanged s ->
       JsonSerializer.Serialize({| hotReloadChanged = true; sessionId = sid s |}, jsonOpts)
+    | ReloadReported (s, reload) ->
+      JsonSerializer.Serialize({| reloadReported = SessionReload.toWire reload; sessionId = sid s |}, jsonOpts)
     | FileReloaded (s, path) ->
       JsonSerializer.Serialize({| fileReloaded = path; sessionId = sid s |}, jsonOpts)
     | SessionFaulted (s, error) ->

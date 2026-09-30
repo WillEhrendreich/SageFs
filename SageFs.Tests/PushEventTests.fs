@@ -27,6 +27,9 @@ let private emptyImpact =
 let private emptyActionQueue =
   SageFs.Features.ActionPrioritizer.ActionQueueReport.empty
 
+let private sampleReload : SageFs.ReloadFacts =
+  { Case = SageFs.ReloadCase.Patched; Patched = 3; Considered = 5; Message = "3 of 5 changed definitions are live"; SuggestedAction = "" }
+
 let private allPushEvents = [
   PushEvent.DiagnosticsChanged []
   PushEvent.StateChanged (0, 0)
@@ -41,6 +44,7 @@ let private allPushEvents = [
   PushEvent.ActionQueueReady emptyActionQueue
   PushEvent.TestSourceLocations []
   PushEvent.SystemAlarm ("update", "boom")
+  PushEvent.ReloadReported sampleReload
 ]
 
 [<Tests>]
@@ -48,9 +52,10 @@ let pushEventTagTests = testList "PushEvent.tag" [
   testCase "all variants have unique tags" (fun () ->
     let tags = allPushEvents |> List.map PushEvent.tag
     tags |> List.distinct |> Expect.hasLength "all unique" allPushEvents.Length)
-  testCase "tags are sequential 0..12" (fun () ->
+  // 13 is FailureNarrativesUpdated, which this list does not build; ReloadReported is 14.
+  testCase "tags are sequential 0..12, then 14 (13 belongs to an event not listed here)" (fun () ->
     let tags = allPushEvents |> List.map PushEvent.tag
-    tags |> Expect.equal "sequential" [0;1;2;3;4;5;6;7;8;9;10;11;12])
+    tags |> Expect.equal "sequential" [0;1;2;3;4;5;6;7;8;9;10;11;12;14])
 ]
 
 [<Tests>]
@@ -84,6 +89,19 @@ let pushEventFormatForLlmTests = testList "PushEvent.formatForLlm" [
   testCase "state changed" (fun () ->
     PushEvent.formatForLlm (PushEvent.StateChanged (42, 7))
     |> Expect.stringContains "output count" "output=42")
+  testCase "a reload verdict says what the save did, in the worker's words, with an icon for which way it went" (fun () ->
+    let say (case: SageFs.ReloadCase) (patched: int) =
+      PushEvent.formatForLlm (PushEvent.ReloadReported { sampleReload with Case = case; Patched = patched; Message = "the worker's wording" })
+    say SageFs.ReloadCase.Patched 3 |> Expect.stringContains "a patch landed" "🔥 hot reload: the worker's wording"
+    say SageFs.ReloadCase.Restarted 0 |> Expect.stringContains "the app was restarted" "🔥"
+    say SageFs.ReloadCase.KeptLiveState 1 |> Expect.stringContains "a kept value with a patch alongside" "🔥"
+    say SageFs.ReloadCase.KeptLiveState 0 |> Expect.stringContains "a kept value alone changed nothing" "⚠️"
+    say SageFs.ReloadCase.NoEffect 0 |> Expect.stringContains "nothing changed in the running process" "⚠️"
+    say SageFs.ReloadCase.RestartRequired 0 |> Expect.stringContains "the app has to be restarted" "⚠️"
+    say SageFs.ReloadCase.CompileFailed 0 |> Expect.stringContains "the file did not compile" "🔴")
+  testCase "only the latest reload verdict is kept, because an older save's verdict is superseded" (fun () ->
+    PushEvent.mergeStrategy (PushEvent.ReloadReported sampleReload)
+    |> Expect.equal "replaces" MergeStrategy.Replace)
   testCase "file reloaded shows filename only" (fun () ->
     PushEvent.formatForLlm (PushEvent.FileReloaded "/long/path/to/Module.fs")
     |> Expect.stringContains "filename" "Module.fs")

@@ -131,7 +131,7 @@ module SidebarCards =
       CreatedAt = now.AddMinutes -5.0; LastActivity = now.AddMinutes -3.0
       Status = WorkerProtocol.SessionLifecycleStatus.ofWorkerReport (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None }) status
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
-      ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+      ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
   let card (session: WorkerProtocol.SessionInfo) = sessionCardOf now None 0 SessionHealth.Healthy session
 

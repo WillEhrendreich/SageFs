@@ -80,11 +80,14 @@ module SessionStatusPayload =
     CoreVersion: string
     EvalCount: int
     AverageDurationMs: int64
-    /// The health verdict, serialized as its caller produced it. Kept as the
-    /// caller's own value so this module never restates the health rules.
-    Health: obj
+    /// The health verdict as `SessionHealth.toJson` produces it. Typed, so the
+    /// payload's shape is checked here instead of hidden behind `obj`; this
+    /// module still never restates the health rules.
+    Health: HealthView
     /// The outcome of the last requested rebuild, in the caller's own words.
     LastRestart: LastRestart
+    /// What the worker last said a save did to the running process.
+    LastReload: SessionReload
   }
 
   /// What a session's rebuild history says, in the payload's terms. The one
@@ -95,6 +98,19 @@ module SessionStatusPayload =
     match rebuild with
     | LastRebuild.Latest outcome -> LastRestart.Recorded(restartKindOf outcome, RebuildOutcome.describe now coreVersion outcome)
     | LastRebuild.NeverRebuilt -> LastRestart.NoneRecorded
+
+  /// What the last rebuild of the session did, when the caller may not have the
+  /// session at all. Read off the session: the manager records it for every caller.
+  let lastRestartOfSession (info: WorkerProtocol.SessionInfo option) (coreVersion: string option) : LastRestart =
+    match info with
+    | Some session -> lastRestartOfRebuild System.DateTime.UtcNow coreVersion session.Rebuild
+    | None -> LastRestart.NoneRecorded
+
+  /// What the worker last said a save did, off the session (no session, no reload).
+  let lastReloadOfSession (info: WorkerProtocol.SessionInfo option) : SessionReload =
+    match info with
+    | Some session -> session.Reload
+    | None -> SessionReload.NoReloadYet
 
   /// How `lastRestart` appears in EVERY status shape (routable, warming,
   /// faulted). One function, so a shape cannot forget it: the warming shape did,
@@ -127,4 +143,5 @@ module SessionStatusPayload =
          averageDurationMs = facts.AverageDurationMs
          health = facts.Health
          lastRestart = lastRestartJson facts.LastRestart
+         lastReload = SessionReload.toWire facts.LastReload
          available = Affordances.availableTools sessionState |})

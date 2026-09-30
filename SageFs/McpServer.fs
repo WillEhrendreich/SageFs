@@ -471,7 +471,7 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
         })))
 
 /// Raised when a request body exceeds the 4 MB hard limit.
-/// withErrorHandling catches this and swallows it (413 already committed).
+/// errorHandlingMiddleware catches this and swallows it (413 already committed).
 exception RequestTooLarge
 
 let private maxRequestBodyBytes = 4_194_304L
@@ -608,21 +608,8 @@ let private toSessionId (s: string) =
   | Ok sid -> sid
   | Error _ -> failwithf "invalid session ID: %s" s
 
-/// Wrap an async handler with try/catch and JSON error response.
-/// Kept for backward compatibility — the global errorHandlingMiddleware now provides
-/// this protection for all routes, so per-endpoint wrapping is no longer needed.
-let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: unit -> Task) = task {
-  try do! handler ()
-  with
-  | RequestTooLarge -> ()  // 413 already committed — do not write a second response
-  | :? System.Text.Json.JsonException as je ->
-    do! jsonResponse ctx 400 (structuredErrorBody (SageFsError.JsonParseError ("request body", je.Message)))
-  | ex ->
-    do! respondUnexpected ctx ex
-}
-
-/// Global error-handling middleware — catches unhandled exceptions from all endpoints.
-/// Replaces per-endpoint withErrorHandling wrapping.  For SSE/streaming responses that
+/// Global error-handling middleware — catches unhandled exceptions from all endpoints,
+/// so no endpoint wraps its own handler. For SSE/streaming responses that
 /// have already started writing, the middleware skips the JSON error response (can't
 /// change Content-Type or status after headers are sent).
 let errorHandlingMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: Func<Task>) = task {
@@ -1155,6 +1142,11 @@ let wireSessionEventSubscription
         ctx.SessionEventBroadcast.Trigger(sseFrame)
       | SseEvent.FileReloaded (sid, path) ->
         ctx.ServerTracker.AccumulateEvent(Some (SageFs.WorkerProtocol.SessionId.value sid), PushEvent.FileReloaded path)
+      // What the save DID, once the worker has decided. "Compiling" is not pushed:
+      // it always resolves into a verdict, and only the verdict is news.
+      | SseEvent.ReloadReported (sid, SageFs.SessionReload.Finished facts) ->
+        ctx.ServerTracker.AccumulateEvent(Some (SageFs.WorkerProtocol.SessionId.value sid), PushEvent.ReloadReported facts)
+      | SseEvent.ReloadReported (_, (SageFs.SessionReload.Compiling _ | SageFs.SessionReload.NoReloadYet)) -> ()
       | SseEvent.SessionFaulted (sid, error) ->
         ctx.ServerTracker.AccumulateEvent(Some (SageFs.WorkerProtocol.SessionId.value sid), PushEvent.SessionFaulted error)
       // Handled by wireModelChangeHandlers's own subscription instead.
@@ -1788,6 +1780,7 @@ let wireModelChangeHandlers
       ctx.ServerTracker.AccumulateEvent(None, PushEvent.SystemAlarm (phase, msg))
     // Handled by wireSessionEventSubscription's own subscription instead.
     | SseEvent.HotReloadChanged _
+    | SseEvent.ReloadReported _
     | SseEvent.SessionReady _
     | SseEvent.WarmupProgress _
     | SseEvent.FileReloaded _
@@ -2769,6 +2762,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
              faultReason = (SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status |> Option.map SageFs.WorkerProtocol.FaultReason.describe)
              health = SageFs.SessionHealth.toJson health
              lastRestart = SageFs.SessionStatusPayload.lastRestartJson (SageFs.SessionStatusPayload.lastRestartOfRebuild DateTime.UtcNow None sess.Rebuild)
+             lastReload = SageFs.SessionReload.toWire sess.Reload
              projects = sess.Projects
              // What the worker ACTUALLY resolved and loaded, which is not always what
              // was declared: a session created with `projects=[]` still loads whatever

@@ -29,7 +29,7 @@ let private sessionWith (status: SessionLifecycleStatus) : SessionInfo =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+    App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
 let private reasonOf (resolution: SessionResolution) =
   match resolution with

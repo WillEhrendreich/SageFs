@@ -64,17 +64,19 @@ type RestartReason =
   /// The Dart VM prefixes exactly this distinction with "Limitation: ", and it
   /// matters: one is a bug report worth filing, the other is physics.
   | NotYetSupported of shape: string
-  /// The detour was ACCEPTED and the running native code did not change: the
-  /// canary compared the method's JIT-compiled bytes either side of the patch
-  /// and found them identical.
+  /// The patch re-pointed a copy of the function, but only an earlier eval's
+  /// copy: nothing proves the redirect reached a compiled entry point the
+  /// running process calls. The running process is untouched and the user has
+  /// to restart to see the edit.
   ///
-  /// This case exists because the canary used to be discarded. `DetourApplied`
-  /// described `Ineffective` as "still counted as redirected (the canary is a
-  /// warning signal, not a verdict)", so a method the canary had already proven
-  /// unchanged was counted as landed — and the save was reported as
-  /// "Hot reloaded 1 of 1" while the running process kept serving the old body.
-  /// The canary is evidence about the running process, which is the only thing
-  /// the count claims to describe, so it is a verdict here.
+  /// The verdict is the planner's (`ReloadPlanning.confirmPatchAsOutcome`): a
+  /// declaration the running build already had must show, from the app's own
+  /// records of what it captured, that the redirect reached it. It is NOT the
+  /// canary's. The canary compares a method's JIT-compiled bytes either side of
+  /// the patch, and that was measured to read "unchanged" for reloads that do
+  /// change what the app serves (a reload can reach the app through a copy the
+  /// canary does not sample), so `HotReloadCore.applyDetourPlan` still counts
+  /// `DetourApplied.Ineffective` as redirected and carries it only as a signal.
   | PatchIneffective of declaration: string
   /// An immutable value you redefined, and the running app kept a copy of the
   /// old one (a closure built at startup, a lazy, a field). A patch of its

@@ -32,7 +32,7 @@ let private liveSession : WorkerProtocol.SessionInfo =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+    App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
 /// The queries the landing page makes for a session it is about to show: a live
 /// session exists, and reading its workflow throws, as a busy worker can.

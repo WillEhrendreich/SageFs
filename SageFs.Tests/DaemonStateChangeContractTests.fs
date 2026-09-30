@@ -35,6 +35,16 @@ let daemonStateChangeContractTests =
       json
       |> Expect.stringContains "payload should keep the hotReloadChanged marker" "\"hotReloadChanged\":true"
 
+    testCase "ReloadReported serializes with the owning session ID and what the worker said the save did" <| fun _ ->
+      let facts : ReloadFacts =
+        { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 2; Message = "restart the app to apply this"; SuggestedAction = "restart" }
+      let json = SseEvent.toJson (SseEvent.ReloadReported (sid "cafe0001", SessionReload.Finished facts))
+      json |> Expect.stringContains "the owning session" "\"sessionId\":\"cafe0001\""
+      json |> Expect.stringContains "the outcome token" "\"outcome\":\"RestartRequired\""
+      json |> Expect.stringContains "the worker's wording" "restart the app to apply this"
+      SseEvent.channel (SseEvent.ReloadReported (sid "cafe0001", SessionReload.NoReloadYet))
+      |> Expect.equal "rides the state channel with the other per-session notifications" SseChannel.State
+
     testCase "FileReloaded serializes with the owning session ID and path" <| fun _ ->
       let s = sid "deadbeef"
       let json = SseEvent.toJson (SseEvent.FileReloaded (s, "C:\\proj\\src\\Lib.fs"))

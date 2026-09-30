@@ -2714,10 +2714,21 @@ let run
   // it's a HotReloadChanged: the dashboard refetches the worker's panels and
   // morphs if anything changed. Without this the only trigger was the
   // daemon's own file event, which fires before the worker has decided.
+  //
+  // The event's payload is what the worker decided about the save (patched, needs
+  // a restart, did not compile). The session records it, so every surface can say
+  // what the save did, not just a browser tab served by the app being reloaded.
   let ensureReloadRelay =
-    WorkerReloadRelay.start getWorkerBaseUrl (fun sid -> stateChangedEvent.Trigger (HotReloadChanged sid)) cts.Token
+    WorkerReloadRelay.start getWorkerBaseUrl (fun sid payload ->
+      match SessionReload.ofPayloadJson payload with
+      | Result.Ok reload ->
+        sessionManager.Post(SessionManager.SessionCommand.ReloadObserved(sid, reload))
+        stateChangedEvent.Trigger (ReloadReported (sid, reload))
+      | Result.Error why ->
+        Log.warn "[WorkerReloadRelay] session %s sent a reload event this daemon cannot read: %s" (WorkerProtocol.SessionId.value sid) (ReloadPayloadError.describe why)
+      stateChangedEvent.Trigger (HotReloadChanged sid)) cts.Token
   // Anything that can mean a session got a worker, lost one, or got a new one.
-  // HotReloadChanged is left out on purpose: the relay raises it.
+  // HotReloadChanged and ReloadReported are left out on purpose: the relay raises them.
   stateChangedEvent.Publish.Add(fun change ->
     match change with
     | SessionReady sid
@@ -2726,6 +2737,7 @@ let run
     | SessionFaulted (sid, _) -> ensureReloadRelay sid
     | SessionProgress
     | HotReloadChanged _
+    | ReloadReported _
     | ModelChanged _
     | WarmupProgress _
     | SystemAlarm _

@@ -562,6 +562,7 @@ let invalidatesWorkerData (change: SseEvent) =
   match change with
   | SseEvent.ModelChanged _
   | SseEvent.HotReloadChanged _
+  | SseEvent.ReloadReported _
   | SseEvent.FileReloaded _
   | SseEvent.WarmupProgress _
   | SseEvent.SessionReady _

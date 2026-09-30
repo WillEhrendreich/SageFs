@@ -24,6 +24,7 @@ let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo =
 
   App = SageFs.AppRun.AppRunState.NotRunning
   Rebuild = LastRebuild.NeverRebuilt
+  Reload = SessionReload.NoReloadYet
 
 }
 
@@ -174,6 +175,7 @@ let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) (pid: in
 
   App = SageFs.AppRun.AppRunState.NotRunning
   Rebuild = LastRebuild.NeverRebuilt
+  Reload = SessionReload.NoReloadYet
 
 }
 

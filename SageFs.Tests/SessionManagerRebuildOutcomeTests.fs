@@ -129,3 +129,48 @@ let tests =
         rebuildOf harness info.Id |> Expect.equal "no build ran, so there is no build outcome" LastRebuild.NeverRebuilt })
     }
   ]
+
+let private reloadOf (harness: Harness) (id: SessionId) : SessionReload =
+  match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(id, reply)) with
+  | Some session -> session.Info.Reload
+  | None -> failtestf "expected session %s to exist" (SessionId.value id)
+
+let private restartRequired : SessionReload =
+  SessionReload.Finished
+    { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 2; Message = "restart the app to apply this"; SuggestedAction = "restart" }
+
+[<Tests>]
+let reloadTests =
+  testList "SessionManager records what the worker said a save did" [
+    testTask "WHY — a session no save has resolved for says so" {
+      do! withHarness (async { return Ok "unused" }) (fun harness -> task {
+        let info = createSession harness
+        reloadOf harness info.Id |> Expect.equal "nothing yet" SessionReload.NoReloadYet })
+    }
+
+    testTask "WHY — what the worker reports is recorded on the session, latest first, so every surface reads the same thing" {
+      do! withHarness (async { return Ok "unused" }) (fun harness -> task {
+        let info = createSession harness
+        harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, SessionReload.Compiling (Some "/src/Ticker.fs")))
+        reloadOf harness info.Id |> Expect.equal "compiling first" (SessionReload.Compiling (Some "/src/Ticker.fs"))
+        harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, restartRequired))
+        reloadOf harness info.Id |> Expect.equal "then the verdict replaces it" restartRequired })
+    }
+
+    testTask "WHY — a report for a session that is gone is dropped, not resurrected" {
+      do! withHarness (async { return Ok "unused" }) (fun harness -> task {
+        let gone = SessionId.newId ()
+        harness.Mailbox.Post(SessionCommand.ReloadObserved(gone, restartRequired))
+        // A round trip through the mailbox guarantees the report was processed.
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(gone, reply))
+        |> Expect.isNone "still no such session" })
+    }
+
+    testTask "WHY — a replacement worker starts with no reload history, because the old worker's verdict is about a process that is gone" {
+      do! withHarness (async { return Ok "build ok" }) (fun harness -> task {
+        let info = createSession harness
+        harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, restartRequired))
+        let! _ = harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, RestartPlan.RespawnOnly, reply))
+        reloadOf harness info.Id |> Expect.equal "the new worker has not been saved to" SessionReload.NoReloadYet })
+    }
+  ]

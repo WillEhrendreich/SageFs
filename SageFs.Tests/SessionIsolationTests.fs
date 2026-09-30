@@ -44,7 +44,7 @@ module McpSessionIsolation =
                      LastActivity = System.DateTime.UtcNow
                      ActiveProject = None
                      ProjectRoles = []
-                     App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt })
+                     App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet })
           GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
           UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
           NotifyWorkerDied = fun _ -> ()
@@ -199,7 +199,7 @@ module SessionResolutionByWorkingDir =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
   let tests = testList "resolveSessionByWorkingDir" [
     test "returns None for empty session list" {
@@ -281,7 +281,7 @@ module WorkingDirDeepMatching =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
   let tests = testList "sessionsMatchingWorkingDirDeep" [
 
@@ -396,7 +396,7 @@ module WorkingDirRoutingPriority =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
   let dummyProxy : WorkerProtocol.SessionProxy =
     fun _msg -> async { return WorkerProtocol.WorkerResponse.WorkerReady }
@@ -655,7 +655,7 @@ module ResetIsolation =
                  Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 0; Port = None }
                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
                  CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow
-                 ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt })
+                 ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet })
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
       UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
       NotifyWorkerDied = fun _ -> ()
@@ -708,7 +708,7 @@ module ResetIsolation =
         LastActivity = DateTime.UtcNow
         ActiveProject = None
         ProjectRoles = []
-        App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+        App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
     let statusSnapshot () : WorkerProtocol.WorkerStatusSnapshot =
       let status =
@@ -836,7 +836,7 @@ module ResetIsolation =
                    LastActivity = DateTime.UtcNow
                    ActiveProject = None
                    ProjectRoles = []
-                   App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt })
+                   App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
           statuses.Add(status)
@@ -1001,6 +1001,7 @@ module ResetIsolation =
             CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
             ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning
             Rebuild = LastRebuild.NeverRebuilt
+            Reload = SessionReload.NoReloadYet
           })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
@@ -1089,6 +1090,7 @@ module ResetIsolation =
             CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
             ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning
             Rebuild = LastRebuild.NeverRebuilt
+            Reload = SessionReload.NoReloadYet
           })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
@@ -1540,7 +1542,7 @@ module SessionMapEviction =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+      App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
 
   let tests = testList "SessionMap eviction" [
     test "setActiveSessionId with empty id removes the agent entry" {

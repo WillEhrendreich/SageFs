@@ -674,7 +674,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         ActiveProject = None
         ProjectRoles = []
-        App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+        App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
     let resolved = resolveViewingSession (Some "0a2b3c4e") [ info sessionA "A.fsproj"; info sessionB "B.fsproj" ]
     resolved |> Expect.equal "stream must retain the browser-requested session" (Some sessionB)
   }

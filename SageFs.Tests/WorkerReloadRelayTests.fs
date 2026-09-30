@@ -41,3 +41,17 @@ let tests =
         | None -> Worker.NoWorker
       Worker.ofLookup url |> Expect.equal "the lookup means exactly what it says" expected
   ]
+
+[<Tests>]
+let sseLineTests =
+  testList "WorkerReloadRelay.SseLine" [
+    testCase "WHY — a data line hands over its payload, so the daemon can read what the save did" <| fun _ ->
+      SseLine.ofLine """data: {"type":"reload","outcome":"Patched"}"""
+      |> Expect.equal "the payload, without the prefix or its space" (SseLine.Data """{"type":"reload","outcome":"Patched"}""")
+      SseLine.ofLine "data:{\"type\":\"none\"}"
+      |> Expect.equal "with no space after the colon" (SseLine.Data "{\"type\":\"none\"}")
+
+    testCase "WHY — heartbeats, retry lines and blank lines are not events" <| fun _ ->
+      for line in [ ": heartbeat"; "retry: 3000"; ""; "event: reload"; "id: 7" ] do
+        SseLine.ofLine line |> Expect.equal (sprintf "'%s' carries no event" line) SseLine.NotAnEvent
+  ]

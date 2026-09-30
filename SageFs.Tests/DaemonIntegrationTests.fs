@@ -84,6 +84,7 @@ let managerStateTests =
 
         App = SageFs.AppRun.AppRunState.NotRunning
         Rebuild = LastRebuild.NeverRebuilt
+        Reload = SessionReload.NoReloadYet
 
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -127,6 +128,7 @@ let managerStateTests =
 
         App = SageFs.AppRun.AppRunState.NotRunning
         Rebuild = LastRebuild.NeverRebuilt
+        Reload = SessionReload.NoReloadYet
 
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -171,6 +173,7 @@ let managerStateTests =
 
           App = SageFs.AppRun.AppRunState.NotRunning
           Rebuild = LastRebuild.NeverRebuilt
+          Reload = SessionReload.NoReloadYet
 
         }
         { Info = info

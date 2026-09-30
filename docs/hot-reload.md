@@ -68,7 +68,15 @@ their apps inside FSI, where the agent is, so that is what they prove.
    compiled types.
 3. [Harmony](https://github.com/pardeike/Harmony) re-points those methods at
    their new bodies at runtime. No restart.
-4. SSE pushes the outcome to connected browsers and editors.
+4. The worker decides what the save did (patched, needs a restart, did not
+   compile) and says so on its reload stream. The daemon keeps the last thing it
+   said on the session, so you can read it without a browser tab: it's
+   `lastReload` in `get_session_status` and `/api/sessions`, a `ReloadReported`
+   event on the SSE stream, and a line in the MCP push an agent gets. The browser
+   overlay still gets it too. Before this, a console app that needed a restart
+   said so only in a worker log nobody was reading.
+   (`SessionReloadTests` pins the wire shape against the worker's own events, and
+   `SessionManagerRebuildOutcomeTests` pins that the session records it.)
 
 Step 2 is the part that makes a startup-captured route table work. The route
 list holds function values created at startup, but each of those still

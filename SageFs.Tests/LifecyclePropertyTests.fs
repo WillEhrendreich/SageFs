@@ -146,6 +146,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
             App = SageFs.AppRun.AppRunState.NotRunning
             Rebuild = LastRebuild.NeverRebuilt
+            Reload = SessionReload.NoReloadYet
 
           }
           Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
@@ -182,6 +183,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
           App = SageFs.AppRun.AppRunState.NotRunning
           Rebuild = LastRebuild.NeverRebuilt
+          Reload = SessionReload.NoReloadYet
 
         }
         Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
@@ -218,6 +220,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
         App = SageFs.AppRun.AppRunState.NotRunning
         Rebuild = LastRebuild.NeverRebuilt
+        Reload = SessionReload.NoReloadYet
 
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = url
@@ -257,6 +260,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
         App = SageFs.AppRun.AppRunState.NotRunning
         Rebuild = LastRebuild.NeverRebuilt
+        Reload = SessionReload.NoReloadYet
 
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""

@@ -15,6 +15,9 @@ type PushEvent =
   | StateChanged of outputCount: int * diagCount: int
   /// A watched file was reloaded by the file watcher.
   | FileReloaded of path: string
+  /// The worker said what a save did to the running process: patched, needs a
+  /// restart, did not compile. Only terminal outcomes are pushed, never "compiling".
+  | ReloadReported of facts: SageFs.ReloadFacts
   /// Session became faulted.
   | SessionFaulted of error: string
   /// Warmup completed.
@@ -60,6 +63,8 @@ module PushEvent =
     | PushEvent.TestSourceLocations _ -> MergeStrategy.Replace
     | PushEvent.FailureNarrativesUpdated _ -> MergeStrategy.Replace
     | PushEvent.SystemAlarm _ -> MergeStrategy.Replace
+    // Only the latest save's verdict matters; an older one is superseded.
+    | PushEvent.ReloadReported _ -> MergeStrategy.Replace
 
   /// Discriminator tag used for Replace dedup.
   let tag = function
@@ -77,6 +82,7 @@ module PushEvent =
     | PushEvent.TestSourceLocations _ -> 11
     | PushEvent.FailureNarrativesUpdated _ -> 13
     | PushEvent.SystemAlarm _ -> 12
+    | PushEvent.ReloadReported _ -> 14
 
   /// Tests the summary counts but never executed to a verdict. A concurrent
   /// summary can momentarily report more passed+failed than the total it was
@@ -168,6 +174,18 @@ module PushEvent =
       sprintf "🔍 failure narratives: %d test(s) with causal context" count
     | PushEvent.SystemAlarm (phase, msg) ->
       sprintf "🚨 system alarm [%s]: %s" phase msg
+    | PushEvent.ReloadReported facts ->
+      // The worker's own wording says what happened and what to do; the icon
+      // only says which way it went. A patch is a landing, a refusal or a
+      // no-op is a warning (nothing changed in the running process), and a
+      // compile failure is an error (the app is still serving the old code).
+      let icon =
+        match facts.Case with
+        | SageFs.ReloadCase.Patched | SageFs.ReloadCase.Restarted -> "🔥"
+        | SageFs.ReloadCase.KeptLiveState when facts.Patched > 0 -> "🔥"
+        | SageFs.ReloadCase.KeptLiveState | SageFs.ReloadCase.NoEffect | SageFs.ReloadCase.RestartRequired -> "⚠️"
+        | SageFs.ReloadCase.CompileFailed -> "🔴"
+      sprintf "%s hot reload: %s" icon facts.Message
 
 type AccumulatedEvent = {
   Timestamp: DateTimeOffset

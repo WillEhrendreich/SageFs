@@ -89,7 +89,7 @@ let mkHangingSession (proc: Process) =
         LastActivity = DateTime.UtcNow
         ActiveProject = None
         ProjectRoles = []
-        App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+        App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
     Process = proc
     // A proxy that never responds — simulates a hung worker whose HTTP server
     // is wedged (the real proxy has no request timeout).

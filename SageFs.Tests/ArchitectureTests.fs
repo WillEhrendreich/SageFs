@@ -1211,7 +1211,10 @@ let fileSizeBudgets =
       // 1904 -> 1894: the worker stderr queue became StderrTail (TailBuffer.fs).
       // 1894 -> 1780: startWorkerProcess and SpawnedWorker moved to WorkerSpawn.fs
       // (about 130 lines), net of recording every rebuild's outcome on the session.
-      "SageFs.Core/SessionManager.fs", 1780 ]
+      // 1780 -> 1740: runOnDedicatedThread (a 25-line comment and its body) and
+      // killWorkerPids moved to WorkerSpawn.fs, net of recording each worker's
+      // reload verdict (`ReloadObserved`).
+      "SageFs.Core/SessionManager.fs", 1740 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->

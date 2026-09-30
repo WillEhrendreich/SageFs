@@ -62,7 +62,7 @@ let private toolsFor (port: int) : SageFsTools =
       Workflow = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults
       ActiveProject = None
       ProjectRoles = []
-      App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt }
+      App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
   let ops =
     { SessionManagementOps.stub with
         GetSessionInfo = fun _ -> Task.FromResult(Some info)

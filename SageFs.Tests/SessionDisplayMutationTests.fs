@@ -31,6 +31,7 @@ let private mkInfo (status: SessionLifecycleStatus) (lastActivity: DateTime) : S
   ProjectRoles = []
   App = SageFs.AppRun.AppRunState.NotRunning
   Rebuild = LastRebuild.NeverRebuilt
+  Reload = SessionReload.NoReloadYet
 }
 
 let private handle = { Pid = 100; Port = Some 5000 }
@@ -75,10 +76,11 @@ let sessionDisplayMutationTests = testList "SessionDisplay mutations" [
     SessionDisplay.displayStatus now info
     |> Expect.equal "Faulted(Some reason) must carry that EXACT reason into the display status" (SessionDisplayStatus.Faulted "OutOfMemoryException")
 
-  testCase "WHY — faulted_with_no_reason_uses_the_fallback_text — a missing reason must use \"Session faulted\", not an empty string" <| fun () ->
-    let info = mkInfo (SessionLifecycleStatus.Faulted (FaultReason.Unexplained FaultOrigin.NotRecorded)) now
+  testCase "WHY — faulted_with_no_reason_uses_the_shared_text — an unexplained fault must say so in the one wording every surface uses, not an empty string and not a sentence of this surface's own" <| fun () ->
+    let reason = FaultReason.Unexplained FaultOrigin.NotRecorded
+    let info = mkInfo (SessionLifecycleStatus.Faulted reason) now
     SessionDisplay.displayStatus now info
-    |> Expect.equal "Faulted(None) must fall back to exactly \"Session faulted\"" (SessionDisplayStatus.Faulted "Session faulted")
+    |> Expect.equal "an unexplained fault displays exactly what FaultReason.describe says" (SessionDisplayStatus.Faulted (FaultReason.describe reason))
 
   testCase "WHY — restarting_is_Restarting_not_Starting — these are visually and semantically distinct states" <| fun () ->
     let info = mkInfo (SessionLifecycleStatus.Restarting (PreviousWorker.Was 42)) now

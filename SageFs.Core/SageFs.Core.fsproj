@@ -257,6 +257,7 @@
         <Compile Include="ProjectCompatibility.fs" />
         <Compile Include="SageFsError.fs" />
         <Compile Include="RebuildOutcome.fs" />
+        <Compile Include="SessionReload.fs" />
         <!-- After SageFsError: F#-aware compile-order insight over BuildDiagnostic (roast UX-4). -->
         <Compile Include="CompileOrderInsight.fs" />
         <!-- After SageFsError: the railway effect type over the algebra. -->
