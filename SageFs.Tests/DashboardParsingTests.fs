@@ -675,4 +675,24 @@ let routeValueTests =
     testCase "WHY — Dashboard.routeValue — a missing route key reads as empty because session id validation then rejects it" <| fun _ ->
       SageFs.Server.Dashboard.routeValue "id" (Microsoft.AspNetCore.Http.DefaultHttpContext())
       |> Expecto.Flip.Expect.equal "empty" ""
+
+    testCase "WHY — the stream route hands the handler the page's own client id, whatever the id looks like, because Falco read 1 in 80 minted ids as a number and the page then streamed under a name it never chose" <| fun _ ->
+      // The real minting function, many times: 8 hex digits, so roughly 1.3% of them are
+      // digits around a single `e` and parse as a float ("2352e570" reads back "Infinity").
+      // A wrong id here lost the friction panel a page had asked for, and would have
+      // stranded its signal-driven session switches, since nothing registered under its id.
+      let misread =
+        [ for _ in 1 .. 20_000 -> SageFs.Server.Dashboard.mintClientId () ]
+        |> List.filter (fun id ->
+          let ctx = Microsoft.AspNetCore.Http.DefaultHttpContext()
+          ctx.Request.RouteValues.["clientId"] <- box id
+          SageFs.Server.Dashboard.streamClientId ctx <> id)
+      misread |> Expecto.Flip.Expect.isEmpty "every minted id reads back as itself"
+
+    testCase "WHY — the stream route reads the ids Falco mangles as the literal text, including ones that overflow to Infinity" <| fun _ ->
+      for id in [ "2352e570"; "78768e24"; "4241e007"; "12345678"; "00000001" ] do
+        let ctx = Microsoft.AspNetCore.Http.DefaultHttpContext()
+        ctx.Request.RouteValues.["clientId"] <- box id
+        SageFs.Server.Dashboard.streamClientId ctx
+        |> Expecto.Flip.Expect.equal (sprintf "client id %s" id) id
   ]

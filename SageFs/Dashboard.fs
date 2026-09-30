@@ -1979,6 +1979,24 @@ let routeValue (key: string) (ctx: HttpContext) : string =
   | true, (:? string as value) -> value
   | _ -> ""
 
+/// A page's client id: 8 hex digits, minted once when the page is served.
+///
+/// It is a hex string, so about 1.3% of them are digits around a single `e`
+/// ("2352e570") and Falco's typed route parser reads those as a float. Anything
+/// that takes one from a route must use `routeValue`, never `RequestData`.
+let mintClientId () : string = Guid.NewGuid().ToString("N").[..7]
+
+/// The client id in `/dashboard/stream/{clientId}`, exactly as the page sent it.
+///
+/// This route used Falco's `RequestData.GetString`, which turned "2352e570" into
+/// "Infinity" and "78768e24" into "7.8768E+28". The stream then ran under an id the
+/// page never had: its friction opt-in (`?panels=friction`) and sort choice were
+/// looked up under the wrong name and the panel it asked for vanished, and the
+/// connection registered under a name no POST from that page carries, so
+/// signal-driven retargets found no channel. It showed up as a browser test that
+/// failed about once in four gate runs, always on a page with an unlucky id.
+let streamClientId (ctx: HttpContext) : string = routeValue "clientId" ctx
+
 let mapPostRaw (route: string) (read: HttpContext -> 'T) (handler: 'T -> HttpHandler) : HttpEndpoint =
   post route (fun ctx -> handler (read ctx) ctx)
 
@@ -2832,7 +2850,7 @@ let createCohortScrubHandler (infra: DashboardInfra) : HttpHandler =
 /// session query parameter — the signal drives everything thereafter.
 let renderLanding (q: DashboardQueries) (infra: DashboardInfra) (panelsQuery: string) : System.Threading.Tasks.Task<XmlNode> =
   task {
-    let clientId = Guid.NewGuid().ToString("N").[..7]
+    let clientId = mintClientId ()
     frictionOptInByClient.Set(clientId, PanelFacts.frictionOptInOfQuery panelsQuery)
     // No session in play: the FULL shell with the session picker in the main
     // area (never a bare picker page: the sidebar and chrome must stay visible
@@ -2909,8 +2927,8 @@ let createEndpoints
     // Stream endpoint for a specific page — the client id is a PATH segment
     // (no session query parameter): this both keys the per-connection channel
     // registry for signal-driven retargets and keeps the URL free of ?session=.
-    yield mapGet "/dashboard/stream/{clientId}"
-      (fun (r: RequestData) -> r.GetString("clientId", ""))
+    yield mapGetRaw "/dashboard/stream/{clientId}"
+      streamClientId
       (fun clientId -> createStreamHandler q infra clientId)
     // The cockpit inspector (§6.5) — a standalone GET detail page + search,
     // not a fragment on the SSE stream. Two-segment route reads via
