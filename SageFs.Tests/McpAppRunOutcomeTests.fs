@@ -120,7 +120,26 @@ let mcpAppRunOutcomeTests =
         //    then launches the entry point on an in-process background
         //    thread (AppRunner.fs — there is no separate OS process) ──
         let! runRaw = callToolPatient client "run_app" [ "project", box "" ]
-        let runDoc = JsonDocument.Parse(runRaw: string)
+        // `run_app` answers JSON on SUCCESS and PROSE on refusal: `Mcp.runApp`
+        // returns `SageFsError.describeForAgent err`, which is
+        // "Cannot … → Next: …". Parsing that as JSON throws
+        // `JsonReaderException: 'C' is an invalid start of a value` and reports
+        // nothing about WHY the app would not start — measured twice in the gate,
+        // on two different shards, which is what made it look like a flake.
+        //
+        // So the shape is checked first and the refusal is surfaced verbatim. The
+        // refusal is the interesting outcome: it names the real reason (a build
+        // or a port), which the JSON parse was destroying.
+        let runDoc =
+          JsonDocument.Parse(
+            let raw = runRaw : string
+            match raw.TrimStart().StartsWith "{" with
+            | true -> raw
+            | false ->
+              failtestf
+                "run_app did not start the ticker and said so in prose, so there is no state to assert: %s"
+                raw
+          )
         let runRoot = runDoc.RootElement
         runRoot.GetProperty("State").GetString()
         |> Expect.equal "run_app should report the ticker Running" "Running"
