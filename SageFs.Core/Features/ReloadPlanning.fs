@@ -105,6 +105,12 @@ type ReloadChange =
   /// reasons, because by the time this is known the process is already
   /// silently wrong.
   | MutableBindingTorn of binding: string
+  /// A function changed in an app SageFs started with run_app. That app runs on a
+  /// thread in the WORKER, and the reload agent that applies a patch lives in the
+  /// FSI host, so a patch would re-point the host's copy of the function and the
+  /// running app would never call it. Known from where the app runs
+  /// (`AppPlacement`), never from the source diff.
+  | RunsOutsideAgent of name: string
 
 /// Live module state a patch has to respect. Rule 1 of hot-reload-state-spec.md:
 /// code changes land, state stays.
@@ -158,6 +164,8 @@ module ReloadChange =
       sprintf
         "'%s' tore: one of its accessors was re-pointed to the new code and the other was not, so reads and writes now disagree about which field is live"
         binding
+    | ReloadChange.RunsOutsideAgent name ->
+      sprintf "%s changed, and this app runs in the worker, where an in-place patch cannot reach it" name
 
   let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
     first :: rest |> List.map describe |> String.concat "; "
@@ -206,6 +214,11 @@ module ReloadChange =
     // be patched at all. The remedy is identical: restart to re-run the
     // initialiser, because SageFs will not guess which field is the real one.
     | ReloadChange.MutableBindingTorn binding -> RestartReason.MutableModuleState binding
+    // Unimplemented rather than impossible: patching an app run by run_app needs
+    // the new body compiled in the WORKER, where the app is, and today it is
+    // compiled in the FSI host. Until then SageFs restarts the app it started.
+    | ReloadChange.RunsOutsideAgent name ->
+      RestartReason.NotYetSupported (sprintf "an in-place patch of '%s', because this app was started with run_app and runs outside the process SageFs patches" name)
 
   let restartReasons (first: ReloadChange) (rest: ReloadChange list) : RestartReason list =
     first :: rest |> List.map restartReason
@@ -1124,6 +1137,39 @@ let confirmWholeFileReeval
 /// union case needs the type spelled out rather than a resolution coin-flip.
 let restartOutcome (first: ReloadChange) (rest: ReloadChange list) : ReloadOutcome =
   SageFs.Features.ReloadOutcome.ReloadOutcome.RestartRequired (ReloadChange.restartReasons first rest)
+
+/// Where the running app lives, relative to the agent that applies patches.
+///
+/// Every session's reload agent lives in the FSI host (HostAgent.fs: it runs "in
+/// the process that loaded those assemblies", and for an isolated session that is
+/// the FSI host). An app SageFs started with `run_app` runs on a thread in the
+/// WORKER. Measured on 0.6.843, a save to such an app was patched in the host's
+/// copy, reported as "Hot reloaded 1 of 1", and changed nothing the app did.
+[<RequireQualifiedAccess>]
+type AppPlacement =
+  /// Whatever runs (an app started from FSI or an init script, or nothing at
+  /// all) is in the agent's own process, so a patch reaches it.
+  | InAgentProcess
+  /// SageFs started the app with run_app: it runs in the worker, out of the
+  /// agent's reach.
+  | InWorkerProcess
+
+module AppPlacement =
+  let private restartFor (functions: SourceDecl list) (plan: ReloadPlan) : ReloadPlan =
+    match functions |> List.map (fun d -> ReloadChange.RunsOutsideAgent d.Name) with
+    | first :: rest -> ReloadPlan.RestartRequired (first, rest)
+    | [] -> plan
+
+  /// A plan the agent cannot carry out becomes the restart it needs. Only
+  /// PATCHING is affected: a plan that already requires a restart keeps the
+  /// planner's more specific reason, and a save that changed nothing stays the
+  /// non-event it is.
+  let adjust (placement: AppPlacement) (plan: ReloadPlan) : ReloadPlan =
+    match placement, plan with
+    | AppPlacement.InWorkerProcess, ReloadPlan.PatchFunctions functions -> restartFor functions plan
+    | AppPlacement.InWorkerProcess, ReloadPlan.PatchKeepingState (functions, _, _) -> restartFor functions plan
+    | AppPlacement.InWorkerProcess, ReloadPlan.RestartRequired _
+    | AppPlacement.InAgentProcess, _ -> plan
 
 /// How a saved source file reaches the process that is running the user's code.
 [<RequireQualifiedAccess>]

@@ -481,6 +481,8 @@
         <Compile Include="GcDumpCaptureTests.fs" />
         <Compile Include="SessionStatusPayloadTests.fs" />
         <Compile Include="SessionBuildTotalityTests.fs" />
+        <Compile Include="RunAppSaveOutcomeTests.fs" />
+        <Compile Include="AppPlacementTests.fs" />
         <Compile Include="MemorySupervisorTests.fs" />
         <Compile Include="MemoryShedSimTests.fs" />
         <Compile Include="ExpensiveWorkLeaseTests.fs" />

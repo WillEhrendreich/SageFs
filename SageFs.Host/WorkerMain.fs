@@ -1413,7 +1413,15 @@ let run (sessionId: string) (port: int) = async {
             (Features.ReloadOutcome.ReloadOutcome.CompileFailed (sprintf "%s does not parse: %s" fileName reason))
           return SaveHandling.Reported
         | Ok current ->
-          match Features.ReloadPlanning.planReload baseline current with
+          // An app SageFs started with run_app runs in THIS process, and the
+          // agent that applies a patch lives in the FSI host. A patch would
+          // re-point the host's copy and report success while the app went on
+          // running the old body, so for that app a function change is a restart.
+          let placement =
+            match AppRunner.state appRunner with
+            | AppRun.AppRunState.Running _ -> Features.ReloadPlanning.AppPlacement.InWorkerProcess
+            | _ -> Features.ReloadPlanning.AppPlacement.InAgentProcess
+          match Features.ReloadPlanning.AppPlacement.adjust placement (Features.ReloadPlanning.planReload baseline current) with
           | Features.ReloadPlanning.ReloadPlan.PatchFunctions [] ->
             // The file's declarations are byte-identical to the running build.
             // Nothing to fetch and nothing to do, so this is reported as the
@@ -1576,7 +1584,14 @@ let run (sessionId: string) (port: int) = async {
                   match routeFor filePath with
                   | Features.ReloadPlanning.ReloadRoute.PatchInPlace baseline -> reloadRunningApp filePath baseline
                   | Features.ReloadPlanning.ReloadRoute.ReevaluateWholeFile ->
-                    async { return SaveHandling.FallBackWholeFile [] }
+                    // No baseline to diff against. Re-evaluating the whole file
+                    // happens in the FSI host, which an app started with run_app
+                    // (running in this process) never sees, so that app restarts.
+                    match AppRunner.state appRunner with
+                    | AppRun.AppRunState.Running _ ->
+                      let fileName = IO.Path.GetFileName filePath
+                      restartOrFallBack fileName (Features.ReloadPlanning.ReloadChange.RunsOutsideAgent fileName) []
+                    | _ -> async { return SaveHandling.FallBackWholeFile [] }
                 match handling with
                 | SaveHandling.Reported -> ()
                 // A mutable's own value changed. Do NOT re-evaluate the whole
