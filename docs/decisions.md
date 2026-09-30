@@ -126,14 +126,28 @@ Reopen it if: a needed attribute has no builder yet. Then add the builder.
 
 ---
 
-## Still open, because nobody decided
-
-### A tool that runs your tests
+## Agents get a door into the test engine, not a test runner of their own
 
 `run_tests` existed, then got removed in March 2026 (commit `1961300a`, "MCP is read-only observer of
-live testing"). A line in `docs/mcp-tools.md` later called that choice deliberate, but that sentence
-came from a voice-polishing pass, not from a recorded decision. The case for bringing something back
-is real: weak models flail without one (see `open-problems-2026-09-30.md` for the lemmings evidence).
-The case against is that two engines picking tests can disagree. Nothing here is settled. The current
-thinking is a scoped, out-of-process runner that returns a receipt (what ran, against what code, what
-didn't run and why), and it's waiting for a yes or no.
+live testing"). With no verb, an agent that wants to run tests has to run `dotnet test` itself, which
+is a second engine whose answers can disagree with `list_tests`, the dashboard and the cohort landing
+gate. The sentence in `docs/mcp-tools.md` that called the removal
+deliberate came from a voice-polishing pass, not from a recorded decision.
+
+It's back, and the shape is the point: `run_tests` dispatches the same `RunTestsRequested` the
+dashboard and editors send, tagged with a request id, and the receipt it returns is a pure read of the
+engine's own record of that request (`RunRequests`, `ResultGenerations`, `LastResults`). There is one
+source of truth and one more way in. It never counts a pass from an earlier run, it names every test
+that didn't pass in this run and why, and `Incomplete` is not green.
+
+Evidence: `SageFs/McpRunTests.fs`, `SageFs.Core/Features/TestRunReceipt.fs`, and
+`SageFs.Tests/TestRunReceiptTests.fs`, which pins that the receipt and the cohort landing gate agree
+on which tests did not pass.
+Reopen it if: the engine can't answer a question an agent needs. Then extend the engine's record,
+don't build a runner beside it.
+
+### Still to do under this decision
+
+The live loop picks affected tests by test name, which misses body-only edits, and the cohort landing
+gate picks them from coverage bitmaps and fails closed. That's two selection rules over one engine.
+They should be one, and the fail-closed one is the only acceptable choice.

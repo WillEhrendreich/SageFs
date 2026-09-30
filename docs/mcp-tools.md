@@ -128,13 +128,26 @@ check `sagefs status` — if it says no daemon is running, start one with
 | Tool | What it does |
 |:---|:---|
 | `list_tests` | List discovered tests, grouped by file with source locations. A compiled-project session's tests are ReflectionOnly and carry no file/line, so those come back under a separate `WithoutSourceLocation` field instead of being dropped. Optional pattern or file filter. |
+| `run_tests` | Run the session's discovered tests through the live-testing engine and get a receipt. Filters: `pattern`, `file_path`, `category`. Waits up to `wait_seconds` (default 30, at most 60); a run still going hands back a `request_id` to call again with. |
 | `targeted_verify` | Plan a trustworthy verification pass for one changed behavior. Refuses to claim green when session trust is ambiguous or loaded code is stale. It doesn't run tests itself. It returns the next trustworthy move. |
 | `explain_test_failure` | Enriched failure context for a test that recently went from passing to failing. |
 
-There is no `run_tests` MCP tool, and I'm not sorry about it. Test runs are
-driven by the live-testing engine (save a file, or use the editor/dashboard
-run controls); agents read results through `list_tests`, `explain_test_failure`,
-and `diagnose`.
+`run_tests` is a door into the live-testing engine, not a second test runner. It
+sends the same request the dashboard and the editors send, and what comes back is
+the engine's own record of that run. So `list_tests`, the dashboard and the
+receipt can't disagree: they're reading one place.
+
+The receipt never calls a test passed unless this run passed it. A pass left over
+from an earlier run doesn't count, and neither does a skipped test, a test the run
+was cut off before, or one that never reported. A run where every requested test
+passed is `AllPassed`, a run where any failed is `SomeFailed`, and everything else
+is `Incomplete`, which is not green. Each line says what happened to that test in
+this run and why. If the session is still warming up, has nothing discovered, or
+your filters match nothing, `run_tests` says so and runs nothing.
+
+Don't run `dotnet test` from an agent to do the same job. That's a second engine,
+and its answers are the ones that drift. `dotnet test` and `dotnet run` stay as
+the final gate before you push.
 
 ## Analysis and diagnostics
 

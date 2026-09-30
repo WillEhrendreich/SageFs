@@ -41,11 +41,11 @@ you are done. Do not use them to probe what an API looks like.
    file. Only after persisting or an `.fsproj` change, not after every eval.
 5. Re-verify in the session, then commit.
 6. Final gate: the full build and the unfiltered test suite, once, at the end.
-   Run it in the background and keep working. To run tests, evaluate
-   `Expecto.Tests.runTestsWithCLIArgs [] [||] MyTests.tests` in the session, or
-   in a shell run an `Exe` Expecto project with `dotnet run --project <tests>`.
-   `dotnet test` finds nothing there unless the project references
-   `YoloDev.Expecto.TestSdk` 0.15 or later.
+   Run it in the background and keep working. To run tests, call
+   `run_tests`. It asks the engine `list_tests` reads and returns a receipt:
+   `Incomplete` is not green. Still running? Call again with the
+   `request_id`. Never `dotnet test` for that. Final gate: `dotnet run --project
+   <tests>` (Expecto `Exe`).
 
 ## Rules that bite before your first edit
 

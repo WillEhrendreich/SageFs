@@ -81,11 +81,14 @@ QUICK REFERENCE - KEY FILES & FUNCTIONS
      * getFileCoverage — per-line coverage; surfaced to editors via SSE
        file_annotations and the HTTP API (GET /api/live-testing/file-annotations),
        not as an MCP tool
-   - There is no run_tests, enable_live_testing, get_live_test_status,
-     get_test_trace, explain_test_run, or get_file_coverage MCP tool. Live-testing
-     enable/disable/status/run are HTTP API endpoints under /api/live-testing/...
-     used by editors and the dashboard, on purpose. This is machinery an editor
-     drives, not something an agent should be poking at directly.
+   - run_tests is the one MCP door for running tests. It dispatches the same
+     RunTestsRequested event the editors and the dashboard use (POST
+     /api/live-testing/run) and reads the engine's own record of that request back
+     as a receipt, so the result is never a second runner's opinion.
+   - There is no enable_live_testing, get_live_test_status, get_test_trace,
+     explain_test_run, or get_file_coverage MCP tool. Live-testing
+     enable/disable/status are HTTP API endpoints under /api/live-testing/...
+     used by editors and the dashboard, on purpose.
 
 8. Per-Line Coverage Data:
    - File: SageFs.Core/Features/LiveTestingTypes.fs
