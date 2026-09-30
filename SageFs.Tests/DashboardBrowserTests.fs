@@ -295,6 +295,24 @@ module OutputScroll =
   /// Following means "sitting at the bottom", give or take a pixel of rounding.
   let atBottomTolerance = 4.0
 
+  /// Wait, up to `ms`, for the panel to sit at the bottom, and return the last
+  /// distance seen. Following is something the page does in answer to a morph;
+  /// it has not necessarily happened by the time a fixed sleep ends, and on a
+  /// loaded machine it hadn't (370 px short after 600 ms, in the gate). Asking
+  /// the question until it is true separates "slow" from "never", which a sleep
+  /// followed by one measurement cannot: a panel that really never follows still
+  /// fails here, with the distance it was stuck at.
+  let waitForAtBottom (ms: int) (page: IPage) = task {
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let! first = distanceFromBottom page
+    let mutable dist = first
+    while dist > atBottomTolerance && sw.ElapsedMilliseconds < int64 ms do
+      do! page.WaitForTimeoutAsync(100.0f)
+      let! next = distanceFromBottom page
+      dist <- next
+    return dist
+  }
+
   /// Run one eval through the real Evaluate box. The code is built so its
   /// result text (`marker`) never appears in the echoed code line, so waiting
   /// for the marker waits for the RESULT, not the echo.
@@ -319,16 +337,14 @@ module OutputScroll =
       do! (DashboardDom.evalButton page).ClickAsync()
     })
     do! PlaywrightExpect.waitForSelectorText 30_000 page panelSelector (sprintf "%s-120" prefix)
-    do! page.WaitForTimeoutAsync(600.0f)
     let! overflow =
       page.EvaluateAsync<float>(
         "() => { var el = document.querySelector('#output-panel'); return el.scrollHeight - el.clientHeight; }")
     Expect.isTrue (overflow > 400.0) (sprintf "output must overflow the panel by a good margin to test scrolling (overflow %f px)" overflow)
     // Opening Evaluate shrank the panel under us. That's not the user
-    // scrolling away, so the fill still has to follow to the bottom.
-    let! dist =
-      page.EvaluateAsync<float>(
-        "() => { var el = document.querySelector('#output-panel'); return el.scrollHeight - el.scrollTop - el.clientHeight; }")
+    // scrolling away, so the fill still has to follow to the bottom. It is
+    // waited FOR, not slept past: see waitForAtBottom.
+    let! dist = waitForAtBottom 10_000 page
     Expect.isTrue (dist <= 4.0) (sprintf "the fill must follow to the bottom even though opening Evaluate resized the panel (%f px from bottom)" dist)
   }
 
@@ -415,22 +431,6 @@ module private NoSessionLanding =
   let private consoleTickerTestsDir = Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker.Tests")
   let private consoleTickerTestsProj = Path.Combine(consoleTickerTestsDir, "SageFs.Samples.ConsoleTicker.Tests.fsproj")
 
-  let private pickFreePort () =
-    use l = new TcpListener(IPAddress.Loopback, 0)
-    l.Start()
-    (l.LocalEndpoint :?> IPEndPoint).Port
-
-  let rec private findPortPair attempts =
-    let mcp = pickFreePort ()
-    let dash = mcp + 1
-    try
-      use probe = new TcpListener(IPAddress.Loopback, dash)
-      probe.Start()
-      mcp
-    with
-    | :? SocketException when attempts > 0 -> findPortPair (attempts - 1)
-    | :? SocketException -> failwith "No-session journey: could not find a free port pair"
-
   type private Daemon =
     { Process: Diagnostics.Process
       McpPort: int
@@ -459,8 +459,13 @@ module private NoSessionLanding =
   /// no-session landing is exactly the state this daemon starts in and stays
   /// in until a journey creates a session.
   let private startDaemon () : Daemon =
-    let mcpPort = findPortPair 5
-    let dashboardPort = mcpPort + 1
+    // The shared allocator, not a private one. It checks the MCP port and the
+    // dashboard at port + 1 on BOTH IPv4 and IPv6 loopback, and stays inside
+    // this tier's slice of the pool. The private copy that used to be here asked
+    // the OS for a port and probed only the IPv4 neighbour, so under the gate the
+    // daemon lost its bind on [::1]:<port + 1> and the test failed a minute later
+    // with "daemon never became healthy".
+    let mcpPort, dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
     let dataDir = Path.Combine(Path.GetTempPath(), "sagefs-nosession", Guid.NewGuid().ToString("N"))
     Directory.CreateDirectory(dataDir) |> ignore
     let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
@@ -569,16 +574,21 @@ module private NoSessionLanding =
   /// Setup-only helper for the second journey below (the FIRST journey
   /// proves the real click-through Create path — this one only needs two
   /// live sessions to exist quickly so it can focus on switch/stop).
-  let private createSessionViaApi (d: Daemon) (project: string) (dir: string) : Task<bool> = task {
+  ///
+  /// Returns WHY on a refusal (status and body). It used to return a bool, so a
+  /// refused create failed the journey with "accepted: false" and nothing about
+  /// what the daemon actually said.
+  let private createSessionViaApi (d: Daemon) (project: string) (dir: string) : Task<Result<unit, string>> = task {
     use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.McpPort))
     client.Timeout <- TimeSpan.FromSeconds(10.0)
     let payload =
       System.Text.Json.JsonSerializer.Serialize({| projects = [| project |]; workingDirectory = dir |})
     use content = new StringContent(payload, Text.Encoding.UTF8, "application/json")
-    let! resp = client.PostAsync("/api/sessions/create", content)
-    let ok = resp.IsSuccessStatusCode
-    resp.Dispose()
-    return ok
+    use! resp = client.PostAsync("/api/sessions/create", content)
+    let! body = resp.Content.ReadAsStringAsync()
+    match resp.IsSuccessStatusCode with
+    | true -> return Ok ()
+    | false -> return Error (sprintf "HTTP %d: %s" (int resp.StatusCode) body)
   }
 
   /// The server-authoritative "which session is this page looking at" fact —
@@ -738,9 +748,13 @@ module private NoSessionLanding =
       // proven by the journey above) so this journey can focus on
       // states 2/3/5 and the Stop transitions.
       let! createdA = createSessionViaApi daemon consoleTickerProj consoleTickerDir
-      Expect.isTrue createdA "session A (ConsoleTicker) create request accepted"
+      match createdA with
+      | Ok () -> ()
+      | Error why -> Tests.failtestf "session A (ConsoleTicker) create request refused: %s" why
       let! createdB = createSessionViaApi daemon consoleTickerTestsProj consoleTickerTestsDir
-      Expect.isTrue createdB "session B (ConsoleTicker.Tests) create request accepted"
+      match createdB with
+      | Ok () -> ()
+      | Error why -> Tests.failtestf "session B (ConsoleTicker.Tests) create request refused: %s" why
       let! bothReady = waitAllReady 120.0 daemon 2
       if not bothReady then dumpLogs daemon
       Expect.isTrue bothReady "both sessions reached Ready on the server within 120s"

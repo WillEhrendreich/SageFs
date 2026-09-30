@@ -1312,3 +1312,35 @@ let integrationSampleBuildCoverage =
               "%s creates a host-integration session on %s, but ci-pipeline.fsx's \"build samples for integration suites\" stage never builds it. An unbuilt sample makes warmup fault with \"Not all DLLs are found\" and the suite reports that the session never reached Ready. Add: run \"dotnet build samples/**/%s -c Release --nologo\""
               testFile sample sample)
   ]
+
+/// A test that spawns its own daemon must reserve the port pair through
+/// `TestInfrastructure.TestPorts`, not by binding port 0 and adding one.
+///
+/// The daemon binds TWO ports: the one it is given for MCP and that port + 1 for
+/// the dashboard, on IPv6 loopback. `TestPorts.reservePair` checks both stacks
+/// and stays inside the tier's slice of the pool. The browser tests carried a
+/// private copy that asked the OS for a port and probed only the IPv4 neighbour,
+/// so under the gate a daemon lost the bind on `[::1]:<port+1>` and the test
+/// reported "daemon never became healthy" a minute later.
+[<Tests>]
+let daemonPortReservation =
+  let testsDir = System.IO.Path.Combine(repoRoot, "SageFs.Tests")
+  let spawnsADaemon (text: string) = text.Contains "\"--mcp-port\""
+  let bindsPortZero (text: string) =
+    System.Text.RegularExpressions.Regex.IsMatch(text, @"TcpListener\(IPAddress\.(IPv6)?Loopback,\s*0\)")
+  let files =
+    match System.IO.Directory.Exists testsDir with
+    | false -> []
+    | true ->
+      System.IO.Directory.GetFiles(testsDir, "*.fs", System.IO.SearchOption.TopDirectoryOnly)
+      |> Array.filter (fun p -> spawnsADaemon (System.IO.File.ReadAllText p))
+      |> Array.toList
+  testList "Architecture — a test that spawns a daemon reserves its ports through TestPorts" [
+    for file in files do
+      testCase
+        (sprintf "WHY — %s spawns a daemon, so it must not choose the port by binding port 0 itself" (System.IO.Path.GetFileName file))
+      <| fun _ ->
+        bindsPortZero (System.IO.File.ReadAllText file)
+        |> Expect.isFalse
+          "reserve the pair with TestInfrastructure.TestPorts.reservePair (). Binding port 0 yourself and adding one probes one address family and ignores the tier's assigned range, which is how a daemon lost the bind on the dashboard port under the gate."
+  ]
