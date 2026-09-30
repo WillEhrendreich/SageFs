@@ -79,9 +79,13 @@ module RestartPolicy =
   [<Struct>]
   type JitterSeed = JitterSeed of int64
 
-  /// How far jitter may move a delay, as a fraction of it, in either direction: at most +/-20%.
+  /// The lowest a jittered delay may fall, as a fraction of the computed delay. Jitter spreads a delay
+  /// over [MinDelayFraction, 1] of itself: half the delay is the most it may be shortened, and it is
+  /// never lengthened, so the exponential schedule and the cap still hold. A band of +/-20% was only
+  /// about 200ms on a 1s first delay, which barely breaks a herd, and at the cap the upward half was
+  /// clamped so delays piled up on the cap itself.
   [<Literal>]
-  let MaxJitterFraction = 0.2
+  let MinDelayFraction = 0.5
 
   /// How many bits the sample keeps. A double holds exactly 53 bits of mantissa, so a 53 bit integer
   /// over 2^53 is uniform in [0, 1) and never reaches 1.
@@ -98,11 +102,11 @@ module RestartPolicy =
     float (mixed >>> (64 - SampleBits)) / float (1UL <<< SampleBits)
 
   /// Spread a delay so sessions whose workers died together do not all retry at the same instant.
-  /// The result is within +/-MaxJitterFraction of the delay, never below zero and never above the
-  /// policy cap. Pure: the same seed and delay always give the same result.
+  /// The result is within [MinDelayFraction * delay, min(delay, cap)]: never below half the delay and
+  /// never above the delay or the policy cap. Pure: the same seed and delay always give the same result.
   let withJitter (policy: Policy) (seed: JitterSeed) (delay: TimeSpan) : TimeSpan =
-    let swing = (2.0 * jitterSample seed - 1.0) * MaxJitterFraction
-    let jitteredMs = delay.TotalMilliseconds * (1.0 + swing)
+    let keptFraction = MinDelayFraction + (1.0 - MinDelayFraction) * jitterSample seed
+    let jitteredMs = delay.TotalMilliseconds * keptFraction
     let boundedMs = max 0.0 (min jitteredMs policy.BackoffMax.TotalMilliseconds)
     TimeSpan.FromMilliseconds boundedMs
 

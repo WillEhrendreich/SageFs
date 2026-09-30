@@ -7,6 +7,25 @@ open SageFs
 open SageFs.Utils
 open SageFs.Watchdog
 
+/// The MCP port the supervised daemon will bind: `--mcp-port <n>` in its args, else the configured
+/// default. The watchdog does not bind it, it only uses it to tell daemons apart.
+let daemonPort (daemonArgs: string list) : int =
+  let rec find (args: string list) =
+    match args with
+    | "--mcp-port" :: value :: rest ->
+      match Int32.TryParse value with
+      | true, port -> port
+      | false, _ -> find rest
+    | _ :: rest -> find rest
+    | [] -> SageFsConfig.McpPortFromEnv
+  find daemonArgs
+
+/// The jitter seed for one crash of one daemon: the working directory and port identify the daemon,
+/// the crash time makes each crash of it different. Two daemons in different directories (or on
+/// different ports) get different seeds for the same crash, which is what breaks the herd.
+let jitterSeed (workingDirectory: string) (port: int) (crashedAt: DateTime) : RestartPolicy.JitterSeed =
+  SessionLifecycle.jitterSeedFor (sprintf "%s:%d" workingDirectory port) crashedAt
+
 /// Impure watchdog runner that monitors and restarts the daemon process.
 /// Uses the pure Watchdog module for all decisions.
 let run
@@ -16,6 +35,7 @@ let run
   (ct: CancellationToken)
   = task {
   let mutable state = emptyState DateTime.UtcNow
+  let port = daemonPort daemonArgs
 
   let checkDaemonStatus (pid: int option) =
     match pid with
@@ -47,7 +67,8 @@ let run
 
   while not ct.IsCancellationRequested do
     let status = checkDaemonStatus state.DaemonPid
-    let action, newState = decide config state status DateTime.UtcNow
+    let checkedAt = DateTime.UtcNow
+    let action, newState = decide config (jitterSeed workingDirectory port checkedAt) state status checkedAt
     state <- newState
 
     match action with

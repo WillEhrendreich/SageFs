@@ -281,6 +281,7 @@
          <Compile Include="CaptureTeeStreamTests.fs" />
          <Compile Include="RunnerLoggingTests.fs" />
          <Compile Include="SageFsErrorJsonShapeTests.fs" />
+         <Compile Include="WatchdogRunnerSeedTests.fs" />
          <Compile Include="BuildOptimizationTests.fs" />
          <Compile Include="WarmupCacheGitIgnoreTests.fs" />
          <Compile Include="ToolNameReferenceTests.fs" />

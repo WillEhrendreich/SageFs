@@ -2016,6 +2016,8 @@ let private mkWatchdogConfig maxRestarts (grace: float) =
         StartupCrashMaxRestarts = 3 }
     GracePeriod = TimeSpan.FromSeconds(grace) }
 
+let private watchdogSeed = RestartPolicy.JitterSeed 1L
+
 let private mkWatchdogState pid lastStarted =
   { Watchdog.State.DaemonPid = pid
     RestartState = { RestartPolicy.State.RestartCount = 0; LastRestartAt = None; WindowStart = None }
@@ -2027,28 +2029,28 @@ let watchdogDecideTests = testList "Watchdog.decide" [
     let cfg = mkWatchdogConfig 3 10.0
     let st = mkWatchdogState (Some 1234) (Some (DateTime(2025,1,1)))
     let now = DateTime(2025,1,1,0,1,0)
-    let action, _ = Watchdog.decide cfg st Watchdog.DaemonStatus.Running now
+    let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.Running now
     action |> Expect.equal "wait" Watchdog.Action.Wait
   }
   test "NotRunning with no PID returns StartDaemon" {
     let cfg = mkWatchdogConfig 3 10.0
     let st = mkWatchdogState None None
     let now = DateTime(2025,1,1,0,1,0)
-    let action, _ = Watchdog.decide cfg st Watchdog.DaemonStatus.NotRunning now
+    let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     action |> Expect.equal "start" Watchdog.Action.StartDaemon
   }
   test "NotRunning within grace period returns Wait" {
     let cfg = mkWatchdogConfig 3 10.0
     let now = DateTime(2025,1,1,0,1,0)
     let st = mkWatchdogState (Some 1234) (Some (now - TimeSpan.FromSeconds(3.0: float)))
-    let action, _ = Watchdog.decide cfg st Watchdog.DaemonStatus.NotRunning now
+    let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     action |> Expect.equal "wait during grace" Watchdog.Action.Wait
   }
   test "NotRunning after grace period returns RestartDaemon" {
     let cfg = mkWatchdogConfig 3 10.0
     let now = DateTime(2025,1,1,0,1,0)
     let st = mkWatchdogState (Some 1234) (Some (now - TimeSpan.FromSeconds(20.0: float)))
-    let action, _ = Watchdog.decide cfg st Watchdog.DaemonStatus.NotRunning now
+    let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     match action with
     | Watchdog.Action.RestartDaemon delay ->
       (delay.TotalSeconds, 0.0) |> Expect.isGreaterThan "positive delay"
@@ -2060,7 +2062,7 @@ let watchdogDecideTests = testList "Watchdog.decide" [
     let st =
       { mkWatchdogState (Some 1234) (Some (now - TimeSpan.FromSeconds(20.0: float))) with
           RestartState = { RestartCount = 3; LastRestartAt = Some now; WindowStart = Some now } }
-    let action, _ = Watchdog.decide cfg st Watchdog.DaemonStatus.NotRunning now
+    let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     match action with
     | Watchdog.Action.GiveUp _ -> ()
     | other -> failwithf "Expected GiveUp, got %A" other
@@ -2069,21 +2071,21 @@ let watchdogDecideTests = testList "Watchdog.decide" [
     let cfg = mkWatchdogConfig 3 10.0
     let st = mkWatchdogState (Some 1234) (Some (DateTime(2025,1,1)))
     let now = DateTime(2025,1,1,0,1,0)
-    let action, _ = Watchdog.decide cfg st Watchdog.DaemonStatus.Unknown now
+    let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.Unknown now
     action |> Expect.equal "wait on unknown" Watchdog.Action.Wait
   }
   test "Restart increments restart count" {
     let cfg = mkWatchdogConfig 5 10.0
     let now = DateTime(2025,1,1,0,1,0)
     let st = mkWatchdogState (Some 1234) (Some (now - TimeSpan.FromSeconds(20.0: float)))
-    let _, newState = Watchdog.decide cfg st Watchdog.DaemonStatus.NotRunning now
+    let _, newState = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     (newState.RestartState.RestartCount, 0) |> Expect.isGreaterThan "count incremented"
   }
   test "StartDaemon on no PID keeps no PID in state" {
     let cfg = mkWatchdogConfig 3 10.0
     let st = mkWatchdogState None None
     let now = DateTime(2025,1,1,0,1,0)
-    let _, newState = Watchdog.decide cfg st Watchdog.DaemonStatus.NotRunning now
+    let _, newState = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     newState.DaemonPid |> Expect.isNone "no PID yet after start decision"
   }
 ]

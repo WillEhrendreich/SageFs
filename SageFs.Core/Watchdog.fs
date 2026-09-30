@@ -58,8 +58,12 @@ module Watchdog =
   }
 
   /// Pure decision: given the daemon status and current time, what should we do?
+  /// The seed spreads the restart delay (see `RestartPolicy.withJitter`), so several per-directory
+  /// daemons that died together, after a laptop wake or an OOM kill, do not all respawn at the same
+  /// instant. The caller supplies it from the impure edge: the same seed always gives the same delay.
   let decide
     (config: Config)
+    (seed: RestartPolicy.JitterSeed)
     (state: State)
     (daemonStatus: DaemonStatus)
     (now: DateTime)
@@ -77,7 +81,7 @@ module Watchdog =
           Action.Wait, state
         | _ ->
           let decision, newRestartState =
-            RestartPolicy.decide config.RestartPolicy state.RestartState now
+            RestartPolicy.decideWithJitter config.RestartPolicy seed state.RestartState now
           match decision with
           | RestartPolicy.Decision.Restart delay ->
             Action.RestartDaemon delay,

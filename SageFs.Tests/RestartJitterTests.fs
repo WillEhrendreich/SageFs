@@ -18,8 +18,17 @@ let private restartDelay (decision: RestartPolicy.Decision) : TimeSpan =
   | RestartPolicy.Decision.Restart delay -> delay
   | RestartPolicy.Decision.GiveUp error -> failtestf "expected Restart, got GiveUp %A" error
 
-/// The widest spread the jitter is allowed, as a fraction of the delay.
-let private fraction = RestartPolicy.MaxJitterFraction
+/// The lowest a jittered delay may fall, as a fraction of the computed delay. Jitter spreads a
+/// delay over [fraction, 1] of itself, so it only ever shortens a wait and never lengthens one.
+let private fraction = RestartPolicy.MinDelayFraction
+
+/// Whether a jittered delay lies in [base * fraction, min(base, cap)], with a millisecond of slack
+/// for the float round trip through TimeSpan.
+let private withinBand (delay: TimeSpan) (jittered: TimeSpan) : bool =
+  let capMs = policy.BackoffMax.TotalMilliseconds
+  let upperMs = min delay.TotalMilliseconds capMs
+  let lowerMs = min (delay.TotalMilliseconds * fraction) capMs
+  jittered.TotalMilliseconds >= lowerMs - 1.0 && jittered.TotalMilliseconds <= upperMs + 1.0
 
 let private sessionIds =
   [ "a1b2c3d4"; "b1c2d3e4"; "c1d2e3f4"; "d1e2f3a4"; "e1f2a3b4"; "f1a2b3c4"; "0a1b2c3d"; "1b2c3d4e" ]
@@ -34,14 +43,33 @@ let tests =
       Expect.isTrue "not below zero" (jittered >= TimeSpan.Zero)
       Expect.isTrue "not above the cap" (jittered <= policy.BackoffMax)
 
-    testProperty "WHY — a jittered delay stays within the stated fraction of the base delay, for any seed"
+    testProperty "WHY — a jittered delay lies in [base/2, min(base, cap)], for any seed and any delay"
     <| fun (seed: int64) (ms: int) ->
       let delay = delayOfMs ms
       let jittered = RestartPolicy.withJitter policy (RestartPolicy.JitterSeed seed) delay
-      let slackMs = delay.TotalMilliseconds * fraction + 1.0
-      Expect.isTrue
-        (sprintf "%A vs %A" jittered delay)
-        (abs (jittered.TotalMilliseconds - delay.TotalMilliseconds) <= slackMs)
+      Expect.isTrue (sprintf "%A vs %A" jittered delay) (withinBand delay jittered)
+
+    testProperty "WHY — a jittered delay is within the band at every attempt of the default policy, for any seed"
+    <| fun (seed: int64) (attempt: byte) ->
+      let delay = RestartPolicy.nextBackoff policy (int attempt % 12 + 1)
+      let jittered = RestartPolicy.withJitter policy (RestartPolicy.JitterSeed seed) delay
+      Expect.isTrue (sprintf "attempt %d: %A vs %A" attempt jittered delay) (withinBand delay jittered)
+
+    testCase "WHY — a delay already above the cap is pulled down to the cap, never past it" <| fun _ ->
+      let over = policy.BackoffMax + TimeSpan.FromSeconds 10.0
+      [ 1L .. 200L ]
+      |> List.iter (fun seed ->
+        let jittered = RestartPolicy.withJitter policy (RestartPolicy.JitterSeed seed) over
+        Expect.isTrue (sprintf "%A" jittered) (jittered <= policy.BackoffMax))
+
+    testCase "WHY — at the cap the delays spread downward instead of piling up at the cap" <| fun _ ->
+      let atCap = RestartPolicy.nextBackoff policy 20
+      let delays =
+        [ 1L .. 1000L ]
+        |> List.map (fun seed -> RestartPolicy.withJitter policy (RestartPolicy.JitterSeed seed) atCap)
+      let atTheCap = delays |> List.filter (fun d -> d >= policy.BackoffMax - TimeSpan.FromMilliseconds 1.0) |> List.length
+      Expect.isLessThan "almost none sit on the cap" (atTheCap, 20)
+      Expect.isGreaterThan "they use most of the half band" ((List.max delays - List.min delays).TotalMilliseconds, atCap.TotalMilliseconds * 0.4)
 
     testProperty "WHY — the same seed always gives the same delay, so a replay is exact"
     <| fun (seed: int64) (ms: int) ->
@@ -62,10 +90,18 @@ let tests =
         |> List.map (fun seed -> RestartPolicy.withJitter policy (RestartPolicy.JitterSeed seed) delay)
       let distinct = delays |> List.distinct |> List.length
       let spread = (List.max delays - List.min delays).TotalMilliseconds
-      let wantedSpread = delay.TotalMilliseconds * fraction
+      let bandMs = delay.TotalMilliseconds * (1.0 - fraction)
       Expect.isGreaterThan "many distinct delays" (distinct, 500)
-      // The band is +/- fraction, so the full width is 2 * fraction. Most of it must be used.
-      Expect.isGreaterThan "most of the band is used" (spread, wantedSpread)
+      // The band is [fraction, 1] of the delay. A thousand seeds must cover most of it.
+      Expect.isGreaterThan "most of the band is used" (spread, bandMs * 0.9)
+
+    testProperty "WHY — two different seeds spread apart: across many seeds at one attempt, most pairs differ"
+    <| fun (attempt: byte) (start: int64) ->
+      let delay = RestartPolicy.nextBackoff policy (int attempt % 12 + 1)
+      let at seed = RestartPolicy.withJitter policy (RestartPolicy.JitterSeed seed) delay
+      let delays = [ 0L .. 99L ] |> List.map (fun offset -> at (start + offset))
+      let distinct = delays |> List.distinct |> List.length
+      Expect.isGreaterThan (sprintf "attempt %d has a spread" attempt) (distinct, 90)
 
     testCase "WHY — adjacent seeds are not adjacent delays" <| fun _ ->
       let delay = TimeSpan.FromSeconds 8.0
@@ -94,8 +130,7 @@ let tests =
       | RestartPolicy.Decision.GiveUp plain, RestartPolicy.Decision.GiveUp jittered ->
         Expect.equal "same give-up reason" plain jittered
       | RestartPolicy.Decision.Restart plain, RestartPolicy.Decision.Restart jittered ->
-        let slackMs = plain.TotalMilliseconds * fraction + 1.0
-        Expect.isTrue "within the fraction" (abs (jittered.TotalMilliseconds - plain.TotalMilliseconds) <= slackMs)
+        Expect.isTrue "within the band" (withinBand plain jittered)
         Expect.isTrue "never above the cap" (jittered <= policy.BackoffMax)
       | plain, jittered -> failtestf "jitter flipped the decision: %A vs %A" plain jittered
 
@@ -108,8 +143,7 @@ let tests =
       | SessionLifecycle.ExitOutcome.Graceful, SessionLifecycle.ExitOutcome.Graceful -> ()
       | SessionLifecycle.ExitOutcome.RestartAfter(plainDelay, plainState), SessionLifecycle.ExitOutcome.RestartAfter(delay, state) ->
         Expect.equal "same state" plainState state
-        Expect.isTrue "delay within the fraction"
-          (abs (delay.TotalMilliseconds - plainDelay.TotalMilliseconds) <= plainDelay.TotalMilliseconds * fraction + 1.0)
+        Expect.isTrue "delay within the band" (withinBand plainDelay delay)
       | SessionLifecycle.ExitOutcome.Abandoned plainError, SessionLifecycle.ExitOutcome.Abandoned error ->
         Expect.equal "same error" plainError error
       | plainOutcome, jitteredOutcome -> failtestf "outcome kind changed: %A vs %A" plainOutcome jitteredOutcome
