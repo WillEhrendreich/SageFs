@@ -114,6 +114,15 @@ module SessionProjectTarget =
     | SessionProjectTarget.Solution path -> sprintf "Solution: %s" path
     | SessionProjectTarget.Bare -> "Bare REPL (no project discovery)"
 
+  /// The target as plain data for a JSON payload: a kind token and a path (null for
+  /// Bare). A raw F# union must never reach System.Text.Json: .NET 11 writes it, .NET 10
+  /// throws, and the net10 tool asset is the one most users install.
+  let toWire (target: SessionProjectTarget) : {| kind: string; path: string | null |} =
+    match target with
+    | SessionProjectTarget.Project path -> {| kind = "Project"; path = path |}
+    | SessionProjectTarget.Solution path -> {| kind = "Solution"; path = path |}
+    | SessionProjectTarget.Bare -> {| kind = "Bare"; path = null |}
+
   let describe (targets: SessionProjectTarget list) : string =
     match targets with
     | [ SessionProjectTarget.Bare ] -> "Bare REPL (no project discovery)"

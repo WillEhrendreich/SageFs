@@ -87,3 +87,22 @@ let lastReloadTests =
       doc.RootElement.GetProperty("lastReload").ValueKind
       |> Expect.equal "null, not a made-up outcome" JsonValueKind.Null
   ]
+
+[<Tests>]
+let targetWireTests =
+  testList "SessionStatusPayload target" [
+
+    testCase "WHY — every target is a plain {kind, path} object, never a raw F# union, because System.Text.Json on .NET 10 refuses to serialize one and get_session_status is the first tool everyone calls" <| fun _ ->
+      let facts =
+        { factsWith SessionStatusPayload.LastRestart.NoneRecorded with
+            Target = [ SessionProjectTarget.Project "/src/App/App.fsproj"; SessionProjectTarget.Solution "/src/All.slnx"; SessionProjectTarget.Bare ] }
+      let json = SessionStatusPayload.serialize facts
+      use doc = JsonDocument.Parse json
+      let targets = doc.RootElement.GetProperty("target").EnumerateArray() |> Seq.toList
+      targets
+      |> List.map (fun t -> t.GetProperty("kind").GetString())
+      |> Expect.equal "one kind token per target, in order" [ "Project"; "Solution"; "Bare" ]
+      targets
+      |> List.map (fun t -> match t.GetProperty("path").ValueKind with JsonValueKind.String -> t.GetProperty("path").GetString() | _ -> "")
+      |> Expect.equal "the path for project and solution, none for bare" [ "/src/App/App.fsproj"; "/src/All.slnx"; "" ]
+  ]
