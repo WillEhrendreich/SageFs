@@ -160,3 +160,41 @@ let sessionStatusTruthTests = testList "session status tells the truth" [
     (facts.Loaded, 0)
     |> Expect.isGreaterThan "a Ready session must have loaded its projects"
 ]
+
+let private faultedInfo : SessionInfo =
+  { warmingInfo with
+      Name = Some "faulted"
+      Status = SessionLifecycleStatus.Faulted (FaultReason.Reported "warmup failed") }
+
+/// The `target` entries as kind tokens, read through the real tool.
+/// `routable` false means the worker has no proxy yet, so a warming or faulted session
+/// resolves to its own status shape instead of the routable one.
+let private targetKinds (routable: bool) (info: SessionInfo) : string list =
+  let ctx =
+    match routable with
+    | true -> ctxFor info
+    | false ->
+      let routed = ctxFor info
+      { routed with SessionOps = { routed.SessionOps with GetProxy = fun _ -> Task.FromResult None } }
+  let json =
+    SageFsTools(ctx, Microsoft.Extensions.Logging.Abstractions.NullLogger<SageFsTools>.Instance)
+      .get_session_status(info.WorkingDirectory)
+      .GetAwaiter()
+      .GetResult()
+  use doc = JsonDocument.Parse json
+  doc.RootElement.GetProperty("target").EnumerateArray()
+  |> Seq.map (fun entry -> entry.GetProperty("kind").GetString())
+  |> Seq.toList
+
+[<Tests>]
+let sessionStatusTargetShapeTests = testList "session status target, every shape" [
+
+  testCase "WHY — a routable session's target is plain {kind, path} data (a raw F# union throws on .NET 10)" <| fun _ ->
+    targetKinds true readyInfo |> Expect.equal "one Project entry" [ "Project" ]
+
+  testCase "WHY — a warming session's status carries the same target shape, because it is built separately from the routable one and each shape has to get it right" <| fun _ ->
+    targetKinds false warmingInfo |> Expect.equal "one Project entry" [ "Project" ]
+
+  testCase "WHY — a faulted session's status carries the same target shape too" <| fun _ ->
+    targetKinds false faultedInfo |> Expect.equal "one Project entry" [ "Project" ]
+]
