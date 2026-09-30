@@ -5,6 +5,7 @@ open System.ComponentModel
 open System.Reflection
 open Expecto
 open Expecto.Flip
+open SageFs
 open SageFs.Server.McpTools
 open SageFs.McpTools
 

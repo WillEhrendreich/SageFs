@@ -30,6 +30,34 @@ module SessionStatusPayload =
     | SessionState.Faulted -> "Faulted"
     | SessionState.Uninitialized -> "WarmingUp"
 
+  /// What the last rebuild a caller asked for did. A hard reset with
+  /// rebuild=true answers "initiated" and does its work later, so this is the
+  /// only place its result can be read. A build that FAILS while the old worker
+  /// is still serving fires no fault, so without this it looks exactly like a
+  /// build that has not finished.
+  [<RequireQualifiedAccess>]
+  type RestartKind =
+    | InProgress
+    | Succeeded
+    | FailedStillServing
+    | FailedNotServing
+
+  module RestartKind =
+    /// The one spelling of each kind on the wire.
+    let label (kind: RestartKind) : string =
+      match kind with
+      | RestartKind.InProgress -> "InProgress"
+      | RestartKind.Succeeded -> "Succeeded"
+      | RestartKind.FailedStillServing -> "FailedStillServing"
+      | RestartKind.FailedNotServing -> "FailedNotServing"
+
+  /// Nothing recorded is its own case: a session nobody restarted must not be
+  /// reported as a restart that succeeded.
+  [<RequireQualifiedAccess>]
+  type LastRestart =
+    | NoneRecorded
+    | Recorded of kind: RestartKind * message: string
+
   /// Everything the payload needs, gathered by the caller. A record so a new
   /// field is a compile error at every construction site rather than a
   /// silently-defaulted hole in the response.
@@ -46,6 +74,8 @@ module SessionStatusPayload =
     /// The health verdict, serialized as its caller produced it. Kept as the
     /// caller's own value so this module never restates the health rules.
     Health: obj
+    /// The outcome of the last requested rebuild, in the caller's own words.
+    LastRestart: LastRestart
   }
 
   /// Build the `get_session_status` payload.
@@ -55,6 +85,10 @@ module SessionStatusPayload =
   /// may call can never disagree with the state it was told the session is in.
   let serialize (facts: Facts) : string =
     let sessionState = facts.SessionState
+    let lastRestart : obj | null =
+      match facts.LastRestart with
+      | LastRestart.NoneRecorded -> null
+      | LastRestart.Recorded (kind, message) -> box {| outcome = RestartKind.label kind; message = message |}
 
     System.Text.Json.JsonSerializer.Serialize(
       {| state = stateLabelOf sessionState
@@ -70,4 +104,5 @@ module SessionStatusPayload =
          evalCount = facts.EvalCount
          averageDurationMs = facts.AverageDurationMs
          health = facts.Health
+         lastRestart = lastRestart
          available = Affordances.availableTools sessionState |})

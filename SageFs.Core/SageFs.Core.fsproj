@@ -286,6 +286,7 @@
         <Compile Include="SessionLifecycle.fs" />
         <Compile Include="WarmupSupervision.fs" />
         <Compile Include="WorkerEventGuard.fs" />
+        <Compile Include="ReadyTransport.fs" />
         <Compile Include="WorkerHealthProbe.fs" />
         <!-- MemoryPressure.fs itself now compiles earlier, just ahead of
              Features\DaemonHealth.fs (see the comment there) — this is only

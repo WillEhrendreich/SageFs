@@ -290,20 +290,6 @@ module SessionManager =
         return WorkerHealthProbe.ProbeOutcome.Missed
     }
 
-  let private hasValidReadyProxy (proxy: SessionProxy) =
-    not (isNull (box proxy))
-
-  let private hasValidReadyTransport (baseUrl: string) (proxy: SessionProxy) =
-    not (String.IsNullOrWhiteSpace baseUrl)
-    && hasValidReadyProxy proxy
-
-  let private describeInvalidReadyTransport (transportKind: string) (baseUrl: string) (proxy: SessionProxy) =
-    match String.IsNullOrWhiteSpace baseUrl, hasValidReadyProxy proxy with
-    | true, false -> sprintf "%s reported ready without a valid base URL or proxy" transportKind
-    | true, true -> sprintf "%s reported ready without a valid base URL" transportKind
-    | false, false -> sprintf "%s reported ready without a valid proxy" transportKind
-    | false, true -> sprintf "%s reported ready with a valid transport" transportKind
-
   /// Start a worker OS process. Returns immediately with the Process
   /// (does NOT wait for the worker to report its port).
   let startWorkerProcess
@@ -817,6 +803,7 @@ module SessionManager =
           inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
         match runtime.StartWorkerProcess id session.Targets session.WorkingDir session.AutoOpenNamespaces workflow onExited with
         | Error err ->
+          Log.warn "[SessionManager] replacement worker for session %s could not start; the current worker keeps serving: %s" (SessionId.value id) (SageFsError.describe err)
           reply.Reply(Error err)
           Instrumentation.failSpan span (SageFsError.describe err)
           state
@@ -1097,6 +1084,7 @@ module SessionManager =
               // The live worker still serves the last good build: the failure is
               // the caller's to show, not a reason to kill a working session.
               let msg = SageFsError.describe err
+              Log.warn "[SessionManager] rebuild for session %s failed; the previous build keeps serving: %s" (SessionId.value id) msg
               reply.Reply(Error err)
               Instrumentation.failSpan rebuildSpan msg
               return stateCleared
@@ -1105,6 +1093,7 @@ module SessionManager =
             | Error err, None ->
               // No worker to fall back to → faulted tombstone that says why.
               let msg = SageFsError.describe err
+              Log.warn "[SessionManager] rebuild for session %s failed and no worker is serving it: %s" (SessionId.value id) msg
               let tombstone = faultedTombstone (Some msg) session
               let newState = ManagerState.addSession id tombstone stateCleared
               reply.Reply(Error err)
@@ -1174,9 +1163,9 @@ module SessionManager =
               Log.warn "[SessionManager] Ignoring stale WorkerReady for session %s (event pid %d != current pid)" (SessionId.value id) workerPid
               return state
             | WorkerEventGuard.ReadyDecision.Commit ->
-              match hasValidReadyTransport baseUrl proxy with
+              match ReadyTransport.isValid baseUrl proxy with
               | false ->
-                let msg = describeInvalidReadyTransport "Worker" baseUrl proxy
+                let msg = ReadyTransport.describeInvalid "Worker" baseUrl proxy
                 do! runtime.StopWorker session
                 let faulted = faultedTombstone (Some msg) session
                 let newState =

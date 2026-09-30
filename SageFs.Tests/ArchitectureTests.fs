@@ -1095,7 +1095,10 @@ let fileSizeBudgets =
       // net is +22 rather than the ~+50 the inline version cost. The bump is
       // for the call site plus its honest log line, not for the logic.
       // Ratchet back DOWN when the file is split; never bump to paper over drift.
-      "SageFs/Mcp.fs", 4410
+      // 4410 -> 4365: RebuildOutcome (a type and its pure functions, ~60 lines)
+      // moved to RebuildOutcome.fs, which is what made room for the status
+      // payload to report the outcome at all.
+      "SageFs/Mcp.fs", 4365
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
@@ -1196,7 +1199,9 @@ let fileSizeBudgets =
       // rebuild is still what an unscoped migration falls back to) and the rest
       // is the comment naming the distinction. Ratchet back DOWN when the file
       // is split; never bump to paper over drift.
-      "SageFs.Core/SessionManager.fs", 1915 ]
+      // 1915 -> 1904: the ready-transport validity helpers moved to
+      // ReadyTransport.fs, net of three log lines for the failed-rebuild paths.
+      "SageFs.Core/SessionManager.fs", 1904 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->
