@@ -306,7 +306,7 @@ let startConfigured (runtime: HostRuntime) (configureRepo: string -> unit) : Tas
 let start (runtime: HostRuntime) : Task<RunningApp> = startConfigured runtime (fun _ -> ())
 
 let private isVerdict (payload: string) =
-  [ "reload"; "failed"; "noeffect"; "restarted" ]
+  [ "pending"; "failed"; "noeffect"; "restarted" ]
   |> List.exists (fun t -> payload.Contains(sprintf "\"type\":\"%s\"" t))
 
 /// Open the reload stream, write the edit, and return the terminal verdict the
@@ -356,6 +356,23 @@ let saveWithinBudget (budget: TimeSpan) (app: RunningApp) (find: string) (replac
 
 let save (app: RunningApp) (find: string) (replace: string) : Task<string> =
   saveWithinBudget (TimeSpan.FromSeconds 60.0) app find replace
+
+/// What a patch ends in. A save's first verdict is `pending` (applied, and the
+/// new code has not been seen running); once the app has run the patched code
+/// the worker says `patched`, and when the bound passes without that it says
+/// `neverentered`. The worker keeps the last verdict, so this reads it until
+/// one of the two has arrived.
+let confirmed (app: RunningApp) : Task<string> = task {
+  let last = ref ""
+  do! until
+        (TimeSpan.FromSeconds 40.0)
+        (fun () -> sprintf "the patch was neither confirmed nor reported never-entered. Last verdict: %s" last.Value)
+        (fun () -> task {
+          let! json = http.GetStringAsync(app.WorkerUrl + "/hotreload/last-outcome")
+          last.Value <- json
+          return json.Contains "\"type\":\"patched\"" || json.Contains "\"type\":\"neverentered\"" })
+  return last.Value
+}
 
 /// GET a worker route, the same one the daemon proxies for the dashboard.
 let getWorker (app: RunningApp) (route: string) : Task<string> =

@@ -68,8 +68,10 @@ their apps inside FSI, where the agent is, so that is what they prove.
    compiled types.
 3. [Harmony](https://github.com/pardeike/Harmony) re-points those methods at
    their new bodies at runtime. No restart.
-4. The worker decides what the save did (patched, needs a restart, did not
-   compile) and says so on its reload stream. The daemon keeps the last thing it
+4. The worker decides what the save did (applied, needs a restart, did not
+   compile) and says so on its reload stream. A patch is reported **applied**
+   first and **patched** only after the new code has been seen running, see
+   [What "patched" means](#what-patched-means). The daemon keeps the last thing it
    said on the session, so you can read it without a browser tab: it's
    `lastReload` in `get_session_status` and `/api/sessions`, a `ReloadReported`
    event on the SSE stream, and a line in the MCP push an agent gets. The browser
@@ -103,10 +105,48 @@ A change reaches the running app when it's a change to a **function body**:
 | a handler whose parameter type is declared in the same file | reloads | shape matrix `localType` |
 | the **body** of a `static member Render x = ...` on a type | reloads | shape matrix `member` |
 | a small function with no `[<MethodImpl(NoInlining)>]` | reloads | shape matrix `tiny` |
+| a function the compiler inlined into its caller (`let inline`, or `AggressiveInlining`) | applied, never confirmed. The detour lands, the caller keeps its own copy of the old body, the page keeps serving the old result, and after the bound the save says the new code never ran | `InlinedCalleeOutcomeTests` (real F# inlining, real detour, real stub, real wait, in process). Not in the real-app matrix: SageFs builds with `Optimize=false`, where an `inline` function is still a call, so a real app built by SageFs does not show it |
 | a function that reads or writes a `let mutable private` in its file | reloads, and it uses the app's OWN field, so reads and writes agree with the rest of the app | state tests, rule 1 `let mutable private` |
 
 The shape matrix is `SageFs.Tests/WebAppHotReloadVerificationTests.fs` (it runs
-on .NET 11). The state tests are `SageFs.Tests/HotReloadStateOutcomeTests.fs`
+on .NET 11).
+
+### What "patched" means
+
+Re-pointing a function is not the same as the app running its new body. The
+detour can land, and the running app can still hold the old body: a caller that
+had the function inlined carries its own copy and never calls the method that
+was re-pointed. Every other signal (the detour is in place, the app holds the
+compiled copy) reads as success in that case, so none of them is taken as proof.
+The proof is the new body running.
+
+So a save is reported in two steps:
+
+| Step | Wire `type` | Outcome | What it means | Page |
+|---|---|---|---|---|
+| 1 | `pending` | `PatchPending` | The detours landed. Nothing has been seen running yet. The message says to exercise the changed code. | refreshes |
+| 2a | `patched` | `Patched` | Every changed function the save still answers for has run its new body. | no second refresh |
+| 2b | `neverentered` | `NeverEntered` | The bound (10 seconds, `SAGEFS_PATCH_CONFIRM_SECONDS`) passed and some changed functions have not run. The message names them and counts the ones that have. | no refresh |
+
+An app with no traffic looks exactly like one that never calls the function, so
+`NeverEntered` does not say why. It says to exercise that code path, and that a
+restart picks the change up if the new code still does not run.
+
+How it is seen: the detour points at a small stub with the new body's exact
+signature. The stub records an entry and then calls the new body
+(`EntryProbes.fs`). The host keeps one probe per patched function, and a newer
+save of the same function supersedes the older probe, so the older save does not
+report a function it no longer owns. The decision itself is pure
+(`PatchConfirmation.fs`). A function whose stub could not be built, and a
+mutable binding's accessors, have no probe, so they are never reported as seen
+running.
+
+`lastReload` in `get_session_status`, the `ReloadReported` event and the browser
+overlay all carry these outcomes. `SessionReloadTests` pins the wire shape, and
+`PatchConfirmationSimTests` is the deterministic simulation: seeded saves, calls,
+replacements and bounds in every order, checking that `Patched` is only ever
+produced for functions that ran. Two twins (claim `Patched` at save time, never
+fire the bound) are caught by it. The state tests are `SageFs.Tests/HotReloadStateOutcomeTests.fs`
 and run once per runtime.
 
 ### State

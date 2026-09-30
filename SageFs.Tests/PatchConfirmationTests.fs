@@ -233,6 +233,13 @@ let tests =
         (DevReload.DevReloadEvent.report (ReloadBroadcast.eventOf (Outcome.NeverEntered("A.g", [], 1, 3, [])))).Patched |> Expect.equal "one ran" 1
         (DevReload.DevReloadEvent.report (ReloadBroadcast.eventOf (Outcome.PatchPending(2, 3, [])))).Considered |> Expect.equal "considered" 3
 
+      testCase "WHY — the session status carries the new cases under their own tokens, so an agent reading lastReload can tell applied from seen running" <| fun _ ->
+        for case, token in [ ReloadCase.PatchPending, "PatchPending"; ReloadCase.NeverEntered, "NeverEntered"; ReloadCase.Patched, "Patched" ] do
+          let facts : ReloadFacts = { Case = case; Patched = 0; Considered = 2; Message = "m"; SuggestedAction = "a" }
+          let wire = SessionReload.toWire (SessionReload.Finished facts)
+          System.Text.Json.JsonSerializer.Serialize wire
+          |> Expect.stringContains (sprintf "%A is reported as %s" case token) (sprintf "\"outcome\":\"%s\"" token)
+
       testCase "WHY — the daemon reads both new cases back as the case the worker wrote" <| fun _ ->
         for expected, outcome in
           [ ReloadCase.PatchPending, Outcome.PatchPending(2, 3, [])

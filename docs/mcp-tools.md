@@ -93,7 +93,7 @@ check `sagefs status` — if it says no daemon is running, start one with
 | `check_fsharp_code` | Type-check a snippet without running it, in the current FSI context. Earlier `send_fsharp_code` definitions are in scope, but namespaces still need an explicit `open`. A "not defined" error here almost always just means you forgot the `open`, nothing more sinister. |
 | `cancel_eval` | Cancel a running evaluation. |
 | `get_daemon_status` | Daemon version, health, memory, process telemetry, and session counts, including with no active session. |
-| `get_session_status` | The selected session's lifecycle, loaded projects, progress, and tools available in the current state. Pass `wait_seconds` (default 0, capped at 60) to wait for a warming session to become Ready instead of polling; the `wait` field in the reply says how it ended (`NotNeeded`, `BecameReady`, `Faulted`, `TimedOut`). |
+| `get_session_status` | The selected session's lifecycle, loaded projects, progress, and tools available in the current state. Pass `wait_seconds` (default 0, capped at 60) to wait for a warming session to become Ready instead of polling; the `wait` field in the reply says how it ended (`NotNeeded`, `BecameReady`, `Faulted`, `TimedOut`). `lastReload` says what the last save did: a patch reads `PatchPending` until the new code has been seen running, then `Patched`, or `NeverEntered` if the bound passed first. See [Hot Reload](hot-reload.md#what-patched-means). |
 | `get_recent_fsi_events` | Recent evals, errors, and loads with timestamps. |
 
 ## Sessions and lifecycle

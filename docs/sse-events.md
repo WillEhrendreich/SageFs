@@ -102,7 +102,7 @@ A single `state` event carries variant-specific fields.
 | `ModelChanged` | `outputCount`, `diagCount` | FSI output or diagnostics count changed. |
 | `SessionReady` | `sessionReady` (sessionId) | Session warmup completed successfully. |
 | `HotReloadChanged` | `hotReloadChanged: true` | Hot-reload state toggled. |
-| `ReloadReported` | `reloadReported` (`state`, then `outcome`, `patched`, `considered`, `message`, `suggestedAction` once finished; `null` before the first save), `sessionId` | What the worker said a save did to the running process. Sent once the worker has decided, so `NoEffect` and `RestartRequired` reach you even when the app has no browser page. The same object is `lastReload` in `get_session_status` and `/api/sessions`. |
+| `ReloadReported` | `reloadReported` (`state`, then `outcome`, `patched`, `considered`, `message`, `suggestedAction` once finished; `null` before the first save), `sessionId` | What the worker said a save did to the running process. Sent once the worker has decided, so `NoEffect` and `RestartRequired` reach you even when the app has no browser page. A patch sends `PatchPending` first (applied, the new code has not been seen running), then `Patched` (it ran) or `NeverEntered` (the bound passed without it running). See [Hot Reload](hot-reload.md#what-patched-means). The same object is `lastReload` in `get_session_status` and `/api/sessions`. |
 | `FileReloaded` | `fileReloaded` (path) | File reloaded from disk. |
 | `SessionFaulted` | `sessionFaulted` (sessionId), `error` | Session entered a faulted state. |
 | `WarmupProgress` | `warmupProgress: true`, `sessionId`, `step`, `total` | Session warmup step progress. |

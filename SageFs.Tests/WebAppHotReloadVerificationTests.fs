@@ -236,6 +236,13 @@ let private readSseUntil (reader: StreamReader) (timeoutMs: int) (predicate: str
     failwithf "SSE stream did not produce a matching event within %dms. SAW %d events:\n%s" timeoutMs seen.Count (String.concat "\n" seen)
   found
 
+/// A patch's first verdict is `pending` (applied, and the new code has not been seen
+/// running). Once the app has run the patched code the same stream carries
+/// `patched`; when the bound passes without that it carries `neverentered`.
+let private readConfirmation (reader: StreamReader) : string =
+  readSseUntil reader 40000 (fun payload ->
+    payload.Contains("\"type\":\"patched\"") || payload.Contains("\"type\":\"neverentered\""))
+
 /// Wait out the worker's double-compile guard before saving the SAME file again.
 ///
 /// This is not a sleep-poll standing in for a missing signal: it is this test
@@ -430,7 +437,7 @@ let webAppHotReloadVerificationTests =
         writeFixtureFile appSource edited
         try
           // 8. Observe Compiling -> Reload through the real worker SSE path.
-          readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"reload\""))
+          readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"pending\""))
           |> ignore
 
           // 9. Request the SAME running process without restart — require B.
@@ -438,6 +445,11 @@ let webAppHotReloadVerificationTests =
           Expect.stringContains
             (sprintf "hot reload should serve the new greeting from the running process.\nValue A body: %s\nHost log:\n%s" bodyA (hostLog.ToString()))
             "hello from hot reload (value B)" bodyB
+
+          // 9b. The request above ran the patched function, so the same stream now
+          //     carries the confirmation: the new code was seen running.
+          readConfirmation sseReader
+          |> Expect.stringContains "the patch is confirmed once its new body has run" "\"type\":\"patched\""
         finally
           // Always restore the fixture so later runs start from value A.
           writeFixtureFile appSource original
@@ -514,10 +526,10 @@ let webAppHotReloadVerificationTests =
             // the watcher's cache so the fix can't reload) — report it.
             let evt =
               readSseUntil sseReader 30000 (fun payload ->
-                payload.Contains("\"type\":\"reload\"")
+                payload.Contains("\"type\":\"pending\"")
                 || payload.Contains("\"type\":\"failed\""))
             Expect.stringContains
-              "repair save should produce reload, not another failure" "\"type\":\"reload\"" evt
+              "repair save should apply the patch, not fail again" "\"type\":\"pending\"" evt
           with ex ->
             let dumpPath = Path.Combine(Path.GetTempPath(), sprintf "sagefs-repair2-%s.log" sessionId)
             File.WriteAllText(dumpPath, hostLog.ToString())
@@ -590,7 +602,7 @@ let webAppHotReloadVerificationTests =
             // 60s budget on a verdict the worker had already sent.
             let verdict =
               readSseUntil sseReader 60000 (fun payload ->
-                [ "reload"; "failed"; "noeffect"; "restarted" ]
+                [ "pending"; "failed"; "noeffect"; "restarted" ]
                 |> List.exists (fun t -> payload.Contains(sprintf "\"type\":\"%s\"" t)))
 
             // Settle before reading, and say WHY this is not a sleep-poll
@@ -632,14 +644,23 @@ let webAppHotReloadVerificationTests =
             // `ReloadOutcome.processChanged` is the ONE place that answers
             // "did the running process change?", so the wire has to agree with
             // what the process actually serves, whatever the cell expects.
+            //
+            // A patch's first verdict is `pending` (applied, not yet seen running), so
+            // the claim that has to agree with the app is the FINAL one: `patched`
+            // once the new code has run, `neverentered` when the bound passed first.
+            // The request above has already run whatever the route calls.
+            let finalVerdict =
+              match verdict.Contains "\"type\":\"pending\"" with
+              | true -> readConfirmation sseReader
+              | false -> verdict
             let claimedChange =
-              [ "\"type\":\"reload\""; "\"type\":\"restarted\"" ]
-              |> List.exists verdict.Contains
+              [ "\"type\":\"patched\""; "\"type\":\"restarted\"" ]
+              |> List.exists finalVerdict.Contains
             let observedChange = served = "B"
             Expect.equal
               (sprintf
                 "%s: the wire and the running app must agree about whether anything changed. The app serves %s, so the process %s changed; the worker sent:\n  %s\nA save that moves behaviour while reporting no effect (or reports a patch that did not land) is the dishonest-count failure ReloadOutcome was built to prevent.\nHost log:\n%s"
-                cell.Name served (if observedChange then "DID" else "did NOT") verdict (hostLog.ToString()))
+                cell.Name served (if observedChange then "DID" else "did NOT") finalVerdict (hostLog.ToString()))
               observedChange claimedChange
 
             match cell.Expected with
@@ -649,6 +670,10 @@ let webAppHotReloadVerificationTests =
                   "%s — %s\nThe running app must serve the new code after the save, with no restart.\nWorker said: %s\nHost log:\n%s"
                   cell.Name cell.Why verdict (hostLog.ToString()))
                 "B" served
+              // The request that served B ran the patched function, so the worker has seen
+              // its new code run and says so: not merely applied.
+              finalVerdict
+              |> Expect.stringContains (sprintf "%s: the new code ran, so the save is confirmed" cell.Name) "\"outcome\":\"Patched\""
             | ShapeMatrix.RestartOnly reason ->
               Expect.equal
                 (sprintf
@@ -704,11 +729,15 @@ let webAppHotReloadVerificationTests =
         let reloadPayload =
           use sseReader = openSseStream baseUrl
           writeFixtureFile appSource edited
-          try readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"reload\""))
+          try readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"pending\""))
           with ex ->
             failwithf "%s\nHost log:\n%s" ex.Message (hostLog.ToString())
-        Expect.stringContains "a landed reload names its own case" "\"outcome\":\"Patched\"" reloadPayload
-        Expect.isFalse "a landed reload never claims zero patched" (reloadPayload.Contains("\"patched\":0"))
+        Expect.stringContains "an applied reload names its own case" "\"outcome\":\"PatchPending\"" reloadPayload
+        // An applied patch has had nothing confirmed yet, so its `patched` count (what has
+        // been seen running) is zero, and it still says how many definitions it put in
+        // front of the process.
+        Expect.isTrue "an applied reload has confirmed nothing yet, and says so" (reloadPayload.Contains("\"patched\":0"))
+        Expect.isFalse "but it never claims it put nothing in front of the process" (reloadPayload.Contains("\"considered\":0"))
         httpGet port "/"
         |> Expect.stringContains "the running process must actually serve the new code" "hello from hot reload (value B)"
 
@@ -728,7 +757,7 @@ let webAppHotReloadVerificationTests =
         // 3. The two payloads must actually differ where a client looks:
         //    the type a client switches on, and the outcome case it renders.
         Expect.isFalse "the reload and no-op payloads must carry different wire types" (reloadPayload.Contains("\"type\":\"noeffect\""))
-        Expect.isFalse "the no-op payload must never carry the refresh cue" (noopPayload.Contains("\"type\":\"reload\""))
+        Expect.isFalse "the no-op payload must never carry the refresh cue" (noopPayload.Contains("\"type\":\"pending\""))
         reloadPayload = noopPayload
         |> Expect.isFalse "the two payloads must not be byte-identical — that is the whole bug this wire exists to prevent"
 

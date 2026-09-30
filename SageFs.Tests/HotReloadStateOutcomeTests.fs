@@ -44,7 +44,7 @@ let private publicStateSurvives (runtime: HostRuntime) =
       let! relabelled = settle app "label" "B"
       relabelled
       |> Expect.equal (sprintf "the edited function should serve its new body.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "B"
-      verdict |> Expect.stringContains "the save should report a real patch" "\"type\":\"reload\""
+      verdict |> Expect.stringContains "the save should report an applied patch, which refreshes the page" "\"type\":\"pending\""
       let! count = get app "count"
       count
       |> Expect.equal (sprintf "count is live data the save never touched, so it has to still be 3.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "3"
@@ -69,7 +69,7 @@ let private privateStateSurvives (runtime: HostRuntime) =
       let! relabelled = settle app "hiddenLabel" "B3"
       relabelled
       |> Expect.equal (sprintf "the patched function should serve its new body AND the live private value.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "B3"
-      verdict |> Expect.stringContains "the save should report a real patch" "\"type\":\"reload\""
+      verdict |> Expect.stringContains "the save should report an applied patch, which refreshes the page" "\"type\":\"pending\""
       let! next = get app "bumpHidden"
       next |> Expect.equal "the app's own bump still lands in the same storage" "4"
       let! after = get app "hiddenLabel"
@@ -176,7 +176,10 @@ let private uncapturedValueIsPatched (runtime: HostRuntime) =
       let! served = settle app "greet" "howdy"
       served
       |> Expect.equal (sprintf "the running app should serve the new value.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "howdy"
-      str (json verdict) "outcome" |> Expect.equal "and the wire has to say it was patched" "Patched"
+      str (json verdict) "outcome" |> Expect.equal "and the wire has to say it was applied, not yet seen running" "PatchPending"
+      // The request above ran the patched getter, so the worker can now say it was seen.
+      let! confirmedVerdict = confirmed app
+      str (json confirmedVerdict) "outcome" |> Expect.equal (sprintf "and once the patched code has run the wire says it was patched.\nVerdict: %s\nHost log:\n%s" confirmedVerdict (RunningApp.log app)) "Patched"
       let! count = get app "count"
       count |> Expect.equal "and redefining a value must not reset the file's live state" "2"
     })
@@ -200,7 +203,7 @@ let private capturedValueIsNeverPatched (runtime: HostRuntime) =
       outcome
       |> Expect.notEqual (sprintf "reporting a patch here would be a lie.\nVerdict: %s" verdict) "Patched"
       str (json verdict) "type"
-      |> Expect.notEqual "and the page must not be told to refresh into the same bytes" "reload"
+      |> Expect.notEqual "and the page must not be told to refresh into the same bytes" "pending"
       let case, message = firstReason verdict
       case |> Expect.equal (sprintf "the reason is that the app kept a copy.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "ValueCopiedByApp"
       message
@@ -236,9 +239,11 @@ let private lazyNotYetForcedGetsTheNewValue (runtime: HostRuntime) =
     do! withApp runtime (fun app -> task {
       let! verdict = save app "let motto = \"carpe diem\"" "let motto = \"seize the day\""
       str (json verdict) "outcome"
-      |> Expect.equal (sprintf "nothing kept motto yet, so this is a patch.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
+      |> Expect.equal (sprintf "nothing kept motto yet, so this is a patch, applied and not yet seen running.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "PatchPending"
       let! served = settle app "motto" "SEIZE THE DAY"
       served |> Expect.equal "the lazy reads the new value when it's first forced" "SEIZE THE DAY"
+      let! confirmedVerdict = confirmed app
+      str (json confirmedVerdict) "outcome" |> Expect.equal (sprintf "forcing the lazy ran the patched getter.\nVerdict: %s\nHost log:\n%s" confirmedVerdict (RunningApp.log app)) "Patched"
     })
   }
 
@@ -287,9 +292,11 @@ let private probeCallersPatchesAThrownAwayReflectiveRead (runtime: HostRuntime) 
       (report.SiteHits, 0L) |> Expect.isGreaterThan "the second call's reads were named by the rewired caller, not walked"
       let! verdict = save app "let reflected = \"mirror\"" "let reflected = \"glass\""
       str (json verdict) "outcome"
-      |> Expect.equal (sprintf "every reflective read was thrown away, so this is a patch.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
+      |> Expect.equal (sprintf "every reflective read was thrown away, so this is a patch, applied and not yet seen running.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "PatchPending"
       let! served = settle app "reflectPeek" "glass"
       served |> Expect.equal "and reflection reads the new value" "glass"
+      let! confirmedVerdict = confirmed app
+      str (json confirmedVerdict) "outcome" |> Expect.equal (sprintf "the reflective read ran the patched getter.\nVerdict: %s\nHost log:\n%s" confirmedVerdict (RunningApp.log app)) "Patched"
     })
   }
 
@@ -322,7 +329,7 @@ let private exactEveryReadPatches (runtime: HostRuntime) =
       (report.Walks, 1000L) |> Expect.isGreaterThanOrEqual "every one of the 2000 reads walked"
       let! verdict = save app "let reflected = \"mirror\"" "let reflected = \"glass\""
       str (json verdict) "outcome"
-      |> Expect.equal (sprintf "the walk found the thrown-away site, so this is a patch.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
+      |> Expect.equal (sprintf "the walk found the thrown-away site, so this is a patch, applied and not yet seen running.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "PatchPending"
     })
   }
 
