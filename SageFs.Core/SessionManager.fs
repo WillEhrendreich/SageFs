@@ -654,7 +654,7 @@ module SessionManager =
                   { session.Info with
                       Status = SessionLifecycleStatus.Restarting (PreviousWorker.ofPid (SessionLifecycleStatus.workerPid session.Info.Status))
                       Workflow = workflow
-                      Reload = SessionReload.NoReloadYet
+                      Reload = SessionReload.afterWorkerSwap session.Info.Reload
                       LastActivity = DateTime.UtcNow } }
           let newState =
             ManagerState.setPendingSwap id session

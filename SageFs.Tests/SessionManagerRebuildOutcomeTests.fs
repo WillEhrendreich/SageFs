@@ -173,4 +173,15 @@ let reloadTests =
         let! _ = harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, RestartPlan.RespawnOnly, reply))
         reloadOf harness info.Id |> Expect.equal "the new worker has not been saved to" SessionReload.NoReloadYet })
     }
+
+    testTask "WHY — a swap keeps a Restarted verdict, because the swap is the restart it reports and an agent reading status right after would otherwise see nothing happened" {
+      do! withHarness (async { return Ok "build ok" }) (fun harness -> task {
+        let info = createSession harness
+        let restarted =
+          SessionReload.Finished
+            { Case = ReloadCase.Restarted; Patched = 0; Considered = 1; Message = "Restarted the app"; SuggestedAction = "" }
+        harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, restarted))
+        let! _ = harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, RestartPlan.RespawnOnly, reply))
+        reloadOf harness info.Id |> Expect.equal "the verdict that caused the swap survives it" restarted })
+    }
   ]

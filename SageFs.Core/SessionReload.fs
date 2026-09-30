@@ -96,6 +96,18 @@ module ReloadCase =
     | None -> Result.Error (ReloadPayloadError.UnknownOutcome text)
 
 module SessionReload =
+  /// What a session says about its last save once its worker has been swapped for a new one.
+  ///
+  /// A verdict is about the process that produced it, so a swap clears it, with one
+  /// exception: `Restarted` reports that the app was restarted, and the swap IS that
+  /// restart, so wiping it would leave status saying nothing happened right after the
+  /// save that caused it (seen live on a run_app ticker, where the pid changed and
+  /// `lastReload` read null). Every other verdict, and an unfinished `Compiling`, goes.
+  let afterWorkerSwap (reload: SessionReload) : SessionReload =
+    match reload with
+    | SessionReload.Finished facts when facts.Case = ReloadCase.Restarted -> reload
+    | SessionReload.Finished _ | SessionReload.Compiling _ | SessionReload.NoReloadYet -> SessionReload.NoReloadYet
+
   /// The worker's SSE `data:` payload for one reload event (`{"type":...}`).
   ///
   /// The `type` cue is the browser overlay's: `compiling`, `reload`, `restarted`,
