@@ -253,6 +253,7 @@
          <Compile Include="AssemblyResolverTests.fs" />
          <Compile Include="SseWriterTests.fs" />
          <Compile Include="SseDedupKeyTests.fs" />
+         <Compile Include="SseDedupKeyEquivalenceTests.fs" />
          <Compile Include="ThemeTests.fs" />
          <Compile Include="ErrorMessagesTests.fs" />
          <Compile Include="EvalSubmissionTests.fs" />
