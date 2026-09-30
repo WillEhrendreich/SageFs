@@ -1318,10 +1318,18 @@ module McpTools =
         match info, routeResult with
         | Some sessionInfo, Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
           let targets = SessionProjectTarget.tryCreateMany sessionInfo.Projects |> Result.defaultValue []
+          let reconciliation =
+            SageFs.ProjectResolution.reconcile targets sessionInfo.ProjectRoles.Length sessionInfo.Status snapshot.Status
           let reconciledStatus =
-            match SageFs.ProjectResolution.reconcile targets sessionInfo.ProjectRoles.Length sessionInfo.Status snapshot.Status with
+            match reconciliation with
             | SageFs.ProjectResolution.ReconciledStatus.Reconciled status -> status
             | SageFs.ProjectResolution.ReconciledStatus.NotYetEarned current -> current
+          // Agents compare list_sessions with this status before trusting the
+          // REPL, so the registry follows the live worker when they differ.
+          match reconciliation with
+          | SageFs.ProjectResolution.ReconciledStatus.Reconciled status when sessionInfo.Status <> status ->
+            do! ctx.SessionOps.UpdateSessionStatus (toSessionId sid) status
+          | _ -> ()
           let! warmup =
             match ctx.GetWarmupContext with
             | Some getCtx -> getCtx sid
@@ -1352,162 +1360,6 @@ module McpTools =
               LastReload = sessionInfo.Reload }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
-    }
-
-  let getStatus (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
-    task {
-      let! resolution = resolveSessionId ctx agent sessionId workingDirectory
-      match resolution with
-      | Gone msg ->
-        // No session found — return useful status instead of an error.
-        // This prevents SessionMissing friction on the most-called tool.
-        let! sessions = ctx.SessionOps.GetAllSessions()
-        let sessionCount = sessions |> List.length
-        let availableTools = Affordances.availableTools SessionState.Uninitialized
-        // Stale-daemon affordance (issue #136), same silent-unless-stale
-        // read as the Routable branch below — deliberately included here
-        // too: a create_session failure that reads like a SageFs bug (the
-        // motivating incident) is most often noticed right where an agent
-        // next calls get_fsi_status with no session yet to show for it.
-        let staleLine =
-          UpdateCheckService.currentOutcome ()
-          |> UpdateCheck.describe
-          |> Option.map (fun line -> " " + line)
-          |> Option.defaultValue ""
-        return
-          System.Text.Json.JsonSerializer.Serialize(
-            {| state = "NoSession"
-               message =
-                 (match sessionCount with
-                  | 0 -> "No sessions exist. Call get_available_projects to discover .fsproj/.sln/.slnx files (pass working_directory to narrow a large tree), then create_project_session for one .fsproj, create_solution_session for one .sln/.slnx, or create_bare_session for a project-free REPL."
-                  | _ -> sprintf "%d session(s) exist but none matched the working directory. Use list_sessions to see them, or switch_session to select one." sessionCount)
-                 + staleLine
-               available = availableTools |})
-      | WarmingUp _ | Unroutable _ | FaultedSession _ ->
-        // INVARIANT (get_fsi_status is total): a session that exists but is
-        // starting, restarting, faulted, or not yet routable is reported as
-        // one of these structured states — never as a transport error and
-        // never as missing. Shared with the Routable branch's own transport-
-        // failure fallback below (renderWarmingOrFaulted) so the two paths
-        // can never disagree about a session's real state.
-        return! renderWarmingOrFaulted ctx resolution
-      | Routable sid ->
-        let eventCount = 0  // EventTracking removed — event count not tracked
-        let! routeResult =
-          routeToSession ctx sid
-            (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
-        match routeResult with
-        | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
-          let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-          let reconciliation = info |> Option.map (fun i -> SageFs.ProjectResolution.reconcile (SessionProjectTarget.tryCreateMany i.Projects |> Result.defaultValue []) i.ProjectRoles.Length i.Status snapshot.Status)
-          let reconciled = reconciliation |> Option.map (function SageFs.ProjectResolution.ReconciledStatus.Reconciled s | SageFs.ProjectResolution.ReconciledStatus.NotYetEarned s -> s)
-          match info, reconciliation with
-          | Some sessionInfo, Some (SageFs.ProjectResolution.ReconciledStatus.Reconciled newStatus) when sessionInfo.Status <> newStatus ->
-            do! ctx.SessionOps.UpdateSessionStatus (toSessionId sid) newStatus
-          | _ -> ()
-          let baseStatus =
-            match info, reconciled with
-            | Some sessionInfo, Some newStatus ->
-              let syncedInfo = { sessionInfo with Status = newStatus }
-              McpAdapter.formatProxyStatus sid eventCount snapshot syncedInfo ctx.McpPort
-            | _ ->
-              let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
-              McpAdapter.formatEnhancedStatus sid eventCount state None None
-          // Enrich with multi-agent coordination data.
-          // Prune first so the caller does not see (and is not misled by)
-          // agents whose tracked presence has gone stale while this live
-          // session stays routable. The caller itself is exempt — its
-          // presence is refreshed by the recordToolCall below.
-          pruneSessionMap ctx None (Some agent) DateTime.UtcNow
-          let occupants = occupantsForSession ctx sid
-          let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
-          let guidance = SessionOperations.SessionGuidance.compute occupants snapshot.Status
-          let enriched =
-            baseStatus
-            |> SessionOperations.CoordinationEnrichment.enrichStatusWithGuidance guidance
-            |> SessionOperations.CoordinationEnrichment.enrichStatusWithPresences DateTime.UtcNow presences
-          // Also record this status check as agent activity — recordMemberActivity
-          // so Role comes from the bound MemberId case, not a re-parsed string.
-          AgentActivityTracker.recordMemberActivity ctx.ActivityTracker (memberIdFor agent) sid None None DateTime.UtcNow
-          let rebuildLine =
-            match info |> Option.map (fun i -> i.Rebuild) with
-            | Some (LastRebuild.Latest outcome) -> "\n" + RebuildOutcome.describe DateTime.UtcNow (Some snapshot.CoreVersion) outcome
-            | Some LastRebuild.NeverRebuilt | None -> ""
-          let reloadLine = SessionReload.statusLine (SessionStatusPayload.lastReloadOfSession info)
-          // Self-host staleness (F5b): only sessions that adopted their own
-          // SageFs.Core build carry an AdoptedCore identity, so the on-disk
-          // scan runs ONLY for those (rare) sessions — never on the common
-          // non-self-hosting get_fsi_status polling path.
-          let! adoptedCore = ctx.SessionOps.GetAdoptedCore (toSessionId sid)
-          let selfHostLine =
-            match adoptedCore, info with
-            | Some _, Some sessionInfo ->
-              let newest = SageFs.HostCoreAdoption.newestCandidateIdentity sessionInfo.Projects
-              SageFs.HostCoreAdoption.selfHostFreshness adoptedCore newest
-              |> SageFs.HostCoreAdoption.formatFreshnessAffordance
-              |> Option.map (fun line -> "\n" + line)
-              |> Option.defaultValue ""
-            | _ -> ""
-          // Derived, user-meaningful health verdict — computed from the SAME
-          // three facts (worker lifecycle status, ProjectRoles, WarmupContext)
-          // that /api/sessions uses, so the two surfaces never disagree.
-          // "Ready" alone only ever meant "the worker process is alive";
-          // this is what tells an agent whether the session is actually usable.
-          let! healthLine =
-            task {
-              match info with
-              | None -> return ""
-              | Some sessionInfo ->
-                let effectiveStatus = reconciled |> Option.defaultValue sessionInfo.Status
-                let! warmupOpt =
-                  match ctx.GetWarmupContext with
-                  | Some getCtx -> getCtx sid
-                  | None -> Task.FromResult None
-                let health = SessionHealth.classify effectiveStatus sessionInfo.ProjectRoles warmupOpt
-                return
-                  SessionHealth.describeForAgent health
-                  |> Option.map (fun line -> "\n" + line)
-                  |> Option.defaultValue ""
-            }
-          // Stale-daemon affordance (issue #136): the daemon's own periodic
-          // NuGet check (UpdateCheckService, DaemonMode's background loop),
-          // read here with no IO of its own — silent unless genuinely
-          // behind, so a current daemon never nags on the tool agents call
-          // constantly.
-          let staleLine =
-            UpdateCheckService.currentOutcome ()
-            |> UpdateCheck.describe
-            |> Option.map (fun line -> "\n" + line)
-            |> Option.defaultValue ""
-          return enriched + rebuildLine + reloadLine + selfHostLine + healthLine + staleLine
-        | Ok other ->
-          return sprintf "Unexpected response: %A" other
-        | Error (RestartInProgress msg) ->
-          // Session became unroutable mid-flight (e.g., worker swapped under us).
-          // Report it as Rebuilding, not as a crash.
-          let availableTools = Affordances.availableTools SessionState.WarmingUp
-          return
-            System.Text.Json.JsonSerializer.Serialize(
-              {| state = "Rebuilding"
-                 sessionId = sid
-                 message = msg
-                 available = availableTools |})
-        | Error msg ->
-          // The proxy looked routable a moment ago but the round-trip itself
-          // failed (worker died between the proxy lookup and this call, or a
-          // transient transport error). Re-resolve against the registry
-          // instead of returning a bare, unstructured string: if the worker
-          // is now known to be Faulted, this must say so — with the real
-          // faultReason — through the SAME renderWarmingOrFaulted path
-          // WarmingUp/Unroutable/FaultedSession use above, so a routing
-          // failure can never hide a fault the registry already recorded.
-          let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-          let reResolved = classifySessionAvailability info false
-          match reResolved with
-          | Gone _ ->
-            return sprintf "Error getting status: %s" (routeErrorMessage msg)
-          | other ->
-            return! renderWarmingOrFaulted ctx other
     }
 
   let getStartupInfo (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =

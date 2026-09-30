@@ -191,18 +191,6 @@ let tests =
       | Ok _ -> failtest "Should return error for non-existent file"
       | Error ex -> Expect.isNotNull "Should have exception" (box ex)
 
-    testCase "McpAdapter.formatStatus includes session ID and event count"
-    <| fun _ ->
-      let result = McpAdapter.formatStatus "test-session-123" 42 SageFs.SessionState.Ready None
-
-      result |> Expect.stringContains "Should include session ID" "test-session-123"
-      result |> Expect.stringContains "Should include event count" "42"
-
-    testCase "McpAdapter.formatStatus is concise"
-    <| fun _ ->
-      let result = McpAdapter.formatStatus "abc123" 0 SageFs.SessionState.Ready None
-      Expect.isFalse "Should NOT include usage tips" (result.Contains("Usage Tips"))
-
     testCase "McpAdapter.formatEvalResult handles empty output string"
     <| fun _ ->
       let response: EvalResponse = {
@@ -424,16 +412,6 @@ let tests =
       let output = sw.ToString()
       Expect.isFalse "should not double CR" (output.Contains("\r\r"))
       output |> Expect.equal "CRLF chars preserved" "h\r\nw"
-
-    testCase "formatStatus includes eval count when stats provided"
-    <| fun _ ->
-      let stats =
-        Affordances.EvalStats.empty
-        |> Affordances.EvalStats.record (TimeSpan.FromMilliseconds 150.0)
-        |> Affordances.EvalStats.record (TimeSpan.FromMilliseconds 250.0)
-      let result = McpAdapter.formatStatus "test" 5 SessionState.Ready (Some stats)
-      result |> Expect.stringContains "has eval count" "Evals: 2"
-      result |> Expect.stringContains "has avg" "Avg:"
   ]
 
 open System.Text.Json
@@ -579,87 +557,6 @@ let jsonFormatVariantTests =
         let doc = JsonDocument.Parse(result)
         doc.RootElement.GetProperty("events").GetArrayLength()
         |> Expect.equal "should have 1 event" 1
-    ]
-
-    testList "formatStatusJson" [
-      testCase "includes sessionId"
-      <| fun _ ->
-        let result = McpAdapter.formatStatusJson "test-123" 10 SessionState.Ready None
-        let doc = JsonDocument.Parse(result)
-        doc.RootElement.GetProperty("sessionId").GetString()
-        |> Expect.equal "should be test-123" "test-123"
-
-      testCase "includes state"
-      <| fun _ ->
-        let result = McpAdapter.formatStatusJson "x" 0 SessionState.Evaluating None
-        let doc = JsonDocument.Parse(result)
-        doc.RootElement.GetProperty("state").GetString()
-        |> Expect.equal "should be Evaluating" "Evaluating"
-
-      testCase "includes tools array"
-      <| fun _ ->
-        let result = McpAdapter.formatStatusJson "x" 0 SessionState.Ready None
-        let doc = JsonDocument.Parse(result)
-        let toolCount = doc.RootElement.GetProperty("tools").GetArrayLength()
-        Expect.isGreaterThan "should have tools" (toolCount, 0)
-
-      testCase "includes eval stats when present"
-      <| fun _ ->
-        let stats =
-          Affordances.EvalStats.empty
-          |> Affordances.EvalStats.record (TimeSpan.FromMilliseconds 100.0)
-          |> Affordances.EvalStats.record (TimeSpan.FromMilliseconds 200.0)
-          |> Affordances.EvalStats.record (TimeSpan.FromMilliseconds 300.0)
-        let result = McpAdapter.formatStatusJson "x" 0 SessionState.Ready (Some stats)
-        let doc = JsonDocument.Parse(result)
-        doc.RootElement.GetProperty("evalStats").GetProperty("count").GetInt32()
-        |> Expect.equal "should be 3" 3
-
-      testCase "omits eval stats when None"
-      <| fun _ ->
-        let result = McpAdapter.formatStatusJson "x" 0 SessionState.Ready None
-        let doc = JsonDocument.Parse(result)
-        let mutable dummy = Unchecked.defaultof<JsonElement>
-        doc.RootElement.TryGetProperty("evalStats", &dummy)
-        |> Expect.isFalse "should not have evalStats"
-    ]
-
-    testList "formatEnhancedStatusJson" [
-      testCase "includes projects from startup config"
-      <| fun _ ->
-        let cfg : StartupConfig = {
-          CommandLineArgs = [||]; LoadedProjects = ["Test.fsproj"]
-          WorkingDirectory = "C:\\test"
-          Workflow = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults; AutoOpenNamespaces = true; AspireDetected = false
-          StartupProfileLoaded = None; StartupTimestamp = DateTime.UtcNow
-        }
-        let result = McpAdapter.formatEnhancedStatusJson "x" 0 SessionState.Ready None (Some cfg)
-        let doc = JsonDocument.Parse(result)
-        let projects = doc.RootElement.GetProperty("projects")
-        projects.GetArrayLength() |> Expect.equal "should have 1 project" 1
-        (projects.EnumerateArray() |> Seq.head).GetString()
-        |> Expect.equal "should be Test.fsproj" "Test.fsproj"
-
-      testCase "includes startup section"
-      <| fun _ ->
-        let cfg : StartupConfig = {
-          CommandLineArgs = [||]; LoadedProjects = []
-          WorkingDirectory = "C:\\work"
-          Workflow = WorkflowTypes.SessionWorkflow.Interactive; AutoOpenNamespaces = true; AspireDetected = true
-          StartupProfileLoaded = None; StartupTimestamp = DateTime.UtcNow
-        }
-        let result = McpAdapter.formatEnhancedStatusJson "x" 0 SessionState.Ready None (Some cfg)
-        let doc = JsonDocument.Parse(result)
-        let startup = doc.RootElement.GetProperty("startup")
-        startup.GetProperty("hotReloadEnabled").GetBoolean()
-        |> Expect.isFalse "should be false"
-
-      testCase "projects empty when no config"
-      <| fun _ ->
-        let result = McpAdapter.formatEnhancedStatusJson "x" 0 SessionState.Ready None None
-        let doc = JsonDocument.Parse(result)
-        doc.RootElement.GetProperty("projects").GetArrayLength()
-        |> Expect.equal "should be 0" 0
     ]
   ]
 

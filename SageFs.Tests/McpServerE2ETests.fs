@@ -14,7 +14,7 @@ open SageFs.WorkflowTypes
 let tests =
   testList "MCP HTTP Handler tests" [
 
-    test "formatEvalResult and formatStatus produce expected content" {
+    test "formatEvalResult produces expected content" {
       // Test MCP protocol initialize handshake
       // Verify the McpAdapter module and its functions exist
       
@@ -27,10 +27,6 @@ let tests =
       }
       let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive testResponse
       result |> Expect.stringContains "formatEvalResult should work" "Result:"
-      
-      // Test formatStatus exists and works
-      let status = McpAdapter.formatStatus "test-session" 10 SageFs.SessionState.Ready None
-      status |> Expect.stringContains "formatStatus should work" "test-session"
     }
 
     test "formatEvents and parseScriptFile produce expected content" {
@@ -41,7 +37,7 @@ let tests =
       // sendFSharpCode: McpContext -> string -> string -> Task<string>
       // loadFSharpScript: McpContext -> string -> string -> Task<string>
       // getRecentEvents: McpContext -> int -> Task<string>
-      // getStatus: McpContext -> Task<string>
+      // getSessionStatus: McpContext -> string -> string option -> string option -> Task<string>
       
       // Test formatEvents exists and works
       let testEvents = [

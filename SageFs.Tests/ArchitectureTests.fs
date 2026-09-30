@@ -1105,7 +1105,11 @@ let fileSizeBudgets =
       // clearSession calls).
       // 4280 -> 4258: the rebuild outcome is recorded by the SessionManager now,
       // so the tool's own store and its recording are gone.
-      "SageFs/Mcp.fs", 4258
+      // 4258 -> 4110: getStatus was dead (only tests called it; the registered
+      // get_session_status tool calls getSessionStatus), and its `eventCount = 0`
+      // printed "Events: 0" on every status. The registry sync it alone did now
+      // lives in getSessionStatus.
+      "SageFs/Mcp.fs", 4110
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
@@ -1114,7 +1118,11 @@ let fileSizeBudgets =
       // one implementation — sagefs-roast.md Finding #1/#13). File dropped
       // to 821 lines; budget set just above that, not left at the old
       // ceiling.
-      "SageFs/McpAdapter.fs", 830
+      // 830 -> 681: the five status formatters that took an eventCount
+      // (formatStatus, formatStatusJson, formatEnhancedStatus,
+      // formatEnhancedStatusJson, formatProxyStatus) and formatLoadedProjectsLine
+      // had no production caller, so they are gone.
+      "SageFs/McpAdapter.fs", 681
       // 5100 -> 5160: a one-time bump for the live-testing-asyoutype-plan.md
       // Brief 4 keystone (EvalThenRunRequest, TestCycleEffect.
       // EvalBufferThenRunAffected, TestCycleEffects.redirectToEvalBuffer,

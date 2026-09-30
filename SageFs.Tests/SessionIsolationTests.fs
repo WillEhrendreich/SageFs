@@ -687,6 +687,11 @@ module ResetIsolation =
         GetProcessTelemetry = fun () -> None } : McpContext
     ctx, restartLog, routedSessions
 
+  /// The top-level `state` of a get_session_status payload.
+  let statusStateOf (json: string) : string =
+    use doc = System.Text.Json.JsonDocument.Parse json
+    doc.RootElement.GetProperty("state").GetString()
+
   let mkStatusSyncCtx () =
     let sid = testSessionId "aaa00001"
     let sidStr = WorkerProtocol.SessionId.value sid
@@ -946,11 +951,11 @@ module ResetIsolation =
         "listSessions should reflect that the session is re-warming during a soft reset"
         "Starting"
 
-      let! status = getStatus ctx "agent1" (Some sid) None
-      status
-      |> Expect.stringContains
-        "getStatus should surface the live worker warming state"
-        "State: WarmingUp"
+      let! status = getSessionStatus ctx "agent1" (Some sid) None
+      statusStateOf status
+      |> Expect.equal
+        "getSessionStatus should surface the live worker warming state"
+        "WarmingUp"
 
       allowResetFinish.TrySetResult(()) |> ignore
 
@@ -961,12 +966,12 @@ module ResetIsolation =
         "reset"
     }
 
-    testTask "WHY — getStatus — synchronizes registry with worker status because agents compare list_sessions and get_fsi_status before trusting REPL readiness" {
+    testTask "WHY — getSessionStatus — synchronizes registry with worker status because agents compare list_sessions and get_session_status before trusting REPL readiness" {
       let ctx, _, resetStarted, _ = mkStatusSyncCtx ()
 
       resetStarted.TrySetResult(()) |> ignore
 
-      let! _ = getStatus ctx "agent1" None (Some @"C:\Code\Repos\SageFs")
+      let! _ = getSessionStatus ctx "agent1" None (Some @"C:\Code\Repos\SageFs")
 
       let! listed = listSessions ctx
       listed

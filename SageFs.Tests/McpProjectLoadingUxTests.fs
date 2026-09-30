@@ -138,24 +138,6 @@ module FormatCreateSessionReplyTests =
         Expect.isFalse "should not contain a hint marker with no hint supplied" (reply.Contains("💡"))
     ]
 
-module FormatLoadedProjectsLineTests =
-
-  [<Tests>]
-  let tests =
-    testList "McpAdapter.formatLoadedProjectsLine" [
-
-      testCase "WHY — an empty resolved-projects list says nothing was resolved yet, distinguishing it from an error" <| fun _ ->
-        let line = McpAdapter.formatLoadedProjectsLine []
-        line |> Expect.stringContains "should explain nothing resolved yet" "none resolved"
-
-      testCase "WHY — resolved projects are shown by file name, not full path (matches the existing 'Projects:' field's style)" <| fun _ ->
-        let roles : SageFs.ProjectLoading.ClassifiedProject list =
-          [ { Path = "/repo/src/App.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Executable; PackageRefs = []; LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
-            { Path = "/repo/tests/App.Tests.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Test; PackageRefs = []; LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized } ]
-        let line = McpAdapter.formatLoadedProjectsLine roles
-        line |> Expect.equal "should list both file names" "App.fsproj, App.Tests.fsproj"
-    ]
-
 module FormatAvailableProjectsHintTests =
 
   [<Tests>]

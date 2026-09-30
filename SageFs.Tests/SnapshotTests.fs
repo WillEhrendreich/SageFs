@@ -15,11 +15,6 @@ let verifyText name (value: string) =
 let formatTests =
   testList "Snapshot tests" [
 
-    testTask "formatStatus snapshot" {
-      let result = McpAdapter.formatStatus "test-session" 42 SageFs.SessionState.Ready None
-      do! verifyText "formatStatus" result
-    }
-
     testTask "formatStartupInfo snapshot" {
       let config: StartupConfig = {
         CommandLineArgs = [| "--mcp-port"; "8080" |]
@@ -32,20 +27,6 @@ let formatTests =
       }
       let result = McpAdapter.formatStartupInfo config
       do! verifyText "formatStartupInfo" result
-    }
-
-    testTask "formatEnhancedStatus snapshot" {
-      let config: StartupConfig = {
-        CommandLineArgs = [| "--mcp-port"; "8080" |]
-        LoadedProjects = [ "Test.fsproj" ]
-        WorkingDirectory = "/code/test"
-        Workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
-        AutoOpenNamespaces = true
-        AspireDetected = false
-        StartupTimestamp = System.DateTime(2025, 1, 1, 0, 0, 0, System.DateTimeKind.Utc); StartupProfileLoaded = None
-      }
-      let result = McpAdapter.formatEnhancedStatus "test-session" 10 SageFs.SessionState.Ready None (Some config)
-      do! verifyText "formatEnhancedStatus" result
     }
 
     testTask "echoStatement single snapshot" {

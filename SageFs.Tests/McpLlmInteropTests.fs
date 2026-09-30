@@ -327,23 +327,6 @@ module McpAdapterEnhancementTests =
         json |> Expect.stringContains "Should have field" "\"commandLineArgs\""
         json |> Expect.stringContains "Should have field" "\"loadedProjects\""
       
-      testCase "formatEnhancedStatus should include startup section"
-      <| fun _ ->
-        let config: SageFs.AppState.StartupConfig = {
-          CommandLineArgs = [| "--mcp-port"; "8080" |]
-          LoadedProjects = [ "Test.fsproj" ]
-          WorkingDirectory = @"C:\Test"
-          Workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
-          AutoOpenNamespaces = true
-          AspireDetected = false
-          StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
-        }
-        
-        let output = SageFs.McpAdapter.formatEnhancedStatus "test-session" 5 SageFs.SessionState.Ready None (Some config)
-        
-        output |> Expect.stringContains "Should have startup section" "Startup Information"
-        (output.Contains("Usage Tips")) |> Expect.isFalse "Should NOT have tips (moved to ServerInstructions)"
-
       testCase "formatStartupBanner includes version"
       <| fun _ ->
         let banner = SageFs.McpAdapter.formatStartupBanner "0.2.29" (Some 37749)

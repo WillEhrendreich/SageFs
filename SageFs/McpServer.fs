@@ -2750,8 +2750,8 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         // Derived, user-meaningful health verdict — distinct from `status`
         // above, which is only the worker's lifecycle label ("Ready" means
         // "the worker process is alive," not "my project is loaded and I can
-        // evaluate"). Computed from the SAME facts as get_fsi_status
-        // (SageFs.Mcp.getStatus) so the two surfaces never disagree.
+        // evaluate"). Computed from the SAME facts as get_session_status
+        // (SageFs.McpTools.getSessionStatus) so the two surfaces never disagree.
         let! warmupOpt =
           match rctx.Config.GetWarmupContext with
           | Some getCtx -> getCtx (SageFs.WorkerProtocol.SessionId.value sess.Id)

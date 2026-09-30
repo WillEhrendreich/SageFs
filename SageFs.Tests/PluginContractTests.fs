@@ -208,66 +208,6 @@ let evalJsonTests =
       |> Expect.equal "code preserved" "let x = 1;;"
   ]
 
-// ─── formatStatus ──────────────────────────────────────────────────
-
-[<Tests>]
-let formatStatusTests =
-  testList "formatStatus" [
-    testCase "includes session ID" <| fun _ ->
-      McpAdapter.formatStatus "sess-42" 5 SessionState.Ready None
-      |> Expect.stringContains "has session id" "sess-42"
-
-    testCase "includes event count" <| fun _ ->
-      McpAdapter.formatStatus "s1" 17 SessionState.Ready None
-      |> Expect.stringContains "has event count" "17"
-
-    testCase "Ready state shown" <| fun _ ->
-      McpAdapter.formatStatus "s1" 0 SessionState.Ready None
-      |> Expect.stringContains "shows Ready" "Ready"
-
-    testCase "Evaluating state shown" <| fun _ ->
-      McpAdapter.formatStatus "s1" 0 SessionState.Evaluating None
-      |> Expect.stringContains "shows Evaluating" "Evaluating"
-
-    testCase "with eval stats shows eval count" <| fun _ ->
-      let stats: EvalStats = {
-        EvalCount = 10
-        TotalDuration = TimeSpan.FromMilliseconds(500.0)
-        MinDuration = TimeSpan.FromMilliseconds(20.0)
-        MaxDuration = TimeSpan.FromMilliseconds(100.0)
-      }
-      McpAdapter.formatStatus "s1" 3 SessionState.Ready (Some stats)
-      |> Expect.stringContains "shows eval count" "10"
-  ]
-
-// ─── formatEnhancedStatus ──────────────────────────────────────────
-
-[<Tests>]
-let enhancedStatusTests =
-  testList "formatEnhancedStatus" [
-    testCase "includes session ID" <| fun _ ->
-      McpAdapter.formatEnhancedStatus "test-sess" 5 SessionState.Ready None None
-      |> Expect.stringContains "has session id" "test-sess"
-
-    testCase "includes event count" <| fun _ ->
-      McpAdapter.formatEnhancedStatus "s1" 42 SessionState.Ready None None
-      |> Expect.stringContains "has event count" "42"
-
-    testCase "includes state" <| fun _ ->
-      McpAdapter.formatEnhancedStatus "s1" 5 SessionState.Evaluating None None
-      |> Expect.stringContains "has state" "Evaluating"
-
-    testCase "with eval stats shows Evals line" <| fun _ ->
-      let stats: EvalStats = {
-        EvalCount = 77
-        TotalDuration = TimeSpan.FromMilliseconds(350.0)
-        MinDuration = TimeSpan.FromMilliseconds(30.0)
-        MaxDuration = TimeSpan.FromMilliseconds(80.0)
-      }
-      McpAdapter.formatEnhancedStatus "s2" 3 SessionState.Ready (Some stats) None
-      |> Expect.stringContains "has eval count" "Evals: 77"
-  ]
-
 // ─── formatStartupInfoJson ─────────────────────────────────────────
 
 [<Tests>]

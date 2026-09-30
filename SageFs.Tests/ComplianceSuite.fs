@@ -28,8 +28,6 @@ let complianceSuite = testList "[Compliance] Behavioral contracts" [
     PluginContractTests.sessionCtxRenderTests
     PluginContractTests.fileStatusRenderTests
     PluginContractTests.evalJsonTests
-    PluginContractTests.formatStatusTests
-    PluginContractTests.enhancedStatusTests
     PluginContractTests.startupInfoTests
     PluginContractTests.editorSplitTests
     PluginContractTests.completionTests
