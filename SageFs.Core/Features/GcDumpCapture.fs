@@ -60,25 +60,60 @@ module GcDumpCapture =
   /// struggling machine.
   let captureTimeoutMs = 120_000
 
+  /// Where dotnet-gcdump is, or every directory we looked in and did not find
+  /// it. A miss says where it looked because "not installed" is a useless
+  /// thing to be told by a machine that has it in a directory nobody put on
+  /// PATH.
+  [<RequireQualifiedAccess>]
+  type ToolLocation =
+    | Located of path: string
+    | Missing of searched: string list
+
+  /// Finds dotnet-gcdump the way a person would: PATH first, then the global
+  /// tools dir that `dotnet tool install -g` uses, which is often NOT on PATH
+  /// (the installer only prints a hint about it). Pure, so the lookup order is
+  /// provable without a machine that has the tool.
+  ///
+  /// It returns the FULL path on purpose. The check and the launch used to
+  /// search separately: the check looked in both places, the launch handed a
+  /// bare name to the OS, which only searches PATH. On a machine with the tool
+  /// in the global dir and not on PATH (the release gate's runner) the check
+  /// said "installed" and the launch said "no such file".
+  let locateTool (pathVar: string) (home: string) (fileExists: string -> bool) : ToolLocation =
+    let onPath = pathVar.Split(IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) |> Array.toList
+    let homeTools =
+      match String.IsNullOrEmpty home with
+      | true -> []
+      | false -> [ IO.Path.Combine(home, ".dotnet", "tools") ]
+    let searched = onPath @ homeTools
+    let candidates =
+      searched
+      |> List.collect (fun dir -> [ "dotnet-gcdump"; "dotnet-gcdump.exe" ] |> List.map (fun name -> IO.Path.Combine(dir, name)))
+    match candidates |> List.filter fileExists with
+    | first :: _ -> ToolLocation.Located first
+    | [] -> ToolLocation.Missing searched
+
+  let private envOrEmpty (name: string) : string =
+    match Environment.GetEnvironmentVariable name with
+    | null -> ""
+    | value -> value
+
+  /// `locateTool` against this machine's real environment and disk.
+  let private locateOnThisMachine () : ToolLocation =
+    locateTool
+      (envOrEmpty "PATH")
+      (Environment.GetFolderPath Environment.SpecialFolder.UserProfile)
+      (fun candidate -> try IO.File.Exists candidate with _ -> false)
+
   /// Whether dotnet-gcdump is installed at all. Worth knowing before a
   /// capture is attempted (a skip for a missing tool is honest; a skip for
   /// anything else is a bug), and worth telling a user who wants the
   /// diagnostic: without the tool we can say the daemon is sick but not what
-  /// is holding the memory. Checks PATH and the default global-tool location,
-  /// which is where `dotnet tool install -g dotnet-gcdump` puts it.
+  /// is holding the memory.
   let isToolAvailable () : bool =
-    let onPath =
-      match Environment.GetEnvironmentVariable "PATH" with
-      | null -> []
-      | path -> path.Split(IO.Path.PathSeparator) |> Array.toList
-    let names = [ "dotnet-gcdump"; "dotnet-gcdump.exe" ]
-    let homeTools =
-      match Environment.GetEnvironmentVariable "HOME" with
-      | null -> []
-      | home -> [ IO.Path.Combine(home, ".dotnet", "tools") ]
-    (onPath @ homeTools)
-    |> List.exists (fun dir ->
-      names |> List.exists (fun name -> try IO.File.Exists(IO.Path.Combine(dir, name)) with _ -> false))
+    match locateOnThisMachine () with
+    | ToolLocation.Located _ -> true
+    | ToolLocation.Missing _ -> false
 
   /// The file name for one capture — pid plus a timestamp, so two daemons
   /// (or two runs of the same daemon) never collide in the same directory.
@@ -92,7 +127,7 @@ module GcDumpCapture =
   /// `Failed`/`Skipped` with a reason, never an exception — a failed
   /// capture attempt must never be the thing that adds insult to an
   /// already-degraded daemon.
-  let captureAsync (pid: int) (outputDir: string) : Async<CaptureOutcome> =
+  let private captureWith (exe: string) (pid: int) (outputDir: string) : Async<CaptureOutcome> =
     async {
       let! ct = Async.CancellationToken
       try
@@ -100,7 +135,7 @@ module GcDumpCapture =
         let path = Path.Combine(outputDir, fileNameFor pid DateTimeOffset.UtcNow)
         let psi =
           ProcessStartInfo(
-            "dotnet-gcdump",
+            exe,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false
@@ -137,3 +172,18 @@ module GcDumpCapture =
         return CaptureOutcome.Skipped(sprintf "dotnet-gcdump is not installed or not on PATH: %s" ex.Message)
       | ex -> return CaptureOutcome.Failed ex.Message
     }
+
+  /// Locate the tool, then run it by its full path. A tool that is nowhere we
+  /// know to look is a `Skipped` that lists where we looked. The
+  /// `Win32Exception` arm in `captureWith` is still there for the one case
+  /// left: the file was found and then gone by the time we started it.
+  let captureAsync (pid: int) (outputDir: string) : Async<CaptureOutcome> =
+    match locateOnThisMachine () with
+    | ToolLocation.Located exe -> captureWith exe pid outputDir
+    | ToolLocation.Missing searched ->
+      async {
+        return
+          CaptureOutcome.Skipped(
+            sprintf "dotnet-gcdump is not installed or not on PATH (looked in: %s)" (String.Join(", ", searched))
+          )
+      }

@@ -110,6 +110,50 @@ let fileNameTests =
   ]
 
 [<Tests>]
+let locateToolTests =
+  // The gate's shape: dotnet-gcdump sits in ~/.dotnet/tools and that directory
+  // is not on PATH, which is where `dotnet tool install -g` leaves it until
+  // someone edits their profile. The check said "installed" and the launch,
+  // which only searched PATH, said "no such file".
+  let home = IO.Path.Combine(IO.Path.DirectorySeparatorChar.ToString(), "home", "runner")
+  let homeTools = IO.Path.Combine(home, ".dotnet", "tools")
+  let pathDir = IO.Path.Combine(IO.Path.DirectorySeparatorChar.ToString(), "usr", "bin")
+  let path = String.Join(string IO.Path.PathSeparator, [ pathDir; "/opt/other" ])
+  let existing (present: string list) (candidate: string) : bool = List.contains candidate present
+
+  testList "GcDumpCapture.locateTool" [
+    testCase "a tool only in the global tools dir is found there, and the launch gets the full path" <| fun () ->
+      let expected = IO.Path.Combine(homeTools, "dotnet-gcdump")
+      GcDumpCapture.locateTool path home (existing [ expected ])
+      |> Expect.equal "PATH does not list that dir, so the full path is what makes the launch work" (GcDumpCapture.ToolLocation.Located expected)
+
+    testCase "a tool on PATH is found on PATH, ahead of the global tools dir" <| fun () ->
+      let onPath = IO.Path.Combine(pathDir, "dotnet-gcdump")
+      let inHome = IO.Path.Combine(homeTools, "dotnet-gcdump")
+      GcDumpCapture.locateTool path home (existing [ inHome; onPath ])
+      |> Expect.equal "PATH wins, the way the shell would resolve it" (GcDumpCapture.ToolLocation.Located onPath)
+
+    testCase "the Windows executable name is found too" <| fun () ->
+      let expected = IO.Path.Combine(homeTools, "dotnet-gcdump.exe")
+      GcDumpCapture.locateTool path home (existing [ expected ])
+      |> Expect.equal "the .exe spelling counts" (GcDumpCapture.ToolLocation.Located expected)
+
+    testCase "a missing tool reports every directory it looked in" <| fun () ->
+      match GcDumpCapture.locateTool path home (existing []) with
+      | GcDumpCapture.ToolLocation.Missing searched ->
+        searched |> Expect.contains "PATH entries are searched" pathDir
+        searched |> Expect.contains "the global tools dir is searched" homeTools
+      | GcDumpCapture.ToolLocation.Located found ->
+        failtestf "nothing exists, but it claimed to find %s" found
+
+    testCase "an empty PATH entry is not the current directory" <| fun () ->
+      // Every candidate "exists" here, so anything that got checked would be
+      // found. With no PATH and no home there is nothing legitimate to check.
+      GcDumpCapture.locateTool "" "" (fun _ -> true)
+      |> Expect.equal "no directories means nothing to find" (GcDumpCapture.ToolLocation.Missing [])
+  ]
+
+[<Tests>]
 let captureIntegrationTests =
   Integration.hostList "GcDumpCapture.captureAsync (real dotnet-gcdump subprocess)" [
     // Two claims, and only one of them is ours. Ours: whatever happens, the
