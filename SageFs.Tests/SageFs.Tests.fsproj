@@ -124,6 +124,7 @@
         <Compile Include="DashboardViewingTests.fs" />
         <Compile Include="WorkerReloadRelayTests.fs" />
         <Compile Include="DashboardRenderGateTests.fs" />
+        <Compile Include="DashboardLandingTests.fs" />
         <Compile Include="DashboardHealthVerdictRenderingTests.fs" />
         <Compile Include="DashboardWorkflowSwitchTests.fs" />
         <Compile Include="DashboardWorkflowSwitcherRenderTests.fs" />

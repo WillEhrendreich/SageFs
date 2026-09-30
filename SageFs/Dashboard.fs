@@ -2817,6 +2817,46 @@ let createCohortScrubHandler (infra: DashboardInfra) : HttpHandler =
   }
 
 /// Create all dashboard routes.
+/// The page `/dashboard` serves. The page's client id, and what it asked for
+/// (`?panels=friction`, the deliberate way into the friction panel the default
+/// layout leaves out), are settled ONCE, before anything that can throw. The
+/// stream that connects next reads that choice back under this id, so the
+/// fallback below has to be the same page with the same id: it used to mint a
+/// new one and record nothing, and a page that had asked for the panel lost it
+/// for good whenever a worker read threw while the snapshot was built.
+///
+/// The viewing session is chosen by the browser's `viewingSessionId` signal,
+/// which starts at a server-side default: the first LIVE session when any exist
+/// (never a Stopped/dead one), otherwise empty so the picker shows. There is NO
+/// session query parameter — the signal drives everything thereafter.
+let renderLanding (q: DashboardQueries) (infra: DashboardInfra) (panelsQuery: string) : System.Threading.Tasks.Task<XmlNode> =
+  task {
+    let clientId = Guid.NewGuid().ToString("N").[..7]
+    frictionOptInByClient.Set(clientId, PanelFacts.frictionOptInOfQuery panelsQuery)
+    // No session in play: the FULL shell with the session picker in the main
+    // area (never a bare picker page: the sidebar and chrome must stay visible
+    // so the user can resume/create a session). The stream's no-session push
+    // morphs the same state, so this page must contain #session-picker or
+    // Datastar fails it with PatchElementsNoTargetsFound.
+    let noSessionPage () =
+      task {
+        let! snapRaw = buildNoSessionSnapshot q infra
+        let snap = PanelVisibility.apply (panelFactsFor q infra None clientId) snapRaw
+        return renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContent snap)
+      }
+    try
+      let! sessions = q.GetAllSessions ()
+      match firstLiveSession sessions with
+      | Some firstId ->
+        let! snapRaw, resolvedId, _, _ = buildDashboardSnapshot q infra firstId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
+        let snap = PanelVisibility.apply (panelFactsFor q infra (Some resolvedId) clientId) snapRaw
+        return renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (resolveDefaultWorkingDir ()) (renderMainContent snap)
+      | None ->
+        return! noSessionPage ()
+    with _ ->
+      return! noSessionPage ()
+  }
+
 let createEndpoints
   (q: DashboardQueries)
   (a: DashboardActions)
@@ -2862,44 +2902,8 @@ let createEndpoints
           do! ctx.Response.Body.WriteAsync(bytes, 0, bytes.Length)
         }))
     yield get "/dashboard" (fun ctx -> task {
-      try
-        let! sessions = q.GetAllSessions ()
-        // The viewing session is chosen by the browser's `viewingSessionId`
-        // signal, which starts at a server-side default: the first available
-        // session when any exist ("if there is any session, one of those"),
-        // otherwise empty so the picker shows. There is NO session query
-        // parameter — deep links land on the picker and the signal drives
-        // everything thereafter, synced with the backend.
-        let clientId = Guid.NewGuid().ToString("N").[..7]
-        // `?panels=friction` is the deliberate way into the friction panel,
-        // which the default layout leaves out. Recorded per tab so the
-        // stream keeps honoring it.
-        frictionOptInByClient.Set(clientId, PanelFacts.frictionOptInOfQuery (string ctx.Request.Query.[PanelFacts.panelsQueryKey]))
-        // Default to the first LIVE session (never a Stopped/dead one); the
-        // picker shows only when there are zero live sessions to display.
-        match firstLiveSession sessions with
-        | Some firstId ->
-          let! snapRaw, resolvedId, _, _ = buildDashboardSnapshot q infra firstId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
-          let snap = PanelVisibility.apply (panelFactsFor q infra (Some resolvedId) clientId) snapRaw
-          let html = renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (resolveDefaultWorkingDir ()) (renderMainContent snap)
-          return! FalcoResponse.ofHtml html ctx
-        | None ->
-          // No session in play: render the FULL dashboard shell with the
-          // session picker in the main area (never a bare picker page — the
-          // sidebar Sessions panel and chrome must stay visible so the user
-          // can resume/create a session). The stream's no-session push morphs
-          // the same state, so the initial HTML must contain #session-picker
-          // or Datastar fails the page with PatchElementsNoTargetsFound.
-          let! snapRaw = buildNoSessionSnapshot q infra
-          let snap = PanelVisibility.apply (panelFactsFor q infra None clientId) snapRaw
-          let html = renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContent snap)
-          return! FalcoResponse.ofHtml html ctx
-      with _ ->
-        let clientId = Guid.NewGuid().ToString("N").[..7]
-        let! snapRaw = buildNoSessionSnapshot q infra
-        let snap = PanelVisibility.apply (panelFactsFor q infra None clientId) snapRaw
-        let html = renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContent snap)
-        return! FalcoResponse.ofHtml html ctx
+      let! page = renderLanding q infra (string ctx.Request.Query.[PanelFacts.panelsQueryKey])
+      return! FalcoResponse.ofHtml page ctx
     })
     // Stream endpoint for a specific page — the client id is a PATH segment
     // (no session query parameter): this both keys the per-connection channel

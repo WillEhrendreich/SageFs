@@ -24,7 +24,7 @@ open SageFs.Server.Dashboard
 /// points (used by tests and one-off callers with no list in hand) still
 /// fetch exactly once.
 
-let private mkQueries (getAllSessionsCount: int ref) (sessions: WorkerProtocol.SessionInfo list) : DashboardQueries =
+let mkQueries (getAllSessionsCount: int ref) (sessions: WorkerProtocol.SessionInfo list) : DashboardQueries =
   { GetSessionState = fun _ -> SessionState.Ready
     GetStatusMsg = fun _ -> None
     GetEvalStats = fun _ -> System.Threading.Tasks.Task.FromResult(SageFs.Affordances.EvalStats.empty)
@@ -65,7 +65,7 @@ let private mkQueries (getAllSessionsCount: int ref) (sessions: WorkerProtocol.S
     GetSessionEvalCounts = fun () -> Map.empty
     IsCreatingSession = fun () -> false }
 
-let private mkInfra () : DashboardInfra =
+let mkInfra () : DashboardInfra =
   { Version = "0.0.0"
     McpPort = 37749
     // Non-optional (roast-6 Phase 0 item 1): these tests never exercise the
