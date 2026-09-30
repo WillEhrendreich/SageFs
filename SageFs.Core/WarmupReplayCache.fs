@@ -244,12 +244,42 @@ module internal WarmupReplayCache =
     | Some _
     | None -> None
 
+  /// The cache is machine-generated and full of this machine's absolute paths, in a
+  /// `.SageFs` folder that also holds files the user writes and commits (`config.fsx`,
+  /// `init.fsx`). It ignores ITSELF in a `.gitignore` beside it, for the generated file
+  /// only, so a new user's first `git status` does not show it as untracked. A
+  /// `.gitignore` already there keeps its own lines and gains the entry; one that
+  /// already has it is left alone.
+  let private ignoreGeneratedFile (directory: string) (fileName: string) =
+    let ignorePath = Path.Combine(directory, ".gitignore")
+    let existing =
+      match File.Exists ignorePath with
+      | true -> File.ReadAllText ignorePath
+      | false -> ""
+    let alreadyIgnored =
+      existing.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+      |> Array.exists (fun line -> line.Trim() = fileName)
+    match alreadyIgnored with
+    | true -> ()
+    | false ->
+      let separator =
+        match existing.Length = 0 || existing.EndsWith "\n" with
+        | true -> ""
+        | false -> "\n"
+      File.WriteAllText(ignorePath, existing + separator + fileName + "\n")
+
   let save (path: string) (plan: ReplayPlan) =
     let directory = Path.GetDirectoryName path
 
     match String.IsNullOrWhiteSpace directory with
     | true -> ()
-    | false -> Directory.CreateDirectory(directory) |> ignore
+    | false ->
+      Directory.CreateDirectory(directory) |> ignore
+      // Only the real project cache lives in a `.SageFs` folder; a cache saved
+      // anywhere else (a test's temp dir) gets no .gitignore it did not ask for.
+      match Path.GetFileName directory = ".SageFs" with
+      | true -> ignoreGeneratedFile directory (Path.GetFileName path)
+      | false -> ()
 
     // Write to a temp file then atomically move it over `path`, matching the
     // rest of the persistence layer: a crash or a concurrent read never sees a
