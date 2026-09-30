@@ -1382,10 +1382,11 @@ reports zero failures. `--filter "Dashboard browser"` (list level) is what
 actually selects it, and the `ran=36` in its TRUST line is the evidence that
 something executed at all.
 
-## An open measurement: the run_app race, and what is still not proven
+## The run_app failure: it was not a race
 
 The `run_app` failure that went red in three consecutive gates was diagnosed
-twice, and the second diagnosis is the useful one.
+three times, and the third one is the one that held. The first two are kept below
+because the way they were wrong is worth knowing.
 
 The exception was `JsonReaderException: 'C' is an invalid start of a value`, and
 `'C'` is the first character of a PROSE refusal, not JSON. `Mcp.runApp`
@@ -1412,23 +1413,56 @@ Measured, on this machine, the same binary four times:
 
     ran=1 passed=1 errored=0  verdict=NarrowedRun   (x4)
 
-### What is NOT yet proven
+### What it actually was (measured 2026-09-30)
 
-**The second defect is not yet fixed under gate load.** The gate on `90a831a3`
-still errored this test once, with the SAME message — `is not loaded in this
-session` — while four consecutive local runs of the identical binary pass.
+Both candidates above were wrong. It was not a race, it was not load, and it was
+not the swap into HotReload. Run alone, on a quiet machine, the test failed every
+time: seven runs out of seven (six at once, then one alone).
 
-That gap is not understood, and the honest statement is that it is not
-understood rather than that it is a flake:
+The refusal was true. Once `run_app`'s message was changed to say what the
+session holds (`951754a0`), it read `this session holds no projects`. So the
+worker really had nothing to run. Running the worker by hand with its stderr
+captured showed why:
 
-- the wait returns on the first poll where the session lists the project, so
-  under the gate's parallel shards the sequence is either "listed, then not
-  listed again" (a regression in session state) or "the session answering
-  `/api/sessions` is not the session `run_app` consults";
-- both are real possibilities and neither has been measured. The discriminating
-  experiment is to log the session id at the moment the wait succeeds and again
-  when `run_app` refuses, and compare them.
+    Loaded 0 project(s).
+    Loader returned 0 projects — attempting manual fsproj parse
 
-So this is recorded as an open measurement, not as a passing test. A gate that
-is red on it is telling the truth, and the fix that makes the failure readable
-is already in — which is what makes the remaining question answerable.
+An Interactive worker and a HotReload worker behaved identically, line for line
+apart from pids and timings. The project loader itself was coming back empty.
+
+The ConsoleTicker sample has a target, `BuildSageFsCoreFirst`, that builds
+SageFs.Core through a nested MSBuild task so a raw `dotnet build` compiles
+against a current Core. It ran `BeforeTargets="ResolveAssemblyReferences"`, and
+Ionide loads a project as a design-time build, which goes through that target. So
+loading the sample as a session started a Restore and full Build of SageFs.Core
+inside the in-process loader. That failed without throwing, the loader returned
+zero projects, and the worker fell back to the manual parse. The fallback counts
+the project as loaded (so the session reaches Ready) but has no built assembly
+for it, so `run_app` has no target. In the gate's clean checkout Core has never
+been built, so it happened every time there. The fix (`f56ff077`) skips the
+target during a design-time load. With it, the same worker logs
+`Loaded 1 project(s).` and the test passes.
+
+Dogfooding the released 0.6.842 turned up a second bug in the same target, which
+the first one had been hiding. When SageFs itself rebuilds the project (a hard
+reset, `run_app`) it injects SageFs.Core as a reference through
+`CustomAfterMicrosoftCommonTargets`. The nested MSBuild task inherits that global
+property, so Core was compiled WITH a reference to Core and every type in it
+became ambiguous. The rebuild failed, the old worker kept serving, and nothing
+said so. Reproduced by running the daemon's exact build command by hand.
+`b96cfc7b` has SageFs send a named marker, `-p:SageFsManagedBuild=true`, with the
+injection, and the sample yields to it.
+
+The silence was its own bug. The hard-reset tool answers "initiated" and points
+you at `get_session_status` for the result, and the result was being recorded and
+then never shown in the JSON status. `d87fa389` puts it there as `lastRestart`,
+and logs the three places a rebuild or swap can fail.
+
+What the earlier diagnoses got wrong: they assumed the wait proved the project was
+runnable. `waitForProjectLoaded` passed in every failing run, so it does not
+detect this state. The reason is in the code and I have not run it down further:
+`classifiedProjectsOf` (`SageFs.Core/ProjectLoading.fs:883`) counts a project the
+manual fallback parsed, and `projectTargetsOf` (`:909`) leaves that same project
+out when no `<Project>.dll` turns up among the collected references. So a session
+can list a project, reach Ready, and have nothing to run, and no status field says
+which of those it is. That gap is still open.
