@@ -100,6 +100,18 @@ let loadSolutionProgressTests =
     testCase "loading the TestWorkspace fixture reports at least one valid, in-range step"
     <| fun _ ->
       let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+      // Under a .NET 10 runtime, this repo's global.json (pinned to an 11.x SDK)
+      // makes loadSolution skip the in-process MSBuild load on purpose
+      // (shouldSkipInProcessLoad: a newer SDK's MSBuild cannot be hosted by an older
+      // runtime), so no project comes back from Ionide. Not a product failure: a
+      // net10 tool on a machine whose SDK is 10 takes the in-process path.
+      let pinnedSdkMajor =
+        System.Text.RegularExpressions.Regex.Match(File.ReadAllText(Path.Combine(repoRoot, "global.json")), "\"version\"\\s*:\\s*\"([^\"]+)\"").Groups[1].Value
+        |> sdkMajorOf
+      match pinnedSdkMajor with
+      | Some major when shouldSkipInProcessLoad System.Environment.Version.Major major ->
+        skiptest (sprintf "this test process runs on .NET %d and global.json pins SDK %d.x, so loadSolution deliberately skips the in-process MSBuild load; it runs on net11, and on a net10 machine whose SDK is 10" System.Environment.Version.Major major)
+      | _ -> ()
       let fixture = Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "TestWorkspace", "TestWorkspace.fsproj")
       let reported = ResizeArray<int * int * string>()
       let config = { SageFs.Args.ProjectLoadConfig.empty with Targets = [ SageFs.SessionProjectTarget.Project fixture ]; WorkingDir = Path.GetDirectoryName fixture }
