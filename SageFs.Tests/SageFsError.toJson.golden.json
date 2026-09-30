@@ -1,0 +1,401 @@
+[
+  {
+    "case": "ToolNotAvailable",
+    "fields": {
+      "toolName": "test",
+      "currentState": "Ready",
+      "availableTools": [
+        "a",
+        "b"
+      ]
+    },
+    "message": "Cannot test: session is Ready. Available: a, b",
+    "suggestedAction": "Wait for session to reach Ready state"
+  },
+  {
+    "case": "SessionNotFound",
+    "fields": {
+      "sessionId": "test"
+    },
+    "message": "Session \u0027test\u0027 not found. Use list_sessions to see available sessions.",
+    "suggestedAction": "Run list_sessions to see available sessions"
+  },
+  {
+    "case": "NoActiveSessions",
+    "fields": {},
+    "message": "No active sessions. Use create_project_session, create_solution_session, or create_bare_session to start one.",
+    "suggestedAction": "Choose create_project_session, create_solution_session, or create_bare_session to start one"
+  },
+  {
+    "case": "AmbiguousSessions",
+    "fields": {
+      "sessionDescriptions": [
+        "a",
+        "b"
+      ]
+    },
+    "message": "Multiple sessions active. Specify sessionId:\na\nb",
+    "suggestedAction": "Specify a sessionId explicitly"
+  },
+  {
+    "case": "SessionCreationFailed",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Failed to create session: test. Check the project path exists and contains a valid .fsproj.",
+    "suggestedAction": "Check the project path and run \u0027dotnet build\u0027"
+  },
+  {
+    "case": "NeedsRebuild",
+    "fields": {
+      "missing": [
+        "a",
+        "b"
+      ]
+    },
+    "message": "Session not created: generated build state is missing (a, b).",
+    "suggestedAction": "Build the project, then retry creating the session"
+  },
+  {
+    "case": "DuplicateSession",
+    "fields": {
+      "existingSessionId": "test",
+      "workingDirectory": "test"
+    },
+    "message": "A session for this project already exists (session test, working directory test). Use switch_session to select it instead of creating a duplicate.",
+    "suggestedAction": "Run switch_session to select the existing session"
+  },
+  {
+    "case": "UnsafeSessionPath",
+    "fields": {
+      "path": "test",
+      "reason": "test"
+    },
+    "message": "Refused session path \u0027test\u0027: test",
+    "suggestedAction": "Use an existing directory and keep project paths inside it \u2014 no UNC paths or \u0027..\u0027 escapes"
+  },
+  {
+    "case": "ProjectFrameworkNotHostable",
+    "fields": {
+      "project": "test",
+      "targetFrameworks": [
+        "a",
+        "b"
+      ],
+      "reason": "NetFramework"
+    },
+    "message": "test targets a, b. SageFs\u0027s FSI host runs on modern .NET (Core), which cannot load .NET Framework assemblies, so SageFs cannot host this project yet \u2014 support is tracked at https://github.com/WillEhrendreich/SageFs/issues/135.",
+    "suggestedAction": "Point SageFs at a .NET (Core) project (net5.0 or newer) for now \u2014 .NET Framework support is not shipped yet, and the message names the issue tracking it"
+  },
+  {
+    "case": "SessionStopFailed",
+    "fields": {
+      "sessionId": "test",
+      "reason": "test"
+    },
+    "message": "Failed to stop session \u0027test\u0027: test",
+    "suggestedAction": "Try hard_reset_fsi_session"
+  },
+  {
+    "case": "SessionSwitchFailed",
+    "fields": {
+      "sessionId": "test",
+      "reason": "test"
+    },
+    "message": "Failed to switch to session \u0027test\u0027: test. Use list_sessions to check available sessions.",
+    "suggestedAction": "Run list_sessions to check available sessions"
+  },
+  {
+    "case": "SupervisorBusy",
+    "fields": {
+      "pending": 42,
+      "capacity": 42
+    },
+    "message": "The session supervisor is overloaded (42 commands pending, capacity 42). Wait a moment and retry.",
+    "suggestedAction": "Wait a few seconds and retry \u2014 the daemon is handling a burst of concurrent session activity"
+  },
+  {
+    "case": "MemoryPressureRefused",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Refused: the machine is low on memory (test).",
+    "suggestedAction": "Stop unused sessions, or wait for machine memory to free up, then retry"
+  },
+  {
+    "case": "SessionNotRoutable",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Session not reachable: test",
+    "suggestedAction": "Run get_session_status or list_sessions to check session state"
+  },
+  {
+    "case": "WorkerCommunicationFailed",
+    "fields": {
+      "sessionId": "test",
+      "reason": "test"
+    },
+    "message": "Cannot reach session \u0027test\u0027: test. The worker may have crashed \u2014 try hard_reset_fsi_session.",
+    "suggestedAction": "Run hard_reset_fsi_session"
+  },
+  {
+    "case": "WorkerSpawnFailed",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Failed to start worker: test. Ensure the .NET SDK is installed and the project builds with \u0027dotnet build\u0027.",
+    "suggestedAction": "Check .NET SDK installation with \u0027dotnet --info\u0027"
+  },
+  {
+    "case": "WorkerTimeout",
+    "fields": {
+      "sessionId": "test",
+      "operation": "test",
+      "timeoutSec": 1
+    },
+    "message": "Session \u0027test\u0027 timed out during test after 1.0s. Try again or use hard_reset_fsi_session.",
+    "suggestedAction": "Retry or run hard_reset_fsi_session"
+  },
+  {
+    "case": "WorkerHttpError",
+    "fields": {
+      "sessionId": "test",
+      "endpoint": "test",
+      "statusCode": 42
+    },
+    "message": "Session \u0027test\u0027 returned HTTP 42 for test",
+    "suggestedAction": "Run hard_reset_fsi_session"
+  },
+  {
+    "case": "PipeClosed",
+    "fields": {},
+    "message": "Pipe closed unexpectedly. The worker process may have crashed \u2014 try hard_reset_fsi_session to recover.",
+    "suggestedAction": "Run hard_reset_fsi_session"
+  },
+  {
+    "case": "EvalFailed",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Evaluation failed: test",
+    "suggestedAction": "Fix the code and resubmit"
+  },
+  {
+    "case": "ResetFailed",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Reset failed: test. Try hard_reset_fsi_session for a full restart.",
+    "suggestedAction": "Run hard_reset_fsi_session"
+  },
+  {
+    "case": "HardResetFailed",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Hard reset failed: test. Check that the project builds with \u0027dotnet build\u0027.",
+    "suggestedAction": "Check that the project builds with \u0027dotnet build\u0027"
+  },
+  {
+    "case": "BuildFailed",
+    "fields": {
+      "exitCode": 42,
+      "diagnostics": [
+        {
+          "File": null,
+          "Line": null,
+          "Column": null,
+          "Severity": "Blocking",
+          "Code": null,
+          "Message": "test error"
+        }
+      ]
+    },
+    "message": "Build failed (exit 42):\ntest error",
+    "suggestedAction": "Fix the build errors, then run the app again"
+  },
+  {
+    "case": "ScriptLoadFailed",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Script load failed: test. Check that the file exists and has valid F# syntax.",
+    "suggestedAction": "Check file exists and has valid F# syntax"
+  },
+  {
+    "case": "CheckFailed",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Type check failed: test",
+    "suggestedAction": "Fix the code and resubmit"
+  },
+  {
+    "case": "CompletionFailed",
+    "fields": {
+      "sessionId": "test",
+      "reason": "test"
+    },
+    "message": "Code completion failed for session \u0027test\u0027: test",
+    "suggestedAction": "Retry or run reset_fsi_session"
+  },
+  {
+    "case": "CancelFailed",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Cancel failed: test",
+    "suggestedAction": "Retry or run hard_reset_fsi_session"
+  },
+  {
+    "case": "EvalSupersededByReset",
+    "fields": {},
+    "message": "The session was reset while this evaluation was running, so its result was discarded: it ran against the session the reset replaced, and none of its definitions exist in the fresh session.",
+    "suggestedAction": "Run the code again in the fresh session"
+  },
+  {
+    "case": "WarmupOpenFailed",
+    "fields": {
+      "name": "test",
+      "reason": "test"
+    },
+    "message": "Failed to open \u0027test\u0027 during warm-up: test",
+    "suggestedAction": "Run \u0027dotnet build\u0027 for the project, then hard_reset_fsi_session. If it still doesn\u0027t resolve, it is not a public, top-level, fully-qualified name in any loaded assembly \u2014 SageFs cannot auto-open a nested or private module by its short name."
+  },
+  {
+    "case": "WarmupContextFailed",
+    "fields": {
+      "sessionId": "test",
+      "reason": "test"
+    },
+    "message": "Failed to get warmup context for session \u0027test\u0027: test",
+    "suggestedAction": "Run hard_reset_fsi_session"
+  },
+  {
+    "case": "HotReloadFailed",
+    "fields": {
+      "path": "test",
+      "reason": "test"
+    },
+    "message": "Hot reload failed for \u0027test\u0027: test. Check the file for syntax errors.",
+    "suggestedAction": "Check the file for syntax errors"
+  },
+  {
+    "case": "HotReloadStateError",
+    "fields": {
+      "sessionId": "test",
+      "reason": "test"
+    },
+    "message": "Hot reload state error in session \u0027test\u0027: test",
+    "suggestedAction": "Run hard_reset_fsi_session"
+  },
+  {
+    "case": "AppRunFailed",
+    "fields": {
+      "project": "test",
+      "reason": "test"
+    },
+    "message": "Could not run \u0027test\u0027: test",
+    "suggestedAction": "Run list_runnable_projects to see which projects can run"
+  },
+  {
+    "case": "RestartLimitExceeded",
+    "fields": {
+      "restartCount": 42,
+      "windowMinutes": 1
+    },
+    "message": "Worker restarted 42 times within 1 minutes \u2014 giving up. Check the log file for crash details and restart SageFs.",
+    "suggestedAction": "Check the log file and restart SageFs"
+  },
+  {
+    "case": "DaemonStartFailed",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "Failed to start daemon: test",
+    "suggestedAction": "Check port availability and .NET SDK"
+  },
+  {
+    "case": "DaemonNotRunning",
+    "fields": {},
+    "message": "SageFs daemon is not running. Start it with \u0027sagefs\u0027 in your project directory.",
+    "suggestedAction": "Start SageFs with \u0027sagefs\u0027"
+  },
+  {
+    "case": "PortInUse",
+    "fields": {
+      "port": 42
+    },
+    "message": "Port 42 is already in use. Another SageFs instance may be running \u2014 try \u0027sagefs status\u0027 or use --mcp-port to pick a different port.",
+    "suggestedAction": "Stop the other process or use --mcp-port"
+  },
+  {
+    "case": "SseConnectionError",
+    "fields": {
+      "reason": "test"
+    },
+    "message": "SSE connection failed: test",
+    "suggestedAction": "Check daemon is running and retry"
+  },
+  {
+    "case": "JsonParseError",
+    "fields": {
+      "context": "test",
+      "reason": "test"
+    },
+    "message": "JSON parse error in test: test",
+    "suggestedAction": "Check request payload format"
+  },
+  {
+    "case": "CohortActionFailed",
+    "fields": {
+      "reason": "test",
+      "suggestion": "test"
+    },
+    "message": "test",
+    "suggestedAction": "test"
+  },
+  {
+    "case": "Unexpected",
+    "fields": {
+      "Item": "test"
+    },
+    "message": "Unexpected error: test",
+    "suggestedAction": "Check the SageFs log for details"
+  },
+  {
+    "case": "BuildFailed",
+    "fields": {
+      "exitCode": 1,
+      "diagnostics": [
+        {
+          "File": "src/A.fs",
+          "Line": 10,
+          "Column": 5,
+          "Severity": "Blocking",
+          "Code": "FS0039",
+          "Message": "The value is not defined"
+        },
+        {
+          "File": "src/B.fs",
+          "Line": 3,
+          "Column": 1,
+          "Severity": "Warning",
+          "Code": "FS3370",
+          "Message": "This construct is deprecated"
+        },
+        {
+          "File": null,
+          "Line": null,
+          "Column": null,
+          "Severity": "Blocking",
+          "Code": null,
+          "Message": "MSBUILD : error MSB1009: Project file does not exist."
+        }
+      ]
+    },
+    "message": "Build failed (exit 1):\nsrc/A.fs(10,5): error FS0039: The value is not defined\nsrc/B.fs(3,1): warning FS3370: This construct is deprecated\nMSBUILD : error MSB1009: Project file does not exist.",
+    "suggestedAction": "Fix the build errors, then run the app again"
+  }
+]

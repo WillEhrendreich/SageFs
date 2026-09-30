@@ -7,26 +7,8 @@ open Expecto.Flip
 open Microsoft.FSharp.Reflection
 open SageFs
 
-/// Reuse the exhaustive case generator from classification tests.
 let private allErrorCases : SageFsError list =
-  let cases = FSharpType.GetUnionCases(typeof<SageFsError>)
-  cases
-  |> Array.map (fun case ->
-    let fields =
-      case.GetFields()
-      |> Array.map (fun f ->
-        match f.PropertyType with
-        | t when t = typeof<string> -> box "test"
-        | t when t = typeof<int> -> box 42
-        | t when t = typeof<float> -> box 1.0
-        | t when t = typeof<exn> -> box (Exception "test")
-        | t when t = typeof<string list> -> box ([ "a"; "b" ] : string list)
-        | t when t = typeof<SessionState> -> box SessionState.Ready
-        | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
-        | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
-        | _ -> box "unknown")
-    FSharpValue.MakeUnion(case, fields) :?> SageFsError)
-  |> Array.toList
+  SageFs.Tests.SageFsErrorJsonShapeTests.allErrorCases
 
 [<Tests>]
 let sageFsErrorJsonTests =
@@ -118,18 +100,13 @@ let sageFsErrorJsonTests =
     // discriminated union serialization is not supported" instead of the
     // refusal. `toJson` itself never calls `JsonSerializer`, so the tests
     // above never caught it. This test does what the HTTP boundary does.
-    // `toJson`'s fix (see `isNonListUnion`) covers a bare DU field directly
-    // on the error case (SessionState, ProjectCompatibility.UnsupportedTfmReason).
-    // `BuildFailed`'s `BuildDiagnostic list` is excluded here: its own
-    // element type nests a DIFFERENT DU (`BuildDiagnosticSeverity`) one
-    // level deeper, inside a list of records — a pre-existing, separate gap
-    // this task did not introduce and is out of scope to fix here (it needs
-    // its own converter on `BuildDiagnosticSeverity`, not a `toJson` field
-    // reduction). Confirmed still broken today so this exclusion is honest,
-    // not papering over a live regression.
+    // Every case is covered, `BuildFailed` included: its diagnostics used to
+    // carry records holding a `BuildDiagnosticSeverity` union, which the .NET 10
+    // serializer refuses (.NET 11 serializes F# unions natively, so this test
+    // only bites on the net10.0 target). The shape tests in
+    // SageFsErrorJsonShapeTests catch the same thing on any runtime.
     test "toJson output actually serializes through the plain JsonSerializer the HTTP boundary uses" {
       allErrorCases
-      |> List.filter (function SageFsError.BuildFailed _ -> false | _ -> true)
       |> List.iter (fun err ->
         let json = SageFsError.toJson err
         try

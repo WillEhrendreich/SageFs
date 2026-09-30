@@ -1,7 +1,6 @@
 namespace SageFs
 
 open Microsoft.Extensions.Logging
-open Microsoft.FSharp.Reflection
 
 [<RequireQualifiedAccess>]
 type BuildDiagnosticSeverity =
@@ -510,43 +509,182 @@ module SageFsError =
     | true -> Result.Error (SageFsError.SupervisorBusy(pending, capacity))
     | false -> Result.Ok ()
 
-  /// True for a genuine F# union type that is NOT a list. F# lists
-  /// (`'a list`) are themselves unions (Cons/Nil) at the CLR level but
-  /// serialize fine as themselves; a "real" union like `SessionState` or
-  /// `ProjectCompatibility.UnsupportedTfmReason` does not, without the
-  /// `JsonFSharpConverter` the HTTP boundary's plain `JsonSerializer`
-  /// doesn't register.
-  let private isNonListUnion (t: System.Type) =
-    FSharpType.IsUnion t
-    && not (t.IsGenericType && t.GetGenericTypeDefinition() = typedefof<int list>)
+  /// The case name a `SageFsError` goes by in JSON (`case`). One exhaustive
+  /// match: a new case cannot compile without being named here.
+  let private caseName (err: SageFsError) : string =
+    match err with
+    | SageFsError.ToolNotAvailable _ -> "ToolNotAvailable"
+    | SageFsError.SessionNotFound _ -> "SessionNotFound"
+    | SageFsError.NoActiveSessions -> "NoActiveSessions"
+    | SageFsError.AmbiguousSessions _ -> "AmbiguousSessions"
+    | SageFsError.SessionCreationFailed _ -> "SessionCreationFailed"
+    | SageFsError.NeedsRebuild _ -> "NeedsRebuild"
+    | SageFsError.DuplicateSession _ -> "DuplicateSession"
+    | SageFsError.UnsafeSessionPath _ -> "UnsafeSessionPath"
+    | SageFsError.ProjectFrameworkNotHostable _ -> "ProjectFrameworkNotHostable"
+    | SageFsError.SessionStopFailed _ -> "SessionStopFailed"
+    | SageFsError.SessionSwitchFailed _ -> "SessionSwitchFailed"
+    | SageFsError.SupervisorBusy _ -> "SupervisorBusy"
+    | SageFsError.MemoryPressureRefused _ -> "MemoryPressureRefused"
+    | SageFsError.SessionNotRoutable _ -> "SessionNotRoutable"
+    | SageFsError.WorkerCommunicationFailed _ -> "WorkerCommunicationFailed"
+    | SageFsError.WorkerSpawnFailed _ -> "WorkerSpawnFailed"
+    | SageFsError.WorkerTimeout _ -> "WorkerTimeout"
+    | SageFsError.WorkerHttpError _ -> "WorkerHttpError"
+    | SageFsError.PipeClosed -> "PipeClosed"
+    | SageFsError.EvalFailed _ -> "EvalFailed"
+    | SageFsError.ResetFailed _ -> "ResetFailed"
+    | SageFsError.HardResetFailed _ -> "HardResetFailed"
+    | SageFsError.BuildFailed _ -> "BuildFailed"
+    | SageFsError.ScriptLoadFailed _ -> "ScriptLoadFailed"
+    | SageFsError.CheckFailed _ -> "CheckFailed"
+    | SageFsError.CompletionFailed _ -> "CompletionFailed"
+    | SageFsError.CancelFailed _ -> "CancelFailed"
+    | SageFsError.EvalSupersededByReset -> "EvalSupersededByReset"
+    | SageFsError.WarmupOpenFailed _ -> "WarmupOpenFailed"
+    | SageFsError.WarmupContextFailed _ -> "WarmupContextFailed"
+    | SageFsError.HotReloadFailed _ -> "HotReloadFailed"
+    | SageFsError.HotReloadStateError _ -> "HotReloadStateError"
+    | SageFsError.AppRunFailed _ -> "AppRunFailed"
+    | SageFsError.RestartLimitExceeded _ -> "RestartLimitExceeded"
+    | SageFsError.DaemonStartFailed _ -> "DaemonStartFailed"
+    | SageFsError.DaemonNotRunning -> "DaemonNotRunning"
+    | SageFsError.PortInUse _ -> "PortInUse"
+    | SageFsError.SseConnectionError _ -> "SseConnectionError"
+    | SageFsError.JsonParseError _ -> "JsonParseError"
+    | SageFsError.CohortActionFailed _ -> "CohortActionFailed"
+    | SageFsError.Unexpected _ -> "Unexpected"
+
+  let private unsupportedReasonName (reason: ProjectCompatibility.UnsupportedTfmReason) : string =
+    match reason with
+    | ProjectCompatibility.UnsupportedTfmReason.NetFramework -> "NetFramework"
+
+  let private severityName (severity: BuildDiagnosticSeverity) : string =
+    match severity with
+    | BuildDiagnosticSeverity.Blocking -> "Blocking"
+    | BuildDiagnosticSeverity.Warning -> "Warning"
+
+  /// An absent optional field is JSON null; a present one is its bare value.
+  let private optionalField (value: 'a option) : obj =
+    match value with
+    | Some v -> box v
+    | None -> null
+
+  /// One build diagnostic as a string-keyed dictionary of primitives, the
+  /// same keys the record's own properties carry (File, Line, Column,
+  /// Severity, Code, Message). The plain `JsonSerializer` the HTTP boundary
+  /// uses refuses an F# record holding a union on .NET 10 (and only happens
+  /// to accept it on .NET 11), so nothing F#-shaped is handed to it.
+  let private diagnosticFields (d: BuildDiagnostic) : System.Collections.Generic.IDictionary<string, obj> =
+    let fields = System.Collections.Generic.Dictionary<string, obj>()
+    fields.["File"] <- optionalField d.File
+    fields.["Line"] <- optionalField d.Line
+    fields.["Column"] <- optionalField d.Column
+    fields.["Severity"] <- box (severityName d.Severity)
+    fields.["Code"] <- optionalField d.Code
+    fields.["Message"] <- box d.Message
+    fields :> System.Collections.Generic.IDictionary<string, obj>
+
+  /// The named payload of each case as JSON primitives only: strings, numbers,
+  /// lists of those, and string-keyed dictionaries of those. ONE exhaustive
+  /// match with no wildcard, so a new case cannot compile without saying how
+  /// it serializes, and no F# union, option or record can reach the serializer.
+  /// A union-typed field is its case name, an `exn` is its message.
+  let toFields (err: SageFsError) : (string * obj) list =
+    match err with
+    | SageFsError.ToolNotAvailable(toolName, currentState, availableTools) ->
+      [ "toolName", box toolName
+        "currentState", box (SessionState.label currentState)
+        "availableTools", box availableTools ]
+    | SageFsError.SessionNotFound sessionId -> [ "sessionId", box sessionId ]
+    | SageFsError.NoActiveSessions -> []
+    | SageFsError.AmbiguousSessions sessionDescriptions -> [ "sessionDescriptions", box sessionDescriptions ]
+    | SageFsError.SessionCreationFailed reason -> [ "reason", box reason ]
+    | SageFsError.NeedsRebuild missing -> [ "missing", box missing ]
+    | SageFsError.DuplicateSession(existingSessionId, workingDirectory) ->
+      [ "existingSessionId", box existingSessionId
+        "workingDirectory", box workingDirectory ]
+    | SageFsError.UnsafeSessionPath(path, reason) ->
+      [ "path", box path
+        "reason", box reason ]
+    | SageFsError.ProjectFrameworkNotHostable(project, targetFrameworks, reason) ->
+      [ "project", box project
+        "targetFrameworks", box targetFrameworks
+        "reason", box (unsupportedReasonName reason) ]
+    | SageFsError.SessionStopFailed(sessionId, reason) ->
+      [ "sessionId", box sessionId
+        "reason", box reason ]
+    | SageFsError.SessionSwitchFailed(sessionId, reason) ->
+      [ "sessionId", box sessionId
+        "reason", box reason ]
+    | SageFsError.SupervisorBusy(pending, capacity) ->
+      [ "pending", box pending
+        "capacity", box capacity ]
+    | SageFsError.MemoryPressureRefused reason -> [ "reason", box reason ]
+    | SageFsError.SessionNotRoutable reason -> [ "reason", box reason ]
+    | SageFsError.WorkerCommunicationFailed(sessionId, reason) ->
+      [ "sessionId", box sessionId
+        "reason", box reason ]
+    | SageFsError.WorkerSpawnFailed reason -> [ "reason", box reason ]
+    | SageFsError.WorkerTimeout(sessionId, operation, timeoutSec) ->
+      [ "sessionId", box sessionId
+        "operation", box operation
+        "timeoutSec", box timeoutSec ]
+    | SageFsError.WorkerHttpError(sessionId, endpoint, statusCode) ->
+      [ "sessionId", box sessionId
+        "endpoint", box endpoint
+        "statusCode", box statusCode ]
+    | SageFsError.PipeClosed -> []
+    | SageFsError.EvalFailed reason -> [ "reason", box reason ]
+    | SageFsError.ResetFailed reason -> [ "reason", box reason ]
+    | SageFsError.HardResetFailed reason -> [ "reason", box reason ]
+    | SageFsError.BuildFailed(exitCode, diagnostics) ->
+      [ "exitCode", box exitCode
+        "diagnostics", box (diagnostics |> List.map diagnosticFields) ]
+    | SageFsError.ScriptLoadFailed reason -> [ "reason", box reason ]
+    | SageFsError.CheckFailed reason -> [ "reason", box reason ]
+    | SageFsError.CompletionFailed(sessionId, reason) ->
+      [ "sessionId", box sessionId
+        "reason", box reason ]
+    | SageFsError.CancelFailed reason -> [ "reason", box reason ]
+    | SageFsError.EvalSupersededByReset -> []
+    | SageFsError.WarmupOpenFailed(name, reason) ->
+      [ "name", box name
+        "reason", box reason ]
+    | SageFsError.WarmupContextFailed(sessionId, reason) ->
+      [ "sessionId", box sessionId
+        "reason", box reason ]
+    | SageFsError.HotReloadFailed(path, reason) ->
+      [ "path", box path
+        "reason", box reason ]
+    | SageFsError.HotReloadStateError(sessionId, reason) ->
+      [ "sessionId", box sessionId
+        "reason", box reason ]
+    | SageFsError.AppRunFailed(project, reason) ->
+      [ "project", box project
+        "reason", box reason ]
+    | SageFsError.RestartLimitExceeded(restartCount, windowMinutes) ->
+      [ "restartCount", box restartCount
+        "windowMinutes", box windowMinutes ]
+    | SageFsError.DaemonStartFailed reason -> [ "reason", box reason ]
+    | SageFsError.DaemonNotRunning -> []
+    | SageFsError.PortInUse port -> [ "port", box port ]
+    | SageFsError.SseConnectionError reason -> [ "reason", box reason ]
+    | SageFsError.JsonParseError(context, reason) ->
+      [ "context", box context
+        "reason", box reason ]
+    | SageFsError.CohortActionFailed(reason, suggestion) ->
+      [ "reason", box reason
+        "suggestion", box suggestion ]
+    // The unnamed field is "Item", as F# reflection has always named it.
+    | SageFsError.Unexpected ex -> [ "Item", box ex.Message ]
 
   /// Serialize a SageFsError to a JSON-friendly anonymous record.
   /// Returns { case, fields, message, suggestedAction }.
   let toJson (err: SageFsError) =
-    let info, values = FSharpValue.GetUnionFields(err, typeof<SageFsError>)
-    let fieldInfos = info.GetFields()
     let fieldMap = System.Collections.Generic.Dictionary<string, obj>()
-    Array.zip fieldInfos values
-    |> Array.iter (fun (fi, v) ->
-      match v with
-      | :? exn as ex -> fieldMap.[fi.Name] <- box ex.Message
-      // A bare F# DU boxed as `obj` (e.g. ToolNotAvailable's SessionState,
-      // or ProjectFrameworkNotHostable's UnsupportedTfmReason) is NOT
-      // serializable by the plain `JsonSerializer.Serialize` the HTTP
-      // boundary uses (McpServer.fs's jsonResponse has no
-      // JsonFSharpConverter registered) — confirmed live via a real
-      // `/api/sessions/create` call, which returned an "F# discriminated
-      // union serialization is not supported" 500 instead of the intended
-      // refusal. Reduce it to its case name, the same shape `case` above
-      // already uses to expose a DU's identity over JSON. `string list`/
-      // `BuildDiagnostic list` fields are also technically unions (F# lists
-      // are Cons/Nil) but must NOT hit this branch — they serialize fine as
-      // themselves — so `isNonListUnion` scopes this to non-list unions.
-      | _ when isNonListUnion fi.PropertyType ->
-        let caseInfo, _ = FSharpValue.GetUnionFields(v, fi.PropertyType)
-        fieldMap.[fi.Name] <- box caseInfo.Name
-      | _ -> fieldMap.[fi.Name] <- v)
-    {| case = info.Name
+    toFields err |> List.iter (fun (name, value) -> fieldMap.[name] <- value)
+    {| case = caseName err
        fields = fieldMap :> System.Collections.Generic.IDictionary<string, obj>
        message = describe err
        suggestedAction = suggestedAction err |}
