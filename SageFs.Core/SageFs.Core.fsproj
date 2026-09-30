@@ -33,6 +33,7 @@
         <Compile Include="ModelSnapshot.fs" />
         <Compile Include="TimeTravel.fs" />
         <Compile Include="Utils.fs" />
+        <Compile Include="WorkerLogFile.fs" />
         <Compile Include="FsiNaming.fs" />
         <Compile Include="NativeResolution.fs" />
         <Compile Include="AppOutput.fs" />
