@@ -999,8 +999,8 @@ module SessionManager =
             // still in flight (started by a previous RestartSession). The
             // RebuildCompleted handler is the single respawn point, so an
             // accepted second reset would otherwise double-spawn the worker.
-            reply.Reply(Error (SageFsError.HardResetFailed "Hard reset already in progress for this session"))
-            Instrumentation.failSpan span "Hard reset already in progress for this session"
+            reply.Reply(Error (SageFsError.HardResetFailed RestartRefusal.alreadyInProgress))
+            Instrumentation.failSpan span RestartRefusal.alreadyInProgress
             return state
           | Some session ->
             // A unit scope still rebuilds — SageFs rebuilds a PROJECT, so there

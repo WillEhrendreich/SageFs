@@ -77,6 +77,17 @@ let private awaitOutcome (p: Probe) = task {
 
 let private hardReset (p: Probe) = hardResetSession p.Ctx "agent1" true (Some p.SessionId) None
 
+/// `state` and `lastRestart.outcome` out of a get_session_status payload. A plain
+/// function, because `use` on a JsonDocument inside a task builder picks an
+/// async-disposable overload it does not satisfy.
+let private stateAndLastRestartOutcome (json: string) : string * string =
+  use doc = System.Text.Json.JsonDocument.Parse json
+  let state = doc.RootElement.GetProperty("state").GetString()
+  match doc.RootElement.TryGetProperty "lastRestart" with
+  | true, restart when restart.ValueKind = System.Text.Json.JsonValueKind.Object ->
+    state, restart.GetProperty("outcome").GetString()
+  | _ -> failtestf "no lastRestart object in the payload: %s" json
+
 let private buildFailed =
   SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "Program.fs(3,5): error FS0039: The value 'x' is not defined" ])
 
@@ -111,6 +122,39 @@ let tests = testList "MCP hard reset rebuild" [
     let! _ = hardReset p
     let! display = awaitOutcome p
     display |> Expect.equal "the display carries the real reason" (SessionDisplayStatus.Faulted (SageFsError.describe buildFailed))
+  }
+
+  testTask "WHY — hard_reset rebuild=true — a second reset the owner REFUSES as already in progress leaves the running rebuild's state alone, because status must not report a rebuild as FAILED while it is still running" {
+    let refused = SageFsError.HardResetFailed "Hard reset already in progress for this session"
+    let p = mkProbe "aaa00040" (Error refused) WorkerProtocol.SessionStatus.Ready
+    let startedAt = DateTime.UtcNow.AddSeconds -5.0
+    // A first rebuild is in flight: the tool recorded it as in progress.
+    rebuildOutcomes.[p.SessionId] <- RebuildOutcome.InProgress startedAt
+    let! _ = hardReset p
+    let! _ = awaitOutcome p
+    rebuildOutcomes.[p.SessionId]
+    |> Expect.equal "still the FIRST rebuild, still in progress: a refusal is not an outcome" (RebuildOutcome.InProgress startedAt)
+  }
+
+  testTask "WHY — get_session_status on a session that is restarting still reports the rebuild behind it, because a cold restart is exactly the shape that hid a failing or running rebuild" {
+    let p = mkProbe "aaa00041" (Ok "Hard reset complete") WorkerProtocol.SessionStatus.Ready
+    let baseGet = p.Ctx.SessionOps.GetSessionInfo
+    // A session mid cold-restart is Restarting and has NO proxy installed yet.
+    let restarting =
+      { p.Ctx with
+          SessionOps =
+            { p.Ctx.SessionOps with
+                GetProxy = fun _ -> Task.FromResult None
+                GetSessionInfo = fun id ->
+                  task {
+                    let! info = baseGet id
+                    return info |> Option.map (fun i -> { i with Status = WorkerProtocol.SessionLifecycleStatus.Restarting None })
+                  } } }
+    rebuildOutcomes.[p.SessionId] <- RebuildOutcome.InProgress DateTime.UtcNow
+    let! (json: string) = getSessionStatus restarting "agent1" (Some p.SessionId) None
+    let state, outcome = stateAndLastRestartOutcome json
+    state |> Expect.equal "this is the warming shape" "WarmingUp"
+    outcome |> Expect.equal "and it says the rebuild is in progress" "InProgress"
   }
 
   testTask "WHY — hard_reset rebuild=false — the owner recycles the worker process, because an in-process FSI rebuild keeps the project assemblies already loaded in the worker's default load context and never sees new code" {

@@ -175,7 +175,7 @@ type SageFsError =
   /// A cohort command was refused by the pure `Cohort.decide` core — the one
   /// boundary that maps `Cohort.CohortError` into this algebra. `reason` and
   /// `suggestion` are built per `CohortError` case at the MCP boundary
-  /// (`Mcp.fs`'s `cohortErrorToSageFsError`), where the caller's `MemberId`
+  /// (`CohortErrorMapping.toSageFsError`), where the caller's `MemberId`
   /// display is available, so the agent gets an accurate what + actionable next
   /// step instead of a mismatched session/worker error's advice.
   | CohortActionFailed of reason: string * suggestion: string

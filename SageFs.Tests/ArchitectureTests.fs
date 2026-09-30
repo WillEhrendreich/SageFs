@@ -1098,7 +1098,10 @@ let fileSizeBudgets =
       // 4410 -> 4365: RebuildOutcome (a type and its pure functions, ~60 lines)
       // moved to RebuildOutcome.fs, which is what made room for the status
       // payload to report the outcome at all.
-      "SageFs/Mcp.fs", 4365
+      // 4365 -> 4298: the cohort error mapping (a pure 76-line function of one
+      // DU) moved to CohortErrorMapping.fs, and the two copies of the rebuild
+      // block became one helper. Net of the lastRestart lookup and helper.
+      "SageFs/Mcp.fs", 4298
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

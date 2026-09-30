@@ -244,6 +244,15 @@ module McpTools =
   let rebuildOutcomes =
     Collections.Concurrent.ConcurrentDictionary<string, RebuildOutcome>()
 
+  /// What the last rebuild for this session did, in the status payload's terms.
+  let private lastRestartFor (sid: string) (coreVersion: string option) : SessionStatusPayload.LastRestart =
+    match rebuildOutcomes.TryGetValue sid with
+    | true, outcome ->
+      SessionStatusPayload.LastRestart.Recorded(
+        RebuildOutcome.kind outcome,
+        RebuildOutcome.describe DateTime.UtcNow coreVersion outcome)
+    | false, _ -> SessionStatusPayload.LastRestart.NoneRecorded
+
   /// Temporal dedup cache — prevents re-evaluating identical code within 2s window.
   let evalDedupCache = Features.EvalDedup.DedupCache.defaultCache ()
 
@@ -1311,6 +1320,7 @@ module McpTools =
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
              workerPid = WorkerProtocol.SessionLifecycleStatus.workerPid status
              workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status
+             lastRestart = SessionStatusPayload.lastRestartJson (lastRestartFor sid None)
              available = SageFs.Affordances.availableTools SageFs.SessionState.WarmingUp |})
       | FaultedSession (sid, cause) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1322,6 +1332,7 @@ module McpTools =
              faultReason = FaultCause.describe cause
              target = targets
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
+             lastRestart = SessionStatusPayload.lastRestartJson (lastRestartFor sid None)
              available = SageFs.Affordances.availableTools SageFs.SessionState.Faulted |})
       | Routable sid ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1360,13 +1371,7 @@ module McpTools =
               // The hard-reset tool answers "initiated" and points here for the
               // result. Without this a failed rebuild was recorded and then
               // never shown, so it read exactly like one still running.
-              LastRestart =
-                match rebuildOutcomes.TryGetValue sid with
-                | true, outcome ->
-                  SessionStatusPayload.LastRestart.Recorded(
-                    RebuildOutcome.kind outcome,
-                    RebuildOutcome.describe DateTime.UtcNow (Some snapshot.CoreVersion) outcome)
-                | false, _ -> SessionStatusPayload.LastRestart.NoneRecorded }
+              LastRestart = lastRestartFor sid (Some snapshot.CoreVersion) }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
@@ -1826,44 +1831,72 @@ module McpTools =
         | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
     })
 
+  /// What a rebuild=true hard reset answers straight away; the outcome lands in
+  /// get_session_status (`lastRestart`) when the build finishes.
+  let private rebuildInitiatedMessage =
+    "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_session_status reports the rebuild's progress and outcome."
+
+  /// Starts a rebuild=true hard reset in the background and records what it did.
+  /// The text tool and the Result tool each carried their own copy of this, so a
+  /// fix had to land twice.
+  ///
+  /// Fire-and-forget: the build runs in the background so the MCP call doesn't
+  /// time out; get_session_status reports progress and the outcome.
+  ///
+  /// The SessionManager mailbox is the single owner of both the session
+  /// registry and restart coalescing: it rejects a second hard reset while a
+  /// rebuild is in flight, keeps the live worker serving through a build-first
+  /// rebuild, and marks a cold restart Restarting itself. So this tool writes NO
+  /// session status and runs no read-then-act pre-check — an earlier "competing
+  /// restart" check read back this call's own Restarting marker and silently
+  /// skipped the rebuild.
+  ///
+  /// A refusal is not an outcome. A second reset the owner refuses as "already in
+  /// progress" leaves the record of the rebuild that IS running alone, or status
+  /// would report a rebuild as failed while it was still building.
+  let private startTrackedRebuild (ctx: McpContext) (sid: string) : unit =
+    compilationStates.TryRemove(sid) |> ignore
+    typeIdentityDiagnostics.TryRemove(sid) |> ignore
+    Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
+    match rebuildOutcomes.TryGetValue sid with
+    | true, RebuildOutcome.InProgress _ -> ()
+    | _ -> rebuildOutcomes.[sid] <- RebuildOutcome.InProgress DateTime.UtcNow
+    notifyElm ctx (
+      TuiEvent.WarmupProgress (1, 4, "Building project..."))
+    task {
+      let! result =
+        task {
+          try return! ctx.SessionOps.RestartSession (toSessionId sid) (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker)
+          with ex -> return Error (SageFsError.Unexpected ex)
+        }
+      let now = DateTime.UtcNow
+      let! after = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+      let fromRegistry () =
+        match after with
+        | Some info -> SessionDisplay.displayStatus now info
+        | None -> SessionDisplayStatus.Faulted "Session is no longer registered"
+      let refused =
+        match result with
+        | Error error -> RestartRefusal.isAlreadyInProgress error
+        | Ok _ -> false
+      let display =
+        match refused with
+        | true -> fromRegistry ()
+        | false ->
+          let outcome = RebuildOutcome.ofResult now result (after |> Option.map (fun info -> info.Status))
+          rebuildOutcomes.[sid] <- outcome
+          match outcome with
+          | RebuildOutcome.FailedNotServing (error, _) -> SessionDisplayStatus.Faulted (SageFsError.describe error)
+          | _ -> fromRegistry ()
+      notifyElm ctx (TuiEvent.SessionStatusChanged (sid, display))
+    } |> ignore
+
   let hardResetSession (ctx: McpContext) (agent: string) (rebuild: bool) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     withSessionAllowFaulted ctx agent sessionId workingDirectory (fun sid -> task {
       match rebuild with
       | true ->
-        compilationStates.TryRemove(sid) |> ignore
-        typeIdentityDiagnostics.TryRemove(sid) |> ignore
-        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
-        rebuildOutcomes.[sid] <- RebuildOutcome.InProgress DateTime.UtcNow
-        notifyElm ctx (
-          TuiEvent.WarmupProgress (1, 4, "Building project..."))
-        // Fire-and-forget: the build runs in the background so the MCP call
-        // doesn't time out; get_fsi_status reports progress and the outcome.
-        //
-        // The SessionManager mailbox is the single owner of both the session
-        // registry and restart coalescing: it rejects a second hard reset
-        // while a rebuild is in flight, keeps the live worker serving through
-        // a build-first rebuild, and marks a cold restart Restarting itself.
-        // So this tool writes NO session status and runs no read-then-act
-        // pre-check — an earlier "competing restart" check read back this
-        // call's own Restarting marker and silently skipped the rebuild.
-        task {
-          let! result =
-            task {
-              try return! ctx.SessionOps.RestartSession (toSessionId sid) (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker)
-              with ex -> return Error (SageFsError.Unexpected ex)
-            }
-          let now = DateTime.UtcNow
-          let! after = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-          let outcome = RebuildOutcome.ofResult now result (after |> Option.map (fun info -> info.Status))
-          rebuildOutcomes.[sid] <- outcome
-          let display =
-            match outcome, after with
-            | RebuildOutcome.FailedNotServing (error, _), _ -> SessionDisplayStatus.Faulted (SageFsError.describe error)
-            | _, Some info -> SessionDisplay.displayStatus now info
-            | _, None -> SessionDisplayStatus.Faulted "Session is no longer registered"
-          notifyElm ctx (TuiEvent.SessionStatusChanged (sid, display))
-        } |> ignore
-        return "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_session_status reports the rebuild's progress and outcome."
+        startTrackedRebuild ctx sid
+        return rebuildInitiatedMessage
       | false ->
         // A hard reset without a rebuild must still replace the worker
         // PROCESS: an in-process FSI rebuild keeps whatever the worker's
@@ -1900,30 +1933,8 @@ module McpTools =
     withSessionAllowFaultedResult ctx agent sessionId workingDirectory (fun sid -> task {
       match rebuild with
       | true ->
-        compilationStates.TryRemove(sid) |> ignore
-        typeIdentityDiagnostics.TryRemove(sid) |> ignore
-        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
-        rebuildOutcomes.[sid] <- RebuildOutcome.InProgress DateTime.UtcNow
-        notifyElm ctx (
-          TuiEvent.WarmupProgress (1, 4, "Building project..."))
-        task {
-          let! result =
-            task {
-              try return! ctx.SessionOps.RestartSession (toSessionId sid) (RestartPlan.Rebuild GranularRestart.RestartSubject.Worker)
-              with ex -> return Error (SageFsError.Unexpected ex)
-            }
-          let now = DateTime.UtcNow
-          let! after = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-          let outcome = RebuildOutcome.ofResult now result (after |> Option.map (fun info -> info.Status))
-          rebuildOutcomes.[sid] <- outcome
-          let display =
-            match outcome, after with
-            | RebuildOutcome.FailedNotServing (error, _), _ -> SessionDisplayStatus.Faulted (SageFsError.describe error)
-            | _, Some info -> SessionDisplay.displayStatus now info
-            | _, None -> SessionDisplayStatus.Faulted "Session is no longer registered"
-          notifyElm ctx (TuiEvent.SessionStatusChanged (sid, display))
-        } |> ignore
-        return Ok "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_session_status reports the rebuild's progress and outcome."
+        startTrackedRebuild ctx sid
+        return Ok rebuildInitiatedMessage
       | false ->
         compilationStates.TryRemove(sid) |> ignore
         typeIdentityDiagnostics.TryRemove(sid) |> ignore
@@ -4074,89 +4085,11 @@ module McpTools =
   // caller with `memberIdFor agentName` (never a self-declared member
   // argument) and dispatches exactly one `CohortCommand` through
   // `ctx.CohortOwner.Commit`. `CohortError` crosses into the product error
-  // algebra HERE, via `cohortErrorToSageFsError` — the one boundary roast §10
+  // algebra HERE, via `CohortErrorMapping.toSageFsError` — the one boundary roast §10
   // asks for — mapped onto the closest existing `SageFsError` case (Cohort.fs
   // is additive-only in this slice; no new SageFsError case was added).
 
-  /// Exhaustive, compiler-checked mapping from `Cohort.CohortError<MemberId>`
-  /// onto `SageFsError.CohortActionFailed(reason, suggestion)` — the one
-  /// boundary (roast §10) where the pure module's error algebra crosses into
-  /// the product's. Each case builds an accurate `reason` (what went wrong,
-  /// naming the member/claim/landing) and an actionable `suggestion` (the next
-  /// step), so an agent reading the error gets cohort-specific guidance rather
-  /// than the mismatched session/worker advice a reused case would attach.
-  let cohortErrorToSageFsError (err: Cohort.CohortError<MemberTable.MemberId>) : SageFsError =
-    let mid = MemberTable.MemberId.display
-    let scopeStr (scope: Cohort.ClaimScope) =
-      match scope with
-      | Cohort.ClaimScope.File f -> sprintf "file:%s" f
-      | Cohort.ClaimScope.Project p -> sprintf "project:%s" p
-    let failed reason suggestion = SageFsError.CohortActionFailed(reason, suggestion)
-    match err with
-    | Cohort.CohortError.DuplicateJoin who ->
-      failed
-        (sprintf "%s is already a member of this cohort." (mid who))
-        "Run get_cohort_status to see your current role; there is no need to join again."
-    | Cohort.CohortError.MemberNotPresent who ->
-      failed
-        (sprintf "%s is not a present member of this cohort." (mid who))
-        "Run join_cohort before acting in the cohort."
-    | Cohort.CohortError.ClaimConflict(scope, holder) ->
-      failed
-        (sprintf "The scope %s is already claimed by %s." (scopeStr scope) (mid holder))
-        "Coordinate with the current holder, or acquire a different, non-overlapping scope."
-    | Cohort.CohortError.NotClaimHolder(Cohort.ClaimId cid, requester) ->
-      failed
-        (sprintf "%s does not hold claim %s." (mid requester) cid)
-        "Acquire it with acquire_claim, or ask the current holder to release it."
-    | Cohort.CohortError.UnknownClaim(Cohort.ClaimId cid) ->
-      failed
-        (sprintf "No claim %s exists in this cohort." cid)
-        "Run get_cohort_status to list the current claims and their ids."
-    | Cohort.CohortError.ClaimNotOrphaned(Cohort.ClaimId cid) ->
-      failed
-        (sprintf "Claim %s is not orphaned, so it cannot be reassigned." cid)
-        "Only a claim whose holder has departed can be reassigned; check get_cohort_status."
-    | Cohort.CohortError.DuplicateClaimId(Cohort.ClaimId cid) ->
-      failed
-        (sprintf "A claim with id %s already exists." cid)
-        "Retry the acquire; claim ids are minted per acquire_claim."
-    | Cohort.CohortError.StaleClaimFence(Cohort.ClaimId cid, presented, current) ->
-      failed
-        (sprintf "Your fence for claim %s is stale — you presented %d but the current fence is %d." cid (int64 presented) (int64 current))
-        "Re-read get_cohort_status and retry with the claim's current fence."
-    | Cohort.CohortError.InvalidPurpose reason ->
-      failed
-        (sprintf "The claim purpose is invalid: %s" reason)
-        "Provide a non-empty purpose describing why you are claiming the scope."
-    | Cohort.CohortError.InvalidStatement reason ->
-      failed
-        (sprintf "The landing statement is invalid: %s" reason)
-        "Provide a non-empty statement describing what this landing changes."
-    | Cohort.CohortError.UnknownLanding(Cohort.LandingId lid) ->
-      failed
-        (sprintf "No landing %s exists in this cohort." lid)
-        "Run get_cohort_status to list the current landings."
-    | Cohort.CohortError.DuplicateLandingId(Cohort.LandingId lid) ->
-      failed
-        (sprintf "A landing with id %s already exists." lid)
-        "Retry the request; landing ids are minted per request_landing."
-    | Cohort.CohortError.NotLandingRequester(Cohort.LandingId lid, who) ->
-      failed
-        (sprintf "%s did not request landing %s." (mid who) lid)
-        "Only the landing's requester can act on it; check get_cohort_status."
-    | Cohort.CohortError.LandingNotAtFrontOfQueue(Cohort.LandingId lid) ->
-      failed
-        (sprintf "Landing %s is not at the front of the landing queue." lid)
-        "Landings are strictly serial; wait until the earlier landings ahead of it complete."
-    | Cohort.CohortError.LandingNotInExpectedState(Cohort.LandingId lid, expected) ->
-      failed
-        (sprintf "Landing %s is not in the expected state (%s)." lid expected)
-        "Run get_cohort_status to see the landing's current state before acting on it."
-    | Cohort.CohortError.NotConductor who ->
-      failed
-        (sprintf "This is a conductor-only action, and %s is not the cohort conductor." (mid who))
-        "Ask the cohort conductor to perform it, or have the conductor delegate the role to you."
+  // The mapping itself lives in CohortErrorMapping.fs (split out of this file).
 
   /// `ctx.CohortOwner` is `None` only when nothing wired a cohort owner
   /// (tests that predate Slice 2) — every production McpContext (DaemonMode.fs)
@@ -4177,7 +4110,7 @@ module McpTools =
         let! result = owner.Commit cmd
         match result with
         | Ok(events, effects) -> return Ok(events, effects)
-        | Error err -> return Error (cohortErrorToSageFsError err)
+        | Error err -> return Error (CohortErrorMapping.toSageFsError err)
     }
 
   let private parseJoinableRole (raw: string) : Result<Cohort.JoinableRole, SageFsError> =
@@ -4329,7 +4262,7 @@ module McpTools =
 
   /// Conductor-only (`Cohort.decide` gates `ReassignClaim` on
   /// `Authority.present by state = Authority.Conductor _`, refusing
-  /// `NotConductor` otherwise — surfaced here via `cohortErrorToSageFsError`).
+  /// `NotConductor` otherwise — surfaced here via `CohortErrorMapping.toSageFsError`).
   /// `toMember` names the recipient by ITS OWN display string, resolved via
   /// `resolveMemberByDisplay` — never trusted as the caller's own identity.
   let reassignClaim (ctx: McpContext) (agentName: string) (claimId: string) (toMember: string) : Task<Result<string, SageFsError>> =

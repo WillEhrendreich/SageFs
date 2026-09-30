@@ -78,6 +78,14 @@ module SessionStatusPayload =
     LastRestart: LastRestart
   }
 
+  /// How `lastRestart` appears in EVERY status shape (routable, warming,
+  /// faulted). One function, so a shape cannot forget it: the warming shape did,
+  /// and a cold restart is exactly the warming shape.
+  let lastRestartJson (restart: LastRestart) : obj | null =
+    match restart with
+    | LastRestart.NoneRecorded -> null
+    | LastRestart.Recorded (kind, message) -> box {| outcome = RestartKind.label kind; message = message |}
+
   /// Build the `get_session_status` payload.
   ///
   /// One status drives every field. `available` is derived from the same
@@ -85,10 +93,6 @@ module SessionStatusPayload =
   /// may call can never disagree with the state it was told the session is in.
   let serialize (facts: Facts) : string =
     let sessionState = facts.SessionState
-    let lastRestart : obj | null =
-      match facts.LastRestart with
-      | LastRestart.NoneRecorded -> null
-      | LastRestart.Recorded (kind, message) -> box {| outcome = RestartKind.label kind; message = message |}
 
     System.Text.Json.JsonSerializer.Serialize(
       {| state = stateLabelOf sessionState
@@ -104,5 +108,5 @@ module SessionStatusPayload =
          evalCount = facts.EvalCount
          averageDurationMs = facts.AverageDurationMs
          health = facts.Health
-         lastRestart = lastRestart
+         lastRestart = lastRestartJson facts.LastRestart
          available = Affordances.availableTools sessionState |})

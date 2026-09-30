@@ -29,6 +29,18 @@ type RestartPlan =
   /// it runs in the worker, with the value in hand.
   | Migrate of boundary: string
 
+/// The owner's refusal of a second hard reset while a rebuild is in flight. One
+/// spelling, shared by the mailbox that says it and by every tool that must not
+/// mistake it for the outcome of a rebuild (it is a refusal, and the rebuild it
+/// refused to duplicate is still running).
+module RestartRefusal =
+  let alreadyInProgress = "Hard reset already in progress for this session"
+
+  let isAlreadyInProgress (error: SageFsError) : bool =
+    match error with
+    | SageFsError.HardResetFailed message -> message = alreadyInProgress
+    | _ -> false
+
 type SessionManagementOps = {
   CreateSession: SessionProjectTarget list -> string -> WorkflowTypes.SessionWorkflow -> Task<Result<string, SageFsError>>
   ListSessions: unit -> Task<string>
