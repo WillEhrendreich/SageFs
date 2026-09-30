@@ -39,15 +39,18 @@ the usual caveat below didn't explain it. A web route did the same thing.
 Now a save to an app that `run_app` is running restarts it with your change and
 says why: `renderLine changed, and this app runs in the worker, where an
 in-place patch cannot reach it; restarting the app`. On the ticker that took
-about six seconds on my machine. A restart resets whatever state the app didn't
-register with SageFs. Patching a `run_app` app in place needs the new function
-body compiled in the worker, or the app run inside the agent's process, and
-neither is built.
+about six seconds on my machine. A restart resets the app's state. Carrying a
+live value across a restart is a narrower feature that applies to a type or
+value change on state the app registers with SageFs, and
+[granular-restart-scope.md](granular-restart-scope.md) is where it's tracked; I
+haven't tested it against a `run_app` save, so I'm not claiming it here.
+Patching a `run_app` app in place needs the new function body compiled in the
+worker, or the app run inside the agent's process, and neither is built.
 
 | You start the app | It runs in | A save to a function | Your app's state |
 |---|---|---|---|
 | from FSI, or an `.SageFs/init.fsx` that `#load`s your sources | the reload agent's process | patched in place, no restart | stays where it is |
-| `run_app` | the worker | SageFs restarts it with your change and says why | reset by the restart, unless the app registers it |
+| `run_app` | the worker | SageFs restarts it with your change and says why | reset by the restart |
 
 The rule is [`AppPlacement.adjust`](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Core/Features/ReloadPlanning.fs#L1149-L1173),
 and the worker [applies it to every save](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Host/WorkerMain.fs#L1418-L1425).
