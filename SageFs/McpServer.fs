@@ -3378,9 +3378,6 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
     // writes into the user's real log directory.
     let logDir = DaemonLog.currentDirectory ()
     let logPath = DaemonLog.sinkPath logDir
-    // The file that exists today (the sink date-suffixes `logPath`), which is
-    // the path a human can open.
-    let logFile = DaemonLog.fileOn logDir (DateOnly.FromDateTime DateTime.Now)
     try
       let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
       let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
@@ -3486,7 +3483,9 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
         cfg.StateChanged |> Option.map (fun evt ->
           wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount cfg.SharedBindingScope lastEvalContext cfg.FrictionStore)
 
-      logStartup app cfg.Port logFile otelConfigured
+      // The file on disk now (the sink date-suffixes `logPath` and rolls past
+      // its size bound), which is the path a human can open.
+      logStartup app cfg.Port (DaemonLog.currentFile ()) otelConfigured
       do! runUntilCancelled app stopping
     with
     | :? System.IO.IOException as ex when ex.Message.Contains("address") || ex.Message.Contains("already") ->
@@ -3510,5 +3509,5 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       SageFs.Features.ComponentWatch.reportFailure
         { Component = "mcp-server"
           Reason = sprintf "%s: %s" (ex.GetType().Name) ex.Message
-          Hint = sprintf "See %s for the stack trace, then run 'sagefs status'." logFile }
+          Hint = sprintf "See %s for the stack trace, then run 'sagefs status'." (DaemonLog.currentFile ()) }
   }

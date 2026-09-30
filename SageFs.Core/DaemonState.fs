@@ -118,13 +118,43 @@ module DaemonLog =
   let fileOn (dir: string) (day: DateOnly) : string =
     Path.Combine(dir, fileStem + day.ToString("yyyyMMdd") + fileExtension)
 
+  /// The roll sequence `name` has on `day`: 0 for the day's first file, N for
+  /// `_NNN`, and None for anything that is not one of that day's log files.
+  let private rollOf (day: DateOnly) (name: string) : int option =
+    let prefix = fileStem + day.ToString("yyyyMMdd")
+    match name = prefix + fileExtension with
+    | true -> Some 0
+    | false ->
+      match name.StartsWith(prefix + "_", StringComparison.Ordinal) && name.EndsWith(fileExtension, StringComparison.Ordinal) with
+      | false -> None
+      | true ->
+        let digits = name.Substring(prefix.Length + 1, name.Length - prefix.Length - 1 - fileExtension.Length)
+        match Int32.TryParse digits with
+        | true, n when digits.Length > 0 && Seq.forall Char.IsDigit digits -> Some n
+        | _ -> None
+
+  /// The file the sink is writing on `day`, given the file names in `dir`: the
+  /// highest roll. A day whose first file is already over `MaxFileBytes` (an
+  /// upgrade from the unbounded logger leaves exactly that) rolls at startup,
+  /// so `fileOn` alone names a file nothing is writing to. With no file for the
+  /// day yet, the day's first, which is where the sink starts.
+  let activeFileOn (dir: string) (day: DateOnly) (existing: string list) : string =
+    match existing |> List.choose (fun name -> rollOf day name |> Option.map (fun roll -> roll, name)) with
+    | [] -> fileOn dir day
+    | rolls -> Path.Combine(dir, rolls |> List.maxBy fst |> snd)
+
   /// This process's log directory, from SAGEFS_DATA_DIR or the user default.
   let currentDirectory () : string =
     directory (DataDirChoice.current ()) (userLogDirectory ())
 
-  /// The file this process is writing today.
+  /// The file this process is writing today, as it is on disk right now.
   let currentFile () : string =
-    fileOn (currentDirectory ()) (DateOnly.FromDateTime DateTime.Now)
+    let dir = currentDirectory ()
+    let names =
+      match Directory.Exists dir with
+      | true -> Directory.GetFiles dir |> Array.map Path.GetFileName |> Array.toList
+      | false -> []
+    activeFileOn dir (DateOnly.FromDateTime DateTime.Now) names
 
 module DaemonState =
 

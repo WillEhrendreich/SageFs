@@ -68,6 +68,24 @@ let daemonLogPathTests =
                    Path.GetFileNameWithoutExtension sinkPath + "20260930" + Path.GetExtension sinkPath)
       |> Expect.equal "inserting the date before the extension gives fileOn" (DaemonLog.fileOn "/logs" (DateOnly(2026, 9, 30)))
 
+    testCase "WHY — a day that rolled reports the rolled file, because that is the one being written" <| fun _ ->
+      let day = DateOnly(2026, 9, 30)
+      let named n = "mcp-server20260930" + n + ".log"
+      DaemonLog.activeFileOn "/logs" day [ named ""; named "_001" ]
+      |> Expect.equal "the highest roll wins" (Path.Combine("/logs", named "_001"))
+      DaemonLog.activeFileOn "/logs" day [ named "_002"; named ""; named "_001" ]
+      |> Expect.equal "order of the listing does not matter" (Path.Combine("/logs", named "_002"))
+
+    testCase "WHY — before the sink has written anything, the reported file is the day's first" <| fun _ ->
+      DaemonLog.activeFileOn "/logs" (DateOnly(2026, 9, 30)) []
+      |> Expect.equal "falls back to fileOn" (DaemonLog.fileOn "/logs" (DateOnly(2026, 9, 30)))
+
+    testCase "WHY — other days, other files and malformed roll suffixes are never mistaken for today's log" <| fun _ ->
+      let day = DateOnly(2026, 9, 30)
+      DaemonLog.activeFileOn "/logs" day
+        [ "mcp-server20260929_009.log"; "daemon-stdout.log"; "mcp-server20260930_x.log"; "mcp-server20260930_.log" ]
+      |> Expect.equal "none of them is today's" (DaemonLog.fileOn "/logs" day)
+
     testCase "WHY — the log bound is finite, named, and small enough that 7 days cannot fill a disk" <| fun _ ->
       let b = DaemonLog.defaultBounds
       b.MaxFileBytes |> Expect.equal "50 MB per file" (50L * 1024L * 1024L)
