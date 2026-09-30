@@ -565,6 +565,95 @@ let sessionManagerSpawnFirstRestartTests =
         // worker1 at all), leaving worker1 as an orphaned live process.
         runtime.GetStoppedPids()
         |> Expect.equal "each swap must retire its own outgoing worker — no worker retired twice, none skipped" [ worker0Pid; worker1Process.Id ]
+
+    testCase "T10 — a replacement that reports an unusable transport is reaped and the old worker keeps serving" <| fun _ ->
+      let distinctProcesses =
+        Process.GetProcesses()
+        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
+      if distinctProcesses.Length = 0 then
+        skiptest "need a second live process to simulate distinct worker pids"
+      let otherProcess = distinctProcesses[0]
+
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun call ->
+            match call with
+            | 1 -> Ok(Process.GetCurrentProcess())
+            | _ -> Ok(otherProcess))
+
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        makeSessionReady harness info
+        let oldPid =
+          getManagedSession harness info.Id
+          |> getWorkerPid
+
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
+        | Ok _ -> ()
+        | Error err -> failtestf "restart failed: %s" (SageFsError.describe err)
+
+        // The replacement reports Ready but with no usable base URL.
+        harness.Mailbox.Post(
+          SessionCommand.WorkerReady(info.Id, otherProcess.Id, "", readyProxy))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> ignore
+
+        let session = getManagedSession harness info.Id
+        session.Info.Status
+        |> Expect.equal "the old worker keeps serving, exactly as when the replacement fails to start" (SessionLifecycleStatus.Ready { Pid = oldPid; Port = Some 4123 })
+        session.WorkerBaseUrl
+        |> Expect.equal "the old worker's transport is restored, not the bad one" "http://localhost:4123"
+        harness.FaultedEvents
+        |> Seq.length
+        |> Expect.equal "a replacement that failed while the old worker serves must not fault the session" 0
+        runtime.GetStoppedPids()
+        |> Expect.equal "only the bad replacement is reaped, the serving worker is left alone" [ otherProcess.Id ]
+
+        // The swap is over: nothing is parked any more, so stopping the
+        // session reaps the serving worker exactly once (a stale PendingSwap
+        // entry would reap the replacement a second time).
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.StopAll reply)
+        runtime.GetStoppedPids()
+        |> Expect.equal "after the failed swap, stop reaps the serving worker once and nothing else" [ otherProcess.Id; oldPid ]
+
+    testCase "T10b — after a failed swap the old worker's exit is a real crash, not an expected retirement" <| fun _ ->
+      let distinctProcesses =
+        Process.GetProcesses()
+        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
+      if distinctProcesses.Length = 0 then
+        skiptest "need a second live process to simulate distinct worker pids"
+      let otherProcess = distinctProcesses[0]
+
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun call ->
+            match call with
+            | 1 -> Ok(Process.GetCurrentProcess())
+            | _ -> Ok(otherProcess))
+
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        makeSessionReady harness info
+        let oldPid =
+          getManagedSession harness info.Id
+          |> getWorkerPid
+
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
+        | Ok _ -> ()
+        | Error err -> failtestf "restart failed: %s" (SageFsError.describe err)
+
+        harness.Mailbox.Post(
+          SessionCommand.WorkerReady(info.Id, otherProcess.Id, "", readyProxy))
+        harness.Mailbox.Post(SessionCommand.WorkerExited(info.Id, oldPid, 1))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> ignore
+
+        let session = getManagedSession harness info.Id
+        session.Info.Status
+        |> isRestarting
+        |> Expect.isTrue "the serving worker crashed, so the restart policy must run (a stale PendingSwap would swallow the exit as a retirement and leave the tombstone)"
   ]
 
 [<Tests>]

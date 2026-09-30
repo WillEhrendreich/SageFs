@@ -994,14 +994,27 @@ module SessionManager =
               match ReadyTransport.isValid baseUrl proxy with
               | false ->
                 let msg = ReadyTransport.describeInvalid "Worker" baseUrl proxy
+                // `session` is the replacement, so this reaps the bad worker.
                 do! runtime.StopWorker session
-                let faulted = faultedTombstone msg session
-                let newState =
-                  { ManagerState.addSession id faulted state with
-                      WarmupProgress = Map.remove id state.WarmupProgress }
-                onSessionReady id
-                onSessionFaulted id msg
-                return newState
+                match ManagerState.tryGetPendingSwap id state with
+                | Some oldSession ->
+                  // Same contract as RevertSwap: the old worker keeps serving. A
+                  // tombstone here would orphan it and swallow its crash.
+                  Log.warn "[SessionManager] Replacement worker for session %s reported an unusable transport; reverting to the still-serving old worker: %s" (SessionId.value id) msg
+                  let newState =
+                    ManagerState.clearPendingSwap id
+                      { ManagerState.addSession id oldSession state with
+                          WarmupProgress = Map.remove id state.WarmupProgress }
+                  onSessionReady id
+                  return newState
+                | None ->
+                  let faulted = faultedTombstone msg session
+                  let newState =
+                    { ManagerState.addSession id faulted state with
+                        WarmupProgress = Map.remove id state.WarmupProgress }
+                  onSessionReady id
+                  onSessionFaulted id msg
+                  return newState
               | true ->
                 let workerPort =
                   let mutable u : System.Uri = null
@@ -1035,21 +1048,14 @@ module SessionManager =
                 let newState =
                   match ManagerState.tryGetPendingSwap id state with
                   | Some oldSession ->
-                    // Retire the old worker off the critical path; its exit event
-                    // now carries a pid that no longer matches Info.WorkerPid, so
-                    // WorkerExited will ignore it (stale-pid guard).
-                    //
-                    // Reaping the outgoing worker is SAFETY-CRITICAL: run it on a
-                    // dedicated thread, NOT Async.Start (the thread pool). Under
-                    // pool saturation / memory pressure a pool-queued retirement
-                    // can be starved indefinitely, leaking the outgoing worker
-                    // exactly when memory is scarcest — repeated hard_resets under
-                    // load then pile up multi-GB of un-reaped workers (observed
-                    // 2026-09-15). A dedicated background thread can't be starved
-                    // behind other pool work. StopWorker is invoked SYNCHRONOUSLY
-                    // (registering the retirement intent before the swap returns);
-                    // its awaitable — which ends in proc.Kill on the real path —
-                    // runs to completion on the dedicated thread.
+                    // Retire the old worker; its exit now carries a pid that no
+                    // longer matches Info.WorkerPid, so WorkerExited ignores it.
+                    // SAFETY-CRITICAL: a dedicated thread, NOT Async.Start (the
+                    // pool). A pool-queued retirement can be starved under memory
+                    // pressure, leaking multi-GB workers (observed 2026-09-15).
+                    // StopWorker is invoked SYNCHRONOUSLY (registering the intent
+                    // before the swap returns); its awaitable runs to completion
+                    // on the dedicated thread.
                     let retireAsync = runtime.StopWorker oldSession
                     let retire () =
                       try Async.RunSynchronously retireAsync
@@ -1063,18 +1069,12 @@ module SessionManager =
                   | None ->
                     stateAfterInstall
                 onSessionReady id
-                // Poll worker until it reports Ready, then update snapshot.
-                // Uses while loop with CT check to stop cleanly on daemon shutdown
-                // or when the session terminates before becoming Ready.
-                // Watchdog: faults the session if it hasn't become Ready within
-                // the bound. Bound decision is WarmupSupervision.decidePoll (the
-                // pure core the DST scenarios in SageFs.Simulation exercise) —
-                // this loop only supplies the IO (the GetStatus round-trip) and
-                // classifies each reply as Ready / Faulted / Progressed /
-                // StillWarming / ProbeFailed. A CHANGED `StatusMessage` (e.g.
-                // "Building (FSharp.Compiler.Service)" → "Building (FSharp.Core)")
-                // counts as Progressed and resets the inactivity clock — the same
-                // "silence, not slowness, trips it" doctrine as awaitWorkerPort.
+                // Poll the worker until Ready (stops on CT cancel). Watchdog: the
+                // bound is WarmupSupervision.decidePoll (the pure core the DST
+                // scenarios exercise); this loop only supplies the GetStatus IO
+                // and classifies each reply. A CHANGED `StatusMessage` counts as
+                // Progressed and resets the inactivity clock: silence, not
+                // slowness, trips it (same doctrine as awaitWorkerPort).
                 Async.Start(async {
                   let mutable done' = false
                   let started = DateTime.UtcNow
