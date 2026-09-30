@@ -400,6 +400,24 @@ module OutputScroll =
 
   let pillVisible (page: IPage) = page.Locator(pillSelector).IsVisibleAsync()
 
+  /// Scroll to the bottom the way a reader does, and look at the pill; if it is
+  /// still there, scroll again. One scroll and a fixed sleep is not what a
+  /// person does, and it failed once in the gate: the scroll landed in the same
+  /// frame as a layout change, so the panel was, correctly, not yet at the
+  /// bottom when the page read it, and it stayed unpinned. The page must still
+  /// re-pin at the bottom, so a panel that never hides the pill fails here.
+  /// Returns whether the pill is still showing when the time is up.
+  let scrollDownUntilPillHides (ms: int) (page: IPage) = task {
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let mutable showing = true
+    while showing && sw.ElapsedMilliseconds < int64 ms do
+      let! _ = page.EvaluateAsync<int>("() => { var el = document.querySelector('#output-panel'); el.scrollTop = el.scrollHeight; return 0; }")
+      do! page.WaitForTimeoutAsync(100.0f)
+      let! visible = pillVisible page
+      showing <- visible
+    return showing
+  }
+
 /// Gap I (outcome-gate-sweep.md, Island H — dashboard journeys): the
 /// no-session landing shipped broken TWICE (emergency releases 0.6.470 and
 /// 0.6.471) because the state matrix that would have caught it was never
@@ -981,10 +999,9 @@ let tests =
     do! OutputScroll.waitForPillText page "1 new eval ↓"
     let! singular = page.Locator(OutputScroll.pillSelector).TextContentAsync()
     Expect.isFalse (singular.Contains "evals") (sprintf "one unseen eval reads singular (%s)" singular)
-    let! _ = page.EvaluateAsync<int>("() => { var el = document.querySelector('#output-panel'); el.scrollTop = el.scrollHeight; return 0; }")
-    do! page.WaitForTimeoutAsync(400.0f)
-    let! pillAfterSelfScroll = OutputScroll.pillVisible page
-    Expect.isFalse pillAfterSelfScroll "scrolling back to the bottom yourself hides the pill"
+    let! pillAfterSelfScroll = OutputScroll.scrollDownUntilPillHides 5_000 page
+    let! distSelfScroll = OutputScroll.distanceFromBottom page
+    Expect.isFalse pillAfterSelfScroll (sprintf "scrolling back to the bottom yourself hides the pill (the panel ended %f px from the bottom)" distSelfScroll)
     do! OutputScroll.runEval page "self-refollow"
     do! page.WaitForTimeoutAsync(400.0f)
     let! distSelf = OutputScroll.distanceFromBottom page
