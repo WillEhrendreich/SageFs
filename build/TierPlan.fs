@@ -127,14 +127,20 @@ let testBinDirOf (framework: Framework) =
 
 let dllOf (framework: Framework) = sprintf "%s/SageFs.Tests.dll" (testBinDirOf framework)
 
-/// The command that builds the test assembly for `framework`, for a framework
-/// the whole-solution `dotnet build` did not already build it for.
+/// The commands that build the test assembly for `framework`, for a framework
+/// the whole-solution `dotnet build` did not already build it for: a restore,
+/// then a build that does not restore again.
+///
+/// The restore is its own step because a build's implicit restore ignores the
+/// `TargetFramework` property and restores the project's default (net11.0), which
+/// then fails the build with NETSDK1005.
 ///
 /// `-p:TargetFramework=` picks the framework (the test project is single-target;
 /// Core, Host and Simulation multi-target and follow it). Three more properties
 /// keep it from disturbing the gate's own tree:
-///  * RestorePackagesWithLockFile=false: the restore would otherwise REWRITE the
-///    tracked packages.lock.json files with only this framework's section.
+///  * NuGetLockFilePath: the restore would otherwise REWRITE the tracked
+///    packages.lock.json files with only this framework's sections. (Turning the
+///    lock file off instead is NU1005 while a tracked one exists.)
 ///  * RestoreLockedMode=false: CI turns locked restore on, which refuses a
 ///    graph that differs from the committed (all-frameworks) lock file.
 ///  * BaseIntermediateOutputPath: a restore writes obj/project.assets.json, and
@@ -142,10 +148,14 @@ let dllOf (framework: Framework) = sprintf "%s/SageFs.Tests.dll" (testBinDirOf f
 ///    later `--no-restore` net11 build failing NETSDK1005. A private obj
 ///    directory per framework keeps the two restores apart. bin/ is already
 ///    per-framework.
-let testBuildCommand (framework: Framework) =
-  sprintf
-    "dotnet build SageFs.Tests -c Release -p:TargetFramework=%s -p:RestorePackagesWithLockFile=false -p:RestoreLockedMode=false -p:BaseIntermediateOutputPath=obj/tier-%s/"
-    (Framework.tfm framework) (Framework.tfm framework)
+let testBuildCommands (framework: Framework) : string list =
+  let tfm = Framework.tfm framework
+  let isolation =
+    sprintf
+      "-p:TargetFramework=%s -p:NuGetLockFilePath=obj/tier-%s/packages.lock.json -p:RestoreLockedMode=false -p:BaseIntermediateOutputPath=obj/tier-%s/"
+      tfm tfm tfm
+  [ sprintf "dotnet restore SageFs.Tests %s" isolation
+    sprintf "dotnet build SageFs.Tests -c Release --no-restore %s" isolation ]
 
 /// Whether tiers can be given private copies of the checkout.
 type Isolation =

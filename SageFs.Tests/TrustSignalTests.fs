@@ -148,7 +148,7 @@ let frameworkTierTests =
       |> Expect.isEmpty "frameworks with no default-suite tier in ci-pipeline.fsx (a dark framework)"
 
     testCase "the pipeline builds the test assembly for every framework it runs a tier on" <| fun _ ->
-      Regex.IsMatch(pipeline.Value, "TierPlan\\.testBuildCommand")
+      Regex.IsMatch(pipeline.Value, "TierPlan\\.testBuildCommands")
       |> Expect.isTrue "a tier on a framework nobody built runs a stale or missing dll"
 
     testCase "a tier's ledger row carries the framework the process really ran on" <| fun _ ->

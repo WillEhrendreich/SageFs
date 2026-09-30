@@ -600,12 +600,12 @@ pipeline "sagefs" {
     run "dotnet build -c Release"
     // The test assembly for every other framework a tier runs on. Built here,
     // once, so the tiers (which run concurrently, each in a clone of this tree)
-    // never build. TierPlan.testBuildCommand explains why these builds leave the
+    // never build. TierPlan.testBuildCommands explains why these builds leave the
     // tracked lock files and the primary build's obj/ alone.
     run (fun ctx ->
       async {
         let others = TierPlan.Framework.all |> List.filter (fun f -> f <> TierPlan.Framework.primary)
-        return! runSteps ctx.RunCommand [ for f in others -> TierPlan.testBuildCommand f ]
+        return! runSteps ctx.RunCommand (others |> List.collect TierPlan.testBuildCommands)
       })
   }
 

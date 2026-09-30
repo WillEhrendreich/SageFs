@@ -148,13 +148,21 @@ let planTests =
       Framework.ofTargetFrameworkName ".NETCoreApp,Version=v9.0" |> Expect.isError "a framework the gate has no tier for"
       Framework.ofTargetFrameworkName null |> Expect.isError "no attribute at all"
 
-    testCase "a secondary framework is built without touching the tracked lock files or the primary build's obj" <| fun _ ->
-      let cmd = testBuildCommand Net10
-      cmd |> Expect.stringContains "builds the test project for that framework" "-p:TargetFramework=net10.0"
-      cmd |> Expect.stringContains "never rewrites packages.lock.json" "-p:RestorePackagesWithLockFile=false"
-      cmd |> Expect.stringContains "a locked restore would refuse the net10-only graph" "-p:RestoreLockedMode=false"
-      cmd |> Expect.stringContains "its restore output stays out of the primary build's project.assets.json" "-p:BaseIntermediateOutputPath=obj/tier-net10.0/"
-      testBuildCommand Net11 |> Expect.notEqual "each framework gets its own obj directory" cmd
+    testCase "a secondary framework is restored and built without touching the tracked lock files or the primary build's obj" <| fun _ ->
+      match testBuildCommands Net10 with
+      | [ restore; build ] ->
+        restore |> Expect.stringStarts "restores first: a build's implicit restore ignores the TargetFramework property" "dotnet restore SageFs.Tests"
+        build |> Expect.stringStarts "then builds without restoring again" "dotnet build SageFs.Tests -c Release --no-restore"
+        [ restore; build ]
+        |> List.iter (fun cmd ->
+          cmd |> Expect.stringContains "for that framework" "-p:TargetFramework=net10.0"
+          cmd |> Expect.stringContains "lock file goes into the private obj, never over the tracked packages.lock.json" "-p:NuGetLockFilePath=obj/tier-net10.0/packages.lock.json"
+          cmd.Contains "RestorePackagesWithLockFile=false"
+          |> Expect.isFalse "NU1005: turning the lock file off is an error while a tracked one exists"
+          cmd |> Expect.stringContains "a locked restore would refuse the net10-only graph" "-p:RestoreLockedMode=false"
+          cmd |> Expect.stringContains "restore output stays out of the primary build's project.assets.json" "-p:BaseIntermediateOutputPath=obj/tier-net10.0/")
+      | other -> failtestf "expected a restore then a build, got %A" other
+      testBuildCommands Net11 |> Expect.notEqual "each framework gets its own obj directory" (testBuildCommands Net10)
 
     // ── port ranges: the fix for cross-tier daemon-port collisions ──
     testProperty "portRangeOf partitions the pool: in bounds, disjoint, and clear of the live daemon" <|

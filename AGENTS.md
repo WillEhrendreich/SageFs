@@ -200,11 +200,13 @@ tool asset is the one most users install and a bug that exists on .NET 10 only
 (a raw F# union reaching System.Text.Json, which .NET 11 writes and .NET 10
 throws on) is invisible to a net11 run. Each framework is its own tier and its
 own trust row: `default` on net11, `default-net10` on net10. The `build` stage
-builds the net10 test assembly with `TierPlan.testBuildCommand`, which leaves the
+builds the net10 test assembly with `TierPlan.testBuildCommands`, which leaves the
 tracked lock files and the net11 `obj/` alone. To run it by hand:
 
 ```
-dotnet build SageFs.Tests -c Release -p:TargetFramework=net10.0 -p:RestorePackagesWithLockFile=false -p:RestoreLockedMode=false -p:BaseIntermediateOutputPath=obj/tier-net10.0/
+P="-p:TargetFramework=net10.0 -p:NuGetLockFilePath=obj/tier-net10.0/packages.lock.json -p:RestoreLockedMode=false -p:BaseIntermediateOutputPath=obj/tier-net10.0/"
+dotnet restore SageFs.Tests $P
+dotnet build SageFs.Tests -c Release --no-restore $P
 dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --summary
 ```
 
