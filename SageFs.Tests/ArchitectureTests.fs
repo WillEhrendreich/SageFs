@@ -1109,7 +1109,11 @@ let fileSizeBudgets =
       // get_session_status tool calls getSessionStatus), and its `eventCount = 0`
       // printed "Events: 0" on every status. The registry sync it alone did now
       // lives in getSessionStatus.
-      "SageFs/Mcp.fs", 4110
+      // 4110 -> 4175: get_session_status `wait_seconds` (the AwaitReady park and
+      // its call site; the closed outcome set and the clamp live in
+      // SessionStatusPayload.fs). Still 83 under the 4258 this started the
+      // series at.
+      "SageFs/Mcp.fs", 4175
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

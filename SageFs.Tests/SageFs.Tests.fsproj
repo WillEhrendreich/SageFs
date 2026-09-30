@@ -288,6 +288,7 @@
          <Compile Include="WorkerReadyCommitTests.fs" />
          <Compile Include="SupervisorWatchdogSimTests.fs" />
          <Compile Include="SessionManagerSupervisorAlarmTests.fs" />
+         <Compile Include="StatusWaitTests.fs" />
          <Compile Include="BuildOptimizationTests.fs" />
          <Compile Include="WarmupCacheGitIgnoreTests.fs" />
          <Compile Include="ToolNameReferenceTests.fs" />

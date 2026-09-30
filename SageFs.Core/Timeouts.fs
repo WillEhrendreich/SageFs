@@ -56,6 +56,9 @@ module Timeouts =
   /// legitimately long evals still complete while a wedged worker eventually
   /// surfaces as a timeout error instead of an infinite hang.
   let workerHttpRequest = envOrDefaultMinutes "SAGEFS_WORKER_HTTP_REQUEST_MINUTES" 10.0
+  /// The longest `wait_seconds` get_session_status will park a caller for.
+  /// A larger request is clamped to this, never refused.
+  let statusWaitCap = TimeSpan.FromSeconds(60.0)
   let healthCheck = TimeSpan.FromSeconds(2.0)
   let shutdownHttpClient = TimeSpan.FromSeconds(5.0)
   let sseKeepAlive = TimeSpan.FromHours(24.0)

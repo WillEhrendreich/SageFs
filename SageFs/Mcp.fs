@@ -279,7 +279,7 @@ module McpTools =
                          | WorkerProtocol.SessionLifecycleStatus.Starting _
                          | WorkerProtocol.SessionLifecycleStatus.Restarting _ -> true
                          | _ -> false) ->
-            return Result.Error (Message (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_session_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
+            return Result.Error (Message (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Call get_session_status with wait_seconds=60 to wait for readiness; do not sleep or poll. Do NOT create a new session — it will compete for resources and make warmup slower." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
           | _ ->
             return Result.Error (Message (sprintf "Session '%s' not found" sessionId))
         | Some send ->
@@ -312,7 +312,7 @@ module McpTools =
               let! info = ctx.SessionOps.GetSessionInfo validId
               match info with
               | Some i when (match i.Status with WorkerProtocol.SessionLifecycleStatus.Restarting WorkerProtocol.PreviousWorker.ColdStart -> true | _ -> false) ->
-                return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Poll get_session_status every 5-10s; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
+                return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Call get_session_status with wait_seconds=60 to wait for it; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
               | _ ->
                 ctx.SessionOps.NotifyWorkerDied validId
                 do! ctx.SessionOps.UpdateSessionStatus validId (WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.report (routeErrorMessage transportError)))
@@ -361,7 +361,7 @@ module McpTools =
   let formatSessionResolution = function
     | Routable _ -> ""
     | WarmingUp (sid, status) ->
-      sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_session_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
+      sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Call get_session_status with wait_seconds=60 to wait for readiness; do not sleep or poll. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | Unroutable (sid, status) ->
       sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_session_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | FaultedSession (sid, cause) ->
@@ -1269,7 +1269,7 @@ module McpTools =
       | SageFs.ExpensiveWorkLease.ReleaseOutcome.Released -> Ok "released"
       | SageFs.ExpensiveWorkLease.ReleaseOutcome.AlreadyGone -> Ok "already_gone_or_not_owned"
 
-  let getSessionStatus
+  let private sessionStatusPayload
     (ctx: McpContext)
     (agent: string)
     (sessionId: string option)
@@ -1361,6 +1361,71 @@ module McpTools =
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
+
+  /// Park on AwaitReady when the session is on its way to Ready, for at most
+  /// `requested`. A session that is Ready, Faulted or Stopped, one that does
+  /// not exist, and a request for no wait all return at once.
+  let private awaitWarmingSession
+    (ctx: McpContext)
+    (agent: string)
+    (sessionId: string option)
+    (workingDirectory: string option)
+    (requested: TimeSpan)
+    : Task<SessionStatusPayload.WaitReport> =
+    task {
+      match requested > TimeSpan.Zero with
+      | false -> return SessionStatusPayload.StatusWait.notWaited
+      | true ->
+        let! resolution = resolveSessionId ctx agent sessionId workingDirectory
+        let target =
+          match resolution with
+          | Routable sid
+          | WarmingUp (sid, _)
+          | Unroutable (sid, _)
+          | FaultedSession (sid, _) -> Some sid
+          | Gone _ -> None
+        match target with
+        | None -> return SessionStatusPayload.StatusWait.notWaited
+        | Some sid ->
+          let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+          match info |> Option.map (fun i -> SessionStatusPayload.StatusWait.planFor i.Status) with
+          | Some SessionStatusPayload.WaitPlan.Park ->
+            let clock = System.Diagnostics.Stopwatch.StartNew()
+            let! answer = ctx.SessionOps.AwaitReady (toSessionId sid) requested
+            return
+              ({ Outcome = SessionStatusPayload.StatusWait.ofAwaitReady answer
+                 WaitedMs = clock.ElapsedMilliseconds } : SessionStatusPayload.WaitReport)
+          | Some SessionStatusPayload.WaitPlan.DoNotPark
+          | None -> return SessionStatusPayload.StatusWait.notWaited
+    }
+
+  /// get_session_status with an optional wait: a session that is Starting,
+  /// Building or Restarting parks the call on the SessionManager's AwaitReady
+  /// for up to `waitSeconds` (clamped to 0..Timeouts.statusWaitCap), then the
+  /// normal payload is read, with a `wait` field saying what the wait did.
+  let getSessionStatusAwaiting
+    (ctx: McpContext)
+    (agent: string)
+    (sessionId: string option)
+    (workingDirectory: string option)
+    (waitSeconds: int)
+    : Task<string> =
+    task {
+      let! report =
+        awaitWarmingSession ctx agent sessionId workingDirectory
+          (SessionStatusPayload.StatusWait.clampSeconds waitSeconds)
+      let! payload = sessionStatusPayload ctx agent sessionId workingDirectory
+      return SessionStatusPayload.StatusWait.withReport report payload
+    }
+
+  /// get_session_status without a wait.
+  let getSessionStatus
+    (ctx: McpContext)
+    (agent: string)
+    (sessionId: string option)
+    (workingDirectory: string option)
+    : Task<string> =
+    getSessionStatusAwaiting ctx agent sessionId workingDirectory 0
 
   let getStartupInfo (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun sid -> task {

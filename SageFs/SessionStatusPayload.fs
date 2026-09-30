@@ -145,3 +145,79 @@ module SessionStatusPayload =
          lastRestart = lastRestartJson facts.LastRestart
          lastReload = SessionReload.toWire facts.LastReload
          available = Affordances.availableTools sessionState |})
+
+  // ── `wait_seconds` ─────────────────────────────────────────────────
+  //
+  // A caller that asks get_session_status to wait parks on the
+  // SessionManager's event-driven AwaitReady instead of sleeping and polling.
+  // What that wait did is a closed set, reported in the payload next to the
+  // status the caller then reads.
+
+  /// What a `wait_seconds` request did.
+  [<RequireQualifiedAccess>]
+  type StatusWait =
+    /// Nothing to wait for: the session was Ready, Faulted or Stopped, or no
+    /// wait was asked for.
+    | NotNeeded
+    /// The session reached Ready while the caller was parked.
+    | BecameReady
+    /// The session faulted or stopped while the caller was parked.
+    | Faulted
+    /// The session was still warming when the wait ran out.
+    | TimedOut
+
+  /// How a wait ended and how long the caller was parked.
+  type WaitReport = { Outcome: StatusWait; WaitedMs: int64 }
+
+  /// Whether a session's lifecycle status is worth parking on.
+  [<RequireQualifiedAccess>]
+  type WaitPlan =
+    | Park
+    | DoNotPark
+
+  module StatusWait =
+    /// The one spelling of each outcome on the wire.
+    let label (wait: StatusWait) : string =
+      match wait with
+      | StatusWait.NotNeeded -> "NotNeeded"
+      | StatusWait.BecameReady -> "BecameReady"
+      | StatusWait.Faulted -> "Faulted"
+      | StatusWait.TimedOut -> "TimedOut"
+
+    /// The report for a call that did not wait.
+    let notWaited : WaitReport = { Outcome = StatusWait.NotNeeded; WaitedMs = 0L }
+
+    /// What the caller asked for, as a TimeSpan: clamped, never refused.
+    let clampSeconds (seconds: int) : System.TimeSpan =
+      let cap = int Timeouts.statusWaitCap.TotalSeconds
+      System.TimeSpan.FromSeconds(float (min cap (max 0 seconds)))
+
+    /// Only a session that is on its way to Ready is worth waiting for.
+    let planFor (status: WorkerProtocol.SessionLifecycleStatus) : WaitPlan =
+      match status with
+      | WorkerProtocol.SessionLifecycleStatus.Starting _
+      | WorkerProtocol.SessionLifecycleStatus.Restarting _
+      | WorkerProtocol.SessionLifecycleStatus.Building _ -> WaitPlan.Park
+      | WorkerProtocol.SessionLifecycleStatus.Ready _
+      | WorkerProtocol.SessionLifecycleStatus.Evaluating _
+      | WorkerProtocol.SessionLifecycleStatus.Faulted _
+      | WorkerProtocol.SessionLifecycleStatus.Stopped -> WaitPlan.DoNotPark
+
+    /// How AwaitReady answered, in the payload's terms.
+    let ofAwaitReady (answer: Result<unit, SageFsError>) : StatusWait =
+      match answer with
+      | Result.Ok () -> StatusWait.BecameReady
+      | Result.Error (SageFsError.WorkerTimeout _) -> StatusWait.TimedOut
+      | Result.Error _ -> StatusWait.Faulted
+
+    /// Add the `wait` field to a status payload. Every status shape is a JSON
+    /// object, so one place adds it to all of them.
+    let withReport (report: WaitReport) (payload: string) : string =
+      match System.Text.Json.Nodes.JsonNode.Parse payload with
+      | :? System.Text.Json.Nodes.JsonObject as body ->
+        let wait = System.Text.Json.Nodes.JsonObject()
+        wait["outcome"] <- System.Text.Json.Nodes.JsonValue.Create(label report.Outcome)
+        wait["waitedMs"] <- System.Text.Json.Nodes.JsonValue.Create(report.WaitedMs)
+        body["wait"] <- wait
+        body.ToJsonString()
+      | _ -> payload

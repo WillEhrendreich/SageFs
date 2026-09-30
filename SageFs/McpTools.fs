@@ -757,11 +757,14 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
         working_directory: string,
         [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
         [<Optional; DefaultParameterValue("")>]
-        session_id: string
+        session_id: string,
+        [<Description("Seconds to wait for a warming session (Starting, Building or Restarting) to become Ready before answering. Default 0 answers at once; values above 60 are clamped to 60. A Ready, Faulted or Stopped session never waits. The `wait` field in the reply says how it ended: NotNeeded, BecameReady, Faulted or TimedOut.")>]
+        [<Optional; DefaultParameterValue(0)>]
+        wait_seconds: int
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
-        getSessionStatus ctx "mcp" sid wd |> withEcho ctx "get_session_status"
+        getSessionStatusAwaiting ctx "mcp" sid wd wait_seconds |> withEcho ctx "get_session_status"
     [<McpServerTool>]
     [<Description("Acquire a lease for a caller-owned full build. The lease kind is fixed by this tool; use it only when SageFs will not run the build itself.")>]
     member _.acquire_full_build_lease() : Task<string> =
