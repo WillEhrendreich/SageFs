@@ -86,6 +86,7 @@
         <Compile Include="MultiAgentCoordinationTests.fs" />
         <Compile Include="AgentActivityTrackerTests.fs" />
         <Compile Include="RestartPolicyTests.fs" />
+        <Compile Include="RestartJitterTests.fs" />
         <Compile Include="WarmupSupervisionTests.fs" />
         <Compile Include="WarmupSimTests.fs" />
         <Compile Include="SessionManagerAdmissionTests.fs" />
@@ -201,6 +202,7 @@
         <Compile Include="FsiHostBuildTests.fs" />
         <Compile Include="FsiHostSdkRootTests.fs" />
         <Compile Include="FsiHostClientTests.fs" />
+        <Compile Include="FsiHostLimitsTests.fs" />
         <Compile Include="IsolatedFsiSessionTests.fs" />
         <Compile Include="FsiSessionContractTests.fs" />
         <Compile Include="McpWireProtocolTests.fs" />

@@ -377,3 +377,116 @@ let decodeRequest (line: string) : Result<Request, ProtocolError> = decode line
 let encodeResponse (response: Response) : string = encode response
 
 let decodeResponse (line: string) : Result<Response, ProtocolError> = decode line
+
+/// What the host process refuses, and how it says so. Pure decisions, plus the one file read at the edge
+/// (`readArgsFile`). Lives here, not in Program.fs, because Program.fs needs the F# compiler service and
+/// so cannot be linked into the test project; this file is already compiled into SageFs.Core.
+module HostLimits =
+
+  /// How many requests may wait for the session thread. The parent runs one request at a time per
+  /// caller, so a queue anywhere near this deep means the session thread is stuck behind a long
+  /// evaluation and the caller is piling up work. Past it, requests are refused with a reason
+  /// instead of growing memory without bound or silently blocking the reader thread.
+  [<Literal>]
+  let EvalQueueCapacity = 256
+
+  /// The numbers behind a refused request, so the message can say how full the queue was.
+  type QueueRefusal = { Capacity: int; Pending: int }
+
+  type Admission =
+    | Admitted
+    | Refused of QueueRefusal
+
+  /// Whether one more request fits. The reader thread is the only producer, so the pending count can
+  /// only fall between this decision and the add: an admitted request never blocks.
+  let admit (capacity: int) (pending: int) : Admission =
+    match pending < capacity with
+    | true -> Admitted
+    | false -> Refused { Capacity = capacity; Pending = pending }
+
+  /// Which kind of reply the refused caller is waiting for.
+  type Asked =
+    | AskedEval
+    | AskedOther
+
+  let describeRefusal (refusal: QueueRefusal) : string =
+    sprintf
+      "the FSI host's request queue is full (%d pending, capacity %d): the session thread is busy with earlier work. Retry when it finishes, or interrupt the running evaluation."
+      refusal.Pending
+      refusal.Capacity
+
+  /// The reply for a refused request. An eval gets a failed EvalResult; every other request gets a
+  /// refusal carrying its id (the client turns it into a "host gone" reason). Either way the caller
+  /// is answered, never left waiting.
+  let refusalResponse (asked: Asked) (id: int64) (refusal: QueueRefusal) : Response =
+    match asked with
+    | AskedEval -> EvalResult(id, EvalFailed(describeRefusal refusal), [])
+    | AskedOther -> AgentRefused(id, describeRefusal refusal)
+
+  /// Why one line of the args file is not a valid argument.
+  type BadLineReason =
+    | ControlCharacter
+    | BlankButNotEmpty
+    | OptionInProgramNameSlot
+    | NotAnOption
+
+  /// Why the args file could not be turned into FSI arguments. Every case names the file.
+  type ArgsFileError =
+    | ArgsFileMissing of path: string
+    | ArgsFileUnreadable of path: string * reason: string
+    | ArgsFileEmpty of path: string
+    | ArgsFileBadLine of path: string * line: int * text: string * reason: BadLineReason
+
+  let private describeBadLine (reason: BadLineReason) : string =
+    match reason with
+    | ControlCharacter -> "it contains a control character"
+    | BlankButNotEmpty -> "it is blank but not empty"
+    | OptionInProgramNameSlot -> "the first argument is the program name, but this is an option"
+    | NotAnOption -> "an argument after the program name must be an option starting with '-'"
+
+  let describeArgsFileError (error: ArgsFileError) : string =
+    match error with
+    | ArgsFileMissing path -> sprintf "args file '%s' does not exist" path
+    | ArgsFileUnreadable(path, reason) -> sprintf "args file '%s' could not be read: %s" path reason
+    | ArgsFileEmpty path -> sprintf "args file '%s' has no arguments" path
+    | ArgsFileBadLine(path, line, text, reason) ->
+      sprintf "args file '%s', line %d: '%s' is not a valid argument: %s" path line text (describeBadLine reason)
+
+  let private hasControlCharacter (text: string) = text |> Seq.exists Char.IsControl
+
+  /// Check every line of an args file and return the arguments: blank lines are dropped, the first
+  /// argument is the program name, the rest are options. Line numbers are one-based and count blank
+  /// lines, so they match what an editor shows.
+  let validateArgs (path: string) (lines: string[]) : Result<string list, ArgsFileError> =
+    let judge (line: int, text: string) (accepted: Result<string list, ArgsFileError>) =
+      match accepted with
+      | Result.Error _ -> accepted
+      | Result.Ok soFar ->
+        let bad reason = Result.Error(ArgsFileBadLine(path, line, text, reason))
+        match text.Length = 0 with
+        | true -> accepted
+        | false ->
+          match hasControlCharacter text, String.IsNullOrWhiteSpace text, soFar.IsEmpty, text.StartsWith '-' with
+          | true, _, _, _ -> bad ControlCharacter
+          | false, true, _, _ -> bad BlankButNotEmpty
+          | false, false, true, true -> bad OptionInProgramNameSlot
+          | false, false, false, false -> bad NotAnOption
+          | false, false, _, _ -> Result.Ok(soFar @ [ text ])
+    let judged =
+      lines
+      |> Array.mapi (fun index text -> (index + 1, text))
+      |> Array.fold (fun accepted numbered -> judge numbered accepted) (Result.Ok [])
+    match judged with
+    | Result.Ok [] -> Result.Error(ArgsFileEmpty path)
+    | other -> other
+
+  /// Read and validate the args file. The one IO of this module: every way the read can fail comes
+  /// back as an error naming the file.
+  let readArgsFile (path: string) : Result<string list, ArgsFileError> =
+    match File.Exists path, Directory.Exists path with
+    | false, true -> Result.Error(ArgsFileUnreadable(path, "it is a directory"))
+    | false, false -> Result.Error(ArgsFileMissing path)
+    | true, _ ->
+      match (try Result.Ok(File.ReadAllLines path) with ex -> Result.Error(ArgsFileUnreadable(path, ex.Message))) with
+      | Result.Error error -> Result.Error error
+      | Result.Ok lines -> validateArgs path lines

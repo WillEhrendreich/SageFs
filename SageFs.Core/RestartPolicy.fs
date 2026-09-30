@@ -73,6 +73,39 @@ module RestartPolicy =
       let capped = min delay policy.BackoffMax.TotalMilliseconds
       TimeSpan.FromMilliseconds(capped)
 
+  /// The seed a jittered delay is drawn from. A single-case union, so a seed is never mistaken for a
+  /// count, a pid or a delay. The caller supplies it (a hash of the session id and the crash time is
+  /// enough), which keeps the policy pure: the same seed always gives the same delay.
+  [<Struct>]
+  type JitterSeed = JitterSeed of int64
+
+  /// How far jitter may move a delay, as a fraction of it, in either direction: at most +/-20%.
+  [<Literal>]
+  let MaxJitterFraction = 0.2
+
+  /// How many bits the sample keeps. A double holds exactly 53 bits of mantissa, so a 53 bit integer
+  /// over 2^53 is uniform in [0, 1) and never reaches 1.
+  [<Literal>]
+  let private SampleBits = 53
+
+  /// A number in [0, 1) that is a pure function of the seed. SplitMix64's finalizer, so seeds that
+  /// differ by one (session ids in a row) land far apart rather than next to each other.
+  let jitterSample (JitterSeed seed) : float =
+    let step1 = uint64 seed + 0x9E3779B97F4A7C15UL
+    let step2 = (step1 ^^^ (step1 >>> 30)) * 0xBF58476D1CE4E5B9UL
+    let step3 = (step2 ^^^ (step2 >>> 27)) * 0x94D049BB133111EBUL
+    let mixed = step3 ^^^ (step3 >>> 31)
+    float (mixed >>> (64 - SampleBits)) / float (1UL <<< SampleBits)
+
+  /// Spread a delay so sessions whose workers died together do not all retry at the same instant.
+  /// The result is within +/-MaxJitterFraction of the delay, never below zero and never above the
+  /// policy cap. Pure: the same seed and delay always give the same result.
+  let withJitter (policy: Policy) (seed: JitterSeed) (delay: TimeSpan) : TimeSpan =
+    let swing = (2.0 * jitterSample seed - 1.0) * MaxJitterFraction
+    let jitteredMs = delay.TotalMilliseconds * (1.0 + swing)
+    let boundedMs = max 0.0 (min jitteredMs policy.BackoffMax.TotalMilliseconds)
+    TimeSpan.FromMilliseconds boundedMs
+
   /// Should we restart? Pure function: policy + state + current time → decision + new state.
   ///
   /// Rules:
@@ -133,3 +166,16 @@ module RestartPolicy =
           | Some _ as ws -> ws
       }
       Decision.Restart delay, newState
+
+  /// `decide`, with the restart delay spread by `withJitter`. The next state and the give-up decision
+  /// are exactly what `decide` returns: jitter only moves the delay, never the count or the window.
+  let decideWithJitter
+    (policy: Policy)
+    (seed: JitterSeed)
+    (state: State)
+    (now: DateTime)
+    : Decision * State =
+    let decision, newState = decide policy state now
+    match decision with
+    | Decision.Restart delay -> Decision.Restart(withJitter policy seed delay), newState
+    | Decision.GiveUp _ -> decision, newState

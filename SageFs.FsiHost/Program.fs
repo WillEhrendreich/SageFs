@@ -132,9 +132,8 @@ let private applyProjectBaseDirectory () =
   | "" -> ()
   | dir -> AppContext.SetData("APP_CONTEXT_BASE_DIRECTORY", dir)
 
-let private run (argsFile: string) : int =
+let private run (fsiArgs: string list) : int =
   applyProjectBaseDirectory ()
-  let fsiArgs = File.ReadAllLines argsFile |> Array.filter (fun line -> line.Length > 0)
 
   let listener = TcpListener(IPAddress.Loopback, 0)
   listener.Start()
@@ -160,7 +159,7 @@ let private run (argsFile: string) : int =
 
   let config = FsiEvaluationSession.GetDefaultConfiguration()
   use session =
-    FsiEvaluationSession.Create(config, fsiArgs, new StreamReader(Stream.Null), outWriter, errWriter, collectible = true)
+    FsiEvaluationSession.Create(config, List.toArray fsiArgs, new StreamReader(Stream.Null), outWriter, errWriter, collectible = true)
 
   send (
     Ready(
@@ -170,7 +169,9 @@ let private run (argsFile: string) : int =
   )
 
   // Everything that touches the session runs on the one eval thread, in order: FSI sessions are not thread-safe.
-  let requests = new BlockingCollection<Work>()
+  // Bounded (HostLimits.EvalQueueCapacity): a caller piling up work behind a long evaluation is refused with a
+  // reason (see `enqueue`), not allowed to grow this queue without limit.
+  let requests = new BlockingCollection<Work>(HostLimits.EvalQueueCapacity)
   // The candidates of the latest Complete, for Describe. Only the session thread reads or writes it.
   let lastCompletions = ref (0L, ([||]: DeclarationListItem[]))
   let runningLock = obj ()
@@ -253,6 +254,13 @@ let private run (argsFile: string) : int =
   let evalThread = Thread(evalLoop, IsBackground = true, Name = "fsihost-eval")
   evalThread.Start()
 
+  /// Queue work for the session thread, or answer the caller at once that the queue is full. Only the reader
+  /// thread below calls this, so the count can only fall between the check and the Add: an admitted Add never blocks.
+  let enqueue (asked: HostLimits.Asked) (id: int64) (work: Work) =
+    match HostLimits.admit requests.BoundedCapacity requests.Count with
+    | HostLimits.Admitted -> requests.Add work
+    | HostLimits.Refused refusal -> send (HostLimits.refusalResponse asked id refusal)
+
   let mutable serving = true
   while serving do
     match reader.ReadLine() with
@@ -260,21 +268,21 @@ let private run (argsFile: string) : int =
     | line ->
       match decodeRequest line with
       | Result.Error reason -> send (Output(StdErr, sprintf "[fsihost] rejected a request: %s\n" (describeError reason)))
-      | Result.Ok(Eval(id, code)) -> requests.Add(RunEval(id, code))
-      | Result.Ok(ReadFlag(id, name)) -> requests.Add(RunReadFlag(id, name))
-      | Result.Ok(ReadValue(id, name)) -> requests.Add(RunReadValue(id, name))
-      | Result.Ok(ReadLiveValues(id, generation)) -> requests.Add(RunReadLiveValues(id, generation))
-      | Result.Ok(Check(id, text)) -> requests.Add(RunCheck(id, text))
-      | Result.Ok(CheckWithSymbols(id, filePath, text)) -> requests.Add(RunCheckWithSymbols(id, filePath, text))
-      | Result.Ok(Complete(id, text, caret)) -> requests.Add(RunComplete(id, text, caret))
-      | Result.Ok(Describe(id, completionsId, index)) -> requests.Add(RunDescribe(id, completionsId, index))
-      | Result.Ok(EvalConfig(id, content)) -> requests.Add(RunEvalConfig(id, content))
-      | Result.Ok(AgentStart(id, init)) -> requests.Add(RunAgentStart(id, init))
-      | Result.Ok(AgentAfterEval(id, request)) -> requests.Add(RunAgentAfterEval(id, request))
-      | Result.Ok(AgentDiscoverLoaded id) -> requests.Add(RunAgentDiscover id)
-      | Result.Ok(AgentLoadedAssemblies id) -> requests.Add(RunAgentLoadedAssemblies id)
-      | Result.Ok(AgentTakeCoverage id) -> requests.Add(RunAgentTakeCoverage id)
-      | Result.Ok(AgentValueReads(id, values)) -> requests.Add(RunAgentValueReads(id, values))
+      | Result.Ok(Eval(id, code)) -> enqueue HostLimits.AskedEval id (RunEval(id, code))
+      | Result.Ok(ReadFlag(id, name)) -> enqueue HostLimits.AskedOther id (RunReadFlag(id, name))
+      | Result.Ok(ReadValue(id, name)) -> enqueue HostLimits.AskedOther id (RunReadValue(id, name))
+      | Result.Ok(ReadLiveValues(id, generation)) -> enqueue HostLimits.AskedOther id (RunReadLiveValues(id, generation))
+      | Result.Ok(Check(id, text)) -> enqueue HostLimits.AskedOther id (RunCheck(id, text))
+      | Result.Ok(CheckWithSymbols(id, filePath, text)) -> enqueue HostLimits.AskedOther id (RunCheckWithSymbols(id, filePath, text))
+      | Result.Ok(Complete(id, text, caret)) -> enqueue HostLimits.AskedOther id (RunComplete(id, text, caret))
+      | Result.Ok(Describe(id, completionsId, index)) -> enqueue HostLimits.AskedOther id (RunDescribe(id, completionsId, index))
+      | Result.Ok(EvalConfig(id, content)) -> enqueue HostLimits.AskedOther id (RunEvalConfig(id, content))
+      | Result.Ok(AgentStart(id, init)) -> enqueue HostLimits.AskedOther id (RunAgentStart(id, init))
+      | Result.Ok(AgentAfterEval(id, request)) -> enqueue HostLimits.AskedOther id (RunAgentAfterEval(id, request))
+      | Result.Ok(AgentDiscoverLoaded id) -> enqueue HostLimits.AskedOther id (RunAgentDiscover id)
+      | Result.Ok(AgentLoadedAssemblies id) -> enqueue HostLimits.AskedOther id (RunAgentLoadedAssemblies id)
+      | Result.Ok(AgentTakeCoverage id) -> enqueue HostLimits.AskedOther id (RunAgentTakeCoverage id)
+      | Result.Ok(AgentValueReads(id, values)) -> enqueue HostLimits.AskedOther id (RunAgentValueReads(id, values))
       | Result.Ok(AgentReflectionReads id) ->
         // Beside the session thread: the tracker is thread-safe, and a running app must not hide its own mode.
         match Volatile.Read(&agentState.contents) with
@@ -313,13 +321,22 @@ let private run (argsFile: string) : int =
   requests.CompleteAdding()
   0
 
+/// Exit code when the args file is missing, unreadable, empty or holds an invalid line (2 is usage, 3 is protocol).
+[<Literal>]
+let private ArgsFileExitCode = 4
+
 [<EntryPoint>]
 let main argv =
   match checkSupported (), argv with
   | Result.Error reason, _ ->
     eprintfn "fsihost: protocol check failed: %s" (describeError reason)
     3
-  | Result.Ok(), [| "--args-file"; argsFile |] -> run argsFile
+  | Result.Ok(), [| "--args-file"; argsFile |] ->
+    match HostLimits.readArgsFile argsFile with
+    | Result.Error error ->
+      eprintfn "fsihost: %s" (HostLimits.describeArgsFileError error)
+      ArgsFileExitCode
+    | Result.Ok fsiArgs -> run fsiArgs
   | Result.Ok(), _ ->
     eprintfn "usage: FsiHost --args-file <path>"
     2
