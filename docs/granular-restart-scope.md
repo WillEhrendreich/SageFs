@@ -1381,3 +1381,54 @@ case name does not contain those substrings, and a filter matching nothing still
 reports zero failures. `--filter "Dashboard browser"` (list level) is what
 actually selects it, and the `ran=36` in its TRUST line is the evidence that
 something executed at all.
+
+## An open measurement: the run_app race, and what is still not proven
+
+The `run_app` failure that went red in three consecutive gates was diagnosed
+twice, and the second diagnosis is the useful one.
+
+The exception was `JsonReaderException: 'C' is an invalid start of a value`, and
+`'C'` is the first character of a PROSE refusal, not JSON. `Mcp.runApp`
+(Mcp.fs:4082) answers `SageFsError.describeForAgent err` on failure, and
+`describeForAgent` is `"%s → Next: %s"` whose first arm begins "Cannot …". So
+the test was parsing a refusal as a state document, and the parse error was
+destroying the only information that mattered:
+
+    Could not run '…/SageFs.Samples.ConsoleTicker.fsproj':
+    … is not loaded in this session.
+
+So there are two defects, not one, and the second was invisible until the first
+was fixed:
+
+1. **The test could not read a refusal.** Fixed by checking the shape first and
+   reporting the prose verbatim. That alone turns an unreadable crash into the
+   real reason, which is the whole point.
+2. **The test waited for a weaker condition than the action needs.**
+   `waitForReadySession` waits for `status = "Ready"`, and a session is Ready
+   while its project is still loading. `waitForProjectLoaded` waits for the
+   session to actually list the project.
+
+Measured, on this machine, the same binary four times:
+
+    ran=1 passed=1 errored=0  verdict=NarrowedRun   (x4)
+
+### What is NOT yet proven
+
+**The second defect is not yet fixed under gate load.** The gate on `90a831a3`
+still errored this test once, with the SAME message — `is not loaded in this
+session` — while four consecutive local runs of the identical binary pass.
+
+That gap is not understood, and the honest statement is that it is not
+understood rather than that it is a flake:
+
+- the wait returns on the first poll where the session lists the project, so
+  under the gate's parallel shards the sequence is either "listed, then not
+  listed again" (a regression in session state) or "the session answering
+  `/api/sessions` is not the session `run_app` consults";
+- both are real possibilities and neither has been measured. The discriminating
+  experiment is to log the session id at the moment the wait succeeds and again
+  when `run_app` refuses, and compare them.
+
+So this is recorded as an open measurement, not as a passing test. A gate that
+is red on it is telling the truth, and the fix that makes the failure readable
+is already in — which is what makes the remaining question answerable.
