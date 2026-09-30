@@ -9,7 +9,7 @@ A live F# engine with hot reload, live testing, and AI-agent support, for any ed
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-8406+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-9900+-22c55e?style=flat-square)]()
 [![Live testing](https://img.shields.io/badge/live%20testing-edit%20→%20affected%20tests%20rerun-f59e0b?style=flat-square)]()
 
 </div>
@@ -62,6 +62,8 @@ Save a `.fs` file and SageFs figures out which functions changed and uses [Harmo
 Because it re-points **methods**, not everything is patchable: a handler that's *called* per request reloads, a handler whose output was *computed once* at startup can't. Prefer `let getHome (ctx: HttpContext) = ...` over `let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. Changed signatures, changed types, and a `let mutable` whose type changed restart the app instead of pretending to reload.
 
 Apps started by a `.SageFs/init.fsx` that `#load`s your sources patch in place too, on .NET 10 and .NET 11. SageFs tracks which copy of a function the app is actually holding and patches that one.
+
+How you start the app matters, and I'd rather tell you than have you find out. An app started from FSI or an `init.fsx` lives in the same process as the reload agent, so a save patches it in place and its state stays put. An app started with `run_app` runs in the worker, out of the agent's reach, so a save **restarts it with your change** and says why (about six seconds for the ticker demo on my machine). Until 0.6.845 that second path reported `Patched` and changed nothing, which I caught by editing the demo and watching the output not move. It's fixed, and there's a test that starts an app with `run_app`, saves an edit and checks what the running app prints. The table and the source links are in [docs/hot-reload.md](docs/hot-reload.md#how-you-start-the-app-decides-which-of-two-things-happens).
 
 Your app's live state survives a save. A `let mutable` you didn't touch keeps its value, private ones included. Edit a mutable's initializer and the app keeps its live value, SageFs tells you what it kept, and the dashboard's Hot Reload panel (or the `reset_hot_reload_state` MCP tool) has a Reset for when you want the new initializer to run. Redefine a plain `let` value and it gets its new value, as long as nothing in the running app kept a copy of the old one. The app tells SageFs where every read of it went, so if startup put it in a closure, or a `lazy` cached it, or a handler that hands it on already ran, it's a restart that names who kept it, never a fake Patched. The details, and where that falls short, are in [docs/hot-reload.md](docs/hot-reload.md#values).
 

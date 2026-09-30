@@ -6,7 +6,9 @@ Giraffe / Saturn pattern (`module App.Program` + `let routes = [...]`). No
 restart. And the app's live state stays where it is: the counter you bumped,
 the cache you filled. This is the thing I most wanted from a REPL and couldn't
 get anywhere else, so I built it. The gaps I know about are further down,
-under [Where it falls short right now](#where-it-falls-short-right-now).
+under [Where it falls short right now](#where-it-falls-short-right-now). One
+of them matters before you start: [how you start the app](#how-you-start-the-app-decides-which-of-two-things-happens)
+decides whether a save patches it in place or restarts it.
 
 > **Prerequisite:** Hot reload requires the **Hot Reload workflow**:
 > `SessionWorkflow.HotReload`, which `switch_workflow` still spells `live` /
@@ -15,6 +17,44 @@ under [Where it falls short right now](#where-it-falls-short-right-now).
 > workflows, REPL (`Interactive`, the default) and Live Testing
 > (`LiveTesting`), both of which keep full type redefinition instead. See
 > [Workflow Modes](workflow-modes.md) for the full set and how to switch.
+
+## How you start the app decides which of two things happens
+
+Everything above is true for an app that lives in the same process as
+SageFs's reload agent: one you start from FSI, or one an `.SageFs/init.fsx`
+starts by `#load`ing your sources. There a save patches the running function
+and your state stays where it is.
+
+An app you start with `run_app` is different, and I found out by using it. It
+runs on a thread in the worker, and the reload agent lives in the FSI host
+(`HostAgent.fs` says so: [the agent runs in the process that loaded the
+assemblies](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Core/HostAgent.fs#L1-L6),
+and for an isolated session that's the host). So a patch landed in the host's
+copy of the function and the app never called it. Until 0.6.845, a save to a
+`run_app` app said `Hot reloaded 1 of 1 changed definition(s)` and changed
+nothing you could see. I caught it by editing the ticker demo and watching the
+output not change, on a build SageFs had made itself with optimizations off, so
+the usual caveat below didn't explain it. A web route did the same thing.
+
+Now a save to an app that `run_app` is running restarts it with your change and
+says why: `renderLine changed, and this app runs in the worker, where an
+in-place patch cannot reach it; restarting the app`. On the ticker that took
+about six seconds on my machine. A restart resets whatever state the app didn't
+register with SageFs. Patching a `run_app` app in place needs the new function
+body compiled in the worker, or the app run inside the agent's process, and
+neither is built.
+
+| You start the app | It runs in | A save to a function | Your app's state |
+|---|---|---|---|
+| from FSI, or an `.SageFs/init.fsx` that `#load`s your sources | the reload agent's process | patched in place, no restart | stays where it is |
+| `run_app` | the worker | SageFs restarts it with your change and says why | reset by the restart, unless the app registers it |
+
+The rule is [`AppPlacement.adjust`](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Core/Features/ReloadPlanning.fs#L1149-L1173),
+and the worker [applies it to every save](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Host/WorkerMain.fs#L1418-L1425).
+The test is [`RunAppSaveOutcomeTests.fs`](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Tests/RunAppSaveOutcomeTests.fs#L115):
+it starts the ticker with `run_app` on its own copy, saves an edit, and requires
+the running app to print the new message. The other "real app" tests here start
+their apps inside FSI, where the agent is, so that is what they prove.
 
 ## The pipeline
 
