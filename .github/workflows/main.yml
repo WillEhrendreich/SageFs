@@ -164,7 +164,21 @@ jobs:
         echo "using:$candidate"
         echo "$candidate" >> "$GITHUB_PATH"
         "$candidate/node" --version
-        npm --version
+        # `npm` BY ABSOLUTE PATH, not by name. $GITHUB_PATH only takes effect in
+        # LATER steps, so in this one `npm` still resolves against the runner's
+        # own PATH — which has /usr/bin/node and no npm beside it. That is
+        # precisely how stage 5 died the first time, and it is why this step's
+        # own verification has to name the binary rather than test the command
+        # the next step will use. Measured on 0.6.840:
+        #
+        #   using:/home/will/.local/share/mise/installs/node/26.8.2/bin
+        #   v26.8.2
+        #   …: line 47: npm: command not found          <- exit 127
+        #
+        # So the discovery is verified here, and the name becomes resolvable in
+        # the next step via GITHUB_PATH. Verifying the PATH the NEXT step will
+        # see is the only verification that would have caught this.
+        "$candidate/npm" --version
 
     - name: Local gate (instant when this commit already passed on this machine)
       shell: bash
