@@ -1894,8 +1894,9 @@ let createElmRuntime
           match json <> lastStateJson with
           | true ->
             lastStateJson <- json
-            // DIAGNOSTIC: log every state change propagation
-            Log.info "[elm-OnModelChanged] output=%d diags=%d json.Length=%d" outputCount diagCount json.Length
+            // Every app output line changes the model, so this fires per printed
+            // line: Debug, or it fills the daemon log (roast C1).
+            Log.debug "[elm-OnModelChanged] output=%d diags=%d json.Length=%d" outputCount diagCount json.Length
             let significantOutputChange = abs (outputCount - lastLoggedOutputCount) >= 50
             let diagChanged = diagCount <> lastLoggedDiagCount
             match significantOutputChange || diagChanged with
