@@ -29,7 +29,7 @@ open SageFs.Server.McpServer
 let private handle : WorkerHandle = { Pid = 1; Port = Some 5000 }
 
 let private project : ClassifiedProject =
-  { Path = "/repo/MyApp/MyApp.fsproj"; Role = ProjectRole.Executable; PackageRefs = [] }
+  { Path = "/repo/MyApp/MyApp.fsproj"; Role = ProjectRole.Executable; PackageRefs = []; LoadMode = LoadMode.Evaluated }
 
 let private loadedAssembly : LoadedAssembly =
   { Name = "MyApp"; Path = "/bin/MyApp.dll"; NamespaceCount = 1; ModuleCount = 1 }

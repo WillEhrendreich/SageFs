@@ -12,7 +12,8 @@ let private handle : WorkerHandle = { Pid = 4242; Port = Some 5000 }
 let private project (role: ProjectRole) (name: string) : ClassifiedProject =
   { Path = sprintf "/repo/%s/%s.fsproj" name name
     Role = role
-    PackageRefs = [] }
+    PackageRefs = []
+    LoadMode = LoadMode.Evaluated }
 
 let private myApp = project ProjectRole.Executable "MyApp"
 

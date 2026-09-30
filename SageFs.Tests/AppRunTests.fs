@@ -13,7 +13,8 @@ let private root = Path.Combine(Path.GetTempPath(), "sagefs-apprun-tests")
 let private proj (role: ProjectRole) (name: string) : ClassifiedProject =
   { Path = Path.Combine(root, name, name + ".fsproj")
     Role = role
-    PackageRefs = [] }
+    PackageRefs = []
+    LoadMode = LoadMode.Evaluated }
 
 let private web = proj ProjectRole.Executable "Web"
 let private api = proj ProjectRole.Executable "Api"

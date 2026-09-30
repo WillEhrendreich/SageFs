@@ -60,7 +60,8 @@ let private readyInfo : SessionInfo =
   let readyRole : ClassifiedProject =
     { Path = "Thing.fsproj"
       Role = ProjectRole.Library
-      PackageRefs = [] }
+      PackageRefs = []
+      LoadMode = LoadMode.Evaluated }
 
   { Id = SessionId.newId ()
     Name = Some "ready"

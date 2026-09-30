@@ -16,7 +16,7 @@ open SageFs.Server.DashboardFragments
 // control breaks a test here, not a demo recording.
 
 let private runningProject : SageFs.ProjectLoading.ClassifiedProject =
-  { Path = "MyApp.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Executable; PackageRefs = [] }
+  { Path = "MyApp.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Executable; PackageRefs = []; LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated }
 
 let private mkSession (id: string) (app: SageFs.AppRun.AppRunState) (projectRoles: SageFs.ProjectLoading.ClassifiedProject list) : ParsedSession =
   { Id = WorkerProtocol.SessionId.validate id |> Result.defaultValue (WorkerProtocol.SessionId.newId ())

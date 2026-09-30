@@ -150,8 +150,8 @@ module FormatLoadedProjectsLineTests =
 
       testCase "WHY — resolved projects are shown by file name, not full path (matches the existing 'Projects:' field's style)" <| fun _ ->
         let roles : SageFs.ProjectLoading.ClassifiedProject list =
-          [ { Path = "/repo/src/App.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Executable; PackageRefs = [] }
-            { Path = "/repo/tests/App.Tests.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Test; PackageRefs = [] } ]
+          [ { Path = "/repo/src/App.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Executable; PackageRefs = []; LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated }
+            { Path = "/repo/tests/App.Tests.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Test; PackageRefs = []; LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated } ]
         let line = McpAdapter.formatLoadedProjectsLine roles
         line |> Expect.equal "should list both file names" "App.fsproj, App.Tests.fsproj"
     ]

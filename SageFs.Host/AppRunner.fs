@@ -15,6 +15,7 @@ open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.Hosting
 open SageFs.AppRun
+open SageFs.ProjectLoading
 
 /// Resolves a hosted project's MANAGED dependencies when it is run in-process
 /// via `Assembly.LoadFrom` + reflection-invoke (see `resolveProjectAssembly`).
@@ -173,9 +174,21 @@ let private pathComparison =
 
 /// The assembly the session actually loaded for a project (its shadow copy),
 /// so the app runs the same code the REPL and hot reload see.
-let resolveProjectAssembly (projectTargets: (string * string) list) (projectPath: string) : Result<Assembly, string> =
+let resolveProjectAssembly (projectTargets: (string * string) list) (projectRoles: ClassifiedProject list) (projectPath: string) : Result<Assembly, string> =
   let samePath (a: string) (b: string) = String.Equals(Path.GetFullPath a, Path.GetFullPath b, pathComparison)
   match projectTargets |> List.tryFind (fun (project, _) -> samePath project projectPath) with
+  | None when projectRoles |> List.exists (fun role -> samePath role.Path projectPath && role.LoadMode <> LoadMode.Evaluated) ->
+    // The project IS in the session, so "create a session that includes it"
+    // would send the reader in a circle. It has no build output to run because
+    // MSBuild could not evaluate it; say why.
+    let cause =
+      projectRoles
+      |> List.tryPick (fun role ->
+        match role.LoadMode with
+        | LoadMode.ManualFallback cause when samePath role.Path projectPath -> Some (FallbackCause.describe cause)
+        | LoadMode.ManualFallback _ | LoadMode.Evaluated -> None)
+      |> Option.defaultValue "MSBuild could not evaluate it."
+    Error (sprintf "%s is in this session, but it was loaded without a build, so there is nothing to run. %s" projectPath cause)
   | None ->
     // Say what the session DOES hold. Without it the reader can't tell a wrong
     // path from a worker that came up with no projects at all, and those need

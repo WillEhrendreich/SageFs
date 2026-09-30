@@ -17,7 +17,7 @@ let private mkCardSession (id: string) (projects: (string * ProjectLoading.Proje
     ActiveProject = None
     ProjectRoles =
       projects
-      |> List.map (fun (path, role) -> { ProjectLoading.ClassifiedProject.Path = path; Role = role; PackageRefs = [] })
+      |> List.map (fun (path, role) -> { ProjectLoading.ClassifiedProject.Path = path; Role = role; PackageRefs = []; LoadMode = ProjectLoading.LoadMode.Evaluated })
     App = AppRun.AppRunState.NotRunning
     WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
 

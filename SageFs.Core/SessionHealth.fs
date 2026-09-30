@@ -70,6 +70,17 @@ module SessionHealth =
       |> String.concat "; "
     sprintf "Warmup reported %d failed open(s): %s" (List.length failures) detail
 
+  /// Each project that loaded through the manual fallback, with why. A session
+  /// like that evaluates code fine, so it is Degraded, not Failed: it cannot
+  /// run_app or hot reload, and its cause is worth reading before you try.
+  let private fallbackReasons (projectRoles: ClassifiedProject list) : string list =
+    projectRoles
+    |> List.choose (fun project ->
+      match project.LoadMode with
+      | LoadMode.ManualFallback cause ->
+        Some (sprintf "%s: %s" (System.IO.Path.GetFileName project.Path) (FallbackCause.describe cause))
+      | LoadMode.Evaluated -> None)
+
   let private nothingLoadedReason =
     "Session is Ready but nothing was loaded: 0 assemblies, 0 namespaces opened, though a project was resolved. " +
     "The project likely has never been built — run `dotnet build` on it, then hard_reset_fsi_session (rebuild=true)."
@@ -110,6 +121,9 @@ module SessionHealth =
       SessionHealth.Starting
     | SessionLifecycleStatus.Ready _
     | SessionLifecycleStatus.Evaluating _ ->
+      match fallbackReasons projectRoles with
+      | _ :: _ as reasons -> SessionHealth.Degraded (String.concat " " reasons)
+      | [] ->
       match warmup with
       // No warmup data available (yet) — nothing to be suspicious about;
       // don't invent a problem the daemon can't yet see.

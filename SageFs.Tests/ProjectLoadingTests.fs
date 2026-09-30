@@ -349,7 +349,8 @@ let private solutionWith (targetPath: string) (otherOptions: string list) : Solu
     StartupFiles = []
     References = []
     LibPaths = []
-    OtherArgs = [] }
+    OtherArgs = []
+    Mode = LoadMode.Evaluated }
 
 [<Tests>]
 let releaseOnlyReferenceTests =

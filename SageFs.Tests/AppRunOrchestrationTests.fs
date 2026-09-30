@@ -22,7 +22,7 @@ let private clock () = at
 let private readyTimeout = TimeSpan.FromSeconds 5.0
 
 let private exe (path: string) : ClassifiedProject =
-  { Path = path; Role = ProjectRole.Executable; PackageRefs = [] }
+  { Path = path; Role = ProjectRole.Executable; PackageRefs = []; LoadMode = LoadMode.Evaluated }
 
 let private running (runId: string) : RunningApp =
   { RunId = runId

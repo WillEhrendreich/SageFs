@@ -15,6 +15,42 @@ type FileName = string
 type DllName = string
 type DirName = string
 
+/// Why a session's projects did not come from MSBuild evaluation.
+[<RequireQualifiedAccess>]
+type FallbackCause =
+  /// The project loader threw.
+  | Threw of message: string
+  /// The loader returned no projects and no error: MSBuild evaluation failed
+  /// in-process without saying so.
+  | ReturnedNothing
+  /// Not tried on purpose: the project's SDK is a newer major than SageFs's own
+  /// runtime, and loading that SDK's MSBuild in-process would corrupt it.
+  | SkippedNewerSdk of sdkMajor: int * hostMajor: int
+
+/// How a project's options reached the session.
+[<RequireQualifiedAccess>]
+type LoadMode =
+  | Evaluated
+  /// Parsed from the .fsproj by hand. Source files load and code evaluates, but
+  /// there is no build output, so there is nothing to run and nothing to patch.
+  | ManualFallback of cause: FallbackCause
+
+module FallbackCause =
+  let private whatToDo =
+    "Run `dotnet build` on the project and read the first MSBuild error. A session loaded this way can evaluate code but cannot run_app or hot reload."
+
+  /// The cause and what to do about it, in words a reader can act on. Never blank.
+  let describe (cause: FallbackCause) : string =
+    match cause with
+    | FallbackCause.Threw message when not (String.IsNullOrWhiteSpace message) ->
+      sprintf "MSBuild evaluation failed: %s. %s" message whatToDo
+    | FallbackCause.Threw _ ->
+      sprintf "MSBuild evaluation failed with no message. %s" whatToDo
+    | FallbackCause.ReturnedNothing ->
+      sprintf "MSBuild evaluation failed in-process without reporting an error (the project loader returned no projects). %s" whatToDo
+    | FallbackCause.SkippedNewerSdk (sdkMajor, hostMajor) ->
+      sprintf "This project's .NET SDK is %d.x, newer than SageFs's own runtime (.NET %d), so it was not loaded in-process. %s" sdkMajor hostMajor whatToDo
+
 /// Project role classification for session management.
 /// Determines which projects are suitable for hot-reloading vs. testing.
 type ProjectRole =
@@ -28,6 +64,7 @@ and ClassifiedProject = {
   Path: string
   Role: ProjectRole
   PackageRefs: string list
+  LoadMode: LoadMode
 }
 
 /// Minimal manual .fsproj parse used as a fallback when Ionide's workspace
@@ -242,6 +279,7 @@ type Solution = {
   References: DllName list
   LibPaths: DirName list
   OtherArgs: string list
+  Mode: LoadMode
 }
 
 let emptySolution = {
@@ -251,6 +289,7 @@ let emptySolution = {
   References = []
   LibPaths = []
   OtherArgs = []
+  Mode = LoadMode.Evaluated
 }
 
 /// If a build output does not exist, probe the same path under the sibling
@@ -590,6 +629,7 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
       References = []
       LibPaths = []
       OtherArgs = []
+      Mode = LoadMode.Evaluated
     }
   | _ ->
 
@@ -603,7 +643,8 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
     // toolsPathOpt is Some only when Init.init actually ran — the only case loadedProjects can come back
     // non-empty, since both the skip branch and a failed/empty Ionide load produce []. reloadAt (below)
     // needs it for the multi-TFM re-evaluation pass, which only ever runs on a non-empty loadedProjects.
-    let loadedProjects, toolsPathOpt =
+    // `emptyBecause` says why loadedProjects is empty; it means nothing when it is not.
+    let loadedProjects, toolsPathOpt, emptyBecause =
       match ambientMajor with
       | Some sdkMajor when shouldSkipInProcessLoad hostMajor sdkMajor ->
         // See `shouldSkipInProcessLoad`: Init.init's process-wide resolving handler for a newer-major SDK
@@ -614,7 +655,7 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
             sdkMajor
             hostMajor
         )
-        [], None
+        [], None, FallbackCause.SkippedNewerSdk (sdkMajor, hostMajor)
       | _ ->
         logger.LogInfo "Initializing build tooling..."
         let toolsPath = Init.init (DirectoryInfo directory) None
@@ -632,7 +673,7 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
           | None -> ())
 
         logger.LogInfo "Loading solution and project references..."
-        let loaded =
+        let attempt =
           try
             let slnProjects =
               solutions
@@ -642,12 +683,15 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
             slnProjects
             |> Seq.append (defaultLoader.LoadProjects projects)
             |> Seq.toList
+            |> Result.Ok
           with ex ->
             match classifyProjectLoaderFailure hostMajor ex.Message with
             | Some explanation -> logger.LogWarning (sprintf "  Project loader failed: %s" explanation)
             | None -> logger.LogWarning (sprintf "  Project loader failed (%s) — falling back to manual fsproj parse" ex.Message)
-            []
-        loaded, Some toolsPath
+            Result.Error ex.Message
+        match attempt with
+        | Result.Ok loaded -> loaded, Some toolsPath, FallbackCause.ReturnedNothing
+        | Result.Error message -> [], Some toolsPath, FallbackCause.Threw message
 
     logger.LogInfo (sprintf "  Loaded %d project(s)." (List.length loadedProjects))
 
@@ -696,6 +740,7 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
         // fallback there are no ProjectOptions to carry --langversion, so set
         // it explicitly.
         OtherArgs = [ "--langversion:preview" ]
+        Mode = LoadMode.ManualFallback emptyBecause
       }
     | _ ->
       // Ionide's loader evaluates projects with MSBuild defaults (Debug
@@ -741,6 +786,7 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) (onProgress:
         References = []
         LibPaths = []
         OtherArgs = []
+        Mode = LoadMode.Evaluated
       }
 
 /// Package names that mark a project as a test project (Expecto, xUnit,
@@ -797,7 +843,8 @@ let classifyProject (proj: ProjectOptions) : ClassifiedProject =
     PackageRefs =
       packageRefs
       @ activeUiPropertyMarkers proj
-      @ WorkflowTypes.ProjectFileMarkers.read proj.ProjectFileName }
+      @ WorkflowTypes.ProjectFileMarkers.read proj.ProjectFileName
+    LoadMode = LoadMode.Evaluated }
 
 /// Classify all projects in a solution, returning a map of path to classification.
 let classifyProjects (projects: ProjectOptions list) : ClassifiedProject list =
@@ -854,7 +901,7 @@ let private readFallbackProjectProps (projPath: string) : FallbackProjectProps =
 /// A wrongly-`Executable` fallback project would put a Run button on
 /// something that cannot run; that is a worse lie than reporting Library on
 /// something that happens to be runnable.
-let classifyFallbackProject (fp: FSharpProjectOptions) : ClassifiedProject =
+let classifyFallbackProject (mode: LoadMode) (fp: FSharpProjectOptions) : ClassifiedProject =
   let props = readFallbackProjectProps fp.ProjectFileName
   let role =
     match props.OutputType with
@@ -866,7 +913,8 @@ let classifyFallbackProject (fp: FSharpProjectOptions) : ClassifiedProject =
       | _ -> ProjectRole.Library
   { Path = fp.ProjectFileName
     Role = role
-    PackageRefs = props.PackageRefs }
+    PackageRefs = props.PackageRefs
+    LoadMode = mode }
 
 /// Classify every project a Solution actually loaded — covering BOTH the
 /// normal Ionide path (`Projects`) and the manual-parse fallback path
@@ -886,7 +934,7 @@ let classifiedProjectsOf (sln: Solution) : ClassifiedProject list =
   let fallback =
     sln.FsProjects
     |> List.filter (fun fp -> not (normalPaths.Contains fp.ProjectFileName))
-    |> List.map classifyFallbackProject
+    |> List.map (classifyFallbackProject sln.Mode)
   normal @ fallback
 
 /// Best-effort target assembly for a fallback project: the manual fallback

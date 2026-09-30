@@ -468,6 +468,7 @@ module ShadowCopyTests =
           References = [ fakeDll ]
           LibPaths = []
           OtherArgs = []
+          Mode = SageFs.ProjectLoading.LoadMode.Evaluated
         }
         try
           let result = SageFs.ShadowCopy.shadowCopySolution shadowDir sln
@@ -491,6 +492,7 @@ module ShadowCopyTests =
           References = [ fakeDll ]
           LibPaths = []
           OtherArgs = []
+          Mode = SageFs.ProjectLoading.LoadMode.Evaluated
         }
         try
           let _result = SageFs.ShadowCopy.shadowCopySolution shadowDir sln

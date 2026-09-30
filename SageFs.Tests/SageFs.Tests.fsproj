@@ -215,6 +215,7 @@
          <Compile Include="WarmupReplayCacheTests.fs" />
          <Compile Include="WarmupInitBoundaryTests.fs" />
          <Compile Include="SessionHealthTests.fs" />
+         <Compile Include="LoadModeTests.fs" />
          <Compile Include="ProjectResolutionTests.fs" />
          <Compile Include="WarmupBatchedOpenTests.fs" />
          <Compile Include="WarmupProgressContractTests.fs" />

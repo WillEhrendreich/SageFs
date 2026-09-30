@@ -262,7 +262,8 @@ let workerProtocolTests =
           Projects =
             [ { Path = "/src/App/App.fsproj"
                 Role = SageFs.ProjectLoading.ProjectRole.Executable
-                PackageRefs = [ "Falco" ] } ]
+                PackageRefs = [ "Falco" ]
+                LoadMode = SageFs.ProjectLoading.LoadMode.Evaluated } ]
           CoreVersion = "0.0.0-test"
         }
         let resp = WorkerResponse.StatusResult("r6", status)

@@ -1843,7 +1843,7 @@ let run (sessionId: string) (port: int) = async {
   let appRuns : AppRunHandlers = {
     Run = fun project previous -> async {
       let prepared =
-        AppRunner.resolveProjectAssembly result.ProjectTargets project
+        AppRunner.resolveProjectAssembly result.ProjectTargets result.ProjectRoles project
         |> Result.bind (fun asm -> AppRunner.entryPointOf asm |> Result.map (fun entry -> asm, entry))
         |> Result.bind (fun (asm, entry) -> AppRunner.readLaunchConfig project |> Result.map (fun config -> asm, entry, config))
       match prepared with
