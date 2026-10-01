@@ -185,6 +185,9 @@ module WorkerHttpTransport =
     /// Hold one test for a debugger, and release it. Both change what the host is doing, so both are POSTs.
     let debugTest = WorkerRoute.Post "/debug-test"
     let debugTestContinue = WorkerRoute.Post "/debug-test-continue"
+    /// Where the save pipeline takes its saves from, and the saves a landing hands it. Both change what the worker does.
+    let saveSource = WorkerRoute.Post "/save-source"
+    let applySaves = WorkerRoute.Post "/apply-saves"
     let devReload = WorkerRoute.Get ("/__sagefs__/reload", GetAccess.CrossOriginStream)
     /// The last terminal `ReloadOutcome`, past the server boundary, for a
     /// client that cannot hold the `devReload` SSE stream open — a dashboard
@@ -207,6 +210,7 @@ module WorkerHttpTransport =
     Routes.hotReloadWatchDirectory; Routes.hotReloadUnwatchDirectory
     Routes.runApp; Routes.stopApp; Routes.awaitAppChange
     Routes.debugTest; Routes.debugTestContinue
+    Routes.saveSource; Routes.applySaves
     Routes.devReload; Routes.hotReloadLastOutcome
   ]
 
@@ -715,6 +719,26 @@ module WorkerHttpTransport =
           let ticket = (jsonProp doc "ticket").GetString()
           let rid = (jsonProp doc "replyId").GetString()
           return! respond' ctx (WorkerMessage.DebugTestContinue(ticket, park, rid))
+      })) |> ignore
+
+      map Routes.saveSource (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        match Serialization.tryDeserialize<Features.TrunkFollow.SaveSource> ((jsonProp doc "source").GetRawText()) with
+        | Result.Error error -> return! rejectUnreadable ctx "source" error
+        | Result.Ok source ->
+          let rid = (jsonProp doc "replyId").GetString()
+          return! respond' ctx (WorkerMessage.SetSaveSource(source, rid))
+      })) |> ignore
+
+      map Routes.applySaves (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        match Serialization.tryDeserialize<Features.TrunkFollow.SavedFile list> ((jsonProp doc "files").GetRawText()) with
+        | Result.Error error -> return! rejectUnreadable ctx "files" error
+        | Result.Ok files ->
+          let rid = (jsonProp doc "replyId").GetString()
+          return! respond' ctx (WorkerMessage.ApplySaves(files, rid))
       })) |> ignore
 
       map Routes.shutdown (Func<HttpContext, Task>(fun ctx -> task {

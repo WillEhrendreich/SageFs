@@ -335,6 +335,14 @@ let handleMessage
           HostAgent.TestDebug.DebugProgress.Ended(HostAgent.TestDebug.DebugEnd.HostLost reason)
       return WorkerResponse.DebugTestAnswer(replyId, WorkerProtocol.Serialization.serialize progress)
 
+    // The save pipeline lives with the file watcher in `run`, not with the actor, so `run`'s ready handler answers these
+    // before a message gets here. A host that has no pipeline says so rather than pretending it applied a save.
+    | WorkerMessage.SetSaveSource(source, replyId) ->
+      return WorkerResponse.SaveSourceSet(replyId, source)
+
+    | WorkerMessage.ApplySaves(_, replyId) ->
+      return WorkerResponse.SavesApplied(replyId, Features.TrunkFollow.SessionOutcome.NoPipeline "this host has no hot reload save pipeline")
+
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
   }
@@ -966,6 +974,12 @@ let run (sessionId: string) (port: int) = async {
             Log.info "Hot reload: reflection reads are %s now" (Middleware.ValueReads.ReflectionReadMode.name mode)
             Result.Ok report
           | HostAgent.AgentUnavailable reason -> Result.Error(Features.KeptState.ReflectionReadsError.NoAgent reason) }
+
+  // Where this worker's saves come from, and the save pipeline's entry once the watcher below has built it. A landing hands the
+  // pipeline its saves through this entry (`WorkerMessage.ApplySaves`), so the pipeline a trunk session runs a landing through
+  // is the one a person's save takes.
+  let saveSource = ref Features.TrunkFollow.SaveSource.WatchedFiles
+  let savePipeline : (FileWatcher.FileChange -> Async<unit>) option ref = ref None
 
   // Start file watcher unless no-watch was set
   let fileWatcher =
@@ -1693,7 +1707,9 @@ let run (sessionId: string) (port: int) = async {
               return! patchInPlace fileName filePath baseline current emitted carried kept recheck
           | Features.SaveRoute.PerPlan (Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest)) ->
             return! restartOrFallBack fileName first rest }
-      let onFileChanged (change: FileWatcher.FileChange) =
+      /// The save pipeline for one change. The part that has to happen the moment the change arrives (counting it, and
+      /// cancelling an older eval of the same file) happens when this is called; the returned async is the rest.
+      let beginChange (change: FileWatcher.FileChange) : Async<unit> =
         let ext = IO.Path.GetExtension(change.FilePath)
         let kind = match change.Kind with
                    | FileWatcher.FileChangeKind.Changed -> "Modified"
@@ -1723,7 +1739,7 @@ let run (sessionId: string) (port: int) = async {
             newCts)
         |> ignore
         let ct = newCts.Token
-        Async.Start(async {
+        async {
           // Chesterton's fence: the wait for the compiler is BOUNDED, and the
           // timeout is REPORTED. An unbounded wait here was the subsystem's
           // worst failure mode: `ct` is cancelled only by a newer change to
@@ -1984,7 +2000,16 @@ let run (sessionId: string) (port: int) = async {
               Log.error "File watcher async failed: %s" (ex.ToString())
           finally
             compilationLock.Release() |> ignore
-        })
+        }
+      // A save is one pipeline whoever hands it in. The watcher hands it saves it saw, and a landing hands it the files it moved.
+      // A worker told to take its saves from landings only drops what the watcher saw: the daemon wrote those files itself and
+      // is about to hand them over, and the pipeline would otherwise run the same save twice.
+      let onFileChanged (change: FileWatcher.FileChange) =
+        match saveSource.Value with
+        | Features.TrunkFollow.SaveSource.WatchedFiles -> Async.Start (beginChange change)
+        | Features.TrunkFollow.SaveSource.LandedOnly ->
+          Log.debug "File change left to the landing that made it: %s" (IO.Path.GetFileName change.FilePath)
+      savePipeline.Value <- Some beginChange
       Some (FileWatcher.start config DevReload.DevReloadConfig.defaults onFileChanged)
 
   /// Record the source each loaded project's assembly was built from. That baseline
@@ -2094,6 +2119,53 @@ let run (sessionId: string) (port: int) = async {
     Continue = fun ticket park -> result.Agent.DebugContinue ticket park
   }
 
+  /// Run the save pipeline over the files a landing moved, one at a time and in the order given, and say what it said about each.
+  ///
+  /// The verdict is read from the same record a polling client reads (`DevReload.LastReload`), and only when the pipeline
+  /// recorded something for THIS file: the record's count is compared before and after, so a file the pipeline had nothing to say
+  /// about (it was superseded, or the compiler stayed busy) is `NoVerdict` and never an older save's verdict.
+  let applyLandedSaves (files: Features.TrunkFollow.SavedFile list) : Async<Features.TrunkFollow.SessionOutcome> =
+    async {
+      match savePipeline.Value with
+      | None ->
+        return
+          Features.TrunkFollow.SessionOutcome.NoPipeline
+            "the worker watches no project directory (watching is off, or no project was loaded), so it has no save pipeline"
+      | Some pipeline ->
+        let applyOne (file: Features.TrunkFollow.SavedFile) : Async<Features.TrunkFollow.FileVerdict> =
+          async {
+            let kind =
+              match file.Kind with
+              | Features.TrunkFollow.SaveKind.Changed -> FileWatcher.FileChangeKind.Changed
+              | Features.TrunkFollow.SaveKind.Created -> FileWatcher.FileChangeKind.Created
+              | Features.TrunkFollow.SaveKind.Deleted -> FileWatcher.FileChangeKind.Deleted
+            let change : FileWatcher.FileChange = { FilePath = file.Path; Kind = kind; Timestamp = DateTimeOffset.UtcNow }
+            let verdict (outcome: Features.TrunkFollow.FileOutcome) : Features.TrunkFollow.FileVerdict =
+              { File = file.Path; Outcome = outcome }
+            match FileWatcher.fileChangeAction change with
+            | FileWatcher.FileChangeAction.Reload path when HotReloadState.isWatched path !result.HotReloadStateRef ->
+              let before = DevReload.LastReload.sequence ()
+              do! pipeline change
+              // The first terminal event the save recorded is what the save said. Later ones (a restarted app coming back, a patch
+              // confirmed) are about the process, and reach the daemon on the reload stream.
+              match DevReload.LastReload.since before with
+              | [] ->
+                return verdict (Features.TrunkFollow.FileOutcome.NoVerdict "the save pipeline recorded no outcome for it (it was superseded, or the compiler stayed busy)")
+              | said :: _ -> return verdict (Features.TrunkFollow.outcomeOfPayload said)
+            | FileWatcher.FileChangeAction.Reload _ -> return verdict Features.TrunkFollow.FileOutcome.NotWatched
+            | FileWatcher.FileChangeAction.SoftReset ->
+              return
+                verdict (
+                  Features.TrunkFollow.FileOutcome.NeedsRebuild
+                    "a project file changed, so the project's references or its compile list changed, which a running process cannot take in place"
+                )
+            | FileWatcher.FileChangeAction.RecoverFromOverflow _
+            | FileWatcher.FileChangeAction.Ignore -> return verdict Features.TrunkFollow.FileOutcome.NotWatched
+          }
+        let! verdicts = files |> List.map applyOne |> Async.Sequential
+        return Features.TrunkFollow.SessionOutcome.Delivered (Array.toList verdicts)
+    }
+
   // Signal readiness over the pipe
   let handler =
     handleMessage actor result.GetSessionStatus result.GetEvalStats result.GetStatusMessage result.ProjectRoles
@@ -2103,6 +2175,13 @@ let run (sessionId: string) (port: int) = async {
     match msg with
     | WorkerMessage.GetInstrumentationMaps(replyId) ->
       return WorkerResponse.InstrumentationMapsResult(replyId, result.InstrumentationMaps)
+    | WorkerMessage.SetSaveSource(source, replyId) ->
+      saveSource.Value <- source
+      Log.info "Save pipeline: saves now come from %A" source
+      return WorkerResponse.SaveSourceSet(replyId, source)
+    | WorkerMessage.ApplySaves(files, replyId) ->
+      let! outcome = applyLandedSaves files
+      return WorkerResponse.SavesApplied(replyId, outcome)
     | _ -> return! handler msg
   }
 

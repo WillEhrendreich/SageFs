@@ -379,6 +379,11 @@ module WorkerProtocol =
     | DebugTestBegin of test: Features.LiveTesting.TestCase * replyId: string
     /// Release the held test (the editor's debugger is attached) and wait up to `park` for it to finish. Safe to repeat.
     | DebugTestContinue of ticket: string * park: TimeSpan * replyId: string
+    /// Choose where this worker's save pipeline takes its saves from. A trunk session takes them from landings only.
+    | SetSaveSource of source: Features.TrunkFollow.SaveSource * replyId: string
+    /// A landing moved these files under the worker. Run the save pipeline over each, the same one a person's save takes, and
+    /// answer with what it said about every file.
+    | ApplySaves of files: Features.TrunkFollow.SavedFile list * replyId: string
     | Shutdown
 
   /// F# compiler diagnostic serialized for worker→daemon transport.
@@ -495,6 +500,11 @@ module WorkerProtocol =
     /// as wire JSON (those types live in the host's own sources, which this file precedes, so they cannot be named here;
     /// the daemon read what it asked for back with `Serialization.tryDeserialize`).
     | DebugTestAnswer of replyId: string * answerJson: string
+    /// Reply to SetSaveSource: the source the worker now takes its saves from.
+    | SaveSourceSet of replyId: string * source: Features.TrunkFollow.SaveSource
+    /// Reply to ApplySaves: what the save pipeline said about every file (`Delivered`), or that this worker has no hot reload
+    /// pipeline to ask (`NoPipeline`).
+    | SavesApplied of replyId: string * outcome: Features.TrunkFollow.SessionOutcome
     | WorkerReady
     | WorkerShuttingDown
     | WorkerError of SageFsError
@@ -521,6 +531,7 @@ module WorkerProtocol =
       | WorkerMessage.EvalLiveTestFile _
       | WorkerMessage.RunApp _
       | WorkerMessage.StopApp _
+      | WorkerMessage.ApplySaves _
       | WorkerMessage.DebugTestBegin _ -> true
       | WorkerMessage.CancelEval
       | WorkerMessage.ResetSession _
@@ -532,6 +543,7 @@ module WorkerProtocol =
       | WorkerMessage.GetInstrumentationMaps _
       | WorkerMessage.AwaitAppChange _
       | WorkerMessage.DebugTestContinue _
+      | WorkerMessage.SetSaveSource _
       | WorkerMessage.Shutdown -> false
 
   /// Wrapping helpers for `SessionProxy` — kept next to the type so every

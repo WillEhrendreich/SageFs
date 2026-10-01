@@ -390,6 +390,19 @@ module LastReload =
   // question entirely rather than relying on it working out.
   let private domainKey = "SageFs.DevReload.lastTerminalPayloadJson"
 
+  /// How many terminal events have been recorded, kept beside the payload under the same lock. A caller that wants the
+  /// verdict of ONE save compares this before and after the save: an unchanged count means the save recorded nothing, and
+  /// the payload `json` returns is an older save's.
+  let private sequenceKey = "SageFs.DevReload.lastTerminalSequence"
+
+  /// The payloads of the most recent terminal events, newest last, with the sequence number each was recorded at. A save can
+  /// record more than one terminal event (a restart is announced, and the app then comes back), and the first is what the save
+  /// itself said.
+  let private recentKey = "SageFs.DevReload.recentTerminalPayloads"
+
+  /// How many recent payloads are kept. Enough for every terminal event one save records, and nothing like a log.
+  let recentLimit = 16
+
   /// Record the payload for the most recent terminal event. Called from the
   /// single `broadcast` choke point, so every `broadcastXxx` function updates
   /// this the same way it notifies live SSE subscribers.
@@ -398,7 +411,49 @@ module LastReload =
     | Compiling _ -> ()
     | terminal ->
       let interned = String.Intern(domainKey)
-      lock interned (fun () -> AppDomain.CurrentDomain.SetData(domainKey, DevReloadEvent.payloadJson terminal))
+      lock interned (fun () ->
+        let count =
+          match AppDomain.CurrentDomain.GetData(sequenceKey) with
+          | :? int64 as n -> n
+          | _ -> 0L
+        let payload = DevReloadEvent.payloadJson terminal
+        // Plain strings, "<sequence>|<payload>", for the reason the payload itself is a string: a copy of FSharp.Core in another
+        // load context would not recognise an F# list from this one.
+        let recent =
+          match AppDomain.CurrentDomain.GetData(recentKey) with
+          | :? (string[]) as items -> items
+          | _ -> [||]
+        let entry = sprintf "%d|%s" (count + 1L) payload
+        let kept = Array.append recent [| entry |] |> Array.rev |> Array.truncate recentLimit |> Array.rev
+        AppDomain.CurrentDomain.SetData(sequenceKey, count + 1L)
+        AppDomain.CurrentDomain.SetData(recentKey, kept)
+        AppDomain.CurrentDomain.SetData(domainKey, payload))
+
+  /// How many terminal events this process has recorded. See `sequenceKey`.
+  let sequence () : int64 =
+    let interned = String.Intern(domainKey)
+    lock interned (fun () ->
+      match AppDomain.CurrentDomain.GetData(sequenceKey) with
+      | :? int64 as n -> n
+      | _ -> 0L)
+
+  /// The payloads recorded after sequence number `after`, oldest first: what every save since then said, as far as the most recent
+  /// `recentLimit` of them reach.
+  let since (after: int64) : string list =
+    let interned = String.Intern(domainKey)
+    lock interned (fun () ->
+      match AppDomain.CurrentDomain.GetData(recentKey) with
+      | :? (string[]) as items ->
+        items
+        |> Array.toList
+        |> List.choose (fun entry ->
+          match entry.IndexOf '|' with
+          | -1 -> None
+          | i ->
+            match Int64.TryParse(entry.Substring(0, i)) with
+            | true, n when n > after -> Some (entry.Substring(i + 1))
+            | _ -> None)
+      | _ -> [])
 
   /// The exact JSON a live SSE subscriber would have received for the last
   /// terminal event — `{outcome, patched, considered, message,
