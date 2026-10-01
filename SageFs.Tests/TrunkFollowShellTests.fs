@@ -34,7 +34,8 @@ let private session (id: string) (dir: string) (status: SessionLifecycleStatus) 
     ProjectRoles = []
     App = app
     Rebuild = LastRebuild.NeverRebuilt
-    Reload = SessionReload.NoReloadYet }
+    Reload = SessionReload.NoReloadYet
+    Freshness = ReplFreshness.InSync }
 
 let private ready = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
 

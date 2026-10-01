@@ -80,7 +80,8 @@ module TrunkFollowSim =
       Considered = 1
       Message = "applied; the new body has not run yet"
       SuggestedAction = ""
-      Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta }
+      Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta
+      Declarations = [] }
 
   let private settledFacts : ReloadFacts = { patchFacts with Case = ReloadCase.Patched; Patched = 1; Message = "the new body ran" }
 
@@ -90,7 +91,8 @@ module TrunkFollowSim =
       Considered = 1
       Message = "restarted: a virtual member changed its signature"
       SuggestedAction = ""
-      Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch }
+      Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch
+      Declarations = [] }
 
   let private restartCause : RestartCause = { Case = "VirtualSignatureChanged"; Message = "Shape.Name changed its signature" }
 

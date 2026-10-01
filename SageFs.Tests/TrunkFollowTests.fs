@@ -21,7 +21,8 @@ let private pendingFacts : ReloadFacts =
     Considered = 1
     Message = "applied"
     SuggestedAction = ""
-    Mechanism = ReloadOutcome.PatchMechanism.MetadataDelta }
+    Mechanism = ReloadOutcome.PatchMechanism.MetadataDelta
+    Declarations = [] }
 
 let private file (name: string) : SavedFile = { Path = Path.Combine("/trunk", name); Kind = SaveKind.Changed }
 
@@ -204,7 +205,8 @@ let private session (id: string) (dir: string) (status: SessionLifecycleStatus) 
     ProjectRoles = []
     App = app
     Rebuild = LastRebuild.NeverRebuilt
-    Reload = SessionReload.NoReloadYet }
+    Reload = SessionReload.NoReloadYet
+    Freshness = ReplFreshness.InSync }
 
 let private ready = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
 
