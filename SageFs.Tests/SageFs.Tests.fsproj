@@ -378,6 +378,14 @@
         <Compile Include="GuardRuntimeTests.fs" />
         <Compile Include="GuardIlFixture.fs" />
         <Compile Include="GuardIlTests.fs" />
+        <Compile Include="GuardFixtures.fs" />
+        <Compile Include="GuardReachabilityTests.fs" />
+        <Compile Include="GuardPatcherTests.fs" />
+        <Compile Include="GuardCoexistenceTests.fs" />
+        <Compile Include="MemberEvaluationGuardTests.fs" />
+        <!-- The child half: Program.fs starts this assembly again with --guard-child to click a getter that would end the process. -->
+        <Compile Include="GuardChild.fs" />
+        <Compile Include="GuardChildTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
         <Compile Include="StreamingProxyTests.fs" />
         <Compile Include="StreamingProxySimTests.fs" />
