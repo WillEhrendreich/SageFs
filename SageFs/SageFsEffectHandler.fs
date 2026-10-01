@@ -180,7 +180,9 @@ module SageFsEffectHandler =
       Utils.Log.info "[confirm] session %s build %d answered: %A" sessionId generation outcome
     | Features.LiveTesting.ConfirmationEvent.DeadlineReached generation ->
       Utils.Log.warn "[confirm] session %s build %d reached its deadline" sessionId generation
-    | _ -> ()
+    // The other two a build or a timer raises (the quiet window ending, the disk text not being the evaluated
+    // text) decide whether a build starts at all, so a confirmation that never came leaves its reason here.
+    | other -> Utils.Log.info "[confirm] session %s: %s" sessionId (Features.LiveTesting.ConfirmationEvent.describe other)
     dispatch (SageFsMsg.Event (TuiEvent.BuildConfirmation (sessionId, event)))
 
   /// (Re)start the session's quiet window: when it runs out without being restarted, the editing has gone quiet.
@@ -205,6 +207,7 @@ module SageFsEffectHandler =
   let private abandonConfirmationBuild (sessionId: string) (generation: int64) =
     match confirmationBuilds.TryRemove(struct (sessionId, generation)) with
     | true, source ->
+      Utils.Log.info "[confirm] session %s build %d is no longer watched (its answer, or a newer text, ended the wait)" sessionId generation
       source.Cancel()
       source.Dispose()
     | false, _ -> ()
@@ -551,6 +554,14 @@ module SageFsEffectHandler =
                       Features.LiveTesting.FcsTypeCheckResult.Success(req.FilePath, refs)
                   | _ ->
                     Features.LiveTesting.FcsTypeCheckResult.Cancelled req.FilePath
+                // A check that blocks runs, or that never answered, is the whole reason a save can go unjudged, so
+                // each says so here with the compiler's own first words.
+                match result with
+                | Features.LiveTesting.FcsTypeCheckResult.Failed (file, errors) ->
+                  Utils.Log.info "[live] type-check of %s found %d blocking error(s): %s" file errors.Length (errors |> List.truncate 2 |> String.concat " | ")
+                | Features.LiveTesting.FcsTypeCheckResult.Cancelled file ->
+                  Utils.Log.info "[live] type-check of %s did not answer, so nothing was decided for this edit" file
+                | Features.LiveTesting.FcsTypeCheckResult.Success _ -> ()
                 dispatch (SageFsMsg.FcsTypeCheckCompleted (req.SessionId, Some effectiveAnalysisIdentity, result))
                 let timing : Features.LiveTesting.TestCycleTiming = {
                   Depth = Features.LiveTesting.TestCycleDepth.ThroughFcs(req.TreeSitterElapsed, fcsStopwatch.Elapsed)
@@ -573,6 +584,7 @@ module SageFsEffectHandler =
           do! withSession deps dispatch targetSid (fun sid proxy ->
             async {
               let replyId = newReplyId ()
+              Utils.Log.info "[live] evaluating %s for %d test(s), asked by %A" req.FilePath req.Run.Tests.Length req.Run.Trigger
               let! outcome =
                 async { return! proxy (WorkerMessage.EvalLiveTestFile(req.FilePath, req.Content, replyId)) }
                 |> Async.Catch
