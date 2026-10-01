@@ -137,6 +137,27 @@ let create
       (fun req token -> runHandler req token),
       true)
 
+  // The Debug profile is what puts "Debug Test" on a test's gutter glyph and in the Test Explorer. Debugging holds one test
+  // in the test host at a time, so it debugs the first test the request names.
+  let debugHandler (request: TestRunRequest) (_token: CancellationToken) : JS.Promise<unit> =
+    promise {
+      match request.``include`` with
+      | Some items when items.Length > 0 ->
+        match tryOfObj items.[0] with
+        | Some item ->
+          do! Commands.executeCommandWith SageFs.Vscode.TestDebugPure.DebugCommandId (box item.id) |> Promise.map ignore
+        | None -> ()
+      | _ ->
+        Window.showWarningMessage "Pick a test to debug: use Debug Test on a test in the Test Explorer or on its gutter mark." [||] |> ignore
+    }
+
+  let _debugProfile =
+    controller.createRunProfile(
+      "Debug Test",
+      TestRunProfileKind.Debug,
+      (fun req token -> debugHandler req token),
+      false)
+
   let updateSourceLocations (locations: obj array) =
     for loc in locations do
       let testName = fieldString "TestName" loc |> Option.defaultValue ""

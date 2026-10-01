@@ -74,6 +74,10 @@ type IFsiSession =
   abstract AwaitEntries: probes: int64 list * bound: TimeSpan -> Async<AgentReply<SageFs.Middleware.EntryProbes.EntryReading>>
   /// Run one discovered test where it lives.
   abstract RunTest: test: LiveTesting.TestCase -> Async<AgentReply<LiveTesting.TestResult>>
+  /// Hold one test where it lives, for a debugger: the process to attach to and the ticket that releases the test.
+  abstract DebugBegin: test: LiveTesting.TestCase -> Async<AgentReply<TestDebug.DebugBegin>>
+  /// Release a held test (the editor's debugger is attached) and wait up to `park` for it to finish.
+  abstract DebugContinue: ticket: TestDebug.DebugTicket * park: TimeSpan -> Async<AgentReply<TestDebug.DebugProgress>>
 
 /// Evaluate and raise on failure: the throwing form, for startup scripts whose failure must abort.
 let evalOrThrow (session: IFsiSession) (code: string) (cancellationToken: CancellationToken) : unit =
@@ -178,6 +182,14 @@ type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
       async {
         let! result = agent.RunTest test
         return AgentAnswered result
+      }
+
+    member _.DebugBegin(test) = async { return AgentAnswered(agent.DebugBegin test) }
+
+    member _.DebugContinue(ticket, park) =
+      async {
+        let! progress = agent.DebugContinue(ticket, park)
+        return AgentAnswered progress
       }
 
     member _.Dispose() = (session :> IDisposable).Dispose()

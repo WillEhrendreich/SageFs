@@ -289,7 +289,44 @@ event: failure_narratives
 data: {"SessionId":"<id>", "Narratives": [{"TestId":"string", "TestName":"string", "Summary":"string", "TimeSinceLastPass":"string", "CausalChanges":[{"Symbol":"string", "File":"string"}], "PropertyViolation":null|{...}}]}
 ```
 
+## Debugging a failing test
+
+You can debug a failing test from VS Code. A failing test gets a Debug lens next to its result, a Debug link in the hover of its gutter mark, and Debug Test in the Test Explorer (that is also what puts Debug Test on the glyph). Neovim does not have it yet.
+
+How it works: the test runs in the process that loaded your code, which is the isolated FSI host (or the worker, for an in-process session). So the editor attaches a .NET debugger to that process.
+
+1. The editor asks the daemon to debug a test. The host holds the test and answers with its process id and a ticket.
+2. The editor attaches its `coreclr` debugger to that process.
+3. The editor continues. The host checks that a debugger is really attached, runs the test under it, and answers when it finishes. The editor then detaches.
+
+If nobody releases the test within two minutes (`Timeouts.debugHold`), the host drops the hold and the test never runs. If the debugger is not attached when the test is released, the test does not run either. Nothing runs without a debugger.
+
+**Which debugger you need.** One that provides the `coreclr` debug type. In Microsoft's VS Code that is the C# extension (`ms-dotnettools.csharp`). If nothing installed provides it, the extension says so and offers to install it. Microsoft's debugger is licensed for Microsoft's own build of VS Code. In another build you need some other extension that provides `coreclr`.
+
+**What the debugger can stop in.**
+
+- Code in your project's compiled assemblies has a PDB, so breakpoints bind. Build in Debug, or with portable PDBs. An optimized build will skip lines and hide locals, like any optimized build.
+- Code you evaluated in the session (a test file SageFs re-evaluated when you saved it) lives in a dynamic assembly. It has no PDB, so breakpoints inside it will not bind. The debugger still runs the test, it just will not stop in that code. SageFs says so when you start. To debug the compiled copy, hard reset the session with a rebuild first.
+- A compiled method that hot reload has detoured to a new body has the same problem for that method.
+
+**Linux.** Attaching to a process that is not your child needs ptrace permission. With `kernel.yama.ptrace_scope` at 1 (the default on many distros) the host opens that door itself for the length of the hold and closes it after, so the attach works without you changing anything. At 2 only root may attach, and at 3 nobody may. SageFs tells you which one it hit and what to change, but it cannot fix those for you.
+
+**What it does not do yet.**
+
+- It debugs one test at a time. The host holds one test, and a second request is refused until the first ends.
+- The result of a debug run is shown in the editor. It is not recorded in the live-testing state, so the gutter updates on the next normal run.
+- I have run the host side against a real isolated host, and checked the ptrace door opens and closes on a real process. I have not run a full attach with the C# extension's debugger from this repo's tests. The VS Code side is covered by contract tests that run without VS Code.
+
+The two routes, for any editor client. Both answer the same JSON shape (camelCase) and read the body whatever the status code is.
+
+| Route | Body | Answers |
+|---|---|---|
+| `POST /api/live-testing/debug` | `{ "testId": "<id>" }` or `{ "pattern": "<name>" }`, optional `"sessionId"` | `status` `held` with `pid`, `ticket`, `testName`, `symbols` (`compiled` or `eval`), `symbolsNote`, `access` (`open` or `blocked`), `accessNote`, `holdMs` |
+| `POST /api/live-testing/debug/continue` | `{ "ticket": "<ticket>" }`, optional `"sessionId"` | `still_running` (ask again), or `attached` with `outcome` and `detail`, or one of the dead ends below |
+
+The other statuses are `hold_already_open`, `no_debugger_within`, `released_without_debugger`, `no_such_hold`, `host_lost`, `host_unavailable`, `not_discovered`, `no_test_matched`, `ambiguous_test`, `no_session`, `no_worker`, `worker_failed` and `bad_request`. Every response carries a `message` that says what happened and what to do about it.
+
 ## Editor Integrations
 
-- **VS Code**: `FileAnnotationsListener.fs` parses file_annotations. `Extension.fs` renders coverage gutter decorations + inline failures. `TestControllerAdapter.fs` enriches test items with failure narratives.
+- **VS Code**: `FileAnnotationsListener.fs` parses file_annotations. `Extension.fs` renders coverage gutter decorations + inline failures. `TestControllerAdapter.fs` enriches test items with failure narratives, and registers the Debug profile. `TestDebugCommand.fs` and `TestDebugPure.fs` debug a failing test (see above).
 - **Neovim**: lives in its own repo, [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) (not in this tree). Its `testing.lua` caches source_locations and failure_narratives, `telescope_picker.lua` jumps to source on `<CR>`, and `commands.lua` shows a narrative floating window on `<C-d>`.

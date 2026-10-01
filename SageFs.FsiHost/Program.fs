@@ -322,6 +322,27 @@ let private run (fsiArgs: string list) : int =
               with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
             }
           )
+      | Result.Ok(AgentDebugBegin(id, test)) ->
+        // Answered at once: the editor needs the pid and the ticket before it can attach, and the hold itself is just
+        // state on the agent (the test does not start until it is released).
+        match Volatile.Read(&agentState.contents) with
+        | AgentNotStarted -> refuse id "the agent was not started: send AgentStart first"
+        | AgentRunning agent ->
+          try send (AgentDebugBeginResult(id, agent.DebugBegin test))
+          with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+      | Result.Ok(AgentDebugContinue(id, ticket, park)) ->
+        // Beside the session thread: the wait lasts as long as the test sits on a breakpoint.
+        match Volatile.Read(&agentState.contents) with
+        | AgentNotStarted -> refuse id "the agent was not started: send AgentStart first"
+        | AgentRunning agent ->
+          Async.Start(
+            async {
+              try
+                let! progress = agent.DebugContinue(ticket, park)
+                send (AgentDebugContinueResult(id, progress))
+              with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+            }
+          )
       | Result.Ok Interrupt ->
         lock runningLock (fun () ->
           match running with
@@ -329,7 +350,12 @@ let private run (fsiArgs: string list) : int =
             current.Cancel.Cancel()
             current.Thread.Interrupt()
           | None -> ())
-      | Result.Ok Shutdown -> serving <- false
+      | Result.Ok Shutdown ->
+        // A test held for a debugger ends as lost, so whoever waits on it hears that now instead of waiting out the bound.
+        match Volatile.Read(&agentState.contents) with
+        | AgentRunning agent -> agent.DebugHostEnding "the FSI host is shutting down"
+        | AgentNotStarted -> ()
+        serving <- false
 
   requests.CompleteAdding()
   0

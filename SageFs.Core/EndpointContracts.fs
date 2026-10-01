@@ -57,6 +57,8 @@ module EndpointContracts =
     Endpoint.create POST "/api/live-testing/disable" "Testing" "Disable live testing"
     Endpoint.create POST "/api/live-testing/policy" "Testing" "Set testing policy"
     Endpoint.create POST "/api/live-testing/run" "Testing" "Run tests"
+    Endpoint.create POST "/api/live-testing/debug" "Testing" "Hold one test for a debugger; answers the process to attach to"
+    Endpoint.create POST "/api/live-testing/debug/continue" "Testing" "Release the held test once the debugger is attached, and wait for it to finish"
     Endpoint.create GET "/api/live-testing/status" "Testing" "Get testing status"
     Endpoint.create GET "/api/live-testing/file-annotations" "Testing" "Get gutter annotations"
     Endpoint.create GET "/api/live-testing/test-trace" "Testing" "Get test execution trace"
@@ -134,6 +136,8 @@ module EndpointContracts =
     POST, "/api/sessions/{sid}/stop-app"
     POST, "/api/live-testing/enable"
     POST, "/api/live-testing/disable"
+    POST, "/api/live-testing/debug"
+    POST, "/api/live-testing/debug/continue"
     POST, "/api/completions"
   ]
 

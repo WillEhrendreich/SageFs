@@ -63,7 +63,7 @@ let endpointContractTests = testList "EndpointContracts" [
     test "VS Code contract has expected count" {
       vscodeContract
       |> List.length
-      |> Expect.equal "should have 15 endpoints" 15
+      |> Expect.equal "should have 17 endpoints" 17
     }
   ]
 
@@ -155,7 +155,7 @@ let endpointContractTests = testList "EndpointContracts" [
       |> List.length
       |> Expect.equal
         "endpoint count changed — update contracts and bump this number"
-        38
+        40
     }
   ]
 

@@ -2602,6 +2602,15 @@ let activate (context: ExtensionContext) =
     | name ->
       simpleCommand (sprintf "SageFs: running %s…" name) "Test queued" (Client.runTests name)
       |> promiseIgnoreLog logToOutput)
+  // Debug ONE test: hold it in the test host, attach a .NET debugger to the host, release it, detach when it finishes. The
+  // Debug lens, the failing test's hover link and the Test Explorer's Debug profile all run this with the test's id.
+  reg "sagefs.debugTest" (fun args ->
+    match tryCastString args |> Option.defaultValue "" with
+    | "" ->
+      Window.showWarningMessage "No test selected. Use Debug above a failing test, or Debug Test in the Test Explorer." [||] |> ignore
+    | testId ->
+      withClient (fun c -> TestDebugCommand.debugTest c testId)
+      |> promiseIgnoreLog logToOutput)
   reg "sagefs.setRunPolicy" (fun _ ->
     withClient (fun c ->
       promise {

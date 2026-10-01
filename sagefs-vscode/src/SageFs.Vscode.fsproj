@@ -19,6 +19,7 @@
     <Compile Include="FileAnnotationsListener.fs" />
     <Compile Include="LiveTestingListener.fs" />
     <Compile Include="AppRunPure.fs" />
+    <Compile Include="TestDebugPure.fs" />
     <Compile Include="SessionsTreePure.fs" />
     <Compile Include="ProjectPickPure.fs" />
     <Compile Include="WorkflowPickPure.fs" />
@@ -41,6 +42,7 @@
     <Compile Include="CoverageViewCodeLensProvider.fs" />
     <Compile Include="InlineDecorations.fs" />
     <Compile Include="DebugRects.fs" />
+    <Compile Include="TestDebugCommand.fs" />
     <Compile Include="Extension.fs" />
   </ItemGroup>
   <ItemGroup>

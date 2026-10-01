@@ -177,6 +177,8 @@ type FsiHostSession
           | Result.Ok(AgentAfterEvalResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentDiscoveryResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentTestResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentDebugBeginResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentDebugContinueResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentLoadedAssembliesResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentCoverageResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentValueReadsResult(id, _) as answer) -> complete id answer
@@ -411,6 +413,26 @@ type FsiHostSession
       | Got(AgentTestResult(_, result)) -> return Answered result
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent run-test" other)
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
+    }
+
+  /// Hold one test in the host for a debugger.
+  member _.AgentDebugBegin(test: SageFs.Features.LiveTesting.TestCase) : Async<HostCall<SageFs.HostAgent.TestDebug.DebugBegin>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentDebugBegin(id, test)) with
+      | Got(AgentDebugBeginResult(_, answer)) -> return Answered answer
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent debug-begin" other)
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
+    }
+
+  /// Release a held test and wait up to `park` for it to finish.
+  member _.AgentDebugContinue(ticket: SageFs.HostAgent.TestDebug.DebugTicket, park: TimeSpan) : Async<HostCall<SageFs.HostAgent.TestDebug.DebugProgress>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentDebugContinue(id, ticket, park)) with
+      | Got(AgentDebugContinueResult(_, progress)) -> return Answered progress
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent debug-continue" other)
       | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 

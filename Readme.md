@@ -347,6 +347,7 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | **Coverage gutters** | ✅ | ✅ | — | — |
 | **Failure narratives** | ✅ | ✅ | ✅ | ✅ |
 | **Test source-jump** | ✅ | ✅ | — | — |
+| **Debug a failing test** | ✅ | — | — | — |
 | Test panel | ✅ | ✅ | ✅ | ✅ |
 | Test policy controls | ✅ | ✅ | ✅ | — |
 | Type explorer | ✅ | ✅ | — | — |
@@ -447,6 +448,8 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel (experimental)
 | ⊘ | Inline failure — shows the test name and Expected/Actual diff |
 
 > 💡 **Hover** over any gutter icon for details. In Neovim, press `<C-d>` on a failing test for the full failure narrative.
+>
+> 🐛 **In VS Code, a failing test has a Debug lens and a Debug link in its hover**, and the Test Explorer has Debug Test. It attaches the C# extension's .NET debugger to the process that runs your tests, so breakpoints bind in your compiled project code. Code you evaluated in the session has no debug symbols, so breakpoints in it will not bind. [How it works and what it needs](docs/LIVE_TESTING_GUIDE.md#debugging-a-failing-test).
 
 ---
 

@@ -92,6 +92,18 @@ let create () =
             "arguments" ==> [| t.FullName |]
           ]
           lenses.Add(newCodeLens range cmd)
+          // A test that failed or errored offers Debug beside its result, the way Visual Studio's glyph does.
+          match result |> Option.map (fun r -> SageFs.Vscode.TestDebugPure.debugOfferFor r.Outcome) with
+          | Some SageFs.Vscode.TestDebugPure.DebugOffer.Offered ->
+            let debugCmd = createObj [
+              "title" ==> SageFs.Vscode.TestDebugPure.DebugLensTitle
+              "command" ==> SageFs.Vscode.TestDebugPure.DebugCommandId
+              "tooltip" ==> SageFs.Vscode.TestDebugPure.debugLensTooltip t.DisplayName
+              "arguments" ==> [| LiveTestingTypes.VscTestId.value t.Id |]
+            ]
+            lenses.Add(newCodeLens range debugCmd)
+          | Some SageFs.Vscode.TestDebugPure.DebugOffer.NotOffered
+          | None -> ()
           // Add inline narrative lens for failed tests — shows causal context without clicking
           match result with
           | Some r ->

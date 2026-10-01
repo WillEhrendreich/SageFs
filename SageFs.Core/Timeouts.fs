@@ -433,6 +433,19 @@ module Timeouts =
   /// that it timed out and goes on. No recorded reason for 15s.
   let appRunnerShutdown = TimeSpan.FromSeconds(15.0)
 
+  // -- Debugging a test --
+  /// How long a host keeps a test held for a debugger. The client has to get the
+  /// attach going (the C# debugger starts its adapter on first use, which takes a
+  /// while) and then say it is attached; if it has not released the test by then the
+  /// hold is dropped and the test never runs. Two minutes covers a cold adapter start
+  /// with room to spare, and a stuck client does not keep a test parked for long.
+  let debugHold = TimeSpan.FromMinutes(2.0)
+  /// How long one debug-continue request waits for the test to finish before it
+  /// answers "still running" and the client asks again. A test stopped on a
+  /// breakpoint can sit for as long as the person likes, so the wait is cut into
+  /// pieces that stay well inside every HTTP bound between the editor and the host.
+  let debugContinuePark = TimeSpan.FromSeconds(20.0)
+
   // -- Restart / Backoff --
   /// First delay before a crashed worker is restarted; later restarts double it
   /// (RestartPolicy.nextBackoff) up to `restartMaxBackoff`.

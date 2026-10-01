@@ -192,6 +192,20 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
         | HostGone reason -> return HostAgent.AgentUnavailable reason
       }
 
+    member _.DebugBegin(test) =
+      async {
+        match! host.AgentDebugBegin test with
+        | Answered answer -> return HostAgent.AgentAnswered answer
+        | HostGone reason -> return HostAgent.AgentUnavailable reason
+      }
+
+    member _.DebugContinue(ticket, park) =
+      async {
+        match! host.AgentDebugContinue(ticket, park) with
+        | Answered progress -> return HostAgent.AgentAnswered progress
+        | HostGone reason -> return HostAgent.AgentUnavailable reason
+      }
+
     member _.Dispose() = (host :> IDisposable).Dispose()
 
 /// Why a session could not be attached to a running host.

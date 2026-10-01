@@ -538,6 +538,10 @@
         <Compile Include="MemoryShedSimTests.fs" />
         <Compile Include="ExpensiveWorkLeaseTests.fs" />
         <Compile Include="LeaseSimTests.fs" />
+        <Compile Include="TestDebugTests.fs" />
+        <Compile Include="TestDebugSimTests.fs" />
+        <Compile Include="DebugTestRequestTests.fs" />
+        <Compile Include="DebugTestRoutesHttpTests.fs" />
         <Compile Include="ScratchPadTests.fs" />
         <Compile Include="EvalRippleTests.fs" />
         <Compile Include="EvalLensTests.fs" />
