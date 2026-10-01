@@ -131,12 +131,20 @@ let closeOver (definition: MethodInfo) (arguments: Type[]) : MethodInfo =
 
 // ── which instantiations the program can reach ───────────────────────────────
 
+/// How the definitions the scan was asked about are reached.
+[<RequireQualifiedAccess>]
+type ReachedThrough =
+  /// Only by method references that name every type argument.
+  | ClosedReferences
+  /// Also by a generic method or type of the program that refers to one with type arguments of its own, so the
+  /// arguments it runs with are the ones that generic is reached with.
+  | GenericMethodsOrTypes
+
 /// What the scan found for the definitions it was asked about.
 type Reach =
   { /// Every closed instantiation some method reference in the program names, by definition.
     Instantiations: Map<int, Type[] list>
-    /// Some generic method or type of the program refers to a definition with type arguments of its own.
-    GenericCarrier: bool }
+    Through: ReachedThrough }
 
 /// The most method contexts one scan visits. Past this a program is one this scan does not know the end of.
 [<Literal>]
@@ -170,6 +178,14 @@ let private isCallLike (op: System.Reflection.Emit.OpCode) : bool =
   || op = OpCodes.Ldvirtftn
   || op = OpCodes.Ldtoken
   || op = OpCodes.Jmp
+
+/// The two reflection calls that make a generic method or type out of values. Looked up on the types that own
+/// them, so a name that does not exist fails when this module loads and not by silently matching nothing.
+let private makeGenericMethod : MethodInfo =
+  typeof<MethodInfo>.GetMethod("MakeGenericMethod", [| typeof<Type[]> |])
+
+let private makeGenericType : MethodInfo =
+  typeof<Type>.GetMethod("MakeGenericType", [| typeof<Type[]> |])
 
 /// Reads the program's IL for method references to `targets`, following the generic methods and types that
 /// reach them with the type arguments they are reached with. `scanned` are the assemblies whose code can
@@ -253,9 +269,9 @@ let reach (scanned: Assembly list) (targets: MethodInfo list) : Result<Reach, Un
             match resolved with
             | Some(:? MethodBase as callee) ->
               match callee with
-              | :? MethodInfo as mi when mi.Name = "MakeGenericMethod" && mi.DeclaringType.FullName = "System.Reflection.MethodInfo" ->
+              | :? MethodInfo as mi when keyOf mi = keyOf makeGenericMethod ->
                 madeGenericMethod <- madeGenericMethod |> Option.orElse (Some(nameOf m))
-              | :? MethodInfo as mi when mi.Name = "MakeGenericType" && mi.DeclaringType.FullName = "System.Type" ->
+              | :? MethodInfo as mi when keyOf mi = keyOf makeGenericType ->
                 madeGenericType <- madeGenericType |> Option.orElse (Some(nameOf m))
               | _ -> ()
               // Which definition does it name, and over what?
@@ -319,7 +335,10 @@ let reach (scanned: Assembly list) (targets: MethodInfo list) : Result<Reach, Un
     | None, _, _ ->
       Ok
         { Instantiations = found |> Seq.map (fun (KeyValue(k, v)) -> k, List.ofSeq v) |> Map.ofSeq
-          GenericCarrier = carrier }
+          Through =
+            match carrier with
+            | true -> ReachedThrough.GenericMethodsOrTypes
+            | false -> ReachedThrough.ClosedReferences }
 
 // ── value-type bodies and the shared body ────────────────────────────────────
 
@@ -530,17 +549,17 @@ let sharedStub (probe: EntryProbe) (older: MethodInfo) (newer: MethodInfo) (repr
       match context with
       | Context.ExactMethod ->
         il.Emit(OpCodes.Ldarg, int16 self.Length)
-        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod "ResolveMethod")
+        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod(nameof SharedTargets.ResolveMethod))
       | Context.ExactClass ->
         il.Emit(OpCodes.Ldarg, int16 self.Length)
-        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod "ResolveClass")
+        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod(nameof SharedTargets.ResolveClass))
       | Context.TheObject ->
         il.Emit OpCodes.Ldarg_0
-        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod "ResolveObject")
+        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod(nameof SharedTargets.ResolveObject))
       | Context.ExactMethodOfTheObject ->
         il.Emit OpCodes.Ldarg_0
         il.Emit(OpCodes.Ldarg, 1s)
-        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod "ResolveMethodOfObject")
+        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod(nameof SharedTargets.ResolveMethodOfObject))
       | Context.NotCarried -> ()
       il.Emit(OpCodes.Stloc, entry)
       for k in 0 .. self.Length - 1 do

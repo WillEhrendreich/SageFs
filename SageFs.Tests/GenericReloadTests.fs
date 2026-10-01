@@ -184,7 +184,7 @@ let tests =
         | Result.Error why -> failtestf "expected a list, got %s" (GenericReload.Unreachable.describe why)
         | Result.Ok reach ->
           namesOf reach |> Expect.equal "Echo<float> and Echo<Box>, through Outer" [ [ "Box" ]; [ "Double" ] ]
-          reach.GenericCarrier |> Expect.isTrue "Outer is a generic method that refers to it"
+          reach.Through |> Expect.equal "Outer is a generic method that refers to it" GenericReload.ReachedThrough.GenericMethodsOrTypes
 
       testCase "WHY - a program that calls MakeGenericMethod can make an instantiation no code names, so the list is refused" <| fun _ ->
         let created, echo = program [ Call.Over typeof<int>; Call.MakesGenericMethod ]
