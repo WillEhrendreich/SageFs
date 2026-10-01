@@ -526,27 +526,113 @@ on net10.0 and net11.0; the planner rules in `SageFs.Tests/ReloadPlanningTests.f
 Reopen it if: callers in other files turn out to bite (a cross-file check of who calls a changed signature would let it
 restart instead), or a removed declaration's old copy turns out to matter.
 
-## A generic function restarts and says so, because a detour of a generic function reaches only part of it
+## A generic function is re-pointed in every body the runtime compiled for it, and restarts, naming why, when the program can make one nobody can list
 
-A generic function is compiled once for every instantiation that runs, and the runtime keeps one body for all reference
-types and one for each value type. Measured against the Harmony we ship: detouring the open definition throws (and the
-process aborted on the next call), and detouring a closed instantiation changes that instantiation and nothing else. A
-call with a type that has not run yet is compiled from the old IL afterwards. So a patch of a generic function would be
-right for the calls that already happened and wrong for one that comes later, which is the kind of "Patched" this tool
-exists not to say. Microsoft's mechanism edits the method in place and does not have this problem; we do.
+This entry replaces an earlier one that said a generic function always restarts, because "a detour reaches only the
+instantiations that have run". Will asked why Visual Studio can do generics and we can't. The earlier measurement was
+half right, and the wrong half is the interesting one. Everything below was measured on net10.0.12 and net11.0.0-rc.1,
+linux-x64, tiering off (the host's default), with the Harmony we ship, in a throwaway console project. The rows in
+`SageFs.Tests/HotReloadParityTests.fs` and the tests in `GenericReloadTests.fs` reproduce every claim that matters.
 
-The row that proves it (`generic`) saves an edit to `genericTag<'T>` that two call sites use with a string and an int.
-Both instantiations had run, so detouring them would have looked right. A third (a float) came out with the old body.
+**What the runtime does with a generic method.** With `DOTNET_JitStdOutFile` and `DOTNET_JitDisasmSummary=1`, one
+generic function used with an int, a float, a struct and three reference types (a string and two records) compiled
+four bodies: `wrap[int]` (101 bytes of code), `wrap[double]` (90), `wrap[struct]` (69) and ONE `wrap[System.__Canon]`
+(135) for all three reference types. A function over two type arguments gets one shared body per pattern of value
+types: `(*, int)`, `(*, float)`, `(int, *)` and `(*, *)` are four bodies, and detouring three of them left the fourth
+on the old code.
 
-Now a generic function is registered so a save can name it, never detoured, and a save that edits one that the app holds
-is refused with `GenericFunction`, which names the function. The refusal stops every detour of the save and the whole-file
-fallback is skipped, so the running app is left as it was. The remedy says what works: a function that is not generic is
-re-pointed, so if it only has to work for one type, annotate its arguments with it.
+**Who calls what.** A plain caller of a reference-type instantiation loads the exact instantiation (the method
+descriptor) into the first argument register and calls the shared body directly: `mov rdi, <exact method>; mov rsi,
+arg; call [wrap[System.__Canon]]`. The register differs between a call with a string and a call with a record. A
+shared generic caller (`outer[__Canon]`) takes its own hidden argument, looks `wrap<T>` up in its dictionary
+(`CORINFO_HELP_RUNTIMEHANDLE_METHOD`) and calls the same shared body. A value-type instantiation is `call
+[wrap[int]]`, its own code, no hidden argument. A delegate and a reflection call end in the same code. So the shared
+body is ONE piece of code that every reference-type caller reaches, and nothing reaches an instantiation by a path
+that skips it.
 
-Evidence: `SageFs.Tests/HotReloadParityTests.fs` row `generic` on net10.0 and net11.0, and the spike on a bare session
-in this change's commit message.
-Reopen it if: a way to detour every instantiation, present and future, shows up (a shared canonical body for reference
-types would cover half of it, and half is not a claim worth making).
+**What a detour does.**
+
+- A closed value-type instantiation: detouring `wrap<int>` moved the plain caller, the generic caller `outer<int>` and a
+  delegate over it, and nothing else. A float that first ran after the detour got the old body.
+- A closed reference-type instantiation, the way the earlier measurement did it: `wrap<string>` onto `wrap2<string>`
+  moved EVERY reference type, including `wrap<Rec>` first used after, because they are one body. That is the half the
+  earlier entry got wrong. But the new body runs with the type argument of the method it was pointed at: a body that
+  prints `typeof<'T>.Name` printed `String:B` for a string, `String:B` for a record and `String:B` for another record.
+  MonoMod's own source says it ("your hook will receive calls for all reference type-based implementations").
+- `PatchTools.DetourMethod` wraps the replacement in a glue method that drops the hidden argument, so a stub that takes
+  the exact instantiation fails to compile (`InvalidProgramException`).
+- The open definition: `PrepareMethod` throws `ArgumentException`, and MonoMod throws `NotSupportedException` out of
+  `MMReflectionImporter.ImportGenericParameter`. It is an exception, not a native fault. The exit 134 of the earlier
+  measurement is what .NET does with an unhandled exception in a bare process (my spike, which did not catch it,
+  aborted with the same exit code and that exception as its last output); `detourMethod` already catches it and reports
+  `Failed`. A method closed over `__Canon` itself throws `InvalidProgramException`.
+- Tiering on: the detour of a body is lost after tier-up (it lasted about two rounds of 60 calls and a 400 ms pause).
+  That is the exposure every detour here has, and the host runs with tiering off.
+
+**What works.** A native detour (MonoMod's `PlatformTriple.CreateNativeDetour`, reached by reflection the way
+`detourMethod` reaches `PatchTools`) from the shared body to a stub with the shared body's own signature, hidden
+argument included. The hidden argument says which instantiation the call is for, and where it lives depends on where
+the method lives:
+
+| the method | the hidden argument |
+|---|---|
+| generic, in an ordinary type | the exact method (`MethodBase.GetMethodFromHandle(RuntimeMethodHandle.FromIntPtr md)` gives it, and its generic arguments are the instantiation) |
+| an instance member of a generic class | none: the type arguments are the object's |
+| a static member of a generic class | the exact class (a MethodTable, `Type.GetTypeFromHandle`) |
+| a generic instance method of a generic class | the exact method, which the runtime only turns back into a method given the exact class, and the object has it |
+| a static generic method of a generic class | the exact method, and nothing at the call names its class: refused when a reference type is among its arguments (a value-type instantiation has its own code and is detoured on its own) |
+
+The stub finds the exact instantiation, finds the new copy's entry for the same type arguments and calls it with
+`calli`. With it, the same `typeof<'T>.Name` body printed `String:B`, `Rec:B`, `Rec2:B` and `Int32:A` (a value type
+nobody patched): each reference type got its own type argument, the ones that had not run included.
+
+**The design.** A save re-points a generic function body by body: one detour for each value-type instantiation the
+program can reach (a stub with a probe), and one native detour for each shared body (a stub with a probe). Which bodies
+exist is read from the program, not guessed: `GenericReload.reach` decodes the IL of every assembly that can name the
+function (the declaring one, the ones that refer to it, the project's own, FSI's) and finds the method references
+(`call`, `callvirt`, `newobj`, `ldftn`, `ldvirtftn`, `ldtoken`). It follows a generic caller with the type arguments it
+is reached with (`Outer<float>` reaches `Inner<float>`) and a closed generic type through all its members, since a
+virtual or interface call reaches a member no IL names. It took 23 ms for the parity fixture's assembly. Planned
+first, applied after: one refusal anywhere stops every detour of the save, as for everything else.
+
+It says it cannot list the instantiations, and the save restarts with the new cause `GenericInstantiationsUnknown`,
+when: the program calls `MethodInfo.MakeGenericMethod` anywhere in those assemblies (it can make an instantiation no
+code names), or `Type.MakeGenericType` while a generic type or method reaches the function (or the function is a member
+of a generic type), a method could not be decoded, more than 200000 method contexts were reached, or the shape is one
+the stub cannot take: a byref parameter, a struct returned through a buffer (it comes back before the hidden argument), a
+generic struct's members, a static generic method of a generic class used with a reference type. The check is deliberately coarse: one
+`MakeGenericMethod` call in a program refuses every generic edit in it. A finer rule (the call's `MethodInfo` comes from
+a `ldstr` of this function's name) would restart less and prove less.
+
+**The probes.** Each body gets a probe under the function's name, and the function is `Patched` once the host has seen
+any of its new bodies run: the planner matches a probe to the declaration the user edited by name, and says the
+declaration ran when one of its probes has been entered, which is how the several closures of one declaration already
+work. So `Patched` for a generic function means a new body was seen running, and every body was patched in the same
+save. It does not mean every instantiation was exercised. A body nothing runs stays unseen without the save saying so.
+That is the weakest claim in this design, and tightening it (every probe of a declaration entered, or superseded)
+means changing what the closures' confirmation means too.
+
+**What it does not do.**
+
+- Reflection that makes generic methods or types, as above: it restarts and says so. A delegate bound straight to a
+  generic method is one: F# wraps a function used as a value in a closure (that row is `genericClosure` and it
+  patches), so a direct delegate takes `CreateDelegate` and `MakeGenericMethod`, which is why `genericDelegate` is a
+  restart.
+- A real fix for those would not be a detour. Roslyn changes the method definition in the runtime's metadata, so the
+  runtime re-JITs every instantiation, the ones that exist and the ones to come, and no list is needed: that is
+  `MetadataUpdater.ApplyUpdate` with a delta, which `dotnet/fsharp#19941` is building the compiler side of. A profiler's
+  `RequestReJIT` and `SetILFunctionBody` do the same job from the other side (a native profiler the host would load, set
+  up at process start, which SageFs does start). Neither is planned.
+
+Evidence: `SageFs.Tests/HotReloadParityTests.fs` rows `generic`, `genericRef`, `genericKind` (a body that reads its own
+type argument), `genericLate` (a float and a struct first compiled after the save), `genericNested`, `genericClosure`,
+`genericInstanceMethod`, `genericStaticMethod`, `genericTypeInstance`, `genericTypeStatic` and `genericMethodOnType`, which
+end `Patched` on net10.0 and net11.0, and `genericReflection` and `genericDelegate`, which restart with
+`GenericInstantiationsUnknown`; `SageFs.Tests/GenericReloadTests.fs` for the scan (emitted IL), the grouping and the
+real detours, including the ones that prove the list has to be complete (an unlisted value type keeps the old body).
+Reopen it if: a program that uses `MakeGenericMethod` for something unrelated turns out to be common (the coarse rule
+would then cost real restarts, and the finer one is the next step), or `Patched` for a generic function that was seen
+running in one instantiation and not in another bites someone.
 
 ## The debugger row downloads a pinned debugger and checks its hash, because the row has to be real
 

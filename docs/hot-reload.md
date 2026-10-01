@@ -129,6 +129,10 @@ on .NET 11).
 | a **new type**, or a **new value**, the saved code uses | reloads, the same way | parity `addedType`, `addedValue` |
 | a function **taken out**, with the code that used it | reloads. The old one stays in the process for whatever holds it | parity `removed` |
 | a function that **gains a parameter**, with its callers saved in the same save | reloads. It is a new method to the running app, and the callers move onto it | parity `signature` |
+| a **generic function**, used with value types, reference types, or both | reloads in every instantiation: the ones that ran, a float or a struct that is first used (and so first compiled) after the save, and a reference type nobody named. A body that reads `typeof<'T>` gets each instantiation's own `'T` | parity `generic`, `genericRef`, `genericKind`, `genericLate` |
+| a generic function **called from another generic function**, or used as a **first-class value** | reloads | parity `genericNested`, `genericClosure` |
+| a **generic method** of a class, instance or static | reloads | parity `genericInstanceMethod`, `genericStaticMethod` |
+| a member of a **generic type**: an instance member, a static one, or a generic method of it | reloads. Each object keeps its own type argument, and the objects built before the save run the new body | parity `genericTypeInstance`, `genericTypeStatic`, `genericMethodOnType` |
 
 The planner only takes an edit as "just the lambdas" when nothing outside a
 lambda changed (it cuts every lambda out of both versions and compares what is
@@ -371,7 +375,8 @@ isn't the one running your app, tells you a restart is needed):
 | the **entry point**, a bare expression that runs at startup, a module alias, added or removed | it takes effect when the process starts | planner: `ReloadPlanningTests` |
 | a lambda that **starts capturing** something it did not, or gains or loses a lambda inside it | the closures the app already built have no room for the change. It says `ClosureShapeChanged` and names the field | parity `inlineNewCapture` |
 | an instance member that starts reading a **constructor argument** (the compiler adds a field) | the objects the app already built do not have it. It says `InstanceLayoutChanged` and names the field | parity `instanceNewField` |
-| a **generic function** the app already holds | a detour reaches the instantiations that have run, and one that runs later would get the old body. It says `GenericFunction` and names it. If the function only has to work for one type, annotate its arguments with it and it is re-pointed like any other | parity `generic` |
+| a **generic function** in a program that can make instantiations by **reflection** (`MakeGenericMethod` anywhere in your code, or `MakeGenericType` while a generic type or method reaches the function), including a delegate bound straight to a generic method | the runtime compiles a generic function once per value type and once for all reference types, and SageFs patches every body it can find in your code. Reflection can make one that no code names, so a patch could leave it on the old body. It says `GenericInstantiationsUnknown` and names what it saw. If the function only has to work for one type, annotate its arguments with it and it is re-pointed like any other | parity `genericReflection`, `genericDelegate` |
+| a generic function with a **byref parameter**, a **struct return**, a member of a **generic struct**, or a static generic method of a generic class used with a reference type | the stub that carries the exact instantiation cannot take an address or a return buffer, and nothing at that call names the class. It says `GenericInstantiationsUnknown` | `GenericReloadTests` (struct return) |
 
 Each of those leaves the running app exactly as it was, and the whole save with
 it: one refusal anywhere in a save stops every detour of it.
@@ -439,9 +444,13 @@ I'd rather you hear this from me than find it at 11pm.
 - **A caller in another file keeps the old method after a signature change.**
   The saved callers move onto the new method; one you haven't saved yet still
   calls the old one, until you save it.
-- **A generic function is a restart.** There is no way for a detour to reach
-  every instantiation, present and future, so it names the function and says so
-  rather than patching some calls.
+- **A generic function is patched in every body SageFs can find, and "found"
+  means read from your code.** One `MakeGenericMethod` call anywhere in the
+  assemblies that can name the function turns every generic edit in them into a
+  restart, because that call can make an instantiation no code names. That is
+  coarse on purpose. And `Patched` for a generic function means a new body was
+  seen running and every body was patched in the same save, not that every
+  instantiation has been called since.
 - **Adding a member to an existing type is a restart.** Microsoft's mechanism
   supports it. Mine treats any change to a type's member list as a shape change.
 
