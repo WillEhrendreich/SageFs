@@ -1,6 +1,6 @@
 /// A timeout is a decision with a name and one home, never a bare number at the call site.
 /// `Timeouts` (SageFs.Core/Timeouts.fs) holds the product's, `TestTimeouts`
-/// (SageFs.Tests/TestInfrastructure.fs) holds the ones a test picks on purpose, and each says
+/// (SageFs.Tests/TestTimeouts.fs) holds the ones a test picks on purpose, and each says
 /// what the wait is for and why that long. This pins where an inline literal is still left:
 /// `TimeSpan.From...` with a number, `Task.Delay n`, `Thread.Sleep n`, `Async.Sleep n`, `.AddSeconds n` and
 /// its kin, `WaitForExit n`, `CancelAfter n`, a `...Ms = n` or `timeout = n` binding, and a bare digit-group
