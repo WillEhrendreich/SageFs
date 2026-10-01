@@ -23,6 +23,8 @@
 //   --keep           do not delete --work at the end
 //   --skip-lt        skip the live-testing stages
 //   --skip-reset     skip the hard-reset stages
+//   --reuse-profile  carry machine-profile.json from one run's data dir to the next, as a real
+//                    user's daemon finds it, instead of every run probing the machine afresh
 //
 // To get a tier on one machine, wrap THIS command, for example
 //   systemd-run --user --scope -p AllowedCPUs=0-1 -p CPUQuota=100% -p MemoryMax=2G \
@@ -59,7 +61,8 @@ type Options =
     Out: string
     Keep: bool
     SkipLt: bool
-    SkipReset: bool }
+    SkipReset: bool
+    ReuseProfile: bool }
 
 let defaultOptions =
   { SageFsDir = ""
@@ -74,7 +77,8 @@ let defaultOptions =
     Out = ""
     Keep = false
     SkipLt = false
-    SkipReset = false }
+    SkipReset = false
+    ReuseProfile = false }
 
 let rec parseArgs (o: Options) (rest: string list) : Options =
   match rest with
@@ -95,6 +99,7 @@ let rec parseArgs (o: Options) (rest: string list) : Options =
   | "--keep" :: tl -> parseArgs { o with Keep = true } tl
   | "--skip-lt" :: tl -> parseArgs { o with SkipLt = true } tl
   | "--skip-reset" :: tl -> parseArgs { o with SkipReset = true } tl
+  | "--reuse-profile" :: tl -> parseArgs { o with ReuseProfile = true } tl
   | other :: _ -> failwithf "unknown option %s (see the top of this file)" other
 
 let opts =
@@ -344,8 +349,12 @@ type Daemon =
     OutFile: string
     ErrFile: string }
 
+/// Where the profile a run left behind is kept for the next run (--reuse-profile).
+let carriedProfile = Path.Combine(opts.Work, "machine-profile.carried.json")
+
 let startDaemon (dataDir: string) (hostCache: string) : Daemon =
   Directory.CreateDirectory dataDir |> ignore
+  if opts.ReuseProfile && File.Exists carriedProfile then File.Copy(carriedProfile, Path.Combine(dataDir, "machine-profile.json"), true)
   Directory.CreateDirectory hostCache |> ignore
   let dll = Path.Combine(opts.SageFsDir, "SageFs.dll")
   let exe, args =
@@ -686,6 +695,8 @@ let runOnce (kind: RunKind) (index: int) (hostCache: string) =
       | c -> failures.Add(sprintf "[%s] create answered %d: %s" tag c resp)
   finally
     stopDaemon daemon
+    let profileFile = Path.Combine(dataDir, "machine-profile.json")
+    if opts.ReuseProfile && File.Exists profileFile then File.Copy(profileFile, carriedProfile, true)
     say "[%s] done in %.0fs" tag swAll.Elapsed.TotalSeconds
 
 // ---- report ------------------------------------------------------------------------

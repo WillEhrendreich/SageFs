@@ -48,10 +48,14 @@ TIERS=(
   "t4m8g|0-3||8G"
   "t4m4g|0-3||4G"
   "t4m2g|0-3||2G"
+  "t4m1500m|0-3||1500M"
+  "t4m1g|0-3||1G"
 )
 
 for spec in "${TIERS[@]}"; do
   IFS='|' read -r name cpus quota mem <<<"$spec"
+  # TIERS_ONLY="t1q50 t4m2g" runs just those (a rerun of the tiers that failed under the shipped timeouts).
+  if [ -n "${TIERS_ONLY:-}" ] && [[ " $TIERS_ONLY " != *" $name "* ]]; then continue; fi
   props=()
   [ -n "$quota" ] && props+=(-p "CPUQuota=$quota")
   [ -n "$mem" ] && props+=(-p "MemoryMax=$mem" -p MemorySwapMax=0)

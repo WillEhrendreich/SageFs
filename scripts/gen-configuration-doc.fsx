@@ -58,11 +58,13 @@ type Row =
     Default: float
     Unit: Unit'
     Comment: string option
+    /// Whether the default is a wait for the machine, scaled by the machine tier (see `Timeouts`).
+    Scaled: bool
     Line: int }
 
 let sectionRx = Regex(@"^  // -- (.+) --\s*$")
 let docRx = Regex(@"^\s*///\s?(.*)$")
-let envRx = Regex(@"(envOrDefaultMinutes|envOrDefault)\s+""(SAGEFS_[A-Z0-9_]+)""\s+(.+?)\s*$")
+let envRx = Regex(@"(envOrDefaultMachineMinutes|envOrDefaultMachine|envOrDefaultMinutes|envOrDefault)\s+""(SAGEFS_[A-Z0-9_]+)""\s+(.+?)\s*$")
 let letRx = Regex(@"^\s*let\s+(?:mutable\s+)?(?:private\s+)?(\w+)\b")
 
 /// Numeric literals the defaults are written as, plus the two shapes this file
@@ -70,11 +72,25 @@ let letRx = Regex(@"^\s*let\s+(?:mutable\s+)?(?:private\s+)?(\w+)\b")
 let fallbackSeconds =
   lines
   |> Array.choose (fun l ->
-    let m = Regex.Match(l, @"^\s*let\s+(\w+)\s*=\s*TimeSpan\.FromSeconds\(([0-9.]+)\)\s*$")
+    let m = Regex.Match(l, @"^\s*let\s+(\w+)\s*=\s*(?:forMachine \()?TimeSpan\.FromSeconds\(([0-9.]+)\)\)?\s*$")
     match m.Success with
     | true -> Some (m.Groups.[1].Value, float m.Groups.[2].Value)
     | false -> None)
   |> Map.ofArray
+
+/// Fallbacks that are themselves a wait for the machine: a variable whose default is one of these scales too.
+let scaledFallbacks =
+  lines
+  |> Array.choose (fun l ->
+    let m = Regex.Match(l, @"^\s*let\s+(\w+)\s*=\s*forMachine \(TimeSpan\.FromSeconds\(([0-9.]+)\)\)\s*$")
+    match m.Success with
+    | true -> Some m.Groups.[1].Value
+    | false -> None)
+  |> Set.ofArray
+
+let isScaledViaFallback (expr: string) : bool =
+  let m = Regex.Match(expr, @"^(\w+)\.TotalSeconds$")
+  m.Success && scaledFallbacks.Contains m.Groups.[1].Value
 
 let resolveDefault (expr: string) : float =
   let bare = Regex.Match(expr, @"^([0-9_.]+)$")
@@ -116,7 +132,8 @@ let timeoutRows =
         // The value is either on the `let` line or on the line after a bare `let x =`.
         let letIndex = if letRx.IsMatch line then i else i - 1
         let name = letRx.Match(lines.[letIndex]).Groups.[1].Value
-        let unit', seconds = (match env.Groups.[1].Value with "envOrDefaultMinutes" -> Minutes | _ -> Seconds), resolveDefault env.Groups.[3].Value
+        let isMinutes = env.Groups.[1].Value.EndsWith "Minutes"
+        let unit', seconds = (if isMinutes then Minutes else Seconds), resolveDefault env.Groups.[3].Value
         yield
           { Var = env.Groups.[2].Value
             Name = name
@@ -124,6 +141,7 @@ let timeoutRows =
             Default = seconds
             Unit = unit'
             Comment = docAbove letIndex
+            Scaled = env.Groups.[1].Value.StartsWith "envOrDefaultMachine" || isScaledViaFallback env.Groups.[3].Value
             Line = letIndex + 1 } ]
 
 // DataRetention: the env var names are string constants, the readers take the constant.
@@ -147,6 +165,7 @@ let retentionRows =
             Default = float (m.Groups.[4].Value.Replace("_", ""))
             Unit = (match m.Groups.[2].Value with "Days" -> Days | _ -> Count)
             Comment = docAbove i
+            Scaled = false
             Line = i + 1 } ]
 
 // pruneInterval is written out by hand in the source (an env value in minutes, a one hour default).
@@ -161,6 +180,7 @@ let pruneRow =
     Default = 60.0
     Unit = Minutes
     Comment = docAbove pruneIndex
+    Scaled = false
     Line = pruneIndex + 1 }
 
 let allRows = timeoutRows @ retentionRows @ [ pruneRow ]
@@ -222,9 +242,9 @@ let render () =
   for a in areas do
     let rows = allRows |> List.filter (fun r -> r.Area = a)
     sb.AppendLine(sprintf "### %s" a).AppendLine() |> ignore
-    sb.AppendLine("| Variable | Default | Unit | What it is for | Source |").AppendLine("|:---|---:|:---|:---|:---|") |> ignore
+    sb.AppendLine("| Variable | Default | Unit | Scaled by tier | What it is for | Source |").AppendLine("|:---|---:|:---|:---|:---|:---|") |> ignore
     for r in rows do
-      sb.AppendLine(sprintf "| `%s` | %s | %s | %s | %s |" r.Var (fmtNumber r.Default) (unitName r) (describe r) (link r)) |> ignore
+      sb.AppendLine(sprintf "| `%s` | %s | %s | %s | %s | %s |" r.Var (fmtNumber r.Default) (unitName r) (if r.Scaled then "yes" else "no") (describe r) (link r)) |> ignore
     sb.AppendLine() |> ignore
   sb.ToString().TrimEnd() + "\n"
 
