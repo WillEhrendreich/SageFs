@@ -106,6 +106,41 @@ let tests =
             failtestf "expected real=Succeeded and old loop=GaveUp for a start needing %.0fs, got real=%A old=%A" needs.TotalSeconds real.Outcome old.Outcome
     ]
 
+    testList "learning across many starts" [
+
+      testPropertyWithConfig simConfig
+        "seeded machines: any tier, any typical start time, between two and twenty starts; the real code never allows a first attempt less than the last start took, and stable machines stop wasting"
+        <| fun (seed: int) ->
+          let t = StartLearningSim.run (StartLearningGenerators.fromSeed seed)
+          match StartLearningInvariants.violations t with
+          | [] -> ()
+          | vs -> failtestf "INVARIANT VIOLATION (%s) seed=%d: %A" t.Reducer seed vs
+
+      testCase "the Phenom's case: the first start needs a second attempt, and no start after it does" <| fun _ ->
+        let t = StartLearningSim.run StartLearningGenerators.phenom
+        (t.Sessions |> List.head).Attempts |> Expect.equal "the first start: 30 s is not enough, 60 s is" 2
+        t.Sessions |> List.skip 1 |> List.forall (fun s -> s.Attempts = 1) |> Expect.isTrue "every later start gets it right first time"
+        StartLearningInvariants.violations t |> Expect.equal "the real code is clean" []
+
+      testCase "the twin that learns nothing wastes a first attempt on every start, and both invariants say so" <| fun _ ->
+        let t = StartLearningSim.runWithoutMemory StartLearningGenerators.phenom
+        t.Sessions |> List.forall (fun s -> s.Attempts = 2) |> Expect.isTrue "every start repeats the first start's waste"
+        let ids = StartLearningInvariants.violations t |> List.map fst
+        ids |> Expect.contains "later starts are given less than the last one took" "next-first-attempt-covers-the-last-start"
+        ids |> Expect.contains "a stable machine keeps wasting" "stable-machines-stop-wasting"
+
+      testPropertyWithConfig simConfig
+        "teeth: for ANY stable machine whose starts need a second attempt, the twin violates stable-machines-stop-wasting and the real code does not"
+        <| fun (PositiveInt extra) ->
+          // A typical start between 1.3 and 2.3 times the 30 s allowance of a Fast machine: past the first attempt, inside the second.
+          let typical = StartEscalationTimeouts.slowStartFloor + TimeSpan.FromSeconds(float (extra % 30))
+          let scenario = StartLearningGenerators.stableMachine extra MachineTier.Fast typical 8
+          let real = StartLearningInvariants.violations (StartLearningSim.run scenario) |> List.map fst
+          let twin = StartLearningInvariants.violations (StartLearningSim.runWithoutMemory scenario) |> List.map fst
+          real |> List.contains "stable-machines-stop-wasting" |> not
+          && twin |> List.contains "stable-machines-stop-wasting"
+    ]
+
     testList "determinism / replay" [
       testProperty "same seed gives an identical trace" <|
         fun (seed: int) ->

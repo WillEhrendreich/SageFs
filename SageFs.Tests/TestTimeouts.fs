@@ -1198,6 +1198,10 @@ module StartEscalationTimeouts =
   /// FSI host build (about 40 s, measured on 2026-10-01).
   let slowHealthyStart = secs 40.
 
+  /// The shortest start the teeth property uses: 1.3 times the 30 s a first attempt is allowed, so it always needs a
+  /// second attempt.
+  let slowStartFloor = secs 39.
+
   /// A start that outlasts the first two attempts' allowances (30 s and 60 s) but not the third's.
   let verySlowStart = secs 100.
 

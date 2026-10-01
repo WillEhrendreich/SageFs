@@ -51,6 +51,12 @@ module Timeouts =
   //   * Anything else stays as written: a pause tuned to a person typing, a poll, a debounce, a
   //     presence window, a lease or a retention period, a network budget, a protocol constant, a
   //     test's own deadline. It is declared with a bare `TimeSpan.From...` or `envOrDefault`.
+  //   * A bound before a KILL (how long a process gets to exit on its own, how long to wait for it to be gone,
+  //     how long to drain its pipes) is not scaled either: when the bound is spent the caller kills the process,
+  //     so a longer bound only delays the kill. Measured on 0.6.875, `stop_session` costs 5.1 to 5.7 seconds on
+  //     every machine tried, from a 16 thread desktop to a 2009 four core with a spinning disk: the worker never
+  //     leaves inside the 2 + 3 seconds it is given, so those seconds are always spent in full and scaling them
+  //     would only make every stop on a slow machine 2.5 to 6 times longer.
   // An environment variable always wins over the scaled value: the person who set it chose a number.
   // `TimeoutScalingTests` holds the list of which is which, and fails on a duration that is in neither.
 
@@ -131,7 +137,7 @@ module Timeouts =
   /// How long `sagefs stop` waits for the process to be gone after it killed it.
   /// `processKillVerify` serves the same purpose in SessionManager at 2s; this
   /// site had 3s and keeps it.
-  let stopKillExit = forMachine (TimeSpan.FromSeconds(3.0))
+  let stopKillExit = TimeSpan.FromSeconds(3.0)
 
   // -- HTTP / Worker Communication --
   let workerHttpRead = envOrDefaultMachine "SAGEFS_WORKER_HTTP_READ_SECONDS" 30.0
@@ -276,23 +282,23 @@ module Timeouts =
   /// How long a process that was asked to stop (a worker after its Shutdown
   /// message, the daemon during its own stop) gets to exit on its own before
   /// the caller kills it. No recorded reason for 3s.
-  let processNormalExit = forMachine (TimeSpan.FromSeconds(3.0))
+  let processNormalExit = TimeSpan.FromSeconds(3.0)
   /// How long a process that was just killed gets to be gone before the caller
   /// logs that it is not and carries on. No recorded reason for 2s.
-  let processKillVerify = forMachine (TimeSpan.FromSeconds(2.0))
+  let processKillVerify = TimeSpan.FromSeconds(2.0)
   /// How long the failure path waits for a worker's stderr reader to reach EOF
   /// once stdout has closed. stderr closes with the process, so this normally
   /// costs nothing; the bound only matters when a grandchild holds the pipe
   /// open. No recorded reason for 2s.
-  let stderrDrainGrace = forMachine (TimeSpan.FromSeconds(2.0))
+  let stderrDrainGrace = TimeSpan.FromSeconds(2.0)
   /// How long the client waits, after the FSI host's connection closes, for the
   /// process to report its exit code. The code arrives right behind the close, so
   /// this normally costs nothing; if it never comes the end is reported as a
   /// closed connection instead. Was a bare 2000 ms, kept at that.
-  let fsiHostExitReport = forMachine (TimeSpan.FromSeconds(2.0))
+  let fsiHostExitReport = TimeSpan.FromSeconds(2.0)
   /// How long disposing an FSI host session waits for the host to exit after the
   /// shutdown request before it kills the process. Was a bare 5000 ms, kept at that.
-  let fsiHostShutdownGrace = forMachine (TimeSpan.FromSeconds(5.0))
+  let fsiHostShutdownGrace = TimeSpan.FromSeconds(5.0)
   /// How long the `dotnet build` of the FSI host (a cold build, once per host
   /// version and SDK) may run before FsiHostBuild gives up. No recorded reason
   /// for 5 minutes.
@@ -656,7 +662,7 @@ module Timeouts =
   /// broadcast. It runs on its own thread so it keeps ticking when the eval is
   /// slow. No recorded reason for 500ms.
   let evalHeartbeatInterval = TimeSpan.FromMilliseconds(500.0)
-  let workerShutdownDelay = forMachine (TimeSpan.FromSeconds(2.0))
+  let workerShutdownDelay = TimeSpan.FromSeconds(2.0)
   /// Defense-in-depth bound on a `StopSession` mailbox round-trip
   /// (`DaemonMode.createSessionOps.StopSession`). `stopWorker` itself is
   /// already bounded (workerShutdownDelay + a WaitForExit + a Kill

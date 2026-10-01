@@ -37,6 +37,9 @@ type FixedBecause =
   | Threshold
   /// Read only so an old setting keeps parsing, or no time at all.
   | Inert
+  /// A bound before a kill: when it is spent the caller kills the process, so a longer bound only delays the
+  /// kill. Measured: `stop_session` costs 5.1 to 5.7 s on every tier, so the bound is always spent in full.
+  | BoundBeforeKill
   /// A deadline a test harness picks, not a product wait.
   | TestHarness
 
@@ -73,6 +76,9 @@ let private fixedTable : (string * FixedBecause) list =
         "dashboardStaleAfter"; "dashboardWorkerDataTtl"; "legacyStateStreamKeepAlive"; "reloadStreamHeartbeat"
         "processStartTimeTolerance"; "fileWriteTimeTolerance" ]
   @ all FixedBecause.Threshold [ "impactP95Acceptable"; "impactP95Investigate"; "memberEvaluationGrace"; "scaledWaitCeiling" ]
+  @ all FixedBecause.BoundBeforeKill
+      [ "processNormalExit"; "processKillVerify"; "stderrDrainGrace"; "fsiHostExitReport"; "fsiHostShutdownGrace"
+        "stopKillExit"; "workerShutdownDelay" ]
   @ all FixedBecause.Inert [ "legacyWorkerStartup"; "notRun" ]
   @ all FixedBecause.TestHarness
       [ "integrationDaemonReady"; "integrationWorkerRestart"; "browserJourneyWarmup"; "webAppHotReloadBuild"
@@ -82,18 +88,17 @@ let private fixedTable : (string * FixedBecause) list =
 let private machineScaled : Set<string> =
   set [ "warmupAbsoluteMax"; "warmupInactivityLimit"; "softResetCancellation"; "initSessionCancellation"
         "fsiHostStartup"; "dotnetSdkQuery"; "ambientSdkProbe"; "targetFrameworkEvaluation"; "gcDumpCapture"
-        "fsiAvailabilityProbe"; "stopGracefulExit"; "stopKillExit"; "workerHttpRead"; "workerHttpRequest"
+        "fsiAvailabilityProbe"; "stopGracefulExit"; "workerHttpRead"; "workerHttpRequest"
         "gateStatusProbe"; "healthCheck"; "shutdownHttpClient"; "daemonSessionsProbe"; "perTestTimeoutFallback"
         "liveTestConfirmationDeadline"; "liveValueBindingBudget"; "memberEvaluationDeadline"
-        "liveTestWatcherShutdown"; "rebuildReadyWait"; "buildCompletion"; "processNormalExit"; "processKillVerify"
-        "stderrDrainGrace"; "fsiHostExitReport"; "fsiHostShutdownGrace"; "hostBuildRun"; "gitQuick"; "gitRebase"
+        "liveTestWatcherShutdown"; "rebuildReadyWait"; "buildCompletion"; "hostBuildRun"; "gitQuick"; "gitRebase"
         "gitWorktreeAdd"; "cohortIntegrationSettle"; "testRunAwaitSlack"; "leaseTtlSessionCreate"
         "leaseTtlTestSuite"; "frictionSlowFirstSuccess"; "compileQueueWait"; "compileBudget"; "reloadPlanningCheck"
         "appHostAppearGrace"; "appHostStart"; "appHostStop"; "appEntryFinishGrace"; "appRunnerShutdown"
         "debugHold"; "restartStartupCrashWindow"; "watchdogGracePeriod"; "workerHealthProbeTimeout"
         "workerEndpointFetch"; "workerWarmupContextFetch"; "outputCommitWait"; "gracefulShutdownWatchdog"
         "shutdownManifestCommit"; "testCycleTimerStop"; "cacheSaveTimerStop"; "workerHttpServerStop"
-        "startupDelay"; "workerShutdownDelay"; "stopSessionMailboxTimeout"; "supervisorWedgeAfter"
+        "startupDelay"; "stopSessionMailboxTimeout"; "supervisorWedgeAfter"
         "sessionDispose"; "warmupReadyPollMax"; "workerProxyRegister"; "daemonStartWait" ]
 
 /// Declared as another wait for the machine, so they scale through it.
@@ -170,8 +175,8 @@ let tests =
         declared.[name].Contains source |> Expect.isTrue (sprintf "%s is declared from %s" name source)
 
     testCase "WHY — the number of waits for the machine only goes up when a table says so (a ratchet on the count, with the reason a wait is fixed in the table above)" <| fun _ ->
-      machineScaled |> Set.count |> Expect.equal "waits for the machine" 67
-      fixedTable |> List.length |> Expect.equal "fixed durations" 87
+      machineScaled |> Set.count |> Expect.equal "waits for the machine" 60
+      fixedTable |> List.length |> Expect.equal "fixed durations" 94
 
     testCase "WHY — each machine constant in the running process equals its written value scaled for the process's tier, so the wiring is real and not only the text" <| fun _ ->
       let timeouts = typeof<ValidTimeout>.Assembly.GetType "SageFs.Timeouts"

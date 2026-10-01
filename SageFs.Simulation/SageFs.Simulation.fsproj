@@ -184,6 +184,9 @@
         <Compile Include="StartEscalationSim.fs" />
         <Compile Include="StartEscalationInvariants.fs" />
         <Compile Include="StartEscalationGenerators.fs" />
+        <Compile Include="StartLearningSim.fs" />
+        <Compile Include="StartLearningInvariants.fs" />
+        <Compile Include="StartLearningGenerators.fs" />
         <Compile Include="SessionStatusReconciliationSim.fs" />
         <Compile Include="SessionStatusReconciliationInvariants.fs" />
         <Compile Include="SessionStatusReconciliationGenerators.fs" />

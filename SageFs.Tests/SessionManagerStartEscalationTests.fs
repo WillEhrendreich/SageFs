@@ -247,7 +247,7 @@ let realAwait =
         let cancellation = new CancellationTokenSource()
         try
           let ledger =
-            StartLedger.openAt dir (MachineProfile.ofProbe { LogicalCores = 4; TotalMemoryMb = 8000L; AvailableMemoryMb = 4000L; Storage = StorageKind.Unknown; Calibration = Calibration.NotMeasured "test" })
+            StartLedger.openAt dir (MachineProfile.ofProbe { LogicalCores = 4; CpuQuota = CpuQuota.Unlimited; TotalMemoryMb = 8000L; AvailableMemoryMb = 4000L; Storage = StorageKind.Unknown; Calibration = Calibration.NotMeasured "test" })
           let inbox, ready = collect (function SessionCommand.WorkerReady _ -> true | _ -> false)
           awaitWorkerPort ledger (SessionId.newId ()) child inbox cancellation.Token shortBudget
           let! winner = Task.WhenAny(ready, Task.Delay TestTimeouts.patience)

@@ -3,6 +3,7 @@ namespace SageFs
 open System
 open System.Collections.Generic
 open System.Diagnostics
+open System.Runtime.InteropServices
 open System.Text
 
 /// A fixed single-thread workload that looks like compiler work (string hashing, dictionary and
@@ -36,14 +37,61 @@ module MachineCalibration =
   [<Literal>]
   let private SteadyRuns = 2
 
-  /// What one measurement says. Both numbers are milliseconds of wall clock for the same
-  /// workload; `FirstMs` includes the JIT of the workload itself.
+  /// What the time is measured with. The CPU time of the calling thread is what says how fast the CPU
+  /// is: another process taking the CPU for a moment stretches the wall clock of the same work (a fast
+  /// desktop read 24 ms on a quiet minute and 89 ms while a build ran on every core) but not the thread's
+  /// own CPU time. Where the platform has no such clock the wall clock is used, and says so.
+  [<RequireQualifiedAccess>]
+  type Clock =
+    | ThreadCpu
+    | Wall
+
+  /// What one measurement says. Both numbers are milliseconds of `Clock` for the same workload;
+  /// `FirstMs` includes the JIT of the workload itself.
   type Measurement =
     { FirstMs: float
-      SteadyMs: float }
+      SteadyMs: float
+      Clock: Clock }
 
-  let private workload () : float =
+  [<Struct; StructLayout(LayoutKind.Sequential)>]
+  type private Timespec =
+    val mutable Seconds: int64
+    val mutable Nanoseconds: int64
+
+  [<DllImport("libc", EntryPoint = "clock_gettime")>]
+  extern int private clock_gettime(int clockId, Timespec& result)
+
+  /// CLOCK_THREAD_CPUTIME_ID: 3 on Linux, 16 on macOS.
+  let private threadCpuClockId : int = (match OperatingSystem.IsMacOS() with | true -> 16 | false -> 3)
+
+  [<Literal>]
+  let private NanosecondsPerMillisecond = 1000000.0
+
+  [<Literal>]
+  let private MillisecondsPerSecond = 1000.0
+
+  /// What the thread CPU clock said, or that this platform has none.
+  [<RequireQualifiedAccess>]
+  type private CpuReading =
+    | Milliseconds of float
+    | NoClock
+
+  /// The calling thread's CPU time so far, where the platform has the clock.
+  let private threadCpuMs () : CpuReading =
+    match OperatingSystem.IsWindows() with
+    | true -> CpuReading.NoClock
+    | false ->
+      try
+        let mutable now = Unchecked.defaultof<Timespec>
+        match clock_gettime (threadCpuClockId, &now) with
+        | 0 -> CpuReading.Milliseconds (float now.Seconds * MillisecondsPerSecond + float now.Nanoseconds / NanosecondsPerMillisecond)
+        | _ -> CpuReading.NoClock
+      with _ -> CpuReading.NoClock
+
+  /// How long the workload took by the best clock there is, and which clock that was.
+  let private workload () : float * Clock =
     let timer = Stopwatch.StartNew()
+    let cpuBefore = threadCpuMs ()
     let counts = Dictionary<string, int>()
     let mutable churn = 0
     for i in 0 .. KeyCount do
@@ -58,10 +106,12 @@ module MachineCalibration =
     for row in rows do
       builder.Append(row.Length) |> ignore
     ignore (churn + builder.Length)
-    timer.Elapsed.TotalMilliseconds
+    match cpuBefore, threadCpuMs () with
+    | CpuReading.Milliseconds before, CpuReading.Milliseconds after -> after - before, Clock.ThreadCpu
+    | _ -> timer.Elapsed.TotalMilliseconds, Clock.Wall
 
   /// Run the workload and report. Blocks the calling thread for the length of the workload.
   let measure () : Measurement =
-    let first = workload ()
-    let steady = [ for _ in 1 .. SteadyRuns -> workload () ] |> List.min
-    { FirstMs = first; SteadyMs = steady }
+    let first, clock = workload ()
+    let steady = [ for _ in 1 .. SteadyRuns -> fst (workload ()) ] |> List.min
+    { FirstMs = first; SteadyMs = steady; Clock = clock }

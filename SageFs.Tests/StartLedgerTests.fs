@@ -13,6 +13,7 @@ open SageFs.Tests.StartEscalationTimeouts
 
 let private probe : MachineProbe =
   { LogicalCores = 4
+    CpuQuota = CpuQuota.Unlimited
     TotalMemoryMb = 7913L
     AvailableMemoryMb = 4812L
     Storage = StorageKind.Rotational

@@ -150,7 +150,7 @@ let tests =
         let text = StartEscalation.describe failure
         text |> Expect.stringContains "the last tier" "SAGEFS_MACHINE_TIER=Minimal"
         text |> Expect.stringContains "the last thing it said" "2/4 loading"
-        text |> Expect.stringContains "one attempt is not pluralised" "1 attempt waiting"
+        text |> Expect.stringContains "one attempt is not pluralised" "1 attempt ("
     ]
 
     testList "where the failure is read" [

@@ -133,7 +133,7 @@ module StartEscalation =
   /// how many times, what the machine usually does, and what to do. Never just "faulted".
   let describe (failure: StartFailure) : string =
     sprintf
-      "The session could not start: it gave up after %d attempt%s waiting %s for %s. Each attempt waited longer (%s). %s %s What to do: close whatever is using the CPU or the disk and run hard_reset_fsi_session with rebuild=true. To wait longer, set SAGEFS_WARMUP_INACTIVITY_SECONDS, or tell SageFs this is a slower machine with %s=%s. The worker's log (daemon log directory, workers/<session id>.log) says where it stopped."
+      "The session could not start: it gave up after %d attempt%s (%s in all) waiting for %s. Each attempt was allowed more silence than the one before (%s). %s %s What to do: close whatever is using the CPU or the disk and run hard_reset_fsi_session with rebuild=true. To wait longer, set SAGEFS_WARMUP_INACTIVITY_SECONDS, or tell SageFs this is a slower machine with %s=%s. The worker's log (daemon log directory, workers/<session id>.log) says where it stopped."
       failure.Attempts
       (match failure.Attempts with 1 -> "" | _ -> "s")
       (seconds failure.TotalWaited)

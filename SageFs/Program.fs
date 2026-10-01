@@ -6,6 +6,22 @@ open System.Reflection
 open SageFs
 open SageFs.Server
 
+// The first thing this executable does: work out what machine it is on, and publish the tier in this process's
+// environment BEFORE anything reads `Timeouts`, which fixes every scaled wait the moment it is first read. A
+// top-level `do` in the last file runs at entry, in order, ahead of every binding below it and ahead of `main`.
+// (A first version did this inside `main`, and the daemon's own log said so: "Timeouts were read before the
+// machine tier was established". A top-level `do` in an EARLIER file did not run at all: those files initialise
+// when something in them is first used.) Help and version read nothing and wait for nothing, so they skip it,
+// and its probe.
+do
+  let asksForNothing =
+    Environment.GetCommandLineArgs()
+    |> Array.skip 1
+    |> Array.exists (fun a -> a = "--help" || a = "-h" || a = "--version" || a = "-v")
+  match asksForNothing with
+  | true -> ()
+  | false -> MachineStartup.establish DaemonState.SageFsDir |> ignore
+
 /// Wraps a TextWriter to normalize lone LF to CRLF.
 /// Some console modes on Windows cause \n alone to not carriage-return.
 /// This wrapper ensures all output uses \r\n.
@@ -183,10 +199,6 @@ let decideCustomPortOwnership
 
 /// Run daemon mode (default behavior).
 let runDaemon (args: string array) =
-  // The machine's tier, worked out (override, profile or a probe) and published in this process's environment
-  // BEFORE anything reads `Timeouts`, so every wait for the machine is scaled for this machine and the
-  // workers the daemon starts are told the same tier.
-  MachineStartup.establish DaemonState.SageFsDir |> ignore
   // Fail fast on a non-loopback SAGEFS_BIND_HOST before anything binds. The
   // supervised watchdog's child daemon runs this check again.
   match SageFsConfig.BindHost with
@@ -478,11 +490,6 @@ let private fetchSessionCountHttp (info: DaemonInfo) : int option =
 [<EntryPoint>]
 let main args =
   let command = CliCommand.parse args
-  // Every command that waits on the machine (the daemon's own start, the stdio bridge, `status`, `check`)
-  // scales its waits for this machine's tier. Help and version read nothing and wait for nothing.
-  match command with
-  | ShowHelp | ShowVersion -> ()
-  | _ -> MachineStartup.establish DaemonState.SageFsDir |> ignore
   match command with
   | Mcp _ -> () // stdout IS the JSON-RPC protocol stream: no CRLF-normalizing wrapper, ever.
   | _ ->

@@ -40,6 +40,7 @@ module StartLedger =
         | Error (MachineProbeError.CouldNotProbe reason) ->
           MachineProfile.ofProbe
             { LogicalCores = Environment.ProcessorCount
+              CpuQuota = CpuQuota.Unlimited
               TotalMemoryMb = 0L
               AvailableMemoryMb = 0L
               Storage = StorageKind.Unknown

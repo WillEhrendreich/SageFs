@@ -29,11 +29,20 @@ type MachineProbeError =
 type ProfileWriteError =
   | CouldNotWrite of path: string * reason: string
 
+/// A limit on how much CPU the process may use, apart from the cores it can see: a container's `--cpus`, a
+/// systemd scope's `CPUQuota`. .NET rounds such a quota UP to whole cores (half a core is one), but a start
+/// inside it takes twice as long, not as long.
+[<RequireQualifiedAccess>]
+type CpuQuota =
+  | Unlimited
+  | Limited of cores: float
+
 /// What was learned about a machine at one moment. Pure data; reading it off the machine is
 /// `MachineProbeReader`.
 type MachineProbe =
-  { /// Logical cores .NET can use: affinity and a cgroup CPU quota already applied.
+  { /// Logical cores .NET can use: affinity and a cgroup CPU quota already applied (and rounded up).
     LogicalCores: int
+    CpuQuota: CpuQuota
     TotalMemoryMb: int64
     AvailableMemoryMb: int64
     Storage: StorageKind
@@ -74,31 +83,44 @@ module MachineProbe =
       | _ when s < ConstrainedBelowSlowness -> MachineTier.Constrained
       | _ -> MachineTier.Minimal
 
-  /// Cores at or above this lose nothing to a lack of them.
-  [<Literal>]
-  let FastMinCores = 8
+  /// The CPU the process can actually use, in cores: the cores it can see, held down by a quota if it has one.
+  let effectiveCores (probe: MachineProbe) : float =
+    match probe.CpuQuota with
+    | CpuQuota.Unlimited -> float probe.LogicalCores
+    | CpuQuota.Limited cores -> min cores (float probe.LogicalCores)
 
+  /// Four cores or more lose nothing to a lack of them: the measured start on 16, 8 and 4 cores differs by 10%
+  /// (docs/TROUBLESHOOTING.md).
   [<Literal>]
-  let StandardMinCores = 4
+  let FastMinCores = 4.0
 
+  /// One to four cores: the start's parallel parts (the compiler building the FSI host) take about 1.6 times as
+  /// long on two cores and 1.7 times on one. A start still fits well inside the `Standard` waits.
   [<Literal>]
-  let ConstrainedMinCores = 2
+  let StandardMinCores = 1.0
 
-  let coreTier (logicalCores: int) : MachineTier =
-    match logicalCores with
+  /// Half a core to one: a start takes several times as long.
+  [<Literal>]
+  let ConstrainedMinCores = 0.5
+
+  let coreTier (cores: float) : MachineTier =
+    match cores with
     | n when n >= FastMinCores -> MachineTier.Fast
     | n when n >= StandardMinCores -> MachineTier.Standard
     | n when n >= ConstrainedMinCores -> MachineTier.Constrained
     | _ -> MachineTier.Minimal
 
+  /// A cold start peaks around 1.5 GB (the daemon, the worker, the FSI host and the compiler building the host)
+  /// and a warm one under 1 GB. Under a 2 GB cap the measured start was as fast as under 32 GB, so 2 GB
+  /// available loses nothing.
   [<Literal>]
-  let FastMinAvailableMb = 6144L
+  let FastMinAvailableMb = 2048L
 
   [<Literal>]
-  let StandardMinAvailableMb = 3072L
+  let StandardMinAvailableMb = 1536L
 
   [<Literal>]
-  let ConstrainedMinAvailableMb = 1536L
+  let ConstrainedMinAvailableMb = 1024L
 
   let memoryTier (availableMb: int64) : MachineTier =
     match availableMb with
@@ -116,7 +138,7 @@ module MachineProbe =
   /// The tier a probe gives: the slowest of what the CPU, the cores, the memory and the disk each give.
   let tierOf (probe: MachineProbe) : MachineTier =
     [ speedTier probe.Calibration
-      coreTier probe.LogicalCores
+      coreTier (effectiveCores probe)
       memoryTier probe.AvailableMemoryMb
       storageTier probe.Storage ]
     |> List.fold MachineTier.slowest MachineTier.Fast
@@ -288,7 +310,7 @@ module MachineProbeDescription =
       | StorageKind.Rotational -> "a spinning disk"
       | StorageKind.SolidState -> "a solid state disk"
       | StorageKind.Unknown -> "disk unknown"
-    sprintf "%d cores, %.1f GB memory (%.1f GB available), %s, %s" probe.LogicalCores (float probe.TotalMemoryMb / 1024.0) (float probe.AvailableMemoryMb / 1024.0) calibration storage
+    sprintf "%.1f cores, %.1f GB memory (%.1f GB available), %s, %s" (MachineProbe.effectiveCores probe) (float probe.TotalMemoryMb / 1024.0) (float probe.AvailableMemoryMb / 1024.0) calibration storage
 
 module TierResolutionDescription =
 
@@ -352,18 +374,106 @@ module MachineProbeReader =
             | _ -> StorageKind.Unknown
     with _ -> StorageKind.Unknown
 
+  /// What memory the machine has: total and available, in MB.
+  type private Memory =
+    { TotalMb: int64
+      AvailableMb: int64 }
+
+  let private kbPerMb = 1024L
+
+  let private bytesPerMb = 1024L * 1024L
+
+  /// MemTotal and MemAvailable from /proc/meminfo (in kB there). `MemAvailable` is the kernel's own estimate of what
+  /// can be used without swapping, which is what decides whether a start is slow.
+  let private fromProcMeminfo () : Memory option =
+    try
+      match File.Exists "/proc/meminfo" with
+      | false -> None
+      | true ->
+        let kb (name: string) =
+          File.ReadAllLines "/proc/meminfo"
+          |> Array.tryPick (fun line ->
+            match line.StartsWith(name + ":", StringComparison.Ordinal) with
+            | true -> Some (Int64.Parse(line.Substring(name.Length + 1).Replace("kB", "").Trim()))
+            | false -> None)
+        match kb "MemTotal", kb "MemAvailable" with
+        | Some total, Some available -> Some { TotalMb = total / kbPerMb; AvailableMb = available / kbPerMb }
+        | _ -> None
+    with _ -> None
+
+  /// The memory limit this process's cgroup (v2) puts on it, and what is left under it, when there is one. A
+  /// container or a systemd scope can hold a process to less than the machine has, and a start inside it
+  /// swaps or is killed at that limit, not at the machine's.
+  let private fromCgroup () : Memory option =
+    try
+      match File.Exists "/proc/self/cgroup" with
+      | false -> None
+      | true ->
+        let line = File.ReadAllLines "/proc/self/cgroup" |> Array.tryFind (fun l -> l.StartsWith("0::", StringComparison.Ordinal))
+        match line with
+        | None -> None
+        | Some l ->
+          // The limit may sit on a parent of the group this process is in: walk up to the first that has one.
+          let rec up (relative: string) : Memory option =
+            let dir = Path.Combine("/sys/fs/cgroup", relative)
+            let limit = Path.Combine(dir, "memory.max")
+            match File.Exists limit with
+            | true when File.ReadAllText(limit).Trim() <> "max" ->
+              let max' = Int64.Parse(File.ReadAllText(limit).Trim())
+              let used = Int64.Parse(File.ReadAllText(Path.Combine(dir, "memory.current")).Trim())
+              Some { TotalMb = max' / bytesPerMb; AvailableMb = max 0L (max' - used) / bytesPerMb }
+            | _ ->
+              match relative with
+              | "" -> None
+              | _ -> up (match relative.LastIndexOf '/' with | -1 -> "" | i -> relative.Substring(0, i))
+          up (l.Substring(3).Trim('/'))
+    with _ -> None
+
+  /// The CPU quota this process's cgroup (v2) puts on it, when there is one: `cpu.max` is `<quota> <period>`, in
+  /// microseconds, or `max <period>` for none. Looked for up the tree like the memory limit.
+  let private cpuQuota () : CpuQuota =
+    try
+      match File.Exists "/proc/self/cgroup" with
+      | false -> CpuQuota.Unlimited
+      | true ->
+        let line = File.ReadAllLines "/proc/self/cgroup" |> Array.tryFind (fun l -> l.StartsWith("0::", StringComparison.Ordinal))
+        match line with
+        | None -> CpuQuota.Unlimited
+        | Some l ->
+          let rec up (relative: string) : CpuQuota =
+            let file = Path.Combine("/sys/fs/cgroup", relative, "cpu.max")
+            let parts = (match File.Exists file with | true -> File.ReadAllText(file).Trim().Split(' ') | false -> [||])
+            match parts with
+            | [| quota; period |] when quota <> "max" -> CpuQuota.Limited (float (Int64.Parse quota) / float (Int64.Parse period))
+            | _ ->
+              match relative with
+              | "" -> CpuQuota.Unlimited
+              | _ -> up (match relative.LastIndexOf '/' with | -1 -> "" | i -> relative.Substring(0, i))
+          up (l.Substring(3).Trim('/'))
+    with _ -> CpuQuota.Unlimited
+
+  /// The machine's memory, with any cgroup limit applied. Where there is no /proc (not Linux), the
+  /// runtime's own view of the memory it may use.
+  let private readMemory () : Memory =
+    match fromProcMeminfo (), fromCgroup () with
+    | Some machine, Some group -> { TotalMb = min machine.TotalMb group.TotalMb; AvailableMb = min machine.AvailableMb group.AvailableMb }
+    | Some machine, None -> machine
+    | None, _ ->
+      let gc = GC.GetGCMemoryInfo()
+      let total = gc.TotalAvailableMemoryBytes / bytesPerMb
+      { TotalMb = total; AvailableMb = max 0L (total - gc.MemoryLoadBytes / bytesPerMb) }
+
   /// Take a probe now. The data directory is where the storage is read from, because that is the disk
   /// a start reads and writes.
   let read (dataDir: string) : Result<MachineProbe, MachineProbeError> =
     try
-      let gc = GC.GetGCMemoryInfo()
-      let totalMb = gc.TotalAvailableMemoryBytes / (1024L * 1024L)
-      let loadedMb = gc.MemoryLoadBytes / (1024L * 1024L)
+      let memory = readMemory ()
       let measurement = MachineCalibration.measure ()
       Ok
         { LogicalCores = Environment.ProcessorCount
-          TotalMemoryMb = totalMb
-          AvailableMemoryMb = max 0L (totalMb - loadedMb)
+          CpuQuota = cpuQuota ()
+          TotalMemoryMb = memory.TotalMb
+          AvailableMemoryMb = memory.AvailableMb
           Storage = storageOf dataDir
           Calibration = Calibration.Measured (measurement.SteadyMs, measurement.FirstMs) }
     with ex -> Error (MachineProbeError.CouldNotProbe ex.Message)

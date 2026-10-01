@@ -1030,12 +1030,12 @@ module SessionManager =
             | StartTimeoutDecision.Decision.RevertSwap ->
               match ManagerState.tryGetPendingSwap id state with
               | Some oldSession ->
-                Log.warn "[SessionManager] Replacement worker for session %s said nothing for %.0fs; reverting to the still-serving old worker" (SessionId.value id) timeout.Waited.TotalSeconds
+                Log.warn "[SessionManager] Replacement worker for session %s was silent for %.0fs; reverting to the still-serving old worker" (SessionId.value id) timeout.Budget.Inactivity.TotalSeconds
                 onSessionReady id
                 return ManagerState.clearPendingSwap id { ManagerState.addSession id oldSession state with WarmupProgress = Map.remove id state.WarmupProgress }
               | None -> return state
             | StartTimeoutDecision.Decision.Retry (budget, progress) ->
-              Log.warn "[SessionManager] Session %s: the worker said nothing for %.0fs (attempt %d of %d); starting it again and waiting up to %.0fs" (SessionId.value id) timeout.Waited.TotalSeconds timeout.Budget.Attempt StartEscalation.MaxAttempts budget.Inactivity.TotalSeconds
+              Log.warn "[SessionManager] Session %s: the worker was silent for %.0fs, %.0fs in all (attempt %d of %d); starting it again and allowing %.0fs of silence" (SessionId.value id) timeout.Budget.Inactivity.TotalSeconds timeout.Waited.TotalSeconds timeout.Budget.Attempt StartEscalation.MaxAttempts budget.Inactivity.TotalSeconds
               let retried, spawned = spawnColdReplacement id session inbox (Instrumentation.startSpan Instrumentation.sessionSource "session.start_retry" [("session.id", box id)]) state budget
               match spawned with
               | Ok () ->

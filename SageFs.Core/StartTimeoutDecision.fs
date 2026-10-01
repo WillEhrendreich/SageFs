@@ -27,8 +27,8 @@ module StartTimeoutDecision =
   /// The progress line that says a slow start was started again. The step and total are the attempt and
   /// the attempts allowed, so it reads in the same "n/m text" shape the worker's own progress does.
   let retryProgress (budget: StartBudget) (timeout: StartTimeout) : string =
-    sprintf "%d/%d Slow start: the worker said nothing for %.0f s, so it was started again (attempt %d of %d), waiting up to %.0f s for %s."
-      budget.Attempt StartEscalation.MaxAttempts timeout.Waited.TotalSeconds budget.Attempt StartEscalation.MaxAttempts
+    sprintf "%d/%d Slow start: the worker was silent for %.0f s (%.0f s in all), so it was started again (attempt %d of %d). This attempt may be silent for up to %.0f s while it waits for %s."
+      budget.Attempt StartEscalation.MaxAttempts timeout.Budget.Inactivity.TotalSeconds timeout.Waited.TotalSeconds budget.Attempt StartEscalation.MaxAttempts
       budget.Inactivity.TotalSeconds (StartStage.describe timeout.Stage)
 
   /// The progress line that tells a person a slow machine's first start is expected to be slow; "" on a

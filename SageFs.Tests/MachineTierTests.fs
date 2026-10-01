@@ -20,6 +20,7 @@ let private propConfig = { FsCheckConfig.defaultConfig with maxTest = 300 }
 /// The Ryzen 7 5800XT the reference was taken on: 16 threads, 64 GB, NVMe, steady 24 ms.
 let private fastDesktop : MachineProbe =
   { LogicalCores = 16
+    CpuQuota = CpuQuota.Unlimited
     TotalMemoryMb = 64215L
     AvailableMemoryMb = 39076L
     Storage = StorageKind.SolidState
@@ -28,6 +29,7 @@ let private fastDesktop : MachineProbe =
 /// The AMD Phenom II X4 B50 (4 cores, 7.9 GB, a 5400 rpm disk), steady 122 ms.
 let private phenom : MachineProbe =
   { LogicalCores = 4
+    CpuQuota = CpuQuota.Unlimited
     TotalMemoryMb = 7913L
     AvailableMemoryMb = 4812L
     Storage = StorageKind.Rotational
@@ -45,6 +47,7 @@ let private probeGen : Gen<MachineProbe> =
     let! measured = Gen.elements [ true; true; true; false ]
     return
       { LogicalCores = cores
+        CpuQuota = CpuQuota.Unlimited
         TotalMemoryMb = int64 total
         AvailableMemoryMb = int64 total * int64 availablePercent / 100L
         Storage = storage
@@ -148,7 +151,7 @@ let tests =
         Prop.forAll probeArb (fun probe ->
           let expected =
             [ MachineProbe.speedTier probe.Calibration
-              MachineProbe.coreTier probe.LogicalCores
+              MachineProbe.coreTier (MachineProbe.effectiveCores probe)
               MachineProbe.memoryTier probe.AvailableMemoryMb
               MachineProbe.storageTier probe.Storage ]
             |> List.reduce MachineTier.slowest
@@ -161,6 +164,22 @@ let tests =
             MachineTier.rank (MachineProbe.tierOf { probe with LogicalCores = fewer })
             >= MachineTier.rank (MachineProbe.tierOf probe)
             || fewer = probe.LogicalCores))
+
+      testCase "WHY — a CPU quota counts, not the cores .NET rounds it up to: half a core is not one, because a start inside it takes twice as long" <| fun _ ->
+        let at (quota: CpuQuota) = MachineProbe.tierOf { fastDesktop with CpuQuota = quota }
+        at CpuQuota.Unlimited |> Expect.equal "no quota" MachineTier.Fast
+        at (CpuQuota.Limited 4.0) |> Expect.equal "four cores" MachineTier.Fast
+        at (CpuQuota.Limited 2.0) |> Expect.equal "two cores" MachineTier.Standard
+        at (CpuQuota.Limited 1.0) |> Expect.equal "one core" MachineTier.Standard
+        at (CpuQuota.Limited 0.5) |> Expect.equal "half a core" MachineTier.Constrained
+        at (CpuQuota.Limited 0.25) |> Expect.equal "a quarter of a core" MachineTier.Minimal
+        MachineProbe.effectiveCores { fastDesktop with CpuQuota = CpuQuota.Limited 64.0 } |> Expect.equal "a quota above the cores changes nothing" 16.0
+
+      testPropertyWithConfig propConfig "a CPU quota never gives a faster tier" <|
+        Prop.forAll probeArb (fun probe ->
+          Prop.forAll (Arb.fromGen (Gen.choose (1, 64))) (fun quarters ->
+            let limited = { probe with CpuQuota = CpuQuota.Limited (float quarters / 4.0) }
+            MachineTier.rank (MachineProbe.tierOf limited) >= MachineTier.rank (MachineProbe.tierOf probe)))
 
       testPropertyWithConfig propConfig "less memory never gives a faster tier" <|
         Prop.forAll probeArb (fun probe ->
