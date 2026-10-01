@@ -218,3 +218,14 @@ Evidence: `SageFs.Core/Features/LiveValueTree.fs`, `SageFs.Tests/LiveValueTreeTe
 `SageFs.Tests/HttpApiIntegrationTests.fs`.
 Reopen it if: a getter that is slow but finite shows up as unreadable often enough to matter. Then the budget is
 wrong, or the walk should move off the eval thread entirely and publish when it is ready.
+
+## After a rebuild restart we await the session manager, we don't poll it
+
+`RequestRebuild` used to read `ListSessions` and `GetStreamingTestProxy` every 50 ms, then every 250 ms, for up to
+30 s. It is one `AwaitReady` now, raced against the deadline and the rebuild's cancel token (`RebuildReadyWait`). That
+one await is enough because `WorkerReady` installs the worker URL before the session can be marked Ready, and the manager
+publishes after every step, so Ready already implies a proxy. A test over seeded arrival orders on the real manager
+checks it, and its twin (Ready with no `WorkerReady`) is caught.
+
+Evidence: `SageFs/RebuildReadyWait.fs`, `SageFs.Tests/RebuildReadyWaitTests.fs`, `SageFs.Core/SessionManager.fs` (`WorkerReady`, `settleReadyWaiters`).
+Reopen it if: Ready is ever marked before the URL is installed. The claim test fails first.
