@@ -19,6 +19,8 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 ///     selects only that test;
 ///   * provenance: a result says whether it ran against evaluated code or a real build, and a real
 ///     build that disagrees says so loudly;
+///   * restart: an edit typed while a confirmation's build restarts the worker is judged all the same, and
+///     nothing says the code is broken while there is no worker to ask;
 ///   * scale controls: pause and an include/exclude set, against what Visual Studio offers.
 
 let private circleLine () = lineOf "| Circle r"
@@ -179,6 +181,31 @@ let private buildDisagrees () : Task<unit> =
       |> Expect.stringContains "the row says the build failed, with the compiler's own words" "FS0039"
     })
 
+/// A person keeps typing while the confirming build replaces the worker. The first save evaluates and asks a build to
+/// confirm it; once the confirmation is at `moment`, a second save changes a line one test depends on. While the worker
+/// is replaced it has no proxy, and then a proxy for a worker still warming, so nothing can answer the second save's
+/// type-check at once. It must be judged anyway, as soon as the worker is Ready, and nothing along the way may say the
+/// code has errors: every text written here is valid F#.
+let private editedWhileConfirmationIsIn (moment: ConfirmationMoment) () : Task<unit> =
+  journey (fun http _ feed original ->
+    task {
+      drain feed
+      note feed "wrote the first edit to disk: valid, so the eval runs the tests and a build is asked to confirm them"
+      File.WriteAllText(helloPath (), original.Replace(rectangleArm, rectangleArm + " * 1.0"))
+      let! _ =
+        expectFrame feed "the first edit's verdict arriving as evaluated"
+          (fun f -> provenanceIn rectangleName f = "Evaluated") TestTimeouts.liveTestingVerdictCeiling
+      do! awaitConfirmationMoment feed http moment TestTimeouts.buildConfirmation
+      note feed (sprintf "wrote the second edit to disk, with the confirmation %s" (ConfirmationMoment.toWire moment))
+      File.WriteAllText(helloPath (), original.Replace(greenAdd, redAdd))
+      let! _ =
+        expectFrame feed "the newest text's verdict, evaluated, on the test its edit turns red"
+          (fun f -> verdictIn affectedTest f = Verdict.Failed && provenanceIn affectedTest f = "Evaluated")
+          TestTimeouts.buildConfirmation
+      blockedSummariesSeen feed
+      |> Expect.isEmpty "no summary said the session was blocked by compile errors, because no text written was broken"
+    })
+
 let private pauseHoldsRunsBack () : Task<unit> =
   journey (fun http sid feed original ->
     task {
@@ -247,6 +274,8 @@ let journeyTests =
     Integration.dedicatedCaseTask "--integration-lt" "LT coverage: an edit to a line only one test runs selects only that test" lineEditSelectsOnlyItsTest
     Integration.dedicatedCaseTask "--integration-lt" "LT provenance: an evaluated verdict is confirmed by a real build" evaluatedThenVerifiedByBuild
     Integration.dedicatedCaseTask "--integration-lt" "LT provenance: a real build that rejects what the session accepted says so on the row" buildDisagrees
+    Integration.dedicatedCaseTask "--integration-lt" "LT restart: an edit typed while the confirming build replaces the worker is judged, and nothing says blocked" (editedWhileConfirmationIsIn ConfirmationMoment.WorkerRestarting)
+    Integration.dedicatedCaseTask "--integration-lt" "LT restart: an edit typed while the confirmation runs the tests against its build is judged, and nothing says blocked" (editedWhileConfirmationIsIn ConfirmationMoment.RunningBuilt)
     Integration.dedicatedCaseTask "--integration-lt" "LT scale: pausing holds test runs back and resuming catches up" pauseHoldsRunsBack
     Integration.dedicatedCaseTask "--integration-lt" "LT scale: an exclude set keeps a test out of automatic runs, an explicit run still runs it" scopeKeepsTestsOutOfAutomaticRuns
   ]

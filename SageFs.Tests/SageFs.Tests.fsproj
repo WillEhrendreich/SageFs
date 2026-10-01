@@ -180,6 +180,7 @@
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
+        <Compile Include="LiveCheckPumpSimTests.fs" />
         <Compile Include="ValueReadSimTests.fs" />
         <Compile Include="ReflectionReadSimTests.fs" />
         <Compile Include="EvalStoreMutationTests.fs" />

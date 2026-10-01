@@ -105,6 +105,14 @@
         <Compile Include="BuildConfirmationSim.fs" />
         <Compile Include="BuildConfirmationInvariants.fs" />
         <Compile Include="BuildConfirmationGenerators.fs" />
+        <!-- Live check pump DST: folds the real LiveCheckPump decision through edits that land while the
+             worker is absent, warming, ready or retired, answers that come back from a worker that is no
+             longer the one asked, and waits that end in any order; twins drop what they cannot ask, ask a
+             warming worker, believe an answer without looking again, apply an older request's answer and
+             ask while a request is in flight. -->
+        <Compile Include="LiveCheckPumpSim.fs" />
+        <Compile Include="LiveCheckPumpInvariants.fs" />
+        <Compile Include="LiveCheckPumpGenerators.fs" />
         <!-- Rule 2 read-provenance DST: folds the real ValueReads classifier,
              ledger and save check through every interleaving of reads, the
              startup window closing, probes coming off and saves; twins put
