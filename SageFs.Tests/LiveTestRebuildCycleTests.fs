@@ -706,6 +706,98 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       |> Expect.equal "replacement queued rebuild should describe the latest analyzed content" (box (Some identity2))
     }
 
+    test "a saved edit that type-checks while a run is in flight is evaluated when that run ends, not dropped" {
+      // WHY: the `--integration-lt` provenance journey failed about half the time. It saved a file while the
+      // confirmation of the previous text was running tests, and the save's verdict never arrived: the type-check
+      // passed, the decision found the session busy and emitted nothing, and the intent to run later was only kept
+      // for a RequestRebuild, which the live path no longer emits (it evaluates the buffer instead). A save is the
+      // last event of an edit, so nothing else was going to trigger it.
+      let generation = RunGeneration.next RunGeneration.zero
+      let content = "module Foo\nlet value = 1"
+      let identity = AnalysisIdentity.ofContent content
+      let state =
+        { LiveTestCycleState.empty with
+            TestState =
+              { activeStateWith [| sampleTestCase |] with
+                  RunPhases = Map.ofList [ "test-session", Running generation ]
+                  LastGeneration = generation
+                  SessionDiscovery = Map.ofList [ "test-session", DiscoveryProgress.Completed ] }
+            ActiveFile = Some "Foo.fs"
+            LatestContent = Some content
+            LatestAnalysisIdentity = Some identity
+            LastTrigger = RunTrigger.FileSave }
+
+      let effects, busy =
+        LiveTestCycleState.handleFcsResult (FcsTypeCheckResult.Success ("Foo.fs", [])) state
+
+      effects |> Expect.isEmpty "the session is busy, so nothing runs yet"
+
+      let finished =
+        { busy with TestState = { busy.TestState with RunPhases = Map.ofList [ "test-session", TestRunPhase.Idle ] } }
+      let replayed, after = LiveTestCycleState.promoteQueuedRebuild (Some "test-session") finished
+
+      match replayed with
+      | [ TestCycleEffect.EvalBufferThenRunAffected req ] ->
+        req.Content |> Expect.equal "the buffer that is evaluated is the saved text" content
+        req.FilePath |> Expect.equal "of the saved file" "Foo.fs"
+        req.Run.Trigger |> Expect.equal "still a save" RunTrigger.FileSave
+        req.Run.Tests |> Array.map (fun t -> t.Id) |> Expect.equal "and the tests the save reaches run" [| sampleTestCase.Id |]
+      | other -> failtestf "expected the saved text to be evaluated when the run ended, got %A" other
+
+      after.PendingRebuild |> Expect.isNone "an evaluation is not a rebuild, so none is recorded as in flight"
+      after.QueuedRebuild |> Expect.isNone "and the owed run is consumed"
+    }
+
+    test "a keystroke that type-checks while a run is in flight is evaluated when that run ends, not dropped" {
+      // WHY: the same loss as a save, for the last keystroke of a burst.
+      let generation = RunGeneration.next RunGeneration.zero
+      let content = "module Foo\nlet value = 2"
+      let identity = AnalysisIdentity.ofContent content
+      let state =
+        { LiveTestCycleState.empty with
+            TestState =
+              { activeStateWith [| sampleTestCase |] with
+                  RunPhases = Map.ofList [ "test-session", Running generation ]
+                  LastGeneration = generation
+                  SessionDiscovery = Map.ofList [ "test-session", DiscoveryProgress.Completed ] }
+            ActiveFile = Some "Foo.fs"
+            LatestContent = Some content
+            LatestAnalysisIdentity = Some identity
+            LastTrigger = RunTrigger.Keystroke }
+
+      let _, busy = LiveTestCycleState.handleFcsResult (FcsTypeCheckResult.Success ("Foo.fs", [])) state
+      let replayed, _ = LiveTestCycleState.promoteQueuedRebuild (Some "test-session") busy
+
+      match replayed with
+      | [ TestCycleEffect.EvalBufferThenRunAffected req ] ->
+        req.Content |> Expect.equal "the buffer that is evaluated is the newest text" content
+        req.Run.Trigger |> Expect.equal "still a keystroke" RunTrigger.Keystroke
+      | other -> failtestf "expected the newest text to be evaluated when the run ended, got %A" other
+    }
+
+    test "text that changed again before the run ended is not replayed, the newer text's own check owes the run" {
+      // WHY: replaying a save the buffer has since moved past would judge text nobody is editing.
+      let generation = RunGeneration.next RunGeneration.zero
+      let content = "module Foo\nlet value = 1"
+      let state =
+        { LiveTestCycleState.empty with
+            TestState =
+              { activeStateWith [| sampleTestCase |] with
+                  RunPhases = Map.ofList [ "test-session", Running generation ]
+                  LastGeneration = generation
+                  SessionDiscovery = Map.ofList [ "test-session", DiscoveryProgress.Completed ] }
+            ActiveFile = Some "Foo.fs"
+            LatestContent = Some content
+            LatestAnalysisIdentity = Some (AnalysisIdentity.ofContent content)
+            LastTrigger = RunTrigger.FileSave }
+
+      let _, busy = LiveTestCycleState.handleFcsResult (FcsTypeCheckResult.Success ("Foo.fs", [])) state
+      let newer = busy |> LiveTestCycleState.onFileSaveWithContent "module Foo\nlet value = 3" "Foo.fs" DateTimeOffset.UtcNow
+      let replayed, _ = LiveTestCycleState.promoteQueuedRebuild (Some "test-session") newer
+
+      replayed |> Expect.isEmpty "the stale owed run is dropped"
+    }
+
     test "distinct rebuild intents still receive increasing generations" {
       // WHY: Coalescing only applies to semantically identical work. Once a
       // fresh save invalidates the pending rebuild, the next rebuild intent
