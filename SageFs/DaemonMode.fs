@@ -535,6 +535,14 @@ let createSessionOpsWithRecovery
         match checkMemoryAdmission readSnapshot with
         | Result.Error refused -> return Result.Error refused
         | Result.Ok () ->
+        // Refuse a project no host can load BEFORE building it. A .NET Framework project's build either
+        // fails on a missing targeting pack (an MSBuild error that names neither the framework nor SageFs's
+        // issue) or succeeds into output nothing here can load. The target framework is asked of MSBuild
+        // when the project file does not name one, because a Directory.Build.props often does.
+        match ProjectCompatibility.findUnhostableEvaluated (SessionProjectTarget.projects targets) with
+        | Some(project, targetFrameworks, reason) ->
+          return Result.Error(SageFsError.ProjectFrameworkNotHostable(project, targetFrameworks, reason))
+        | None ->
           let missing =
             targets
             |> List.collect (fun target ->

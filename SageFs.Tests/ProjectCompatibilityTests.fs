@@ -37,6 +37,11 @@ let tests =
       classify (fsprojWithTfm "net10.0")
       |> Expect.equal "should be Hostable net10.0" (ProjectHostability.Hostable "net10.0")
 
+    testCase "WHY — a platform-specific moniker is a modern .NET TFM, because the platform decides where it runs and not what loads it" <| fun () ->
+      for tfm, major in [ "net8.0-windows", 8; "net8.0-windows10.0.19041.0", 8; "net9.0-android", 9; "net10.0-browser", 10 ] do
+        classifyTfm tfm
+        |> Expect.equal (sprintf "%s should be Supported" tfm) (TfmVerdict.Supported(tfm, major))
+
     testCase "WHY — net8.0 is hostable because it's a modern .NET (Core) TFM, not just the host's own version" <| fun () ->
       classify (fsprojWithTfm "net8.0")
       |> Expect.equal "should be Hostable net8.0" (ProjectHostability.Hostable "net8.0")
@@ -103,6 +108,51 @@ let tests =
         | other -> failtestf "expected Some(path, [net48], NetFramework), got %A" other
       finally
         System.IO.Directory.Delete(dir, true)
+
+    testList "a project whose file does not name its target framework" [
+      let withProjectFile (body: string -> unit) =
+        let dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-pc-test-%s" (System.Guid.NewGuid().ToString("N")))
+        System.IO.Directory.CreateDirectory dir |> ignore
+        try
+          let path = System.IO.Path.Combine(dir, "App.fsproj")
+          System.IO.File.WriteAllText(path, fsprojWithNoTfm)
+          body path
+        finally
+          System.IO.Directory.Delete(dir, true)
+
+      testCase "WHY — the evaluated target framework decides, because a Directory.Build.props sets it where the project file cannot show it" <| fun () ->
+        withProjectFile (fun path ->
+          classifyProjectFileWith (fun _ -> Result.Ok [ "net48" ]) path
+          |> Expect.equal "refused" (ProjectHostability.NotHostable([ "net48" ], UnsupportedTfmReason.NetFramework))
+          classifyProjectFileWith (fun _ -> Result.Ok [ "net10.0" ]) path
+          |> Expect.equal "hostable" (ProjectHostability.Hostable "net10.0"))
+
+      testCase "WHY — MSBuild failing to answer is Indeterminate with the reason, never a refusal" <| fun () ->
+        withProjectFile (fun path ->
+          match classifyProjectFileWith (fun _ -> Result.Error "timed out") path with
+          | ProjectHostability.Indeterminate reason -> reason |> Expect.stringContains "says why" "timed out"
+          | other -> failtestf "expected Indeterminate, got %A" other)
+
+      testCase "WHY — a project that names its framework is classified from the file, and MSBuild is never asked" <| fun () ->
+        let dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "sagefs-pc-test-%s" (System.Guid.NewGuid().ToString("N")))
+        System.IO.Directory.CreateDirectory dir |> ignore
+        try
+          let path = System.IO.Path.Combine(dir, "App.fsproj")
+          System.IO.File.WriteAllText(path, fsprojWithTfm "net10.0")
+          classifyProjectFileWith (fun _ -> failwith "MSBuild must not be asked") path
+          |> Expect.equal "from the file" (ProjectHostability.Hostable "net10.0")
+        finally
+          System.IO.Directory.Delete(dir, true)
+
+      testCase "WHY — MSBuild's property output is read for the single framework, then the plural, and nothing is Error" <| fun () ->
+        parseEvaluatedTargetFrameworks """{"Properties":{"TargetFramework":"net48","TargetFrameworks":""}}"""
+        |> Expect.equal "single" (Result.Ok [ "net48" ])
+        parseEvaluatedTargetFrameworks """{"Properties":{"TargetFramework":"","TargetFrameworks":"net8.0;net48"}}"""
+        |> Expect.equal "plural" (Result.Ok [ "net8.0"; "net48" ])
+        parseEvaluatedTargetFrameworks """{"Properties":{"TargetFramework":"","TargetFrameworks":""}}"""
+        |> Expect.isError "neither"
+        parseEvaluatedTargetFrameworks "not json" |> Expect.isError "not JSON"
+    ]
 
     testCase "WHY — findUnhostable treats an unreadable path as Indeterminate, never a refusal" <| fun () ->
       findUnhostable [ "/nonexistent/does-not-exist/Foo.fsproj" ]
