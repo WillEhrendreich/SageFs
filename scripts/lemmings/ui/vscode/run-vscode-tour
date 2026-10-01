@@ -26,7 +26,12 @@ run_one() {
   name=$(basename "$tour" .tour)
   id=$(lem_run_id tour "$name"); run=$LEM_ROOT/$id; w=$run/w; out=$run/out
   mkdir -p "$w" "$out/screens" "$out/shots"
-  cp -r --reflink=auto "$LEMDIR/fixtures/demoenv/." "$w/"
+  # The fixture is demoenv unless the tour's own first comment lines say "# fixture: <name>".
+  local fixture
+  fixture=$(sed -n 's/^# fixture: *//p' "$tour" | head -n 1)
+  fixture=${fixture:-demoenv}
+  [ -d "$LEMDIR/fixtures/$fixture" ] || { echo "lem: no fixture '$fixture' under $LEMDIR/fixtures" >&2; return 2; }
+  cp -r --reflink=auto "$LEMDIR/fixtures/$fixture/." "$w/"
   cp "$tour" "$out/tour.txt"
   echo "lem: tour $name in $run  dashboard http://localhost:$LEM_DASH_PORT/dashboard" >&2
 

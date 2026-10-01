@@ -63,6 +63,17 @@ A step that fails does not stop the tour, because the later shots still matter. 
 the call exits 1 at the end. An unknown step or a bad line is refused before anything starts, with the
 line number of every bad line.
 
+## What `resize` is, and what it is not
+
+`resize` sets the viewport the workbench lays itself out in (Playwright's viewport emulation over CDP),
+and reads the size back to check it. The Xvfb screen is 1600x1000, so a 1920x1080 shot is a layout at
+that size, rendered into a larger emulated viewport, which is what a reviewer needs. It does not move
+the sash between the side bar and the editor, so there is no step for a narrow side bar; the narrow
+sizes (1024x700) are where a narrow side bar shows up.
+
+A tour can start from another fixture: a first comment line `# fixture: <name>` picks a directory
+under `scripts/lemmings/fixtures`. The default is demoenv.
+
 ## Why these tours switch session
 
 On a daemon that already has an active session, `SageFs: Create Session` makes a session but does not
@@ -87,6 +98,7 @@ hot reload tour uses `set-workflow` so the rest of the flow can be looked at.
 | `live-testing-failing.tour` | Live testing on, the fixture's failing test: gutter, inline failure, Test Explorer, SageFs views. |
 | `live-testing-passing.tour` | The same, with the source fixed and everything passing. |
 | `hot-reload-patched.tour` | Hot Reload workflow, every file watched, then a save. DemoEnv has no running app, so there is no patched line to wait for. |
+| `hot-reload-app.tour` | The falco-hello fixture (`# fixture: falco-hello` on the first line picks it): Run App from the editor, watch the file, change a route's text and save. After the save the window shows nothing about the patch, which is what the shot records. |
 | `error-eval.tour` | Alt+Enter on a line that does not compile: the error and its diagnostics inline. |
 | `error-switch-workflow.tour` | The Switch Workflow defect above. |
 
