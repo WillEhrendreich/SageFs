@@ -394,7 +394,6 @@ let watchableDirsTests = testList "watchableDirs" [
 // budget first. watchableDirsCapped separates the pure walk-with-a-cap
 // logic from watchableDirs's loud report so the cap can be proven against a
 // tiny tree instead of growing one to 50,000 real directories.
-[<Tests>]
 let watchableDirsCappedTests = testList "watchableDirsCapped" [
     testCase "WHY — watchableDirsCapped — reports truncated=true the moment the cap is reached, instead of silently returning a partial list" <| fun () ->
       let root = Directory.CreateTempSubdirectory("sagefs-watchcap-").FullName
@@ -569,7 +568,6 @@ let classifyWatcherErrorTests = testList "classifyWatcherError" [
     }
   ]
 
-[<Tests>]
 let handleWatcherErrorTests = testList "handleWatcherError" [
     test "WHY — a watcher Error event reports into ComponentWatch, because before this fix only inotify exhaustion and the MaxWatchableEntries cap did — a buffer overflow or permission-denied error left /health reporting healthy: true while a session's watcher silently lost events" {
       SageFs.Features.ComponentWatch.reset ()
@@ -605,7 +603,6 @@ let handleWatcherErrorTests = testList "handleWatcherError" [
 // filesystem root is refused up front, with the reason where /health and
 // sagefs status can read it.
 
-[<Tests>]
 let watchRootGuardTests =
   testList "watch root guard" [
 
@@ -668,3 +665,14 @@ let watchRootGuardTests =
         Directory.Delete(home, true)
     }
   ]
+
+/// These lists reset and read the daemon-wide `ComponentWatch` registry, so they run one after another: two of them in
+/// parallel would wipe each other's entries between a report and its read (the gate saw `List.find` fail once).
+[<Tests>]
+let componentWatchRegistryTests =
+  testSequenced (
+    testList "ComponentWatch registry" [
+      watchableDirsCappedTests
+      handleWatcherErrorTests
+      watchRootGuardTests
+    ])
