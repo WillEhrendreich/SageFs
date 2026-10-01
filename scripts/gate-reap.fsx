@@ -8,6 +8,7 @@
 // workspace hygiene plan cannot disagree about what is safe to remove, and the logic is tested there. This file only
 // reads its arguments and says what happened. The checkout for <invoking-repo> is never touched.
 
+#load "../SageFs.Core/MachineTier.fs"
 #load "../SageFs.Core/Timeouts.fs"
 #load "../SageFs.Core/WorkspaceHygiene.fs"
 #load "../SageFs.Core/HygieneFs.fs"
