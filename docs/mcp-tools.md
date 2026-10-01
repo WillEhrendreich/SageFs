@@ -93,7 +93,7 @@ check `sagefs status` — if it says no daemon is running, start one with
 | `check_fsharp_code` | Type-check a snippet without running it, in the current FSI context. Earlier `send_fsharp_code` definitions are in scope, but namespaces still need an explicit `open`. A "not defined" error here almost always just means you forgot the `open`, nothing more sinister. |
 | `cancel_eval` | Cancel a running evaluation. |
 | `get_daemon_status` | Daemon version, health, memory, process telemetry, and session counts, including with no active session. |
-| `get_session_status` | The selected session's lifecycle, loaded projects, progress, and tools available in the current state. Pass `wait_seconds` (default 0, capped at 60) to wait for a warming session to become Ready instead of polling; the `wait` field in the reply says how it ended (`NotNeeded`, `BecameReady`, `Faulted`, `TimedOut`). `lastReload` says what the last save did: a patch reads `PatchPending` until the new code has been seen running, then `Patched`, or `NeverEntered` if the bound passed first. See [Hot Reload](hot-reload.md#what-patched-means). `replFreshness` says whether the REPL and live tests run the build the app runs: `InSync`, or `BehindApp` with the number of saves and what was patched, after an app started with `run_app` was patched in place. `send_fsharp_code`, `check_fsharp_code`, `run_tests` and `list_sessions` say it too, after their results. |
+| `get_session_status` | The selected session's lifecycle, loaded projects, progress, and tools available in the current state. Pass `wait_seconds` (default 0, capped at 60) to wait for a warming session to become Ready instead of polling; the `wait` field in the reply says how it ended (`NotNeeded`, `BecameReady`, `Faulted`, `TimedOut`). `lastReload` says what the last save did: a patch reads `PatchPending` until the new code has been seen running, then `Patched`, or `NeverEntered` if the bound passed first. See [Hot Reload](hot-reload.md#what-patched-means). `replFreshness` says whether the REPL and live tests run the build the app runs: `InSync`, or `BehindApp` with the number of saves and what was patched, after an app started with `run_app` was patched in place. `send_fsharp_code`, `check_fsharp_code`, `run_tests` and `list_sessions` say it too, after their results. `sourceState` is a different fact: whether the build the session runs is behind the files on disk. It is `InSync`, `Stale` (with the files that were written after the build, and when), `Rebuilding` (a rebuild is in progress and the old worker is still serving), or `Unknown` (with why: no project is loaded, the worker did not say when it loaded its build, a file could not be read). It is in every shape of the reply, including the warming and faulted ones. `replFreshness` is the REPL behind the app, and `sourceState` is the disk ahead of the build, so they can be true together, apart, or not at all. |
 | `get_recent_fsi_events` | Recent evals, errors, and loads with timestamps. |
 
 ## Sessions and lifecycle
@@ -103,7 +103,7 @@ check `sagefs status` — if it says no daemon is running, start one with
 | `create_project_session` | Create an isolated session for one explicit `.fsproj`. Missing generated build state is rebuilt before the session is registered. |
 | `create_solution_session` | Create an isolated session for one explicit `.sln` or `.slnx`. |
 | `create_bare_session` | Create an isolated project-free REPL. It never auto-discovers. |
-| `list_sessions` | List active sessions. |
+| `list_sessions` | List active sessions. Every entry ends with a `Source:` line: in sync with the build, no project loaded, or the same warning `get_session_status` carries as `sourceState` when files changed after the build, a rebuild is running, or it could not be told. |
 | `switch_session` | Change which session your calls route to. |
 | `stop_session` | Stop a session by id. MCP-bound sessions can only be stopped by the connection that created them. |
 | `reset_fsi_session` | Soft reset: clears definitions, keeps loaded DLLs. |
@@ -144,6 +144,21 @@ passed is `AllPassed`, a run where any failed is `SomeFailed`, and everything el
 is `Incomplete`, which is not green. Each line says what happened to that test in
 this run and why. If the session is still warming up, has nothing discovered, or
 your filters match nothing, `run_tests` says so and runs nothing.
+
+The tests run in the build the session loaded, and the files on disk can be newer
+than that build. So a finished receipt also carries `source`, the same
+`sourceState` that `get_session_status` has, read when the run was dispatched and
+again when it finished (the worse of the two counts, so an edit during the run
+shows up), and fixed once the run settles. `AllPassed` means every test passed and
+`source` is `InSync`. A pass over anything else gets its own verdict:
+`PassedOnStaleSource` (files changed on disk after the build; `source` names them),
+`PassedWhileRebuilding`, or `PassedOnUnknownSource` (a file could not be read, the
+worker did not say when it loaded, or no project is loaded). None of those is
+green. The text says it too, as `passed, but on STALE source`, and ends with a
+`Source:` line. The run still happens and the receipt says what it ran against.
+`hard_reset_fsi_session` with `rebuild=true` brings the build level with the files. The mtime check can read a file as changed that only
+got touched (a branch switch does that), and it cannot see an edit made inside
+the window of a build that was already running.
 
 Don't run `dotnet test` from an agent to do the same job. That's a second engine,
 and its answers are the ones that drift. `dotnet test` and `dotnet run` stay as

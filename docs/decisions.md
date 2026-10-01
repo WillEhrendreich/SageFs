@@ -1219,3 +1219,69 @@ Chromium), `SageFs.Tests/SessionManagerRebuildOutcomeTests.fs` (the session carr
 `SageFs.Tests/RunAppDeltaTests.fs` (`run_app repl freshness`, the measurement).
 Reopen it if: the daemon starts re-fetching maps and discovery after a host swap, or the FSI host can apply a delta and keep its
 coverage.
+## A run_tests receipt says whether the build it ran against is behind the files on disk
+
+Nehemiah edited a test file on disk, did not rebuild, and called `run_tests`. The receipt said `3 passed` and nothing else. I
+checked that against the code before building anything, because the report also said `get_session_status` already knew the edit was
+not reflected, and it does not. `run_tests` never looks at the disk. The check that was meant to catch this, `StaleDefinitions` in
+`sessionTrustObservation`, fired only when a `FileStatus` read `Stale`, and both places the daemon builds a `SessionContext` hard-code
+`FileStatuses = []`, so nothing ever produced `Stale` and the check reported "current" by naming the artifact. `replFreshness` is a
+different fact (the REPL behind a delta-patched app) and read `InSync`. A rebuild in progress leaves the old worker Ready, so a run
+during one was trusted too.
+
+**What it is now.** `SourceState` is `InSync | Stale of changed files | Rebuilding | Unknown of reason`, in
+`SageFs.Core/Features/SourceState.fs`. The decision is a pure function of the rebuild record, when the worker loaded its build, and the
+write times of the build output and of every file that builds into it. The disk reads sit at the edge (`SageFs/SourceStateProbe.fs`)
+and every failed read arrives as a case of the evidence, so "I could not tell" is an answer and never a quiet "in sync": no project
+loaded, a worker that did not report, a file or its directory that cannot be stat'ed, a project whose Compile items need MSBuild to
+evaluate. A rebuild in progress answers by itself. A changed file outranks a file that could not be read, because it is the fact someone
+can act on.
+
+**Where the build stamp comes from.** From records that exist, not a new one. The worker's warmup report already carries when it
+started and which assemblies it loaded, and the daemon already fetches it for `get_session_status`. The stamp of the build is the
+write time of that assembly's output on disk: a source written after it is an edit after the build, and an output written after the
+worker started means a newer build than the one the session runs (an outside `dotnet build`). I did not use `LastRebuild` for the
+stamp, because it holds only the last daemon-driven rebuild and says nothing about a session that was started on a stale build or built
+from outside.
+
+**The receipt composes with what it had.** `RanReceipt` gains `Source`, and the verdict became a function of the counts and the source:
+`AllPassed` only over `InSync`, and `PassedOnStaleSource`, `PassedWhileRebuilding` or `PassedOnUnknownSource` otherwise, so a pass over
+a build that is behind never reads as plain `AllPassed`. A run is read against the disk when it is dispatched and when it first settles;
+the worse of the two is the receipt's source, so an edit during the run counts (the `RunningButEdited` case the receipt used to lose),
+and the reading is frozen at settle, so the same `receipt_id` does not change its mind because of an edit made afterwards. The run
+still happens over a stale source. A refusal would have given the agent no receipt to read, and the point is that the receipt says what
+it ran against. `observe` alone, with no source check, starts at `Unknown NotAssessed`, so a path that forgets to attach a source gets
+the cautious verdict and never `AllPassed`.
+
+**It is on every surface the status already is, next to `replFreshness` and named so the two cannot be confused**: `sourceState` in
+every shape of `get_session_status` (ready, warming, faulted), a `Source:` line under every entry of `list_sessions`, and `source` on
+the `run_tests` structured result.
+
+**Why `FileStatuses` was not made real.** I considered filling it from this decision. It is a snapshot the Elm model holds, and an edit
+on disk does not push into the Elm model, so a freshness read from it is stale the moment it is made. That is the same bug as the
+original. So the staleness truth is `SourceState`, read when a tool asks, and the trust path (`targeted_verify`) now judges loaded
+definitions from it. `StaleDefinitions` is therefore reachable for the first time. `FileStatuses` stays the dashboard's file list, and
+nothing reads staleness from it. `FileReadiness.Stale` is still in the type because the dashboard has a colour for it
+(`DashboardFragments.fs`), which I did not touch; nothing produces it, and removing the case is a one-line follow-up there.
+
+**What it cannot see, and says so.** The stamp is a write time, so a file that was only touched (a branch switch does it) reads as
+changed; that errs toward a warning. A file edited inside the window of a build that was already running is written before the output
+and may not be in it; the output's write time is the end of the build, so the decision cannot tell, and the simulation keeps edits and
+builds from overlapping in its ground truth for the same reason. Edits to `Directory.Build.props`, a lock file or a referenced project's
+own sources outside the listed projects are not inputs it looks at. A project whose Compile items use a wildcard or an MSBuild property
+is `Unknown`, not guessed. `/api/sessions`, the `sessions://list` resource and the dashboard card do not carry the field yet; they read
+`SessionInfo` without the daemon's disk edge (see the hand-off note).
+
+**How it is proved.** `SourceStateTests` (the decision as examples and as properties, with an oracle written as a conjunction), and
+`SourceStateProbeTests` against real files and write times. `SourceStateSim` is a DST over edits, builds that end or fail, workers that
+load the build on disk or keep an older one, outside builds, files that stop being readable, a rebuild record delivered in any order and
+a silent worker, with the invariants NEVER-GREEN-OVER-STALE, REBUILD-IS-NEVER-INSYNC, UNKNOWN-IS-NEVER-INSYNC and INSYNC-IS-EARNED.
+Three twins put the bugs back: a decision that ignores write times, one that believes the rebuild record over the files, and one that
+takes a failed read for an old stamp. They are caught on 159, 102 and 45 of the first 300 seeds, and the real decision breaks no invariant on any of
+them. `McpRunTestsTests` runs `run_tests` through the tool layer over a project
+on disk, `SourceStateSurfaceTests` reads every status shape, and `SourceStateOutcomeTests` is the gate through a real daemon and a
+real MCP client over a fixture project of its own: untouched is `AllPassed` and `InSync`, a test file edited with no rebuild is
+`PassedOnStaleSource` naming the file, a source edited too names both, a run during a rebuild is `PassedWhileRebuilding`, a rebuild
+then reads `InSync` again, and a directory made unreadable reads `Unknown` with the reason.
+Reopen it if: a client needs the field on `/api/sessions`, the project list can be read from the evaluated project instead of the
+project file, or a stamp that survives an edit inside a build's window becomes cheap (a recorded build start).
