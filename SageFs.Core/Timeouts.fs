@@ -83,8 +83,12 @@ module Timeouts =
   // -- Live Testing (configurable at runtime via MCP, thread-safe) --
   let private _perTestLock = obj ()
   let private _globalTestLock = obj ()
+  /// The per-test timeout when neither the environment nor a setting says
+  /// otherwise. Also the value `SettingsCatalog` falls back to if a requested
+  /// per-test timeout is outside ValidTimeout's range. No recorded reason for 5s.
+  let perTestTimeoutFallback = TimeSpan.FromSeconds(5.0)
   let mutable private _perTestDefault =
-    envOrDefault "SAGEFS_PER_TEST_TIMEOUT_SECONDS" 5.0
+    envOrDefault "SAGEFS_PER_TEST_TIMEOUT_SECONDS" perTestTimeoutFallback.TotalSeconds
   let mutable private _globalTestRun = TimeSpan.FromMinutes(2.0)
   let perTestDefault () = lock _perTestLock (fun () -> _perTestDefault)
   let globalTestRun () = lock _globalTestLock (fun () -> _globalTestRun)
@@ -100,8 +104,24 @@ module Timeouts =
     | Error _ -> ()
 
   // -- Process Management --
+  /// How long a `dotnet build` run by a session start or rebuild may take before
+  /// SessionBuild kills it and the session faults with `BuildFailure.TimedOut`.
+  /// Large repos need minutes; 10 matches the ValidTimeout max.
   let buildCompletion = envOrDefaultMinutes "SAGEFS_BUILD_TIMEOUT_MINUTES" 10.0
   let processNormalExit = TimeSpan.FromSeconds(3.0)
+  /// How long the failure path waits for a worker's stderr reader to reach EOF
+  /// once stdout has closed. stderr closes with the process, so this normally
+  /// costs nothing; the bound only matters when a grandchild holds the pipe
+  /// open. No recorded reason for 2s.
+  let stderrDrainGrace = TimeSpan.FromSeconds(2.0)
+  /// How long a session start waits for another process's build of the same FSI
+  /// host to finish (the cross-process build lock in FsiHostBuild). A cold host
+  /// build is the slowest thing the lock guards, so this is a build-sized
+  /// budget. No recorded reason for 5 minutes.
+  let hostBuildLockWait = envOrDefaultMinutes "SAGEFS_HOST_BUILD_LOCK_MINUTES" 5.0
+  /// How often the host build lock is retried while another process holds it.
+  /// This is a poll; the lock is a file handle with no way to wait on it.
+  let hostBuildLockPoll = TimeSpan.FromMilliseconds(200.0)
 
   // -- Cohort landing gate --
   /// How long the landing gate waits for the integration session to settle to a
@@ -140,9 +160,23 @@ module Timeouts =
   let appHostStart = envOrDefault "SAGEFS_APP_HOST_START_SECONDS" 90.0
 
   // -- Restart / Backoff --
+  /// First delay before a crashed worker is restarted; later restarts double it
+  /// (RestartPolicy.nextBackoff) up to `restartMaxBackoff`.
   let restartBaseBackoff = TimeSpan.FromSeconds(1.0)
+  /// Cap on the restart delay, so a worker that keeps crashing is retried at
+  /// least this often until the policy gives up.
   let restartMaxBackoff = TimeSpan.FromSeconds(30.0)
+  /// Restarts older than this are forgotten, so spaced-out transient failures
+  /// never add up to a permanent give-up.
   let restartCountResetWindow = TimeSpan.FromMinutes(5.0)
+  /// A crash this soon after the previous restart is a startup crash (the host
+  /// is failing to come up), which backs off 4x and gives up at a lower ceiling.
+  /// No recorded reason for 10s.
+  let restartStartupCrashWindow = TimeSpan.FromSeconds(10.0)
+  /// What the workflow-switch confirmation tells the user a cold session start
+  /// costs. A display estimate, not a bound: nothing waits on it. No recorded
+  /// reason for 15s.
+  let estimatedColdStart = TimeSpan.FromSeconds(15.0)
 
   // -- Watchdog / Supervision --
   let watchdogInterval = TimeSpan.FromSeconds(5.0)

@@ -86,7 +86,7 @@ module StderrTail =
   /// How long the failure path waits for the stderr reader to reach EOF once
   /// stdout has closed. stderr closes with the process, so this normally costs
   /// nothing; the bound only matters when a grandchild holds the pipe open.
-  let drainGrace : System.TimeSpan = System.TimeSpan.FromSeconds 2.0
+  let drainGrace : System.TimeSpan = Timeouts.stderrDrainGrace
 
   /// The last `summaryLineCount` lines, newline-joined; "" when nothing was
   /// captured (callers use that to keep their "no stderr" wording).

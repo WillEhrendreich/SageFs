@@ -454,7 +454,7 @@ module SessionBuild =
               match proc.HasExited with
               | true -> tcs.TrySetResult(true) |> ignore
               | false -> ()
-              let timeoutTask = System.Threading.Tasks.Task.Delay(600_000, ct)
+              let timeoutTask = System.Threading.Tasks.Task.Delay(Timeouts.buildCompletion, ct)
               let! completed =
                 System.Threading.Tasks.Task.WhenAny(tcs.Task, timeoutTask)
                 |> Async.AwaitTask

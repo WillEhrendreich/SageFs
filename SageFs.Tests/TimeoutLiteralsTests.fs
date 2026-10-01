@@ -26,16 +26,11 @@ let private budgets : (string * int) list =
     "SageFs.Core/DaemonOwnership.fs", 2
     "SageFs.Core/ExpensiveWorkLease.fs", 9
     "SageFs.Core/Features/ObservedFrictionTypes.fs", 3
-    "SageFs.Core/FsiHostBuild.fs", 1
     "SageFs.Core/HostCoreAdoption.fs", 1
     "SageFs.Core/MemorySupervisor.fs", 1
     "SageFs.Core/Middleware/ValueReads.fs", 1
     "SageFs.Core/OwnerMonitor.fs", 1
-    "SageFs.Core/RestartPolicy.fs", 4
-    "SageFs.Core/SessionBuild.fs", 1
     "SageFs.Core/SettingsCatalog.fs", 1
-    "SageFs.Core/TailBuffer.fs", 1
-    "SageFs.Core/WorkflowTypes.fs", 1
     "SageFs.Host/AppRunner.fs", 2
     "SageFs.Host/WorkerHttpTransport.fs", 2
     "SageFs.Host/WorkerMain.fs", 1

@@ -513,7 +513,7 @@ module TransitionCost =
   let compute (evalCount: int) (cellCount: int) = {
     DefinitionsLost = evalCount
     CellsLost = cellCount
-    EstimatedRestart = System.TimeSpan.FromSeconds 15.0
+    EstimatedRestart = Timeouts.estimatedColdStart
   }
 
 // ─── Workflow switch outcome ────────────────────────────────

@@ -54,10 +54,10 @@ module RestartPolicy =
 
   let defaultPolicy : Policy = {
     MaxRestarts = 5
-    BackoffBase = TimeSpan.FromSeconds 1.0
-    BackoffMax = TimeSpan.FromSeconds 30.0
-    ResetWindow = TimeSpan.FromMinutes 5.0
-    StartupCrashWindow = TimeSpan.FromSeconds 10.0
+    BackoffBase = Timeouts.restartBaseBackoff
+    BackoffMax = Timeouts.restartMaxBackoff
+    ResetWindow = Timeouts.restartCountResetWindow
+    StartupCrashWindow = Timeouts.restartStartupCrashWindow
     StartupCrashMaxRestarts = 3
   }
 

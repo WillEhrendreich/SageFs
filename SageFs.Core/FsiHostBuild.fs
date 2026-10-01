@@ -258,7 +258,7 @@ let private withBuildLock (lockPath: string) (timeoutMs: int) (work: unit -> Res
       Ok(new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
     with
     | :? IOException when DateTime.UtcNow < deadline ->
-      Thread.Sleep 200
+      Thread.Sleep Timeouts.hostBuildLockPoll
       acquire ()
     | ex -> Error(BuildLockUnavailable(lockPath, ex.Message))
   match acquire () with
@@ -284,7 +284,7 @@ let ensureBuiltWith (dotnet: string) (selection: SdkSelection) (cacheRoot: strin
     | true -> Ok(Reused dll)
     | false ->
       Directory.CreateDirectory directory |> ignore
-      withBuildLock (Path.Combine(directory, ".lock")) 300_000 (fun () ->
+      withBuildLock (Path.Combine(directory, ".lock")) (int Timeouts.hostBuildLockWait.TotalMilliseconds) (fun () ->
         // Another session may have finished the build while we waited for the lock.
         match isBuilt () with
         | true -> Ok(Reused dll)
