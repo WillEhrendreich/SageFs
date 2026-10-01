@@ -2302,7 +2302,7 @@ WORKFLOW: Call before run_app to see what can run.""")>]
     [<McpServerTool>]
     [<Description("""Join this daemon's cohort — the shared multi-agent coordination session that tracks who else is working here, file/project claims, and landing requests.
 
-v1 has no separate "create cohort" step: the FIRST agent to join an empty cohort automatically becomes its conductor (the only member who can reassign an orphaned claim or delegate conductor to someone else).
+v1 has no separate "create cohort" step: the FIRST agent to join an empty cohort automatically becomes its conductor (the only member who can reassign an orphaned claim). No tool hands the conductor role to someone else yet.
 
 WHEN TO USE: Once per agent, before acquiring claims or requesting a landing, when multiple agents/sub-agents may be touching this repo concurrently.
 

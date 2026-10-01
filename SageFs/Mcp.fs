@@ -743,7 +743,7 @@ module McpTools =
           sprintf "%s cannot call %s: your role (%s) does not permit it."
             (MemberTable.MemberId.display who) toolName roleText
         let suggestion =
-          "Join as Implementer for claim/landing tools, or ask the cohort conductor to perform this action (or delegate the conductor role to you)."
+          "Join as Implementer for claim/landing tools, or ask the cohort conductor to perform this action."
         Some (Error (SageFsError.describeForAgent (SageFsError.CohortActionFailed(reason, suggestion))))
 
   /// ── Affordance call gate ─────────────────────────────────────────────────
