@@ -370,6 +370,10 @@ module SessionOperations =
   /// enrichment over `McpContext.SessionMap` (per-agent routing state), not
   /// part of `SessionInfo`, and keeping this function pure means it cannot
   /// read that mutable map.
+  ///
+  /// `opts` is the caller's options object (SageFs/McpResources.fs passes the camelCase
+  /// shape, `Json.camelCase`). This is one function from `Json.serialize`: it takes a
+  /// `JsonProfile` once that caller does.
   let sessionsToJson (opts: JsonSerializerOptions) (sessions: SessionInfo list) : string =
     let rows =
       sessions

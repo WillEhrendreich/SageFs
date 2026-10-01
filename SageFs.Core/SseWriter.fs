@@ -76,6 +76,14 @@ let private deriveWarmupPhase (step: int) (total: int) =
     | _ -> "finalizing"
   | false -> "opening_namespaces"
 
+/// Every payload in this file is written here, with the options the caller passed in. The callers in
+/// SageFs/ still hand over an options object: the SSE stream's has keys as written and the F#
+/// converter (the `Json.standard` shape), the MCP resource's is camelCase (`Json.camelCase`). This
+/// file is one function from `Json.serialize`; it stays on the caller's options until those
+/// callers pass a `JsonProfile`, which is when the parameter goes.
+let private writeWith (value: 'T, opts: JsonSerializerOptions) : string =
+  JsonSerializer.Serialize(value, opts)
+
 /// Format a warmup progress event as an SSE event string.
 /// Emitted during session warmup so editor plugins can show phase-by-phase progress.
 let formatWarmupProgressEvent (opts: JsonSerializerOptions) (sessionId: string option) (step: int) (total: int) (message: string) : string =
@@ -85,7 +93,7 @@ let formatWarmupProgressEvent (opts: JsonSerializerOptions) (sessionId: string o
     | t -> System.Math.Round(float step / float t, 3)
   let phase = deriveWarmupPhase step total
   let json =
-    JsonSerializer.Serialize(
+    writeWith(
       {| Step = step; Total = total; Message = message; Progress = progress; Phase = phase |}, opts)
     |> injectSessionId sessionId
   formatSseEvent "warmup_progress" json
@@ -106,7 +114,7 @@ let formatTestSummaryEvent
        Disabled = summary.Disabled
        Enabled = summary.Enabled
        LastDecision = lastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "test_summary" json
 
 /// Format a TestSummary as an SSE event string, carrying the authoritative
@@ -141,7 +149,7 @@ let formatTestSummaryEventWithDiscovery
        DiscoveryState = Features.LiveTesting.LiveTestDiscoveryState.toWireValue discoveryState
        DiscoveryGeneration = discoveryGeneration
        LastDecision = lastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "test_summary" json
 
 /// Format a TestResultsBatchPayload as an SSE event string
@@ -153,12 +161,12 @@ let formatTestResultsBatchEvent (opts: JsonSerializerOptions) (sessionId: string
        Entries = payload.Entries
        Summary = payload.Summary
        LastDecision = payload.LastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}
-  let json = JsonSerializer.Serialize(wirePayload, opts) |> injectSessionId sessionId
+  let json = writeWith(wirePayload, opts) |> injectSessionId sessionId
   formatSseEvent "test_results_batch" json
 
 /// Format a FileAnnotations as an SSE event string
 let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (sessionId: string option) (annotations: Features.LiveTesting.FileAnnotations) : string =
-  let json = JsonSerializer.Serialize(annotations, opts) |> injectSessionId sessionId
+  let json = writeWith(annotations, opts) |> injectSessionId sessionId
   formatSseEvent "file_annotations" json
 
 /// Format a CoverageView as an SSE event string.
@@ -167,7 +175,7 @@ let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (sessionId: string 
 /// as one CodeLens, Neovim shows it as one virt_text line, VS shows it
 /// in the navigation bar. The editor never sees per-test inline text for
 /// a heavily-tested function — only the aggregate badge.
-/// Performance: a single JsonSerializer.Serialize call per view. The
+/// Performance: a single serialize call per view. The
 /// caller (SsePublisher) is expected to throttle / batch across files.
 let formatCoverageViewEvent
   (opts: JsonSerializerOptions)
@@ -184,7 +192,7 @@ let formatCoverageViewEvent
        Overflow = view.Overflow
        InlineBadgeText = view.InlineBadgeText
        Health = view.Health |}
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "coverage_view" json
 
 /// Format failure narratives as an SSE event string
@@ -200,13 +208,13 @@ let formatFailureNarrativesEvent (opts: JsonSerializerOptions) (sessionId: strin
            | Features.LiveTesting.CausalChange.FileChanged f -> {| Kind = "file"; Name = f |}
            | Features.LiveTesting.CausalChange.Unknown -> {| Kind = "unknown"; Name = "" |})
          PropertyViolation = n.PropertyViolation; Summary = n.Summary |})
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "failure_narratives" json
 
 /// Format TestSourceLocations as an SSE event string
 let formatTestSourceLocationsEvent (opts: JsonSerializerOptions) (sessionId: string option) (locations: Features.LiveTesting.TestSourceLocation list) : string =
   let payload = {| Locations = locations |}
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "test_source_locations" json
 
 // ── Bindings snapshot (CQRS: server-side parsing, push via SSE) ──
@@ -299,7 +307,7 @@ let formatBindingsSnapshotEvent
   (bindings: FsiBinding array)
   : string =
   let json =
-    JsonSerializer.Serialize(
+    writeWith(
       {| Bindings = bindings
          BindingValues = bindingValues
          blockStartLine = blockStartLine
@@ -316,7 +324,7 @@ let formatLiveBindingsEvent
   (snapshot: Features.LiveValueTree.LiveValueSnapshot)
   : string =
   let json =
-    JsonSerializer.Serialize(snapshot, opts)
+    writeWith(snapshot, opts)
     |> injectSessionId sessionId
   formatSseEvent "live_bindings" json
 
@@ -340,14 +348,14 @@ let formatEvalDiffEvent (opts: JsonSerializerOptions) (sessionId: string option)
        Removed = summary.RemovedCount
        Modified = summary.ModifiedCount
        Unchanged = summary.UnchangedCount |}
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "eval_diff" json
 
 /// Format an eval started notification as an SSE event.
 /// Emitted at the start of each /exec call so editor plugins can mark decorations stale.
 let formatEvalStartedEvent (opts: JsonSerializerOptions) (sessionId: string option) (filePath: string) (blockStartLine: int) : string =
   let json =
-    JsonSerializer.Serialize(
+    writeWith(
       {| filePath = filePath
          blockStartLine = blockStartLine |}, opts)
     |> injectSessionId sessionId
@@ -358,7 +366,7 @@ let formatEvalStartedEvent (opts: JsonSerializerOptions) (sessionId: string opti
 /// Lets editors show elapsed time and confirm the SSE connection is alive.
 let formatEvalHeartbeatEvent (opts: JsonSerializerOptions) (sessionId: string option) (filePath: string) (blockStartLine: int) (elapsedMs: int64) : string =
   let json =
-    JsonSerializer.Serialize(
+    writeWith(
       {| FilePath = filePath
          BlockStartLine = blockStartLine
          ElapsedMs = elapsedMs |}, opts)
@@ -369,7 +377,7 @@ let formatEvalHeartbeatEvent (opts: JsonSerializerOptions) (sessionId: string op
 /// Emitted after each /exec call with filePath, blockStartLine, and durationMs populated.
 let formatEvalResultEvent (opts: JsonSerializerOptions) (sessionId: string option) (filePath: string) (blockStartLine: int) (output: string) (success: bool) (durationMs: float) : string =
   let json =
-    JsonSerializer.Serialize(
+    writeWith(
       {| filePath = filePath
          blockStartLine = blockStartLine
          output = output
@@ -385,7 +393,7 @@ let formatCellDependenciesEvent (opts: JsonSerializerOptions) (sessionId: string
          {| Id = c.Id; Produces = c.Produces; Consumes = c.Consumes |})
          |> Array.ofSeq
        Edges = graph.Edges |> List.map (fun (f, t) -> {| From = f; To = t |}) |}
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "cell_dependencies" json
 
 /// Format a binding scope map as an SSE event string
@@ -396,7 +404,7 @@ let formatBindingScopeMapEvent (opts: JsonSerializerOptions) (sessionId: string 
             ShadowedBy = b.ShadowedBy; ReferencedIn = b.ReferencedIn |})
        ActiveCount = snapshot.ActiveBindings.Count
        ShadowedCount = snapshot.ShadowedBindings.Length |}
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "binding_scope_map" json
 
 /// Format eval timeline stats as an SSE event string
@@ -408,7 +416,7 @@ let formatEvalTimelineEvent (opts: JsonSerializerOptions) (sessionId: string opt
        P99Ms = stats.P99Ms
        MeanMs = stats.MeanMs
        Sparkline = stats.Sparkline |}
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "eval_timeline" json
 
 /// Format a DiagnosticReport as an SSE event string.
@@ -439,7 +447,7 @@ let formatDiagnosisReadyEvent (opts: JsonSerializerOptions) (sessionId: string o
          report.PerformanceContext
          |> Option.map (fun s -> {| Sparkline = s.Sparkline; P50Ms = s.P50Ms; P95Ms = s.P95Ms |})
        Summary = report.Summary |}
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "diagnosis_ready" json
 
 // ── Cohort SSE events (item 15a: cohort_matrix / claim_changed / landing_changed) ──
@@ -579,7 +587,7 @@ let cohortFrameJson (opts: JsonSerializerOptions) (frame: Cohort.CohortFrame<Mem
        Rows = rows
        IntegrationHead = frame.IntegrationHead
        Landings = landings |}
-  JsonSerializer.Serialize(payload, opts)
+  writeWith(payload, opts)
 
 let formatCohortMatrixEvent (opts: JsonSerializerOptions) (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
   formatSseEvent "cohort_matrix" (cohortFrameJson opts frame)
@@ -604,7 +612,7 @@ let formatClaimChangedEvent (opts: JsonSerializerOptions) (kind: string) (claim:
        Holder = holder
        Fence = claim.Fence
        Kind = kind |}
-  let json = JsonSerializer.Serialize(payload, opts)
+  let json = writeWith(payload, opts)
   formatSseEvent "claim_changed" json
 
 /// Format a single landing state change (from a `LandingStateChanged`
@@ -624,7 +632,7 @@ let formatLandingChangedEvent (opts: JsonSerializerOptions) (landing: Cohort.Lan
        State = landingStateKind landing.State
        Blocker = blocker
        NextAction = nextAction |}
-  let json = JsonSerializer.Serialize(payload, opts)
+  let json = writeWith(payload, opts)
   formatSseEvent "landing_changed" json
 
 /// Format a claim early-warning (multi-agent vision §5.1: a cohort member's
@@ -648,7 +656,7 @@ let formatSaveObservedEvent
        Holder = displayMember holder
        Scope = claimScopeToWire claim.Scope
        Path = path |}
-  let json = JsonSerializer.Serialize(payload, opts)
+  let json = writeWith(payload, opts)
   formatSseEvent "save_observed" json
 
 // ── Authoritative SSE event type registry ──────────────────────────────────────────

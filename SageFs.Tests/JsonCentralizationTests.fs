@@ -20,7 +20,7 @@ let private strayPattern =
 let private budgets : (string * int) list =
   [ "SageFs.Core/DevReload.fs", 1
     "SageFs.Core/SessionOperations.fs", 1
-    "SageFs.Core/SseWriter.fs", 23
+    "SageFs.Core/SseWriter.fs", 1
     "SageFs/Mcp.fs", 36
     "SageFs/McpAdapter.fs", 5
     "SageFs/McpFrictionRecorder.fs", 3
