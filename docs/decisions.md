@@ -178,3 +178,20 @@ Evidence: `SageFs.Core/Json.fs`, `SageFs.Tests/JsonTests.fs`, `SageFs.Tests/Json
 Reopen it if: Serde.FS reaches a stable 1.0 with more than one publisher, a generator that runs on the SDK's own
 runtime, floats that agree across runtimes, per-call options plus anonymous-record support, and a reader that is not
 slower than STJ. The report lists the five conditions.
+
+## A duration has a name and one home, and a ratchet counts the places that don't
+
+A timeout is a decision, so it carries what the wait is for and why that long, and it lives in one place:
+`Timeouts` for the product, `TestTimeouts` for the ones a test picks on purpose. The first net10 gate run
+showed what a bare number costs: the AppRunner tests gave a web app 500 ms to begin building its host while
+production gives 10 s, so a cold ASP.NET host build on a loaded runner read as a console app. The values had
+no names, so the gap between test and production was invisible.
+
+`TimeoutLiteralsTests` counts every inline duration (`TimeSpan.From...` with a number, `Task.Delay n`,
+`Thread.Sleep n`, `.AddSeconds n`, `WaitForExit n`, a `...Ms = n` binding, a bare `60_000`) outside the central
+files, with a budget per file that only goes down. About 780 sites were found on the first count and 62 product
+sites were named in one pass, which also woke a dead env var (`SAGEFS_BUILD_TIMEOUT_MINUTES`, read by nothing
+because `SessionBuild` had its own `600_000`).
+
+Evidence: `SageFs.Core/Timeouts.fs`, `SageFs.Tests/TestTimeouts.fs`, `SageFs.Tests/TimeoutLiteralsTests.fs`.
+Reopen it if: a constant stops saying why it is that long. Then fix the comment or the value, don't inline it.

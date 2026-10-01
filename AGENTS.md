@@ -134,6 +134,28 @@ The Visual Studio extension (`sagefs-vs/`) is deprecated and no longer built, te
 ### Indentation
 - **ALWAYS use 2 spaces**, never 4 spaces — this is non-negotiable across the entire codebase.
 
+### One home for each kind of decision (ratcheted, never magic)
+
+A value that several places must agree on has one named home, and a test counts the places
+that still decide for themselves. Each count only goes down. A file that is not in a
+budget table has a budget of zero, and a budget above the real count is itself a failure.
+
+- **Durations.** `Timeouts` (`SageFs.Core/Timeouts.fs`) is the product's. A constant says
+  what the wait is FOR and why that long, is named for that purpose and never for its
+  value, and takes an `envOrDefault` override only if an operator could need to tune it.
+  A test takes a production duration from `Timeouts`, never from a copy. A duration a test
+  picks on purpose lives in `SageFs.Tests/TestTimeouts.fs` (`TestTimeouts`, and
+  `FixtureDurations` for made-up result durations that nothing reads back). No bare
+  `TimeSpan.FromSeconds 20.`, `Task.Delay 250`, `60_000` or `timeout = 5000` at a call site.
+  `TimeoutLiteralsTests` is the ratchet.
+- **JSON.** `SageFs.Json` (`SageFs.Core/Json.fs`) is the one place that serializes and
+  deserializes. A call site names a profile (naming, layout, nulls, union encoding) and never
+  builds a `JsonSerializerOptions` or calls `JsonSerializer` itself. Every profile carries the
+  F# converter, so a value is the same text on .NET 10 and .NET 11 (.NET 11 writes an F#
+  union and .NET 10 throws). Read a record that clients may send with optional fields left
+  out with the `omitNulls` profile. `JsonCentralizationTests` is the ratchet.
+- **Closed sets of strings** are discriminated unions with one exhaustive to-string function.
+
 ### Package References
 - **NEVER** include `Version` attributes in `<PackageReference>` elements in `.fsproj` files.
 - All versions are defined centrally in `Directory.Packages.props` at the repo root.
