@@ -196,19 +196,10 @@ module Timeouts =
   /// (ImpactForecast). No recorded reason for 2s.
   let impactP95Investigate = TimeSpan.FromMilliseconds(2000.0)
   /// How long after a rebuild restart the live-testing pipeline waits for the
-  /// session to be Ready with a streaming test proxy before it reports the
-  /// rebuild as failed. No recorded reason for 30s.
+  /// session manager to say the session is Ready (which is also when its
+  /// streaming test proxy exists) before it reports the rebuild as failed. It
+  /// is the one timer in that wait. No recorded reason for 30s.
   let rebuildReadyWait = envOrDefault "SAGEFS_REBUILD_READY_SECONDS" 30.0
-  /// Right after a rebuild restart the readiness poll is quick, because a warm
-  /// restart is Ready within a second; this is how long that quick phase lasts.
-  /// No recorded reason for 1s.
-  let rebuildFastPollWindow = TimeSpan.FromMilliseconds(1000.0)
-  /// The readiness poll cadence inside `rebuildFastPollWindow`. This is a poll;
-  /// the session manager already knows when a session turns Ready.
-  let rebuildFastPoll = TimeSpan.FromMilliseconds(50.0)
-  /// The readiness poll cadence after `rebuildFastPollWindow`. A poll, like
-  /// `rebuildFastPoll`.
-  let rebuildSlowPoll = TimeSpan.FromMilliseconds(250.0)
 
   // -- Process Management --
   /// How long a `dotnet build` run by a session start or rebuild may take before

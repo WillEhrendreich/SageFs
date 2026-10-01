@@ -57,7 +57,12 @@ let createEffectDeps
     ListSessions = fun () ->
       // CQRS read path — lock-free snapshot, no mailbox blocking
       async { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
-    SleepMs = Async.Sleep
+    AwaitReady = fun sessionId ->
+      // Parks in the manager until the session is Ready or can no longer become
+      // Ready. No timeout here: RebuildReadyWait owns the deadline and the cancel.
+      sessionManager.PostAndAsyncReply(fun reply ->
+        SessionManager.SessionCommand.AwaitReady(sessionId, reply))
+    ReadyDeadline = Timeouts.rebuildReadyWait
     GetStreamingTestProxy = fun _sessionId -> None
     GetWarmupContext = None
     TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()

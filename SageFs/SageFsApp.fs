@@ -2281,8 +2281,11 @@ type EffectDeps = {
   RestartSession: SessionId -> RestartPlan -> Async<Result<string, SageFsError>>
   /// List all sessions
   ListSessions: unit -> Async<SessionInfo list>
-  /// Sleep for the requested number of milliseconds.
-  SleepMs: int -> Async<unit>
+  /// Answers when the session is Ready, or with the reason it can no longer
+  /// become Ready. Parked in the session manager, so it costs nothing while it waits.
+  AwaitReady: SessionId -> Async<Result<unit, SageFsError>>
+  /// How long a rebuild waits for AwaitReady before it fails the rebuild.
+  ReadyDeadline: System.TimeSpan
   /// Fetch warmup context for a session (optional — None disables warmup dispatch)
   GetWarmupContext: (SessionId -> Async<SessionContext option>) option
   /// Test cycle cancellation for stale work
@@ -2810,96 +2813,77 @@ module SageFsEffectHandler =
                       sidStr
                       restartStopwatch.Elapsed.TotalMilliseconds
                       msg
-                    let waitTimeoutMs = int Timeouts.rebuildReadyWait.TotalMilliseconds
-                    let fastPollWindowMs = int Timeouts.rebuildFastPollWindow.TotalMilliseconds
-                    let fastPollDelayMs = int Timeouts.rebuildFastPoll.TotalMilliseconds
-                    let slowPollDelayMs = int Timeouts.rebuildSlowPoll.TotalMilliseconds
-                    let deadline = DateTimeOffset.UtcNow.AddMilliseconds(float waitTimeoutMs)
+                    let waitTimeoutMs = int deps.ReadyDeadline.TotalMilliseconds
                     let waitStopwatch = System.Diagnostics.Stopwatch.StartNew()
-                    let mutable readyObservedMs : float option = None
-                    let mutable proxyObservedMs : float option = None
-                    let recordReadyObservation status =
-                      match readyObservedMs, status with
-                      | None, Some (SessionLifecycleStatus.Ready _) ->
-                        let elapsedMs = waitStopwatch.Elapsed.TotalMilliseconds
-                        readyObservedMs <- Some elapsedMs
-                        Instrumentation.liveTestingRebuildReadyWaitMs.Record(elapsedMs)
-                        Utils.Log.info "[rebuild] Session %s reached Ready %.1fms after rebuild restart" sidStr elapsedMs
-                      | _ -> ()
-                    let recordProxyObservation hasProxy =
-                      match proxyObservedMs, hasProxy with
-                      | None, true ->
-                        let elapsedMs = waitStopwatch.Elapsed.TotalMilliseconds
-                        proxyObservedMs <- Some elapsedMs
-                        Instrumentation.liveTestingRebuildProxyWaitMs.Record(elapsedMs)
-                        Utils.Log.info "[rebuild] Session %s streaming proxy available %.1fms after rebuild restart" sidStr elapsedMs
-                      | _ -> ()
-                    let rec waitForReadyProxy waitedMs = async {
-                      ct.ThrowIfCancellationRequested()
-                      let! sessions = deps.ListSessions()
-                      ct.ThrowIfCancellationRequested()
-                      let status =
-                        sessions
-                        |> List.tryFind (fun si -> si.Id = sid)
-                        |> Option.map (fun si -> si.Status)
-                      let streamingProxy = deps.GetStreamingTestProxy sid
-                      let hasStreamingProxy = streamingProxy |> Option.isSome
-                      recordReadyObservation status
-                      recordProxyObservation hasStreamingProxy
-                      match status, hasStreamingProxy with
-                      | Some (SessionLifecycleStatus.Ready _), true ->
-                        waitStopwatch.Stop()
-                        rebuildStopwatch.Stop()
-                        Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
-                        let readyMs = readyObservedMs |> Option.defaultValue waitStopwatch.Elapsed.TotalMilliseconds
-                        let proxyMs = proxyObservedMs |> Option.defaultValue waitStopwatch.Elapsed.TotalMilliseconds
+                    // One await on the session manager, bounded by the deadline and
+                    // abandoned on cancel. A session is Ready only after its worker URL
+                    // is installed, so Ready is also when the proxy exists (RebuildReadyWait).
+                    let! outcome = RebuildReadyWait.await (deps.AwaitReady sid) deps.ReadyDeadline ct
+                    ct.ThrowIfCancellationRequested()
+                    waitStopwatch.Stop()
+                    rebuildStopwatch.Stop()
+                    Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
+                    let failRebuild (err: string) =
+                      Utils.Log.warn "[rebuild] %s" err
+                      dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error err))
+                    match outcome with
+                    | RebuildReadyWait.Outcome.Ready ->
+                      let readyMs = waitStopwatch.Elapsed.TotalMilliseconds
+                      Instrumentation.liveTestingRebuildReadyWaitMs.Record(readyMs)
+                      Utils.Log.info "[rebuild] Session %s reached Ready %.1fms after rebuild restart" sidStr readyMs
+                      match deps.GetStreamingTestProxy sid with
+                      | Some _ ->
+                        Instrumentation.liveTestingRebuildProxyWaitMs.Record(readyMs)
+                        Utils.Log.info "[rebuild] Session %s streaming proxy available %.1fms after rebuild restart" sidStr readyMs
                         Utils.Log.info
                           "[rebuild] Session %s ready with streaming proxy after rebuild (restart=%.1fms ready=%.1fms proxy=%.1fms total=%.1fms)"
                           sidStr
                           restartStopwatch.Elapsed.TotalMilliseconds
                           readyMs
-                            proxyMs
-                            rebuildStopwatch.Elapsed.TotalMilliseconds
+                          readyMs
+                          rebuildStopwatch.Elapsed.TotalMilliseconds
                         dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Ok ()))
-                      | _ when DateTimeOffset.UtcNow >= deadline ->
-                        ct.ThrowIfCancellationRequested()
-                        waitStopwatch.Stop()
-                        rebuildStopwatch.Stop()
-                        Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)
-                        let statusText =
-                          status
-                          |> Option.map string
-                          |> Option.defaultValue "missing"
-                        let readyText =
-                          readyObservedMs
-                          |> Option.map (fun elapsedMs -> sprintf "%.1fms" elapsedMs)
-                          |> Option.defaultValue "not-observed"
-                        let proxyText =
-                          proxyObservedMs
-                          |> Option.map (fun elapsedMs -> sprintf "%.1fms" elapsedMs)
-                          |> Option.defaultValue "not-observed"
-                        let err =
-                          sprintf
-                            "Rebuild succeeded but session %s never became ready for test execution within %dms (status=%s, restart=%.1fms, ready=%s, proxy=%s, total=%.1fms)."
+                      | None ->
+                        failRebuild
+                          (sprintf
+                            "Rebuild succeeded and session %s is Ready, but no streaming proxy is registered for it (restart=%.1fms, ready=%.1fms, proxy=missing, total=%.1fms)."
                             sidStr
-                            waitTimeoutMs
-                            statusText
                             restartStopwatch.Elapsed.TotalMilliseconds
-                            readyText
-                            proxyText
-                            rebuildStopwatch.Elapsed.TotalMilliseconds
-                        Utils.Log.warn "[rebuild] %s" err
-                        dispatch (SageFsMsg.RebuildCompleted (targetSession, generation, Error err))
-                      | _ ->
-                        let pollDelayMs =
-                          match waitedMs < fastPollWindowMs with
-                          | true -> fastPollDelayMs
-                          | false -> slowPollDelayMs
-                        do! deps.SleepMs pollDelayMs
-                        ct.ThrowIfCancellationRequested()
-                        return! waitForReadyProxy (waitedMs + pollDelayMs)
-                    }
-                    do! waitForReadyProxy 0
+                            readyMs
+                            rebuildStopwatch.Elapsed.TotalMilliseconds)
+                    | RebuildReadyWait.Outcome.Failed err ->
+                      failRebuild
+                        (sprintf
+                          "Rebuild succeeded but session %s did not become ready for test execution: %s (restart=%.1fms, total=%.1fms)."
+                          sidStr
+                          (SageFsError.describe err)
+                          restartStopwatch.Elapsed.TotalMilliseconds
+                          rebuildStopwatch.Elapsed.TotalMilliseconds)
+                    | RebuildReadyWait.Outcome.DeadlineReached ->
+                      // One look, for the message only. It decides nothing.
+                      let! sessions = deps.ListSessions()
+                      ct.ThrowIfCancellationRequested()
+                      let statusText =
+                        sessions
+                        |> List.tryFind (fun si -> si.Id = sid)
+                        |> Option.map (fun si -> string si.Status)
+                        |> Option.defaultValue "missing"
+                      let proxyText =
+                        match deps.GetStreamingTestProxy sid with
+                        | Some _ -> "registered"
+                        | None -> "not-observed"
+                      failRebuild
+                        (sprintf
+                          "Rebuild succeeded but session %s never became ready for test execution within %dms (status=%s, restart=%.1fms, ready=not-observed, proxy=%s, total=%.1fms)."
+                          sidStr
+                          waitTimeoutMs
+                          statusText
+                          restartStopwatch.Elapsed.TotalMilliseconds
+                          proxyText
+                          rebuildStopwatch.Elapsed.TotalMilliseconds)
+                    | RebuildReadyWait.Outcome.Cancelled ->
+                      // Only a cancelled token produces this, and it threw above.
+                      Utils.Log.info "[rebuild] RequestRebuild cancelled for %A" targetSession
               with
               | :? OperationCanceledException ->
                 rebuildStopwatch.Stop()

@@ -1188,7 +1188,9 @@ let fileSizeBudgets =
       // dispatch-batch reducer out to SageFsDispatchReduction.fs. Exact size.
       // 3124 -> 3094: SseDedupKey moved to SageFsSseDedup.fs without changing
       // its public module path. Exact post-split size.
-      "SageFs/SageFsApp.fs", 3094
+      // 3094 -> 3078: the rebuild readiness poll became one await on AwaitReady
+      // (RebuildReadyWait.fs). Exact size.
+      "SageFs/SageFsApp.fs", 3078
       "SageFs.Core/AppState.fs", 2000
       // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
       // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,

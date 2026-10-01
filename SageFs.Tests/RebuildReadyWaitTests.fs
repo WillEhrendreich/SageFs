@@ -22,11 +22,11 @@ open SageFs.Tests.SageFsEffectHandlerTests
 // ---- the helper, on its own ----
 
 /// Wait for a task with a ceiling, so a hang fails the test instead of the run.
-let private within (ceiling: TimeSpan) (what: string) (task: Task<'a>) : Task<'a> =
+let private within (ceiling: TimeSpan) (what: string) (pending: Task<'a>) : Task<'a> =
   task {
-    let! winner = Task.WhenAny(task, Task.Delay ceiling)
-    match obj.ReferenceEquals(winner, task) with
-    | true -> return! task
+    let! winner = Task.WhenAny(pending, Task.Delay ceiling)
+    match obj.ReferenceEquals(winner, pending) with
+    | true -> return! pending
     | false -> return failtestf "%s did not happen within %O" what ceiling
   }
 
@@ -60,7 +60,7 @@ let helperTests =
 
     testTask "cancelling the token ends a parked wait at once, well before the deadline" {
       let never = newSignal<Result<unit, string>> ()
-      use cancellation = new CancellationTokenSource()
+      let cancellation = new CancellationTokenSource()
       let waiting =
         RebuildReadyWait.await (Async.AwaitTask never.Task) RebuildWaitTimeouts.deadlineNotHit cancellation.Token
         |> Async.StartAsTask
@@ -71,7 +71,7 @@ let helperTests =
 
     testTask "a token that is already cancelled is Cancelled without waiting for the answer" {
       let never = newSignal<Result<unit, string>> ()
-      use cancellation = new CancellationTokenSource()
+      let cancellation = new CancellationTokenSource()
       cancellation.Cancel()
       let! outcome =
         RebuildReadyWait.await (Async.AwaitTask never.Task) RebuildWaitTimeouts.deadlineNotHit cancellation.Token
@@ -360,7 +360,7 @@ let private runTrial (manager: Manager) (seed: int) (trial: Trial) : string list
   let random = Random seed
   let info =
     match manager.Mailbox.PostAndReply(fun reply ->
-      SessionCommand.CreateSession([ SageFs.SessionProjectTarget.Project "Test.fsproj" ], "/test", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
+      SessionCommand.CreateSession([ SageFs.SessionProjectTarget.Project "Test.fsproj" ], sprintf "/test/%d" seed, true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
     | Ok info -> info
     | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
   let session =
