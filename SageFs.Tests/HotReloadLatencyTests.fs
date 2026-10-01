@@ -79,6 +79,8 @@ let pureTests =
         { SavedAt = at (ms 100.)
           CompilingAt = Moment.Observed (at (ms 320.))
           AppliedAt = Moment.Observed (at (ms 410.))
+          WarmingAt = Moment.Observed (at (ms 2900.))
+          ReadyAt = Moment.Observed (at (ms 6700.))
           ServedAt = Moment.Observed (at (ms 450.))
           ConfirmedAt = Moment.Observed (at (ms 470.)) }
       match Sample.ofStamps stamps with
@@ -93,6 +95,8 @@ let pureTests =
       { SavedAt = at (ms 100.)
         CompilingAt = Moment.NotObserved
         AppliedAt = Moment.NotObserved
+        WarmingAt = Moment.NotObserved
+        ReadyAt = Moment.NotObserved
         ServedAt = Moment.NotObserved
         ConfirmedAt = Moment.NotObserved }
       |> Sample.ofStamps
@@ -102,6 +106,8 @@ let pureTests =
       { SavedAt = at (ms 500.)
         CompilingAt = Moment.Observed (at (ms 100.))
         AppliedAt = Moment.NotObserved
+        WarmingAt = Moment.NotObserved
+        ReadyAt = Moment.NotObserved
         ServedAt = Moment.Observed (at (ms 900.))
         ConfirmedAt = Moment.NotObserved }
       |> Sample.ofStamps
@@ -109,7 +115,7 @@ let pureTests =
 
     testCase "a series is the stage's times over the samples, and a series that needs a stage nobody reached is refused" <| fun _ ->
       let sample served confirmed =
-        { Compiling = Elapsed.Never; Applied = Elapsed.Never; Served = ms served; Confirmed = confirmed }
+        { Compiling = Elapsed.Never; Applied = Elapsed.Never; Warming = Elapsed.Never; Ready = Elapsed.Never; Served = ms served; Confirmed = confirmed }
       let samples = [ sample 300. (Elapsed.After (ms 350.)); sample 310. (Elapsed.After (ms 360.)) ]
       Sample.series Series.PatchSaveToServed samples
       |> Expect.equal "served" (Ok [ ms 300.; ms 310. ])
@@ -126,12 +132,34 @@ let pureTests =
 
     testCase "the stage line names the path, the count and the median of each stage" <| fun _ ->
       let sample served =
-        { Compiling = Elapsed.After (ms 210.); Applied = Elapsed.After (ms 300.); Served = ms served; Confirmed = Elapsed.After (ms (served + 20.)) }
+        { Compiling = Elapsed.After (ms 210.); Applied = Elapsed.After (ms 300.); Warming = Elapsed.Never; Ready = Elapsed.Never; Served = ms served; Confirmed = Elapsed.After (ms (served + 20.)) }
       let line = Sample.stageLine Series.PatchSaveToServed [ sample 320.; sample 340.; sample 360. ]
       line |> Expect.stringContains "starts the line" "STAGES hr-patch"
       line |> Expect.stringContains "the count" "n=3"
       line |> Expect.stringContains "compiling median" "compiling-p50=210.0ms"
       line |> Expect.stringContains "served median" "served-p50=340.0ms"
+      line |> Expect.stringContains "served 95th percentile" "served-p95=360.0ms"
+      Expect.isFalse "a stage nobody reached is left out" (line.Contains "warming")
+
+    testCase "a stage only some samples reached says how many" <| fun _ ->
+      let sample warming =
+        { Compiling = Elapsed.Never; Applied = Elapsed.Never; Warming = warming; Ready = Elapsed.Never; Served = ms 9000.; Confirmed = Elapsed.Never }
+      Sample.stageLine Series.RestartSaveToServed [ sample (Elapsed.After (ms 2800.)); sample Elapsed.Never ]
+      |> Expect.stringContains "one of two reached it" "warming-p50=2800.0ms(1 of 2)"
+
+    testCase "the stream's warm-up and ready frames read as the new worker's, for this session only" <| fun _ ->
+      """{"sessionId":"s1","step":1,"total":4,"warmupProgress":true}"""
+      |> ReloadFrame.ofData "s1"
+      |> Expect.equal "warming" ReloadFrame.WorkerWarming
+      """{"sessionReady":"s1"}"""
+      |> ReloadFrame.ofData "s1"
+      |> Expect.equal "ready" ReloadFrame.WorkerReady
+      """{"sessionReady":"s2"}"""
+      |> ReloadFrame.ofData "s1"
+      |> Expect.equal "another session's ready" ReloadFrame.OtherSession
+      """{"sessionId":"s2","step":1,"total":4,"warmupProgress":true}"""
+      |> ReloadFrame.ofData "s1"
+      |> Expect.equal "another session's warm-up" ReloadFrame.OtherSession
   ]
 
 /// Report one series the way the LT tier does, then judge it against its bound.

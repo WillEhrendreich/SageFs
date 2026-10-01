@@ -116,6 +116,23 @@ module TestTimeouts =
   /// Regression bound on the 95th percentile of save-to-green. First measurement: p95 709ms over 20 saves
   /// on the same machine and in the same conditions. Four times that, for the same reason.
   let liveTestingSaveToGreenP95Bound = secs 3.
+  /// Regression bound on the 95th percentile of hot reload save-to-served (a patched save: the first byte
+  /// of the write to the first response carrying the new body, polled every `pollTight`). First measurement:
+  /// p95 348ms over 20 saves on a 16-thread Ryzen 7 5800XT, Linux, a daemon owned by the runner and other
+  /// jobs running on the same machine; 200ms of that is the file watcher's debounce, which a slower machine
+  /// does not stretch. The bound is about four times that, because a cold or shared CI runner is slower and
+  /// a gate that flakes gets deleted; it still fails on what matters, a save that takes whole seconds (a
+  /// compile that fell back to the whole file, or a restart where a patch used to be).
+  let hotReloadPatchServedP95Bound = secs 1.5
+  /// Regression bound on the 95th percentile of hot reload save-to-confirmed (the daemon's verdict reaching
+  /// `Patched`, which needs the new code to have run). First measurement: p95 392ms over 20 saves, same
+  /// machine and conditions. Four times that, for the same reason.
+  let hotReloadPatchConfirmedP95Bound = secs 1.5
+  /// Regression bound on the 95th percentile of save-to-served for a save to an app `run_app` runs, which
+  /// SageFs rebuilds and relaunches (a build, a new worker, a new FSI session, a warm-up, then the app).
+  /// First measurement: p95 11.6s over 20 saves, p50 9.2s, same machine and conditions. About three and a
+  /// half times that: a build and a process start get slower on a cold runner by more than a request does.
+  let hotReloadRestartServedP95Bound = secs 40.
   /// The daemon's own wall-clock save fires 60s after start and does not get faster on a faster
   /// runner, so both resume waits (the save becoming durable, the second daemon rebuilding the
   /// session) are a generous multiple of it.

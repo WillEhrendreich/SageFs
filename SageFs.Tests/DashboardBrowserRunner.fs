@@ -564,9 +564,15 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
           |> Array.filter (fun a -> a <> "--integration-hr")
         // The inlined-callee journeys go first: the dashboard journeys end with
         // restore saves on the net11 session, and an outcome from one of those
-        // arriving during a journey would be read as that journey's save.
+        // arriving during a journey would be read as that journey's save. The latency measurement goes
+        // last, from a session the journeys have left at rest, and it saves Greeting.fs and CalledCallee.fs
+        // of the net11 copy, so nothing may run beside it.
         let hrJourneys =
-          testList "hot-reload journeys" [ HotReloadInlinedCalleeJourneyTests.tests; HotReloadBrowserTests.tests ]
+          testList
+            "hot-reload journeys"
+            [ HotReloadInlinedCalleeJourneyTests.tests
+              HotReloadBrowserTests.tests
+              testSequenced HotReloadLatencyTests.latencyTests ]
         let result =
           SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-hr" hrArgv hrJourneys
         exitWith result
