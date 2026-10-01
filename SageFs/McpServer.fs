@@ -1979,7 +1979,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
         | _ -> None, None
       let sw = System.Diagnostics.Stopwatch.StartNew()
       // Heartbeat timer — independent thread so it survives if eval thread is slow.
-      // Reads elapsed time via Stopwatch (thread-safe for reads) and fires every 500ms.
+      // Reads elapsed time via Stopwatch (thread-safe for reads), at Timeouts.evalHeartbeatInterval.
       use heartbeatCts = new System.Threading.CancellationTokenSource()
       let heartbeatTask : System.Threading.Tasks.Task =
         System.Threading.Tasks.Task.Run(System.Func<System.Threading.Tasks.Task>(fun () ->
@@ -1987,7 +1987,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
             let token = heartbeatCts.Token
             try
               while not token.IsCancellationRequested do
-                do! System.Threading.Tasks.Task.Delay(500, token)
+                do! System.Threading.Tasks.Task.Delay(Timeouts.evalHeartbeatInterval, token)
                 if not token.IsCancellationRequested then
                   let fp = evalFp |> Option.defaultValue ""
                   let bsl = evalBsl |> Option.defaultValue 0

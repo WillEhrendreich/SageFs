@@ -68,6 +68,16 @@ module Timeouts =
   let shutdownHttpClient = TimeSpan.FromSeconds(5.0)
   let sseKeepAlive = TimeSpan.FromHours(24.0)
 
+  /// Hard timeout on a short GET to the local daemon's `/api/sessions` from the
+  /// CLI (`sagefs status` and the environment check). The daemon is on this
+  /// machine, so a probe that takes this long means it is wedged, and the caller
+  /// reports that instead of waiting. Shorter than `workerHttpRead`.
+  let daemonSessionsProbe = envOrDefault "SAGEFS_DAEMON_SESSIONS_PROBE_SECONDS" 3.0
+  /// Request timeout for posting a friction report to the configured endpoint.
+  /// The post is user-initiated and the dashboard shows the failure, so this is
+  /// a network budget with no recorded reason for 15s.
+  let frictionReportPost = envOrDefault "SAGEFS_FRICTION_POST_SECONDS" 15.0
+
   // -- Update / staleness check (issue #136) --
   /// Hard timeout on the NuGet flat-container GET. Any failure (including a
   /// timeout) must be swallowed by the caller into `CheckFailed`, never
@@ -122,6 +132,19 @@ module Timeouts =
   /// How often the host build lock is retried while another process holds it.
   /// This is a poll; the lock is a file handle with no way to wait on it.
   let hostBuildLockPoll = TimeSpan.FromMilliseconds(200.0)
+  /// Request timeout for a workflow switch (HotReload and back) sent to the
+  /// daemon. A switch can rebuild the target project before the new worker is
+  /// ready, so it matches the build kill timer rather than an eval-style timeout.
+  let workflowSwitchRequest = buildCompletion
+  // Budgets for the git subprocesses the cohort landing gate runs (CohortGit).
+  // Each kills the process tree on timeout and returns an error. They are
+  // separate from `buildCompletion`: a different operation with a different cost.
+  /// Plumbing commands (rev-parse, diff, update-ref, worktree remove).
+  let gitQuick = envOrDefault "SAGEFS_GIT_QUICK_SECONDS" 30.0
+  /// A rebase, which may run hooks and touch many commits.
+  let gitRebase = envOrDefaultMinutes "SAGEFS_GIT_REBASE_MINUTES" 5.0
+  /// `git worktree add`, which checks out a whole tree.
+  let gitWorktreeAdd = envOrDefaultMinutes "SAGEFS_GIT_WORKTREE_ADD_MINUTES" 2.0
 
   // -- Cohort landing gate --
   /// How long the landing gate waits for the integration session to settle to a
@@ -138,6 +161,11 @@ module Timeouts =
   // by `CohortLandingVerify.awaitBudget()` (globalTestRun + slack) instead.
   /// Poll cadence while waiting on the settle / rediscovery generation signals.
   let cohortLandingPoll = TimeSpan.FromMilliseconds(200.0)
+  /// Added to `globalTestRun` to bound how long the landing gate awaits a test
+  /// run's verdict: the worker cancels the run at `globalTestRun`, and this is
+  /// room for daemon-side dispatch latency and result aggregation. No recorded
+  /// reason for 30s.
+  let testRunAwaitSlack = TimeSpan.FromSeconds(30.0)
   /// How long a cohort member may be silent before the reaper departs it and
   /// orphans its claims. Silence, not busyness, costs a seat: any tool call and
   /// any eval renews the lease, so this is generous. No recorded reason for 30
@@ -281,7 +309,23 @@ module Timeouts =
   /// has no URL in the snapshot and the relay just stops.
   let workerReloadRelayRetry = TimeSpan.FromSeconds(1.0)
   let scheduledGraceDelay = TimeSpan.FromSeconds(5.0)
+  /// Pause after the MCP and dashboard host tasks are started, to let them bind
+  /// their ports before the daemon checks that neither has already failed.
   let startupDelay = TimeSpan.FromMilliseconds(200.0)
+  /// How often the file log sink flushes to disk, so a crash loses seconds of
+  /// log, not minutes. No recorded reason for 2s.
+  let logFlushInterval = TimeSpan.FromSeconds(2.0)
+  /// How often the `mcp-stdio` bridge asks whether the daemon it just started is
+  /// up yet. A poll: there is nothing to wait on until the daemon listens.
+  let stdioBridgeProbeInterval = TimeSpan.FromMilliseconds(500.0)
+  /// How long a Jupyter kernel socket receive (shell, and the heartbeat echo)
+  /// blocks before it rechecks for cancellation. A poll; it bounds how long
+  /// kernel shutdown can wait on a quiet socket.
+  let jupyterReceivePoll = TimeSpan.FromMilliseconds(100.0)
+  /// How often a running eval's heartbeat event (carrying elapsed time) is
+  /// broadcast. It runs on its own thread so it keeps ticking when the eval is
+  /// slow. No recorded reason for 500ms.
+  let evalHeartbeatInterval = TimeSpan.FromMilliseconds(500.0)
   let workerShutdownDelay = TimeSpan.FromSeconds(2.0)
   /// Defense-in-depth bound on a `StopSession` mailbox round-trip
   /// (`DaemonMode.createSessionOps.StopSession`). `stopWorker` itself is

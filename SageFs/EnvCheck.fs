@@ -618,7 +618,7 @@ let checkSessionAuthority (targetDir: string) (sessions: SessionAuthoritySession
 
 let private tryGetDaemonSessions (mcpPort: int) =
   try
-    use client = new HttpClient(Timeout = TimeSpan.FromSeconds(3.0))
+    use client = new HttpClient(Timeout = Timeouts.daemonSessionsProbe)
     let response = client.GetAsync(sprintf "http://localhost:%d/api/sessions" mcpPort).Result
     match response.IsSuccessStatusCode with
     | true ->

@@ -41,7 +41,7 @@ let categoryLevels : (string * LogLevel) list =
 let private outputTemplate = "{Timestamp:o} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}"
 
 /// How often the file sink flushes to disk, so a crash loses seconds, not minutes.
-let private flushInterval = TimeSpan.FromSeconds 2.0
+let private flushInterval = Timeouts.logFlushInterval
 
 /// The file logger: daily files that also roll at `bounds.MaxFileBytes`, keeping
 /// `bounds.RetainedFiles` of them, at most Information, with `categoryLevels`

@@ -169,17 +169,8 @@ let private budgets : (string * int) list =
     "SageFs.Tests/WorkflowSwitchTests.fs", 1
     "SageFs.Tests/WorkflowTransitionPropertyTests.fs", 1
     "SageFs.Tests/WorkflowTypesMutationTests.fs", 1
-    "SageFs/CohortGit.fs", 3
-    "SageFs/CohortLandingVerify.fs", 1
-    "SageFs/DaemonLogging.fs", 1
     "SageFs/DaemonMode.fs", 13
-    "SageFs/Dashboard.fs", 2
-    "SageFs/EnvCheck.fs", 1
-    "SageFs/JupyterTransport.fs", 2
-    "SageFs/Mcp.fs", 2
-    "SageFs/McpServer.fs", 1
-    "SageFs/McpStdioBridge.fs", 1
-    "SageFs/Program.fs", 1 ]
+    "SageFs/Mcp.fs", 2 ]
 
 /// Every source file with its count of inline timeout literals, except the central module.
 let private actual : (string * int) list =

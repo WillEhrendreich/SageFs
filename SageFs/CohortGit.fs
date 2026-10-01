@@ -21,14 +21,12 @@
 /// total: a failed process start, a nonzero exit, or a timeout are all
 /// caught and returned as `Error`, never thrown.
 ///
-/// `Timeouts` (SageFs.Core/Timeouts.fs) has no constant shaped for a single
-/// git subprocess — its nearest relative, `buildCompletion`, is a 10-minute,
-/// env-overridable budget for `dotnet build`, which is a different
-/// operation with a different cost profile. This module defines its own
-/// local, conservative budgets instead: short-lived plumbing commands
-/// (rev-parse, diff, update-ref, worktree remove) get 30s; a rebase — which
-/// may run hooks and touch many commits — gets 5 minutes; `worktree add`
-/// (a checkout of a whole tree) gets 2 minutes.
+/// The budgets are `Timeouts.gitQuick`, `gitRebase` and `gitWorktreeAdd`
+/// (SageFs.Core/Timeouts.fs), kept apart from `buildCompletion` because a git
+/// subprocess is a different operation with a different cost profile:
+/// short-lived plumbing commands (rev-parse, diff, update-ref, worktree remove),
+/// a rebase (which may run hooks and touch many commits), and `worktree add`
+/// (a checkout of a whole tree).
 module SageFs.Features.CohortGit
 
 open System
@@ -36,9 +34,9 @@ open System.Diagnostics
 open System.IO
 open System.Threading.Tasks
 
-let private shortTimeout = TimeSpan.FromSeconds 30.0
-let private rebaseTimeout = TimeSpan.FromMinutes 5.0
-let private worktreeTimeout = TimeSpan.FromMinutes 2.0
+let private shortTimeout = SageFs.Timeouts.gitQuick
+let private rebaseTimeout = SageFs.Timeouts.gitRebase
+let private worktreeTimeout = SageFs.Timeouts.gitWorktreeAdd
 
 let private trim (s: string) = s.Trim()
 

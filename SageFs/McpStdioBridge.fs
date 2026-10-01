@@ -464,6 +464,6 @@ let runMcpStdio (mcpPort: int) : Task<int> =
         OpenServerStream = openServerStream client mcpPort stdout
         TerminateSession = terminateSession client mcpPort
         PumpStdin = pumpStdin
-        ProbeInterval = TimeSpan.FromMilliseconds 500.0 }
+        ProbeInterval = Timeouts.stdioBridgeProbeInterval }
     return! run defaultPolicy io stdout
   }

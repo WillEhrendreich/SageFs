@@ -458,7 +458,7 @@ let private wedgedPidFor (mcpPort: int) : int option =
 /// `/api/sessions`, exactly as the original inline `Status` branch did.
 let private fetchSessionCountHttp (info: DaemonInfo) : int option =
   try
-    use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(3.0))
+    use client = new System.Net.Http.HttpClient(Timeout = Timeouts.daemonSessionsProbe)
     let resp = client.GetAsync(sprintf "http://localhost:%d/api/sessions" info.Port).Result
     match resp.IsSuccessStatusCode with
     | true ->

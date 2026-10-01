@@ -133,7 +133,7 @@ let advance (tests: TestId list) (progress: RunProgress) (testState: LiveTestSta
 /// `SAGEFS_TEST_RUN_TIMEOUT_MINUTES` — see `SageFs.Core/Timeouts.fs`) plus
 /// slack for daemon-side dispatch latency and result aggregation.
 let awaitBudget () : TimeSpan =
-  Timeouts.globalTestRun () + TimeSpan.FromSeconds 30.0
+  Timeouts.globalTestRun () + Timeouts.testRunAwaitSlack
 
 let private pollDelayMs = 200
 

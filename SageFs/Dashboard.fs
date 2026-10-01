@@ -1856,7 +1856,7 @@ let switchWorkflowViaApi
       // A HotReload switch can rebuild the target project before the new
       // worker is ready — generous, matching Hard Reset's own expectations
       // (SessionBuild's kill timer) rather than a short eval-style timeout.
-      http.Timeout <- TimeSpan.FromMinutes(10.0)
+      http.Timeout <- Timeouts.workflowSwitchRequest
       let url = sprintf "http://127.0.0.1:%d/api/sessions/%s/workflow" mcpPort (WorkerProtocol.SessionId.value sessionId)
       let bodyJson = Json.serialize Json.standard {| workflow = WorkflowSwitch.requestValue target |}
       use req = new HttpRequestMessage(HttpMethod.Post, url)
@@ -2323,7 +2323,7 @@ let createFrictionSendHandler
               let mutable reportId = ""
               try
                 use http = new HttpClient()
-                http.Timeout <- System.TimeSpan.FromSeconds(15.0)
+                http.Timeout <- Timeouts.frictionReportPost
                 try
                   let req = new HttpRequestMessage(HttpMethod.Post, endpoint)
                   req.Content <- new StringContent(payloadJson, System.Text.Encoding.UTF8, "application/json")

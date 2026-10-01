@@ -156,7 +156,7 @@ module JupyterTransport =
     =
     while not ct.IsCancellationRequested do
       let mutable incoming = NetMQMessage()
-      match socket.TryReceiveMultipartMessage(TimeSpan.FromMilliseconds(100.0), &incoming) with
+      match socket.TryReceiveMultipartMessage(Timeouts.jupyterReceivePoll, &incoming) with
       | false -> ()
       | true ->
         match parseFrames key incoming with
@@ -197,7 +197,7 @@ module JupyterTransport =
     // Heartbeat: echo back whatever arrives
     let hbThread = Thread(fun () ->
       while not ct.IsCancellationRequested do
-        let ok, bytes = heartbeat.TryReceiveFrameBytes(TimeSpan.FromMilliseconds(100.0))
+        let ok, bytes = heartbeat.TryReceiveFrameBytes(Timeouts.jupyterReceivePoll)
         match ok with
         | false -> ()
         | true -> heartbeat.SendFrame(bytes))
