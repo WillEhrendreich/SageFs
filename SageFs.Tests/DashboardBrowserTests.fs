@@ -894,8 +894,13 @@ module private NoSessionLanding =
         return! picker.IsVisibleAsync()
       })
       Expect.isTrue pickerBack "[stop 2/2] session picker re-appears once the last session is stopped"
-      let! viewingAfterLast = viewingSessionId page
-      Expect.equal viewingAfterLast "" "[stop 2/2] #main carries no viewing session id once zero sessions remain"
+      // The picker is shown by a client signal and the id is carried by the morph that follows: wait for the morph,
+      // do not read the attribute in the gap between them (under load the gate saw that gap).
+      let! viewingCleared = waitUntil BrowserWaits.daemonWork (fun () -> task {
+        let! sid = viewingSessionId page
+        return sid = ""
+      })
+      Expect.isTrue viewingCleared "[stop 2/2] #main carries no viewing session id once zero sessions remain"
       do! assertPermanentChrome page "stop 2/2: back to zero sessions"
 
       assertNoErrors errors "sessions + switch + stop journey"
