@@ -235,3 +235,43 @@ let trustTests =
           InputHashCoverage.trust "fixed-test-toolchain" (reader edited) threeFileMap bitmap <> HashTrust.Trusted h
         | _ -> false
   ]
+
+/// Coverage is of the instrumented build. A file evaluated over the build runs as evaluated code, which is not instrumented, so
+/// no test's coverage names it again. Every test may depend on it all the same, and a key or an affected-test selection made
+/// from coverage alone cannot see an edit to it: the pass cached for one landing answers for the next.
+[<Tests>]
+let blindFilesTests =
+  testList "InputHashCoverage files coverage cannot see" [
+
+    test "a file evaluated over the build is part of the key, though no bitmap names it" {
+      // Only B.fs is covered. C.fs was evaluated over the build, so the test's coverage no longer reaches it.
+      let onlyB = CoverageBitmap.ofBoolArray [| false; false; true; false |]
+      let key (c: string) = InputHashCoverage.trustBeyond [ "C.fs" ] "fixed-test-toolchain" (reader (contents |> Map.add "C.fs" c)) threeFileMap onlyB
+      key "let c = 3"
+      |> Expect.notEqual "an edit to an evaluated file is a different key" (key "let c = 4")
+    }
+
+    test "without evaluated files the key is the coverage key" {
+      InputHashCoverage.trustBeyond [] "fixed-test-toolchain" (reader contents) threeFileMap aAndBBitmap
+      |> Expect.equal "nothing beyond coverage, nothing added" (InputHashCoverage.trust "fixed-test-toolchain" (reader contents) threeFileMap aAndBBitmap)
+    }
+
+    test "a bitmap that hit nothing is still no key, however many files were evaluated" {
+      let nothingHit = CoverageBitmap.ofBoolArray [| false; false; false; false |]
+      InputHashCoverage.trustBeyond [ "A.fs"; "C.fs" ] "fixed-test-toolchain" (reader contents) threeFileMap nothingHit
+      |> Expect.equal "evaluated files do not make no coverage into a key" (HashTrust.Untrusted UntrustedHash.CoversNothing)
+    }
+
+    test "the files a test may depend on are what it covered and what was evaluated, each once, sorted" {
+      InputHashCoverage.seenFiles [ "C.fs"; "A.fs" ] threeFileMap aAndBBitmap
+      |> Expect.equal "A.fs is covered and evaluated, C.fs only evaluated, B.fs only covered" [ "A.fs"; "B.fs"; "C.fs" ]
+    }
+
+    test "a test that covers only B.fs is affected by an edit to an evaluated C.fs" {
+      let onlyB = CoverageBitmap.ofBoolArray [| false; false; true; false |]
+      let test = TestId.TestId "needs-c-without-saying-so"
+      let seen = InputHashCoverage.seenFiles [ "C.fs" ] threeFileMap onlyB
+      AffectedTests.affected [ "C.fs" ] (fun _ -> Some seen) [ test ]
+      |> Expect.equal "the evaluated file is one the test may depend on" [ test ]
+    }
+  ]
