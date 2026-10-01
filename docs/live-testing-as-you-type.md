@@ -20,20 +20,22 @@
 ## How This Compares to VS Enterprise
 
 VS Enterprise's Live Unit Testing triggers on unsaved edits, same as SageFs. The
-architecture is different: VS Enterprise copies your buffer to a ProjFS workspace, runs
-full MSBuild, instruments IL, then runs the tests, which takes 5-30 seconds. SageFs sends
-the changed function definition straight to FSI, a REPL that redefines bindings on the
-fly, with no build, no file copying, and no IL instrumentation. Feedback arrives in under
-a second, which is the whole point. Tests run as you type and go green before you even
-hit save, and it still feels great every time it works.
+architecture is different. VS Enterprise copies the repo to a private workspace on the
+Windows Projected File System, applies your unsaved changes and runs MSBuild on the copy
+([Microsoft](https://learn.microsoft.com/en-us/visualstudio/test/live-unit-testing?view=vs-2022)).
+SageFs sends your unsaved buffer to the FSI session that already has your project loaded,
+type-checks it there and evals it, so there is no copy of the repo and no MSBuild step in
+the loop. One thing is shared with VS: coverage comes from IL instrumentation. SageFs
+shadow-copies your project outputs and instruments them once, at session start. Nothing
+here has been timed end to end, so I'm not quoting a speed.
 
 | Dimension | VS Enterprise | SageFs |
 |-----------|--------------|--------|
 | **Trigger** | Unsaved edits | Unsaved edits |
-| **Speed** | 5-30s (MSBuild + IL instrumentation) | 300-800ms end-to-end (debounce + type-check + FSI eval) |
-| **Mechanism** | ProjFS workspace → MSBuild → IL instrumentation → test run | Extract scope → type-check snippet → FSI eval → test run |
-| **Broken code** | Dead: must compile to instrument | Tree-sitter/LSP works mid-keystroke |
-| **Scope** | Rebuilds impacted projects | Single function definition |
+| **Speed** | Not documented | Not measured end to end. The path has a client debounce and a daemon one, see the budget below |
+| **Mechanism** | Copy of the repo on ProjFS → MSBuild → instrumented binaries → test run | Whole buffer → type-check in the live FSI session → eval → test run. Coverage instrumented once at session start |
+| **Broken code** | Build errors go to the Output window | A type error means no eval and no run. Last results stay, state is blocked. Tree-sitter still finds test locations |
+| **Scope** | Rebuilds the projects relevant to the edit | The whole edited file's buffer |
 | **Frameworks** | xUnit, NUnit, MSTest | + Expecto, TUnit, extensible; FsCheck `[<Property>]` tests are discovered and shown in the live panel |
 | **Clients** | Visual Studio only | Neovim, VS Code, web dashboard, MCP |
 | **Platform** | Windows only (ProjFS) | Cross-platform (.NET) |
@@ -143,7 +145,7 @@ The approach: type-check the scope and compare the inferred signature with the c
 previous one. If the signature is stable (90% of edits), send it to FSI and run the
 tests: the fast path. If the signature changed (10% of edits), mark dependent tests as
 "Stale" via SSE; saving the file triggers the existing file-watcher reload path, which
-recompiles dependents. Even this path is faster than VS Enterprise's 5-30s.
+recompiles dependents.
 
 ### Performance Budget
 
@@ -155,7 +157,7 @@ recompiles dependents. Even this path is faster than VS Enterprise's 5-30s.
 | FSI eval (redefine binding) | 5-20ms |
 | Affected test execution | 10-500ms (depends on test count/complexity) |
 | SSE push | <5ms |
-| **Total end-to-end** | **300-800ms typical** |
+| **Total end-to-end** | **not measured** (the figures above are the design target) |
 
 Type-checking a single function in a warm FCS context is much faster than type-checking a
 whole file, which is another advantage of scope-level evaluation.

@@ -448,14 +448,15 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel (experimental)
 
 ## Live Testing Cost Comparison
 
-Visual Studio Enterprise charges about $250/month per seat for Live Unit Testing: $3,000/year per developer. It only works in Visual Studio, it only supports 3 frameworks, it takes 5-30 seconds, and it requires your code to compile first.
+Visual Studio Enterprise has Live Unit Testing for C#. It costs about $250/month per seat, it only works in Visual Studio on Windows, and it supports xUnit, NUnit and MSTest. It copies your repo to a private workspace and runs MSBuild on it for every change ([Microsoft's description](https://learn.microsoft.com/en-us/visualstudio/test/live-unit-testing?view=vs-2022)). Its pages don't mention F#.
 
-SageFs delivers that loop with a REPL-centered architecture, and goes past it: an unsaved edit evals into the session and re-runs only the *affected* tests against your new code. No save, no full rebuild, and it works on incomplete code. Editors post the live buffer to `POST /api/sessions/{sid}/buffer-changed`; that endpoint has an integration test of its own, and the actual "an unsaved edit overrides the test a saved build already registered" behavior is proven at the worker level too (`WorkerLiveTestEvalTests.fs`), so the unsaved path is wired *and* covered now, not just wired. Visual Studio's Live Unit Testing barely supports F# at all; SageFs is F#-first and works across VS Code and Neovim. Client polish still varies, but the engine, SSE, and coverage are solid.
+SageFs delivers that loop with a REPL-centered architecture, and goes past it: an unsaved edit evals into the session and re-runs only the *affected* tests against your new code. No save, no copy of your repo, no MSBuild rebuild in the loop. Editors post the live buffer to `POST /api/sessions/{sid}/buffer-changed`; that endpoint has an integration test of its own, and the actual "an unsaved edit overrides the test a saved build already registered" behavior is proven at the worker level too (`WorkerLiveTestEvalTests.fs`), so the unsaved path is wired *and* covered now, not just wired. Visual Studio's Live Unit Testing barely supports F# at all; SageFs is F#-first and works across VS Code and Neovim. Client polish still varies, but the engine, SSE, and coverage are solid.
 
 | | VS Enterprise Live Testing | **SageFs** |
 |:---|:---|:---|
-| **Speed** | 5–30 sec (MSBuild rebuild) | **No MSBuild rebuild** — affected tests re-run through the warm FSI session. It feels fast, but nothing measures it yet, see the pipeline note below |
-| **Broken code** | ✗ Must compile first | **✓ Tree-sitter works on incomplete code** |
+| **How an edit is checked** | A private copy of the repo, built with MSBuild | **Your unsaved buffer is type-checked and evaluated in the FSI session that already has your project loaded.** No copy, no MSBuild rebuild. It feels fast, but nothing measures it yet, see the pipeline note below |
+| **Code that doesn't compile** | Build errors go to the Output window | **Nothing is evaluated or run and your last results stay, marked as blocked, with the file and error count.** Tree-sitter still finds where your tests are in broken code |
+| **Why those tests ran** | Impacted tests are detected, the mechanism isn't documented | **Every selection says why** (exact dependency match, coverage approximation, fallback) and a failure says how long ago it last passed and what changed |
 | **Editors** | Visual Studio only | **VS Code · Neovim · Web dashboard · MCP clients** |
 | **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
 | **Price** | ~$250/month | **Free, MIT licensed** |
