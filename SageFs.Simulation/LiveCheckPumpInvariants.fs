@@ -120,29 +120,46 @@ module LiveCheckPumpInvariants =
             | _ -> None)
           |> function Some m -> ValueSome m | None -> ValueNone) }
 
-  /// single-flight: at most one call is in flight, so no step asks while another has not come back.
+  /// single-flight: at most one call is in flight, so no step asks while another has not come back. A step that is
+  /// the other's answer coming back may ask the next.
   let singleFlight : Invariant =
     { Id = "single-flight"
-      Description = "A step asks at most once, and only when nothing is in flight."
+      Description = "A step asks at most once, and only when nothing is in flight or the step is the answer that ends the flight."
       Check = fun t ->
         firstViolation t (fun s ->
           let asks = s.Effects |> List.filter (function PumpEffect.Ask _ -> true | _ -> false) |> List.length
+          let isAnswer = (match s.Event with PumpEvent.WorkerAnswered _ -> true | _ -> false)
           match asks, s.Before.Flight with
           | 0, _ -> ValueNone
           | 1, Flight.Idle -> ValueNone
+          | 1, Flight.InFlight _ when isAnswer -> ValueNone
           | n, flight -> ValueSome (sprintf "step %A asked %d time(s) with %A in flight" s.Op n flight)) }
 
-  /// resolved-once: a request ends once. Reporting it twice puts the same text's verdict on the rows twice.
-  let resolvedOnce : Invariant =
-    { Id = "resolved-once"
-      Description = "No request is delivered more than once."
+  /// every-request-ends-exactly-once: a request is reported once or is replaced by a newer one, never both and never
+  /// twice (reporting it twice puts the same text's verdict on the rows twice), and none is left without an end once
+  /// the worker is Ready and every call has come back (a request that is lost is an edit nobody judged).
+  let everyRequestEndsExactlyOnce : Invariant =
+    { Id = "every-request-ends-exactly-once"
+      Description = "After the settle, each request has been delivered or superseded exactly once."
       Check = fun t ->
-        let ids = allDeliveries t |> List.map (fun (r, _) -> r.Id)
-        match ids |> List.countBy id |> List.tryFind (fun (_, n) -> n > 1) with
-        | Some (id, n) -> Outcome.Violated (sprintf "request #%d was delivered %d times (%s)" id n (replay t))
+        let ends =
+          t.Steps
+          |> List.collect (fun s ->
+            s.Effects
+            |> List.choose (function
+              | PumpEffect.Deliver (request, _) -> Some request.Id
+              | PumpEffect.Superseded request -> Some request.Id
+              | PumpEffect.Ask _
+              | PumpEffect.AwaitWorker _ -> None))
+        let counts = ends |> List.countBy id |> Map.ofList
+        let miscounted =
+          t.Requests
+          |> List.tryFind (fun r -> Map.tryFind r.Id counts |> Option.defaultValue 0 <> 1)
+        match miscounted with
+        | Some request -> Outcome.Violated (sprintf "request %A ended %d times (%s)" request (Map.tryFind request.Id counts |> Option.defaultValue 0) (replay t))
         | None -> Outcome.Holds }
 
-  /// every-request-runs-in-order: under `EveryOneRuns` each request ends, and in the order it was made, so a
+  /// every-request-runs-in-order: under `EveryOneRuns` each request is delivered, and in the order it was made, so a
   /// worker that came back does not reorder the evals of one file.
   let everyRequestRunsInOrder : Invariant =
     { Id = "every-request-runs-in-order"
@@ -192,7 +209,7 @@ module LiveCheckPumpInvariants =
       noStaleApply
       asksOnlyAReadyWorker
       singleFlight
-      resolvedOnce
+      everyRequestEndsExactlyOnce
       everyRequestRunsInOrder
       staleWaitsDoNothing
       everythingResolves ]

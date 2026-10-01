@@ -71,6 +71,14 @@ type Awaiting =
   /// Waiting for the session to be Ready, as wait `waitId`. A wake-up for any other id is stale.
   | AwaitingWorker of waitId: int64
 
+module UnansweredWhy =
+  /// The reason, in words, for a log line or a message.
+  let describe (why: UnansweredWhy) : string =
+    match why with
+    | UnansweredWhy.WorkerGone reason -> sprintf "no worker is coming (%s)" reason
+    | UnansweredWhy.WorkerSilent reason -> sprintf "the worker did not answer (%s)" reason
+    | UnansweredWhy.NoWorkerInTime -> "no worker was Ready in time"
+
 type PumpState<'req> =
   { /// Requests not yet put to a worker, oldest first.
     Queue: 'req list
@@ -97,30 +105,75 @@ type PumpEffect<'req, 'reply> =
   | AwaitWorker of waitId: int64
   /// This is how the request ended: report it.
   | Deliver of 'req * PumpOutcome<'reply>
+  /// A newer request replaced this one before it was answered, so nothing will be reported for it.
+  | Superseded of 'req
 
 module LiveCheckPump =
   let initial<'req> : PumpState<'req> =
     { Queue = []; Flight = Flight.Idle; Awaiting = Awaiting.NotAwaiting; NextWait = 1L }
 
-  /// Fold one event. `supersedes newer older` says whether a request makes an older queued one pointless.
-  /// Total: every state answers every event.
+  /// What the queue does next, given what the manager says about the worker right now: put the oldest request to a
+  /// Ready worker, park until one is Ready, or end every request because none is coming.
+  let private drive
+    (state: PumpState<'req>)
+    (view: WorkerView)
+    (effects: PumpEffect<'req, 'reply> list)
+    : PumpState<'req> * PumpEffect<'req, 'reply> list =
+    match state.Flight, state.Queue with
+    | Flight.InFlight _, _
+    | Flight.Idle, [] -> state, effects
+    | Flight.Idle, oldest :: rest ->
+      match view with
+      | WorkerView.Serving pid ->
+        { state with Queue = rest; Flight = Flight.InFlight (oldest, pid) }, effects @ [ PumpEffect.Ask (oldest, pid) ]
+      | WorkerView.Arriving ->
+        match state.Awaiting with
+        | Awaiting.AwaitingWorker _ -> state, effects
+        | Awaiting.NotAwaiting ->
+          { state with Awaiting = Awaiting.AwaitingWorker state.NextWait; NextWait = state.NextWait + 1L },
+          effects @ [ PumpEffect.AwaitWorker state.NextWait ]
+      | WorkerView.Gone reason ->
+        { state with Queue = []; Awaiting = Awaiting.NotAwaiting },
+        effects @ (state.Queue |> List.map (fun request -> PumpEffect.Deliver (request, PumpOutcome.Unanswered (UnansweredWhy.WorkerGone reason))))
+
+  /// Fold one event. `supersedes newer older` says whether a request makes an older one pointless. Total: every
+  /// state answers every event, and a wake-up or a deadline for a wait that is not the one parked is no event at all.
   let step
     (supersedes: 'req -> 'req -> bool)
     (state: PumpState<'req>)
     (event: PumpEvent<'req, 'reply>)
     : PumpState<'req> * PumpEffect<'req, 'reply> list =
     match event with
-    | PumpEvent.Requested (request, WorkerView.Serving pid) ->
-      { state with Flight = Flight.InFlight (request, pid) }, [ PumpEffect.Ask (request, pid) ]
-    | PumpEvent.Requested (_, _) -> state, []
-    | PumpEvent.WorkerAnswered (WorkerReply.Replied reply, _) ->
+    // A newer request replaces the older ones queued behind it that it supersedes, then goes to the back.
+    | PumpEvent.Requested (request, view) ->
+      let replaced, kept = state.Queue |> List.partition (fun queued -> supersedes request queued)
+      drive { state with Queue = kept @ [ request ] } view (replaced |> List.map PumpEffect.Superseded)
+    | PumpEvent.WorkerAnswered (reply, view) ->
       match state.Flight with
-      | Flight.InFlight (request, _) -> { state with Flight = Flight.Idle }, [ PumpEffect.Deliver (request, PumpOutcome.Answered reply) ]
       | Flight.Idle -> state, []
-    | PumpEvent.WorkerAnswered (WorkerReply.Silent why, _) ->
-      match state.Flight with
-      | Flight.InFlight (request, _) ->
-        { state with Flight = Flight.Idle }, [ PumpEffect.Deliver (request, PumpOutcome.Unanswered (UnansweredWhy.WorkerSilent why)) ]
-      | Flight.Idle -> state, []
-    | PumpEvent.WorkerSeen _
-    | PumpEvent.WaitDeadlineReached _ -> state, []
+      | Flight.InFlight (asked, pid) ->
+        let idle = { state with Flight = Flight.Idle }
+        let superseded = state.Queue |> List.exists (fun queued -> supersedes queued asked)
+        // Only the worker that was asked, still Ready, can vouch for what it said. A worker that was retired under
+        // the call, or is not Ready now, said nothing that counts, whatever the call came back with.
+        match view = WorkerView.Serving pid, superseded with
+        | true, true -> drive idle view [ PumpEffect.Superseded asked ]
+        | true, false ->
+          match reply with
+          | WorkerReply.Replied answer -> drive idle view [ PumpEffect.Deliver (asked, PumpOutcome.Answered answer) ]
+          // The worker the manager calls Ready did not answer: asking it again would be a loop with no event to end it.
+          | WorkerReply.Silent why -> drive idle view [ PumpEffect.Deliver (asked, PumpOutcome.Unanswered (UnansweredWhy.WorkerSilent why)) ]
+        | false, true -> drive idle view [ PumpEffect.Superseded asked ]
+        | false, false -> drive { idle with Queue = asked :: idle.Queue } view []
+    | PumpEvent.WorkerSeen (waitId, view) ->
+      match state.Awaiting with
+      | Awaiting.AwaitingWorker parked when parked = waitId -> drive { state with Awaiting = Awaiting.NotAwaiting } view []
+      | Awaiting.AwaitingWorker _
+      | Awaiting.NotAwaiting -> state, []
+    | PumpEvent.WaitDeadlineReached waitId ->
+      match state.Awaiting with
+      | Awaiting.AwaitingWorker parked when parked = waitId ->
+        { state with Queue = []; Awaiting = Awaiting.NotAwaiting },
+        state.Queue |> List.map (fun request -> PumpEffect.Deliver (request, PumpOutcome.Unanswered UnansweredWhy.NoWorkerInTime))
+      | Awaiting.AwaitingWorker _
+      | Awaiting.NotAwaiting -> state, []

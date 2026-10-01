@@ -177,7 +177,7 @@ module LiveCheckPumpSim =
       | Flight.InFlight (_, pid) -> real state (PumpEvent.WorkerAnswered (reply, WorkerView.Serving pid))
       | Flight.Idle -> real state event
     | Policy.AppliesOlderAnswers, _ -> LiveCheckPump.step (fun _ _ -> false) state event
-    | Policy.AsksWhileInFlight, PumpEvent.Requested (request, WorkerView.Serving pid) ->
+    | Policy.AsksWhileInFlight, PumpEvent.Requested (request, WorkerView.Serving pid) when state.Flight <> Flight.Idle ->
       state, [ PumpEffect.Ask (request, pid) ]
     | _ -> real state event
 
@@ -194,7 +194,8 @@ module LiveCheckPumpSim =
         match effect with
         | PumpEffect.Ask (request, pid) -> { w with Asked = w.Asked @ [ request, pid ] }
         | PumpEffect.AwaitWorker waitId -> { w with Waits = w.Waits @ [ waitId ] }
-        | PumpEffect.Deliver _ -> w)
+        | PumpEffect.Deliver _
+        | PumpEffect.Superseded _ -> w)
       world
 
   let private foldEvent (policy: Policy) (world: World) (op: Op) (event: PumpEvent<Req, Verdict>) : World =
