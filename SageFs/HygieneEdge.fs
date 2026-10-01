@@ -14,35 +14,9 @@ open SageFs
 open SageFs.WorkspaceHygiene
 open SageFs.HygieneGather
 
-/// Follow every symlink in a path, so the gate sees where a removal would really land. A path that does not
-/// exist resolves to itself; one that loops, or goes too deep, is an error.
-let resolvePath (path: string) : Result<string, ResolveFailure> =
-  // The kernel's own bound on symlink chains is 40 on Linux; a path that needs more is looping.
-  let maxLinks = 40
-  let rec walk (current: string) (remaining: string list) (links: int) : Result<string, ResolveFailure> =
-    match remaining with
-    | [] -> Result.Ok current
-    | segment :: rest ->
-      let next = (match current with | "/" -> "/" + segment | _ -> current + "/" + segment)
-      let target =
-        try
-          match FileInfo(next).LinkTarget with
-          | null -> None
-          | t -> Some t
-        with _ -> None
-      match target with
-      | None -> walk next rest links
-      | Some t ->
-        match links >= maxLinks with
-        | true -> Result.Error(ResolveFailure.TooManyLinks path)
-        | false ->
-          let absolute = (match Path.IsPathRooted t with | true -> t | false -> Guard.normalize (current + "/" + t))
-          let parts = Guard.normalize absolute |> fun p -> p.Split([| '/' |], StringSplitOptions.RemoveEmptyEntries) |> Array.toList
-          walk "/" (parts @ rest) (links + 1)
-  try
-    let parts = Guard.normalize path |> fun p -> p.Split([| '/' |], StringSplitOptions.RemoveEmptyEntries) |> Array.toList
-    walk "/" parts 0
-  with ex -> Result.Error(ResolveFailure.Unreadable(path, ex.Message))
+/// Follow every symlink in a path, so the gate sees where a removal would really land (`HygieneFs`).
+let resolvePath (path: string) : Result<string, ResolveFailure> = HygieneFs.resolvePath path
+
 
 type EdgeContext =
   { MakeScan: unit -> Scan

@@ -2740,10 +2740,26 @@ let run
       | Result.Error why ->
         Log.warn "[WorkerReloadRelay] session %s sent a reload event this daemon cannot read: %s" (WorkerProtocol.SessionId.value sid) (ReloadPayloadError.describe why)
       stateChangedEvent.Trigger (HotReloadChanged sid)) cts.Token
+  // The host cache's own housekeeping: a built FSI host nobody has used for a month (and that is not the newest of an SDK
+  // a session resolves, and no process runs from) is pruned by the same plan, confirmation and second look as `tidy`.
+  // Event-driven, never on a timer: once now, and again whenever a session stops.
+  let hostCacheHousekeeping () =
+    HygieneService.pruneHostCacheInBackground
+      (HygieneService.locationsFor Environment.CurrentDirectory)
+      (fun () ->
+        let sessions = (sessionOps.GetAllSessions()).GetAwaiter().GetResult()
+        HygieneService.liveFactsWith (sessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id, s.WorkingDirectory)) None)
+      (fun report ->
+        match report.ReclaimedBytes with
+        | 0L -> ()
+        | bytes -> log.LogInformation("Pruned unused FSI hosts, reclaiming {Bytes} bytes", bytes))
+      (fun ex -> log.LogWarning("Host cache prune failed: {Error}", ex.Message))
+  hostCacheHousekeeping ()
   // Anything that can mean a session got a worker, lost one, or got a new one.
   // HotReloadChanged and ReloadReported are left out on purpose: the relay raises them.
   stateChangedEvent.Publish.Add(fun change ->
     match change with
+    | SessionStopped _ -> hostCacheHousekeeping ()
     | SessionReady sid
     | SessionSwitched sid
     | FileReloaded (sid, _)
@@ -2760,7 +2776,6 @@ let run
     | HotReloadFileToggled _
     | SessionActivated _
     | SessionCreated _
-    | SessionStopped _
     | WorkflowSwitching _
     | WorkflowSwitched _
     | SessionHealthChanged _ -> ())

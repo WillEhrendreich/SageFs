@@ -287,11 +287,7 @@ type Scan =
 // ─── Sizes and times ───────────────────────────────────────────────────
 
 /// Total file size under a directory, links not followed, what cannot be read counted as nothing.
-let directorySize (dir: string) : int64 =
-  try
-    let options = EnumerationOptions(RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint)
-    DirectoryInfo(dir).EnumerateFiles("*", options) |> Seq.sumBy (fun f -> try f.Length with _ -> 0L)
-  with _ -> 0L
+let directorySize (dir: string) : int64 = HygieneFs.directorySize dir
 
 let private touched (path: string) : DateTime =
   try Directory.GetLastWriteTimeUtc path with _ -> DateTime.UtcNow
@@ -506,97 +502,19 @@ let private childDirs (dir: string) : string list =
 let private childFiles (dir: string) : string list =
   try Directory.EnumerateFiles dir |> Seq.map normalize |> Seq.toList with _ -> []
 
-/// The pid and sha of a gate run in progress, from the gate's `current` file, if that process is alive.
-let private runningGate (scan: Scan) : int option =
-  try
-    let text = File.ReadAllText(Path.Combine(scan.Loc.GateDir, "current")).Trim()
-    match text.Split(' ') with
-    | [| pid; _ |] ->
-      match Int32.TryParse pid with
-      | true, p when scan.IsAlive p None -> Some p
-      | _ -> None
-    | _ -> None
-  with _ -> None
-
-/// The repo a gate checkout was made for: recorded by the gate (`owners/<name>`), else the repo whose path hashes
-/// to the checkout's name (the gate keys a checkout by sha1 of the invoking repo path).
-let private gateOwnerRepo (scan: Scan) (name: string) : string option =
-  let recorded =
-    try
-      let file = Path.Combine(scan.Loc.GateDir, "owners", name)
-      match File.Exists file with
-      | true -> (File.ReadAllLines file |> Array.tryHead |> Option.map (fun l -> l.Trim()))
-      | false -> None
-    with _ -> None
-  match recorded with
-  | Some repo -> Some repo
-  | None ->
-    let hash (p: string) =
-      use sha = System.Security.Cryptography.SHA1.Create()
-      Convert.ToHexString(sha.ComputeHash(Text.Encoding.UTF8.GetBytes p)).ToLowerInvariant().Substring(0, 8)
-    match name.StartsWith "checkout-" && name.Substring("checkout-".Length).Length >= 8 with
-    | true when name.Substring("checkout-".Length, 8) = hash scan.Loc.Repo -> Some scan.Loc.Repo
-    | _ -> None
-
-let private gateCandidates (scan: Scan) (entries: WorktreeEntry list) : Candidate list =
-  let gateRunning = runningGate scan
-  let make (kind: LeftoverKind) (dir: string) : Candidate =
-    let target = Target.Directory dir
-    { Target = target
-      Kind = kind
+/// The gate's checkouts, tier clones and pass records, read by `GateReaper` (the gate's own reap reads them with the
+/// same function, so the two cannot disagree). A process working inside one is a use here as it is everywhere.
+let private gateCandidates (scan: Scan) : Candidate list =
+  let fs = GateReaper.realFs (fun pid -> scan.IsAlive pid None)
+  GateReaper.entries fs scan.Loc.GateDir
+  |> List.map (fun entry ->
+    let dir = GateReaper.entryDir entry
+    { Target = Target.Directory dir
+      Kind = GateReaper.entryKind entry
       Build =
         fun () ->
-          let name = Path.GetFileName(dir.TrimEnd '/')
-          let topName = name
-          let ownerName = (match kind with | LeftoverKind.GateTierClone -> Path.GetFileName(Path.GetDirectoryName dir) | _ -> topName).Replace(".tiers", "")
-          let ownerRepo = gateOwnerRepo scan ownerName
-          let lineage =
-            match ownerRepo with
-            | Some repo when not (Directory.Exists repo) -> Lineage.WorkingDirectoryGone(repo, touched dir)
-            | _ -> Lineage.NoOwnerRecorded
-          let registered = entries |> List.tryFind (fun e -> normalize e.Path = dir)
-          { subjectBase kind target with
-              SizeBytes = directorySize dir
-              LastTouched = touched dir
-              Repo = (match registered with | Some _ -> RepoLink.InRepo scan.Loc.Repo | None -> RepoLink.NoRepo)
-              Display = name
-              Uses =
-                (match gateRunning with
-                 | Some pid -> [ InUseReason.GateRunning pid ]
-                 | None -> [])
-                @ usesOf scan dir
-              Lineage = lineage
-              Retention = Retention.KeepFor DataRetention.gateCheckoutRetention } }
-  let checkouts =
-    childDirs scan.Loc.GateDir
-    |> List.filter (fun d -> let n = Path.GetFileName d in n.StartsWith "checkout-" && not (n.EndsWith ".tiers"))
-    |> List.map (make LeftoverKind.GateCheckout)
-  let tiers =
-    childDirs scan.Loc.GateDir
-    |> List.filter (fun d -> (Path.GetFileName d).EndsWith ".tiers")
-    |> List.collect childDirs
-    |> List.map (make LeftoverKind.GateTierClone)
-  checkouts @ tiers
-
-/// The gate's pass records, `passed/<sha>/`: each holds a commit's release bundle. Only the newest few are kept; the
-/// pre-push hook only ever asks about the commit being pushed.
-let private gatePassCandidates (scan: Scan) : Candidate list =
-  let gateRunning = runningGate scan
-  childDirs (Path.Combine(scan.Loc.GateDir, "passed"))
-  |> List.sortByDescending touched
-  |> List.indexed
-  |> List.map (fun (rank, dir) ->
-    let target = Target.Directory dir
-    { Target = target
-      Kind = LeftoverKind.GatePassRecord
-      Build =
-        fun () ->
-          { subjectBase LeftoverKind.GatePassRecord target with
-              SizeBytes = directorySize dir
-              LastTouched = touched dir
-              Display = Path.GetFileName dir
-              Uses = (match gateRunning with | Some pid -> [ InUseReason.GateRunning pid ] | None -> [])
-              Retention = Retention.KeepNewest(rank, DataRetention.gatePassRecordsKept) } })
+          let subject = GateReaper.describe fs scan.Now scan.Loc.GateDir [ scan.Loc.Repo ] None entry
+          { subject with Uses = subject.Uses @ usesOf scan dir } })
 
 /// The SDK version a host was built with, from its content-addressed name: `sdk-<version>-<hash>`.
 let sdkVersionOfHostKey (key: string) : string =
@@ -793,7 +711,6 @@ let candidatesOf (scan: Scan) (wanted: LeftoverKind -> bool) : Candidate list =
   let managedRoot = normalize (Path.Combine(scan.Loc.Repo, ".claude", "worktrees"))
   let gateRoot = normalize scan.Loc.GateDir
   let worktreeState = match needsGit with | true -> Some(worktreeEntries scan) | false -> None
-  let entries = match worktreeState with | Some(Result.Ok all) -> all | _ -> []
   let baseRef = lazy (baseBranch scan.Git scan.Loc.Repo)
   let gitBacked : Candidate list =
     match worktreeState with
@@ -821,9 +738,9 @@ let candidatesOf (scan: Scan) (wanted: LeftoverKind -> bool) : Candidate list =
           | _ -> Some(outsideCandidate scan e)))
       @ kindIf LeftoverKind.StaleBranch (fun () -> branchCandidates scan (baseRef.Force()) all)
   gitBacked
-  @ kindIf LeftoverKind.GateCheckout (fun () -> gateCandidates scan entries |> List.filter (fun c -> c.Kind = LeftoverKind.GateCheckout))
-  @ kindIf LeftoverKind.GateTierClone (fun () -> gateCandidates scan [] |> List.filter (fun c -> c.Kind = LeftoverKind.GateTierClone))
-  @ kindIf LeftoverKind.GatePassRecord (fun () -> gatePassCandidates scan)
+  @ (match [ LeftoverKind.GateCheckout; LeftoverKind.GateTierClone; LeftoverKind.GatePassRecord ] |> List.exists wanted with
+     | true -> gateCandidates scan |> List.filter (fun c -> wanted c.Kind)
+     | false -> [])
   @ kindIf LeftoverKind.HostCacheEntry (fun () -> hostCandidates scan)
   @ kindIf LeftoverKind.WorkerLogFile (fun () -> workerLogCandidates scan)
   @ kindIf LeftoverKind.TempRunDir (fun () -> tempCandidates scan)
@@ -851,10 +768,12 @@ let kindsOfTarget (loc: Locations) (target: Target) : LeftoverKind list =
         yield LeftoverKind.GateTierClone
         yield LeftoverKind.GatePassRecord
       if under loc.HostCacheDir p then yield LeftoverKind.HostCacheEntry
-      if under loc.TempDir p then yield LeftoverKind.TempRunDir
-      // Anything else a worktree list names is a worktree outside the roots.
-      yield LeftoverKind.AgentWorktree ]
+      if under loc.TempDir p then yield LeftoverKind.TempRunDir ]
     |> List.distinct
+    |> function
+      // Anything under no root of ours is, if it is anything, a worktree outside them that a worktree list names.
+      | [] -> [ LeftoverKind.AgentWorktree ]
+      | matched -> matched
 
 /// Classify every candidate. `only` restricts the work to one target.
 let gather (scan: Scan) (only: Target option) : Leftover list =

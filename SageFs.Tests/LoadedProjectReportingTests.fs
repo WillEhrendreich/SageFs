@@ -71,7 +71,7 @@ let private mkProject (fileName: string) (outputType: string option) (isTestProj
     Analyzers = [] }
 
 let private tempDir () =
-  let dir = Path.Combine(Path.GetTempPath(), "sagefs-loaded-project-reporting-" + Guid.NewGuid().ToString("N"))
+  let dir = SageFs.Tests.RunnerDirs.scratchPath "loaded-project-reporting-"
   Directory.CreateDirectory dir |> ignore
   dir
 

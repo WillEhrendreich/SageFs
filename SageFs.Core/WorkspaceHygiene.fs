@@ -82,6 +82,8 @@ type InUseReason =
   | LockedByLiveProcess of pid: int * reason: string
   /// A running process was started from it (a host's own copy of the files it runs).
   | RunsFrom of pid: int * name: string
+  /// A gate run for this repo is about to use it.
+  | InvokingGate of repo: string
 
 /// What the world says about who made a leftover and whether they are still around.
 [<RequireQualifiedAccess>]
@@ -462,6 +464,7 @@ module InUseReason =
     | InUseReason.CurrentSdkHost sdk -> sprintf "it is the host for the SDK the daemon resolves now (%s)" sdk
     | InUseReason.LockedByLiveProcess(pid, reason) -> sprintf "locked by a live process (pid %d): %s" pid reason
     | InUseReason.RunsFrom(pid, name) -> sprintf "%s (pid %d) is running from it" name pid
+    | InUseReason.InvokingGate repo -> sprintf "the gate run for %s is about to use it" repo
 
 module MergeHow =
   let describe (how: MergeHow) : string =

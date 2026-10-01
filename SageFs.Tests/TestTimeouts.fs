@@ -1227,3 +1227,6 @@ module HygieneAges =
 
   /// How far ahead of the real clock a scan believes it is, so a thing made just now counts as past its retention.
   let clockSkewPastRetention = System.TimeSpan.FromDays 30.
+
+  /// Written to a quarter of an hour ago: a run that just crashed, inside every retention.
+  let justNow = System.TimeSpan.FromMinutes 15.

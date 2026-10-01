@@ -39,7 +39,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 let private daemonPort = Harness.reserveLoopbackPort ()
 
-let private sharedDir = IO.Directory.CreateTempSubdirectory("sagefs-multiclient-").FullName
+let private sharedDir = SageFs.Tests.RunnerDirs.scratchDir "multiclient-"
 
 let private daemon =
   lazy (

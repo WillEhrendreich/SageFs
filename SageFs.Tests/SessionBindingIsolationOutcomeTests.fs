@@ -44,8 +44,8 @@ let private daemonPort = Harness.reserveLoopbackPort ()
 /// Two sessions for the SAME directory are one session by design (the owner
 /// rejects the duplicate), so each gets its own temp directory. Bare: no
 /// project, so `create` returns quickly and nothing is compiled.
-let private dirA = IO.Directory.CreateTempSubdirectory("sagefs-isolation-a-").FullName
-let private dirB = IO.Directory.CreateTempSubdirectory("sagefs-isolation-b-").FullName
+let private dirA = SageFs.Tests.RunnerDirs.scratchDir "isolation-a-"
+let private dirB = SageFs.Tests.RunnerDirs.scratchDir "isolation-b-"
 
 let private daemon =
   lazy (

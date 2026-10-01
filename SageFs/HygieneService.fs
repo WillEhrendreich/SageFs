@@ -340,12 +340,38 @@ let tidy (loc: Locations) (live: unit -> LiveFacts) (shown: PlanId) : TidyOutcom
 /// The host cache's own housekeeping: prune hosts nobody has used for `DataRetention.hostCacheMaxAge` that are not the
 /// newest of an SDK the daemon resolves and that no process runs from. Same planner, same confirmation, same
 /// second look as `tidy`; it only ever looks at host cache entries.
-let pruneHostCache (loc: Locations) (live: unit -> LiveFacts) : Report =
-  let scan = realScan loc (live ())
-  let leftovers = gatherKinds scan [ LeftoverKind.HostCacheEntry ]
+let pruneHostCacheWith (ctx: HygieneEdge.EdgeContext) (loc: Locations) : Report =
+  // A host built before sessions marked their use has no `.last-used`, and its directory's own time is when it was
+  // built, not when it was last run. Stamp those as used now, so the first prune on an old cache cannot throw away a
+  // host somebody ran yesterday; they expire a retention from now unless a session uses them.
+  try
+    for dir in Directory.EnumerateDirectories loc.HostCacheDir do
+      let marker = Path.Combine(dir, FsiHostBuild.HostLastUsedMarker)
+      match File.Exists marker with
+      | true -> ()
+      | false -> File.WriteAllText(marker, DateTime.UtcNow.ToString "o")
+  with _ -> ()
+  let leftovers = gatherKinds (ctx.MakeScan()) [ LeftoverKind.HostCacheEntry ]
   let plan = Planner.plan leftovers
   match Confirmation.safeOnly plan plan.Id with
   | Result.Error _ -> { Executed = []; ReclaimedBytes = 0L }
-  | Result.Ok confirmation ->
-    let effects = HygieneEdge.effects (HygieneEdge.realContext loc live)
-    Executor.run effects (rootsOf loc) confirmation plan
+  | Result.Ok confirmation -> Executor.run (HygieneEdge.effects ctx) (rootsOf loc) confirmation plan
+
+let pruneHostCache (loc: Locations) (live: unit -> LiveFacts) : Report =
+  pruneHostCacheWith (HygieneEdge.realContext loc live) loc
+
+let private pruning : int ref = ref 0
+
+/// Prune the host cache in the background, at most one at a time. Event-driven: the daemon calls it at start and when a
+/// session stops, never on a timer. `report` hears what it did.
+let pruneHostCacheInBackground (loc: Locations) (live: unit -> LiveFacts) (report: Report -> unit) (failed: exn -> unit) : unit =
+  match System.Threading.Interlocked.CompareExchange(&pruning.contents, 1, 0) with
+  | 0 ->
+    Task.Run(fun () ->
+      try
+        try report (pruneHostCache loc live)
+        with ex -> failed ex
+      finally
+        System.Threading.Interlocked.Exchange(&pruning.contents, 0) |> ignore)
+    |> ignore
+  | _ -> ()

@@ -150,6 +150,18 @@ trap release_gate_lease EXIT INT TERM
 # clone and the Harmony nupkg stay warm between runs. git clean without -x
 # keeps ignored build output while removing every untracked source file.
 WT="$STATE/checkout-$(echo -n "$REPO" | sha1sum | cut -c1-8)"
+
+# Say who this checkout is for, then reap what nobody needs. One checkout per invoking repo path (an agent's
+# worktree is a repo path of its own) and a release bundle per passed commit piled up to 172 GB with nothing
+# ever removing any of it. The record names the repo and the pid, so a checkout whose repo is gone is reaped by
+# the next gate; the reap itself is F# (scripts/gate-reap.fsx, SageFs.Core/GateReaper.fs), the same rules the
+# daemon's hygiene plan uses, because a script that is only shell is a script nobody tested. It never touches
+# the checkout this run is about to use, and a failure here never blocks the gate.
+mkdir -p "$STATE/owners"
+printf '%s\n%s\n%s\n' "$REPO" "$$" "$(date -Iseconds)" > "$STATE/owners/$(basename "$WT")"
+dotnet fsi "$(dirname "$0")/gate-reap.fsx" "$STATE" "$REPO" 9>&- 2>&1 | sed -u 's/^/local-gate: /' || true
+git -C "$REPO" worktree prune 2>/dev/null || true
+
 if [ ! -d "$WT/.git" ] && [ ! -f "$WT/.git" ]; then
   git -C "$REPO" worktree add --detach "$WT" "$sha" -q || exit 9
 fi

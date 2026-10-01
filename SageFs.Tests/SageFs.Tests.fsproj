@@ -12,6 +12,7 @@
         <Compile Include="TestTimeouts.fs" />
         <!-- Before TestInfrastructure: the trust ledger names a tier by its framework. -->
         <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
+        <Compile Include="RunnerDirs.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="RunnerLogging.fs" />
         <Compile Include="TestCountBadge.fs" />
@@ -70,6 +71,8 @@
         <Compile Include="HygieneSandbox.fs" />
         <Compile Include="HygieneGatherTests.fs" />
         <Compile Include="HygieneExecuteTests.fs" />
+        <Compile Include="GateReaperTests.fs" />
+        <Compile Include="RunnerDirsTests.fs" />
         <Compile Include="HygieneSurfaceTests.fs" />
         <Compile Include="HygienePanelTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />

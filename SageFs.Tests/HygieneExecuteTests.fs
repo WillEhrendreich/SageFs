@@ -177,3 +177,67 @@ let executeTests =
       | Standing.Orphaned _ -> ()
       | other -> failtestf "expected Orphaned, got %A" other
   ]
+
+// ─── The daemon's host cache housekeeping ───────────────────────────────
+
+let private housekeeping (sb: Sandbox) : Report =
+  let ctx : HygieneEdge.EdgeContext = { MakeScan = (fun () -> sb.Scan()); Git = runGit; IsAlive = noneAlive }
+  HygieneService.pruneHostCacheWith ctx sb.Locations
+
+let private makeHost (sb: Sandbox) (name: string) (usedDaysAgo: float option) : string =
+  let dir = Path.Combine(sb.Locations.HostCacheDir, name)
+  write (Path.Combine(dir, "bin", "FsiHost.dll")) "x"
+  match usedDaysAgo with
+  | Some days ->
+    let marker = Path.Combine(dir, FsiHostBuild.HostLastUsedMarker)
+    write marker "used"
+    File.SetLastWriteTimeUtc(marker, DateTime.UtcNow - TimeSpan.FromDays days)
+    Directory.SetLastWriteTimeUtc(dir, DateTime.UtcNow - TimeSpan.FromDays days)
+  | None -> Directory.SetLastWriteTimeUtc(dir, DateTime.UtcNow - HygieneAges.ancient)
+  dir
+
+[<Tests>]
+let hostHousekeepingTests =
+  testList "Workspace hygiene: the daemon's host cache housekeeping" [
+
+    testCase "a host nobody used for the retention is pruned, and a recently used one stays" <| fun _ ->
+      use sb = new Sandbox()
+      let stale = makeHost sb "sdk-10.0.100-aaaa" (Some HygieneAges.ancient.TotalDays)
+      let recent = makeHost sb "sdk-10.0.100-bbbb" (Some 1.0)
+      housekeeping sb |> ignore
+      Directory.Exists stale |> Expect.isFalse "unused for ninety days: pruned"
+      Directory.Exists recent |> Expect.isTrue "used yesterday: kept"
+
+    testCase "a host with no use marker is stamped as used now, so the first prune on an old cache loses nothing" <| fun _ ->
+      use sb = new Sandbox()
+      let old = makeHost sb "sdk-10.0.100-cccc" None
+      housekeeping sb |> ignore
+      Directory.Exists old |> Expect.isTrue "an unmarked host is kept this time"
+      File.Exists(Path.Combine(old, FsiHostBuild.HostLastUsedMarker)) |> Expect.isTrue "and now carries a marker"
+
+    testCase "a host a process is running from is never pruned, however long ago it was marked" <| fun _ ->
+      use sb = new Sandbox()
+      let running = makeHost sb "sdk-9.0.100-dddd" (Some HygieneAges.ancient.TotalDays)
+      sb.Procs <- [ { Pid = 77; StartTicks = 1L; Name = "dotnet"; CommandLine = sprintf "dotnet %s/bin/FsiHost.dll" running; Cwd = CwdState.Unreadable; ParentPid = 1; Environment = Map.empty } ]
+      housekeeping sb |> ignore
+      Directory.Exists running |> Expect.isTrue "in use: kept"
+
+    testCase "the newest host of an SDK a session resolves is never pruned" <| fun _ ->
+      use sb = new Sandbox()
+      let newest = makeHost sb "sdk-11.0.100-eeee" (Some HygieneAges.ancient.TotalDays)
+      let older = makeHost sb "sdk-11.0.100-ffff" (Some(HygieneAges.ancient.TotalDays + 5.0))
+      sb.Live <- { LiveFacts.none with CurrentSdkVersions = [ "11.0.100" ] }
+      housekeeping sb |> ignore
+      Directory.Exists newest |> Expect.isTrue "the one a new session would reuse stays"
+      Directory.Exists older |> Expect.isFalse "an older host of the same SDK goes"
+
+    testCase "it only ever looks at the host cache: stale temp runs and worktrees are untouched" <| fun _ ->
+      use sb = new Sandbox()
+      let tempRun = Path.Combine(sb.Locations.TempDir, "sagefs-hr", "old")
+      write (Path.Combine(tempRun, "x")) "x"
+      Directory.SetLastWriteTimeUtc(tempRun, DateTime.UtcNow - HygieneAges.ancient)
+      let worktree = sb.AddWorktree "merged-and-idle"
+      housekeeping sb |> ignore
+      Directory.Exists tempRun |> Expect.isTrue "a stale temp run is not the host cache's business"
+      Directory.Exists worktree |> Expect.isTrue "nor is a merged worktree"
+  ]
