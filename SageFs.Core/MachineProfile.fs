@@ -134,15 +134,23 @@ module MachineProbe =
     | n when n >= ConstrainedMinCores -> MachineTier.Constrained
     | _ -> MachineTier.Minimal
 
-  /// A cold start peaks around 1.5 GB (the daemon, the worker, the FSI host and the compiler building the host)
-  /// and a warm one under 1 GB. Under a 2 GB cap the measured start was as fast as under 32 GB, so 2 GB
-  /// available loses nothing.
+  /// Measured on 2026-10-01 on the 5800XT with the cap on the daemon and everything it starts (`MemoryMax`, no
+  /// swap, shipped 0.6.875, scripts/machine-bench.fsx --memory-cap): at 8, 4, 2 and 1.5 GB a start to Ready took
+  /// as long as at 32 GB (warm 5.7 to 6.3 s, cold 14.2 to 15.7 s), so 2 GB available loses nothing. The daemon,
+  /// the worker and the FSI host peak at about 720 MB together. At 1 GB the first start still finished
+  /// (15.5 s cold, 5.8 s warm) and so did a plain hard reset, but a hard reset with a rebuild never returned:
+  /// the build next to a live worker and host went over the cap and everything was killed. At 768 MB the first
+  /// start did not finish in 300 s. So the floor is between 1 and 1.5 GB, and below it no wait helps.
   [<Literal>]
   let FastMinAvailableMb = 2048L
 
+  /// 1.5 GB ran at full speed in every stage measured, so this tier is a margin and not a cost.
   [<Literal>]
   let StandardMinAvailableMb = 1536L
 
+  /// A first start finishes down to 1 GB (above), slowly if anything, and that is what the longer waits are for.
+  /// Under it the machine is `Minimal`: the longest waits, which cannot rescue a build that is killed (a rebuild
+  /// already was at 1 GB) but do let a slow one finish.
   [<Literal>]
   let ConstrainedMinAvailableMb = 1024L
 
