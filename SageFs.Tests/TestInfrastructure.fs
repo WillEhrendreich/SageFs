@@ -15,6 +15,143 @@ module TestTimeouts =
   /// Web-app tests must not use it, because a cold host build on a loaded runner outlasts it.
   let consoleAppGrace = System.TimeSpan.FromMilliseconds 500.
 
+  // --- tests A to K ---
+  // The helpers below build each value from a number once, here. Every call site names the value
+  // by what it is for. A passing test never waits out a ceiling: reaching one means the test failed.
+  let private ms (n: float) = System.TimeSpan.FromMilliseconds n
+  let private secs (n: float) = System.TimeSpan.FromSeconds n
+  let private hours (n: float) = System.TimeSpan.FromHours n
+
+  // Ceilings on a single wait.
+
+  /// Ceiling on a wait that crosses a real process or a real server (a spawned host exiting, a
+  /// request through a started web host, a daemon failing a bad bind). A cold start on a loaded
+  /// runner takes seconds, so this is generous.
+  let patience = secs 20.
+  /// Ceiling on a wait that completes in the test's own process (a task settling, a file watcher
+  /// reporting, a long poll answering) but goes through the thread pool and can be starved.
+  let patienceInProcess = secs 10.
+  /// Ceiling on in-process work with no real I/O (an Elm loop reaching a model, a host stopping).
+  let patienceBrief = secs 5.
+  /// Ceiling on a wait that is a few message hops and nothing else.
+  let patienceTight = secs 2.
+
+  // Settles: a short, fixed window where nothing can be awaited.
+
+  /// A window for in-process work to drain, or for a negative assertion ("nothing more
+  /// happened") where waiting is the only way to look for an absent event.
+  let settle = ms 50.
+  /// A gap long enough for a stopwatch to read a positive elapsed time, and no longer.
+  let measurableGap = ms 2.
+  /// The delay inside a timed piece of work, when the test then asserts the measured time is at
+  /// least this much.
+  let timedWork = ms 20.
+  /// Let a just-started daemon finish warmup (module init, JIT of the request pipeline) before
+  /// its memory baseline is taken, so the baseline is not a mid-startup reading.
+  let warmupSettle = secs 2.
+  /// Let a just-started in-process server or file watcher begin before the first request or edit.
+  let startSettle = secs 1.
+  /// Let an SSE connection establish before the event it should carry is triggered.
+  let connectSettle = ms 200.
+
+  // Poll intervals: how often a loop looks again. Each is how fast the thing being waited on
+  // can change, not how long the loop may run (that is a ceiling above or a budget below).
+
+  /// An in-process flag flips within a few milliseconds (an Elm loop draining).
+  let pollTight = ms 10.
+  /// A timer thread flushes a batch within a few tens of milliseconds.
+  let pollFlush = ms 20.
+  /// A landing drives real `git` subprocesses, so each look costs real work.
+  let pollLanding = ms 25.
+  /// A local server that answers fast once it is up: a daemon's health during startup, or a
+  /// route settling on a value.
+  let pollQuick = ms 100.
+  /// A page's DOM, or a file that another process still holds open.
+  let pollPage = ms 200.
+  /// A service, app or SSE connection coming up over a few seconds.
+  let pollService = ms 250.
+  /// A file the init profile writes, or a session changing workflow, both over several seconds.
+  let pollMedium = ms 500.
+  /// A session or a hot reload that takes many seconds to land.
+  let pollSlow = secs 1.
+
+  // Request timeouts on one HTTP call.
+
+  /// One probe request to a local server, in a loop that retries it.
+  let httpProbe = secs 5.
+  /// One request that may have to start work first (create a session, serve a page).
+  let httpRequest = secs 10.
+  /// One request to a daemon that may be mid-build.
+  let httpDaemon = secs 30.
+  /// How long a test listens to an SSE stream for the event it triggered.
+  let sseListen = secs 15.
+
+  // Budgets for a whole wait that ends when something becomes ready.
+
+  /// A daemon, session or discovery on the small sample becoming ready.
+  let readyBudget = secs 60.
+  /// Four sample sessions, each loaded and evaluated in turn, all reaching Ready.
+  let loadedSessionsReady = secs 90.
+  /// The daemon's own wall-clock save fires 60s after start and does not get faster on a faster
+  /// runner, so both resume waits (the save becoming durable, the second daemon rebuilding the
+  /// session) are a generous multiple of it.
+  let daemonResumeCeiling = secs 150.
+  /// A save verdict after 160,000 stack walks: the tiered reflection reads make this slower than
+  /// a quiet app needs.
+  let heavyVerdictBudget = secs 150.
+  /// A real-git-backed landing reaching a terminal state. Generous relative to `pollLanding`.
+  let landingBudget = secs 30.
+  /// The default window an idle daemon's memory is watched over. `SAGEFS_IDLE_RSS_SOAK_MINUTES`
+  /// widens it on purpose.
+  let idleRssWindow = secs 60.
+  /// How often the idle daemon's memory is sampled, so a failure shows the shape of the growth.
+  let idleRssSampleInterval = secs 15.
+  /// A hot-reload host printing the port its worker listens on.
+  let workerPortReport = secs 120.
+  /// A hot-reload host's session becoming Ready, including its first build.
+  let workerSessionReady = secs 180.
+  /// The running app answering its first request.
+  let appFirstAnswer = secs 30.
+  /// The worker reporting that a file is watched after watch-all.
+  let watchRegistered = secs 10.
+  /// A hot-reload save reaching its first verdict.
+  let saveVerdict = secs 60.
+  /// A patch ending in confirmed or never-entered. Outlasts `Timeouts.patchConfirmation`, the
+  /// bound the worker itself gives the patched code to run.
+  let patchOutcome = secs 40.
+
+  // Bounds a test hands to the code under test.
+
+  /// A bound the code under test never reaches because the test ends the wait first.
+  let unreachedBound = hours 1.
+  /// A probe bound short enough that a worker which never answers is refused inside the test.
+  let hungProbeBound = ms 200.
+  /// The ready bound a test hands to an orchestration whose fake host answers at once and
+  /// ignores it, so only the code that passes the bound along is exercised.
+  let handedReadyBound = secs 5.
+  /// How long the host is asked to wait for entry probes in a test where the answer is
+  /// already settled.
+  let entryAwaitBound = ms 300.
+  /// How long evaluated code sleeps when a test has to interrupt or kill it. Far longer than
+  /// `patience`, so the test can only pass by ending the eval early.
+  let runawayEval = secs 60.
+  /// How soon after an eval starts a test cancels it, long before the eval would finish by itself.
+  let cancelAfter = ms 700.
+
+  // Crash scenarios for the deterministic simulation. These are inputs to the scenario, not
+  // waits, and they are chosen against `RestartPolicy.defaultPolicy` (a crash within its 10s
+  // StartupCrashWindow is a startup crash; a gap over its 5 minute ResetWindow starts a new window).
+
+  /// Crashes spaced past the startup window and inside the reset window: none is a startup
+  /// crash and all share one window.
+  let crashGapSpaced = secs 20.
+  /// A crash right after the last one, inside the startup window: the startup-crash circuit breaker.
+  let crashGapRapid = secs 2.
+  /// A quiet stretch longer than the reset window, so the restart count starts over.
+  let quietPastResetWindow = secs 400.
+  /// One tick of a clock that carries no event.
+  let clockTick = secs 1.
+
 /// Harness-root Verify configuration — the ONE place that owns the snapshot
 /// directory, the unique-prefix setting and the line-ending scrubber. Program.fs
 /// calls `configure` before any test runs; snapshot tests call `verify` and never
