@@ -21,12 +21,13 @@ Everything else is reference material you can come back to when you need it.
 ## Reference
 - **[Can I use SageFs with…?](ecosystem-compatibility.md)**: Falco, Giraffe, Saturn, Oxpecker, plain ASP.NET, Fable/SAFE, React/Vue/Angular, Native AOT, .NET Framework
 - **[Feature Matrix](FEATURE_MATRIX.md)**: capabilities across VS Code, Neovim, the web dashboard, and MCP
-- **[MCP Tools](mcp-tools.md)**: the 60 affordance-gated tools and per-client config
+- **[MCP Tools](mcp-tools.md)**: the 61 affordance-gated tools and per-client config
 - **[SSE Events](sse-events.md)**: wire format for the events editors consume
 - **[Binary Format Spec](binary-format-spec.md)**: the `.sagefs` and `.sagetc` persistence formats
 - **[Binary Format Benchmarks](binary-format-benchmarks.md)**: serialization performance data
 - **[System Architecture](architecture.md)**: daemon, workers, dashboard, and the MCP surface
-- **[Troubleshooting](TROUBLESHOOTING.md)**: first-run issues, runtime problems, platform fixes
+- **[Configuration](configuration.md)**: every `SAGEFS_*` environment variable, with its default and what it is for
+- **[Troubleshooting](TROUBLESHOOTING.md)**: first-run issues, runtime problems, where the logs are, what Degraded means, platform fixes
 
 ## For contributors
 - **[Contributing Guide](../CONTRIBUTING.md)**: development workflow, testing, PRs

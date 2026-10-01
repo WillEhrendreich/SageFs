@@ -65,7 +65,7 @@ Apps started by a `.SageFs/init.fsx` that `#load`s your sources patch in place t
 
 How you start the app matters, and I'd rather tell you than have you find out. An app started from FSI or an `init.fsx` lives in the same process as the reload agent, so a save patches it in place and its state stays put. An app started with `run_app` runs in the worker, out of the agent's reach, so a save **restarts it with your change** and says why (about six seconds for the ticker demo on my machine). Until 0.6.845 that second path reported `Patched` and changed nothing, which I caught by editing the demo and watching the output not move. It's fixed, and there's a test that starts an app with `run_app`, saves an edit and checks what the running app prints. The table and the source links are in [docs/hot-reload.md](docs/hot-reload.md#how-you-start-the-app-decides-which-of-two-things-happens).
 
-A detour landing isn't reported as live. A patched function stays `PatchPending` (the browser still refreshes, because the change may well be live) until its new body has been seen running, and then it becomes `Patched`. If ten seconds go by and it never ran, it's `NeverEntered`, and the message says to exercise it. A function the JIT inlined looks exactly like that, and so does an app nobody has clicked on yet, so the wording stays at "unconfirmed". Nothing is claimed that wasn't observed.
+A detour landing isn't reported as live. A patched function stays `PatchPending` (the browser still refreshes, because the change may well be live) until its new body has been seen running, and then it becomes `Patched`. If ten seconds go by and it never ran, it's `NeverEntered`, and the message says to exercise it. An app nobody has clicked on yet looks exactly like that, so the wording stays at "unconfirmed". So does a function the JIT inlined into its caller, but only in a project built with optimizations. SageFs builds a session with `-p:Optimize=false`, where an F# `inline` call stays a call and the assembly is marked so the JIT does not inline either. If it finds an optimized build (a Release you built by hand), it marks the session Degraded and says so, because a patch can be bypassed there and nothing else would tell you. Nothing is claimed that wasn't observed.
 
 Your app's live state survives a save. A `let mutable` you didn't touch keeps its value, private ones included. Edit a mutable's initializer and the app keeps its live value, SageFs tells you what it kept, and the dashboard's Hot Reload panel (or the `reset_hot_reload_state` MCP tool) has a Reset for when you want the new initializer to run. Redefine a plain `let` value and it gets its new value, as long as nothing in the running app kept a copy of the old one. The app tells SageFs where every read of it went, so if startup put it in a closure, or a `lazy` cached it, or a handler that hands it on already ran, it's a restart that names who kept it, never a fake Patched. The details, and where that falls short, are in [docs/hot-reload.md](docs/hot-reload.md#values).
 
@@ -282,7 +282,7 @@ flowchart TB
 
 **The daemon is a service.** It starts with no project and no session. It just listens, and clients tell it what to do.
 
-**Sessions are isolated workers.** Each session is a separate OS process with its own FSI instance, project, and file watcher, so they can't interfere with each other. Create as many as you need.
+**Sessions are isolated workers.** Each session is a separate OS process with its own FSI instance, project, and file watcher, so they can't interfere with each other. Create as many as you need. The watcher is rooted at the session's working directory, and a session opened in your home directory or a filesystem root is refused a watcher and says so in `/health` ([details](docs/multi-session.md#a-sessions-working-directory-is-its-file-watchers-root)). Open the session in the project directory.
 
 **Clients are thin.** Editor integrations, dashboard tabs, the Jupyter bridge, and MCP clients all connect to the same daemon. They create sessions, send code, and read results. Multiple clients can share the same session or each use their own.
 
@@ -322,7 +322,7 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | History browser | ✅ | ✅ | ✅ | ✅ |
 | Test trace | ✅ | ✅ | ✅ | — |
 
-A ✅ in the MCP column means a tool in the [60-tool surface](docs/mcp-tools.md) does it. Five rows used to claim ✅ and didn't have one, so I fixed the row instead of the code, since the code was already the right call: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (the `get_completions` / `explore_type` members in `SageFs/McpTools.fs` carry a `[<Description>]` but no `[<McpServerTool>]`, so they aren't exposed at all); the call graph is `GET /api/dependency-graph` (the MCP `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells*, not source symbols); run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
+A ✅ in the MCP column means a tool in the [61-tool surface](docs/mcp-tools.md) does it. Five rows used to claim ✅ and didn't have one, so I fixed the row instead of the code, since the code was already the right call: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (the `get_completions` / `explore_type` members in `SageFs/McpTools.fs` carry a `[<Description>]` but no `[<McpServerTool>]`, so they aren't exposed at all); the call graph is `GET /api/dependency-graph` (the MCP `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells*, not source symbols); run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
 
 <details>
 <summary><strong>Editor setup guides</strong></summary>
@@ -607,7 +607,9 @@ If the config already exists, SageFs opens or points you at the file instead of 
 | Stale REPL after code changes | Save the file first — source edits auto-reload. Use hard reset only for `.fsproj` / package changes. |
 | Session stuck warming up on a big repo | Name one project or solution, or choose a bare session explicitly. SageFs builds missing generated state itself. See [Large repos](docs/TROUBLESHOOTING.md#warmup-progress-phases) |
 
-📖 **[Full Troubleshooting Guide →](docs/TROUBLESHOOTING.md)**: covers first-run issues, runtime problems, platform-specific fixes, and diagnostic tools.
+📖 **[Full Troubleshooting Guide →](docs/TROUBLESHOOTING.md)**: covers first-run issues, runtime problems, where the logs are, what a Degraded health reading means, platform-specific fixes, and diagnostic tools.
+
+⚙️ **[Configuration →](docs/configuration.md)**: every `SAGEFS_*` environment variable, with its default and what it is for.
 
 📊 **[Feature Matrix →](docs/FEATURE_MATRIX.md)**: compare features across VS Code, Neovim, the web dashboard, and MCP.
 

@@ -41,7 +41,36 @@ The event names are defined in `allSseEventTypes` in `SageFs.Core/SseWriter.fs`.
 |:---|:---|:---|
 | `bindings_snapshot` | `Bindings[]` (name, type, value, shadowCount), `BindingValues[]`, `blockStartLine`, `filePath` | Current FSI variable bindings with types, values, and shadow counts. |
 | `binding_scope_map` | `Bindings[]`, `ActiveCount`, `ShadowedCount` | Scope hierarchy showing which bindings are active vs shadowed. |
-| `live_bindings` | `LiveValueSnapshot` (expanded value tree per binding) | Expanded, best-effort view of each bound value for the live watch view. |
+| `live_bindings` | `LiveValueSnapshot` (expanded value tree per binding) | Expanded, best-effort view of each bound value for the live watch view. What the walk will and won't touch is below the table. |
+
+#### What the `live_bindings` walk does to your values
+
+The walk reads every bound value after each eval, which means it runs your
+property getters. Since 0.6.865 it is careful about the ways that can hurt
+(`SageFs.Core/Features/LiveValueTree.fs`, the reasoning is in
+[decisions.md](decisions.md#looking-at-a-value-never-runs-the-users-code-on-the-eval-thread)):
+
+- A `Task` is shown by its status. The walk never waits on it, and reads `Result`
+  or `Exception` only once the task has finished. `ValueTask` is handled the same
+  way.
+- A `Lazy` is shown as created or not created, and `Value` is read only after it
+  has been created. The walk never forces one.
+- Each property is read once per walk, not twice.
+- One walker thread takes the bindings in order, and the caller waits on each
+  with a deadline, `Timeouts.liveValueBindingBudget` (1 second). A binding whose
+  getter does not return in that time shows as unreadable, is not walked again,
+  and the walk carries on with the next binding. Once 16 abandoned walkers are
+  still stuck, the pass says so and stops starting new ones until the session
+  restarts.
+
+What this does not cover yet. A getter stuck in an infinite loop (a
+`member this.Self = this.Self` compiles to one, because F# makes the self-call a
+tail call) never returns, and the abandoned walker thread keeps spinning a core
+for the life of the host. The deadline hides it from the eval thread and does not
+stop it. A getter that overflows the stack kills the host process, and with it the
+session; nothing in the walk can catch that. The fix I have in mind is to stop
+running getters on types you wrote and show their fields instead, but that
+changes what the dashboard shows for a class instance, so I haven't done it.
 
 ### Live Testing
 

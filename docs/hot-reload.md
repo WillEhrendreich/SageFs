@@ -354,6 +354,29 @@ built from, so build the project before starting the session. A source file
 edited after its last build gets re-evaluated whole instead of patched, and
 SageFs logs that it's doing so.
 
+### File watching
+
+A save only reaches SageFs if something is watching the directory. The daemon
+roots one recursive watcher at each session's working directory, and
+`bin`, `obj`, `.git`, `node_modules`, `.runs`, `artifacts` and nested checkouts
+are filtered out of its events (`SageFs.Core/FileWatcher.fs`,
+`startPrunedWatcherUnder`).
+
+A working directory that is your home directory, one that contains it, or a
+filesystem root is refused, and nothing is watched there. A recursive watch
+costs an inotify watch per directory, and a daemon started in `$HOME` would hand
+`$HOME` out as a session root. The refusal is not quiet. It is logged, and it
+shows up in `/health` under `componentFailures` as `file-watcher:<directory>`
+with the reason and a hint: open the session in a project directory, not the home
+directory or a filesystem root, and restart it. That hint also says hot reload and
+live testing get no file events for the session until you do. The check compares
+whole path segments, so `/home/william` is not mistaken for `/home/will`, and a
+dotfiles repo at `$HOME` is refused as well, since the cost is the directory
+count whether or not `.git` is there.
+
+The other failure you can hit is Linux running out of inotify instances. That is
+reported the same way, with a hint to raise `fs.inotify.max_user_instances`.
+
 ## Where it falls short right now
 
 I'd rather you hear this from me than find it at 11pm.

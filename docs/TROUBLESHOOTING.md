@@ -2,7 +2,7 @@
 
 Quick fixes for common issues. If your problem isn't listed here, check the
 [GitHub Issues](https://github.com/WillEhrendreich/SageFs/issues) or run the
-health check in your editor. If it's genuinely broken, file it. I'd
+health check in your editor. If it's broken, file it. I'd
 rather hear about it than have you quietly work around it.
 
 ## Editor Health Checks (Start Here)
@@ -41,7 +41,8 @@ is installed and you want a project on 10, pin it.
    port. In VS Code, set `sagefs.mcpPort` in settings.
 3. **Check the SageFs console window**: it logs startup errors to its
    own terminal window. Look for .NET SDK errors, missing project files, or
-   compilation failures.
+   compilation failures. The daemon also writes a log file
+   ([Where the logs are](#where-the-logs-are)).
 4. **First-time JIT warmup**: The very first launch after install takes longer
    (NuGet restore + JIT compilation). Give it 30–60 seconds.
 
@@ -134,12 +135,133 @@ dotnet tool update --global SageFs --version X.Y.Z
 lags the package store by a few minutes after a release. The package can be on
 NuGet while the CLI still can't see it.
 
+### Where the logs are
+
+There are three places, and which one you want depends on what broke. Paths
+below are what the code builds
+([`DaemonState.fs`](../SageFs.Core/DaemonState.fs),
+[`WorkerLogFile.fs`](../SageFs.Core/WorkerLogFile.fs)).
+
+**The daemon log.** The daemon writes `mcp-server<yyyyMMdd>.log`, for example
+`mcp-server20260930.log`, in its log directory. That is the `SageFs` folder under
+your local application data directory (`~/.local/share/SageFs` on Linux,
+`%LOCALAPPDATA%\SageFs` on Windows), or the data dir itself when
+`SAGEFS_DATA_DIR` is set. You don't have to work the path out. The dashboard
+port serves it:
+
+```bash
+curl -s http://localhost:37750/api/daemon-info
+```
+
+The `logPath` field is the file being written right now. A day that outgrows the
+size cap rolls to `_001`, `_002` beside it, so the name can differ from the one
+you'd guess. The daemon logs Information and above, rolls a file at 50 MB and
+keeps 7 of them, so the daemon log never costs more than 350 MB. (`37750` is the
+MCP port plus one. If you moved the MCP port, so did the dashboard.)
+
+**The worker log.** Each session's worker writes
+`<data dir>/workers/<sessionId>.log`, where the data dir is `~/.SageFs` unless
+`SAGEFS_DATA_DIR` says otherwise. This is where project loading, warmup and hot
+reload messages from inside the worker end up, one line each, as
+`<UTC time> [INF|DBG|WRN|ERR] message`. The session id is in `list_sessions` and
+on the dashboard. Each file is capped at 4 MiB. When the next line would pass
+that, the file moves to `<sessionId>.log.1`, replacing the previous one, so a
+session costs at most 8 MiB. Nothing deletes the files of sessions that have
+ended (I found no code that does, and my own data dir has hundreds), so a log
+for a session that no longer exists is just a file you can delete. If a worker
+can't open its log it says so on stderr and carries on without one.
+
+**The stderr tail.** While a worker is starting, the daemon keeps the last 200
+lines of its stderr. If the worker exits before it reports its port, goes quiet
+past the inactivity limit, passes the warmup ceiling, or can't be connected to,
+the last 20 of those lines are added to the failure reason under a `stderr:`
+heading. That reason is the session's fault reason, and the daemon log has it too
+(`Worker spawn failed for session ...`). The buffer is not read after startup, so
+a worker that dies later leaves its story in its worker log and nowhere else.
+
+### When health says Degraded
+
+"Degraded" is said in three places and means something different in each. All
+three are on `/health` (the MCP port, `37749`), and the dashboard shows the
+reason in full.
+
+**A session is Degraded.** The session works, but something you'd expect to work
+won't, and the reason says what to do. `/health` and `/api/sessions` carry it as
+`health: { status, reason }` per session
+([`SessionHealth.fs`](../SageFs.Core/SessionHealth.fs)). Today there are three
+causes:
+
+- A project was loaded by hand-parsing the `.fsproj` instead of MSBuild
+  evaluation. Code evaluates, but there is no build output, so `run_app` and hot
+  reload won't work. The reason names why MSBuild failed (it threw, it returned
+  nothing, or the project's SDK is newer than the .NET SageFs itself runs on).
+  Run `dotnet build` on the project and read the first MSBuild error.
+- A project's assembly was built with optimizations. A hot-reload patch to one of
+  its functions can be bypassed by inlining, and a live value it holds can go
+  untracked, and nothing else would tell you. This happens when you build Release
+  by hand and SageFs finds that build up to date. Run `hard_reset_fsi_session`
+  with `rebuild=true`: SageFs builds sessions with `-p:Optimize=false`
+  ([`BuildOptimization.fs`](../SageFs.Core/BuildOptimization.fs)).
+- The session is Ready but warmup loaded nothing: zero assemblies and zero
+  namespaces opened, though a project was resolved. The project has most likely
+  never been built. Build it, then `hard_reset_fsi_session` with `rebuild=true`.
+  If warmup recorded failed opens, the reason quotes them instead.
+
+A session that is Faulted or Stopped is `Failed`, with the reason. One that is
+still starting, building or restarting is `Starting`.
+
+**The daemon is Degraded.** `/health` has an `overall` field that is `Healthy`,
+`Degraded` or `Unhealthy`
+([`DaemonHealth.fs`](../SageFs.Core/Features/DaemonHealth.fs)). It is Degraded
+when any session is Faulted, when the machine's available memory is down to the
+point SageFs calls tight (it enters at 20% available and leaves at 30%, and
+while tight, expensive work runs one at a time), or when the session manager is
+in trouble. It is Unhealthy when memory is critical (8% available, easing back to tight at
+15%) or one of the daemon's own telemetry signals has broken from its normal.
+`memoryPressure` and `anomalies` in the same response say which.
+
+**The session manager is in trouble.** The supervisor watches the loop that
+handles session commands (create, stop, restart) and reports one of three
+things ([`SupervisorWatchdog.fs`](../SageFs.Core/SupervisorWatchdog.fs),
+[`SupervisorHealth.fs`](../SageFs.Core/SupervisorHealth.fs)):
+
+- The loop threw and was restarted from its last good state. Look in the daemon
+  log for `Mailbox loop threw unexpectedly`.
+- One command's handler threw and the loop carried on without it. The reason
+  names the command. Check the daemon log.
+- One command has held the loop for longer than `SAGEFS_SUPERVISOR_WEDGE_SECONDS`
+  (30 by default). Session commands then hang while reads, like a status check,
+  still answer, which is why every session can look Ready on a daemon that can't
+  act on them. Restart the daemon if it doesn't clear.
+
+The supervisor goes back to healthy the next time a command finishes without
+throwing, so a one-off failure clears itself and a stuck command clears when it
+finally completes.
+
+Separately, hot reload has its own health for the app it patches, and
+`enable_hot_reload` reports it as `Degraded: <reason>`. The reasons in the code
+today: a detour was applied but the native code did not change (the patch may be
+ineffective); MonoMod could not patch on this runtime
+(`PlatformNotSupportedException`); one accessor of a mutable binding was
+re-pointed and its partner was not (restart the app); the dev-reload middleware
+had to be appended instead of inserted first, so other middleware may answer
+before it; and a hot-reload compile held the compiler past
+`SAGEFS_HOT_RELOAD_COMPILE_QUEUE_SECONDS`.
+
 ### Hot reload not working
 
-- Hot reload is auto-injected by default for `.fs` file changes
-- Check `SAGEFS_DEVRELOAD` environment variable isn't set to `0`
-- Look for `[DevReload]` messages in daemon logs
+- Hot reload isn't on in every session. A session in the default REPL workflow
+  starts with it off, and nothing is watched for patching until you opt in.
+  Switch with `switch_workflow(target='live')`; see
+  [Workflow Modes](workflow-modes.md).
+- Check the `SAGEFS_DEVRELOAD` environment variable isn't set to `0` or `false`
+- Look for `[DevReload]` messages in the session's worker log (see
+  [Where the logs are](#where-the-logs-are))
 - Ensure the file is part of the active project (listed in `.fsproj`)
+- Check the session's health. A project built with optimizations is reported as
+  Degraded (see [When health says Degraded](#when-health-says-degraded))
+- A session whose directory is your home directory or a filesystem root is not
+  watched at all. See [Hot reload and file watching](hot-reload.md#file-watching)
 
 ### Live testing not running
 
@@ -151,9 +273,10 @@ NuGet while the CLI still can't see it.
 ### SSE connections dropping
 
 - Set proxy/reverse-proxy timeout ≥ 60 seconds
-- SageFs sends a keepalive comment on the dashboard's SSE stream every 5
-  seconds by default (`SAGEFS_DASHBOARD_HEARTBEAT_SECONDS`), well inside
-  Kestrel's own keep-alive window
+- The dashboard's SSE stream patches a heartbeat signal at least every 5
+  seconds by default (`SAGEFS_DASHBOARD_HEARTBEAT_SECONDS`), even when nothing
+  else changed, and the page shows the disconnect banner if none arrives within
+  `SAGEFS_DASHBOARD_STALE_AFTER_SECONDS` (15 by default)
 - Corporate proxies may need explicit WebSocket/SSE passthrough configuration
 
 ### Eval watchdog — detecting daemon crash during eval
@@ -176,20 +299,23 @@ still seeing it, that's a regression. File it.
 
 ## Environment Variable Overrides
 
-All timeout values can be overridden via environment variables. Set them before
-starting SageFs (or in your shell profile).
+The waits and intervals can be overridden through environment variables. Set
+them before starting SageFs (or in your shell profile). Every one, with its
+default and what it is for, is on the
+[configuration page](configuration.md), which is generated from the code. The
+ones people usually reach for:
 
-| Variable | Default | Description |
+| Variable | Default | What it is for |
 |:---------|:--------|:------------|
-| `SAGEFS_WARMUP_INACTIVITY_SECONDS` | `30` | Max seconds of inactivity during warmup before declaring failure |
-| `SAGEFS_WARMUP_MAX_MINUTES` | `10` | Absolute max warmup duration |
-| `SAGEFS_PER_TEST_TIMEOUT_SECONDS` | `5` | Per-test timeout |
-| `SAGEFS_BUILD_TIMEOUT_MINUTES` | `10` | Max time for `dotnet build` during hard reset |
-| `SAGEFS_WORKER_HTTP_READ_SECONDS` | `30` | HTTP read timeout for daemon→worker communication |
-| `SAGEFS_WORKER_STARTUP_TIMEOUT_MS` | `120000` | Worker process startup timeout (milliseconds) |
-| `SAGEFS_DASHBOARD_HEARTBEAT_SECONDS` | `5` | Dashboard SSE keepalive/heartbeat cadence |
+| `SAGEFS_WARMUP_INACTIVITY_SECONDS` | `30` | How long a starting worker may go without progress before it is declared stuck |
+| `SAGEFS_WARMUP_MAX_MINUTES` | `10` | The hard ceiling on warmup |
+| `SAGEFS_PER_TEST_TIMEOUT_SECONDS` | `5` | The starting per-test timeout for live testing |
+| `SAGEFS_BUILD_TIMEOUT_MINUTES` | `10` | How long a `dotnet build` run by a session start or rebuild may take |
 | `SAGEFS_BIND_HOST` | `localhost` | Loopback bind address: `localhost`, `127.0.0.1` or `::1`. Any other value stops the daemon at startup (see [Docker / Remote Containers](#docker--remote-containers)) |
 | `SAGEFS_MCP_PORT` | `37749` | MCP server port |
+
+`SAGEFS_WORKER_STARTUP_TIMEOUT_MS` used to be on this list. Nothing reads it any
+more, so setting it does nothing. The two warmup variables above replaced it.
 
 **Example**: slow CI machine with large project:
 
@@ -202,8 +328,8 @@ sagefs
 
 Then create a session for `MyBigProject.Tests/MyBigProject.Tests.fsproj`.
 
-The `ValidTimeout` type enforces a 1s–10min range. Values outside this range
-are silently ignored and the default is used.
+A value that isn't a number, or is zero or negative, is silently ignored and the
+default is used. There is no upper limit on these variables.
 
 ---
 
@@ -289,6 +415,8 @@ must be sent as `Content-Type: application/json`.
 | `sagefs status` | Running daemon info, port, sessions |
 | `sagefs stop` | Gracefully stop the daemon |
 | Daemon console window | Real-time logs, compilation output, test results |
+| Log files | The daemon log and one log per session worker. See [Where the logs are](#where-the-logs-are) |
+| `GET /health` on the MCP port | Per-session `health`, the daemon's `overall` verdict, and any component failures. See [When health says Degraded](#when-health-says-degraded) |
 | OpenTelemetry export | Structured traces and metrics (set `OTEL_EXPORTER_OTLP_ENDPOINT`) |
 | Editor output channel | Extension-side logs (VS Code: "SageFs" in Output panel) |
 

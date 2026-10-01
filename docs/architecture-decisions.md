@@ -136,7 +136,7 @@ parsing CLI output. MCP provides tool discovery with typed schemas and no need f
 terminal emulation.
 
 **Current status — call-time gate, not a filtered list**: the `tools/list` response is
-static and unfiltered — an agent always sees the full 60-tool catalog, in every session
+static and unfiltered — an agent always sees the full 61-tool catalog, in every session
 state. What the state machine actually gates is *calling* a tool: `enforceToolCallGate`
 rejects a call to a tool that doesn't apply to the current state with a structured error
 ([`SageFs/Mcp.fs:614`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/Mcp.fs#L614),
