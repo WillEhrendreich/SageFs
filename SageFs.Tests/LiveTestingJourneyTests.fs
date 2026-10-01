@@ -67,6 +67,7 @@ let private journey (body: HttpClient -> string -> SseFeed -> string -> Task<uni
     let cleanup () : Task =
       task {
         drain feed
+        note feed "cleanup: putting the original Hello.fs back on disk and in the buffer"
         File.WriteAllText(helloPath (), original)
         let! _ = postJson http "/api/live-testing/resume" {||}
         let! _ = postJson http "/api/live-testing/scope" {| mode = "every"; patterns = Array.empty<string> |}
@@ -94,7 +95,9 @@ let private journey (body: HttpClient -> string -> SseFeed -> string -> Task<uni
       ensuring cleanup (fun () ->
         task {
           do! connect feed
+          note feed "journey: settling green before the body"
           do! settleGreen feed http
+          note feed "journey: settled, running the body"
           do! body http sid feed original
         })
   }
@@ -147,6 +150,7 @@ let private evaluatedThenVerifiedByBuild () : Task<unit> =
       // A save whose content compiles: the eval runs the tests first, a real build confirms them after.
       // A different edit from the one the line-narrowing journey made, so nothing the daemon remembers of that
       // one can stand in for this one.
+      note feed "wrote the edited Hello.fs to disk"
       File.WriteAllText(helloPath (), original.Replace(rectangleArm, rectangleArm + " * 1.0"))
       let! _ =
         expectFrame feed "the rectangle test's verdict arriving as evaluated"

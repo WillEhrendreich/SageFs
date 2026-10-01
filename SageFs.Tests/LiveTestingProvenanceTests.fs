@@ -168,3 +168,48 @@ let confirmationFlowTests =
       for tc in everyTest do
         provenanceOf sid tc late |> Expect.equal (sprintf "%s is untouched by an answer about older text" tc.DisplayName) ResultProvenance.Evaluated
   ]
+
+[<Tests>]
+let confirmationStatusTests =
+  /// What `GET /api/live-testing/status` says about the confirmation, for the session.
+  let confirmationSaid (sid: string) (model: SageFsModel) : string =
+    use doc = System.Text.Json.JsonDocument.Parse(LiveTestStatusView.render sid (SageFsModel.cycleForSession sid model) None)
+    doc.RootElement.GetProperty("Confirmation").GetString()
+
+  testList "result provenance: the status says whether a confirmation is in flight" [
+
+    testCase "WHY — rows that say Compiled are not at rest while a confirmation's build runs, and the status says so (the journey flake)" <| fun _ ->
+      // A confirmation's build restarts the worker, and the run the restart causes marks every row Compiled
+      // while the build is still going. Counting Evaluated rows then says "all confirmed" with a build in flight,
+      // and an edit made at that moment has no worker to be evaluated by.
+      let model, sid = started ()
+      let state = evaluatedRun sid (everyTest |> Array.map passed) model
+      confirmationSaid sid (fst state) |> Expect.equal "the editing may not be done: the quiet window is open" "quiet"
+      let building = state |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.QuietElapsed))
+      confirmationSaid sid (fst building) |> Expect.equal "a build is in flight" "building"
+      let restarted, _ = runs sid (everyTest |> Array.map passed) building
+      for tc in everyTest do
+        provenanceOf sid tc restarted |> Expect.equal (sprintf "%s now says Compiled" tc.DisplayName) ResultProvenance.Compiled
+      confirmationSaid sid restarted |> Expect.equal "and the build is still in flight, whatever the rows say" "building"
+
+    testCase "the status says idle once the build's answer has landed, and before anything was evaluated" <| fun _ ->
+      let model, sid = started ()
+      confirmationSaid sid model |> Expect.equal "nothing evaluated, nothing to confirm" "idle"
+      let building = evaluatedRun sid (everyTest |> Array.map passed) model |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.QuietElapsed))
+      let generation =
+        confirmEffects (snd building)
+        |> List.pick (function ConfirmationEffect.StartBuild (g, _) -> Some g | _ -> None)
+      let answered, _ = building |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, BuildAnswer.DidNotBuild "FS0039")))
+      confirmationSaid sid answered |> Expect.equal "the failed build ended it" "idle"
+
+    testCase "every phase has its own wire word, and only Idle says idle" <| fun _ ->
+      let confirmation = { Content = edited; File = "Hello.fs"; Evaluated = Map.empty }
+      let words =
+        [ ConfirmationPhase.Idle
+          ConfirmationPhase.Quiet confirmation
+          ConfirmationPhase.Building (confirmation, 1L)
+          ConfirmationPhase.RunningBuilt (confirmation, 1L) ]
+        |> List.map ConfirmationPhase.toWireValue
+      words |> List.distinct |> List.length |> Expect.equal "four phases, four words" 4
+      words |> List.filter ((=) "idle") |> List.length |> Expect.equal "one of them is idle" 1
+  ]

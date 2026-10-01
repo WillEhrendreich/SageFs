@@ -38,7 +38,8 @@ module FailureLocationParser =
 /// testing. Pure: the session's state in, one JSON document out.
 module LiveTestStatusView =
 
-  let render (activeId: string) (state: LiveTestState) (fileFilter: string option) : string =
+  let render (activeId: string) (cycle: LiveTestCycleState) (fileFilter: string option) : string =
+    let state = cycle.TestState
     let discoveryState = LiveTestState.discoveryState state
     let discoveryRequiresEval = LiveTestState.requiresPrimingEval state
     let sessionEntries = LiveTestState.statusEntriesForSession activeId state
@@ -67,6 +68,10 @@ module LiveTestStatusView =
         sessionEntries
         |> Array.filter (fun e -> match e.Provenance with ResultProvenance.Evaluated -> true | _ -> false)
         |> Array.length)
+    // Where this session's confirmation of an evaluated run against a real build stands. A row can say it ran
+    // against a build while a confirmation (and the worker restart it causes) is still in flight, so a client
+    // that wants the session at rest waits for `idle`, not only for no row to be unconfirmed.
+    resp["Confirmation"] <- box (ConfirmationPhase.toWireValue cycle.Confirmation.Phase)
     // The run the rows are from: it advances with every run, so a client (or a test) can tell that a run
     // happened after the one it last saw.
     resp["Generation"] <- box (RunGeneration.value state.LastGeneration)

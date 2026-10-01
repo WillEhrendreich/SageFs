@@ -580,7 +580,20 @@ type PendingRebuildState = {
   InstrumentationMaps: InstrumentationMap array
 }
 
+/// How a run that was held back by a busy session is carried out once the session is free.
+[<RequireQualifiedAccess>]
+type QueuedMeans =
+  /// Rebuild the project, then run the tests against what it built (a file that would not type-check, or one
+  /// with no buffer text to evaluate).
+  | RebuildThenRun
+  /// Evaluate exactly this text in the live session, then run the tests against what was evaluated. The text is
+  /// the one the held-back check was about, so the run is judged against what was saved or typed.
+  | EvaluateThenRun of content: string
+
+/// A run the session owes: an edit's check found the session busy, so nothing was started, and the edit is the
+/// last thing that will ask for this run. `LiveTestCycleState.promoteQueuedRebuild` starts it when the busy run ends.
 type QueuedRebuildState = {
+  Means: QueuedMeans
   Tests: TestCase array
   Trigger: RunTrigger
   FilePath: string
@@ -778,6 +791,22 @@ module LiveTestCycleState =
 
   let promoteQueuedRebuild (targetSession: string option) (s: LiveTestCycleState) =
     match s.QueuedRebuild with
+    // Text that was held back from evaluation is evaluated now. An evaluation is not a rebuild: there is no
+    // generation to cancel or supersede, so none is recorded as pending.
+    | Some ({ Means = QueuedMeans.EvaluateThenRun content } as queued)
+        when queued.SessionId = targetSession
+             && queued.AnalysisIdentity = s.LatestAnalysisIdentity ->
+        [ TestCycleEffect.EvalBufferThenRunAffected
+            { FilePath = queued.FilePath
+              Content = content
+              Run =
+                { Tests = queued.Tests
+                  Trigger = queued.Trigger
+                  TreeSitterElapsed = queued.TreeSitterElapsed
+                  FcsElapsed = queued.FcsElapsed
+                  SessionId = queued.SessionId
+                  InstrumentationMaps = queued.InstrumentationMaps } } ],
+        { s with QueuedRebuild = None }
     | Some queued
         when queued.SessionId = targetSession
              && queued.AnalysisIdentity = s.LatestAnalysisIdentity ->
@@ -918,6 +947,23 @@ module LiveTestCycleState =
           | TestCycleEffect.RequestRebuild (_, req)
               when TestRunPhase.isSessionRunning req.SessionId state.TestState.RunPhases ->
                 Some {
+                  Means = QueuedMeans.RebuildThenRun
+                  Tests = req.Tests
+                  Trigger = req.Trigger
+                  FilePath = filePath
+                  AnalysisIdentity = analysisIdentity
+                  TreeSitterElapsed = req.TreeSitterElapsed
+                  FcsElapsed = req.FcsElapsed
+                  SessionId = req.SessionId
+                  InstrumentationMaps = req.InstrumentationMaps
+                }
+          // The live path evaluates the buffer instead of rebuilding (see `redirectToEvalBuffer`). The text that
+          // would have been evaluated is kept, so the run is not lost to the session being busy.
+          | TestCycleEffect.EvalBufferThenRunAffected evalReq
+              when TestRunPhase.isSessionRunning evalReq.Run.SessionId state.TestState.RunPhases ->
+                let req = evalReq.Run
+                Some {
+                  Means = QueuedMeans.EvaluateThenRun evalReq.Content
                   Tests = req.Tests
                   Trigger = req.Trigger
                   FilePath = filePath

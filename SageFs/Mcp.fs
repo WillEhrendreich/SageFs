@@ -2423,7 +2423,7 @@ module McpTools =
               ActiveSession.sessionId model.Sessions.ActiveSessionId
               |> Option.map WorkerProtocol.SessionId.value
               |> Option.defaultValue ""
-        return LiveTestStatusView.render activeId (SageFsModel.cycleForSession activeId model).TestState fileFilter
+        return LiveTestStatusView.render activeId (SageFsModel.cycleForSession activeId model) fileFilter
     }
 
   let rec setLiveTesting (ctx: McpContext) (enabled: bool) : Task<string> =

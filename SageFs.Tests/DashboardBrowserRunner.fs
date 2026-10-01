@@ -836,6 +836,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
           try
             Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
             Environment.SetEnvironmentVariable("SAGEFS_LT_FIXTURE_DIR", sampleDir)
+            Environment.SetEnvironmentVariable("SAGEFS_LT_DATA_DIR", dataDir)
             Environment.SetEnvironmentVariable("SAGEFS_LT_MCP_PORT", string mcpPort)
             let ltArgv =
               cliArgs

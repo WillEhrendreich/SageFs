@@ -23,9 +23,18 @@ type SseFrame =
     Data: string
     ReceivedAt: int64 }
 
+/// One line of what a feed lived through, in the order it happened: a frame the stream delivered, or a note a
+/// journey left about something it did (a write, a drain). Kept for every frame, read or thrown away, so a
+/// timeout can show the whole sequence and not only the frames after the last drain.
+type FeedEntry =
+  | Frame of SseFrame
+  | Note of text: string * at: int64
+
 /// The daemon's `/events` stream, read on its own task. Frames queue in arrival order.
 type SseFeed =
   { Frames: ChannelReader<SseFrame>
+    /// Everything the feed saw and every note a journey left, in order. Guarded by its own lock.
+    History: ResizeArray<FeedEntry>
     Stop: unit -> Task }
 
 /// The verdict a stream frame carries for one test.
@@ -45,6 +54,11 @@ module LtEnv =
 
   let mcpPort = required "SAGEFS_LT_MCP_PORT"
   let fixtureDir = required "SAGEFS_LT_FIXTURE_DIR"
+  /// The daemon's own data dir, where its log is. Read only to explain a timeout, so a missing one is not an error.
+  let dataDir : string voption =
+    match Environment.GetEnvironmentVariable "SAGEFS_LT_DATA_DIR" with
+    | null | "" -> ValueNone
+    | value -> ValueSome value
 
 let baseUrl () = Uri(sprintf "http://localhost:%s" LtEnv.mcpPort.Value)
 let helloPath () = Path.Combine(LtEnv.fixtureDir.Value, "Hello.fs")
@@ -63,8 +77,11 @@ let openFeed () : SseFeed =
   let channel = Channel.CreateUnbounded<SseFrame>()
   let cts = new CancellationTokenSource()
   let http = new HttpClient(BaseAddress = baseUrl (), Timeout = Timeout.InfiniteTimeSpan)
+  let history = ResizeArray<FeedEntry>()
   let publish (event: string) (data: string) =
-    channel.Writer.TryWrite { Event = event; Data = data; ReceivedAt = Stopwatch.GetTimestamp() } |> ignore
+    let frame = { Event = event; Data = data; ReceivedAt = Stopwatch.GetTimestamp() }
+    lock history (fun () -> history.Add(Frame frame))
+    channel.Writer.TryWrite frame |> ignore
   let pump =
     task {
       try
@@ -96,6 +113,7 @@ let openFeed () : SseFeed =
         http.Dispose()
     }
   { Frames = channel.Reader
+    History = history
     Stop =
       fun () ->
         cts.Cancel()
@@ -123,6 +141,127 @@ let private batchSummary (data: string) : string =
         sprintf "%s=%s/%s" name status provenance)
       |> String.concat "; "
   with :? JsonException -> data
+
+/// Leave a note in the feed's history, stamped now, saying what a journey just did.
+let note (feed: SseFeed) (text: string) : unit =
+  lock feed.History (fun () -> feed.History.Add(Note (text, Stopwatch.GetTimestamp())))
+
+/// What a `test_summary` frame says that a timeout needs: whether the suite is settled, and the last decision.
+let private summaryLine (data: string) : string =
+  try
+    use doc = JsonDocument.Parse data
+    let root = doc.RootElement
+    let number (name: string) =
+      match root.TryGetProperty name with
+      | true, v when v.ValueKind = JsonValueKind.Number -> string (v.GetInt32())
+      | _ -> "?"
+    let text (name: string) =
+      match root.TryGetProperty name with
+      | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
+      | _ -> "?"
+    let decision =
+      match root.TryGetProperty "LastDecision" with
+      | true, d when d.ValueKind = JsonValueKind.Object ->
+        sprintf "decision=%s/%s selected=%d" (d.GetProperty("Cause").GetString()) (d.GetProperty("Precision").GetString()) (d.GetProperty("SelectedTests").GetArrayLength())
+      | _ -> "decision=none"
+    sprintf "activity=%s total=%s running=%s stale=%s failed=%s %s"
+      (text "Activity") (number "Total") (number "Running") (number "Stale") (number "Failed") decision
+  with :? JsonException -> data
+
+/// The events a stream sends constantly and that say nothing about a verdict: a run of them is one line.
+let private isBackground (event: string) : bool =
+  match event with
+  | "test_results_batch" | "test_summary" | "session" -> false
+  | _ -> true
+
+/// Every frame the feed saw and every note a journey left, in order, with the milliseconds since the first
+/// entry. A run of background frames of one kind (state, coverage_view, warmup_progress) is one line with its
+/// count; every verdict and every summary is its own line, with each test's verdict and what it ran against.
+let describeHistory (feed: SseFeed) : string =
+  let entries = lock feed.History (fun () -> feed.History.ToArray())
+  let stampOf entry =
+    match entry with
+    | Frame f -> f.ReceivedAt
+    | Note (_, at) -> at
+  match entries with
+  | [||] -> "(the feed saw nothing)"
+  | _ ->
+    let origin = stampOf entries[0]
+    let at (stamp: int64) = (elapsed origin stamp).TotalMilliseconds
+    let lines = ResizeArray<string>()
+    let runEvent = ref ""
+    let runCount = ref 0
+    let runStart = ref 0L
+    let flush () =
+      match runCount.Value with
+      | 0 -> ()
+      | n -> lines.Add(sprintf "%9.0fms  %s x%d" (at runStart.Value) runEvent.Value n)
+      runCount.Value <- 0
+    for entry in entries do
+      match entry with
+      | Frame f when isBackground f.Event ->
+        match f.Event = runEvent.Value && runCount.Value > 0 with
+        | true -> runCount.Value <- runCount.Value + 1
+        | false ->
+          flush ()
+          runEvent.Value <- f.Event
+          runCount.Value <- 1
+          runStart.Value <- f.ReceivedAt
+      | Frame f ->
+        flush ()
+        let detail =
+          match f.Event with
+          | "test_results_batch" -> batchSummary f.Data
+          | "test_summary" -> summaryLine f.Data
+          | _ -> ""
+        lines.Add(sprintf "%9.0fms  %s %s" (at f.ReceivedAt) f.Event detail)
+      | Note (text, stamp) ->
+        flush ()
+        lines.Add(sprintf "%9.0fms  >>> %s" (at stamp) text)
+    flush ()
+    String.Join("\n", lines)
+
+/// The newest daemon log's last lines and every line the build confirmation wrote, when the runner told us where the
+/// daemon's data dir is. Empty when it did not.
+let private daemonLogTail () : string =
+  match LtEnv.dataDir with
+  | ValueNone -> "(SAGEFS_LT_DATA_DIR not set, so no daemon log)"
+  | ValueSome dir ->
+    try
+      let newest =
+        Directory.GetFiles(dir, "mcp-server*.log")
+        |> Array.sortByDescending (fun p -> File.GetLastWriteTimeUtc p)
+        |> Array.tryHead
+      match newest with
+      | None -> sprintf "(no mcp-server*.log in %s)" dir
+      | Some path ->
+        use stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)
+        use reader = new StreamReader(stream)
+        let lines = reader.ReadToEnd().Split('\n')
+        let confirm = lines |> Array.filter (fun l -> l.Contains "[confirm]")
+        let tail = lines |> Array.skip (max 0 (lines.Length - 60))
+        sprintf "--- %s: every [confirm] line ---\n%s\n--- last 60 lines ---\n%s" (Path.GetFileName path) (String.Join("\n", confirm)) (String.Join("\n", tail))
+    with ex -> sprintf "(could not read the daemon log: %s)" ex.Message
+
+/// What the daemon's status says now, for the end of a timeout: the counts, whether a confirmation is in flight and how
+/// many rows are unconfirmed. A timeout that only shows frames cannot say whether the daemon was idle or mid-build.
+let private statusSnapshot () : Task<string> =
+  task {
+    try
+      use http = new HttpClient(BaseAddress = baseUrl (), Timeout = TestTimeouts.httpRequest)
+      let! body = http.GetStringAsync "/api/live-testing/status"
+      use doc = JsonDocument.Parse body
+      let root = doc.RootElement
+      let text (name: string) =
+        match root.TryGetProperty name with
+        | true, v -> v.ToString()
+        | false, _ -> "?"
+      let summary = root.GetProperty("Summary")
+      return
+        sprintf "confirmation=%s unconfirmed=%s pause=%s generation=%s summary=%s"
+          (text "Confirmation") (text "Unconfirmed") (text "Pause") (text "Generation") (summary.GetRawText())
+    with ex -> return sprintf "(status unavailable: %s)" ex.Message
+  }
 
 /// Read frames until one satisfies `predicate`, or `budget` passes. The error names what was seen.
 let awaitFrame (feed: SseFeed) (what: string) (predicate: SseFrame -> bool) (budget: TimeSpan) : Task<Result<SseFrame, string>> =
@@ -162,14 +301,22 @@ let expectFrame (feed: SseFeed) (what: string) (predicate: SseFrame -> bool) (bu
   task {
     match! awaitFrame feed what predicate budget with
     | Ok frame -> return frame
-    | Result.Error error -> return failwith error
+    | Result.Error error ->
+      // The counts in `error` say what kind of frame went by; this says in what order, with every verdict and
+      // what it ran against, what the daemon says its state is, and what it logged meanwhile.
+      let! status = statusSnapshot ()
+      return
+        failwithf "%s\n--- daemon status now ---\n%s\n--- every frame the feed saw, in order (ms since the first) ---\n%s\n--- daemon log ---\n%s"
+          error status (describeHistory feed) (daemonLogTail ())
   }
 
 /// Throw away whatever is queued, so the next wait only sees what happens after now.
 let drain (feed: SseFeed) =
   let mutable frame = Unchecked.defaultof<SseFrame>
+  let mutable thrownAway = 0
   while feed.Frames.TryRead(&frame) do
-    ()
+    thrownAway <- thrownAway + 1
+  note feed (sprintf "drain: threw away %d queued frames" thrownAway)
 
 /// Run `read` over the parsed frame.
 let withJson (frame: SseFrame) (read: JsonElement -> 'a) : 'a =
@@ -273,6 +420,12 @@ let generationIn (frame: SseFrame) : int64 =
         System.Text.RegularExpressions.Regex.Match(generation.GetRawText(), "[0-9]+").Value |> int64)
   | _ -> -1L
 
+/// How many rows still ran against evaluated code, and where the session's confirmation stands, from the
+/// daemon's status.
+let private confirmationStateOf (statusJson: string) : struct (int * string) =
+  use doc = JsonDocument.Parse statusJson
+  struct (doc.RootElement.GetProperty("Unconfirmed").GetInt32(), doc.RootElement.GetProperty("Confirmation").GetString())
+
 /// A `test_results_batch` frame in which no row is still waiting for a real build to confirm it.
 let private batchIsConfirmed (frame: SseFrame) : bool =
   match frame.Event with
@@ -294,18 +447,29 @@ let hasEvaluatedRow (frame: SseFrame) : bool =
   | "test_results_batch" -> not (batchIsConfirmed frame)
   | _ -> false
 
-/// Wait until every row says what a real build made of it (none is `Evaluated`), so a journey starts from a
-/// session whose last confirmation is over and cannot answer into the next journey's rows. Asks the daemon's
-/// status first, for the same reason `awaitSettled` does.
+/// Wait until the session's confirmation of an evaluated run is over, so a journey starts from a session that no
+/// build is still working for: a build in flight restarts the worker, and an edit made meanwhile has nothing to
+/// be evaluated by, and its answer would land in the next journey's rows.
+///
+/// The rows alone cannot say so. A confirmation's build restarts the worker, and the run the restart causes marks
+/// every row `Compiled` while the confirmation is still building, so for a while no row is `Evaluated` and a
+/// build is nevertheless in flight. The status's `Confirmation` is the machine's own phase and `idle` is the only
+/// word that says nothing is in flight. Asks the status first, for the same reason `awaitSettled` does, and asks
+/// it again after each verdict batch or summary (a confirmation ends in one: its marks) rather than on a timer.
 let awaitConfirmed (feed: SseFeed) (http: HttpClient) (budget: TimeSpan) : Task<unit> =
   task {
-    let! status = http.GetStringAsync "/api/live-testing/status"
-    use doc = JsonDocument.Parse status
-    match doc.RootElement.GetProperty("Unconfirmed").GetInt32() with
-    | 0 -> ()
-    | _ ->
-      let! _ = expectFrame feed "every row confirmed by a build" batchIsConfirmed budget
-      ()
+    let clock = Stopwatch.StartNew()
+    let mutable resting = false
+    while not resting do
+      let! status = http.GetStringAsync "/api/live-testing/status"
+      match confirmationStateOf status with
+      | struct (_, "idle") -> resting <- true
+      | _ ->
+        note feed "waiting for the confirmation to end"
+        let! _ =
+          expectFrame feed "the confirmation ending (a verdict or a summary, after which the status says idle)"
+            (fun f -> f.Event = "test_results_batch" || f.Event = "test_summary") (max TimeSpan.Zero (budget - clock.Elapsed))
+        ()
   }
 
 /// The `LastDecision` a `test_summary` frame carries: its precision, reason and selected tests.
