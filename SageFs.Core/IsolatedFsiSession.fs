@@ -555,10 +555,9 @@ let start
             | None -> []
           // #141: the project's FSharp.Core, if it differs in build from the host's own (both commonly
           // report the same version), silently loses at runtime — warn now instead of waiting for the
-          // MissingMethodException that only shows up when user code happens to hit a missing member. NOT
-          // yet rewriting it: see ProjectFSharpCoreIdentity's doc comment for why a late, fsiArgs-string-
-          // level rewrite is provably bypassed by ShadowCopy's own re-derivation from the project's
-          // original build output, and what the real fix needs.
+          // MissingMethodException that only shows up when user code happens to hit a missing member. The
+          // call-site rewrite that fixes the project's own assembly runs earlier (ActorCreation.fs); this
+          // warning is for what it cannot reach: see ProjectFSharpCoreIdentity's doc comment.
           match projectFSharpCoreDll fsiArgs with
           | None -> ()
           | Some projectFSharpCore ->

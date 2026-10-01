@@ -32,7 +32,7 @@ defaults to `Interactive`. Agents use the MCP tools instead:
 
 ## Session Isolation
 
-Each session is a separate OS process with its own:
+Each session is its own worker process plus its own FSI host process (so two), with its own:
 
 - FSI instance
 - Loaded project assemblies

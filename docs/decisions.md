@@ -80,6 +80,14 @@ where the APIs are compatible, swaps in version-matched variants where SageFs's 
 coupled to the library, and moves feature dependencies out of the host entirely. Refusal is the
 last-resort safety net before any eval, never the first answer.
 
+Where that stands, checked against the code on 2026-10-01: what exists is the isolated host with a tiny
+closure, the SDK's own FSharp.Core and compiler, a renamed Harmony, and a call-site rewrite that makes the
+project's own assembly bind to the host's FSharp.Core. Re-initializing against a project's pins and swapping in
+version-matched variants are designed (`HostAdaptation`, `VariantSelector`) and tested as pure logic, but nothing
+calls them and no variant assemblies exist. Two projects in one solution that resolve different versions of the
+same package, and a project that builds its own FSharp.Compiler.Service, are not covered by a test. Closing those
+is open work, and nothing here should claim it until a test does.
+
 Evidence: the recorded preferences in `CLAUDE.md`; the isolated FSI host design
 (`SageFs.FsiHost`).
 Reopen it if: an adaptation turns out to be unsound for a specific library.

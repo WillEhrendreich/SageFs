@@ -4,9 +4,9 @@ open System
 open System.IO
 open System.Text.Json
 
-/// The vetted-manifest mechanism for the FSI host process directory.
+/// The vetted-manifest mechanism for the WORKER process directory (SageFs.Host), not the FSI host's.
 ///
-/// The host's directory must contain ONLY the assemblies listed in its
+/// The worker's directory must contain ONLY the assemblies listed in its
 /// `host-manifest.json` (plus the manifest itself). This is the structural
 /// guarantee that the host's probing world contains no dashboard-only deps
 /// (Falco, OpenTelemetry, ...) — the source of the 0x80131040 collisions.

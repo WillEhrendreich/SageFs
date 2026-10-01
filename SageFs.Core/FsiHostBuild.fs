@@ -2,8 +2,8 @@
 ///
 /// The host is compiled by that SDK's fsc against that SDK's FSharp.Compiler.Service and FSharp.Core, so the
 /// FSI session that runs a user's code is exactly the SDK's FSI and shares no assembly with SageFs. A host is
-/// built once per (SDK version, exact host sources) and cached under `<cacheRoot>/<key>/`; building takes a
-/// couple of seconds. The sources are embedded in this assembly, so there is no path to find or package.
+/// built once per (SDK version, exact host sources) and cached under `<cacheRoot>/<key>/`; building took
+/// 7 to 11 seconds on one development machine. The sources are embedded in this assembly, so there is no path to find or package.
 module SageFs.FsiHostBuild
 
 open System

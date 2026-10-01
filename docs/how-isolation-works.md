@@ -1,0 +1,230 @@
+# How SageFs opens projects that plain FSI can't
+
+You point `dotnet fsi` at a real project. Maybe it's a web app with a few dozen packages, maybe it's the F# compiler itself. You reference the output and it either works or it fails in some strange way: a `MissingMethodException` six evals later, or a file-load error that names a version you never asked for. Nothing in any of those messages says "your project pins a different version of a library than the one this process already loaded." FSI has no idea that's what happened, so it can't tell you, and you can't proceed.
+
+SageFs opens those projects. This page is how, with links into the code at v0.6.868 (commit `bba42706`) so you can check me. The short version: your code never runs in a process that has any of SageFs in it. It runs in a small host process that I build on demand with your project's own SDK, and the only things in that process are what the SDK ships plus a handful of source files I compile in. Everything else about it is plumbing to keep that true.
+
+I'm also going to be plain about which parts are doing the work today and which parts are logic that nothing calls. There is a section for that, and a list at the bottom of what I couldn't verify.
+
+## What FSI does with a name
+
+I read the F# compiler checkout at `~/Work/fsharp-compiler-services` (dotnet/fsharp at `cdb9dc5e5`) to see what FSI actually does when your code asks for an assembly.
+
+FSI hooks `AppDomain.CurrentDomain.AssemblyResolve` ([fsi.fs:3592-3617](https://github.com/dotnet/fsharp/blob/cdb9dc5e52e74e5c260e0489e81c0dfef60a3ad9/src/Compiler/Interactive/fsi.fs#L3592-L3617)). When that fires it takes the simple name (`fullAssemName.Split(',')[0]`, [L3420](https://github.com/dotnet/fsharp/blob/cdb9dc5e52e74e5c260e0489e81c0dfef60a3ad9/src/Compiler/Interactive/fsi.fs#L3420)), and looks for something already referenced with that simple name. The code's own comment says "This does unification by assembly name once an assembly has been referenced" ([L3446-3449](https://github.com/dotnet/fsharp/blob/cdb9dc5e52e74e5c260e0489e81c0dfef60a3ad9/src/Compiler/Interactive/fsi.fs#L3446-L3449)). If that misses it walks the `-r:` list comparing file names ([L3483-3500](https://github.com/dotnet/fsharp/blob/cdb9dc5e52e74e5c260e0489e81c0dfef60a3ad9/src/Compiler/Interactive/fsi.fs#L3483-L3500)), and whatever it finds gets loaded by path with `Assembly.UnsafeLoadFrom` ([L3404](https://github.com/dotnet/fsharp/blob/cdb9dc5e52e74e5c260e0489e81c0dfef60a3ad9/src/Compiler/Interactive/fsi.fs#L3404), [L3545](https://github.com/dotnet/fsharp/blob/cdb9dc5e52e74e5c260e0489e81c0dfef60a3ad9/src/Compiler/Interactive/fsi.fs#L3545)).
+
+Two things I looked for and didn't find. There is no `AssemblyLoadContext` in `src/Compiler/Interactive/`, so everything lands in the default context. And I found no place in that path that compares versions or warns. The `#r "nuget:..."` route is the same shape: a handler on `AssemblyLoadContext.Default.Resolving` that matches probing paths by simple name ([AssemblyResolveHandler.fs:39](https://github.com/dotnet/fsharp/blob/cdb9dc5e52e74e5c260e0489e81c0dfef60a3ad9/src/Compiler/DependencyManager/AssemblyResolveHandler.fs#L39), [L53-57](https://github.com/dotnet/fsharp/blob/cdb9dc5e52e74e5c260e0489e81c0dfef60a3ad9/src/Compiler/DependencyManager/AssemblyResolveHandler.fs#L53-L57)).
+
+What the runtime does before FSI's handler gets a say (an already-loaded assembly with the same name answers first, and a second one with the same name can't be loaded beside it in the default context) is standard .NET behavior, not something I read in FSI's source, and I did not reproduce it for this page. It matches what the repo records when it hits it: the comment in `ProjectLoading` about mixed Debug and Release DLLs ("duplicate assembly versions that FSI rejects with 0x80131040", [ProjectLoading.fs:166-168](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L166-L168)), the same HRESULT named as the collision source in [HostManifestTests.fs:8-11](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/HostManifestTests.fs#L8-L11), and the message SageFs prints about FSharp.Core: "FSI hosts everything in one process, and the first FSharp.Core loaded wins" ([IsolatedFsiSession.fs:139-145](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L139-L145)).
+
+So with plain FSI, the process FSI lives in is the process your code lives in, and whatever that process loaded first is what your project gets. If that process is `dotnet fsi`, it has the SDK's FCS and FSharp.Core in it. If it's a tool built on FCS, it has the tool's. Either way you're a guest in somebody else's dependency graph.
+
+## Who loads what
+
+A session involves three processes: the daemon (shared by all sessions), a worker, and an FSI host. The daemon and the worker are SageFs. The FSI host is the only one that ever sees your code.
+
+```
+ editor / dashboard / MCP client
+        |  HTTP + SSE
+        v
+ +-------------------------------------------------+
+ | daemon  (sagefs, net10.0 or net11.0 build)      |  Falco, Datastar, OpenTelemetry,
+ |  sessions, MCP, dashboard                       |  the dashboard's whole world
+ +-------------------------------------------------+
+        |  one process per session, loopback HTTP
+        v
+ +-------------------------------------------------+
+ | worker  (SageFs.Host + SageFs.Core)             |  Ionide.ProjInfo + MSBuild evaluate your project,
+ |  loads the project's metadata                   |  Cecil instruments a shadow copy of your DLLs,
+ |  shadow-copies + instruments your assemblies    |  SageFs's own FCS (43.13.101-preview7)
+ |  builds the FSI command line                    |  NEVER runs your code
+ +-------------------------------------------------+
+        |  FsiProtocol: one JSON object per line, loopback TCP,
+        |  spawned with `dotnet FsiHost.dll --args-file <file>`
+        v
+ +-------------------------------------------------+
+ | FSI host  (FsiHost.dll, built per SDK, cached)  |  the SDK's FSharp.Core, FSharp.Compiler.Service
+ |  one FsiEvaluationSession + the agent           |  and FSharp.DependencyManager.Nuget,
+ |  your code runs HERE                            |  ASP.NET shared framework,
+ +-------------------------------------------------+  SageFs.HostHarmony (a renamed Harmony)
+```
+
+The pieces, with the line that says so:
+
+- The worker is `SageFs.Host`, spawned per session by [WorkerSpawn.fs:28-147](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/WorkerSpawn.fs#L28-L147). It loads the project through Ionide/MSBuild ([ProjectLoading.fs:616-698](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L616-L698)), shadow-copies and instruments the assemblies ([ActorCreation.fs:114-132](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ActorCreation.fs#L114-L132)), and builds the FSI arguments ([ProjectLoading.fs:1061-1155](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L1061-L1155)).
+- The FSI host is started from the worker by `IsolatedFsiSession.start` ([IsolatedFsiSession.fs:520-588](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L520-L588)). The worker picks the isolated kind unconditionally ([WorkerMain.fs:637-648](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Host/WorkerMain.fs#L637-L648), and the in-process kind is a test-only reference implementation, see [SessionKinds.fs:1-11](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/SessionKinds.fs#L1-L11)).
+- The host is a console program that opens a loopback listener, prints `FSIHOST_PORT=<n>`, accepts the one parent connection, sends `Ready`, and serves requests until the connection closes ([Program.fs:1-9](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/Program.fs#L1-L9), [L135-169](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/Program.fs#L135-L169)). If the worker dies, even by `kill -9`, the OS closes its end of the socket, `ReadLine` returns null, and the host exits with it ([Program.fs:264-267](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/Program.fs#L264-L267)).
+
+SageFs does not isolate your code with an `AssemblyLoadContext`, and that's worth saying out loud for this audience. Inside the host there is still one default context and name-based resolution, the same as plain FSI. What I changed is who else is in that process with you. The isolation is the process boundary and a very small closure, plus a few targeted rewrites for the places where that wasn't enough.
+
+## Mechanism 1: the host is built with your project's SDK
+
+The host isn't shipped prebuilt. Its sources are embedded as resources in `SageFs.Core.dll` ([SageFs.Core.fsproj:73-98](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/SageFs.Core.fsproj#L73-L98)) and `FsiHostBuild` writes them to a cache directory and runs `dotnet build` on them ([FsiHostBuild.fs:270-318](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L270-L318)).
+
+Which SDK? The one `dotnet --version` reports from your project's folder, so a `global.json` pin wins ([FsiHostBuild.fs:220-235](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L220-L235)). The build gets its own `global.json` pinning exactly that version with `rollForward: disable` ([L97-99](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L97-L99), written at [L297](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L297)). The SDK's root travels with the version, because an Arcade repo like dotnet/fsharp ships its SDK inside the checkout and a build from anywhere else can't find it ([L184-218](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L184-L218), [L298-305](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L298-L305)). That's the bug behind commit `c0083a78`: a session on a compiler checkout "could not start at all" and now does.
+
+The host project compiles against the SDK's own copies, referenced by path out of the SDK's `FSharp` directory ([FsiHost.fsproj:61-63](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiHost.fsproj#L61-L63)), with the implicit FSharp.Core reference turned off ([L11](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiHost.fsproj#L11)). Its target framework is whatever the SDK bundles ([L9](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiHost.fsproj#L9)). So the FSI that runs your code is the FSI your own `dotnet fsi` would have been, built by the same compiler, running the same FSharp.Core, and nothing from SageFs sits next to it. I checked a built one on my machine: the host folder holds `FSharp.Compiler.Service.dll` (about 44 MB), `FSharp.Core.dll`, `FSharp.DependencyManager.Nuget.dll`, `FsiHost.dll` and `SageFs.HostHarmony.dll`, plus satellite resource folders.
+
+Why per SDK and not one prebuilt host? What the code says: the FCS API differs between SDKs ("SDK 11 changed a tooltip type"), so one source has to compile against every SDK a user might have, and a test builds it with every installed one ([FsiHostBuildTests.fs:122-135](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostBuildTests.fs#L122-L135)). `RemoteFsiSession` goes out of its way to survive that, mapping FCS's glyph by case name so a newer SDK's FCS degrades to `Type` instead of breaking ([RemoteFsiSession.fs:50-55](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/RemoteFsiSession.fs#L50-L55)). What the code doesn't say, and what I'm inferring, is that a single prebuilt host would carry one FCS and one FSharp.Core and would be wrong for any project on a different SDK. That's the whole problem again, one level up.
+
+The cache is content-addressed: `sdk-<version>-<12 hex of SHA-256 over the SDK version, every source file, and the renamed Harmony's hash>` ([FsiHostBuild.fs:87-95](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L87-L95), [L279](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L279)). Two sessions starting together build it once, behind a cross-process file lock ([L253-268](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L253-L268)). Any change to the sources changes the key, so a worker only ever launches a host built from its own embedded sources.
+
+## Mechanism 2: the protocol is a source file both sides compile
+
+`FsiProtocol.fs` is the one definition of every message between the worker and the host. It is compiled into `SageFs.Core` ([SageFs.Core.fsproj:359](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/SageFs.Core.fsproj#L359)) and embedded into the host build ([L96](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/SageFs.Core.fsproj#L96)), so both sides are built from the same text. Its header says "BCL + FSharp.Core ONLY" and that it can't drift ([FsiProtocol.fs:1-19](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiProtocol.fs#L1-L19)):
+
+- the `Request` and `Response` unions are the only definition ([L96-L159](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiProtocol.fs#L96-L159));
+- the codec is generic over them by F# reflection, so wire names are the types' own names and adding a case or field changes encode and decode together;
+- both sides pattern-match with no wildcard, so a new `Response` case is a compile error in the client until it's routed ([FsiHostClient.fs:117-137](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostClient.fs#L117-L137));
+- `checkSupported` walks the types and refuses anything the codec can't represent, at host start ([FsiProtocol.fs:195-216](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiProtocol.fs#L195-L216), [Program.fs:57-71](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/Program.fs#L57-L71): exit code 3).
+
+There is no protocol version number anywhere, and I think that's right for this design. A version handshake solves two binaries built at different times from different sources. Here the host is rebuilt whenever the sources change, so they can't be. `Ready` carries the runtime description and the FSharp.Core version, and the worker only logs them ([FsiProtocol.fs:138](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiProtocol.fs#L138)). If I ever ship a host out of band, this is the thing to revisit.
+
+"BCL + FSharp.Core only" describes what the host references. It says nothing about how much SageFs source is compiled in, and the answer is a fair amount. The host compiles about twenty SageFs source files (hot reload, live testing, coverage probes, the agent, the live-value tree, `Timeouts`, and the rest), listed in [FsiHost.fsproj:30-60](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiHost.fsproj#L30-L60) and mirrored by name in [FsiHostBuild.fs:19-43](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L19-L43). The comment at the top of that fsproj still says "these three files", which stopped being true a while ago. And the protocol uses `System.Text.Json` from the shared framework ([FsiProtocol.fs:24](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiProtocol.fs#L24)), so that library is loaded in the host before your code runs. More on that under "What this does not solve".
+
+## Mechanism 3: a closure that holds almost nothing
+
+The host project has no `PackageReference` at all ([FsiHost.fsproj](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiHost.fsproj) has none). What it references is the SDK's FSharp.Core, FCS and `FSharp.DependencyManager.Nuget` (so `#r "nuget:"` uses the SDK's own), one `FrameworkReference` to `Microsoft.AspNetCore.App` (the user's code runs in this process, and web projects need the shared framework to load for execution, [L21-26](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiHost.fsproj#L21-L26)), and one oddity.
+
+The oddity is Harmony. Hot reload needs it in the host. If I put it there as `0Harmony` and your project references `Lib.Harmony`, you'd collide with me, which is the exact bug this page is about. So `FsiHostBuild` reads SageFs's Harmony, rewrites its assembly identity with Cecil to `SageFs.HostHarmony` (types and namespaces untouched, so `HarmonyLib.*` source compiles unchanged), and builds the host against that ([FsiHostBuild.fs:101-124](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L101-L124), [FsiHost.fsproj:64-66](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiHost.fsproj#L64-L66)). So the README line that says the host links "no Harmony" is slightly off: it links one, under a name nobody else uses.
+
+What is deliberately not in the host: Fantomas, Cecil, FSharp.Data.Adaptive, Ionide, TreeSitter, FSharp.SystemTextJson, Falco, OpenTelemetry. Cecil does its work in the worker, on the shadow copy, before the host ever loads the DLLs ([ActorCreation.fs:126-132](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ActorCreation.fs#L126-L132)). The list is pinned by a test that builds a real host and looks at the folder ([FsiHostBuildTests.fs:167-179](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostBuildTests.fs#L167-L179)).
+
+## Mechanism 4: FSI is fed what MSBuild resolved
+
+The worker doesn't hand FSI a pile of globbed DLLs. It asks MSBuild what the project resolved and passes exactly that: the project outputs (shadow-copied), each project's NuGet DLL paths, extra references, `--lib:` entries, and the `--checknulls`, `--nowarn` and `--langversion` flags the project itself uses ([ProjectLoading.fs:1061-1075](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L1061-L1075), [L1133-1155](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L1133-L1155)). Versions are whatever `dotnet build` chose. A missing DLL fails the session before FSI starts, with the paths checked and what to do ([L1113-1128](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L1113-L1128), message at [L1046-1059](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L1046-L1059)).
+
+There is a manual fallback for when MSBuild evaluation fails, and it has its own guard against stale orphans: same-named DLLs under several TFM folders are deduped by file name keeping the newest, so an old `net10.0` copy can't shadow a fresh build ([ProjectLoading.fs:189-199](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L189-L199)).
+
+Around the process there are a few smaller things:
+
+- the host's own environment is scrubbed of MSBuild's resolution variables (`MSBUILD_EXE_PATH`, `DOTNET_ROOT` and friends) that Ionide pins on the worker, because every child would inherit them and load the wrong SDK ([ProcessEnvironment.fs:1-36](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProcessEnvironment.fs#L1-L36), applied at [FsiHostClient.fs:412-424](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostClient.fs#L412-L424));
+- `AppContext.BaseDirectory` is reset to your project's real build output through `SAGEFS_PROJECT_OUTPUT`, because otherwise your code sees the host's cache folder ([Program.fs:122-133](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/Program.fs#L122-L133), [IsolatedFsiSession.fs:59-67](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L59-L67));
+- the runtime is chosen from your project's `runtimeconfig.json`: if the SDK's runtime is at least what the project needs, change nothing, if a newer one is installed set `DOTNET_ROLL_FORWARD=LatestMajor` (plus prerelease when the project targets a preview), and if none is installed say so ([RuntimeCompat.fs:107-123](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/RuntimeCompat.fs#L107-L123), [RuntimeSelection.fs:44-55](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/RuntimeSelection.fs#L44-L55), [IsolatedFsiSession.fs:543-549](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L543-L549)).
+
+## When your project pins a different FSharp.Core
+
+This is the one place where a project's pin and the host's copy really do meet in the same process, and the one place I did real adaptation work. It's issue #141: a project's `FSharp.Core` has the same version number as the SDK's but is a different build with different members (the case that bit was `use` inside `task { }` calling a `TaskBuilderBase.Using` overload the host's copy lacks). The version strings can't tell you; file size can, so the code compares sizes ([IsolatedFsiSession.fs:126-166](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L126-L166)).
+
+The fix is an IL rewrite, and it's narrow on purpose. It does not swap the host's FSharp.Core, because the host's own FCS depends on that file ([L176-183](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L176-L183)). Instead:
+
+1. `missingMethodKeys` finds the public members the project's FSharp.Core has and the host's lacks ([L277-287](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L277-L287); on the author's box that was 16 members, per the comment).
+2. `rewriteReferenceWith` walks every method body in the project's shadow-copied assembly, nested types included (that's where the `Using` call actually lives, [L377-390](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L377-L390)), and retargets only the call sites of those members to an assembly named `SageFs.ProjectFSharpCore` ([L317-420](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L317-L420)).
+3. The project's own FSharp.Core is copied beside it under that new name ([L492-497](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L492-L497)), and the folder goes on `--lib:` so the runtime can find it. It must not go on `-r:`; the comment records that doing so crashed FCS ([L195-200](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L195-L200)).
+4. It also strips the `FSharpOptimizationCompressedData` resources so FCS can't inline a one-liner back against the ambient FSharp.Core ([L209-221](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L209-L221)).
+
+A blanket rename of the whole reference was tried first and reverted, because it retargeted calls into third-party assemblies like Expecto whose own signatures mention FSharp.Core types, and that moved the same `MissingMethodException` to a different boundary ([L302-316](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L302-L316)).
+
+This is wired. `ActorCreation.createActorImmediate` calls it right after the shadow copy, before anything else reads the files ([ActorCreation.fs:134-149](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ActorCreation.fs#L134-L149)). It runs in the worker, so the host process is never touched.
+
+### What is wired, what isn't
+
+The wired parts are the FSharp.Core rewrite above, the Harmony rename, the runtime roll-forward, `SAGEFS_PROJECT_OUTPUT`, and `HostCoreAdoption`. That last one is for a different problem (a session whose project ships its own build of `SageFs.Core`, which is SageFs working on SageFs; it launches the worker from a private copy of the host folder, [HostCoreAdoption.fs:7-39](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/HostCoreAdoption.fs#L7-L39), called from [WorkerSpawn.fs:59-76](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/WorkerSpawn.fs#L59-L76), and it refuses a version mismatch rather than guess, [HostCoreAdoption.fs:109-117](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/HostCoreAdoption.fs#L109-L117)).
+
+`HostAdaptation` and `VariantSelector` are pure logic that nothing in the product calls. `HostAdaptation` takes the assembly identities in a project's `bin`, and for each name decides: load the project's version (FSharp.Core, FCS, FSharp.SystemTextJson, Adaptive), pick a version-matched variant (Fantomas, Cecil, Harmony), refuse if there's no variant, or no conflict ([HostAdaptation.fs:23-94](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/HostAdaptation.fs#L23-L94), [VariantSelector.fs:18-40](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/VariantSelector.fs#L18-L40)). I grepped the whole tree at `bba42706`: `HostAdaptation` is referenced by its own file, the Core fsproj compile list, and tests. `VariantSelector` is referenced by `HostAdaptation` and tests. No variant assemblies exist anywhere (the only mention of `SageFs.Host.Preprocess.Fantomas6` is a comment in `VariantSelector.fs`). The tests that exist pin the pure logic ([HostAdaptationTests.fs:12-47](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/HostAdaptationTests.fs#L12-L47)) and nothing else.
+
+These came from an earlier design (commits `5e895784`, `a1a8bc0f`, Aug 26) where the worker was going to carry Fantomas, Cecil and Harmony and swap variants to match a project. Then the isolated host landed on Sep 19 (`9c5566d7`) with none of those libraries in it, and the problem the variants solved mostly stopped existing. I never deleted the old code. So `docs/decisions.md` ("the host re-initializes against the project's pins ... swaps in version-matched variants", [L75-85](https://github.com/WillEhrendreich/SageFs/blob/bba42706/docs/decisions.md#L75-L85)) describes a design the code doesn't implement. What the code implements is smaller: a minimal closure, one renamed Harmony, and the FSharp.Core call-site rewrite.
+
+The `HostManifest` is also not what its doc comment says. It's described as the vetted manifest "for the FSI host process directory" ([HostManifest.fs:7-16](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/HostManifest.fs#L7-L16)), but the only caller is the worker's startup check on its own folder ([SageFs.Host/Program.fs:30-39](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Host/Program.fs#L30-L39)), and the manifest is generated by the worker's fsproj ([SageFs.Host.fsproj:46-70](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Host/SageFs.Host.fsproj#L46-L70)). It keeps Falco and OpenTelemetry out of the worker's folder. The FSI host's folder has no startup manifest check. It has the build (nothing but the SDK's files and one Harmony go in) and the tests listed below.
+
+## When the runtime or SDK is missing, or the TFM is wrong
+
+I went looking for silent failures here. Most of these are loud.
+
+| Situation | What happens | Code |
+|---|---|---|
+| `dotnet --version` fails in your folder (global.json pins an SDK you don't have) | `SdkUnavailable`: "Could not determine the .NET SDK for <dir> ... Install the .NET SDK from https://dotnet.microsoft.com/download or fix the SDK version in global.json" | [FsiHostBuild.fs:75-79](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L75-L79) |
+| the host build fails | "Building the FSI host with .NET SDK X failed. Make sure that SDK is installed." plus the build output | [L81-82](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L81-L82) |
+| your project needs a newer runtime than any installed | `RuntimeMissing`: names the major and the download page, session refused | [RuntimeCompat.fs:128-129](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/RuntimeCompat.fs#L128-L129), [IsolatedFsiSession.fs:545](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L545) |
+| the host starts and dies | the start error carries the host's last 40 lines of output | [FsiHostClient.fs:39-47](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostClient.fs#L39-L47), [L396-401](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostClient.fs#L396-L401) |
+| a `net48`-style TFM | refused at session creation, naming the project, the TFM and issue #135 | [ProjectCompatibility.fs:115-127](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectCompatibility.fs#L115-L127), [L213-219](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectCompatibility.fs#L213-L219), [SessionManager.fs:788-799](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/SessionManager.fs#L788-L799) |
+| the project isn't built | "Not all DLLs are found (N missing)" with the exact paths, and `hard_reset_fsi_session rebuild:true` as the way out | [ProjectLoading.fs:1046-1059](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L1046-L1059) |
+
+The start failure from `IsolatedFsiSession` is rethrown with `failwith message` ([AppState.fs:730-739](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/AppState.fs#L730-L739)), so warmup fails with that text. I didn't trace how far that text travels from there to the dashboard or an MCP reply.
+
+Three places are quieter than I'd like:
+
+- The runtime decision `Unknown` (the project has no `runtimeconfig.json` yet, usually because it isn't built) changes nothing and `IsolatedFsiSession` only logs for `RollForward` ([L548-549](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L548-L549)). The "not built" message above usually catches it a step later.
+- `ProjectCompatibility` returns `Indeterminate` for a project it can't read or a TFM it doesn't recognize, and lets it through on purpose ([L162-195](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectCompatibility.fs#L162-L195)).
+- The FSharp.Core rewrite fails open: any exception is caught, a warning is logged, and the session carries on with the host's copy ([IsolatedFsiSession.fs:509-515](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L509-L515)).
+
+One more case isn't a start failure but is worth knowing. The worker evaluates your project with MSBuild in its own process. If your SDK's major is newer than the worker's runtime, SageFs doesn't attempt that, because the Ionide loader installs a process-wide resolver that stays attached after a failed load ([ProjectLoading.fs:554-571](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L554-L571), [L644-661](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L644-L661)). It falls back to parsing the `.fsproj` by hand. The session still evaluates code, but it can't `run_app` or hot reload, and the session health says why ([ProjectLoading.fs:18-52](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L18-L52), [SessionHealth.fs:78-87](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/SessionHealth.fs#L78-L87)). That's the worker having the same disease the host was built to avoid, and I managed it instead of curing it.
+
+## What fails closed, and the tests that say so
+
+Where it fails closed:
+
+- `checkSupported` at host start (exit 3), args-file validation (exit 4 or 2), both before FSI exists ([Program.fs:57-71](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/Program.fs#L57-L71), [FsiProtocol.fs:430-496](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiProtocol.fs#L430-L496)).
+- The host's request queue is bounded at 256 and a full queue answers with a reason instead of growing or blocking ([FsiProtocol.fs:388-428](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/FsiProtocol.fs#L388-L428), [Program.fs:259-262](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.FsiHost/Program.fs#L259-L262)).
+- A call on a dead host never hangs: when the connection closes every pending call completes as lost, and so does every later one ([FsiHostClient.fs:1-7](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostClient.fs#L1-L7), [L91-94](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostClient.fs#L91-L94)).
+- The SDK is pinned with no roll-forward, so a host is never built by a different SDK than the one that was asked for ([FsiHostBuild.fs:97-99](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L97-L99)).
+- Adopting a project's `SageFs.Core` refuses a version mismatch ([HostCoreAdoption.fs:109-117](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/HostCoreAdoption.fs#L109-L117)).
+
+Where it fails open on purpose: the three quiet cases in the section above.
+
+The tests, by what they pin. The ones marked host tier are in `Integration.hostList` and only run under `--integration-host`, not in the default suite ([TestInfrastructure.fs:233-234](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/TestInfrastructure.fs#L233-L234)).
+
+- Closure and identity. `the host closure contains nothing SageFs-owned` and `a built host directory holds the agent's Harmony under its own name, and no 0Harmony and no SageFs assembly` (host tier, [FsiHostBuildTests.fs:137-146](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostBuildTests.fs#L137-L146), [L167-179](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostBuildTests.fs#L167-L179)); `the host process loads no SageFs assembly and no 0Harmony` and `a project's own Lib.Harmony loads beside the agent's, and the agent still works` (host tier, [FsiSessionContractTests.fs:277-304](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiSessionContractTests.fs#L277-L304)); `renameAssembly re-identifies the assembly and leaves its types alone` and `the host's Harmony is never called 0Harmony` (default suite, [FsiHostBuildTests.fs:100-110](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostBuildTests.fs#L100-L110)).
+- Per-SDK build. `the host builds with every installed SDK`, `builds the host once, then reuses it from the cache` (host tier, [L122-165](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostBuildTests.fs#L122-L165)); the `cacheKey` and `globalJson` lists (default suite, [L36-62](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostBuildTests.fs#L36-L62)); `FSI host SDK root` for repo-local SDKs ([FsiHostSdkRootTests.fs:28-62](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostSdkRootTests.fs#L28-L62)).
+- Protocol. `the embedded protocol is the file the tests were built from` ([FsiHostBuildTests.fs:73-78](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostBuildTests.fs#L73-L78)), and the `FsiProtocol` list: `checkSupported`, round trips for any request and any response generated from the types, adversarial text, one-line framing, "decoding arbitrary text never throws" ([FsiProtocolTests.fs:102-163](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiProtocolTests.fs#L102-L163)).
+- Host behavior over the wire (host tier). `a killed host completes the running eval with HostLost instead of hanging`, `cancelling interrupts the running eval and the session stays usable`, `Ready reports the SDK's own runtime and FSharp.Core` ([FsiHostClientTests.fs:92-170](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostClientTests.fs#L92-L170)); the queue and args-file tests ([FsiHostLimitsTests.fs:22-120](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/FsiHostLimitsTests.fs#L22-L120)).
+- FSharp.Core. `ProjectFSharpCoreIdentity.rewriteReferenceWith` retargets only the missing members and finds the call inside a nested type ([IsolatedFsiSessionTests.fs:123-247](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/IsolatedFsiSessionTests.fs#L123-L247)), and the `#141/#142 outcome gate` runs a real session against a real fixture project where `task { use ... }` has to compute the right value (host tier, [DogfoodReplTests.fs:311-365](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/DogfoodReplTests.fs#L311-L365)).
+- Runtime and TFM. The `RuntimeCompat` decide and describe cases ([RuntimeCompatTests.fs:44-92](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/RuntimeCompatTests.fs#L44-L92)) and the `ProjectCompatibility` list.
+- The worker's own folder. `host dir must not contain Falco.dll`, `...OpenTelemetry assemblies`, `manifest verification is fail-closed on an unexpected file` ([HostManifestTests.fs:38-88](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/HostManifestTests.fs#L38-L88)).
+
+## What this does not solve
+
+A few things plain FSI can't do for you, and this doesn't either. Some of this is reading the code, not running it, and I've said which.
+
+- Inside the host, resolution is still by name in one default context. If your own project graph ends up with two versions of one library on the FSI command line, you're back to first one wins. The `-r:` list is deduped by path only ([ProjectLoading.fs:1070-1075](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L1070-L1075)), so a solution session whose projects resolve different versions of the same package passes both paths. A single project doesn't hit this, since MSBuild picks one. I haven't run a solution session to see what happens.
+- The host's resolver does the same thing on purpose: it returns an already-loaded assembly of that simple name regardless of version, and otherwise picks the highest version it can find on its search paths ([HotReloadCore.fs:1025-1041](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/Middleware/HotReloadCore.fs#L1025-L1041), [HostAgent.fs:127-136](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/HostAgent.fs#L127-L136)).
+- FSharp.Core is narrower than "your pin wins". Only call sites in your project's own assemblies, and only members the host's build lacks, are redirected ([IsolatedFsiSession.fs:289-300](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L289-L300), [L472-476](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L472-L476)). Code you type at the prompt always resolves against the host's FSharp.Core; one of the tests says so out loud ([DogfoodReplTests.fs:346-365](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Tests/DogfoodReplTests.fs#L346-L365)). From reading `fixShadowCopiedFSharpCoreReferences` it only rewrites the projects' own `TargetPath`, so a NuGet package built against a newer FSharp.Core than the SDK's, calling a member the host lacks, isn't covered. I haven't tried one.
+- `System.Text.Json` is in the host because the protocol uses it. A project that pins a newer System.Text.Json than the shared framework's falls into the same name collision this page opened with. Unverified, and the claim in `decisions.md` that the host handles a System.Text.Json pin has no code behind it that I could find.
+- Your project is its own FCS. A project that references `FSharp.Compiler.Service` (or is the compiler) is subject to the host's FCS, which carries the same simple name. A session on a dotnet/fsharp checkout reaches Ready and evaluates (that's what `c0083a78` fixed), but I found no test that loads a project-built FCS beside the host's, and no rename or rewrite for it like Harmony and FSharp.Core get. I'd treat that as open.
+- The runtime only goes up. The host runs on the SDK's runtime or a newer installed one, never an older one, so a project targeting `net8.0` on a machine with a 10 SDK runs on the 10 runtime ([RuntimeCompat.fs:107-114](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/RuntimeCompat.fs#L107-L114)). If you need the older runtime, pin the SDK with `global.json`.
+- .NET Framework projects aren't hosted. It needs a second host, tracked in [#135](https://github.com/WillEhrendreich/SageFs/issues/135).
+- The worker's MSBuild evaluation, covered above.
+
+### What it costs
+
+Each session carries a worker process and a host process, where plain FSI is one. I did not measure resident memory for this page. The only memory figure in the docs ("Each FSI worker process consumes 200-500MB", [warmup-design-next.md:136](https://github.com/WillEhrendreich/SageFs/blob/bba42706/docs/warmup-design-next.md#L136)) predates the split, so don't quote it.
+
+What I did measure, on my own Linux box, from `~/.SageFs/hosts` (not linkable, and a loaded dev machine):
+
+- a cold host build took 7 to 11 seconds in the 12 most recent cache folders (the gap between the sources being written and the `.built` stamp). The code comment says "a couple of seconds" ([FsiHostBuild.fs:5-6](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/FsiHostBuild.fs#L5-L6)); it isn't. Once per SDK per host-source change, so once per release per SDK, and the lock makes concurrent starters wait it out for up to 5 minutes ([Timeouts.fs:221-229](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/Timeouts.fs#L221-L229));
+- each cached host is 51 to 60 MB on disk, and I have 55 of them, 3.3 GB. I searched `SageFs` and `SageFs.Core` for anything that prunes the folder and found only code that creates it. I count that as a gap in the design;
+- the host startup handshake is allowed up to 120 seconds before it's declared failed ([Timeouts.fs:50-54](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/Timeouts.fs#L50-L54)). I have no figure for how long it normally takes.
+
+`HostCoreAdoption` has its own cost for self-hosting sessions, a private copy of the host folder per session. The code comment says 680 to 835 MB of temp each ([WorkerSpawn.fs:77-79](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/WorkerSpawn.fs#L77-L79)) and a doc says 94 MB ([live-testing-baseline-flake.md:76-78](https://github.com/WillEhrendreich/SageFs/blob/bba42706/docs/live-testing-baseline-flake.md#L76-L78)). Those disagree and I didn't measure which is right.
+
+On platforms: I found nothing in the isolation path that is Linux-only or Windows-only apart from naming (`dotnet.exe` versus `dotnet` for the muxer, [IsolatedFsiSession.fs:34-42](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L34-L42)) and the manual fallback scanning for the Windows Desktop shared framework ([ProjectLoading.fs:230-234](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/ProjectLoading.fs#L230-L234)). I ran nothing on Windows or macOS for this page.
+
+## If you want to poke at it
+
+See which host a session got. The worker logs one line when the host comes up, with the runtime, the FSharp.Core version and the host's pid ([IsolatedFsiSession.fs:583](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L583)), into `<data dir>/workers/<sessionId>.log` ([WorkerLogFile.fs:160-178](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/WorkerLogFile.fs#L160-L178)):
+
+```
+grep -h "Isolated FSI host started" ~/.SageFs/workers/*.log
+# 2026-10-01T03:41:20Z [INF]   Isolated FSI host started: .NET 11.0.0-rc.1.26425.128, FSharp.Core 11.0.0.0 (pid 3132598)
+```
+
+That output is from my machine; the format is the code's. Then:
+
+```
+ps -o pid,args -p <pid>                 # dotnet .../hosts/<key>/bin/FsiHost.dll --args-file ...
+ls ~/.SageFs/hosts                      # one folder per SDK + host sources: sdk-<version>-<hash>
+cat ~/.SageFs/hosts/<key>/src/global.json
+ls ~/.SageFs/hosts/<key>/bin            # the whole closure
+```
+
+`SAGEFS_HOST_CACHE_DIR` moves the cache, and `SAGEFS_DATA_DIR` moves everything else ([IsolatedFsiSession.fs:44-57](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/IsolatedFsiSession.fs#L44-L57)).
+
+Run the tests. The real check is an unfiltered run, because a filter that matches nothing exits 0 (this is in `AGENTS.md`, learned the hard way):
+
+```
+dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --summary                       # default suite: protocol, cacheKey, rewrite, runtime, TFM
+dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --integration-host --summary    # host tier: builds a real host, runs real sessions
+```
+
+For the inner loop you can narrow with `--filter-test-list "FsiHostBuild"` (or `"FsiProtocol"`, `"IsolatedFsiSession"`, `"RuntimeCompat"`), and read the `TRUST` line at the end to see whether it was a narrowed run.
+
+The most direct experiment: create a session on a project, run `System.AppDomain.CurrentDomain.GetAssemblies() |> Array.map (fun a -> a.GetName().Name)` in it, and look for anything starting with `SageFs`. You should see `SageFs.HostHarmony` and nothing else; that's what the host-tier test asserts.

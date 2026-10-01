@@ -494,8 +494,8 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 
 - `SageFs.Core/`, the shared engine and runtime logic: session management, MCP/session operations, live testing, persistence, and shared rendering primitives
 - `SageFs/`, the CLI entrypoint, daemon host, MCP server, dashboard, and worker HTTP transport
-- `SageFs.Host/`, the worker process the daemon spawns per session: it owns the FSI session, the Harmony detours, and the worker HTTP transport the daemon talks to
-- `SageFs.FsiHost/`, the isolated FSI host, built and launched per session by `SageFs.Core/IsolatedFsiSession.fs`. Sessions run in it by default; it deliberately links no SageFs assembly and no Harmony, so a project's own dependency versions never collide with the daemon's
+- `SageFs.Host/`, the worker process the daemon spawns per session: it loads your project with MSBuild, shadow-copies and instruments the outputs for coverage, and runs the worker HTTP transport the daemon talks to. It never runs your code
+- `SageFs.FsiHost/`, the isolated FSI host, built and launched per session by `SageFs.Core/IsolatedFsiSession.fs`. Sessions run in it by default. It holds the FSI session and your running code, the hot-reload detours and the live-testing agent. Its dependency closure is deliberately tiny (the SDK's own FSharp.Core and F# compiler, a renamed copy of Harmony, and about twenty of our own source files compiled in), and it references none of SageFs's assemblies, so a project's own dependency versions never collide with the daemon's. [How that works](docs/how-isolation-works.md)
 - `SageFs.Simulation/`, deterministic simulation (DST) models that fold the real cores: file-reload routing, worker lifecycle, supervision, the manifest
 - `SageFs.Tests/`, the Expecto suite: unit tests, property tests, snapshot tests, the DST drivers, and every real-daemon integration and browser journey
 - `sagefs-vscode/`, VS Code extension (F# via Fable → JavaScript)
