@@ -8,7 +8,6 @@ open Expecto.Flip
 open SageFs
 open SageFs.Server.DaemonMode
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private sid =
   match WorkerProtocol.SessionId.validate "aa000001" with

@@ -8,7 +8,6 @@ open SageFs.Utils
 open System.Collections.Concurrent
 open System.Collections.Generic
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Await a condition with a hard ceiling, without sleep-polling.
 /// The ElmLoop drain runs on a dedicated thread, so the async yield never

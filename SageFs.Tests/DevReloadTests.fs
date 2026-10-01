@@ -18,7 +18,6 @@ open Microsoft.Extensions.Hosting
 open SageFs.DevReload
 open SageFs
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ============================================================================
 // Property-based tests (FsCheck) — intent-surfacing

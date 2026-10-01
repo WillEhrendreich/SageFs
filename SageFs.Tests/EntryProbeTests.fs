@@ -11,7 +11,6 @@ open Expecto
 open Expecto.Flip
 open SageFs.Middleware.EntryProbes
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 type ProbeTargets =
   [<MethodImpl(MethodImplOptions.NoInlining)>]

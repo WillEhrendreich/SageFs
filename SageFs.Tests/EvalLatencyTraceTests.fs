@@ -25,7 +25,6 @@ open SageFs.Server
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 [<Tests>]
 let evalLatencyTraceTests = testList "EvalLatencyTrace" [

@@ -11,7 +11,6 @@ open Microsoft.Playwright
 open SageFs.Server.DashboardTypes
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Helpers for Playwright assertions inside Expecto.
 module PlaywrightExpect =

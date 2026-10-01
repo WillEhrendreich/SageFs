@@ -10,7 +10,6 @@ open SageFs.Features.Diagnostics
 open SageFs.Features.LiveTesting
 open SageFs.Tests.SharedGenerators
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Helper to get output buffer for a session from the model.
 let outputFor sid (model: SageFsModel) = model.RecentOutput.GetBuffer(sid)

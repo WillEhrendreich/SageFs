@@ -9,7 +9,6 @@ open Expecto.Flip
 open SageFs.SseWriter
 open SageFs.Features.LiveTesting
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 [<Tests>]
 let sseTests = testList "SSE Writer" [

@@ -19,7 +19,6 @@ open SageFs.SessionManager
 open SageFs.WorkerProtocol
 open SageFs.ProjectLoading
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 type private Harness = {
   Mailbox: MailboxProcessor<SessionCommand>

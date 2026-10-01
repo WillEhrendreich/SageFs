@@ -9,7 +9,6 @@ open SageFs.Features.LiveTesting
 open SageFs.Features.LiveTestActivity
 open SageFs.Tests.LiveTestingTestHelpers
 
-module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
 
 let private sid = "aa000001"
 let private otherSid = "bb000002"

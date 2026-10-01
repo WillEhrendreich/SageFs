@@ -6,7 +6,6 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features.LiveTesting
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Helper to create a TestStatusEntry
 let makeEntry (i: int) (status: TestRunStatus) : TestStatusEntry =

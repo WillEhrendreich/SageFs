@@ -8,7 +8,6 @@ open Expecto
 open Expecto.Flip
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private sageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 

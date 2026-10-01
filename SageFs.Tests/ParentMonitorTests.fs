@@ -7,7 +7,6 @@ open Expecto
 open Expecto.Flip
 open SageFs.Server.WorkerMain
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Tests for the worker parent-death watchdog (issue #126).
 /// Workers self-exit when their daemon process dies, so hard kills

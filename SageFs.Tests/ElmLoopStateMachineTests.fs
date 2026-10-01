@@ -7,7 +7,6 @@ open System.Threading
 open System.Threading.Tasks
 open SageFs
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 type TestModel = { Count: int; Log: string list }
 type TestMsg = Increment | Decrement | AddLog of string | Reset | TriggerEffect of string

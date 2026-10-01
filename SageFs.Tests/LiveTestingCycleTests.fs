@@ -9,7 +9,6 @@ open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 open SageFs.Measures
 
-module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
 
 // --- Stage timings the cycle-timing cases feed in ---
 //

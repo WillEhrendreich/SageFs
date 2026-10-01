@@ -7,6 +7,7 @@
 /// returns any other wrong value is killed too.
 module SessionOperationsMutationTests
 
+open SageFs.Tests
 open System
 open Expecto
 open Expecto.Flip
@@ -15,7 +16,6 @@ open SageFs.WorkerProtocol
 open SageFs.SessionOperations
 open SageFs.Tests.SharedGenerators
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo = {
   Id = id

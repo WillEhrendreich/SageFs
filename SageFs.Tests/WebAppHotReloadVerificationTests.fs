@@ -13,7 +13,6 @@ open SageFs
 open SageFs.WorkerProtocol
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ============================================================================
 // Deterministic end-to-end verification of the web-app hot-reload path:

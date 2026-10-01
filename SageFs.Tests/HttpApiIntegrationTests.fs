@@ -15,7 +15,6 @@ open Expecto.Flip
 open SageFs.Features
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ─── Shared Helpers ───────────────────────────────────────────────
 

@@ -9,7 +9,6 @@ open Microsoft.Playwright
 open SageFs.Tests.DashboardBrowserTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// The hot-reload panel's Watch All button, found by the accessibility rule the
 /// markup actually follows rather than an exact-name match it never promised.

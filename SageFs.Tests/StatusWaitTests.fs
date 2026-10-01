@@ -14,7 +14,6 @@ open SageFs
 open SageFs.McpTools
 open SageFs.WorkerProtocol
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// A session whose registry status the test controls, with a fake AwaitReady
 /// that records each call and lets the test decide when it answers.

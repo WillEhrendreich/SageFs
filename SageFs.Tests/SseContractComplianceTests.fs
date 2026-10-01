@@ -18,7 +18,6 @@ open SageFs.Features.FsiOutputParser
 open SageFs.Features.EvalProvenance
 open SageFs.Features.Ghostwriter
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ── JSON options matching daemon configuration ──
 

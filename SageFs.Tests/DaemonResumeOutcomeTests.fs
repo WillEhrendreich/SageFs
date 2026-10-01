@@ -72,10 +72,10 @@ module Infra = SageFs.Tests.TestInfrastructure
 /// How long to wait for the daemon's periodic save to make the session
 /// durable. The timer is wall-clock (60s from daemon start) and does not get
 /// faster on a faster runner, so the ceiling is a generous multiple of it.
-let private manifestDurabilityCeiling = Infra.TestTimeouts.daemonResumeCeiling
+let private manifestDurabilityCeiling = SageFs.Tests.TestTimeouts.daemonResumeCeiling
 
 /// How long the second daemon may take to rebuild the session.
-let private resumeCeiling = Infra.TestTimeouts.daemonResumeCeiling
+let private resumeCeiling = SageFs.Tests.TestTimeouts.daemonResumeCeiling
 
 /// Daemon 1's manifest-save cadence for this gate: small enough that the real
 /// periodic save fires in seconds rather than the production 60s default, so
@@ -118,7 +118,7 @@ let private startDaemonOnDataDir (port: int) (dataDir: string) (envOverrides: (s
   let proc = Process.Start(psi)
   let client = new HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)
-  client.Timeout <- Infra.TestTimeouts.httpDaemon
+  client.Timeout <- SageFs.Tests.TestTimeouts.httpDaemon
 
   let! healthy =
     Infra.waitForAsync 90_000 (fun () -> task {

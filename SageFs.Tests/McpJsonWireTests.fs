@@ -18,7 +18,6 @@ open SageFs
 open SageFs.McpTools
 open SageFs.WorkerProtocol
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private lf (text: string) : string = text.Replace("\r\n", "\n")
 

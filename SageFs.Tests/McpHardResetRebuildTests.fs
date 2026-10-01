@@ -7,7 +7,6 @@ open Expecto.Flip
 open SageFs
 open SageFs.McpTools
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// A hard reset against fake session ops that model the real registry
 /// read-your-own-write: UpdateSessionStatus posts to the SessionManager, whose

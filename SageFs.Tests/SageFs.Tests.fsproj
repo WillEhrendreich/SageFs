@@ -9,6 +9,7 @@
 
     <ItemGroup>
         <Compile Include="LiveTestingBudgets.fs" />
+        <Compile Include="TestTimeouts.fs" />
         <!-- Before TestInfrastructure: the trust ledger names a tier by its framework. -->
         <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
         <Compile Include="TestInfrastructure.fs" />

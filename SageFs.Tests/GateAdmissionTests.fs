@@ -16,7 +16,6 @@ open SageFs.McpTools
 open SageFs.Server.McpTools
 open SageFs.WorkerProtocol
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private workingDirectory = "/work/gate-admission"
 

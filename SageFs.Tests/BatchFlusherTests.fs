@@ -5,7 +5,6 @@ open Expecto.Flip
 open SageFs
 open System.Threading
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 [<Tests>]
 let batchFlusherTests = testList "BatchFlusher never loses items and respects capacity" [

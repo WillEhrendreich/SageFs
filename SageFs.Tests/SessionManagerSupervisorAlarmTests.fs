@@ -18,7 +18,6 @@ open SageFs.WorkerProtocol
 // health on the snapshot. The timings are real but tiny, and every wait is
 // on an event, never a sleep.
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private patience = TestTimeouts.patience
 

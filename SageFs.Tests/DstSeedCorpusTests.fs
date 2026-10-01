@@ -10,7 +10,6 @@ open SageFs.Simulation.Runner
 open SageFs.Simulation.Invariants
 open SageFs.Simulation.SeedCorpus
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Brief B4: revision-stamped scenario identity + a saved-seed regression
 /// corpus. A `RevisionStamp` identifies a scenario by its CONTENT

@@ -17,7 +17,6 @@ open SageFs
 open SageFs.AppRun
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private freePort () =
   use l = new TcpListener(IPAddress.Loopback, 0)

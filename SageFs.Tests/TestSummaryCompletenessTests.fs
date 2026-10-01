@@ -23,7 +23,6 @@ open Expecto
 open Expecto.Flip
 open SageFs.Features.LiveTesting
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private activation = LiveTestingActivation.Active
 

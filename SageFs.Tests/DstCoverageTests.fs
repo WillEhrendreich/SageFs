@@ -9,7 +9,6 @@ open SageFs.Simulation.Scenario
 open SageFs.Simulation.Invariants
 open SageFs.Simulation.Coverage
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Coverage-matrix tests (Brief B3): turns "the suite is green" into "the
 /// suite is green AND it actually exercised every branch it claims to."

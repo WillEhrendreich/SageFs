@@ -7,7 +7,6 @@ open System.Net.Http
 open System.Net.Sockets
 open Expecto
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Run the [Integration] Dashboard browser journeys end to end, owning the
 /// daemon lifecycle in-process (no external workflow / runner script).

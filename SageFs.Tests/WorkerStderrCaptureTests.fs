@@ -9,7 +9,6 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// A child that writes `lines` numbered lines to stderr and then exits without
 /// ever printing WORKER_PORT=, which is what a worker that crashes in startup

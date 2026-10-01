@@ -34,7 +34,6 @@ open Expecto.Flip
 
 module Harness = SageFs.Tests.HttpApiIntegrationTests
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ─── One daemon, one session, two independent clients ───────────────────────
 

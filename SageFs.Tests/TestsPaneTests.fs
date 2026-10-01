@@ -5,7 +5,6 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features.LiveTesting
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ── Helpers ───────────────────────────────────────────────────────
 

@@ -9,7 +9,6 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ─── HTTP wiring tests ─────────────────────────────────────────────
 // The worker HTTP server (SageFs.Host, the F#-executing surface) must be

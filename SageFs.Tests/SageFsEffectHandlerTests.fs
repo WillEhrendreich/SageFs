@@ -1,4 +1,4 @@
-﻿module SageFs.Tests.SageFsEffectHandlerTests
+module SageFs.Tests.SageFsEffectHandlerTests
 
 open System
 open System.Threading.Tasks
@@ -11,7 +11,6 @@ open SageFs.WorkerProtocol
 open SageFs.Features.Diagnostics
 open SageFs.Tests.SharedGenerators
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 module TestDeps =
 

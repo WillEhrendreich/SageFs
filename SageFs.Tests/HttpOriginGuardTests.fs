@@ -15,7 +15,6 @@ open Microsoft.AspNetCore.Hosting
 open Microsoft.AspNetCore.Http
 open SageFs.Server
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // The daemon's listeners: MCP and dashboard.
 let private mcpPort = 37749

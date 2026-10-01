@@ -21,7 +21,6 @@ open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 
-module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
 
 /// How long the tree-sitter stage took in the second pending rebuild of the scope case. It is
 /// not the first rebuild's value, so a mix-up between the two would show. Never read back.

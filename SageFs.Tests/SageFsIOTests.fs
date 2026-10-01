@@ -7,12 +7,12 @@
 /// algebra instead of a raw exception or a bare bool.
 module SageFsIOTests
 
+open SageFs.Tests
 open System
 open Expecto
 open Expecto.Flip
 open SageFs
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ── Fixtures ────────────────────────────────────────────────────────────
 

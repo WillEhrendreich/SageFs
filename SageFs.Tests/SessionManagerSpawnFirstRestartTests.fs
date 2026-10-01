@@ -9,7 +9,6 @@ open SageFs.SessionManager
 open SageFs.SessionBuild
 open SageFs.WorkerProtocol
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Shared verb log so ordering tests can assert spawn-before-stop.
 type private Verb =

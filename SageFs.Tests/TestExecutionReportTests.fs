@@ -6,7 +6,6 @@ open Expecto.Flip
 open FsCheck
 open SageFs.Features.LiveTesting
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private resultId (name: string) = TestId.create name TestFramework.Expecto
 

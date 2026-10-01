@@ -108,7 +108,7 @@ let private jsonBody (payload: obj) (p: Probe) =
 /// BaseAddress, and these probes must control that header.
 let private sendTo (port: int) (p: Probe) = task {
   use client = new HttpClient()
-  client.Timeout <- Infra.TestTimeouts.patience
+  client.Timeout <- SageFs.Tests.TestTimeouts.patience
   use request = new HttpRequestMessage(p.Method, Uri(sprintf "http://127.0.0.1:%d%s" port p.Path))
   match p.Body with
   | Some body ->

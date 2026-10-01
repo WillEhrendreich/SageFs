@@ -7,7 +7,6 @@ open FsCheck
 open SageFs
 open SageFs.Features.LiveTesting
 
-module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
 
 // --- Helpers ---
 

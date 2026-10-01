@@ -8,7 +8,6 @@ open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 
-module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
 
 /// A passing result's duration with a fractional part, so the tooltip case can check that the
 /// whole-millisecond part ("12") is rendered.

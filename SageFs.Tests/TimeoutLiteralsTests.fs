@@ -2,7 +2,9 @@
 /// `Timeouts` (SageFs.Core/Timeouts.fs) holds the product's, `TestTimeouts`
 /// (SageFs.Tests/TestInfrastructure.fs) holds the ones a test picks on purpose, and each says
 /// what the wait is for and why that long. This pins where an inline literal is still left:
-/// `TimeSpan.From...` with a number, `Task.Delay n` and `Thread.Sleep n`. Each file has a budget,
+/// `TimeSpan.From...` with a number, `Task.Delay n`, `Thread.Sleep n`, `Async.Sleep n`, `.AddSeconds n` and
+/// its kin, `WaitForExit n`, `CancelAfter n`, a `...Ms = n` or `timeout = n` binding, and a bare digit-group
+/// number such as `60_000` (a millisecond count wearing no unit). Each file has a budget,
 /// the budgets only go DOWN, a file that is not listed has a budget of zero, and a file under its
 /// budget is stale. When the table is empty there is nowhere a magic duration can hide.
 module SageFs.Tests.TimeoutLiteralsTests
@@ -15,55 +17,220 @@ open Expecto.Flip
 let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
 
 let private literalPattern =
-  Regex(@"TimeSpan\.From(Seconds|Milliseconds|Minutes|Hours|Days)\s*\(?\s*[0-9]|Task\.Delay\s*\(?\s*[0-9]|Thread\.Sleep\s*\(?\s*[0-9]", RegexOptions.Compiled)
+  Regex(@"TimeSpan\.From(Seconds|Milliseconds|Minutes|Hours|Days)\s*\(?\s*[0-9]|Task\.Delay\s*\(?\s*[0-9]|Thread\.Sleep\s*\(?\s*[0-9]|Async\.Sleep\s*\(?\s*[0-9]|\.Add(Milliseconds|Seconds|Minutes|Hours|Days)\s*\(\s*[0-9]|WaitForExit\s*\(\s*[0-9]|CancelAfter\s*\(\s*[0-9]|[A-Za-z](Ms|Millis|Seconds|Secs)\s*=\s*[0-9]|[Tt]imeout\s*=\s*[0-9]|\b[0-9]{1,3}(_000)+L?\b", RegexOptions.Compiled)
 
 /// The files allowed to hold durations: the product's, and the ones a test picks on purpose.
-let private central = Set.ofList [ "SageFs.Core/Timeouts.fs"; "SageFs.Tests/TestInfrastructure.fs"; "SageFs.Tests/LiveTestingBudgets.fs" ]
+let private central = Set.ofList [ "SageFs.Core/Timeouts.fs"; "SageFs.Tests/TestTimeouts.fs"; "SageFs.Tests/LiveTestingBudgets.fs" ]
 
 /// What each file may still spell out itself. Ratchet down, never up.
 let private budgets : (string * int) list =
-  [ "SageFs.Tests/AffordancesMutationTests.fs", 6
-    "SageFs.Tests/AffordancesPropertyTests.fs", 1
+  [ "SageFs.Core/AppState.fs", 2
+    "SageFs.Core/ConfigHost.fs", 1
+    "SageFs.Core/DevReload.fs", 9
+    "SageFs.Core/Features/EvalResultSummary.fs", 1
+    "SageFs.Core/Features/EvalStore.fs", 1
+    "SageFs.Core/Features/FeatureHooks.fs", 1
+    "SageFs.Core/Features/FsiOutputParser.fs", 1
+    "SageFs.Core/Features/GcDumpCapture.fs", 1
+    "SageFs.Core/Features/ImpactForecast.fs", 2
+    "SageFs.Core/Features/LiveTestingTypes.fs", 4
+    "SageFs.Core/Features/LiveValueTree.fs", 1
+    "SageFs.Core/Features/ManifestPersistence.fs", 1
+    "SageFs.Core/Features/ReloadPlanning.fs", 3
+    "SageFs.Core/Features/TestCachePersistence.fs", 1
+    "SageFs.Core/Features/TestTreemap.fs", 2
+    "SageFs.Core/Features/Tweak/LiteralEdit.fs", 1
+    "SageFs.Core/Features/Tweak/TweakLog.fs", 1
+    "SageFs.Core/FileWatcher.fs", 2
+    "SageFs.Core/FsiHostBuild.fs", 3
+    "SageFs.Core/IsolatedFsiSession.fs", 1
+    "SageFs.Core/McpToolAudit.fs", 2
+    "SageFs.Core/OwnerMonitor.fs", 1
+    "SageFs.Core/ProjectLoading.fs", 1
+    "SageFs.Core/RetryPolicy.fs", 1
+    "SageFs.Core/SafeDirectoryWalk.fs", 1
+    "SageFs.Core/SageFsConfig.fs", 1
+    "SageFs.Core/SessionManager.fs", 3
+    "SageFs.Core/WarmUp.fs", 1
+    "SageFs.Core/WarmupContext.fs", 4
+    "SageFs.Core/WorkerHealthProbe.fs", 2
+    "SageFs.Core/WorkerPostReady.fs", 1
+    "SageFs.Host/AppRunner.fs", 2
+    "SageFs.Tests/AffordancesMutationTests.fs", 6
+    "SageFs.Tests/AffordancesPropertyTests.fs", 2
     "SageFs.Tests/AgentActivityTrackerTests.fs", 3
-    "SageFs.Tests/BinaryFormatTests.fs", 4
+    "SageFs.Tests/AppRunOrchestrationTests.fs", 3
+    "SageFs.Tests/BatchFlusherPropertyTests.fs", 2
+    "SageFs.Tests/BatchFlusherTests.fs", 1
+    "SageFs.Tests/BinaryFormatTests.fs", 34
+    "SageFs.Tests/CohortDogfoodIntegrationTests.fs", 1
+    "SageFs.Tests/CohortFastForwardFailedTests.fs", 1
+    "SageFs.Tests/CohortGitTests.fs", 1
+    "SageFs.Tests/CohortLandingGitAcceptanceTests.fs", 1
+    "SageFs.Tests/CohortLandingLoopTests.fs", 1
+    "SageFs.Tests/CohortLandingVerifyTests.fs", 2
+    "SageFs.Tests/CohortLedgerExportTests.fs", 1
+    "SageFs.Tests/CohortLedgerSqliteTests.fs", 1
+    "SageFs.Tests/CohortMatrixRenderTests.fs", 1
+    "SageFs.Tests/CohortPanelTests.fs", 3
+    "SageFs.Tests/CohortProjectEquivalenceTests.fs", 1
     "SageFs.Tests/CohortReaperTests.fs", 1
     "SageFs.Tests/CohortRetentionTests.fs", 3
     "SageFs.Tests/CoverageIntelTests.fs", 1
     "SageFs.Tests/CrossCheckoutOverlapTests.fs", 1
     "SageFs.Tests/CustomPortOwnershipTests.fs", 1
-    "SageFs.Tests/DaemonHealthTests.fs", 11
+    "SageFs.Tests/DaemonHealthTests.fs", 13
+    "SageFs.Tests/DaemonIdleRssTests.fs", 1
+    "SageFs.Tests/DaemonIntegrationTests.fs", 8
     "SageFs.Tests/DaemonOwnershipTests.fs", 21
+    "SageFs.Tests/DaemonResumeOutcomeTests.fs", 2
+    "SageFs.Tests/DaemonRssReturnsToBaselineTests.fs", 2
+    "SageFs.Tests/DashboardBrowserRunner.fs", 12
+    "SageFs.Tests/DashboardBrowserTests.fs", 88
+    "SageFs.Tests/DashboardDiagnosticsTests.fs", 6
+    "SageFs.Tests/DashboardDisconnectIndicatorBrowserTests.fs", 12
     "SageFs.Tests/DashboardFailureNarrativesTests.fs", 4
+    "SageFs.Tests/DashboardFilmstripTests.fs", 6
     "SageFs.Tests/DashboardHealthTests.fs", 5
-    "SageFs.Tests/DiagnosticianTests.fs", 1
-    "SageFs.Tests/EventExhaustivenessTests.fs", 2
+    "SageFs.Tests/DashboardHealthVerdictRenderingTests.fs", 11
+    "SageFs.Tests/DashboardPanelVisibilityTests.fs", 3
+    "SageFs.Tests/DashboardParsingTests.fs", 1
+    "SageFs.Tests/DashboardSnapshotTests.fs", 28
+    "SageFs.Tests/DashboardSparklineTests.fs", 25
+    "SageFs.Tests/DashboardTestIdTests.fs", 3
+    "SageFs.Tests/DevReloadTests.fs", 3
+    "SageFs.Tests/DiagnosticianTests.fs", 2
+    "SageFs.Tests/DogfoodReplTests.fs", 2
+    "SageFs.Tests/DstOracleTests.fs", 1
+    "SageFs.Tests/ElmLoopResilienceTests.fs", 2
+    "SageFs.Tests/ElmLoopStateMachineTests.fs", 2
+    "SageFs.Tests/EvalLatencyTraceTests.fs", 6
+    "SageFs.Tests/EvalResultSummaryTests.fs", 6
+    "SageFs.Tests/EvalStoreTests.fs", 8
+    "SageFs.Tests/EvalTimelineTests.fs", 1
+    "SageFs.Tests/EventExhaustivenessTests.fs", 3
+    "SageFs.Tests/FeatureHookTests.fs", 1
+    "SageFs.Tests/FileWatcherTests.fs", 1
     "SageFs.Tests/FlakyClassificationPropertyTests.fs", 1
     "SageFs.Tests/FlakyClassificationTests.fs", 4
-    "SageFs.Tests/GcDumpCaptureTests.fs", 2
+    "SageFs.Tests/FrictionClassificationTests.fs", 3
+    "SageFs.Tests/FsiHostClientTests.fs", 2
+    "SageFs.Tests/FsiOutputParserTests.fs", 8
+    "SageFs.Tests/FsiSessionContractTests.fs", 1
+    "SageFs.Tests/GateAdmissionTests.fs", 3
+    "SageFs.Tests/GcDumpCaptureTests.fs", 9
+    "SageFs.Tests/HealthAnomalyTests.fs", 5
     "SageFs.Tests/HealthWatchWiringTests.fs", 2
-    "SageFs.Tests/HttpApiIntegrationTests.fs", 1
+    "SageFs.Tests/HolderTests.fs", 6
+    "SageFs.Tests/HostCoreAdoptionMarkerTests.fs", 1
+    "SageFs.Tests/HostCoreAdoptionOrphanSweepTests.fs", 2
+    "SageFs.Tests/HotReloadBrowserTests.fs", 17
+    "SageFs.Tests/HotReloadStateHarness.fs", 1
+    "SageFs.Tests/HttpApiIntegrationTests.fs", 2
     "SageFs.Tests/JsonCoreFilesTests.fs", 1
     "SageFs.Tests/LandingCacheTests.fs", 1
+    "SageFs.Tests/LeaseSimTests.fs", 1
+    "SageFs.Tests/LiteralEditTests.fs", 3
     "SageFs.Tests/LiveTestWatcherScopeTests.fs", 2
+    "SageFs.Tests/LiveTestingBrowserTests.fs", 8
     "SageFs.Tests/LiveTestingCoverageTests.fs", 2
-    "SageFs.Tests/LiveTestingCycleTests.fs", 14
+    "SageFs.Tests/LiveTestingCycleTests.fs", 32
     "SageFs.Tests/LiveTestingDecompositionTests.fs", 3
-    "SageFs.Tests/LiveTestingElmTests.fs", 1
-    "SageFs.Tests/LiveTestingGraphTests.fs", 2
+    "SageFs.Tests/LiveTestingElmTests.fs", 11
+    "SageFs.Tests/LiveTestingGraphTests.fs", 22
+    "SageFs.Tests/LiveTestingTypesTests.fs", 1
+    "SageFs.Tests/LoadModeTests.fs", 5
     "SageFs.Tests/LocalDataSqliteTests.fs", 1
-    "SageFs.Tests/McpAdapterTests.fs", 3
+    "SageFs.Tests/ManifestOwnerTests.fs", 2
+    "SageFs.Tests/ManifestPersistenceTests.fs", 17
+    "SageFs.Tests/McpAdapterTests.fs", 4
+    "SageFs.Tests/McpStdioBridgeE2ETests.fs", 2
+    "SageFs.Tests/McpStdioBridgeSimTests.fs", 1
+    "SageFs.Tests/McpToolGateTests.fs", 3
+    "SageFs.Tests/McpWireProtocolTests.fs", 10
+    "SageFs.Tests/MeasureTests.fs", 2
+    "SageFs.Tests/MemoryShedSimTests.fs", 12
+    "SageFs.Tests/MemorySupervisorTests.fs", 18
     "SageFs.Tests/MultiAgentCoordinationTests.fs", 1
-    "SageFs.Tests/OwnerMonitorTests.fs", 3
+    "SageFs.Tests/ObservedFrictionResetThrashTests.fs", 1
+    "SageFs.Tests/ObservedFrictionResolutionTests.fs", 1
+    "SageFs.Tests/OriginGuardOutcomeTests.fs", 1
+    "SageFs.Tests/OwnerMonitorTests.fs", 18
+    "SageFs.Tests/ParentMonitorTests.fs", 1
     "SageFs.Tests/PatchAnnouncerTests.fs", 1
+    "SageFs.Tests/PeriodicManifestSaveDstTests.fs", 2
     "SageFs.Tests/PersistenceComplianceTests.fs", 1
-    "SageFs.Tests/PureModulesComprehensiveTests.fs", 2
+    "SageFs.Tests/PipelineFlameTests.fs", 17
+    "SageFs.Tests/PluginContractTests.fs", 7
+    "SageFs.Tests/ProcessEnvironmentTests.fs", 1
+    "SageFs.Tests/Program.fs", 2
+    "SageFs.Tests/PureModulesComprehensiveTests.fs", 5
+    "SageFs.Tests/ReflectionReadTrackingTests.fs", 1
     "SageFs.Tests/ReloadBroadcastTests.fs", 2
-    "SageFs.Tests/ReloadPlanningTests.fs", 2
+    "SageFs.Tests/ReloadPlanningTests.fs", 6
+    "SageFs.Tests/ResilientActorTests.fs", 4
+    "SageFs.Tests/ResolveSessionStatusReconciliationTests.fs", 3
     "SageFs.Tests/RestartJitterTests.fs", 1
+    "SageFs.Tests/RestartPolicyTests.fs", 4
+    "SageFs.Tests/RetryPolicyTests.fs", 7
+    "SageFs.Tests/Round10HardeningTests.fs", 16
+    "SageFs.Tests/Round5HardeningTests.fs", 1
+    "SageFs.Tests/Round6HardeningTests.fs", 1
+    "SageFs.Tests/Round7HardeningTests.fs", 2
+    "SageFs.Tests/Round8HardeningTests.fs", 1
+    "SageFs.Tests/Round9HardeningTests.fs", 8
+    "SageFs.Tests/SafeDirectoryWalkTests.fs", 1
+    "SageFs.Tests/SageFsAppTests.fs", 5
+    "SageFs.Tests/SageFsConfigTests.fs", 1
+    "SageFs.Tests/SageFsEffectHandlerTests.fs", 7
+    "SageFs.Tests/SageFsIOTests.fs", 7
+    "SageFs.Tests/SessionActivityTouchTests.fs", 3
+    "SageFs.Tests/SessionCreationTests.fs", 1
+    "SageFs.Tests/SessionHealthSseTests.fs", 5
+    "SageFs.Tests/SessionHealthTests.fs", 6
+    "SageFs.Tests/SessionIsolationTests.fs", 3
+    "SageFs.Tests/SessionLifecycleMutationTests.fs", 10
+    "SageFs.Tests/SessionManagerAdmissionTests.fs", 2
+    "SageFs.Tests/SessionManagerEarnedReadyTests.fs", 3
+    "SageFs.Tests/SessionManagerRestartTombstoneTests.fs", 3
+    "SageFs.Tests/SessionManagerSpawnFirstRestartTests.fs", 9
+    "SageFs.Tests/SessionPredicatesAndUiTests.fs", 1
+    "SageFs.Tests/SessionStatusPayloadTests.fs", 1
+    "SageFs.Tests/SessionStatusTruthTests.fs", 3
+    "SageFs.Tests/ShutdownLifecycleTests.fs", 1
+    "SageFs.Tests/SimulationTests.fs", 1
+    "SageFs.Tests/SseContractComplianceTests.fs", 1
+    "SageFs.Tests/SseFeatureFormatTests.fs", 6
+    "SageFs.Tests/StatusWaitTests.fs", 3
+    "SageFs.Tests/StreamingProxyTests.fs", 4
+    "SageFs.Tests/SurfaceJsonWireTests.fs", 6
+    "SageFs.Tests/SyntaxHighlightTests.fs", 1
+    "SageFs.Tests/TargetedVerifyMcpToolTests.fs", 3
+    "SageFs.Tests/TestCachePersistenceMutationTests.fs", 4
+    "SageFs.Tests/TimeoutLiteralsTests.fs", 1
     "SageFs.Tests/TimeoutsTests.fs", 10
+    "SageFs.Tests/TweakSimDstTests.fs", 1
+    "SageFs.Tests/VscodeCommandProofTests.fs", 2
+    "SageFs.Tests/VscodeExtensionTests.fs", 13
+    "SageFs.Tests/WarmupContextTests.fs", 39
+    "SageFs.Tests/WarmupInitBoundaryTests.fs", 1
+    "SageFs.Tests/WarmupOpenReplayTests.fs", 2
+    "SageFs.Tests/WorkerHttpTransportTests.fs", 7
+    "SageFs.Tests/WorkerLogFileTests.fs", 1
+    "SageFs.Tests/WorkerProtocolTests.fs", 4
     "SageFs.Tests/WorkflowSwitchTests.fs", 1
     "SageFs.Tests/WorkflowTransitionPropertyTests.fs", 1
-    "SageFs.Tests/WorkflowTypesMutationTests.fs", 1 ]
+    "SageFs.Tests/WorkflowTypesMutationTests.fs", 1
+    "SageFs/CohortLandingVerify.fs", 1
+    "SageFs/DaemonMode.fs", 12
+    "SageFs/Dashboard.fs", 6
+    "SageFs/DashboardTypes.fs", 1
+    "SageFs/EnvCheck.fs", 1
+    "SageFs/McpStateHandlers.fs", 1
+    "SageFs/Program.fs", 2
+    "SageFs/SageFsApp.fs", 5
+    "SageFs/SessionStatusPayload.fs", 1
+    "SageFs/WorkerProxyWait.fs", 2 ]
 
 /// Every source file with its count of inline timeout literals, except the central module.
 let private actual : (string * int) list =

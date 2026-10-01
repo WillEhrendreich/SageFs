@@ -10,7 +10,6 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ─── Route mapping tests ───────────────────────────────────────────
 

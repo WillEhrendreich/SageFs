@@ -370,7 +370,7 @@ let private keepTieringLapsesAndFailsClosed (runtime: HostRuntime) =
       | true ->
         // 160,000 stack walks just ran, so give the verdict more room than a
         // quiet app needs.
-        let! verdict = HotReloadStateHarness.saveWithinBudget SageFs.Tests.TestInfrastructure.TestTimeouts.heavyVerdictBudget app "let reflected = \"mirror\"" "let reflected = \"glass\""
+        let! verdict = HotReloadStateHarness.saveWithinBudget SageFs.Tests.TestTimeouts.heavyVerdictBudget app "let reflected = \"mirror\"" "let reflected = \"glass\""
         str (json verdict) "outcome"
         |> Expect.notEqual (sprintf "the watch lapsed, so a read in the gap can't be ruled out. Patched here is the lie fail-closed exists to prevent.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
         let _, message = firstReason verdict

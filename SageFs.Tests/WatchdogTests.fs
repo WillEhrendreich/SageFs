@@ -5,7 +5,6 @@ open Expecto
 open Expecto.Flip
 open SageFs.Watchdog
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let now = DateTime(2026, 2, 15, 0, 0, 0)
 let seed = SageFs.RestartPolicy.JitterSeed 1L

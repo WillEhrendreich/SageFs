@@ -14,7 +14,6 @@ open SageFs.Features.LiveTesting
 open SageFs.Features.LiveValueTree
 open SageFs.Tests.SharedGenerators
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private sampleTestCase (id: string) =
   { Id = TestId.TestId id

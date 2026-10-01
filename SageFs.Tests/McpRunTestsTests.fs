@@ -18,7 +18,6 @@ open SageFs.McpTools
 open SageFs.WorkerProtocol
 open SageFs.Tests.LiveTestingTestHelpers
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private framework = TestFramework.Expecto
 let private caseOf name = mkTestCase name framework TestCategory.Unit

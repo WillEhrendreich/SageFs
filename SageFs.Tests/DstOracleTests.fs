@@ -11,7 +11,6 @@ open SageFs.Simulation.Scenario
 open SageFs.Simulation.ReferenceModel
 open SageFs.Simulation.Oracle
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Brief B1 — reference-vs-candidate oracle for the supervision core.
 ///

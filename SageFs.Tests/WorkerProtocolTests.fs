@@ -11,7 +11,6 @@ open SageFs.WorkerProtocol
 open SageFs.Features.LiveTesting
 open SageFs.Tests.SharedGenerators
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let roundTrip<'T> (value: 'T) =
   let json = Serialization.serialize value

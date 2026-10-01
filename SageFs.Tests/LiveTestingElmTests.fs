@@ -10,7 +10,6 @@ open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 open SageFs.Measures
 
-module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
 
 /// How long the failing result in the assertion-message case says it took. Never read back.
 let private mismatchResultDuration = TimeSpan.FromMilliseconds 12.0

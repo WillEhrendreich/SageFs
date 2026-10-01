@@ -36,7 +36,6 @@ open SageFs
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private sharedTickerDir = Path.Combine(Http.repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker")
 

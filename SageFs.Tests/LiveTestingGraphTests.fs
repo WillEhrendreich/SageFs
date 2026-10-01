@@ -9,7 +9,6 @@ open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 open SageFs.Measures
 
-module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
 
 /// The duration of the result in the round-trip case. The case checks it comes back unchanged, so
 /// it is neither zero nor one of the shared fixture values.

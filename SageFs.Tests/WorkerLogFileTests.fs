@@ -7,7 +7,6 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// A fresh temp directory removed when `body` returns, so every test writes real
 /// files without leaving any behind.

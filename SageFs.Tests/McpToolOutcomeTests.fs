@@ -63,7 +63,6 @@ open ModelContextProtocol.Protocol
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private fixtureDir =
   Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "McpToolOutcomeFixture")

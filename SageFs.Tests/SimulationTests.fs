@@ -11,7 +11,6 @@ open SageFs.Simulation.Scenario
 open SageFs.Simulation.Runner
 open SageFs.Simulation.Invariants
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// DST harness tests: every invariant in Invariants.all is claimed to be a
 /// TRUE property of the real supervision core, so a failure here is a genuine

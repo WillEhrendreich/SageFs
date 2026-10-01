@@ -7,7 +7,6 @@ open Expecto
 open Expecto.Flip
 open SageFs.OwnerMonitor
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// How much later (or earlier) a process that reused a dead owner's pid started than the
 /// owner did: a day, which is unambiguously a different process, not read jitter.

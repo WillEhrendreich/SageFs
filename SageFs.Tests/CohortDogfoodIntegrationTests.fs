@@ -218,7 +218,7 @@ let private startIsolatedDaemon (workingDir: string) (dataDir: string) : Task<Pr
   let proc = Process.Start psi
   use client = new Net.Http.HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)
-  client.Timeout <- SageFs.Tests.TestInfrastructure.TestTimeouts.httpProbe
+  client.Timeout <- SageFs.Tests.TestTimeouts.httpProbe
 
   // Event-driven, not a hand-rolled attempt-counter poll: the same
   // TestInfrastructure.waitForAsync every other integration daemon-readiness

@@ -28,7 +28,6 @@ open Expecto.Flip
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private libProject =
   """<Project Sdk="Microsoft.NET.Sdk">

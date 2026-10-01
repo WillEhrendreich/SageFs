@@ -8,7 +8,6 @@ open FsCheck.FSharp
 open SageFs.Features.LiveTesting
 open SageFs.Tests.SharedGenerators
 
-module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
 
 let mkLiveTestCase
   (fullName: string)

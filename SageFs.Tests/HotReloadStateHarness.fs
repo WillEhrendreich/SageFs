@@ -20,7 +20,6 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// The runtimes the shipped host is built for. Every state outcome test runs
 /// once per case, so a gap on either one is a red test, not a footnote.

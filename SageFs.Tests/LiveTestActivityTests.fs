@@ -7,7 +7,6 @@ open FsCheck
 open SageFs.Features.LiveTesting
 open SageFs.Features.LiveTestActivity
 
-module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
 
 let private passed = TestRunStatus.Passed FixtureDurations.usualResult
 let private failed = TestRunStatus.Failed (TestFailure.AssertionFailed "boom", FixtureDurations.usualResult)

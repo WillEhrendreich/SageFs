@@ -50,7 +50,6 @@ open Expecto.Flip
 open SageFs.Tests.HttpApiIntegrationTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private rssMB (proc: Process) =
   proc.Refresh()

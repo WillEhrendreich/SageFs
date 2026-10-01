@@ -27,7 +27,6 @@ open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 [<Tests>]
 let healthSignalWiringTests =

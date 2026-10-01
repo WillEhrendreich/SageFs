@@ -1,4 +1,4 @@
-﻿module SageFs.Tests.ElmDaemonTests
+module SageFs.Tests.ElmDaemonTests
 
 open System
 open System.Threading
@@ -9,7 +9,6 @@ open SageFs.WorkerProtocol
 open SageFs.Features.Diagnostics
 open SageFs.Tests.SharedGenerators
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Test helpers for ElmDaemon
 module ElmDaemonTestHelpers =

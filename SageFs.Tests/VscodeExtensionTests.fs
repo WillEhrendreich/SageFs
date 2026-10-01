@@ -8,7 +8,6 @@ open Expecto.Flip
 open Microsoft.Playwright
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Deadline-based wait on an ACTUAL condition — never a fixed sleep. Probes
 /// every 100ms until `probe` is true or `timeoutMs` elapses; returns whether

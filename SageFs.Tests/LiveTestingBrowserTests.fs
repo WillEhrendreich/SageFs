@@ -8,7 +8,6 @@ open Microsoft.Playwright
 open SageFs.Tests.DashboardBrowserTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// LT-DASH browser journeys — real live-testing through the live dashboard:
 /// enable in the panel, watch the session's Expecto tests get discovered and

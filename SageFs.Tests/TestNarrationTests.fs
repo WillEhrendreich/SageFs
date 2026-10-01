@@ -6,7 +6,6 @@ open Expecto.Flip
 open SageFs.Features.LiveTesting
 open SageFs.Features
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 [<Tests>]
 let narrateFailureTests =

@@ -5,7 +5,6 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 [<Tests>]
 let timeoutsTests = testList "Timeouts" [

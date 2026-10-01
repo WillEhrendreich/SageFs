@@ -8,12 +8,12 @@
 /// that returns any other wrong value is killed too.
 module WatchdogMutationTests
 
+open SageFs.Tests
 open Expecto
 open Expecto.Flip
 open SageFs
 open System
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let config = Watchdog.defaultConfig
 let now = DateTime.UtcNow

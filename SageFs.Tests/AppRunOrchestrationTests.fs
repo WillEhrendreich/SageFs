@@ -10,7 +10,6 @@ open SageFs.WorkerProtocol
 open SageFs.AppRun
 open SageFs.ProjectLoading
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private sid =
   match SessionId.validate "0a0b0c0d" with

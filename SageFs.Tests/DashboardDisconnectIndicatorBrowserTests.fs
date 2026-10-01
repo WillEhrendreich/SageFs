@@ -50,7 +50,6 @@ open Expecto
 open Microsoft.Playwright
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Fast-but-not-flaky test values: heartbeat every 1s, stale after 3s (still
 /// comfortably the doctrine's 3x ratio). Production defaults (5s / 15s) stay

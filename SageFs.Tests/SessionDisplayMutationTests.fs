@@ -11,13 +11,13 @@
 /// displayStatus/snapshot logic are not in flux.)
 module SessionDisplayMutationTests
 
+open SageFs.Tests
 open System
 open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private mkInfo (status: SessionLifecycleStatus) (lastActivity: DateTime) : SessionInfo = {
   Id = SageFs.Tests.SharedGenerators.testSessionId "aa000001"

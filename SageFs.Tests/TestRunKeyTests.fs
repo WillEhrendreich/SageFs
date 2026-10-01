@@ -7,7 +7,6 @@ open FsCheck
 open FsCheck.FSharp
 open SageFs.Features.LiveTesting
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private mkResult (testId: TestId) (result: TestResult) : TestRunResult =
   { TestId = testId

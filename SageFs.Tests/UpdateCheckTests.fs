@@ -5,7 +5,6 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private v (text: string) = System.Version.Parse text
 

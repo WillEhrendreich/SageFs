@@ -8,7 +8,6 @@ open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 
-module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
 
 // --- TestId Tests (GREEN — already correct) ---
 

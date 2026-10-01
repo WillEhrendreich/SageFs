@@ -7,7 +7,6 @@ open Expecto.Flip
 open SageFs.Features.LiveBindingsAdaptive
 open SageFs.Features.LiveValueTree
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private mkSnap (sessionId: string) (generation: int64) (names: string list) =
   let bindings =

@@ -10,7 +10,6 @@ open SageFs
 open SageFs.WorkerProtocol
 open SageFs.Server.DaemonMode
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private silentLogger =
   { new SageFs.Utils.ILogger with

@@ -8,7 +8,6 @@ open SageFs.AppState
 open SageFs.WorkerProtocol
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 

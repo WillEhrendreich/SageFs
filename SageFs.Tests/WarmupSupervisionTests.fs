@@ -24,7 +24,6 @@ open SageFs
 open SageFs.WarmupSupervision
 open SageFs.Tests.SharedGenerators
 
-module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private bounds : Bounds = SageFs.Simulation.WarmupGenerators.defaultBounds
 
