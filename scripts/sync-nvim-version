@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# scripts/sync-nvim-version [--check] <version>
+#
+# Keeps sagefs.nvim in lockstep with SageFs: every SageFs release gets a plugin
+# commit with the same version number, tested and pushed. scripts/ship calls
+# this after it has pushed the release, so the plugin never falls behind.
+#
+#   <version>   the SageFs version just released (for example 0.6.880)
+#   --check     only report whether the plugin's version matches, change nothing
+#
+# The plugin repo is found at $SAGEFS_NVIM_DIR (default ~/Work/sagefs.nvim). It
+# is its own repo only so Neovim distribution works; it is part of SageFs.
+#
+# This is meant to never block a release: a plugin repo that is missing, dirty,
+# not on master, diverged from origin, or red in its own tests is reported
+# loudly and left alone (exit 0), and the SageFs release stands. Exit 1 only for
+# --check when the versions differ, and for bad arguments.
+set -euo pipefail
+
+CHECK=no
+if [ "${1:-}" = "--check" ]; then CHECK=yes; shift; fi
+VERSION=${1:?usage: scripts/sync-nvim-version [--check] <version>}
+case "$VERSION" in
+  [0-9]*.[0-9]*.[0-9]*) ;;
+  *) echo "sync-nvim-version: '$VERSION' is not a version like 0.6.880" >&2; exit 1 ;;
+esac
+
+REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+NVIM=${SAGEFS_NVIM_DIR:-$HOME/Work/sagefs.nvim}
+VERSION_FILE="$NVIM/lua/sagefs/version.lua"
+
+warn() { echo "sync-nvim-version: $*" >&2; }
+
+if [ ! -d "$NVIM/.git" ] && [ ! -f "$NVIM/.git" ]; then
+  warn "no plugin repo at $NVIM (set SAGEFS_NVIM_DIR). The plugin version was NOT synced to $VERSION."
+  exit 0
+fi
+
+current=$(grep -oP '(?<=")[0-9][^"]*(?=")' "$VERSION_FILE" 2>/dev/null | head -1 || true)
+
+if [ "$CHECK" = yes ]; then
+  if [ "$current" = "$VERSION" ]; then
+    echo "sagefs.nvim is at $current, matching SageFs $VERSION"
+    exit 0
+  fi
+  echo "sagefs.nvim is at ${current:-unknown}, SageFs is at $VERSION" >&2
+  exit 1
+fi
+
+if [ "$current" = "$VERSION" ]; then
+  echo "sagefs.nvim already at $VERSION"
+  exit 0
+fi
+
+branch=$(git -C "$NVIM" branch --show-current)
+if [ "$branch" != "master" ]; then
+  warn "$NVIM is on '$branch', not master. Not syncing; run: scripts/sync-nvim-version $VERSION from a clean master."
+  exit 0
+fi
+if [ -n "$(git -C "$NVIM" status --porcelain --untracked-files=no)" ]; then
+  warn "$NVIM has uncommitted changes to tracked files. Not syncing; commit or stash them, then run: scripts/sync-nvim-version $VERSION"
+  exit 0
+fi
+if ! git -C "$NVIM" fetch --quiet origin master; then
+  warn "could not fetch origin for the plugin. Not syncing."
+  exit 0
+fi
+if ! git -C "$NVIM" merge-base --is-ancestor origin/master HEAD; then
+  if git -C "$NVIM" merge-base --is-ancestor HEAD origin/master; then
+    git -C "$NVIM" merge --quiet --ff-only origin/master
+  else
+    warn "the plugin's master has diverged from origin/master. Not syncing; resolve it, then run: scripts/sync-nvim-version $VERSION"
+    exit 0
+  fi
+fi
+
+printf 'return "%s"\n' "$VERSION" > "$VERSION_FILE"
+echo "sagefs.nvim version file now says $VERSION"
+
+# The plugin's own tests gate its release, exactly as SageFs's gate does for SageFs.
+# Same command the plugin's CI runs ('busted' reads .busted). A suite that runs and
+# fails stops the sync. A runner that is not installed here cannot say anything, so
+# the sync goes ahead and says so: the push triggers the plugin's CI, which runs it.
+out=$(mktemp)
+if (cd "$NVIM" && PATH="$HOME/.luarocks/bin:$PATH" busted > "$out" 2>&1); then
+  echo "sagefs.nvim busted suite green"
+elif grep -q -E "module 'busted[^']*' not found|busted: (command )?not found|No such file or directory" "$out"; then
+  warn "busted is not usable on this machine, so the plugin's tests were not run here; its CI will run them on the push."
+else
+  warn "the plugin's busted suite is RED. Reverting the version change and leaving it unpushed. Output: $out"
+  git -C "$NVIM" checkout -- lua/sagefs/version.lua
+  exit 0
+fi
+rm -f "$out"
+
+msg=$(mktemp)
+printf 'chore: release v%s\n\nMatches SageFs v%s. The plugin version always equals the SageFs release it was tested against.\n' "$VERSION" "$VERSION" > "$msg"
+git -C "$NVIM" commit --quiet -F "$msg" -- lua/sagefs/version.lua
+rm -f "$msg"
+
+if git -C "$NVIM" push --quiet origin master; then
+  echo "sagefs.nvim v$VERSION pushed"
+else
+  warn "committed v$VERSION in the plugin but the push failed. Run: git -C $NVIM push origin master"
+fi

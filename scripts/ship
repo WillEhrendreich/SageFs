@@ -43,3 +43,12 @@ fi
 "$REPO/scripts/local-gate" "$sha"
 git -C "$REPO" push origin "$sha:refs/heads/master"
 echo "ship: pushed ${sha:0:8}; the self-hosted runner promotes its bundle to publish"
+
+# sagefs.nvim is part of SageFs and its version always matches the release. This bumps, tests and
+# pushes the plugin once the SageFs push has gone through. It never blocks a release: a plugin repo
+# that is dirty, off master or red says so and is left alone (see scripts/sync-nvim-version).
+released=$(git -C "$REPO" show "$sha:Directory.Build.props" | grep -oP '(?<=<Version>)[^<]+' || true)
+if [ -n "$released" ]; then
+  "$REPO/scripts/sync-nvim-version" "$released" \
+    || echo "ship: the sagefs.nvim version sync failed; run scripts/sync-nvim-version $released" >&2
+fi
