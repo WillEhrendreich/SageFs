@@ -54,30 +54,6 @@ module DaemonPresence =
     | DaemonPresence.Running info -> sprintf "daemon running (PID %d, port %d)" info.Pid info.Port
     | DaemonPresence.Wedged pid -> sprintf "daemon process %d is holding the port but not answering — it is wedged" pid
 
-/// Whose state a daemon owns: the user's own, or an isolated directory named by
-/// SAGEFS_DATA_DIR (tests, throwaway daemons). The manifest dir and the log dir
-/// both read this one decision, so a daemon that is isolated for one is isolated
-/// for the other.
-[<RequireQualifiedAccess>]
-type DataDirChoice =
-  | Isolated of dir: string
-  | UserDefault
-
-module DataDirChoice =
-  /// The environment variable that requests isolation.
-  [<Literal>]
-  let envVar = "SAGEFS_DATA_DIR"
-
-  /// Unset, empty and blank all mean "not isolated".
-  let ofEnvValue (value: string | null) : DataDirChoice =
-    match value with
-    | null -> DataDirChoice.UserDefault
-    | v when String.IsNullOrWhiteSpace v -> DataDirChoice.UserDefault
-    | v -> DataDirChoice.Isolated (Path.GetFullPath v)
-
-  let current () : DataDirChoice =
-    ofEnvValue (Environment.GetEnvironmentVariable envVar)
-
 /// How much log a daemon may keep. Finite by construction: a chatty day costs
 /// at most `MaxFileBytes` per file and `RetainedFiles` files in total.
 type LogBounds = { MaxFileBytes: int64; RetainedFiles: int }
@@ -158,15 +134,10 @@ module DaemonLog =
 
 module DaemonState =
 
-  let SageFsDir =
-    // SAGEFS_DATA_DIR isolates the daemon's persisted state (manifest, test
-    // cache, themes, friction store). Tests use it to avoid polluting and
-    // being polluted by the real ~/.SageFs state.
-    match DataDirChoice.current () with
-    | DataDirChoice.Isolated dir -> dir
-    | DataDirChoice.UserDefault ->
-      let home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
-      Path.Combine(home, ".SageFs")
+  // SAGEFS_DATA_DIR isolates the daemon's persisted state (manifest, test
+  // cache, themes, friction store). Tests use it to avoid polluting and
+  // being polluted by the real ~/.SageFs state.
+  let SageFsDir = DataDirChoice.dataDirectory ()
 
   /// Ensure the data dir exists and is owner-only on Unix (roast-9 §8: it held
   /// manifests, the friction db, and cohort ledger under the default umask,

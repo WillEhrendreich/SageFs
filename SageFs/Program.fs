@@ -11,7 +11,9 @@ open SageFs.Server
 // top-level `do` in the last file runs at entry, in order, ahead of every binding below it and ahead of `main`.
 // (A first version did this inside `main`, and the daemon's own log said so: "Timeouts were read before the
 // machine tier was established". A top-level `do` in an EARLIER file did not run at all: those files initialise
-// when something in them is first used.) Help and version read nothing and wait for nothing, so they skip it,
+// when something in them is first used. And asking `DaemonState.SageFsDir` for the directory to read the profile
+// from fixed the waits at Fast on a slow machine, because DaemonState's static values build an HttpClient from
+// `Timeouts`: hence `DataDirChoice.dataDirectory`, a function that touches neither.) Help and version read nothing and wait for nothing, so they skip it,
 // and its probe.
 do
   let asksForNothing =
@@ -20,7 +22,7 @@ do
     |> Array.exists (fun a -> a = "--help" || a = "-h" || a = "--version" || a = "-v")
   match asksForNothing with
   | true -> ()
-  | false -> MachineStartup.establish DaemonState.SageFsDir |> ignore
+  | false -> MachineStartup.establish (DataDirChoice.dataDirectory ()) |> ignore
 
 /// Wraps a TextWriter to normalize lone LF to CRLF.
 /// Some console modes on Windows cause \n alone to not carriage-return.
