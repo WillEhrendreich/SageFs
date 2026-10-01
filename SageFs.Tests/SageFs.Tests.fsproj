@@ -188,6 +188,8 @@
         <Compile Include="EvalStoreMutationTests.fs" />
         <Compile Include="SessionDisplayMutationTests.fs" />
         <Compile Include="ReloadPlanningDecisionMutationTests.fs" />
+        <Compile Include="CohortGitMutationTests.fs" />
+        <Compile Include="SseWriterCohortMutationTests.fs" />
         <Compile Include="ReloadPlanningOutcomeRegressionTests.fs" />
         <Compile Include="ReloadPlanningWholeFileReevalTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
