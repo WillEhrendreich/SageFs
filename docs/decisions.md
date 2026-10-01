@@ -229,3 +229,31 @@ checks it, and its twin (Ready with no `WorkerReady`) is caught.
 
 Evidence: `SageFs/RebuildReadyWait.fs`, `SageFs.Tests/RebuildReadyWaitTests.fs`, `SageFs.Core/SessionManager.fs` (`WorkerReady`, `settleReadyWaiters`).
 Reopen it if: Ready is ever marked before the URL is installed. The claim test fails first.
+
+## A dead FSI host is a state the session reports, and we don't restart it for the user
+
+Found live on 0.6.865: a thread in user code threw, the isolated FSI host aborted (exit 134), and the session stayed
+Ready, Healthy, with the same worker pid. Every later eval said "the FSI host exited (code 134)" and the guidance
+added "Do NOT reset the session, previous definitions are still valid", which was false: the host held the session,
+so everything in it was gone. The reason was only in the worker's own log.
+
+Now the worker watches its host (`FsiHostSession.Ended`, one task that completes once with `Retired` when we disposed
+it or `Crashed` with the exit code and the last 40 lines it wrote). The eval actor folds that end through the same
+pure `decide` as everything else, stamped with the session generation, so a stop or reset never counts as a crash and
+a replaced host's late exit does nothing to its successor. A crash becomes `SessionActivity.HostCrashed`, which the
+worker reports as `SessionStatus.HostCrashed`, the daemon keeps as `SessionLifecycleStatus.HostCrashed` (worker handle
+and crash, so a reset can still reach the worker), and health reads `Failed` with the crash and the way out. The 5 s
+health probe carries the worker's status to the registry, so the dashboard, `list_sessions` and the status payload
+agree within one probe. An eval after a crash is refused with `SageFsError.FsiHostCrashed`, a typed case, so nothing
+re-guesses advice from its text. The reset tools stay admitted and bring the session back.
+
+What we turned down is restarting the host on our own. It would hide the cause, lose the user's definitions without
+saying so, and loop on a program that crashes the host every time. If it comes back it should be a setting that
+restarts once, tells the user what was lost, and gives up after a second crash inside a short window.
+
+Evidence: `SageFs.Core/FsiHostClient.fs`, `SageFs.Core/EvalActorDecision.fs`, `SageFs.Simulation/EvalActorSim.fs`
+(four twins: a stop reported as a crash, a replaced host's crash, an eval run against a dead host, a crash reported
+twice), `SageFs.Tests/FsiHostLostTests.fs`, `SageFs.Tests/HostCrashTests.fs`, and the real-host case in
+`SageFs.Tests/HostCrashRecoveryTests.fs`.
+Reopen it if: users lose work to host crashes often enough that "tell them and let them reset" costs more than a
+restart that says what it dropped.
