@@ -9,12 +9,12 @@ open Expecto.Flip
 let tests =
   testList "CohortTrunkFixture" [
     test "alice speaks as alice" {
-      Alice.message () |> Expect.stringStarts "alice's message starts with her name" "alice:"
+      Alice.aliceMessage () |> Expect.stringStarts "alice's message starts with her name" "alice:"
     }
     test "bob speaks as bob" {
-      Bob.message () |> Expect.stringStarts "bob's message starts with his name" "bob:"
+      Bob.bobMessage () |> Expect.stringStarts "bob's message starts with his name" "bob:"
     }
     test "the shape speaks as rude" {
-      Rude.message () |> Expect.stringStarts "the shape's message starts with its name" "rude:"
+      Rude.rudeMessage () |> Expect.stringStarts "the shape's message starts with its name" "rude:"
     }
   ]

@@ -13,11 +13,13 @@
 ///   1. a trunk session that is not running an app records the landing and says there is no running app to update;
 ///   2. two agents each land a handler of their own, back to back, and the one process serves both, its counter carrying on;
 ///   3. a landing that conflicts with what already landed is refused with its reason, and the trunk app is untouched;
-///   4. a landing whose verification fails (a test goes red) does not land, and the trunk app serves the old behavior;
-///   5. a landing that needs a restart (a virtual member changes its signature) restarts the app, names the cause, and
-///      says it landed.
+///   4. a landing that needs a restart (a virtual member changes its signature) restarts the app, names the cause, and
+///      says it landed;
+///   5. a landing whose verification fails (a test goes red) does not land, and the trunk app serves the old behavior.
 ///
-/// The rows share the daemon and each leans on the one before it, so they run sequenced.
+/// The rows share the daemon and each leans on the one before it, so they run sequenced. The row for a landing that is refused
+/// for a failing test runs last: the verifying session keeps what it evaluated for a landing it blocked, and the landing after
+/// it is verified against that.
 module SageFs.Tests.TrunkLandingOutcomeTests
 
 open System
@@ -223,6 +225,8 @@ type private World = {
   /// The checkout the cohort lands into, and the working directory of the trunk session.
   TrunkPath: string
   TrunkSession: string
+  /// The integration session that verifies landings, for saying what a blocked landing failed on.
+  IntegrationSession: string
   /// The trunk app's own HTTP client.
   App: HttpClient
 }
@@ -236,11 +240,25 @@ let private statusOf (w: World) : Task<string> = callTool w.Alice.Client "get_co
 
 /// The single `get_cohort_status` line for a landing in the landings list.
 let private landingLine (status: string) (landingId: string) : string option =
-  status.Split('\n') |> Array.tryFind (fun l -> l.TrimStart().StartsWith(sprintf "- %s " landingId, StringComparison.Ordinal))
+  let lines = status.Split('\n')
+  match lines |> Array.tryFindIndex (fun (l: string) -> l.TrimStart().StartsWith(sprintf "- %s " landingId, StringComparison.Ordinal)) with
+  | None -> None
+  | Some first ->
+    // A long state is printed over several lines, so the entry runs until the next list item or the next heading.
+    let continuation =
+      lines
+      |> Array.skip (first + 1)
+      |> Array.takeWhile (fun (l: string) -> l.Length > 0 && Char.IsWhiteSpace l.[0] && not (l.TrimStart().StartsWith("- ", StringComparison.Ordinal)))
+    Some (String.Join("\n", Array.append [| lines.[first] |] continuation))
 
-/// The trunk line for a landing: what the trunk did with it. Absent until the landing has landed and the trunk has acted.
+/// The trunk line for a landing: what the trunk did with it. Absent until the landing has landed and the trunk has finished with
+/// it: a landing the trunk is still following, or has queued, is not yet something it did.
 let private trunkLine (status: string) (landingId: string) : string option =
-  status.Split('\n') |> Array.tryFind (fun l -> l.TrimStart().StartsWith(sprintf "trunk %s:" landingId, StringComparison.Ordinal))
+  status.Split('\n')
+  |> Array.tryFind (fun (l: string) ->
+    l.TrimStart().StartsWith(sprintf "trunk %s:" landingId, StringComparison.Ordinal)
+    && not (l.Contains ": following (")
+    && not (l.Contains ": queued behind"))
 
 /// How many landings the trunk has said something about.
 let private trunkLineCount (status: string) : int =
@@ -265,7 +283,18 @@ let private awaitSettled (w: World) (landingId: string) : Task<string> =
         match landingLine status landingId with
         | Some line -> return line.Contains "state=Landed" || line.Contains "state=Blocked"
         | None -> return false })
-    return (landingLine last.Value landingId).Value
+    let line = (landingLine last.Value landingId).Value
+    match line.Contains "state=Blocked" with
+    | false -> return line
+    | true ->
+      // A blocked landing says why it was blocked, and what the verifying session's tests were doing says what to look at.
+      use probe = new HttpClient(Timeout = TestTimeouts.httpRequest)
+      let! live =
+        task {
+          try return! probe.GetStringAsync(sprintf "http://localhost:%d/api/live-testing/status?session=%s" w.Port w.IntegrationSession)
+          with ex -> return sprintf "(live testing status unreadable: %s)" ex.Message
+        }
+      return sprintf "%s\n  verifying session's live testing status: %s" line live
   }
 
 /// Wait until the trunk has said what it did with a landing that landed, and return that line.
@@ -273,7 +302,7 @@ let private awaitTrunkLine (w: World) (landingId: string) (accept: string -> boo
   task {
     let last = ref ""
     do!
-      waitFor TestTimeouts.patience (fun () -> sprintf "the trunk to report landing %s. Last status:\n%s" landingId last.Value) (fun () -> task {
+      waitFor TestTimeouts.saveVerdict (fun () -> sprintf "the trunk to report landing %s. Last status:\n%s" landingId last.Value) (fun () -> task {
         let! status = statusOf w
         last.Value <- status
         match trunkLine status landingId with
@@ -312,6 +341,31 @@ let private trunkReload (w: World) : Task<JsonElement> =
     let! text = callTool w.Alice.Client "get_session_status" [ "session_id", box w.TrunkSession ]
     use doc = JsonDocument.Parse text
     return doc.RootElement.GetProperty("lastReload").Clone()
+  }
+
+/// Wait until a session is Ready and, when `notWorker` names a worker process, until the worker is another one. Answers the worker's
+/// process id.
+let private awaitSessionReady (client: McpClient) (session: string) (notWorker: int64 option) : Task<int64> =
+  task {
+    let last = ref ""
+    let pid = ref 0L
+    do!
+      waitFor TestTimeouts.workerSessionReady (fun () -> sprintf "session %s to be Ready (not worker %A). Last status: %s" session notWorker last.Value) (fun () -> task {
+        let! text = callTool client "get_session_status" [ "session_id", box session; "wait_seconds", box (int TestTimeouts.readyBudget.TotalSeconds) ]
+        last.Value <- text
+        use doc = JsonDocument.Parse text
+        let root = doc.RootElement
+        let workerPid =
+          match root.TryGetProperty "workerPid" with
+          | true, p when p.ValueKind = JsonValueKind.Number -> p.GetInt64()
+          | _ -> 0L
+        pid.Value <- workerPid
+        let anotherWorker =
+          match notWorker with
+          | Some before -> workerPid <> before
+          | None -> true
+        return root.GetProperty("lifecycle").GetString() = "Ready" && anotherWorker })
+    return pid.Value
   }
 
 let private newWorld () : Task<World> =
@@ -358,6 +412,7 @@ let private newWorld () : Task<World> =
     configured |> Expect.stringContains "it reports the trunk checkout the cohort lands into" "trunk="
     let branch = field "branch=" configured
     let trunkPath = field "trunk=" configured
+    let integrationSession = field "session=" configured
     Directory.Exists trunkPath |> Expect.isTrue "the trunk checkout exists on disk"
 
     // The trunk session: a hot reload session whose working directory is the trunk checkout. Nothing runs in it yet.
@@ -367,13 +422,7 @@ let private newWorld () : Task<World> =
           "working_directory", box trunkPath
           "workflow", box "hotreload" ]
     let trunkSession = created.Split('\n').[0].Trim()
-    let ready = ref ""
-    do!
-      waitFor TestTimeouts.workerSessionReady (fun () -> sprintf "the trunk session %s to be Ready. Last status: %s" trunkSession ready.Value) (fun () -> task {
-        let! text = callTool alice.Client "get_session_status" [ "session_id", box trunkSession; "wait_seconds", box 60 ]
-        ready.Value <- text
-        use doc = JsonDocument.Parse text
-        return doc.RootElement.GetProperty("lifecycle").GetString() = "Ready" })
+    let! _ = awaitSessionReady alice.Client trunkSession None
     return
       { Repo = repo
         Daemon = daemon
@@ -385,6 +434,7 @@ let private newWorld () : Task<World> =
         IntegrationBranch = branch
         TrunkPath = trunkPath
         TrunkSession = trunkSession
+        IntegrationSession = integrationSession
         App = appClient }
   }
 
@@ -397,6 +447,13 @@ let private startTrunkApp (w: World) : Task<World> =
   task {
     let! switched = callTool w.Alice.Client "switch_session" [ "session_id", box w.TrunkSession ]
     ignore switched
+    // The session was built before anything landed, and run_app starts the build it holds. The trunk says so when it finds no app
+    // to update, so the session is rebuilt from the trunk checkout before the app starts. The reset answers once it is scheduled,
+    // so the session is ready again when it reports a worker other than the one it had.
+    let! workerBefore = awaitSessionReady w.Alice.Client w.TrunkSession None
+    let! reset = callToolPatient w.Alice.Client "hard_reset_fsi_session" [ "rebuild", box true ]
+    ignore reset
+    let! _ = awaitSessionReady w.Alice.Client w.TrunkSession (Some workerBefore)
     let! ran = callToolPatient w.Alice.Client "run_app" [ "project", box "" ]
     let m = Regex.Match(ran, @"http://[^\s""\\/]+:(\d+)")
     match m.Success with
@@ -506,21 +563,6 @@ let tests =
         pidAfter |> Expect.equal "in the same process" pidBefore
       }
 
-      testTask "WHY: a landing whose verification fails does not land, and the trunk app serves the old behavior" {
-        let! w = appWorld ()
-        let! tipBefore = integrationTip w
-        let! landingId = land w w.Carol "Bob.fs" tipBefore [ "bob:v2", "broken" ] "carol: bob stops speaking as bob"
-        let! settled = awaitSettled w landingId
-        settled |> Expect.stringContains "the landing is blocked" "state=Blocked"
-        settled |> Expect.stringContains "because a test failed" "FailingTests"
-        let! status = statusOf w
-        (trunkLine status landingId) |> Expect.isNone "the trunk was told nothing about it"
-        File.ReadAllText(Path.Combine(w.TrunkPath, "Bob.fs"))
-        |> Expect.stringContains "the trunk checkout still holds bob's landed file" "bob:v2"
-        let! served = appGet w "bob"
-        splitCounted served |> fst |> Expect.equal "the app serves the old behavior" "bob:v2"
-      }
-
       testTask "WHY: a landing that needs a restart restarts the app, names the cause, and says it landed" {
         let! w = appWorld ()
         let! pidBefore = appGet w "pid"
@@ -548,6 +590,26 @@ let tests =
         count |> Expect.equal "its in-memory state started over, which is what a restart is" 1
         let! bob = appGet w "bob"
         splitCounted bob |> fst |> Expect.equal "and it still serves everything that landed before" "bob:v2"
+      }
+
+      // Last, because a landing the gate blocks leaves what the verifying session evaluated for it in that session, and the next
+      // landing is verified against that. The trunk follows only what lands, so this row's own claims hold wherever it runs.
+      testTask "WHY: a landing whose verification fails does not land, and the trunk app serves the old behavior" {
+        let! w = appWorld ()
+        let! tipBefore = integrationTip w
+        let! servedBefore = appGet w "bob"
+        // Carol changes bob's handler so it no longer speaks as bob, and the test that says what a handler's message looks like
+        // goes red in the verifying session.
+        let! landingId = land w w.Carol "Bob.fs" tipBefore [ "bob:v2", "broken" ] "carol: bob stops speaking as bob"
+        let! settled = awaitSettled w landingId
+        settled |> Expect.stringContains "the landing is blocked" "state=Blocked"
+        settled |> Expect.stringContains "because a test failed" "FailingTests"
+        let! status = statusOf w
+        (trunkLine status landingId) |> Expect.isNone "the trunk was told nothing about it"
+        File.ReadAllText(Path.Combine(w.TrunkPath, "Bob.fs"))
+        |> Expect.stringContains "the trunk checkout still holds bob's landed file" "bob:v2"
+        let! servedAfter = appGet w "bob"
+        splitCounted servedAfter |> fst |> Expect.equal "the app serves the old behavior" (fst (splitCounted servedBefore))
       }
     ]
   ]

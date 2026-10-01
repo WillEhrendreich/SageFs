@@ -81,7 +81,8 @@ let mkInfra () : DashboardInfra =
     ActivityTracker = None
     LiveBindingsAdaptive = None
     ReadCohortFrame = fun () -> SageFs.Cohort.project (SageFs.Cohort.replayHead []) [||]
-    ReadCohortLedger = fun () -> [] }
+    ReadCohortLedger = fun () -> []
+    ReadTrunk = fun () -> SageFs.Features.TrunkFollow.initial }
 
 [<Tests>]
 let tests = testList "Dashboard render gate — no redundant GetAllSessions per push" [

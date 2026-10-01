@@ -21,8 +21,8 @@ let main args =
   let app = builder.Build()
   app.MapGet("/ready", text (fun () -> "ready")) |> ignore
   app.MapGet("/pid", text (fun () -> string Environment.ProcessId)) |> ignore
-  app.MapGet("/alice", counted Alice.message) |> ignore
-  app.MapGet("/bob", counted Bob.message) |> ignore
-  app.MapGet("/rude", counted Rude.message) |> ignore
+  app.MapGet("/alice", counted Alice.aliceMessage) |> ignore
+  app.MapGet("/bob", counted Bob.bobMessage) |> ignore
+  app.MapGet("/rude", counted Rude.rudeMessage) |> ignore
   app.Run()
   0

@@ -1009,6 +1009,7 @@ let buildDashboardSnapshotWithSessions
       Elem.div [] [
         renderCohortPanel (infra.ReadCohortFrame ())
         renderCohortLanesPanel (infra.ReadCohortLedger ())
+        renderTrunkPanel (infra.ReadTrunk ())
       ]
     let snap : DashboardSnapshot = {
               Version = infra.Version

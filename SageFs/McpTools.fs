@@ -2519,7 +2519,9 @@ OUTPUT: Confirmation text with the new landing id, or a validation error (invali
 
 WHEN TO USE: Before acquiring a claim (check for conflicts), to see who else is in the cohort, or to find a claim/landing id to act on.
 
-OUTPUT: Plain-text summary of members, claims, the test matrix, AND the landing queue — each landing's id, requester, state (Queued/Rebasing/Verifying/Blocked/Landed/Withdrawn), queue position, and the current integration head. The same landing state is on the cohort://status MCP resource, so you can subscribe instead of polling.""")>]
+OUTPUT: Plain-text summary of members, claims, the test matrix, AND the landing queue — each landing's id, requester, state (Queued/Rebasing/Verifying/Blocked/Landed/Withdrawn), queue position, and the current integration head. The same landing state is on the cohort://status MCP resource, so you can subscribe instead of polling.
+
+Once an integration is configured it ends with the trunk: one `trunk <landing id>: ...` line per landing that landed, saying what the trunk session's running app did with it (the file, the outcome such as PatchPending, Patched or Restarted, the mechanism such as metadata-delta or detour, and the cause of a restart), or that there is no running app to update.""")>]
     member _.get_cohort_status() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_cohort_status called")
         task {
@@ -2534,11 +2536,11 @@ OUTPUT: Plain-text summary of members, claims, the test matrix, AND the landing 
     [<McpServerTool>]
     [<Description("""Configure this cohort's integration branch/worktree — the git ref real landings rebase onto and fast-forward into (item 14c of the multi-agent landing pipeline). CONDUCTOR-ONLY — refused with a "not the cohort conductor" error for anyone else.
 
-Resolves integration_ref (a branch, tag, or commit sha) to a commit in the daemon's own working directory, creates a dedicated integration git worktree on a fresh branch at that commit, binds Cohort's IntegrationHead to it, and starts a daemon-owned FSI session on the worktree so landings can be test-verified.
+Resolves integration_ref (a branch, tag, or commit sha) to a commit in the daemon's own working directory, creates a dedicated integration git worktree on a fresh branch at that commit, binds Cohort's IntegrationHead to it, and starts a daemon-owned FSI session on the worktree so landings can be test-verified. It also creates the trunk checkout, a second detached worktree that is moved to each landing's commit once the landing has landed. A session whose working directory is the trunk checkout and that runs an app (create_project_session with workflow hotreload, then run_app) has each landing carried into the running app.
 
 WHEN TO USE: Once per cohort, before the first request_landing, by whoever is the conductor (the first member to join_cohort). Calling it again re-points the integration worktree/branch at a new ref.
 
-OUTPUT: Confirmation text naming the resolved head sha, worktree path, branch, and session id — or an error naming what failed (an unresolvable ref, a worktree that could not be created, or — non-fatal — an integration session that failed to start).""")>]
+OUTPUT: Confirmation text naming the resolved head sha, worktree path, branch, trunk checkout path (trunk=), and session id — or an error naming what failed (an unresolvable ref, a worktree that could not be created, or — non-fatal — an integration session that failed to start).""")>]
     member _.set_integration_ref(
         [<Description("Your agent or model name — must be the cohort's current conductor.")>]
         agentName: string,

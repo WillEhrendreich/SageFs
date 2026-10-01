@@ -12,4 +12,4 @@ type Square() =
 
 let shape : Shape = Square()
 
-let message () : string = shape.Name()
+let rudeMessage () : string = shape.Name()

@@ -2817,6 +2817,45 @@ let run
     match visible with
     | true -> stateChangedEvent.Trigger CohortChanged
     | false -> ())
+  // The trunk follows what lands: when the cohort records a landing as landed, the trunk checkout moves to its commit and the
+  // sessions that work in that checkout are told which files changed (Features/TrunkFollow.fs is the decision, TrunkFollowShell.fs
+  // does the work). Only `LandingLanded` is passed on, so a landing that was blocked or is still being verified never reaches it.
+  use trunkFollower =
+    Features.TrunkFollowOwner.start
+      (Log.asILogger ())
+      (TrunkFollowShell.performer
+        { TrunkPath = fun () -> SageFs.McpCohortIntegration.cohortIntegrationRef.Value |> Option.map (fun binding -> binding.TrunkPath)
+          Sessions = fun () -> SessionManager.QuerySnapshot.allSessions (readSnapshot ())
+          AwaitSettled = awaitModelCondition Timeouts.cohortIntegrationSettle
+          Ask = fun sid msg -> proxyToSession getProxyStr notifyWorkerDiedStr sid msg |> Async.AwaitTask
+          CurrentHead = Features.CohortGit.currentHead
+          Diff = Features.CohortGit.diffSavedFiles
+          MoveTo = Features.CohortGit.moveCheckoutTo
+          Build =
+            fun trunkPath ->
+              async {
+                let projects =
+                  SessionManager.QuerySnapshot.allSessions (readSnapshot ())
+                  |> Features.TrunkSessions.sessionsIn trunkPath
+                  |> List.collect (fun info -> info.Projects)
+                  |> List.distinct
+                let! built = SessionBuild.runBuildAsync projects trunkPath
+                return built |> Result.map ignore |> Result.mapError SageFsError.describeForAgent
+              }
+          NewReplyId = fun () -> System.Guid.NewGuid().ToString("N") })
+  SageFs.McpCohortIntegration.trunkFollowRef.Value <- Some trunkFollower
+  cohortOwner.Events.Add(fun events ->
+    for ev in events do
+      match Features.TrunkFollow.ofCohortEvent ev with
+      | Some trunkEvent -> trunkFollower.Post trunkEvent
+      | None -> ())
+  // A session's reload row finishing a save is the later word on a patch the trunk recorded as pending.
+  stateChangedEvent.Publish.Add(fun change ->
+    match change with
+    | ReloadReported (sid, SessionReload.Finished facts) ->
+      trunkFollower.Post (Features.TrunkFollow.TrunkEvent.ReloadReported (WorkerProtocol.SessionId.value sid, facts))
+    | _ -> ())
+  trunkFollower.Changes.Add(fun _ -> stateChangedEvent.Trigger CohortChanged)
   // Sessions that were ready before this line ran.
   SessionManager.QuerySnapshot.allSessions (readSnapshot ())
   |> List.iter (fun info -> ensureReloadRelay info.Id)
@@ -3939,6 +3978,7 @@ let run
     // directly — no mailbox round-trip, no IO.
     ReadCohortFrame = cohortOwner.ReadFrame
     ReadCohortLedger = cohortLedgerPort.ReadAll
+    ReadTrunk = trunkFollower.Read
     GetCompletions = fun (sessionId: WorkerProtocol.SessionId) (code: string) (cursorPos: int) -> task {
       try
         let! proxy = sessionOps.GetProxy sessionId
