@@ -276,3 +276,99 @@ let liveValueTreeCachedReaderTests = testList "LiveValueTree cached readers" [
       let value = box (people, shapes, pair, tree)
       buildValueNode "v" value = SageFs.Tests.LiveValueTreeReference.buildValueNode "v" value
 ]
+
+// ── Members that wait, force or have effects ────────────────────────────
+// The watch window reads every public property of a class value after each eval, on the
+// session's one eval thread. A property that waits (`Task.Result`), forces work (`Lazy.Value`)
+// or has an effect then stalls or changes the session it is only meant to show. A pending
+// Task bound at top level was enough to hang every later eval of the session.
+
+/// A value whose getter never returns until the gate opens, and counts how often it was entered.
+type BlockedGetter(gate: Threading.Tasks.TaskCompletionSource<int>, entered: int ref) =
+  member _.Data : int =
+    Threading.Interlocked.Increment entered |> ignore
+    gate.Task.Result
+
+/// A value whose getter counts how often it is read.
+type CountedGetter(reads: int ref) =
+  member _.Value : int = Threading.Interlocked.Increment reads
+
+/// Run a walk on its own thread so a walker that blocks fails the case at the patience ceiling
+/// instead of hanging the suite.
+let private walkWithin (walk: unit -> LiveValueNode) : Threading.Tasks.Task<LiveValueNode option> =
+  task {
+    let work = Threading.Tasks.Task.Factory.StartNew(walk, Threading.Tasks.TaskCreationOptions.LongRunning)
+    let! winner = Threading.Tasks.Task.WhenAny(work, Threading.Tasks.Task.Delay TestTimeouts.patience)
+    match obj.ReferenceEquals(winner, work) with
+    | true -> return Some work.Result
+    | false -> return None
+  }
+
+let private childNamed (name: string) (node: LiveValueNode) =
+  node.Children |> List.tryFind (fun c -> c.Label = name)
+
+[<Tests>]
+let liveValueTreeAwaitableTests = testList "LiveValueTree members that wait or force" [
+
+  testTask "WHY — a pending Task is described by its status and never waited on, because reading Result blocks the eval thread that every later eval needs" {
+    let pending = Threading.Tasks.TaskCompletionSource<Result<int, string>>().Task
+    let! node = walkWithin (fun () -> rootOf (box pending))
+    match node with
+    | None -> failtest "the walk of a pending Task did not return: it waited on Result"
+    | Some n ->
+      n.Preview |> Expect.stringContains "the preview names the status" "WaitingForActivation"
+      childNamed "Result" n |> Expect.isNone "a pending Task has no result to show"
+  }
+
+  testCase "WHY — a Task that completed shows its result, because the value is there and not waiting for it" <| fun _ ->
+    let node = rootOf (box (Threading.Tasks.Task.FromResult 42))
+    node.Preview |> Expect.stringContains "the preview names the status" "RanToCompletion"
+    childNamed "Result" node |> Option.map (fun c -> c.Preview) |> Expect.equal "the result is a child" (Some "42")
+
+  testCase "WHY — a faulted Task shows why, and the walk does not throw" <| fun _ ->
+    let node = rootOf (box (Threading.Tasks.Task.FromException<int>(InvalidOperationException "boom")))
+    node.Preview |> Expect.stringContains "the preview names the status" "Faulted"
+    childNamed "Exception" node |> Option.map (fun c -> c.Preview) |> Option.defaultValue ""
+    |> Expect.stringContains "the exception message is shown" "boom"
+
+  testTask "WHY — a pending ValueTask is not waited on either" {
+    let pending = Threading.Tasks.ValueTask<int>(Threading.Tasks.TaskCompletionSource<int>().Task)
+    let! node = walkWithin (fun () -> rootOf (box pending))
+    node |> Expect.isSome "the walk of a pending ValueTask returned"
+  }
+
+  testCase "WHY — a Lazy that has not been forced is not forced by looking at it, because forcing runs the user's code" <| fun _ ->
+    let forced = ref 0
+    let lazyValue = lazy (Threading.Interlocked.Increment forced)
+    let node = rootOf (box lazyValue)
+    forced.Value |> Expect.equal "the factory never ran" 0
+    node.Preview |> Expect.stringContains "the preview says so" "not created"
+    childNamed "Value" node |> Expect.isNone "an unforced Lazy has no value to show"
+
+  testCase "WHY — a Lazy that was forced shows its value" <| fun _ ->
+    let lazyValue = lazy 7
+    lazyValue.Force() |> ignore
+    let node = rootOf (box lazyValue)
+    childNamed "Value" node |> Option.map (fun c -> c.Preview) |> Expect.equal "the value is a child" (Some "7")
+
+  testCase "WHY — a property getter is read once per walk, because the preview and the children both used to read it and an effect ran twice" <| fun _ ->
+    let reads = ref 0
+    rootOf (box (CountedGetter reads)) |> ignore
+    reads.Value |> Expect.equal "one read" 1
+
+  testTask "WHY — a getter that never returns costs one deadline, once, and is skipped after that, so a blocked value cannot stall every eval" {
+    let gate = Threading.Tasks.TaskCompletionSource<int>()
+    let entered = ref 0
+    let blocked = BlockedGetter(gate, entered)
+    let! first = walkWithin (fun () -> buildValueNodeWithin TestTimeouts.blockedGetterBudget "v" (box blocked))
+    let! second = walkWithin (fun () -> buildValueNodeWithin TestTimeouts.blockedGetterBudget "v" (box blocked))
+    gate.TrySetResult 0 |> ignore
+    match first, second with
+    | Some one, Some two ->
+      one.Kind |> Expect.equal "the first walk gives up on the value" NodeKind.Leaf
+      one.Preview |> Expect.stringContains "it says why" "did not return"
+      two.Preview |> Expect.stringContains "the second walk skips it and says so" "did not return"
+      entered.Value |> Expect.equal "the getter was entered once, not once per walk" 1
+    | _ -> failtest "a walk of a blocked getter did not return within the patience ceiling"
+  }
+]

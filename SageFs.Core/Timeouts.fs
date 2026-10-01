@@ -171,6 +171,12 @@ module Timeouts =
   /// change that queues one wakes the timer at once, so a save is never held
   /// back by this. No recorded reason for 1s.
   let liveTestTickIdle = TimeSpan.FromSeconds(1.0)
+  /// How long the live-values walk waits on one binding before it gives up on it. Walking a
+  /// value runs the user's property getters on the session's one eval thread, so a getter that
+  /// never returns would stall every later eval. Past this the binding shows as unreadable and is
+  /// not walked again. A second is long for a getter that merely reads a field and short enough
+  /// that one blocked getter costs the next eval a second, once. No recorded reason for 1s.
+  let liveValueBindingBudget = TimeSpan.FromSeconds(1.0)
   /// The debounce of the daemon's live-test file watcher: a burst of events
   /// from one save settles into one change. No recorded reason for 75ms.
   let liveTestWatcherDebounce = TimeSpan.FromMilliseconds(75.0)

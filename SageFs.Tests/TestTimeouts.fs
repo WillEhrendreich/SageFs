@@ -271,6 +271,10 @@ module TestTimeouts =
   /// How often a test's fast supervisor watchdog looks at the loop: a tenth of the wedge window.
   let watchdogCheckEvery = System.TimeSpan.FromMilliseconds 15.
 
+  /// The deadline a test gives the live-values walk for one binding whose getter never returns.
+  /// Real time but tiny: the case waits on the walk giving up, and a longer one only slows it down.
+  let blockedGetterBudget = System.TimeSpan.FromMilliseconds 150.
+
   /// The timeout handed to a timer join. An idle timer has to be joined well inside it,
   /// not by sitting it out.
   let timerJoinTimeout = System.TimeSpan.FromSeconds 2.

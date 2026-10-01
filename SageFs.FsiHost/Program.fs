@@ -111,7 +111,7 @@ let private liveValues (session: FsiEvaluationSession) (generation: int64) : Liv
           try typeNameOf bound.Value
           with _ -> ""
         (bound.Name, typeSignature, value))
-    LiveValueTree.buildSnapshot "" generation boundValues
+    LiveValueTree.buildSnapshotWith (LiveValueTree.buildValueNodeWithin Timeouts.liveValueBindingBudget) "" generation boundValues
   with _ -> LiveValueTree.buildSnapshot "" generation []
 
 /// The eval currently running, so Interrupt can reach it.
