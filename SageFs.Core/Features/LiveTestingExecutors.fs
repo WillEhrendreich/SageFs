@@ -348,6 +348,44 @@ module BuiltInExecutors =
       Tag: int
     }
 
+    /// Build the reflection cache from the Expecto assembly itself. Split out of tryBuildCache so a
+    /// caller that already holds the Expecto assembly (a test, the REPL) needs no referencing assembly.
+    let tryBuildCacheFromExpecto (expAsm: Assembly) : ReflectionCache option =
+      let testModule = expAsm.GetType("Expecto.TestModule")
+      let testType = expAsm.GetType("Expecto.Test")
+      let flatTestType = expAsm.GetType("Expecto.FlatTest")
+      let testCodeType = expAsm.GetType("Expecto.TestCode")
+      match testModule = null || testType = null || flatTestType = null || testCodeType = null with
+      | true -> None
+      | false ->
+        let toTestCodeList =
+          testModule.GetMethod("toTestCodeList", BindingFlags.Public ||| BindingFlags.Static)
+        match toTestCodeList = null with
+        | true -> None
+        | false ->
+          let fsCheckDefaultConfig =
+            try
+              let fscType = expAsm.GetType("Expecto.FsCheckConfig")
+              match fscType <> null with
+              | true ->
+                let defaultProp = fscType.GetProperty("defaultConfig", BindingFlags.Public ||| BindingFlags.Static)
+                match defaultProp <> null with
+                | true -> Some (defaultProp.GetValue(null))
+                | false -> None
+              | false -> None
+            with _ -> None
+          Some {
+            ToTestCodeList = toTestCodeList
+            TestType = testType
+            FlatTestNameProp = flatTestType.GetProperty("name")
+            FlatTestTestProp = flatTestType.GetProperty("test")
+            TestCodeTagProp = testCodeType.GetProperty("Tag")
+            AssertExceptionType = expAsm.GetType("Expecto.AssertException")
+            FailedExceptionType = expAsm.GetType("Expecto.FailedException")
+            IgnoreExceptionType = expAsm.GetType("Expecto.IgnoreException")
+            FsCheckDefaultConfig = fsCheckDefaultConfig
+          }
+
     /// Try to build reflection cache from an assembly that references Expecto.
     let tryBuildCache (asm: Assembly) : ReflectionCache option =
       try
@@ -356,42 +394,7 @@ module BuiltInExecutors =
           |> Array.tryFind (fun a -> a.Name = "Expecto")
         match expectoRef with
         | None -> None
-        | Some asmName ->
-          let expAsm = Assembly.Load(asmName)
-          let testModule = expAsm.GetType("Expecto.TestModule")
-          let testType = expAsm.GetType("Expecto.Test")
-          let flatTestType = expAsm.GetType("Expecto.FlatTest")
-          let testCodeType = expAsm.GetType("Expecto.TestCode")
-          match testModule = null || testType = null || flatTestType = null || testCodeType = null with
-          | true -> None
-          | false ->
-            let toTestCodeList =
-              testModule.GetMethod("toTestCodeList", BindingFlags.Public ||| BindingFlags.Static)
-            match toTestCodeList = null with
-            | true -> None
-            | false ->
-              let fsCheckDefaultConfig =
-                try
-                  let fscType = expAsm.GetType("Expecto.FsCheckConfig")
-                  match fscType <> null with
-                  | true ->
-                    let defaultProp = fscType.GetProperty("defaultConfig", BindingFlags.Public ||| BindingFlags.Static)
-                    match defaultProp <> null with
-                    | true -> Some (defaultProp.GetValue(null))
-                    | false -> None
-                  | false -> None
-                with _ -> None
-              Some {
-                ToTestCodeList = toTestCodeList
-                TestType = testType
-                FlatTestNameProp = flatTestType.GetProperty("name")
-                FlatTestTestProp = flatTestType.GetProperty("test")
-                TestCodeTagProp = testCodeType.GetProperty("Tag")
-                AssertExceptionType = expAsm.GetType("Expecto.AssertException")
-                FailedExceptionType = expAsm.GetType("Expecto.FailedException")
-                IgnoreExceptionType = expAsm.GetType("Expecto.IgnoreException")
-                FsCheckDefaultConfig = fsCheckDefaultConfig
-              }
+        | Some asmName -> tryBuildCacheFromExpecto (Assembly.Load(asmName))
       with ex ->
         Log.warn "[LiveTesting] Expecto reflection cache build failed for %s: %s\n%s" asm.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         Instrumentation.liveTestingAssemblyLoadErrors.Add(1L)
@@ -583,30 +586,43 @@ module BuiltInExecutors =
       let cause = root ex
       sprintf "%s: %s\n%s" (cause.GetType().Name) cause.Message (cause.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
+    /// Flatten each named Expecto test value into FullName → ReflectedFlatTest. A binding whose value cannot
+    /// be read or flattened is logged and contributes nothing. This is the seam buildLookup runs through, so
+    /// a caller holding Expecto `Test` values (a test, the REPL) needs no assembly to scan.
+    let lookupFromBindings
+      (cache: ReflectionCache)
+      (bindings: (string * (unit -> obj)) list)
+      : Map<string, ReflectedFlatTest> =
+      bindings
+      |> List.toArray
+      |> Array.collect (fun (propertyFullName, readValue) ->
+        try
+          let testValue = readValue ()
+          let flatTests = cache.ToTestCodeList.Invoke(null, [|testValue|])
+          let enumerable = flatTests :?> System.Collections.IEnumerable
+          [ for ft in enumerable do
+              let name = cache.FlatTestNameProp.GetValue(ft) :?> string list
+              let testCode = cache.FlatTestTestProp.GetValue(ft)
+              let tag = cache.TestCodeTagProp.GetValue(testCode) :?> int
+              let testPath = name |> String.concat "/"
+              let fullName = sprintf "%s/%s" propertyFullName testPath
+              yield fullName, { TestCodeObj = testCode; Tag = tag } ]
+          |> List.toArray
+        with ex ->
+          Log.warn "[LiveTesting] buildLookup binding %s failed: %s" propertyFullName (describeBindingFailure ex)
+          [||])
+      |> Map.ofArray
+
     /// Build a lookup from FullName → ReflectedFlatTest for leaf-level execution.
     let buildLookup (cache: ReflectionCache) (asm: Assembly) : Map<string, ReflectedFlatTest> =
       try
         AttributeDiscovery.exportedTypesForDiscovery asm
         |> Array.collect (fun t ->
           getTestBindings cache t
-          |> Array.collect (fun binding ->
-            try
-              let testValue = binding.ReadValue ()
-              let propertyFullName = sprintf "%s.%s" (AttributeDiscovery.normalizeTypeFullName t.FullName) binding.Name
-              let flatTests = cache.ToTestCodeList.Invoke(null, [|testValue|])
-              let enumerable = flatTests :?> System.Collections.IEnumerable
-              [ for ft in enumerable do
-                  let name = cache.FlatTestNameProp.GetValue(ft) :?> string list
-                  let testCode = cache.FlatTestTestProp.GetValue(ft)
-                  let tag = cache.TestCodeTagProp.GetValue(testCode) :?> int
-                  let testPath = name |> String.concat "/"
-                  let fullName = sprintf "%s/%s" propertyFullName testPath
-                  yield fullName, { TestCodeObj = testCode; Tag = tag } ]
-               |> List.toArray
-             with ex ->
-              Log.warn "[LiveTesting] buildLookup binding %s.%s failed: %s" t.FullName binding.Name (describeBindingFailure ex)
-              [||]))
-        |> Map.ofArray
+          |> Array.map (fun binding ->
+            sprintf "%s.%s" (AttributeDiscovery.normalizeTypeFullName t.FullName) binding.Name, binding.ReadValue))
+        |> Array.toList
+        |> lookupFromBindings cache
       with ex ->
         Log.warn "[LiveTesting] buildLookup assembly scan failed for %s: %s\n%s" asm.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         Instrumentation.liveTestingAssemblyLoadErrors.Add(1L)
