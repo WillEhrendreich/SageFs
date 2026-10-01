@@ -876,7 +876,7 @@ module ResetIsolation =
           GetProcessTelemetry = fun () -> None } : McpContext
 
       let hardResetTask = hardResetSession ctx "agent1" true (Some "aaa00001") None
-      let! completed = Task.WhenAny(hardResetTask, Task.Delay(1000))
+      let! completed = Task.WhenAny(hardResetTask, Task.Delay TestTimeouts.immediateReply)
 
       obj.ReferenceEquals(completed, hardResetTask)
       |> Expect.isTrue "rebuild hard reset should return immediately"
@@ -1059,7 +1059,7 @@ module ResetIsolation =
       restartResult.TrySetResult(Error (SageFsError.HardResetFailed "build failed"))
       |> Expect.isTrue "should be able to complete restart TCS"
 
-      let! winner = Task.WhenAny(finished.Task :> Task, Task.Delay 5000)
+      let! winner = Task.WhenAny(finished.Task :> Task, Task.Delay TestTimeouts.briefPatience)
       obj.ReferenceEquals(winner, finished.Task)
       |> Expect.isTrue "the background rebuild must report an outcome"
 
@@ -1148,7 +1148,7 @@ module ResetIsolation =
       message
       |> Expect.stringContains "should return immediately" "Hard reset initiated"
 
-      let! winner = Task.WhenAny(finished.Task :> Task, Task.Delay 5000)
+      let! winner = Task.WhenAny(finished.Task :> Task, Task.Delay TestTimeouts.briefPatience)
       obj.ReferenceEquals(winner, finished.Task)
       |> Expect.isTrue "the background rebuild must report an outcome, not swallow the exception"
 
@@ -1284,7 +1284,7 @@ module SessionCycleIsolation =
     let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| collidingId |], Some sidAStr))) m4
     let passResult =
       { TestRunResult.TestId = collidingId; TestName = "tests"
-        Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 3.0)
+        Result = TestResult.Passed TestTimeouts.testElapsed
         Timestamp = System.DateTimeOffset.UtcNow; Output = None }
     let m6, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some sidAStr, [| passResult |]))) m5
     let m7, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sidAStr))) m6
@@ -1296,7 +1296,7 @@ module SessionCycleIsolation =
     let m10, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| collidingId |], Some sidBStr))) m9
     let failResult =
       { TestRunResult.TestId = collidingId; TestName = "tests"
-        Result = TestResult.Failed (TestFailure.AssertionFailed "diverged", System.TimeSpan.FromMilliseconds 4.0)
+        Result = TestResult.Failed (TestFailure.AssertionFailed "diverged", TestTimeouts.testElapsedOther)
         Timestamp = System.DateTimeOffset.UtcNow; Output = None }
     let m11, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some sidBStr, [| failResult |]))) m10
     let final, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sidBStr))) m11
@@ -1353,7 +1353,7 @@ module SessionCycleIsolation =
       let m6, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| collidingId |], Some sidAStr))) m5
       let passResult =
         { TestRunResult.TestId = collidingId; TestName = "tests"
-          Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 3.0)
+          Result = TestResult.Passed TestTimeouts.testElapsed
           Timestamp = System.DateTimeOffset.UtcNow; Output = None }
       let m7, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some sidAStr, [| passResult |]))) m6
       let m8, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sidAStr))) m7
@@ -1365,7 +1365,7 @@ module SessionCycleIsolation =
       let m10, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| collidingId |], Some sidBStr))) m9
       let failResult =
         { TestRunResult.TestId = collidingId; TestName = "tests"
-          Result = TestResult.Failed (TestFailure.AssertionFailed "diverged", System.TimeSpan.FromMilliseconds 4.0)
+          Result = TestResult.Failed (TestFailure.AssertionFailed "diverged", TestTimeouts.testElapsedOther)
           Timestamp = System.DateTimeOffset.UtcNow; Output = None }
       let m11, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some sidBStr, [| failResult |]))) m10
       let final, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sidBStr))) m11

@@ -88,24 +88,10 @@ let private budgets : (string * int) list =
     "SageFs.Tests/RestartJitterTests.fs", 4
     "SageFs.Tests/RestartPolicyTests.fs", 10
     "SageFs.Tests/RunAppSaveOutcomeTests.fs", 6
-    "SageFs.Tests/SageFsAppTests.fs", 13
-    "SageFs.Tests/SageFsEffectHandlerTests.fs", 5
-    "SageFs.Tests/SageFsIOTests.fs", 3
-    "SageFs.Tests/SessionActivityTouchTests.fs", 3
-    "SageFs.Tests/SessionBindingIsolationOutcomeTests.fs", 1
-    "SageFs.Tests/SessionDisplayMutationTests.fs", 3
-    "SageFs.Tests/SessionIsolationTests.fs", 7
-    "SageFs.Tests/SessionLifecycleMutationTests.fs", 8
-    "SageFs.Tests/SessionManagerSpawnFirstRestartTests.fs", 2
-    "SageFs.Tests/SessionManagerSupervisorAlarmTests.fs", 3
-    "SageFs.Tests/SessionOperationsMutationTests.fs", 2
-    "SageFs.Tests/SessionPredicatesAndUiTests.fs", 1
-    "SageFs.Tests/ShutdownLifecycleTests.fs", 7
     "SageFs.Tests/SimulationTests.fs", 16
     "SageFs.Tests/SseContractComplianceTests.fs", 4
     "SageFs.Tests/SseDedupKeyTests.fs", 4
     "SageFs.Tests/SseWriterTests.fs", 4
-    "SageFs.Tests/StatusWaitTests.fs", 3
     "SageFs.Tests/StreamingProxyTests.fs", 15
     "SageFs.Tests/TestExecutionReportTests.fs", 3
     "SageFs.Tests/TestNarrationTests.fs", 13

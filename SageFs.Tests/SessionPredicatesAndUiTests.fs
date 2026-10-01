@@ -124,7 +124,7 @@ let sessionLifecycleTests = testList "SessionLifecycle" [
     test "RestartAfter maps to Restarting, keeping the exited worker's pid to guard against its late events" {
       SessionLifecycle.statusAfterExit
         (Some 4242)
-        (SessionLifecycle.ExitOutcome.RestartAfter(TimeSpan.FromSeconds 1.0, RestartPolicy.emptyState))
+        (SessionLifecycle.ExitOutcome.RestartAfter(RestartPolicy.defaultPolicy.BackoffBase, RestartPolicy.emptyState))
       |> Expect.equal "restarting" (SessionLifecycleStatus.Restarting (PreviousWorker.Was 4242))
     }
     test "Abandoned maps to Faulted with the abandonment's own reason" {

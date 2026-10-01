@@ -88,7 +88,7 @@ let private createBareSession (workingDir: string) = task {
     Harness.postJson (client ()) "/api/sessions/create"
       {| projects = ([||]: string array); workingDirectory = workingDir |}
   status |> Expect.equal (sprintf "session create for %s succeeds (%s)" workingDir body) 200
-  let! ready, sessions = Harness.waitForReadySession (client ()) workingDir (TimeSpan.FromSeconds 120.0)
+  let! ready, sessions = Harness.waitForReadySession (client ()) workingDir SageFs.Timeouts.integrationDaemonReady
   ready
   |> Expect.isTrue (sprintf "the bare session for %s must reach Ready. Sessions: %s" workingDir sessions)
 }

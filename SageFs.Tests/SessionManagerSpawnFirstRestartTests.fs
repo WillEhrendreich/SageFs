@@ -9,6 +9,8 @@ open SageFs.SessionManager
 open SageFs.SessionBuild
 open SageFs.WorkerProtocol
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// Shared verb log so ordering tests can assert spawn-before-stop.
 type private Verb =
   | Start
@@ -698,7 +700,7 @@ let sessionManagerProjectRolesTests =
             let roles = current |> Option.map (fun s -> s.Info.ProjectRoles) |> Option.defaultValue []
             match roles, System.DateTime.UtcNow > deadline with
             | [], false ->
-              do! System.Threading.Tasks.Task.Delay 50
+              do! System.Threading.Tasks.Task.Delay TestTimeouts.asyncConditionPoll
               return! settledRoles ()
             | roles, _ -> return roles
           }
@@ -823,7 +825,7 @@ let workerFaultReportTests =
             | Some (SessionLifecycleStatus.Faulted why), _ -> return why
             | _, true -> return failtest "the session never became Faulted"
             | _, false ->
-              do! System.Threading.Tasks.Task.Delay 50
+              do! System.Threading.Tasks.Task.Delay TestTimeouts.asyncConditionPoll
               return! faultReason ()
           }
         let! why = faultReason ()

@@ -32,7 +32,7 @@ let sessionLifecycleMutationTests = testList "SessionLifecycle mutations" [
       { RestartCount = 1; LastRestartAt = Some now; WindowStart = Some now }
     SessionLifecycle.onWorkerExited policy state0 1 now
     |> Expect.equal "a crash (exit 1) from empty state must restart after 1s with RestartCount=1"
-      (SessionLifecycle.ExitOutcome.RestartAfter(TimeSpan.FromSeconds 1.0, expectedState))
+      (SessionLifecycle.ExitOutcome.RestartAfter(policy.BackoffBase, expectedState))
 
   testCase "WHY — onWorkerExited_graceful_is_Graceful — clean exit must not trigger restart" <| fun () ->
     SessionLifecycle.onWorkerExited policy state0 0 now
@@ -45,7 +45,7 @@ let sessionLifecycleMutationTests = testList "SessionLifecycle mutations" [
     |> Expect.equal "Graceful must map to Stopped" SessionLifecycleStatus.Stopped
 
   testCase "WHY — statusAfterExit_RestartAfter_is_Restarting_with_exited_pid — restart decision carries the exited worker's pid" <| fun () ->
-    SessionLifecycle.statusAfterExit (Some 4242) (SessionLifecycle.ExitOutcome.RestartAfter (TimeSpan.FromSeconds(1.0), state0))
+    SessionLifecycle.statusAfterExit (Some 4242) (SessionLifecycle.ExitOutcome.RestartAfter (policy.BackoffBase, state0))
     |> Expect.equal "RestartAfter must map to Restarting (Was 4242)" (SessionLifecycleStatus.Restarting (PreviousWorker.Was 4242))
 
   testCase "WHY — statusAfterExit_Abandoned_is_Faulted_with_description — give-up means faulted, described" <| fun () ->
@@ -73,19 +73,19 @@ let sessionLifecycleMutationTests = testList "SessionLifecycle mutations" [
       { RestartCount = 1; LastRestartAt = Some now; WindowStart = Some now }
     RestartPolicy.decide policy state0 now
     |> Expect.equal "the first decision from empty state must restart after 1s with RestartCount=1"
-      (RestartPolicy.Decision.Restart(TimeSpan.FromSeconds 1.0), expectedState)
+      (RestartPolicy.Decision.Restart policy.BackoffBase, expectedState)
 
   testCase "WHY — decide_window_expiry_resets_count_to_1 — old restarts must not count against a new window" <| fun () ->
     // Use state with restarts, but advance time past the reset window (5 min)
     let _, s1 = RestartPolicy.decide policy state0 now
     let _, s2 = RestartPolicy.decide policy s1 (now.AddSeconds(1.0))
-    let oldState = { s2 with WindowStart = Some (now - TimeSpan.FromMinutes(10.0)) }
+    let oldState = { s2 with WindowStart = Some (now - policy.ResetWindow * 2.0) }
     let decideAt = now.AddSeconds(2.0)
     let expectedState : RestartPolicy.State =
       { RestartCount = 1; LastRestartAt = Some decideAt; WindowStart = Some decideAt }
     RestartPolicy.decide policy oldState decideAt
     |> Expect.equal "after window expiry, the count must reset and restart fresh as if it were the first crash"
-      (RestartPolicy.Decision.Restart(TimeSpan.FromSeconds 1.0), expectedState)
+      (RestartPolicy.Decision.Restart policy.BackoffBase, expectedState)
 
   testCase "WHY — decide_startup_crash_circuit_breaker_gives_up_at_3 — startup loops must fail fast, below MaxRestarts" <| fun () ->
     // Three rapid crashes within StartupCrashWindow (10s) — the 4th must give
@@ -103,7 +103,7 @@ let sessionLifecycleMutationTests = testList "SessionLifecycle mutations" [
   testCase "WHY — nextBackoff_is_exactly_exponential — linear backoff is too slow for cascading failures" <| fun () ->
     (RestartPolicy.nextBackoff policy 1, RestartPolicy.nextBackoff policy 2, RestartPolicy.nextBackoff policy 3)
     |> Expect.equal "backoff for restarts 1,2,3 must be exactly 1s, 2s, 4s"
-      (TimeSpan.FromSeconds 1.0, TimeSpan.FromSeconds 2.0, TimeSpan.FromSeconds 4.0)
+      (policy.BackoffBase, policy.BackoffBase * 2.0, policy.BackoffBase * 4.0)
 
   testCase "WHY — nextBackoff_caps_at_BackoffMax — unbounded backoff delays recovery forever" <| fun () ->
     RestartPolicy.nextBackoff policy 20

@@ -14,6 +14,8 @@ open SageFs
 open SageFs.McpTools
 open SageFs.WorkerProtocol
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// A session whose registry status the test controls, with a fake AwaitReady
 /// that records each call and lets the test decide when it answers.
 type private Harness =
@@ -138,7 +140,7 @@ let tests =
             return Result.Ok ()
           })
       let statusTask = getSessionStatusAwaiting h.Ctx "agent" (Some h.Sid) None 30
-      let! winner = Task.WhenAny(h.AwaitReadyEntered.Task, Task.Delay(TimeSpan.FromSeconds 10.0))
+      let! winner = Task.WhenAny(h.AwaitReadyEntered.Task, Task.Delay TestTimeouts.shortPatience)
       Object.ReferenceEquals(winner, h.AwaitReadyEntered.Task)
       |> Expect.isTrue "the call reached AwaitReady instead of answering at once"
       statusTask.IsCompleted
@@ -199,11 +201,11 @@ let tests =
       let h =
         mkHarness starting (fun _ timeout ->
           Task.FromResult(Result.Error (SageFsError.WorkerTimeout ("s", "restart", timeout.TotalSeconds))))
-      let! json = getSessionStatusAwaiting h.Ctx "agent" (Some h.Sid) None 5
+      let! json = getSessionStatusAwaiting h.Ctx "agent" (Some h.Sid) None (int TestTimeouts.statusWaitRequest.TotalSeconds)
       let state, outcome, _ = read json
       outcome |> Expect.equal "the timeout is named" "TimedOut"
       state |> Expect.equal "and the payload is the warming one" "WarmingUp"
-      h.AwaitReadyCalls.ToArray() |> Expect.equal "it waited the time it was asked for" [| TimeSpan.FromSeconds 5.0 |]
+      h.AwaitReadyCalls.ToArray() |> Expect.equal "it waited the time it was asked for" [| TestTimeouts.statusWaitRequest |]
     }
 
     testTask "a session that faults while we wait is reported as Faulted" {
@@ -222,7 +224,7 @@ let tests =
         mkHarness starting (fun _ timeout ->
           Task.FromResult(Result.Error (SageFsError.WorkerTimeout ("s", "restart", timeout.TotalSeconds))))
       let! _ = getSessionStatusAwaiting h.Ctx "agent" (Some h.Sid) None 100000
-      h.AwaitReadyCalls.ToArray() |> Expect.equal "it parked for the cap, not the request" [| TimeSpan.FromSeconds 60.0 |]
+      h.AwaitReadyCalls.ToArray() |> Expect.equal "it parked for the cap, not the request" [| Timeouts.statusWaitCap |]
     }
 
     testProperty "clampSeconds always lands between zero and the cap" <| fun (seconds: int) ->

@@ -11,6 +11,8 @@ open SageFs.WorkerProtocol
 open SageFs.Features.Diagnostics
 open SageFs.Tests.SharedGenerators
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 module TestDeps =
 
   type CallLog = {
@@ -163,7 +165,7 @@ module TestDeps =
       let mutable ok = false
       while not ok && sw.ElapsedMilliseconds < int64 timeoutMs do
         if condition () then ok <- true
-        else do! Task.Delay 10
+        else do! Task.Delay TestTimeouts.inProcessPoll
       return ok
     }
 
@@ -1501,9 +1503,9 @@ module RunEndHarness =
     Output = None
   }
 
-  let passedA = reported requested.[0] (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+  let passedA = reported requested.[0] (TestResult.Passed TestTimeouts.testElapsed)
   let failedB =
-    reported requested.[1] (TestResult.Failed (TestFailure.AssertionFailed "expected 1, got 2", TimeSpan.FromMilliseconds 7.0))
+    reported requested.[1] (TestResult.Failed (TestFailure.AssertionFailed "expected 1, got 2", TestTimeouts.testElapsedOther))
 
   type Completion =
     | ReportedCompletion
@@ -1616,7 +1618,7 @@ let runEndTests = testList "SageFsEffectHandler — every requested test ends te
   }
 
   testTask "a stalled stream keeps the results that arrived and marks the rest never-reported, not failed" {
-    let after = TimeSpan.FromSeconds 30.0
+    let after = TestTimeouts.streamStalledAfter
     let! runEnd =
       RunEndHarness.run RunEndHarness.CompletesItself (fun onResult ->
         async {
@@ -1690,7 +1692,7 @@ let runEndTests = testList "SageFsEffectHandler — every requested test ends te
   testCase "the run summary says how many requested tests never reported, and why" <| fun _ ->
     let missing =
       Features.LiveTesting.TestRunResult.neverReported
-        (Features.LiveTesting.NoResultReason.StreamStalled (TimeSpan.FromSeconds 30.0))
+        (Features.LiveTesting.NoResultReason.StreamStalled TestTimeouts.streamStalledAfter)
         DateTimeOffset.UtcNow
         RunEndHarness.requested
         (Set.ofList [ RunEndHarness.passedA.TestId ])

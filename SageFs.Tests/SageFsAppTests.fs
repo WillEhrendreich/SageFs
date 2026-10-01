@@ -10,6 +10,8 @@ open SageFs.Features.Diagnostics
 open SageFs.Features.LiveTesting
 open SageFs.Tests.SharedGenerators
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// Helper to get output buffer for a session from the model.
 let outputFor sid (model: SageFsModel) = model.RecentOutput.GetBuffer(sid)
 
@@ -440,7 +442,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.hasLength "should have 1 diagnostic" 1
 
   testCase "WarmupCompleted with no failures adds info" <| fun _ ->
-    let event = TuiEvent.WarmupCompleted (TimeSpan.FromSeconds 2.0, [])
+    let event = TuiEvent.WarmupCompleted (TestTimeouts.warmupElapsed, [])
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     (activeOutput newModel).[0].Text
@@ -448,7 +450,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "WarmupCompleted with failures adds error lines" <| fun _ ->
     let event =
-      TuiEvent.WarmupCompleted (TimeSpan.FromSeconds 2.0, ["ns1"; "ns2"])
+      TuiEvent.WarmupCompleted (TestTimeouts.warmupElapsed, ["ns1"; "ns2"])
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     activeOutput newModel
@@ -513,7 +515,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "FileReloaded success adds info line" <| fun _ ->
     let event =
-      TuiEvent.FileReloaded ("test.fs", TimeSpan.FromMilliseconds 50.0, Ok "loaded")
+      TuiEvent.FileReloaded ("test.fs", TestTimeouts.fileReloadElapsed, Ok "loaded")
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     (activeOutput newModel).[0].Kind
@@ -521,7 +523,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "FileReloaded failure adds error line" <| fun _ ->
     let event =
-      TuiEvent.FileReloaded ("test.fs", TimeSpan.FromMilliseconds 50.0, Error "parse error")
+      TuiEvent.FileReloaded ("test.fs", TestTimeouts.fileReloadElapsed, Error "parse error")
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     (activeOutput newModel).[0].Kind
@@ -549,7 +551,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
           (SageFsModel.initial()).Sessions with
             Sessions = [snap] }
     }
-    let event = TuiEvent.SessionStale ("aa000001", TimeSpan.FromMinutes 15.0)
+    let event = TuiEvent.SessionStale ("aa000001", TestTimeouts.sessionStaleFor)
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.Sessions.Sessions.[0].Status
@@ -1548,8 +1550,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
           discoveredModel
       startedModel
 
-    let batch1 = [| mkPassedRunResult "test.buffered.a" "test.buffered.a" 11.0 |]
-    let batch2 = [| mkFailedRunResult "test.buffered.b" "test.buffered.b" "boom" 7.0 |]
+    let batch1 = [| mkPassedRunResult "test.buffered.a" "test.buffered.a" TestTimeouts.testElapsed.TotalMilliseconds |]
+    let batch2 = [| mkFailedRunResult "test.buffered.b" "test.buffered.b" "boom" TestTimeouts.testElapsedOther.TotalMilliseconds |]
     let updated, effects =
       SageFsUpdate.update
         (SageFsMsg.BufferedTestResults {
@@ -1569,9 +1571,9 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Map.ofArray
     |> fun statuses ->
       Map.find "test.buffered.a" statuses
-      |> Expect.equal "the buffered refresh should surface the passed test status" (TestRunStatus.Passed (TimeSpan.FromMilliseconds 11.0))
+      |> Expect.equal "the buffered refresh should surface the passed test status" (TestRunStatus.Passed TestTimeouts.testElapsed)
       Map.find "test.buffered.b" statuses
-      |> Expect.equal "the buffered refresh should surface the failed test status" (TestRunStatus.Failed (TestFailure.AssertionFailed "boom", TimeSpan.FromMilliseconds 7.0))
+      |> Expect.equal "the buffered refresh should surface the failed test status" (TestRunStatus.Failed (TestFailure.AssertionFailed "boom", TestTimeouts.testElapsedOther))
     effects |> Expect.isEmpty "buffered streamed results should not emit follow-up effects"
 
   testCase "queue coalescing keeps only the latest pending session refresh truth" <| fun _ ->
@@ -1881,8 +1883,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         Trigger = RunTrigger.Keystroke
         FilePath = "Background.fs"
         AnalysisIdentity = None
-        TreeSitterElapsed = TimeSpan.FromMilliseconds 5.0
-        FcsElapsed = TimeSpan.FromMilliseconds 10.0
+        TreeSitterElapsed = TestTimeouts.treeSitterElapsed
+        FcsElapsed = TestTimeouts.fcsElapsed
         SessionId = Some "aa000002"
         InstrumentationMaps = [||] }
     let primaryState =
@@ -1928,8 +1930,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Trigger = RunTrigger.FileSave
       FilePath = "SessionA.fs"
       AnalysisIdentity = None
-      TreeSitterElapsed = TimeSpan.FromMilliseconds 2.0
-      FcsElapsed = TimeSpan.FromMilliseconds 4.0
+      TreeSitterElapsed = TestTimeouts.treeSitterElapsed
+      FcsElapsed = TestTimeouts.fcsElapsed
       SessionId = Some "aa000001"
       InstrumentationMaps = [||] }
     let pendingB = {
@@ -1938,8 +1940,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Trigger = RunTrigger.Keystroke
       FilePath = "SessionB.fs"
       AnalysisIdentity = None
-      TreeSitterElapsed = TimeSpan.FromMilliseconds 3.0
-      FcsElapsed = TimeSpan.FromMilliseconds 6.0
+      TreeSitterElapsed = TestTimeouts.treeSitterElapsed
+      FcsElapsed = TestTimeouts.fcsElapsed
       SessionId = Some "aa000002"
       InstrumentationMaps = [||] }
     let stateA =

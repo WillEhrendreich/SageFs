@@ -12,6 +12,8 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 // ── Fixtures ────────────────────────────────────────────────────────────
 
 /// Build a `Result<int, SageFsError>` from cheap FsCheck-generated inputs
@@ -107,23 +109,23 @@ let timeoutTests =
     testCase "WHY — an async that exceeds the span yields Error <the passed error>" <| fun _ ->
       let slow : SageFsIO<int> =
         async {
-          do! Async.Sleep(2000)
+          do! Async.Sleep(int TestTimeouts.slowWork.TotalMilliseconds)
           return Ok 1
         }
-      let onTimeout = SageFsError.WorkerTimeout ("s1", "eval", 0.05)
-      let result = SageFsIO.timeout (TimeSpan.FromMilliseconds 50.0) onTimeout slow |> runIO
+      let onTimeout = SageFsError.WorkerTimeout ("s1", "eval", TestTimeouts.deadlineTight.TotalSeconds)
+      let result = SageFsIO.timeout TestTimeouts.deadlineTight onTimeout slow |> runIO
       result |> Expect.equal "times out with the given error" (Error onTimeout)
 
     testCase "WHY — an async that finishes in time yields its own result, not the timeout error" <| fun _ ->
       let fast : SageFsIO<int> = SageFsIO.ret 7
-      let onTimeout = SageFsError.WorkerTimeout ("s1", "eval", 5.0)
-      let result = SageFsIO.timeout (TimeSpan.FromSeconds 5.0) onTimeout fast |> runIO
+      let onTimeout = SageFsError.WorkerTimeout ("s1", "eval", TestTimeouts.deadlineRoomy.TotalSeconds)
+      let result = SageFsIO.timeout TestTimeouts.deadlineRoomy onTimeout fast |> runIO
       result |> Expect.equal "finishes with its own value" (Ok 7)
 
     testCase "WHY — a fast failure still beats the deadline with its own error, not the timeout error" <| fun _ ->
       let fastFailure : SageFsIO<int> = SageFsIO.ofResult (Error (SageFsError.EvalFailed "fast failure"))
-      let onTimeout = SageFsError.WorkerTimeout ("s1", "eval", 5.0)
-      let result = SageFsIO.timeout (TimeSpan.FromSeconds 5.0) onTimeout fastFailure |> runIO
+      let onTimeout = SageFsError.WorkerTimeout ("s1", "eval", TestTimeouts.deadlineRoomy.TotalSeconds)
+      let result = SageFsIO.timeout TestTimeouts.deadlineRoomy onTimeout fastFailure |> runIO
       result |> Expect.equal "own failure wins over the deadline" (Error (SageFsError.EvalFailed "fast failure"))
   ]
 

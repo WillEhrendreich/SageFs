@@ -17,6 +17,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private mkInfo (status: SessionLifecycleStatus) (lastActivity: DateTime) : SessionInfo = {
   Id = SageFs.Tests.SharedGenerators.testSessionId "aa000001"
   Name = None
@@ -57,17 +59,17 @@ let sessionDisplayMutationTests = testList "SessionDisplay mutations" [
     |> Expect.equal "a fresh Building session must display Running" SessionDisplayStatus.Running
 
   testCase "WHY — evaluating_never_goes_idle_no_matter_how_old_LastActivity_is — busy is never idle" <| fun () ->
-    let info = mkInfo (SessionLifecycleStatus.Evaluating handle) (now - TimeSpan.FromDays 30.0)
+    let info = mkInfo (SessionLifecycleStatus.Evaluating handle) (now - TestTimeouts.sessionAgeFarPastIdle)
     SessionDisplay.displayStatus now info
     |> Expect.equal "a session mid-eval must display Running regardless of LastActivity age" SessionDisplayStatus.Running
 
   testCase "WHY — building_never_goes_idle_no_matter_how_old_LastActivity_is — busy is never idle" <| fun () ->
-    let info = mkInfo (SessionLifecycleStatus.Building ("dotnet build", handle)) (now - TimeSpan.FromDays 30.0)
+    let info = mkInfo (SessionLifecycleStatus.Building ("dotnet build", handle)) (now - TestTimeouts.sessionAgeFarPastIdle)
     SessionDisplay.displayStatus now info
     |> Expect.equal "a session mid-build must display Running regardless of LastActivity age" SessionDisplayStatus.Running
 
   testCase "WHY — starting_is_Starting_regardless_of_activity_age — Starting must never be reclassified as Stale" <| fun () ->
-    let info = mkInfo (SessionLifecycleStatus.Starting handle) (now - TimeSpan.FromDays 1.0)
+    let info = mkInfo (SessionLifecycleStatus.Starting handle) (now - TestTimeouts.sessionAgeOneDay)
     SessionDisplay.displayStatus now info
     |> Expect.equal "Starting must display Starting even with old LastActivity" SessionDisplayStatus.Starting
 

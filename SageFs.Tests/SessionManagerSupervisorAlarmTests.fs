@@ -18,13 +18,13 @@ open SageFs.WorkerProtocol
 // health on the snapshot. The timings are real but tiny, and every wait is
 // on an event, never a sleep.
 
-/// Ceiling on any single wait. A test that reaches it has failed, it is never
-/// how a passing test finishes.
-let private patience = TimeSpan.FromSeconds 20.0
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
+let private patience = TestTimeouts.patience
 
 let private fastWatchdog : Settings =
-  { WedgeAfter = TimeSpan.FromMilliseconds 150.0
-    CheckEvery = TimeSpan.FromMilliseconds 15.0 }
+  { WedgeAfter = TestTimeouts.watchdogWedgeAfter
+    CheckEvery = TestTimeouts.watchdogCheckEvery }
 
 type private Harness =
   { Mailbox: MailboxProcessor<SessionCommand>

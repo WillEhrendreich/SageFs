@@ -19,6 +19,8 @@ open SageFs.SessionManager
 open SageFs.WorkerProtocol
 open SageFs.ProjectLoading
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 type private Harness = {
   Mailbox: MailboxProcessor<SessionCommand>
   ReadSnapshot: unit -> QuerySnapshot
@@ -129,7 +131,7 @@ let sessionActivityTouchTests =
 
         // Real wall-clock gap so a later LastActivity is unambiguously later,
         // not a same-tick coincidence.
-        Thread.Sleep(30)
+        Thread.Sleep TestTimeouts.clockGap
 
         let! _ = wrapped (WorkerMessage.EvalCode("1+1", "r1")) |> Async.StartAsTask
         let afterTouch = flush harness created.Id
@@ -143,7 +145,7 @@ let sessionActivityTouchTests =
         // WITHIN the threshold measured from the fresh, touched value. One
         // instant, two verdicts: Idle from the stale timestamp, Running from
         // the one the touch actually wrote.
-        let now = beforeTouch + Timeouts.idleSessionThreshold + TimeSpan.FromMilliseconds(1.0)
+        let now = beforeTouch + Timeouts.idleSessionThreshold + TestTimeouts.boundaryMargin
         SessionDisplay.displayStatus now { afterTouch with LastActivity = beforeTouch }
         |> Expect.equal "sanity: the untouched timestamp WOULD have read Idle at this instant" SessionDisplayStatus.Idle
         SessionDisplay.displayStatus now afterTouch
@@ -165,7 +167,7 @@ let sessionActivityTouchTests =
             (fun () -> harness.Mailbox.Post(SessionCommand.TouchSession created.Id))
             fakeWorker
 
-        Thread.Sleep(30)
+        Thread.Sleep TestTimeouts.clockGap
         let! _ = wrapped (WorkerMessage.GetStatus "poll") |> Async.StartAsTask
         let afterPoll = flush harness created.Id
 

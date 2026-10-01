@@ -15,6 +15,8 @@ open SageFs.WorkerProtocol
 open SageFs.SessionOperations
 open SageFs.Tests.SharedGenerators
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo = {
   Id = id
   Name = None
@@ -134,16 +136,18 @@ let sessionOperationsMutationTests = testList "SessionOperations mutations" [
   // ── AgentPresence.freshness ──────────────────────────────────────────────
 
   testCase "WHY — freshness_exactly_at_timeout_is_still_fresh — the boundary must use `>`, not `>=`" <| fun () ->
-    let now = DateTime(2026, 1, 1, 0, 10, 0)
-    let timeout = TimeSpan.FromMinutes 10.0
-    let presence = { AgentName = "a"; Role = OccupantRole.Worker; SessionId = "s"; LastToolCall = DateTime(2026, 1, 1, 0, 0, 0); Intent = None; RecentFiles = []; EvalCount = 0 }
+    let lastToolCall = DateTime(2026, 1, 1, 0, 0, 0)
+    let timeout = TestTimeouts.agentFreshnessWindow
+    let now = lastToolCall + timeout
+    let presence = { AgentName = "a"; Role = OccupantRole.Worker; SessionId = "s"; LastToolCall = lastToolCall; Intent = None; RecentFiles = []; EvalCount = 0 }
     AgentPresence.freshness now timeout presence
     |> Expect.equal "exactly at the timeout boundary, elapsed is NOT > timeout, so the agent must still be Fresh" AgentFreshness.Fresh
 
   testCase "WHY — freshness_one_tick_past_timeout_is_stale" <| fun () ->
-    let now = DateTime(2026, 1, 1, 0, 10, 0, 0).AddTicks 1L
-    let timeout = TimeSpan.FromMinutes 10.0
-    let presence = { AgentName = "a"; Role = OccupantRole.Worker; SessionId = "s"; LastToolCall = DateTime(2026, 1, 1, 0, 0, 0); Intent = None; RecentFiles = []; EvalCount = 0 }
+    let lastToolCall = DateTime(2026, 1, 1, 0, 0, 0)
+    let timeout = TestTimeouts.agentFreshnessWindow
+    let now = (lastToolCall + timeout).AddTicks 1L
+    let presence = { AgentName = "a"; Role = OccupantRole.Worker; SessionId = "s"; LastToolCall = lastToolCall; Intent = None; RecentFiles = []; EvalCount = 0 }
     AgentPresence.freshness now timeout presence
     |> Expect.equal "one tick past the timeout boundary, the agent must be Stale" AgentFreshness.Stale
 

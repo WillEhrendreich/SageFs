@@ -118,7 +118,7 @@ let shutdownLifecycleTests =
       let session = mkHangingSession proc
       try
         let stop = SessionManager.stopWorker session |> Async.StartAsTask
-        let! winner = Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(10.0)))
+        let! winner = Task.WhenAny(stop, Task.Delay TestTimeouts.shortPatience)
         obj.ReferenceEquals(winner, stop)
         |> Expect.isTrue
           (sprintf "stopWorker must return within a bound even when the Shutdown proxy hangs (pid %d)" pid)
@@ -138,9 +138,9 @@ let shutdownLifecycleTests =
       let pids = procs |> List.map (fun p -> p.Id)
       try
         SessionManager.killWorkerPids pids
-        let deadline = DateTime.UtcNow.AddSeconds(5.0)
+        let deadline = DateTime.UtcNow.Add TestTimeouts.briefPatience
         while DateTime.UtcNow < deadline && procs |> List.exists (fun p -> not p.HasExited) do
-          do! Task.Delay(100)
+          do! Task.Delay TestTimeouts.poll
         procs
         |> List.iter (fun p ->
           p.HasExited
@@ -163,14 +163,14 @@ let webHostStopTests =
         let started = TaskCompletionSource()
         app.Lifetime.ApplicationStarted.Register(fun () -> started.TrySetResult() |> ignore) |> ignore
         let running = SageFs.Server.McpServer.runUntilCancelled app stopping.Token
-        let! _ = Task.WhenAny(started.Task, Task.Delay(TimeSpan.FromSeconds 10.))
+        let! _ = Task.WhenAny(started.Task, Task.Delay TestTimeouts.shortPatience)
         started.Task.IsCompleted |> Expect.isTrue "the host started"
         stopping.Cancel()
-        let! first = Task.WhenAny(running, Task.Delay(TimeSpan.FromSeconds 10.))
+        let! first = Task.WhenAny(running, Task.Delay TestTimeouts.shortPatience)
         (first = running) |> Expect.isTrue "the host stops once the stop token is cancelled"
       finally
         stopping.Dispose()
-        (app :> IAsyncDisposable).DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds 10.) |> ignore
+        (app :> IAsyncDisposable).DisposeAsync().AsTask().Wait TestTimeouts.shortPatience |> ignore
     }
   ]
 
@@ -180,9 +180,9 @@ let timerStopTests =
     testTask "WHY — DaemonMode.disposeTimerAndWait — an idle timer is joined at once because every daemon shutdown used to sit out the full wait timeouts" {
       let timer = new System.Threading.Timer((fun _ -> ()), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite)
       let watch = Stopwatch.StartNew()
-      let! stop = SageFs.Server.DaemonMode.disposeTimerAndWait timer (TimeSpan.FromSeconds 2.)
+      let! stop = SageFs.Server.DaemonMode.disposeTimerAndWait timer TestTimeouts.timerJoinTimeout
       watch.Stop()
       stop |> Expect.equal "an idle timer has no callback to wait for" SageFs.Server.DaemonMode.TimerStop.Joined
-      (watch.Elapsed < TimeSpan.FromSeconds 1.5) |> Expect.isTrue (sprintf "joined without sitting out the timeout (took %O)" watch.Elapsed)
+      (watch.Elapsed < TestTimeouts.timerJoinTimeout * 0.75) |> Expect.isTrue (sprintf "joined without sitting out the timeout (took %O)" watch.Elapsed)
     }
   ]
