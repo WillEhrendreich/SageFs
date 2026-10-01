@@ -4,6 +4,13 @@ These are the key decisions that shape SageFs's architecture, written to explain
 
 > **Historical status:** ADR-2 and ADR-5, along with the frontend lists in other early ADRs, describe the former built-in SageTUI, legacy TUI, and `SageFs.Gui` Raylib product frontends. Those frontends are now deprecated, and for current product direction these decisions are superseded by the web dashboard, editor integrations, and MCP. The original records are unchanged and kept as architectural history. Raylib application and game demos are not deprecated.
 
+> **Checked against the tree on 2026-10-01.** The records below stay as I wrote them, and these are the places the code has moved on.
+>
+> - ADR-3 says session state and test results go in `.sagefm`. Today `.sagefm` is the daemon's session registry, and test outcomes, coverage and flaky history are in `.sagetc` ([format spec](binary-format-spec.md)). There is no `sagefs dump-manifest` command (the CLI has `check`, `stop`, `status`, `sweep`, `hygiene`, `play` and `mcp`). To look inside a manifest you use the reader in `SageFs.Core/Features/ManifestPersistence.fs`.
+> - ADR-4 says 30 cases. `SageFsError` has 42 now (counted from `type SageFsError` in `SageFs.Core/SageFsError.fs`).
+> - ADR-7 says zero interfaces. There are a few: `ILogger` in `SageFs.Core/Utils.fs` and `IFsiSession`, which `RemoteFsiSession.fs` implements. Everything else is still functions and modules.
+> - ADR-6's tool count is current (63), and its two source links are permalinks to the commit I wrote it against.
+
 ---
 
 ## ADR-1: SSE as the Only Read Channel (CQRS)

@@ -1,5 +1,7 @@
 # Runner environment: `npm` is not on the self-hosted runner's PATH
 
+> **Status on 2026-10-01: fixed, and kept as a record.** The "What is needed" section below asked for a fix on the runner. It landed in `.github/workflows/main.yml` on 2026-09-29 instead (commits `110cd4b4`, `2716bde0`, `82c258d8`): a step finds a node install that has npm, from `NUGET_NODE_BIN` or the machine's mise install tree, and puts it on the path for the extension stages, printing what it searched when it finds none. Nothing in this page is a user problem. It is a note about my own CI machine, and it would sit better under `docs/internal/`.
+
 The `0.6.838` push failed the CI gate at **stage 5, `vscode extension compile`**,
 not in a test tier:
 

@@ -46,7 +46,7 @@ Every function in the chain either succeeds and passes the value forward, or fai
 typed error. No hidden control flow. No forgotten catch block. No `NullReferenceException` surfacing three
 stack frames away from where it actually went wrong.
 
-The `SageFsError` DU has cases across four categories (client/server/gateway/infra). An architecture test
+The `SageFsError` DU has cases across five categories (client, internal, gateway, infra and overload, which are the `ErrorCategory` cases in `SageFsError.fs`). An architecture test
 verifies every case has exactly one classification and a valid HTTP status code, so you cannot add a new error
 case without classifying it. The compiler and the test suite both hold you to it.
 
@@ -155,7 +155,7 @@ generation, just the type system doing what it's there for.
 
 ## 7. The Module System Scales Without Ceremony
 
-SageFs.Core alone is organized into roughly 190 top-level modules, no class hierarchies, no
+SageFs.Core alone compiles 283 files (counted in `SageFs.Core.fsproj` on 2026-10-01), no class hierarchies, no
 dependency-injection containers, no abstract factory patterns in sight.
 
 ```fsharp
@@ -166,9 +166,10 @@ let buildTracedPipeline (middleware: NamedMiddleware list) (evalFn: MiddlewareNe
 ```
 
 Functions are the unit of abstraction. Modules are the unit of organization. No `ITracingMiddlewareFactory`.
-No `AbstractPipelineBuilderBase<T>`. That said, 190 files is also a lot of files, and a few of the biggest
-ones in this repo have grown past where I'd like them to be. Modules-not-classes buys you a lot, but it
-doesn't save you from writing a 5,000-line file if you're not paying attention. I'm not.
+No `AbstractPipelineBuilderBase<T>`. That said, 283 files is also a lot of files, and a few of the biggest
+ones in this repo have grown past where I'd like them to be (the biggest source file is
+`SageFs/DaemonMode.fs`, about 4,200 lines, and the biggest in `SageFs.Core` is `Features/LiveTestingTypes.fs`, about 3,700). Modules-not-classes buys you a lot, but it
+doesn't save you from writing a file that size if you're not paying attention. I'm not.
 
 ---
 

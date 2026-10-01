@@ -21,15 +21,15 @@ EXPECTO! 162 tests run — 162 passed, 0 failed. Success!
 For the best learning experience, use SageFs for live feedback:
 
 ```bash
-cd SageFs.Samples.Koans
-sagefs watch .
+sagefs   # start the daemon, then create a session for SageFs.Samples.Koans.fsproj
+         # from your editor, the dashboard or an MCP client
 ```
 
-Then open any `.fs` file in your editor (VS Code, Neovim, or TUI):
+Then open any `.fs` file in your editor (VS Code or Neovim):
 
 1. **Alt+Enter** on any expression to see its value inline
 2. **Edit** a test — change a value and save
-3. **See** ✓/✗ gutter markers update in < 200ms
+3. **See** ✓/✗ gutter markers update, in well under a second on my machine (about 0.7 s from edit to verdict on the small FromCSharp sample, see [how live testing works](../../docs/how-live-testing-works.md))
 
 No terminal. No `dotnet run`. Just instant feedback.
 
@@ -88,7 +88,7 @@ the `__` placeholders ready for you.
 | Original Koans | SageFs Edition |
 |-----------------|----------------|
 | NUnit `AssertEquality` | Expecto.Flip pipelines |
-| `dotnet run` ~3s/cycle | Save → gutter marker < 200ms |
+| `dotnet run` ~3s/cycle | Save → gutter marker in under a second |
 | One failure halts all | All tests run, each shows ✓/✗ |
 | Scroll terminal output | Gutter arrow jumps to failure |
 | Custom `[<Koan>]` runner | Industry-standard Expecto |

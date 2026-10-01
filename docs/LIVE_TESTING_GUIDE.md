@@ -104,7 +104,9 @@ EXECUTION FLOW - AS-YOU-TYPE LIVE TESTING
 
 1. KEYSTROKE EVENT:
    - LiveTestCycleState.onKeystroke marks phase as edited
-   - Triggers TreeSitter debounce (default 150ms)
+   - Triggers the TreeSitter debounce (50 ms by default, `Timeouts.liveTestTreeSitterDebounce`);
+     the FCS type-check waits 300 ms (`liveTestFcsDebounce`) and backs off to 2 s when typing
+     keeps cancelling it
 
 2. TREESITTER PARSES FILE:
    - Extract test function locations (source-mapped)
@@ -126,7 +128,8 @@ EXECUTION FLOW - AS-YOU-TYPE LIVE TESTING
 
 6. TEST EXECUTION (If FullCycle):
    - Prioritize tests: tier → -coverageWeight → duration
-   - Execute in parallel chunks (per-session executors)
+   - Execute (per-session executors): in parallel chunks for a project with no instrumented
+     assemblies, one test at a time for one with them, so each coverage reading is one test's
    - Collect TestRunResult + coverage bitmaps
    - Update FlakyHistory (ResultWindow)
    - Build FailureNarratives for Passed→Failed transitions
@@ -212,8 +215,12 @@ KEY INVARIANTS & GUARANTEES
 7. Tier Invariant: Environmental flaky failures demoted tier 0→2
    → Prevents attention-stealing; allows honest failures to surface
 
-8. Coverage Bitmap Intersection: All tests in same batch share same bitmap
-   → Conservative: any test might have hit any probe → safe upper bound
+8. Coverage is attributed per test: the worker reads and clears the coverage probes
+   after each test and sends the reading with that test's result, so a bitmap belongs
+   to one test. To make that true, the tests of a project with instrumented assemblies
+   run one at a time. (Earlier there was one bitmap per run batch, shared by every
+   test in it, which was a safe upper bound and could not say which test reached a
+   line. [how-live-testing-works.md](how-live-testing-works.md) has the details.)
 
 ================================================================================
 EXTENSION POINTS FOR CUSTOMIZATION
