@@ -46,7 +46,7 @@ Most of the live testing and hot reload rows above merged on 2026-10-01 and are 
 
 For the curious, there are three short write-ups on how it's done, each with the tools I learned from, what F# and .NET don't hand you, how SageFs gets it done, and where Microsoft's version is ahead: [how hot reload works](docs/how-hot-reload-works.md), [how live testing works](docs/how-live-testing-works.md), and [how SageFs opens projects plain FSI can't](docs/how-isolation-works.md).
 
-If you want to see how it got here, [what SageFs has become, stretch by stretch](docs/progress.md) goes through each change as before, now, why it matters, and a link to the code.
+If you want to see how it got here, [what SageFs has become, stretch by stretch](docs/progress.md) goes through each change as before, now, why it matters, and a link to the code. If you want to see where it's going, [the roadmap](docs/roadmap.md) lists what I'm building now, what's next, and the ideas further out. It updates itself: an item moves to Built when its code lands.
 
 I'm not going to pretend all of that is finished. [Live testing](docs/live-testing-as-you-type.md) and hot reload each have documented limits, written down next to the tests that pin them. But all of it runs today, and none of it is a mockup.
 
