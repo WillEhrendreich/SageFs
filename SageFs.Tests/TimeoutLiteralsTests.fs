@@ -55,6 +55,7 @@ let private budgets : (string * int) list =
     "SageFs.Core/WarmupContext.fs", 4
     "SageFs.Core/WorkerHealthProbe.fs", 2
     "SageFs.Core/WorkerPostReady.fs", 1
+    "SageFs.Core/WorkflowTypes.fs", 1
     "SageFs.Host/AppRunner.fs", 2
     "SageFs.Tests/AffordancesMutationTests.fs", 6
     "SageFs.Tests/AffordancesPropertyTests.fs", 2

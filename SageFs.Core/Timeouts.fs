@@ -300,10 +300,6 @@ module Timeouts =
   /// is failing to come up), which backs off 4x and gives up at a lower ceiling.
   /// No recorded reason for 10s.
   let restartStartupCrashWindow = TimeSpan.FromSeconds(10.0)
-  /// What the workflow-switch confirmation tells the user a cold session start
-  /// costs. A display estimate, not a bound: nothing waits on it. No recorded
-  /// reason for 15s.
-  let estimatedColdStart = TimeSpan.FromSeconds(15.0)
 
   // -- Watchdog / Supervision --
   let watchdogInterval = TimeSpan.FromSeconds(5.0)

@@ -297,6 +297,7 @@
          <Compile Include="JsonTests.fs" />
          <Compile Include="JsonCentralizationTests.fs" />
          <Compile Include="TimeoutLiteralsTests.fs" />
+         <Compile Include="StandaloneSourceTests.fs" />
          <Compile Include="SurfaceJsonWireTests.fs" />
          <Compile Include="JsonCoreFilesTests.fs" />
          <Compile Include="EvalPreflightTests.fs" />

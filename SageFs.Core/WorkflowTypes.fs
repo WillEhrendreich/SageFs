@@ -507,13 +507,19 @@ module TransitionCost =
   let isZeroCost (cost: TransitionCost) =
     cost.DefinitionsLost = 0 && cost.CellsLost = 0
 
+  /// What the workflow-switch confirmation tells the user a cold session start costs. A display
+  /// estimate, not a bound: nothing waits on it. No recorded reason for 15 s. It is named here, and
+  /// not in `Timeouts`, because this file is also loaded on its own by the VS Code contract
+  /// scripts, which have no other SageFs file (`StandaloneSourceTests` pins that).
+  let coldStartEstimate = TimeSpan.FromSeconds 15.
+
   /// Compute transition cost from observable session state.
   /// Every switch spawns a fresh session, so restart always reflects
   /// the cold-start estimate — there is no standby pool anymore.
   let compute (evalCount: int) (cellCount: int) = {
     DefinitionsLost = evalCount
     CellsLost = cellCount
-    EstimatedRestart = Timeouts.estimatedColdStart
+    EstimatedRestart = coldStartEstimate
   }
 
 // ─── Workflow switch outcome ────────────────────────────────
