@@ -65,7 +65,7 @@ module McpSessionIsolation =
         GetWarmupContext = None
         GetFeatureState = None; RecordEval = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
-        LiveSnapshotSink = None
+        LiveBindings = None
         CohortOwner = None
         GetDaemonHealth = fun () -> None
         GetProcessTelemetry = fun () -> None } : McpContext
@@ -175,7 +175,7 @@ module McpSessionIsolation =
           GetWarmupContext = None
           GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
-          LiveSnapshotSink = None
+          LiveBindings = None
           CohortOwner = None
           GetDaemonHealth = fun () -> None
           GetProcessTelemetry = fun () -> None } : McpContext
@@ -427,7 +427,7 @@ module WorkingDirRoutingPriority =
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
       GetFeatureState = None; RecordEval = None; ActivityTracker = SageFs.AgentActivityTracker.create()
-      LiveSnapshotSink = None; CohortOwner = None
+      LiveBindings = None; CohortOwner = None
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }
 
@@ -461,7 +461,7 @@ module WorkingDirRoutingPriority =
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
       GetFeatureState = None; RecordEval = None; ActivityTracker = SageFs.AgentActivityTracker.create()
-      LiveSnapshotSink = None; CohortOwner = None
+      LiveBindings = None; CohortOwner = None
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }
 
@@ -681,7 +681,7 @@ module ResetIsolation =
         GetWarmupContext = None
         GetFeatureState = None; RecordEval = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
-        LiveSnapshotSink = None
+        LiveBindings = None
         CohortOwner = None
         GetDaemonHealth = fun () -> None
         GetProcessTelemetry = fun () -> None } : McpContext
@@ -783,7 +783,7 @@ module ResetIsolation =
         GetWarmupContext = None
         GetFeatureState = None; RecordEval = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
-        LiveSnapshotSink = None
+        LiveBindings = None
         CohortOwner = None
         GetDaemonHealth = fun () -> None
         GetProcessTelemetry = fun () -> None } : McpContext
@@ -870,7 +870,7 @@ module ResetIsolation =
           GetWarmupContext = None
           GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
-          LiveSnapshotSink = None
+          LiveBindings = None
           CohortOwner = None
           GetDaemonHealth = fun () -> None
           GetProcessTelemetry = fun () -> None } : McpContext
@@ -1038,7 +1038,7 @@ module ResetIsolation =
           GetWarmupContext = None
           GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
-          LiveSnapshotSink = None
+          LiveBindings = None
           CohortOwner = None
           GetDaemonHealth = fun () -> None
           GetProcessTelemetry = fun () -> None } : McpContext
@@ -1127,7 +1127,7 @@ module ResetIsolation =
           GetWarmupContext = None
           GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
-          LiveSnapshotSink = None
+          LiveBindings = None
           CohortOwner = None
           GetDaemonHealth = fun () -> None
           GetProcessTelemetry = fun () -> None } : McpContext
@@ -1534,7 +1534,7 @@ module SessionMapEviction =
       GetWarmupContext = None
       GetFeatureState = None; RecordEval = None
       ActivityTracker = SageFs.AgentActivityTracker.create()
-      LiveSnapshotSink = None
+      LiveBindings = None
       CohortOwner = None
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None } : McpContext

@@ -118,6 +118,12 @@ let readingTests =
       |> WorkerProtocol.Serialization.tryDeserialize<LiveBindingsPane.LiveValuesReading>
       |> Expect.equal "round trip" (Result.Ok reading)
 
+    testCase "the reading built around snapshot JSON reads back as the same reading, with no second pass over the tree" <| fun _ ->
+      let snapshot = snapshotOf [ binding "a" (held "x" NotEvaluatedReason.GetterLoops) ]
+      LiveBindingsPane.readingJson WalkOff LiveBindingsPane.StartedWithDefault (WorkerProtocol.Serialization.serialize snapshot)
+      |> WorkerProtocol.Serialization.tryDeserialize<LiveBindingsPane.LiveValuesReading>
+      |> Expect.equal "same reading" (Result.Ok({ Mode = WalkOff; Origin = LiveBindingsPane.StartedWithDefault; Snapshot = snapshot } : LiveBindingsPane.LiveValuesReading))
+
     testCase "a worker that was never told a mode is advised to take the config's, once" <| fun _ ->
       let reading origin mode : LiveBindingsPane.LiveValuesReading = { Mode = mode; Origin = origin; Snapshot = snapshotOf [] }
       LiveBindingsPane.adviseConfigured WalkEverything (reading LiveBindingsPane.StartedWithDefault WalkSafe)
@@ -149,4 +155,115 @@ let storeTests =
       let store = LiveBindingsPane.PaneStore.create ()
       LiveBindingsPane.PaneStore.setMode store "s1" WalkOff
       (LiveBindingsPane.PaneStore.notesOf store "s2").Mode |> Expect.equal "s2 untouched" WalkSafe
+  ]
+
+// ---- the daemon's feed: pulls, clicks and mode switches, against a fake worker ----
+
+type private FakeWorker(initial: LiveBindingsPane.LiveValuesReading) =
+  let mutable reading = initial
+  let sent = System.Collections.Generic.List<WorkerProtocol.WorkerMessage>()
+  let mutable outcome : MemberOutcome = BindingNotFound "unset"
+  member _.Sent = sent |> Seq.toList
+  member _.ClickAnswers(answer: MemberOutcome) = outcome <- answer
+  member _.Ask : LiveBindingsPane.Feed.Ask =
+    fun message ->
+      async {
+        sent.Add message
+        match message with
+        | WorkerProtocol.WorkerMessage.GetLiveValues rid ->
+          return Result.Ok(WorkerProtocol.WorkerResponse.LiveValuesResult(rid, WorkerProtocol.Serialization.serialize reading))
+        | WorkerProtocol.WorkerMessage.SetValueWalk(mode, rid) ->
+          reading <- { reading with Mode = mode; Origin = LiveBindingsPane.ChosenByUser }
+          return Result.Ok(WorkerProtocol.WorkerResponse.LiveValuesResult(rid, WorkerProtocol.Serialization.serialize reading))
+        | WorkerProtocol.WorkerMessage.EvaluateLiveMember(_, _, rid) ->
+          return Result.Ok(WorkerProtocol.WorkerResponse.LiveMemberResult(rid, WorkerProtocol.Serialization.serialize outcome))
+        | other -> return Result.Error(SageFsError.WorkerCommunicationFailed("s1", sprintf "unexpected %A" other))
+      }
+
+let private readingOf origin mode bindings : LiveBindingsPane.LiveValuesReading =
+  { Mode = mode; Origin = origin; Snapshot = snapshotOf bindings }
+
+let private stores () = Features.LiveBindingsAdaptive.create (), LiveBindingsPane.PaneStore.create ()
+
+[<Tests>]
+let feedTests =
+  testList "the daemon's live-bindings feed" [
+    testAsync "a pull puts the snapshot in the store under the session's id and remembers the mode the worker walked in" {
+      let adaptive, notes = stores ()
+      let worker = FakeWorker(readingOf LiveBindingsPane.ChosenByUser WalkOff [ binding "a" (node "a" NodeKind.Leaf []) ])
+      do! LiveBindingsPane.Feed.pull worker.Ask adaptive notes "s1" (fun () -> WalkSafe)
+      (Features.LiveBindingsAdaptive.tryGet adaptive "s1").Value.SessionId |> Expect.equal "stamped" "s1"
+      (LiveBindingsPane.PaneStore.notesOf notes "s1").Mode |> Expect.equal "the worker's mode" WalkOff
+    }
+
+    testAsync "a worker nobody has told gets the config's mode, once, and the store shows the reading taken after it" {
+      let adaptive, notes = stores ()
+      let worker = FakeWorker(readingOf LiveBindingsPane.StartedWithDefault WalkSafe [ binding "a" (node "a" NodeKind.Leaf []) ])
+      do! LiveBindingsPane.Feed.pull worker.Ask adaptive notes "s1" (fun () -> WalkEverything)
+      worker.Sent
+      |> List.exists (function WorkerProtocol.WorkerMessage.SetValueWalk(WalkEverything, _) -> true | _ -> false)
+      |> Expect.isTrue "the config's choice was sent"
+      (LiveBindingsPane.PaneStore.notesOf notes "s1").Mode |> Expect.equal "now Everything" WalkEverything
+      do! LiveBindingsPane.Feed.pull worker.Ask adaptive notes "s1" (fun () -> WalkEverything)
+      worker.Sent
+      |> List.filter (function WorkerProtocol.WorkerMessage.SetValueWalk _ -> true | _ -> false)
+      |> List.length
+      |> Expect.equal "told once, not on every eval" 1
+    }
+
+    testAsync "a worker whose mode a user chose is never overruled by the config" {
+      let adaptive, notes = stores ()
+      let worker = FakeWorker(readingOf LiveBindingsPane.ChosenByUser WalkSafe [])
+      do! LiveBindingsPane.Feed.pull worker.Ask adaptive notes "s1" (fun () -> WalkEverything)
+      worker.Sent
+      |> List.exists (function WorkerProtocol.WorkerMessage.SetValueWalk _ -> true | _ -> false)
+      |> Expect.isFalse "nothing was sent"
+    }
+
+    testAsync "a click whose row now has a value replaces that binding's tree, notes how it was contained and keeps the generation" {
+      let adaptive, notes = stores ()
+      let worker = FakeWorker(readingOf LiveBindingsPane.ChosenByUser WalkSafe [ binding "box" (held "Size" NotEvaluatedReason.GetterRunsCode); binding "other" (node "other" NodeKind.Leaf []) ])
+      do! LiveBindingsPane.Feed.pull worker.Ask adaptive notes "s1" (fun () -> WalkSafe)
+      let after = binding "box" (node "box" NodeKind.Class [ node "Size" NodeKind.Leaf [] ])
+      worker.ClickAnswers(MemberShown(after, NotContained NotLinux))
+      let! outcome = LiveBindingsPane.Feed.evaluateMember worker.Ask adaptive notes "s1" "box" [ "Size" ]
+      outcome |> Expect.equal "answered" (Result.Ok(MemberShown(after, NotContained NotLinux)))
+      let stored = (Features.LiveBindingsAdaptive.tryGet adaptive "s1").Value
+      stored.Bindings.[0] |> Expect.equal "replaced" after
+      stored.Generation |> Expect.equal "same walk" 3L
+      (LiveBindingsPane.PaneStore.notesOf notes "s1").Click
+      |> Expect.equal "remembered" (LiveBindingsPane.ClickAnswered(MemberShown(after, NotContained NotLinux)))
+    }
+
+    testAsync "a refused click still reaches every subscriber, because its line changed" {
+      let adaptive, notes = stores ()
+      let worker = FakeWorker(readingOf LiveBindingsPane.ChosenByUser WalkEverything [ binding "box" (node "box" NodeKind.Class []) ])
+      do! LiveBindingsPane.Feed.pull worker.Ask adaptive notes "s1" (fun () -> WalkEverything)
+      let pushes = ref 0
+      use _subscription = Features.LiveBindingsAdaptive.subscribe adaptive "s1" (fun _ -> pushes.Value <- pushes.Value + 1)
+      let before = pushes.Value
+      worker.ClickAnswers(MemberRefused EveryGetterAlreadyRan)
+      let! _ = LiveBindingsPane.Feed.evaluateMember worker.Ask adaptive notes "s1" "box" [ "Size" ]
+      Expect.isGreaterThan "pushed again" (pushes.Value, before)
+      (LiveBindingsPane.PaneStore.notesOf notes "s1").Click
+      |> Expect.equal "remembered" (LiveBindingsPane.ClickAnswered(MemberRefused EveryGetterAlreadyRan))
+    }
+
+    testAsync "a mode switch asks the worker, stores the new reading and clears the old click line" {
+      let adaptive, notes = stores ()
+      let worker = FakeWorker(readingOf LiveBindingsPane.ChosenByUser WalkSafe [ binding "box" (node "box" NodeKind.Class []) ])
+      do! LiveBindingsPane.Feed.pull worker.Ask adaptive notes "s1" (fun () -> WalkSafe)
+      LiveBindingsPane.PaneStore.recordClick notes "s1" (LiveBindingsPane.ClickAnswered(BindingNotFound "x"))
+      let! _ = LiveBindingsPane.Feed.setMode worker.Ask adaptive notes "s1" WalkEverything
+      LiveBindingsPane.PaneStore.notesOf notes "s1"
+      |> Expect.equal "new mode, no stale line" ({ Mode = WalkEverything; Click = LiveBindingsPane.NoClickYet } : LiveBindingsPane.PaneNotes)
+    }
+
+    testAsync "a worker that cannot be reached is an error, not an empty pane" {
+      let adaptive, notes = stores ()
+      let unreachable : LiveBindingsPane.Feed.Ask = fun _ -> async { return Result.Error(SageFsError.WorkerCommunicationFailed("s1", "gone")) }
+      match! LiveBindingsPane.Feed.evaluateMember unreachable adaptive notes "s1" "box" [ "Size" ] with
+      | Result.Error _ -> ()
+      | Result.Ok other -> failtestf "expected an error, got %A" other
+    }
   ]

@@ -264,6 +264,14 @@ let handleMessage
       let! json = actor.PostAndAsyncReply(fun rc -> GetLiveValues rc)
       return WorkerResponse.LiveValuesResult(replyId, json)
 
+    | WorkerMessage.EvaluateLiveMember(binding, path, replyId) ->
+      let! json = actor.PostAndAsyncReply(fun rc -> EvaluateLiveMember(binding, path, rc))
+      return WorkerResponse.LiveMemberResult(replyId, json)
+
+    | WorkerMessage.SetValueWalk(mode, replyId) ->
+      let! json = actor.PostAndAsyncReply(fun rc -> SetValueWalk(mode, rc))
+      return WorkerResponse.LiveValuesResult(replyId, json)
+
     | WorkerMessage.RunTests(tests, maxParallelism, replyId) ->
       let runTest = getRunTest()
       let results = System.Collections.Concurrent.ConcurrentBag<Features.LiveTesting.TestRunResult>()

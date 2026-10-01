@@ -12,6 +12,9 @@ type ValueWalk =
   /// Do not open class instances at all.
   | WalkOff
 
+/// A name that is not one of the choices, as an editor or a person typed it.
+type UnknownValueWalk = UnknownValueWalk of given: string
+
 module ValueWalk =
   /// Every choice, in the order the pane offers them.
   let all : ValueWalk list = [ WalkSafe; WalkEverything; WalkOff ]
@@ -31,6 +34,15 @@ module ValueWalk =
     | WalkSafe -> "Reads fields and runs only getters that provably do nothing. Every other getter is listed, and runs only when you click it."
     | WalkEverything -> "Runs your getters: every public property of every class value, after every eval. That is your code running, and it can take time or change things."
     | WalkOff -> "Does not open class instances. Records, unions, tuples, lists and maps still show."
+
+  /// Read a choice from its name, ignoring case. The names are exactly `name`'s, so config, the API and the pane spell it one way.
+  let parse (text: string) : Result<ValueWalk, UnknownValueWalk> =
+    match all |> List.tryFind (fun choice -> System.String.Equals(name choice, text, System.StringComparison.OrdinalIgnoreCase)) with
+    | Some choice -> Result.Ok choice
+    | None -> Result.Error(UnknownValueWalk text)
+
+  let describeUnknown (UnknownValueWalk given: UnknownValueWalk) : string =
+    sprintf "'%s' is not a way to walk values. The choices are: %s." given (all |> List.map name |> String.concat ", ")
 
   let toWalkMode (choice: ValueWalk) : LiveValueTree.WalkMode =
     match choice with

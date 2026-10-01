@@ -963,7 +963,7 @@ let buildDashboardSnapshotWithSessions
       // Live watch window takes priority; fall back to the text-parsed panel
       // for sessions that haven't produced a live snapshot yet.
       match q.GetLiveBindings sessionId with
-      | Some liveSnap -> renderLiveBindingsPanel (Some liveSnap)
+      | Some view -> renderLiveBindingsPanel (Some view.Snapshot)
       | None -> renderBindingsPanel (resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings sessionId))
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)

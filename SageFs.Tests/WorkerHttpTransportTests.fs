@@ -119,6 +119,10 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.InstrumentationMapsResult(rid, [||])
   | WorkerMessage.GetLiveValues rid ->
     return WorkerResponse.LiveValuesResult(rid, "{}")
+  | WorkerMessage.SetValueWalk(_, rid) ->
+    return WorkerResponse.LiveValuesResult(rid, "{}")
+  | WorkerMessage.EvaluateLiveMember(_, _, rid) ->
+    return WorkerResponse.LiveMemberResult(rid, "{}")
   | WorkerMessage.Shutdown ->
     return WorkerResponse.WorkerShuttingDown
 }

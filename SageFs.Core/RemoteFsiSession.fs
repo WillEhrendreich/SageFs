@@ -116,6 +116,18 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
       // A lost host has no values: an empty snapshot, exactly what a session with no bindings reports.
       | HostGone _ -> WorkerProtocol.Serialization.serialize (LiveValueTree.buildSnapshot "" next [])
 
+    member _.EvaluateMember(binding, path) =
+      let outcome =
+        match wait (host.EvaluateMember(binding, path)) with
+        | Answered outcome -> outcome
+        | HostGone reason -> MemberUnavailable(HostNotRunning reason)
+      WorkerProtocol.Serialization.serialize outcome
+
+    member _.SetWalkMode(mode) =
+      match wait (host.SetWalkMode mode) with
+      | Answered held -> WalkModeNow held
+      | HostGone reason -> WalkModeNotSet(HostNotRunning reason)
+
     member _.Completions(text, caret, word) =
       // F# candidates come from the host, unsorted; SageFs ranks them exactly as it does in-process.
       let fromHost (queryText: string) (queryCaret: int) (_word: string) : AutoCompletion.CompletionItem seq =

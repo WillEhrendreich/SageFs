@@ -69,7 +69,7 @@ let private mcpContextFor (model: SageFsModel) (callerSession: string) : McpCont
     GetFeatureState = Some (fun () -> Features.FeatureHooks.FeaturePushState.empty)
     RecordEval = None
     ActivityTracker = AgentActivityTracker.create ()
-    LiveSnapshotSink = None
+    LiveBindings = None
     CohortOwner = None
     GetDaemonHealth = fun () -> None
     GetProcessTelemetry = fun () -> None }

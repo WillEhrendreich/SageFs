@@ -126,6 +126,10 @@ module WorkerHttpTransport =
     let diagThreadpool = WorkerRoute.Get ("/diag/threadpool", GetAccess.ReadOnly)
     let status = WorkerRoute.Get ("/status", GetAccess.ReadOnly)
     let liveValues = WorkerRoute.Get ("/live-values", GetAccess.ReadOnly)
+    /// Runs one getter of the user's code on a click, so it is a POST like every other route that executes code.
+    let liveValuesEvaluate = WorkerRoute.Post "/live-values/evaluate"
+    /// Changes how much of a class every later walk runs, so it is a POST like every other mutating route.
+    let liveValuesMode = WorkerRoute.Post "/live-values/mode"
     let eval = WorkerRoute.Post "/eval"
     let check = WorkerRoute.Post "/check"
     let typecheckSymbols = WorkerRoute.Post "/typecheck-symbols"
@@ -174,7 +178,7 @@ module WorkerHttpTransport =
     let hotReloadLastOutcome = WorkerRoute.Get ("/hotreload/last-outcome", GetAccess.ReadOnly)
 
   let routes : WorkerRoute list = [
-    Routes.diagThreadpool; Routes.status; Routes.liveValues; Routes.eval; Routes.check
+    Routes.diagThreadpool; Routes.status; Routes.liveValues; Routes.liveValuesEvaluate; Routes.liveValuesMode; Routes.eval; Routes.check
     Routes.typecheckSymbols; Routes.completions; Routes.cancel; Routes.loadScript
     Routes.reset; Routes.hardReset; Routes.runTests; Routes.runTestsStream
     Routes.testDiscovery; Routes.evalLiveTestFile; Routes.instrumentationMaps; Routes.shutdown
@@ -386,6 +390,25 @@ module WorkerHttpTransport =
       map Routes.liveValues (Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetLiveValues rid)
+      })) |> ignore
+
+      map Routes.liveValuesEvaluate (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let binding = (jsonProp doc "binding").GetString()
+        let path = [ for label in (jsonProp doc "path").EnumerateArray() -> label.GetString() ]
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.EvaluateLiveMember(binding, path, rid))
+      })) |> ignore
+
+      map Routes.liveValuesMode (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let name = (jsonProp doc "mode").GetString()
+        let rid = (jsonProp doc "replyId").GetString()
+        match ValueWalk.parse name with
+        | Result.Error unknown -> return! rejectUnreadable ctx "mode" (SageFsError.JsonParseError("the worker wire", ValueWalk.describeUnknown unknown))
+        | Result.Ok mode -> return! respond' ctx (WorkerMessage.SetValueWalk(mode, rid))
       })) |> ignore
 
       map Routes.eval (Func<HttpContext, Task>(fun ctx -> task {

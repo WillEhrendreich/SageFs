@@ -94,7 +94,7 @@ let roundTripTests =
             return WorkerResponse.LiveMemberResult(replyId, "BindingNotFound")
           | other -> return WorkerResponse.WorkerError(SageFsError.WorkerCommunicationFailed("test", sprintf "unexpected %A" other))
         }
-      let! server = startWith handler
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = startWith handler
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
         let! response = proxy (WorkerMessage.EvaluateLiveMember("box", [ "Items" ], "c1")) |> Async.StartAsTask
@@ -118,7 +118,7 @@ let roundTripTests =
             return WorkerResponse.LiveValuesResult(replyId, "{}")
           | other -> return WorkerResponse.WorkerError(SageFsError.WorkerCommunicationFailed("test", sprintf "unexpected %A" other))
         }
-      let! server = startWith handler
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = startWith handler
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
         let! _ = proxy (WorkerMessage.SetValueWalk(WalkEverything, "m1")) |> Async.StartAsTask

@@ -206,6 +206,10 @@ type Command =
   /// Pulled on demand, after the eval reply — never attached to it (roast-4
   /// #2). Serialized JSON of a Features.LiveValueTree.LiveValueSnapshot.
   | GetLiveValues of AsyncReplyChannel<string>
+  /// A click on a "not evaluated" row: answers the JSON of a FsiProtocol.MemberOutcome, off every actor.
+  | EvaluateLiveMember of binding: string * path: string list * AsyncReplyChannel<string>
+  /// Choose how much of a class the walk may run, from now on. Answers a fresh reading (JSON).
+  | SetValueWalk of ValueWalk * AsyncReplyChannel<string>
   | AddMiddleware of Middleware list * AsyncReplyChannel<unit>
   | GetDiagnostics of text: string * AsyncReplyChannel<Diagnostics.Diagnostic array>
   | GetTypeCheckWithSymbols of text: string * filePath: string * AsyncReplyChannel<Diagnostics.TypeCheckWithSymbolsResult>
@@ -1171,6 +1175,9 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
   let currentEvalCts = ref Option<CancellationTokenSource>.None
   let currentEvalThread = ref Option<Thread>.None
 
+  // How much of a class the live-values walk may run: this worker's own, told to each session before its first read.
+  let walkKeeper = WalkModeKeeper()
+
   // Eval actor: owns AppState, serializes evals and session mutations.
   // Publishes immutable snapshots to query actor after each state change.
   let evalActor = MailboxProcessor<EvalCommand>.Start(fun mailbox ->
@@ -1369,9 +1376,10 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           // the caller already has its eval result (roast-4 #2).
           match phase with
           | Active (st, _) ->
-            reply.Reply (st.Session.LiveValuesJson liveValueGeneration)
+            walkKeeper.Ensure(st.Session, logger.LogWarning)
+            reply.Reply (walkKeeper.ReadingJson (st.Session.LiveValuesJson liveValueGeneration))
           | Initializing _ | Faulted _ ->
-            reply.Reply (WorkerProtocol.Serialization.serialize (Features.LiveValueTree.buildSnapshot "" 0L []))
+            reply.Reply (walkKeeper.EmptyReadingJson())
           return (phase, middleware, evalStats)
         | EvalMarkCancelling ->
           match phase with
@@ -1881,6 +1889,14 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           // goes to the eval actor, not the query actor — but it is a pull
           // the caller issues after its own eval reply, so it never delays one.
           evalActor.Post(EvalGetLiveValues reply)
+        | SetValueWalk(mode, reply) ->
+          // Chosen here, so the eval actor's very next read (the one that answers) already walks in the new mode.
+          walkKeeper.Choose mode
+          evalActor.Post(EvalGetLiveValues reply)
+        | EvaluateLiveMember(binding, path, reply) ->
+          let session = match (System.Threading.Volatile.Read(&latestSnapshot)).Phase with | Active (st, _) -> st.Session | Initializing _ | Faulted _ -> null
+          // On the thread pool, not an actor: the click may wait the getter's whole deadline.
+          System.Threading.Tasks.Task.Run(fun () -> reply.Reply(walkKeeper.EvaluateMember(session, binding, path, logger.LogWarning))) |> ignore
 
         // Cancel — cooperative via CTS + thread interrupt, answered synchronously; also posts EvalMarkCancelling since it can't confirm the signal stopped anything.
         | CancelEval reply ->

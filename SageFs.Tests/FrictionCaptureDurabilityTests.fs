@@ -32,7 +32,7 @@ let private mkCtxWithStore (store: FrictionStore option) : McpTools.McpContext =
     GetWarmupContext = None
     GetFeatureState = None; RecordEval = None
     ActivityTracker = AgentActivityTracker.create()
-    LiveSnapshotSink = None
+    LiveBindings = None
     CohortOwner = None
     GetDaemonHealth = fun () -> None
     GetProcessTelemetry = fun () -> None }

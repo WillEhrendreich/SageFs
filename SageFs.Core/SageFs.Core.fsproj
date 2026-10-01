@@ -363,6 +363,8 @@
         <Compile Include="Middleware\HotReloadCore.fs" />
         <Compile Include="HostAgent.fs" />
         <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />
+        <!-- What the live-bindings pane knows beyond the tree (mode, last click, held-row count). Needs the protocol's MemberOutcome. -->
+        <Compile Include="Features\LiveBindingsPane.fs" />
         <Compile Include="FsiHostBuild.fs" />
         <Compile Include="FsiHostClient.fs" />
         <!-- No dependency on FileWatcher.fs itself (System/System.IO only) —
@@ -382,6 +384,7 @@
         <Compile Include="FsiSession.fs" />
         <Compile Include="RemoteFsiSession.fs" />
         <Compile Include="IsolatedFsiSession.fs" />
+        <Compile Include="WalkModeKeeper.fs" />
         <Compile Include="ConfigHost.fs" />
         <Compile Include="SessionAgent.fs" />
         <!-- Pure warmup open-replay decision core (extractOpensFromLines/

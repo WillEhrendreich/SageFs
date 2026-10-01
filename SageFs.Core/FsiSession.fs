@@ -36,6 +36,13 @@ type HostLifetime =
   /// FSI is in a host process of its own. `ended` completes once, with how that process's life ended.
   | SeparateHost of ended: System.Threading.Tasks.Task<HostEnd>
 
+/// What telling a session its walk mode came to.
+type WalkModeOutcome =
+  /// The session walks in this mode from now on.
+  | WalkModeNow of LiveValueTree.WalkMode
+  /// The mode could not be put to the session, for this reason.
+  | WalkModeNotSet of reason: SageFs.FsiHost.FsiProtocol.MemberUnavailableReason
+
 [<AllowNullLiteral>]
 type IFsiSession =
   inherit IDisposable
@@ -47,6 +54,12 @@ type IFsiSession =
   abstract ReadFlag: name: string -> FlagValue
   /// The session's bound values as a serialized LiveValueSnapshot (increments the generation).
   abstract LiveValuesJson: generation: int64 ref -> string
+  /// Run ONE getter the live-values walk listed as "not evaluated", under containment, and answer with the JSON of a
+  /// FsiProtocol.MemberOutcome: the binding walked again, or why the click was not run. Only an isolated host can contain a
+  /// getter, so an in-process session answers MemberUnavailable.
+  abstract EvaluateMember: binding: string * path: string list -> string
+  /// Choose how much of a class the live-values walk may run, from now on. A new session walks in Safe mode.
+  abstract SetWalkMode: mode: LiveValueTree.WalkMode -> WalkModeOutcome
   abstract Completions: text: string * caret: int * word: string -> AutoCompletion.CompletionItem list
   abstract Diagnose: text: string -> Diagnostics.Diagnostic array
   abstract TypeCheckWithSymbols: filePath: string * text: string -> Diagnostics.TypeCheckWithSymbolsResult
@@ -85,7 +98,7 @@ let evalOrThrow (session: IFsiSession) (code: string) (cancellationToken: Cancel
 /// Reflection-walk an FSI session's bound values into a JSON-serialized Features.LiveValueTree.LiveValueSnapshot,
 /// for the dashboard's watch window. Pulled on demand AFTER an eval reply, never attached to it — the walk used to
 /// sit between the eval finishing and the caller getting its result (roast-4 #2).
-let private captureLiveValueSnapshotJson (session: FsiEvaluationSession) (generationRef: int64 ref) : string =
+let private captureLiveValueSnapshotJson (session: FsiEvaluationSession) (mode: LiveValueTree.WalkMode) (generationRef: int64 ref) : string =
   try
     let boundValues =
       session.GetBoundValues()
@@ -101,7 +114,7 @@ let private captureLiveValueSnapshotJson (session: FsiEvaluationSession) (genera
           with _ -> ""
         (bv.Name, typeSig, value))
     let generation = Interlocked.Increment(&generationRef.contents)
-    let snap = LiveValueTree.buildSnapshot "" generation boundValues
+    let snap = LiveValueTree.buildSnapshotWith (Array.map (fun (name, value) -> LiveValueTree.buildValueNodeIn mode name value)) "" generation boundValues
     // Use WorkerProtocol.Serialization (FSharp.SystemTextJson) so the NodeKind DU and other F# types serialize correctly.
     WorkerProtocol.Serialization.serialize snap
   with ex ->
@@ -113,6 +126,8 @@ let private captureLiveValueSnapshotJson (session: FsiEvaluationSession) (genera
 [<Sealed; AllowNullLiteral>]
 type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
   let agent = Agent(init, currentProcess (fun () -> session.DynamicAssemblies))
+  // How much of a class the walk may run: Safe until the worker says otherwise.
+  let walkMode = ref LiveValueTree.WalkMode.Safe
 
   interface IFsiSession with
     member _.HostLifetime = SharesTheWorkerProcess
@@ -138,7 +153,14 @@ type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
             | t -> t.Name
           )
 
-    member _.LiveValuesJson(generation) = captureLiveValueSnapshotJson session generation
+    member _.LiveValuesJson(generation) = captureLiveValueSnapshotJson session (Volatile.Read(&walkMode.contents)) generation
+
+    member _.EvaluateMember(_, _) =
+      WorkerProtocol.Serialization.serialize (SageFs.FsiHost.FsiProtocol.MemberUnavailable SageFs.FsiHost.FsiProtocol.NoIsolatedHost)
+
+    member _.SetWalkMode(mode) =
+      Volatile.Write(&walkMode.contents, mode)
+      WalkModeNow mode
 
     member _.Completions(text, caret, word) = AutoCompletion.getCompletions session text caret word
 

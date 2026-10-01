@@ -50,6 +50,9 @@ module EndpointContracts =
     Endpoint.create GET "/api/sessions/{sid}/warmup-context" "Sessions" "Get warmup context"
     Endpoint.create POST "/api/sessions/{sid}/run-app" "Sessions" "Run a session's app"
     Endpoint.create POST "/api/sessions/{sid}/stop-app" "Sessions" "Stop a session's app"
+    Endpoint.create POST "/api/sessions/{sid}/live-values/evaluate" "Sessions" "Run one not-evaluated getter of the live bindings under containment"
+    Endpoint.create POST "/api/sessions/{sid}/live-values/mode" "Sessions" "Choose how much of a class the live bindings walk may run"
+    Endpoint.create GET "/api/sessions/{sid}/live-values/mode" "Sessions" "Read the live bindings walk mode and the last click's containment"
   ]
 
   let liveTestingEndpoints = [

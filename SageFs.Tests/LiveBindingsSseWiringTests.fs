@@ -6,7 +6,7 @@ module SageFs.Tests.LiveBindingsSseWiringTests
 //     eval already pulls a `Features.LiveValueTree.LiveValueSnapshot` via
 //     `GetLiveValues` (AppState.fs) — off the eval thread, fire-and-forget,
 //     bounded (MaxBindings/MaxNodes/MaxDepth) — and feeds it to the
-//     dashboard's `LiveBindingsAdaptive` store. WIRED: `wrapLiveSnapshotSinkForSse`
+//     dashboard's `LiveBindingsAdaptive` store. WIRED: `pushLiveBindingsOverSse`
 //     makes the SAME already-paid snapshot ALSO reach SSE clients, at zero
 //     extra reflection cost.
 //   - `domain_model`: its OWN data source (`DomainModelViz.annotateWithHealth`)
@@ -16,7 +16,7 @@ module SageFs.Tests.LiveBindingsSseWiringTests
 //     wire, even in principle. DELETED, along with the tests that existed
 //     only to exercise it.
 //
-// These tests prove: (1) `wrapLiveSnapshotSinkForSse` actually pushes a
+// These tests prove: (1) `pushLiveBindingsOverSse` actually pushes a
 // `live_bindings` SSE frame carrying the real snapshot content, without
 // dropping the original consumer; (2) `domain_model` no longer exists in the
 // SSE event registry.
@@ -45,49 +45,41 @@ let private mkSnapshot (sessionId: string) : LiveValueSnapshot =
     CapturedAt = DateTimeOffset.UtcNow }
 
 [<Tests>]
-let wrapLiveSnapshotSinkForSseTests = testList "wrapLiveSnapshotSinkForSse" [
+let pushLiveBindingsOverSseTests = testList "pushLiveBindingsOverSse" [
 
-  testCase "None in, None out — no behavior change when no sink is wired" <| fun _ ->
-    wrapLiveSnapshotSinkForSse (Event<string>()) jsonOpts None
-    |> Expect.isNone "wrapping None stays None"
+  let hubOf () : SageFs.Features.LiveBindingsPane.Hub =
+    { Adaptive = SageFs.Features.LiveBindingsAdaptive.create ()
+      Notes = SageFs.Features.LiveBindingsPane.PaneStore.create ()
+      ConfiguredWalk = fun _ -> WalkSafe }
 
-  testCase "calls the inner sink AND pushes a live_bindings SSE frame carrying the real snapshot" <| fun _ ->
+  testCase "no hub, no subscription — nothing is pushed" <| fun _ ->
+    use _subscription = pushLiveBindingsOverSse (Event<string>()) jsonOpts None
+    ()
+
+  testCase "every store update pushes a live_bindings SSE frame carrying the real snapshot" <| fun _ ->
     let broadcast = Event<string>()
     let received = ResizeArray<string>()
     broadcast.Publish.Add(received.Add)
-    let innerCalls = ResizeArray<string * LiveValueSnapshot>()
-    let inner sid (snap: LiveValueSnapshot) = innerCalls.Add(sid, snap)
-
-    let wrapped =
-      match wrapLiveSnapshotSinkForSse broadcast jsonOpts (Some inner) with
-      | Some w -> w
-      | None -> failwith "expected Some — an inner sink was provided"
-
-    let snap = mkSnapshot "sess-1"
-    wrapped "sess-1" snap
-
-    // The dashboard's own consumer must still run — this is additive, not a
-    // replacement. A broken wrap that forgets to call `inner` would fail this.
-    innerCalls.Count |> Expect.equal "inner sink still called exactly once" 1
-    innerCalls.[0] |> Expect.equal "inner sink got the real args" ("sess-1", snap)
-
-    // A broken wrap that never triggers the broadcast would fail this.
+    let hub = hubOf ()
+    use _subscription = pushLiveBindingsOverSse broadcast jsonOpts (Some hub)
+    SageFs.Features.LiveBindingsAdaptive.update hub.Adaptive "sess-1" (mkSnapshot "sess-1")
     received.Count |> Expect.equal "exactly one live_bindings frame pushed" 1
     received.[0] |> Expect.stringStarts "rides the session channel" "event: live_bindings\n"
     received.[0] |> Expect.stringContains "carries the session id" "sess-1"
     received.[0] |> Expect.stringContains "carries the real binding name" "\"x\""
 
-  testCase "one wrapped sink call per snapshot — no extra pushes" <| fun _ ->
+  testCase "one push per update — no extra pushes, and none after the subscription is disposed" <| fun _ ->
     let broadcast = Event<string>()
     let received = ResizeArray<string>()
     broadcast.Publish.Add(received.Add)
-    let wrapped =
-      match wrapLiveSnapshotSinkForSse broadcast jsonOpts (Some (fun _ _ -> ())) with
-      | Some w -> w
-      | None -> failwith "expected Some"
-    wrapped "s1" (mkSnapshot "s1")
-    wrapped "s2" (mkSnapshot "s2")
-    received.Count |> Expect.equal "two calls, two pushes, no duplication" 2
+    let hub = hubOf ()
+    let subscription = pushLiveBindingsOverSse broadcast jsonOpts (Some hub)
+    SageFs.Features.LiveBindingsAdaptive.update hub.Adaptive "s1" (mkSnapshot "s1")
+    SageFs.Features.LiveBindingsAdaptive.update hub.Adaptive "s2" (mkSnapshot "s2")
+    received.Count |> Expect.equal "two updates, two pushes, no duplication" 2
+    subscription.Dispose()
+    SageFs.Features.LiveBindingsAdaptive.update hub.Adaptive "s3" (mkSnapshot "s3")
+    received.Count |> Expect.equal "disposed, so quiet" 2
 ]
 
 // ── domain_model deletion (roast-8 §2) ────────────────────────────────────

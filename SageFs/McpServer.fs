@@ -884,7 +884,7 @@ type McpServerConfig = {
   /// In-memory agent activity tracker for multi-agent coordination.
   ActivityTracker: SageFs.AgentActivityTracker.Tracker
   /// Receives the live bound-value snapshot after each successful eval.
-  LiveSnapshotSink: (string -> SageFs.Features.LiveValueTree.LiveValueSnapshot -> unit) option
+  LiveBindings: SageFs.Features.LiveBindingsPane.Hub option
   /// The single per-daemon cohort owner (cohort-integration-plan.md Slice 2).
   /// `None` when the caller wires no cohort support (most existing tests).
   CohortOwner: SageFs.Features.CohortOwner.Handle option
@@ -896,7 +896,7 @@ let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> op
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; RecordEval = recordEval; ActivityTracker = cfg.ActivityTracker; LiveSnapshotSink = cfg.LiveSnapshotSink; CohortOwner = cfg.CohortOwner; GetDaemonHealth = cfg.GetDaemonHealth; GetProcessTelemetry = DaemonTelemetry.current }
+  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; RecordEval = recordEval; ActivityTracker = cfg.ActivityTracker; LiveBindings = cfg.LiveBindings; CohortOwner = cfg.CohortOwner; GetDaemonHealth = cfg.GetDaemonHealth; GetProcessTelemetry = DaemonTelemetry.current }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 
@@ -1377,26 +1377,19 @@ let wireSessionHealthSubscription
 
 // ── Live bindings SSE push (roast-8 §2) ─────────────────────────────────────
 
-/// Wrap a `LiveSnapshotSink` so that, in addition to feeding whatever
-/// consumer it already has (the dashboard's `LiveBindingsAdaptive` store),
-/// every fresh `LiveValueSnapshot` is ALSO pushed as a `live_bindings` SSE
-/// event on the session channel — closing the gap where the per-eval
-/// reflection walk (`Features.LiveValueTree.buildSnapshot`, pulled via
-/// `GetLiveValues` after every successful eval) computed this snapshot and
-/// handed it to nobody outside the dashboard. `None` in, `None` out — no new
-/// behavior when the caller wires no sink. The wrapped closure calls the
-/// inner sink FIRST so an exception pushing the SSE frame can never suppress
-/// the dashboard's own update.
-let wrapLiveSnapshotSinkForSse
+/// Push every update of the live-bindings store as a `live_bindings` SSE event on the session channel: the eval's pull, a
+/// click's answer and a mode switch all reach the editors the same way, because they all go through the store. No hub, no
+/// subscription. Dispose to stop pushing.
+let pushLiveBindingsOverSse
   (sessionEventBroadcast: Event<string>)
   (sseJsonOpts: JsonSerializerOptions)
-  (inner: (string -> SageFs.Features.LiveValueTree.LiveValueSnapshot -> unit) option)
-  : (string -> SageFs.Features.LiveValueTree.LiveValueSnapshot -> unit) option =
-  inner |> Option.map (fun sink ->
-    fun sid snap ->
-      sink sid snap
-      sessionEventBroadcast.Trigger(
-        SageFs.SseWriter.formatLiveBindingsEvent sseJsonOpts (Some sid) snap))
+  (hub: SageFs.Features.LiveBindingsPane.Hub option)
+  : IDisposable =
+  match hub with
+  | None -> { new IDisposable with member _.Dispose() = () }
+  | Some hub ->
+    hub.Adaptive.Updates.Publish.Subscribe(fun (sid, snap) ->
+      sessionEventBroadcast.Trigger(SageFs.SseWriter.formatLiveBindingsEvent sseJsonOpts (Some sid) snap))
 
 // ── Action queue push: ActionQueueReady, wired for real ─────────────────────
 
@@ -3103,6 +3096,124 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
     } :> Task
   ) |> ignore
 
+/// The live-bindings pane's controls, for the dashboard and for any editor: run one "not evaluated" getter on a click, switch
+/// how much of a class the walk may run, and read both back. A click and a mode switch change the same store an eval's pull
+/// feeds, so every client (the dashboard's morph, the editors' `live_bindings` SSE event) hears about them the same way.
+///
+///   POST /api/sessions/{sid}/live-values/evaluate  { "binding": "box", "path": ["Items", "Count"] }
+///   POST /api/sessions/{sid}/live-values/mode      { "mode": "Safe" | "Everything" | "Off" }
+///   GET  /api/sessions/{sid}/live-values/mode
+let mapLiveBindingsRoutes (app: WebApplication) (rctx: RouteContext) =
+  let askWorker (sid: SageFs.WorkerProtocol.SessionId) : Task<SageFs.Features.LiveBindingsPane.Feed.Ask option> =
+    task {
+      let! proxy = rctx.Config.SessionOps.GetProxy sid
+      return
+        proxy
+        |> Option.map (fun send ->
+          fun message ->
+            async {
+              try
+                let! response = send message
+                return Result.Ok response
+              with ex ->
+                return Result.Error(SageFsError.WorkerCommunicationFailed(SageFs.WorkerProtocol.SessionId.value sid, ex.Message))
+            })
+    }
+  let notEvaluated (hub: SageFs.Features.LiveBindingsPane.Hub) (sidStr: string) =
+    match SageFs.Features.LiveBindingsAdaptive.tryGet hub.Adaptive sidStr with
+    | Some snapshot -> SageFs.Features.LiveBindingsPane.notEvaluatedCount snapshot
+    | None -> 0
+  let lineText (notes: SageFs.Features.LiveBindingsPane.PaneNotes) =
+    match SageFs.Features.LiveBindingsPane.containmentLine notes.Click with
+    | SageFs.Features.LiveBindingsPane.LineSays text -> text
+    | SageFs.Features.LiveBindingsPane.NothingClickedYet -> ""
+  // Resolves the session, the hub and the worker, or answers why not. Everything the three routes share.
+  let withLiveBindings
+    (ctx: Microsoft.AspNetCore.Http.HttpContext)
+    (handle: SageFs.WorkerProtocol.SessionId -> SageFs.Features.LiveBindingsPane.Hub -> SageFs.Features.LiveBindingsPane.Feed.Ask -> Task)
+    : Task =
+    task {
+      let raw = ctx.Request.RouteValues.["sid"] |> string
+      match SageFs.WorkerProtocol.SessionId.validate raw, rctx.Config.LiveBindings with
+      | Error msg, _ -> do! jsonResponse ctx 400 {| success = false; error = msg |}
+      | Ok _, None -> do! jsonResponse ctx 503 {| success = false; error = "this daemon does not keep live bindings" |}
+      | Ok sid, Some hub ->
+        match! askWorker sid with
+        | None -> do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found or not ready" raw |}
+        | Some ask -> do! handle sid hub ask
+    } :> Task
+  app.MapPost("/api/sessions/{sid}/live-values/evaluate", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withLiveBindings ctx (fun sid hub ask ->
+      task {
+        let sidStr = SageFs.WorkerProtocol.SessionId.value sid
+        let! request =
+          task {
+            try
+              use! doc = readJsonBody ctx
+              let root = doc.RootElement
+              let binding = match root.TryGetProperty "binding" with | true, p when p.ValueKind = JsonValueKind.String -> p.GetString() | _ -> ""
+              let path =
+                match root.TryGetProperty "path" with
+                | true, p when p.ValueKind = JsonValueKind.Array -> [ for label in p.EnumerateArray() -> label.GetString() ]
+                | _ -> []
+              return Result.Ok(binding, path)
+            with ex -> return Result.Error ex.Message
+          }
+        match request with
+        | Result.Error why -> do! jsonResponse ctx 400 {| success = false; error = sprintf "the body must be { \"binding\": string, \"path\": string[] }: %s" why |}
+        | Result.Ok(binding, _) when System.String.IsNullOrWhiteSpace binding ->
+          do! jsonResponse ctx 400 {| success = false; error = "the body must name a binding: { \"binding\": string, \"path\": string[] }" |}
+        | Result.Ok(binding, path) ->
+          match! SageFs.Features.LiveBindingsPane.Feed.evaluateMember ask hub.Adaptive hub.Notes sidStr binding path |> Async.StartAsTask with
+          | Result.Ok outcome ->
+            let outcomeJson = System.Text.Json.JsonDocument.Parse(SageFs.WorkerProtocol.Serialization.serialize outcome).RootElement.Clone()
+            do! jsonResponse ctx 200
+                  {| success = true
+                     outcome = outcomeJson
+                     containment = lineText (SageFs.Features.LiveBindingsPane.PaneStore.notesOf hub.Notes sidStr)
+                     notEvaluated = notEvaluated hub sidStr |}
+          | Result.Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+      } :> Task)
+  ) |> ignore
+  app.MapPost("/api/sessions/{sid}/live-values/mode", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withLiveBindings ctx (fun sid hub ask ->
+      task {
+        let sidStr = SageFs.WorkerProtocol.SessionId.value sid
+        let! requested =
+          task {
+            try
+              use! doc = readJsonBody ctx
+              return
+                match doc.RootElement.TryGetProperty "mode" with
+                | true, p when p.ValueKind = JsonValueKind.String -> p.GetString()
+                | _ -> ""
+            with _ -> return ""
+          }
+        match SageFs.ValueWalk.parse requested with
+        | Result.Error unknown -> do! jsonResponse ctx 400 {| success = false; error = SageFs.ValueWalk.describeUnknown unknown |}
+        | Result.Ok mode ->
+          match! SageFs.Features.LiveBindingsPane.Feed.setMode ask hub.Adaptive hub.Notes sidStr mode |> Async.StartAsTask with
+          | Result.Ok reading ->
+            do! jsonResponse ctx 200
+                  {| success = true
+                     mode = SageFs.ValueWalk.name reading.Mode
+                     notEvaluated = SageFs.Features.LiveBindingsPane.notEvaluatedCount reading.Snapshot |}
+          | Result.Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+      } :> Task)
+  ) |> ignore
+  app.MapGet("/api/sessions/{sid}/live-values/mode", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    withLiveBindings ctx (fun sid hub _ ->
+      task {
+        let sidStr = SageFs.WorkerProtocol.SessionId.value sid
+        let notes = SageFs.Features.LiveBindingsPane.PaneStore.notesOf hub.Notes sidStr
+        do! jsonResponse ctx 200
+              {| success = true
+                 mode = SageFs.ValueWalk.name notes.Mode
+                 notEvaluated = notEvaluated hub sidStr
+                 containment = lineText notes |}
+      } :> Task)
+  ) |> ignore
+
 let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
   // Truthful command failure: enable/disable/policy used to report HTTP 200
   // success even when the internal operation failed (e.g. Elm loop not
@@ -3407,7 +3518,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       // Every fresh LiveValueSnapshot now ALSO reaches editor clients over SSE
       // (roast-8 §2), not just the dashboard's own adaptive store — the inner
       // sink (when wired) still runs first and unchanged.
-      let cfg = { cfg with LiveSnapshotSink = wrapLiveSnapshotSinkForSse sessionEventBroadcast sseJsonOpts cfg.LiveSnapshotSink }
+      let _liveBindingsOverSse = pushLiveBindingsOverSse sessionEventBroadcast sseJsonOpts cfg.LiveBindings
       let mcpContext =
         mkContext cfg stateChangedStr
           (Some (fun () -> featurePushState.Value))
@@ -3471,6 +3582,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       mapEventsRoute app rctx
       mapStatusRoutes app rctx
       mapSessionRoutes app rctx
+      mapLiveBindingsRoutes app rctx
       mapLiveTestingRoutes app rctx
       mapAnalysisRoutes app rctx
 

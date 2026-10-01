@@ -295,7 +295,7 @@ let tests =
         do!
           withSession newInProcess (fun session ->
             mustSucceed session "type Probe() =\n  member _.Calls = string (List.length [ 1; 2; 3 ])\nlet probe = Probe()"
-            match WorkerProtocol.Serialization.tryDeserialize<SageFs.FsiHost.FsiProtocol.MemberOutcome> (session.EvaluateMember("probe", [ "Calls" ])) with
+            match SageFs.WorkerProtocol.Serialization.tryDeserialize<SageFs.FsiHost.FsiProtocol.MemberOutcome> (session.EvaluateMember("probe", [ "Calls" ])) with
             | Result.Ok(SageFs.FsiHost.FsiProtocol.MemberUnavailable SageFs.FsiHost.FsiProtocol.NoIsolatedHost) -> ()
             | other -> failtestf "expected MemberUnavailable NoIsolatedHost, got %A" other)
       }
@@ -339,7 +339,7 @@ let tests =
         do!
           withSession newRemote (fun session ->
             mustSucceed session "type Probe() =\n  member _.Calls = string (List.length [ 1; 2; 3 ])\nlet probe = Probe()"
-            match WorkerProtocol.Serialization.tryDeserialize<SageFs.FsiHost.FsiProtocol.MemberOutcome> (session.EvaluateMember("probe", [ "Calls" ])) with
+            match SageFs.WorkerProtocol.Serialization.tryDeserialize<SageFs.FsiHost.FsiProtocol.MemberOutcome> (session.EvaluateMember("probe", [ "Calls" ])) with
             | Result.Ok(SageFs.FsiHost.FsiProtocol.MemberShown(shown, _)) ->
               Expect.equal "the binding" "probe" shown.Name
               Expect.isFalse "the clicked row now has its value" ((sprintf "%A" shown.Root).Contains "GetterRunsCode")
@@ -351,7 +351,7 @@ let tests =
           withSession newRemote (fun session ->
             mustSucceed session "type Probe() =\n  member _.Calls = string (List.length [ 1; 2; 3 ])\nlet probe = Probe()"
             session.SetWalkMode SageFs.Features.LiveValueTree.WalkMode.Everything |> ignore
-            match WorkerProtocol.Serialization.tryDeserialize<SageFs.FsiHost.FsiProtocol.MemberOutcome> (session.EvaluateMember("probe", [ "Calls" ])) with
+            match SageFs.WorkerProtocol.Serialization.tryDeserialize<SageFs.FsiHost.FsiProtocol.MemberOutcome> (session.EvaluateMember("probe", [ "Calls" ])) with
             | Result.Ok(SageFs.FsiHost.FsiProtocol.MemberRefused SageFs.FsiHost.FsiProtocol.EveryGetterAlreadyRan) -> ()
             | other -> failtestf "expected a refusal, got %A" other)
       }

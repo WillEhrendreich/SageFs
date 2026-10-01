@@ -126,7 +126,7 @@ let private ctxFor (engine: Engine) (sid: string) (status: SessionLifecycleStatu
     GetFeatureState = None
     RecordEval = None
     ActivityTracker = AgentActivityTracker.create ()
-    LiveSnapshotSink = None
+    LiveBindings = None
     CohortOwner = None
     GetDaemonHealth = fun () -> None
     GetProcessTelemetry = fun () -> None }

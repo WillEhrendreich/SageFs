@@ -349,6 +349,11 @@ module WorkerProtocol =
     /// to sit between the eval finishing and the caller getting its result;
     /// this request lets the daemon ask for it separately (roast-4 #2).
     | GetLiveValues of replyId: string
+    /// A click on a "not evaluated" row of the live-bindings pane: run that one getter under containment and answer with the
+    /// binding walked again. `path` is the labels from the binding down to the member.
+    | EvaluateLiveMember of binding: string * path: string list * replyId: string
+    /// Choose how much of a class the live-values walk may run, for this session from now on. Answered with a fresh reading.
+    | SetValueWalk of mode: ValueWalk * replyId: string
     | RunTests of tests: Features.LiveTesting.TestCase array * maxParallelism: int * replyId: string
     | GetTestDiscovery of replyId: string
     /// Identity-preserving whole-file eval of a (possibly unsaved) editor
@@ -454,7 +459,10 @@ module WorkerProtocol =
     | StatusResult of replyId: string * status: WorkerStatusSnapshot
     /// Reply to GetLiveValues: the same JSON a Features.LiveValueTree.LiveValueSnapshot
     /// serializes to today (the daemon already deserializes that type).
-    | LiveValuesResult of replyId: string * snapshotJson: string
+    /// The JSON is a LiveBindingsPane.LiveValuesReading: the snapshot, the mode it was walked in and who chose the mode.
+    | LiveValuesResult of replyId: string * readingJson: string
+    /// Reply to EvaluateLiveMember: the JSON of a FsiProtocol.MemberOutcome.
+    | LiveMemberResult of replyId: string * outcomeJson: string
     | EvalCancelled of wasRunning: bool
     | ResetResult of replyId: string * result: Result<unit, SageFsError>
     | HardResetResult of replyId: string * result: Result<string, SageFsError>
@@ -497,6 +505,7 @@ module WorkerProtocol =
       | WorkerMessage.GetCompletions _
       | WorkerMessage.LoadScript _
       | WorkerMessage.RunTests _
+      | WorkerMessage.EvaluateLiveMember _
       | WorkerMessage.EvalLiveTestFile _
       | WorkerMessage.RunApp _
       | WorkerMessage.StopApp _ -> true
@@ -505,6 +514,7 @@ module WorkerProtocol =
       | WorkerMessage.HardResetSession _
       | WorkerMessage.GetStatus _
       | WorkerMessage.GetLiveValues _
+      | WorkerMessage.SetValueWalk _
       | WorkerMessage.GetTestDiscovery _
       | WorkerMessage.GetInstrumentationMaps _
       | WorkerMessage.AwaitAppChange _
