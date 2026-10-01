@@ -36,28 +36,54 @@ nothing you could see. I caught it by editing the ticker demo and watching the
 output not change, on a build SageFs had made itself with optimizations off, so
 the usual caveat below didn't explain it. A web route did the same thing.
 
-Now a save to an app that `run_app` is running restarts it with your change and
-says why: `renderLine changed, and this app runs in the worker, where an
-in-place patch cannot reach it; restarting the app`. On the ticker that took
+From 0.6.845 a save to an app that `run_app` is running restarted it with your
+change and said why: `renderLine changed, and this app runs in the worker, where
+an in-place patch cannot reach it; restarting the app`. On the ticker that took
 about six seconds on my machine. A restart resets the app's state. Carrying a
 live value across a restart is a narrower feature that applies to a type or
 value change on state the app registers with SageFs, and
 [granular-restart-scope.md](granular-restart-scope.md) is where it's tracked; I
 haven't tested it against a `run_app` save, so I'm not claiming it here.
-Patching a `run_app` app in place needs the new function body compiled in the
-worker, or the app run inside the agent's process, and neither is built.
+
+That restart is still what happens with the metadata-delta route off. With it
+on, a save to a `run_app` app is patched into the same process by a **metadata
+delta**: SageFs builds your project, takes the difference between that build
+and the assembly the worker loaded, and hands the runtime a delta
+(`MetadataUpdater.ApplyUpdate`, the call `dotnet watch` makes for C#). Your
+state stays where it is, and the save says `metadata-delta` as its
+`mechanism`. [How it works](how-hot-reload-works.md#a-run_app-app-the-same-save-as-a-metadata-delta)
+has the mechanism, the measurements and what it can't take.
 
 | You start the app | It runs in | A save to a function | Your app's state |
 |---|---|---|---|
-| from FSI, or an `.SageFs/init.fsx` that `#load`s your sources | the reload agent's process | patched in place, no restart | stays where it is |
-| `run_app` | the worker | SageFs restarts it with your change and says why | reset by the restart |
+| from FSI, or an `.SageFs/init.fsx` that `#load`s your sources | the reload agent's process | patched in place by a detour, no restart | stays where it is |
+| `run_app`, metadata-delta route on | the worker | patched in place by a metadata delta, same process id | stays where it is |
+| `run_app`, route off | the worker | SageFs restarts it with your change and says why | reset by the restart |
 
-The rule is [`AppPlacement.adjust`](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Core/Features/ReloadPlanning.fs#L1149-L1173),
-and the worker [applies it to every save](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Host/WorkerMain.fs#L1418-L1425).
-The test is [`RunAppSaveOutcomeTests.fs`](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Tests/RunAppSaveOutcomeTests.fs#L115):
-it starts the ticker with `run_app` on its own copy, saves an edit, and requires
-the running app to print the new message. The other "real app" tests here start
-their apps inside FSI, where the agent is, so that is what they prove.
+The route is on by default. Set `SAGEFS_METADATA_DELTA=off` in the daemon's
+environment and a `run_app` save restarts the app as it did before this route
+existed ([configuration](configuration.md)). Measured on my machine on the test fixture,
+a save is served in 2.6 s on .NET 10 and 1.8 s on .NET 11, against about 7.5 s
+and 5.8 s for the restart it replaces.
+
+What a delta takes and what it doesn't, from the emitter's own refusals
+(`RudeCause`): a new body for a method, a closure body, a task body, a method added to a
+type the app already runs, all in every instantiation of a generic function.
+Everything else restarts and names the declaration: a type or method removed, a
+field added, a signature changed, a changed startup value, a new lambda that adds a
+closure class, a lambda that starts capturing something. The planner turns away what
+it can see from source (a type's shape, startup code, mutable state) before anything is
+built, and the emitter turns away what only the compiled shapes show.
+
+The rule that picks the route is [`PatchRoute.choose`](../SageFs.Core/Features/PatchRoute.fs),
+the placement rule it falls back to is `AppPlacement.adjust`, and the worker applies
+both to every save. The rows that prove it are
+[`RunAppDeltaTests.fs`](../SageFs.Tests/RunAppDeltaTests.fs): one real app per row
+on a real host, on .NET 10 and .NET 11, each ending in the same process serving
+the new code and `Patched`, or in a restart that names what could not be patched.
+[`RunAppSaveOutcomeTests.fs`](../SageFs.Tests/RunAppSaveOutcomeTests.fs) pins the
+restart for the route off. The other "real app" tests here start their apps inside
+FSI, where the agent is, so that is what they prove.
 
 ## The pipeline
 
@@ -178,6 +204,11 @@ An app with no traffic looks exactly like one that never calls the function, so
 `NeverEntered` does not say why. It says to exercise that code path, and that a
 restart picks the change up if the new code still does not run.
 
+The same two steps, with the same wire `type`s, are what a metadata delta
+reports. The `mechanism` field says which one it was: `detour` or
+`metadata-delta`. A client reads that field and not the words, and it is empty for
+a verdict that is not a patch.
+
 How it is seen: the detour points at a small stub with the new body's exact
 signature. The stub records an entry and then calls the new body
 (`EntryProbes.fs`). The host keeps one probe per patched function, and a newer
@@ -185,7 +216,13 @@ save of the same function supersedes the older probe, so the older save does not
 report a function it no longer owns. The decision itself is pure
 (`PatchConfirmation.fs`). A function whose stub could not be built, and a
 mutable binding's accessors, have no probe, so they are never reported as seen
-running.
+running. A metadata delta has no stub to point at, since the body is replaced in
+place, so the probe is the first thing written into the new body: a call that
+records its entry. A method the delta only adds has no probe, because nothing runs
+it until a caller does, and the caller's probe is what shows the patch live. A call
+that was already inside the old body when the delta landed, and finishes
+afterwards, proves nothing, and `DeltaRouteSimTests` has a twin that takes it as
+proof and is caught.
 
 `lastReload` in `get_session_status`, the `ReloadReported` event and the browser
 overlay all carry these outcomes. `SessionReloadTests` pins the wire shape, and
@@ -472,7 +509,21 @@ I'd rather you hear this from me than find it at 11pm.
   instead, and that re-declares every `let mutable` in it. Your live state in
   that file is reset. The outcome says restart-required, which is true, but it
   doesn't say your state went with it. Start the app with `run_app` and SageFs
-  restarts it properly instead.
+  patches it by metadata delta, or restarts it properly and says why.
+- **A metadata delta changes the app, and not the REPL.** The delta goes into the
+  process the app runs in, the worker. The FSI host, where `send_fsharp_code` and
+  live tests run, keeps the code of the last build until the session restarts or you
+  `hard_reset_fsi_session` with `rebuild`. A REPL call to a function you just saved
+  runs the old body. I haven't built the second delta that would update it.
+- **The build is the floor.** A save to a `run_app` app waits for `dotnet build`,
+  1.6 to 2.4 seconds on my fixture, and everything after it is milliseconds. A
+  detour has no build to wait for.
+- **A debugger on the app's process, or a Harmony patch on a method the save
+  rewrites, restarts.** The runtime refuses an update under a debugger, and a
+  Harmony patch wraps the body a delta would replace. Both are named in the restart
+  (`MetadataDeltaUnavailable`) before the runtime is asked.
+- **A project built Release by hand can't take a delta.** The runtime edits only an
+  assembly built without optimizations, which is what SageFs's own build makes.
 - **The reset button runs just the initializer.** If the initializer uses
   something private in its file, the save can't check it and you get a restart
   instead of a kept value.

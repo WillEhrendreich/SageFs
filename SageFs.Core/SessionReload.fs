@@ -49,6 +49,9 @@ type ReloadFacts = {
   Message: string
   /// What to do about it; empty when nothing is needed.
   SuggestedAction: string
+  /// How a patch reached the process: a detour in the reload agent, or a metadata delta in the worker. `NoPatch` for a
+  /// verdict that is not a patch (a restart, a compile failure, nothing changed).
+  Mechanism: SageFs.Features.ReloadOutcome.PatchMechanism
 }
 
 [<RequireQualifiedAccess>]
@@ -147,7 +150,8 @@ module SessionReload =
                 Patched = count "patched"
                 Considered = count "considered"
                 Message = text "message"
-                SuggestedAction = text "suggestedAction" })
+                SuggestedAction = text "suggestedAction"
+                Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.ofWireName (text "mechanism") })
         | _ -> Result.Error ReloadPayloadError.NoOutcome
       match text "type" with
       | "none" -> Result.Ok SessionReload.NoReloadYet
@@ -174,7 +178,8 @@ module SessionReload =
            patched = facts.Patched
            considered = facts.Considered
            message = facts.Message
-           suggestedAction = facts.SuggestedAction |}
+           suggestedAction = facts.SuggestedAction
+           mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.wireName facts.Mechanism |}
 
   /// One line for a person or an agent: what the save did, or that it is still
   /// compiling, or that nothing has been saved yet.

@@ -259,6 +259,14 @@ module PatchMechanism =
     | PatchMechanism.Detour -> "detour"
     | PatchMechanism.MetadataDelta -> "metadata-delta"
 
+  /// The mechanism a payload names. A spelling nobody knows is no mechanism, so a client older than the worker shows
+  /// a patch with nothing to say about how, never a wrong how.
+  let ofWireName (name: string) : PatchMechanism =
+    match name with
+    | "detour" -> PatchMechanism.Detour
+    | "metadata-delta" -> PatchMechanism.MetadataDelta
+    | _ -> PatchMechanism.NoPatch
+
 /// The stages of a patch applied as a metadata delta, which mirror the detour's: applied and not yet seen running,
 /// seen running, never seen. A separate type so a delta's outcome cannot be built as anything but one of the three.
 [<RequireQualifiedAccess>]

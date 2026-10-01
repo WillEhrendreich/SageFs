@@ -123,6 +123,7 @@ let deltaRouteTests =
         "maybe", MetadataDeltaMode.defaultMode; "", MetadataDeltaMode.defaultMode ]
       |> List.iter (fun (text, expected) -> MetadataDeltaMode.parse text |> Expect.equal (sprintf "%A" text) expected)
       MetadataDeltaMode.parse null |> Expect.equal "unset is the default" MetadataDeltaMode.defaultMode
+      MetadataDeltaMode.defaultMode |> Expect.equal "and the default is on: the escape hatch is SAGEFS_METADATA_DELTA=off" MetadataDeltaMode.On
 
     // -- what a chain is good for ---------------------------------------------------------------------------
 

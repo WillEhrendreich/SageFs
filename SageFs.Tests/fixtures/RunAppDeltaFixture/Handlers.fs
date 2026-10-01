@@ -63,6 +63,23 @@ let taskBody () : Task<string> =
 
 let addedCaller () : string = "addedMethod:A"
 
+// -- what being editable costs the process --------------------------------------------------------------------
+
+[<System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)>]
+let step (x: int) : int = x + 1
+
+/// How many calls `spin` makes.
+let spinCalls = 50000000
+
+/// A call-heavy loop, the work a process that can be edited pays for most (a call into an editable method cannot be
+/// bound directly). Returns how many milliseconds it took, and the count, so nothing can drop the loop.
+let spin () : string =
+  let watch = System.Diagnostics.Stopwatch.StartNew()
+  let mutable acc = 0
+  for _ in 1 .. spinCalls do
+    acc <- step acc
+  string watch.Elapsed.TotalMilliseconds + ":" + string acc
+
 // -- the edits a metadata delta cannot take ------------------------------------------------------------------
 
 /// A virtual member. An edit that changes its signature changes what every override has to be.

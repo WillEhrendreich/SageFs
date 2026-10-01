@@ -34,6 +34,7 @@ let main args =
   app.MapGet("/instance", text Handlers.instance) |> ignore
   app.MapGet("/taskBody", textTask Handlers.taskBody) |> ignore
   app.MapGet("/addedMethod", text Handlers.addedCaller) |> ignore
+  app.MapGet("/spin", text Handlers.spin) |> ignore
   app.MapGet("/rudeVirtual", text Handlers.rudeVirtual) |> ignore
   app.MapGet("/rudeStruct", text Handlers.rudeStruct) |> ignore
   app.Run()

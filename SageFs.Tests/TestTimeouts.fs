@@ -66,6 +66,8 @@ module TestTimeouts =
   let pollFlush = ms 20.
   /// A landing drives real `git` subprocesses, so each look costs real work.
   let pollLanding = ms 25.
+  /// A measurement of how long a save takes to be served: finer than the thing measured, so the poll is not the number.
+  let pollMeasure = ms 10.
   /// A local server that answers fast once it is up: a daemon's health during startup, or a
   /// route settling on a value.
   let pollQuick = ms 100.

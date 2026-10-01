@@ -397,12 +397,13 @@ let metadataDeltaTests =
 
     // -- the switch and the closed sets ---------------------------------------------------------------------
 
-    testCase "WHY - the delta path is off unless the process turns it on, and only the named spellings do" <| fun _ ->
-      [ null, MetadataDeltaMode.Off
-        "", MetadataDeltaMode.Off
+    testCase "WHY - the delta path is on unless the process turns it off, and only the named spellings do" <| fun _ ->
+      [ null, MetadataDeltaMode.On
+        "", MetadataDeltaMode.On
+        "yes please", MetadataDeltaMode.On
         "0", MetadataDeltaMode.Off
         "off", MetadataDeltaMode.Off
-        "yes please", MetadataDeltaMode.Off
+        " FALSE ", MetadataDeltaMode.Off
         "1", MetadataDeltaMode.On
         "on", MetadataDeltaMode.On
         " TRUE ", MetadataDeltaMode.On ]

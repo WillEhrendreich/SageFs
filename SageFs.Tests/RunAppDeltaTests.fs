@@ -330,3 +330,106 @@ let runAppDeltaTests =
           stop app
       }
   ]
+
+// -- what the route costs -------------------------------------------------------------------------------------------
+
+/// How many times each mode runs the call-heavy loop after a warm-up run.
+let private spinRuns = 5
+
+/// The most the call-heavy loop may cost when the process can be edited, as a multiple of what it costs when it cannot.
+/// The measured figure is well under this: it is a tripwire for the cost doubling, not a target.
+let private spinCostBound = 2.0
+
+/// How many saves the latency run makes.
+let private latencySaves = 6
+
+let private median (values: float list) : float =
+  let sorted = List.sort values
+  sorted[sorted.Length / 2]
+
+let private spinMs (app: RunningApp) : Task<float> = task {
+  let! answer = get app "spin"
+  return float (answer.Substring(0, answer.IndexOf ':'))
+}
+
+let private spinTimes (mode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<float list> = task {
+  let! app = startRunAppWith mode runtime
+  try
+    // The first run pays the JIT and the first-request costs.
+    let! _ = spinMs app
+    let times = ResizeArray<float>()
+    for _ in 1 .. spinRuns do
+      let! ms = spinMs app
+      times.Add ms
+    return List.ofSeq times
+  finally
+    stop app
+}
+
+let private machine () : string =
+  sprintf "%d logical cores, %s, %s" Environment.ProcessorCount System.Runtime.InteropServices.RuntimeInformation.OSDescription System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription
+
+/// The milliseconds a worker log line names after `label`, for every line that has it.
+let private loggedMs (log: string) (label: string) : float list =
+  System.Text.RegularExpressions.Regex.Matches(log, label + @" (\d+) ms")
+  |> Seq.map (fun m -> float m.Groups[1].Value)
+  |> List.ofSeq
+
+[<Tests>]
+let runAppDeltaCostTests =
+  Integration.hostList "run_app metadata delta cost" [
+    for runtime in HostRuntime.all do
+      testTask (sprintf "[%s] a process started so it can take a delta runs a call-heavy loop within a small multiple of one that was not" (HostRuntime.moniker runtime)) {
+        let! off = spinTimes SageFs.Features.MetadataDelta.MetadataDeltaMode.Off runtime
+        let! on = spinTimes SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime
+        let ratio = median on / median off
+        eprintfn "DELTA-COST machine: %s" (machine ())
+        eprintfn "DELTA-COST [%s] %d calls of a NoInlining method, n=%d runs after a warm-up: route off %s ms (median %.0f), route on %s ms (median %.0f), ratio %.2f"
+          (HostRuntime.moniker runtime) 50000000 spinRuns
+          (off |> List.map (sprintf "%.0f") |> String.concat ", ") (median off)
+          (on |> List.map (sprintf "%.0f") |> String.concat ", ") (median on)
+          ratio
+        (ratio, spinCostBound) |> Expect.isLessThan (sprintf "the route's cost on a call-heavy loop (off %A ms, on %A ms)" off on)
+      }
+      testTask (sprintf "[%s] what a save costs: file written to new code served, with the build, the diff and the runtime's call apart, against a process start" (HostRuntime.moniker runtime)) {
+        let! app, started = startRunAppTimed SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime
+        try
+          let served = ResizeArray<float>()
+          // The reload watcher drops a second change to a file inside its double-compile guard, so the first write waits it out.
+          do! Task.Delay (SageFs.DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
+          let letters = [ 'A'; 'B'; 'C'; 'D'; 'E'; 'F'; 'G'; 'H' ] |> List.truncate (latencySaves + 1)
+          for was, now in List.pairwise letters do
+            let source = System.IO.File.ReadAllText app.StateSource
+            let find = sprintf "\"closure:%c\"" was
+            let after = source.Replace(find, sprintf "\"closure:%c\"" now)
+            after |> Expect.notEqual (sprintf "the anchor %s is in the file" find) source
+            let watch = System.Diagnostics.Stopwatch.StartNew()
+            System.IO.File.WriteAllText(app.StateSource, after)
+            let want = sprintf "closure:%c!?" now
+            let mutable answer = ""
+            while answer <> want && watch.Elapsed < TestTimeouts.saveVerdict do
+              let! read = tryGet app "closure"
+              answer <- read
+              match answer = want with
+              | true -> ()
+              | false -> do! Task.Delay TestTimeouts.pollMeasure
+            answer |> Expect.equal "the process serves the new body" want
+            served.Add watch.Elapsed.TotalMilliseconds
+            // The watcher's double-compile guard, again, before the next write.
+            do! Task.Delay (SageFs.DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
+          let log = RunningApp.log app
+          let build = loggedMs log "build"
+          let prepare = loggedMs log "diff and write"
+          let apply = loggedMs log "apply"
+          eprintfn "DELTA-COST machine: %s" (machine ())
+          eprintfn "DELTA-COST [%s] n=%d saves to a running run_app app, file written to new body served (ms): %s, median %.0f"
+            (HostRuntime.moniker runtime) served.Count (served |> Seq.map (sprintf "%.0f") |> String.concat ", ") (median (List.ofSeq served))
+          eprintfn "DELTA-COST [%s] of which the build (ms): median %.0f, the diff and the delta written: median %.0f, the runtime's call and its handlers: median %.0f"
+            (HostRuntime.moniker runtime) (median build) (median prepare) (median apply)
+          eprintfn "DELTA-COST [%s] a restart starts a process on top of the same build: host to app answering %.0f ms, after a build of %.0f ms (one start, measured on this run)"
+            (HostRuntime.moniker runtime) started.ProcessMs started.BuildMs
+          build |> List.length |> Expect.equal "every save logged its parts" served.Count
+        finally
+          stop app
+      }
+  ]

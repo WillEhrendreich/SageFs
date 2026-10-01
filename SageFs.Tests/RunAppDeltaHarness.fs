@@ -164,9 +164,20 @@ let private runApp (proxy: SessionProxy) (project: string) : Task<int> = task {
 
 /// Spin the whole thing up: scratch copy, SageFs build, host, `run_app`, the app answering. The worker
 /// watches the project's sources for hot reload as soon as the app is running.
-let startRunAppWith (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp> = task {
+/// How long the parts of a start took.
+type StartTimes =
+  { /// `dotnet build` of the scratch project, which every route pays.
+    BuildMs: float
+    /// From starting the host to the app answering: a new process, its session, the project loaded, the app started.
+    /// This is what a restart pays on top of the build.
+    ProcessMs: float }
+
+let startRunAppTimed (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp * StartTimes> = task {
   let runDir, project = copyFixture runAppFixture runtime
+  let watch = Stopwatch.StartNew()
   do! buildAsSageFsDoes runDir project
+  let buildMs = watch.Elapsed.TotalMilliseconds
+  watch.Restart()
   let hostLog = StringBuilder()
   let! proc, workerUrl = spawnHost deltaMode runtime runDir project hostLog
   let proxy = HttpWorkerClient.httpProxy workerUrl
@@ -196,8 +207,13 @@ let startRunAppWith (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode)
     | true -> ()
     | false -> do! Task.Delay TestTimeouts.pollService
   match answered with
-  | true -> return app
+  | true -> return app, { BuildMs = buildMs; ProcessMs = watch.Elapsed.TotalMilliseconds }
   | false -> return failwithf "the run_app fixture never answered /%s.\n%s" runAppFixture.ReadyRoute (RunningApp.log app)
+}
+
+let startRunAppWith (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp> = task {
+  let! app, _ = startRunAppTimed deltaMode runtime
+  return app
 }
 
 /// The route as a user gets it when the flag is on.
