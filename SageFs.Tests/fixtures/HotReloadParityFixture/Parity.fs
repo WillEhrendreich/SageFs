@@ -10,6 +10,7 @@
 /// so the edits a test makes never touch this checked-in copy.
 module ParityFixture.Parity
 
+open System
 open System.Threading.Tasks
 
 // ── instance members ────────────────────────────────────────────────────────
@@ -77,9 +78,90 @@ let sigCaller () : string = sigHandler "!"
 
 // ── generics ────────────────────────────────────────────────────────────────
 
+/// A record (a reference type) and a struct (a value type) with a ToString that says what they are, so a row
+/// can tell which body ran for which type.
+type GenRec =
+  { N: int }
+  override this.ToString() = "r" + string this.N
+
+[<Struct>]
+type GenPoint =
+  { PX: int }
+  override this.ToString() = "p" + string this.PX
+
 let genericTag<'T> (x: 'T) : string = "generic:A" + string x
 
 let genericCaller () : string = genericTag "s" + "|" + genericTag 7
+
+/// An int (a value type), a string and a record (reference types) through one generic function.
+let genericRefTag<'T> (x: 'T) : string = "genericRef:A" + string x
+
+let genericRefCaller () : string = genericRefTag 1 + "|" + genericRefTag "s" + "|" + genericRefTag { N = 2 }
+
+/// The body reads its own type argument, so a body that ran with the WRONG type argument cannot hide.
+let genericKindTag<'T> (x: 'T) : string = "genericKind:A" + typeof<'T>.Name
+
+let genericKindCaller () : string =
+  genericKindTag "s" + "|" + genericKindTag { N = 2 } + "|" + genericKindTag 1 + "|" + genericKindTag { PX = 3 }
+
+/// The second call of the route is the first to use a float and a struct, so those instantiations are
+/// first compiled AFTER the save.
+let lateCalls = ref 0
+
+let genericLateTag<'T> (x: 'T) : string = "genericLate:A" + string x
+
+let genericLateCaller () : string =
+  lateCalls.Value <- lateCalls.Value + 1
+  match lateCalls.Value with
+  | 1 -> genericLateTag 7
+  | _ -> genericLateTag 7 + "|" + genericLateTag 2.5 + "|" + genericLateTag { PX = 3 }
+
+/// A generic function called from another generic function.
+let genericInnerTag<'T> (x: 'T) : string = "genericNested:A" + string x
+
+let genericOuterTag<'T> (x: 'T) : string = genericInnerTag x + "!"
+
+let genericNestedCaller () : string = genericOuterTag "s" + "|" + genericOuterTag 7 + "|" + genericOuterTag { N = 2 }
+
+/// A generic function used as a first-class value: the compiler wraps each use in a closure.
+let genericClosureTag<'T> (x: 'T) : string = "genericClosure:A" + string x
+
+let genericClosureString : string -> string = genericClosureTag
+
+let genericClosureInt : int -> string = genericClosureTag
+
+let genericClosureCaller () : string = genericClosureString "s" + "|" + genericClosureInt 7
+
+/// Generic methods and members of types.
+type GenTools() =
+  member _.Tag<'T>(x: 'T) : string = "genericInstanceMethod:A" + string x
+  static member StaticTag<'T>(x: 'T) : string = "genericStaticMethod:A" + string x
+
+let genTools = GenTools()
+
+let genericInstanceMethodCaller () : string = genTools.Tag "s" + "|" + genTools.Tag 7 + "|" + genTools.Tag { N = 2 }
+
+let genericStaticMethodCaller () : string =
+  GenTools.StaticTag "s" + "|" + GenTools.StaticTag 7 + "|" + GenTools.StaticTag { N = 2 }
+
+type GenHolder<'T>(v: 'T) =
+  member _.Show() : string = "genericTypeInstance:A" + string v
+  static member Make(x: 'T) : string = "genericTypeStatic:A" + string x
+  member _.Pair<'U>(u: 'U) : string = "genericMethodOnType:A" + string v + string u
+
+let genHolderString = GenHolder("s")
+
+let genHolderRec = GenHolder({ N = 2 })
+
+let genHolderInt = GenHolder(7)
+
+let genericTypeInstanceCaller () : string = genHolderString.Show() + "|" + genHolderRec.Show() + "|" + genHolderInt.Show()
+
+let genericTypeStaticCaller () : string =
+  GenHolder<string>.Make "s" + "|" + GenHolder<GenRec>.Make { N = 2 } + "|" + GenHolder<int>.Make 7
+
+let genericMethodOnTypeCaller () : string =
+  genHolderString.Pair 1 + "|" + genHolderRec.Pair "u" + "|" + genHolderInt.Pair { N = 3 }
 
 // ── the table, captured BY VALUE at startup, like a Falco route list ────────
 
@@ -112,4 +194,14 @@ let routes : (string * (unit -> Task<string>)) list =
     "addedValue", (fun () -> Task.FromResult(addedValueCaller ()))
     "removed", (fun () -> Task.FromResult(removedCaller ()))
     "signature", (fun () -> Task.FromResult(sigCaller ()))
-    "generic", (fun () -> Task.FromResult(genericCaller ())) ]
+    "generic", (fun () -> Task.FromResult(genericCaller ()))
+    "genericRef", (fun () -> Task.FromResult(genericRefCaller ()))
+    "genericKind", (fun () -> Task.FromResult(genericKindCaller ()))
+    "genericLate", (fun () -> Task.FromResult(genericLateCaller ()))
+    "genericNested", (fun () -> Task.FromResult(genericNestedCaller ()))
+    "genericClosure", (fun () -> Task.FromResult(genericClosureCaller ()))
+    "genericInstanceMethod", (fun () -> Task.FromResult(genericInstanceMethodCaller ()))
+    "genericStaticMethod", (fun () -> Task.FromResult(genericStaticMethodCaller ()))
+    "genericTypeInstance", (fun () -> Task.FromResult(genericTypeInstanceCaller ()))
+    "genericTypeStatic", (fun () -> Task.FromResult(genericTypeStaticCaller ()))
+    "genericMethodOnType", (fun () -> Task.FromResult(genericMethodOnTypeCaller ())) ]

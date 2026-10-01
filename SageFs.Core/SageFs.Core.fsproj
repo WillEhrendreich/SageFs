@@ -114,6 +114,7 @@
         <EmbeddedResource Include="DevReload.fs" LogicalName="FsiHost/DevReload.fs" />
         <EmbeddedResource Include="Middleware\EntryProbes.fs" LogicalName="FsiHost/EntryProbes.fs" />
         <EmbeddedResource Include="Middleware\ValueReads.fs" LogicalName="FsiHost/ValueReads.fs" />
+        <EmbeddedResource Include="Middleware\GenericReload.fs" LogicalName="FsiHost/GenericReload.fs" />
         <EmbeddedResource Include="Middleware\ValueReadTracking.fs" LogicalName="FsiHost/ValueReadTracking.fs" />
         <EmbeddedResource Include="Middleware\HotReloadCore.fs" LogicalName="FsiHost/HotReloadCore.fs" />
         <EmbeddedResource Include="HostAgent.fs" LogicalName="FsiHost/HostAgent.fs" />
@@ -132,6 +133,9 @@
              show a patched function's new body running. The planner-side
              PatchConfirmation (below ReloadPlanning) reads its types. -->
         <Compile Include="Middleware\EntryProbes.fs" />
+        <!-- What it takes to re-point a generic function in every body the runtime compiled for it. BCL only,
+             and compiled into the isolated FSI host too (it reads ValueReads' IL decoder and EntryProbes). -->
+        <Compile Include="Middleware\GenericReload.fs" />
         <Compile Include="HolderRegistry.fs" />
         <Compile Include="RestartCost.fs" />
         <!-- After TypeShapeMigration (compiledShapeOf/decideRecord), after

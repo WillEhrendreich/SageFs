@@ -92,6 +92,7 @@ release/
 # Scratch copies the hot-reload state tests build per runtime (HotReloadStateHarness).
 SageFs.Tests/fixtures/HotReloadStateFixture/.runs/
 SageFs.Tests/fixtures/HotReloadParityFixture/.runs/
+SageFs.Tests/fixtures/HotReloadGenericReflectionFixture/.runs/
 
 # Agent scratch. NEVER a product artifact.
 #

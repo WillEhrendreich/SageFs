@@ -108,10 +108,12 @@ type RestartReason =
   /// the running app already built are laid out without it. A member's body is
   /// re-pointed in place while the type's fields stay the same.
   | InstanceLayoutChanged of typeName: string * detail: string
-  /// A generic function. A patch reaches the instantiations that have run; one
-  /// that runs later would still get the old body, and a patch that is right for
-  /// some calls and wrong for others is not one to claim.
-  | GenericFunction of declaration: string
+  /// A generic function whose instantiations SageFs cannot all list. The runtime compiles it once per
+  /// value-type instantiation and once for all reference types, and a patch has to reach every body the
+  /// program can run, the ones that ran and the ones that have not. When the program can make an
+  /// instantiation no code names (reflection), a patch that is right for some calls and wrong for others
+  /// is not one to claim. The detail says what stops the list.
+  | GenericInstantiationsUnknown of declaration: string * detail: string
 
 module RestartReason =
 
@@ -156,9 +158,8 @@ module RestartReason =
       sprintf "the lambdas in '%s' changed shape (%s), and the closures the running app already built have no room for the change" declaration detail
     | RestartReason.InstanceLayoutChanged(typeName, detail) ->
       sprintf "the fields of '%s' changed (%s), and the objects the running app already built were laid out without them" typeName detail
-    | RestartReason.GenericFunction declaration ->
-      sprintf "'%s' is generic, and a patch only reaches the instantiations that have already run: one that runs later would still get the old body" declaration
-
+    | RestartReason.GenericInstantiationsUnknown(declaration, detail) ->
+      sprintf "'%s' is generic, and SageFs cannot list every instantiation the app can run (%s), so a patch could leave one on the old body" declaration detail
   /// What the user can actually do. Never empty — a refusal a user cannot act
   /// on is a dead end, and this is the field that stops it being one.
   let remedy =
@@ -208,9 +209,8 @@ module RestartReason =
       sprintf
         "Restart the app to pick it up. A member's body reloads in place while '%s' keeps the same fields; a member that starts using a constructor argument gives the type a new field, which the objects already built do not have."
         typeName
-    | RestartReason.GenericFunction declaration ->
-      sprintf "Restart the app to pick it up. If '%s' only needs to work for one type, annotate its arguments with it: a function that is not generic is re-pointed in place." declaration
-
+    | RestartReason.GenericInstantiationsUnknown(declaration, _) ->
+      sprintf "Restart the app to pick it up. A generic function is re-pointed in every instantiation while the program's own code names them all; if '%s' only needs to work for one type, annotate its arguments with it and it is re-pointed like any other function." declaration
 /// A `let mutable` whose initializer you edited while the app was running. The
 /// app kept its live value (rule 3 of the state spec), and this is what the
 /// save says about it.

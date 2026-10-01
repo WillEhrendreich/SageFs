@@ -125,9 +125,9 @@ type ReloadChange =
   /// An instance member's type gained, lost or re-typed a field, so the objects
   /// the running app already built are laid out without it. Found at patch time.
   | InstanceLayoutChanged of typeName: string * detail: string
-  /// A generic function. A patch reaches the instantiations that have already
-  /// run; one that runs later would still get the old body. Found at patch time.
-  | GenericFunction of declaration: string
+  /// A generic function whose instantiations cannot all be listed, so a patch could leave one on the old
+  /// body. Found at patch time, from the program's own code.
+  | GenericInstantiationsUnknown of declaration: string * detail: string
 
 /// Live module state a patch has to respect. Rule 1 of hot-reload-state-spec.md:
 /// code changes land, state stays.
@@ -187,8 +187,7 @@ module ReloadChange =
       sprintf "the lambdas in %s changed shape (%s)" name detail
     | ReloadChange.InstanceLayoutChanged (typeName, detail) ->
       sprintf "the fields of %s changed (%s)" typeName detail
-    | ReloadChange.GenericFunction name -> sprintf "%s is generic" name
-
+    | ReloadChange.GenericInstantiationsUnknown (name, detail) -> sprintf "%s is generic, and %s" name detail
   let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
     first :: rest |> List.map describe |> String.concat "; "
 
@@ -243,8 +242,7 @@ module ReloadChange =
       RestartReason.NotYetSupported (sprintf "an in-place patch of '%s', because this app was started with run_app and runs outside the process SageFs patches" name)
     | ReloadChange.ClosureShapeChanged (name, detail) -> RestartReason.ClosureShapeChanged (name, detail)
     | ReloadChange.InstanceLayoutChanged (typeName, detail) -> RestartReason.InstanceLayoutChanged (typeName, detail)
-    | ReloadChange.GenericFunction name -> RestartReason.GenericFunction name
-
+    | ReloadChange.GenericInstantiationsUnknown (name, detail) -> RestartReason.GenericInstantiationsUnknown (name, detail)
   let restartReasons (first: ReloadChange) (rest: ReloadChange list) : RestartReason list =
     first :: rest |> List.map restartReason
 
@@ -1305,7 +1303,10 @@ type PatchOutcome =
 let reachedBy (names: string list) (f: SourceDecl) =
   match f.Kind with
   | DeclKind.TypeDecl ->
+    // The runtime names a generic type with its number of type parameters (`GenHolder`1`), the source does not.
+    let withoutArity (m: string) = System.Text.RegularExpressions.Regex.Replace(m, "`[0-9]+", "")
     names
+    |> List.map withoutArity
     |> List.exists (fun m ->
       m.StartsWith(f.Name + ".", StringComparison.Ordinal) || m.Contains("." + f.Name + "."))
   // A value is re-pointed through its getter.

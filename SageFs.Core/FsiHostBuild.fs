@@ -44,6 +44,7 @@ let hostSourceNames =
     "DevReload.fs"
     "EntryProbes.fs"
     "ValueReads.fs"
+    "GenericReload.fs"
     "ValueReadTracking.fs"
     "HotReloadCore.fs"
     "HostAgent.fs"

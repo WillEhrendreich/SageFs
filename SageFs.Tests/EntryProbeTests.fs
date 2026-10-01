@@ -158,12 +158,21 @@ let tests =
           |> Expect.equal "the member ran against the object it was handed" (box "hello world")
           statusOf (ProbeRegistry.Shared.Read [ probe.Id ]) probe.Id |> Expect.equal "called, so entered" ProbeStatus.Entered
 
-      testCase "WHY - a generic member gets no stub, because only the instantiations that already ran could be reached" <| fun _ ->
+      testCase "WHY - an open generic method gets no stub, because it has no code to call until its type arguments are known" <| fun _ ->
         let probe = ProbeRegistry.Shared.Allocate "ProbeInstance.Echo"
         match stubFor probe (typeof<ProbeInstance>.GetMethod "Echo") with
-        | Result.Ok _ -> failtest "a generic method must not be given a stub"
+        | Result.Ok _ -> failtest "an open generic method must not be given a stub"
         | Result.Error (StubFailure.NotDetourable _) -> ()
         | Result.Error other -> failtestf "expected NotDetourable, got %A" other
+
+      testCase "WHY - a generic method closed over its type arguments gets a stub, which is how a value-type instantiation is detoured" <| fun _ ->
+        let probe = ProbeRegistry.Shared.Allocate "ProbeInstance.Echo<int>"
+        let closed = typeof<ProbeInstance>.GetMethod("Echo").MakeGenericMethod typeof<int>
+        match stubFor probe closed with
+        | Result.Error failure -> failtestf "a closed generic method must get a stub: %s" (StubFailure.describe failure)
+        | Result.Ok stub ->
+          stub.Invoke(null, [| box (ProbeInstance "x"); box 7 |]) |> Expect.equal "the closed method ran against the object" (box 7)
+          statusOf (ProbeRegistry.Shared.Read [ probe.Id ]) probe.Id |> Expect.equal "called, so entered" ProbeStatus.Entered
 
       testCase "WHY — a stub that is never called leaves its probe NotEntered" <| fun _ ->
         let probe = ProbeRegistry.Shared.Allocate "ProbeTargets.Double.unused"
