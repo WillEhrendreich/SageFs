@@ -23,6 +23,8 @@ open Expecto
 open Expecto.Flip
 open SageFs.Features.LiveTesting
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private activation = LiveTestingActivation.Active
 
 let private summaryOf (statuses: TestRunStatus array) =
@@ -57,7 +59,7 @@ let testSummaryCompletenessTests =
     testCase "WHY — a mixed suite still accounts for every test" <| fun _ ->
       let s =
         summaryOf
-          [| TestRunStatus.Passed (TimeSpan.FromMilliseconds 1.0)
+          [| TestRunStatus.Passed TestTimeouts.testElapsed
              TestRunStatus.Failed (TestFailure.AssertionFailed "boom", TimeSpan.Zero)
              TestRunStatus.Detected
              TestRunStatus.Queued

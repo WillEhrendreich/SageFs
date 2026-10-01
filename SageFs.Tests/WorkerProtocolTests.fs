@@ -11,6 +11,8 @@ open SageFs.WorkerProtocol
 open SageFs.Features.LiveTesting
 open SageFs.Tests.SharedGenerators
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let roundTrip<'T> (value: 'T) =
   let json = Serialization.serialize value
   let result = Serialization.tryDeserialize<'T> json |> Expect.wantOk "the wire text reads back"
@@ -336,7 +338,7 @@ let workerProtocolTests =
         let r1: SageFs.Features.LiveTesting.TestRunResult =
           { TestId = TestId.TestId "abc123"
             TestName = "should add"
-            Result = TestResult.Passed (TimeSpan.FromMilliseconds 42.0)
+            Result = TestResult.Passed TestTimeouts.reportedElapsed
             Timestamp = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
             Output = None }
         let r2: SageFs.Features.LiveTesting.TestRunResult =
@@ -344,7 +346,7 @@ let workerProtocolTests =
             TestName = "should fail"
             Result = TestResult.Failed(
               TestFailure.AssertionFailed "Expected 42",
-              TimeSpan.FromMilliseconds 15.0)
+              TestTimeouts.testElapsedOther)
             Timestamp = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
             Output = None }
         let resp = WorkerResponse.TestRunResults("r-run1", [| r1; r2 |])

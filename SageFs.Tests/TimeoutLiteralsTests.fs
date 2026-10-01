@@ -89,16 +89,6 @@ let private budgets : (string * int) list =
     "SageFs.Tests/RestartPolicyTests.fs", 10
     "SageFs.Tests/RunAppSaveOutcomeTests.fs", 6
     "SageFs.Tests/SimulationTests.fs", 16
-    "SageFs.Tests/SseContractComplianceTests.fs", 4
-    "SageFs.Tests/SseDedupKeyTests.fs", 4
-    "SageFs.Tests/SseWriterTests.fs", 4
-    "SageFs.Tests/StreamingProxyTests.fs", 15
-    "SageFs.Tests/TestExecutionReportTests.fs", 3
-    "SageFs.Tests/TestNarrationTests.fs", 13
-    "SageFs.Tests/TestRunExplainerTests.fs", 5
-    "SageFs.Tests/TestRunKeyTests.fs", 1
-    "SageFs.Tests/TestSummaryCompletenessTests.fs", 1
-    "SageFs.Tests/TestsPaneTests.fs", 2
     "SageFs.Tests/TimeoutsTests.fs", 16
     "SageFs.Tests/UpdateCheckTests.fs", 7
     "SageFs.Tests/VscodeCommandProofTests.fs", 7
@@ -112,9 +102,7 @@ let private budgets : (string * int) list =
     "SageFs.Tests/WorkerHttpGuardTests.fs", 1
     "SageFs.Tests/WorkerHttpTransportTests.fs", 1
     "SageFs.Tests/WorkerLogFileTests.fs", 1
-    "SageFs.Tests/WorkerProtocolTests.fs", 2
     "SageFs.Tests/WorkerStderrCaptureTests.fs", 1
-    "SageFs.Tests/WorkflowScenarioTests.fs", 1
     "SageFs.Tests/WorkflowSwitchTests.fs", 1
     "SageFs.Tests/WorkflowTransitionPropertyTests.fs", 1
     "SageFs.Tests/WorkflowTypesMutationTests.fs", 1 ]

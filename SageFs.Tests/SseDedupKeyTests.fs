@@ -6,6 +6,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features.LiveTesting
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// Helper to create a TestStatusEntry
 let makeEntry (i: int) (status: TestRunStatus) : TestStatusEntry =
   { TestId = TestId.TestId (sprintf "test-%d" i)
@@ -23,7 +25,7 @@ let baseModel = (SageFsModel.initial())
 let withTests (count: int) (model: SageFsModel) =
   let entries =
     [| for i in 1..count ->
-        makeEntry i (TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)) |]
+        makeEntry i (TestRunStatus.Passed TestTimeouts.testElapsed) |]
   let statuses = entries |> Array.map (fun e -> e.Status)
   let summary = TestSummary.fromStatuses model.LiveTesting.TestState.Activation statuses
   let ts =
@@ -83,11 +85,11 @@ let tests = testList "SseDedupKey" [
       let modelPassed = baseModel |> withTests 3
       let modelFailed =
         let entries =
-          [| makeEntry 1 (TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0))
+          [| makeEntry 1 (TestRunStatus.Passed TestTimeouts.testElapsed)
              makeEntry 2 (TestRunStatus.Failed (
               TestFailure.AssertionFailed "oops",
-              TimeSpan.FromMilliseconds 20.0))
-             makeEntry 3 (TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)) |]
+              TestTimeouts.testElapsedOther))
+             makeEntry 3 (TestRunStatus.Passed TestTimeouts.testElapsed) |]
         let statuses = entries |> Array.map (fun e -> e.Status)
         let summary = TestSummary.fromStatuses baseModel.LiveTesting.TestState.Activation statuses
         let ts =

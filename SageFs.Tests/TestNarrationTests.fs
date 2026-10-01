@@ -6,6 +6,8 @@ open Expecto.Flip
 open SageFs.Features.LiveTesting
 open SageFs.Features
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 [<Tests>]
 let narrateFailureTests =
   testList "TestNarration failure stories" [
@@ -15,7 +17,7 @@ let narrateFailureTests =
         TestNarration.narrateFailure
           "MyModule.addNumbers"
           (TestFailure.AssertionFailed "expected 42 but got 41")
-          (TimeSpan.FromMilliseconds 12.0)
+          TestTimeouts.testElapsedOther
           None
       story |> Expect.stringContains "names the test" "addNumbers"
       story |> Expect.stringContains "includes expected" "expected 42 but got 41"
@@ -25,7 +27,7 @@ let narrateFailureTests =
         TestNarration.narrateFailure
           "Parser.tokenize"
           (TestFailure.ExceptionThrown ("NullReferenceException: Object reference not set", "at Parser.tokenize()"))
-          (TimeSpan.FromMilliseconds 5.0)
+          TestTimeouts.testElapsed
           None
       story |> Expect.stringContains "has exception" "NullReferenceException"
 
@@ -33,8 +35,8 @@ let narrateFailureTests =
       let story =
         TestNarration.narrateFailure
           "Network.fetchData"
-          (TestFailure.TimedOut (TimeSpan.FromSeconds 5.0))
-          (TimeSpan.FromSeconds 5.0)
+          (TestFailure.TimedOut TestTimeouts.testTimeLimit)
+          TestTimeouts.testTimeLimit
           None
       story |> Expect.stringContains "mentions timeout" "timed out"
 
@@ -42,13 +44,13 @@ let narrateFailureTests =
       let narrative = {
         FailureNarrative.empty with
           CausalChanges = [ CausalChange.SymbolChanged "Calculator.add" ]
-          TimeSinceLastPass = Some (TimeSpan.FromMinutes 3.0)
+          TimeSinceLastPass = Some TestTimeouts.timeSinceLastPass
       }
       let story =
         TestNarration.narrateFailure
           "CalculatorTests.addTest"
           (TestFailure.AssertionFailed "expected 4 but got 3")
-          (TimeSpan.FromMilliseconds 8.0)
+          TestTimeouts.testElapsed
           (Some narrative)
       story |> Expect.stringContains "identifies culprit" "Calculator.add"
 
@@ -65,7 +67,7 @@ let narrateFailureTests =
         TestNarration.narrateFailure
           "MathProps.commutativity"
           (TestFailure.AssertionFailed "Falsifiable")
-          (TimeSpan.FromMilliseconds 150.0)
+          TestTimeouts.testElapsedOther
           (Some narrative)
       story |> Expect.stringContains "mentions property" "commutativity"
       story |> Expect.stringContains "shows counterexample" "a=1, b=-1"
@@ -76,7 +78,7 @@ let narrateResultTests =
   testList "TestNarration result summaries" [
 
     testCase "passed test gets brief celebration" <| fun _ ->
-      let story = TestNarration.narrateResult "MyTest.works" (TestResult.Passed (TimeSpan.FromMilliseconds 3.0))
+      let story = TestNarration.narrateResult "MyTest.works" (TestResult.Passed TestTimeouts.testElapsed)
       story |> Expect.stringContains "mentions pass" "passed"
 
     testCase "skipped test explains why" <| fun _ ->
@@ -100,12 +102,12 @@ let narrateStatusTests =
       TestNarration.statusLabel TestRunStatus.PolicyDisabled |> Expect.equal "disabled" "Disabled by policy"
 
     testCase "status label for passed includes timing" <| fun _ ->
-      let label = TestNarration.statusLabel (TestRunStatus.Passed (TimeSpan.FromMilliseconds 42.0))
+      let label = TestNarration.statusLabel (TestRunStatus.Passed TestTimeouts.reportedElapsed)
       label |> Expect.stringContains "has passed" "Passed"
-      label |> Expect.stringContains "has timing" "42"
+      label |> Expect.stringContains "has timing" (string (int TestTimeouts.reportedElapsed.TotalMilliseconds))
 
     testCase "status label for failed includes reason" <| fun _ ->
-      let label = TestNarration.statusLabel (TestRunStatus.Failed (TestFailure.AssertionFailed "bad", TimeSpan.FromMilliseconds 10.0))
+      let label = TestNarration.statusLabel (TestRunStatus.Failed (TestFailure.AssertionFailed "bad", TestTimeouts.testElapsed))
       label |> Expect.stringContains "has failed" "Failed"
   ]
 
@@ -118,7 +120,7 @@ let densityTests =
         TestNarration.narrateAtDensity
           NarrationDetail.Minimal
           "MyTest.works"
-          (TestResult.Failed (TestFailure.AssertionFailed "expected 1 got 2", TimeSpan.FromMilliseconds 5.0))
+          (TestResult.Failed (TestFailure.AssertionFailed "expected 1 got 2", TestTimeouts.testElapsed))
           None
       story.Length < 80 |> Expect.isTrue "should be short"
 
@@ -126,13 +128,13 @@ let densityTests =
       let narrative = {
         FailureNarrative.empty with
           CausalChanges = [ CausalChange.SymbolChanged "Foo.bar" ]
-          TimeSinceLastPass = Some (TimeSpan.FromMinutes 5.0)
+          TimeSinceLastPass = Some TestTimeouts.timeSinceLastPass
       }
       let story =
         TestNarration.narrateAtDensity
           NarrationDetail.Full
           "MyTest.fails"
-          (TestResult.Failed (TestFailure.AssertionFailed "expected 1 got 2", TimeSpan.FromMilliseconds 5.0))
+          (TestResult.Failed (TestFailure.AssertionFailed "expected 1 got 2", TestTimeouts.testElapsed))
           (Some narrative)
       story |> Expect.stringContains "has culprit" "Foo.bar"
   ]

@@ -5,6 +5,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features.LiveTesting
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 // ── Helpers ───────────────────────────────────────────────────────
 
 let private makeEntry (name: string) (status: TestRunStatus) : TestStatusEntry =
@@ -18,8 +20,8 @@ let private makeEntry (name: string) (status: TestRunStatus) : TestStatusEntry =
     Status = status
     PreviousStatus = TestRunStatus.Stale }
 
-let private passEntry n  = makeEntry n (TestRunStatus.Passed (System.TimeSpan.FromMilliseconds 42.0))
-let private failEntry n  = makeEntry n (TestRunStatus.Failed (TestFailure.AssertionFailed "boom", System.TimeSpan.FromMilliseconds 7.0))
+let private passEntry n  = makeEntry n (TestRunStatus.Passed TestTimeouts.reportedElapsed)
+let private failEntry n  = makeEntry n (TestRunStatus.Failed (TestFailure.AssertionFailed "boom", TestTimeouts.testElapsedOther))
 let private runEntry  n  = makeEntry n TestRunStatus.Running
 let private staleEntry n = makeEntry n TestRunStatus.Stale
 
@@ -113,7 +115,7 @@ let buildContentTests = testList "TestsPane.buildContent" [
   }
   test "duration appears for passed test" {
     let content = TestsPane.buildContent 80 [| passEntry "T" |]
-    content |> Expect.stringContains "duration present" "42ms"
+    content |> Expect.stringContains "duration present" (sprintf "%dms" (int TestTimeouts.reportedElapsed.TotalMilliseconds))
   }
   test "long test name is truncated to fit pane" {
     let longName = System.String.Concat(Array.replicate 200 "x")

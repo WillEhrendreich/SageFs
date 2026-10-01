@@ -14,6 +14,8 @@ open SageFs.Features.LiveTesting
 open SageFs.Features.LiveValueTree
 open SageFs.Tests.SharedGenerators
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private sampleTestCase (id: string) =
   { Id = TestId.TestId id
     FullName = sprintf "SageFs.Tests.Fake.``sample %s``" id
@@ -33,7 +35,7 @@ let private passResult (tc: TestCase) =
 /// Every reason a requested test can end a run without a result of its own.
 let private noResultReasons =
   [| NoResultReason.StreamEnded
-     NoResultReason.StreamStalled (TimeSpan.FromSeconds 30.0)
+     NoResultReason.StreamStalled TestTimeouts.streamStalledAfter
      NoResultReason.TransportFailed "connection reset by worker"
      NoResultReason.RunCancelled |]
 
@@ -145,7 +147,7 @@ let streamingProxyTests =
           }
         Async.Start serve
         try
-          let proxy = streamingTestProxy (TimeSpan.FromMilliseconds 500.0) (sprintf "http://127.0.0.1:%d" port)
+          let proxy = streamingTestProxy TestTimeouts.streamWindowCleanEnd (sprintf "http://127.0.0.1:%d" port)
           let! outcome =
             proxy [| sampleTestCase "a" |] 1 (fun _ -> ()) CancellationToken.None
             |> Async.StartAsTask
@@ -178,11 +180,11 @@ let streamingProxyTests =
           }
         Async.Start serve
         try
-          let proxy = streamingTestProxy (TimeSpan.FromMilliseconds 150.0) (sprintf "http://127.0.0.1:%d" port)
+          let proxy = streamingTestProxy TestTimeouts.streamWindowStalled (sprintf "http://127.0.0.1:%d" port)
           let work =
             proxy [| sampleTestCase "a" |] 1 (fun _ -> ()) CancellationToken.None
             |> Async.StartAsTask
-          let! _ = Task.WhenAny(work, Task.Delay 5000) :> Task
+          let! _ = Task.WhenAny(work, Task.Delay TestTimeouts.briefPatience) :> Task
           if not work.IsCompleted then
             failtest "proxy did not time out within the deadline"
           match work.Result with
@@ -209,7 +211,7 @@ let streamingProxyTests =
             })
         let run = new CancellationTokenSource()
         try
-          let proxy = streamingTestProxy (TimeSpan.FromSeconds 10.0) url
+          let proxy = streamingTestProxy TestTimeouts.streamWindowNeverWaitedOut url
           // ct is threaded explicitly into the proxy itself — NOT also handed
           // to Async.StartAsTask's own cancellationToken parameter. Passing
           // it to both is the double-token hazard: StartAsTask registers its
@@ -219,7 +221,7 @@ let streamingProxyTests =
           let work = Async.StartAsTask(proxy [| sampleTestCase "a" |] 1 ignore run.Token)
           let! _ = started.Task
           run.Cancel()
-          let! winner = Task.WhenAny(work :> Task, Task.Delay 3000)
+          let! winner = Task.WhenAny(work :> Task, Task.Delay TestTimeouts.cancelPatience)
           obj.ReferenceEquals(winner, work)
           |> Expect.isTrue "a cancelled run stops reading within the ceiling, not after the 10s read timeout"
           let! outcome = work
@@ -248,10 +250,10 @@ let streamingProxyTests =
           serveOnce (fun stream -> async { do! Async.Sleep 10000 })
         let run = new CancellationTokenSource()
         try
-          let proxy = streamingTestProxy (TimeSpan.FromSeconds 10.0) url
+          let proxy = streamingTestProxy TestTimeouts.streamWindowNeverWaitedOut url
           run.Cancel()
           let work = Async.StartAsTask(proxy [| sampleTestCase "a" |] 1 ignore run.Token)
-          let! winner = Task.WhenAny(work :> Task, Task.Delay 3000)
+          let! winner = Task.WhenAny(work :> Task, Task.Delay TestTimeouts.cancelPatience)
           obj.ReferenceEquals(winner, work)
           |> Expect.isTrue "a run cancelled before it starts still resolves within the ceiling"
           let! outcome = work
@@ -273,7 +275,7 @@ let streamingProxyTests =
         try
           // 6 x 100ms = 600ms of streaming, well past a 350ms window that is
           // re-armed on every line.
-          let proxy = streamingTestProxy (TimeSpan.FromMilliseconds 350.0) url
+          let proxy = streamingTestProxy TestTimeouts.streamWindowSteady url
           let! outcome = proxy [| sampleTestCase "a" |] 1 ignore CancellationToken.None |> Async.StartAsTask
           outcome |> Expect.equal "steady stream completes" StreamOutcome.Completed
         finally
@@ -283,7 +285,7 @@ let streamingProxyTests =
 
     testList "InactivityWindow — one deadline per run" [
       testCase "touching the window re-arms the same deadline instead of allocating a new one" <| fun _ ->
-        use window = new InactivityWindow(TimeSpan.FromSeconds 30.0, CancellationToken.None)
+        use window = new InactivityWindow(TestTimeouts.inactivityWindowLong, CancellationToken.None)
         let before = window.Token
         window.Touch()
         window.Touch()
@@ -292,18 +294,18 @@ let streamingProxyTests =
 
       testCase "cancelling the caller cancels the window and says so" <| fun _ ->
         use caller = new CancellationTokenSource()
-        use window = new InactivityWindow(TimeSpan.FromSeconds 30.0, caller.Token)
+        use window = new InactivityWindow(TestTimeouts.inactivityWindowLong, caller.Token)
         caller.Cancel()
         window.Token.IsCancellationRequested
         |> Expect.isTrue "the window token follows the caller's token"
         window.State |> Expect.equal "caller cancelled, not expired" WindowState.CallerCancelled
 
       testTask "a window nobody touches expires on its own" {
-        let window = new InactivityWindow(TimeSpan.FromMilliseconds 50.0, CancellationToken.None)
+        let window = new InactivityWindow(TestTimeouts.inactivityWindowExpiring, CancellationToken.None)
         let fired = TaskCompletionSource<bool>()
         let registration = window.Token.Register(fun () -> fired.TrySetResult true |> ignore)
         try
-          let! winner = Task.WhenAny(fired.Task :> Task, Task.Delay 3000)
+          let! winner = Task.WhenAny(fired.Task :> Task, Task.Delay TestTimeouts.cancelPatience)
           obj.ReferenceEquals(winner, fired.Task)
           |> Expect.isTrue "the window expired within the ceiling"
           window.State |> Expect.equal "expired" WindowState.Expired
@@ -341,8 +343,8 @@ let streamingProxyTests =
               | true ->
                 let outcome =
                   match flag failMask i with
-                  | true -> TestResult.Failed (TestFailure.AssertionFailed "boom", TimeSpan.FromMilliseconds 2.0)
-                  | false -> TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+                  | true -> TestResult.Failed (TestFailure.AssertionFailed "boom", TestTimeouts.testElapsedOther)
+                  | false -> TestResult.Passed TestTimeouts.testElapsed
                 Some { passResult tc with Result = outcome })
           let reason = noResultReasons.[int reasonPick % noResultReasons.Length]
           let receivedIds = received |> Array.map (fun r -> r.TestId) |> Set.ofArray

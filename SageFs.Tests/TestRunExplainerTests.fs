@@ -5,6 +5,8 @@ open Expecto
 open Expecto.Flip
 open SageFs.Features.LiveTesting
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 // --- Helpers ---
 
 let private mkTestCase (name: string) (cat: TestCategory) : TestCase =
@@ -42,7 +44,7 @@ let explainerTests = testList "TestRunExplainer" [
     let lastResults =
       Map.ofList [
         TestId.TestId "test_add",
-        mkResult "test_add" (TestResult.Passed (TimeSpan.FromMilliseconds 42.0)) ]
+        mkResult "test_add" (TestResult.Passed TestTimeouts.reportedElapsed) ]
     let result =
       TestRunExplainer.explainTest
         graph lastResults Map.empty ["MyModule.add"] RunTrigger.Keystroke tc
@@ -52,7 +54,7 @@ let explainerTests = testList "TestRunExplainer" [
     |> Expect.equal "should be SymbolCoverage"
       (TestTriggerReason.SymbolCoverage ["MyModule.add"])
     result.DurationMs
-    |> Expect.equal "should have cached duration" (Some 42.0)
+    |> Expect.equal "should have cached duration" (Some TestTimeouts.reportedElapsed.TotalMilliseconds)
     result.FlakyClassification |> Expect.equal "no history = insufficient" FlakyClassification.Insufficient
 
   testCase "explainTest: new test with no prior results" <| fun _ ->
@@ -71,7 +73,7 @@ let explainerTests = testList "TestRunExplainer" [
     let lastResults =
       Map.ofList [
         TestId.TestId "test_add",
-        mkResult "test_add" (TestResult.Passed (TimeSpan.FromMilliseconds 10.0)) ]
+        mkResult "test_add" (TestResult.Passed TestTimeouts.testElapsed) ]
     let result =
       TestRunExplainer.explainTest
         graph lastResults Map.empty ["Unrelated.sym"] RunTrigger.Keystroke tc
@@ -143,10 +145,10 @@ let explainerTests = testList "TestRunExplainer" [
     let lastResults =
       Map.ofList [
         TestId.TestId "test_parse_ok",
-        mkResult "test_parse_ok" (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+        mkResult "test_parse_ok" (TestResult.Passed TestTimeouts.testElapsed)
         TestId.TestId "test_parse_err",
         mkResult "test_parse_err"
-          (TestResult.Failed (TestFailure.AssertionFailed "nope", TimeSpan.FromMilliseconds 12.0)) ]
+          (TestResult.Failed (TestFailure.AssertionFailed "nope", TestTimeouts.testElapsedOther)) ]
     let result =
       TestRunExplainer.queryTestCoverage graph tests lastResults "Parser.parse"
     result.Length |> Expect.equal "should find 2 covering tests" 2
@@ -166,12 +168,12 @@ let explainerTests = testList "TestRunExplainer" [
         TestId.TestId "test_fail",
         mkResult "test_fail"
           (TestResult.Failed
-            (TestFailure.AssertionFailed "bad", TimeSpan.FromMilliseconds 99.0)) ]
+            (TestFailure.AssertionFailed "bad", TestTimeouts.testElapsedOther)) ]
     let result =
       TestRunExplainer.explainTest
         graph lastResults Map.empty ["M.f"] RunTrigger.ExplicitRun tc
     result.DurationMs
-    |> Expect.equal "should extract failed duration" (Some 99.0)
+    |> Expect.equal "should extract failed duration" (Some TestTimeouts.testElapsedOther.TotalMilliseconds)
 
   testCase "explainTest: skipped test has no duration" <| fun _ ->
     let graph = mkGraph [ "M.g", ["test_skip"] ]

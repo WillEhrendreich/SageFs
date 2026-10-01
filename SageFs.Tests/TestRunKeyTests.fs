@@ -7,6 +7,8 @@ open FsCheck
 open FsCheck.FSharp
 open SageFs.Features.LiveTesting
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private mkResult (testId: TestId) (result: TestResult) : TestRunResult =
   { TestId = testId
     TestName = "some.test"
@@ -14,7 +16,7 @@ let private mkResult (testId: TestId) (result: TestResult) : TestRunResult =
     Timestamp = DateTimeOffset.UnixEpoch
     Output = None }
 
-let private passed = mkResult (TestId.create "T" (TestFramework.Unknown "x")) (TestResult.Passed(TimeSpan.FromSeconds 1.0))
+let private passed = mkResult (TestId.create "T" (TestFramework.Unknown "x")) (TestResult.Passed TestTimeouts.testElapsed)
 
 [<Tests>]
 let inputHashTests =

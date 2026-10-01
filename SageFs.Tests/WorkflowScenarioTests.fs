@@ -167,7 +167,7 @@ let private transitionCostScenarios =
       let cost = {
         DefinitionsLost = 12
         CellsLost = 3
-        EstimatedRestart = System.TimeSpan.FromSeconds 8.0
+        EstimatedRestart = SageFs.Tests.TestInfrastructure.TestTimeouts.sampleRestartEstimate
       }
 
       // THEN the cost accurately describes what switching will cost

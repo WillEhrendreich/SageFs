@@ -18,6 +18,8 @@ open SageFs.Features.FsiOutputParser
 open SageFs.Features.EvalProvenance
 open SageFs.Features.Ghostwriter
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 // ── JSON options matching daemon configuration ──
 
 let private jsonOpts =
@@ -69,8 +71,8 @@ let private mkTestResultsBatch (n: int) : TestResultsBatchPayload =
           Framework = TestFramework.Expecto
           Category = TestCategory.Unit
           CurrentPolicy = RunPolicy.OnEveryChange
-          Status = TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)
-          PreviousStatus = TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0) } |]
+          Status = TestRunStatus.Passed TestTimeouts.testElapsed
+          PreviousStatus = TestRunStatus.Passed TestTimeouts.testElapsed } |]
   { Generation = RunGeneration 1
     Freshness = ResultFreshness.Fresh
     Completion = BatchCompletion.Complete (n, n)
@@ -84,7 +86,7 @@ let private mkFileAnnotations () : FileAnnotations =
       [| { TestLineAnnotation.Line = 10
            TestId = TestId.TestId "test1"
            DisplayName = "test 1"
-           Status = TestRunStatus.Passed (TimeSpan.FromMilliseconds 5.0)
+           Status = TestRunStatus.Passed TestTimeouts.testElapsed
            Freshness = AnnotationFreshness.Current } |]
     CoverageAnnotations =
       [| { CoverageLineAnnotation.Line = 5; EndLine = 5; EndColumn = 40
@@ -121,7 +123,7 @@ let private mkTimelineStats () : TimelineStats =
 let private mkFailureNarratives () : Map<TestId, FailureNarrative> =
   [ TestId.TestId "fail1",
     { LastPassedAt = Some (DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
-      TimeSinceLastPass = Some (TimeSpan.FromMinutes 5.0)
+      TimeSinceLastPass = Some TestTimeouts.timeSinceLastPass
       CausalChanges = [ CausalChange.SymbolChanged "myFunc" ]
       PropertyViolation = None
       Summary = "Test failed because myFunc changed" } ]

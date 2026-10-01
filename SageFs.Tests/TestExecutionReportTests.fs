@@ -6,6 +6,8 @@ open Expecto.Flip
 open FsCheck
 open SageFs.Features.LiveTesting
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private resultId (name: string) = TestId.create name TestFramework.Expecto
 
 let private result (name: string) outcome : TestRunResult =
@@ -70,11 +72,11 @@ let tests =
     test "termination preserves transport and timeout reasons" {
       let requested: TestId list = []
       let stalled =
-        TestExecutionReport.create requested (TestExecutionTermination.StreamStalled (TimeSpan.FromSeconds 3.0)) [||]
+        TestExecutionReport.create requested (TestExecutionTermination.StreamStalled TestTimeouts.streamStalledAfter) [||]
       stalled.Termination
-      |> Expect.equal "stalled" (TestExecutionTermination.StreamStalled (TimeSpan.FromSeconds 3.0))
+      |> Expect.equal "stalled" (TestExecutionTermination.StreamStalled TestTimeouts.streamStalledAfter)
       TestExecutionTermination.noResultReason stalled.Termination
-      |> Expect.equal "stalled maps to structured no-result" (NoResultReason.StreamStalled (TimeSpan.FromSeconds 3.0))
+      |> Expect.equal "stalled maps to structured no-result" (NoResultReason.StreamStalled TestTimeouts.streamStalledAfter)
       TestExecutionTermination.TransportFailed "socket closed" |> TestExecutionTermination.noResultReason
       |> Expect.equal "transport reason" (NoResultReason.TransportFailed "socket closed")
     }

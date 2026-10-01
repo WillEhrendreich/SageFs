@@ -9,6 +9,8 @@ open Expecto.Flip
 open SageFs.SseWriter
 open SageFs.Features.LiveTesting
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 [<Tests>]
 let sseTests = testList "SSE Writer" [
   testList "formatSseEvent" [
@@ -217,7 +219,7 @@ let wireProtocolTests = testList "Wire Protocol Contract" [
       doc.RootElement.GetProperty("Case").GetString() |> Expect.equal "case" "PolicyDisabled"
 
     testCase "Passed carries duration in Fields" <| fun () ->
-      let status = SageFs.Features.LiveTesting.TestRunStatus.Passed (System.TimeSpan.FromMilliseconds(42.5))
+      let status = SageFs.Features.LiveTesting.TestRunStatus.Passed TestTimeouts.testElapsed
       let json = JsonSerializer.Serialize(status, productionSseOpts)
       let doc = JsonDocument.Parse(json)
       let root = doc.RootElement
@@ -227,7 +229,7 @@ let wireProtocolTests = testList "Wire Protocol Contract" [
 
     testCase "Failed carries failure+duration in Fields" <| fun () ->
       let failure = SageFs.Features.LiveTesting.TestFailure.AssertionFailed "oops"
-      let dur = System.TimeSpan.FromMilliseconds(100.0)
+      let dur = TestTimeouts.testElapsed
       let status = SageFs.Features.LiveTesting.TestRunStatus.Failed(failure, dur)
       let json = JsonSerializer.Serialize(status, productionSseOpts)
       let doc = JsonDocument.Parse(json)
@@ -380,7 +382,7 @@ let protocolSnapshotTests = testList "Protocol Snapshots" [
     testCase "TestLineAnnotation shape" <| fun () ->
       let tla : TestLineAnnotation = {
         TestId = TestId.TestId "my-test"; DisplayName = "MyModule.should_work"
-        Line = 10; Status = TestRunStatus.Passed(System.TimeSpan.FromMilliseconds(50.0))
+        Line = 10; Status = TestRunStatus.Passed TestTimeouts.testElapsed
         Freshness = AnnotationFreshness.Current
       }
       let root = serAndParse tla
@@ -411,7 +413,7 @@ let protocolSnapshotTests = testList "Protocol Snapshots" [
 
   testList "TestCycleTiming wire format" [
     testCase "has all expected fields" <| fun () ->
-      let ts = System.TimeSpan.FromMilliseconds(10.0)
+      let ts = TestTimeouts.testElapsed
       let pt : TestCycleTiming = {
         Depth = TestCycleDepth.ThroughExecution(ts, ts, ts)
         TotalTests = 100; AffectedTests = 12
