@@ -316,7 +316,7 @@ module JupyterKernel =
           CodemirrorMode = "mllike"
           NbconvertExporter = "script"
         }
-        Banner = "SageFs — F# Live Development Environment\nPowered by F# Interactive"
+        Banner = "SageFs — F# Interactive with your project loaded\nLive tests, hot reload, and one session for every client"
         HelpLinks = [
           "SageFs Documentation", "https://github.com/WillEhrendreich/SageFs"
         ] }

@@ -1,7 +1,7 @@
 # Why F#? — Lessons from Building SageFs
 
-I built SageFs (a live F# development environment: a REPL engine, web dashboard, editor integrations, an MCP
-surface, and a daemon holding it all together) almost entirely in F#. Here's what I actually learned doing it,
+I built SageFs (F# Interactive with your project loaded, live tests and hot reload on top, and a daemon that
+lets an editor, a browser dashboard and an AI agent share one session) almost entirely in F#. Here's what I actually learned doing it,
 with real code from the codebase as the receipts.
 
 ---

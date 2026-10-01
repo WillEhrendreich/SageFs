@@ -110,7 +110,7 @@ silent no-op reads exactly like a successful one.
 
 ## Project Overview
 
-SageFs is an F# live development environment with editor integrations for VS Code and Neovim, a web dashboard, and an MCP server for agent and programmatic access. Its daemon architecture hosts persistent, isolated F# Interactive sessions.
+SageFs is F# Interactive that already has your project loaded, re-runs the affected tests on unsaved edits, and patches the running app on save. VS Code, Neovim, a web dashboard and an MCP server for agents all share its sessions. A daemon hosts persistent, isolated F# Interactive sessions, one worker process each.
 
 The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated. Do not treat them as current product surfaces or add new product documentation for them. Preserve Raylib application and game demos because they demonstrate SageFs support for game projects and are independent of the deprecated GUI frontend.
 

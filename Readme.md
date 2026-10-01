@@ -4,7 +4,7 @@
 
 ### You save. The affected tests re-run. The running app serves the new code.
 
-A live F# engine with hot reload, live testing, and AI-agent support, for any editor, free.
+F# Interactive that already has your project loaded, re-runs your tests on unsaved edits, and patches your running app. VS Code, Neovim, a browser dashboard and your AI agent all share the one session. Free, MIT.
 
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
@@ -18,7 +18,33 @@ A live F# engine with hot reload, live testing, and AI-agent support, for any ed
 
 Hey, I'm Will. SageFs is the thing I wanted every time I sat there waiting on a rebuild just to find out whether one little function did what I thought it did.
 
-It's a live F# development engine. Start it once, then connect from VS Code, Neovim, the web dashboard, or an MCP client, and you get feedback as you work: inline eval results, live test markers that re-run the affected tests against your edits (saved or not), hot reload, and agent access. It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients can all share live state at the same time.
+### What's wrong with F# Interactive
+
+Everybody who's used `dotnet fsi` on a real project has hit the same wall.
+
+- **It starts empty.** Your project, your packages and your `open`s are all on you, through `#r` and `#load`, every time.
+- **It's one process in one terminal.** A bad eval or a hang takes the session with it, and nothing else can use it while you do.
+- **It knows nothing about your tests.** Change a function, run `dotnet test`, wait.
+- **It can't touch a running app.** Edit a handler in a web app and it's stop, build, start, click back to where you were.
+- **Values scroll away.** You see `val x : int = 3` once, then it's gone off the top of the terminal.
+- **Only you can drive it.** An AI agent can't sit in your REPL, so it shells out to `dotnet build` like it's 2015.
+
+### What SageFs does about it
+
+Start `sagefs` once. Then:
+
+| The wall | What you get instead |
+|:---|:---|
+| It starts empty | A session loads your real project, built by the SDK `dotnet` picks in that folder, in its own host process. Your package versions never fight mine. No config files, and it works on half-written code. |
+| One process, one terminal | One daemon, any number of isolated session workers. VS Code, Neovim, the dashboard and agents all talk to the same live session at the same time, and each keeps its own view. |
+| It knows nothing about your tests | Edit a function, saved or not, and the *affected* tests re-run against it. The failing one goes red in your gutter and green again when you fix it, without touching the file on disk. See [live testing](docs/live-testing-as-you-type.md). |
+| It can't touch a running app | Save a `.fs` file and SageFs re-points the changed methods in the process that's already running. Your state stays where it was, and when a change *can't* be patched it restarts the app and says why. See [hot reload](docs/hot-reload.md). |
+| Values scroll away | Every binding in your session is shown live in the dashboard, top-down, and updates after each eval. |
+| Only you can drive it | An MCP server with [61 tools](docs/mcp-tools.md). An agent evals, type-checks and runs your tests in the same session you're looking at, and `run_tests` hands back a receipt so a stale pass never counts as green. |
+
+I'm not going to pretend all of that is finished. [Live testing](docs/live-testing-as-you-type.md) and hot reload each have documented limits, written down next to the tests that pin them. But all of it runs today, and none of it is a mockup.
+
+It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients all share live state at the same time.
 
 **How's it different from Ionide?** Ionide gives you the editor smarts (IntelliSense, diagnostics, project support) through the F# Compiler Service, and it's great. SageFs adds live *execution*: eval any expression and see the result inline, continuous test feedback on every save (or keystroke, if you want it), and hot reload that patches your running app. Use both together: Ionide for editing, SageFs for running. They get along fine.
 
