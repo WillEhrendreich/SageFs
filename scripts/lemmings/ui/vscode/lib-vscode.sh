@@ -127,3 +127,89 @@ vsc_stop_pid() {
   kill -9 "$pid" 2>/dev/null || true
   echo forced
 }
+
+# ---- what the window and the lemming are given ------------------------------------------------
+
+VSC_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+VSC_REPO=$(cd "$VSC_LIB_DIR/../../../.." && pwd)
+VSC_DRIVE_DIR=$VSC_REPO/scripts/lemmings/ui/LemDrive
+VSC_DRIVE_BIN=$VSC_DRIVE_DIR/bin/Release/net11.0
+VSC_EXT_SRC=$VSC_REPO/sagefs-vscode
+LEM_LOCK_DIR=${LEM_ROOT:-/tmp/lem}
+
+# The compiled F# driver, built when it is missing or older than a source file. flock keeps
+# two lemmings starting together from building at once.
+vsc_ensure_driver() {
+  local stale=
+  if [ ! -f "$VSC_DRIVE_BIN/LemDrive.dll" ]; then stale=1
+  elif [ -n "$(find "$VSC_DRIVE_DIR" -maxdepth 1 \( -name '*.fs' -o -name '*.fsproj' \) -newer "$VSC_DRIVE_BIN/LemDrive.dll" -print -quit)" ]; then stale=1
+  fi
+  [ -z "$stale" ] && return 0
+  echo "lem: building LemDrive" >&2
+  mkdir -p "$LEM_LOCK_DIR"
+  flock "$LEM_LOCK_DIR/.lemdrive-build.lock" dotnet build "$VSC_DRIVE_DIR/LemDrive.fsproj" -c Release -nologo -v quiet >&2 \
+    || { echo "lem: LemDrive failed to build" >&2; return 1; }
+}
+
+# The extension, built from this repo (npm run compile = Fable then esbuild) when dist is
+# missing or older than its sources, then copied into the run directory so a rebuild cannot
+# change a running trial. Only what a published extension ships is copied.
+vsc_prepare_extension() {
+  local run=$1 dest=$1/.lem/ext/sagefs
+  local dist=$VSC_EXT_SRC/dist/Extension.js
+  if [ ! -f "$dist" ] || [ -n "$(find "$VSC_EXT_SRC/src" "$VSC_EXT_SRC/package.json" -newer "$dist" -print -quit)" ]; then
+    echo "lem: building the VS Code extension" >&2
+    [ -d "$VSC_EXT_SRC/node_modules" ] || (cd "$VSC_EXT_SRC" && npm ci >&2) || return 1
+    (cd "$VSC_EXT_SRC" && npm run compile >&2) || { echo "lem: the extension did not build" >&2; return 1; }
+  fi
+  mkdir -p "$dest"
+  cp -r --reflink=auto "$VSC_EXT_SRC/package.json" "$VSC_EXT_SRC/dist" "$VSC_EXT_SRC/icon.png" "$VSC_EXT_SRC/README.md" \
+    "$VSC_EXT_SRC/LICENSE" "$VSC_EXT_SRC/CHANGELOG.md" "$VSC_EXT_SRC/snippets" "$dest/"
+}
+
+# A fresh profile: no welcome page, no trust prompt, no updates, no telemetry, and the SageFs
+# extension pointed at the shared daemon's default ports. autoStart is OFF on purpose: the
+# extension must never start a daemon of its own, because the daemon belongs to Will.
+vsc_write_profile() {
+  local run=$1
+  mkdir -p "$run/.lem/vsc/User" "$run/.lem/vsc-ext" "$run/.lem/home" "$run/.lem/tmp"
+  cat > "$run/.lem/vsc/User/settings.json" <<JSON
+{
+  "security.workspace.trust.enabled": false,
+  "workbench.startupEditor": "none",
+  "update.mode": "none",
+  "extensions.autoCheckUpdates": false,
+  "telemetry.telemetryLevel": "off",
+  "chat.disableAIFeatures": true,
+  "workbench.tips.enabled": false,
+  "sagefs.mcpPort": ${LEM_PORT:-37749},
+  "sagefs.dashboardPort": ${LEM_DASH_PORT:-37750},
+  "sagefs.autoStart": false
+}
+JSON
+}
+
+# The tools the lemming types: vsc-snapshot, vsc-click, ... Each is a one-line exec of the F#
+# driver. Written into <run>/bin/tools, which the sandbox binds read-only.
+vsc_install_tools() {
+  local run=$1 verb
+  mkdir -p "$run/bin/tools" "$run/bin/lemdrive"
+  cp -r --reflink=auto "$VSC_DRIVE_BIN/." "$run/bin/lemdrive/"
+  for verb in snapshot click key type palette open wait shot; do
+    printf '%s\n' '#!/bin/sh' "exec dotnet \"$run/bin/lemdrive/LemDrive.dll\" vsc $verb \"\$@\"" > "$run/bin/tools/vsc-$verb"
+    chmod +x "$run/bin/tools/vsc-$verb"
+  done
+}
+
+# The desktop check: the real windows, one line each, so a leak is a diff. Writes the list to $1.
+vsc_desktop_windows() {
+  hyprctl clients 2>/dev/null | grep -E '^Window ' | sed -E 's/^Window [0-9a-f]+ -> //' | sort > "$1" || true
+}
+
+# vsc_check_no_leak <before-file> <after-file>   0 when no window appeared on the real desktop
+vsc_check_no_leak() {
+  local new; new=$(comm -13 "$1" "$2")
+  [ -z "$new" ] && return 0
+  echo "lem: A WINDOW APPEARED ON THE REAL DESKTOP: $new" >&2
+  return 1
+}

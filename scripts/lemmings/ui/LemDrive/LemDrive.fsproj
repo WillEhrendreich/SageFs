@@ -18,6 +18,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The extension's own manifest travels with the driver: the find-help oracle checks
+         an answer against the command titles the extension really declares. -->
+    <None Include="../../../../sagefs-vscode/package.json" Link="package.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="Outcome.fs" />
     <Compile Include="Chord.fs" />
     <Compile Include="Guard.fs" />
@@ -25,6 +31,11 @@
     <Compile Include="Snapshot.fs" />
     <Compile Include="Cdp.fs" />
     <Compile Include="Vsc.fs" />
+    <Compile Include="Daemon.fs" />
+    <Compile Include="Shim.fs" />
+    <Compile Include="VscHost.fs" />
+    <Compile Include="FellOver.fs" />
+    <Compile Include="Oracle.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
