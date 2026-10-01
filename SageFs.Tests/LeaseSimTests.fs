@@ -78,7 +78,7 @@ let tests =
                 SimEvent.Abandon "agent-c"
                 SimEvent.Abandon "agent-d"
                 SimEvent.PressureChange MemoryPressure.Normal
-                SimEvent.PassSeconds 20_000
+                SimEvent.PassSeconds FixtureDurations.passPastEveryLease
                 SimEvent.Request("agent-e", Kind.Rebuild) ] }
         let real = trace PoolBehavior.Real scenario
         let twin = trace PoolBehavior.NeverExpiresTwin scenario

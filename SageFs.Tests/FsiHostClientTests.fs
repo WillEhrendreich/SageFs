@@ -53,7 +53,7 @@ let private startHost () : Async<Started> =
         Environment = []
         OnOutput = fun _ text -> output.Enqueue text
         OnLog = ignore
-        StartupTimeoutMs = 60_000 }
+        StartupTimeoutMs = TestTimeouts.asMs TestTimeouts.processStartPatience }
     match! start options with
     | Result.Ok session -> return { Session = session; Output = output }
     | Result.Error reason -> return failtest (describeStartError reason)
@@ -154,7 +154,7 @@ let tests =
           withHost (fun started ->
             async {
               let running = started.Session.Eval(runawayEvalCode, CancellationToken.None) |> Async.StartAsTask
-              do! Async.Sleep 500
+              do! Async.Sleep (TestTimeouts.asMs TestTimeouts.cancelAfter)
               Process.GetProcessById(started.Session.ProcessId).Kill true
               let! finished = Task.WhenAny(running, Task.Delay(TestTimeouts.patience)) |> Async.AwaitTask
               Expect.isTrue "the pending eval completed" (obj.ReferenceEquals(finished, running))

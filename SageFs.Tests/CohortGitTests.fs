@@ -38,7 +38,7 @@ let tests =
             RedirectStandardError = true,
             UseShellExecute = false)
         use proc = Process.Start psi
-        proc.WaitForExit(5000) |> ignore
+        proc.WaitForExit(TestTimeouts.childExit) |> ignore
         proc.HasExited && proc.ExitCode = 0
       with _ -> false
 

@@ -501,7 +501,7 @@ let elmLoopBackpressureTests =
 
     testTask "effect concurrency bounded: at most 64 effects run simultaneously" {
       // 20 msgs × 5 effects = 100 potential concurrent in-flight effects.
-      // Without a SemaphoreSlim cap, all 100 Async.Start immediately; Async.Sleep(50) keeps
+      // Without a SemaphoreSlim cap, all 100 Async.Start immediately; a sleep in each keeps
       // them all in-flight simultaneously so maxConcurrent ≈ 100.
       // With SemaphoreSlim(64), at most 64 can hold the semaphore at once → maxConcurrent ≤ 64.
       let currentConcurrent = ref 0
@@ -518,7 +518,7 @@ let elmLoopBackpressureTests =
               match !currentConcurrent > !maxConcurrent with
               | true -> maxConcurrent := !currentConcurrent
               | false -> ())
-            do! Async.Sleep 50
+            do! Async.Sleep (TestTimeouts.asMs TestTimeouts.effectInFlightHold)
             lock counterLock (fun () ->
               currentConcurrent := !currentConcurrent - 1
               effectsCompleted := !effectsCompleted + 1)

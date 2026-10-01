@@ -128,7 +128,7 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
         ConnectionState = DashboardConnectionState.Connected
         SessionState = "ready"; SessionId = "test-id"; WorkingDir = "/w"
         WarmupProgress = ""; WorkflowLabel = "REPL"
-        EvalStats = { Count = 3; AvgMs = 1.0; MinMs = 1.0; MaxMs = 1.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+        EvalStats = FixtureStats.threeQuickEvals
         AlarmPanel = Elem.div [] []; DaemonHealth = Elem.div [] []
         FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []
         FilmstripPanel = Elem.div [] []; ThemeName = "default"; ConnectionLabel = None
@@ -150,7 +150,7 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
         ConnectionState = DashboardConnectionState.Connected
         SessionState = "ready"; SessionId = "test-id"; WorkingDir = "/w"
         WarmupProgress = ""; WorkflowLabel = "REPL"
-        EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+        EvalStats = FixtureStats.noEvals
         AlarmPanel = Elem.div [] []; DaemonHealth = Elem.div [] []
         FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []
         FilmstripPanel = Elem.div [] []; ThemeName = "default"; ConnectionLabel = None

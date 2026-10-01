@@ -62,7 +62,7 @@ let private genFence : Gen<int64<fence>> =
   Gen.choose (0, 100) |> Gen.map (fun n -> LanguagePrimitives.Int64WithMeasure<fence> (int64 n))
 
 let private genDateTime : Gen<DateTime> =
-  Gen.choose (0, 1_000_000)
+  Gen.choose (0, 1000000)
   |> Gen.map (fun s -> DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(float s))
 
 let private genShortList (g: Gen<'a>) : Gen<'a list> =

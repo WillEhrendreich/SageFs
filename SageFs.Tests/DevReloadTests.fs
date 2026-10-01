@@ -838,7 +838,7 @@ let fileWatcherResilienceTests = testSequenced <| testList "FileWatcher resilien
     let config : FileWatcher.WatchConfig = {
       Directories = [ @"C:\__nonexistent_dir_sagefs_test_12345__" ]
       Extensions = [ ".fs" ]
-      DebounceMs = 200
+      DebounceMs = int SageFs.Timeouts.fileWatchDebounce.TotalMilliseconds
       ExcludePatterns = []
     }
     let mutable callCount = 0
@@ -853,7 +853,7 @@ let fileWatcherResilienceTests = testSequenced <| testList "FileWatcher resilien
       let config : FileWatcher.WatchConfig = {
         Directories = [ @"C:\__nonexistent_dir_sagefs_test_12345__"; tempDir ]
         Extensions = [ ".fs" ]
-        DebounceMs = 200
+        DebounceMs = int SageFs.Timeouts.fileWatchDebounce.TotalMilliseconds
         ExcludePatterns = []
       }
       let reported = System.Threading.Tasks.TaskCompletionSource<string>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
@@ -893,7 +893,7 @@ let fileWatcherResilienceTests = testSequenced <| testList "FileWatcher resilien
     let config : FileWatcher.WatchConfig = {
       Directories = []
       Extensions = [ ".fs" ]
-      DebounceMs = 200
+      DebounceMs = int SageFs.Timeouts.fileWatchDebounce.TotalMilliseconds
       ExcludePatterns = []
     }
     let watcher = FileWatcher.start config DevReload.DevReloadConfig.defaults (fun _ -> ())

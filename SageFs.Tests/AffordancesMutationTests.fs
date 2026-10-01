@@ -12,6 +12,7 @@ module AffordancesMutationTests
 open System
 open Expecto
 open Expecto.Flip
+open SageFs.Tests
 open SageFs
 
 let affordancesMutationTests = testList "Affordances mutations" [
@@ -109,30 +110,30 @@ let affordancesMutationTests = testList "Affordances mutations" [
   // ── EvalStats ─────────────────────────────────────────────────────────────
 
   testCase "WHY — evalStats_first_record_sets_min_max_equal_to_duration" <| fun () ->
-    let duration = TimeSpan.FromSeconds 3.0
+    let duration = TestTimeouts.testElapsed
     let stats = Affordances.EvalStats.record duration Affordances.EvalStats.empty
     (stats.EvalCount, stats.TotalDuration, stats.MinDuration, stats.MaxDuration)
     |> Expect.equal "the FIRST recorded duration must set count=1 and Total=Min=Max=that duration"
       (1, duration, duration, duration)
 
   testCase "WHY — evalStats_second_record_tracks_true_min_and_max — min/max must not just track the latest value" <| fun () ->
-    let slow = TimeSpan.FromSeconds 5.0
-    let fast = TimeSpan.FromSeconds 1.0
+    let slow = FixtureDurations.slowResult
+    let fast = FixtureDurations.fastResult
     let stats =
       Affordances.EvalStats.empty
       |> Affordances.EvalStats.record slow
       |> Affordances.EvalStats.record fast
     (stats.EvalCount, stats.TotalDuration, stats.MinDuration, stats.MaxDuration)
-    |> Expect.equal "after 5s then 1s: count=2, total=6s, min=1s (not 5s), max=5s (not 1s)"
+    |> Expect.equal "after the slow then the fast: count=2, total=both, min=the fast (not the slow), max=the slow (not the fast)"
       (2, slow + fast, fast, slow)
 
   testCase "WHY — evalStats_averageDuration_divides_total_by_count" <| fun () ->
     let stats =
       Affordances.EvalStats.empty
-      |> Affordances.EvalStats.record (TimeSpan.FromSeconds 2.0)
-      |> Affordances.EvalStats.record (TimeSpan.FromSeconds 4.0)
+      |> Affordances.EvalStats.record FixtureDurations.meanLow
+      |> Affordances.EvalStats.record FixtureDurations.meanHigh
     Affordances.EvalStats.averageDuration stats
-    |> Expect.equal "the average of 2s and 4s must be exactly 3s" (TimeSpan.FromSeconds 3.0)
+    |> Expect.equal "the average of the two must be exactly halfway between them" FixtureDurations.meanOfLowAndHigh
 
   testCase "WHY — evalStats_averageDuration_of_empty_is_zero_not_a_divide_by_zero_crash" <| fun () ->
     Affordances.EvalStats.averageDuration Affordances.EvalStats.empty

@@ -239,7 +239,7 @@ let rec private waitUntil (owner: CohortOwner.Handle) (deadline: DateTime) (desc
     elif DateTime.UtcNow > deadline then
       failtestf "condition not met within timeout: %s" (describe ())
     else
-      do! Async.Sleep 15
+      do! Async.Sleep (TestTimeouts.asMs TestTimeouts.inProcessPoll)
       return! waitUntil owner deadline describe check
   }
 

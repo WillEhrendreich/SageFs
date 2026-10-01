@@ -385,6 +385,6 @@ let post (app: RunningApp) (route: string) (body: string) : Task<int * string> =
 
 let stop (app: RunningApp) =
   try app.Host.Kill(entireProcessTree = true) with _ -> ()
-  try app.Host.WaitForExit 10_000 |> ignore with _ -> ()
+  try app.Host.WaitForExit TestTimeouts.childExitSlow |> ignore with _ -> ()
   try app.Host.Dispose() with _ -> ()
   try Directory.Delete(app.RunDir, true) with _ -> ()

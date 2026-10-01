@@ -135,7 +135,7 @@ let cohortMatrixRenderTests =
         // pass on most checkouts — highly redundant, which is exactly what
         // makes the whole-suite-for-the-whole-cohort picture cheap (§6.5).
         let rowCount = 10
-        let colCount = 7_000
+        let colCount = 7000
         let pass = Array.init rowCount (fun _ -> Array.init colCount (fun c -> c % 37 <> 0))
         let fail = Array.init rowCount (fun r -> Array.init colCount (fun c -> c % 37 = 0 && (c + r) % 3 = 0))
         let stale = Array.init rowCount (fun r -> Array.init colCount (fun c -> c % 37 = 0 && (c + r) % 3 = 1))

@@ -11,10 +11,10 @@ open SageFs.Tests.LiveTestingTestHelpers
 
 /// A passing result's duration with a fractional part, so the tooltip case can check that the
 /// whole-millisecond part ("12") is rendered.
-let private tooltipDuration = TimeSpan.FromMilliseconds 12.5
+let private tooltipDuration = FixtureDurations.fractionalElapsed
 
 /// The duration of the passing result the enrichment case feeds in. Never read back.
-let private enrichmentDuration = TimeSpan.FromMilliseconds 100.0
+let private enrichmentDuration = FixtureDurations.usualResult
 
 // --- TestDependencyGraph Tests (RED — stub returns empty) ---
 

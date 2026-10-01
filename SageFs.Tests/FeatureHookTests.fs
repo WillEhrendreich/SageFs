@@ -317,7 +317,7 @@ let featureHookTests = testList "Feature Hook Computation" [
 
   testList "EvalStore.recentPair" [
     let mkHistEntry cellIndex result : EvalStore.EvalHistoryEntry =
-      { CellIndex = cellIndex; Code = ""; Result = result; DurationMs = 0L; Timestamp = System.DateTimeOffset.UnixEpoch }
+      { CellIndex = cellIndex; Code = ""; Result = result; DurationMs = FixtureDurations.notRunMsInt64; Timestamp = System.DateTimeOffset.UnixEpoch }
 
     test "WHY — EvalStore.recentPair — of the two most recent matches, the newer one lands second because get_eval_diff must never show a diff backwards (additions read as removals)" {
       // Newest-first, as state.EvalHistory always is: E5 is the most recent.

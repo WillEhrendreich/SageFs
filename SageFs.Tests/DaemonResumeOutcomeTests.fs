@@ -121,7 +121,7 @@ let private startDaemonOnDataDir (port: int) (dataDir: string) (envOverrides: (s
   client.Timeout <- SageFs.Tests.TestTimeouts.httpDaemon
 
   let! healthy =
-    Infra.waitForAsync 90_000 (fun () -> task {
+    Infra.waitForAsync (TestTimeouts.asMs TestTimeouts.daemonFirstOutput) (fun () -> task {
       try
         let! resp = client.GetAsync("/health")
         return int resp.StatusCode > 0
@@ -231,7 +231,7 @@ let daemonResumeOutcomeTests =
         // entireProcessTree so the session's worker goes with it: a surviving
         // worker would make "the session came back" ambiguous.
         proc1.Kill(entireProcessTree = true)
-        proc1.WaitForExit(15_000) |> ignore
+        proc1.WaitForExit(TestTimeouts.childExitSlow) |> ignore
         proc1.HasExited |> Expect.isTrue "daemon 1 is gone before daemon 2 starts"
         client1.Dispose()
         firstClient <- null

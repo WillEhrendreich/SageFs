@@ -413,7 +413,7 @@ let watchableDirsCappedTests = testList "watchableDirsCapped" [
       try
         Directory.CreateDirectory(Path.Combine(root, "Features")) |> ignore
         let noMarker (_: string) = false
-        let dirs, truncated = watchableDirsCapped 50_000 root noMarker
+        let dirs, truncated = watchableDirsCapped 50000 root noMarker
         truncated |> Flip.Expect.isFalse "two directories is nowhere near 50,000"
         dirs.Length |> Flip.Expect.equal "root plus its one child" 2
       finally

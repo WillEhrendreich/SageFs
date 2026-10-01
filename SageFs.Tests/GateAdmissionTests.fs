@@ -32,9 +32,9 @@ let private readySnapshot : WorkerStatusSnapshot =
   { Status = SessionStatus.Ready
     StatusMessage = None
     EvalCount = 0
-    AvgDurationMs = 0L
-    MinDurationMs = 0L
-    MaxDurationMs = 0L
+    AvgDurationMs = FixtureDurations.notRunMsInt64
+    MinDurationMs = FixtureDurations.notRunMsInt64
+    MaxDurationMs = FixtureDurations.notRunMsInt64
     Projects = []
     CoreVersion = "0.0.0-test" }
 

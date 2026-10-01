@@ -39,7 +39,7 @@ let makeTestProgram (onModelChanged: TestModel -> TestRegion list -> unit) =
       match effect with
       | LogEffect s -> dispatch (AddLog s)
       | DelayedMsg msg ->
-        do! Async.Sleep 10
+        do! Async.Sleep (TestTimeouts.asMs TestTimeouts.delayedMsgDelay)
         dispatch msg
     }
     OnModelChanged = onModelChanged
@@ -190,7 +190,7 @@ let elmLoopStateMachineTests =
             match effect with
             | LogEffect s -> dispatch (AddLog s)
             | DelayedMsg msg ->
-              do! Async.Sleep 10
+              do! Async.Sleep (TestTimeouts.asMs TestTimeouts.delayedMsgDelay)
               dispatch msg
           }
           OnModelChanged = fun _ _ -> ()

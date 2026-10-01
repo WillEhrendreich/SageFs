@@ -598,6 +598,46 @@ module TestTimeouts =
   /// The least time `SageFsConfig.WorkerStartupTimeoutMs` may allow a worker to start in. A cold
   /// worker on a loaded machine needs this long, so a default below it would fail good starts.
   let workerStartupFloor = secs 30.
+  // ---- half A ----
+  // Waits, budgets and clock steps for the tests in the first half of the alphabet (A to
+  // LiveTesting). A passing test never waits out a ceiling: reaching one means the test failed.
+  let private minutes (n: float) = System.TimeSpan.FromMinutes n
+
+  /// How far either side of a boundary (a lease window, the point a cohort went silent) a clock tick
+  /// lands, to be clearly inside it or clearly past it.
+  let clockMargin = minutes 1.
+  /// How long after the lease window opens a landing settles in the retention scene: still inside
+  /// the window of the departure tick that follows.
+  let landingSettleAfterLease = secs 30.
+
+  /// Turn a wait into the whole milliseconds an API that takes an int wants.
+  let asMs (t: System.TimeSpan) : int = int t.TotalMilliseconds
+
+  // Process waits.
+
+  /// A short-lived helper process the test ran to completion (git, a CLI call), or a process it
+  /// just killed, finishing and being gone. A cold runner takes seconds.
+  let childExit = secs 5.
+  /// A helper or a killed process tree that takes real work to finish or tear down: a daemon with
+  /// its workers, a hot reload app host, a git checkout.
+  let childExitSlow = secs 15.
+  /// Let the async readers on a process's output drain after it exited, so the log is complete.
+  let readerFlush = secs 1.
+
+  // Waits and holds inside a test's own scenario.
+
+  /// The ceiling on a daemon's memory settling back to within tolerance of its baseline after the
+  /// sessions that grew it are stopped.
+  let rssSettleBudget = secs 30.
+  /// How long a test effect holds itself in flight, so every effect of a burst is running at once
+  /// and only the concurrency cap can limit them.
+  let effectInFlightHold = ms 50.
+  /// The delay inside a delayed-message effect: long enough that the dispatch arrives from a
+  /// later continuation, not from inside the effect call.
+  let delayedMsgDelay = ms 10.
+  /// How long a fake test runner takes to report results after it started, so the run is
+  /// observably in flight in between.
+  let fakeRunReportDelay = ms 20.
 
 /// Durations a test makes up as data, not waits: how long a fabricated test result or pipeline
 /// stage says it took. Nothing sleeps for them. A case that asserts on a duration (a formatter,
@@ -706,6 +746,138 @@ module FixtureDurations =
   /// A start time, in ticks, a case gives an owner process. The fence cases add skews to it, so
   /// the value only has to be far from zero and from overflow.
   let ownerStartTicks = 1_000_000_000L
+
+  // ---- half A ----
+  // Made-up durations for the tests in the first half of the alphabet (A to LiveTesting). The
+  // helpers build each value from a number once, here.
+  let private ms (n: float) = System.TimeSpan.FromMilliseconds n
+  let private secs (n: float) = System.TimeSpan.FromSeconds n
+  let private mins (n: float) = System.TimeSpan.FromMinutes n
+  let private hours (n: float) = System.TimeSpan.FromHours n
+  let private days (n: float) = System.TimeSpan.FromDays n
+
+  // Elapsed times and timestamps that say "nothing ran" or "nobody set this".
+
+  /// The elapsed time of work that did not run, as the float a view model carries.
+  let notRunMs : float = SageFs.Timeouts.notRun.TotalMilliseconds
+  /// The elapsed time of work that did not run, as the whole milliseconds a protocol record carries.
+  let notRunMsInt64 : int64 = int64 SageFs.Timeouts.notRun.TotalMilliseconds
+  /// Where an entry sits on an eval timeline: at its origin. No case reads the offset back.
+  let timelineOrigin : int64 = notRunMsInt64
+  /// A created-at that nobody wrote, the same value the persisted types start from.
+  let unwrittenAtMs : int64 = System.DateTimeOffset.UnixEpoch.ToUnixTimeMilliseconds()
+  /// A created-at the golden file case pins (2024-03-02 UTC), so the bytes it writes never change.
+  let goldenCreatedAtMs : int64 = 1709337600000L
+
+  // Durations a stored test result carries through a write and a read. Only that they come
+  // back unchanged matters.
+
+  /// A stored result's duration in a case that never reads it back.
+  let savedMsTiny : uint32 = 1u
+  /// A stored result's duration in a case that round-trips it.
+  let savedResultMs : uint32 = 100u
+  /// A second stored result's duration, different from `savedResultMs` so two entries tell apart.
+  let savedResultMsOther : uint32 = 200u
+  /// Four durations that differ, for a file holding four entries that must not be mixed up.
+  let savedMsDistinct : uint32 array = [| 1u; 2u; 3u; 4u |]
+  /// The span a stalled or timed-out result carries through a write and read. The format must keep
+  /// any span; this one is only chosen to be non-zero and to survive being compared whole.
+  let stalledSpan = secs 30.
+
+  // Eval durations a case feeds to a statistic and then reads the answer of.
+
+  /// One of two durations whose mean is `meanOfLowAndHigh`.
+  let meanLow = ms 2.
+  /// The other of the two, above `meanLow`.
+  let meanHigh = ms 4.
+  /// Exactly halfway between `meanLow` and `meanHigh`: what averaging the two must give.
+  let meanOfLowAndHigh = ms 3.
+  /// A binding's eval duration in a case that never reads it back.
+  let bindingEvalMs : float = 1.0
+  /// An eval duration with a fractional part, so a round trip shows it is kept whole.
+  let fractionalElapsed = ms 12.5
+  let fractionalElapsedMs : float = fractionalElapsed.TotalMilliseconds
+  /// The total a traced eval reports in the event case list. Never read back.
+  let tracedTotalMs : float = 5.0
+  /// The duration of an eval history entry nobody reads.
+  let evalEntryMs : int64 = 1L
+  /// How long a failed open attempt says it took. Never read back.
+  let failedOpenMs : float = 1.0
+  /// How long the second pending rebuild's tree-sitter stage took. Not the first rebuild's value,
+  /// so a mix-up between the two would show. Never read back.
+  let secondRebuildTreeSitterStage = ms 7.
+  /// How long the second pending rebuild's FCS stage took. Never read back.
+  let secondRebuildFcsStage = ms 12.
+  /// The durations of the five sample tests in the test filter bar cases. They differ so the
+  /// size order of the entries shows.
+  let treemapMs : float array = [| 100.0; 200.0; 50.0; 10.0; 5.0 |]
+
+  // How long a signal stayed off baseline.
+
+  /// A signal off baseline for a short while: not a long-held verdict.
+  let sustainedBriefly = mins 1.
+  /// A signal off baseline long enough to count as held.
+  let sustainedLong = mins 2.
+
+  // Uptimes and ages.
+
+  /// A daemon uptime no assertion depends on: a daemon that is not brand new.
+  let uptimeUnread = mins 10.
+  /// An uptime the formatter prints in minutes only.
+  let uptimeMinutesLabel = mins 45.
+  /// An uptime the formatter prints as hours and minutes.
+  let uptimeHoursLabel = hours 2.5
+  /// An uptime the formatter prints as days and hours.
+  let uptimeDaysLabel = days 1.5
+  /// A time since the last pass short enough to read "just now".
+  let sinceUnderAMinute = secs 30.
+  /// A time since the last pass the narrative prints in hours.
+  let sinceHours = hours 2.
+  /// A time since the last pass the narrative panel renders as "7 minutes ago".
+  let sinceMinutesRendered = mins 7.
+  /// How long ago another checkout touched a file: recent enough to be worth an advisory.
+  let otherCheckoutTouchedAgo = mins 2.
+  /// A later tool call in the same session, so two calls have different times.
+  let laterToolCall = secs 10.
+
+  // Ttls the daemon ownership cases choose against.
+
+  /// A ttl long enough that a second of idle time is nowhere near it. Also a ttl that only has to
+  /// be present, whatever its length.
+  let ttlLong = mins 30.
+  /// A daemon that has been idle for a very long time.
+  let idleVeryLong = days 1.
+  /// A ttl the caller gave explicitly.
+  let ttlExplicit = mins 5.
+  /// A ttl of an hour: the exact value in the reported bug, far above the activity window cap.
+  let ttlHuge = mins 60.
+  /// A ttl under the activity window cap, which must never be inflated past itself.
+  let ttlUnderCap = secs 30.
+  /// A ttl a case puts the idle time exactly on.
+  let ttlBoundary = secs 5.
+  /// Ttls from a second to a day, to show the activity window never exceeds the ttl it serves.
+  let ttlsAcrossTheRange = [ secs 1.; mins 1.; mins 2.; mins 5.; hours 1.; hours 24. ]
+  /// What `--ttl 500ms` parses to.
+  let parsedMillis = ms 500.
+  /// What `--ttl 30m` parses to.
+  let parsedMinutes = mins 30.
+  /// What `--ttl 1h` parses to.
+  let parsedHour = hours 1.
+  /// What `2h` parses to.
+  let parsedHours = hours 2.
+  /// What a bare `90` parses to: seconds.
+  let parsedBare = secs 90.
+
+  // Scenario inputs.
+
+  /// A pass of virtual time (in seconds) longer than any lease lives, so every abandoned lease is
+  /// past its ttl. Chosen against `Timeouts.leaseTtlRunApp`, the longest.
+  let passPastEveryLease : int = int (SageFs.Timeouts.leaseTtlRunApp.TotalSeconds * 1.5)
+  /// The timeout seconds a held config carries through a migration. Only `Retries` is read back.
+  let heldConfigTimeoutSeconds : int = 30
+  /// How far a browser's clock is set from the real time (ten minutes, either way) in the journeys
+  /// that prove the disconnect banner does not trust the client clock.
+  let clockSkewMs : int64 = 600_000L
 
 /// Values a case pins because the number IS the expectation: the case is about a bound, a
 /// default or a window, and says so in its name. A case that merely needs a duration to build a
@@ -870,3 +1042,83 @@ module TestMagnitudes =
   let oneMsAfterEpoch = 1L
   /// A made-up manifest creation time a case only needs to see come back unchanged.
   let fixedCreatedAtMs = 1234567890L
+
+/// Eval statistics and warmup timing records a case builds only because the type needs them.
+module FixtureStats =
+  /// A session that has run no evals.
+  let noEvals : SageFs.Server.DashboardTypes.EvalStatsView =
+    { Count = 0
+      AvgMs = FixtureDurations.notRunMs
+      MinMs = FixtureDurations.notRunMs
+      MaxMs = FixtureDurations.notRunMs
+      Sparkline = ""
+      P50Ms = None
+      P95Ms = None }
+  /// Three evals that each took the same short time.
+  let threeQuickEvals : SageFs.Server.DashboardTypes.EvalStatsView =
+    { noEvals with Count = 3; AvgMs = 1.0; MinMs = 1.0; MaxMs = 1.0 }
+  /// Seven evals with a mean between the quickest and the slowest.
+  let sevenEvals : SageFs.Server.DashboardTypes.EvalStatsView =
+    { noEvals with Count = 7; AvgMs = 42.0; MinMs = 1.0; MaxMs = 100.0 }
+  /// The evals the stats snapshot renders.
+  let snapshotEvals : SageFs.Server.DashboardTypes.EvalStatsView =
+    { noEvals with Count = 42; AvgMs = 123.4; MinMs = 5.0; MaxMs = 1045.0 }
+  /// Five evals with a wide spread between the fastest and the slowest.
+  let wideSpread : SageFs.Server.DashboardTypes.EvalStatsView =
+    { noEvals with Count = 5; AvgMs = 100.0; MinMs = 50.0; MaxMs = 200.0 }
+  /// Three evals close together.
+  let tightSpread : SageFs.Server.DashboardTypes.EvalStatsView =
+    { noEvals with Count = 3; AvgMs = 100.0; MinMs = 80.0; MaxMs = 120.0 }
+  /// Three evals close together with one slower tail.
+  let tightSlowTail : SageFs.Server.DashboardTypes.EvalStatsView =
+    { noEvals with Count = 3; AvgMs = 100.0; MinMs = 80.0; MaxMs = 150.0 }
+  /// Many quick evals.
+  let manyQuickEvals : SageFs.Server.DashboardTypes.EvalStatsView =
+    { noEvals with Count = 42; AvgMs = 50.0; MinMs = 10.0; MaxMs = 100.0 }
+  /// A warmup that ran no phase.
+  let phaseTimingNotRun : SageFs.WarmUp.WarmupPhaseTiming =
+    { ScanSourceFilesMs = FixtureDurations.notRunMsInt64
+      ScanAssembliesMs = FixtureDurations.notRunMsInt64
+      OpenNamespacesMs = FixtureDurations.notRunMsInt64
+      TotalMs = FixtureDurations.notRunMsInt64 }
+  /// A warmup whose phases report nothing but a short total.
+  let phaseTimingBriefTotal : SageFs.WarmUp.WarmupPhaseTiming =
+    { phaseTimingNotRun with TotalMs = 5L }
+
+/// Waits a browser journey gives the page, in the whole milliseconds Playwright and the journey
+/// helpers take. Each wait ends the moment the page shows what it waits for, so a long one costs a
+/// passing run nothing and only a failing one pays it.
+module BrowserWaits =
+  let private ms (t: System.TimeSpan) = TestTimeouts.asMs t
+
+  /// A page state that is already true, or settles within a few frames: an element that must be
+  /// absent, a scroll reaching the bottom, a connection flag that is already set.
+  let pageProbe = ms TestTimeouts.patienceBrief
+  /// Text or an element that the first server render, or the next SSE push, puts on the page.
+  let pageRenders = ms TestTimeouts.patienceInProcess
+  /// A panel or session card changing after the daemon handled a click, or the SSE stream
+  /// attaching after a navigation.
+  let panelUpdates = ms TestTimeouts.sseListen
+  /// Something the daemon has to do work for: an eval's output reaching the output panel, a
+  /// session reaching Ready, a panel appearing after a workflow switch.
+  let daemonWork = ms TestTimeouts.requestPatience
+  /// The first live testing results (a build and a run) reaching the panel once it is enabled.
+  let liveTestsReport = ms TestTimeouts.readyBudget
+  /// Live testing results after an edit: a rebuild and a rerun.
+  let liveTestsRerun = ms TestTimeouts.loadedSessionsReady
+  /// A hot reload session coming up, with its first build.
+  let hotReloadBuild = ms TestTimeouts.workerSessionReady
+  /// The running app answering a request, once its host is up.
+  let appAnswers = ms TestTimeouts.sseListen
+  /// The app host coming up and serving its first request after the workflow starts.
+  let appStarts = ms TestTimeouts.readyBudget
+  /// An edit reaching the running app after a hot reload.
+  let hotReloadApplies = ms TestTimeouts.saveVerdict
+  /// How long the journey waits for the app to serve before it saves the file again, in case the
+  /// watcher missed the first save.
+  let resaveAfter = ms TestTimeouts.sseListen
+  /// A generous margin over the stale budget, so a loaded runner's scheduler jitter never
+  /// false-fails the "became stale" assertion.
+  let staleDetected = ms TestTimeouts.sseListen
+  /// The banner clearing again after the daemon restarts.
+  let reconnected = ms TestTimeouts.patience

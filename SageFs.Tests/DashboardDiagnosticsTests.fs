@@ -1,4 +1,4 @@
-﻿module SageFs.Tests.DashboardDiagnosticsTests
+module SageFs.Tests.DashboardDiagnosticsTests
 
 open System
 open Expecto
@@ -166,7 +166,7 @@ let diagnosticsPanelSnapshotTests =
       let snap : DashboardSnapshot = {
         Version = "0.6.48"; SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
         WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
-        EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+        EvalStats = FixtureStats.noEvals
         DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []
         DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []
         HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
@@ -193,7 +193,7 @@ let diagnosticsPanelSnapshotTests =
       let snap : DashboardSnapshot = {
         Version = "0.6.48"; SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
         WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
-        EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+        EvalStats = FixtureStats.noEvals
         DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []
         DiagnosticsPanel = renderCurrentDiagnostics []; FilmstripPanel = Elem.div [] []
         HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []

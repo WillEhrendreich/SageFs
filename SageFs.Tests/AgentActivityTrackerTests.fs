@@ -13,7 +13,7 @@ open SageFs.Tests.SharedGenerators
 // ── Helpers ──────────────────────────────────────────────────────
 
 let now = DateTime(2026, 3, 14, 22, 0, 0, DateTimeKind.Utc)
-let fiveMinTimeout = TimeSpan.FromMinutes 5.0
+let presenceTimeout = SageFs.Timeouts.agentPresenceEviction
 let minutes (n: float) = TimeSpan.FromMinutes n
 
 // ── Recording and presence tests ─────────────────────────────────
@@ -38,7 +38,7 @@ let recordingTests = testList "AgentActivityTracker — recording creates presen
   testCase "Multiple tool calls accumulate recent files" <| fun _ ->
     let tracker = AgentActivityTracker.create()
     let t1 = now
-    let t2 = now + TimeSpan.FromSeconds 10.0
+    let t2 = now + FixtureDurations.laterToolCall
     AgentActivityTracker.recordToolCall tracker "claude" "sess-1" (Some "A.fs") None t1
     AgentActivityTracker.recordToolCall tracker "claude" "sess-1" (Some "B.fs") None t2
     let p = (AgentActivityTracker.getPresence tracker "claude").Value
@@ -125,7 +125,7 @@ let getAllPresencesTests = testList "AgentActivityTracker — getAllPresences" [
     let tracker = AgentActivityTracker.create()
     AgentActivityTracker.recordToolCall tracker "claude" "sess-1" None None (now - minutes 2.0)
     AgentActivityTracker.recordToolCall tracker "stale-agent" "sess-1" None None (now - minutes 10.0)
-    let active = AgentActivityTracker.getActivePresences tracker (Some "sess-1") fiveMinTimeout now
+    let active = AgentActivityTracker.getActivePresences tracker (Some "sess-1") presenceTimeout now
     active |> Expect.hasLength "should exclude stale agent" 1
     active.[0].AgentName |> Expect.equal "should be claude" "claude"
 ]
@@ -137,7 +137,7 @@ let cleanupTests = testList "AgentActivityTracker — occupancy cleanup" [
   testCase "Fresh agents survive cleanup" <| fun _ ->
     let tracker = AgentActivityTracker.create()
     AgentActivityTracker.recordToolCall tracker "claude" "sess-1" None None (now - minutes 2.0)
-    let outcome = AgentActivityTracker.cleanup tracker fiveMinTimeout now
+    let outcome = AgentActivityTracker.cleanup tracker presenceTimeout now
     outcome |> Expect.equal "should be NothingToClean" OccupancyCleanupOutcome.NothingToClean
     AgentActivityTracker.getPresence tracker "claude"
     |> Option.isSome
@@ -146,7 +146,7 @@ let cleanupTests = testList "AgentActivityTracker — occupancy cleanup" [
   testCase "Stale agents are evicted by cleanup" <| fun _ ->
     let tracker = AgentActivityTracker.create()
     AgentActivityTracker.recordToolCall tracker "claude" "sess-1" None None (now - minutes 10.0)
-    let outcome = AgentActivityTracker.cleanup tracker fiveMinTimeout now
+    let outcome = AgentActivityTracker.cleanup tracker presenceTimeout now
     match outcome with
     | OccupancyCleanupOutcome.EvictedStale names ->
       names |> Expect.contains "should contain claude" "claude"
@@ -159,7 +159,7 @@ let cleanupTests = testList "AgentActivityTracker — occupancy cleanup" [
     AgentActivityTracker.recordToolCall tracker "claude" "sess-1" None None (now - minutes 10.0)
     AgentActivityTracker.recordToolCall tracker "copilot" "sess-1" None None (now - minutes 10.0)
     AgentActivityTracker.recordToolCall tracker "agent-1" "sess-1" None None (now - minutes 1.0)
-    let outcome = AgentActivityTracker.cleanup tracker fiveMinTimeout now
+    let outcome = AgentActivityTracker.cleanup tracker presenceTimeout now
     match outcome with
     | OccupancyCleanupOutcome.EvictedStale names ->
       names |> Set.ofList |> Set.count
@@ -173,7 +173,7 @@ let cleanupTests = testList "AgentActivityTracker — occupancy cleanup" [
     let tracker = AgentActivityTracker.create()
     AgentActivityTracker.recordToolCall tracker "claude" "sess-1" None None (now - minutes 1.0)
     AgentActivityTracker.recordToolCall tracker "copilot" "sess-1" None None (now - minutes 2.0)
-    let outcome = AgentActivityTracker.cleanup tracker fiveMinTimeout now
+    let outcome = AgentActivityTracker.cleanup tracker presenceTimeout now
     outcome |> Expect.equal "should be NothingToClean" OccupancyCleanupOutcome.NothingToClean
 ]
 
@@ -231,7 +231,7 @@ let propertyTests = testList "AgentActivityTracker properties" [
         let tracker = AgentActivityTracker.create()
         let callTime = now - TimeSpan.FromMinutes minutesAgo
         AgentActivityTracker.recordToolCall tracker "claude" "sess-1" None None callTime
-        let outcome = AgentActivityTracker.cleanup tracker fiveMinTimeout now
+        let outcome = AgentActivityTracker.cleanup tracker presenceTimeout now
         match outcome with
         | OccupancyCleanupOutcome.NothingToClean -> true
         | _ -> false)
@@ -246,9 +246,9 @@ let propertyTests = testList "AgentActivityTracker properties" [
         }
       Prop.forAll (Arb.fromGen gen) (fun minutesBeyond ->
         let tracker = AgentActivityTracker.create()
-        let callTime = now - fiveMinTimeout - TimeSpan.FromMinutes minutesBeyond
+        let callTime = now - presenceTimeout - TimeSpan.FromMinutes minutesBeyond
         AgentActivityTracker.recordToolCall tracker "claude" "sess-1" None None callTime
-        let outcome = AgentActivityTracker.cleanup tracker fiveMinTimeout now
+        let outcome = AgentActivityTracker.cleanup tracker presenceTimeout now
         match outcome with
         | OccupancyCleanupOutcome.EvictedStale _ -> true
         | _ -> false)
@@ -297,7 +297,7 @@ let memberActivityTests = testList "AgentActivityTracker — recordMemberActivit
     // both entry points collapse onto one shared implementation/table.
     let tracker = AgentActivityTracker.create()
     AgentActivityTracker.recordToolCall tracker "claude" "sess-1" (Some "A.fs") None now
-    AgentActivityTracker.recordMemberActivity tracker (MemberTable.MemberId.Minted "claude") "sess-1" (Some "B.fs") None (now + TimeSpan.FromSeconds 1.0)
+    AgentActivityTracker.recordMemberActivity tracker (MemberTable.MemberId.Minted "claude") "sess-1" (Some "B.fs") None (now + TestTimeouts.clockTick)
     let p = (AgentActivityTracker.getPresence tracker "claude").Value
     p.EvalCount |> Expect.equal "both calls landed on the same presence entry" 2
     p.RecentFiles |> Set.ofList

@@ -6,7 +6,7 @@ open Expecto.Flip
 open SageFs.Features
 
 /// An uptime that no assertion in the snapshots using it depends on.
-let private settledUptime = TimeSpan.FromMinutes 10.0
+let private settledUptime = FixtureDurations.uptimeUnread
 
 [<Tests>]
 let healthSnapshotTests =
@@ -16,7 +16,7 @@ let healthSnapshotTests =
       let snapshot = {
         DaemonPid = 1234
         DaemonPort = 37749
-        Uptime = TimeSpan.FromHours 2.5
+        Uptime = settledUptime
         Version = "0.5.761"
         SessionSummaries = [
           { SessionId = "abc123"; ProjectName = "MyLib"; Status = SessionHealthStatus.Ready; EvalCount = 42; LastActivity = DateTimeOffset.UtcNow }
@@ -35,7 +35,7 @@ let healthSnapshotTests =
       let snapshot = {
         DaemonPid = 1234
         DaemonPort = 37749
-        Uptime = TimeSpan.FromMinutes 5.0
+        Uptime = settledUptime
         Version = "0.5.761"
         SessionSummaries = [
           { SessionId = "abc"; ProjectName = "Good"; Status = SessionHealthStatus.Ready; EvalCount = 10; LastActivity = DateTimeOffset.UtcNow }
@@ -55,7 +55,7 @@ let healthSnapshotTests =
       let snapshot = {
         DaemonPid = 1234
         DaemonPort = 37749
-        Uptime = TimeSpan.FromSeconds 2.0
+        Uptime = settledUptime
         Version = "0.5.761"
         SessionSummaries = []
         LiveTestingSummary = None
@@ -72,13 +72,13 @@ let healthSnapshotTests =
       let snapshot = {
         DaemonPid = 1234
         DaemonPort = 37749
-        Uptime = TimeSpan.FromHours 3.0
+        Uptime = settledUptime
         Version = "0.6.820"
         SessionSummaries = [
           { SessionId = "abc123"; ProjectName = "MyLib"; Status = SessionHealthStatus.Ready; EvalCount = 42; LastActivity = DateTimeOffset.UtcNow }
         ]
         LiveTestingSummary = None
-        MemoryMB = 55_000
+        MemoryMB = 55000
         // Empty — the EWMA/CUSUM detector's own learned baseline rose right
         // along with a smooth ramp, exactly like both real incidents. This
         // snapshot has to be judged unhealthy some other way.
@@ -94,13 +94,13 @@ let healthSnapshotTests =
       let snapshot = {
         DaemonPid = 1234
         DaemonPort = 37749
-        Uptime = TimeSpan.FromHours 1.0
+        Uptime = settledUptime
         Version = "0.6.820"
         SessionSummaries = [
           { SessionId = "abc123"; ProjectName = "MyLib"; Status = SessionHealthStatus.Ready; EvalCount = 10; LastActivity = DateTimeOffset.UtcNow }
         ]
         LiveTestingSummary = None
-        MemoryMB = 40_000
+        MemoryMB = 40000
         Anomalies = []
         GcDumpOutcome = None
         MemoryPressure = SageFs.MemoryPressure.Tight
@@ -158,7 +158,7 @@ let healthFormatTests =
       let snapshot = {
         DaemonPid = 5678
         DaemonPort = 37749
-        Uptime = TimeSpan.FromHours 1.5
+        Uptime = settledUptime
         Version = "0.5.761"
         SessionSummaries = [
           { SessionId = "s1"; ProjectName = "Lib"; Status = SessionHealthStatus.Ready; EvalCount = 25; LastActivity = DateTimeOffset.UtcNow }
@@ -189,7 +189,7 @@ let healthFormatTests =
       let snapshot = {
         DaemonPid = 4321
         DaemonPort = 37749
-        Uptime = TimeSpan.FromMinutes 1.0
+        Uptime = settledUptime
         Version = "0.5.761"
         SessionSummaries = []
         LiveTestingSummary = None
@@ -256,11 +256,11 @@ let sessionHealthTests =
       DaemonHealth.sessionStatusEmoji SessionHealthStatus.WarmingUp |> Expect.equal "warmup" "⏳"
 
     testCase "uptime formatting" <| fun _ ->
-      DaemonHealth.formatUptime (TimeSpan.FromMinutes 45.0)
+      DaemonHealth.formatUptime FixtureDurations.uptimeMinutesLabel
       |> Expect.equal "minutes" "45m"
-      DaemonHealth.formatUptime (TimeSpan.FromHours 2.5)
+      DaemonHealth.formatUptime FixtureDurations.uptimeHoursLabel
       |> Expect.equal "hours" "2h 30m"
-      DaemonHealth.formatUptime (TimeSpan.FromDays 1.5)
+      DaemonHealth.formatUptime FixtureDurations.uptimeDaysLabel
       |> Expect.equal "days" "1d 12h"
   ]
 

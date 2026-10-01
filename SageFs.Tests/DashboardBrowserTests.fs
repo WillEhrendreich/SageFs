@@ -211,7 +211,7 @@ module DashboardDom =
       do! page.Locator("#expand-toggle-btn").First.ClickAsync()
       // Wait until #main actually carries the expanded class before returning.
       do! page.Locator("#main.expanded").First.WaitForAsync(
-        LocatorWaitForOptions(State = WaitForSelectorState.Attached, Timeout = 5000.0f))
+        LocatorWaitForOptions(State = WaitForSelectorState.Attached, Timeout = float32 BrowserWaits.pageProbe))
   }
 
   /// Open the Evaluate accordion (#evaluate-section is a <details
@@ -334,7 +334,7 @@ module OutputScroll =
       do! textarea.FillAsync(code)
       do! (DashboardDom.evalButton page).ClickAsync()
     })
-    do! PlaywrightExpect.waitForSelectorText 30_000 page panelSelector marker
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page panelSelector marker
     // Let any scroll the morph kicked off finish before anyone measures.
     do! page.WaitForTimeoutAsync(600.0f)
   }
@@ -346,7 +346,7 @@ module OutputScroll =
       do! textarea.FillAsync(sprintf "String.concat \"\\n\" [ for i in 1 .. 120 -> sprintf \"%s-%%03d\" i ];;" prefix)
       do! (DashboardDom.evalButton page).ClickAsync()
     })
-    do! PlaywrightExpect.waitForSelectorText 30_000 page panelSelector (sprintf "%s-120" prefix)
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page panelSelector (sprintf "%s-120" prefix)
     let! overflow =
       page.EvaluateAsync<float>(
         "() => { var el = document.querySelector('#output-panel'); return el.scrollHeight - el.clientHeight; }")
@@ -354,7 +354,7 @@ module OutputScroll =
     // Opening Evaluate shrank the panel under us. That's not the user
     // scrolling away, so the fill still has to follow to the bottom. It is
     // waited FOR, not slept past: see waitForAtBottom.
-    let! dist = waitForAtBottom 10_000 page
+    let! dist = waitForAtBottom BrowserWaits.pageRenders page
     Expect.isTrue (dist <= 4.0) (sprintf "the fill must follow to the bottom even though opening Evaluate resized the panel (%f px from bottom)" dist)
   }
 
@@ -396,7 +396,7 @@ module OutputScroll =
       }""", text)
 
   let waitForPillText (page: IPage) (text: string) =
-    PlaywrightExpect.waitForSelectorText 10_000 page pillSelector text
+    PlaywrightExpect.waitForSelectorText BrowserWaits.pageRenders page pillSelector text
 
   let pillVisible (page: IPage) = page.Locator(pillSelector).IsVisibleAsync()
 
@@ -543,7 +543,7 @@ module private NoSessionLanding =
     try
       if not d.Process.HasExited then d.Process.Kill(entireProcessTree = true)
     with _ -> ()
-    try d.Process.WaitForExit(5000) |> ignore with _ -> ()
+    try d.Process.WaitForExit(TestTimeouts.childExit) |> ignore with _ -> ()
     try d.Process.Dispose() with _ -> ()
     try Directory.Delete(d.DataDir, true) with _ -> ()
 
@@ -701,7 +701,7 @@ module private NoSessionLanding =
       do! assertPermanentChrome page "state 1: no sessions"
       let picker = page.Locator("#session-picker")
       do! PlaywrightExpect.isVisibleAsync picker "[state 1] session picker visible in #main"
-      do! PlaywrightExpect.waitForText 10_000 (page.Locator(".sessions-empty")) "No active sessions"
+      do! PlaywrightExpect.waitForText BrowserWaits.pageRenders (page.Locator(".sessions-empty")) "No active sessions"
       let! viewingBefore = viewingSessionId page
       Expect.equal viewingBefore "" "[state 1] #main carries no viewing session id"
 
@@ -721,13 +721,13 @@ module private NoSessionLanding =
 
       // Client-side proof: the SAME page reflects it via SSE — no
       // navigation, no reload, the picker gone, a real session row present.
-      let! sidReflected = waitUntil 30_000 (fun () -> task {
+      let! sidReflected = waitUntil BrowserWaits.daemonWork (fun () -> task {
         let! sid = viewingSessionId page
         return sid <> ""
       })
       Expect.isTrue sidReflected "[state 4] #main's viewing-session-id populated via SSE within 30s (no reload)"
       Expect.equal page.Url bareUrl "[state 4] no navigation/reload occurred — URL is unchanged"
-      let! pickerHiddenNow = waitUntil 10_000 (fun () -> task {
+      let! pickerHiddenNow = waitUntil BrowserWaits.pageRenders (fun () -> task {
         let! visible = picker.IsVisibleAsync()
         return not visible
       })
@@ -817,7 +817,7 @@ module private NoSessionLanding =
       let picker = page.Locator("#session-picker")
       do! PlaywrightExpect.isHiddenAsync picker "[state 2] session picker hidden when sessions exist"
       let! selected =
-        waitUntil 15_000 (fun () -> task {
+        waitUntil BrowserWaits.panelUpdates (fun () -> task {
           let! sid = viewingSessionId page
           return sid = idA || sid = idB
         })
@@ -832,7 +832,7 @@ module private NoSessionLanding =
       let rowLocator (sid: string) = page.Locator(sprintf "#session-card-%s" sid)
       let switchBtn1 = (rowLocator target1).GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "show this session's output here"))
       do! switchBtn1.ClickAsync()
-      let! reachedTarget1 = waitUntil 15_000 (fun () -> task {
+      let! reachedTarget1 = waitUntil BrowserWaits.panelUpdates (fun () -> task {
         let! sid = viewingSessionId page
         return sid = target1
       })
@@ -843,7 +843,7 @@ module private NoSessionLanding =
       let target2 = if target1 = idA then idB else idA
       let otherRow = rowLocator target2
       do! otherRow.ClickAsync()
-      let! reachedTarget2 = waitUntil 15_000 (fun () -> task {
+      let! reachedTarget2 = waitUntil BrowserWaits.panelUpdates (fun () -> task {
         let! sid = viewingSessionId page
         return sid = target2
       })
@@ -853,8 +853,8 @@ module private NoSessionLanding =
       // one other remains -> auto-advance to it (no picker). ---
       let stopBtn (sid: string) = (rowLocator sid).GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "unload the session"))
       do! (stopBtn target2).ClickAsync()
-      do! PlaywrightExpect.waitForSelectorText 15_000 page (sprintf "#session-card-%s" target2) (sprintf "Stopping session id:%s" target2)
-      let! autoAdvanced = waitUntil 30_000 (fun () -> task {
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.panelUpdates page (sprintf "#session-card-%s" target2) (sprintf "Stopping session id:%s" target2)
+      let! autoAdvanced = waitUntil BrowserWaits.daemonWork (fun () -> task {
         let! sid = viewingSessionId page
         return sid = target1
       })
@@ -866,8 +866,8 @@ module private NoSessionLanding =
       // back to the picker, and the rest of the chrome must still render —
       // the exact transition that shipped broken as 0.6.470/0.6.471. ---
       do! (stopBtn target1).ClickAsync()
-      do! PlaywrightExpect.waitForSelectorText 15_000 page (sprintf "#session-card-%s" target1) (sprintf "Stopping session id:%s" target1)
-      let! pickerBack = waitUntil 30_000 (fun () -> task {
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.panelUpdates page (sprintf "#session-card-%s" target1) (sprintf "Stopping session id:%s" target1)
+      let! pickerBack = waitUntil BrowserWaits.daemonWork (fun () -> task {
         return! picker.IsVisibleAsync()
       })
       Expect.isTrue pickerBack "[stop 2/2] session picker re-appears once the last session is stopped"
@@ -946,7 +946,7 @@ let tests =
   })
 
   playwrightTest "output panel scrolls like a chat: follows at the bottom, holds when scrolled up, counts unseen evals" (fun page -> task {
-    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     do! OutputScroll.fillPastOneScreen page "chat-fill"
 
     // At the bottom, new output follows and no pill shows up.
@@ -999,7 +999,7 @@ let tests =
     do! OutputScroll.waitForPillText page "1 new eval ↓"
     let! singular = page.Locator(OutputScroll.pillSelector).TextContentAsync()
     Expect.isFalse (singular.Contains "evals") (sprintf "one unseen eval reads singular (%s)" singular)
-    let! pillAfterSelfScroll = OutputScroll.scrollDownUntilPillHides 5_000 page
+    let! pillAfterSelfScroll = OutputScroll.scrollDownUntilPillHides BrowserWaits.pageProbe page
     let! distSelfScroll = OutputScroll.distanceFromBottom page
     Expect.isFalse pillAfterSelfScroll (sprintf "scrolling back to the bottom yourself hides the pill (the panel ended %f px from the bottom)" distSelfScroll)
     do! OutputScroll.runEval page "self-refollow"
@@ -1010,7 +1010,7 @@ let tests =
 
   playwrightTest "output panel unseen-eval pill fits a phone-width viewport" (fun page -> task {
     do! page.SetViewportSizeAsync(390, 844)
-    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     do! OutputScroll.fillPastOneScreen page "phone-fill"
     do! OutputScroll.wheelUp page 900.0f
     do! OutputScroll.runEval page "phone-unseen"
@@ -1082,7 +1082,7 @@ let tests =
     // reopen-retry helper — by opening the accordion once and asserting it
     // is still open after outlasting at least two 1-second SSE-fallback
     // ticks (Timeouts.sseEventInterval).
-    do! PlaywrightExpect.waitForSSE 10_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
     do! DashboardDom.openEvalArea page
     let isOpen () =
       page.EvaluateAsync<bool>(
@@ -1100,7 +1100,7 @@ let tests =
     // `.expanded-only` panels collapse for a frame, and the browser clamps
     // .sidebar-inner's scrollTop to the collapsed maximum — the user's scroll
     // position snaps back near the top. Fix: `data-preserve-attr="class"`.
-    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     let textarea = DashboardDom.textarea page
     // Stage the eval first, at the normal viewport, so submitting it later is
     // just a keypress. An idle daemon suppresses no-change pushes, so the eval
@@ -1136,7 +1136,7 @@ let tests =
           return 0;
         }""")
     do! textarea.PressAsync("Alt+Enter")
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "scroll-probe"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" "scroll-probe"
     do! page.WaitForTimeoutAsync(1500.0f)
     let! pushes = page.EvaluateAsync<int>("() => window.__pushes")
     Expect.isTrue (pushes > 0) "at least one SSE morph reached #main while the sidebar was scrolled"
@@ -1172,9 +1172,9 @@ let tests =
     // renders in the sibling .tabline-info. Both are inside #main, pushed
     // by the server on every SSE state change.
     let status = page.Locator("#session-status")
-    do! PlaywrightExpect.waitForText 10_000 status "Ready"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders status "Ready"
     let sessionInfo = page.Locator("#main .tabline-info").First
-    do! PlaywrightExpect.waitForText 10_000 sessionInfo "Session:"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders sessionInfo "Session:"
   })
 
   playwrightTest "diagnostics panel has diagnostics-panel class" (fun page -> task {
@@ -1191,14 +1191,14 @@ let tests =
     let stats = page.Locator("#eval-stats").First
     do! stats.WaitForAsync(
       LocatorWaitForOptions(State = WaitForSelectorState.Attached))
-    do! PlaywrightExpect.waitForText 10_000 stats "evals"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders stats "evals"
   })
 
   // NOTE: "create session section has all inputs" moved to shellStructureTests in DashboardSnapshotTests.fs
 
   playwrightTest "Tab inserts 2 spaces in textarea" (fun page -> task {
     // Wait for Datastar to fully initialize and bind handlers
-    do! PlaywrightExpect.waitForSSE 10_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
     // The textarea lives inside the collapsed Evaluate accordion — open it.
     do! DashboardDom.openEvalArea page
     let textarea = page.Locator("#eval-textarea")
@@ -1222,7 +1222,7 @@ let tests =
 
   playwrightTest "Alt+Enter triggers eval" (fun page -> task {
     // Wait for connection before evaluating
-    do! PlaywrightExpect.waitForSSE 10_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
     // The textarea lives inside the collapsed Evaluate accordion — open it.
     do! DashboardDom.openEvalArea page
 
@@ -1230,7 +1230,7 @@ let tests =
     do! textarea.FillAsync("1 + 1;;")
     do! textarea.PressAsync("Alt+Enter")
 
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val it: int = 2"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" "val it: int = 2"
   })
 
   playwrightTest "responsive layout on mobile viewport" (fun page -> task {
@@ -1251,40 +1251,40 @@ let tests =
   // --- Agent-generated tests (via Playwright test planner + generator agents) ---
 
   playwrightTest "evaluate simple expression" (fun page -> task {
-    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     let textarea = DashboardDom.textarea page
     do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
       do! textarea.FillAsync("let x = 1 + 1;;")
       do! (DashboardDom.evalButton page).ClickAsync()
     })
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val x: int = 2"
-    do! PlaywrightExpect.waitForTextareaCleared 10_000 textarea
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" "val x: int = 2"
+    do! PlaywrightExpect.waitForTextareaCleared BrowserWaits.pageRenders textarea
   })
 
   playwrightTest "evaluate with Alt+Enter shortcut" (fun page -> task {
-    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     let textarea = DashboardDom.textarea page
     do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
       do! textarea.ClickAsync()
       do! textarea.FillAsync("""printfn "Hello, World!" """)
       do! page.Keyboard.PressAsync("Alt+Enter")
     })
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val it: unit = ()"
-    do! PlaywrightExpect.waitForTextareaCleared 10_000 textarea
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" "val it: unit = ()"
+    do! PlaywrightExpect.waitForTextareaCleared BrowserWaits.pageRenders textarea
   })
 
   playwrightTest "evaluate multiline code" (fun page -> task {
-    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     let textarea = DashboardDom.textarea page
     do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
       do! textarea.FillAsync("let add x y =\n  x + y\nadd 5 3;;")
       do! (DashboardDom.evalButton page).ClickAsync()
     })
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "int = 8"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" "int = 8"
   })
 
   playwrightTest "evaluate code with errors" (fun page -> task {
-    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     let textarea = DashboardDom.textarea page
     do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
       do! textarea.FillAsync("let x = undefinedVariable;;")
@@ -1292,11 +1292,11 @@ let tests =
     })
     // The dashboard renders eval failures as an "Evaluation failed" line in
     // the output panel (the FSI exception message, not the raw FS-code text).
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "Evaluation failed"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" "Evaluation failed"
   })
 
   playwrightTest "consecutive evaluations maintain scope" (fun page -> task {
-    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     let textarea = DashboardDom.textarea page
     let evalBtn = DashboardDom.evalButton page
 
@@ -1304,7 +1304,7 @@ let tests =
       do! textarea.FillAsync("let x = 5;;")
       do! evalBtn.ClickAsync()
     })
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val x: int = 5"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" "val x: int = 5"
 
     // Each eval's SSE morph can re-collapse the Evaluate accordion — reopen
     // before the next interaction (throughPanelReset also covers the
@@ -1313,13 +1313,13 @@ let tests =
       do! textarea.FillAsync("let y = x + 3;;")
       do! evalBtn.ClickAsync()
     })
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val y: int = 8"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" "val y: int = 8"
 
     do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
       do! textarea.FillAsync("x + y;;")
       do! evalBtn.ClickAsync()
     })
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val it: int = 13"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#output-panel" "val it: int = 13"
   })
 
   playwrightTest "keyboard help shows shortcuts" (fun page -> task {
@@ -1366,7 +1366,7 @@ let tests =
   })
 
   playwrightTest "sessions panel shows session info" (fun page -> task {
-    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     let sessionsHeading =
       page.GetByRole(
         AriaRole.Heading, PageGetByRoleOptions(Name = "Sessions"))
@@ -1375,13 +1375,13 @@ let tests =
     // selected indicator in the sidebar sessions panel.
     let sessionCard = page.Locator(".session-row").First
     do! PlaywrightExpect.isVisibleAsync sessionCard "session card visible"
-    do! PlaywrightExpect.waitForText 15_000 sessionCard "● selected"
+    do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates sessionCard "● selected"
   })
 
   playwrightTest "diagnostics panel renders empty state" (fun page -> task {
     // Diagnostics panel is in the expanded-only sidebar section; a healthy
     // session has no diagnostics to show.
-    do! PlaywrightExpect.waitForSSE 10_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
     let! panelExists = page.EvaluateAsync<bool>(
       "() => { var el = document.querySelector('#diagnostics-panel'); return el !== null && el !== undefined; }")
     Expect.isTrue panelExists "diagnostics panel exists"
@@ -1419,10 +1419,10 @@ let tests =
     // The dashboard switch endpoint should NOT broadcast SessionSwitched
     // to the shared Elm model. It should only update the requesting browser's
     // active session (via signal or per-connection state).
-    do! PlaywrightExpect.waitForSSE 15_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page
     // The tabline shows the viewing session identity.
     let tabline = page.Locator("#main .tabline-info").First
-    do! PlaywrightExpect.waitForText 10_000 tabline "Session:"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders tabline "Session:"
     // The switch endpoint should return a signal update, not an Elm dispatch.
     // Verify by checking that the switch response contains a signal patch
     // for activeSession (not a full page morph from Elm re-render).
@@ -1441,9 +1441,9 @@ let tests =
     // Open page1
     let! _ = page1.GotoAsync(
       sprintf "%s/dashboard" PlaywrightFixture.dashboardUrl)
-    do! PlaywrightExpect.waitForSSE 15_000 page1
+    do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page1
     let tabline1 = page1.Locator("#main .tabline-info").First
-    do! PlaywrightExpect.waitForText 15_000 tabline1 "Session:"
+    do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates tabline1 "Session:"
     let! text1Before = tabline1.TextContentAsync()
 
     // Open page2 in separate context (simulates different browser tab)
@@ -1451,9 +1451,9 @@ let tests =
     try
       let! _ = page2.GotoAsync(
         sprintf "%s/dashboard" PlaywrightFixture.dashboardUrl)
-      do! PlaywrightExpect.waitForSSE 15_000 page2
+      do! PlaywrightExpect.waitForSSE BrowserWaits.panelUpdates page2
       let tabline2 = page2.Locator("#main .tabline-info").First
-      do! PlaywrightExpect.waitForText 15_000 tabline2 "Session:"
+      do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates tabline2 "Session:"
       let! text2Before = tabline2.TextContentAsync()
 
       // Both tabs should show the same session initially (default session)
@@ -1473,7 +1473,7 @@ let tests =
     // The shell has no <h1>; the daemon-health bar carries the product
     // identity + version (e.g. "🟢 Healthy · SageFs 0.6.444.0 · up 6m · 15MB").
     let health = page.Locator("#daemon-health")
-    do! PlaywrightExpect.waitForText 30_000 health "SageFs"
+    do! PlaywrightExpect.waitForText BrowserWaits.daemonWork health "SageFs"
     let! text = health.TextContentAsync()
     Expect.isTrue (
       text <> null
@@ -1485,7 +1485,7 @@ let tests =
     let outputSection = page.Locator("#output-section")
     do! PlaywrightExpect.isVisibleAsync outputSection "output section visible"
     let outputHeading = outputSection.Locator("h2")
-    do! PlaywrightExpect.waitForText 10_000 outputHeading "Output"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders outputHeading "Output"
     let outputPanel = page.Locator("#output-panel")
     do! PlaywrightExpect.isVisibleAsync outputPanel "output panel visible"
   })
@@ -1493,7 +1493,7 @@ let tests =
   playwrightTest "page structure: evaluate section has textarea and buttons" (fun page -> task {
     let evalSection = page.Locator("#evaluate-section")
     do! PlaywrightExpect.isVisibleAsync evalSection "evaluate section visible"
-    do! PlaywrightExpect.waitForText 10_000 evalSection "Evaluate"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders evalSection "Evaluate"
     // Evaluate is a <details class="eval-area"> collapsed by default, and
     // the periodic 1s SSE fallback push can re-collapse it between these
     // sequential IsVisibleAsync snapshots on a loaded machine — reopen and
@@ -1523,11 +1523,11 @@ let tests =
   playwrightTest "page structure: clear output button in panel header" (fun page -> task {
     let clearBtn = page.Locator("#output-section .panel-header-btn")
     do! PlaywrightExpect.isVisibleAsync clearBtn "clear button visible"
-    do! PlaywrightExpect.waitForText 10_000 clearBtn "CLEAR"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders clearBtn "CLEAR"
   })
 
   playwrightTest "page structure: create session section has inputs and buttons" (fun page -> task {
-    do! PlaywrightExpect.waitForSSE 10_000 page
+    do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
     // "New Session" is a <details> collapsed by default, and the periodic
     // 1s SSE fallback push can re-collapse it between these sequential
     // IsVisibleAsync snapshots on a loaded machine — reopen and retry the
@@ -1556,22 +1556,22 @@ let tests =
   playwrightTest "friction panel renders honest empty state with no send form" (fun page -> task {
     // The friction panel isn't in the default layout; this tab asks for it.
     let! _ = page.GotoAsync(sprintf "%s/dashboard?panels=friction" PlaywrightFixture.dashboardUrl)
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
-    do! PlaywrightExpect.waitForCount 15_000 panel 1
+    do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates panel 1
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
     let summary = panel.Locator("summary")
-    do! PlaywrightExpect.waitForText 15_000 summary "Friction"
+    do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates summary "Friction"
     // Friction panel is a <details> — open it if collapsed.
     let! isOpen =
       page.EvaluateAsync<bool>(
         "() => { var el = document.querySelector('#friction-panel'); return el ? el.open : false; }")
     if not isOpen then
       do! summary.ClickAsync()
-    do! PlaywrightExpect.waitForText 10_000 summary "0 events"
-    do! PlaywrightExpect.waitForText 10_000 summary "0 feedback"
-    do! PlaywrightExpect.waitForText 10_000 panel "No local friction recorded yet"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders summary "0 events"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders summary "0 feedback"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders panel "No local friction recorded yet"
     // Honest 0-event state: no send form (endpoint input / Send Report button).
     let! endpointInputs =
       panel.GetByPlaceholder("your-worker.example.workers.dev").CountAsync()
@@ -1584,22 +1584,22 @@ let tests =
   // --- TS journey ports (live-testing-journey.spec.ts) ---
 
   playwrightTest "live testing panel appears when it's turned on and goes when it's turned off" (fun page -> task {
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#live-testing-panel")
     // Off: the panel isn't there at all.
-    do! PlaywrightExpect.waitForCount 15_000 panel 0
+    do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates panel 0
     // Turn it on the way an editor or agent does, through the daemon API.
     use http = new Net.Http.HttpClient()
     let! enable = http.PostAsync(sprintf "http://localhost:%d/api/live-testing/enable" PlaywrightFixture.mcpPort, null)
     Expect.isTrue enable.IsSuccessStatusCode (sprintf "enable live testing returned %d" (int enable.StatusCode))
-    do! PlaywrightExpect.waitForCount 30_000 panel 1
-    do! PlaywrightExpect.waitForText 30_000 panel "Live Testing: ON"
+    do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork panel 1
+    do! PlaywrightExpect.waitForText BrowserWaits.daemonWork panel "Live Testing: ON"
     // Disable from the panel's own button, and the panel goes away again.
     let disableBtn =
       panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Disable"))
     do! disableBtn.ClickAsync()
-    do! PlaywrightExpect.waitForCount 30_000 panel 0
+    do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork panel 0
   })
 
   // --- FR-DASH: real friction capture through the local store (seeded via
@@ -1611,10 +1611,10 @@ let tests =
   playwrightTest "friction feedback recorded locally reflects in the panel with the send form" (fun page -> task {
     // The friction panel isn't in the default layout; this tab asks for it.
     let! _ = page.GotoAsync(sprintf "%s/dashboard?panels=friction" PlaywrightFixture.dashboardUrl)
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
-    do! PlaywrightExpect.waitForCount 15_000 panel 1
+    do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates panel 1
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
     // Record ONE explicit feedback through the product's recorder API into
     // the daemon's local SQLite store (the same store the MCP report_friction
@@ -1643,29 +1643,29 @@ let tests =
     let! _ = page.ReloadAsync()
     // The reload reset expanded mode too — re-enable so the panel is visible.
     do! DashboardDom.ensureExpanded page
-    do! PlaywrightExpect.waitForCount 15_000 panel 1
-    do! PlaywrightExpect.waitForText 15_000 (page.Locator("#friction-panel summary")) "1 feedback"
+    do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates panel 1
+    do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates (page.Locator("#friction-panel summary")) "1 feedback"
     // The reload reset the <details> to closed — open it for role queries.
     let! isOpen =
       page.EvaluateAsync<bool>(
         "() => { var el = document.querySelector('#friction-panel'); return el ? el.open : false; }")
     if not isOpen then
       do! panel.Locator("summary").ClickAsync()
-    do! PlaywrightExpect.waitForText 10_000 panel "Report is sanitized locally before send"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders panel "Report is sanitized locally before send"
     let! sendButtons =
       panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Send Report")).CountAsync()
     Expect.equal sendButtons 1 "send form appears once local friction exists"
     // The recorded reason is editable in the panel (server renders local data).
-    do! PlaywrightExpect.waitForText 10_000 panel "the eval tool result was confusing"
+    do! PlaywrightExpect.waitForText BrowserWaits.pageRenders panel "the eval tool result was confusing"
   })
 
   playwrightTest "friction send validates the destination and surfaces the result inline" (fun page -> task {
     // The friction panel isn't in the default layout; this tab asks for it.
     let! _ = page.GotoAsync(sprintf "%s/dashboard?panels=friction" PlaywrightFixture.dashboardUrl)
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
-    do! PlaywrightExpect.waitForCount 15_000 panel 1
+    do! PlaywrightExpect.waitForCount BrowserWaits.panelUpdates panel 1
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
     // Open the <details> so the send form is in the accessibility tree.
     do! DashboardDom.openFrictionPanel page
@@ -1681,7 +1681,7 @@ let tests =
     // (see DashboardDom.throughPanelReset).
     do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openFrictionPanel page) 5
           (fun () -> task { do! sendBtn.ClickAsync() })
-    do! PlaywrightExpect.waitForText 15_000 (page.Locator("#friction-send-status")) "missing endpoint"
+    do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates (page.Locator("#friction-send-status")) "missing endpoint"
 
     // 2. Non-loopback plaintext http -> rejected before any network I/O.
     let endpoint = panel.Locator("input").First
@@ -1690,7 +1690,7 @@ let tests =
       do! sendBtn.ClickAsync()
     })
     let status = page.Locator("#friction-send-status")
-    do! PlaywrightExpect.waitForText 15_000 status "endpoint must be an absolute https URL"
+    do! PlaywrightExpect.waitForText BrowserWaits.panelUpdates status "endpoint must be an absolute https URL"
   })
 
   // --- Contextual panels (dashboard-ux-redesign.md, suggested order item 2):
@@ -1706,11 +1706,11 @@ let tests =
       eprintfn "screenshot: %s" path
     }
     let count (selector: string) expected ms = PlaywrightExpect.waitForCount ms (page.Locator(selector)) expected
-    do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     // 1. A REPL session: none of them, even with the extra panels expanded.
     for selector in [ "#hot-reload-panel"; "#cohort-panel"; "#cohort-lanes"; "#friction-panel"; "#live-testing-panel" ] do
-      do! count selector 0 15_000
+      do! count selector 0 BrowserWaits.panelUpdates
     do! shot "1-repl"
 
     // 2. A cohort with a present member holding a claim: cohort and lanes.
@@ -1726,13 +1726,13 @@ let tests =
     try
       do! call "join_cohort" [ "agentName", box "panel-journey"; "role", box "Implementer" ]
       do! call "acquire_claim" [ "agentName", box "panel-journey"; "scope", box "file:src/Panels.fs"; "purpose", box "panel journey" ]
-      do! count "#cohort-panel" 1 30_000
-      do! count "#cohort-lanes" 1 30_000
+      do! count "#cohort-panel" 1 BrowserWaits.daemonWork
+      do! count "#cohort-lanes" 1 BrowserWaits.daemonWork
       do! shot "2-cohort"
       // The member leaves: nobody is present, so both go, whatever the ledger still holds.
       do! call "leave_cohort" [ "agentName", box "panel-journey" ]
-      do! count "#cohort-panel" 0 30_000
-      do! count "#cohort-lanes" 0 30_000
+      do! count "#cohort-panel" 0 BrowserWaits.daemonWork
+      do! count "#cohort-lanes" 0 BrowserWaits.daemonWork
     finally
       (client :> IAsyncDisposable).DisposeAsync().AsTask().GetAwaiter().GetResult()
 
@@ -1757,12 +1757,12 @@ let tests =
       return ()
     }
     do! switchViaDropdown "hotreload"
-    do! count "#hot-reload-panel" 1 180_000
-    do! PlaywrightExpect.waitForSelectorText 180_000 page "#session-status" "Ready"
+    do! count "#hot-reload-panel" 1 BrowserWaits.hotReloadBuild
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.hotReloadBuild page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     do! shot "3-hot-reload"
     for selector in [ "#cohort-panel"; "#cohort-lanes"; "#friction-panel" ] do
-      do! count selector 0 5_000
+      do! count selector 0 BrowserWaits.pageProbe
     // The switcher's OWN selected option reflects the switch actually
     // landed server-side (the select is server-rendered from the session's
     // real workflow, not just whatever the click left in the DOM).
@@ -1771,8 +1771,8 @@ let tests =
 
     // Put the shared session back the way the other journeys expect it.
     do! switchViaDropdown "interactive"
-    do! count "#hot-reload-panel" 0 180_000
-    do! PlaywrightExpect.waitForSelectorText 180_000 page "#session-status" "Ready"
+    do! count "#hot-reload-panel" 0 BrowserWaits.hotReloadBuild
+    do! PlaywrightExpect.waitForSelectorText BrowserWaits.hotReloadBuild page "#session-status" "Ready"
     let! selectedLabelBack = switcher.EvaluateAsync<string>("el => el.options[el.selectedIndex].textContent")
     Expect.equal selectedLabelBack "REPL" "the switcher shows REPL selected again after switching back"
 

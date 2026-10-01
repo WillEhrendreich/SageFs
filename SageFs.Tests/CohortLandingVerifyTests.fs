@@ -124,7 +124,7 @@ let private mkRealRuntime
       | Some (req, startMessage) ->
         dispatch (SageFsMsg.Event startMessage)
         async {
-          do! Async.Sleep 20
+          do! Async.Sleep (TestTimeouts.asMs TestTimeouts.fakeRunReportDelay)
           let results =
             req.Tests
             |> Array.map (fun tc -> mkResult tc.Id (outcomes |> Map.tryFind tc.Id |> Option.defaultValue (TestResult.Passed TimeSpan.Zero)))
@@ -151,7 +151,7 @@ let private testAwait (timeout: System.TimeSpan) (cond: unit -> bool) : Async<bo
         if cond () then return true
         elif DateTime.UtcNow > deadline then return false
         else
-          do! Async.Sleep 5
+          do! Async.Sleep (TestTimeouts.asMs TestTimeouts.inProcessPoll)
           return! loop ()
       }
     return! loop ()

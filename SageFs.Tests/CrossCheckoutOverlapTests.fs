@@ -7,7 +7,7 @@ open SageFs
 open SageFs.CrossCheckoutOverlap
 
 /// How long ago the other checkout touched the file: recent enough to be worth an advisory.
-let private touchedAgo = TimeSpan.FromMinutes 2.0
+let private touchedAgo = FixtureDurations.otherCheckoutTouchedAgo
 
 /// RED tests for sagefs-multiagent-vision.md §10 Phase 0 item 5: a
 /// cross-checkout overlap advisory — "impl-x touched LiveTestActivity.fs

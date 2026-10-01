@@ -58,7 +58,7 @@ let private genEvent : Gen<SimEvent> =
 
 let private genScenario : Gen<Scenario> =
   gen {
-    let! seed = Gen.choose (0, 1_000_000)
+    let! seed = Gen.choose (0, 1000000)
     let! policy = genPolicy
     let! events = Gen.listOf genEvent
     return

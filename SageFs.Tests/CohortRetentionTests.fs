@@ -17,11 +17,11 @@ open SageFs.Cohort
 
 let private t0 = DateTime(2026, 1, 1, 12, 0, 0)
 let private retention = settledRetention
-let private second = TimeSpan.FromSeconds 1.0
+let private second = TestTimeouts.clockTick
 
 /// How far past a boundary (the lease window, the point the cohort went silent) a tick lands, to
 /// be clearly on the far side of it.
-let private margin = TimeSpan.FromMinutes 1.0
+let private margin = TestTimeouts.clockMargin
 
 let private ent (n: int) : Entropy = [| byte (n &&& 0xff); byte ((n >>> 8) &&& 0xff) |]
 
@@ -162,7 +162,7 @@ let private staleScene (n: int) : CohortState<string> * DateTime =
   // every member requests a landing that then hits a rebase conflict (Blocked,
   // popped) just before the cohort goes silent — so these settle WITHIN the
   // window of the departure tick below, like the claims that orphan on it
-  let settleClock = t0 + leaseWindow + TimeSpan.FromSeconds 30.0
+  let settleClock = t0 + leaseWindow + TestTimeouts.landingSettleAfterLease
   let s3 =
     names
     |> List.fold

@@ -16,14 +16,14 @@ let private evidence signal value =
     BaselineStdDev = 40.0
     Direction = HealthAnomaly.SignalDirection.Increased
     DeviationInSigmas = 120.0
-    SustainedFor = TimeSpan.FromMinutes 2.0
+    SustainedFor = FixtureDurations.sustainedLong
     SamplesSustained = 12 }
   : HealthAnomaly.SignalEvidence
 
 let private snapshotWith anomalies sessions =
   { DaemonPid = 1
     DaemonPort = 37749
-    Uptime = TimeSpan.FromHours 6.0
+    Uptime = FixtureDurations.uptimeUnread
     Version = "0.6.812"
     SessionSummaries = sessions
     LiveTestingSummary = None

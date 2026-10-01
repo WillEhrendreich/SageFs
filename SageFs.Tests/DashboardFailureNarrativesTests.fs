@@ -51,17 +51,17 @@ let failureNarrativeEntryTests =
     }
 
     test "formatTimeSince under 60s returns just now" {
-      let result = FailureNarrativeEntry.formatTimeSince (Some (TimeSpan.FromSeconds 30.0))
+      let result = FailureNarrativeEntry.formatTimeSince (Some FixtureDurations.sinceUnderAMinute)
       result |> Expect.equal "should say 'just now'" (Some "just now")
     }
 
     test "formatTimeSince 5 minutes returns minutes label" {
-      let result = FailureNarrativeEntry.formatTimeSince (Some (TimeSpan.FromMinutes 5.0))
+      let result = FailureNarrativeEntry.formatTimeSince (Some TestTimeouts.timeSinceLastPass)
       result |> Expect.equal "should say '5 minutes ago'" (Some "5 minutes ago")
     }
 
     test "formatTimeSince 2 hours returns hours label" {
-      let result = FailureNarrativeEntry.formatTimeSince (Some (TimeSpan.FromHours 2.0))
+      let result = FailureNarrativeEntry.formatTimeSince (Some FixtureDurations.sinceHours)
       result |> Expect.equal "should say '2 hours ago'" (Some "2 hours ago")
     }
 
@@ -146,7 +146,7 @@ let renderFailureNarrativesTests =
     }
 
     test "renders time-since label when present" {
-      let pairs = [ "t", makeNarrative "failed" (Some (TimeSpan.FromMinutes 7.0)) [] None ]
+      let pairs = [ "t", makeNarrative "failed" (Some FixtureDurations.sinceMinutesRendered) [] None ]
       let html = renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs) |> renderToString
       html |> Expect.stringContains "should contain timing label" "7 minutes ago"
     }

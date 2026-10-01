@@ -318,7 +318,7 @@ let private genState =
           Queue = queue }
   }
 
-let private genLedgerSeq = Gen.choose (0, 100_000) |> Gen.map (fun n -> int64 n * 1L<ledgerSeq>)
+let private genLedgerSeq = Gen.choose (0, 100000) |> Gen.map (fun n -> int64 n * 1L<ledgerSeq>)
 
 let private genHead : Gen<LedgerHead<int>> =
   gen {

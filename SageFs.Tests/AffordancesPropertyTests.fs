@@ -15,7 +15,7 @@ let private pick gen = (Gen.sample 1 gen).[0]
 // ── Generators ──
 
 let private genPositiveDuration =
-  Gen.choose (1, 10_000_000)
+  Gen.choose (1, int TimeSpan.TicksPerSecond)
   |> Gen.map (fun ticks -> TimeSpan.FromTicks(int64 ticks))
 
 let private genDurationList =
@@ -47,7 +47,7 @@ let evalStatsPropertyTests =
     testPropertyWithConfig propConfig "record increments EvalCount by 1 each time" <|
       fun (PositiveInt n) ->
         let n = min n 100
-        let dur = TimeSpan.FromMilliseconds 10.0
+        let dur = TestTimeouts.testElapsed
         let stats =
           List.init n (fun _ -> dur)
           |> List.fold (fun s d -> EvalStats.record d s) EvalStats.empty

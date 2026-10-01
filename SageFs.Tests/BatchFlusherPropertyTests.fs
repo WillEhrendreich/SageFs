@@ -57,7 +57,7 @@ let batchFlusherPropertyTests = testList "BatchFlusher properties" [
       let flushed = ResizeArray<int array>()
       // maxBatchSize deliberately huge so only the byte budget can trigger a
       // flush — isolates the property this test is about.
-      use flusher = new BatchFlusher<int>(1_000_000, 0, (fun batch -> flushed.Add(batch)), maxBufferBytes, id)
+      use flusher = new BatchFlusher<int>(1000000, 0, (fun batch -> flushed.Add(batch)), maxBufferBytes, id)
       for size in sizes do flusher.Add(size)
       (flusher.BufferedBytes <= int64 maxBufferBytes)
       |> Expect.isTrue "after every Add, buffered bytes must never exceed the budget (a flush must have drained it)"
@@ -67,7 +67,7 @@ let batchFlusherPropertyTests = testList "BatchFlusher properties" [
       let maxBufferBytes = max 1 (min maxBufferBytes 5000)
       let items = itemSizes.Get |> Array.map (fun (PositiveInt n) -> min n 200)
       let flushed = ResizeArray<int array>()
-      use flusher = new BatchFlusher<int>(1_000_000, 0, (fun batch -> flushed.Add(batch)), maxBufferBytes, id)
+      use flusher = new BatchFlusher<int>(1000000, 0, (fun batch -> flushed.Add(batch)), maxBufferBytes, id)
       for item in items do flusher.Add(item)
       flusher.Flush()
       let result = flushed |> Seq.collect id |> Seq.sort |> Seq.toArray

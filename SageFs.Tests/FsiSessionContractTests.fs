@@ -60,7 +60,7 @@ let private newRemote () : Async<IFsiSession> =
         Environment = []
         OnOutput = fun _ _ -> ()
         OnLog = ignore
-        StartupTimeoutMs = 60_000 }
+        StartupTimeoutMs = TestTimeouts.asMs TestTimeouts.processStartPatience }
     match! start options with
     | Result.Ok host ->
       match! attach host { Projects = []; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads } with

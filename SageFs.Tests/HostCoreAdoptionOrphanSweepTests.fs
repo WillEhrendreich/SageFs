@@ -38,7 +38,7 @@ let tests =
     testCaseAsync
       "WHY — a real adoption's private launch root disappears once its worker exits, proven against a fixture that actually adopts a Core rather than one that passes vacuously (roast: 13 orphaned sagefs-host-adopt-* dirs, ~9.5GB)"
       (async {
-        use cts = new CancellationTokenSource(240_000)
+        use cts = new CancellationTokenSource(TestTimeouts.sessionReadyColdBuild)
         let mgr, _ =
           SageFs.SessionManager.create
             cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
@@ -90,10 +90,10 @@ let tests =
               // Cleanup runs off `proc.Exited`, which races the StopSession
               // reply (WaitForExit and the event are two independent exit
               // detections) — poll rather than assert immediately.
-              let deadline = DateTime.UtcNow.AddSeconds 20.0
+              let deadline = DateTime.UtcNow.Add TestTimeouts.patience
               let mutable stillThere = Directory.Exists root
               while stillThere && DateTime.UtcNow < deadline do
-                do! Async.Sleep 200
+                do! Async.Sleep (TestTimeouts.asMs TestTimeouts.localHttpPoll)
                 stillThere <- Directory.Exists root
 
               stillThere

@@ -93,7 +93,7 @@ let tests =
             UseShellExecute = false)
         if OperatingSystem.IsWindows() then psi.Arguments <- "/c exit 0"
         use p = Process.Start psi
-        p.WaitForExit(5000) |> ignore
+        p.WaitForExit(TestTimeouts.childExit) |> ignore
         HostCoreAdoption.markAdoptedRootOwner dir p.Id
 
         HostCoreAdoption.sweepStaleAdoptedRootsIn parent ShadowCopy.processLiveness

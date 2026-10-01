@@ -97,7 +97,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
     try
       if not daemon.HasExited then daemon.Kill(entireProcessTree = true)
     with _ -> ()
-    try daemon.WaitForExit(5000) |> ignore with _ -> ()
+    try daemon.WaitForExit(TestTimeouts.childExit) |> ignore with _ -> ()
     daemon.Dispose()
 
   let syncGetString (path: string) =
@@ -121,7 +121,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
   try
     // Wait for /health (up to 60s).
     let mutable healthy = false
-    let healthDeadline = DateTime.UtcNow.AddSeconds(60.0)
+    let healthDeadline = DateTime.UtcNow.Add TestTimeouts.readyBudget
     while not healthy && DateTime.UtcNow < healthDeadline do
       try
         use _resp = client.GetAsync("/health").GetAwaiter().GetResult()
@@ -154,7 +154,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
         let mutable ready = false
         // Cold CI runners can take several minutes for the first FSI project
         // load; budget generously (the job's overall timeout is 20 min).
-        let warmupDeadline = DateTime.UtcNow.AddSeconds(300.0)
+        let warmupDeadline = DateTime.UtcNow.Add SageFs.Timeouts.browserJourneyWarmup
         while not ready && DateTime.UtcNow < warmupDeadline do
           try
             let body = syncGetString "/api/sessions"
@@ -335,10 +335,10 @@ let prepareHotReloadFixture (repoRoot: string) : string =
     }
   let outDrain = drain build.StandardOutput outWriter |> Async.StartAsTask
   let errDrain = drain build.StandardError errWriter |> Async.StartAsTask
-  if not (build.WaitForExit(180000)) then
-    failwith "HR runner: pre-build of the WebAppFixture copy timed out after 180s"
-  try outDrain.Wait(5000) |> ignore with _ -> ()
-  try errDrain.Wait(5000) |> ignore with _ -> ()
+  if not (build.WaitForExit(SageFs.Timeouts.webAppHotReloadBuild)) then
+    failwithf "HR runner: pre-build of the WebAppFixture copy timed out after %O" SageFs.Timeouts.webAppHotReloadBuild
+  try outDrain.Wait(TestTimeouts.childExit) |> ignore with _ -> ()
+  try errDrain.Wait(TestTimeouts.childExit) |> ignore with _ -> ()
   if build.ExitCode <> 0 then
     let out = if File.Exists buildOut then File.ReadAllText(buildOut) else ""
     let err = if File.Exists buildErr then File.ReadAllText(buildErr) else ""
@@ -416,7 +416,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
     try
       if not daemon.HasExited then daemon.Kill(entireProcessTree = true)
     with _ -> ()
-    try daemon.WaitForExit(5000) |> ignore with _ -> ()
+    try daemon.WaitForExit(TestTimeouts.childExit) |> ignore with _ -> ()
     daemon.Dispose()
 
   let syncGetString (path: string) =
@@ -440,7 +440,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
 
   try
     let mutable healthy = false
-    let healthDeadline = DateTime.UtcNow.AddSeconds(60.0)
+    let healthDeadline = DateTime.UtcNow.Add TestTimeouts.readyBudget
     while not healthy && DateTime.UtcNow < healthDeadline do
       try
         use _resp = client.GetAsync("/health").GetAwaiter().GetResult()
@@ -468,7 +468,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
       else
         let mutable ready = false
         let mutable faulted = false
-        let warmupDeadline = DateTime.UtcNow.AddSeconds(300.0)
+        let warmupDeadline = DateTime.UtcNow.Add SageFs.Timeouts.browserJourneyWarmup
         while not ready && not faulted && DateTime.UtcNow < warmupDeadline do
           try
             let body = syncGetString "/api/sessions"
@@ -505,7 +505,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
           // The init profile wrote app-url.txt into the fixture dir.
           let appUrlFile = Path.Combine(fixtureDir, "app-url.txt")
           let mutable appUrl = ""
-          let urlDeadline = DateTime.UtcNow.AddSeconds(60.0)
+          let urlDeadline = DateTime.UtcNow.Add TestTimeouts.readyBudget
           while appUrl = "" && DateTime.UtcNow < urlDeadline do
             try
               if File.Exists appUrlFile then
@@ -629,7 +629,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
     try
       if not daemon.HasExited then daemon.Kill(entireProcessTree = true)
     with _ -> ()
-    try daemon.WaitForExit(5000) |> ignore with _ -> ()
+    try daemon.WaitForExit(TestTimeouts.childExit) |> ignore with _ -> ()
     daemon.Dispose()
 
   let syncGetString (path: string) =
@@ -664,12 +664,12 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
       git.RedirectStandardOutput <- true
       git.RedirectStandardError <- true
       use p = Diagnostics.Process.Start(git)
-      p.WaitForExit(15000) |> ignore
+      p.WaitForExit(TestTimeouts.childExitSlow) |> ignore
     with _ -> ()
 
   try
     let mutable healthy = false
-    let healthDeadline = DateTime.UtcNow.AddSeconds(60.0)
+    let healthDeadline = DateTime.UtcNow.Add TestTimeouts.readyBudget
     while not healthy && DateTime.UtcNow < healthDeadline do
       try
         use _resp = client.GetAsync("/health").GetAwaiter().GetResult()
@@ -695,7 +695,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
       else
         let mutable ready = false
         let mutable faulted = false
-        let warmupDeadline = DateTime.UtcNow.AddSeconds(300.0)
+        let warmupDeadline = DateTime.UtcNow.Add SageFs.Timeouts.browserJourneyWarmup
         while not ready && not faulted && DateTime.UtcNow < warmupDeadline do
           try
             let body = syncGetString "/api/sessions"

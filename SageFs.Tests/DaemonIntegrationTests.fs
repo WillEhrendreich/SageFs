@@ -52,7 +52,7 @@ let tryKill (pid: int) =
   try
     let p = Process.GetProcessById(pid)
     p.Kill()
-    p.WaitForExit(3000) |> ignore
+    p.WaitForExit(TestTimeouts.childExit) |> ignore
   with _ -> ()
 
 // ─── SessionManager: ManagerState pure functions ───────────────────
@@ -247,7 +247,7 @@ let daemonCliTests =
 
       use proc = Process.Start(psi)
       let output = proc.StandardOutput.ReadToEnd()
-      proc.WaitForExit(5000) |> ignore
+      proc.WaitForExit(TestTimeouts.childExit) |> ignore
 
       proc.ExitCode |> Expect.equal "exit code 1" 1
       output |> Expect.stringContains "says no daemon" "No daemon running"
@@ -324,7 +324,7 @@ let daemonStartupFailsClosedTests =
         |> Expect.isTrue
              "the daemon must exit on its own once its dashboard bind fails, instead of hanging around claiming to be ready"
 
-        daemonProc.WaitForExit(1000) |> ignore // flush the async readers
+        daemonProc.WaitForExit(TestTimeouts.readerFlush) |> ignore // flush the async readers
         lock logLock (fun () -> logWriter.Flush())
 
         daemonProc.ExitCode
@@ -339,7 +339,7 @@ let daemonStartupFailsClosedTests =
         try
           if not daemonProc.HasExited then
             daemonProc.Kill()
-            daemonProc.WaitForExit(3000) |> ignore
+            daemonProc.WaitForExit(TestTimeouts.childExit) |> ignore
         with _ -> ()
         try Directory.Delete(dataDirForLogs, true) with _ -> ()
   ]
@@ -391,7 +391,7 @@ let daemonLifecycleTests =
 
         use statusProc = Process.Start(statusPsi)
         let statusOutput = statusProc.StandardOutput.ReadToEnd()
-        statusProc.WaitForExit(5000) |> ignore
+        statusProc.WaitForExit(TestTimeouts.childExit) |> ignore
 
         statusProc.ExitCode |> Expect.equal "status exits 0" 0
         statusOutput |> Expect.stringContains "shows running" "running"
@@ -409,7 +409,7 @@ let daemonLifecycleTests =
 
         use stopProc = Process.Start(stopPsi)
         let stopOutput = stopProc.StandardOutput.ReadToEnd()
-        stopProc.WaitForExit(5000) |> ignore
+        stopProc.WaitForExit(TestTimeouts.childExit) |> ignore
 
         stopProc.ExitCode |> Expect.equal "stop exits 0" 0
         stopOutput |> Expect.stringContains "reports the stopped daemon's pid" (sprintf "Daemon stopped (PID %d)" daemonProc.Id)
@@ -429,7 +429,7 @@ let daemonLifecycleTests =
         try
           if not daemonProc.HasExited then
             daemonProc.Kill()
-            daemonProc.WaitForExit(3000) |> ignore
+            daemonProc.WaitForExit(TestTimeouts.childExit) |> ignore
         with _ -> ()
   ]
 
@@ -629,7 +629,7 @@ let sessionManagerLifecycleTests =
           try
             let p = Process.GetProcessById(pid1)
             p.Kill()
-            p.WaitForExit(5000) |> ignore
+            p.WaitForExit(TestTimeouts.childExit) |> ignore
           with _ -> ()
 
           // Supervision restarts the crashed worker with backoff

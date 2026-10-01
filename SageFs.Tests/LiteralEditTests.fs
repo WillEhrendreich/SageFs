@@ -31,9 +31,9 @@ let literalEditTests =
       roundTrip source "x" (LiteralValue.Integer 255L) |> Expect.equal "still hex, uppercase digits" "module M\nlet x = 0xFF\n"
 
     testCase "underscore grouping is kept for a freshly grouped value" <| fun _ ->
-      let source = "module M\nlet x = 1_000\n"
-      roundTrip source "x" (LiteralValue.Integer 2000000L)
-      |> Expect.equal "grouped every 3 digits from the right" "module M\nlet x = 2_000_000\n"
+      let source = "module M\nlet x = 1_234\n"
+      roundTrip source "x" (LiteralValue.Integer 2345678L)
+      |> Expect.equal "grouped every 3 digits from the right" "module M\nlet x = 2_345_678\n"
 
     testCase "suffixes survive: float32" <| fun _ ->
       let source = "module M\nlet x = 1.0f\n"
@@ -61,8 +61,8 @@ let literalEditTests =
       result |> Expect.equal "exact round trip" "module M\nlet x = 0.12\n"
 
     testCase "setting the exact same value back reproduces the original source byte for byte" <| fun _ ->
-      let source = "module M\nlet x = 1_000\n"
-      roundTrip source "x" (LiteralValue.Integer 1000L) |> Expect.equal "byte for byte" source
+      let source = "module M\nlet x = 1_234\n"
+      roundTrip source "x" (LiteralValue.Integer 1234L) |> Expect.equal "byte for byte" source
 
     testCase "readLiteral on a bool" <| fun _ ->
       let source = "module M\nlet x = true\n"

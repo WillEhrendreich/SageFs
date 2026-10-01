@@ -24,10 +24,10 @@ open SageFs.Tests.LiveTestingTestHelpers
 
 /// How long the tree-sitter stage took in the second pending rebuild of the scope case. It is
 /// not the first rebuild's value, so a mix-up between the two would show. Never read back.
-let private secondRebuildTreeSitterStage = TimeSpan.FromMilliseconds 7.0
+let private secondRebuildTreeSitterStage = FixtureDurations.secondRebuildTreeSitterStage
 
 /// How long the FCS stage took in the second pending rebuild. Never read back.
-let private secondRebuildFcsStage = TimeSpan.FromMilliseconds 12.0
+let private secondRebuildFcsStage = FixtureDurations.secondRebuildFcsStage
 
 // ── helpers ─────────────────────────────────────────────────────────
 

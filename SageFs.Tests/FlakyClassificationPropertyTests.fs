@@ -9,7 +9,7 @@ open SageFs.Features.LiveTesting
 let private tid name = TestId.TestId name
 
 /// How long a failed result says it ran. Classification reads the failure message, never this.
-let private failedAfter = TimeSpan.FromMilliseconds 10.0
+let private failedAfter = FixtureDurations.usualResult
 
 let private mkWindow (outcomes: TestOutcome list) =
   let mutable w = ResultWindow.create 10

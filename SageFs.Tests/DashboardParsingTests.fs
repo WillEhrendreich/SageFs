@@ -682,7 +682,7 @@ let routeValueTests =
       // A wrong id here lost the friction panel a page had asked for, and would have
       // stranded its signal-driven session switches, since nothing registered under its id.
       let misread =
-        [ for _ in 1 .. 20_000 -> SageFs.Server.Dashboard.mintClientId () ]
+        [ for _ in 1 .. 20000 -> SageFs.Server.Dashboard.mintClientId () ]
         |> List.filter (fun id ->
           let ctx = Microsoft.AspNetCore.Http.DefaultHttpContext()
           ctx.Request.RouteValues.["clientId"] <- box id

@@ -36,7 +36,7 @@ let private mkSnap () : DashboardSnapshot =
   { DashboardSnapshot.Version = "0.0.0"
     SessionState = "ready"; SessionId = "0a2b3c4d"; WorkingDir = "/work"
     WarmupProgress = ""; WorkflowLabel = "REPL"
-    EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+    EvalStats = FixtureStats.noEvals
     ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
     HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
     OutputPanel = renderOutputForSession "0a2b3c4d" 0 [] "No output yet"

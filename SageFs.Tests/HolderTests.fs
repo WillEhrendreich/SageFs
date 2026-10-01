@@ -30,7 +30,7 @@ let private carryNothing (old: ConfigV1) : Migration<ConfigV1, ConfigV2> =
 let holderTests = testList "holder" [
 
   testCase "WHY — a carried migration hands back a cell holding the NEW shape" <| fun _ ->
-    let v1 = hold { Retries = 3; TimeoutSeconds = 30 }
+    let v1 = hold { Retries = 3; TimeoutSeconds = FixtureDurations.heldConfigTimeoutSeconds }
 
     match swapIfMigrated v1 carryConfig with
     | Swap.Swapped(_, _, cell) ->
@@ -42,7 +42,7 @@ let holderTests = testList "holder" [
     | Swap.Held(_, _) -> failtest "a successful migration must swap, never hold"
 
   testCase "WHY — a refused migration hands back the ORIGINAL value at its original type" <| fun _ ->
-    let v1 = hold { Retries = 3; TimeoutSeconds = 30 }
+    let v1 = hold { Retries = 3; TimeoutSeconds = FixtureDurations.heldConfigTimeoutSeconds }
 
     match swapIfMigrated v1 carryNothing with
     | Swap.Held(why, cell) ->
@@ -58,7 +58,7 @@ let holderTests = testList "holder" [
     // yields a ConfigV2 and the held branch a ConfigV1, and unifying them is a
     // compile error rather than a runtime surprise. The two annotations below
     // are what make that difference observable.
-    let v1 = hold { Retries = 1; TimeoutSeconds = 2 }
+    let v1 = hold { Retries = 1; TimeoutSeconds = FixtureDurations.heldConfigTimeoutSeconds }
 
     let carried: ConfigV2 =
       match swapIfMigrated v1 carryConfig with
@@ -76,7 +76,7 @@ let holderTests = testList "holder" [
   testCase "WHY — two attempts from the same cell are independent, not cumulative" <| fun _ ->
     // Both attempts read the ORIGINAL cell, so a failed one cannot have
     // disturbed what a later one sees.
-    let v1 = hold { Retries = 7; TimeoutSeconds = 9 }
+    let v1 = hold { Retries = 7; TimeoutSeconds = FixtureDurations.heldConfigTimeoutSeconds }
 
     let _refusedFirst = swapIfMigrated v1 carryNothing
     let carriedSecond = swapIfMigrated v1 carryConfig
@@ -87,7 +87,7 @@ let holderTests = testList "holder" [
 
   testCase "WHY — a migration is described in words a save can show, and never claims a carry it did not do" <| fun _ ->
     let carried: Migration<ConfigV1, ConfigV2> =
-      Migration.Carried({ Retries = 1; TimeoutSeconds = 1 }, { Retries = 1; TimeoutSeconds = 1; Trace = true })
+      Migration.Carried({ Retries = 1; TimeoutSeconds = FixtureDurations.heldConfigTimeoutSeconds }, { Retries = 1; TimeoutSeconds = FixtureDurations.heldConfigTimeoutSeconds; Trace = true })
 
     let refused: Migration<ConfigV1, ConfigV2> = Migration.Refused "no default"
 

@@ -52,14 +52,14 @@ let private evalIn (proxy: SessionProxy) (rid: string) (code: string) : Result<s
 /// `sharedDaemon` lazy-plus-`ProcessExit` teardown pattern.
 ///
 /// The setup budget starts when the session is created, not when the module
-/// loads. It used to be a module-level `CancellationTokenSource(240_000)`,
+/// loads. It used to be a module-level `CancellationTokenSource` with a fixed budget,
 /// which starts counting at process start: in a full `--integration-host` run
 /// this suite comes up several minutes in, the token had already fired, the
 /// SessionManager mailbox was cancelled before it got a message, and
 /// `PostAndAsyncReply` waited forever. Alone it passed in 28s, so it only ever
 /// hung the whole tier. Every wait below is bounded by the same budget, so a
 /// stuck setup fails the case instead of hanging the run.
-let private setupBudgetMs = 240_000
+let private setupBudgetMs = TestTimeouts.asMs TestTimeouts.sessionReadyColdBuild
 
 let private sharedSession =
   lazy (

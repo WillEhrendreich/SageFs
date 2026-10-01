@@ -160,7 +160,7 @@ let ghostTextTests =
       let bv : BindingValue = {
         Name = "x"; TypeSig = "int"; DisplayValue = "42"
         IsTruncated = false; IsFunctionValue = false
-        CellIndex = 0; EvalDurationMs = 1.0; SourceLine = 0
+        CellIndex = 0; EvalDurationMs = FixtureDurations.bindingEvalMs; SourceLine = 0
       }
       let text = BindingValue.toGhostText bv
       text |> Expect.stringContains "has arrow and value" "→ 42"
@@ -171,7 +171,7 @@ let ghostTextTests =
       let bv : BindingValue = {
         Name = "f"; TypeSig = "int -> string"; DisplayValue = "<fun>"
         IsTruncated = false; IsFunctionValue = true
-        CellIndex = 0; EvalDurationMs = 0.5; SourceLine = 0
+        CellIndex = 0; EvalDurationMs = FixtureDurations.bindingEvalMs; SourceLine = 0
       }
       let text = BindingValue.toGhostText bv
       text |> Expect.stringContains "user-friendly fn" "→ <fn>"
@@ -182,7 +182,7 @@ let ghostTextTests =
       let bv : BindingValue = {
         Name = "xs"; TypeSig = "int list"; DisplayValue = "[1; 2; ...]"
         IsTruncated = true; IsFunctionValue = false
-        CellIndex = 0; EvalDurationMs = 2.0; SourceLine = 0
+        CellIndex = 0; EvalDurationMs = FixtureDurations.bindingEvalMs; SourceLine = 0
       }
       let text = BindingValue.toGhostText bv
       text |> Expect.stringContains "unicode ellipsis" "…"
@@ -192,7 +192,7 @@ let ghostTextTests =
       let bv : BindingValue = {
         Name = "xs"; TypeSig = "int list"; DisplayValue = "[1; 2; ...]"
         IsTruncated = true; IsFunctionValue = false
-        CellIndex = 0; EvalDurationMs = 2.0; SourceLine = 0
+        CellIndex = 0; EvalDurationMs = FixtureDurations.bindingEvalMs; SourceLine = 0
       }
       let text = BindingValue.toGhostText bv
       text |> Expect.stringContains "truncated suffix" "⟨truncated⟩"
@@ -202,7 +202,7 @@ let ghostTextTests =
       let bv : BindingValue = {
         Name = "obj"; TypeSig = "SomeType"; DisplayValue = "<null>"
         IsTruncated = false; IsFunctionValue = false
-        CellIndex = 0; EvalDurationMs = 0.0; SourceLine = 0
+        CellIndex = 0; EvalDurationMs = FixtureDurations.notRunMs; SourceLine = 0
       }
       let text = BindingValue.toGhostText bv
       text |> Expect.stringContains "null shown" "null"
@@ -213,7 +213,7 @@ let ghostTextTests =
       let bv : BindingValue = {
         Name = "it"; TypeSig = "unit"; DisplayValue = "()"
         IsTruncated = false; IsFunctionValue = false
-        CellIndex = 0; EvalDurationMs = 0.1; SourceLine = 0
+        CellIndex = 0; EvalDurationMs = FixtureDurations.bindingEvalMs; SourceLine = 0
       }
       let text = BindingValue.toGhostText bv
       text |> Expect.stringContains "unit shown" "()"
@@ -230,7 +230,7 @@ let bindingValueContractTests =
       let bv : BindingValue = {
         Name = "answer"; TypeSig = "int"; DisplayValue = "42"
         IsTruncated = false; IsFunctionValue = false
-        CellIndex = 3; EvalDurationMs = 12.5; SourceLine = 0
+        CellIndex = 3; EvalDurationMs = FixtureDurations.fractionalElapsedMs; SourceLine = 0
       }
       let json = JsonSerializer.Serialize(bv, opts)
       let rt = JsonSerializer.Deserialize<BindingValue>(json, opts)
@@ -249,7 +249,7 @@ let bindingValueContractTests =
       let bv : BindingValue = {
         Name = "x"; TypeSig = "int"; DisplayValue = "1"
         IsTruncated = false; IsFunctionValue = false
-        CellIndex = 0; EvalDurationMs = 0.0; SourceLine = 0
+        CellIndex = 0; EvalDurationMs = FixtureDurations.notRunMs; SourceLine = 0
       }
       let payload = {| BindingValues = [ bv ] |}
       let json = JsonSerializer.Serialize(payload, opts)

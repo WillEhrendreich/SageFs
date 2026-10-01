@@ -37,7 +37,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
   }
 
   testTask "renderEvalStats" {
-    let html = renderEvalStats { Count = 42; AvgMs = 123.4; MinMs = 5.0; MaxMs = 1045.0; Sparkline = ""; P50Ms = None; P95Ms = None } |> renderNode
+    let html = renderEvalStats FixtureStats.snapshotEvals |> renderNode
     do! verifyDashboard "dashboard_evalStats" html
   }
 
@@ -390,14 +390,9 @@ let hostileEscapingTests = testList "FSI-derived hostile-string escaping" [
             ErrorMessage = hostile
             Diagnostics = []
             RetryCount = 1
-            DurationMs = 1.0 }
+            DurationMs = FixtureDurations.failedOpenMs }
         ]
-        PhaseTiming = {
-          ScanSourceFilesMs = 0L
-          ScanAssembliesMs = 0L
-          OpenNamespacesMs = 0L
-          TotalMs = 0L
-        }
+        PhaseTiming = FixtureStats.phaseTimingNotRun
         StartedAt = DateTimeOffset.MinValue
       }
       FileStatuses = []
@@ -445,7 +440,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
   }
 
   testTask "renderEvalStats zero evals" {
-    let html = renderEvalStats { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None } |> renderNode
+    let html = renderEvalStats FixtureStats.noEvals |> renderNode
     do! verifyDashboard "dashboard_evalStats_zero" html
   }
 
@@ -580,7 +575,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
   let mkSnap version = {
     DashboardSnapshot.Version = version
     SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
-    WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+    WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
     ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
     HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
     OutputPanel = Elem.div [] []
@@ -993,15 +988,15 @@ let railwayVisualizationTests = testList "Railway visualization" [
 // ── Test filter bar tests ──
 
 let sampleTestEntries = [|
-  { DisplayName = "test A"; FullName = "Ns.test A"; DurationMs = 100.0
+  { DisplayName = "test A"; FullName = "Ns.test A"; DurationMs = FixtureDurations.treemapMs.[0]
     Status = Features.LiveTesting.TreemapStatus.Passed }
-  { DisplayName = "test B"; FullName = "Ns.test B"; DurationMs = 200.0
+  { DisplayName = "test B"; FullName = "Ns.test B"; DurationMs = FixtureDurations.treemapMs.[1]
     Status = Features.LiveTesting.TreemapStatus.Failed }
-  { DisplayName = "test C"; FullName = "Ns.test C"; DurationMs = 50.0
+  { DisplayName = "test C"; FullName = "Ns.test C"; DurationMs = FixtureDurations.treemapMs.[2]
     Status = Features.LiveTesting.TreemapStatus.Passed }
-  { DisplayName = "test D"; FullName = "Ns.test D"; DurationMs = 10.0
+  { DisplayName = "test D"; FullName = "Ns.test D"; DurationMs = FixtureDurations.treemapMs.[3]
     Status = Features.LiveTesting.TreemapStatus.Running }
-  { DisplayName = "test E"; FullName = "Ns.test E"; DurationMs = 5.0
+  { DisplayName = "test E"; FullName = "Ns.test E"; DurationMs = FixtureDurations.treemapMs.[4]
     Status = Features.LiveTesting.TreemapStatus.Skipped }
 |]
 
@@ -1154,7 +1149,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
     let snap = {
       DashboardSnapshot.Version = "0.0.0"
       SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
-      WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+      WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
       ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
@@ -1197,7 +1192,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
     let snap = {
       DashboardSnapshot.Version = "0.0.0"
       SessionState = "ready"; SessionId = "t"; WorkingDir = "C:\\"
-      WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+      WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.noEvals
       ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
@@ -1219,7 +1214,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
   let mkSnap version sessionId workingDir state =
     { DashboardSnapshot.Version = version
       SessionState = state; SessionId = sessionId; WorkingDir = workingDir
-      WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = { Count = 7; AvgMs = 42.0; MinMs = 1.0; MaxMs = 100.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+      WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = FixtureStats.sevenEvals
       ThemeName = "monokai"; ConnectionLabel = Some "🌐 2 🤖 1"; ConnectionState = DashboardConnectionState.Connected
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []

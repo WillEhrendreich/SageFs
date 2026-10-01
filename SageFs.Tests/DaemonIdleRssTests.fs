@@ -152,7 +152,7 @@ let tests =
         try
           if not proc.HasExited then
             proc.Kill()
-            proc.WaitForExit(5000) |> ignore
+            proc.WaitForExit(TestTimeouts.childExit) |> ignore
         with _ -> ()
         client.Dispose()
     }

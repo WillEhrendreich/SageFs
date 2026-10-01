@@ -41,7 +41,7 @@ let private brokenAdd = "let add a b = a + b + 1"
 let private writeHello (content: string) =
   let sw = Diagnostics.Stopwatch.StartNew()
   let mutable written = false
-  while not written && sw.ElapsedMilliseconds < 15_000L do
+  while not written && sw.ElapsedMilliseconds < int64 BrowserWaits.panelUpdates do
     try
       File.WriteAllText(LtEnv.helloFile.Value, content)
       written <- true
@@ -73,7 +73,7 @@ let private ensureLiveTestingOn (page: IPage) = task {
   do! PlaywrightExpect.isVisibleAsync panel "live testing panel visible"
   let mutable on = false
   let sw = Diagnostics.Stopwatch.StartNew()
-  while not on && sw.ElapsedMilliseconds < 15_000L do
+  while not on && sw.ElapsedMilliseconds < int64 BrowserWaits.panelUpdates do
     let! text = panel.TextContentAsync()
     if text.Contains("Live Testing: ON") then on <- true
     else
@@ -91,7 +91,7 @@ let tests =
   testList "Live-testing dashboard browser tests" [
 
     ltPlaywrightTest "enable discovers and runs the sample's tests through the panel" (fun page -> task {
-      do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
       // #live-testing-panel lives inside an `.expanded-only` wrapper, which is
       // display:none until #main gains the `expanded` class. Without this the
       // panel is never visible and every assertion below fails on a dashboard
@@ -100,7 +100,7 @@ let tests =
       do! ensureLiveTestingOn page
       // Discovery + baseline run: the panel header carries "N✓" for passed.
       let panel = page.Locator("#live-testing-panel")
-      do! PlaywrightExpect.waitForText 60_000 panel "11✓"
+      do! PlaywrightExpect.waitForText BrowserWaits.liveTestsReport panel "11✓"
       let! header = panel.Locator("h2").TextContentAsync()
       Expect.isTrue (header.Contains("Live Testing: ON"))
         (sprintf "header should show Live Testing ON, was: %s" header)
@@ -111,7 +111,7 @@ let tests =
     })
 
     ltPlaywrightTest "editing a source file reruns tests and surfaces the failure live" (fun page -> task {
-      do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
       // #live-testing-panel lives inside an `.expanded-only` wrapper, which is
       // display:none until #main gains the `expanded` class. Without this the
       // panel is never visible and every assertion below fails on a dashboard
@@ -119,7 +119,7 @@ let tests =
       do! DashboardDom.ensureExpanded page
       do! ensureLiveTestingOn page
       let panel = page.Locator("#live-testing-panel")
-      do! PlaywrightExpect.waitForText 60_000 panel "11✓"
+      do! PlaywrightExpect.waitForText BrowserWaits.liveTestsReport panel "11✓"
 
       // Mutate `add` on disk: the edit-triggered rerun must surface the
       // failing "add infers int" test in the panel.
@@ -129,7 +129,7 @@ let tests =
       try
         writeHello edited
         // The header shows "10✓ 1✗" once the failure lands.
-        do! PlaywrightExpect.waitForText 90_000 panel "1✗"
+        do! PlaywrightExpect.waitForText BrowserWaits.liveTestsRerun panel "1✗"
         let! header = panel.Locator("h2").TextContentAsync()
         Expect.isTrue (header.Contains("10✓") && header.Contains("1✗"))
           (sprintf "header should show 10 passed / 1 failed, was: %s" header)
@@ -138,7 +138,7 @@ let tests =
         // happens after the try/finally.
         writeHello original
       // The fix must rerun and return the panel to all-green.
-      do! PlaywrightExpect.waitForText 90_000 panel "11✓"
+      do! PlaywrightExpect.waitForText BrowserWaits.liveTestsRerun panel "11✓"
       let! header = panel.Locator("h2").TextContentAsync()
       Expect.isFalse (header.Contains("1✗"))
         (sprintf "header should be all-green after restore, was: %s" header)

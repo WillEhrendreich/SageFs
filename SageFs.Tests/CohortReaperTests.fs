@@ -20,7 +20,7 @@ let private entropy : Cohort.Entropy = [| 1uy |]
 
 /// How far either side of the lease window a tick lands, to put a member clearly inside or clearly
 /// past its lease.
-let private leaseMargin = TimeSpan.FromMinutes 1.0
+let private leaseMargin = TestTimeouts.clockMargin
 
 /// Apply one command through the real decide, ignoring refusals (a RenewLease
 /// of a non-member is a harmless no-op, exactly as in production).

@@ -124,7 +124,7 @@ let cohortPanelTests =
           ConnectionState = DashboardTypes.DashboardConnectionState.Connected
           SessionState = "No session"; SessionId = ""; WorkingDir = ""
           WarmupProgress = ""; WorkflowLabel = "Interactive"
-          EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+          EvalStats = FixtureStats.noEvals
           AlarmPanel = Elem.div [] []; DaemonHealth = Elem.div [] []
           FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []
           FilmstripPanel = Elem.div [] []; ThemeName = "default"; ConnectionLabel = None

@@ -29,23 +29,23 @@ let evalResultSummaryTests =
       result.Text |> Expect.equal "text is untouched" raw
 
     testCase "WHY — a ~90,000-char printed value (the ProjectOptions repro) comes back bounded, not as a wall of text" <| fun _ ->
-      let raw = String.replicate 90_000 "a"
+      let raw = String.replicate 90000 "a"
       let result = bound maxResultChars raw
       result.WasTruncated |> Expect.isTrue "truncated"
-      result.OriginalLength |> Expect.equal "original length is reported honestly" 90_000
+      result.OriginalLength |> Expect.equal "original length is reported honestly" 90000
       result.KeptLength |> Expect.equal "kept length is the configured cap" maxResultChars
       (result.Text.Length > maxResultChars) |> Expect.isTrue "the notice adds some bytes on top of the kept prefix"
       result.Text.StartsWith(String.replicate maxResultChars "a") |> Expect.isTrue "the kept prefix is the head of the original, not a summary of it"
 
     testCase "WHY — the notice states the real size and the kept size, not just \"truncated\"" <| fun _ ->
-      let raw = String.replicate 5_000 "b"
-      let result = bound 4_000 raw
+      let raw = String.replicate 5000 "b"
+      let result = bound 4000 raw
       result.Text.Contains("5000") |> Expect.isTrue "the original length appears in the notice"
       result.Text.Contains("4000") |> Expect.isTrue "the kept length appears in the notice"
 
     testCase "WHY — the drill-in points at `it`, the value FSI actually bound, not generic advice" <| fun _ ->
-      let raw = String.replicate 10_000 "c"
-      let result = bound 4_000 raw
+      let raw = String.replicate 10000 "c"
+      let result = bound 4000 raw
       result.Text.Contains("it") |> Expect.isTrue "the notice names the real FSI binding the caller can act on"
 
     testCase "WHY — maxChars <= 0 never throws, because this runs on the eval reply path" <| fun _ ->

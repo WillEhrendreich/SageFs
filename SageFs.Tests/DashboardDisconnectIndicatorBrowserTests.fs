@@ -59,9 +59,9 @@ module private TestTiming =
   let staleAfterSeconds = "3"
   /// Generous margin over the stale budget so a loaded CI runner's scheduler
   /// jitter never false-fails the "became stale" assertion.
-  let staleWaitBudgetMs = 15_000
+  let staleWaitBudgetMs = BrowserWaits.staleDetected
   /// Generous margin for the reconnect assertion after the daemon restarts.
-  let reconnectWaitBudgetMs = 20_000
+  let reconnectWaitBudgetMs = BrowserWaits.reconnected
 
 /// Poll `condition` until it returns true or `budgetMs` elapses. Not a
 /// Thread.Sleep poll loop over a fixed count — it's a bounded wait against a
@@ -178,7 +178,7 @@ module private IsolatedDaemon =
     try
       if not d.Process.HasExited then d.Process.Kill(entireProcessTree = true)
     with _ -> ()
-    try d.Process.WaitForExit(5000) |> ignore with _ -> ()
+    try d.Process.WaitForExit(TestTimeouts.childExit) |> ignore with _ -> ()
 
   /// Respawn on the SAME port pair and data dir `d` was using, returning the
   /// updated record (new OS process, same ports — the point of the test).
@@ -258,9 +258,9 @@ let private disconnectIndicatorJourney () = task {
     let! _ = page.GotoAsync(sprintf "http://localhost:%d/dashboard" daemon.DashboardPort)
 
     // 1. Daemon up: banner hidden, data-connected="true".
-    let! initiallyHidden = waitUntil 10_000 (fun () -> bannerHidden page)
+    let! initiallyHidden = waitUntil BrowserWaits.pageRenders (fun () -> bannerHidden page)
     Expect.isTrue initiallyHidden "banner hidden while the daemon is up"
-    let! initiallyConnected = waitUntil 5_000 (fun () -> dataConnected page "true")
+    let! initiallyConnected = waitUntil BrowserWaits.pageProbe (fun () -> dataConnected page "true")
     Expect.isTrue initiallyConnected "body[data-connected]=\"true\" while the daemon is up"
 
     // 2. Kill the daemon mid-stream: banner becomes visible + data-connected
@@ -270,7 +270,7 @@ let private disconnectIndicatorJourney () = task {
     let! becameVisible = waitUntil TestTiming.staleWaitBudgetMs (fun () -> bannerVisible page)
     Expect.isTrue becameVisible
       (sprintf "banner became visible within %dms of the daemon dying" TestTiming.staleWaitBudgetMs)
-    let! becameDisconnected = waitUntil 5_000 (fun () -> dataConnected page "false")
+    let! becameDisconnected = waitUntil BrowserWaits.pageProbe (fun () -> dataConnected page "false")
     Expect.isTrue becameDisconnected "body[data-connected] flipped to \"false\" after staleness"
     let! bannerText = page.Locator("#server-status").TextContentAsync()
     Expect.isTrue
@@ -288,7 +288,7 @@ let private disconnectIndicatorJourney () = task {
     | true -> ()
     let! reconnectedHidden = waitUntil TestTiming.reconnectWaitBudgetMs (fun () -> bannerHidden page)
     Expect.isTrue reconnectedHidden "banner cleared after the daemon reconnected (no reload)"
-    let! reconnectedConnected = waitUntil 5_000 (fun () -> dataConnected page "true")
+    let! reconnectedConnected = waitUntil BrowserWaits.pageProbe (fun () -> dataConnected page "true")
     Expect.isTrue reconnectedConnected "body[data-connected] flipped back to \"true\" after reconnect"
 
     // 4. Zero Datastar console errors across the whole journey (kill+respawn
@@ -367,10 +367,10 @@ let private clockSkewJourney (skewMs: int64) = task {
     // 1. Daemon up, under skew: banner hidden, data-connected="true". Under
     //    the OLD cross-clock comparison, a far-AHEAD client clock would
     //    already fail this — the banner would show on a healthy daemon.
-    let! initiallyHidden = waitUntil 10_000 (fun () -> bannerHidden page)
+    let! initiallyHidden = waitUntil BrowserWaits.pageRenders (fun () -> bannerHidden page)
     Expect.isTrue initiallyHidden
       (sprintf "banner hidden on a healthy daemon under %dms client clock skew" skewMs)
-    let! initiallyConnected = waitUntil 5_000 (fun () -> dataConnected page "true")
+    let! initiallyConnected = waitUntil BrowserWaits.pageProbe (fun () -> dataConnected page "true")
     Expect.isTrue initiallyConnected
       (sprintf "body[data-connected]=\"true\" on a healthy daemon under %dms client clock skew" skewMs)
 
@@ -383,7 +383,7 @@ let private clockSkewJourney (skewMs: int64) = task {
     Expect.isTrue becameVisible
       (sprintf "banner became visible within %dms of the daemon dying, under %dms client clock skew"
         TestTiming.staleWaitBudgetMs skewMs)
-    let! becameDisconnected = waitUntil 5_000 (fun () -> dataConnected page "false")
+    let! becameDisconnected = waitUntil BrowserWaits.pageProbe (fun () -> dataConnected page "false")
     Expect.isTrue becameDisconnected
       (sprintf "body[data-connected] flipped to \"false\" after staleness under %dms client clock skew" skewMs)
 
@@ -400,9 +400,9 @@ let tests =
     testTask "[Integration] Dashboard disconnect indicator: kill/respawn journey" {
       do! disconnectIndicatorJourney () }
     testTask "[Integration] Dashboard disconnect indicator: client clock far BEHIND real time still detects staleness (GLM roast #5)" {
-      do! clockSkewJourney -600_000L }
+      do! clockSkewJourney (-FixtureDurations.clockSkewMs) }
     testTask "[Integration] Dashboard disconnect indicator: client clock far AHEAD of real time still detects staleness (GLM roast #5)" {
-      do! clockSkewJourney 600_000L }
+      do! clockSkewJourney FixtureDurations.clockSkewMs }
   ]
   |> Integration.register (Integration.Dedicated "--integration-disconnect")
 

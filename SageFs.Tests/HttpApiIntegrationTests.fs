@@ -340,7 +340,7 @@ let killDaemon (proc: Process) =
   try
     if not proc.HasExited then
       proc.Kill(entireProcessTree = true)
-      proc.WaitForExit(5000) |> ignore
+      proc.WaitForExit(TestTimeouts.childExit) |> ignore
   with _ -> ()
   proc.Dispose()
 
@@ -349,7 +349,7 @@ let httpApiHarnessTests =
   testList "HTTP API harness" [
     testCase "daemon startup wait budget matches the documented 60 seconds" <| fun _ ->
       daemonStartupHealthTimeout
-      |> Expect.equal "startup wait should match documented 60 seconds" (TimeSpan.FromSeconds(60.0))
+      |> Expect.equal "startup wait should be the shared ready budget" TestTimeouts.readyBudget
 
     testCase "reserveLoopbackPort returns a genuinely free, bindable port" <| fun _ ->
       // The "skips an occupied preferred port" contract this test used to

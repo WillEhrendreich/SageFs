@@ -17,7 +17,7 @@ let private mkResult (testId: TestId) (result: TestResult) : TestRunResult =
 let private mkTestId (name: string) : TestId = TestId.create name (TestFramework.Unknown "x")
 
 /// What every made-up result in this file says it took. Never read back.
-let private resultDuration = TimeSpan.FromSeconds 1.0
+let private resultDuration = FixtureDurations.usualResult
 
 let private passedResult (testId: TestId) : TestRunResult =
   mkResult testId (TestResult.Passed resultDuration)

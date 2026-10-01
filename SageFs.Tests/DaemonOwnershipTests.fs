@@ -12,17 +12,17 @@ open SageFs.DaemonOwnership
 // instead, because the span is the thing under test there.
 
 /// One second: the shortest ttl a test uses, and the unit idle time is measured in.
-let private second = TimeSpan.FromSeconds 1.0
+let private second = TestTimeouts.clockTick
 /// A ttl long enough that a second of idle time is nowhere near it.
-let private longTtl = TimeSpan.FromMinutes 30.0
+let private longTtl = FixtureDurations.ttlLong
 /// A daemon that has been idle for a very long time.
-let private longIdle = TimeSpan.FromDays 1.0
+let private longIdle = FixtureDurations.idleVeryLong
 /// A ttl the caller passed explicitly, distinct from the nested-checkout default.
-let private explicitTtl = TimeSpan.FromMinutes 5.0
+let private explicitTtl = FixtureDurations.ttlExplicit
 /// The ttl from the reported bug: far above the client-activity cap.
-let private hugeTtl = TimeSpan.FromMinutes 60.0
+let private hugeTtl = FixtureDurations.ttlHuge
 /// A ttl below the client-activity cap, so the window is the ttl itself.
-let private underCapTtl = TimeSpan.FromSeconds 30.0
+let private underCapTtl = FixtureDurations.ttlUnderCap
 
 /// Phase 0 item 2 (multi-agent vision §3.1, §3.3, §10 item 2): daemon
 /// ownership, TTL, the daemon-info file, and `sagefs sweep`. Reaping is by
@@ -51,12 +51,12 @@ let parseTests = testList "OwnershipArgs.parse" [
 
   testCase "--ttl 30m sets a 30-minute Ttl" <| fun _ ->
     (OwnershipArgs.parse ["--ttl"; "30m"]).Ttl
-    |> Expect.equal "ttl" (Some (TimeSpan.FromMinutes 30.0))
+    |> Expect.equal "ttl" (Some FixtureDurations.parsedMinutes)
 
   testCase "all three together" <| fun _ ->
     let parsed = OwnershipArgs.parse ["--owner-pid"; "10"; "--owner-start"; "20"; "--ttl"; "1h"]
     parsed
-    |> Expect.equal "parsed" { OwnerPid = Some 10; OwnerStartTicks = Some 20L; Ttl = Some (TimeSpan.FromHours 1.0) }
+    |> Expect.equal "parsed" { OwnerPid = Some 10; OwnerStartTicks = Some 20L; Ttl = Some FixtureDurations.parsedHour }
 
   testCase "unrelated flags are skipped without disturbing parsing" <| fun _ ->
     OwnershipArgs.parse ["--no-watch"; "--owner-pid"; "7"; "--prune"]
@@ -68,23 +68,23 @@ let tryParseTtlTests = testList "OwnershipArgs.tryParseTtl" [
 
   testCase "milliseconds" <| fun _ ->
     OwnershipArgs.tryParseTtl "500ms"
-    |> Expect.equal "500ms" (Some (TimeSpan.FromMilliseconds 500.0))
+    |> Expect.equal "500ms" (Some FixtureDurations.parsedMillis)
 
   testCase "seconds" <| fun _ ->
     OwnershipArgs.tryParseTtl "1s"
-    |> Expect.equal "1s" (Some (TimeSpan.FromSeconds 1.0))
+    |> Expect.equal "1s" (Some TestTimeouts.clockTick)
 
   testCase "minutes" <| fun _ ->
     OwnershipArgs.tryParseTtl "30m"
-    |> Expect.equal "30m" (Some (TimeSpan.FromMinutes 30.0))
+    |> Expect.equal "30m" (Some FixtureDurations.parsedMinutes)
 
   testCase "hours" <| fun _ ->
     OwnershipArgs.tryParseTtl "2h"
-    |> Expect.equal "2h" (Some (TimeSpan.FromHours 2.0))
+    |> Expect.equal "2h" (Some FixtureDurations.parsedHours)
 
   testCase "bare number defaults to seconds" <| fun _ ->
     OwnershipArgs.tryParseTtl "90"
-    |> Expect.equal "90" (Some (TimeSpan.FromSeconds 90.0))
+    |> Expect.equal "90" (Some FixtureDurations.parsedBare)
 
   testCase "garbage is None" <| fun _ ->
     OwnershipArgs.tryParseTtl "banana"
@@ -177,7 +177,7 @@ let shouldSelfTerminateTests = testList "shouldSelfTerminate" [
 
   testCase "exactly at the ttl boundary -> true (>=)" <| fun _ ->
     let now = DateTime.UtcNow
-    let ttl = TimeSpan.FromSeconds 5.0
+    let ttl = FixtureDurations.ttlBoundary
     let lastActive = now - ttl
     shouldSelfTerminate now ttl lastActive false false
     |> Expect.isTrue "the boundary itself counts as past the ttl"
@@ -196,15 +196,14 @@ let ttlClientActivityWindowTests = testList "ttlClientActivityWindow" [
 
   testCase "WHY — a long ttl (60m, the reported bug's exact value) is capped at 2 minutes, not reused whole" <| fun _ ->
     ttlClientActivityWindow hugeTtl
-    |> Expect.equal "capped, never the raw (bug-reproducing) ttl" (TimeSpan.FromMinutes 2.0)
+    |> Expect.equal "capped, never the raw (bug-reproducing) ttl" SageFs.Timeouts.agentActivityFresh
 
   testCase "WHY — a short ttl (30s) is never inflated past the ttl itself" <| fun _ ->
     ttlClientActivityWindow underCapTtl
     |> Expect.equal "capped at the ttl, not the 2-minute default" underCapTtl
 
   testCase "WHY — the window can never exceed the ttl it serves" <| fun _ ->
-    [ TimeSpan.FromSeconds 1.0; TimeSpan.FromMinutes 1.0; TimeSpan.FromMinutes 2.0
-      TimeSpan.FromMinutes 5.0; TimeSpan.FromHours 1.0; TimeSpan.FromHours 24.0 ]
+    FixtureDurations.ttlsAcrossTheRange
     |> List.forall (fun ttl -> ttlClientActivityWindow ttl <= ttl)
     |> Expect.isTrue "window <= ttl for every ttl, however large"
 

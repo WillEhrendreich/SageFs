@@ -16,7 +16,7 @@ let private defaultPort = 37749
 let private customPort = 47001
 
 /// A ttl that satisfies the gate. The decision looks at whether a ttl is present, not how long it is.
-let private anyTtl = TimeSpan.FromMinutes 30.0
+let private anyTtl = FixtureDurations.ttlLong
 
 [<Tests>]
 let customPortOwnershipTests =

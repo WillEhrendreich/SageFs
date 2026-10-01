@@ -13,7 +13,7 @@ let private mkTestId name = TestId.TestId name
 
 let private mkNarrative causalChanges summary = {
   LastPassedAt = Some DateTimeOffset.UtcNow
-  TimeSinceLastPass = Some (TimeSpan.FromMinutes 5.0)
+  TimeSinceLastPass = Some TestTimeouts.timeSinceLastPass
   CausalChanges = causalChanges
   PropertyViolation = None
   Summary = summary

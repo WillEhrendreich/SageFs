@@ -11,7 +11,7 @@ let private tid name = TestId.TestId name
 
 /// How long a failed result says it ran in the tests that do not care. Classification reads the
 /// failure message, never this.
-let private failedAfter = TimeSpan.FromMilliseconds 50.0
+let private failedAfter = FixtureDurations.usualResult
 
 let private mkWindow (outcomes: TestOutcome list) =
   let mutable w = ResultWindow.create 10
@@ -96,7 +96,7 @@ let classifyFlakinessTests = testList "FlakyDetection.classifyFlakiness" [
     let results =
       Map.ofList [
         tid "t1",
-        mkResult "t1" (TestResult.Failed (TestFailure.AssertionFailed "timeout", TimeSpan.FromMilliseconds 100.0)) ]
+        mkResult "t1" (TestResult.Failed (TestFailure.AssertionFailed "timeout", FixtureDurations.usualResult)) ]
     match FlakyDetection.classifyFlakiness (tid "t1") history results with
     | FlakyClassification.Environmental n ->
       (n, 0) |> Expect.isGreaterThan "should have flips"
@@ -134,7 +134,7 @@ let classifyFlakinessTests = testList "FlakyDetection.classifyFlakiness" [
     let results =
       Map.ofList [
         tid "t1",
-        mkResult "t1" (TestResult.Failed (TestFailure.AssertionFailed msg, TimeSpan.FromMilliseconds 10.0)) ]
+        mkResult "t1" (TestResult.Failed (TestFailure.AssertionFailed msg, FixtureDurations.usualResult)) ]
     FlakyDetection.classifyFlakiness (tid "t1") history results
     |> Expect.equal "consistent failures = stable, not property counterexample" FlakyClassification.Stable
 
@@ -145,7 +145,7 @@ let classifyFlakinessTests = testList "FlakyDetection.classifyFlakiness" [
         tid "t1",
         mkResult "t1"
           (TestResult.Failed
-            (TestFailure.ExceptionThrown ("System.TimeoutException: timed out", "stack"), TimeSpan.FromMilliseconds 5000.0)) ]
+            (TestFailure.ExceptionThrown ("System.TimeoutException: timed out", "stack"), TestTimeouts.testTimeLimit)) ]
     match FlakyDetection.classifyFlakiness (tid "t1") history results with
     | FlakyClassification.Environmental _ -> ()
     | other -> failtest (sprintf "expected Environmental, got %A" other)

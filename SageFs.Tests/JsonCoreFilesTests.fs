@@ -315,7 +315,7 @@ let tests =
       testCase "WHY — a union inside a payload is written by the F# converter" <| fun _ ->
         let summary : Features.LiveTesting.TestSummary =
           { Total = 1; Passed = 1; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
-        let passedIn = TimeSpan.FromMilliseconds 10.0
+        let passedIn = TestTimeouts.testElapsed
         let entry : Features.LiveTesting.TestStatusEntry =
           { TestId = Features.LiveTesting.TestId.TestId "t1"
             DisplayName = "t 1"

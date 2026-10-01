@@ -11,16 +11,16 @@ open SageFs.Features
 /// compiler warning (incomplete pattern) until updated.
 let allEventCases : SageFsEvent list = [
   SessionStarted {| Config = Map.empty; StartedAt = DateTimeOffset.UtcNow |}
-  SessionWarmUpCompleted {| Duration = TimeSpan.FromMilliseconds 100.0; Errors = [] |}
+  SessionWarmUpCompleted {| Duration = TestTimeouts.warmupElapsed; Errors = [] |}
   SessionWarmUpProgress {| Step = 1; Total = 4; Message = "scanning" |}
   SessionReady
   SessionFaulted {| Error = "boom"; StackTrace = None |}
   SessionReset
   SessionHardReset {| Rebuild = false |}
   EvalRequested {| Code = "1+1;;"; Source = EventSource.Console |}
-  EvalCompleted {| Code = "1+1;;"; Result = "2"; TypeSignature = Some "int"; Duration = TimeSpan.FromMilliseconds 50.0 |}
+  EvalCompleted {| Code = "1+1;;"; Result = "2"; TypeSignature = Some "int"; Duration = TestTimeouts.testElapsed |}
   EvalFailed {| Code = "bad"; Error = "parse error"; Diagnostics = [] |}
-  EvalTraced {| Code = "1+1;;"; Stages = [ "Eval", 5.0 ]; TotalMs = 5.0 |}
+  EvalTraced {| Code = "1+1;;"; Stages = [ "Eval", FixtureDurations.tracedTotalMs ]; TotalMs = FixtureDurations.tracedTotalMs |}
   DiagnosticsChecked {| Code = "let x = 1"; Diagnostics = []; Source = EventSource.System |}
   DiagnosticsCleared
   ScriptLoaded {| FilePath = "init.fsx"; StatementCount = 3; Source = EventSource.System |}

@@ -10,7 +10,7 @@ open SageFs.Server
 open SageFs.Server.DashboardTypes
 
 /// An uptime no assertion in this file depends on: it only has to be a daemon that is not brand new.
-let private unremarkableUptime = TimeSpan.FromMinutes 5.0
+let private unremarkableUptime = FixtureDurations.uptimeUnread
 
 let private makeHealthSnapshot
   (sessions: SessionHealthSummary list)
@@ -55,7 +55,7 @@ let daemonHealthViewTests =
       view.MemoryMB |> Expect.equal "memory MB round-trips" 256
 
     testCase "fromSnapshot populates UptimeLabel" <| fun () ->
-      let snap = makeHealthSnapshot [] None (TimeSpan.FromHours 2.5) 128
+      let snap = makeHealthSnapshot [] None FixtureDurations.uptimeHoursLabel 128
       let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
       view.UptimeLabel |> Expect.isNotEmpty "uptime label is non-empty"
 
@@ -103,12 +103,12 @@ let daemonHealthViewTests =
       view.TestsPassed |> Expect.equal "no tests when no summary" None
 
     testCase "UptimeLabel is human-readable for minutes" <| fun () ->
-      let snap = makeHealthSnapshot [] None (TimeSpan.FromMinutes 42.0) 128
+      let snap = makeHealthSnapshot [] None FixtureDurations.uptimeMinutesLabel 128
       let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
       view.UptimeLabel |> Expect.stringContains "minutes label contains m" "m"
 
     testCase "UptimeLabel is human-readable for hours" <| fun () ->
-      let snap = makeHealthSnapshot [] None (TimeSpan.FromHours 3.5) 128
+      let snap = makeHealthSnapshot [] None FixtureDurations.uptimeHoursLabel 128
       let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
       view.UptimeLabel |> Expect.stringContains "hours label contains h" "h"
   ]
@@ -144,7 +144,7 @@ let renderDaemonHealthTests =
       html |> Expect.stringContains "memory MB in rendered output" "312"
 
     testCase "renders uptime in output" <| fun () ->
-      let snap = makeHealthSnapshot [] None (TimeSpan.FromMinutes 90.0) 128
+      let snap = makeHealthSnapshot [] None FixtureDurations.uptimeHoursLabel 128
       let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
       let html = DashboardFragments.renderDaemonHealth view |> renderNode
       html |> Expect.isNotEmpty "renders uptime info"

@@ -44,8 +44,8 @@ module private Fixtures =
     { SourceFilesScanned = 1
       AssembliesLoaded = []
       NamespacesOpened = []
-      FailedOpens = [ { Name = "MyApp"; Kind = SageFs.WarmUp.OpenableKind.Namespace; ErrorMessage = "no namespaces/modules were found to open"; Diagnostics = []; RetryCount = 1; DurationMs = 0.0 } ]
-      PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 5L }
+      FailedOpens = [ { Name = "MyApp"; Kind = SageFs.WarmUp.OpenableKind.Namespace; ErrorMessage = "no namespaces/modules were found to open"; Diagnostics = []; RetryCount = 1; DurationMs = FixtureDurations.notRunMs } ]
+      PhaseTiming = FixtureStats.phaseTimingBriefTotal
       StartedAt = System.DateTimeOffset.UtcNow }
 
   let card (health: SessionHealth) (session: WorkerProtocol.SessionInfo) : ParsedSession =
@@ -144,7 +144,7 @@ let evalStatsDuplicateIdRegressionTests =
         { DashboardSnapshot.Version = "0.0.0"
           SessionState = "ready"; SessionId = "t"; WorkingDir = "/w"
           WarmupProgress = ""; WorkflowLabel = "Interactive"
-          EvalStats = { Count = 3; AvgMs = 1.0; MinMs = 1.0; MaxMs = 1.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+          EvalStats = FixtureStats.threeQuickEvals
           ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
           HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
           OutputPanel = Elem.div [] []
@@ -177,7 +177,7 @@ let workflowBadgeTests =
         { DashboardSnapshot.Version = "0.0.0"
           SessionState = "ready"; SessionId = "t"; WorkingDir = "/w"
           WarmupProgress = ""; WorkflowLabel = "LiveTesting"
-          EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+          EvalStats = FixtureStats.noEvals
           ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
           HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
           OutputPanel = Elem.div [] []

@@ -14,7 +14,10 @@ open SageFs.Features
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 /// How long a signal has stayed off baseline in the verdicts that are not meant to look long-held.
-let private briefSustain = TimeSpan.FromMinutes 1.0
+let private briefSustain = FixtureDurations.sustainedBriefly
+
+let private megabyte = 1000L * 1000L
+let private gigabyte = 1000L * megabyte
 
 let private brokenRss : HealthAnomaly.Verdict =
   HealthAnomaly.Verdict.Broken
@@ -25,7 +28,7 @@ let private brokenRss : HealthAnomaly.Verdict =
       BaselineStdDev = 40.0
       Direction = HealthAnomaly.SignalDirection.Increased
       DeviationInSigmas = 100.0
-      SustainedFor = TimeSpan.FromMinutes 2.0
+      SustainedFor = FixtureDurations.sustainedLong
       SamplesSustained = 10 }
 
 let private drifting : HealthAnomaly.Verdict =
@@ -83,19 +86,19 @@ let headroomTests =
   testList "GcDumpCapture.hasHeadroomToCapture" [
 
     testCase "the 55GB-daemon-1GB-free incident: no headroom, skip the dump" <| fun () ->
-      GcDumpCapture.hasHeadroomToCapture (55_000_000_000L) (1_000_000_000L)
+      GcDumpCapture.hasHeadroomToCapture (55L * gigabyte) gigabyte
       |> Expect.isFalse "attempting a dump here risks finishing the machine off"
 
     testCase "a healthy daemon with plenty of available memory has headroom" <| fun () ->
-      GcDumpCapture.hasHeadroomToCapture (500_000_000L) (40_000_000_000L)
+      GcDumpCapture.hasHeadroomToCapture (500L * megabyte) (40L * gigabyte)
       |> Expect.isTrue "small process, huge headroom"
 
     testCase "available memory exactly equal to the process RSS is NOT enough headroom" <| fun () ->
-      GcDumpCapture.hasHeadroomToCapture (1_000_000_000L) (1_000_000_000L)
+      GcDumpCapture.hasHeadroomToCapture gigabyte gigabyte
       |> Expect.isFalse "the floor is strictly more than the process's own size"
 
     testCase "a zero or negative recorded RSS never counts as having headroom" <| fun () ->
-      GcDumpCapture.hasHeadroomToCapture 0L (40_000_000_000L) |> Expect.isFalse "nothing meaningful to gate on"
+      GcDumpCapture.hasHeadroomToCapture 0L (40L * gigabyte) |> Expect.isFalse "nothing meaningful to gate on"
   ]
 
 [<Tests>]

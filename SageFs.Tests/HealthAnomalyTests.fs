@@ -50,8 +50,8 @@ let private propConfig = { FsCheckConfig.defaultConfig with maxTest = 200 }
 /// and a modest noise fraction of that baseline.
 let private genFlatShape : Gen<int * float * float> =
   gen {
-    let! seed = Gen.choose (1, 1_000_000)
-    let! baseVal = Gen.choose (1, 100_000) |> Gen.map float
+    let! seed = Gen.choose (1, 1000000)
+    let! baseVal = Gen.choose (1, 100000) |> Gen.map float
     let! noisePercent = Gen.choose (1, 20)
     return seed, baseVal, baseVal * float noisePercent / 100.0
   }
@@ -158,7 +158,7 @@ let tests =
         let rng = Random 20260922
         // A minute of samples at 1Hz either side, a minute of the incident itself.
         let normal = flatNoisy rng 60 4.0 1.2
-        let stuck = flatNoisy rng 60 60_000.0 2_000.0
+        let stuck = flatNoisy rng 60 60000.0 2000.0
         let recovered = flatNoisy rng 250 4.0 1.2
         let series = (normal @ stuck @ recovered) |> reindexed
         let verdicts = evaluate series
@@ -179,7 +179,7 @@ let tests =
         let climb =
           [ for i in 0 .. 300 ->
               { At = atSec 0
-                Value = 30.0 + float i * (37_000.0 - 30.0) / 300.0 + (rng.NextDouble() - 0.5) * 2.0 } ]
+                Value = 30.0 + float i * (37000.0 - 30.0) / 300.0 + (rng.NextDouble() - 0.5) * 2.0 } ]
         let series = (baseline @ climb) |> reindexed
         let verdicts = evaluate series
 

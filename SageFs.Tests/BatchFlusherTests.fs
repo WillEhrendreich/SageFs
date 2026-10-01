@@ -98,7 +98,7 @@ let batchFlusherTests = testList "BatchFlusher never loses items and respects ca
     // A single huge item — if a byte budget were silently active with some
     // default estimator, this alone could trigger a flush. It must not: the
     // 3-arg constructor's behavior is byte-oblivious, exactly as before.
-    flusher.Add(String.replicate 1_000_000 "x")
+    flusher.Add(String.replicate 1000000 "x")
     flushed.Count |> Expect.equal "no byte budget applies without an explicit maxBufferBytes/estimateBytes" 0
     flusher.BufferedBytes |> Expect.equal "with no estimator, buffered bytes is always reported as 0" 0L
   }

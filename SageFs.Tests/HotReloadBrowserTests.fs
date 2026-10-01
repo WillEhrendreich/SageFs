@@ -175,7 +175,7 @@ let tests =
   testList "Hot-reload dashboard browser tests" [
 
     hrPlaywrightTest "watch all arms the file watcher and the panel reflects it" (fun page -> task {
-      do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
       // #hot-reload-panel lives inside an `.expanded-only` wrapper, which is
       // display:none until #main gains the `expanded` class. Without this the
       // panel is never visible and every assertion below fails on a dashboard
@@ -183,27 +183,27 @@ let tests =
       do! DashboardDom.ensureExpanded page
       let panel = page.Locator("#hot-reload-panel")
       do! PlaywrightExpect.isVisibleAsync panel "hot reload panel visible"
-      do! PlaywrightExpect.waitForText 10_000 panel "Hot Reload: OFF"
+      do! PlaywrightExpect.waitForText BrowserWaits.pageRenders panel "Hot Reload: OFF"
       // Click Watch All.
       let watchAll =
         watchAllButton panel
       do! watchAll.ClickAsync()
       // The panel header flips to ON with a watched count > 0.
-      do! PlaywrightExpect.waitForText 30_000 panel "Hot Reload: ON"
+      do! PlaywrightExpect.waitForText BrowserWaits.daemonWork panel "Hot Reload: ON"
       let! header = panel.Locator("h2").TextContentAsync()
       Expect.isTrue (header.Contains("of") && header.Contains("files"))
         (sprintf "header should show 'N of N files', was: %s" header)
     })
 
     hrPlaywrightTest "saving a watched file hot-reloads the running app (value A -> value B)" (fun page -> task {
-      do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
       // #hot-reload-panel lives inside an `.expanded-only` wrapper, which is
       // display:none until #main gains the `expanded` class. Without this the
       // panel is never visible and every assertion below fails on a dashboard
       // that is working correctly. Idempotent.
       do! DashboardDom.ensureExpanded page
       // Establish value A from the running app.
-      let! bodyA = waitForAppBody HrEnv.appUrl.Value "hello from sagefs" 15_000
+      let! bodyA = waitForAppBody HrEnv.appUrl.Value "hello from sagefs" BrowserWaits.appAnswers
       Expect.isTrue (bodyA.Contains("hello from sagefs")) "app should serve value A before the edit"
 
       // Arm the watch set via the dashboard panel (Watch All), same as the UI.
@@ -212,7 +212,7 @@ let tests =
       let watchAll =
         watchAllButton panel
       do! watchAll.ClickAsync()
-      do! PlaywrightExpect.waitForText 30_000 panel "Hot Reload: ON"
+      do! PlaywrightExpect.waitForText BrowserWaits.daemonWork panel "Hot Reload: ON"
       // Give the watcher a moment to arm before the edit (a save racing the
       // watch-set update would be ignored).
       do! page.WaitForTimeoutAsync(1500.0f)
@@ -237,13 +237,13 @@ let tests =
         let sw = Diagnostics.Stopwatch.StartNew()
         let mutable served = false
         let mutable resaved = false
-        while not served && sw.ElapsedMilliseconds < 60_000L do
+        while not served && sw.ElapsedMilliseconds < int64 BrowserWaits.appStarts do
           try
             let! body = httpGet HrEnv.appUrl.Value
             if body.Contains("hello from hot reload (value B)") then
               served <- true
             else
-              if not resaved && sw.ElapsedMilliseconds > 15_000L then
+              if not resaved && sw.ElapsedMilliseconds > int64 BrowserWaits.resaveAfter then
                 writeGreeting edited
                 resaved <- true
               do! Task.Delay(TestTimeouts.pollSlow)
@@ -257,7 +257,7 @@ let tests =
     })
 
     hrPlaywrightTest "compile-error save keeps last valid behavior and repair hot-reloads it" (fun page -> task {
-      do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
       // #hot-reload-panel lives inside an `.expanded-only` wrapper, which is
       // display:none until #main gains the `expanded` class. Without this the
       // panel is never visible and every assertion below fails on a dashboard
@@ -268,7 +268,7 @@ let tests =
       let watchAll =
         watchAllButton panel
       do! watchAll.ClickAsync()
-      do! PlaywrightExpect.waitForText 30_000 panel "Hot Reload: ON"
+      do! PlaywrightExpect.waitForText BrowserWaits.daemonWork panel "Hot Reload: ON"
       do! page.WaitForTimeoutAsync(1500.0f)
 
       let original = File.ReadAllText(HrEnv.greetingFile.Value)
@@ -278,7 +278,7 @@ let tests =
       let broken = original.Replace(valueAGreeting, "let greeting () : int = \"this will not compile\"")
       writeGreeting broken
       try
-        let! bodyAfterFail = waitForAppBody HrEnv.appUrl.Value "hello from sagefs" 15_000
+        let! bodyAfterFail = waitForAppBody HrEnv.appUrl.Value "hello from sagefs" BrowserWaits.appAnswers
         Expect.stringContains bodyAfterFail "hello from sagefs"
           "compile error must not take down the running app (last valid behavior retained)"
 
@@ -286,7 +286,7 @@ let tests =
         Threading.Thread.Sleep(TestTimeouts.startSettle)
         let repaired = original.Replace(valueAGreeting, valueBGreeting)
         writeGreeting repaired
-        let! bodyB = waitForAppBody HrEnv.appUrl.Value "hello from hot reload (value B)" 45_000
+        let! bodyB = waitForAppBody HrEnv.appUrl.Value "hello from hot reload (value B)" BrowserWaits.hotReloadApplies
         Expect.stringContains bodyB "hello from hot reload (value B)"
           "repair should hot-reload the new greeting from the running process"
       finally
@@ -298,12 +298,12 @@ let tests =
     // Reload panel, and the panel's Reset button runs the new initializer in
     // the SAME running app. Last in the list: it leaves the counter at 101.
     hrPlaywrightTest "an edited initializer keeps the live counter, and Reset in the panel runs the new one" (fun page -> task {
-      do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+      do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
       do! DashboardDom.ensureExpanded page
       let panel = page.Locator("#hot-reload-panel")
       do! PlaywrightExpect.isVisibleAsync panel "hot reload panel visible"
       do! (watchAllButton panel).ClickAsync()
-      do! PlaywrightExpect.waitForText 30_000 panel "Hot Reload: ON"
+      do! PlaywrightExpect.waitForText BrowserWaits.daemonWork panel "Hot Reload: ON"
       // Same arming gap the other journeys give the watcher.
       do! page.WaitForTimeoutAsync(1500.0f)
 
@@ -324,7 +324,7 @@ let tests =
         // the open page by itself: the worker decides what it kept after the
         // daemon's own file watcher has already fired, so a panel that only
         // refreshes on the file event shows the state from before the save.
-        let! shown = showsWithin 30_000 panel notice
+        let! shown = showsWithin BrowserWaits.daemonWork panel notice
         let! panelText = panel.TextContentAsync()
         shown
         |> Expecto.Flip.Expect.isTrue (sprintf "the open Hot Reload panel should say what the save kept, without a reload.\nPanel: %s" panelText)
@@ -337,14 +337,14 @@ let tests =
             LocatorGetByRoleOptions(NameRegex = Text.RegularExpressions.Regex("^Reset WebAppFixture\\.Counter\\.visits\\b")))
         do! reset.ClickAsync()
 
-        let! served = appServes 15_000 "/counter" "100"
+        let! served = appServes BrowserWaits.appAnswers "/counter" "100"
         served |> Expecto.Flip.Expect.equal "Reset ran the new initializer in the running app" "100"
         let! next = appRoute "/counter/bump"
         next |> Expecto.Flip.Expect.equal "and the app counts on from the new value" "101"
         // The notice goes away once nothing is waiting for a reset. This
         // throws a TimeoutException naming the selector if it never does.
         do! page.Locator("#hot-reload-panel .kept-state").WaitForAsync(
-              LocatorWaitForOptions(State = WaitForSelectorState.Detached, Timeout = 15_000.0f))
+              LocatorWaitForOptions(State = WaitForSelectorState.Detached, Timeout = float32 BrowserWaits.panelUpdates))
       finally
         File.WriteAllText(counterFile, original)
     })
