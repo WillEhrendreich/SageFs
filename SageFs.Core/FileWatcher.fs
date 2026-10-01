@@ -341,6 +341,40 @@ let handleWatcherError (rootFull: string) (onOverflow: string -> unit) (ex: exn)
       Hint = hint }
   onOverflow rootFull
 
+/// Whether a directory is a sane thing to give one recursive watcher.
+[<RequireQualifiedAccess>]
+type WatchRootVerdict =
+  | Watchable
+  /// Refused, and why. Never a quiet skip: the reason is reported to /health.
+  | TooBroad of reason: string
+
+/// Pure: a watch root that is the home directory, holds it, or is a filesystem
+/// root is too broad to watch. One recursive `FileSystemWatcher` takes an inotify
+/// watch per directory under it, and a daemon started in $HOME hands $HOME out as
+/// a session root. A dotfiles repo at $HOME is refused too: the cost is the
+/// directory count, not whether `.git` is there. Decided on whole path segments,
+/// so `/home/william` is not mistaken for `/home/will`.
+let classifyWatchRoot (home: string) (root: string) : WatchRootVerdict =
+  let normalize (path: string) =
+    let full = Path.GetFullPath path
+    match String.Equals(full, Path.GetPathRoot full, StringComparison.Ordinal) with
+    | true -> full
+    | false -> full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+  let rootFull = normalize root
+  // A service with no home directory has none to protect. Only a filesystem
+  // root is refused then, and the guard never throws on a blank home.
+  let holdsHome =
+    match String.IsNullOrWhiteSpace home with
+    | true -> false
+    | false ->
+      let homeFull = normalize home
+      String.Equals(rootFull, homeFull, StringComparison.Ordinal)
+      || homeFull.StartsWith(rootFull.TrimEnd(Path.DirectorySeparatorChar) + string Path.DirectorySeparatorChar, StringComparison.Ordinal)
+  match String.Equals(rootFull, Path.GetPathRoot rootFull, StringComparison.Ordinal), holdsHome with
+  | true, _ -> WatchRootVerdict.TooBroad (sprintf "%s is a filesystem root" rootFull)
+  | false, true -> WatchRootVerdict.TooBroad (sprintf "%s is the home directory or contains it" rootFull)
+  | false, false -> WatchRootVerdict.Watchable
+
 /// Side-effectful: watch `root` recursively for file changes, with excluded
 /// subtrees (`shouldPruneDir` — bin/obj/.git/node_modules/.runs/artifacts,
 /// nested checkouts) filtered out at EVENT time instead of never watched.
@@ -375,7 +409,8 @@ let handleWatcherError (rootFull: string) (onOverflow: string -> unit) (ex: exn)
 /// those excluded subtrees raise are filtered right here, before `onChange`
 /// ever sees them, so a build churning through `artifacts/` or `obj/` costs
 /// this a cheap path-prefix check per event, never a reload.
-let startPrunedWatcher
+let startPrunedWatcherUnder
+  (home: string)
   (root: string)
   (extensions: string list)
   (bufferSizeBytes: int)
@@ -384,9 +419,16 @@ let startPrunedWatcher
   : IDisposable =
   let rootFull = Path.GetFullPath root
   let noop = { new IDisposable with member _.Dispose() = () }
-  match Directory.Exists rootFull with
-  | false -> noop
-  | true ->
+  match Directory.Exists rootFull, classifyWatchRoot home rootFull with
+  | false, _ -> noop
+  | true, WatchRootVerdict.TooBroad reason ->
+    Log.error "[FileWatcher] Not watching %s: %s. A recursive watch there would spend an inotify watch on every directory under it." rootFull reason
+    SageFs.Features.ComponentWatch.reportFailure
+      { Component = sprintf "file-watcher:%s" rootFull
+        Reason = sprintf "refused to watch %s: %s" rootFull reason
+        Hint = "Open the session in a project directory, not the home directory or a filesystem root, and restart it. Hot reload and live testing get no file events for this session until then." }
+    noop
+  | true, WatchRootVerdict.Watchable ->
     // Diagnostic-only: how many directories this watch conceptually covers,
     // and whether that walk itself hit MaxWatchableEntries (still worth
     // knowing — a tree with a legitimate, non-excluded subtree bigger than
@@ -435,6 +477,16 @@ let startPrunedWatcher
     | ex ->
       Log.warn "[FileWatcher] Cannot watch %s: %s — hot reload disabled for this session\n%s" rootFull ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       noop
+
+/// `startPrunedWatcherUnder` with this process's own home directory.
+let startPrunedWatcher
+  (root: string)
+  (extensions: string list)
+  (bufferSizeBytes: int)
+  (onChange: FileChangeKind -> FileSystemEventArgs -> unit)
+  (onOverflow: string -> unit)
+  : IDisposable =
+  startPrunedWatcherUnder (Environment.GetFolderPath Environment.SpecialFolder.UserProfile) root extensions bufferSizeBytes onChange onOverflow
 
 /// Side-effectful: start watching directories for file changes.
 /// Returns a dispose function that stops all watchers.

@@ -4,6 +4,7 @@ open System
 open Expecto
 open SageFs.FileWatcher
 open System.IO
+open System.Threading.Tasks
 
 // ── Debounce Guard ──────────────────────────────────────────────────────
 
@@ -593,5 +594,77 @@ let handleWatcherErrorTests = testList "handleWatcherError" [
       let mutable called = None
       handleWatcherError root (fun r -> called <- Some r) (InternalBufferOverflowException "overflow")
       called |> Flip.Expect.equal "onOverflow receives the same root the Error event fired for" (Some root)
+    }
+  ]
+
+// ── A watch root that is the home directory or above it ─────────────────
+// A daemon started in $HOME hands out $HOME as a session root, and one
+// recursive FileSystemWatcher then takes an inotify watch per directory
+// under it. The capped diagnostic walk logs loudly, but the real watcher
+// was started anyway. A root that is the home directory, holds it, or is a
+// filesystem root is refused up front, with the reason where /health and
+// sagefs status can read it.
+
+[<Tests>]
+let watchRootGuardTests =
+  testList "watch root guard" [
+
+    testCase "WHY — classifyWatchRoot — the home directory, what holds it, and a filesystem root are too broad; a project under it, or a sibling that merely shares a prefix, is fine" <| fun () ->
+      let home = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "sagefs-guard-home", "will"))
+      let verdictOf root =
+        match classifyWatchRoot home root with
+        | WatchRootVerdict.TooBroad _ -> "TooBroad"
+        | WatchRootVerdict.Watchable -> "Watchable"
+      [ home
+        home + string Path.DirectorySeparatorChar
+        Path.GetDirectoryName home
+        Path.GetPathRoot home
+        Path.Combine(home, "Work", "SageFs")
+        home + "iam"
+        Path.Combine(Path.GetTempPath(), "sagefs-guard-other") ]
+      |> List.map verdictOf
+      |> Flip.Expect.equal "each root is classified on its own path, never on a string prefix"
+           [ "TooBroad"; "TooBroad"; "TooBroad"; "TooBroad"; "Watchable"; "Watchable"; "Watchable" ]
+
+    testCase "WHY — classifyWatchRoot — a process with no home directory still refuses a filesystem root and never throws on the blank home" <| fun () ->
+      let root = Path.GetPathRoot(Path.GetTempPath())
+      let isTooBroad = function WatchRootVerdict.TooBroad _ -> true | WatchRootVerdict.Watchable -> false
+      classifyWatchRoot "" root |> isTooBroad |> Flip.Expect.isTrue "a filesystem root is refused with no home"
+      classifyWatchRoot "" (Path.GetTempPath()) |> isTooBroad |> Flip.Expect.isFalse "an ordinary directory is fine with no home"
+
+    testCase "WHY — startPrunedWatcherUnder — a root that is the home directory is refused and reported with a hint, so the watches are never spent and /health says why" <| fun () ->
+      let home = Directory.CreateTempSubdirectory("sagefs-guard-home-").FullName
+      try
+        SageFs.Features.ComponentWatch.reset ()
+        use _watcher = startPrunedWatcherUnder home home [ ".fs" ] 65536 (fun _ _ -> ()) (fun _ -> ())
+        let failure =
+          SageFs.Features.ComponentWatch.current ()
+          |> List.tryFind (fun f -> f.Component = sprintf "file-watcher:%s" home)
+        match failure with
+        | None -> failtest "the refused root should be reported into ComponentWatch"
+        | Some f ->
+          f.Reason |> Flip.Expect.stringContains "the reason names the home directory" "home directory"
+          f.Hint |> Flip.Expect.stringContains "the hint says what to do instead" "project directory"
+      finally
+        Directory.Delete(home, true)
+
+    testTask "WHY — startPrunedWatcherUnder — a project directory under the home directory still watches and still delivers a save, with nothing reported" {
+      let home = Directory.CreateTempSubdirectory("sagefs-guard-home-").FullName
+      let project = Directory.CreateDirectory(Path.Combine(home, "proj")).FullName
+      SageFs.Features.ComponentWatch.reset ()
+      let saved = TaskCompletionSource<string>()
+      let watcher =
+        startPrunedWatcherUnder home project [ ".fs" ] 65536 (fun _ e -> saved.TrySetResult e.FullPath |> ignore) (fun _ -> ())
+      try
+        let file = Path.Combine(project, "A.fs")
+        File.WriteAllText(file, "module A")
+        let! winner = Task.WhenAny(saved.Task, Task.Delay TestTimeouts.patience)
+        Flip.Expect.isTrue "the save was delivered before the patience ceiling" (obj.ReferenceEquals(winner, saved.Task))
+        SageFs.Features.ComponentWatch.current ()
+        |> List.exists (fun f -> f.Component = sprintf "file-watcher:%s" project)
+        |> Flip.Expect.isFalse "a watchable root reports no failure"
+      finally
+        watcher.Dispose()
+        Directory.Delete(home, true)
     }
   ]
