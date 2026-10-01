@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **Historical frontend note:** Entries about SageTUI, the legacy TUI, and the `SageFs.Gui` Raylib frontend record features available at those release dates. Those built-in product frontends are now deprecated; current product interfaces are the web dashboard, editor integrations, and MCP. Raylib application and game demos remain supported examples and are not part of this deprecation.
 
-## [Unreleased]
+> **I stopped keeping this file up to date by hand.** Releases are numbered by each push to master now (the newest tag is v0.6.875 as I write this, on 2026-10-01), and the headings below, [0.8.0] and [0.7.0] among them, never matched those tags. For what shipped, the notes on each [GitHub Release](https://github.com/WillEhrendreich/SageFs/releases) are generated from the conventional commits between tags (`scripts/release-notes.fsx`). For the story, [docs/progress.md](docs/progress.md) goes stretch by stretch and says which entries are in a release and which are only merged, and [docs/roadmap.md](docs/roadmap.md) says what's next. The sections below are what I wrote at the time, left as they were.
+
+## [Unreleased] (written 2026-08-28)
+
+> The heading says Unreleased because it was when I wrote it. The work it describes has been released since (I checked that `friction-receiver/` and the dashboard are in the tree), but I haven't matched each entry to the tag that first carried it or re-checked each one against today's dashboard. The test count in the next paragraph is that day's number. One thing I know has changed: the `?session=` query parameter for dashboard deep links, listed under Changed, is gone. The dashboard now follows a `viewingSessionId` signal and keeps the URL free of it.
 
 > **What's New**: Dashboard redesign aligned with **sagetech.dev** aesthetic
 > (flat panels, sharp corners, tabline/statusline/cmdline), **per-client
