@@ -334,6 +334,35 @@ let workflowSwitchBodyTests =
     }
   ]
 
+let private outgoingReport : SageFs.Features.FrictionSanitize.OutgoingReport =
+  { SchemaVersion = 1
+    SageFsVersion = "0.6.1"
+    SubmittedAtUtc = "2026-01-02T03:04:05.0000000Z"
+    TotalEvents = 7
+    TotalFeedbackItems = 2
+    ToolsWithFriction =
+      [ { Tool = "t"; Invocations = 5; Blocked = 1; Abandoned = 2; ExplicitFeedback = 3; SuggestedFix = "fix" } ]
+    TopBlockers = [ { Blocker = "b"; Count = 4; AffectedTools = [ "t" ] } ]
+    FrequentTransitions = [ { From = "a"; To = "b"; Count = 6 } ]
+    RecentFeedback =
+      [ { Tool = "t"; Kind = "k"; Count = 1; Reason = "r"; Alternative = Some "alt" }
+        { Tool = "u"; Kind = "k"; Count = 2; Reason = "s"; Alternative = None } ]
+    RecommendedWorkItems =
+      [ { Title = "w"; TargetTool = Some "t"; Reason = "r"; SuggestedAction = "a" }
+        { Title = "x"; TargetTool = None; Reason = "r"; SuggestedAction = "a" } ] }
+
+[<Tests>]
+let frictionPayloadTests =
+  testList "friction send payload" [
+
+    test "WHY: the receiver reads camelCase keys and checks schemaVersion first, so that is how the report is written" {
+      frictionPayloadJson outgoingReport
+      |> Expect.equal
+           "payload text"
+           """{"schemaVersion":1,"sageFsVersion":"0.6.1","submittedAtUtc":"2026-01-02T03:04:05.0000000Z","totalEvents":7,"totalFeedbackItems":2,"toolsWithFriction":[{"tool":"t","invocations":5,"blocked":1,"abandoned":2,"explicitFeedback":3,"suggestedFix":"fix"}],"topBlockers":[{"blocker":"b","count":4,"affectedTools":["t"]}],"frequentTransitions":[{"from":"a","to":"b","count":6}],"recentFeedback":[{"tool":"t","kind":"k","count":1,"reason":"r","alternative":"alt"},{"tool":"u","kind":"k","count":2,"reason":"s","alternative":null}],"recommendedWorkItems":[{"title":"w","targetTool":"t","reason":"r","suggestedAction":"a"},{"title":"x","targetTool":null,"reason":"r","suggestedAction":"a"}]}"""
+    }
+  ]
+
 /// A response body that says when a whole SSE frame (ending in a blank line) has been written.
 type private FrameSignalStream() =
   inherit MemoryStream()
@@ -420,5 +449,15 @@ let apiDispatchTests =
       let! status, text, count = post """{"action":"nope"}"""
       (status, count) |> Expect.equal "result" (400, 0)
       text |> Expect.stringContains "names the action" "nope"
+    }
+
+    testTask "WHY: a body with no action is refused with 400 and says so" {
+      let! status, text, count = post """{"value":"a"}"""
+      (status, text, count) |> Expect.equal "result" (400, """{"error":"Missing action"}""", 0)
+    }
+
+    testTask "WHY: a body that is not JSON is refused with 400 and nothing is dispatched" {
+      let! status, text, count = post "not json"
+      (status, text, count) |> Expect.equal "result" (400, """{"error":"Request failed"}""", 0)
     }
   ]

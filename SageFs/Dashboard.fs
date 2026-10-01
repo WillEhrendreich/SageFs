@@ -1858,7 +1858,7 @@ let switchWorkflowViaApi
       // (SessionBuild's kill timer) rather than a short eval-style timeout.
       http.Timeout <- TimeSpan.FromMinutes(10.0)
       let url = sprintf "http://127.0.0.1:%d/api/sessions/%s/workflow" mcpPort (WorkerProtocol.SessionId.value sessionId)
-      let bodyJson = Text.Json.JsonSerializer.Serialize({| workflow = WorkflowSwitch.requestValue target |})
+      let bodyJson = Json.serialize Json.standard {| workflow = WorkflowSwitch.requestValue target |}
       use req = new HttpRequestMessage(HttpMethod.Post, url)
       req.Content <- new StringContent(bodyJson, Text.Encoding.UTF8, "application/json")
       let! resp = http.SendAsync(req)
@@ -2257,6 +2257,12 @@ let isAllowedFrictionEndpoint (endpoint: string) : bool =
     | _ -> false
   | _ -> false
 
+/// The body the friction receiver (`friction-receiver/src/index.ts`) reads: camelCase keys,
+/// `schemaVersion` first checked. The receiver rejects a body without `schemaVersion`, so
+/// the keys are not a matter of taste.
+let frictionPayloadJson (outgoing: SageFs.Features.FrictionSanitize.OutgoingReport) : string =
+  Json.serialize Json.camelCase outgoing
+
 /// POST /dashboard/friction/send — server-authoritative friction send.
 ///
 /// Privacy + integrity model:
@@ -2311,7 +2317,7 @@ let createFrictionSendHandler
               do! ssePatchNode ctx (frictionSendResultDom false err "")
             | Ok bundle ->
               let outgoing = SageFs.Features.FrictionReviewView.buildOutgoingForSend bundle.Report editsJson
-              let payloadJson = System.Text.Json.JsonSerializer.Serialize(outgoing)
+              let payloadJson = frictionPayloadJson outgoing
               let urlHash = frictionEndpointHash endpoint
               let mutable attemptError : string option = None
               let mutable reportId = ""
@@ -2657,7 +2663,7 @@ let createApiStateHandler
           {| testName = l.TestName; filePath = l.FilePath; startLine = l.StartLine |})
       let workflow = q.GetSessionWorkflow activeSid
       let payload =
-        System.Text.Json.JsonSerializer.Serialize(
+        Json.serialize Json.standard
           {| sessionId = activeSidStr
              sessionState = SessionState.label state
              evalCount = stats.EvalCount
@@ -2669,7 +2675,7 @@ let createApiStateHandler
              testSourceLocations = testSourceLocations
              workflowLabel = WorkflowTypes.SessionWorkflow.label workflow
              replCapability = WorkflowTypes.ReplCapability.label (WorkflowTypes.SessionWorkflow.replCapability workflow)
-             hotReloadActive = WorkflowTypes.SessionWorkflow.isHotReloadActive workflow |})
+             hotReloadActive = WorkflowTypes.SessionWorkflow.isHotReloadActive workflow |}
       do! ctx.Response.WriteAsync(sprintf "data: %s\n\n" payload)
       do! ctx.Response.Body.FlushAsync()
     }
@@ -2735,17 +2741,34 @@ let createApiDispatchHandler
     use reader = new StreamReader(ctx.Request.Body)
     let! body = reader.ReadToEndAsync()
     try
-      let action = System.Text.Json.JsonSerializer.Deserialize<{| action: string; value: string option |}>(body)
-      let editorAction = parseEditorAction action.action action.value
-      let appMsg = parseAppMsg action.action editorAction
-      match appMsg with
-      | Some msg ->
-        dispatch msg
-        ctx.Response.StatusCode <- 200
-        do! ctx.Response.WriteAsJsonAsync({| ok = true |})
-      | None ->
+      // The body is a flat object of strings: `action`, and `value` when the action carries one
+      // (`DaemonClient.dispatchAction` leaves it out otherwise). Read as a map, so a missing
+      // `value` is simply absent.
+      match Json.deserialize<Collections.Generic.Dictionary<string, string>> Json.standard body with
+      | Error reason ->
+        Log.warn "[dashboard] /api/dispatch body is not a dispatch request: %s" reason
         ctx.Response.StatusCode <- 400
-        do! ctx.Response.WriteAsJsonAsync({| error = sprintf "Unknown action: %s" action.action |})
+        do! ctx.Response.WriteAsJsonAsync({| error = "Request failed" |})
+      | Ok fields ->
+        match fields.TryGetValue "action" with
+        | false, _ ->
+          ctx.Response.StatusCode <- 400
+          do! ctx.Response.WriteAsJsonAsync({| error = "Missing action" |})
+        | true, actionName ->
+          let value =
+            match fields.TryGetValue "value" with
+            | true, v when not (isNull v) -> Some v
+            | _ -> None
+          let editorAction = parseEditorAction actionName value
+          let appMsg = parseAppMsg actionName editorAction
+          match appMsg with
+          | Some msg ->
+            dispatch msg
+            ctx.Response.StatusCode <- 200
+            do! ctx.Response.WriteAsJsonAsync({| ok = true |})
+          | None ->
+            ctx.Response.StatusCode <- 400
+            do! ctx.Response.WriteAsJsonAsync({| error = sprintf "Unknown action: %s" actionName |})
     with
     | :? RequestTooLargeException -> ()  // 413 already written
     | ex ->
