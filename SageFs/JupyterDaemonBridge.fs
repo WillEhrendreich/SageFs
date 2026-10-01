@@ -142,7 +142,7 @@ module JupyterDaemonBridge =
 
     let execOnce (code: string) : Async<ExecOutcome> =
       async {
-        let body = JsonSerializer.Serialize {| code = code; working_directory = workingDirectory |}
+        let body = Json.serialize Json.standard {| code = code; working_directory = workingDirectory |}
         let! outcome = execPost body
         match outcome with
         | Ok (status, respBody) -> return parseExecResponse status respBody
@@ -165,7 +165,7 @@ module JupyterDaemonBridge =
           match first with
           | InfraError err when isNoSessionAtAll err ->
             let createBody =
-              JsonSerializer.Serialize {| workingDirectory = workingDirectory; projects = Array.empty<string> |}
+              Json.serialize Json.standard {| workingDirectory = workingDirectory; projects = Array.empty<string> |}
             let! created = createSessionPost createBody
             match created with
             | Ok (status, _) when status >= 200 && status < 300 ->

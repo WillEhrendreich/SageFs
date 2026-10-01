@@ -225,9 +225,9 @@ module DaemonClient =
     let payload =
       match value with
       | Some v ->
-        JsonSerializer.Serialize({| action = actionName; value = v |})
+        Json.serialize Json.standard {| action = actionName; value = v |}
       | None ->
-        JsonSerializer.Serialize({| action = actionName |})
+        Json.serialize Json.standard {| action = actionName |}
     let content = new StringContent(payload, Text.Encoding.UTF8, "application/json")
     try
       let! resp = client.PostAsync(sprintf "%s/api/dispatch" baseUrl, content)

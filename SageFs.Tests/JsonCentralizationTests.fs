@@ -27,10 +27,8 @@ let private budgets : (string * int) list =
     "SageFs.Core/SseWriter.fs", 23
     "SageFs.Core/WarmupReplayCache.fs", 3
     "SageFs.Core/WorkerProtocol.fs", 3
-    "SageFs/DaemonClient.fs", 2
     "SageFs/Dashboard.fs", 4
     "SageFs/DashboardTypes.fs", 3
-    "SageFs/JupyterDaemonBridge.fs", 2
     "SageFs/JupyterKernel.fs", 17
     "SageFs/McpAdapter.fs", 5
     "SageFs/McpFrictionRecorder.fs", 3
