@@ -2,7 +2,7 @@
 
 Editors receive daemon events over the main SSE stream, `GET /events` on port 37749. Most events carry a `SessionId` field so a client can filter to the session it cares about. The four cohort events are the exception: one cohort spans every session on the daemon, so they carry no `SessionId`.
 
-The daemon emits 26 event types across four sources: 23 `SseWriter` events on `/events`, one `session` event (8 subtypes), one `state` event (8 variants), and `diagnostics` on its own stream.
+The daemon emits 25 event types across four sources: 22 `SseWriter` events on `/events`, one `session` event (8 subtypes), one `state` event (8 variants), and `diagnostics` on its own stream.
 
 ## Connection
 
@@ -15,7 +15,7 @@ The daemon sends a `retry:` hint at connection time so clients reconnect automat
 
 ---
 
-## SseWriter Events (23)
+## SseWriter Events (22)
 
 The event names are defined in `allSseEventTypes` in `SageFs.Core/SseWriter.fs`.
 
@@ -89,7 +89,6 @@ changes what the dashboard shows for a class instance, so I haven't done it.
 | Event | Payload | Description |
 |:---|:---|:---|
 | `cell_dependencies` | `Nodes[]` (Id, Produces, Consumes), `Edges[]` (From, To) | Dependency graph of code cells. |
-| `domain_model` | `Transitions[]` (FromState, ToState, FunctionName, IsErrorBranch, Health) | Annotated DU state machine with health status per transition. |
 | `diagnosis_ready` | `Severity`, `FailureCount`, `AffectedCells`, `SuggestionCount`, `TopSuggestions[]`, `Failures[]`, `Performance`, `Summary` | Auto-diagnosis report with causal analysis and suggested fixes. |
 
 ### Multi-Agent Cohort
@@ -151,8 +150,8 @@ A single `state` event carries variant-specific fields.
 
 | Category | Count | Events |
 |:---|:---|:---|
-| SseWriter | 23 | warmup_progress, eval_started, eval_heartbeat, eval_result, eval_diff, eval_timeline, bindings_snapshot, binding_scope_map, live_bindings, test_summary, test_results_batch, test_trace, test_source_locations, file_annotations, failure_narratives, coverage_view, cell_dependencies, domain_model, diagnosis_ready, cohort_matrix, claim_changed, landing_changed, save_observed |
+| SseWriter | 22 | warmup_progress, eval_started, eval_heartbeat, eval_result, eval_diff, eval_timeline, bindings_snapshot, binding_scope_map, live_bindings, test_summary, test_results_batch, test_trace, test_source_locations, file_annotations, failure_narratives, coverage_view, cell_dependencies, diagnosis_ready, cohort_matrix, claim_changed, landing_changed, save_observed |
 | Session | 1 (8 subtypes) | session |
 | Daemon state | 1 (8 variants) | state |
 | Diagnostics | 1 (separate endpoint) | diagnostics |
-| **Total** | **26** | |
+| **Total** | **25** | |
