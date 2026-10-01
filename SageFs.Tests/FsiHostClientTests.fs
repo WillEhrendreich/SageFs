@@ -75,6 +75,13 @@ let private evalOk (session: FsiHostSession) (code: string) : Async<unit> =
 
 let private joined (output: ConcurrentQueue<string>) = String.Join("", output.ToArray())
 
+/// Where a syscall filter can be installed the click says it ran under one; where it cannot, it says so, never silently.
+let private expectContainmentMatchesPlatform (containment: Containment) =
+  match SageFs.ThreadSandbox.availability (), containment with
+  | Result.Ok _, ContainedBy policy -> policy |> Expect.equal "the policy the host chose" SageFs.SandboxPolicy.NoNetworkNoWritesNoSpawn
+  | Result.Error _, NotContained _ -> ()
+  | availability, other -> failtestf "containment %A does not match this platform (%A)" other availability
+
 [<Tests>]
 let tests =
   testList "FsiHostClient" [
@@ -164,6 +171,53 @@ let tests =
               match! started.Session.Eval("1;;", CancellationToken.None) with
               | HostCrashed _ -> ()
               | other -> failtestf "later calls should also be HostCrashed, got %A" other
+            })
+      }
+
+      testAsync "a click runs one held getter in a real host, a looping getter times out, and the host keeps serving" {
+        do!
+          withHost (fun started ->
+            async {
+              // `Len` calls other code (held), `Spin` loops (held), `Const` is a constant (shown without a click).
+              do!
+                evalOk started.Session
+                  "type Gadget(name: string) =\n  member _.Name = name\n  member _.Const = 42\n  member this.Len = this.Name.Length\n  member _.Spin : int =\n    while true do ()\n    0;;"
+              do! evalOk started.Session "let g = Gadget(\"abcd\");;"
+              let childOf (label: string) (binding: SageFs.Features.LiveValueTree.LiveBindingValue) =
+                binding.Root.Children |> List.tryFind (fun c -> c.Label = label)
+              let! before = started.Session.ReadLiveValues 1L
+              match before with
+              | Answered snapshot ->
+                let g = snapshot.Bindings |> List.find (fun b -> b.Name = "g")
+                childOf "Len" g |> Option.map (fun c -> c.Kind)
+                |> Expect.equal "Len is listed, not run" (Some (SageFs.Features.LiveValueTree.NodeKind.NotEvaluated SageFs.Features.LiveValueTree.NotEvaluatedReason.GetterRunsCode))
+                childOf "Spin" g |> Option.map (fun c -> c.Kind)
+                |> Expect.equal "Spin is listed as a loop" (Some (SageFs.Features.LiveValueTree.NodeKind.NotEvaluated SageFs.Features.LiveValueTree.NotEvaluatedReason.GetterLoops))
+              | other -> failtestf "expected a snapshot, got %A" other
+
+              match! started.Session.EvaluateMember("g", [ "Len" ]) with
+              | Answered (MemberShown (binding, containment)) ->
+                childOf "Len" binding |> Option.map (fun c -> c.Preview) |> Expect.equal "the click ran Len" (Some "4")
+                childOf "Spin" binding |> Option.map (fun c -> c.Kind)
+                |> Expect.equal "Spin was not run by the click on Len" (Some (SageFs.Features.LiveValueTree.NodeKind.NotEvaluated SageFs.Features.LiveValueTree.NotEvaluatedReason.GetterLoops))
+                expectContainmentMatchesPlatform containment
+              | other -> failtestf "expected the walked binding, got %A" other
+
+              match! started.Session.EvaluateMember("g", [ "Spin" ]) with
+              | Answered (MemberShown (binding, _)) ->
+                childOf "Spin" binding |> Option.map (fun c -> c.Kind)
+                |> Expect.equal "the looping getter is given up on, with the reason" (Some (SageFs.Features.LiveValueTree.NodeKind.NotEvaluated SageFs.Features.LiveValueTree.NotEvaluatedReason.EvaluationTimedOut))
+              | other -> failtestf "expected the walked binding, got %A" other
+
+              // The host is still serving: the abandoned getter did not take it down.
+              match! started.Session.EvaluateMember("g", [ "Len" ]) with
+              | Answered (MemberShown (binding, _)) ->
+                childOf "Len" binding |> Option.map (fun c -> c.Preview) |> Expect.equal "still answers after a timeout" (Some "4")
+              | other -> failtestf "expected the walked binding, got %A" other
+
+              match! started.Session.EvaluateMember("missing", [ "Len" ]) with
+              | Answered (BindingNotFound name) -> name |> Expect.equal "names the binding" "missing"
+              | other -> failtestf "expected BindingNotFound, got %A" other
             })
       }
 

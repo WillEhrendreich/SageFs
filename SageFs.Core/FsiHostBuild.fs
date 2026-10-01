@@ -27,6 +27,7 @@ let hostSourceNames =
     "ConfigDsl.fs"
     "LiveValueTree.fs"
     "ThreadSandbox.fs"
+    "MemberEvaluation.fs"
     "TestProviderTypes.fs"
     "LiveTestingTypes.fs"
     "CoverageProbes.fs"

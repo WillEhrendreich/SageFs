@@ -168,6 +168,7 @@ type FsiHostSession
           | Result.Ok(FlagResult(id, _) as answer) -> complete id answer
           | Result.Ok(ValueResult(id, _) as answer) -> complete id answer
           | Result.Ok(LiveValuesResult(id, _) as answer) -> complete id answer
+          | Result.Ok(MemberResult(id, _) as answer) -> complete id answer
           | Result.Ok(CheckResult(id, _) as answer) -> complete id answer
           | Result.Ok(SymbolsResult(id, _, _) as answer) -> complete id answer
           | Result.Ok(CompletionsResult(id, _) as answer) -> complete id answer
@@ -268,6 +269,16 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> ReadLiveValues(id, generation)) with
       | Got(LiveValuesResult(_, snapshot)) -> return Answered snapshot
       | Got other -> return HostGone(unexpected "live values" other)
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
+    }
+
+  /// Run one "not evaluated" getter under containment and get the binding walked again. `path` is the labels below
+  /// the binding, ending at the member.
+  member _.EvaluateMember(binding: string, path: string list) : Async<HostCall<MemberOutcome>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> EvaluateMember(id, binding, path)) with
+      | Got(MemberResult(_, outcome)) -> return Answered outcome
+      | Got other -> return HostGone(unexpected "evaluate member" other)
       | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 

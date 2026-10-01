@@ -72,6 +72,7 @@
         <Compile Include="Features\LiveValueTree.fs" />
         <!-- Dependency-free like LiveValueTree, and also compiled into the host (it runs a getter on a filtered thread there). -->
         <Compile Include="ThreadSandbox.fs" />
+        <Compile Include="Features\MemberEvaluation.fs" />
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
         <EmbeddedResource Include="../SageFs.FsiHost/FsiHost.fsproj" LogicalName="FsiHost/FsiHost.fsproj" />
@@ -84,6 +85,7 @@
         <EmbeddedResource Include="../SageFs.FsiHost/ConfigDsl.fs" LogicalName="FsiHost/ConfigDsl.fs" />
         <EmbeddedResource Include="Features\LiveValueTree.fs" LogicalName="FsiHost/LiveValueTree.fs" />
         <EmbeddedResource Include="ThreadSandbox.fs" LogicalName="FsiHost/ThreadSandbox.fs" />
+        <EmbeddedResource Include="Features\MemberEvaluation.fs" LogicalName="FsiHost/MemberEvaluation.fs" />
         <EmbeddedResource Include="TestProviderTypes.fs" LogicalName="FsiHost/TestProviderTypes.fs" />
         <EmbeddedResource Include="Features\LiveTestingTypes.fs" LogicalName="FsiHost/LiveTestingTypes.fs" />
         <EmbeddedResource Include="Features\CoverageProbes.fs" LogicalName="FsiHost/CoverageProbes.fs" />

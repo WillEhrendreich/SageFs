@@ -93,6 +93,20 @@ type ConfigOutcome =
   | ConfigEvaluated of config: DirectoryConfig
   | ConfigRejected of failure: ConfigFailure
 
+/// How a clicked getter was kept from doing harm, said on the row so "no I/O containment here" always comes with its reason.
+type Containment =
+  /// It ran on a thread under this syscall filter (and a deadline).
+  | ContainedBy of policy: SandboxPolicy
+  /// It ran on a thread under a deadline only: no syscall filter could be installed here, for this reason.
+  | NotContained of why: SandboxUnavailable
+
+/// What a click on a "not evaluated" row came to.
+type MemberOutcome =
+  /// The binding walked again with the clicked member run (or the reason it was not).
+  | MemberShown of binding: LiveValueTree.LiveBindingValue * containment: Containment
+  /// The session has no binding of that name any more (a reset or a rebind between the pane and the click).
+  | BindingNotFound of name: string
+
 type Request =
   | Eval of id: int64 * code: string
   /// Evaluate a config.fsx expression (in the host, never in the daemon) and answer with the DirectoryConfig it builds.
@@ -101,6 +115,10 @@ type Request =
   | ReadValue of id: int64 * name: string
   /// The session's bound values as an expanded, bounded tree (the dashboard's watch window). The client picks the generation.
   | ReadLiveValues of id: int64 * generation: int64
+  /// Run ONE getter the live-values walk listed as "not evaluated", under containment, and answer with that binding walked
+  /// again. `path` is the labels from the binding down to the member. Answered beside the session thread: a getter that
+  /// never returns must never hold up an eval.
+  | EvaluateMember of id: int64 * binding: string * path: string list
   /// Parse + type-check a snippet against the session's current state and report diagnostics.
   | Check of id: int64 * text: string
   /// Like Check, plus the symbol references of error-free code (the live-testing cycle's type-check effect).
@@ -145,6 +163,7 @@ type Response =
   | FlagResult of id: int64 * reading: FlagReading
   | ValueResult of id: int64 * reading: ValueReading
   | LiveValuesResult of id: int64 * snapshot: LiveValueTree.LiveValueSnapshot
+  | MemberResult of id: int64 * outcome: MemberOutcome
   | CheckResult of id: int64 * diagnostics: FsiDiagnostic list
   | SymbolsResult of id: int64 * diagnostics: FsiDiagnostic list * symbols: WireSymbolRef list
   | CompletionsResult of id: int64 * items: WireCompletion list

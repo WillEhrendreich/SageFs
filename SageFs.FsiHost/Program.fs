@@ -52,6 +52,7 @@ type private Work =
   | RunReadFlag of id: int64 * name: string
   | RunReadValue of id: int64 * name: string
   | RunReadLiveValues of id: int64 * generation: int64
+  | RunEvaluateMember of id: int64 * binding: string * path: string list
   | RunCheck of id: int64 * text: string
   | RunCheckWithSymbols of id: int64 * filePath: string * text: string
   | RunComplete of id: int64 * text: string * caret: int
@@ -111,7 +112,7 @@ let private liveValues (session: FsiEvaluationSession) (generation: int64) : Liv
           try typeNameOf bound.Value
           with _ -> ""
         (bound.Name, typeSignature, value))
-    LiveValueTree.buildSnapshotWithin Timeouts.liveValueBindingBudget "" generation boundValues
+    LiveValueTree.buildSnapshotWithin LiveValueTree.WalkMode.Safe Timeouts.liveValueBindingBudget "" generation boundValues
   with _ -> LiveValueTree.buildSnapshot "" generation []
 
 /// The eval currently running, so Interrupt can reach it.
@@ -179,6 +180,15 @@ let private run (fsiArgs: string list) : int =
   // The agent (hot reload + live testing) that lives beside the user's code. Written on the session thread, read by test runs.
   let agentState = ref AgentNotStarted
   let refuse (id: int64) (reason: string) = send (AgentRefused(id, reason))
+  // A click runs a getter the live-values walk would not. Where a syscall filter can be installed the getter runs under
+  // it; where it cannot, it still runs on its own thread under a deadline, and every answer says which it was.
+  let containment, memberEvaluator =
+    match ThreadSandbox.availability () with
+    | Result.Ok _ ->
+      ContainedBy SandboxPolicy.NoNetworkNoWritesNoSpawn,
+      MemberEvaluation.create MemberEvaluation.productLimits (MemberEvaluation.filtered SandboxPolicy.NoNetworkNoWritesNoSpawn)
+    | Result.Error why ->
+      NotContained why, MemberEvaluation.create MemberEvaluation.productLimits MemberEvaluation.unfiltered
   /// Run agent work that needs a started agent; a failure is reported as a refusal, never a crash of the host.
   let withAgent (id: int64) (work: HostAgent.Agent -> unit) =
     match Volatile.Read(&agentState.contents) with
@@ -195,6 +205,28 @@ let private run (fsiArgs: string list) : int =
         | RunReadFlag(id, name) -> send (FlagResult(id, readFlag session name))
         | RunReadValue(id, name) -> send (ValueResult(id, readValue session name))
         | RunReadLiveValues(id, generation) -> send (LiveValuesResult(id, liveValues session generation))
+        | RunEvaluateMember(id, binding, path) ->
+          // Read the value on this thread (the session is not thread-safe), then run the getter on its own thread so a
+          // getter that never returns cannot hold up the next eval.
+          let found =
+            session.GetBoundValues()
+            |> List.filter (fun bound -> bound.Name = binding)
+            |> List.rev
+            |> List.tryHead
+          match found with
+          | None -> send (MemberResult(id, BindingNotFound binding))
+          | Some bound ->
+            let value = try bound.Value.ReflectionValue with _ -> null
+            let signature = try typeNameOf bound.Value with _ -> ""
+            let walkAgain () =
+              try
+                let walk : LiveValueTree.Walk =
+                  { Mode = LiveValueTree.WalkMode.Safe
+                    Force = LiveValueTree.ForcedMember.At(binding :: path, memberEvaluator.Run) }
+                let root = LiveValueTree.buildValueNodeWith walk binding value
+                send (MemberResult(id, MemberShown({ Name = binding; TypeSignature = signature; Root = root }, containment)))
+              with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+            Thread(walkAgain, IsBackground = true, Name = "sagefs-member-click").Start()
         | RunCheck(id, text) ->
           let diagnostics = try FcsQueries.check session text with _ -> []
           send (CheckResult(id, diagnostics))
@@ -272,6 +304,7 @@ let private run (fsiArgs: string list) : int =
       | Result.Ok(ReadFlag(id, name)) -> enqueue HostLimits.AskedOther id (RunReadFlag(id, name))
       | Result.Ok(ReadValue(id, name)) -> enqueue HostLimits.AskedOther id (RunReadValue(id, name))
       | Result.Ok(ReadLiveValues(id, generation)) -> enqueue HostLimits.AskedOther id (RunReadLiveValues(id, generation))
+      | Result.Ok(EvaluateMember(id, binding, path)) -> enqueue HostLimits.AskedOther id (RunEvaluateMember(id, binding, path))
       | Result.Ok(Check(id, text)) -> enqueue HostLimits.AskedOther id (RunCheck(id, text))
       | Result.Ok(CheckWithSymbols(id, filePath, text)) -> enqueue HostLimits.AskedOther id (RunCheckWithSymbols(id, filePath, text))
       | Result.Ok(Complete(id, text, caret)) -> enqueue HostLimits.AskedOther id (RunComplete(id, text, caret))
