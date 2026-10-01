@@ -183,12 +183,6 @@ module DaemonState =
 
   let defaultMcpPort = 37749
 
-  let jsonOptions =
-    JsonSerializerOptions(
-      PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-      WriteIndented = true
-    )
-
   let isProcessAlive (pid: int) =
     try
       let p = System.Diagnostics.Process.GetProcessById(pid)

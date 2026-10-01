@@ -18,9 +18,7 @@ let private strayPattern =
 
 /// What each file may still do itself. Ratchet down, never up.
 let private budgets : (string * int) list =
-  [ "SageFs.Core/DaemonOwnership.fs", 5
-    "SageFs.Core/DaemonState.fs", 1
-    "SageFs.Core/DevReload.fs", 1
+  [ "SageFs.Core/DevReload.fs", 1
     "SageFs.Core/Features/KeptState.fs", 2
     "SageFs.Core/SessionOperations.fs", 1
     "SageFs.Core/SettingsStore.fs", 3

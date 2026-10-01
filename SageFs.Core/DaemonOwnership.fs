@@ -2,7 +2,6 @@ module SageFs.DaemonOwnership
 
 open System
 open System.IO
-open System.Text.Json
 
 /// Ownership rule 2 (multi-agent vision §3.1): every externally-spawned
 /// daemon gets an owner or a TTL. `sagefs --owner-pid <pid> [--owner-start
@@ -192,7 +191,8 @@ type DaemonInfoFile = {
 }
 
 module DaemonInfoFile =
-  let jsonOptions = JsonSerializerOptions(WriteIndented = true)
+  /// Indented, keys as written: a person reads this file when a daemon wedges.
+  let private profile = Json.indented Json.standard
 
   let fileName = "daemon-info.json"
 
@@ -205,20 +205,36 @@ module DaemonInfoFile =
     Directory.CreateDirectory(dataDir) |> ignore
     let target = path dataDir
     let tmp = target + ".tmp"
-    File.WriteAllText(tmp, JsonSerializer.Serialize(info, jsonOptions))
+    File.WriteAllText(tmp, Json.serialize profile info)
     File.Move(tmp, target, true)
 
-  let tryRead (dataDir: string) : DaemonInfoFile option =
+  /// The file's text for an info, for a registry entry that is the same document.
+  let render (info: DaemonInfoFile) : string = Json.serialize profile info
+
+  /// Read one daemon-info document. A file that cannot be read or is not a daemon-info is an
+  /// `Error` naming the file and why.
+  let read (file: string) : Result<DaemonInfoFile, SageFsError> =
     try
-      let p = path dataDir
-      match File.Exists p with
-      | false -> None
-      | true ->
-        let info = JsonSerializer.Deserialize<DaemonInfoFile>(File.ReadAllText p, jsonOptions)
-        match obj.ReferenceEquals(info, null) with
-        | true -> None
-        | false -> Some info
-    with _ -> None
+      Json.deserialize<DaemonInfoFile> profile (File.ReadAllText file)
+      |> Result.mapError (fun error -> SageFsError.JsonParseError(file, JsonError.describe error))
+    with
+    | :? IOException as ex -> Result.Error (SageFsError.JsonParseError(file, sprintf "could not be read: %s" ex.Message))
+    | :? UnauthorizedAccessException as ex -> Result.Error (SageFsError.JsonParseError(file, sprintf "could not be read: %s" ex.Message))
+
+  /// `read`, for a caller that treats a file it cannot use as "no daemon here". The reason goes to
+  /// stderr so a skipped file is never silent.
+  let tryReadFile (file: string) : DaemonInfoFile option =
+    match read file with
+    | Result.Ok info -> Some info
+    | Result.Error error ->
+      eprintfn "SageFs: skipping a daemon-info file: %s" (SageFsError.describe error)
+      None
+
+  let tryRead (dataDir: string) : DaemonInfoFile option =
+    let p = path dataDir
+    match File.Exists p with
+    | false -> None
+    | true -> tryReadFile p
 
   let delete (dataDir: string) : unit =
     try
@@ -246,7 +262,7 @@ let registerSpawned (realSageFsDir: string) (info: DaemonInfoFile) : unit =
   Directory.CreateDirectory dir |> ignore
   let target = Path.Combine(dir, sprintf "%d.json" info.Pid)
   let tmp = target + ".tmp"
-  File.WriteAllText(tmp, JsonSerializer.Serialize(info, DaemonInfoFile.jsonOptions))
+  File.WriteAllText(tmp, DaemonInfoFile.render info)
   File.Move(tmp, target, true)
 
 let unregisterSpawned (realSageFsDir: string) (pid: int) : unit =
@@ -258,12 +274,7 @@ let unregisterSpawned (realSageFsDir: string) (pid: int) : unit =
   with _ -> ()
 
 let private tryReadRegistryEntry (file: string) : DaemonInfoFile option =
-  try
-    let info = JsonSerializer.Deserialize<DaemonInfoFile>(File.ReadAllText file, DaemonInfoFile.jsonOptions)
-    match obj.ReferenceEquals(info, null) with
-    | true -> None
-    | false -> Some info
-  with _ -> None
+  DaemonInfoFile.tryReadFile file
 
 /// Every daemon-info known on this machine: the primary daemon's own
 /// (directly under `realSageFsDir`) plus every registered spawned daemon
