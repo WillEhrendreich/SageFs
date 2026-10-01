@@ -33,6 +33,14 @@ let PickerOpenMs = 5000
 [<Literal>]
 let PollMs = 100
 
+/// How many matches of a click target are tried before the click gives up.
+[<Literal>]
+let ClickCandidates = 6
+
+/// How long one candidate gets to become clickable.
+[<Literal>]
+let ClickTryMs = 2000.0
+
 let private sleep (ms: int) : Task = Task.Delay ms
 
 let private brief (c: Cdp.Connection) : Task<string> =
@@ -182,16 +190,36 @@ let private click (c: Cdp.Connection) (target: string) : Task<Outcome> =
         let! b = brief c
         return DriveFailed(sprintf "nothing visible matches \"%s\" (by label, text or title). Try \"snapshot\" to see the names on screen.\n%s" target b)
       | Some(how, loc, n) ->
-        let first = loc.First
-        let! label = first.GetAttributeAsync "aria-label"
-        let! inner = first.InnerTextAsync()
-        let described = match String.IsNullOrWhiteSpace(defaultArg (Option.ofObj label) "") with | false -> defaultArg (Option.ofObj label) "" | true -> inner
-        match Guard.check described with
-        | Result.Error e -> return Refused e
-        | Ok() ->
-          do! first.ClickAsync()
-          let many = match n with | 1 -> "" | k -> sprintf " (%d matched, clicked the first; use longer text to pick another)" k
-          return! done' c (sprintf "clicked \"%s\" [%s]%s" (described.Trim().Replace('\n', ' ')) how many)
+        // Try the matches in order until one can actually be clicked: the first one can sit
+        // behind the tab strip (the code lens above line 1 does), and Playwright then waits
+        // out its whole timeout on an element something else covers.
+        let mutable clicked : (string * int) option = None
+        let mutable refusal : string option = None
+        let mutable lastError = ""
+        for i in 0 .. (min n ClickCandidates) - 1 do
+          match clicked, refusal with
+          | None, None ->
+            let candidate = loc.Nth i
+            let! label = candidate.GetAttributeAsync "aria-label"
+            let! inner = candidate.InnerTextAsync()
+            let described = match String.IsNullOrWhiteSpace(defaultArg (Option.ofObj label) "") with | false -> defaultArg (Option.ofObj label) "" | true -> inner
+            match Guard.check described with
+            | Result.Error e -> refusal <- Some e
+            | Ok() ->
+              try
+                do! candidate.ClickAsync(LocatorClickOptions(Timeout = float32 ClickTryMs))
+                clicked <- Some(described, i)
+              with :? PlaywrightException as ex ->
+                lastError <- ex.Message.Split('\n') |> Array.tryHead |> Option.defaultValue ex.Message
+          | _ -> ()
+        match clicked, refusal with
+        | _, Some e -> return Refused e
+        | Some(described, i), None ->
+          let which = match n, i with | 1, _ -> "" | k, 0 -> sprintf " (%d matched, clicked the first; use longer text to pick another)" k | k, j -> sprintf " (%d matched, match %d was the first one that could be clicked)" k (j + 1)
+          return! done' c (sprintf "clicked \"%s\" [%s]%s" (described.Trim().Replace('\n', ' ')) how which)
+        | None, None ->
+          let! b = brief c
+          return DriveFailed(sprintf "found %d match(es) for \"%s\" but none could be clicked (%s).\n%s" n target lastError b)
   }
 
 // --- palette and quick open --------------------------------------------------
@@ -259,11 +287,39 @@ let private snapshot (c: Cdp.Connection) : Task<Outcome> =
     return Output(render f)
   }
 
-let private shot (c: Cdp.Connection) (screen: Screen) : Task<Outcome> =
+/// How often an expect-text looks at the window again.
+[<Literal>]
+let ExpectPollMs = 500
+
+/// The run directory the harness named, when it did. A shot's activation line and a tour's file
+/// changes need it; a plain call without it still works.
+let private runDirOf () : string option =
+  match DriverEnv.read RunDir with
+  | Ok d -> Some d
+  | Result.Error _ -> None
+
+/// `shot <name> [--region part]...`: the numbered PNG, its crops and the text sidecar.
+let private shot (c: Cdp.Connection) (screen: Screen) (name: string) (regions: Region list) : Task<Outcome> =
   task {
-    let! _ = c.Page.ScreenshotAsync(PageScreenshotOptions(Path = screen.ImagePath))
-    let! b = brief c
-    return Output(sprintf "screenshot saved: %s\n%s" screen.ImagePath b)
+    let screensDir = defaultArg (DriverEnv.read ScreensDir |> Result.toOption) (IO.Path.GetDirectoryName screen.TextPath)
+    match Shot.Reservation.reserve (Shot.shotsDir screensDir) name with
+    | Result.Error e -> return DriveFailed e
+    | Ok r ->
+      let! written = Shot.capture c (defaultArg (runDirOf ()) "") r regions
+      let! b = brief c
+      return Output(sprintf "shot saved:\n%s\n%s" written b)
+  }
+
+/// Sets the window's size and says what it is afterwards, so a failed resize is not silent.
+let private resize (c: Cdp.Connection) (width: int) (height: int) : Task<Outcome> =
+  task {
+    do! c.Page.SetViewportSizeAsync(width, height)
+    do! sleep ActionSettleMs
+    let! actual = c.Page.EvaluateAsync<string>(Shot.ReadInnerSize)
+    let wanted = sprintf "%dx%d" width height
+    match actual = wanted with
+    | true -> return Output(sprintf "window is now %s" actual)
+    | false -> return DriveFailed(sprintf "asked for %s but the window reports %s" wanted actual)
   }
 
 let private waitSeconds (c: Cdp.Connection) (seconds: int) : Task<Outcome> =
@@ -275,12 +331,14 @@ let private waitSeconds (c: Cdp.Connection) (seconds: int) : Task<Outcome> =
 
 /// Runs one command. Any Playwright failure becomes a `DriveFailed` that says what
 /// was being done, never a stack trace.
-let private run (c: Cdp.Connection) (screen: Screen) (cmd: VscCommand) : Task<Outcome> =
+let rec private run (c: Cdp.Connection) (screen: Screen) (cmd: VscCommand) : Task<Outcome> =
   task {
     try
       match cmd with
       | Snapshot -> return! snapshot c
-      | Shot -> return! shot c screen
+      | Shot(name, regions) -> return! shot c screen name regions
+      | Resize(w, h) -> return! resize c w h
+      | Tour file -> return! runTour c screen file
       | Wait s -> return! waitSeconds c s
       | Click target -> return! click c target
       | Palette text -> return! palette c text
@@ -298,6 +356,81 @@ let private run (c: Cdp.Connection) (screen: Screen) (cmd: VscCommand) : Task<Ou
     with ex -> return DriveFailed(sprintf "%s failed: %s" (verb cmd) ex.Message)
   }
 
+// --- tours ---------------------------------------------------------------------
+
+/// Waits until the window's text contains `text` (any case), for up to `seconds`.
+and private expectText (c: Cdp.Connection) (text: string) (seconds: int) : Task<Result<unit, string>> =
+  task {
+    let started = Diagnostics.Stopwatch.StartNew()
+    let mutable found = false
+    let mutable last = ""
+    while not found && started.Elapsed.TotalSeconds < float seconds do
+      let! f = Cdp.facts c
+      last <- render f
+      match last.Contains(text, StringComparison.OrdinalIgnoreCase) with
+      | true -> found <- true
+      | false -> do! sleep ExpectPollMs
+    return
+      match found with
+      | true -> Ok()
+      | false -> Result.Error(sprintf "the window never showed \"%s\" within %d s" text seconds)
+  }
+
+/// Changes a workspace file on disk, once, and only if the text to find occurs exactly once.
+and private replaceInFile (path: string) (find: string) (replacement: string) : Result<string, string> =
+  match runDirOf () with
+  | None -> Result.Error "replace needs LEM_RUN_DIR (the harness sets it)"
+  | Some runDir ->
+    let full = IO.Path.Combine(runDir, "w", path)
+    match IO.File.Exists full with
+    | false -> Result.Error(sprintf "%s does not exist in the workspace" path)
+    | true ->
+      let text = IO.File.ReadAllText full
+      let count = (text.Length - text.Replace(find, "").Length) / find.Length
+      match count with
+      | 1 ->
+        IO.File.WriteAllText(full, text.Replace(find, replacement))
+        Ok(sprintf "changed %s" path)
+      | 0 -> Result.Error(sprintf "no match for \"%s\" in %s" find path)
+      | n -> Result.Error(sprintf "%d matches for \"%s\" in %s; refusing to guess which" n find path)
+
+/// Runs a tour file in order. A step that fails does not stop the tour (the later shots still
+/// matter to a reviewer), but the shots after it say so, and the whole call fails at the end.
+and private runTour (c: Cdp.Connection) (screen: Screen) (file: string) : Task<Outcome> =
+  task {
+    match IO.File.Exists file with
+    | false -> return BadUsage(sprintf "no tour file at %s" file)
+    | true ->
+      match Tour.parse (IO.File.ReadAllText file) with
+      | Result.Error errors -> return BadUsage(sprintf "%s does not parse:\n%s" file (String.Join("\n", errors)))
+      | Ok tour ->
+        let log = ResizeArray<string>()
+        let mutable failures = 0
+        let total = List.length tour.Steps
+        for (i, placed) in tour.Steps |> List.indexed do
+          let label = sprintf "[%d/%d] line %d  %s" (i + 1) total placed.Line (Tour.describe placed.Step)
+          let! result =
+            task {
+              match placed.Step with
+              | Tour.Run cmd -> return! run c screen cmd
+              | Tour.ExpectText(text, seconds) ->
+                let! r = expectText c text seconds
+                return (match r with | Ok() -> Output "found" | Result.Error e -> DriveFailed e)
+              | Tour.Replace(path, find, replacement) ->
+                return (match replaceInFile path find replacement with | Ok m -> Output m | Result.Error e -> DriveFailed e)
+            }
+          match result with
+          | Output text ->
+            // Only the first line of a step's answer: the shots carry the detail.
+            log.Add(sprintf "%s\n    ok: %s" label (text.Split('\n')[0]))
+          | other ->
+            failures <- failures + 1
+            log.Add(sprintf "%s\n    %s" label (Outcome.text other))
+        let summary = sprintf "tour %s: %d step(s), %d failed" (IO.Path.GetFileName file) total failures
+        let body = String.Join("\n", log) + "\n" + summary
+        return (match failures with | 0 -> Output body | _ -> DriveFailed body)
+  }
+
 /// The `vsc` command line: parse, connect, run, and leave a numbered transcript.
 /// Every call is logged, including the ones that fail to parse.
 let cli (args: string list) : Task<Outcome> =
@@ -309,6 +442,7 @@ let cli (args: string list) : Task<Outcome> =
       match Screens.reserve screensDir with
       | Result.Error e -> return DriveFailed e
       | Ok screen ->
+        let startedMs = Timeline.nowMs ()
         let! outcome =
           task {
             match parse args, Int32.TryParse portText with
@@ -323,5 +457,12 @@ let cli (args: string list) : Task<Outcome> =
                 finally c.Playwright.Dispose()
           }
         Screens.write screen ("vsc" :: args) outcome
+        Timeline.append
+          { StartMs = startedMs
+            EndMs = Timeline.nowMs ()
+            Editor = "vsc"
+            Command = (match args with | v :: _ -> v | [] -> "")
+            Args = (match args with | _ :: rest -> rest | [] -> [])
+            Outcome = Outcome.label outcome }
         return outcome
   }

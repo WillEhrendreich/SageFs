@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# scripts/lemmings/ui/vscode/run-vscode-tour <tour-file> [<more tour files>...]
+#
+# Runs tour files (TOURS.md) against a fresh VS Code with the SageFs extension, as a client of the
+# shared SageFs daemon, for the automated design review. No model is called. Each tour gets its own
+# run directory, /tmp/lem/tour-<tour-name>-<nn>, with the numbered shots in out/shots and the
+# driver's call log in out/screens. Same isolation as run-vscode-lemming (see its header): Xvfb
+# on :80 and up, VS Code in bubblewrap, exact pids only, `hyprctl clients` before and after.
+#
+# Exit: 0 every tour ran and nothing was left behind; 1 a tour step failed; 5 a window leaked onto
+# the real desktop or a session was left on the dashboard.
+set -euo pipefail
+
+[ $# -ge 1 ] || { echo "usage: run-vscode-tour <tour-file>..." >&2; exit 2; }
+HERE=$(cd "$(dirname "$0")" && pwd)
+LEMDIR=$(cd "$HERE/../.." && pwd)
+. "$LEMDIR/lib-cmd.sh"
+. "$HERE/lib-vscode.sh"
+
+lem_use_shared_daemon
+vsc_ensure_driver
+STATUS=0
+
+run_one() {
+  local tour=$1 name id run w out cdp ready tour_exit leak=no left
+  name=$(basename "$tour" .tour)
+  id=$(lem_run_id tour "$name"); run=$LEM_ROOT/$id; w=$run/w; out=$run/out
+  mkdir -p "$w" "$out/screens" "$out/shots"
+  cp -r --reflink=auto "$LEMDIR/fixtures/demoenv/." "$w/"
+  cp "$tour" "$out/tour.txt"
+  echo "lem: tour $name in $run  dashboard http://localhost:$LEM_DASH_PORT/dashboard" >&2
+
+  vsc_prepare_extension "$run"; vsc_write_profile "$run"
+  vsc_desktop_windows "$out/windows.before"
+  local xvfb_pid="" code_pid=""
+  vsc_start_xvfb "$run" || { echo "lem: no display" >&2; return 4; }
+  xvfb_pid=$VSC_XVFB_PID
+  cdp=$(vsc_free_port)
+  vsc_start_code "$run" "$cdp" "$run/.lem/ext/sagefs"; code_pid=$VSC_PID
+  printf '%s %s %s %s\n' "$VSC_DISPLAY" "$xvfb_pid" "$code_pid" "$cdp" > "$out/window.pids"
+
+  if vsc_wait_cdp "$cdp" 60 && dotnet "$VSC_DRIVE_BIN/LemDrive.dll" host ready --cdp-port "$cdp" --wait 90 > "$out/ready.snapshot.txt" 2>&1; then
+    set +e
+    LEM_CDP_PORT=$cdp LEM_SCREENS_DIR="$out/screens" LEM_SHOTS_DIR="$out/shots" LEM_RUN_DIR="$run" NODE_NO_WARNINGS=1 \
+      dotnet "$VSC_DRIVE_BIN/LemDrive.dll" vsc tour "$tour" > "$out/tour.out" 2>&1
+    tour_exit=$?
+    set -e
+  else
+    echo "lem: the SageFs extension never activated in $name" >&2; tour_exit=4
+  fi
+
+  # Whatever the tour made on the shared daemon is stopped by id, then checked gone.
+  lem_cleanup_sessions "$w"
+  left=$(lem_sessions_under "$w" 2>/dev/null | grep -c . || true)
+  local stop_code stop_x
+  stop_code=$(vsc_stop_pid "$code_pid" "$LEM_CODE_STOP_SECONDS"); stop_x=$(vsc_stop_pid "$xvfb_pid" 5)
+  vsc_desktop_windows "$out/windows.after"
+  vsc_check_no_leak "$out/windows.before" "$out/windows.after" || leak=yes
+  printf 'tourExit=%s windowStop=%s displayStop=%s desktopLeak=%s cleanup=%s sessionsLeft=%s\n' \
+    "$tour_exit" "$stop_code" "$stop_x" "$leak" "$LEM_CLEANUP" "$left" > "$out/teardown.txt"
+  cat "$out/tour.out" 2>/dev/null | tail -25
+  echo "lem: shots in $out/shots ($(ls "$out/shots" 2>/dev/null | grep -c '\.png$' || true) png)" >&2
+  [ "$leak" = no ] && [ "$left" = 0 ] || return 5
+  return "$tour_exit"
+}
+
+for tour in "$@"; do
+  run_one "$tour" || { code=$?; [ "$code" -gt "$STATUS" ] && STATUS=$code; }
+done
+exit "$STATUS"

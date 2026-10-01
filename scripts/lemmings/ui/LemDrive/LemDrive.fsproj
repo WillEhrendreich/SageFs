@@ -25,11 +25,14 @@
 
   <ItemGroup>
     <Compile Include="Outcome.fs" />
+    <Compile Include="Timeline.fs" />
     <Compile Include="Chord.fs" />
     <Compile Include="Guard.fs" />
     <Compile Include="VscCommand.fs" />
+    <Compile Include="Tour.fs" />
     <Compile Include="Snapshot.fs" />
     <Compile Include="Cdp.fs" />
+    <Compile Include="Shot.fs" />
     <Compile Include="Vsc.fs" />
     <Compile Include="Daemon.fs" />
     <Compile Include="Shim.fs" />

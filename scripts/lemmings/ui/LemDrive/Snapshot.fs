@@ -193,3 +193,56 @@ let render (f: Facts) : string =
     |> Option.defaultValue [ "--- side bar: closed ---" ]
   let panel = f.Panel |> Option.map renderPanel |> Option.defaultValue []
   String.Join("\n", header f @ [ activity ] @ tabs @ editor @ side @ panel @ overlays f)
+
+// --- the sidecar a design review reads beside a screenshot ------------------------
+
+/// What a shot's text file says about the moment it was taken.
+type Sidecar =
+  { Name: string
+    Regions: string list
+    Width: int
+    Height: int
+    TakenAt: string
+    Activation: string
+    Facts: Facts }
+
+/// The rows of every SageFs view in the side bar, or why there are none to show.
+let private viewLines (f: Facts) : string list =
+  match f.SideBar with
+  | None -> [ "  (the side bar is closed in this shot, so no view is visible)" ]
+  | Some s ->
+    match s.Panes with
+    | [] -> [ sprintf "  (the \"%s\" side bar has no views)" s.Title ]
+    | panes ->
+      panes
+      |> List.collect (fun p ->
+        let rows, hidden = takeRows p.Rows
+        let head = sprintf "  [%s] %s, %d row(s)" p.Title (match p.Expanded with | true -> "expanded" | false -> "collapsed") (List.length p.Rows)
+        let body = match String.IsNullOrWhiteSpace p.Body with | true -> [] | false -> [ sprintf "    text: %s" (oneLine p.Body) ]
+        head :: body @ (rows |> List.map (fun r -> "  " + renderRow r)) @ moreLine hidden)
+
+/// The text file beside NNN-name.png: the state a reviewer needs to cross-check the image,
+/// then the same text snapshot a model would have read at that moment.
+let renderSidecar (s: Sidecar) : string =
+  let f = s.Facts
+  let regions = match s.Regions with | [] -> "full window" | rs -> "full window, plus " + String.Join(", ", rs)
+  let status = f.StatusBar |> List.map (fun i -> sprintf "  - %s" (oneLine i))
+  let toasts =
+    match f.Toasts with
+    | [] -> [ "  (none showing)" ]
+    | ts -> ts |> List.map renderToast
+  String.Join(
+    "\n",
+    [ sprintf "# shot %s" s.Name
+      sprintf "taken: %s" s.TakenAt
+      sprintf "window: %dx%d (%s)" s.Width s.Height regions
+      ""
+      "## extension state"
+      sprintf "activation: %s" s.Activation
+      "status bar items:" ]
+    @ status
+    @ [ "SageFs views:" ]
+    @ viewLines f
+    @ [ "notifications:" ]
+    @ toasts
+    @ [ ""; "## text snapshot (the accessibility view of the same moment)"; render f; "" ])
