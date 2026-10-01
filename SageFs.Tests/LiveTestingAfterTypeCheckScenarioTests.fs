@@ -301,6 +301,86 @@ let tests =
   ]
 
 // ---------------------------------------------------------------------------
+// The keystroke trivia gate. A keystroke whose buffer normalizes to the last
+// one cancels the type-check and queues nothing, so the normalizer may only
+// drop what F# ignores. F# is offside-sensitive: where a token sits on its
+// line, and whether two tokens touch, changes what the program means.
+// ---------------------------------------------------------------------------
+
+let private triviaStart = System.DateTimeOffset(2026, 10, 1, 0, 0, 0, System.TimeSpan.Zero)
+
+let private isFcsRequest effect =
+  match effect with
+  | TestCycleEffect.RequestFcsTypeCheck _ -> true
+  | _ -> false
+
+/// Types `previous`, lets its check fire (so nothing is pending), types `next`,
+/// and says whether a type-check of `next` is requested.
+let private checkRequestedAfterEdit (previous: string) (next: string) : bool =
+  let s1 = LiveTestCycleState.empty |> LiveTestCycleState.onKeystroke previous "Lib.fs" triviaStart
+  let _, s2 = s1 |> LiveTestCycleState.tick (triviaStart + DebounceClock.pastFcs)
+  let editedAt = triviaStart + DebounceClock.pastFcs + DebounceClock.keyGap
+  let s3 = s2 |> LiveTestCycleState.onKeystroke next "Lib.fs" editedAt
+  let effects, _ = s3 |> LiveTestCycleState.tick (editedAt + DebounceClock.pastFcs)
+  List.exists isFcsRequest effects
+
+[<Tests>]
+let triviaNormalizationTests =
+  testList "Live testing keystroke trivia gate" [
+    // Moving a line into or out of an offside block changes which expression
+    // it belongs to. Dropping every whitespace character made these identical.
+    testCase "moving a line into an offside block is a change and gets type-checked" <| fun _ ->
+      checkRequestedAfterEdit
+        "let f x =\n  if x then\n    printfn \"a\"\n  printfn \"b\"\n"
+        "let f x =\n  if x then\n    printfn \"a\"\n    printfn \"b\"\n"
+      |> Expect.isTrue "the second printfn now runs only when x is true"
+
+    testCase "moving a line out of an offside block is a change and gets type-checked" <| fun _ ->
+      checkRequestedAfterEdit
+        "let f x =\n  if x then\n    printfn \"a\"\n    printfn \"b\"\n"
+        "let f x =\n  if x then\n    printfn \"a\"\n  printfn \"b\"\n"
+      |> Expect.isTrue "the second printfn now runs whatever x is"
+
+    testCase "joining two lines is a change and gets type-checked" <| fun _ ->
+      checkRequestedAfterEdit
+        "let f g x =\n  g\n  x\n"
+        "let f g x =\n  g x\n"
+      |> Expect.isTrue "two statements became one application"
+
+    testCase "a space between tokens is a change and gets type-checked" <| fun _ ->
+      checkRequestedAfterEdit "let y = x -1\n" "let y = x - 1\n"
+      |> Expect.isTrue "an application of x to -1 became a subtraction"
+
+    // What F# really ignores still does not start a run.
+    testCase "a comment, trailing spaces, blank lines and CRLF are still trivia" <| fun _ ->
+      let previous = "let f x =\n  if x then\n    1\n  else\n    2\n"
+      [ "let f x = // pick one\n  if x then\n    1\n  else\n    2\n"
+        "let f x =\n  if x then   \n    1\n  else\n    2\n"
+        "let f x =\n\n  if x then\n    1\n\n  else\n    2\n"
+        "let f x =\r\n  if x then\r\n    1\r\n  else\r\n    2\r\n"
+        "let f x =\n  if x   then\n    1\n  else\n    2\n"
+        "let f x = (* why *)\n  if x then\n    1\n  else\n    2\n" ]
+      |> List.iter (fun next ->
+        checkRequestedAfterEdit previous next
+        |> Expect.isFalse (sprintf "this edit moves no token, so no check: %A" next))
+
+    // A real edit followed, inside its debounce window, by a comment keystroke:
+    // the comment keystroke is trivia relative to the buffer BEFORE it, which was
+    // never checked. Cancelling the pending check drops the real edit.
+    testCase "a comment typed right after a real edit does not cancel that edit's check" <| fun _ ->
+      let s1 = LiveTestCycleState.empty |> LiveTestCycleState.onKeystroke "let add a b = a + b\n" "Lib.fs" triviaStart
+      let _, s2 = s1 |> LiveTestCycleState.tick (triviaStart + DebounceClock.pastFcs)
+      let editedAt = triviaStart + DebounceClock.pastFcs + DebounceClock.keyGap
+      let s3 = s2 |> LiveTestCycleState.onKeystroke "let add a b = a - b\n" "Lib.fs" editedAt
+      let commentedAt = editedAt + DebounceClock.keyGap
+      let s4 = s3 |> LiveTestCycleState.onKeystroke "let add a b = a - b // x\n" "Lib.fs" commentedAt
+      let effects, _ = s4 |> LiveTestCycleState.tick (commentedAt + DebounceClock.pastFcs)
+      effects
+      |> List.exists isFcsRequest
+      |> Expect.isTrue "the `+` to `-` edit must still be type-checked"
+  ]
+
+// ---------------------------------------------------------------------------
 // The live loop must never turn "the narrow found nothing" into a green pane.
 // These drive `LiveTestCycleState.handleFcsResult`, the function the keystroke
 // path really calls, so `onFcsComplete` (name diff, graph update) runs first
