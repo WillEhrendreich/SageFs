@@ -1,7 +1,5 @@
 namespace SageFs.Server
 
-open System.Text.Json
-open System.Text.Json.Serialization
 open SageFs
 
 /// The SSE `event:` name a case rides on. Editor clients (the in-repo VS Code
@@ -99,26 +97,24 @@ module SseEvent =
   /// Preserved for the existing wire-contract name ("session" channel only).
   let sseEventTypeSession = channelName SseChannel.Session
 
-  let private jsonOpts =
-    let o = JsonSerializerOptions()
-    o.DefaultIgnoreCondition <- JsonIgnoreCondition.WhenWritingNull
-    o
+  /// Keys as written, compact, and a null or `None` field is left out of the payload.
+  let private payloadProfile = Json.omitNulls Json.standard
+
+  let private write (payload: 'T) : string = Json.serialize payloadProfile payload
 
   let private sid (s: WorkerProtocol.SessionId) = WorkerProtocol.SessionId.value s
 
-  /// `jsonOpts` here has no F# converter registered (only
-  /// `DefaultIgnoreCondition`), so an `Option` field must be converted to a
-  /// nullable `obj` before serializing — same discipline as `diagnosticJson`'s
-  /// `FileName |> Option.toObj` below.
+  /// `reason` is an `Option`; the profile's F# converter writes `Some` as the
+  /// value and leaves `None` out.
   let private sessionHealthJson (health: SessionHealth) =
     {| status = SessionHealth.label health
-       reason = SessionHealth.reason health |> Option.toObj |}
+       reason = SessionHealth.reason health |}
 
   let private diagnosticJson (d: WarmUp.WarmupFcsDiagnostic) =
     {| message = d.Message
        severity = d.Severity
        errorNumber = d.ErrorNumber
-       fileName = d.FileName |> Option.toObj
+       fileName = d.FileName
        startLine = d.StartLine
        endLine = d.EndLine
        startColumn = d.StartColumn
@@ -157,7 +153,7 @@ module SseEvent =
 
   /// Serialize an SseEvent to its JSON payload (the SSE frame's `data:`
   /// body — not the envelope). ONE function, ONE technique
-  /// (JsonSerializer over anonymous records) for every case — replacing the
+  /// (`SageFs.Json` over anonymous records) for every case — replacing the
   /// former split between DaemonStateChange's sprintf string-templating and
   /// SessionEvents' hand-rolled Utf8JsonWriter. Wire shapes match the
   /// pre-unification output field-for-field (see DaemonStateChangeContractTests,
@@ -166,57 +162,57 @@ module SseEvent =
     match evt with
     // ── State channel ──
     | SessionProgress ->
-      JsonSerializer.Serialize({| sessionProgress = true |}, jsonOpts)
+      write({| sessionProgress = true |})
     | SessionReady s ->
-      JsonSerializer.Serialize({| sessionReady = sid s |}, jsonOpts)
+      write({| sessionReady = sid s |})
     | SessionSwitched s ->
-      JsonSerializer.Serialize({| sessionSwitched = sid s |}, jsonOpts)
+      write({| sessionSwitched = sid s |})
     | HotReloadChanged s ->
-      JsonSerializer.Serialize({| hotReloadChanged = true; sessionId = sid s |}, jsonOpts)
+      write({| hotReloadChanged = true; sessionId = sid s |})
     | ReloadReported (s, reload) ->
-      JsonSerializer.Serialize({| reloadReported = SessionReload.toWire reload; sessionId = sid s |}, jsonOpts)
+      write({| reloadReported = SessionReload.toWire reload; sessionId = sid s |})
     | FileReloaded (s, path) ->
-      JsonSerializer.Serialize({| fileReloaded = path; sessionId = sid s |}, jsonOpts)
+      write({| fileReloaded = path; sessionId = sid s |})
     | SessionFaulted (s, error) ->
-      JsonSerializer.Serialize({| sessionFaulted = sid s; error = error |}, jsonOpts)
+      write({| sessionFaulted = sid s; error = error |})
     | ModelChanged (outputCount, diagCount) ->
-      JsonSerializer.Serialize({| outputCount = outputCount; diagCount = diagCount |}, jsonOpts)
+      write({| outputCount = outputCount; diagCount = diagCount |})
     | WarmupProgress (s, step, total, _msg) ->
-      JsonSerializer.Serialize({| warmupProgress = true; sessionId = sid s; step = step; total = total |}, jsonOpts)
+      write({| warmupProgress = true; sessionId = sid s; step = step; total = total |})
     | SystemAlarm (phase, message) ->
-      JsonSerializer.Serialize({| systemAlarm = true; phase = phase; message = message |}, jsonOpts)
+      write({| systemAlarm = true; phase = phase; message = message |})
     | CohortChanged ->
-      JsonSerializer.Serialize({| cohortChanged = true |}, jsonOpts)
+      write({| cohortChanged = true |})
     // ── Session channel ──
     | WarmupContextSnapshot (s, ctx) ->
-      JsonSerializer.Serialize(
-        {| ``type`` = "warmup_context_snapshot"; sessionId = s; context = warmupContextJson ctx |}, jsonOpts)
+      write(
+        {| ``type`` = "warmup_context_snapshot"; sessionId = s; context = warmupContextJson ctx |})
     | HotReloadSnapshot (s, watchedFiles) ->
-      JsonSerializer.Serialize(
-        {| ``type`` = "hotreload_snapshot"; sessionId = s; watchedFiles = watchedFiles |}, jsonOpts)
+      write(
+        {| ``type`` = "hotreload_snapshot"; sessionId = s; watchedFiles = watchedFiles |})
     | HotReloadFileToggled (s, file, watched) ->
-      JsonSerializer.Serialize(
-        {| ``type`` = "hotreload_file_toggled"; sessionId = s; file = file; watched = watched |}, jsonOpts)
+      write(
+        {| ``type`` = "hotreload_file_toggled"; sessionId = s; file = file; watched = watched |})
     | SessionActivated s ->
-      JsonSerializer.Serialize({| ``type`` = "session_activated"; sessionId = s |}, jsonOpts)
+      write({| ``type`` = "session_activated"; sessionId = s |})
     | SessionCreated (s, projectNames) ->
-      JsonSerializer.Serialize(
-        {| ``type`` = "session_created"; sessionId = s; projectNames = projectNames |}, jsonOpts)
+      write(
+        {| ``type`` = "session_created"; sessionId = s; projectNames = projectNames |})
     | SessionStopped s ->
-      JsonSerializer.Serialize({| ``type`` = "session_stopped"; sessionId = s |}, jsonOpts)
+      write({| ``type`` = "session_stopped"; sessionId = s |})
     | WorkflowSwitching (s, fromLabel, toLabel) ->
-      JsonSerializer.Serialize(
-        {| ``type`` = "workflow_switching"; sessionId = s; fromWorkflow = fromLabel; toWorkflow = toLabel |}, jsonOpts)
+      write(
+        {| ``type`` = "workflow_switching"; sessionId = s; fromWorkflow = fromLabel; toWorkflow = toLabel |})
     | WorkflowSwitched (s, label, replCapability, hotReloadActive) ->
-      JsonSerializer.Serialize(
+      write(
         {| ``type`` = "workflow_switched"
            sessionId = s
            workflowLabel = label
            replCapability = replCapability
-           hotReloadActive = hotReloadActive |}, jsonOpts)
+           hotReloadActive = hotReloadActive |})
     | SessionHealthChanged (s, health) ->
-      JsonSerializer.Serialize(
-        {| ``type`` = "session_health_changed"; sessionId = s; health = sessionHealthJson health |}, jsonOpts)
+      write(
+        {| ``type`` = "session_health_changed"; sessionId = s; health = sessionHealthJson health |})
 
   /// Format a complete SSE frame (`event: ...\ndata: ...\n\n`) for an event.
   let format (evt: SseEvent) : string =
