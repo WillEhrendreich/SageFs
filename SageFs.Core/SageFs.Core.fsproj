@@ -18,6 +18,10 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- First: it depends on nothing, and files compiled early (Cohort, OwnerMonitor, TailBuffer,
+             WorkflowTypes, RestartPolicy) name their durations from it. It is also embedded into the
+             FSI host, which compiles it without SageFs.Core, so it must stay free of other SageFs files. -->
+        <Compile Include="Timeouts.fs" />
         <Compile Include="Editing.fs" />
         <Compile Include="TestProviderTypes.fs" />
         <Compile Include="WorkflowTypes.fs" />
@@ -41,7 +45,6 @@
         <Compile Include="MemberTable.fs" />
         <Compile Include="Tutorial.fs" />
         <Compile Include="SageFsConfig.fs" />
-        <Compile Include="Timeouts.fs" />
         <Compile Include="Json.fs" />
         <Compile Include="UpdateCheck.fs" />
         <Compile Include="Settings.fs" />
