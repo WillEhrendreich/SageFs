@@ -540,7 +540,7 @@ let main args =
     printfn "       SageFs stop                     Stop running daemon"
     printfn "       SageFs status                   Show daemon info"
     printfn "       SageFs sweep [--kill]           Reap daemons whose owner process is gone"
-    printfn "       SageFs hygiene [--tidy]         Show the leftovers agents made (worktrees, gate checkouts, caches, temp dirs) and a plan to tidy them; --tidy runs only the safe part"
+    printfn "       SageFs hygiene [--tidy]         Show what agents left behind (worktrees, gate checkouts, caches, temp dirs) as a dry-run plan; --tidy runs only the safe part"
     printfn "       SageFs play <ledger.jsonl>      Replay a portable cohort ledger file offline"
     printfn ""
     printfn "Options:"

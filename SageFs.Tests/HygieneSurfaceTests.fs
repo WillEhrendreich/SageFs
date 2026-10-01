@@ -210,6 +210,24 @@ let toolTests =
       withLine |> Expect.stringContains "adds the line" "call get_workspace_hygiene"
     }
 
+    testTask "a status reply gets a workspace field once the repo is buried, keeps its other fields, and is left alone otherwise" {
+      use sb = new Sandbox()
+      let json = """{"scope":"Session","state":"Ready"}"""
+      let! (untouched: string) = McpHygiene.withHygieneForSession context "" sb.Repo json
+      untouched |> Expect.equal "no snapshot: the reply is exactly as it was" json
+      HygieneService.Cache.put
+        { Repo = sb.Repo
+          TakenAt = DateTime.UtcNow
+          Leftovers = []
+          Plan = Planner.plan []
+          Summary = summaryWith (Thresholds.leftoverWorktreeNudge + 3) 0L }
+      let! (buried: string) = McpHygiene.withHygieneForSession context "" sb.Repo json
+      let doc = System.Text.Json.JsonDocument.Parse buried
+      doc.RootElement.GetProperty("state").GetString() |> Expect.equal "the other fields are kept" "Ready"
+      doc.RootElement.GetProperty("workspace").GetString() |> Expect.stringContains "the line is there" "call get_workspace_hygiene"
+      doc.Dispose()
+    }
+
     testTask "a context that is not a running daemon never scans the machine for a reply" {
       let quiet = { context with Dispatch = None }
       McpHygiene.withHygieneLine quiet "/anywhere" "reply" |> Expect.equal "unchanged" "reply"

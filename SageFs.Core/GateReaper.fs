@@ -84,15 +84,20 @@ let entries (fs: GateFs) (gateDir: string) : GateEntry list =
     |> List.map (fun (rank, d) -> GateEntry.PassRecord(d, rank))
   (checkouts |> List.map GateEntry.Checkout) @ (tiers |> List.map GateEntry.TierClone) @ passes
 
-/// The pid of a gate run in progress, from the gate's `current` file ("pid sha"), when that process is alive.
-let runningGate (fs: GateFs) (gateDir: string) : int option =
+/// The gate run that is doing the reaping: the repo it is for, whose checkout it is about to use, and its own pid, which
+/// is already in the gate's `current` file by then and must not make everything look busy.
+type Invoker = { Repo: string; Pid: int }
+
+/// The pid of a gate run in progress, from the gate's `current` file ("pid sha"), when that process is alive and is not
+/// `ignoring` (the caller's own).
+let runningGate (fs: GateFs) (gateDir: string) (ignoring: int option) : int option =
   match fs.FirstLine(gateDir + "/" + Names.currentFile) with
   | None -> None
   | Some line ->
     match line.Split(' ') with
     | [| pid; _ |] ->
       match Int32.TryParse pid with
-      | true, p when fs.IsAlive p -> Some p
+      | true, p when fs.IsAlive p && ignoring <> Some p -> Some p
       | _ -> None
     | _ -> None
 
@@ -116,17 +121,17 @@ let describe
   (now: DateTime)
   (gateDir: string)
   (knownRepos: string list)
-  (invokingRepo: string option)
+  (invoker: Invoker option)
   (entry: GateEntry)
   : Subject =
   let dir = entryDir entry
   let name = Path.GetFileName dir
   let ownerName = (match entry with | GateEntry.TierClone _ -> Path.GetFileName(Path.GetDirectoryName dir) | _ -> name).Replace(Names.tiersSuffix, "")
-  let running = runningGate fs gateDir
+  let running = runningGate fs gateDir (invoker |> Option.map (fun i -> i.Pid))
   let owner = ownerRepo fs gateDir knownRepos ownerName
   let invoking =
-    match invokingRepo, entry with
-    | Some repo, (GateEntry.Checkout _ | GateEntry.TierClone _) when ownerName = Names.checkoutPrefix + repoKey repo -> [ InUseReason.InvokingGate repo ]
+    match invoker, entry with
+    | Some i, (GateEntry.Checkout _ | GateEntry.TierClone _) when ownerName = Names.checkoutPrefix + repoKey i.Repo -> [ InUseReason.InvokingGate i.Repo ]
     | _ -> []
   let lineage =
     match owner with
@@ -174,7 +179,7 @@ let private runGit (repo: string) (args: string list) : Outcome =
   with ex -> Outcome.Failed ex.Message
 
 /// The effects the gate's reap runs through the shared executor: only the file operations a gate leftover needs.
-let effects (fs: GateFs) (now: DateTime) (gateDir: string) (knownRepos: string list) (invokingRepo: string option) : Effects =
+let effects (fs: GateFs) (now: DateTime) (gateDir: string) (knownRepos: string list) (invoker: Invoker option) : Effects =
   let entryFor (target: Target) =
     match target with
     | Target.Directory dir -> entries fs gateDir |> List.tryFind (fun e -> entryDir e = dir)
@@ -183,7 +188,7 @@ let effects (fs: GateFs) (now: DateTime) (gateDir: string) (knownRepos: string l
       fun target ->
         match entryFor target with
         | None -> Rechecked.Gone
-        | Some entry -> Rechecked.Fresh(classify now (describe fs now gateDir knownRepos invokingRepo entry))
+        | Some entry -> Rechecked.Fresh(classify now (describe fs now gateDir knownRepos invoker entry))
     Resolve = HygieneFs.resolvePath
     Perform =
       fun op ->
@@ -226,15 +231,15 @@ let reap
   (now: DateTime)
   (gateDir: string)
   (knownRepos: string list)
-  (invokingRepo: string option)
+  (invoker: Invoker option)
   (deleteFile: string -> unit)
   : ReapResult =
-  let leftovers = entries fs gateDir |> List.map (fun e -> classify now (describe fs now gateDir knownRepos invokingRepo e))
+  let leftovers = entries fs gateDir |> List.map (fun e -> classify now (describe fs now gateDir knownRepos invoker e))
   let plan = Planner.plan leftovers
   let report =
     match Confirmation.safeOnly plan plan.Id with
     | Result.Error _ -> { Executed = []; ReclaimedBytes = 0L }
-    | Result.Ok confirmation -> Executor.run (effects fs now gateDir knownRepos invokingRepo) (roots gateDir) confirmation plan
+    | Result.Ok confirmation -> Executor.run (effects fs now gateDir knownRepos invoker) (roots gateDir) confirmation plan
   let stale = staleLogs fs.LastWrite DataRetention.gateLogsKept (fs.ChildFiles(gateDir + "/" + Names.logsDir))
   for log in stale do
     try deleteFile log with _ -> ()

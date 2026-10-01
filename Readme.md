@@ -580,6 +580,7 @@ Usage: sagefs [options]                Start daemon (bare by default)
        sagefs stop                     Stop running daemon
        sagefs status                   Show daemon info
        sagefs sweep [--kill]           Reap daemons whose owner process is gone
+       sagefs hygiene [--tidy]         Show what agents left behind (worktrees, gate checkouts, caches, temp dirs) as a dry-run plan; --tidy runs only the safe part
        sagefs play <ledger.jsonl>      Replay a portable cohort ledger file offline
 
 Daemon options:

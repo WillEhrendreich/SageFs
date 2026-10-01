@@ -159,7 +159,7 @@ WT="$STATE/checkout-$(echo -n "$REPO" | sha1sum | cut -c1-8)"
 # the checkout this run is about to use, and a failure here never blocks the gate.
 mkdir -p "$STATE/owners"
 printf '%s\n%s\n%s\n' "$REPO" "$$" "$(date -Iseconds)" > "$STATE/owners/$(basename "$WT")"
-dotnet fsi "$(dirname "$0")/gate-reap.fsx" "$STATE" "$REPO" 9>&- 2>&1 | sed -u 's/^/local-gate: /' || true
+dotnet fsi "$(dirname "$0")/gate-reap.fsx" "$STATE" "$REPO" "$$" 9>&- 2>&1 | sed -u 's/^/local-gate: /' || true
 git -C "$REPO" worktree prune 2>/dev/null || true
 
 if [ ! -d "$WT/.git" ] && [ ! -f "$WT/.git" ]; then

@@ -2,7 +2,7 @@
 // retention, pass records past the newest few, and old logs. Run by scripts/local-gate before it makes its own
 // checkout.
 //
-//   dotnet fsi scripts/gate-reap.fsx <gate-state-dir> <invoking-repo>
+//   dotnet fsi scripts/gate-reap.fsx <gate-state-dir> <invoking-repo> <invoking-pid>
 //
 // The decisions are SageFs.Core/GateReaper.fs and the pure hygiene domain it loads, so the gate and the daemon's
 // workspace hygiene plan cannot disagree about what is safe to remove, and the logic is tested there. This file only
@@ -22,13 +22,15 @@ open SageFs.WorkspaceHygiene
 let args = fsi.CommandLineArgs
 
 match args.Length with
-| n when n < 3 ->
-  eprintfn "usage: dotnet fsi scripts/gate-reap.fsx <gate-state-dir> <invoking-repo>"
+| n when n < 4 ->
+  eprintfn "usage: dotnet fsi scripts/gate-reap.fsx <gate-state-dir> <invoking-repo> <invoking-pid>"
   exit 2
 | _ -> ()
 
 let gateDir = args.[1]
 let invokingRepo = args.[2]
+// The gate script has already written its own pid into `current` by now; it must not make everything look busy.
+let invokingPid = int args.[3]
 
 let isAlive (pid: int) : bool =
   try
@@ -37,7 +39,7 @@ let isAlive (pid: int) : bool =
   with _ -> false
 
 let result =
-  GateReaper.reap (GateReaper.realFs isAlive) DateTime.UtcNow gateDir [ invokingRepo ] (Some invokingRepo) File.Delete
+  GateReaper.reap (GateReaper.realFs isAlive) DateTime.UtcNow gateDir [ invokingRepo ] (Some({ Repo = invokingRepo; Pid = invokingPid } : GateReaper.Invoker)) File.Delete
 
 let removed =
   result.Report.Executed

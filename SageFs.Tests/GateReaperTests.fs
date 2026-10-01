@@ -48,9 +48,15 @@ let private withCheckout (repo: string) (age: float) (world: World) : World =
       Dirs = world.Dirs |> Map.add (checkoutOf repo) (daysAgo age, 1000L)
       Lines = world.Lines |> Map.add (gate + "/" + Names.ownersDir + "/" + Names.checkoutPrefix + repoKey repo) repo }
 
-let private standingsOf (w: World) (invoking: string option) : (string * Standing) list =
+/// The gate run doing the reaping, for `repo`, as the pid it has in the `current` file.
+let private invokerOf (pid: int) (repo: string) : Invoker = { Repo = repo; Pid = pid }
+
+let private standingsAs (w: World) (invoker: Invoker option) : (string * Standing) list =
   entries (fsOf w) gate
-  |> List.map (fun e -> Path.GetFileName(entryDir e), standingOf now (describe (fsOf w) now gate [ repoA ] invoking e))
+  |> List.map (fun e -> Path.GetFileName(entryDir e), standingOf now (describe (fsOf w) now gate [ repoA ] invoker e))
+
+let private standingsOf (w: World) (invoking: string option) : (string * Standing) list =
+  standingsAs w (invoking |> Option.map (invokerOf 1))
 
 [<Tests>]
 let tests =
@@ -89,6 +95,12 @@ let tests =
       match standingsOf w None |> List.exactlyOne |> snd with
       | Standing.InUse(InUseReason.GateRunning 4242, _) -> ()
       | other -> failtestf "expected InUse by the running gate, got %A" other
+
+    testCase "the gate that is doing the reaping has its own pid in the current file, and that does not make everything busy" <| fun _ ->
+      let w = { (baseWorld |> withCheckout repoB 0.1) with Lines = Map.ofList [ gate + "/" + Names.currentFile, "4242 abc"; gate + "/owners/" + Names.checkoutPrefix + repoKey repoB, repoB ]; Alive = Set.ofList [ 4242 ] }
+      match standingsAs w (Some(invokerOf 4242 repoA)) |> List.exactlyOne |> snd with
+      | Standing.Orphaned _ -> ()
+      | other -> failtestf "expected Orphaned (the running gate is the caller), got %A" other
 
     testCase "a dead gate's current file is not a use" <| fun _ ->
       let w = { (baseWorld |> withCheckout repoB 0.1) with Lines = Map.ofList [ gate + "/" + Names.currentFile, "4242 abc"; gate + "/owners/" + Names.checkoutPrefix + repoKey repoB, repoB ] }
@@ -159,7 +171,7 @@ let realTests =
           let log = Path.Combine(logs, sprintf "%02d.log" i)
           write log "log"
           age log (TimeSpan.FromHours(float i))
-        let result = reap (realFs (fun _ -> false)) DateTime.UtcNow gateDir [ invoking ] (Some invoking) File.Delete
+        let result = reap (realFs (fun _ -> false)) DateTime.UtcNow gateDir [ invoking ] (Some(invokerOf 1 invoking)) File.Delete
         Directory.Exists live |> Expect.isTrue "the invoking repo's checkout is never touched, however old"
         Directory.Exists orphan |> Expect.isFalse "a checkout whose repo is gone is removed"
         Directory.Exists tier |> Expect.isFalse "so are its tier clones"
@@ -213,7 +225,9 @@ let realTests =
         write (Path.Combine(gateDir, Names.ownersDir, Names.checkoutPrefix + repoKey gone)) gone
         let script = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", "scripts", "gate-reap.fsx"))
         let psi = ProcessStartInfo("dotnet", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
-        for a in [ "fsi"; script; gateDir; repo ] do psi.ArgumentList.Add a
+        // The gate script has already written its own (live) pid into `current` when it reaps; that must not stop the reap.
+        write (Path.Combine(gateDir, Names.currentFile)) (sprintf "%d abc" Environment.ProcessId)
+        for a in [ "fsi"; script; gateDir; repo; string Environment.ProcessId ] do psi.ArgumentList.Add a
         use p = Process.Start psi
         let out = p.StandardOutput.ReadToEndAsync()
         let err = p.StandardError.ReadToEndAsync()
