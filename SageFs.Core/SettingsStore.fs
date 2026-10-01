@@ -2,7 +2,6 @@ namespace SageFs
 
 open System
 open System.IO
-open System.Text.Json
 
 /// Persistence for the settings layers (unified-settings-design.md §2.3).
 /// A layer file is a flat, machine-safe JSON object of `key -> rendered raw
@@ -31,16 +30,33 @@ module SettingsStore =
   /// Read one layer file into a `key -> raw value` map. Missing or malformed
   /// files resolve to the empty map — resolution must never fail because a
   /// layer file is absent or corrupt.
-  let readLayer (path: string) : Map<string, string> =
+  /// What reading a layer file found: a layer (an absent file is the empty layer), or why the
+  /// file could not be used.
+  [<RequireQualifiedAccess>]
+  type LayerRead =
+    | Layer of Map<string, string>
+    | Unreadable of reason: string
+
+  let readLayerChecked (path: string) : LayerRead =
     try
       match File.Exists path with
-      | false -> Map.empty
+      | false -> LayerRead.Layer Map.empty
       | true ->
-        let json = File.ReadAllText path
-        match JsonSerializer.Deserialize<Collections.Generic.Dictionary<string, string>>(json) with
-        | null -> Map.empty
-        | dict -> dict |> Seq.map (fun kv -> kv.Key, kv.Value) |> Map.ofSeq
-    with _ -> Map.empty
+        match Json.deserialize<Collections.Generic.Dictionary<string, string>> Json.standard (File.ReadAllText path) with
+        | Result.Ok dict -> LayerRead.Layer (dict |> Seq.map (fun kv -> kv.Key, kv.Value) |> Map.ofSeq)
+        | Result.Error error -> LayerRead.Unreadable (sprintf "%s is not a settings layer: %s" path (JsonError.describe error))
+    with
+    | :? IOException as ex -> LayerRead.Unreadable (sprintf "%s could not be read: %s" path ex.Message)
+    | :? UnauthorizedAccessException as ex -> LayerRead.Unreadable (sprintf "%s could not be read: %s" path ex.Message)
+
+  /// `readLayerChecked` for resolution, which must stay total: an unreadable layer is the empty
+  /// layer, and the reason goes to stderr so it is never silent. A later `setKey` rewrites the file.
+  let readLayer (path: string) : Map<string, string> =
+    match readLayerChecked path with
+    | LayerRead.Layer layer -> layer
+    | LayerRead.Unreadable reason ->
+      eprintfn "SageFs: settings layer ignored: %s" reason
+      Map.empty
 
   /// Atomically replace a layer file with `m` (tmp + move), creating the
   /// directory if needed.
@@ -53,7 +69,7 @@ module SettingsStore =
       let dict = Collections.Generic.Dictionary<string, string>()
       for KeyValue(k, v) in m do
         dict.[k] <- v
-      let json = JsonSerializer.Serialize(dict, JsonSerializerOptions(WriteIndented = true))
+      let json = Json.serialize (Json.indented Json.standard) dict
       let tmp = path + ".tmp"
       File.WriteAllText(tmp, json)
       File.Move(tmp, path, true)
