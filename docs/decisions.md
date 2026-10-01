@@ -1272,6 +1272,10 @@ own sources outside the listed projects are not inputs it looks at. A project wh
 is `Unknown`, not guessed. `/api/sessions`, the `sessions://list` resource and the dashboard card do not carry the field yet; they read
 `SessionInfo` without the daemon's disk edge (see the hand-off note).
 
+**What it costs.** One pass of file stats and one project-file parse per project, when a tool asks. I measured it on this repo's own
+three projects (SageFs.Core alone lists 295 Compile items): 9 ms the first time and about 2.5 ms after, in a warm REPL session.
+`list_sessions` also asks each live worker for its warmup report, all at once, which `get_session_status` already did for one.
+
 **How it is proved.** `SourceStateTests` (the decision as examples and as properties, with an oracle written as a conjunction), and
 `SourceStateProbeTests` against real files and write times. `SourceStateSim` is a DST over edits, builds that end or fail, workers that
 load the build on disk or keep an older one, outside builds, files that stop being readable, a rebuild record delivered in any order and
