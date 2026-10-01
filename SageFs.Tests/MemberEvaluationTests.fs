@@ -68,17 +68,15 @@ let memberEvaluationTests =
       | other -> failtestf "expected a throw, got %A" other
 
     testCase "WHY — a getter blocked on a wait is freed by Interrupt and reported as timed out" <| fun _ ->
-      let target = gadget ()
-      let release = ManualResetEventSlim(false)
-      let sawInterrupt = ManualResetEventSlim(false)
+      let release = new ManualResetEventSlim(false)
+      let sawInterrupt = new ManualResetEventSlim(false)
       let blocked = Gadget(release, new ManualResetEventSlim(false), sawInterrupt)
       let evaluator = create (limits 2) unfiltered
       evaluator.Run (property "WaitsForever") (box blocked) |> Expect.equal "timed out" (Error MemberFailure.MemberTimedOut)
       sawInterrupt.Wait TestTimeouts.patienceBrief |> Expect.isTrue "the getter saw the interrupt, so its thread is free"
-      ignore target
 
     testCase "WHY — a getter that spins is given up on at the deadline, and the same target is not run again" <| fun _ ->
-      let release = ManualResetEventSlim(false)
+      let release = new ManualResetEventSlim(false)
       let spinner = Gadget(release, new ManualResetEventSlim(false), new ManualResetEventSlim(false))
       let evaluator = create (limits 2) unfiltered
       try
@@ -89,7 +87,7 @@ let memberEvaluationTests =
         release.Set()
 
     testCase "WHY — past the cap of abandoned getters, nothing else is run until the session restarts" <| fun _ ->
-      let release = ManualResetEventSlim(false)
+      let release = new ManualResetEventSlim(false)
       let first = Gadget(release, new ManualResetEventSlim(false), new ManualResetEventSlim(false))
       let second = Gadget(release, new ManualResetEventSlim(false), new ManualResetEventSlim(false))
       let evaluator = create (limits 1) unfiltered

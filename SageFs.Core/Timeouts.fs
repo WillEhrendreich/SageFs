@@ -177,6 +177,16 @@ module Timeouts =
   /// not walked again. A second is long for a getter that merely reads a field and short enough
   /// that one blocked getter costs the next eval a second, once. No recorded reason for 1s.
   let liveValueBindingBudget = TimeSpan.FromSeconds(1.0)
+  /// How long a click on a "not evaluated" row lets the getter run. A click is the user asking for that value, so
+  /// this is longer than the walk's budget, and short enough that a getter that never returns does not look like a
+  /// hung pane. No recorded reason for 5s.
+  let memberEvaluationDeadline = TimeSpan.FromSeconds(5.0)
+  /// How long a getter that was interrupted gets to leave its wait before its thread is given up on. An interrupt
+  /// frees a blocked wait at once, so this only bounds a getter that ignores it. No recorded reason for 250ms.
+  let memberEvaluationGrace = TimeSpan.FromMilliseconds(250.0)
+  /// How many clicked getters a host tolerates never returning. Each keeps its thread for the life of the process,
+  /// so past this the host refuses more and says to restart. No recorded reason for 8.
+  let maxAbandonedMembers = 8
   /// The debounce of the daemon's live-test file watcher: a burst of events
   /// from one save settles into one change. No recorded reason for 75ms.
   let liveTestWatcherDebounce = TimeSpan.FromMilliseconds(75.0)
