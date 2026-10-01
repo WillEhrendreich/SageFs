@@ -229,3 +229,26 @@ checks it, and its twin (Ready with no `WorkerReady`) is caught.
 
 Evidence: `SageFs/RebuildReadyWait.fs`, `SageFs.Tests/RebuildReadyWaitTests.fs`, `SageFs.Core/SessionManager.fs` (`WorkerReady`, `settleReadyWaiters`).
 Reopen it if: Ready is ever marked before the URL is installed. The claim test fails first.
+
+## A getter is evaluated on a thread with a syscall filter, and the filter only stops I/O
+
+When the live-bindings pane evaluates a user's property getter on a click, `ThreadSandbox.run` puts it on a fresh
+dedicated thread and installs a seccomp filter on that thread first. `NoNetwork` makes socket, connect, accept, bind,
+listen, send* and socketpair fail with EPERM. `NoNetworkNoWritesNoSpawn` adds opens with a write, create, truncate or
+append flag (checked on the flags argument), unlink, rename, mkdir, rmdir, truncate, chmod, chown, symlink, link, fork,
+vfork, execve, execveat, and clone without CLONE_THREAD, so the runtime can still make threads. clone3 answers ENOSYS,
+because its flags sit in a struct the filter can't read, and glibc then falls back to clone. A denied call fails with an
+errno and the getter sees a SocketException, an UnauthorizedAccessException or a Win32Exception. The filter never kills
+or traps.
+
+It does not stop a spin, a stack overflow, an in-memory effect, a write to a file descriptor that was already open, or a
+getter that issues 32-bit compat syscalls on purpose. A thread the work starts inherits the filter, and a task the work
+hands to a pool thread does not. There is no deadline in it: the caller owns the deadline and abandons a stuck thread,
+and the filter dies with the thread. Linux x86-64 is the only verified platform. Aarch64 is in the type and reported
+unverified, other OSes report `NotLinux`, and if the filter can't be installed the work does not run. The caller shows
+the reason, so the pane says "no I/O containment here" and why. The BPF is built by a pure function and run through a
+small interpreter in the tests against a separately written model.
+
+Evidence: `SageFs.Core/ThreadSandbox.fs`, `SageFs.Tests/ThreadSandboxTests.fs`.
+Reopen it if: arm64 gets a machine to verify on, or a getter that does I/O through an fd opened before the filter turns
+out to matter.
