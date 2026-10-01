@@ -1899,7 +1899,7 @@ let run (sessionId: string) (port: int) = async {
       let! stopped = AppRunner.stop appRunner scope |> Async.AwaitTask
       return stopped |> Result.mapError (fun reason -> SageFsError.AppRunFailed (project, reason)) }
     AwaitChange = fun runId -> async {
-      use cts = new CancellationTokenSource(TimeSpan.FromMinutes 5.0)
+      use cts = new CancellationTokenSource(Timeouts.appChangeAwait)
       return! AppRunner.awaitChange appRunner runId cts.Token |> Async.AwaitTask } }
 
   // Signal readiness over the pipe

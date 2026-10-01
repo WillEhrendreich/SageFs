@@ -44,7 +44,7 @@ module WorkerHttpTransport =
       member _.DisposeAsync() = app.StopAsync() |> ValueTask
     interface IDisposable with
       member _.Dispose() =
-        use cts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(5.0))
+        use cts = new System.Threading.CancellationTokenSource(Timeouts.workerHttpServerStop)
         try app.StopAsync(cts.Token).GetAwaiter().GetResult()
         with _ -> ()
 
@@ -747,11 +747,11 @@ module WorkerHttpTransport =
       })) |> ignore
 
       // DevReload SSE endpoint — browsers connect here for hot-reload notifications.
-      // Long-lived: sends heartbeats every 15s, compiling/reload/failed events as they happen.
+      // Long-lived: sends heartbeats every Timeouts.reloadStreamHeartbeat, compiling/reload/failed events as they happen.
       // Cross-origin (user's app port → worker port), so CORS header is required.
       //
       // Chesterton's fence: pre-allocated byte arrays avoid per-event allocation.
-      // The heartbeat fires every 15s for the lifetime of every connected browser tab —
+      // The heartbeat fires every Timeouts.reloadStreamHeartbeat for the lifetime of every connected browser tab —
       // that's a long-lived allocation pattern worth eliminating.
       let heartbeatBytes = Text.Encoding.UTF8.GetBytes(": heartbeat\n\n")
       let connectedBytes = Text.Encoding.UTF8.GetBytes(": connected\n\nretry: 1000\n\n")
@@ -789,7 +789,7 @@ module WorkerHttpTransport =
             let! hasEvent =
               task {
                 try
-                  use cts = new CancellationTokenSource(TimeSpan.FromSeconds(15.0))
+                  use cts = new CancellationTokenSource(Timeouts.reloadStreamHeartbeat)
                   use linked = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, ct)
                   return! reader.WaitToReadAsync(linked.Token).AsTask()
                 with

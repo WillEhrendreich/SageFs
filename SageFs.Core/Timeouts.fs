@@ -268,6 +268,19 @@ module Timeouts =
   let appHostAppearGrace = envOrDefault "SAGEFS_APP_HOST_APPEAR_SECONDS" 10.0
   /// How long a host that has been built may take to start listening.
   let appHostStart = envOrDefault "SAGEFS_APP_HOST_START_SECONDS" 90.0
+  /// How long stopping an app's host may take before the stop gives up and logs
+  /// that it failed. No recorded reason for 10s.
+  let appHostStop = TimeSpan.FromSeconds(10.0)
+  /// How long, after an app's host has stopped, its entry point (`main`) gets to
+  /// return before the run is reported as ended with exit code 0. `main` can
+  /// return early after a fire-and-forget RunAsync, so a host stop is the
+  /// authority and the entry point only gets this grace. No recorded reason for
+  /// 5s.
+  let appEntryFinishGrace = TimeSpan.FromSeconds(5.0)
+  /// How long one `AwaitAppChange` request parks the worker for. At the end of
+  /// it the request returns the app's state at that moment, so a caller that
+  /// wants to keep watching asks again. No recorded reason for 5 minutes.
+  let appChangeAwait = TimeSpan.FromMinutes(5.0)
 
   // -- Restart / Backoff --
   /// First delay before a crashed worker is restarted; later restarts double it
@@ -332,6 +345,13 @@ module Timeouts =
   /// changes. 10s because a steady-state refresh is cheap but a 2s cadence
   /// dominated the dashboard's render budget.
   let sessionStatusPoll = TimeSpan.FromSeconds(10.0)
+  /// How long the worker's dev reload SSE stream (the one browser tabs connect
+  /// to for hot reload notifications) waits for an event before it writes a
+  /// heartbeat comment and waits again. No recorded reason for 15s.
+  let reloadStreamHeartbeat = TimeSpan.FromSeconds(15.0)
+  /// How long disposing a worker's HTTP server waits for it to stop before it
+  /// gives up. No recorded reason for 5s.
+  let workerHttpServerStop = TimeSpan.FromSeconds(5.0)
   /// How long the daemon waits before listening again after a worker's reload
   /// stream closed on its own (WorkerReloadRelay). A worker that's gone by then
   /// has no URL in the snapshot and the relay just stops.

@@ -272,7 +272,7 @@ let private addressesOf (host: IHost) : string list =
 
 let private stopHost (host: IHost) = async {
   try
-    use cts = new CancellationTokenSource(TimeSpan.FromSeconds 10.0)
+    use cts = new CancellationTokenSource(Timeouts.appHostStop)
     do! host.StopAsync(cts.Token) |> Async.AwaitTask
   with ex ->
     SageFs.Utils.Log.warn "[AppRunner] Stopping the app host failed: %s" ex.Message
@@ -389,7 +389,7 @@ let private launch
   let watchHost () =
     async {
       do! hostStopped.Task |> Async.AwaitTask
-      let! _ = Task.WhenAny(entryDone.Task :> Task, Task.Delay(TimeSpan.FromSeconds 5.0)) |> Async.AwaitTask
+      let! _ = Task.WhenAny(entryDone.Task :> Task, Task.Delay(Timeouts.appEntryFinishGrace)) |> Async.AwaitTask
       let outcome =
         match entryDone.Task.IsCompleted with
         | true -> entryDone.Task.Result
