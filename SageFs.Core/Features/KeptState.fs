@@ -68,7 +68,7 @@ module Access =
 
 
 module ResetOutcome =
-  let private json (value: obj) = System.Text.Json.JsonSerializer.Serialize value
+  let private json (value: string) = SageFs.Json.serialize SageFs.Json.standard value
 
   /// The HTTP status a client branches on.
   let status =
@@ -97,7 +97,7 @@ module ResetOutcome =
 /// The `kept` array of `GET /hotreload`: the same fields the save's own report
 /// carries, so a client reads both with one parser.
 let pendingJson (pending: KeptValue list) : string =
-  let json (value: obj) = System.Text.Json.JsonSerializer.Serialize value
+  let json (value: string) = SageFs.Json.serialize SageFs.Json.standard value
   pending
   |> List.map (fun k ->
     sprintf """{"binding":%s,"keptValue":%s,"newInitializer":%s}""" (json k.Binding) (json k.KeptValue) (json k.NewInitializer))
