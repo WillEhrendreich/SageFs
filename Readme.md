@@ -18,9 +18,9 @@ F# Interactive that already has your project loaded, re-runs your tests on unsav
 
 Hey, I'm Will. SageFs is the thing I wanted every time I sat there waiting on a rebuild just to find out whether one little function did what I thought it did.
 
-### F# Interactive is amazing. Here's where it runs out of road.
+### F# Interactive is amazing. Here's what I wanted on top of it.
 
-Type an expression, get the answer, no build step. FSI is one of the best things about F# and I use it all day. I'm not trying to replace it, SageFs *is* FSI underneath. But everybody who's used `dotnet fsi` on a real project has hit the same wall:
+Type an expression, get the answer, no build step. FSI is one of the best things about F# and I use it all day. I'm not trying to replace it, SageFs *is* FSI underneath. But everybody who's used `dotnet fsi` on a real project has run into the same things:
 
 - **It starts empty.** Your project, your packages and your `open`s are all on you, through `#r` and `#load`, every time.
 - **It's one process in one terminal.** A bad eval or a hang takes the session with it, and nothing else can use it while you do.
@@ -33,7 +33,7 @@ Type an expression, get the answer, no build step. FSI is one of the best things
 
 Start `sagefs` once. Then:
 
-| The wall | What you get instead |
+| On a real project, FSI | With SageFs |
 |:---|:---|
 | It starts empty | A session loads your real project, built by the SDK `dotnet` picks in that folder, in its own host process. Your package versions never fight mine. No config files, and it works on half-written code. |
 | One process, one terminal | One daemon, any number of isolated session workers. VS Code, Neovim, the dashboard and agents all talk to the same live session at the same time, and each keeps its own view. |
