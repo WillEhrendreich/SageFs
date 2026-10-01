@@ -205,18 +205,25 @@ module DashboardDom =
     let viewing () =
       page.EvaluateAsync<string>(
         "() => { var m = document.querySelector('#main'); return m ? (m.getAttribute('data-viewing-session-id') || '') : ''; }")
-    let! current = viewing ()
-    if current <> sessionId then
-      let button =
-        page.Locator(sprintf "#session-card-%s" sessionId)
-          .GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "show this session's output here"))
-      do! button.ClickAsync()
+    // The first render may not have arrived yet, and a bare load may already view this session (then its card has
+    // no Switch button): so look at the page until it is viewing the session, and press Switch only when the
+    // card offers it and the page is viewing something else. Never read once and decide.
+    let button =
+      page.Locator(sprintf "#session-card-%s" sessionId)
+        .GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "show this session's output here"))
     let deadline = System.DateTime.UtcNow.AddMilliseconds(float budgetMs)
     let mutable reached = false
+    let mutable pressed = false
     while not reached && System.DateTime.UtcNow < deadline do
       let! now = viewing ()
       reached <- (now = sessionId)
-      if not reached then do! System.Threading.Tasks.Task.Delay TestTimeouts.pollTight
+      if not reached then
+        let! offered = button.CountAsync()
+        if offered > 0 && not pressed then
+          do! button.ClickAsync()
+          pressed <- true
+        else
+          do! System.Threading.Tasks.Task.Delay TestTimeouts.pollTight
     if not reached then failwithf "the page never switched to viewing session %s within %dms" sessionId budgetMs
   }
 
