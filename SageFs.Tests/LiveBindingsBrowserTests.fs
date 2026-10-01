@@ -63,6 +63,17 @@ let private paneText (page: IPage) = page.Locator(pane).InnerTextAsync()
 let private waitForPaneText (page: IPage) (text: string) =
   PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page pane text
 
+/// A class binding is a <details> the user opens, like any expandable value in the pane. Opens it and waits until it is open.
+let private openBinding (page: IPage) (binding: string) = task {
+  let selector = sprintf "%s details[id^='open_%s_']" pane binding
+  let details = page.Locator(selector).First
+  do! details.WaitForAsync(LocatorWaitForOptions(State = WaitForSelectorState.Attached, Timeout = float32 BrowserWaits.daemonWork))
+  let! isOpen = details.EvaluateAsync<bool>("el => el.open")
+  if not isOpen then do! details.Locator("> summary").First.ClickAsync()
+  let! _ = page.WaitForFunctionAsync("sel => { const d = document.querySelector(sel); return !!d && d.open; }", selector)
+  ()
+}
+
 let private modeButton (page: IPage) (name: string) =
   page.Locator(sprintf "%s .live-mode button" pane).Filter(LocatorFilterOptions(HasTextString = name))
 
@@ -108,8 +119,9 @@ let tests =
     let errors = watchErrors page
     do! ready page
     do! evalCode page probeCode "probe-defined"
-    do! waitForPaneText page "RunsCode"
+    do! waitForPaneText page "probe"
     do! waitForMode page "Safe"
+    do! openBinding page "probe"
     let! text = paneText page
     Expect.stringContains text "Harmless" "the harmless getter is shown"
     Expect.stringContains text "7" "with its value, because Safe mode ran it"
@@ -131,7 +143,8 @@ let tests =
   playwrightTest "live bindings: a click shows evaluating in the row at once, then the value, the containment line and a lower count" (fun page -> task {
     let errors = watchErrors page
     do! ready page
-    do! waitForPaneText page "RunsCode"
+    do! waitForPaneText page "probe"
+    do! openBinding page "probe"
     // Hold the click's request until the journey has looked at the row, so "evaluating" is observed, not raced.
     let release = TaskCompletionSource()
     do! page.RouteAsync("**/live-values/evaluate", Func<IRoute, Task>(fun route ->
@@ -165,11 +178,13 @@ let tests =
     let errors = watchErrors page
     do! ready page
     do! waitForPaneText page "probe"
+    do! openBinding page "probe"
     let everything = modeButton page "Everything"
     let! tooltip = everything.GetAttributeAsync("title")
     Expect.stringContains tooltip "getters" "the tooltip tells the user that Everything runs their getters"
     do! everything.ClickAsync()
     do! waitForMode page "Everything"
+    do! openBinding page "probe"
     do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator(sprintf "%s .live-held-btn" pane)) 0
     let! everythingText = paneText page
     Expect.stringContains everythingText "RunsCode" "the getter is still listed"
@@ -185,6 +200,7 @@ let tests =
 
     do! (modeButton page "Safe").ClickAsync()
     do! waitForMode page "Safe"
+    do! openBinding page "probe"
     do! waitForPaneText page "the getter calls other code"
     do! PlaywrightExpect.waitForCount BrowserWaits.daemonWork (page.Locator(sprintf "%s .live-held-btn" pane)) 1
     let! problems = layoutProblems page
@@ -196,6 +212,8 @@ let tests =
     let errors = watchErrors page
     do! ready page
     do! evalCode page spinnerCode "spinner-defined"
+    do! waitForPaneText page "spinner"
+    do! openBinding page "spinner"
     do! waitForPaneText page "the getter loops or calls itself"
     let row = page.Locator(sprintf "%s .live-held-row" pane).Filter(LocatorFilterOptions(HasTextString = "Self"))
     do! row.Locator(".live-held-btn").ClickAsync()

@@ -52,7 +52,7 @@ let pushLiveBindingsOverSseTests = testList "pushLiveBindingsOverSse" [
       Notes = SageFs.Features.LiveBindingsPane.PaneStore.create ()
       ConfiguredWalk = fun _ -> WalkSafe }
 
-  testCase "no hub, no subscription — nothing is pushed" <| fun _ ->
+  testCase "no hub, no subscription, so nothing is pushed" <| fun _ ->
     use _subscription = pushLiveBindingsOverSse (Event<string>()) jsonOpts None
     ()
 
@@ -68,7 +68,7 @@ let pushLiveBindingsOverSseTests = testList "pushLiveBindingsOverSse" [
     received.[0] |> Expect.stringContains "carries the session id" "sess-1"
     received.[0] |> Expect.stringContains "carries the real binding name" "\"x\""
 
-  testCase "one push per update — no extra pushes, and none after the subscription is disposed" <| fun _ ->
+  testCase "one push per update, no extra pushes, and none after the subscription is disposed" <| fun _ ->
     let broadcast = Event<string>()
     let received = ResizeArray<string>()
     broadcast.Publish.Add(received.Add)
