@@ -91,7 +91,7 @@ This started as an experiment in how far agentic development could go, and it's 
 
 Save a `.fs` file and SageFs figures out which functions changed and uses [Harmony](https://github.com/pardeike/Harmony) to re-point those methods in the process that's already running. No rebuild, no restart, and yes, that includes apps whose route table was only ever built once at startup. Connected browsers refresh automatically over SSE.
 
-Because it re-points **methods**, not everything is patchable: a handler that's *called* per request reloads, a handler whose output was *computed once* at startup can't. Prefer `let getHome (ctx: HttpContext) = ...` over `let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. Changed signatures, changed types, and a `let mutable` whose type changed restart the app instead of pretending to reload.
+Because it re-points **methods**, not everything is patchable: a handler that's *called* per request reloads, a handler whose output was *computed once* at startup can't. Prefer `let getHome (ctx: HttpContext) = ...` over `let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. Lambdas in your route list, instance members, added or removed functions and a changed signature all patch in place now. Reshaping a type, adding a member to an existing type, a generic function, and a `let mutable` whose type changed restart the app and say why instead of pretending to reload.
 
 Apps started by a `.SageFs/init.fsx` that `#load`s your sources patch in place too, on .NET 10 and .NET 11. SageFs tracks which copy of a function the app is actually holding and patches that one.
 

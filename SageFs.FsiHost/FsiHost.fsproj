@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- The isolated FSI host. NOT part of the SageFs solution: SageFs.Core embeds these source files (about twenty) and
+  <!-- The isolated FSI host. NOT part of the SageFs solution: SageFs.Core embeds these source files (one per Compile entry below) and
        FsiHostBuild copies them into a cache directory and builds them with the PROJECT'S OWN SDK, so this
        program is compiled by that SDK's fsc against that SDK's FSharp.Compiler.Service and FSharp.Core.
        Nothing from SageFs is referenced, so nothing from SageFs can conflict with the user's packages. -->
