@@ -981,10 +981,15 @@ let private waitForEditor (cfg: ServeConfig) : Result<string, string> =
       poll ()
   poll ()
 
+/// Opens the editor and waits until the plugin has put its status text on screen.
+/// Returns the status line it saw.
+let startEditor (cfg: ServeConfig) : Result<string, string> =
+  launch cfg |> bindResult (fun () -> waitForEditor cfg)
+
 /// Runs until it is told to stop. SIGTERM stops it; the call log is flushed per call.
 let serve (cfg: ServeConfig) : int =
   let writeReady (status: string) = File.WriteAllText(cfg.ReadyFile, status + "\n")
-  match launch cfg |> bindResult (fun () -> waitForEditor cfg) with
+  match startEditor cfg with
   | Result.Error reason ->
     writeReady ("failed: " + reason)
     eprintfn "driver could not start: %s" reason

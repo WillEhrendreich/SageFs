@@ -160,6 +160,14 @@ let private tokenize (input: string) : Token list =
             else
               j <- j + 1
           i <- j
+        | next when next >= ' ' && next <= '/' ->
+          // nF sequences such as ESC ( B (select a character set, which tmux writes after a
+          // reset): intermediate bytes 0x20-0x2F, then one final byte. Without this the final
+          // byte would be printed as text.
+          let mutable j = i + 1
+          while j < input.Length && input.[j] >= ' ' && input.[j] <= '/' do
+            j <- j + 1
+          i <- min input.Length (j + 1)
         | _ -> i <- i + 2
     elif c = '\n' then
       tokens.Add NewLine

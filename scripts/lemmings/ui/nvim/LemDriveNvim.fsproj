@@ -23,6 +23,7 @@
     <Compile Include="Ansi.fs" />
     <Compile Include="Shot.fs" />
     <Compile Include="Nvim.fs" />
+    <Compile Include="Tour.fs" />
     <Compile Include="NvimOracle.fs" />
     <Compile Include="NvimMain.fs" />
   </ItemGroup>

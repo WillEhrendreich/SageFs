@@ -6,7 +6,7 @@ module LemDrive.NvimMain
 let private usage =
   "usage: dotnet LemDrive.dll nvim <command>\n"
   + "  lemming commands: keys | nvim-type | nvim-screen | nvim-wait | nvim-messages | nvim-shell | nvim-shot\n"
-  + "  harness commands: serve | oracle | summarize | annotate | daemon-state | tour | tour-check"
+  + "  harness commands: serve | oracle | summarize | annotate | daemon-state | tour | tour-check | render"
 
 /// The arguments after `nvim`. Returns the process exit code.
 let dispatch (args: string list) : int =
@@ -14,6 +14,9 @@ let dispatch (args: string list) : int =
   | "oracle" :: rest -> NvimOracle.run rest
   | "summarize" :: rest -> NvimOracle.summarize rest
   | "annotate" :: rest -> NvimOracle.annotate rest
+  | "tour" :: rest -> Tour.run rest
+  | "tour-check" :: rest -> Tour.check rest
+  | "render" :: rest -> Tour.render rest
   | "daemon-state" :: rest ->
     match rest with
     | [ "--run"; dir ] -> NvimOracle.daemonState dir NvimOracle.Daemon.Port
