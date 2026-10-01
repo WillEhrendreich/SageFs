@@ -2745,8 +2745,8 @@ let createApiDispatchHandler
       // (`DaemonClient.dispatchAction` leaves it out otherwise). Read as a map, so a missing
       // `value` is simply absent.
       match Json.deserialize<Collections.Generic.Dictionary<string, string>> Json.standard body with
-      | Error reason ->
-        Log.warn "[dashboard] /api/dispatch body is not a dispatch request: %s" reason
+      | Error error ->
+        Log.warn "[dashboard] /api/dispatch body is not a dispatch request: %s" (JsonError.describe error)
         ctx.Response.StatusCode <- 400
         do! ctx.Response.WriteAsJsonAsync({| error = "Request failed" |})
       | Ok fields ->

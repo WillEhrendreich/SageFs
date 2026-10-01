@@ -1520,7 +1520,7 @@ let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary
       | Ok dict ->
         for kv in dict do
           result.[kv.Key] <- kv.Value
-      | Error reason -> Log.warn "Themes file %s is not a readable theme map, using none: %s" path reason
+      | Error error -> Log.warn "Themes file %s is not a readable theme map, using none: %s" path (JsonError.describe error)
     | false -> ()
   with ex -> Log.warn "Failed to load themes from %s: %s\n%s" sageFsDir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
   result

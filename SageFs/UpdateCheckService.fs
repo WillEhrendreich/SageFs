@@ -55,8 +55,8 @@ module UpdateCheckService =
       | true ->
         match Json.deserialize<CacheFile> cacheProfile (File.ReadAllText path) with
         | Ok cache -> cache
-        | Error reason ->
-          Utils.Log.warn "[UpdateCheck] %s is not a readable cache, starting empty: %s" path reason
+        | Error error ->
+          Utils.Log.warn "[UpdateCheck] %s is not a readable cache, starting empty: %s" path (JsonError.describe error)
           emptyCache
     with _ -> emptyCache
 
