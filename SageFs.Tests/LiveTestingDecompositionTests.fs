@@ -251,6 +251,7 @@ module RebuildLifecycleTests =
       let tc = mkTestCase "Rebuild.test1" TestFramework.Expecto
       let identity = AnalysisIdentity.ofContent "let x = 1"
       let queued : QueuedRebuildState = {
+        Means = QueuedMeans.RebuildThenRun
         Tests = [| tc |]
         Trigger = RunTrigger.FileSave
         FilePath = "Foo.fs"
