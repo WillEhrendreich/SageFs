@@ -138,9 +138,9 @@ module DeltaApply =
     | null -> "(unnamed assembly)"
     | name -> name
 
-  /// Everything known before the call. A delta is handed to the runtime only when this says `Capable`.
-  let check (capability: RuntimeCapability) (assembly: Assembly) (payload: DeltaPayload) : CapabilityCheck =
-    let gaps =
+  /// What stands between this process and an edit to this module, before any delta exists: the runtime, the
+  /// environment, a debugger, and whether the module is one the runtime will edit.
+  let moduleGaps (capability: RuntimeCapability) (assembly: Assembly) : CapabilityGap list =
       [ match capability.Support with
         | UpdateSupport.Supported -> ()
         | UpdateSupport.Unsupported -> yield CapabilityGap.RuntimeUpdateUnsupported
@@ -160,11 +160,16 @@ module DeltaApply =
             | attribute -> not (attribute.DebuggingFlags.HasFlag DebuggableAttribute.DebuggingModes.DisableOptimizations)
           match optimized with
           | true -> yield CapabilityGap.ModuleOptimized (nameOf assembly)
-          | false -> ()
-        for feature in payload.Requires do
-          match capability.Features |> List.contains (RequiredFeature.capabilityName feature) with
-          | true -> ()
-          | false -> yield CapabilityGap.MissingFeature feature ]
+          | false -> () ]
+
+  /// Everything known before the call. A delta is handed to the runtime only when this says `Capable`.
+  let check (capability: RuntimeCapability) (assembly: Assembly) (payload: DeltaPayload) : CapabilityCheck =
+    let gaps =
+      moduleGaps capability assembly
+      @ [ for feature in payload.Requires do
+            match capability.Features |> List.contains (RequiredFeature.capabilityName feature) with
+            | true -> ()
+            | false -> yield CapabilityGap.MissingFeature feature ]
     match gaps with
     | [] -> CapabilityCheck.Capable
     | _ -> CapabilityCheck.Incapable gaps

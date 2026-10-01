@@ -1,8 +1,8 @@
 /// An app started with `run_app` keeps running when a save edits a body, and the save says how.
 ///
-/// The app runs in the worker process, out of the reach of the reload agent in the FSI host, so today every
-/// function edit to such an app ends the run and the daemon rebuilds and relaunches it (about six seconds,
-/// a new process, every in-memory value gone). A metadata delta applied to the project's own compiled
+/// The app runs in the worker process, out of the reach of the reload agent in the FSI host, so with the route
+/// off every function edit to such an app ends the run and the daemon rebuilds and relaunches it (about six
+/// seconds, a new process, every in-memory value gone). A metadata delta applied to the project's own compiled
 /// assembly changes the method bodies of the process that is already running, for every instantiation of a
 /// generic function, for the closure objects the app holds, and for the objects an instance member runs on.
 ///
@@ -11,8 +11,8 @@
 /// have thrown away is still there, and the save says it was patched by metadata delta, after the new
 /// body ran. A row that cannot be patched asks for a restart that names what could not be.
 ///
-/// These rows are the outcome gate for the metadata-delta path. They are written before the path exists,
-/// and each one's message says what it does today.
+/// These rows are the outcome gate for the metadata-delta path. They were written before the path existed,
+/// and each one's message says what it does when it does not hold.
 module SageFs.Tests.RunAppDeltaTests
 
 open System
@@ -24,13 +24,22 @@ open SageFs.Tests.RunAppDeltaHarness
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
+/// Who refused the edit. The source planner sees a type's shape change before anything is built; the emitter sees what
+/// the compiler made of an edit the planner took for a body.
+[<RequireQualifiedAccess>]
+type Cause =
+  /// The source planner restarts it before a build.
+  | Planner
+  /// The emitter refuses it with this `RudeCause` case, after the build.
+  | Emitter of case: string
+
 /// What a row ends in.
 [<RequireQualifiedAccess>]
 type Ending =
   /// The same process serves the new code, and the save says it was patched by metadata delta.
   | PatchedByDelta
   /// The save restarts the app and names the declaration that could not be patched.
-  | RestartsNaming of declaration: string
+  | RestartsNaming of declaration: string * cause: Cause
 
 type Row = {
   /// The route the row reads: GET /<Name>.
@@ -98,7 +107,7 @@ let rows : Row list = [
     Before = "rudeVirtual:A"
     After = ""
     AlsoAfter = []
-    Ending = Ending.RestartsNaming "Shape" }
+    Ending = Ending.RestartsNaming ("Shape", Cause.Planner) }
   { Name = "rudeStruct"
     Why = "a struct gains a field, so its size changes under every value of it already in memory"
     Edits =
@@ -108,7 +117,14 @@ let rows : Row list = [
     Before = "rudeStruct:A3"
     After = ""
     AlsoAfter = []
-    Ending = Ending.RestartsNaming "Dim" }
+    Ending = Ending.RestartsNaming ("Dim", Cause.Planner) }
+  { Name = "closure"
+    Why = "a lambda starts capturing one more value: the closure object the app holds has no field for it, which only the compiled shapes show"
+    Edits = [ "fun () -> \"closure:A\" + tag", "fun () -> \"closure:A\" + tag + suffix" ]
+    Before = "closure:A!?"
+    After = ""
+    AlsoAfter = []
+    Ending = Ending.RestartsNaming ("makeHeld", Cause.Emitter "FieldsChanged") }
 ]
 
 let private json (payload: string) = System.Text.Json.JsonDocument.Parse(payload).RootElement
@@ -182,20 +198,27 @@ let exerciseRow (app: RunningApp) (row: Row) : Task<Observed> = task {
         // The reads above ran the patched bodies, so the worker can now say it saw them running.
         let! confirmedVerdict = confirmed app
         let final = json confirmedVerdict
-        match prop final "outcome", (prop final "message").Contains("metadata delta", StringComparison.OrdinalIgnoreCase) with
-        | "Patched", true -> return observed served ""
-        | "Patched", false ->
-          return observed served (sprintf "the save ended Patched and does not say it was a metadata delta: %s" (shorten (prop final "message")))
-        | other, _ -> return observed served (sprintf "the new body ran and the save ended %s, not Patched: %s" other (shorten confirmedVerdict))
+        // The first verdict said Pending, by the same mechanism: a client reads `mechanism`, never the words.
+        match prop final "outcome", prop final "mechanism", prop (json verdict) "outcome", prop (json verdict) "mechanism" with
+        | "Patched", "metadata-delta", "PatchPending", "metadata-delta" -> return observed served ""
+        | "Patched", mechanism, _, _ when mechanism <> "metadata-delta" ->
+          return observed served (sprintf "the save ended Patched by %A, not by metadata delta: %s" mechanism (shorten (prop final "message")))
+        | "Patched", _, first, firstMechanism ->
+          return observed served (sprintf "the first verdict was %s by %A, and should have been PatchPending by metadata-delta" first firstMechanism)
+        | other, _, _, _ -> return observed served (sprintf "the new body ran and the save ended %s, not Patched: %s" other (shorten confirmedVerdict))
       | problem -> return observed served problem
-  | Ending.RestartsNaming declaration ->
+  | Ending.RestartsNaming (declaration, cause) ->
     let reasons = reasonsOf verdict
+    let fromWho (r: string) =
+      match cause with
+      | Cause.Planner -> true
+      | Cause.Emitter case -> r.StartsWith(case + ":", StringComparison.Ordinal)
     match prop (json verdict) "outcome", reasons with
-    | "Restarted", (_ :: _) when reasons |> List.exists (fun r -> r.Contains(declaration, StringComparison.Ordinal)) ->
+    | "Restarted", (_ :: _) when reasons |> List.exists (fun r -> fromWho r && r.Contains(declaration, StringComparison.Ordinal)) ->
       return observed "" ""
     | "Restarted", [] -> return observed "" "the app restarted and the verdict names no cause"
     | "Restarted", _ ->
-      return observed "" (sprintf "the restart should name %s, and says %A" declaration reasons)
+      return observed "" (sprintf "the restart should name %s (%A), and says %A" declaration cause reasons)
     | other, _ -> return observed "" (sprintf "this edit cannot be patched, and the save ended %s, not Restarted" other)
 }
 
@@ -251,5 +274,59 @@ let runAppDeltaTests =
       }
       testTask (sprintf "[%s] an edit a metadata delta cannot take restarts the app and names the declaration" (HostRuntime.moniker runtime)) {
         do! runRows runtime restarting
+      }
+      testTask (sprintf "[%s] saves after saves each land on the one before: the chain carries from the first delta to the third, in the same process" (HostRuntime.moniker runtime)) {
+        let! app = startRunApp runtime
+        try
+          let! pid = get app "pid"
+          let mutable problems = []
+          for was, now in [ "A", "B"; "B", "C"; "C", "D" ] do
+            let! verdict = saveEdits app app.StateSource [ sprintf "\"closure:%s\"" was, sprintf "\"closure:%s\"" now ]
+            let! served = settle app "closure" (sprintf "closure:%s!?" now)
+            let! pidAfter = tryGet app "pid"
+            match prop (json verdict) "type", prop (json verdict) "mechanism", served = sprintf "closure:%s!?" now, pidAfter = pid with
+            | "pending", "metadata-delta", true, true -> ()
+            | _ -> problems <- sprintf "%s to %s: said %s, serves %A, pid %s (was %s)" was now (said verdict) served pidAfter pid :: problems
+          problems |> Expect.isEmpty "every save in the chain is a delta on the same process"
+        finally
+          stop app
+      }
+      testTask (sprintf "[%s] a patch and then an edit a delta cannot take: the first is patched, the second restarts and names what could not be" (HostRuntime.moniker runtime)) {
+        let! app = startRunApp runtime
+        try
+          let! first = saveEdits app app.StateSource [ "\"taskBody:A\"", "\"taskBody:B\"" ]
+          prop (json first) "type" |> Expect.equal (sprintf "the first save is patched: %s" (said first)) "pending"
+          let! second = saveEdits app app.StateSource [ "fun () -> \"closure:A\" + tag", "fun () -> \"closure:A\" + tag + suffix" ]
+          reasonsOf second
+          |> List.exists (fun r -> r.StartsWith("FieldsChanged:", StringComparison.Ordinal) && r.Contains "makeHeld")
+          |> Expect.isTrue (sprintf "the second save restarts and names the closure of makeHeld: %s" (said second))
+        finally
+          stop app
+      }
+      testTask (sprintf "[%s] a save that does not build is reported as it is and leaves the process alone, and the fix is patched on the chain that was there" (HostRuntime.moniker runtime)) {
+        let! app = startRunApp runtime
+        try
+          let! pid = get app "pid"
+          let! broken = saveEdits app app.StateSource [ "\"closure:A\"", "undefinedNameZ" ]
+          prop (json broken) "type" |> Expect.equal (sprintf "a build that fails is reported as failed: %s" (said broken)) "failed"
+          let! stillServing = get app "closure"
+          stillServing |> Expect.equal "the process keeps serving what it had" "closure:A!?"
+          let! fixedSave = saveEdits app app.StateSource [ "undefinedNameZ", "\"closure:B\"" ]
+          prop (json fixedSave) "mechanism" |> Expect.equal (sprintf "the fix is patched by delta: %s" (said fixedSave)) "metadata-delta"
+          let! served = settle app "closure" "closure:B!?"
+          served |> Expect.equal "and the process serves it" "closure:B!?"
+          let! pidAfter = get app "pid"
+          pidAfter |> Expect.equal "in the same process" pid
+        finally
+          stop app
+      }
+      testTask (sprintf "[%s] with the route off, a body edit to a run_app app restarts the app as it always did" (HostRuntime.moniker runtime)) {
+        let! app = startRunAppWith SageFs.Features.MetadataDelta.MetadataDeltaMode.Off runtime
+        try
+          let! verdict = saveEdits app app.StateSource [ "\"closure:A\"", "\"closure:B\"" ]
+          prop (json verdict) "outcome" |> Expect.equal (sprintf "the edit restarts: %s" (said verdict)) "Restarted"
+          prop (json verdict) "mechanism" |> Expect.equal "and it is not a patch, so it names no mechanism" ""
+        finally
+          stop app
       }
   ]

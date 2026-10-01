@@ -407,6 +407,7 @@
         <Compile Include="DeltaInstrumentation.fs" />
         <Compile Include="DeltaChild.fs" />
         <Compile Include="MetadataDeltaTests.fs" />
+        <Compile Include="DeltaRouteTests.fs" />
         <Compile Include="GuardSimTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
         <Compile Include="StreamingProxyTests.fs" />

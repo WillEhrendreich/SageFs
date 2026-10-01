@@ -90,10 +90,10 @@ let private buildAsSageFsDoes (runDir: string) (project: string) = task {
   |> Expect.equal (sprintf "the run_app fixture has to build with SageFs's session-build command:\n%s\n%s" out err) 0
 }
 
-let private spawnHost (runtime: HostRuntime) (runDir: string) (project: string) (hostLog: StringBuilder) = task {
+let private spawnHost (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) (runDir: string) (project: string) (hostLog: StringBuilder) = task {
   let sessionId = sprintf "runapp-%s" (Guid.NewGuid().ToString("N"))
   let args, envVars =
-    Args.buildWorkerSpawnConfig sessionId [ SageFs.SessionProjectTarget.Project project ] false true
+    Args.buildWorkerSpawnConfigWith deltaMode sessionId [ SageFs.SessionProjectTarget.Project project ] false true
       (WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults)
   let psi = ProcessStartInfo(hostExePath runtime, args)
   psi.UseShellExecute <- false
@@ -164,11 +164,11 @@ let private runApp (proxy: SessionProxy) (project: string) : Task<int> = task {
 
 /// Spin the whole thing up: scratch copy, SageFs build, host, `run_app`, the app answering. The worker
 /// watches the project's sources for hot reload as soon as the app is running.
-let startRunApp (runtime: HostRuntime) : Task<RunningApp> = task {
+let startRunAppWith (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp> = task {
   let runDir, project = copyFixture runAppFixture runtime
   do! buildAsSageFsDoes runDir project
   let hostLog = StringBuilder()
-  let! proc, workerUrl = spawnHost runtime runDir project hostLog
+  let! proc, workerUrl = spawnHost deltaMode runtime runDir project hostLog
   let proxy = HttpWorkerClient.httpProxy workerUrl
   do! waitReady proxy hostLog
   let! appPort = runApp proxy project
@@ -199,3 +199,7 @@ let startRunApp (runtime: HostRuntime) : Task<RunningApp> = task {
   | true -> return app
   | false -> return failwithf "the run_app fixture never answered /%s.\n%s" runAppFixture.ReadyRoute (RunningApp.log app)
 }
+
+/// The route as a user gets it when the flag is on.
+let startRunApp (runtime: HostRuntime) : Task<RunningApp> =
+  startRunAppWith SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime

@@ -407,6 +407,8 @@ type internal ChainState =
 type PreparedDelta internal (payload: DeltaPayload, pending: Pending, from: int) =
   member _.Payload : DeltaPayload = payload
   member internal _.Pending : Pending = pending
+  /// The generation of the chain this delta was prepared from.
+  member _.FromGeneration : int = from
   /// The generation of the chain this was prepared from, so a commit onto another chain is refused.
   member internal _.From : int = from
 
