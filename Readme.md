@@ -272,7 +272,7 @@ Live testing is *also* a per-session toggle that works in any of the three workf
 
 Use your editor's command to switch workflows:
 
-- **Neovim**: `:SageFsWorkflow live` or `:SageFsWorkflow repl`. The plugin's command documents only those two, so reach for MCP if you want `livetesting`
+- **Neovim**: not from the editor yet. `:SageFsWorkflow` takes no argument and shows the current workflow only (I read the plugin's `commands.lua` on 2026-10-01). Use the dashboard or MCP
 - **VS Code**: Command Palette → `SageFs: Switch Workflow`. This hits `POST /api/sessions/{sid}/workflow` directly, which restarts the same session id in place
 - **MCP**: `switch_workflow` with `target` = `repl` | `livetesting` | `live` (⚠️ `live` means Hot Reload, not live testing; the alias predates the third workflow). This one creates a *new* session in the target workflow and stops the old one
 - **Web dashboard**: a real dropdown next to your session now, not a read-only badge. Pick a workflow and it switches, restarting the same session id in place, same as VS Code
