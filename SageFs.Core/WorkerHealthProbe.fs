@@ -1,5 +1,7 @@
 module SageFs.WorkerHealthProbe
 
+open SageFs.WorkerProtocol
+
 /// Detects a worker whose OS PROCESS stays alive but stops answering the
 /// daemon's own health checks — the exact gap `proc.Exited` and the warmup
 /// poll are structurally blind to (roast-6 #3: `WorkerLivenessMonitor.fs` was
@@ -16,7 +18,10 @@ module SageFs.WorkerHealthProbe
 /// hung worker as healthy.
 [<RequireQualifiedAccess>]
 type ProbeOutcome =
+  /// The worker answered, with nothing usable to say about its status.
   | Healthy
+  /// The worker answered, and this is the status it reported about itself.
+  | Reported of SessionStatus
   | Missed
 
 /// Decision after folding one probe outcome into the current consecutive-miss
@@ -48,12 +53,45 @@ let defaultProbeTimeoutMs = int Timeouts.workerHealthProbeTimeout.TotalMilliseco
 ///     the threshold restarts.
 let decide (threshold: int) (missCount: int) (outcome: ProbeOutcome) : Decision =
   match outcome with
-  | ProbeOutcome.Healthy -> Decision.Continue 0
+  | ProbeOutcome.Healthy
+  | ProbeOutcome.Reported _ -> Decision.Continue 0
   | ProbeOutcome.Missed ->
     let next = missCount + 1
     match next >= threshold with
     | true -> Decision.Restart
     | false -> Decision.Continue next
+
+/// What the daemon's registry should do with a status a worker just reported on a probe.
+[<RequireQualifiedAccess>]
+type RegistryUpdate =
+  | NoChange
+  | Replace of SessionLifecycleStatus
+
+/// The probe is not a second status writer: it only carries one fact the registry has no other way to learn on
+/// its own, that the worker's FSI host died while the worker stayed up (the worker process never exits, so no
+/// `WorkerExited` comes), and the host coming back after a reset. Everything else a worker reports is left to the
+/// paths that already own it. A Faulted or Stopped session is terminal and is never touched.
+let registryUpdate (current: SessionLifecycleStatus) (reported: SessionStatus) : RegistryUpdate =
+  match current, reported with
+  | SessionLifecycleStatus.HostCrashed(_, known), SessionStatus.HostCrashed seen when known = seen -> RegistryUpdate.NoChange
+  | (SessionLifecycleStatus.Ready _ | SessionLifecycleStatus.Evaluating _ | SessionLifecycleStatus.HostCrashed _), SessionStatus.HostCrashed _
+  | SessionLifecycleStatus.HostCrashed _, (SessionStatus.Ready | SessionStatus.Evaluating) ->
+    RegistryUpdate.Replace(SessionLifecycleStatus.ofWorkerReport current reported)
+  | _ -> RegistryUpdate.NoChange
+
+/// The probe's `onReported`: look the registry's status up when a report arrives (not before, it moves) and post
+/// the replacement when `registryUpdate` says there is one. A session that is gone has nothing to update.
+let syncRegistry
+  (currentStatus: unit -> SessionLifecycleStatus option)
+  (replace: SessionLifecycleStatus -> unit)
+  (reported: SessionStatus)
+  : unit =
+  match currentStatus () with
+  | None -> ()
+  | Some current ->
+    match registryUpdate current reported with
+    | RegistryUpdate.Replace status -> replace status
+    | RegistryUpdate.NoChange -> ()
 
 /// Run the probe loop until either the miss threshold is reached
 /// (`onRestart` fires exactly once and the loop exits) or `shouldContinue`
@@ -67,6 +105,7 @@ let run
   (threshold: int)
   (intervalMs: int)
   (shouldContinue: unit -> bool)
+  (onReported: SessionStatus -> unit)
   (onRestart: unit -> unit)
   : Async<unit> =
   async {
@@ -84,6 +123,10 @@ let run
             with _ ->
               return ProbeOutcome.Missed
           }
+        match outcome with
+        | ProbeOutcome.Reported status -> onReported status
+        | ProbeOutcome.Healthy
+        | ProbeOutcome.Missed -> ()
         match decide threshold missCount outcome with
         | Decision.Continue n -> missCount <- n
         | Decision.Restart ->

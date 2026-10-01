@@ -49,6 +49,7 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   // constructs it specifically for the WarmingUp/Unroutable resolutions).
   | SageFs.SageFsError.SessionNotRoutable _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming
   | SageFs.SageFsError.WorkerCommunicationFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
+  | SageFs.SageFsError.FsiHostCrashed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.WorkerSpawnFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.WorkerTimeout _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
   | SageFs.SageFsError.WorkerHttpError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure

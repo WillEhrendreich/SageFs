@@ -2172,7 +2172,8 @@ let sessionHealthStatusOfWorkerStatus (status: SageFs.WorkerProtocol.SessionStat
   | SageFs.WorkerProtocol.SessionStatus.Building _ -> SageFs.Features.SessionHealthStatus.Evaluating
   | SageFs.WorkerProtocol.SessionStatus.Starting
   | SageFs.WorkerProtocol.SessionStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
-  | SageFs.WorkerProtocol.SessionStatus.Faulted -> SageFs.Features.SessionHealthStatus.Faulted
+  | SageFs.WorkerProtocol.SessionStatus.Faulted
+  | SageFs.WorkerProtocol.SessionStatus.HostCrashed _ -> SageFs.Features.SessionHealthStatus.Faulted
   | SageFs.WorkerProtocol.SessionStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
 
 /// Same vocabulary, for when no worker answered at all (no proxy, an HTTP
@@ -2184,7 +2185,8 @@ let sessionHealthStatusOfWorkerStatus (status: SageFs.WorkerProtocol.SessionStat
 /// — not a silent default.
 let sessionHealthStatusOfLifecycleFallback (status: SageFs.WorkerProtocol.SessionLifecycleStatus) : SageFs.Features.SessionHealthStatus =
   match status with
-  | SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted _ -> SageFs.Features.SessionHealthStatus.Faulted
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted _
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.HostCrashed _ -> SageFs.Features.SessionHealthStatus.Faulted
   | SageFs.WorkerProtocol.SessionLifecycleStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
   | SageFs.WorkerProtocol.SessionLifecycleStatus.Starting _
   | SageFs.WorkerProtocol.SessionLifecycleStatus.Restarting _

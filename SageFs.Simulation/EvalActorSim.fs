@@ -44,7 +44,13 @@ module EvalActorSim =
     | Cancel
     | Reset
     | StragglerFinished of generationsAgo: int
+    /// The end of the FSI host of the session incarnation `generationsAgo` resets in the past (0 = the current
+    /// host): a crash, or the purposeful retire a stop or reset does.
+    | HostEnded of generationsAgo: int * HostEnd
     | PoisonPill
+
+  /// The crash every scripted `HostEnded(_, Crashed _)` in the generators uses. One value, so a test can name it.
+  let fixtureCrash : HostCrash = { Exit = ExitedWith 134; Output = "Unhandled exception. System.OverflowException" }
 
   /// A fully-specified, replayable scenario.
   type Scenario = { Seed: int; Ops: EvalOp list }
@@ -67,6 +73,8 @@ module EvalActorSim =
     /// was running under, exactly like `Evaluating` does.
     | Cancelling of forGeneration: SessionGeneration
     | Reset of forGeneration: SessionGeneration
+    /// The host died on its own; mirrors `SessionActivity.HostCrashed`. Only a reset leaves it.
+    | HostCrashed of forGeneration: SessionGeneration * HostCrash
 
   /// One entry in the fold's decision log: which op, which `EvalInput` it
   /// resolved to, the generation `decide` saw at that point, and what it
@@ -108,6 +116,7 @@ module EvalActorSim =
     | Activity.Evaluating _ -> EvalPhase.Active SessionActivity.Evaluating
     | Activity.Cancelling _ -> EvalPhase.Active SessionActivity.Cancelling
     | Activity.Reset _ -> EvalPhase.Active SessionActivity.Idle
+    | Activity.HostCrashed(_, crash) -> EvalPhase.Active(SessionActivity.HostCrashed crash)
 
   /// A reducer under test: the shape of `EvalActorDecision.decide`.
   type Decide = SessionGeneration -> EvalPhase -> EvalInput -> EvalDecision
@@ -125,6 +134,9 @@ module EvalActorSim =
     | EvalOp.StragglerFinished generationsAgo ->
       let target = state.History |> List.tryItem (max 0 generationsAgo) |> Option.defaultValue state.Generation
       Some(EvalInput.Finished target)
+    | EvalOp.HostEnded(generationsAgo, hostEnd) ->
+      let target = state.History |> List.tryItem (max 0 generationsAgo) |> Option.defaultValue state.Generation
+      Some(EvalInput.HostEnded(target, hostEnd))
     | EvalOp.PoisonPill -> None
 
   /// Apply one decision to fold state — activity/generation transitions
@@ -142,8 +154,14 @@ module EvalActorSim =
       // orphan.
       match state.Activity with
       | Activity.Evaluating g -> { state with Activity = Activity.Cancelling g }
-      | Activity.Idle | Activity.Cancelling _ | Activity.Reset _ -> state
-    | EvalDecision.ApplyFinished -> { state with Activity = Activity.Idle }
+      | Activity.Idle | Activity.Cancelling _ | Activity.Reset _ | Activity.HostCrashed _ -> state
+    | EvalDecision.ApplyFinished ->
+      // Same rule as AppState: an eval finishing after the host died does not make the session idle.
+      match state.Activity with
+      | Activity.HostCrashed _ -> state
+      | Activity.Idle | Activity.Evaluating _ | Activity.Cancelling _ | Activity.Reset _ -> { state with Activity = Activity.Idle }
+    | EvalDecision.MarkHostCrashed crash -> { state with Activity = Activity.HostCrashed(state.Generation, crash) }
+    | EvalDecision.IgnoreHostEnd -> state
     | EvalDecision.DropSupersededFinished -> state
     | EvalDecision.AdvanceGenerationAndReset ->
       let g' = SessionGeneration.next state.Generation
@@ -236,6 +254,37 @@ module EvalActorSim =
       | EvalInput.Submit, EvalPhase.Active SessionActivity.Cancelling -> EvalDecision.RunEval
       | other, p -> decide generation p other
 
+  /// TWIN 4: retire-blind — a purposeful end of the host (a stop, a reset, a restart) is reported as a crash.
+  /// The false positive a naive exit watcher gives the moment the session retires its own host.
+  let private decideRetireBlind : Decide =
+    fun generation phase input ->
+      match input with
+      | EvalInput.HostEnded(forGeneration, HostEnd.Retired) -> decide generation phase (EvalInput.HostEnded(forGeneration, HostEnd.Crashed fixtureCrash))
+      | other -> decide generation phase other
+
+  /// TWIN 5: generation-blind host end — the crash of a host a reset already replaced is applied to the new session.
+  let private decideStaleHostEndBlind : Decide =
+    fun generation phase input ->
+      match input with
+      | EvalInput.HostEnded(_, hostEnd) -> decide generation phase (EvalInput.HostEnded(generation, hostEnd))
+      | other -> decide generation phase other
+
+  /// TWIN 6: no crash gate — a Submit is run even though the host is gone, which is what production did before: the
+  /// eval hit the dead connection and said so one eval at a time while the session claimed to be Ready.
+  let private decideNoCrashGate : Decide =
+    fun generation phase input ->
+      match input, phase with
+      | EvalInput.Submit, EvalPhase.Active(SessionActivity.HostCrashed _) -> EvalDecision.RunEval
+      | other, p -> decide generation p other
+
+  /// TWIN 7: reports every end — a crash already known is marked again, so one crash is reported twice.
+  let private decideReportsEveryEnd : Decide =
+    fun generation phase input ->
+      match input, phase with
+      | EvalInput.HostEnded(forGeneration, HostEnd.Crashed crash), EvalPhase.Active(SessionActivity.HostCrashed _) when forGeneration = generation ->
+        EvalDecision.MarkHostCrashed crash
+      | other, p -> decide generation p other
+
   /// Run through the REAL `EvalActorDecision.decide`, guarded — the subject
   /// under test, in production's own shape.
   let run (scenario: Scenario) : Trace =
@@ -255,6 +304,22 @@ module EvalActorSim =
   /// `cancel-blocks-resubmit` has teeth (reproduces the live orphan bug).
   let runNoCancellingGate (scenario: Scenario) : Trace =
     runGuardedWith "twin-no-cancelling-gate" decideNoCancellingGate scenario
+
+  /// Run through the retire-blind twin — proves `host-end-purpose` has teeth.
+  let runRetireBlind (scenario: Scenario) : Trace =
+    runGuardedWith "twin-retire-blind" decideRetireBlind scenario
+
+  /// Run through the generation-blind host-end twin — proves `host-end-purpose` has teeth.
+  let runStaleHostEndBlind (scenario: Scenario) : Trace =
+    runGuardedWith "twin-stale-host-end-blind" decideStaleHostEndBlind scenario
+
+  /// Run through the no-crash-gate twin — proves `crash-blocks-eval` has teeth (the live bug).
+  let runNoCrashGate (scenario: Scenario) : Trace =
+    runGuardedWith "twin-no-crash-gate" decideNoCrashGate scenario
+
+  /// Run through the reports-every-end twin — proves `crash-reported-once` has teeth.
+  let runReportsEveryEnd (scenario: Scenario) : Trace =
+    runGuardedWith "twin-reports-every-end" decideReportsEveryEnd scenario
 
   /// Run the REAL decide through the UNGUARDED fold — used to prove
   /// `loop-survival` has teeth (it is the fold guard, not the decision

@@ -218,6 +218,14 @@ module Timeouts =
   /// costs nothing; the bound only matters when a grandchild holds the pipe
   /// open. No recorded reason for 2s.
   let stderrDrainGrace = TimeSpan.FromSeconds(2.0)
+  /// How long the client waits, after the FSI host's connection closes, for the
+  /// process to report its exit code. The code arrives right behind the close, so
+  /// this normally costs nothing; if it never comes the end is reported as a
+  /// closed connection instead. Was a bare 2000 ms, kept at that.
+  let fsiHostExitReport = TimeSpan.FromSeconds(2.0)
+  /// How long disposing an FSI host session waits for the host to exit after the
+  /// shutdown request before it kills the process. Was a bare 5000 ms, kept at that.
+  let fsiHostShutdownGrace = TimeSpan.FromSeconds(5.0)
   /// How long the `dotnet build` of the FSI host (a cold build, once per host
   /// version and SDK) may run before FsiHostBuild gives up. No recorded reason
   /// for 5 minutes.

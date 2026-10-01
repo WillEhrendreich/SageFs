@@ -126,6 +126,8 @@ module SessionHealth =
     match status with
     | SessionLifecycleStatus.Faulted reason ->
       SessionHealth.Failed (FaultReason.describe reason)
+    | SessionLifecycleStatus.HostCrashed(_, crash) ->
+      SessionHealth.Failed (sprintf "%s %s" (HostCrash.describe crash) HostCrash.recovery)
     | SessionLifecycleStatus.Stopped ->
       SessionHealth.Failed "Session is stopped."
     | SessionLifecycleStatus.Starting _

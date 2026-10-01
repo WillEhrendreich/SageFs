@@ -101,6 +101,7 @@ module Scenario =
     | SessionLifecycleStatus.Ready _
     | SessionLifecycleStatus.Evaluating _
     | SessionLifecycleStatus.Building _
+    | SessionLifecycleStatus.HostCrashed _
     | SessionLifecycleStatus.Restarting _ -> false
 
   /// The full deterministic result of running a scenario: the scenario plus

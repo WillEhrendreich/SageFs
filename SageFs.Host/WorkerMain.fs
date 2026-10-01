@@ -69,9 +69,9 @@ let toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiagnostic =
     EndColumn = d.Range.EndColumn
     ErrorNumber = d.ErrorNumber }
 
-/// Convert internal SessionState + EvalStats to WorkerStatusSnapshot.
+/// Convert the session's status + EvalStats to WorkerStatusSnapshot.
 let toStatusSnapshot
-  (state: SessionState)
+  (status: SessionStatus)
   (stats: Affordances.EvalStats)
   (statusMsg: string option)
   (projects: SageFs.ProjectLoading.ClassifiedProject list)
@@ -80,13 +80,6 @@ let toStatusSnapshot
     match stats.EvalCount > 0 with
     | true -> stats.TotalDuration.TotalMilliseconds / float stats.EvalCount |> int64
     | false -> 0L
-  let status =
-    match state with
-    | SessionState.Uninitialized
-    | SessionState.WarmingUp -> SessionStatus.Starting
-    | SessionState.Ready -> SessionStatus.Ready
-    | SessionState.Evaluating -> SessionStatus.Evaluating
-    | SessionState.Faulted -> SessionStatus.Faulted
   { Status = status
     StatusMessage = statusMsg
     EvalCount = stats.EvalCount
@@ -169,7 +162,7 @@ let private toWorkerError (fallback: string -> SageFsError) (ex: exn) : SageFsEr
 /// Handle a single WorkerMessage by dispatching to the actor.
 let handleMessage
   (actor: AppActor)
-  (getState: unit -> SessionState)
+  (getStatus: unit -> SessionStatus)
   (getStats: unit -> Affordances.EvalStats)
   (getStatusMessage: unit -> string option)
   (projects: SageFs.ProjectLoading.ClassifiedProject list)
@@ -263,9 +256,9 @@ let handleMessage
       return WorkerResponse.HardResetResult(replyId, result)
 
     | WorkerMessage.GetStatus replyId ->
-      let state = getState ()
+      let status = getStatus ()
       let stats = getStats ()
-      return WorkerResponse.StatusResult(replyId, toStatusSnapshot state stats (getStatusMessage()) projects)
+      return WorkerResponse.StatusResult(replyId, toStatusSnapshot status stats (getStatusMessage()) projects)
 
     | WorkerMessage.GetLiveValues replyId ->
       let! json = actor.PostAndAsyncReply(fun rc -> GetLiveValues rc)
@@ -1904,7 +1897,7 @@ let run (sessionId: string) (port: int) = async {
 
   // Signal readiness over the pipe
   let handler =
-    handleMessage actor result.GetSessionState result.GetEvalStats result.GetStatusMessage result.ProjectRoles
+    handleMessage actor result.GetSessionStatus result.GetEvalStats result.GetStatusMessage result.ProjectRoles
       getRunTest setDynamicRunTest getInitialDiscovery evalLiveTestFile appRuns
 
   let readyHandler (msg: WorkerMessage) = async {

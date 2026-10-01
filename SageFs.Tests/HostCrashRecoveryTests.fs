@@ -14,6 +14,7 @@ open SageFs.ActorCreation
 open SageFs.Features.Events
 open SageFs.WorkerProtocol
 open SageFs.Tests
+open SageFs.Tests.TestInfrastructure
 
 /// A thread whose body throws: the unhandled exception aborts the process, which is the crash found live.
 let private crashTheHost = "System.Threading.Thread((fun () -> failwith \"host-crash-marker\")).Start();;"

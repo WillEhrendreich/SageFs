@@ -233,6 +233,7 @@ let architectureTests =
               | t when t = typeof<SessionState> -> box SessionState.Uninitialized
               | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
               | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
+              | t when t = typeof<HostCrash> -> box ({ Exit = ExitedWith 134; Output = "test" } : HostCrash)
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
@@ -264,6 +265,7 @@ let architectureTests =
               | t when t = typeof<SessionState> -> box SessionState.Uninitialized
               | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
               | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
+              | t when t = typeof<HostCrash> -> box ({ Exit = ExitedWith 134; Output = "test" } : HostCrash)
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
@@ -292,6 +294,7 @@ let architectureTests =
               | t when t = typeof<SessionState> -> box SessionState.Uninitialized
               | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
               | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
+              | t when t = typeof<HostCrash> -> box ({ Exit = ExitedWith 134; Output = "test" } : HostCrash)
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
@@ -1117,7 +1120,11 @@ let fileSizeBudgets =
       // started the series at; never bump to paper over drift.
       // 4226 -> 4219: JSON goes through SageFs.Json, so liveTestJsonOpts and the
       // two ad hoc JsonSerializerOptions are gone.
-      "SageFs/Mcp.fs", 4219
+      // 4219 -> 4229: a session whose FSI host crashed. The tool gate probes the worker's status and, for
+      // a crashed host, refuses with the crash instead of the generic wait-for-Ready advice (a reset stays
+      // admitted), and the eval formatter does not guess advice for the typed crash. Deliberate, reviewed;
+      // ratchet back DOWN when this file is split.
+      "SageFs/Mcp.fs", 4229
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
@@ -1190,7 +1197,8 @@ let fileSizeBudgets =
       // its public module path. Exact post-split size.
       // 3094 -> 3078: the rebuild readiness poll became one await on AwaitReady
       // (RebuildReadyWait.fs). Exact size.
-      "SageFs/SageFsApp.fs", 3078
+      // 3078 -> 3079: the HostCrashed arm of the session display mapping.
+      "SageFs/SageFsApp.fs", 3079
       "SageFs.Core/AppState.fs", 2000
       // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
       // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,
@@ -1239,7 +1247,9 @@ let fileSizeBudgets =
       // 1616 -> 1672: the supervisor alarm (the callbacks record, createWithAlarm
       // and the loop's beat stamps), net of probeWorkerHealthOnce moving to
       // WorkerPostReady.fs. Still 68 under where the WorkerReady split started.
-      "SageFs.Core/SessionManager.fs", 1672 ]
+      // 1672 -> 1676: the health probe hands the worker's reported status to the registry sync
+      // (WorkerHealthProbe.syncRegistry), and a HostCrashed arm in the ready-waiter settle.
+      "SageFs.Core/SessionManager.fs", 1676 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->

@@ -154,6 +154,10 @@ type SageFsError =
   /// A reset replaced the session while this evaluation was still running, so
   /// its result belongs to a session that no longer exists and was discarded.
   | EvalSupersededByReset
+  /// The isolated FSI host process went away on its own (an unhandled exception on a thread of the user's code,
+  /// an abort, a kill) while the session was in service. The session's state lived in that host, so all of it is
+  /// gone; the crash carries how the host ended and the last of what it said.
+  | FsiHostCrashed of crash: HostCrash
   // ── Warm-up ──
   | WarmupOpenFailed of name: string * reason: string
   | WarmupContextFailed of sessionId: string * reason: string
@@ -259,6 +263,7 @@ module SageFsError =
       sprintf "Cancel failed: %s" reason
     | SageFsError.EvalSupersededByReset ->
       "The session was reset while this evaluation was running, so its result was discarded: it ran against the session the reset replaced, and none of its definitions exist in the fresh session."
+    | SageFsError.FsiHostCrashed crash -> HostCrash.describe crash
     | SageFsError.WarmupOpenFailed(name, reason) ->
       sprintf "Failed to open '%s' during warm-up: %s" name reason
     | SageFsError.WarmupContextFailed(id, reason) ->
@@ -304,6 +309,7 @@ module SageFsError =
     | SageFsError.UnsafeSessionPath _ -> LogLevel.Warning
     | SageFsError.ProjectFrameworkNotHostable _ -> LogLevel.Information
     | SageFsError.EvalFailed _ -> LogLevel.Error
+    | SageFsError.FsiHostCrashed _ -> LogLevel.Error
     | SageFsError.ResetFailed _ -> LogLevel.Error
     | SageFsError.HardResetFailed _ -> LogLevel.Error
     | SageFsError.BuildFailed _ -> LogLevel.Error
@@ -363,6 +369,7 @@ module SageFsError =
     // 502 Bad Gateway
     | SageFsError.WorkerHttpError _ -> 502
     | SageFsError.WorkerCommunicationFailed _ -> 502
+    | SageFsError.FsiHostCrashed _ -> 502
     | SageFsError.PipeClosed -> 502
     | SageFsError.WorkerSpawnFailed _ -> 502
     | SageFsError.SseConnectionError _ -> 502
@@ -424,6 +431,7 @@ module SageFsError =
     | SageFsError.AppRunFailed _
     | SageFsError.Unexpected _ -> ErrorCategory.Internal
     | SageFsError.WorkerCommunicationFailed _
+    | SageFsError.FsiHostCrashed _
     | SageFsError.WorkerSpawnFailed _
     | SageFsError.WorkerTimeout _
     | SageFsError.WorkerHttpError _
@@ -480,6 +488,7 @@ module SageFsError =
     | SageFsError.CompletionFailed _ -> "Retry or run reset_fsi_session"
     | SageFsError.CancelFailed _ -> "Retry or run hard_reset_fsi_session"
     | SageFsError.EvalSupersededByReset -> "Run the code again in the fresh session"
+    | SageFsError.FsiHostCrashed _ -> HostCrash.recovery
     | SageFsError.WarmupOpenFailed _ -> "Run 'dotnet build' for the project, then hard_reset_fsi_session. If it still doesn't resolve, it is not a public, top-level, fully-qualified name in any loaded assembly — SageFs cannot auto-open a nested or private module by its short name."
     | SageFsError.WarmupContextFailed _ -> "Run hard_reset_fsi_session"
     | SageFsError.HotReloadFailed _ -> "Check the file for syntax errors"
@@ -541,6 +550,7 @@ module SageFsError =
     | SageFsError.CompletionFailed _ -> "CompletionFailed"
     | SageFsError.CancelFailed _ -> "CancelFailed"
     | SageFsError.EvalSupersededByReset -> "EvalSupersededByReset"
+    | SageFsError.FsiHostCrashed _ -> "FsiHostCrashed"
     | SageFsError.WarmupOpenFailed _ -> "WarmupOpenFailed"
     | SageFsError.WarmupContextFailed _ -> "WarmupContextFailed"
     | SageFsError.HotReloadFailed _ -> "HotReloadFailed"
@@ -648,6 +658,11 @@ module SageFsError =
         "reason", box reason ]
     | SageFsError.CancelFailed reason -> [ "reason", box reason ]
     | SageFsError.EvalSupersededByReset -> []
+    | SageFsError.FsiHostCrashed crash ->
+      let parts = System.Collections.Generic.Dictionary<string, obj>()
+      parts.["exitCode"] <- (match crash.Exit with ExitedWith code -> box code | ConnectionClosed -> null)
+      parts.["output"] <- box crash.Output
+      [ "crash", box (parts :> System.Collections.Generic.IDictionary<string, obj>) ]
     | SageFsError.WarmupOpenFailed(name, reason) ->
       [ "name", box name
         "reason", box reason ]

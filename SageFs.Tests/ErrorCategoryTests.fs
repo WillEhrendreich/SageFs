@@ -44,6 +44,7 @@ let private golden : (string * ErrorCategory) list =
     "CompletionFailed", ErrorCategory.Internal
     "CancelFailed", ErrorCategory.Internal
     "EvalSupersededByReset", ErrorCategory.Internal
+    "FsiHostCrashed", ErrorCategory.Gateway
     "WarmupOpenFailed", ErrorCategory.Internal
     "WarmupContextFailed", ErrorCategory.Internal
     "HotReloadFailed", ErrorCategory.Internal
@@ -74,6 +75,7 @@ let private everyError : (string * SageFsError) list =
         | t when t = typeof<SessionState> -> box SessionState.Uninitialized
         | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
         | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
+        | t when t = typeof<HostCrash> -> box ({ Exit = ExitedWith 134; Output = "test" } : HostCrash)
         | _ -> null)
     case.Name, FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError)
   |> Array.toList

@@ -208,6 +208,33 @@ let sessionManagerSpawnFirstRestartTests =
         |> isRestarting
         |> Expect.isTrue "session stays registered as Restarting during the swap"
 
+    testCase "T2c — a session whose FSI host crashed is brought back by a hard reset: a replacement worker is spawned before the old one is stopped" <| fun _ ->
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun _ -> Ok(Process.GetCurrentProcess()))
+
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        makeSessionReady harness info
+        let pid = getManagedSession harness info.Id |> getWorkerPid
+        let crash : HostCrash = { Exit = ExitedWith 134; Output = "Unhandled exception. System.OverflowException" }
+        harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionLifecycleStatus.HostCrashed({ Pid = pid; Port = Some 4123 }, crash)))
+        getManagedSession harness info.Id
+        |> fun session -> session.Info.Status
+        |> Expect.equal "the registry holds the crash, with the worker that is still there" (SessionLifecycleStatus.HostCrashed({ Pid = pid; Port = Some 4123 }, crash))
+
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.RespawnOnly, reply)) with
+        | Ok _ -> ()
+        | Error err -> failtestf "restart of a crashed session failed: %s" (SageFsError.describe err)
+
+        runtime.Verbs |> Seq.toList
+        |> Expect.equal "the replacement is spawned without stopping the old worker first" [ Verb.Start; Verb.Start ]
+        getManagedSession harness info.Id
+        |> fun session -> session.Info.Status
+        |> isRestarting
+        |> Expect.isTrue "the session is Restarting, no longer HostCrashed"
+
     testCase "T3 — non-rebuild hard reset with a spawn failure leaves the session Ready and serving" <| fun _ ->
       let runtime =
         mkRuntime

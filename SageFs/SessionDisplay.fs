@@ -128,6 +128,8 @@ module SessionDisplay =
       SessionDisplayStatus.Starting
     | SessionLifecycleStatus.Faulted reason ->
       SessionDisplayStatus.Faulted (FaultReason.describe reason)
+    | SessionLifecycleStatus.HostCrashed(_, crash) ->
+      SessionDisplayStatus.Faulted (HostCrash.describe crash)
     | SessionLifecycleStatus.Restarting _ ->
       SessionDisplayStatus.Restarting
     | SessionLifecycleStatus.Stopped ->

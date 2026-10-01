@@ -31,7 +31,14 @@ module SageFs.EvalActorDecision
 /// case the eval actor had no way to remember "a cancel is outstanding and
 /// unconfirmed", so a second Submit was accepted onto the SAME live FSI
 /// session as the still-running orphan — two threads racing one session.
-type SessionActivity = Idle | Evaluating | Cancelling
+///
+/// `HostCrashed` is the isolated FSI host process dying on its own while the session was in service. The session's
+/// state lived in that host, so nothing can run on it any more; only a reset leaves this activity.
+type SessionActivity =
+  | Idle
+  | Evaluating
+  | Cancelling
+  | HostCrashed of HostCrash
 
 /// Which incarnation of the FSI session an eval ran against. Every reset
 /// (soft or hard) replaces the session and advances the generation, so a
@@ -67,6 +74,8 @@ type EvalInput =
   | Query
   | Finished of forGeneration: SessionGeneration
   | Reset
+  /// The FSI host of the session incarnation `forGeneration` ended, one way or the other.
+  | HostEnded of forGeneration: SessionGeneration * HostEnd
 
 /// What to do about an `EvalInput`, given the actor's current generation
 /// and phase. A DU — not a bool/Option — so every route is a distinct,
@@ -85,6 +94,11 @@ type EvalDecision =
   | ApplyFinished
   | DropSupersededFinished
   | AdvanceGenerationAndReset
+  /// The current host died on its own: the activity becomes `HostCrashed`.
+  | MarkHostCrashed of HostCrash
+  /// A host end that changes nothing: a purposeful stop, the host of a session a reset already replaced, one the
+  /// session already knows about, or one that arrives when there is no live session to move.
+  | IgnoreHostEnd
 
 /// The eval gate: can code be evaluated right now? Phase-based — no null
 /// checks, because a live Session/OutStream exist iff phase is Active.
@@ -135,6 +149,7 @@ let decide (generation: SessionGeneration) (phase: EvalPhase) (input: EvalInput)
         SageFsError.EvalFailed
           "A previous eval was cancelled but hasn't confirmed it stopped — likely a loop with no cancellation checkpoint. \
            New evals are blocked on this session until it does, or you run hard_reset_fsi_session to recover.")
+    | EvalPhase.Active(SessionActivity.HostCrashed crash) -> EvalDecision.RejectEval(SageFsError.FsiHostCrashed crash)
     | EvalPhase.Active _ -> EvalDecision.RunEval
   | EvalInput.Query -> EvalDecision.ServeQuery
   | EvalInput.Cancel -> EvalDecision.AckCancel
@@ -143,6 +158,19 @@ let decide (generation: SessionGeneration) (phase: EvalPhase) (input: EvalInput)
     | true -> EvalDecision.ApplyFinished
     | false -> EvalDecision.DropSupersededFinished
   | EvalInput.Reset -> EvalDecision.AdvanceGenerationAndReset
+  | EvalInput.HostEnded(forGeneration, hostEnd) ->
+    match hostEnd with
+    // Our own stop, reset or restart: never a failure.
+    | HostEnd.Retired -> EvalDecision.IgnoreHostEnd
+    | HostEnd.Crashed crash ->
+      match forGeneration = generation, phase with
+      // The host of a session a reset already replaced.
+      | false, _ -> EvalDecision.IgnoreHostEnd
+      // Already known: a crash is reported once.
+      | true, EvalPhase.Active(SessionActivity.HostCrashed _) -> EvalDecision.IgnoreHostEnd
+      | true, EvalPhase.Active _ -> EvalDecision.MarkHostCrashed crash
+      // No live session to move: a reset is in flight, or the session is already faulted.
+      | true, (EvalPhase.Initializing | EvalPhase.Faulted) -> EvalDecision.IgnoreHostEnd
 
 /// The activity effect of an acknowledged Cancel (`EvalDecision.AckCancel`):
 /// only `Evaluating` moves to `Cancelling` — a cancel with nothing new in
@@ -152,4 +180,11 @@ let decide (generation: SessionGeneration) (phase: EvalPhase) (input: EvalInput)
 let applyCancelAck (activity: SessionActivity) : SessionActivity =
   match activity with
   | Evaluating -> Cancelling
-  | Idle | Cancelling -> activity
+  | Idle | Cancelling | HostCrashed _ -> activity
+
+/// The activity once an eval's `Finished` is applied. An eval that was running when the host died finishes too (as a
+/// failure), and that must not make a session with no host look idle: only a reset leaves `HostCrashed`.
+let activityAfterFinished (activity: SessionActivity) : SessionActivity =
+  match activity with
+  | HostCrashed _ -> activity
+  | Idle | Evaluating | Cancelling -> Idle

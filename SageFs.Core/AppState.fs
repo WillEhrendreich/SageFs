@@ -167,6 +167,7 @@ module SessionPhase =
   let statusMessage = function
     | Initializing msg -> msg
     | Faulted reason -> Some reason
+    | Active (_, HostCrashed crash) -> Some (HostCrash.describe crash)
     | Active _ -> None
 
   /// Derive the legacy SessionState for external consumers. Cancelling->Faulted keeps hard_reset reachable via Affordances's gate (see SessionActivity.Cancelling doc).
@@ -175,7 +176,18 @@ module SessionPhase =
     | Active (_, Idle) -> SessionState.Ready
     | Active (_, Evaluating) -> SessionState.Evaluating
     | Active (_, Cancelling) -> SessionState.Faulted
+    | Active (_, HostCrashed _) -> SessionState.Faulted
     | Faulted _ -> SessionState.Faulted
+
+  /// The status the worker reports to the daemon. Same mapping as `toSessionState`, except a crashed host keeps its
+  /// crash: the daemon shows why, and knows the worker is still there to reset.
+  let toWorkerStatus = function
+    | Initializing _ -> WorkerProtocol.SessionStatus.Starting
+    | Active (_, Idle) -> WorkerProtocol.SessionStatus.Ready
+    | Active (_, Evaluating) -> WorkerProtocol.SessionStatus.Evaluating
+    | Active (_, Cancelling) -> WorkerProtocol.SessionStatus.Faulted
+    | Active (_, HostCrashed crash) -> WorkerProtocol.SessionStatus.HostCrashed crash
+    | Faulted _ -> WorkerProtocol.SessionStatus.Faulted
 
   /// Extract the AppState when active, None otherwise.
   /// Narrow convenience for callers that genuinely don't need phase distinction.
@@ -247,6 +259,8 @@ type internal EvalCommand =
   | EvalGetLiveValues of AsyncReplyChannel<string>
   /// Posted after a cancel signal to record it outstanding (SessionActivity.Cancelling); no reply.
   | EvalMarkCancelling
+  /// Posted when the FSI host of the session incarnation `generation` ends (see `watchHost`); no reply.
+  | EvalHostEnded of generation: SessionGeneration * HostEnd
 
 /// Test-only fault-injection seam for the eval-actor resilience tests
 /// (SageFs.Tests/EvalActorResilienceTests.fs). When set, the eval actor's
@@ -1173,6 +1187,15 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
         Diagnostics = [||]
         EvaluatedCode = code
         Metadata = Map.empty }
+    // The session's FSI may live in a host process that can die on its own. Tell this actor when the host of the
+    // CURRENT incarnation ends; `decide` judges it (a purposeful stop or a replaced host's end changes nothing).
+    let watchHost (session: FsiSession.IFsiSession) =
+      match session.HostLifetime with
+      | FsiSession.SharesTheWorkerProcess -> ()
+      | FsiSession.SeparateHost ended ->
+        let generation = sessionGeneration.Value
+        ended.ContinueWith((fun (finished: Task<HostEnd>) -> mailbox.Post(EvalHostEnded(generation, finished.Result))), TaskContinuationOptions.OnlyOnRanToCompletion)
+        |> ignore
     let processEvalCommand (phase: SessionPhase, middleware: Middleware list, evalStats: Affordances.EvalStats) (cmd: EvalCommand) : Async<SessionPhase * Middleware list * Affordances.EvalStats> =
       async {
         // Test-only fault-injection seam (None in production): a throw here
@@ -1242,8 +1265,10 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           | EvalActorDecision.EvalDecision.AckCancel
           | EvalActorDecision.EvalDecision.ApplyFinished
           | EvalActorDecision.EvalDecision.DropSupersededFinished
-          | EvalActorDecision.EvalDecision.AdvanceGenerationAndReset ->
-            // Unreachable: decide only returns these for Query/Cancel/Finished/Reset, never Submit.
+          | EvalActorDecision.EvalDecision.AdvanceGenerationAndReset
+          | EvalActorDecision.EvalDecision.MarkHostCrashed _
+          | EvalActorDecision.EvalDecision.IgnoreHostEnd ->
+            // Unreachable: decide only returns these for Query/Cancel/Finished/Reset/HostEnded, never Submit.
             return (phase, middleware, evalStats)
         | EvalFinished(_, sw, code, reply, generation)
             when EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) (EvalActorDecision.EvalInput.Finished generation)
@@ -1262,10 +1287,16 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           EvalLatencyTrace.shared.StampFinished()
           currentEvalCts.Value <- None
           currentEvalThread.Value <- None
+          // An eval that was running when the host died finishes too, as a failure. It must not make a session with
+          // no host look idle.
+          let settled =
+            match phase with
+            | Active (_, activity) -> EvalActorDecision.activityAfterFinished activity
+            | Initializing _ | Faulted _ -> Idle
           match result with
           | Ok(res, newSt) ->
             let evalStats' = Affordances.EvalStats.record sw.Elapsed evalStats
-            publishSnapshot newSt Idle evalStats'
+            publishSnapshot newSt settled evalStats'
             match res.EvaluationResult with
             | Ok result ->
               observeEvalLatency observeEvalLatencyToHealthWatch sw.Elapsed.TotalMilliseconds
@@ -1294,7 +1325,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             // Live values (watch window) are no longer attached here — pulled
             // on demand via GetLiveValues, off this reply path (roast-4 #2).
             reply.Reply res
-            return (Active (newSt, Idle), middleware, evalStats')
+            return (Active (newSt, settled), middleware, evalStats')
           | Error ex ->
             let errResponse = {
               EvaluationResult = Error ex
@@ -1304,18 +1335,31 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             }
             match phase with
             | Active (st, _) ->
-              publishSnapshot st Idle evalStats
+              publishSnapshot st settled evalStats
               emit (Events.EvalFailed {|
                 Code = code
                 Error = ex.Message
                 Diagnostics = []
               |})
               reply.Reply errResponse
-              return (Active (st, Idle), middleware, evalStats)
+              return (Active (st, settled), middleware, evalStats)
             | Initializing _ | Faulted _ ->
               // Unreachable: a reset advances the generation, so a stale EvalFinished takes the straggler arm above.
               reply.Reply errResponse
               return (phase, middleware, evalStats)
+        | EvalHostEnded(forGeneration, hostEnd) ->
+          match EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) (EvalActorDecision.EvalInput.HostEnded(forGeneration, hostEnd)) with
+          | EvalActorDecision.EvalDecision.MarkHostCrashed crash ->
+            match phase with
+            | Active (st, _) ->
+              logger.LogError (sprintf "❌ %s" (HostCrash.describe crash))
+              emit (Events.SessionFaulted {| Error = HostCrash.describe crash; StackTrace = None |})
+              publishSnapshot st (HostCrashed crash) evalStats
+              return (Active (st, HostCrashed crash), middleware, evalStats)
+            | Initializing _ | Faulted _ ->
+              // Unreachable: decide only marks a crash for an Active session.
+              return (phase, middleware, evalStats)
+          | _ -> return (phase, middleware, evalStats)
         | EvalAddMiddleware(additionalMiddleware, r) ->
           r.Reply(())
           return (phase, additionalMiddleware @ middleware, evalStats)
@@ -1408,6 +1452,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                 softResetCts.Token
                 onProgress
             softResetCts.Dispose()
+            watchHost newSession
             let baseSt =
               match activeSt with
               | Some st -> st
@@ -1629,6 +1674,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
               return (Faulted msg, middleware, evalStats)
             | Ok (newSession, newRecorder, _, warmupFailures, warmupCtx) ->
             warmupCts.Dispose()
+            watchHost newSession
             let newSt =
               match activeSt with
               | Some st ->
@@ -1712,6 +1758,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
               initCts.Token
               onProgress
           initCts.Dispose()
+          watchHost fsiSession
           
           let warmupErrors =
             warmupFailures
@@ -1899,6 +1946,9 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
   let getSessionState () =
     let snap = System.Threading.Volatile.Read(&latestSnapshot)
     SessionPhase.toSessionState snap.Phase
+  let getSessionStatus () =
+    let snap = System.Threading.Volatile.Read(&latestSnapshot)
+    SessionPhase.toWorkerStatus snap.Phase
   let getEvalStats () =
     let snap = System.Threading.Volatile.Read(&latestSnapshot)
     snap.EvalStats
@@ -1930,4 +1980,4 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
     actor.PostAndAsyncReply(fun reply -> CancelEval reply)
     |> Async.StartAsTask
 
-  actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent
+  actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getSessionStatus, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent

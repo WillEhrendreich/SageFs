@@ -67,7 +67,7 @@ let runLoopTests =
         }
       let threshold = 3
       let loop =
-        run throwingProbe threshold 5 (fun () -> true) (fun () -> restartCount <- restartCount + 1)
+        run throwingProbe threshold 5 (fun () -> true) ignore (fun () -> restartCount <- restartCount + 1)
       do! loop |> Async.StartAsTask :> Task
 
       restartCount |> Expect.equal "onRestart fired exactly once" 1
@@ -85,7 +85,7 @@ let runLoopTests =
       let stopAfter = DateTime.UtcNow.AddMilliseconds 120.0
       let shouldContinue () = DateTime.UtcNow < stopAfter
       do!
-        run healthyProbe 3 10 shouldContinue (fun () -> restartCount <- restartCount + 1)
+        run healthyProbe 3 10 shouldContinue ignore (fun () -> restartCount <- restartCount + 1)
         |> Async.StartAsTask :> Task
 
       restartCount |> Expect.equal "never restarted" 0
@@ -107,11 +107,32 @@ let runLoopTests =
       // stop on its own rather than restart a worker it no longer owns.
       let shouldContinue () = probeCalls < 2
       do!
-        run missingProbe 5 1 shouldContinue (fun () -> restartCount <- restartCount + 1)
+        run missingProbe 5 1 shouldContinue ignore (fun () -> restartCount <- restartCount + 1)
         |> Async.StartAsTask :> Task
 
       probeCalls |> Expect.equal "stopped after exactly 2 misses" 2
       restartCount |> Expect.equal "never restarted once shouldContinue turned false" 0
+    }
+
+    testTask "a status the worker reports reaches the caller, and a worker reporting a crashed host is not restarted" {
+      let crash : SageFs.HostCrash = { Exit = SageFs.ExitedWith 134; Output = "boom" }
+      let mutable probeCalls = 0
+      let reported = ResizeArray<SageFs.WorkerProtocol.SessionStatus>()
+      let mutable restartCount = 0
+      let crashedProbe () : Async<ProbeOutcome> =
+        async {
+          probeCalls <- probeCalls + 1
+          return ProbeOutcome.Reported(SageFs.WorkerProtocol.SessionStatus.HostCrashed crash)
+        }
+      // Deterministic stop point: the loop ends after the third probe.
+      let shouldContinue () = probeCalls < 3
+      do!
+        run crashedProbe 2 1 shouldContinue reported.Add (fun () -> restartCount <- restartCount + 1)
+        |> Async.StartAsTask :> Task
+
+      reported |> Seq.toList
+      |> Expect.equal "each probe handed the worker's own status over" (List.replicate 3 (SageFs.WorkerProtocol.SessionStatus.HostCrashed crash))
+      restartCount |> Expect.equal "the worker answered, so it is not a hung worker to restart" 0
     }
   ]
 

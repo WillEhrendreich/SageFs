@@ -255,6 +255,17 @@
     "suggestedAction": "Run the code again in the fresh session"
   },
   {
+    "case": "FsiHostCrashed",
+    "fields": {
+      "crash": {
+        "exitCode": 134,
+        "output": "test"
+      }
+    },
+    "message": "the FSI host crashed (exit 134), so the state of this session and all of its definitions are gone. Last output from the host:\ntest",
+    "suggestedAction": "Call hard_reset_fsi_session to start a fresh host, then run your definitions again. Fix the code that crashed the host first, or it will crash it again."
+  },
+  {
     "case": "WarmupOpenFailed",
     "fields": {
       "name": "test",

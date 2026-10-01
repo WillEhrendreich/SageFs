@@ -274,6 +274,7 @@
         <Compile Include="SessionState.fs" />
         <!-- Before SageFsError: ProjectFrameworkNotHostable carries its UnsupportedTfmReason. -->
         <Compile Include="ProjectCompatibility.fs" />
+        <Compile Include="FsiHostCrash.fs" />
         <Compile Include="SageFsError.fs" />
         <Compile Include="RebuildOutcome.fs" />
         <Compile Include="SessionReload.fs" />

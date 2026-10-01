@@ -44,6 +44,8 @@ module WorkerPostReady =
           | SessionStatus.Ready -> return WarmupSupervision.PollObservation.Ready snapshot.Projects
           | SessionStatus.Faulted | SessionStatus.Stopped ->
             return WarmupSupervision.PollObservation.Faulted snapshot.StatusMessage
+          | SessionStatus.HostCrashed crash ->
+            return WarmupSupervision.PollObservation.Faulted(Some(HostCrash.describe crash))
           | SessionStatus.Starting
           | SessionStatus.Evaluating
           | SessionStatus.Building _
@@ -157,8 +159,10 @@ module WorkerPostReady =
       try
         let rid = Guid.NewGuid().ToString("N")
         let! child = Async.StartChild(proxy (WorkerMessage.GetStatus rid), timeoutMs)
-        let! _resp = child
-        return WorkerHealthProbe.ProbeOutcome.Healthy
+        match! child with
+        | WorkerResponse.StatusResult(_, snapshot) -> return WorkerHealthProbe.ProbeOutcome.Reported snapshot.Status
+        // Any answer at all means the worker is alive; only a status carries anything more.
+        | _ -> return WorkerHealthProbe.ProbeOutcome.Healthy
       with _ ->
         return WorkerHealthProbe.ProbeOutcome.Missed
     }

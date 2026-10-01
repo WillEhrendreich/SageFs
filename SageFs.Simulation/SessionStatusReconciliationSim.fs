@@ -102,6 +102,7 @@ module SessionStatusReconciliationSim =
       SessionLifecycleStatus.Faulted (
         SessionLifecycleStatus.faultReason current
         |> Option.defaultValue (FaultReason.Unexplained FaultOrigin.WorkerSelfReported))
+    | SessionStatus.HostCrashed crash -> SessionLifecycleStatus.HostCrashed (handle (), crash)
     | SessionStatus.Restarting -> SessionLifecycleStatus.Restarting (PreviousWorker.ofPid (SessionLifecycleStatus.workerPid current))
     | SessionStatus.Stopped -> SessionLifecycleStatus.Stopped
 
