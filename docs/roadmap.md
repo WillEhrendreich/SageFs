@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 16, Later 17, Exploring 16. Already built: 8.
+On the page today: Now 0, Next 16, Later 17, Exploring 16. Already built: 10.
 
 ## Next
 
@@ -135,6 +135,8 @@ _These were on this page and are in the code now. Whether a build has shipped is
 
 ### Live testing
 
+- **A test receipt says what source it ran on.** If you edit a test file and don't rebuild, `run_tests` used to say "3 passed" with no warning. Now every receipt carries whether the source is in sync, stale (naming the files), being rebuilt, or unknown and why. A pass over stale source reads "passed, but on STALE source" and is never plain AllPassed. It's also on `get_session_status` and `list_sessions`, next to the REPL-behind state. Code: [`SageFs.Core/Features/SourceState.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/SourceState.fs)
+- **A pending test is skipped, not passed.** An Expecto `ptest` used to run its body and count as passed. It's now reported as skipped and never run, and a run with one is Incomplete, not AllPassed. If anything is focused with `ftest`, the unfocused tests are reported as skipped too, matching what Expecto itself does. Code: [`SageFs.Core/Features/LiveTestingExecutors.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/LiveTestingExecutors.fs)
 - **Edits during a worker swap are judged.** An edit typed while the confirming build replaces the worker used to be lost. A type-check or an eval now waits for a Ready worker and believes an answer only from the worker it asked. Code: [`SageFs/LiveCheckRelay.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/LiveCheckRelay.fs)
 
 ### Hot reload

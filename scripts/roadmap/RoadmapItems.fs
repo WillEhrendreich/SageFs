@@ -61,6 +61,16 @@ let items : Item list =
       [ "docs/how-hot-reload-works.md" ]
       "A test tier times saves against a real running app and fails if the p95 drifts. It's one machine and one small app, and I have no Microsoft figure to set it against."
 
+    item "receipts-say-what-source-they-ran-on" "A test receipt says what source it ran on" LiveTesting Now
+      (landmark "SageFs.Core/Features/SourceState.fs" "SourceState")
+      [ "docs/mcp-tools.md"; "docs/how-live-testing-works.md" ]
+      "If you edit a test file and don't rebuild, `run_tests` used to say \"3 passed\" with no warning. Now every receipt carries whether the source is in sync, stale (naming the files), being rebuilt, or unknown and why. A pass over stale source reads \"passed, but on STALE source\" and is never plain AllPassed. It's also on `get_session_status` and `list_sessions`, next to the REPL-behind state."
+
+    item "pending-tests-are-skipped" "A pending test is skipped, not passed" LiveTesting Now
+      (landmark "SageFs.Core/Features/LiveTestingExecutors.fs" "ExpectoDisposition")
+      [ "docs/how-live-testing-works.md" ]
+      "An Expecto `ptest` used to run its body and count as passed. It's now reported as skipped and never run, and a run with one is Incomplete, not AllPassed. If anything is focused with `ftest`, the unfocused tests are reported as skipped too, matching what Expecto itself does."
+
     item "edits-during-worker-swap-judged" "Edits during a worker swap are judged" LiveTesting Now
       (landmark "SageFs/LiveCheckRelay.fs" "LiveCheckRelay")
       [ "docs/how-live-testing-works.md"; "docs/decisions.md" ]
