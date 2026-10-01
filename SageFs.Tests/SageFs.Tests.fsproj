@@ -403,6 +403,10 @@
         <!-- The child half: Program.fs starts this assembly again as a guard child to click a getter that would end the process. -->
         <Compile Include="GuardChild.fs" />
         <Compile Include="GuardChildTests.fs" />
+        <Compile Include="DeltaProgram.fs" />
+        <Compile Include="DeltaInstrumentation.fs" />
+        <Compile Include="DeltaChild.fs" />
+        <Compile Include="MetadataDeltaTests.fs" />
         <Compile Include="GuardSimTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
         <Compile Include="StreamingProxyTests.fs" />

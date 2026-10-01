@@ -195,6 +195,16 @@
         <Compile Include="Features\TestCachePersistence.fs" />
         <Compile Include="Features\CoverageProbes.fs" />
         <Compile Include="Features\CoverageInstrumenter.fs" />
+        <!-- The metadata-delta emitter: reads two builds of a project and writes the delta that patches a
+             running assembly's method bodies. Pure over System.Reflection.Metadata, off by default, and not
+             wired into the planner yet. -->
+        <Compile Include="Features\MetadataDelta\RudeCause.fs" />
+        <Compile Include="Features\MetadataDelta\MetadataDeltaFlag.fs" />
+        <Compile Include="Features\MetadataDelta\PeImage.fs" />
+        <Compile Include="Features\MetadataDelta\IlCanon.fs" />
+        <Compile Include="Features\MetadataDelta\MethodDiff.fs" />
+        <Compile Include="Features\MetadataDelta\DeltaWriter.fs" />
+        <Compile Include="Features\MetadataDelta\DeltaApply.fs" />
         <Compile Include="Features\LiveTestingInstrumentation.fs" />
         <Compile Include="Features\ReflectionDiscovery.fs" />
         <Compile Include="Features\LiveTestingExecutors.fs" />
