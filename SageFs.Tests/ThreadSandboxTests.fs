@@ -194,6 +194,8 @@ let private genNr : Gen<int> =
     @ [ nrOpen; nrOpenat; nrClone; nrClone3; nrRead; nrWrite; nrMmap; nrFutex; nrMadvise; nrGetpid; nrExit ]
   Gen.frequency
     [ 4, Gen.elements interesting
+      // The three calls whose verdict depends on an argument get their own weight.
+      3, Gen.elements [ nrOpen; nrOpenat; nrClone ]
       2, Gen.choose (0, 600)
       1, Gen.choose (x32Bit, x32Bit + 600)
       1, Gen.elements [ -1; Int32.MinValue; Int32.MaxValue ] ]
@@ -209,7 +211,11 @@ let private genArg : Gen<uint64> =
       2, Gen.map (fun v -> v &&& ~~~writeFlagsMask) genRandom64
       1, Gen.map (fun v -> v ||| cloneThread) genRandom64
       1, Gen.map (fun v -> v &&& ~~~cloneThread) genRandom64
-      1, Gen.map (fun v -> (v &&& ~~~writeFlagsMask) ||| oRdwr) genRandom64 ]
+      // Exactly one write flag set, so a mask that misses any single bit is found.
+      2, Gen.map2 (fun flag v -> (v &&& ~~~writeFlagsMask) ||| flag) (Gen.elements [ oWronly; oRdwr; oCreat; oTrunc; oAppend ]) genRandom64 ]
+
+/// One verdict costs microseconds, and the argument-dependent calls are a small slice of the space, so run many.
+let private manyRuns = { FsCheckConfig.defaultConfig with maxTest = 3000 }
 
 let private genArch : Gen<uint32> =
   Gen.frequency
@@ -247,10 +253,15 @@ let private requireLinuxX64 () =
 let private runSandboxed (policy: SandboxPolicy) (work: unit -> 'T) : Task<SandboxOutcome<'T>> =
   Task.Run(fun () -> ThreadSandbox.run policy work).WaitAsync(TestTimeouts.patienceInProcess)
 
-let private startLoopbackListener () =
-  let listener = new TcpListener(IPAddress.Loopback, 0)
-  listener.Start()
-  listener, (listener.LocalEndpoint :?> IPEndPoint).Port
+let private withLoopbackListener (body: int -> Task) : Task =
+  task {
+    let listener = new TcpListener(IPAddress.Loopback, 0)
+    listener.Start()
+    try
+      do! body (listener.LocalEndpoint :?> IPEndPoint).Port
+    finally
+      listener.Stop()
+  }
 
 /// Connects from a pool thread. The kernel completes the handshake from the listen backlog, so no accept is needed.
 let private connectFromPoolThread (port: int) : Task =
@@ -259,7 +270,12 @@ let private connectFromPoolThread (port: int) : Task =
     do! client.ConnectAsync(IPAddress.Loopback, port).WaitAsync(TestTimeouts.patienceInProcess)
   }
 
-let private withTempDir (body: string -> Task) : Task =
+/// A blocking connect on whichever thread calls it.
+let private connectHere (port: int) =
+  use client = new TcpClient()
+  client.Connect(IPAddress.Loopback, port)
+
+let private withTempDir(body: string -> Task) : Task =
   task {
     let dir = Path.Combine(Path.GetTempPath(), "sagefs-sandbox-" + Guid.NewGuid().ToString("N"))
     Directory.CreateDirectory dir |> ignore
@@ -327,11 +343,11 @@ let seccompProgramTests =
       let foreign = { d with Arch = (match d.Arch = auditArchX86_64 with true -> auditArchI386 | false -> d.Arch) }
       allPolicies |> List.forall (fun policy -> runBpf (Seccomp.denyProgram X86_64 policy) foreign = VAllow))
 
-    testProperty "WHY — NoNetwork decides every x86-64 syscall the way the model says, so the BPF and the policy cannot drift"
+    testPropertyWithConfig manyRuns "WHY — NoNetwork decides every x86-64 syscall the way the model says, so the BPF and the policy cannot drift"
     <| Prop.forAll (Arb.fromGen genData) (fun d ->
       runBpf (Seccomp.denyProgram X86_64 NoNetwork) d = verdictOf (model NoNetwork d))
 
-    testProperty "WHY — NoNetworkNoWritesNoSpawn decides every x86-64 syscall the way the model says, flags included"
+    testPropertyWithConfig manyRuns "WHY — NoNetworkNoWritesNoSpawn decides every x86-64 syscall the way the model says, flags included"
     <| Prop.forAll (Arb.fromGen genData) (fun d ->
       runBpf (Seccomp.denyProgram X86_64 NoNetworkNoWritesNoSpawn) d = verdictOf (model NoNetworkNoWritesNoSpawn d))
 
@@ -449,17 +465,19 @@ let realThreadTests =
 
     testTask "WHY — a connect on the filtered thread fails with Permission denied while another thread reaches the same listener before and after" {
       requireLinuxX64 ()
-      let listener, port = startLoopbackListener ()
-      use _listener = listener
-      do! connectFromPoolThread port
-      let! outcome =
-        runSandboxed NoNetwork (fun () ->
-          use client = new TcpClient()
-          client.Connect(IPAddress.Loopback, port))
-      match outcome with
-      | Threw (:? SocketException as se) -> se.SocketErrorCode |> Expect.equal "EPERM is AccessDenied" SocketError.AccessDenied
-      | other -> failtestf "expected a SocketException, got %A" other
-      do! connectFromPoolThread port
+      do!
+        withLoopbackListener (fun port ->
+          task {
+            do! connectFromPoolThread port
+            let! outcome =
+              runSandboxed NoNetwork (fun () ->
+                use client = new TcpClient()
+                client.Connect(IPAddress.Loopback, port))
+            match outcome with
+            | Threw (:? SocketException as se) -> se.SocketErrorCode |> Expect.equal "EPERM is AccessDenied" SocketError.AccessDenied
+            | other -> failtestf "expected a SocketException, got %A" other
+            do! connectFromPoolThread port
+          })
     }
 
     testTask "WHY — the filtered thread still allocates, collects garbage, makes threads and JITs fresh code, so the runtime keeps working under the filter" {
@@ -573,15 +591,16 @@ let realThreadTests =
 
     testTask "WHY — the filter does not leak to the calling thread, a pool thread or a later run's thread" {
       requireLinuxX64 ()
-      let listener, port = startLoopbackListener ()
-      use _listener = listener
-      let! _ = runSandboxed NoNetworkNoWritesNoSpawn (fun () -> 1)
-      // The calling thread of the test body, a pool thread, and a second sandbox run that does not need the network.
-      use client = new TcpClient()
-      do! client.ConnectAsync(IPAddress.Loopback, port).WaitAsync(TestTimeouts.patienceInProcess)
-      do! connectFromPoolThread port
       do!
-        withTempDir (fun dir ->
-          task { File.WriteAllText(Path.Combine(dir, "after.txt"), "still allowed on this thread") })
+        withLoopbackListener (fun port ->
+          task {
+            let! _ = runSandboxed NoNetworkNoWritesNoSpawn (fun () -> 1)
+            // A pool thread, and then the very thread this test body is running on: neither has the filter.
+            do! connectFromPoolThread port
+            connectHere port
+            do!
+              withTempDir (fun dir ->
+                task { File.WriteAllText(Path.Combine(dir, "after.txt"), "still allowed on this thread") })
+          })
     }
   ]
