@@ -4,7 +4,7 @@ Here's where everything lives. If you're just trying to get running, start at th
 Everything else is reference material you can come back to when you need it.
 
 ## Start here
-- **[What SageFs has become](progress.md)**: what you had, what you have now, and why it matters, stretch by stretch since February, each change linked to its code
+- **[What SageFs has become](progress.md)**: what you had, what you have now, and why it matters, stretch by stretch since February, each change linked to its code. The newest window is 2026-10-01 and says which entries are in a release and which are only merged
 - **[Get Started](../Readme.md#get-started)**: install, check your environment, start the daemon, connect an editor
 - **[Using SageFs with AI agents](agents.md)**: install the SageFs skill, so your agent uses the REPL instead of rebuilding, and pull it back when it drifts
 - **[Workflow Modes](workflow-modes.md)**: REPL, Live Testing, and Hot Reload: when to use which, and how the Live Testing *workflow* differs from the live-testing *toggle*
@@ -13,9 +13,9 @@ Everything else is reference material you can come back to when you need it.
 - **[Coming from another language](../Readme.md#coming-from-another-language)**: Python, Jupyter, C#, Java, JS/TS, Rust, or F# koans
 
 ## Feature deep dives
-- **[How hot reload works](how-hot-reload-works.md)**: the ideas it borrows (Erlang, Clojure, Smalltalk), what F# and .NET lack by default, and how it compares with .NET's hot reload
-- **[How live testing works](how-live-testing-works.md)**: one keystroke, in the order the data moves, and how it compares with Visual Studio Live Unit Testing
-- **[How SageFs opens projects plain FSI can't](how-isolation-works.md)**: why FSI fails on name-based assembly resolution, and the process and closure design that avoids it
+- **[How hot reload works](how-hot-reload-works.md)**: the ideas it borrows (Erlang, Clojure, Smalltalk), what F# and .NET lack by default, and a row-by-row comparison with .NET's hot reload that says where it is level, where it is behind and what the plan is
+- **[How live testing works](how-live-testing-works.md)**: one keystroke, in the order the data moves, and a row-by-row comparison with Visual Studio Live Unit Testing, including the measured latency and what is still rough
+- **[How SageFs opens projects plain FSI can't](how-isolation-works.md)**: why FSI fails on name-based assembly resolution, the process and closure design that avoids it, and how a project's pinned versions are adapted to or refused
 - **[Hot Reload](hot-reload.md)**: file watch → FSI eval → Harmony patch → browser refresh, and its current limits
 - **[Live Testing As You Type](live-testing-as-you-type.md)**: the three-speed feedback pipeline
 - **[Multi-Session](multi-session.md)**: one daemon, many isolated worker processes
@@ -35,6 +35,7 @@ Everything else is reference material you can come back to when you need it.
 
 ## For contributors
 - **[Contributing Guide](../CONTRIBUTING.md)**: development workflow, testing, PRs
+- **[Decisions](decisions.md)**: things I looked at and said no to, and the design calls behind hot reload, live testing and live values, each with its evidence and what would reopen it
 - **[Architecture Decision Records](architecture-decisions.md)**: persistence, typed errors, MCP, module composition, and superseded frontend decisions
 - **[Live Testing Guide](LIVE_TESTING_GUIDE.md)**: implementation details of the test pipeline
 - **[Features Survey](FEATURES_SURVEY.md)**: module inventory
