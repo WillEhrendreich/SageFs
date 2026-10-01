@@ -839,13 +839,32 @@ module Planner =
         | Some name, Leftover.AgentWorktree(_, { Repo = RepoLink.InRepo repo }) -> Some(repo, name)
         | _ -> None)
       |> Set.ofList
+    // A branch that a worktree in this list is checked out on, and that worktree is not going, cannot go either.
+    let heldBranches =
+      leftovers
+      |> List.choose (fun l ->
+        match l with
+        | Leftover.AgentWorktree(_, { Repo = RepoLink.InRepo repo; Branch = BranchLabel.OnBranch name }) -> Some(repo, name)
+        | _ -> None)
+      |> Set.ofList
+    let heldStep (l: Leftover) : Step =
+      let step = stepOf None l
+      { step with
+          Action = Action.Nothing
+          Command = ""
+          Risk = Risk.Busy
+          ReclaimsBytes = 0L
+          Reason = "a worktree is checked out on this branch and is not being removed" }
     let steps =
       leftovers
       |> List.filter (fun l ->
         match branchesOf l with
         | Some key -> not (Set.contains key covered)
         | None -> true)
-      |> List.map (fun l -> stepOf (coveredBranchOf l) l)
+      |> List.map (fun l ->
+        match branchesOf l with
+        | Some key when Set.contains key heldBranches -> heldStep l
+        | _ -> stepOf (coveredBranchOf l) l)
       |> List.sortBy (fun s -> riskRank s.Risk, -s.ReclaimsBytes, (let (StepId id) = s.Id in id))
     let total risk = steps |> List.filter (fun s -> s.Risk = risk) |> List.sumBy (fun s -> s.ReclaimsBytes)
     { Id = idOf steps

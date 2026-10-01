@@ -225,6 +225,13 @@ let planTests =
       plan.Steps |> List.length |> Expect.equal "one step, not two" 1
       plan.Steps.Head.Action |> Expect.equal "removes the branch too" (Action.RemoveBranchToo "worktree-agent-1")
 
+    testCase "a merged branch whose worktree is in use is not offered for removal on its own" <| fun _ ->
+      let wt = worktree "agent-1" |> withUse (InUseReason.LiveSession "abc")
+      let br = branch "worktree-agent-1" (MergeEvidence.MergedInto MergeHow.Ancestor)
+      let plan = planOf [ wt; br ]
+      plan.Steps |> List.length |> Expect.equal "both are listed" 2
+      plan.Steps |> List.forall (fun s -> s.Risk <> Risk.Safe) |> Expect.isTrue "neither is safe to run"
+
     testCase "a merged branch with no worktree is a Safe branch removal" <| fun _ ->
       let step = branch "worktree-agent-9" (MergeEvidence.MergedInto MergeHow.Ancestor) |> stepFor
       step.Risk |> Expect.equal "safe" Risk.Safe
