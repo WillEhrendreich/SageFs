@@ -172,3 +172,59 @@ let offModeTests =
         buildValueNodeIn WalkMode.Safe "v" value |> Expect.equal "Safe matches Everything" everything
         buildValueNodeIn WalkMode.Off "v" value |> Expect.equal "Off matches Everything" everything
   ]
+
+let private forced (path: string list) (calls: ResizeArray<string>) (outcome: Result<obj, MemberFailure>) =
+  let run (property: PropertyInfo) (_target: obj) =
+    calls.Add property.Name
+    outcome
+  { Mode = WalkMode.Safe; Force = ForcedMember.At (path, run) }
+
+[<Tests>]
+let forcedMemberTests =
+  testList "forcing one member" [
+
+    testCase "WHY — a click runs exactly the clicked getter, through the runner it is given, and shows the value" <| fun _ ->
+      let counter = Counter()
+      let calls = ResizeArray<string>()
+      let node = buildValueNodeWith (forced [ "p"; "Len" ] calls (Ok (box 4))) "p" (probeWith counter)
+      childOf "Len" node |> Option.map (fun c -> c.Preview) |> Expect.equal "the runner's value" (Some "4")
+      calls |> Seq.toList |> Expect.equal "only Len was run" [ "Len" ]
+
+    testCase "WHY — the other getters that run code stay unrun and still say why" <| fun _ ->
+      let counter = Counter()
+      let node = buildValueNodeWith (forced [ "p"; "Len" ] (ResizeArray()) (Ok (box 4))) "p" (probeWith counter)
+      childOf "Next" node |> Option.map (fun c -> c.Kind) |> Expect.equal "still held" (Some (notEvaluated NotEvaluatedReason.GetterRunsCode))
+      counter.Count |> Expect.equal "the effectful getter did not run" 0
+
+    testCase "WHY — a click that times out is shown as unknown, with the reason, never as empty" <| fun _ ->
+      let node = buildValueNodeWith (forced [ "p"; "Len" ] (ResizeArray()) (Error MemberFailure.MemberTimedOut)) "p" (probe ())
+      childOf "Len" node |> Option.map (fun c -> c.Kind) |> Expect.equal "timed out" (Some (notEvaluated NotEvaluatedReason.EvaluationTimedOut))
+
+    testCase "WHY — a getter that throws is shown with what it threw" <| fun _ ->
+      let node = buildValueNodeWith (forced [ "p"; "Len" ] (ResizeArray()) (Error (MemberFailure.MemberThrew "boom"))) "p" (probe ())
+      let child = childOf "Len" node
+      child |> Option.map (fun c -> c.Kind) |> Expect.equal "threw" (Some (notEvaluated (NotEvaluatedReason.EvaluationThrew "boom")))
+      child |> Option.map (fun c -> c.Preview) |> Option.defaultValue "" |> Expect.stringContains "the message is on the row" "boom"
+
+    testCase "WHY — a refusal to contain the getter says why it was not run" <| fun _ ->
+      let node = buildValueNodeWith (forced [ "p"; "Len" ] (ResizeArray()) (Error (MemberFailure.MemberNotContained "no sandbox here"))) "p" (probe ())
+      childOf "Len" node |> Option.map (fun c -> c.Kind)
+      |> Expect.equal "not contained" (Some (notEvaluated (NotEvaluatedReason.EvaluationNotContained "no sandbox here")))
+
+    testCase "WHY — a path that names nothing runs nothing" <| fun _ ->
+      let calls = ResizeArray<string>()
+      buildValueNodeWith (forced [ "p"; "NoSuchMember" ] calls (Ok (box 1))) "p" (probe ()) |> ignore
+      buildValueNodeWith (forced [ "other"; "Len" ] calls (Ok (box 1))) "p" (probe ()) |> ignore
+      calls |> Seq.toList |> Expect.isEmpty "the runner was never called"
+
+    testCase "WHY — with nothing forced the walk is exactly the Safe walk" <| fun _ ->
+      let safe = buildValueNodeIn WalkMode.Safe "p" (probe ())
+      buildValueNodeWith { Mode = WalkMode.Safe; Force = ForcedMember.Nothing } "p" (probe ()) |> Expect.equal "same tree" safe
+
+    testCase "WHY — a click finds a member inside a record that holds the object" <| fun _ ->
+      let calls = ResizeArray<string>()
+      let holder = box (Some (probe ()))
+      let node = buildValueNodeWith (forced [ "h"; "Value"; "Len" ] calls (Ok (box 4))) "h" holder
+      calls |> Seq.toList |> Expect.equal "Len inside Some(probe) was run" [ "Len" ]
+      node |> ignore
+  ]
