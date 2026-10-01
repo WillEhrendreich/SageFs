@@ -58,6 +58,7 @@ let private newRemote () : Async<IFsiSession> =
         FsiArgs = fsiArgs
         WorkingDir = repoRoot
         Environment = []
+        Libraries = SageFs.HostAdaptation.HostLibraries.AsBuilt
         OnOutput = fun _ _ -> ()
         OnLog = ignore
         StartupTimeoutMs = TestTimeouts.asMs TestTimeouts.processStartPatience }

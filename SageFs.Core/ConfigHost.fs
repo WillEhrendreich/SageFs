@@ -50,6 +50,7 @@ let private evaluateUncached (workingDir: string) (content: string) : Result<Dir
         FsiArgs = [ "fsi"; "--noninteractive"; "--nologo"; "--readline-"; "-r:" + dll ]
         WorkingDir = workingDir
         Environment = []
+        Libraries = HostAdaptation.HostLibraries.AsBuilt
         OnOutput = fun _ _ -> ()
         OnLog = ignore
         StartupTimeoutMs = int Timeouts.fsiHostStartup.TotalMilliseconds }

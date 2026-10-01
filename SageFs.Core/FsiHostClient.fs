@@ -56,6 +56,9 @@ type StartOptions =
     WorkingDir: string
     /// Extra environment for the host process, e.g. RuntimeCompat.rollForwardEnv.
     Environment: (string * string) list
+    /// The project's own copies of libraries the host also carries, loaded into the host at launch in
+    /// place of the host's. `AsBuilt` for most sessions. See HostAdaptation.
+    Libraries: HostAdaptation.HostLibraries
     /// Text the user's code (or FSI itself) wrote to the console.
     OnOutput: OutputStream -> string -> unit
     /// Host stdout/stderr lines that are not protocol (diagnostics for the daemon log).
@@ -438,7 +441,19 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
   async {
     let argsFile = Path.Combine(Path.GetTempPath(), sprintf "sagefs-fsihost-%s.args" (Guid.NewGuid().ToString "N"))
     File.WriteAllLines(argsFile, options.FsiArgs)
-    let deleteArgsFile () = try File.Delete argsFile with _ -> ()
+    // The extra dependency manifest is read once, when the runtime starts, so it can go as soon as the host
+    // has reported Ready (or failed to).
+    let depsFile = Path.ChangeExtension(argsFile, ".deps.json")
+    let overrides =
+      match options.Libraries with
+      | HostAdaptation.HostLibraries.AsBuilt -> []
+      | HostAdaptation.HostLibraries.WithProjectCopies(hostMajor, overrides) ->
+        File.WriteAllText(depsFile, HostAdaptation.additionalDepsJson hostMajor overrides)
+        overrides
+    let deleteDepsFile () = try File.Delete depsFile with _ -> ()
+    let deleteArgsFile () =
+      deleteDepsFile ()
+      try File.Delete argsFile with _ -> ()
     let tail = HostOutputTail()
     let log (line: string) =
       tail.Add line
@@ -446,6 +461,9 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
     let hostOutput () = tail.Lines() |> String.concat "\n"
     let command = options.Dotnet + " " + options.HostDll
     let psi = ProcessStartInfo(options.Dotnet)
+    // Muxer options (the project's libraries to probe) go before the host dll.
+    for option in HostAdaptation.muxerOptions overrides do
+      psi.ArgumentList.Add option
     psi.ArgumentList.Add options.HostDll
     psi.ArgumentList.Add "--args-file"
     psi.ArgumentList.Add argsFile
@@ -466,7 +484,7 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
     // that runs the USER's own code, so it is the seam that matters most for an
     // external agent: a fault-injection or determinism shim reaches the code
     // under test here, not just the worker that supervises it.
-    applyToWithForwarding psi options.Environment
+    applyToWithForwarding psi (HostAdaptation.additionalDepsEnvironment depsFile overrides @ options.Environment)
     let fail (proc: Process) (error: StartError) : Result<FsiHostSession, StartError> =
       (try proc.Kill true with _ -> ())
       deleteArgsFile ()
@@ -527,6 +545,7 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
           | Choice2Of2 _ -> return fail proc (NotReady(options.StartupTimeoutMs, hostOutput ()))
           | Choice1Of2 ConnectionEnded -> return fail proc (ClosedBeforeReady(hostOutput ()))
           | Choice1Of2(HostReady(runtime, fsharpCore)) ->
+            deleteDepsFile ()
             return
               Ok(new FsiHostSession(HostProcess.ofProcess proc, tcp, reader, runtime, fsharpCore, argsFile, options.OnOutput, options.OnLog, tail))
   }

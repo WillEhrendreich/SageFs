@@ -51,6 +51,7 @@ let private startHost () : Async<Started> =
         FsiArgs = [ "fsi"; "--noninteractive"; "--nologo"; "--readline-" ]
         WorkingDir = repoRoot
         Environment = []
+        Libraries = SageFs.HostAdaptation.HostLibraries.AsBuilt
         OnOutput = fun _ text -> output.Enqueue text
         OnLog = ignore
         StartupTimeoutMs = TestTimeouts.asMs TestTimeouts.processStartPatience }

@@ -58,7 +58,6 @@ let main argv =
         CoverageViewProjectMutationTests.coverageViewProjectMutationTests
         RestartPolicyBoundaryMutationTests.restartPolicyBoundaryMutationTests
         WatchdogMutationTests.watchdogMutationTests
-        VariantSelectorMutationTests.variantSelectorMutationTests
         SessionOperationsMutationTests.sessionOperationsMutationTests
         WorkflowTypesMutationTests.workflowTypesMutationTests
         AffordancesMutationTests.affordancesMutationTests

@@ -422,13 +422,25 @@ module ProjectFSharpCoreIdentity =
   let private readAssemblyFromBytes (bytes: byte[]) : Mono.Cecil.AssemblyDefinition =
     Mono.Cecil.AssemblyDefinition.ReadAssembly(new MemoryStream(bytes))
 
-  /// Rewrite one on-disk assembly's FSharp.Core reference, IO and all. `None` (untouched, no file written)
-  /// when the assembly has no FSharp.Core reference, has one but nothing in `missingFromHost` is actually
-  /// called, or couldn't be read as a .NET assembly at all (never a session-killing exception; worst case,
-  /// that one assembly keeps resolving against whatever it did before, exactly today's behavior).
-  let rewriteFileReference (missingFromHost: Set<string>) (dllPath: string) : byte[] option =
-    try rewriteReferenceWith readAssemblyFromBytes missingFromHost (File.ReadAllBytes dllPath)
-    with _ -> None
+  /// What rewriting one assembly's FSharp.Core reference came to.
+  [<RequireQualifiedAccess>]
+  type RewriteResult =
+    /// The bytes with the missing members' call sites redirected.
+    | Rewritten of bytes: byte[]
+    /// No FSharp.Core reference, or nothing in `missingFromHost` is actually called: no file to write.
+    | NothingToRewrite
+    /// The rewrite threw. The assembly keeps resolving against the host's FSharp.Core, so a call to a
+    /// member only the project's build has will throw MissingMethodException. The reader must be told.
+    | Failed of detail: string
+
+  /// Rewrite one on-disk assembly's FSharp.Core reference, IO and all. Never a session-killing exception;
+  /// a failure is a value the caller reports (see ProjectLoading.HostConcern.FSharpCoreRewriteFailed).
+  let rewriteFileReference (missingFromHost: Set<string>) (dllPath: string) : RewriteResult =
+    try
+      match rewriteReferenceWith readAssemblyFromBytes missingFromHost (File.ReadAllBytes dllPath) with
+      | Some bytes -> RewriteResult.Rewritten bytes
+      | None -> RewriteResult.NothingToRewrite
+    with ex -> RewriteResult.Failed ex.Message
 
 /// #141, the REAL fix: rewrite a shadow-copied project assembly's FSharp.Core reference IN PLACE — the
 /// SAME file every downstream step (namespace scanning, IL coverage instrumentation, FSI's own `-r:`
@@ -441,79 +453,217 @@ module ProjectFSharpCoreIdentity =
 /// un-rewritten build output. There is only ever ONE physical file for each project assembly; making it
 /// correct before anything reads it removes the race instead of trying to out-run it.
 ///
-/// Resolves and builds the isolated host itself (same `resolveSdk`/`ensureBuiltWith` calls
-/// `IsolatedFsiSession.start` makes later) — an extra call, but a cheap one: the host is content-addressed
-/// and cached, so every session after the first for a given SDK finds it already built. Returns the shadow
-/// directory a `--lib:` entry must be added for (only when a rewrite actually happened — the renamed
-/// FSharp.Core needs to be on FSI's search path for the CLR to resolve it at runtime), so the caller can
-/// fold it into `sln.LibPaths` before `solutionToFsiArgs` ever runs.
-let fixShadowCopiedFSharpCoreReferences
+/// `hostFSharpCore` is the FSharp.Core the host process will actually run on: its own copy, or the
+/// project's when a project pins a newer one and `HostAdaptation` loads it into the host at launch (then a
+/// project whose FSharp.Core IS that file has no mismatch, and nothing is rewritten for it).
+///
+/// Returns the shadow directory a `--lib:` entry must be added for (only when a rewrite actually happened
+/// — the renamed FSharp.Core needs to be on FSI's search path for the CLR to resolve it at runtime), so the
+/// caller can fold it into `sln.LibPaths` before `solutionToFsiArgs` ever runs, and every rewrite that did
+/// NOT work, as a concern on the project it is about: a rewrite that fails leaves the project running
+/// against the host's FSharp.Core, and the session has to say so.
+type FSharpCoreRewrites =
+  { LibDir: string option
+    Concerns: (string * ProjectLoading.HostConcern) list }
+
+let rewriteProjectFSharpCoreReferences
     (logger: ILogger)
-    (workingDir: string)
+    (hostFSharpCore: string)
     (sln: SageFs.ProjectLoading.Solution)
-    : string option =
+    : FSharpCoreRewrites =
   let projectFSharpCoreOf (po: Ionide.ProjInfo.Types.ProjectOptions) : string option =
     po.PackageReferences
     |> List.tryFind (fun pr -> String.Equals(Path.GetFileNameWithoutExtension(pr.FullPath: string), "FSharp.Core", StringComparison.OrdinalIgnoreCase))
     |> Option.map (fun pr -> pr.FullPath)
+  let mutable fixedShadowDir = None
+  let concerns = ResizeArray<string * ProjectLoading.HostConcern>()
+  let failed (po: Ionide.ProjInfo.Types.ProjectOptions) (detail: string) =
+    let assembly = Path.GetFileName(po.TargetPath: string)
+    logger.LogWarning(
+      sprintf "  Could not rewrite %s's FSharp.Core reference (%s) — it runs against the host's FSharp.Core" assembly detail)
+    concerns.Add(po.ProjectFileName, ProjectLoading.HostConcern.FSharpCoreRewriteFailed(assembly, detail))
+  for po in sln.Projects do
+    match projectFSharpCoreOf po with
+    | None -> ()
+    | Some projectFSharpCore ->
+      match detectFSharpCoreMismatchWith fileLengthOrNone hostFSharpCore projectFSharpCore with
+      | None -> ()
+      | Some mismatch ->
+        try
+          // A file-size difference is only PROOF that the two builds differ, not proof any of that
+          // difference is a member the PROJECT'S code actually calls — most differences between two
+          // "same version, different build" FSharp.Core copies are irrelevant. Only the members the
+          // project's build has that the host's LACKS are candidates for redirecting; see
+          // `ProjectFSharpCoreIdentity.rewriteReferenceWith`'s own doc comment for why redirecting
+          // anything wider than that breaks calls into third parties (Expecto and friends).
+          let missing = ProjectFSharpCoreIdentity.missingMethodKeys mismatch.HostCopy mismatch.ProjectCopy
+          match ProjectFSharpCoreIdentity.rewriteFileReference missing po.TargetPath with
+          | ProjectFSharpCoreIdentity.RewriteResult.NothingToRewrite -> ()
+          | ProjectFSharpCoreIdentity.RewriteResult.Failed detail -> failed po detail
+          | ProjectFSharpCoreIdentity.RewriteResult.Rewritten rewrittenBytes ->
+            File.WriteAllBytes(po.TargetPath, rewrittenBytes)
+            let shadowDir = Path.GetDirectoryName(po.TargetPath: string)
+            let renamedPath = Path.Combine(shadowDir, ProjectFSharpCoreIdentity.RewrittenName + ".dll")
+            match File.Exists renamedPath with
+            | true -> ()
+            | false ->
+              let renamedBytes = renameAssembly ProjectFSharpCoreIdentity.RewrittenName (File.ReadAllBytes mismatch.ProjectCopy)
+              File.WriteAllBytes(renamedPath, renamedBytes)
+            fixedShadowDir <- Some shadowDir
+            logger.LogWarning(
+              sprintf
+                "  Rewrote %s's FSharp.Core reference to its own identity in place for %d member(s) the host's build lacks (host: %s, %d bytes; project: %s, %d bytes)"
+                (Path.GetFileName(po.TargetPath: string))
+                (Set.count missing)
+                mismatch.HostCopy
+                mismatch.HostSizeBytes
+                mismatch.ProjectCopy
+                mismatch.ProjectSizeBytes
+            )
+        with ex -> failed po ex.Message
+  { LibDir = fixedShadowDir; Concerns = List.ofSeq concerns }
+
+/// Whether the host that will run a session could be resolved from the worker.
+[<RequireQualifiedAccess>]
+type HostResolution =
+  /// The SDK or the host build failed. `start` reports why, in words; nothing here can be decided.
+  | Unresolved
+  /// The host is built; `fsharpCore` is the FSharp.Core it will run on: its own, or the project's when
+  /// the plan loads that one in place of it.
+  | Resolved of fsharpCore: string
+
+/// What the worker works out about the host from the evaluated projects and the host that will run
+/// them: which of the project's libraries go into the host in place of the host's, the reasons the
+/// session must not start, and what the session is told that does not stop it. Computed again at every
+/// (re)start from the projects as they are then, so a rebuild that changes a pin is seen.
+type HostPlanning =
+  { Plan: HostAdaptation.Plan
+    Refusals: HostAdaptation.Refusal list
+    Concerns: (string * ProjectLoading.HostConcern) list
+    Host: HostResolution }
+
+/// What happens to the project's files before the session reads them, and what that told the user.
+type HostPreparation =
+  { /// Where the renamed FSharp.Core lives, when a rewrite happened (a `--lib:` entry).
+    ShadowLibDir: string option
+    Concerns: (string * ProjectLoading.HostConcern) list }
+
+/// Nothing prepared: a bare session.
+let noPreparation : HostPreparation = { ShadowLibDir = None; Concerns = [] }
+
+/// `<dotnet root>/shared`, from the runtime this process runs on (the SDKs and runtimes live side by side).
+let private sharedFrameworksRoot () : string =
+  let runtimeDir =
+    System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory().TrimEnd(Path.DirectorySeparatorChar)
+  Path.GetDirectoryName(Path.GetDirectoryName runtimeDir)
+
+/// The runtime major the host will actually run on: its SDK's, or the newest installed one when the
+/// project needs a newer runtime and the launch rolls forward.
+let private hostRuntimeMajor (hostMajor: int) (choice: RuntimeCompat.RuntimeChoice) : int =
+  match choice with
+  | RuntimeCompat.RollForward _ -> RuntimeSelection.installedRuntimeMajors () |> List.fold max hostMajor
+  | RuntimeCompat.HostFits
+  | RuntimeCompat.RuntimeMissing _
+  | RuntimeCompat.Unknown _ -> hostMajor
+
+/// Resolves and builds the isolated host (the same `resolveSdk`/`ensureBuiltWith` calls `start` makes
+/// later; the host is content-addressed and cached, so this is cheap after the first session per SDK),
+/// then decides, for the projects of `sln`, what the host needs. Reads files, changes none.
+let planHost (workingDir: string) (sln: SageFs.ProjectLoading.Solution) : HostPlanning =
+  let unplanned : HostPlanning =
+    { Plan = HostAdaptation.emptyPlan; Refusals = []; Concerns = []; Host = HostResolution.Unresolved }
   match sln.Projects with
-  | [] -> None
+  | [] -> unplanned
   | projects ->
+    let tfmRefusals, tfmConcerns =
+      HostAdaptation.targetFrameworkFindings (projects |> List.map (fun po -> po.ProjectFileName, po.TargetFramework))
     let dotnet = dotnetPath ()
     match resolveSdk dotnet workingDir with
-    | Error _ -> None // can't resolve the host from here; the later detect-and-warn path in `start` still covers it
+    | Error _ -> { unplanned with Refusals = tfmRefusals; Concerns = tfmConcerns } // `start` reports the SDK
     | Ok sdk ->
       match ensureBuiltWith dotnet sdk (hostCacheRoot ()) with
-      | Error _ -> None
+      | Error _ -> { unplanned with Refusals = tfmRefusals; Concerns = tfmConcerns }
       | Ok build ->
         let hostDll = match build with Built d -> d | Reused d -> d
+        let hostDir = Path.GetDirectoryName(hostDll: string)
         let hostFSharpCore = hostFSharpCoreDll hostDll
-        let mutable fixedShadowDir = None
-        for po in projects do
-          match projectFSharpCoreOf po with
-          | None -> ()
-          | Some projectFSharpCore ->
-            match detectFSharpCoreMismatchWith fileLengthOrNone hostFSharpCore projectFSharpCore with
-            | None -> ()
-            | Some mismatch ->
-              try
-                // A file-size difference is only PROOF that the two builds differ, not proof any of that
-                // difference is a member the PROJECT'S code actually calls — most differences between two
-                // "same version, different build" FSharp.Core copies are irrelevant. Only the members the
-                // project's build has that the host's LACKS are candidates for redirecting; see
-                // `ProjectFSharpCoreIdentity.rewriteReferenceWith`'s own doc comment for why redirecting
-                // anything wider than that breaks calls into third parties (Expecto and friends).
-                let missing = ProjectFSharpCoreIdentity.missingMethodKeys mismatch.HostCopy mismatch.ProjectCopy
-                match ProjectFSharpCoreIdentity.rewriteFileReference missing po.TargetPath with
+        let hostMajor = int (sdk.Version.Split('.').[0])
+        let projectFiles = projects |> List.map (fun po -> po.ProjectFileName)
+        let choice = RuntimeSelection.resolveRuntimeChoiceFor hostMajor projectFiles
+        let framework = HostAdaptation.frameworkAssemblies (sharedFrameworksRoot ()) (hostRuntimeMajor hostMajor choice)
+        let referenced : HostAdaptation.ReferencedAssembly list =
+          [ for po in projects do
+              for pr in po.PackageReferences do
+                match HostAdaptation.assemblyVersionOf pr.FullPath with
                 | None -> ()
-                | Some rewrittenBytes ->
-                  File.WriteAllBytes(po.TargetPath, rewrittenBytes)
-                  let shadowDir = Path.GetDirectoryName(po.TargetPath: string)
-                  let renamedPath = Path.Combine(shadowDir, ProjectFSharpCoreIdentity.RewrittenName + ".dll")
-                  match File.Exists renamedPath with
-                  | true -> ()
-                  | false ->
-                    let renamedBytes = renameAssembly ProjectFSharpCoreIdentity.RewrittenName (File.ReadAllBytes mismatch.ProjectCopy)
-                    File.WriteAllBytes(renamedPath, renamedBytes)
-                  fixedShadowDir <- Some shadowDir
-                  logger.LogWarning(
-                    sprintf
-                      "  Rewrote %s's FSharp.Core reference to its own identity in place for %d member(s) the host's build lacks (host: %s, %d bytes; project: %s, %d bytes)"
-                      (Path.GetFileName(po.TargetPath: string))
-                      (Set.count missing)
-                      mismatch.HostCopy
-                      mismatch.HostSizeBytes
-                      mismatch.ProjectCopy
-                      mismatch.ProjectSizeBytes
-                  )
-              with ex ->
-                logger.LogWarning(
-                  sprintf
-                    "  Could not rewrite %s's FSharp.Core reference (%s) — continuing with the host's copy, which is the pre-existing (potentially mismatched) behavior"
-                    (Path.GetFileName(po.TargetPath: string))
-                    ex.Message
-                )
-        fixedShadowDir
+                | Some version ->
+                  yield
+                    { Name = Path.GetFileNameWithoutExtension(pr.FullPath: string)
+                      Version = version
+                      Path = pr.FullPath
+                      Owner = po.ProjectFileName
+                      Source = sprintf "%s %s" pr.Name pr.Version } ]
+        let hostFSharpCoreVersion = HostAdaptation.assemblyVersionOf hostFSharpCore
+        let hostVersionOf (name: string) : Version option =
+          match String.Equals(name, HostAdaptation.FSharpCoreName, StringComparison.OrdinalIgnoreCase) with
+          | true -> hostFSharpCoreVersion
+          | false ->
+            match framework.TryGetValue name with
+            | true, version -> Some version
+            | false, _ -> None
+        let newestWins (name: string) =
+          String.Equals(name, HostAdaptation.FSharpCoreName, StringComparison.OrdinalIgnoreCase) || framework.ContainsKey name
+        let plan = HostAdaptation.plan newestWins hostVersionOf referenced
+        // The FSharp.Core the host will run on: the project's, when `plan` loads it in place of the host's.
+        let effectiveFSharpCore =
+          plan.Overrides
+          |> List.tryFind (fun o -> String.Equals(o.Name, HostAdaptation.FSharpCoreName, StringComparison.OrdinalIgnoreCase))
+          |> Option.map (fun o -> o.Path)
+          |> Option.defaultValue hostFSharpCore
+        // A project's own build of the compiler service (a compiler checkout) is not a package reference.
+        let ownCompilerService : HostAdaptation.ReferencedAssembly list =
+          [ for po in projects do
+              match Path.GetFileNameWithoutExtension(po.TargetPath: string) = HostAdaptation.CompilerServiceName with
+              | false -> ()
+              | true ->
+                match HostAdaptation.assemblyVersionOf po.TargetPath with
+                | None -> ()
+                | Some version ->
+                  yield
+                    { Name = HostAdaptation.CompilerServiceName
+                      Version = version
+                      Path = po.TargetPath
+                      Owner = po.ProjectFileName
+                      Source = "the project's own build" } ]
+        let compilerServiceConcerns =
+          match HostAdaptation.assemblyVersionOf (Path.Combine(hostDir, HostAdaptation.CompilerServiceName + ".dll")) with
+          | None -> []
+          | Some hostVersion -> HostAdaptation.compilerServiceConcerns hostVersion sdk.Version (referenced @ ownCompilerService)
+        let requirements =
+          projects
+          |> List.map (fun po ->
+            po.ProjectFileName, RuntimeSelection.projectRuntimeRequirement po.ProjectFileName)
+        let refusals =
+          tfmRefusals
+          @ (match plan.Conflicts with
+             | [] -> []
+             | conflicts -> [ HostAdaptation.Refusal.AssemblyVersionConflicts conflicts ])
+        { Plan = plan
+          Refusals = refusals
+          Concerns = tfmConcerns @ compilerServiceConcerns @ HostAdaptation.runtimeConcerns requirements
+          Host = HostResolution.Resolved effectiveFSharpCore }
+
+/// Plans the host for `sln` and rewrites what has to be rewritten before anything reads the project's
+/// assemblies. `ActorCreation` calls it right after the shadow copy, and the FSharp.Core rewrite happens
+/// here for the same reason (see `rewriteProjectFSharpCoreReferences`).
+let prepareHost (logger: ILogger) (workingDir: string) (sln: SageFs.ProjectLoading.Solution) : HostPreparation =
+  let planning = planHost workingDir sln
+  match planning.Host with
+  | HostResolution.Unresolved -> { ShadowLibDir = None; Concerns = planning.Concerns }
+  | HostResolution.Resolved fsharpCore ->
+    let rewrites = rewriteProjectFSharpCoreReferences logger fsharpCore sln
+    { ShadowLibDir = rewrites.LibDir
+      Concerns = planning.Concerns @ rewrites.Concerns }
 
 /// Start an isolated FSI session for `projects`, run from `workingDir`. `recorder` receives everything the user's
 /// code and FSI write to stdout (so per-eval output capture works exactly as it does in-process).
@@ -523,6 +673,7 @@ let start
   (fsiArgs: string list)
   (workingDir: string)
   (projects: string list)
+  (overrides: HostAdaptation.Override list)
   (agent: HostAgent.AgentInit)
   : Async<Result<IFsiSession, IsolatedStartError>> =
   async {
@@ -535,10 +686,23 @@ let start
       match built with
       | Error reason -> return Error(HostBuildFailed reason)
       | Ok build ->
-        let dll =
+        let builtDll =
           match build with
           | Built dll -> dll
           | Reused dll -> dll
+        // A project that pins a newer FSharp.Core runs on a host whose FSharp.Core IS that one (see
+        // `ensureFSharpCoreVariant`); every other library the project pins newer goes in through the extra
+        // dependency manifest at launch.
+        let isFSharpCore (o: HostAdaptation.Override) =
+          String.Equals(o.Name, HostAdaptation.FSharpCoreName, StringComparison.OrdinalIgnoreCase)
+        let fsharpCoreOverrides, libraryOverrides = overrides |> List.partition isFSharpCore
+        let! variant =
+          match fsharpCoreOverrides with
+          | [] -> async { return Ok builtDll }
+          | newest :: _ -> Async.AwaitTask(Task.Run(fun () -> ensureFSharpCoreVariant builtDll newest.Path))
+        match variant with
+        | Error reason -> return Error(HostBuildFailed reason)
+        | Ok dll ->
         // The host is built for its SDK's target framework, so that major is the runtime it runs on by default.
         let hostMajor = int (sdk.Version.Split('.').[0])
         match RuntimeSelection.resolveRuntimeChoiceFor hostMajor projects with
@@ -558,18 +722,33 @@ let start
           // MissingMethodException that only shows up when user code happens to hit a missing member. The
           // call-site rewrite that fixes the project's own assembly runs earlier (ActorCreation.fs); this
           // warning is for what it cannot reach: see ProjectFSharpCoreIdentity's doc comment.
+          let hostFSharpCore =
+            overrides
+            |> List.tryFind (fun o -> String.Equals(o.Name, HostAdaptation.FSharpCoreName, StringComparison.OrdinalIgnoreCase))
+            |> Option.map (fun o -> o.Path)
+            |> Option.defaultValue (hostFSharpCoreDll dll)
           match projectFSharpCoreDll fsiArgs with
           | None -> ()
           | Some projectFSharpCore ->
-            match detectFSharpCoreMismatchWith fileLengthOrNone (hostFSharpCoreDll dll) projectFSharpCore with
+            match detectFSharpCoreMismatchWith fileLengthOrNone hostFSharpCore projectFSharpCore with
             | Some mismatch -> logger.LogWarning("  " + describeFSharpCoreMismatch mismatch)
             | None -> ()
+          let libraries =
+            match libraryOverrides with
+            | [] -> HostAdaptation.HostLibraries.AsBuilt
+            | overrides ->
+              logger.LogInfo(
+                sprintf
+                  "  Isolated FSI host loads the project's own %s in place of its own"
+                  (overrides |> List.map (fun o -> sprintf "%s %O" o.Name o.Version) |> String.concat ", "))
+              HostAdaptation.HostLibraries.WithProjectCopies(hostMajor, overrides)
           let options =
             { HostDll = dll
               Dotnet = dotnet
               FsiArgs = fsiArgs
               WorkingDir = workingDir
               Environment = projectOutputEnv @ RuntimeCompat.rollForwardEnv choice @ Middleware.ValueReadTracking.processEnvironment agent.ValueReads
+              Libraries = libraries
               OnOutput =
                 fun stream text ->
                   match stream with

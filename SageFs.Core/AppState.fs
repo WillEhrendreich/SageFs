@@ -743,8 +743,18 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
         }
       | SessionKinds.Isolated ->
         async {
+          // What the host cannot be made to do for these projects fails the session HERE, before a host
+          // starts, with a message that names what and says what to do. Running anyway would give a wrong
+          // answer (a project on another project's version of a library) or a framework no host can load.
+          let planning = IsolatedFsiSession.planHost System.Environment.CurrentDirectory sln
+          match planning.Refusals with
+          | [] -> ()
+          | refusals ->
+            let message = refusals |> List.map HostAdaptation.describeRefusal |> String.concat "\n\n"
+            logger.LogError (sprintf "  ❌ The session was refused: %s" message)
+            failwith message
           let projects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
-          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects (SessionAgent.agentInitOf sln hotReload (SessionAgent.reflectionSettingsFor System.Environment.CurrentDirectory)) with
+          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects planning.Plan.Overrides (SessionAgent.agentInitOf sln hotReload (SessionAgent.reflectionSettingsFor System.Environment.CurrentDirectory)) with
           | Ok session -> return session
           | Error reason ->
             let message = IsolatedFsiSession.describeStartError reason

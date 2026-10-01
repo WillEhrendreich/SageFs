@@ -403,7 +403,9 @@ let private ownCompilerServiceCase (ws: Workspace) : Task<Case> = task {
       Targets = [ app ]
       Probe = "App.P.spreadTypeName ();;"
       Expected = "FSharp.Compiler.Syntax.SynFieldOrSpread"
-      MustName = [ "FSharp.Compiler.Service"; fcsVersion ]
+      // The message names the assembly version the runtime compares, which is the package version's
+      // numeric part (43.13.101), and the host's own (43.12.401).
+      MustName = [ "FSharp.Compiler.Service"; (fcsVersion.Split('-')[0]); "global.json" ]
       Standard = Standard.WorksOrLoud }
 }
 
@@ -443,7 +445,7 @@ let private missingRuntimeCase : Workspace -> Task<Case> =
   builtExecutableWithRuntimeConfig runtimeNobodyHasConfig [ ".NET 99"; "install" ]
 
 let private corruptRuntimeConfigCase : Workspace -> Task<Case> =
-  builtExecutableWithRuntimeConfig "{ this is not json" [ "App.runtimeconfig.json" ]
+  builtExecutableWithRuntimeConfig "{ this is not json" [ "App.fsproj"; "runtimeconfig.json" ]
 
 /// A .NET Framework project whose target framework is NOT in the project file (a shared
 /// Directory.Build.props sets it), so the daemon's read of the .fsproj cannot see it.

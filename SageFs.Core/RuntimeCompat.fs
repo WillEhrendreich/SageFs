@@ -40,6 +40,19 @@ let describeConfigError (error: RuntimeConfigError) : string =
   | NoFrameworkVersion -> "runtimeconfig.json names no framework version"
   | UnrecognisedFrameworkVersion text -> sprintf "unrecognised framework version '%s'" text
 
+/// The requirement is missing because there is nothing to read (the project is not built, or it never
+/// has a runtimeconfig.json: a library), as opposed to a file that is there and cannot be understood.
+/// Absence is ordinary; anything else is something the user has to be told.
+let isAbsence (error: RuntimeConfigError) : bool =
+  match error with
+  | NoProjects
+  | ProjectNotBuilt _
+  | RuntimeConfigNotFound _ -> true
+  | RuntimeConfigUnreadable _
+  | NotJsonRuntimeConfig _
+  | NoFrameworkVersion
+  | UnrecognisedFrameworkVersion _ -> false
+
 /// What to do about the host's runtime for one session.
 type RuntimeChoice =
   /// The host's own runtime satisfies the project: change nothing.
