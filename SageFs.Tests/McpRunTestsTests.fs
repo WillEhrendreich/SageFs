@@ -291,3 +291,179 @@ let categoryTests =
     testCase "WHY — an unknown name is a custom category, never silently dropped (a dropped filter would run everything)" <| fun _ ->
       parseCategory "smoke" |> Expect.equal "custom" (Some (TestCategory.Custom "smoke"))
   ]
+
+// ── what the receipt says about its source ───────────────────────────────────────────────
+
+/// A project on disk (project file, one source, a build output) whose files are all older than the build, the build
+/// older than the worker's load: in sync until a test writes to something.
+type private SourceFixture =
+  { Dir: string
+    Project: string
+    Source: string
+    Dll: string }
+
+let private sourceT0 = DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc)
+let private sourceAt (minutes: int) = sourceT0.AddMinutes(float minutes)
+
+let private makeSourceFixture () : SourceFixture =
+  let dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "run-tests-source-%s" (Guid.NewGuid().ToString("N")))
+  System.IO.Directory.CreateDirectory(System.IO.Path.Combine(dir, "bin")) |> ignore
+  let project = System.IO.Path.Combine(dir, "Lib.fsproj")
+  let source = System.IO.Path.Combine(dir, "A.fs")
+  let dll = System.IO.Path.Combine(dir, "bin", "Lib.dll")
+  System.IO.File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><Compile Include=\"A.fs\" /></ItemGroup></Project>")
+  System.IO.File.WriteAllText(source, "module A")
+  System.IO.File.WriteAllText(dll, "assembly")
+  for file in [ project; source ] do System.IO.File.SetLastWriteTimeUtc(file, sourceAt -60)
+  System.IO.File.SetLastWriteTimeUtc(dll, sourceAt -30)
+  { Dir = dir; Project = project; Source = source; Dll = dll }
+
+let private dropSourceFixture (f: SourceFixture) = try System.IO.Directory.Delete(f.Dir, true) with _ -> ()
+
+/// The session's context with the project on disk loaded, a worker that says when it loaded, and the given rebuild record.
+let private ctxOverProject (engine: Engine) (f: SourceFixture) (rebuild: LastRebuild) : McpContext =
+  let baseCtx = ctxFor engine sid ready
+  let info : SessionInfo =
+    { Id = SageFs.McpSessionRouting.toSessionId sid
+      Name = None
+      Projects = [ f.Project ]
+      WorkingDirectory = f.Dir
+      SolutionRoot = None
+      Status = ready
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      CreatedAt = DateTime.UtcNow
+      LastActivity = DateTime.UtcNow
+      ActiveProject = None
+      ProjectRoles =
+        [ { Path = f.Project
+            Role = ProjectLoading.ProjectRole.Library
+            PackageRefs = []
+            LoadMode = ProjectLoading.LoadMode.Evaluated
+            Build = SageFs.BuildOptimization.Unoptimized } ]
+      App = AppRun.AppRunState.NotRunning
+      Rebuild = rebuild
+      Reload = SessionReload.NoReloadYet
+      Freshness = ReplFreshness.InSync }
+  let warmup : WarmupContext =
+    { WarmupContext.empty with
+        StartedAt = DateTimeOffset(sourceAt -10)
+        AssembliesLoaded = [ { Name = "Lib"; Path = f.Dll; NamespaceCount = 0; ModuleCount = 0 } ] }
+  { baseCtx with
+      SessionOps =
+        { baseCtx.SessionOps with
+            GetSessionInfo = fun _ -> Task.FromResult (Some info)
+            GetAllSessions = fun () -> Task.FromResult [ info ] }
+      GetWarmupContext = Some (fun _ -> Task.FromResult (Some warmup)) }
+
+let private ranOf (outcome: RunTestsOutcome) : RanReceipt =
+  match receiptOf outcome with
+  | RunReceipt.Ran ran -> ran
+  | other -> failtestf "expected Ran, got %A" other
+
+let private withFixture (body: SourceFixture -> Task<unit>) : Task<unit> =
+  task {
+    let f = makeSourceFixture ()
+    let! outcome = (body f).ContinueWith(fun (t: Task<unit>) -> match t.IsFaulted with true -> Error (t.Exception :> exn) | false -> Ok ())
+    dropSourceFixture f
+    match outcome with
+    | Error e -> raise e
+    | Ok () -> ()
+  }
+
+[<Tests>]
+let sourceTests =
+  testList "run_tests says what source its receipt reflects" [
+
+    testTask "WHY — a run over a project whose files are all older than its build is AllPassed, and the receipt says the source was in sync" {
+      do! withFixture (fun f -> task {
+        let engine = Engine(sid, cases, Map.empty)
+        let running = runTests (ctxOverProject engine f LastRebuild.NeverRebuilt) "agent" everything
+        do! engine.RunDispatched.WaitAsync patience
+        engine.ReleaseWorker ()
+        let! outcome = running
+        let ran = ranOf outcome
+        ran.Verdict |> Expect.equal "plain AllPassed" RunVerdict.AllPassed
+        match ran.Source with
+        | SourceState.InSync _ -> ()
+        | other -> failtestf "expected InSync, got %A" other })
+    }
+
+    testTask "WHY — the Nehemiah case: a source edited after the build, then run_tests, is passed-on-stale-source and names the file" {
+      do! withFixture (fun f -> task {
+        System.IO.File.SetLastWriteTimeUtc(f.Source, sourceAt -2)
+        let engine = Engine(sid, cases, Map.empty)
+        let running = runTests (ctxOverProject engine f LastRebuild.NeverRebuilt) "agent" everything
+        do! engine.RunDispatched.WaitAsync patience
+        engine.ReleaseWorker ()
+        let! outcome = running
+        let ran = ranOf outcome
+        ran.Verdict |> Expect.equal "not AllPassed" RunVerdict.PassedOnStaleSource
+        match ran.Source with
+        | SourceState.Stale [ file ] -> file.Path |> Expect.equal "the edited file" f.Source
+        | other -> failtestf "expected Stale naming the source, got %A" other
+        TestRunReceipt.summarize (RunReceipt.Ran ran) |> Expect.stringContains "the text says STALE" "STALE" })
+    }
+
+    testTask "WHY — a session with no project loaded cannot be called in sync: the run is passed-on-unknown-source, and the reason is that no project is loaded" {
+      let engine = Engine(sid, cases, Map.empty)
+      let running = runTests (ctxFor engine sid ready) "agent" everything
+      do! engine.RunDispatched.WaitAsync patience
+      engine.ReleaseWorker ()
+      let! outcome = running
+      let ran = ranOf outcome
+      ran.Verdict |> Expect.equal "not AllPassed" RunVerdict.PassedOnUnknownSource
+      ran.Source |> Expect.equal "no project" (SourceState.Unknown UnknownReason.NoProjectLoaded)
+    }
+
+    testTask "WHY — a run dispatched while a rebuild is in progress says so: passed-while-rebuilding" {
+      do! withFixture (fun f -> task {
+        let engine = Engine(sid, cases, Map.empty)
+        let rebuilding = LastRebuild.Latest (RebuildOutcome.InProgress (sourceAt -1))
+        let running = runTests (ctxOverProject engine f rebuilding) "agent" everything
+        do! engine.RunDispatched.WaitAsync patience
+        engine.ReleaseWorker ()
+        let! outcome = running
+        (ranOf outcome).Verdict |> Expect.equal "passed while rebuilding" RunVerdict.PassedWhileRebuilding })
+    }
+
+    testTask "WHY — a file edited WHILE the run is in flight counts: dispatched in sync, finished stale is stale" {
+      do! withFixture (fun f -> task {
+        let engine = Engine(sid, cases, Map.empty)
+        let running = runTests (ctxOverProject engine f LastRebuild.NeverRebuilt) "agent" everything
+        do! engine.RunDispatched.WaitAsync patience
+        System.IO.File.SetLastWriteTimeUtc(f.Source, sourceAt -1)
+        engine.ReleaseWorker ()
+        let! outcome = running
+        (ranOf outcome).Verdict |> Expect.equal "stale, because of the edit during the run" RunVerdict.PassedOnStaleSource })
+    }
+
+    testTask "WHY — the receipt is frozen when the run settles: an edit AFTER it finished does not change what the same receipt_id says" {
+      do! withFixture (fun f -> task {
+        let engine = Engine(sid, cases, Map.empty)
+        let ctx = ctxOverProject engine f LastRebuild.NeverRebuilt
+        let running = runTests ctx "agent" everything
+        do! engine.RunDispatched.WaitAsync patience
+        engine.ReleaseWorker ()
+        let! first = running
+        let firstRan = ranOf first
+        System.IO.File.SetLastWriteTimeUtc(f.Source, sourceAt -1)
+        let! again = runTests ctx "agent" { everything with Continue = Some firstRan.RequestId }
+        (ranOf again).Verdict |> Expect.equal "still what the run was" RunVerdict.AllPassed
+        (ranOf again).Source |> Expect.equal "the same reading" firstRan.Source })
+    }
+
+    testTask "WHY — the tool's structured result carries the source and the verdict token, so an agent branches on data" {
+      do! withFixture (fun f -> task {
+        System.IO.File.SetLastWriteTimeUtc(f.Source, sourceAt -2)
+        let engine = Engine(sid, cases, Map.empty)
+        let tools = SageFsTools(ctxOverProject engine f LastRebuild.NeverRebuilt, Microsoft.Extensions.Logging.Abstractions.NullLogger<SageFsTools>.Instance)
+        let running = tools.run_tests("", "", "", 30, "", sid, "")
+        do! engine.RunDispatched.WaitAsync patience
+        engine.ReleaseWorker ()
+        let! (result: ModelContextProtocol.Protocol.CallToolResult) = running
+        let data = result.StructuredContent.Value
+        data.GetProperty("verdict").GetString() |> Expect.equal "the verdict token" "PassedOnStaleSource"
+        data.GetProperty("source").GetProperty("state").GetString() |> Expect.equal "the source state" "Stale"
+        data.GetProperty("replFreshness").GetProperty("state").GetString() |> Expect.equal "the REPL's own freshness stays its own field" "InSync" })
+    }
+  ]

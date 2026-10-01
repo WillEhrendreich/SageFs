@@ -201,6 +201,8 @@
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
+        <Compile Include="SourceStateProbeTests.fs" />
+        <Compile Include="SourceStateSimTests.fs" />
         <Compile Include="TrunkFollowSimTests.fs" />
         <Compile Include="TrunkFollowTests.fs" />
         <Compile Include="TrunkFollowShellTests.fs" />
@@ -338,6 +340,7 @@
          <Compile Include="FirstRunLinuxTests.fs" />
          <Compile Include="McpStdioBridgeOwnershipTests.fs" />
          <Compile Include="TestRunReceiptTests.fs" />
+         <Compile Include="SourceStateTests.fs" />
          <Compile Include="McpRunTestsTests.fs" />
          <Compile Include="JsonTests.fs" />
          <Compile Include="JsonCentralizationTests.fs" />
@@ -491,6 +494,7 @@
         <Compile Include="WorkflowSwitchSimTests.fs" />
         <Compile Include="DstCoverageTests.fs" />
         <Compile Include="McpToolOutcomeTests.fs" />
+        <Compile Include="SourceStateOutcomeTests.fs" />
         <Compile Include="McpAppRunOutcomeTests.fs" />
         <Compile Include="DstShrinkTests.fs" />
         <Compile Include="OriginGuardOutcomeTests.fs" />

@@ -117,6 +117,11 @@
         <Compile Include="BuildConfirmationSim.fs" />
         <Compile Include="BuildConfirmationInvariants.fs" />
         <Compile Include="BuildConfirmationGenerators.fs" />
+        <!-- Source state DST: folds the real SourceState decision through edits, builds that end or fail,
+             workers that load the build on disk or keep an older one, outside builds, files that cannot be
+             read, a rebuild record delivered in any order, and a worker that goes silent; twins ignore write
+             times, believe the rebuild record over the files, and take a failed read for an old stamp. -->
+        <Compile Include="SourceStateSim.fs" />
         <!-- Live check pump DST: folds the real LiveCheckPump decision through edits that land while the
              worker is absent, warming, ready or retired, answers that come back from a worker that is no
              longer the one asked, and waits that end in any order; twins drop what they cannot ask, ask a

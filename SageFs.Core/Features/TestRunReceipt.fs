@@ -4,6 +4,7 @@
 module SageFs.Features.RunReceipts
 
 open System
+open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Features.Verification
 
@@ -51,6 +52,15 @@ type RunVerdict =
   /// Nothing failed, but not every test passed here (skipped, cut off, never reported,
   /// or no tests named). Never to be read as green.
   | Incomplete
+  /// Every requested test passed, but files the build was made from changed on disk after the build the tests ran
+  /// against. What passed is not what the files say. Never to be read as green.
+  | PassedOnStaleSource
+  /// Every requested test passed while a rebuild was in progress, so the run says nothing about the edits the rebuild
+  /// is picking up. Never to be read as green.
+  | PassedWhileRebuilding
+  /// Every requested test passed, but nothing could say whether the build is current (see `source` for why).
+  /// Never to be read as green.
+  | PassedOnUnknownSource
 
 type RunCounts =
   { Passing: int
@@ -64,7 +74,10 @@ type RanReceipt =
     Generation: RunGeneration
     Verdict: RunVerdict
     Counts: RunCounts
-    Lines: ReceiptLine list }
+    Lines: ReceiptLine list
+    /// Whether the build these tests ran against is behind the files on disk, as of this run. `observe` starts it at
+    /// `Unknown NotAssessed`; `withSource` puts the real reading in and the verdict follows it.
+    Source: SourceState }
 
 /// What the engine can say about a `run_tests` request right now.
 [<RequireQualifiedAccess>]
@@ -85,6 +98,9 @@ module RunVerdict =
     | RunVerdict.AllPassed -> "AllPassed"
     | RunVerdict.SomeFailed -> "SomeFailed"
     | RunVerdict.Incomplete -> "Incomplete"
+    | RunVerdict.PassedOnStaleSource -> "PassedOnStaleSource"
+    | RunVerdict.PassedWhileRebuilding -> "PassedWhileRebuilding"
+    | RunVerdict.PassedOnUnknownSource -> "PassedOnUnknownSource"
 
 module LineOutcome =
   let token = function
@@ -173,7 +189,11 @@ module TestRunReceipt =
             Generation = request.RequestedGeneration
             Verdict = verdictOf counts
             Counts = counts
-            Lines = lines }
+            Lines = lines
+            Source = SourceState.Unknown UnknownReason.NotAssessed }
+
+  /// The receipt with the source reading a run was made against. Skeleton: it changes nothing yet.
+  let withSource (source: SourceState) (receipt: RunReceipt) : RunReceipt = receipt
 
   /// Every requested test that did not pass in this run. Fail-closed, and the
   /// same set `RequestedRuns.failingIn` reports for the cohort landing gate.
@@ -242,6 +262,9 @@ module TestRunReceipt =
         | RunVerdict.AllPassed -> "Every requested test passed in this run."
         | RunVerdict.SomeFailed -> "Some tests failed:"
         | RunVerdict.Incomplete -> "This is not green: not every test passed in this run."
+        | RunVerdict.PassedOnStaleSource
+        | RunVerdict.PassedWhileRebuilding
+        | RunVerdict.PassedOnUnknownSource -> ""
       let problems =
         ran.Lines
         |> List.filter (fun line -> match line.Outcome with LineOutcome.Passed _ -> false | _ -> true)
