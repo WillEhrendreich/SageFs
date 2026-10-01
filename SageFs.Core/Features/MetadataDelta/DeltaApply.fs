@@ -54,6 +54,10 @@ type CapabilityGap =
   | ModuleOptimized of assembly: string
   /// A reflection-emit module, which is what FSI's own assemblies are.
   | ModuleIsDynamic of assembly: string
+  /// Methods the delta rewrites that already carry a Harmony patch in this process (SageFs's own guards and detours, or
+  /// the app's). The patch redirects the method's native code, and a delta replaces the body the patch wraps, so one
+  /// of the two would be lost without a word.
+  | MethodsPatchedByOthers of methods: string list
 
 [<RequireQualifiedAccess>]
 type CapabilityCheck =
@@ -132,6 +136,8 @@ module DeltaApply =
       sprintf "the runtime does not report the %s capability" (RequiredFeature.capabilityName feature)
     | CapabilityGap.ModuleOptimized name -> sprintf "%s was built with optimizations, so the runtime will not edit it" name
     | CapabilityGap.ModuleIsDynamic name -> sprintf "%s is a reflection-emit module, which cannot take an update" name
+    | CapabilityGap.MethodsPatchedByOthers methods ->
+      sprintf "%s already carry a Harmony patch in this process, and a delta would replace the body the patch wraps" (String.concat ", " methods)
 
   let private nameOf (assembly: Assembly) : string =
     match assembly.GetName().Name with
@@ -162,6 +168,27 @@ module DeltaApply =
           | true -> yield CapabilityGap.ModuleOptimized (nameOf assembly)
           | false -> () ]
 
+  /// The methods this delta rewrites that Harmony has already patched in this process. A method the delta adds has no
+  /// token the runtime can resolve yet, and cannot carry a patch, so it is skipped; a token that does not resolve for any
+  /// other reason is not guessed at either.
+  let methodsPatchedByOthers (assembly: Assembly) (payload: DeltaPayload) : string list =
+    let patched =
+      try HarmonyLib.Harmony.GetAllPatchedMethods() |> Seq.toList
+      with _ -> []
+    match patched with
+    | [] -> []
+    | _ ->
+      payload.MethodTokens
+      |> List.choose (fun token ->
+        try
+          match assembly.ManifestModule.ResolveMethod token with
+          | null -> None
+          | resolved ->
+            match patched |> List.exists (fun p -> p.MetadataToken = resolved.MetadataToken && p.Module = resolved.Module) with
+            | true -> Some (sprintf "%s.%s" (match resolved.DeclaringType with | null -> "" | t -> t.FullName) resolved.Name)
+            | false -> None
+        with _ -> None)
+
   /// Everything known before the call. A delta is handed to the runtime only when this says `Capable`.
   let check (capability: RuntimeCapability) (assembly: Assembly) (payload: DeltaPayload) : CapabilityCheck =
     let gaps =
@@ -169,7 +196,10 @@ module DeltaApply =
       @ [ for feature in payload.Requires do
             match capability.Features |> List.contains (RequiredFeature.capabilityName feature) with
             | true -> ()
-            | false -> yield CapabilityGap.MissingFeature feature ]
+            | false -> yield CapabilityGap.MissingFeature feature
+          match methodsPatchedByOthers assembly payload with
+          | [] -> ()
+          | methods -> yield CapabilityGap.MethodsPatchedByOthers methods ]
     match gaps with
     | [] -> CapabilityCheck.Capable
     | _ -> CapabilityCheck.Incapable gaps

@@ -211,10 +211,62 @@ let private withoutDebugger (runtime: HostRuntime) =
       stop app
   }
 
+/// Whether a debugger is attached to the process the run_app app runs in, asked of the app itself: it is the worker
+/// that holds it, and the worker's answer is the one that matters. A stopped process cannot answer, hence the bound.
+let private workerHasDebugger (app: RunningApp) : Task<bool> = task {
+  let ask = SageFs.Tests.HotReloadStateHarness.get app "debugger"
+  let! winner = Task.WhenAny(ask, Task.Delay TestTimeouts.patienceBrief)
+  match obj.ReferenceEquals(winner, ask) with
+  | false -> return false
+  | true ->
+    match ask.IsFaulted with
+    | true -> return false
+    | false -> return ask.Result = "True"
+}
+
+/// A metadata delta is refused by the runtime while a debugger is attached to the process, so the route says so before it asks.
+/// A run_app app runs in the worker process (the one `app.Host` is), and this attaches the debugger there. The debugger a user
+/// opens on a failing test is attached to the FSI host, a different process, and does not touch this route.
+let private deltaWithDebuggerOnTheWorker (runtime: HostRuntime) =
+  testTask (sprintf "[%s] a run_app app with a debugger attached to its process restarts on a save and says a debugger is why, instead of asking the runtime" (HostRuntime.moniker runtime)) {
+    let! executable = debugger.Value
+    let! app = SageFs.Tests.RunAppDeltaHarness.startRunApp runtime
+    let attached = attach executable app.Host.Id
+    try
+      let sw = Stopwatch.StartNew()
+      let mutable attachedNow = false
+      while not attachedNow && sw.Elapsed < TestTimeouts.readyBudget do
+        match attached.Debugger.HasExited with
+        | true ->
+          failwithf "The debugger exited before it attached (exit %d). It said:\n%s" attached.Debugger.ExitCode (lock attached.Said (fun () -> attached.Said.ToString()))
+        | false ->
+          attached.Debugger.StandardInput.WriteLine "continue"
+          let! answer = workerHasDebugger app
+          attachedNow <- answer
+          match attachedNow with
+          | true -> ()
+          | false -> do! Task.Delay TestTimeouts.pollService
+      attachedNow |> Expect.isTrue (sprintf "the app says a debugger is attached to its own process. The debugger said:\n%s" (lock attached.Said (fun () -> attached.Said.ToString())))
+      let! verdict = saveEdits app app.StateSource [ "\"closure:A\"", "\"closure:B\"" ]
+      let json = System.Text.Json.JsonDocument.Parse(verdict : string).RootElement
+      let text (e: System.Text.Json.JsonElement) (name: string) =
+        match e.TryGetProperty name with
+        | true, v -> v.ToString()
+        | false, _ -> ""
+      text json "outcome" |> Expect.equal (sprintf "the save restarts: %s" verdict) "Restarted"
+      [ for r in json.GetProperty("reasons").EnumerateArray() -> text r "case", text r "message" ]
+      |> List.exists (fun (case, message) -> case = "MetadataDeltaUnavailable" && message.Contains "debugger")
+      |> Expect.isTrue (sprintf "the reason is the debugger: %s" verdict)
+    finally
+      (try attached.Debugger.Kill(entireProcessTree = true) with _ -> ())
+      stop app
+  }
+
 [<Tests>]
 let hotReloadDebuggerTests =
   Integration.hostList "hot reload with a managed debugger attached" [
     for runtime in HostRuntime.all do
       withDebugger runtime
       withoutDebugger runtime
+      deltaWithDebuggerOnTheWorker runtime
   ]

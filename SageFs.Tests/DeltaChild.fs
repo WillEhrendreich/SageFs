@@ -19,6 +19,11 @@ open System.Threading.Tasks
 open SageFs.Features.MetadataDelta
 open SageFs.Tests.DeltaProgram
 
+/// The prefix `HarmonyPatch` puts on a method: it runs the original.
+[<AbstractClass; Sealed>]
+type HarmonyNoop =
+  static member Prefix() : bool = true
+
 /// Whether `bench` looks through the coverage probes of its baseline.
 [<RequireQualifiedAccess>]
 type BenchProbes =
@@ -56,6 +61,11 @@ type Op =
   | AllocateProbes of count: int
   /// Print each probe's status: `Entered`, `Superseded` or `NotEntered`.
   | ReadProbes
+  /// Read and clear the coverage tracker the instrumenter put in the loaded assembly, and print how many probes it has
+  /// and which of them ran.
+  | ReadCoverage
+  /// Put a Harmony prefix that changes nothing on a static method of the loaded assembly, the way a guard or a detour does.
+  | HarmonyPatch of typeName: string * methodName: string
 
 [<RequireQualifiedAccess>]
 module Op =
@@ -76,6 +86,8 @@ module Op =
     | Op.Invoke (typeName, methodName) -> sprintf "invoke %s %s" typeName methodName
     | Op.AllocateProbes count -> sprintf "allocateprobes %d" count
     | Op.ReadProbes -> "readprobes"
+    | Op.ReadCoverage -> "readcoverage"
+    | Op.HarmonyPatch (typeName, methodName) -> sprintf "harmonypatch %s %s" typeName methodName
 
   let parse (line: string) : Op voption =
     match line.Split(' ', StringSplitOptions.RemoveEmptyEntries) with
@@ -99,6 +111,8 @@ module Op =
       | true, n -> ValueSome (Op.AllocateProbes n)
       | false, _ -> ValueNone
     | [| "readprobes" |] -> ValueSome Op.ReadProbes
+    | [| "readcoverage" |] -> ValueSome Op.ReadCoverage
+    | [| "harmonypatch"; typeName; methodName |] -> ValueSome (Op.HarmonyPatch (typeName, methodName))
     | _ -> ValueNone
 
 /// What a line the child prints is about.
@@ -118,6 +132,8 @@ type FactKind =
   | Invoked
   /// The status of the probes, from `ReadProbes`: `1=Entered 2=NotEntered`.
   | Probes
+  /// The coverage tracker, from `ReadCoverage`: `total=N hit=a,b,c`.
+  | Coverage
   /// The script had a line the child does not know.
   | Unknown
 
@@ -125,7 +141,7 @@ type FactKind =
 module FactKind =
   let all : FactKind list =
     [ FactKind.EvalBegin; FactKind.EvalEnd; FactKind.EvalLine; FactKind.Apply; FactKind.Check; FactKind.Capability
-      FactKind.Time; FactKind.Bench; FactKind.Second; FactKind.Handler; FactKind.Invoked; FactKind.Probes; FactKind.Unknown ]
+      FactKind.Time; FactKind.Bench; FactKind.Second; FactKind.Handler; FactKind.Invoked; FactKind.Probes; FactKind.Coverage; FactKind.Unknown ]
 
   let tag (kind: FactKind) : string =
     match kind with
@@ -141,6 +157,7 @@ module FactKind =
     | FactKind.Handler -> "HANDLER"
     | FactKind.Invoked -> "INVOKED"
     | FactKind.Probes -> "PROBES"
+    | FactKind.Coverage -> "COVERAGE"
     | FactKind.Unknown -> "UNKNOWN"
 
 /// One thing the child said.
@@ -242,7 +259,7 @@ let private runScript (directory: string) : int =
       let tokens = tokensIn (path (Path.ChangeExtension(meta, "tokens")))
       say FactKind.Apply (describeOutcome (DeltaApply.apply assembly (payloadOf (File.ReadAllBytes(path meta)) (File.ReadAllBytes(path il)) tokens [])))
     | ValueSome (Op.Check (meta, il)) ->
-      let payload = payloadOf (File.ReadAllBytes(path meta)) (File.ReadAllBytes(path il)) [] [ RequiredFeature.Baseline ]
+      let payload = payloadOf (File.ReadAllBytes(path meta)) (File.ReadAllBytes(path il)) (tokensIn (path (Path.ChangeExtension(meta, "tokens")))) [ RequiredFeature.Baseline ]
       match DeltaApply.check (DeltaApply.capability ()) assembly payload with
       | CapabilityCheck.Capable -> say FactKind.Check "Capable"
       | CapabilityCheck.Incapable gaps ->
@@ -316,6 +333,17 @@ let private runScript (directory: string) : int =
       for _ in 1 .. count do
         allocatedProbes <- allocatedProbes + 1
         SageFs.Middleware.EntryProbes.ProbeRegistry.Shared.Allocate(sprintf "probe-%d" allocatedProbes) |> ignore
+    | ValueSome (Op.HarmonyPatch (typeName, methodName)) ->
+      let target = assembly.GetType(typeName).GetMethod(methodName, BindingFlags.Public ||| BindingFlags.Static)
+      let prefix = HarmonyLib.HarmonyMethod(typeof<HarmonyNoop>.GetMethod("Prefix", BindingFlags.Public ||| BindingFlags.Static))
+      HarmonyLib.Harmony("deltachild").Patch(target, prefix) |> ignore
+      say FactKind.Invoked (sprintf "%s.%s patched" typeName methodName)
+    | ValueSome Op.ReadCoverage ->
+      match SageFs.Features.LiveTesting.CoverageProbes.readAndClear (SageFs.Features.LiveTesting.CoverageProbes.findTrackers [| assembly |]) with
+      | None -> say FactKind.Coverage "total=0 hit="
+      | Some hits ->
+        let which = hits |> Array.indexed |> Array.filter snd |> Array.map (fst >> string)
+        say FactKind.Coverage (sprintf "total=%d hit=%s" hits.Length (String.Join(",", which)))
     | ValueSome Op.ReadProbes ->
       let reading = SageFs.Middleware.EntryProbes.ProbeRegistry.Shared.Read [ 1L .. int64 allocatedProbes ]
       say FactKind.Probes

@@ -447,6 +447,8 @@ let metadataDeltaTests =
           Op.ApplyLast
           Op.AllocateProbes 3
           Op.ReadProbes
+          Op.ReadCoverage
+          Op.HarmonyPatch ("Gen.Prog", "m0")
           Op.Invoke ("Ns.Type", "method") ]
       for op in ops do
         Op.parse (Op.toLine op) |> Expect.equal (sprintf "%A survives its own line" op) (ValueSome op)
@@ -648,6 +650,58 @@ let metadataDeltaTests =
           hits baseline (ProbeStripping.StripCoverageProbes CoverageProbe.hitSymbol) |> Expect.equal "and none is left once they are looked through" 0
       finally
         removeQuietly directory
+
+    // -- what a patch costs the process's own coverage -------------------------------------------------------
+
+    testTask "WHY - a method patched into an instrumented module stops reporting coverage and the others keep reporting it, so coverage is read where the tests ran, never from the process that took the delta" {
+      let directory = scratch ()
+      try
+        let edited = { fixedProgram with Methods = [ Plain (Lit 1); fixedProgram.Methods[1]; fixedProgram.Methods[2] ] }
+        let paths = compileAll directory [ fixedProgram; edited ]
+        match SageFs.Tests.DeltaInstrumentation.instrumentInPlace paths[0] with
+        | Result.Error message -> failtestf "instrumenting the baseline failed: %s" message
+        | Result.Ok _ -> ()
+        let prepared = prepare Twin.Honest Probing.Unprobed 1UL (ProbeStripping.StripCoverageProbes CoverageProbe.hitSymbol) directory paths
+        let meta, il = List.head prepared.Deltas
+        let! result =
+          DeltaChild.run directory ModifiableAssemblies.Debug
+            [ Op.Load "base/Gen.dll"; Op.Eval; Op.ReadCoverage; Op.Apply (meta, il); Op.Eval; Op.ReadCoverage ]
+        result.ExitCode |> Expect.equal (sprintf "the child lived: %s" result.Stderr) 0
+        let slotsOf (fact: string) : Set<int> =
+          let hit = fact.Substring(fact.IndexOf "hit=" + 4)
+          hit.Split(',', StringSplitOptions.RemoveEmptyEntries) |> Array.map int |> Set.ofArray
+        match DeltaChild.factsOf FactKind.Coverage result with
+        | [ before; after ] ->
+          let ranBefore, ranAfter = slotsOf before, slotsOf after
+          ranBefore |> Expect.isNonEmpty "the instrumented methods reported while the process ran the build it loaded"
+          Set.isSubset ranAfter ranBefore |> Expect.isTrue "after the patch nothing reports that did not report before"
+          Set.difference ranBefore ranAfter |> Expect.isNonEmpty "the patched method lost its probes, because the new body is the clean build's"
+          ranAfter |> Expect.isNonEmpty "and the methods the delta did not touch still report"
+        | other -> failtestf "two coverage readings were asked for: %A" other
+      finally
+        removeQuietly directory
+    }
+
+    // -- a method another tool has already patched ---------------------------------------------------------
+
+    testTask "WHY - a delta that rewrites a method Harmony has patched is refused before the call, and one that rewrites another method is not" {
+      let directory = scratch ()
+      try
+        let edited = { fixedProgram with Methods = [ Plain (Lit 1); fixedProgram.Methods[1]; fixedProgram.Methods[2] ] }
+        let paths = compileAll directory [ fixedProgram; edited ]
+        let prepared = prepare Twin.Honest Probing.Unprobed 1UL ProbeStripping.KeepEveryInstruction directory paths
+        let meta, il = List.head prepared.Deltas
+        let! patchedMethod =
+          DeltaChild.run directory ModifiableAssemblies.Debug [ Op.Load "base/Gen.dll"; Op.HarmonyPatch ("Gen.Prog", "m0"); Op.Check (meta, il) ]
+        patchedMethod.ExitCode |> Expect.equal (sprintf "the child lived: %s" patchedMethod.Stderr) 0
+        DeltaChild.factsOf FactKind.Check patchedMethod |> List.exists (fun f -> f.Contains "Gen.Prog.m0" && f.Contains "Harmony patch")
+        |> Expect.isTrue (sprintf "the method that is both patched and rewritten is named: %A" patchedMethod.Facts)
+        let! otherMethod =
+          DeltaChild.run directory ModifiableAssemblies.Debug [ Op.Load "base/Gen.dll"; Op.HarmonyPatch ("Gen.Prog", "m1"); Op.Check (meta, il) ]
+        DeltaChild.factsOf FactKind.Check otherMethod |> Expect.equal "a patch on a method the delta leaves alone is nothing to refuse" [ "Capable" ]
+      finally
+        removeQuietly directory
+    }
 
     // -- what the runtime says -------------------------------------------------------------------------------
 
