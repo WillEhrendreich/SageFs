@@ -3443,8 +3443,9 @@ module TestCycleEffects =
       // empty and nothing above selects anything, even though the file's
       // behavior just changed. Selecting on what the file CONTAINS instead of
       // on what its name set DID closes that: every test reaching a symbol
-      // this type-check resolved in the file is a candidate. Save/explicit
-      // only — a keystroke's half-typed buffer would thrash the runner.
+      // this type-check resolved in the file is a candidate. Every trigger,
+      // keystroke included: a half-typed buffer takes the `Failed` branch, and
+      // `PolicyFilter` below keeps a save-only category quiet per keystroke.
       //
       // Residual limit, stated rather than hidden: if the dependency graph has
       // not yet seen the test file that covers this symbol, the narrow still
@@ -3455,7 +3456,6 @@ module TestCycleEffects =
           Array.isEmpty nameDeltaAffected
           && List.isEmpty changedSymbols
           && not (List.isEmpty symbols.InFile)
-          && (trigger = RunTrigger.FileSave || trigger = RunTrigger.ExplicitRun)
         with
         | true -> TestDependencyGraph.findAffected symbols.InFile depGraph
         | false -> [||]
@@ -3473,8 +3473,8 @@ module TestCycleEffects =
       // 2. FileSave on a compiled file where the dep graph is empty — FCS can't see main project
       //    symbols from the test session, so changedSymbols=[] even though the DLL is stale.
       // Do NOT fall back when:
-      // - changedSymbols=[] on Keystroke (intermediate state while typing)
-      // - changedSymbols=[] on FileSave but dep graph is non-empty — the
+      // - changedSymbols=[] on Keystroke with an empty dep graph (intermediate state)
+      // - changedSymbols=[] with a non-empty dep graph, on any trigger — the
       //   file-scope narrow above has already had its turn by this point.
       //   This used to be justified as "FCS correctly reports no semantic
       //   change", which was not true: `changedSymbols` is a `Set<string>`
@@ -3501,7 +3501,7 @@ module TestCycleEffects =
         | false when usedFileScope ->
           affected,
           SelectionPrecision.ConservativeFallback,
-          "This save changed no symbol names, which a name-only comparison cannot tell apart from a rewritten function body, so SageFs selected every test that reaches a symbol this file declares."
+          "This edit changed no symbol names, which a name-only comparison cannot tell apart from a rewritten function body, so SageFs selected every test that reaches a symbol this file declares."
         | false when Array.isEmpty affected ->
           [||],
           SelectionPrecision.NoImpactedTests,
