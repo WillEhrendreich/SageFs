@@ -26,9 +26,16 @@ let roots : Roots =
     NamePrefixes = [ RootKind.TempRuns, "sagefs-" ] }
 
 /// A resolver for paths that are real and not links: a path resolves to itself.
-let identityResolve (path: string) : Result<string, string> = Result.Ok path
+let identityResolve (path: string) : Result<string, ResolveFailure> = Result.Ok path
 
-let aWeekAgo = now - TimeSpan.FromDays 7.0
+let aWeekAgo = now - HygieneAges.aWeek
+
+/// The size of a worktree in the fixtures: small, and the same everywhere, so a plan's byte totals are sums a test can write.
+let aSmallTreeBytes = 1000L
+/// The size of a cache directory in the fixtures.
+let aCacheBytes = 5000L
+/// What an orphaned host process holds in memory.
+let anOrphanBytes = 300L * 1024L * 1024L
 
 let commit (sha: string) : Commit = { Sha = sha; Subject = "work " + sha }
 let realFile (path: string) : ChangedFile = { Path = path; Origin = ChangeOrigin.Real }
@@ -38,7 +45,7 @@ let generatedFile (path: string) : ChangedFile = { Path = path; Origin = ChangeO
 let worktree (name: string) : Subject =
   { Kind = LeftoverKind.AgentWorktree
     Target = Target.Directory(worktreeRoot + "/" + name)
-    SizeBytes = 1_000L
+    SizeBytes = aSmallTreeBytes
     LastTouched = aWeekAgo
     Owner = Owner.OwnerUnrecorded
     Repo = RepoLink.InRepo repoPath
@@ -66,7 +73,7 @@ let unmergedWith (files: ChangedFile list) (s: Subject) : Subject =
 let cache (kind: LeftoverKind) (path: string) (retention: TimeSpan) : Subject =
   { Kind = kind
     Target = Target.Directory path
-    SizeBytes = 5_000L
+    SizeBytes = aCacheBytes
     LastTouched = aWeekAgo
     Owner = Owner.OwnerUnrecorded
     Repo = RepoLink.NoRepo
@@ -94,7 +101,7 @@ let branch (name: string) (merge: MergeEvidence) : Subject =
 let orphanProcess (pid: int) : Subject =
   { Kind = LeftoverKind.OrphanProcess
     Target = Target.RunningProcess(pid, 4242L)
-    SizeBytes = 300_000_000L
+    SizeBytes = anOrphanBytes
     LastTouched = aWeekAgo
     Owner = Owner.OwnedByProcess 1
     Repo = RepoLink.NoRepo
@@ -155,9 +162,7 @@ let genLineage : Gen<Lineage> =
 
 let genKind : Gen<LeftoverKind> =
   Gen.elements
-    [ LeftoverKind.AgentWorktree; LeftoverKind.GateCheckout; LeftoverKind.GateTierClone
-      LeftoverKind.HostCacheEntry; LeftoverKind.WorkerLogFile; LeftoverKind.TempRunDir
-      LeftoverKind.OrphanProcess; LeftoverKind.StaleBranch; LeftoverKind.SpawnedRegistryEntry ]
+    Kind.all
 
 let genSubject : Gen<Subject> =
   gen {
@@ -168,7 +173,7 @@ let genSubject : Gen<Subject> =
     let! git = genGit
     let! ageDays = Gen.choose (0, 60)
     let! retentionDays = Gen.choose (1, 30)
-    let! retentionKind = Gen.elements [ true; false ]
+    let! retentionKind = Gen.choose (0, 2)
     let target =
       match kind with
       | LeftoverKind.OrphanProcess -> Target.RunningProcess(id, int64 id * 10L)
@@ -178,12 +183,13 @@ let genSubject : Gen<Subject> =
       | LeftoverKind.AgentWorktree -> Target.Directory(sprintf "%s/agent-%d" worktreeRoot id)
       | LeftoverKind.GateCheckout
       | LeftoverKind.GateTierClone -> Target.Directory(sprintf "%s/checkout-%d" gateRoot id)
+      | LeftoverKind.GatePassRecord -> Target.Directory(sprintf "%s/passed/%d" gateRoot id)
       | LeftoverKind.HostCacheEntry -> Target.Directory(sprintf "%s/sdk-%d" hostRoot id)
       | LeftoverKind.TempRunDir -> Target.Directory(sprintf "%s/sagefs-hr/%d" tempRoot id)
     return
       { Kind = kind
         Target = target
-        SizeBytes = int64 id * 1_000L
+        SizeBytes = int64 id * aSmallTreeBytes
         LastTouched = now - TimeSpan.FromDays(float ageDays)
         Owner = Owner.OwnerUnrecorded
         Repo = RepoLink.InRepo repoPath
@@ -191,7 +197,11 @@ let genSubject : Gen<Subject> =
         Display = sprintf "item-%d" id
         Uses = uses
         Lineage = lineage
-        Retention = (if retentionKind then Retention.KeepFor(TimeSpan.FromDays(float retentionDays)) else Retention.NeverExpires)
+        Retention =
+          (match retentionKind with
+           | 0 -> Retention.KeepFor(TimeSpan.FromDays(float retentionDays))
+           | 1 -> Retention.KeepNewest(retentionDays % 7, 3)
+           | _ -> Retention.NeverExpires)
         Git = git }
   }
 

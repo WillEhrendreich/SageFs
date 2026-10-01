@@ -113,6 +113,13 @@ module HygieneSim =
   let roots : Roots = { Entries = [ RootKind.AgentWorktrees, worktreeRoot ]; NamePrefixes = [] }
   let now = DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc)
 
+  /// How long ago every simulated thing was last touched: long enough to look abandoned, and the sim has no
+  /// retention rules to cross, so nothing here turns on the number.
+  let private untouchedFor = TimeSpan.FromDays 3.0
+
+  /// How long ago a simulated process's owner died.
+  let private ownerGoneFor = TimeSpan.FromDays 2.0
+
   let pathOf (id: int) : string = sprintf "%s/agent-%d" worktreeRoot id
   let branchOf (id: int) : string = sprintf "worktree-agent-%d" id
 
@@ -172,7 +179,7 @@ module HygieneSim =
     { Kind = kind
       Target = target
       SizeBytes = 100L
-      LastTouched = now - TimeSpan.FromDays 3.0
+      LastTouched = now - untouchedFor
       Owner = Owner.OwnerUnrecorded
       Repo = RepoLink.InRepo repo
       Branch = BranchLabel.NoBranch
@@ -209,7 +216,7 @@ module HygieneSim =
         Lineage =
           (match p.OwnerAlive with
            | true -> Lineage.OwnerAlive 1
-           | false -> Lineage.OwnerGone(1, now - TimeSpan.FromDays 2.0)) }
+           | false -> Lineage.OwnerGone(1, now - ownerGoneFor)) }
 
   /// Every leftover the world holds, classified by the real `classify`.
   let gather (world: World) : Leftover list =

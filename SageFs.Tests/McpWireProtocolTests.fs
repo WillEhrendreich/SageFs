@@ -67,6 +67,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "get_recent_fsi_events"
       "get_session_filmstrip"
       "get_session_status"
+      "get_workspace_hygiene"
       "hard_reset_fsi_session"
       "impact_forecast"
       "join_cohort"
@@ -98,6 +99,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "switch_session"
       "switch_workflow"
       "targeted_verify"
+      "tidy_workspace"
     ]
     let actual =
       findMcpToolMethods ()

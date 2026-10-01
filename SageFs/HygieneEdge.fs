@@ -16,9 +16,10 @@ open SageFs.HygieneGather
 
 /// Follow every symlink in a path, so the gate sees where a removal would really land. A path that does not
 /// exist resolves to itself; one that loops, or goes too deep, is an error.
-let resolvePath (path: string) : Result<string, string> =
+let resolvePath (path: string) : Result<string, ResolveFailure> =
+  // The kernel's own bound on symlink chains is 40 on Linux; a path that needs more is looping.
   let maxLinks = 40
-  let rec walk (current: string) (remaining: string list) (links: int) : Result<string, string> =
+  let rec walk (current: string) (remaining: string list) (links: int) : Result<string, ResolveFailure> =
     match remaining with
     | [] -> Result.Ok current
     | segment :: rest ->
@@ -33,7 +34,7 @@ let resolvePath (path: string) : Result<string, string> =
       | None -> walk next rest links
       | Some t ->
         match links >= maxLinks with
-        | true -> Result.Error(sprintf "more than %d links while resolving %s" maxLinks path)
+        | true -> Result.Error(ResolveFailure.TooManyLinks path)
         | false ->
           let absolute = (match Path.IsPathRooted t with | true -> t | false -> Guard.normalize (current + "/" + t))
           let parts = Guard.normalize absolute |> fun p -> p.Split([| '/' |], StringSplitOptions.RemoveEmptyEntries) |> Array.toList
@@ -41,14 +42,12 @@ let resolvePath (path: string) : Result<string, string> =
   try
     let parts = Guard.normalize path |> fun p -> p.Split([| '/' |], StringSplitOptions.RemoveEmptyEntries) |> Array.toList
     walk "/" parts 0
-  with ex -> Result.Error ex.Message
+  with ex -> Result.Error(ResolveFailure.Unreadable(path, ex.Message))
 
 type EdgeContext =
   { MakeScan: unit -> Scan
     Git: Git
     IsAlive: int -> int64 option -> bool }
-
-let private failed (what: string) (stderr: string) : Outcome = Outcome.Failed(sprintf "%s: %s" what stderr)
 
 let private gitStep (git: Git) (dir: string) (args: string list) : Result<unit, string> =
   match git dir args with

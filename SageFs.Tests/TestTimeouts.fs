@@ -1201,3 +1201,29 @@ module RebuildWaitTimeouts =
   /// How long a test lets a cancelled or superseded rebuild have to wrongly report. It has
   /// no signal to wait for, because the right outcome is that nothing happens.
   let nothingReportedWindow = System.TimeSpan.FromMilliseconds 200.
+
+// ---- workspace hygiene ----
+
+/// Ages the workspace hygiene tests choose on purpose. Each is a position on the retention ladder (what a cache
+/// keeps, and what a worktree is), not a wait: nothing sleeps for them, the tests say how old a thing is.
+module HygieneAges =
+  /// Last touched a week ago: old enough to look abandoned, newer than any cache retention the tests use.
+  let aWeek = System.TimeSpan.FromDays 7.
+
+  /// A retention longer than `aWeek`, so a thing last touched a week ago is still inside it.
+  let longerThanAWeek = System.TimeSpan.FromDays 30.
+
+  /// A retention shorter than `aWeek`, so a thing last touched a week ago is past it.
+  let shorterThanAWeek = System.TimeSpan.FromDays 3.
+
+  /// The gate's own retention (14 days), for a test of a gate checkout whose owner is gone.
+  let gateRetention = System.TimeSpan.FromDays 14.
+
+  /// A retention of one day, for a temp run.
+  let oneDay = System.TimeSpan.FromDays 1.
+
+  /// Far past every retention in the product.
+  let ancient = System.TimeSpan.FromDays 90.
+
+  /// How far ahead of the real clock a scan believes it is, so a thing made just now counts as past its retention.
+  let clockSkewPastRetention = System.TimeSpan.FromDays 30.

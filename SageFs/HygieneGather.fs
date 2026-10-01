@@ -154,8 +154,38 @@ type Proc =
     Name: string
     CommandLine: string
     Cwd: CwdState
+    ParentPid: int
     /// Environment, only read for processes that look like SageFs (it is private to the user).
     Environment: Map<string, string> }
+
+/// Which processes a scan may list as leftovers. A daemon with its own data dir (a test run, an agent's private
+/// daemon) manages what it started and nothing else on the machine.
+[<RequireQualifiedAccess>]
+type ProcessScope =
+  | WholeMachine
+  | DescendantsOf of pid: int
+
+/// Keep the processes inside the scope: the root itself and everything below it, by parent links.
+let inScope (scope: ProcessScope) (all: Proc list) : Proc list =
+  match scope with
+  | ProcessScope.WholeMachine -> all
+  | ProcessScope.DescendantsOf root ->
+    let children = all |> List.groupBy (fun p -> p.ParentPid) |> Map.ofList
+    let rec below (pid: int) : Proc list =
+      match Map.tryFind pid children with
+      | None -> []
+      | Some kids -> kids @ (kids |> List.collect (fun k -> below k.Pid))
+    below root
+
+let private parentOf (statPath: string) : int =
+  try
+    // `pid (comm) S ppid ...`: comm may hold spaces and parentheses, so the fields start after the LAST ')'.
+    let text = File.ReadAllText statPath
+    let rest = text.Substring(text.LastIndexOf ')' + 2).Split(' ')
+    match Int32.TryParse rest.[1] with
+    | true, ppid -> ppid
+    | _ -> 0
+  with _ -> 0
 
 /// The process table, read once per scan. Linux reads /proc; elsewhere only names and ids are known and every
 /// working directory is `Unreadable`, which makes every directory's use "undecidable" rather than "free".
@@ -192,30 +222,38 @@ let readProcesses () : Proc list =
             match OwnerMonitor.getProcessById pid with
             | Some p -> (try OwnerMonitor.startTimeTicksOf p with _ -> 0L)
             | None -> 0L
-          Some { Pid = pid; StartTicks = ticks; Name = name; CommandLine = cmd; Cwd = cwd; Environment = environment }
+          Some { Pid = pid; StartTicks = ticks; Name = name; CommandLine = cmd; Cwd = cwd; ParentPid = parentOf (Path.Combine(dir, "stat")); Environment = environment }
         with _ -> None
       | _ -> None)
     |> Seq.toList
 
 // ─── The facts a scan needs from the running daemon ─────────────────────
 
+/// Whether the MCP connection that created a session is still open.
+[<RequireQualifiedAccess>]
+type AgentConnection =
+  | StillConnected
+  | NotConnected
+
 /// What only a running daemon knows. A scan run without a daemon passes `LiveFacts.none`.
 type LiveFacts =
   { Sessions: (string * string) list
-    /// The SDK-keyed host directories the daemon resolves now.
-    CurrentHostKeys: string list
-    /// Who created the session in each working directory, from the daemon's session ledger.
-    Owners: (string * Owner) list }
+    /// The SDK versions the daemon resolves for its sessions now; the newest host of each is kept.
+    CurrentSdkVersions: string list
+    /// Who created the session in each working directory, from the daemon's session ledger, and whether they
+    /// are still connected.
+    Owners: (string * Owner * AgentConnection) list }
 
 module LiveFacts =
-  let none : LiveFacts = { Sessions = []; CurrentHostKeys = []; Owners = [] }
+  let none : LiveFacts = { Sessions = []; CurrentSdkVersions = []; Owners = [] }
 
 type Locations =
   { Repo: string
     GateDir: string
     DataDir: string
     HostCacheDir: string
-    TempDir: string }
+    TempDir: string
+    Processes: ProcessScope }
 
 /// The names that make a branch an agent's: the prefix the harness gives a worktree's branch.
 let agentBranchPrefixes : string list = [ "worktree-agent-" ]
@@ -234,7 +272,8 @@ let rootsOf (loc: Locations) : Roots =
         RootKind.TempRuns, loc.TempDir ]
     NamePrefixes =
       [ RootKind.TempRuns, "sagefs-"
-        RootKind.GateState, "checkout-" ] }
+        RootKind.GateState, "checkout-"
+        RootKind.GateState, "passed" ] }
 
 type Scan =
   { Now: DateTime
@@ -324,10 +363,17 @@ let private usesOf (scan: Scan) (path: string) : InUseReason list =
       | CwdState.At cwd when under path cwd -> yield InUseReason.ProcessWorkingDirectory(p.Pid, (if p.Name = "" then "process" else p.Name))
       | _ -> () ]
 
-let private ownerOf (scan: Scan) (path: string) : Owner =
+/// Who made the session that ran in this path, and whether they are gone, so the plan can say "made by agent X, which is gone".
+let private ownerOf (scan: Scan) (path: string) : Owner * Lineage =
   scan.Live.Owners
-  |> List.tryPick (fun (wd, owner) -> if under path wd || under wd path then Some owner else None)
-  |> Option.defaultValue Owner.OwnerUnrecorded
+  |> List.tryPick (fun (wd, owner, presence) ->
+    match under path wd || under wd path with
+    | false -> None
+    | true ->
+      match owner, presence with
+      | Owner.CreatedByAgent(name, _), AgentConnection.NotConnected -> Some(owner, Lineage.AgentGone(name, scan.Now))
+      | _ -> Some(owner, Lineage.NoOwnerRecorded))
+  |> Option.defaultValue (Owner.OwnerUnrecorded, Lineage.NoOwnerRecorded)
 
 // ─── Worktrees, gate checkouts and branches ─────────────────────────────
 
@@ -386,10 +432,12 @@ let private worktreeCandidate (scan: Scan) (baseRef: string option) (entry: Work
             match changedFiles scan.Git path with
             | Result.Ok files -> GitEvidence.Worktree(merge, files)
             | Result.Error why -> GitEvidence.GitUnreadable why
+        let owner, lineage = ownerOf scan path
         { subjectBase kind target with
             SizeBytes = directorySize path
             LastTouched = touched path
-            Owner = ownerOf scan path
+            Owner = owner
+            Lineage = lineage
             Repo = RepoLink.InRepo scan.Loc.Repo
             Branch = entry.Branch
             Display = Path.GetFileName path
@@ -530,8 +578,49 @@ let private gateCandidates (scan: Scan) (entries: WorktreeEntry list) : Candidat
     |> List.map (make LeftoverKind.GateTierClone)
   checkouts @ tiers
 
+/// The gate's pass records, `passed/<sha>/`: each holds a commit's release bundle. Only the newest few are kept; the
+/// pre-push hook only ever asks about the commit being pushed.
+let private gatePassCandidates (scan: Scan) : Candidate list =
+  let gateRunning = runningGate scan
+  childDirs (Path.Combine(scan.Loc.GateDir, "passed"))
+  |> List.sortByDescending touched
+  |> List.indexed
+  |> List.map (fun (rank, dir) ->
+    let target = Target.Directory dir
+    { Target = target
+      Kind = LeftoverKind.GatePassRecord
+      Build =
+        fun () ->
+          { subjectBase LeftoverKind.GatePassRecord target with
+              SizeBytes = directorySize dir
+              LastTouched = touched dir
+              Display = Path.GetFileName dir
+              Uses = (match gateRunning with | Some pid -> [ InUseReason.GateRunning pid ] | None -> [])
+              Retention = Retention.KeepNewest(rank, DataRetention.gatePassRecordsKept) } })
+
+/// The SDK version a host was built with, from its content-addressed name: `sdk-<version>-<hash>`.
+let sdkVersionOfHostKey (key: string) : string =
+  let withoutPrefix = match key.StartsWith("sdk-", StringComparison.Ordinal) with | true -> key.Substring 4 | false -> key
+  match withoutPrefix.LastIndexOf '-' with
+  | -1 -> withoutPrefix
+  | i -> withoutPrefix.Substring(0, i)
+
+/// When a host was last used: the newer of its directory and its `.last-used` marker, which the build touches
+/// every time a session reuses the host.
+let hostLastUsed (dir: string) : DateTime =
+  let marker = Path.Combine(dir, FsiHostBuild.HostLastUsedMarker)
+  max (touched dir) (match File.Exists marker with | true -> fileTouched marker | false -> DateTime.MinValue)
+
 let private hostCandidates (scan: Scan) : Candidate list =
-  childDirs scan.Loc.HostCacheDir
+  let hosts = childDirs scan.Loc.HostCacheDir
+  // Per SDK version, the host used most recently: the one a new session on that SDK reuses.
+  let newestPerVersion =
+    lazy
+      (hosts
+       |> List.groupBy (fun dir -> sdkVersionOfHostKey (Path.GetFileName dir))
+       |> List.map (fun (version, dirs) -> version, dirs |> List.maxBy hostLastUsed)
+       |> Map.ofList)
+  hosts
   |> List.map (fun dir ->
     let target = Target.Directory dir
     { Target = target
@@ -539,15 +628,20 @@ let private hostCandidates (scan: Scan) : Candidate list =
       Build =
         fun () ->
           let key = Path.GetFileName dir
-          let marker = Path.Combine(dir, ".last-used")
-          let last = max (touched dir) (match File.Exists marker with | true -> fileTouched marker | false -> DateTime.MinValue)
+          let version = sdkVersionOfHostKey key
+          let resolvedNow =
+            match scan.Live.CurrentSdkVersions |> List.contains version, Map.tryFind version (newestPerVersion.Force()) with
+            | true, Some newest when newest = dir -> [ InUseReason.CurrentSdkHost version ]
+            | _ -> []
+          let runningFrom =
+            scan.Processes
+            |> List.filter (fun p -> p.CommandLine.Contains(dir + "/"))
+            |> List.map (fun p -> InUseReason.RunsFrom(p.Pid, (if p.Name = "" then "process" else p.Name)))
           { subjectBase LeftoverKind.HostCacheEntry target with
               SizeBytes = directorySize dir
-              LastTouched = last
+              LastTouched = hostLastUsed dir
               Display = key
-              Uses =
-                (scan.Live.CurrentHostKeys |> List.filter (fun k -> key = k || key.StartsWith(k + "-", StringComparison.Ordinal)) |> List.map InUseReason.CurrentSdkHost)
-                @ usesOf scan dir
+              Uses = resolvedNow @ runningFrom @ usesOf scan dir
               Retention = Retention.KeepFor DataRetention.hostCacheMaxAge } })
 
 let private workerLogCandidates (scan: Scan) : Candidate list =
@@ -644,7 +738,9 @@ let private sageFsProcess (p: Proc) : bool =
 
 let private processCandidates (scan: Scan) : Candidate list =
   let registry = registryEntries scan
+  // Every process still counts as a USE of a path; only the ones inside the scope can be listed as orphans.
   scan.Processes
+  |> inScope scan.Loc.Processes
   |> List.filter sageFsProcess
   |> List.choose (fun p ->
     let lineage =
@@ -685,46 +781,96 @@ let private processCandidates (scan: Scan) : Candidate list =
 
 // ─── Everything ────────────────────────────────────────────────────────
 
-/// Every candidate leftover, cheap to list. Nothing expensive is read until `Build` runs.
-let candidates (scan: Scan) : Candidate list =
-  let baseRef = lazy (baseBranch scan.Git scan.Loc.Repo)
+/// Every candidate leftover of the wanted kinds, cheap to list. Nothing expensive is read until `Build` runs,
+/// and a kind nobody wants is not even listed (the host cache does not need a worktree list).
+let candidatesOf (scan: Scan) (wanted: LeftoverKind -> bool) : Candidate list =
+  let gitKinds = [ LeftoverKind.AgentWorktree; LeftoverKind.StaleBranch; LeftoverKind.GateCheckout ]
+  let needsGit = gitKinds |> List.exists wanted
+  let kindIf (kind: LeftoverKind) (make: unit -> Candidate list) : Candidate list =
+    match wanted kind with
+    | true -> make ()
+    | false -> []
   let managedRoot = normalize (Path.Combine(scan.Loc.Repo, ".claude", "worktrees"))
   let gateRoot = normalize scan.Loc.GateDir
-  match worktreeEntries scan with
-  | Result.Error why ->
-    // Without the worktree list there is nothing to say about worktrees, and that is said once, here.
-    let target = Target.Directory(normalize scan.Loc.Repo)
-    [ { Target = target
-        Kind = LeftoverKind.AgentWorktree
-        Build =
-          fun () ->
-            { subjectBase LeftoverKind.AgentWorktree target with
-                Repo = RepoLink.InRepo scan.Loc.Repo
-                Git = GitEvidence.GitUnreadable why } } ]
-    @ gateCandidates scan [] @ hostCandidates scan @ workerLogCandidates scan @ tempCandidates scan @ registryCandidates scan @ processCandidates scan
-  | Result.Ok all ->
-    let others = match all with | _ :: rest -> rest | [] -> [] // the first entry is the main checkout
-    let worktrees =
-      others
-      |> List.choose (fun e ->
-        let p = normalize e.Path
-        match under managedRoot p, under gateRoot p with
-        | true, _ -> Some(worktreeCandidate scan (baseRef.Force()) e LeftoverKind.AgentWorktree)
-        | _, true -> None // a gate checkout: `gateCandidates` owns it
-        | _ -> Some(outsideCandidate scan e))
-    worktrees
-    @ branchCandidates scan (baseRef.Force()) all
-    @ gateCandidates scan all
-    @ hostCandidates scan
-    @ workerLogCandidates scan
-    @ tempCandidates scan
-    @ registryCandidates scan
-    @ processCandidates scan
+  let worktreeState = match needsGit with | true -> Some(worktreeEntries scan) | false -> None
+  let entries = match worktreeState with | Some(Result.Ok all) -> all | _ -> []
+  let baseRef = lazy (baseBranch scan.Git scan.Loc.Repo)
+  let gitBacked : Candidate list =
+    match worktreeState with
+    | None -> []
+    | Some(Result.Error why) ->
+      // Without the worktree list there is nothing to say about worktrees, and that is said once, here.
+      let target = Target.Directory(normalize scan.Loc.Repo)
+      kindIf LeftoverKind.AgentWorktree (fun () ->
+        [ { Target = target
+            Kind = LeftoverKind.AgentWorktree
+            Build =
+              fun () ->
+                { subjectBase LeftoverKind.AgentWorktree target with
+                    Repo = RepoLink.InRepo scan.Loc.Repo
+                    Git = GitEvidence.GitUnreadable why } } ])
+    | Some(Result.Ok all) ->
+      let others = match all with | _ :: rest -> rest | [] -> [] // the first entry is the main checkout
+      kindIf LeftoverKind.AgentWorktree (fun () ->
+        others
+        |> List.choose (fun e ->
+          let p = normalize e.Path
+          match under managedRoot p, under gateRoot p with
+          | true, _ -> Some(worktreeCandidate scan (baseRef.Force()) e LeftoverKind.AgentWorktree)
+          | _, true -> None // a gate checkout: the gate's candidates own it
+          | _ -> Some(outsideCandidate scan e)))
+      @ kindIf LeftoverKind.StaleBranch (fun () -> branchCandidates scan (baseRef.Force()) all)
+  gitBacked
+  @ kindIf LeftoverKind.GateCheckout (fun () -> gateCandidates scan entries |> List.filter (fun c -> c.Kind = LeftoverKind.GateCheckout))
+  @ kindIf LeftoverKind.GateTierClone (fun () -> gateCandidates scan [] |> List.filter (fun c -> c.Kind = LeftoverKind.GateTierClone))
+  @ kindIf LeftoverKind.GatePassRecord (fun () -> gatePassCandidates scan)
+  @ kindIf LeftoverKind.HostCacheEntry (fun () -> hostCandidates scan)
+  @ kindIf LeftoverKind.WorkerLogFile (fun () -> workerLogCandidates scan)
+  @ kindIf LeftoverKind.TempRunDir (fun () -> tempCandidates scan)
+  @ kindIf LeftoverKind.SpawnedRegistryEntry (fun () -> registryCandidates scan)
+  @ kindIf LeftoverKind.OrphanProcess (fun () -> processCandidates scan)
+
+/// Every candidate leftover of every kind.
+let candidates (scan: Scan) : Candidate list = candidatesOf scan (fun _ -> true)
+
+/// The kinds a target could be, from where it lives, so looking at one target again does not scan the machine.
+let kindsOfTarget (loc: Locations) (target: Target) : LeftoverKind list =
+  match target with
+  | Target.GitBranch _ -> [ LeftoverKind.StaleBranch ]
+  | Target.RunningProcess _ -> [ LeftoverKind.OrphanProcess ]
+  | Target.File path ->
+    let p = normalize path
+    [ if under (Path.Combine(loc.DataDir, "workers")) p then LeftoverKind.WorkerLogFile
+      if under (DaemonOwnership.registryDir loc.DataDir) p then LeftoverKind.SpawnedRegistryEntry
+      if under loc.TempDir p then LeftoverKind.TempRunDir ]
+  | Target.Directory path ->
+    let p = normalize path
+    [ if under (Path.Combine(loc.Repo, ".claude", "worktrees")) p then yield LeftoverKind.AgentWorktree
+      if under loc.GateDir p then
+        yield LeftoverKind.GateCheckout
+        yield LeftoverKind.GateTierClone
+        yield LeftoverKind.GatePassRecord
+      if under loc.HostCacheDir p then yield LeftoverKind.HostCacheEntry
+      if under loc.TempDir p then yield LeftoverKind.TempRunDir
+      // Anything else a worktree list names is a worktree outside the roots.
+      yield LeftoverKind.AgentWorktree ]
+    |> List.distinct
 
 /// Classify every candidate. `only` restricts the work to one target.
 let gather (scan: Scan) (only: Target option) : Leftover list =
-  candidates scan
+  let wanted =
+    match only with
+    | None -> (fun _ -> true)
+    | Some t ->
+      let kinds = kindsOfTarget scan.Loc t
+      (fun kind -> List.contains kind kinds)
+  candidatesOf scan wanted
   |> List.filter (fun c -> match only with | None -> true | Some t -> c.Target = t)
+  |> List.map (fun c -> classify scan.Now (c.Build()))
+
+/// Classify every candidate of the given kinds.
+let gatherKinds (scan: Scan) (kinds: LeftoverKind list) : Leftover list =
+  candidatesOf scan (fun kind -> List.contains kind kinds)
   |> List.map (fun c -> classify scan.Now (c.Build()))
 
 /// A scan against the real machine.

@@ -2177,6 +2177,8 @@ module McpTools =
       | Result.Ok sid ->
         setActiveSessionId ctx agent sid
         claimSessionOwner agent sid
+        // So a worktree left behind can say which connection made it (the connection is the identity).
+        HygieneService.OwnerLedger.recordCreation DaemonState.SageFsDir ctx.ActivityTracker (resolvedKey agent) agent sid workingDir
         let perProject =
           targets
           |> List.choose (function

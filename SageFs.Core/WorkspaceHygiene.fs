@@ -80,6 +80,8 @@ type InUseReason =
   | UsedBySession of sessionId: string
   | CurrentSdkHost of sdk: string
   | LockedByLiveProcess of pid: int * reason: string
+  /// A running process was started from it (a host's own copy of the files it runs).
+  | RunsFrom of pid: int * name: string
 
 /// What the world says about who made a leftover and whether they are still around.
 [<RequireQualifiedAccess>]
@@ -87,6 +89,8 @@ type Lineage =
   | OwnerGone of pid: int * since: DateTime
   | WorkingDirectoryGone of path: string * since: DateTime
   | OwnerAlive of pid: int
+  /// The MCP connection that created it has closed. A worktree's standing is its git state; this is only who to say it was.
+  | AgentGone of agentName: string * since: DateTime
   | NoOwnerRecorded
   | LineageUndecidable of why: string
 
@@ -123,10 +127,12 @@ type Target =
   | GitBranch of repo: string * name: string
   | RunningProcess of pid: int * startTicks: int64
 
-/// How long a thing that nobody owns is kept before it is `Expired`.
+/// How long a thing that nobody owns is kept before it is `Expired`, or how many of its kind are kept.
 [<RequireQualifiedAccess>]
 type Retention =
   | KeepFor of TimeSpan
+  /// The newest `keep` of its kind are kept and the rest are superseded. `rank` is this one's place, from 0.
+  | KeepNewest of rank: int * keep: int
   /// Never goes stale by age alone (a worktree: only its work decides).
   | NeverExpires
 
@@ -136,6 +142,8 @@ type LeftoverKind =
   | AgentWorktree
   | GateCheckout
   | GateTierClone
+  /// The local gate's record of a commit that passed: its trust report and release bundle.
+  | GatePassRecord
   | HostCacheEntry
   | WorkerLogFile
   | TempRunDir
@@ -185,6 +193,10 @@ type Standing =
   /// Nobody has used it for longer than `after`.
   | Expired of lastUsed: DateTime * after: TimeSpan
   | WithinRetention of until: DateTime
+  /// One of the newest `keep` of its kind, which is what is kept; `rank` counts from 0.
+  | Newest of rank: int * keep: int
+  /// Older than the newest `keep` of its kind.
+  | Superseded of keep: int
   | Unknown of why: UnknownReason
 
 /// What a standing allows. `Reclaimable` may be tidied after one confirm. `NeedsReview` is only ever
@@ -218,6 +230,7 @@ type Leftover =
   | AgentWorktree of Entry * WorktreeDetail
   | GateCheckout of Entry * Registration
   | GateTierClone of Entry
+  | GatePassRecord of Entry
   | HostCacheEntry of Entry * sdk: string
   | WorkerLogFile of Entry
   | TempRunDir of Entry
@@ -299,12 +312,18 @@ type Roots =
   { Entries: (RootKind * string) list
     NamePrefixes: (RootKind * string) list }
 
+/// Why a path could not be followed to where it really is.
+[<RequireQualifiedAccess>]
+type ResolveFailure =
+  | TooManyLinks of path: string
+  | Unreadable of path: string * detail: string
+
 [<RequireQualifiedAccess>]
 type Refusal =
   | OutsideKnownRoots of path: string
   | IsARoot of path: string
   | SymlinkEscapes of path: string * resolved: string
-  | CannotResolve of path: string * why: string
+  | CannotResolve of path: string * ResolveFailure
 
 /// A path that passed the gate. Only `Guard.accept` can make one.
 type Accepted = private { AcceptedPath: string; AcceptedRoot: RootKind }
@@ -346,7 +365,7 @@ type Effects =
   { /// Gather the facts about one target again and classify them.
     Recheck: Target -> Rechecked
     /// Resolve a path to its real location (symlinks followed).
-    Resolve: string -> Result<string, string>
+    Resolve: string -> Result<string, ResolveFailure>
     Perform: Operation -> Outcome }
 
 /// What a confirmation is for. Built from the id of the plan the caller was shown.
@@ -397,6 +416,7 @@ module Kind =
     | LeftoverKind.AgentWorktree -> "agent worktree"
     | LeftoverKind.GateCheckout -> "gate checkout"
     | LeftoverKind.GateTierClone -> "gate tier clone"
+    | LeftoverKind.GatePassRecord -> "gate pass record"
     | LeftoverKind.HostCacheEntry -> "host cache entry"
     | LeftoverKind.WorkerLogFile -> "worker log"
     | LeftoverKind.TempRunDir -> "temp run"
@@ -405,7 +425,7 @@ module Kind =
     | LeftoverKind.SpawnedRegistryEntry -> "spawned-daemon registry entry"
 
   let all : LeftoverKind list =
-    [ LeftoverKind.AgentWorktree; LeftoverKind.GateCheckout; LeftoverKind.GateTierClone
+    [ LeftoverKind.AgentWorktree; LeftoverKind.GateCheckout; LeftoverKind.GateTierClone; LeftoverKind.GatePassRecord
       LeftoverKind.HostCacheEntry; LeftoverKind.WorkerLogFile; LeftoverKind.TempRunDir
       LeftoverKind.OrphanProcess; LeftoverKind.StaleBranch; LeftoverKind.SpawnedRegistryEntry ]
 
@@ -441,6 +461,7 @@ module InUseReason =
     | InUseReason.UsedBySession id -> sprintf "session %s uses it" id
     | InUseReason.CurrentSdkHost sdk -> sprintf "it is the host for the SDK the daemon resolves now (%s)" sdk
     | InUseReason.LockedByLiveProcess(pid, reason) -> sprintf "locked by a live process (pid %d): %s" pid reason
+    | InUseReason.RunsFrom(pid, name) -> sprintf "%s (pid %d) is running from it" name pid
 
 module MergeHow =
   let describe (how: MergeHow) : string =
@@ -494,6 +515,8 @@ module Standing =
     | Standing.Expired(lastUsed, after) ->
       sprintf "expired: last used %s, kept for %g day(s)" (lastUsed.ToString "yyyy-MM-dd") after.TotalDays
     | Standing.WithinRetention until -> sprintf "kept until %s" (until.ToString "yyyy-MM-dd")
+    | Standing.Newest(rank, keep) -> sprintf "kept: number %d of the newest %d" (rank + 1) keep
+    | Standing.Superseded keep -> sprintf "superseded: older than the newest %d" keep
     | Standing.Unknown why -> sprintf "unknown: %s" (UnknownReason.describe why)
 
   let reclaimability (standing: Standing) : Reclaimability =
@@ -501,11 +524,13 @@ module Standing =
     | Standing.Merged _
     | Standing.DirtyGenerated _
     | Standing.Orphaned _
-    | Standing.Expired _ -> Reclaimability.Reclaimable
+    | Standing.Expired _
+    | Standing.Superseded _ -> Reclaimability.Reclaimable
     | Standing.CleanButUnmerged _
     | Standing.DirtyReal _ -> Reclaimability.NeedsReview
     | Standing.InUse _
     | Standing.WithinRetention _
+    | Standing.Newest _
     | Standing.Unknown _ -> Reclaimability.Untouchable
 
 // ─── Classifying ───────────────────────────────────────────────────────
@@ -528,6 +553,7 @@ let private byLineage (now: DateTime) (subject: Subject) : Standing =
   match subject.Lineage with
   | Lineage.OwnerGone(_, since) -> Standing.Orphaned since
   | Lineage.WorkingDirectoryGone(_, since) -> Standing.Orphaned since
+  | Lineage.AgentGone(_, since) -> Standing.Orphaned since
   | Lineage.OwnerAlive pid -> Standing.InUse(InUseReason.OwnerAlive pid, [])
   | Lineage.LineageUndecidable why -> Standing.Unknown(UnknownReason.OwnerLivenessUndecidable why)
   | Lineage.NoOwnerRecorded ->
@@ -538,6 +564,10 @@ let private byLineage (now: DateTime) (subject: Subject) : Standing =
       match now >= until with
       | true -> Standing.Expired(subject.LastTouched, keep)
       | false -> Standing.WithinRetention until
+    | Retention.KeepNewest(rank, keep) ->
+      match rank < keep with
+      | true -> Standing.Newest(rank, keep)
+      | false -> Standing.Superseded keep
 
 /// Decide a standing from the facts. Total and deterministic: the same subject and clock give the same answer.
 let standingOf (now: DateTime) (subject: Subject) : Standing =
@@ -573,6 +603,7 @@ let classify (now: DateTime) (subject: Subject) : Leftover =
       | RepoLink.NoRepo -> Registration.NotRegistered
     Leftover.GateCheckout(entry, registration)
   | LeftoverKind.GateTierClone -> Leftover.GateTierClone entry
+  | LeftoverKind.GatePassRecord -> Leftover.GatePassRecord entry
   | LeftoverKind.HostCacheEntry -> Leftover.HostCacheEntry(entry, nameOf subject.Target)
   | LeftoverKind.WorkerLogFile -> Leftover.WorkerLogFile entry
   | LeftoverKind.TempRunDir -> Leftover.TempRunDir entry
@@ -591,6 +622,7 @@ module Leftover =
     | Leftover.OrphanProcess(e, _)
     | Leftover.StaleBranch(e, _) -> e
     | Leftover.GateTierClone e
+    | Leftover.GatePassRecord e
     | Leftover.WorkerLogFile e
     | Leftover.TempRunDir e
     | Leftover.SpawnedRegistryEntry e -> e
@@ -600,6 +632,7 @@ module Leftover =
     | Leftover.AgentWorktree _ -> LeftoverKind.AgentWorktree
     | Leftover.GateCheckout _ -> LeftoverKind.GateCheckout
     | Leftover.GateTierClone _ -> LeftoverKind.GateTierClone
+    | Leftover.GatePassRecord _ -> LeftoverKind.GatePassRecord
     | Leftover.HostCacheEntry _ -> LeftoverKind.HostCacheEntry
     | Leftover.WorkerLogFile _ -> LeftoverKind.WorkerLogFile
     | Leftover.TempRunDir _ -> LeftoverKind.TempRunDir
@@ -642,17 +675,16 @@ module Guard =
     path.StartsWith(root + "/", StringComparison.Ordinal)
 
   /// Accept a path only if it is strictly inside a root SageFs manages, and still is after following links.
-  let accept (roots: Roots) (resolve: string -> Result<string, string>) (path: string) : Result<Accepted, Refusal> =
+  let accept (roots: Roots) (resolve: string -> Result<string, ResolveFailure>) (path: string) : Result<Accepted, Refusal> =
     let normalized = normalize path
     let known = roots.Entries |> List.map (fun (kind, root) -> kind, normalize root)
-    // A root with a name prefix only owns the entries directly inside it that carry the prefix.
+    // A root with name prefixes only owns the entries directly inside it that carry one of them.
     let namedRight (kind: RootKind) (root: string) : bool =
-      match roots.NamePrefixes |> List.tryFind (fun (k, _) -> k = kind) with
-      | None -> true
-      | Some(_, prefix) ->
-        let rest = normalized.Substring(root.Length + 1)
-        let first = rest.Split('/').[0]
-        first.StartsWith(prefix, StringComparison.Ordinal)
+      match roots.NamePrefixes |> List.filter (fun (k, _) -> k = kind) with
+      | [] -> true
+      | prefixes ->
+        let first = normalized.Substring(root.Length + 1).Split('/').[0]
+        prefixes |> List.exists (fun (_, prefix) -> first.StartsWith(prefix, StringComparison.Ordinal))
     match known |> List.tryFind (fun (_, root) -> root = normalized) with
     | Some _ -> Result.Error(Refusal.IsARoot normalized)
     | None ->
@@ -743,6 +775,7 @@ module Planner =
       Action.Remove, sprintf "git -C %s worktree remove --force %s" (q repo) (q path)
     | Leftover.GateCheckout(_, Registration.NotRegistered)
     | Leftover.GateTierClone _
+    | Leftover.GatePassRecord _
     | Leftover.HostCacheEntry _
     | Leftover.TempRunDir _
     | Leftover.WorkerLogFile _
@@ -759,6 +792,7 @@ module Planner =
 
   let private ownerNote (entry: Entry) : string =
     match entry.Owner, entry.Lineage with
+    | Owner.CreatedByAgent(agent, _), Lineage.AgentGone _
     | Owner.CreatedByAgent(agent, _), Lineage.OwnerGone _ -> sprintf " Made by agent %s, which is gone." agent
     | Owner.CreatedByAgent(agent, _), _ -> sprintf " Made by agent %s." agent
     | _ -> ""
@@ -779,10 +813,12 @@ module Planner =
     match entry.Standing with
     | Standing.InUse _ -> make Action.Nothing "" describe 0L Risk.Busy
     | Standing.WithinRetention _ -> make Action.Nothing "" describe 0L Risk.Busy
+    | Standing.Newest _ -> make Action.Nothing "" describe 0L Risk.Busy
     | Standing.Unknown _ -> make Action.Nothing "" describe 0L Risk.Unverifiable
     | Standing.Merged _
     | Standing.DirtyGenerated _
     | Standing.Orphaned _
+    | Standing.Superseded _
     | Standing.Expired _ ->
       let action, command = reclaim coveredBranch leftover
       let bytes =
@@ -948,6 +984,7 @@ module Executor =
       |> Result.map (fun a -> [ Operation.RemoveWorktree(a, repo, ForceNeed.DisposableCheckout) ])
     | Leftover.GateCheckout(_, Registration.NotRegistered)
     | Leftover.GateTierClone _
+    | Leftover.GatePassRecord _
     | Leftover.HostCacheEntry _
     | Leftover.TempRunDir _
     | Leftover.WorkerLogFile _

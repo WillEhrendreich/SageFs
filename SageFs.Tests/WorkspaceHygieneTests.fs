@@ -73,19 +73,27 @@ let standingTests =
       |> Expect.equal "unknown carries why" (Standing.Unknown why)
 
     testCase "a cache whose owner is gone is Orphaned since then" <| fun _ ->
-      let s = { cache LeftoverKind.GateCheckout (gateRoot + "/checkout-1") (TimeSpan.FromDays 14.0) with Lineage = Lineage.OwnerGone(77, aWeekAgo) }
+      let s = { cache LeftoverKind.GateCheckout (gateRoot + "/checkout-1") HygieneAges.gateRetention with Lineage = Lineage.OwnerGone(77, aWeekAgo) }
       standing s |> Expect.equal "orphaned" (Standing.Orphaned aWeekAgo)
 
     testCase "a cache nobody owns is WithinRetention while young and Expired once old" <| fun _ ->
-      let young = cache LeftoverKind.HostCacheEntry (hostRoot + "/sdk-1") (TimeSpan.FromDays 30.0)
+      let young = cache LeftoverKind.HostCacheEntry (hostRoot + "/sdk-1") (HygieneAges.longerThanAWeek)
       match standing young with
-      | Standing.WithinRetention until -> until |> Expect.equal "kept until last use + retention" (aWeekAgo + TimeSpan.FromDays 30.0)
+      | Standing.WithinRetention until -> until |> Expect.equal "kept until last use + retention" (aWeekAgo + HygieneAges.longerThanAWeek)
       | other -> failtestf "expected WithinRetention, got %A" other
-      let old = cache LeftoverKind.HostCacheEntry (hostRoot + "/sdk-1") (TimeSpan.FromDays 3.0)
-      standing old |> Expect.equal "expired" (Standing.Expired(aWeekAgo, TimeSpan.FromDays 3.0))
+      let old = cache LeftoverKind.HostCacheEntry (hostRoot + "/sdk-1") (HygieneAges.shorterThanAWeek)
+      standing old |> Expect.equal "expired" (Standing.Expired(aWeekAgo, HygieneAges.shorterThanAWeek))
+
+    testCase "the newest few records of a kind are kept and the older ones are superseded and reclaimable" <| fun _ ->
+      let record rank =
+        { cache LeftoverKind.GatePassRecord (gateRoot + "/passed/abc") HygieneAges.oneDay with Retention = Retention.KeepNewest(rank, 3) }
+      standing (record 2) |> Expect.equal "the third of three is kept" (Standing.Newest(2, 3))
+      standing (record 3) |> Expect.equal "the fourth is superseded" (Standing.Superseded 3)
+      Standing.reclaimability (Standing.Newest(0, 3)) |> Expect.equal "kept is untouchable" Reclaimability.Untouchable
+      Standing.reclaimability (Standing.Superseded 3) |> Expect.equal "superseded is reclaimable" Reclaimability.Reclaimable
 
     testCase "a cache whose owner is alive is InUse, and one whose owner cannot be told is Unknown" <| fun _ ->
-      let alive = { cache LeftoverKind.TempRunDir (tempRoot + "/sagefs-hr/1") (TimeSpan.FromDays 1.0) with Lineage = Lineage.OwnerAlive 99 }
+      let alive = { cache LeftoverKind.TempRunDir (tempRoot + "/sagefs-hr/1") HygieneAges.oneDay with Lineage = Lineage.OwnerAlive 99 }
       match standing alive with
       | Standing.InUse(InUseReason.OwnerAlive 99, []) -> ()
       | other -> failtestf "expected InUse OwnerAlive, got %A" other
@@ -97,8 +105,8 @@ let standingTests =
     testCase "classify puts a subject in the leftover case of its kind and keeps path, size and age" <| fun _ ->
       match leftoverOf (worktree "a") with
       | Leftover.AgentWorktree(entry, detail) ->
-        entry.SizeBytes |> Expect.equal "size" 1_000L
-        entry.Age |> Expect.equal "age is now minus last touched" (TimeSpan.FromDays 7.0)
+        entry.SizeBytes |> Expect.equal "size" aSmallTreeBytes
+        entry.Age |> Expect.equal "age is now minus last touched" HygieneAges.aWeek
         detail.Repo |> Expect.equal "repo" (RepoLink.InRepo repoPath)
         detail.Branch |> Expect.equal "branch" (BranchLabel.OnBranch "worktree-a")
       | other -> failtestf "expected AgentWorktree, got %A" other
@@ -110,11 +118,9 @@ let standingTests =
         Generated.ruleFor path |> Option.isNone |> Expect.isTrue (sprintf "%s is somebody's work" path)
 
     testCase "every kind describes itself in its own words" <| fun _ ->
-      let all =
-        [ LeftoverKind.AgentWorktree; LeftoverKind.GateCheckout; LeftoverKind.GateTierClone; LeftoverKind.HostCacheEntry
-          LeftoverKind.WorkerLogFile; LeftoverKind.TempRunDir; LeftoverKind.OrphanProcess; LeftoverKind.StaleBranch
-          LeftoverKind.SpawnedRegistryEntry ]
+      let all = Kind.all
       all |> List.map Kind.describe |> List.distinct |> List.length |> Expect.equal "no two kinds share a name" all.Length
+      all |> List.length |> Expect.equal "every kind the type has is listed" (Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<LeftoverKind>).Length)
 
     testPropertyWithConfig cfg "PROPERTY: anything InUse is never reclaimable" <| fun (s: Subject) ->
       match s.Uses with
@@ -194,8 +200,9 @@ let guardTests =
       | other -> failtestf "expected SymlinkEscapes, got %A" other
 
     testCase "a path that cannot be resolved is refused, not assumed fine" <| fun _ ->
-      match Guard.accept roots (fun _ -> Result.Error "permission denied") (worktreeRoot + "/agent-1") with
-      | Result.Error(Refusal.CannotResolve(_, why)) -> why |> Expect.equal "why" "permission denied"
+      let denied (path: string) = Result.Error(ResolveFailure.Unreadable(path, "permission denied"))
+      match Guard.accept roots denied (worktreeRoot + "/agent-1") with
+      | Result.Error(Refusal.CannotResolve(_, ResolveFailure.Unreadable(_, why))) -> why |> Expect.equal "why" "permission denied"
       | other -> failtestf "expected CannotResolve, got %A" other
 
     testPropertyWithConfig cfg "PROPERTY: whatever the path, an accepted one is strictly inside a known root" <| fun (segments: string list) ->
@@ -221,7 +228,7 @@ let planTests =
     testCase "a merged worktree is a Safe Remove that names the exact command and the bytes it gives back" <| fun _ ->
       let step = worktree "agent-1" |> mergedWith MergeHow.Ancestor [] |> stepFor
       step.Risk |> Expect.equal "risk" Risk.Safe
-      step.ReclaimsBytes |> Expect.equal "bytes" 1_000L
+      step.ReclaimsBytes |> Expect.equal "bytes" aSmallTreeBytes
       step.Command |> Expect.stringContains "uses git worktree remove" "worktree remove"
       step.Command |> Expect.stringContains "names the worktree" (worktreeRoot + "/agent-1")
       Planner.execution step.Risk |> Expect.equal "runs on confirm" Execution.RunsOnConfirm
@@ -278,13 +285,13 @@ let planTests =
 
     testCase "an orphaned process is a Safe StopProcess, and an expired cache entry a Safe prune" <| fun _ ->
       (stepFor (orphanProcess 4321)).Action |> Expect.equal "stop it" (Action.StopProcess 4321)
-      let host = cache LeftoverKind.HostCacheEntry (hostRoot + "/sdk-1") (TimeSpan.FromDays 3.0)
+      let host = cache LeftoverKind.HostCacheEntry (hostRoot + "/sdk-1") (HygieneAges.shorterThanAWeek)
       match (stepFor host).Action with
-      | Action.PruneOlderThan age -> age |> Expect.equal "named retention" (TimeSpan.FromDays 3.0)
+      | Action.PruneOlderThan age -> age |> Expect.equal "named retention" (HygieneAges.shorterThanAWeek)
       | other -> failtestf "expected PruneOlderThan, got %A" other
 
     testCase "the same facts in any order make the same plan with the same id" <| fun _ ->
-      let subjects = [ worktree "a"; worktree "b" |> unmergedWith []; cache LeftoverKind.TempRunDir (tempRoot + "/sagefs-hr/1") (TimeSpan.FromDays 1.0) ]
+      let subjects = [ worktree "a"; worktree "b" |> unmergedWith []; cache LeftoverKind.TempRunDir (tempRoot + "/sagefs-hr/1") HygieneAges.oneDay ]
       (planOf subjects).Id |> Expect.equal "order does not matter" (planOf (List.rev subjects)).Id
 
     testCase "a different set of facts makes a different plan id" <| fun _ ->
@@ -298,7 +305,7 @@ let planTests =
       plan.Steps |> List.map (fun s -> s.Risk) |> Expect.equal "safe before review" [ Risk.Safe; Risk.Safe; Risk.UnmergedCommits ]
       plan.Steps.Head.ReclaimsBytes |> Expect.equal "biggest first" 900L
       plan.SafeBytes |> Expect.equal "safe total" 910L
-      plan.ReviewBytes |> Expect.equal "review total" 1_000L
+      plan.ReviewBytes |> Expect.equal "review total" aSmallTreeBytes
 
     testPropertyWithConfig cfg "PROPERTY: only a Safe step runs on confirm, and a Safe step only comes from a reclaimable standing" <| fun (subjects: Subject list) ->
       let leftovers = subjects |> List.map leftoverOf
@@ -432,7 +439,7 @@ let executorTests =
       (List.exactlyOne report.Executed).Result |> Expect.equal "already gone" StepResult.AlreadyGone
 
     testCase "running the same plan twice is the same as running it once" <| fun _ ->
-      let subjects = [ worktree "a"; worktree "b"; orphanProcess 4321; cache LeftoverKind.TempRunDir (tempRoot + "/sagefs-hr/1") (TimeSpan.FromDays 1.0) ]
+      let subjects = [ worktree "a"; worktree "b"; orphanProcess 4321; cache LeftoverKind.TempRunDir (tempRoot + "/sagefs-hr/1") HygieneAges.oneDay ]
       let world = World subjects
       let plan = planOf subjects
       let c = confirmed plan

@@ -190,6 +190,10 @@ let private gatingDomain : Map<string, ToolGate> =
     "get_friction_summary", ToolGate.AlwaysAvailable
     // Reads and clears SageFs's own files under its data dir. No session involved.
     "manage_local_data", ToolGate.AlwaysAvailable
+    // What agents left behind on the machine (worktrees, gate checkouts, caches, temp dirs) and the plan to tidy it.
+    // About the repository and the disk, not about any session, so callable before one exists.
+    "get_workspace_hygiene", ToolGate.AlwaysAvailable
+    "tidy_workspace", ToolGate.AlwaysAvailable
     "report_friction", ToolGate.AlwaysAvailable
     "enable_hot_reload", ToolGate.AlwaysAvailable
     "disable_hot_reload", ToolGate.AlwaysAvailable

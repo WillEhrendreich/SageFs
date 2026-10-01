@@ -32,7 +32,8 @@ type Sandbox() =
       GateDir = Path.Combine(root, "gate")
       DataDir = Path.Combine(root, "data")
       HostCacheDir = Path.Combine(root, "hosts")
-      TempDir = Path.Combine(root, "tmp") }
+      TempDir = Path.Combine(root, "tmp")
+      Processes = ProcessScope.WholeMachine }
   do
     Directory.CreateDirectory repo |> ignore
     git repo [ "init"; "-b"; "master" ] |> ignore
@@ -46,6 +47,9 @@ type Sandbox() =
   member _.Locations = locations
   /// How far ahead of the real clock every scan believes it is, to age things without waiting.
   member val Skew = TimeSpan.Zero with get, set
+  /// The process table and live facts every scan, including the executor's second looks, sees.
+  member val Procs : Proc list = [] with get, set
+  member val Live : LiveFacts = LiveFacts.none with get, set
 
   /// A worktree under the agent area, on its own branch, at master.
   member _.AddWorktree(name: string) : string =
@@ -61,17 +65,23 @@ type Sandbox() =
       Live = live
       IsAlive = alive }
 
-  member this.Scan() : Scan = this.ScanWith((fun _ _ -> false), [], LiveFacts.none)
+  member this.Scan() : Scan = this.ScanWith((fun _ _ -> false), this.Procs, this.Live)
 
   member _.Roots : Roots = rootsOf locations
 
   member this.Effects(alive: int -> int64 option -> bool) : Effects =
-    effects { MakeScan = (fun () -> this.ScanWith(alive, [], LiveFacts.none)); Git = runGit; IsAlive = alive }
+    effects { MakeScan = (fun () -> this.ScanWith(alive, this.Procs, this.Live)); Git = runGit; IsAlive = alive }
 
   interface IDisposable with
     member _.Dispose() =
       // The worktrees are this test's own, and git leaves read-only objects: best effort.
       try Directory.Delete(root, true) with _ -> ()
+
+  /// So a `task` block can `use` it too.
+  interface IAsyncDisposable with
+    member this.DisposeAsync() =
+      (this :> IDisposable).Dispose()
+      System.Threading.Tasks.ValueTask()
 
 /// Builds the six kinds of worktree an orchestrator leaves behind and returns their paths by name.
 let populate (sb: Sandbox) : Map<string, string> =

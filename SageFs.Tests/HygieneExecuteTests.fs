@@ -87,7 +87,7 @@ let executeTests =
       Directory.CreateDirectory sb.Locations.TempDir |> ignore
       let link = Path.Combine(sb.Locations.TempDir, "sagefs-evil")
       Directory.CreateSymbolicLink(link, outsideDir) |> ignore
-      sb.Skew <- TimeSpan.FromDays 30.0
+      sb.Skew <- HygieneAges.clockSkewPastRetention
       let plan = Planner.plan (gather (sb.Scan()) None)
       let report = Executor.run (sb.Effects noneAlive) sb.Roots (confirm plan) plan
       File.Exists(Path.Combine(outsideDir, "keep.txt")) |> Expect.isTrue "the target of the link is untouched"
@@ -109,8 +109,14 @@ let executeTests =
       let stale = host "sdk-10.0.100-aaaa" 90.0
       let recent = host "sdk-10.0.200-bbbb" 2.0
       let current = host "sdk-11.0.100-cccc" 90.0
-      let live = { LiveFacts.none with CurrentHostKeys = [ "sdk-11.0.100-cccc" ] }
-      tidy sb (sb.ScanWith(noneAlive, [], live)) noneAlive |> ignore
+      let live = { LiveFacts.none with CurrentSdkVersions = [ "11.0.100" ] }
+      let running = host "sdk-9.0.100-eeee" 90.0
+      let runner : Proc =
+        { Pid = 31; StartTicks = 1L; Name = "dotnet"; CommandLine = sprintf "dotnet %s/bin/FsiHost.dll --args-file x" running; Cwd = CwdState.Unreadable; ParentPid = 1; Environment = Map.empty }
+      sb.Procs <- [ runner ]
+      sb.Live <- live
+      tidy sb (sb.Scan()) noneAlive |> ignore
+      Directory.Exists running |> Expect.isTrue "a host a running process was started from stays however old"
       Directory.Exists stale |> Expect.isFalse "the stale host is pruned"
       Directory.Exists recent |> Expect.isTrue "the recent host stays"
       Directory.Exists current |> Expect.isTrue "the host the daemon resolves stays however old"
@@ -129,7 +135,7 @@ let executeTests =
       let old = run "old" 30.0 None
       let notOurs = Path.Combine(sb.Locations.TempDir, "somebody-elses")
       write (Path.Combine(notOurs, "x")) "x"
-      Directory.SetLastWriteTimeUtc(notOurs, DateTime.UtcNow - TimeSpan.FromDays 90.0)
+      Directory.SetLastWriteTimeUtc(notOurs, DateTime.UtcNow - HygieneAges.ancient)
       let only222 = fun pid _ -> pid = 222
       tidy sb (sb.ScanWith(only222, [], LiveFacts.none)) only222 |> ignore
       Directory.Exists orphan |> Expect.isFalse "an orphaned run goes"
@@ -161,6 +167,7 @@ let executeTests =
           Name = "dotnet"
           CommandLine = "dotnet /x/SageFs.Host.dll abc 0"
           Cwd = CwdState.At "/"
+          ParentPid = 1
           Environment = Map.ofList [ "SAGEFS_DAEMON_PID", string daemon ] }
       let only9002 = fun pid _ -> pid = 9002
       let scan = sb.ScanWith(only9002, [ worker 7001 9001; worker 7002 9002 ], LiveFacts.none)
