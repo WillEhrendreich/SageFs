@@ -40,8 +40,7 @@ let private budgets : (string * int) list =
     "SageFs/McpStdioBridge.fs", 2
     "SageFs/McpTools.fs", 2
     "SageFs/SessionStatusPayload.fs", 1
-    "SageFs/SseEvent.fs", 21
-    "SageFs/UpdateCheckService.fs", 3 ]
+    "SageFs/SseEvent.fs", 21 ]
 
 /// Every non-test source file with its count of stray JSON calls, except the central module.
 let private actual : (string * int) list =

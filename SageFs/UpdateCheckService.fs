@@ -22,20 +22,17 @@ module UpdateCheckService =
 
   let private httpClient = new HttpClient(Timeout = Timeouts.updateCheckFetch)
 
-  let private jsonOptions = JsonSerializerOptions(WriteIndented = true)
+  /// The file is indented, keys as written, like the JSON files people open by hand.
+  let private cacheProfile = Json.indented Json.standard
 
   /// On-disk shape of `<SageFsDir>/update-check.json`. Plain primitives only
-  /// (no `option`, no `DateTimeOffset`) so this round-trips through the
-  /// default `JsonSerializer` with no F#-aware converter required — `0L` /
-  /// `""` are the "nothing yet" values, read back via `toLastChecked`/
-  /// `toLatest` below. NOT `private`: System.Text.Json's reflection-based
-  /// deserializer only matches a PUBLIC constructor for an immutable record
-  /// like this one — a `private` type's auto-generated constructor is
-  /// private too, which `Deserialize<CacheFile>` would then silently fail
-  /// to find, and `readCache`'s fail-safe `with _ -> emptyCache` would
-  /// swallow that into "no cache exists" forever, on every read, after
-  /// every write (caught by this file's own tests: dismissing a version
-  /// appeared to work, but a follow-up read never saw it).
+  /// (no `option`, no `DateTimeOffset`): `0L` / `""` are the "nothing yet"
+  /// values, read back via `toLastChecked`/`toLatest` below. NOT `private`:
+  /// a `private` type's auto-generated constructor is private too, and the
+  /// reader would not find it, so `readCache` would fall back to "no cache
+  /// exists" on every read, after every write (this file's own tests caught
+  /// that: dismissing a version appeared to work, but a follow-up read never
+  /// saw it).
   type CacheFile = {
     LastCheckedUtcTicks: int64
     LastKnownLatest: string
@@ -56,9 +53,11 @@ module UpdateCheckService =
       match File.Exists path with
       | false -> emptyCache
       | true ->
-        match JsonSerializer.Deserialize<CacheFile>(File.ReadAllText path, jsonOptions) with
-        | cache when obj.ReferenceEquals(cache, null) -> emptyCache
-        | cache -> cache
+        match Json.deserialize<CacheFile> cacheProfile (File.ReadAllText path) with
+        | Ok cache -> cache
+        | Error reason ->
+          Utils.Log.warn "[UpdateCheck] %s is not a readable cache, starting empty: %s" path reason
+          emptyCache
     with _ -> emptyCache
 
   /// Atomic (tmp + move) and best-effort: a failed write never blocks or
@@ -69,7 +68,7 @@ module UpdateCheckService =
       Directory.CreateDirectory sageFsDir |> ignore
       let target = cachePath sageFsDir
       let tmp = target + ".tmp"
-      File.WriteAllText(tmp, JsonSerializer.Serialize(cache, jsonOptions))
+      File.WriteAllText(tmp, Json.serialize cacheProfile cache)
       File.Move(tmp, target, true)
     with _ -> ()
 
