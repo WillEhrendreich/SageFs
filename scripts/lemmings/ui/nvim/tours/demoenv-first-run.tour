@@ -1,0 +1,61 @@
+# The first ten minutes with sagefs.nvim on the demoenv fixture: a file with no session, the
+# status float, the project picker, a session warming up, a value on screen, an error, and the
+# same editor in a narrow and a wide terminal. Run it with:
+#   scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/demoenv-first-run.tour
+#
+# Shots are numbered in the order they are taken (OUT/shots/001-...png).
+
+# The editor opens with a startup message waiting for Enter.
+shot startup-message
+keys <CR>
+expect "SageFs"
+shot first-run-no-session
+
+# An empty F# buffer, the way a new file looks before anything is typed.
+keys :enew<CR>:set filetype=fsharp<CR>
+shot empty-file
+keys :bdelete!<CR>
+
+# What the plugin says about itself.
+keys :SageFsStatus<CR>
+expect "Connected"
+shot status-float
+keys q
+
+# No session for this directory yet: the plugin offers to create one.
+keys :SageFsCreateSession<CR>
+expect "Select project to load"
+shot project-picker
+keys 1<CR>
+wait 5
+shot session-starting
+wait 25
+shot session-after-warmup
+
+# Evaluate parseSeed (line 38) and read the result next to the code.
+keys 38G<M-CR>
+wait 4
+keys zt
+shot evaluated-definition
+
+# A value, not just a definition: type an expression at the end of the file and evaluate it.
+keys Go<CR>
+type parseSeed (Some "42")
+keys <Esc><M-CR>
+wait 4
+shot evaluated-value
+
+# An error state: a type error in the evaluated cell.
+keys o<CR>
+type let broken = 1 + "one"
+keys <Esc><M-CR>
+wait 4
+shot eval-error
+
+# The same editor in a narrow terminal and in a wide one.
+resize 80x24
+shot narrow-80x24
+resize 200x50
+shot wide-200x50
+resize 140x40
+shot back-to-140x40

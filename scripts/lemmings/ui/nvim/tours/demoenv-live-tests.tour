@@ -1,0 +1,62 @@
+# Live testing on the demoenv fixture: switch it on, see a failing test marked in the gutter and
+# in the test panel, fix the code, save, and watch the same test go green. Run it with:
+#   scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/demoenv-live-tests.tour
+
+keys <CR>
+expect "SageFs"
+
+# The session has to be on the test project so the tests are discovered.
+keys :SageFsCreateSession<CR>
+expect "Select project to load"
+keys 2<CR>
+wait 15
+shot test-session-warmed-up
+
+# What a new user sees when they switch live testing on without choosing a session: the plugin's
+# live-testing commands act on the shared daemon's ACTIVE session, which here belongs to someone else.
+keys :SageFsEnableTesting<CR>
+wait 5
+shot live-testing-enabled-wrong-session
+
+# The session picker does not show working directories, so on a shared daemon a person cannot tell
+# which entry is theirs. The tour switches to its own session the way the picker would, and puts
+# the daemon's previous active session back when it ends.
+keys :SageFsSessions<CR>
+shot session-picker-no-directories
+keys <Esc>
+activate DemoEnv.Tests
+keys :SageFsEnableTesting<CR>
+wait 20
+shot live-testing-enabled
+
+# The failing test lives in the test file; its gutter marker is the thing to look at.
+keys :edit DemoEnv.Tests/DemoEnvTests.fs<CR>
+wait 10
+shot test-file-gutter-failing
+
+keys :SageFsTestPanel<CR>
+wait 4
+shot test-panel-failing
+keys :wincmd p<CR>
+
+# Fix parseSeed in the library: a negative integer must give None.
+keys :edit DemoEnv/DemoEnv.fs<CR>
+keys :%s/true, value -> Some value/true, value when value >= 0 -> Some value/<CR>
+keys :%s/false, _ -> None/_ -> None/<CR>
+shot fix-typed-unsaved
+keys :write<CR>
+wait 30
+shot fix-saved-tests-rerunning
+
+keys :edit DemoEnv.Tests/DemoEnvTests.fs<CR>
+wait 10
+shot test-file-gutter-passing
+keys :SageFsTestPanel<CR>
+wait 4
+shot test-panel-passing
+
+# What the narrow terminal does to the panel and the gutter.
+resize 80x24
+shot test-panel-narrow-80x24
+resize 200x50
+shot test-panel-wide-200x50
