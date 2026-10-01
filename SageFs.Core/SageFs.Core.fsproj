@@ -72,6 +72,11 @@
         <Compile Include="Features\LiveValueTree.fs" />
         <!-- Dependency-free like LiveValueTree, and also compiled into the host (it runs a getter on a filtered thread there). -->
         <Compile Include="ThreadSandbox.fs" />
+        <!-- Layer 2 of getter containment: guards for the code a clicked getter can reach. Dependency-free (System and
+             System.Reflection.Emit.OpCode only) and also compiled into the host, before MemberEvaluation which uses them. -->
+        <Compile Include="Features\GuardCoverage.fs" />
+        <Compile Include="Features\GuardRuntime.fs" />
+        <Compile Include="Features\GuardIl.fs" />
         <Compile Include="Features\MemberEvaluation.fs" />
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
@@ -85,6 +90,9 @@
         <EmbeddedResource Include="../SageFs.FsiHost/ConfigDsl.fs" LogicalName="FsiHost/ConfigDsl.fs" />
         <EmbeddedResource Include="Features\LiveValueTree.fs" LogicalName="FsiHost/LiveValueTree.fs" />
         <EmbeddedResource Include="ThreadSandbox.fs" LogicalName="FsiHost/ThreadSandbox.fs" />
+        <EmbeddedResource Include="Features\GuardCoverage.fs" LogicalName="FsiHost/GuardCoverage.fs" />
+        <EmbeddedResource Include="Features\GuardRuntime.fs" LogicalName="FsiHost/GuardRuntime.fs" />
+        <EmbeddedResource Include="Features\GuardIl.fs" LogicalName="FsiHost/GuardIl.fs" />
         <EmbeddedResource Include="Features\MemberEvaluation.fs" LogicalName="FsiHost/MemberEvaluation.fs" />
         <EmbeddedResource Include="TestProviderTypes.fs" LogicalName="FsiHost/TestProviderTypes.fs" />
         <EmbeddedResource Include="Features\LiveTestingTypes.fs" LogicalName="FsiHost/LiveTestingTypes.fs" />

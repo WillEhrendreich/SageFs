@@ -41,6 +41,9 @@
     <Compile Include="ConfigDsl.fs" />
     <Compile Include="LiveValueTree.fs" />
     <Compile Include="ThreadSandbox.fs" />
+    <Compile Include="GuardCoverage.fs" />
+    <Compile Include="GuardRuntime.fs" />
+    <Compile Include="GuardIl.fs" />
     <Compile Include="MemberEvaluation.fs" />
     <Compile Include="TestProviderTypes.fs" />
     <Compile Include="LiveTestingTypes.fs" />
