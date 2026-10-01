@@ -280,7 +280,12 @@ File.WriteAllText(
 /// and pre-build the copy so the daemon's warmup loads an already-built
 /// project (a cold ionide/FSI build of a temp copy on a clean CI runner can
 /// fault warmup before Ready). Returns the fixture dir.
-let prepareHotReloadFixture (repoRoot: string) : string =
+///
+/// `runtime` is the runtime the copy's app runs on. The checked-in fixture
+/// targets net11.0; a net10 copy gets its target framework rewritten and a
+/// global.json pinning a .NET 10 SDK, so the isolated FSI host the daemon builds
+/// for it (it uses the PROJECT's SDK) is a .NET 10 process too.
+let prepareHotReloadFixture (repoRoot: string) (runtime: HotReloadStateHarness.HostRuntime) : string =
   let fixtureSrc =
     Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "WebAppFixture")
   let dest =
@@ -303,6 +308,21 @@ let prepareHotReloadFixture (repoRoot: string) : string =
   for file in fixtureFiles do
     File.Copy(file, Path.Combine(dest, Path.GetFileName file))
   File.WriteAllText(Path.Combine(dest, ".SageFs", "init.fsx"), hotReloadInitProfile)
+  match runtime with
+  | HotReloadStateHarness.HostRuntime.Net11 -> ()
+  | HotReloadStateHarness.HostRuntime.Net10 ->
+    let project = Path.Combine(dest, "WebAppFixture.fsproj")
+    let net11Target = "<TargetFramework>net11.0</TargetFramework>"
+    let text = File.ReadAllText project
+    if not (text.Contains net11Target) then
+      failwithf "HR runner: the WebAppFixture project no longer says %s, so the net10 copy cannot be derived from it" net11Target
+    File.WriteAllText(project, text.Replace(net11Target, "<TargetFramework>net10.0</TargetFramework>"))
+    match HotReloadStateHarness.sdkPin runtime with
+    | Some sdk ->
+      File.WriteAllText(
+        Path.Combine(dest, "global.json"),
+        sprintf """{"sdk":{"version":"%s","rollForward":"latestPatch","allowPrerelease":false}}""" sdk)
+    | None -> failwith "HR runner: a net10 fixture copy needs an SDK pin, and none was produced"
   // Pre-build the temp copy (Debug is fine — the daemon's config fallback
   // resolves Debug<->Release at the same TFM). Fail loudly with the build log
   // if the fixture itself cannot build on this machine.
@@ -358,7 +378,10 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
     Path.Combine(Path.GetTempPath(), "sagefs-hr", Guid.NewGuid().ToString("N"))
   Directory.CreateDirectory(dataDir) |> ignore
 
-  let fixtureDir = prepareHotReloadFixture repoRoot
+  // The primary copy runs on net11 and carries the dashboard journeys. The net10
+  // copy exists for the journeys that have to hold on both runtimes.
+  let fixtureDir = prepareHotReloadFixture repoRoot HotReloadStateHarness.HostRuntime.Net11
+  let net10FixtureDir = prepareHotReloadFixture repoRoot HotReloadStateHarness.HostRuntime.Net10
 
   let psi = Diagnostics.ProcessStartInfo()
   psi.FileName <- exe
@@ -436,7 +459,75 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
   let exitWith (code: int) =
     stopDaemon ()
     try Directory.Delete(fixtureDir, true) with _ -> ()
+    try Directory.Delete(net10FixtureDir, true) with _ -> ()
     code
+
+  /// Create a HotReload session on a prepared fixture copy, wait until THAT
+  /// session (found by its working directory, since the daemon now hosts two)
+  /// is Ready, then read the app url its init profile wrote. Prints why and
+  /// returns None when any step fails.
+  let bootHotReloadSession (dir: string) : string option =
+    let proj = Path.Combine(dir, "WebAppFixture.fsproj")
+    let payload =
+      System.Text.Json.JsonSerializer.Serialize(
+        {| projects = [| proj |]
+           workingDirectory = dir
+           workflow = "HotReload" |})
+    let createStatus, createBody = syncPost "/api/sessions/create" payload
+    if createStatus <> 200 then
+      eprintfn "HR runner: session create failed for %s (HTTP %d): %s" dir createStatus createBody
+      dumpDaemonLogs ()
+      None
+    else
+      let statusOfThisSession () =
+        let body = syncGetString "/api/sessions"
+        use doc = System.Text.Json.JsonDocument.Parse(body)
+        doc.RootElement.GetProperty("sessions").EnumerateArray()
+        |> Seq.tryFind (fun s ->
+          String.Equals(Path.GetFullPath(s.GetProperty("workingDirectory").GetString()), Path.GetFullPath dir, StringComparison.Ordinal))
+        |> Option.map (fun s -> s.GetProperty("status").GetString())
+      let mutable status = ""
+      let warmupDeadline = DateTime.UtcNow.Add SageFs.Timeouts.browserJourneyWarmup
+      while status <> "Ready" && status <> "Faulted" && DateTime.UtcNow < warmupDeadline do
+        try
+          status <- statusOfThisSession () |> Option.defaultValue ""
+        with _ -> ()
+        if status <> "Ready" && status <> "Faulted" then
+          Threading.Thread.Sleep(TestTimeouts.pollSlow)
+      let dumpSessions () =
+        try
+          eprintfn "--- /api/sessions ---"
+          eprintfn "%s" (syncGetString "/api/sessions")
+        with _ -> ()
+      if status = "Faulted" then
+        eprintfn "HR runner: session on %s Faulted during warmup" dir
+        dumpSessions ()
+        dumpDaemonLogs ()
+        None
+      elif status <> "Ready" then
+        eprintfn "HR runner: session on %s never reached Ready within %O" dir SageFs.Timeouts.browserJourneyWarmup
+        dumpSessions ()
+        dumpDaemonLogs ()
+        None
+      else
+        // The init profile wrote app-url.txt into the fixture dir.
+        let appUrlFile = Path.Combine(dir, "app-url.txt")
+        let mutable appUrl = ""
+        let urlDeadline = DateTime.UtcNow.Add TestTimeouts.readyBudget
+        while appUrl = "" && DateTime.UtcNow < urlDeadline do
+          try
+            if File.Exists appUrlFile then
+              appUrl <- File.ReadAllText(appUrlFile).Trim()
+            else
+              Threading.Thread.Sleep(TestTimeouts.pollMedium)
+          with _ ->
+            Threading.Thread.Sleep(TestTimeouts.pollMedium)
+        if appUrl = "" then
+          eprintfn "HR runner: app-url.txt was not written by the init profile in %s" dir
+          dumpDaemonLogs ()
+          None
+        else
+          Some appUrl
 
   try
     let mutable healthy = false
@@ -453,81 +544,32 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
       dumpDaemonLogs ()
       exitWith 1
     else
-      // HotReload session on the temp fixture.
-      let fixtureProj = Path.Combine(fixtureDir, "WebAppFixture.fsproj")
-      let payload =
-        System.Text.Json.JsonSerializer.Serialize(
-          {| projects = [| fixtureProj |]
-             workingDirectory = fixtureDir
-             workflow = "HotReload" |})
-      let createStatus, createBody = syncPost "/api/sessions/create" payload
-      if createStatus <> 200 then
-        eprintfn "HR runner: session create failed (HTTP %d): %s" createStatus createBody
-        dumpDaemonLogs ()
-        exitWith 1
-      else
-        let mutable ready = false
-        let mutable faulted = false
-        let warmupDeadline = DateTime.UtcNow.Add SageFs.Timeouts.browserJourneyWarmup
-        while not ready && not faulted && DateTime.UtcNow < warmupDeadline do
-          try
-            let body = syncGetString "/api/sessions"
-            use doc = System.Text.Json.JsonDocument.Parse(body)
-            let sessionStates =
-              doc.RootElement.GetProperty("sessions").EnumerateArray()
-              |> Seq.map (fun s -> s.GetProperty("status").GetString())
-              |> Seq.toList
-            if sessionStates |> List.contains "Faulted" then
-              faulted <- true
-            ready <- sessionStates |> List.contains "Ready"
-          with _ ->
-            Threading.Thread.Sleep(TestTimeouts.pollSlow)
-
-        if faulted then
-          eprintfn "HR runner: session Faulted during warmup"
-          try
-            let body = syncGetString "/api/sessions"
-            eprintfn "--- /api/sessions ---"
-            eprintfn "%s" body
-          with _ -> ()
-          dumpDaemonLogs ()
-          exitWith 1
-        elif not ready then
-          eprintfn "HR runner: session never reached Ready within 300s"
-          try
-            let body = syncGetString "/api/sessions"
-            eprintfn "--- /api/sessions ---"
-            eprintfn "%s" body
-          with _ -> ()
-          dumpDaemonLogs ()
-          exitWith 1
-        else
-          // The init profile wrote app-url.txt into the fixture dir.
-          let appUrlFile = Path.Combine(fixtureDir, "app-url.txt")
-          let mutable appUrl = ""
-          let urlDeadline = DateTime.UtcNow.Add TestTimeouts.readyBudget
-          while appUrl = "" && DateTime.UtcNow < urlDeadline do
-            try
-              if File.Exists appUrlFile then
-                appUrl <- File.ReadAllText(appUrlFile).Trim()
-              else
-                Threading.Thread.Sleep(TestTimeouts.pollMedium)
-            with _ ->
-              Threading.Thread.Sleep(TestTimeouts.pollMedium)
-          if appUrl = "" then
-            eprintfn "HR runner: app-url.txt was not written by the init profile"
-            dumpDaemonLogs ()
-            exitWith 1
-          else
-            Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
-            Environment.SetEnvironmentVariable("SAGEFS_HR_APP_URL", appUrl)
-            Environment.SetEnvironmentVariable("SAGEFS_HR_FIXTURE_DIR", fixtureDir)
-            let hrArgv =
-              cliArgs
-              |> Array.filter (fun a -> a <> "--integration-hr")
-            let result =
-              SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-hr" hrArgv HotReloadBrowserTests.tests
-            exitWith result
+      // The net10 session first and the primary one last: creating a session
+      // makes it the active one, and the dashboard journeys read the active
+      // session's panel, so the net11 fixture they edit has to be the last created.
+      match bootHotReloadSession net10FixtureDir with
+      | None -> exitWith 1
+      | Some net10AppUrl ->
+      match bootHotReloadSession fixtureDir with
+      | None -> exitWith 1
+      | Some appUrl ->
+        Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
+        Environment.SetEnvironmentVariable("SAGEFS_HR_APP_URL", appUrl)
+        Environment.SetEnvironmentVariable("SAGEFS_HR_FIXTURE_DIR", fixtureDir)
+        Environment.SetEnvironmentVariable(HotReloadInlinedCalleeJourneyTests.Env.mcpPort, string mcpPort)
+        Environment.SetEnvironmentVariable(HotReloadInlinedCalleeJourneyTests.Env.net10AppUrl, net10AppUrl)
+        Environment.SetEnvironmentVariable(HotReloadInlinedCalleeJourneyTests.Env.net10FixtureDir, net10FixtureDir)
+        let hrArgv =
+          cliArgs
+          |> Array.filter (fun a -> a <> "--integration-hr")
+        // The inlined-callee journeys go first: the dashboard journeys end with
+        // restore saves on the net11 session, and an outcome from one of those
+        // arriving during a journey would be read as that journey's save.
+        let hrJourneys =
+          testList "hot-reload journeys" [ HotReloadInlinedCalleeJourneyTests.tests; HotReloadBrowserTests.tests ]
+        let result =
+          SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-hr" hrArgv hrJourneys
+        exitWith result
   with ex ->
     eprintfn "HR runner: %s" (ex.ToString())
     exitWith 1

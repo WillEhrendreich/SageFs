@@ -110,7 +110,7 @@ let private http =
 /// global.json would run its "net10" app on the .NET 11 FSI host. A net10 run
 /// pins the newest installed 10.x SDK so the whole stack, SageFs.Host, MSBuild,
 /// FCS and the FSI host, is net10. A net11 run keeps the repo's pin.
-let private sdkPin (runtime: HostRuntime) : string option =
+let sdkPin (runtime: HostRuntime) : string option =
   match runtime with
   | HostRuntime.Net11 -> None
   | HostRuntime.Net10 ->

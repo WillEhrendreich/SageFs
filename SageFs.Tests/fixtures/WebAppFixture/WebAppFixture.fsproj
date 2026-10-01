@@ -8,6 +8,8 @@
     <Compile Include="Greeting.fs" />
     <Compile Include="Shapes.fs" />
     <Compile Include="Counter.fs" />
+    <Compile Include="UncalledHelper.fs" />
+    <Compile Include="CalledCallee.fs" />
     <Compile Include="App.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

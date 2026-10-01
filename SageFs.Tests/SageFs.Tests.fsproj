@@ -588,6 +588,7 @@
         <Compile Include="SupervisorPortHandshakeTests.fs" />
         <Compile Include="WebAppHotReloadVerificationTests.fs" />
         <Compile Include="HotReloadStateHarness.fs" />
+        <Compile Include="HotReloadInlinedCalleeJourneyTests.fs" />
         <Compile Include="HotReloadStateOutcomeTests.fs" />
         <Compile Include="TieredCompilationCostBenchmark.fs" />
         <Compile Include="HotReloadKeptStateSurfaceTests.fs" />

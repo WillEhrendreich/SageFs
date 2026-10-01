@@ -34,6 +34,15 @@ module App =
     app.MapGet("/counter", Func<_, _>(fun (ctx: HttpContext) ->
       ctx.Response.ContentType <- "text/plain"
       ctx.Response.WriteAsync(Counter.read ()))) |> ignore
+    // The never-entered and called pair. `/callee/called` calls a compiled helper at request
+    // time. `/callee/uncalled` serves a constant: UncalledHelper.uncalledHelper exists so a save
+    // has something to patch, and no request ever enters it.
+    app.MapGet("/callee/uncalled", Func<_, _>(fun (ctx: HttpContext) ->
+      ctx.Response.ContentType <- "text/plain"
+      ctx.Response.WriteAsync "A")) |> ignore
+    app.MapGet("/callee/called", Func<_, _>(fun (ctx: HttpContext) ->
+      ctx.Response.ContentType <- "text/plain"
+      ctx.Response.WriteAsync(CalledCallee.renderCalled ()))) |> ignore
     let _serverTask =
       app.RunAsync(sprintf "http://127.0.0.1:%d" port)
       |> Async.AwaitTask
