@@ -379,6 +379,8 @@
         <Compile Include="GuardIlFixture.fs" />
         <Compile Include="GuardIlTests.fs" />
         <Compile Include="GuardFixtures.fs" />
+        <Compile Include="ClickLifecycleTests.fs" />
+        <Compile Include="PatchRegistryTests.fs" />
         <Compile Include="GuardReachabilityTests.fs" />
         <Compile Include="GuardPatcherTests.fs" />
         <Compile Include="GuardCoexistenceTests.fs" />
