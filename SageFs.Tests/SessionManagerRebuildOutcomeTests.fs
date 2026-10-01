@@ -137,7 +137,7 @@ let private reloadOf (harness: Harness) (id: SessionId) : SessionReload =
 
 let private restartRequired : SessionReload =
   SessionReload.Finished
-    { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 2; Message = "restart the app to apply this"; SuggestedAction = "restart" }
+    { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 2; Message = "restart the app to apply this"; SuggestedAction = "restart"; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch }
 
 [<Tests>]
 let reloadTests =
@@ -179,7 +179,7 @@ let reloadTests =
         let info = createSession harness
         let restarted =
           SessionReload.Finished
-            { Case = ReloadCase.Restarted; Patched = 0; Considered = 1; Message = "Restarted the app"; SuggestedAction = "" }
+            { Case = ReloadCase.Restarted; Patched = 0; Considered = 1; Message = "Restarted the app"; SuggestedAction = ""; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch }
         harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, restarted))
         let! _ = harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, RestartPlan.RespawnOnly, reply))
         reloadOf harness info.Id |> Expect.equal "the verdict that caused the swap survives it" restarted })

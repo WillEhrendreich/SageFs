@@ -28,6 +28,9 @@ module TestTimeouts =
   /// request through a started web host, a daemon failing a bad bind). A cold start on a loaded
   /// runner takes seconds, so this is generous.
   let patience = secs 20.
+  /// Ceiling on a child process that reads a 4 MB assembly twice, diffs and writes a delta for it five times, and
+  /// has the runtime apply it (DeltaChild `bench`). The first pass has the JIT in it and a loaded runner is slower.
+  let bigAssemblyDelta = secs 120.
   /// Ceiling on a wait that completes in the test's own process (a task settling, a file watcher
   /// reporting, a long poll answering) but goes through the thread pool and can be starved.
   let patienceInProcess = secs 10.
@@ -63,6 +66,8 @@ module TestTimeouts =
   let pollFlush = ms 20.
   /// A landing drives real `git` subprocesses, so each look costs real work.
   let pollLanding = ms 25.
+  /// A measurement of how long a save takes to be served: finer than the thing measured, so the poll is not the number.
+  let pollMeasure = ms 10.
   /// A local server that answers fast once it is up: a daemon's health during startup, or a
   /// route settling on a value.
   let pollQuick = ms 100.

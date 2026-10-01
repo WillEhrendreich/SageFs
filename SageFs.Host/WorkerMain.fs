@@ -484,6 +484,12 @@ type SaveHandling =
   /// patch route refused, because they are still true afterwards.
   | FallBackWholeFile of reasons: Features.ReloadOutcome.RestartReason list
 
+/// The delta route of this worker's app: not started until `run_app` has loaded a module to take a baseline of.
+[<RequireQualifiedAccess>]
+type DeltaRoute =
+  | NotStarted
+  | Started of RunAppDelta.Session
+
 /// What one eval's mutable-binding detours mean for the save as a whole — not
 /// just for `confirmPatchAsOutcome`'s function-only accounting, which never
 /// sees a binding at all. A named DU (not a bare bool or a `Choice`) because
@@ -897,6 +903,11 @@ let run (sessionId: string) (port: int) = async {
   // The source each running app's DLL was built from, advanced after every
   // applied patch: what a save is compared with to decide patch vs restart.
   let reloadBaselines = System.Collections.Concurrent.ConcurrentDictionary<string, Features.ReloadPlanning.FileDecls>()
+  // Whether this worker was started to take run_app saves as metadata deltas, as its daemon decided (the daemon
+  // gave it the runtime variable that makes its assemblies editable, and said so in SAGEFS_METADATA_DELTA).
+  let deltaMode = Features.MetadataDelta.MetadataDeltaMode.fromEnvironment ()
+  // The route's baseline, taken when the app starts: the module this process loaded, before any delta.
+  let deltaRoute = ref DeltaRoute.NotStarted
 
   // The unit→type registry, derived from the baselines on demand rather than
   // cached: `reloadBaselines` is a live concurrent map that every save advances,
@@ -1510,6 +1521,69 @@ let run (sessionId: string) (port: int) = async {
                 | Features.ReloadPlanning.PatchOutcome.RestartNeeded (first, rest) ->
                   return! restartOrFallBack fileName first rest
             }
+      // A save the runtime took as a metadata delta, announced as pending and confirmed when the new bodies are
+      // seen running. The probes are in THIS process (the app runs here), so the wait is local, not the host agent's.
+      let announceDelta (watched: Features.PatchConfirmation.WatchedDecl list) (outcome: Features.ReloadOutcome.ReloadOutcome) =
+        let waiter : Features.PatchAnnouncer.EntryWaiter =
+          fun probes bound ->
+            async {
+              let! reading = Middleware.EntryProbes.ProbeRegistry.Shared.Await(probes, bound)
+              return Features.PatchAnnouncer.EntryAnswer.HostSaw reading
+            }
+        Features.PatchAnnouncer.announce waiter Timeouts.patchConfirmation (Features.PatchConfirmation.start watched outcome)
+        |> Async.Start
+      // Build the project and hand the runtime the difference between that build and the module this process
+      // loaded. Every way this cannot happen is a restart that names why (`RestartReason.RudeEdit` when the edit
+      // is one a delta cannot carry, `MetadataDeltaUnavailable` when the route cannot be used right now).
+      let patchByDelta
+        (fileName: string)
+        (filePath: string)
+        (current: Features.ReloadPlanning.FileDecls)
+        (functions: Features.ReloadPlanning.SourceDecl list)
+        : Async<SaveHandling> = async {
+        match deltaRoute.Value with
+        | DeltaRoute.NotStarted ->
+          return!
+            restartOrFallBack
+              fileName
+              (Features.ReloadPlanning.ReloadChange.DeltaUnavailable "no baseline was captured when the app started")
+              []
+        | DeltaRoute.Started session ->
+          DevReload.broadcastCompiling (Some fileName)
+          match! session.Save() with
+          | RunAppDelta.SaveResult.Unchanged ->
+            reloadBaselines.[IO.Path.GetFullPath filePath] <- current
+            Log.info "Hot reload: %s saved with no change to the compiled code — the running app is already current" fileName
+            Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.unchanged fileName)
+            return SaveHandling.Reported
+          | RunAppDelta.SaveResult.BuildFailed message ->
+            Log.warn "Hot reload: the build for %s failed: %s" fileName message
+            Features.ReloadBroadcast.broadcastOutcome
+              (Features.ReloadOutcome.ReloadOutcome.CompileFailed (sprintf "%s: %s" fileName message))
+            return SaveHandling.Reported
+          | RunAppDelta.SaveResult.Restart (first, rest) ->
+            let changeOf (refusal: Features.MetadataDelta.Refusal) =
+              match refusal with
+              | Features.MetadataDelta.Refusal.Rude cause -> Features.ReloadPlanning.ReloadChange.RefusedByDelta cause
+              | Features.MetadataDelta.Refusal.Unavailable why -> Features.ReloadPlanning.ReloadChange.DeltaUnavailable why
+            return! restartOrFallBack fileName (changeOf first) (rest |> List.map changeOf)
+          | RunAppDelta.SaveResult.Landed landed ->
+            reloadBaselines.[IO.Path.GetFullPath filePath] <- current
+            let considered = landed.Watched.Length
+            let outcome =
+              Features.ReloadOutcome.ReloadOutcome.ByMetadataDelta
+                (Features.ReloadOutcome.MetadataDeltaOutcome.Pending (considered, considered))
+            for failure in landed.HandlerFailures do
+              Log.warn "Hot reload: a metadata-update handler threw after the delta landed: %s" failure
+            announceDelta landed.Watched outcome
+            Log.info "Hot reload: %s — %s (%s; by metadata delta: build %.0f ms, diff and write %.0f ms, apply %.0f ms)"
+              fileName
+              (Features.ReloadOutcome.ReloadOutcome.describe outcome)
+              (functions |> List.map _.Name |> String.concat ", ")
+              landed.Timings.BuildMs
+              landed.Timings.PrepareMs
+              landed.Timings.ApplyMs
+            return SaveHandling.Reported }
       // Patch the process in place when only function bodies changed; anything
       // that takes effect at startup restarts the app (see ReloadPlanning).
       // Every exit reports exactly one terminal outcome, so a Compiling overlay
@@ -1531,8 +1605,9 @@ let run (sessionId: string) (port: int) = async {
             match AppRunner.state appRunner with
             | AppRun.AppRunState.Running _ -> Features.ReloadPlanning.AppPlacement.InWorkerProcess
             | _ -> Features.ReloadPlanning.AppPlacement.InAgentProcess
-          match Features.ReloadPlanning.AppPlacement.adjust placement (Features.ReloadPlanning.planReload baseline current) with
-          | Features.ReloadPlanning.ReloadPlan.PatchFunctions [] ->
+          match Features.PatchRoute.choose placement deltaMode (Features.ReloadPlanning.planReload baseline current) with
+          | Features.SaveRoute.ByMetadataDelta functions -> return! patchByDelta fileName filePath current functions
+          | Features.SaveRoute.PerPlan (Features.ReloadPlanning.ReloadPlan.PatchFunctions []) ->
             // The file's declarations are byte-identical to the running build.
             // Nothing to fetch and nothing to do, so this is reported as the
             // non-event it is — the old code broadcast a browser reload here,
@@ -1540,9 +1615,9 @@ let run (sessionId: string) (port: int) = async {
             Log.info "Hot reload: %s saved with no declaration change — the running app is already current" fileName
             Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.unchanged fileName)
             return SaveHandling.Reported
-          | Features.ReloadPlanning.ReloadPlan.PatchFunctions functions ->
+          | Features.SaveRoute.PerPlan (Features.ReloadPlanning.ReloadPlan.PatchFunctions functions) ->
             return! patchInPlace fileName filePath baseline current functions [] [] (fun () -> [])
-          | Features.ReloadPlanning.ReloadPlan.PatchKeepingState (functions, first, rest) ->
+          | Features.SaveRoute.PerPlan (Features.ReloadPlanning.ReloadPlan.PatchKeepingState (functions, first, rest)) ->
             let state = first :: rest
             let carried =
               state
@@ -1616,7 +1691,7 @@ let run (sessionId: string) (port: int) = async {
                 redefinitionRefusals current redefined
                 |> List.map (Features.RestartAttribution.restartReasonFor (knownUnits ()))
               return! patchInPlace fileName filePath baseline current emitted carried kept recheck
-          | Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest) ->
+          | Features.SaveRoute.PerPlan (Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest)) ->
             return! restartOrFallBack fileName first rest }
       let onFileChanged (change: FileWatcher.FileChange) =
         let ext = IO.Path.GetExtension(change.FilePath)
@@ -1967,6 +2042,26 @@ let run (sessionId: string) (port: int) = async {
       | _ -> ()
   | _ -> ()
 
+  // The baseline of the delta route is the module this process loaded for the app, taken once. A second run of the
+  // app in this process loads the same module (patched by whatever deltas landed), so its chain carries on.
+  let startDeltaRoute (asm: Reflection.Assembly) (project: string) =
+    match deltaMode, workerConfig.Workflow with
+    | Features.MetadataDelta.MetadataDeltaMode.On, WorkflowTypes.SessionWorkflow.HotReload _ ->
+      match deltaRoute.Value with
+      | DeltaRoute.Started session when obj.ReferenceEquals(session.Assembly, asm) -> ()
+      | DeltaRoute.Started _
+      | DeltaRoute.NotStarted ->
+        let session = RunAppDelta.Session.Start(asm, project, Environment.CurrentDirectory)
+        deltaRoute.Value <- DeltaRoute.Started session
+        match session.Standing with
+        | Features.MetadataDelta.Standing.Unusable why ->
+          Log.warn "Run App: saves cannot be patched by metadata delta in this process (%s), so an edit restarts the app" why
+        | Features.MetadataDelta.Standing.Tracking _
+        | Features.MetadataDelta.Standing.NoBaseline ->
+          Log.info "Run App: saves are patched by metadata delta against %s" asm.Location
+    | Features.MetadataDelta.MetadataDeltaMode.Off, _
+    | Features.MetadataDelta.MetadataDeltaMode.On, _ -> ()
+
   let appRuns : AppRunHandlers = {
     Run = fun project previous -> async {
       let prepared =
@@ -1978,7 +2073,9 @@ let run (sessionId: string) (port: int) = async {
       | Ok (asm, entry, config) ->
         let! state = AppRunner.start appRunner project entry (AppRun.planLaunch project config previous) |> Async.AwaitTask
         match state with
-        | AppRun.AppRunState.Running _ -> watchForHotReload project asm.Location
+        | AppRun.AppRunState.Running _ ->
+          watchForHotReload project asm.Location
+          startDeltaRoute asm project
         | _ -> ()
         return Ok state }
     Stop = fun scope -> async {

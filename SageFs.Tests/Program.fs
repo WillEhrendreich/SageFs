@@ -12,6 +12,12 @@ let main argv =
   | SageFs.Tests.GuardChild.ChildRun.Ran exitCode -> exitCode
   | SageFs.Tests.GuardChild.ChildRun.NotAChild ->
 
+  // A metadata-delta test applies a delta in a process of its own, because applying one cannot be undone
+  // (DeltaChild). Same shape: it answers and leaves before the runner is set up.
+  match SageFs.Tests.DeltaChild.tryRun argv with
+  | SageFs.Tests.DeltaChild.ChildRun.Ran exitCode -> exitCode
+  | SageFs.Tests.DeltaChild.ChildRun.NotAChild ->
+
   // Before any tier starts Expecto: its default logger swaps the console writers for an
   // ANSI writer whose two paths lock in opposite orders, which hung gate runs (see
   // RunnerLogging). One plain logger for every entry point below.

@@ -33,7 +33,11 @@ let poisonedVariables : string list =
     "DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR"
     "DOTNET_HOST_PATH"
     "DOTNET_ROOT"
-    "DOTNET_ROOT(x86)" ]
+    "DOTNET_ROOT(x86)"
+    // Only the worker of an app patched by metadata delta carries it (`Args.buildWorkerSpawnConfigWith` names it as
+    // an override). Every process the worker spawns would inherit it: the MSBuild and compiler nodes of the save's
+    // own build, and the FSI host, where it costs speed and means nothing.
+    "DOTNET_MODIFIABLE_ASSEMBLIES" ]
 
 /// Pure: what a child process's environment should be, given the parent's own
 /// environment and whatever explicit overrides this particular child needs.

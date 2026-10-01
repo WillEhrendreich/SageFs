@@ -407,7 +407,13 @@
         <!-- The child half: Program.fs starts this assembly again as a guard child to click a getter that would end the process. -->
         <Compile Include="GuardChild.fs" />
         <Compile Include="GuardChildTests.fs" />
+        <Compile Include="DeltaProgram.fs" />
+        <Compile Include="DeltaInstrumentation.fs" />
+        <Compile Include="DeltaChild.fs" />
+        <Compile Include="MetadataDeltaTests.fs" />
+        <Compile Include="DeltaRouteTests.fs" />
         <Compile Include="GuardSimTests.fs" />
+        <Compile Include="DeltaRouteSimTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
         <Compile Include="StreamingProxyTests.fs" />
         <Compile Include="StreamingProxySimTests.fs" />
@@ -640,6 +646,9 @@
         <Compile Include="HotReloadLatencyTests.fs" />
         <Compile Include="HotReloadStateOutcomeTests.fs" />
         <Compile Include="HotReloadParityTests.fs" />
+        <Compile Include="RunAppDeltaHarness.fs" />
+        <Compile Include="RunAppDeltaTests.fs" />
+        <Compile Include="RealFSharpDeltaTests.fs" />
         <Compile Include="HotReloadDebuggerTests.fs" />
         <Compile Include="HotReloadClosureTests.fs" />
         <Compile Include="TieredCompilationCostBenchmark.fs" />

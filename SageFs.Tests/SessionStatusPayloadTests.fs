@@ -64,7 +64,7 @@ let lastReloadTests =
     testCase "WHY — a save that could not be applied is IN the payload, with the worker's wording and the remedy, because a console app has no browser tab to tell it" <| fun _ ->
       let reload =
         SessionReload.Finished
-          { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 3; Message = "3 changed definitions cannot be patched"; SuggestedAction = "restart the app" }
+          { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 3; Message = "3 changed definitions cannot be patched"; SuggestedAction = "restart the app"; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch }
       let json = SessionStatusPayload.serialize { factsWith SessionStatusPayload.LastRestart.NoneRecorded with LastReload = reload }
       use doc = JsonDocument.Parse json
       let payload = doc.RootElement.GetProperty "lastReload"

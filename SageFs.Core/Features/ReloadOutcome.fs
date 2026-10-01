@@ -22,6 +22,8 @@
 ///      of these systems explicitly moved away from.
 module SageFs.Features.ReloadOutcome
 
+open SageFs.Features.MetadataDelta
+
 /// Why a saved change could not be re-pointed into the already-running process.
 ///
 /// Named after the shape of the change the user made, because that is what they
@@ -114,6 +116,14 @@ type RestartReason =
   /// instantiation no code names (reflection), a patch that is right for some calls and wrong for others
   /// is not one to claim. The detail says what stops the list.
   | GenericInstantiationsUnknown of declaration: string * detail: string
+  /// An app SageFs started with `run_app` is patched by a metadata delta against the assembly it loaded, and this edit is
+  /// one a delta cannot carry: a field added, a type added, a signature changed, a startup value changed. The cause
+  /// is the emitter's own closed `RudeCause`, which names the declaration.
+  | RudeEdit of cause: RudeCause
+  /// The metadata-delta route could not be used for this app at all (the process was not started so the runtime
+  /// will edit the assembly, a debugger is attached, the runtime lacks a capability, the build is not unoptimized).
+  /// Nothing about the edit is wrong; the app has to restart to take it.
+  | MetadataDeltaUnavailable of why: string
 
 module RestartReason =
 
@@ -160,6 +170,8 @@ module RestartReason =
       sprintf "the fields of '%s' changed (%s), and the objects the running app already built were laid out without them" typeName detail
     | RestartReason.GenericInstantiationsUnknown(declaration, detail) ->
       sprintf "'%s' is generic, and SageFs cannot list every instantiation the app can run (%s), so a patch could leave one on the old body" declaration detail
+    | RestartReason.RudeEdit cause -> RudeCause.describe cause
+    | RestartReason.MetadataDeltaUnavailable why -> sprintf "SageFs cannot patch this app in place: %s" why
   /// What the user can actually do. Never empty — a refusal a user cannot act
   /// on is a dead end, and this is the field that stops it being one.
   let remedy =
@@ -211,6 +223,10 @@ module RestartReason =
         typeName
     | RestartReason.GenericInstantiationsUnknown(declaration, _) ->
       sprintf "Restart the app to pick it up. A generic function is re-pointed in every instantiation while the program's own code names them all; if '%s' only needs to work for one type, annotate its arguments with it and it is re-pointed like any other function." declaration
+    | RestartReason.RudeEdit _ ->
+      "Restart the app to pick it up. A method body, a closure body and a method added to a type the app already runs are patched in place; this edit changes something that only takes effect when the process starts."
+    | RestartReason.MetadataDeltaUnavailable _ ->
+      "Restart the app to pick it up. Nothing is wrong with the edit: the running process cannot take an in-place patch right now, and a restart starts a process that can."
 /// A `let mutable` whose initializer you edited while the app was running. The
 /// app kept its live value (rule 3 of the state spec), and this is what the
 /// save says about it.
@@ -225,6 +241,43 @@ type KeptValue = {
 
 /// What a save did to the process that is already running.
 ///
+/// How a patch reached the process. A client reads this from the report's `mechanism`, never from the prose.
+[<RequireQualifiedAccess>]
+type PatchMechanism =
+  /// The outcome is not a patch (a restart, a compile failure, nothing changed).
+  | NoPatch
+  /// A method was re-pointed with a detour, in the process the reload agent lives in.
+  | Detour
+  /// A metadata delta was applied to the assembly the process loaded.
+  | MetadataDelta
+
+module PatchMechanism =
+  /// The wire spelling. Empty for no patch, so a payload for a restart is what it always was.
+  let wireName (mechanism: PatchMechanism) : string =
+    match mechanism with
+    | PatchMechanism.NoPatch -> ""
+    | PatchMechanism.Detour -> "detour"
+    | PatchMechanism.MetadataDelta -> "metadata-delta"
+
+  /// The mechanism a payload names. A spelling nobody knows is no mechanism, so a client older than the worker shows
+  /// a patch with nothing to say about how, never a wrong how.
+  let ofWireName (name: string) : PatchMechanism =
+    match name with
+    | "detour" -> PatchMechanism.Detour
+    | "metadata-delta" -> PatchMechanism.MetadataDelta
+    | _ -> PatchMechanism.NoPatch
+
+/// The stages of a patch applied as a metadata delta, which mirror the detour's: applied and not yet seen running,
+/// seen running, never seen. A separate type so a delta's outcome cannot be built as anything but one of the three.
+[<RequireQualifiedAccess>]
+type MetadataDeltaOutcome =
+  /// The runtime took the delta, and nobody has seen the new code run. `applied` of `considered` changed methods wait.
+  | Pending of applied: int * considered: int
+  /// The new bodies have been seen running.
+  | Patched of patched: int * considered: int
+  /// The bound passed and these changed methods' new bodies have not run (`first` and `rest`); `entered` have.
+  | NeverEntered of first: string * rest: string list * entered: int * considered: int
+
 /// Construct through `ofPatchCounts` rather than directly, so `Patched(0, n)` —
 /// "succeeded, changed nothing", the exact lie this type exists to prevent — is
 /// unrepresentable.
@@ -270,6 +323,10 @@ type ReloadOutcome =
   /// idle app looks exactly like one that never calls the function, so this
   /// says "unconfirmed, exercise it" and never names a cause.
   | NeverEntered of first: string * rest: string list * entered: int * considered: int * kept: KeptValue list
+  /// A patch applied as a metadata delta, at whichever stage it has reached. Read with `MetadataDeltaOutcome`; the
+  /// report names the same stage as the detour's outcomes do (`PatchPending`, `Patched`, `NeverEntered`) and says
+  /// `metadata-delta` in its `mechanism`.
+  | ByMetadataDelta of MetadataDeltaOutcome
 
 module ReloadOutcome =
 
@@ -296,9 +353,25 @@ module ReloadOutcome =
     | ReloadOutcome.KeptLiveState(patched, _, _, _) -> patched > 0
     // Some of the new bodies ran, so the process changed for those.
     | ReloadOutcome.NeverEntered(_, _, entered, _, _) -> entered > 0
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending _)
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched _) -> true
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered(_, _, entered, _)) -> entered > 0
     | ReloadOutcome.NoEffect _
     | ReloadOutcome.RestartRequired _
     | ReloadOutcome.CompileFailed _ -> false
+
+  /// How the outcome reached the process. Read by the report, so a client never infers it from the words.
+  let mechanismOf =
+    function
+    | ReloadOutcome.ByMetadataDelta _ -> PatchMechanism.MetadataDelta
+    | ReloadOutcome.Patched _
+    | ReloadOutcome.PatchPending _
+    | ReloadOutcome.NeverEntered _
+    | ReloadOutcome.KeptLiveState _ -> PatchMechanism.Detour
+    | ReloadOutcome.NoEffect _
+    | ReloadOutcome.Restarted _
+    | ReloadOutcome.RestartRequired _
+    | ReloadOutcome.CompileFailed _ -> PatchMechanism.NoPatch
 
   /// A browser reload is honest only when the bytes it will fetch may be new.
   /// Telling a page to refresh into identical code is the failure users read as
@@ -311,10 +384,13 @@ module ReloadOutcome =
   let shouldRefreshBrowser =
     function
     | ReloadOutcome.PatchPending _
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending _)
     | ReloadOutcome.Restarted _ -> true
     | ReloadOutcome.Patched _
     | ReloadOutcome.KeptLiveState _
     | ReloadOutcome.NeverEntered _
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched _)
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered _)
     | ReloadOutcome.NoEffect _
     | ReloadOutcome.RestartRequired _
     | ReloadOutcome.CompileFailed _ -> false
@@ -374,13 +450,32 @@ module ReloadOutcome =
         silent
         entered
         considered
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(applied, considered)) ->
+      sprintf
+        "Applied %d of %d changed method(s) by metadata delta, not confirmed yet: the new code has not run"
+        applied
+        considered
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched(patched, considered)) ->
+      sprintf "Patched %d of %d changed method(s) in place by metadata delta" patched considered
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered(first, rest, entered, considered)) ->
+      let silent = first :: rest |> String.concat ", "
+      sprintf
+        "Not confirmed: the new code for %s has not run since the save, applied by metadata delta (%d of %d changed method(s) seen running)"
+        silent
+        entered
+        considered
 
   /// What to do next, when there is something to do. `None` means the outcome
   /// is already resolved and the user needs no instruction.
   let remedy =
     function
     | ReloadOutcome.Patched _
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched _)
     | ReloadOutcome.Restarted _ -> None
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending _) ->
+      Some "Exercise the changed code, for example by loading the page or calling the endpoint. This updates when the new code runs. If it never does, the running app is not calling the patched method, and restarting the app picks the change up."
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered _) ->
+      Some "Exercise that code path. If the new code still does not run, the running app is not calling the patched method, so restart the app to pick the change up."
     | ReloadOutcome.NoEffect(_, reasons)
     | ReloadOutcome.RestartRequired reasons ->
       match reasons with
@@ -423,6 +518,7 @@ module ReloadOutcome =
       | ReloadOutcome.NeverEntered _
       | ReloadOutcome.Restarted _
       | ReloadOutcome.KeptLiveState _
+      | ReloadOutcome.ByMetadataDelta _
       | ReloadOutcome.CompileFailed _ -> outcome
 
   /// Folds the bindings a save KEPT into what its patch did. Only outcomes
@@ -445,4 +541,6 @@ module ReloadOutcome =
     | _ :: _, ReloadOutcome.Restarted _
     | _ :: _, ReloadOutcome.RestartRequired _
     | _ :: _, ReloadOutcome.CompileFailed _
+    // A delta patches methods and the objects keep their fields, so it has no bindings to keep.
+    | _ :: _, ReloadOutcome.ByMetadataDelta _
     | _ :: _, ReloadOutcome.KeptLiveState _ -> outcome

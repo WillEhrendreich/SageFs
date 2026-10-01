@@ -26,6 +26,8 @@
         <Compile Include="TestProviderTypes.fs" />
         <Compile Include="WorkflowTypes.fs" />
         <Compile Include="SessionProjectTarget.fs" />
+        <!-- Before Args: the daemon decides whether a worker is started for the delta route, and says so in its environment. -->
+        <Compile Include="Features\MetadataDelta\MetadataDeltaFlag.fs" />
         <Compile Include="Args.fs" />
         <Compile Include="OwnerMonitor.fs" />
         <Compile Include="McpResourceGate.fs" />
@@ -152,6 +154,9 @@
         <Compile Include="ShapeMigration.fs" />
         <Compile Include="Features\RegisteredHolder.fs" />
         <Compile Include="Features\RestartScope.fs" />
+        <!-- Before ReloadOutcome: a refusal of the metadata-delta route is a RestartReason, and names its RudeCause. Both files
+             depend on nothing. -->
+        <Compile Include="Features\MetadataDelta\RudeCause.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
         <!-- Pure: when a patch is live (its new body has been seen running). After ReloadPlanning
@@ -196,6 +201,17 @@
         <Compile Include="Features\TestCachePersistence.fs" />
         <Compile Include="Features\CoverageProbes.fs" />
         <Compile Include="Features\CoverageInstrumenter.fs" />
+        <!-- The metadata-delta emitter: reads two builds of a project and writes the delta that patches a
+             running assembly's method bodies. Pure over System.Reflection.Metadata, off by default, and not
+             wired into the planner yet. -->
+        <Compile Include="Features\MetadataDelta\PeImage.fs" />
+        <Compile Include="Features\MetadataDelta\IlCanon.fs" />
+        <Compile Include="Features\MetadataDelta\MethodDiff.fs" />
+        <Compile Include="Features\MetadataDelta\DeltaWriter.fs" />
+        <Compile Include="Features\MetadataDelta\DeltaApply.fs" />
+        <!-- Pure: what a process's chain of deltas is good for, and how a save is routed to it. -->
+        <Compile Include="Features\MetadataDelta\DeltaSession.fs" />
+        <Compile Include="Features\PatchRoute.fs" />
         <Compile Include="Features\LiveTestingInstrumentation.fs" />
         <Compile Include="Features\ReflectionDiscovery.fs" />
         <Compile Include="Features\LiveTestingExecutors.fs" />
