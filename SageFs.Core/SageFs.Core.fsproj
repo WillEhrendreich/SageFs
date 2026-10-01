@@ -336,6 +336,10 @@
         <Compile Include="SageFsError.fs" />
         <Compile Include="RebuildOutcome.fs" />
         <Compile Include="SessionReload.fs" />
+        <!-- After SessionReload: the trunk follows what lands. The decision folds reload facts, and WorkerProtocol carries its
+             types, so both come before it. -->
+        <Compile Include="Features\TrunkFollow.fs" />
+        <Compile Include="Features\TrunkFollowOwner.fs" />
         <!-- After SageFsError: F#-aware compile-order insight over BuildDiagnostic (roast UX-4). -->
         <Compile Include="CompileOrderInsight.fs" />
         <!-- After SageFsError: the railway effect type over the algebra. -->
@@ -349,6 +353,7 @@
         <Compile Include="Affordances.fs" />
         <Compile Include="WorkerProtocol.fs" />
         <Compile Include="RestartBoundaries.fs" />
+        <Compile Include="Features\TrunkSessions.fs" />
         <Compile Include="Features\CohortLedgerExport.fs" />
         <Compile Include="CrossCheckoutOverlap.fs" />
         <Compile Include="Features\Verification.fs" />

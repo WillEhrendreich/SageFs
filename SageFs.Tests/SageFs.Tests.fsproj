@@ -199,6 +199,8 @@
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
+        <Compile Include="TrunkFollowSimTests.fs" />
+        <Compile Include="TrunkFollowTests.fs" />
         <Compile Include="LiveCheckPumpSimTests.fs" />
         <Compile Include="LiveCheckRelayTests.fs" />
         <Compile Include="ValueReadSimTests.fs" />
