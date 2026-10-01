@@ -3447,10 +3447,8 @@ module TestCycleEffects =
       // keystroke included: a half-typed buffer takes the `Failed` branch, and
       // `PolicyFilter` below keeps a save-only category quiet per keystroke.
       //
-      // Residual limit, stated rather than hidden: if the dependency graph has
-      // not yet seen the test file that covers this symbol, the narrow still
-      // finds nothing. The cohort landing gate's NO-EMPTY-ESCAPE floor
-      // (`AffectedTests.verificationTestSet`) remains the backstop for that.
+      // If the graph has not yet seen the test file that covers this symbol,
+      // the narrow finds nothing; the floor below catches that.
       let fileScopeAffected =
         match
           Array.isEmpty nameDeltaAffected
@@ -3468,24 +3466,17 @@ module TestCycleEffects =
       let isCompiledFile =
         changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
         && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
-      // Fall back to all discovered tests when:
-      // 1. changedSymbols changed but dep graph doesn't cover them (new code/not-yet-tracked symbols)
-      // 2. A compiled file where the dep graph is empty, on ANY trigger — FCS can't see main
-      //    project symbols from the test session, so changedSymbols=[] even though the DLL is
-      //    stale. A keystroke is no exception: selecting nothing reads as green on a regression.
-      // Do NOT fall back when:
-      // - changedSymbols=[] with a non-empty dep graph, on any trigger — the
-      //   file-scope narrow above has already had its turn by this point.
-      //   This used to be justified as "FCS correctly reports no semantic
-      //   change", which was not true: `changedSymbols` is a `Set<string>`
-      //   name difference, so it reads a body rewrite and a comment edit
-      //   identically. That false premise is what let a body-only edit select
-      //   zero tests and report green on a regression.
-      let isEmptyDepGraph =
-        Map.isEmpty depGraph.SymbolToTests && Map.isEmpty depGraph.TransitiveCoverage
+      // The NO-EMPTY-ESCAPE floor, shared with the landing gate
+      // (`AffectedTests.verificationTestSet`): when every narrow above found
+      // nothing for a compiled file, widen to ALL discovered tests, on any
+      // trigger, instead of reading an empty selection as green. Nothing found
+      // is not "nothing affected": `changedSymbols` is a `Set<string>` name
+      // difference, so a body rewrite looks the same as no edit, and the graph
+      // may not have seen the test file that covers this one (cold start, or a
+      // test file not type-checked yet). The run policy still decides whether a
+      // keystroke may run. Scripts (.fsx) are evaluated, not compiled: no floor.
       let symbolsChanged = not (List.isEmpty changedSymbols)
-      let shouldFallback =
-        Array.isEmpty affected && isCompiledFile && (symbolsChanged || isEmptyDepGraph)
+      let shouldFallback = Array.isEmpty affected && isCompiledFile
       let effectiveAffected,
           precision,
           reason =
@@ -3495,7 +3486,9 @@ module TestCycleEffects =
           SelectionPrecision.ConservativeFallback,
           // Mechanism-neutral (Brief 4): redirectToEvalBuffer may retarget
           // this into an FSI eval, not always a rebuild.
-          "The dependency graph could not narrow this compiled-file change, so SageFs conservatively queued all discovered tests for a fresh run."
+          match symbolsChanged with
+          | true -> "The dependency graph could not narrow this compiled-file change, so SageFs conservatively queued all discovered tests for a fresh run."
+          | false -> "No test the dependency graph knows reaches this compiled file, and it may not have seen the test that does, so SageFs queued all discovered tests rather than read an empty selection as green."
         | false when usedFileScope ->
           affected,
           SelectionPrecision.ConservativeFallback,
