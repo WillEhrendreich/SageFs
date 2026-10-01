@@ -93,6 +93,7 @@ release/
 SageFs.Tests/fixtures/HotReloadStateFixture/.runs/
 SageFs.Tests/fixtures/HotReloadParityFixture/.runs/
 SageFs.Tests/fixtures/HotReloadGenericReflectionFixture/.runs/
+SageFs.Tests/fixtures/RunAppDeltaFixture/.runs/
 
 # Agent scratch. NEVER a product artifact.
 #

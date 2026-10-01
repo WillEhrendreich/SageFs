@@ -634,6 +634,8 @@
         <Compile Include="HotReloadInlinedCalleeJourneyTests.fs" />
         <Compile Include="HotReloadStateOutcomeTests.fs" />
         <Compile Include="HotReloadParityTests.fs" />
+        <Compile Include="RunAppDeltaHarness.fs" />
+        <Compile Include="RunAppDeltaTests.fs" />
         <Compile Include="HotReloadDebuggerTests.fs" />
         <Compile Include="HotReloadClosureTests.fs" />
         <Compile Include="TieredCompilationCostBenchmark.fs" />
