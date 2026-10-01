@@ -246,6 +246,11 @@ module Integration =
   let dedicatedCase (entryPoint: string) (name: string) (body: unit -> unit) =
     Expecto.Tests.testCase (tagged name) body |> register (Dedicated entryPoint)
 
+  /// `dedicatedCase` for a body that awaits, so a case that does real async work does not block a
+  /// thread to run it (and does not add to the blocking-call debt the architecture ratchet counts).
+  let dedicatedCaseTask (entryPoint: string) (name: string) (body: unit -> System.Threading.Tasks.Task<unit>) =
+    Expecto.Tests.testCaseTask (tagged name) body |> register (Dedicated entryPoint)
+
   /// Touch every [<Tests>] value in this assembly so every file's lazy module
   /// initialization — and with it every registration — has run.
   let private discovery =
