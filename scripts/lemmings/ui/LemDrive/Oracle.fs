@@ -61,7 +61,7 @@ type Check =
   | AnswerNamesCommands of file: string
   /// The daemon's own event stream, recorded for the run, shows eval output from a session
   /// under the run directory that matches.
-  | EvalOutputSeen of pattern: string
+  | EvalResultSeen of pattern: string
   /// The window, with the SageFs container opened by the harness, shows text matching.
   | SageFsViewsShow of pattern: string
 
@@ -74,7 +74,7 @@ module Check =
     | StatusBarShows p -> sprintf "the status bar shows /%s/" p
     | FixtureTestsPass -> "the project's test suite passes (the harness ran it)"
     | AnswerNamesCommands f -> sprintf "%s names at least %d SageFs commands from the extension's package.json" f FewestCommandsNamed
-    | EvalOutputSeen p -> sprintf "the daemon's event stream shows eval output from the run's session matching /%s/" p
+    | EvalResultSeen p -> sprintf "an evaluation's result matching /%s/ shows in the daemon's event stream or the extension's Output channel" p
     | SageFsViewsShow p -> sprintf "the SageFs views, opened by the harness, show /%s/" p
 
 /// What FSI prints for parseSeed (Some "7"): the value, typed.
@@ -87,8 +87,8 @@ let EvalOfParseSeedNegative = @"int option = None"
 
 let checksFor (t: LemTask) : Check list =
   match t with
-  | UiEval -> [ SessionEvaled 1; EvalOutputSeen EvalOfParseSeedSeven ]
-  | UiEditReeval -> [ SessionEvaled 1; EvalOutputSeen EvalOfParseSeedNegative; FixtureTestsPass ]
+  | UiEval -> [ SessionEvaled 1; EvalResultSeen EvalOfParseSeedSeven ]
+  | UiEditReeval -> [ SessionEvaled 1; EvalResultSeen EvalOfParseSeedNegative; FixtureTestsPass ]
   | UiLiveTests -> [ SessionLoadsProject @"\.Tests\.fsproj$"; StatusBarShows @"\d+/\d+" ]
   | UiHotReload -> [ WorkflowIs "(?i)hot"; SageFsViewsShow "(?i)watch(ing|ed)" ]
   | UiFindHelp -> [ AnswerNamesCommands "ANSWER.md" ]
@@ -191,6 +191,45 @@ let private sageFsViewsText () : Task<Result<string, string>> =
           c.Playwright.Dispose()
   }
 
+/// The Output channel the SageFs extension writes to, as the channel selector names it.
+[<Literal>]
+let SageFsOutputChannel = "SageFs"
+
+/// How long the harness lets the Output panel switch channel and render.
+[<Literal>]
+let OutputSettleMs = 1500
+
+/// The lines of the SageFs Output channel. The panel's channel selector is a native select, so
+/// the harness picks the channel in it, and opens the Output panel first if it is not on screen.
+let private sageFsOutputText () : Task<Result<string, string>> =
+  task {
+    match Environment.GetEnvironmentVariable(Calls.DriverEnv.name Calls.CdpPort) with
+    | null
+    | "" -> return Result.Error "LEM_CDP_PORT is not set, so the window cannot be read"
+    | p ->
+      let! conn = Cdp.connect (int p)
+      match conn with
+      | Result.Error e -> return Result.Error e
+      | Ok c ->
+        try
+          try
+            let selector = c.Page.Locator(".part.panel select.monaco-select-box").First
+            let! showing = selector.IsVisibleAsync()
+            match showing with
+            | true -> ()
+            | false ->
+              do! c.Page.Keyboard.PressAsync "Control+Shift+U"
+              do! Task.Delay OutputSettleMs
+            let! _ = selector.SelectOptionAsync SageFsOutputChannel
+            do! Task.Delay OutputSettleMs
+            let! lines = c.Page.Locator(".part.panel .view-line").AllInnerTextsAsync()
+            return Ok(String.Join("\n", lines |> Seq.map (fun l -> l.Replace(' ', ' '))))
+          with ex ->
+            return Result.Error(sprintf "could not read the SageFs Output channel: %s" (ex.Message.Split('\n')[0]))
+        finally
+          c.Playwright.Dispose()
+  }
+
 let private runCheck (runDir: string) (workspace: string) (port: int) (sessions: Result<DaemonSession list, string>) (check: Check) : Task<Verdict> =
   task {
     match check with
@@ -216,18 +255,30 @@ let private runCheck (runDir: string) (workspace: string) (port: int) (sessions:
           match mine |> List.tryPick (fun s -> s.ProjectPaths |> List.tryFind (fun p -> Regex.IsMatch(p, pattern)) |> Option.map (fun p -> s.Id, p)) with
           | Some(id, path) -> Met(sprintf "session %s loaded %s" id path)
           | None -> NotMet(sprintf "no session under %s loaded a project matching /%s/ (%d session(s) under it)" workspace pattern mine.Length)
-    | EvalOutputSeen pattern ->
+    | EvalResultSeen pattern ->
+      // Two independent places the result shows. The daemon's own event stream, which carries
+      // eval output only for the session the daemon has active; and the extension's Output
+      // channel in the window, which keeps every result it printed. Either is evidence.
       let recorded = Path.Combine(runDir, "out", Daemon.RecordedEvalsFile)
-      return
+      let fromStream =
         match sessions, File.Exists recorded with
-        | Result.Error e, _ -> NotMet e
-        | _, false -> NotMet(sprintf "the harness recorded no daemon eval output (no out/%s)" Daemon.RecordedEvalsFile)
         | Ok all, true ->
           let ids = all |> List.filter (underWorkspace workspace) |> List.map (fun s -> s.Id)
-          let outputs = Daemon.evalOutputsIn (Daemon.readRecorded recorded) ids
-          match outputs |> List.tryFind (fun o -> Regex.IsMatch(o, pattern)) with
-          | Some _ -> Met(sprintf "an eval in session(s) %s printed /%s/" (String.Join(", ", ids)) pattern)
-          | None -> NotMet(sprintf "none of the %d eval event(s) from session(s) %s printed /%s/" (List.length outputs) (String.Join(", ", ids)) pattern)
+          Daemon.evalOutputsIn (Daemon.readRecorded recorded) ids
+          |> List.tryFind (fun o -> Regex.IsMatch(o, pattern))
+          |> Option.map (fun _ -> sprintf "the daemon's event stream shows session(s) %s printing /%s/" (String.Join(", ", ids)) pattern)
+        | _ -> None
+      match fromStream with
+      | Some evidence -> return Met evidence
+      | None ->
+        let! output = sageFsOutputText ()
+        return
+          match output with
+          | Result.Error e -> NotMet(sprintf "no recorded daemon eval output matched /%s/, and the Output channel could not be read: %s" pattern e)
+          | Ok t ->
+            match Regex.IsMatch(t, pattern) with
+            | true -> Met(sprintf "the extension's SageFs Output channel shows /%s/" pattern)
+            | false -> NotMet(sprintf "neither the daemon's event stream nor the extension's SageFs Output channel shows /%s/" pattern)
     | SageFsViewsShow pattern ->
       let! text = sageFsViewsText ()
       return

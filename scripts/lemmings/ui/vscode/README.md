@@ -103,7 +103,18 @@ The rest of `out/`: `screens/NNN.txt` (every driver call), `timeline.ndjson`, `f
 - The command palette matches typed text against the command's title, never its id.
 - The activity bar icon's name is an `aria-label`. `vsc-click SageFs` finds it.
 - The editor's inline eval result is a CSS `::after` and clears after 30 seconds, so nothing reads it
-  after the lemming is done. The oracle uses what the daemon recorded instead.
+  after the lemming is done. The oracle reads two places that keep it: the eval output the runner
+  records from the daemon's `/events` stream (which carries eval output only for the session the
+  daemon has active), and the extension's own `SageFs` Output channel, picked in the panel's channel
+  selector (a native select) by the harness.
+- The extension binds a new window to whichever session is active on the daemon, and its session
+  picker lists every session on the machine. On a busy shared daemon a lemming that never creates
+  its own session evaluates into someone else's. The fellOver list says so, naming the session that
+  printed the output while the lemming's evaluation calls ran (the recorded stream lined up with the
+  actions clock).
+- Playwright refuses to click an element another element is drawn over, such as the placeholder text
+  of the Extensions search box. `vsc-click` tries the next match and then clicks where the element
+  is anyway, which is what a mouse does.
 - `GET /api/sessions` is served on the MCP port (37749). The dashboard port answers 404 for it.
 
 ## Self-test

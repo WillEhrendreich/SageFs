@@ -209,11 +209,25 @@ let private click (c: Cdp.Connection) (target: string) : Task<Outcome> =
               try
                 do! candidate.ClickAsync(LocatorClickOptions(Timeout = float32 ClickTryMs))
                 clicked <- Some(described, i)
-              with :? PlaywrightException as ex ->
+              with ex ->
+                // Playwright's timeout is not a PlaywrightException; any failure to click moves on.
                 lastError <- ex.Message.Split('\n') |> Array.tryHead |> Option.defaultValue ex.Message
           | _ -> ()
+        // Still nothing: click where the first match is, even though something sits on top of it.
+        // That is what a person's mouse does (a search box's placeholder text is covered by the
+        // input itself, so Playwright refuses a click that works fine by hand).
+        match clicked, refusal with
+        | None, None ->
+          try
+            do! (loc.Nth 0).ClickAsync(LocatorClickOptions(Timeout = float32 ClickTryMs, Force = true))
+            clicked <- Some(target, -1)
+          with ex ->
+            lastError <- ex.Message.Split('\n') |> Array.tryHead |> Option.defaultValue ex.Message
+        | _ -> ()
         match clicked, refusal with
         | _, Some e -> return Refused e
+        | Some(described, -1), None ->
+          return! done' c (sprintf "clicked \"%s\" [%s] at its position (another element is drawn over it, as with a placeholder in a search box)" (described.Trim().Replace('\n', ' ')) how)
         | Some(described, i), None ->
           let which = match n, i with | 1, _ -> "" | k, 0 -> sprintf " (%d matched, clicked the first; use longer text to pick another)" k | k, j -> sprintf " (%d matched, match %d was the first one that could be clicked)" k (j + 1)
           return! done' c (sprintf "clicked \"%s\" [%s]%s" (described.Trim().Replace('\n', ' ')) how which)
