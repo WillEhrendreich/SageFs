@@ -139,6 +139,7 @@ Until the 2026-10-01 merges, most of the rows below said Microsoft was ahead and
 | Instance members | Supported | Patched while the type keeps its fields, and the object is the same one (rows `instance`, `instanceState`). A member that needs a new field restarts with `InstanceLayoutChanged` |
 | Generics | Supported (generics on .NET 8+) | Restart, naming the function (`GenericFunction`, row `generic`), because a detour reaches only the instantiations that have run |
 | "Did it take effect" | The agent acknowledges the apply, and the SDK's own notes say an acknowledged update is treated as applied ([AGENTS.md](https://github.com/dotnet/sdk/blob/main/src/Dotnet.Watch/AGENTS.md)) | Pending, then patched only after the new body ran |
+| Latency, save to the change served | No figure. The Visual Studio, ASP.NET Core and `dotnet watch` pages I read on 2026-10-01 say "immediately" and "fast iterative development" and give no number, so I have nothing to put beside mine | Measured, see "How long a save takes" below. About 0.26 s for a patch on my machine, about 8 s for an app `run_app` restarts |
 | With a debugger attached | Not supported for F#. C# supports edits in break mode and active statements | A save lands and ends `Patched` with netcoredbg attached to the process the app runs in (`HotReloadDebuggerTests.fs`, four rows, .NET 10 and 11, Linux x64). Nothing sets a breakpoint, steps, or edits a method the debugger is stopped in |
 
 For the handler case, ASP.NET's page says route creation is run-once "unless the code update is to a route handler delegate" ([ASP.NET](https://learn.microsoft.com/en-us/aspnet/core/test/hot-reload)), so C# has the same rule. A Falco handler written `let handler (ctx: HttpContext) = ...` gets you save, refresh, see it, with the counter still bumped. A value computed once at startup and captured (`let h = Response.ofHtml (...)`) restarts in both worlds.
@@ -154,11 +155,39 @@ Where Microsoft is still ahead, and what I plan about each. Every plan below was
 - Starting your app any way you like. An app started with `run_app` restarts on a save.
 - No JIT tax from me turning tiering off.
 - Windows and macOS, since my CI is Linux only ([`main.yml`](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/.github/workflows/main.yml#L24-L30)). I need machines to close that one.
-- Latency. No test measures save-to-patch, so I quote no number ([`Readme.md`](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/Readme.md#L104)). Live testing has a measured gate now and hot reload doesn't. It's the next row I'd add.
+- Latency. Measured now, on one machine and one small app, and Microsoft documents no figure to compare it with (see "How long a save takes" below). Most of a patched save is the file watcher's 200 ms debounce, which I think is longer than it needs to be. I haven't changed it.
 
 Where it's level on the rows above, I mean the edit and its condition, not the mechanism or the polish.
 
 And the thing I can't claim. I used to believe what I do for F# wasn't possible any other way on .NET. As a technical claim that's false. Detouring a method in a running process is standard (Harmony and MonoMod.RuntimeDetour exist for it), and Microsoft's deltas work in PR #19941 is the other route, with closures, state machines and generic methods on its list. What I can say, dated: as of 2026-10-01 no shipped Microsoft tool hot reloads F# in place, and SageFs does it today by method detour. If Microsoft ships, this page becomes "what SageFs adds on top", which is the state rules and the confirmation. I'd be glad of that.
+
+### How long a save takes
+
+Microsoft documents no latency figure for hot reload. I re-read the Visual Studio, ASP.NET Core and `dotnet watch` pages on 2026-10-01 and they say "immediately" and "fast iterative development" and nothing with a unit. So I have no Microsoft number to put beside mine, and I haven't timed `dotnet watch` myself. I'm not claiming SageFs meets or beats it. I'm saying what mine is and how I took it.
+
+The `--integration-hr` tier times saves against a real running app ([`HotReloadLatency.fs`](../SageFs.Tests/HotReloadLatency.fs), [`HotReloadLatencyTests.fs`](../SageFs.Tests/HotReloadLatencyTests.fs)). The clock starts just before the first byte of the save is written. It stops on something the app or the daemon sent: the first response carrying the new value (the route is asked every 10 ms and each answer is stamped when it arrives), or the `Patched` frame on the daemon's `/events` stream. Each path is 20 saves after 2 warm-up saves, and the tier fails if the p95 of a path passes a bound set about four times above the worst I saw ([`TestTimeouts.fs`](../SageFs.Tests/TestTimeouts.fs)).
+
+The app is the small `WebAppFixture` (one F# project, a handful of routes). The machine was an AMD Ryzen 7 5800XT, 16 threads, Linux, .NET 11.0.0-rc.1, and the tier ran 8 times in a row on 2026-10-01 with other jobs running on it (load average 4 to 18). Each row is the range of the 8 runs. Those 8 ran the latency cases on their own (a filtered run, so an inner-loop number and not a `Trusted` tier). Three whole-tier runs after them, journeys included, had a patch at p50 259, 298 and 362 ms and a restart at p50 6.8, 10.0 and 10.1 s, which is the machine's load again.
+
+| What | p50 | p95 |
+|---|---|---|
+| A patched save, to the first response with the new body | 258 to 306 ms | 298 to 353 ms |
+| The same save, to the daemon saying `Patched` (new code seen running) | 296 to 346 ms | 338 to 392 ms |
+| A save to an app `run_app` runs, to the first response from the restarted app | 7.1 to 10.0 s | 7.7 to 16.2 s |
+
+I also ran it with eight busy loops beside it (load average 12 to 15). Two runs finished: a patch went to p50 311 and 321 ms, p95 372 and 370 ms, and `Patched` to p95 418 and 413 ms. The restart went to p50 11.4 and 10.2 s, p95 14.8 and 14.3 s. Four other loaded tries (three with sixteen busy loops, one with eight) measured nothing, because the runner's session never reached Ready inside its five minutes. The tier is not a loaded-machine tier.
+
+Where a patched save goes (the medians of each run, so they hold across all 8):
+
+- 200 ms is the file watcher's debounce. The worker says it started compiling at 201 to 202 ms after the save (the median of every run, never over 205 ms at the 95th percentile), so that stage is the debounce and about 2 ms. It is about three quarters of the time to a served response, and two thirds of the time to `Patched`.
+- About 60 ms after that is the compile and the detour, and the app serves the new body. The worker says "applied" about 40 ms after the app is already serving it, and `Patched` arrives about 2 ms after that, because the poll is already calling the route.
+- The 60 ms is not steady on a busy machine. In the 8 runs the served times fall on a ladder: about 260 ms, 300 ms and 345 ms, steps of about 43 ms, and a little over half the saves in a run sit on the bottom step. The request that got the new body took under a millisecond every time, so it isn't the poll, and the compiling stamp is always at 202 ms, so it isn't the debounce. It goes away when the machine is quiet. A whole-tier run that finished with the load average at 1.5 had p50 259 ms and p95 261 ms for the patch, one save out of 20 at 299 ms, and none on the upper steps. So I read the ladder as waits for a core between the worker starting to compile and the patch landing, not as something SageFs does. I haven't proven which wait it is.
+
+Where a restart goes (the same 8 runs): about 0.26 s for the worker to decide ("Restarted the app"), 2.4 to 4.1 s until the new worker says its first warm-up step (the rebuild and the process start), 6.0 to 8.8 s until the session is Ready, and 7.1 to 10.0 s until the app answers. The spread follows how busy the machine was, not the save. The two runs that ended with the load average at 14 or more had p95 of 15.2 and 16.2 s, and the run that ended at 3.9 had 7.7 s. The whole-tier run on the quiet machine (load average 1.5 at the end) is the floor I have: p50 6.77 s, p95 6.86 s, min 6.65 s, max 6.87 s, with the new worker's first warm-up step at 2.27 s and Ready at 5.69 s. The build-and-start stage is one that stretched (p95 3.1 s in the quiet run, 8.1 s in a busy one), and so did the stage after it, the session's FSI creation and warm-up.
+
+The measurement alternates two files for a patched save. The watcher drops a second event for the same file within 500 ms of the last one it compiled ([`Timeouts.doubleCompileGuard`](../SageFs.Core/Timeouts.fs)), by timestamp and not by content, and nothing tells a client when that window has closed. So two saves of one file less than half a second apart look like one. I read that in the code and didn't time it.
+
+What I think is slower than it needs to be, and haven't changed: the 200 ms debounce is most of a patched save. A save from an editor that writes the file once does not need to wait 200 ms for more events. Cutting it to about 50 ms would take the typical patch from about 260 ms to about 110 ms. I haven't measured what shorter windows do to the editors that write a save as several events (a rename, then a write), and that is the reason to measure before changing it.
 
 ## What's still rough
 
@@ -168,7 +197,7 @@ If SageFs isn't the one running your app and a save needs a restart, SageFs re-e
 
 The new edits have edges. A generic function and a member added to an existing type restart. A caller in another file keeps calling a re-signed function's old method until you save it. A lambda edit in a project you built Release by hand restarts, because its closures are the wrong shape for the match, and rebuilding through SageFs fixes it. A save that only adds code nothing calls ends "not confirmed" until something calls it, and a removal on its own reports "no declaration change". The debugger row needs Linux on x64 and downloads a pinned netcoredbg once (checked by SHA-256, and a machine that can't reach GitHub fails the row instead of skipping it), and it proves a save lands, not that you can step through it.
 
-No test measures save-to-patch latency. The patched MonoMod fork is a dependency I own and have to keep alive. And you can't redefine a type in the REPL while hot reload is on.
+I have no latency figure for a large app, for a save that touches many functions, or for a first save after the app starts (the two warm-up saves are dropped). The patched MonoMod fork is a dependency I own and have to keep alive. And you can't redefine a type in the REPL while hot reload is on.
 
 ## If you want to poke at it
 
