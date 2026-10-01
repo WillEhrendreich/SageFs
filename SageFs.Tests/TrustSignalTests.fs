@@ -162,6 +162,32 @@ let frameworkTierTests =
       qualifiedTier ".NETFramework,Version=v4.8" "default" |> Expect.notEqual "nor is a framework with no tier" "default"
   ]
 
+/// `build.fsx` is the contributor's first-run script (CONTRIBUTING.md). Its `test` target used to let exit code 2
+/// through as "no TTY, cosmetic". The tiers exit 1 or 2 when a test failed or errored and 3 when nothing ran or the
+/// count did not match, so a script that swallowed 2 reported a suite with an errored test as passed.
+let buildScriptTests =
+  let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let script = lazy (File.ReadAllText(Path.Combine(repoRoot, "build.fsx")))
+
+  testList "TrustSignal build.fsx" [
+    testCase "the suite is run by a step that fails on any non-zero exit, with no exit code let through" <| fun _ ->
+      Regex.IsMatch(script.Value, "runAllowCodes|allowCodes|AllowCodes")
+      |> Expect.isFalse "an allow-list of exit codes is how an errored suite passed"
+      let suiteRuns =
+        script.Value.Split('\n')
+        |> Array.filter (fun line -> line.Contains "SageFs.Tests" && line.Contains "\"dotnet\"")
+      suiteRuns |> Expect.isNonEmpty "the test target runs the suite"
+      suiteRuns
+      |> Array.filter (fun line -> not (line.TrimStart().StartsWith "run \"dotnet\""))
+      |> Expect.isEmpty "every run of the suite goes through `run`, which fails on any non-zero exit"
+
+    testCase "no verdict that is not a pass exits 0, so failing on any non-zero exit is the right policy" <| fun _ ->
+      for expectoExit in [ 0; 1; 2 ] do
+        [ TestsFailed (1, 0); TestsFailed (0, 1); NothingRan; CountMismatch (5, 4) ]
+        |> List.filter (fun verdict -> Verdict.exitCode expectoExit verdict = 0)
+        |> Expect.isEmpty (sprintf "verdicts that exit 0 for Expecto's %d" expectoExit)
+  ]
+
 /// The repo is PUBLIC and both the main build and the release publish run on
 /// this developer machine through a self-hosted runner. A `pull_request` job is
 /// executed from the PR's OWN copy of the workflow, so a fork PR reaching a
@@ -310,4 +336,4 @@ let selfHostedSafetyTests =
   ]
 
 [<Tests>]
-let tests = testList "TrustSignal" [ verdictTests; ciWiringTests; frameworkTierTests; selfHostedSafetyTests ]
+let tests = testList "TrustSignal" [ verdictTests; ciWiringTests; frameworkTierTests; buildScriptTests; selfHostedSafetyTests ]
