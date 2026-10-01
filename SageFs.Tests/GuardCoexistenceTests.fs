@@ -45,7 +45,7 @@ let private covered (lease: GuardLease) : GuardedMethods =
 let guardCoexistenceTests =
   testList "guards and hot reload on one method" [
 
-    testCase "WHY — the hazard itself: a Harmony patch put on a detoured method and taken off puts the old code back over the detour" <| fun _ ->
+    testCase "WHY - the hazard itself: a Harmony patch put on a detoured method and taken off puts the old code back over the detour" <| fun _ ->
       let orig = methodOf typeof<Reloadable4> "Orig"
       let repl = methodOf typeof<Reloadable4> "Repl"
       let harmony = Harmony "guard-coexistence-hazard"
@@ -56,10 +56,10 @@ let guardCoexistenceTests =
       harmony.Unpatch(orig, HarmonyPatchType.Transpiler, harmony.Id)
       Reloadable4.Orig() |> Expect.equal "the original is back: the reload is lost" 42
 
-    testCase "WHY — the ledger says nothing for a method hot reload never touched" <| fun _ ->
+    testCase "WHY - the ledger says nothing for a method hot reload never touched" <| fun _ ->
       DetourLedger.resolve (methodOf typeof<Chain> "Top") |> Expect.equal "untouched" Detour.NotDetoured
 
-    testCase "WHY — marking a method detoured without a body refuses it, and recording the body says where it went" <| fun _ ->
+    testCase "WHY - marking a method detoured without a body refuses it, and recording the body says where it went" <| fun _ ->
       let older = methodOf typeof<LedgerOnly> "Orig"
       let body = methodOf typeof<LedgerOnly> "Repl"
       DetourLedger.markDetoured older
@@ -69,7 +69,7 @@ let guardCoexistenceTests =
       DetourLedger.markDetoured older
       DetourLedger.resolve older |> Expect.equal "a new detour forgets the old destination until it is recorded" Detour.DetouredElsewhere
 
-    testCase "WHY — a getter that calls a reloaded method is guarded through the new body, and the reload survives the click" <| fun _ ->
+    testCase "WHY - a getter that calls a reloaded method is guarded through the new body, and the reload survives the click" <| fun _ ->
       let orig = methodOf typeof<Reloadable1> "Orig"
       let repl = methodOf typeof<Reloadable1> "Repl"
       reload orig repl
@@ -87,7 +87,7 @@ let guardCoexistenceTests =
       Reloadable1.Getter() |> Expect.equal "and so is the getter" 99
       ownsGuards repl |> Expect.isFalse "the new body is clean again"
 
-    testCase "WHY — a method hot reload re-pointed with no body known is refused, said on the row, and left alone" <| fun _ ->
+    testCase "WHY - a method hot reload re-pointed with no body known is refused, said on the row, and left alone" <| fun _ ->
       let orig = methodOf typeof<Reloadable2> "Orig"
       let repl = methodOf typeof<Reloadable2> "Repl"
       detourMethod logger orig repl |> ignore
@@ -102,7 +102,7 @@ let guardCoexistenceTests =
         lease.Release()
       Reloadable2.Orig() |> Expect.equal "the detour is intact" 99
 
-    testCase "WHY — a reload that lands while a click holds guards takes them off first, so the reload is not undone" <| fun _ ->
+    testCase "WHY - a reload that lands while a click holds guards takes them off first, so the reload is not undone" <| fun _ ->
       let orig = methodOf typeof<Reloadable3> "Orig"
       let repl = methodOf typeof<Reloadable3> "Repl"
       let lease = GuardPatcher.prepareWith world WalkBudget.product (methodOf typeof<Reloadable3> "Getter")
@@ -115,7 +115,7 @@ let guardCoexistenceTests =
         lease.Release()
       Reloadable3.Orig() |> Expect.equal "releasing the click's lease does not undo it" 99
 
-    testCase "WHY — a method reloaded twice is guarded through the newest body" <| fun _ ->
+    testCase "WHY - a method reloaded twice is guarded through the newest body" <| fun _ ->
       let orig = methodOf typeof<Reloadable5> "Orig"
       let repl = methodOf typeof<Reloadable5> "Repl"
       let newest = methodOf typeof<Reloadable5> "Newest"

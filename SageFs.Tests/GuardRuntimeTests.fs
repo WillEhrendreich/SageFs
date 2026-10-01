@@ -41,10 +41,10 @@ let private cellOps : Arbitrary<CellOp list> =
 let guardRuntimeTests =
   testList "guard runtime (cells and checks)" [
 
-    testCase "WHY — a check does nothing on a thread that was not asked to stop" <| fun _ ->
+    testCase "WHY - a check does nothing on a thread that was not asked to stop" <| fun _ ->
       checkOn (GuardCell()) |> Expect.isNone "no exception"
 
-    testCase "WHY — a check throws the guard's own exception on the thread that was asked to stop" <| fun _ ->
+    testCase "WHY - a check throws the guard's own exception on the thread that was asked to stop" <| fun _ ->
       let cell = GuardCell()
       Guard.RequestStop cell
       try
@@ -54,7 +54,7 @@ let guardRuntimeTests =
       finally
         Guard.Retire cell
 
-    testCase "WHY — a check on another thread is not stopped by someone else's stop" <| fun _ ->
+    testCase "WHY - a check on another thread is not stopped by someone else's stop" <| fun _ ->
       let stopped = GuardCell()
       Guard.RequestStop stopped
       try
@@ -64,7 +64,7 @@ let guardRuntimeTests =
       finally
         Guard.Retire stopped
 
-    testCase "WHY — the stop stays set, so a catch-all that swallowed it is stopped again at the next check" <| fun _ ->
+    testCase "WHY - the stop stays set, so a catch-all that swallowed it is stopped again at the next check" <| fun _ ->
       let cell = GuardCell()
       Guard.RequestStop cell
       let thrown = ref 0
@@ -84,7 +84,7 @@ let guardRuntimeTests =
       finally
         Guard.Retire cell
 
-    testCase "WHY — a stop that was never asked for is not released, and one that was is released once" <| fun _ ->
+    testCase "WHY - a stop that was never asked for is not released, and one that was is released once" <| fun _ ->
       let neverAsked = GuardCell()
       neverAsked.Retire() |> Expect.equal "nothing to release" GuardCellMove.Unchanged
       let asked = GuardCell()
@@ -96,7 +96,7 @@ let guardRuntimeTests =
       asked.StopIsRequested |> Expect.equal "so it no longer stops anything" GuardCellStop.NotRequested
 
     testSequenced
-    <| testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 200 } "WHY — the global count of stops is exactly the cells asked and not yet retired, whatever order they are asked in"
+    <| testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 200 } "WHY - the global count of stops is exactly the cells asked and not yet retired, whatever order they are asked in"
       (Prop.forAll cellOps (fun ops ->
         let cells = Array.init 4 (fun _ -> GuardCell())
         let before = Guard.Pending

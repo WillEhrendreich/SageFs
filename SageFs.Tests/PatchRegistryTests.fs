@@ -61,7 +61,7 @@ let private ops : Arbitrary<Op list> =
 let patchRegistryTests =
   testList "patch registry (who holds which method)" [
 
-    testCase "WHY — the first lease patches a method, a second lease shares the patch, and it comes off with the last" <| fun _ ->
+    testCase "WHY - the first lease patches a method, a second lease shares the patch, and it comes off with the last" <| fun _ ->
       let recording = Recording()
       let registry = registry recording
       registry.Acquire(1, helper) |> Expect.equal "first holds it" Acquired.Held
@@ -73,7 +73,7 @@ let patchRegistryTests =
       recording.Unpatches |> Expect.equal "unpatched once, by the last" 1
       registry.HeldCount |> Expect.equal "nothing held" 0
 
-    testCase "WHY — releasing a method a lease does not hold, or releasing twice, changes nothing" <| fun _ ->
+    testCase "WHY - releasing a method a lease does not hold, or releasing twice, changes nothing" <| fun _ ->
       let recording = Recording()
       let registry = registry recording
       registry.Release(9, helper)
@@ -82,7 +82,7 @@ let patchRegistryTests =
       registry.Release(1, helper)
       recording.Unpatches |> Expect.equal "unpatched exactly once" 1
 
-    testCase "WHY — a method hot reload re-pointed is refused and never patched" <| fun _ ->
+    testCase "WHY - a method hot reload re-pointed is refused and never patched" <| fun _ ->
       let recording = Recording()
       let ledger = Ledger()
       let registry = PatchRegistry(recording.Backend, ledger)
@@ -90,7 +90,7 @@ let patchRegistryTests =
       registry.Acquire(1, helper) |> Expect.equal "refused, said so" (Acquired.Refused SkipReason.DetouredByHotReload)
       recording.Patches |> Expect.equal "nothing was patched" 0
 
-    testCase "WHY — a reload takes the patch off whoever holds it, nothing goes back on, and the holders' later releases are no-ops" <| fun _ ->
+    testCase "WHY - a reload takes the patch off whoever holds it, nothing goes back on, and the holders' later releases are no-ops" <| fun _ ->
       let recording = Recording()
       let registry = registry recording
       registry.Acquire(1, helper) |> ignore
@@ -102,14 +102,14 @@ let patchRegistryTests =
       registry.Release(2, helper)
       recording.Unpatches |> Expect.equal "unpatched once, by the reload" 1
 
-    testCase "WHY — a patch the backend refuses is not held, and says what the backend said" <| fun _ ->
+    testCase "WHY - a patch the backend refuses is not held, and says what the backend said" <| fun _ ->
       let recording = Recording()
       recording.Refuse <- "no body to patch"
       let registry = registry recording
       registry.Acquire(1, helper) |> Expect.equal "refused" (Acquired.Refused (SkipReason.PatchRefused "no body to patch"))
       registry.HeldCount |> Expect.equal "nothing held" 0
 
-    testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 300 } "WHY — a method is patched exactly while some lease holds it, whatever order the leases come and go in"
+    testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 300 } "WHY - a method is patched exactly while some lease holds it, whatever order the leases come and go in"
       (Prop.forAll ops (fun list ->
         let recording = Recording()
         let registry = registry recording

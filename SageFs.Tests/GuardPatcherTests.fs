@@ -35,7 +35,7 @@ let private guardedNames (lease: GuardLease) : string list =
 let guardPatcherTests =
   testList "guard patcher (putting guards on and taking them off)" [
 
-    testCase "WHY — the getter and what it calls carry guards for the click, and carry none after it" <| fun _ ->
+    testCase "WHY - the getter and what it calls carry guards for the click, and carry none after it" <| fun _ ->
       let top = methodOf typeof<Solo> "Getter"
       let helper = methodOf typeof<Solo> "Helper"
       let lease = GuardPatcher.prepareWith world WalkBudget.product top
@@ -50,14 +50,14 @@ let guardPatcherTests =
       carriesGuards helper |> Expect.isFalse "so is the helper"
       Solo.Getter 1 |> Expect.equal "and still computes the same" 12
 
-    testCase "WHY — releasing a lease twice is harmless" <| fun _ ->
+    testCase "WHY - releasing a lease twice is harmless" <| fun _ ->
       let top = methodOf typeof<Chain> "Top"
       let lease = GuardPatcher.prepareWith world WalkBudget.product top
       lease.Release()
       lease.Release()
       carriesGuards top |> Expect.isFalse "clean"
 
-    testCase "WHY — two clicks that share a helper do not take each other's guards off" <| fun _ ->
+    testCase "WHY - two clicks that share a helper do not take each other's guards off" <| fun _ ->
       let helper = methodOf typeof<Shared> "Helper"
       let first = GuardPatcher.prepareWith world WalkBudget.product (methodOf typeof<Shared> "GetterA")
       let second = GuardPatcher.prepareWith world WalkBudget.product (methodOf typeof<Shared> "GetterB")
@@ -69,7 +69,7 @@ let guardPatcherTests =
         second.Release()
       carriesGuards helper |> Expect.isFalse "the last release takes it off"
 
-    testCase "WHY — a guarded loop is stopped by the watchdog and not left running" <| fun _ ->
+    testCase "WHY - a guarded loop is stopped by the watchdog and not left running" <| fun _ ->
       let release = new ManualResetEventSlim(false)
       let inside = new ManualResetEventSlim(false)
       let getter = methodOf typeof<Spinners> "Getter"
@@ -98,7 +98,7 @@ let guardPatcherTests =
         Guard.Retire cell
         lease.Release()
 
-    testCase "WHY — the same loop without guards is not stopped by the watchdog: the guard is what did it" <| fun _ ->
+    testCase "WHY - the same loop without guards is not stopped by the watchdog: the guard is what did it" <| fun _ ->
       let release = new ManualResetEventSlim(false)
       let inside = new ManualResetEventSlim(false)
       let cell = GuardCell()
@@ -116,7 +116,7 @@ let guardPatcherTests =
         thread.Join TestTimeouts.patienceBrief |> Expect.isTrue "it ends once released"
         Guard.Retire cell
 
-    testCase "WHY — a getter with nothing to guard is not guarded, and says why" <| fun _ ->
+    testCase "WHY - a getter with nothing to guard is not guarded, and says why" <| fun _ ->
       let nothing = GuardReachability.worldFor [] GuardPatcher.calleesOf
       let lease = GuardPatcher.prepareWith nothing WalkBudget.product (methodOf typeof<Chain> "Top")
       match lease.Coverage with
@@ -124,7 +124,7 @@ let guardPatcherTests =
       | other -> failtestf "expected the getter to be skipped as not ours, got %A" other
       lease.Release()
 
-    testCase "WHY — a property's getter is guarded through the property, on the value that is read" <| fun _ ->
+    testCase "WHY - a property's getter is guarded through the property, on the value that is read" <| fun _ ->
       let lease = GuardPatcher.prepare (typeof<Square>.GetProperty "Side") (box (Square 3))
       try
         match lease.Coverage with

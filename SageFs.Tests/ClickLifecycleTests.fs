@@ -28,36 +28,36 @@ let private fold (list: ClickEvent list) : (ClickPhase * GuardDuty) list =
 let clickLifecycleTests =
   testList "click lifecycle (who lets the guards go)" [
 
-    testCase "WHY — the thread ending first leaves the release to the click, which sees it when it looks" <| fun _ ->
+    testCase "WHY - the thread ending first leaves the release to the click, which sees it when it looks" <| fun _ ->
       ClickLifecycle.step ClickPhase.Running ClickEvent.ThreadEnded
       |> Expect.equal "ended, the click releases" (ClickPhase.Ended, GuardDuty.LeaveToTheClick)
 
-    testCase "WHY — the click giving up first leaves the guards on for the thread, which may still run guarded code" <| fun _ ->
+    testCase "WHY - the click giving up first leaves the guards on for the thread, which may still run guarded code" <| fun _ ->
       ClickLifecycle.step ClickPhase.Running ClickEvent.GaveUp
       |> Expect.equal "abandoned, the thread releases" (ClickPhase.Abandoned, GuardDuty.LeaveToTheThread)
 
-    testCase "WHY — an abandoned thread that ends releases the guards itself, as the last to use them" <| fun _ ->
+    testCase "WHY - an abandoned thread that ends releases the guards itself, as the last to use them" <| fun _ ->
       ClickLifecycle.step ClickPhase.Abandoned ClickEvent.ThreadEnded
       |> Expect.equal "ended, released now" (ClickPhase.Ended, GuardDuty.ReleaseNow)
 
-    testCase "WHY — a thread that ended in the instant before the click's verdict was never abandoned: the click releases now" <| fun _ ->
+    testCase "WHY - a thread that ended in the instant before the click's verdict was never abandoned: the click releases now" <| fun _ ->
       ClickLifecycle.step ClickPhase.Ended ClickEvent.GaveUp
       |> Expect.equal "ended, released now" (ClickPhase.Ended, GuardDuty.ReleaseNow)
 
-    testCase "WHY — an event that cannot follow the one before changes nothing" <| fun _ ->
+    testCase "WHY - an event that cannot follow the one before changes nothing" <| fun _ ->
       ClickLifecycle.step ClickPhase.Ended ClickEvent.ThreadEnded
       |> Expect.equal "still ended" (ClickPhase.Ended, GuardDuty.NothingToDo)
       ClickLifecycle.step ClickPhase.Abandoned ClickEvent.GaveUp
       |> Expect.equal "still abandoned" (ClickPhase.Abandoned, GuardDuty.NothingToDo)
 
-    testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 300 } "WHY — whatever order the events come in, the guards are told to be released now at most once, and a click never goes back to running"
+    testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 300 } "WHY - whatever order the events come in, the guards are told to be released now at most once, and a click never goes back to running"
       (Prop.forAll events (fun list ->
         let steps = fold list
         let releases = steps |> List.filter (fun (_, duty) -> duty = GuardDuty.ReleaseNow) |> List.length
         let neverBackToRunning = steps |> List.forall (fun (phase, _) -> phase <> ClickPhase.Running)
         releases <= 1 && neverBackToRunning))
 
-    testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 300 } "WHY — once the thread has ended somebody owes the release, and before that nobody does"
+    testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 300 } "WHY - once the thread has ended somebody owes the release, and before that nobody does"
       (Prop.forAll events (fun list ->
         let steps = fold list
         let ended = steps |> List.exists (fun (phase, _) -> phase = ClickPhase.Ended)

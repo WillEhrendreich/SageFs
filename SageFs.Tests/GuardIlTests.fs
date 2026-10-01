@@ -59,14 +59,14 @@ let private plain : IlInstruction =
 let guardIlTests =
   testList "guard transpiler (pure IL rewrite)" [
 
-    testPropertyWithConfig cfg "WHY — the guarded program computes what the plain program computes, for any input, when nothing asks it to stop"
+    testPropertyWithConfig cfg "WHY - the guarded program computes what the plain program computes, for any input, when nothing asks it to stop"
       (Prop.forAll (programs MaySwallow) (fun shapes ->
         Prop.forAll (Arb.fromGen (Gen.choose (-1000, 1000))) (fun x ->
           let guarded, _ = woven shapes
           let expected = run shapes x
           (toDelegate (compile shapes)).Invoke x = expected && (toDelegate guarded).Invoke x = expected)))
 
-    testPropertyWithConfig cfg "WHY — one entry guard comes first and every jump back has a check before it, counted two ways"
+    testPropertyWithConfig cfg "WHY - one entry guard comes first and every jump back has a check before it, counted two ways"
       (Prop.forAll (programs MaySwallow) (fun shapes ->
         let original = compile shapes
         let guarded, report = woven shapes
@@ -79,7 +79,7 @@ let guardIlTests =
         && report = { EntryGuards = 1; BackEdgeGuards = backEdges }
         && List.length guarded = List.length original + 1 + backEdges))
 
-    testPropertyWithConfig cfg "WHY — nothing of the original is dropped or reordered, only guard calls are added"
+    testPropertyWithConfig cfg "WHY - nothing of the original is dropped or reordered, only guard calls are added"
       (Prop.forAll (programs MaySwallow) (fun shapes ->
         let original = compile shapes
         let guarded, _ = woven shapes
@@ -87,7 +87,7 @@ let guardIlTests =
           instructions |> List.filter (isGuard >> not) |> List.map (fun i -> i.Opcode.Name, i.Operand, i.Target)
         strip guarded = strip original))
 
-    testPropertyWithConfig cfg "WHY — every label and every region mark of the original is still there exactly once"
+    testPropertyWithConfig cfg "WHY - every label and every region mark of the original is still there exactly once"
       (Prop.forAll (programs MaySwallow) (fun shapes ->
         let original = compile shapes
         let guarded, _ = woven shapes
@@ -96,14 +96,14 @@ let guardIlTests =
         let closes (instructions: IlInstruction list) = instructions |> List.collect (fun i -> i.Closes) |> List.length
         marks guarded = marks original && opens guarded = opens original && closes guarded = closes original))
 
-    testPropertyWithConfig cfg "WHY — a thread that was asked to stop is stopped at the entry guard, whatever the program is"
+    testPropertyWithConfig cfg "WHY - a thread that was asked to stop is stopped at the entry guard, whatever the program is"
       (Prop.forAll (programs MaySwallow) (fun shapes ->
         let guarded, _ = woven shapes
         match runStopped BeforeItRuns (toDelegate guarded) 7 with
         | Result.Error (:? GuardAbortedException) -> true
         | _ -> false))
 
-    testPropertyWithConfig cfg "WHY — a stop that arrives mid-run ends the first loop after it, and a program with no loop after it is not disturbed"
+    testPropertyWithConfig cfg "WHY - a stop that arrives mid-run ends the first loop after it, and a program with no loop after it is not disturbed"
       (Prop.forAll (programs NeverSwallows) (fun shapes ->
         let guarded, _ = woven (StopHere :: shapes)
         match runStopped WhenTheProgramSays (toDelegate guarded) 7, loopIterations shapes with
@@ -111,7 +111,7 @@ let guardIlTests =
         | Result.Error (:? GuardAbortedException), n -> n > 0
         | _ -> false))
 
-    testPropertyWithConfig cfg "WHY — even with a catch-all in the program, the only thing a stop ever raises is the guard's own exception"
+    testPropertyWithConfig cfg "WHY - even with a catch-all in the program, the only thing a stop ever raises is the guard's own exception"
       (Prop.forAll (programs MaySwallow) (fun shapes ->
         let guarded, _ = woven (StopHere :: shapes)
         match runStopped WhenTheProgramSays (toDelegate guarded) 7 with
@@ -119,20 +119,20 @@ let guardIlTests =
         | Result.Error (:? GuardAbortedException) -> true
         | Result.Error _ -> false))
 
-    testCase "WHY — a catch-all inside a loop cannot swallow the stop: the loop's own check, outside the try, throws it again" <| fun _ ->
+    testCase "WHY - a catch-all inside a loop cannot swallow the stop: the loop's own check, outside the try, throws it again" <| fun _ ->
       let shapes = [ StopHere; PreLoop (5, [ Swallow [ PreLoop (5, [ Add 1 ]) ] ]) ]
       let guarded, _ = woven shapes
       match runStopped WhenTheProgramSays (toDelegate guarded) 0 with
       | Result.Error (:? GuardAbortedException) -> ()
       | other -> failtestf "expected the stop to get through the catch-all, got %A" other
 
-    testCase "WHY — the same program, unguarded, runs straight through the catch-all: the guard is what stopped it" <| fun _ ->
+    testCase "WHY - the same program, unguarded, runs straight through the catch-all: the guard is what stopped it" <| fun _ ->
       let shapes = [ StopHere; PreLoop (5, [ Swallow [ PreLoop (5, [ Add 1 ]) ] ]) ]
       match runStopped WhenTheProgramSays (toDelegate (compile shapes)) 0 with
       | Result.Ok value -> value |> Expect.equal "all 25 additions ran" 25
       | other -> failtestf "expected the unguarded program to finish, got %A" other
 
-    testCase "WHY — a try that opens on the first instruction still opens after the entry guard, so the guard is outside it" <| fun _ ->
+    testCase "WHY - a try that opens on the first instruction still opens after the entry guard, so the guard is outside it" <| fun _ ->
       let region = IlRegionMark (box TryBegin)
       let body = [ { plain with Opens = [ region ] }; { plain with Opcode = OpCodes.Ret } ]
       let guarded, _ = GuardIl.weave entryGuard backEdgeGuard body
@@ -140,7 +140,7 @@ let guardIlTests =
       guarded.[0].Marks |> Expect.isEmpty "the entry guard takes no label, so a jump to the top does not pay for it again"
       guarded.[1].Opens |> Expect.equal "the first real instruction keeps its region" [ region ]
 
-    testCase "WHY — a catch handler that opens on a jump back opens on the guard, and a region that closes with the jump still does" <| fun _ ->
+    testCase "WHY - a catch handler that opens on a jump back opens on the guard, and a region that closes with the jump still does" <| fun _ ->
       let top = IlLabel 1
       let opens = IlRegionMark (box CatchBegin)
       let closes = IlRegionMark (box TryEnd)
@@ -153,7 +153,7 @@ let guardIlTests =
       guarded.[3].Opens |> Expect.isEmpty "and not on the jump"
       guarded.[3].Closes |> Expect.equal "the jump still closes the region" [ closes ]
 
-    testCase "WHY — a jump back to the very top of the method lands on the back-edge guard, not on the entry guard" <| fun _ ->
+    testCase "WHY - a jump back to the very top of the method lands on the back-edge guard, not on the entry guard" <| fun _ ->
       let top = IlLabel 1
       let body =
         [ { plain with Marks = [ top ]; Opcode = OpCodes.Nop }
@@ -165,7 +165,7 @@ let guardIlTests =
       guarded.[1].Marks |> Expect.equal "the original first instruction keeps the label" [ top ]
       isCallTo backEdgeGuard guarded.[2] |> Expect.isTrue "the check sits right before the jump"
 
-    testCase "WHY — a jump forward gets no check, and a switch that jumps back gets one" <| fun _ ->
+    testCase "WHY - a jump forward gets no check, and a switch that jumps back gets one" <| fun _ ->
       let ahead = IlLabel 1
       let top = IlLabel 2
       let forward =
@@ -178,6 +178,6 @@ let guardIlTests =
           { plain with Marks = [ ahead ]; Opcode = OpCodes.Ret } ]
       snd (GuardIl.weave entryGuard backEdgeGuard backward) |> Expect.equal "the switch is a way back" { EntryGuards = 1; BackEdgeGuards = 1 }
 
-    testCase "WHY — an empty body gets no guard at all" <| fun _ ->
+    testCase "WHY - an empty body gets no guard at all" <| fun _ ->
       GuardIl.weave entryGuard backEdgeGuard [] |> Expect.equal "nothing to guard" ([], { EntryGuards = 0; BackEdgeGuards = 0 })
   ]

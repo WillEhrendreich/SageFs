@@ -84,45 +84,45 @@ let private evaluate (guarding: Guarding) (name: string) (target: Probe) : Membe
 let memberEvaluationGuardTests =
   testList "a click and its guards" [
 
-    testCase "WHY — a getter that returns comes back with what was guarded, and the guards are let go once" <| fun _ ->
+    testCase "WHY - a getter that returns comes back with what was guarded, and the guards are let go once" <| fun _ ->
       let releases = Releases()
       let evaluated = evaluate (preparing releases) "Quick" (probe ())
       evaluated.Outcome |> Expect.equal "the value" (Ok (box 5))
       evaluated.Guards |> Expect.equal "what protected it, and no guard fired" { Coverage = coverage; Trip = GuardTrip.NotTripped }
       releases.Count |> Expect.equal "released once" 1
 
-    testCase "WHY — the guards are let go when the getter threw" <| fun _ ->
+    testCase "WHY - the guards are let go when the getter threw" <| fun _ ->
       let releases = Releases()
       let evaluated = evaluate (preparing releases) "Boom" (probe ())
       evaluated.Outcome |> Expect.equal "the getter's own message" (Error (MemberFailure.MemberThrew "boom"))
       releases.Count |> Expect.equal "released once" 1
 
-    testCase "WHY — with guards switched off the click runs as before and says it was not guarded" <| fun _ ->
+    testCase "WHY - with guards switched off the click runs as before and says it was not guarded" <| fun _ ->
       let evaluated = evaluate GuardsOff "Quick" (probe ())
       evaluated.Outcome |> Expect.equal "the value" (Ok (box 5))
       evaluated.Guards |> Expect.equal "the row says why" { Coverage = GuardCoverage.NotGuarded NotGuardedReason.SwitchedOff; Trip = GuardTrip.NotTripped }
 
-    testCase "WHY — a preparer that throws leaves the getter running, and the row says the guards could not be put on" <| fun _ ->
+    testCase "WHY - a preparer that throws leaves the getter running, and the row says the guards could not be put on" <| fun _ ->
       let evaluated = evaluate (GuardsOn (fun _ _ -> failwith "no patching here")) "Quick" (probe ())
       evaluated.Outcome |> Expect.equal "the getter still ran" (Ok (box 5))
       match evaluated.Guards.Coverage with
       | GuardCoverage.NotGuarded (NotGuardedReason.PreparationFailed detail) -> detail |> Expect.stringContains "with the reason" "no patching here"
       | other -> failtestf "expected a preparation failure, got %A" other
 
-    testCase "WHY — a loop with a check is stopped at the deadline, the click says it timed out, and the stop is on the row" <| fun _ ->
+    testCase "WHY - a loop with a check is stopped at the deadline, the click says it timed out, and the stop is on the row" <| fun _ ->
       let releases = Releases()
       let evaluated = evaluate (preparing releases) "CheckedSpin" (probe ())
       evaluated.Outcome |> Expect.equal "timed out" (Error MemberFailure.MemberTimedOut)
       evaluated.Guards.Trip |> Expect.equal "a loop guard stopped it" GuardTrip.LoopStopped
       releases.Count |> Expect.equal "the guards are let go, the thread being gone" 1
 
-    testCase "WHY — a catch-all in the getter does not keep it running past the deadline" <| fun _ ->
+    testCase "WHY - a catch-all in the getter does not keep it running past the deadline" <| fun _ ->
       let releases = Releases()
       let evaluated = evaluate (preparing releases) "CheckedSpinSwallowed" (probe ())
       evaluated.Outcome |> Expect.equal "timed out" (Error MemberFailure.MemberTimedOut)
       evaluated.Guards.Trip |> Expect.equal "stopped" GuardTrip.LoopStopped
 
-    testCase "WHY — a getter that ran the stack out comes back as a throw that says so, with the stack guard on the row" <| fun _ ->
+    testCase "WHY - a getter that ran the stack out comes back as a throw that says so, with the stack guard on the row" <| fun _ ->
       let releases = Releases()
       let evaluated = evaluate (preparing releases) "Overflows" (probe ())
       match evaluated.Outcome with
@@ -131,14 +131,14 @@ let memberEvaluationGuardTests =
       evaluated.Guards.Trip |> Expect.equal "the stack guard" GuardTrip.StackLimitReached
       releases.Count |> Expect.equal "released once" 1
 
-    testCase "WHY — a wait is freed by Interrupt, no guard is claimed, and the guards are let go" <| fun _ ->
+    testCase "WHY - a wait is freed by Interrupt, no guard is claimed, and the guards are let go" <| fun _ ->
       let releases = Releases()
       let evaluated = evaluate (preparing releases) "Waits" (probe ())
       evaluated.Outcome |> Expect.equal "timed out" (Error MemberFailure.MemberTimedOut)
       evaluated.Guards.Trip |> Expect.equal "nothing tripped: the wait was freed" GuardTrip.NotTripped
       releases.Count |> Expect.equal "released once" 1
 
-    testCase "WHY — a getter nothing checks is abandoned, and its guards stay on until its thread ends, then come off once" <| fun _ ->
+    testCase "WHY - a getter nothing checks is abandoned, and its guards stay on until its thread ends, then come off once" <| fun _ ->
       let releases = Releases()
       let release = new ManualResetEventSlim(false)
       let target = Probe(release, new ManualResetEventSlim(false))
@@ -153,7 +153,7 @@ let memberEvaluationGuardTests =
       releases.Count |> Expect.equal "once" 1
 
     testSequenced (
-      testCase "WHY — a click leaves no stop pending behind it, whether the loop was stopped, the wait freed or the getter returned" (fun _ ->
+      testCase "WHY - a click leaves no stop pending behind it, whether the loop was stopped, the wait freed or the getter returned" (fun _ ->
         let before = Guard.Pending
         for name in [ "Quick"; "CheckedSpin"; "Waits"; "Overflows" ] do
           evaluate (preparing (Releases())) name (probe ()) |> ignore
@@ -166,7 +166,7 @@ let memberEvaluationGuardTests =
 let realGuardsOnAbandonedThreadTests =
   testList "real guards on a click whose thread is abandoned" [
 
-    testCase "WHY — the guards stay on while the abandoned thread runs, it is stopped the moment it enters guarded code, and they come off when it ends" <| fun _ ->
+    testCase "WHY - the guards stay on while the abandoned thread runs, it is stopped the moment it enters guarded code, and they come off when it ends" <| fun _ ->
       let release = new ManualResetEventSlim(false)
       let inside = new ManualResetEventSlim(false)
       let target = SageFs.Tests.GuardFixtures.Lingerer(release, inside)

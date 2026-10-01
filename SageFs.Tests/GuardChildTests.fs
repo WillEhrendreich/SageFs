@@ -111,7 +111,7 @@ let private survived (child: ChildResult) =
 let guardChildTests =
   testList "guards against what ends a process (child processes)" [
 
-    testTask "WHY — a getter that returns is guarded in several methods and unaffected" {
+    testTask "WHY - a getter that returns is guarded in several methods and unaffected" {
       let! child = runChild Returns
       survived child
       field "result" child |> Expect.equal "its value" "ok:42"
@@ -120,7 +120,7 @@ let guardChildTests =
       field "pending" child |> Expect.equal "no stop left pending" "0"
     }
 
-    testTask "WHY — a getter that recurses forever throws instead of ending the process, and says the stack ran out" {
+    testTask "WHY - a getter that recurses forever throws instead of ending the process, and says the stack ran out" {
       let! child = runChild RecursesForever
       survived child
       field "result" child |> Expect.stringStarts "a throw" "threw:"
@@ -129,14 +129,14 @@ let guardChildTests =
       field "pending" child |> Expect.equal "no stop left pending" "0"
     }
 
-    testTask "WHY — the same recursion with guards off ends the process: the control that shows the guard did it" {
+    testTask "WHY - the same recursion with guards off ends the process: the control that shows the guard did it" {
       let! child = runChild RecursesForeverUnguarded
       child.Fields |> Expect.isEmpty "the child never got to say anything"
       child.ExitCode |> Expect.notEqual "the process was killed" 0
       child.Stderr |> Expect.stringContains "by a stack overflow" "Stack overflow"
     }
 
-    testTask "WHY — a getter that spins forever is stopped at the deadline, its thread ends, and nothing is left pending" {
+    testTask "WHY - a getter that spins forever is stopped at the deadline, its thread ends, and nothing is left pending" {
       let! child = runChild SpinsForever
       survived child
       field "result" child |> Expect.equal "timed out" "timed-out"
@@ -144,7 +144,7 @@ let guardChildTests =
       field "pending" child |> Expect.equal "the thread ended, so its stop was let go" "0"
     }
 
-    testTask "WHY — the same spin with guards off is only given up on: its thread keeps running and its stop stays pending" {
+    testTask "WHY - the same spin with guards off is only given up on: its thread keeps running and its stop stays pending" {
       let! child = runChild SpinsForeverUnguarded
       survived child
       field "result" child |> Expect.equal "timed out" "timed-out"
@@ -153,7 +153,7 @@ let guardChildTests =
       field "pending" child |> Expect.equal "the abandoned thread still has a stop pending" "1"
     }
 
-    testTask "WHY — a spin inside a catch-all is still stopped, because the stop is thrown again at the next check" {
+    testTask "WHY - a spin inside a catch-all is still stopped, because the stop is thrown again at the next check" {
       let! child = runChild SpinsInsideACatchAll
       survived child
       field "result" child |> Expect.equal "timed out" "timed-out"
@@ -161,14 +161,14 @@ let guardChildTests =
       field "pending" child |> Expect.equal "the thread ended" "0"
     }
 
-    testTask "WHY — a spin in a helper the getter calls is stopped, because the helper was reached and guarded too" {
+    testTask "WHY - a spin in a helper the getter calls is stopped, because the helper was reached and guarded too" {
       let! child = runChild SpinsInAHelper
       survived child
       field "trip" child |> Expect.equal "stopped" "loop"
       (int (field "guarded" child), 2) |> Expect.isGreaterThanOrEqual "the getter and the helper"
     }
 
-    testTask "WHY — a blocked wait is freed by Interrupt, and no guard is claimed for it" {
+    testTask "WHY - a blocked wait is freed by Interrupt, and no guard is claimed for it" {
       let! child = runChild BlocksOnAWait
       survived child
       field "result" child |> Expect.equal "timed out" "timed-out"
@@ -176,7 +176,7 @@ let guardChildTests =
       field "pending" child |> Expect.equal "the thread ended through the interrupt" "0"
     }
 
-    testTask "WHY — a spin inside an async state machine is the stated limit: only the deadline gives up on it, the thread is abandoned, the process lives" {
+    testTask "WHY - a spin inside an async state machine is the stated limit: only the deadline gives up on it, the thread is abandoned, the process lives" {
       let! child = runChild SpinsInAStateMachine
       survived child
       field "result" child |> Expect.equal "timed out" "timed-out"

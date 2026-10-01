@@ -26,15 +26,15 @@ let private guarded (methods: string list) (skips: SkippedMethod list) : GuardCo
 let guardCoverageTests =
   testList "guard coverage (what the row says)" [
 
-    testCase "WHY — a click guarded everywhere says how many methods had their stack and loops checked" <| fun _ ->
+    testCase "WHY - a click guarded everywhere says how many methods had their stack and loops checked" <| fun _ ->
       GuardCoverage.describe (guarded [ "A.get_Total"; "A.helper" ] [])
       |> Expect.equal "plural" "guarded: stack and loops checked in 2 methods"
 
-    testCase "WHY — one method is not '1 methods'" <| fun _ ->
+    testCase "WHY - one method is not '1 methods'" <| fun _ ->
       GuardCoverage.describe (guarded [ "A.get_Total" ] [])
       |> Expect.equal "singular" "guarded: stack and loops checked in 1 method"
 
-    testCase "WHY — what was reachable and not guarded is said beside what was, grouped by kind, biggest first" <| fun _ ->
+    testCase "WHY - what was reachable and not guarded is said beside what was, grouped by kind, biggest first" <| fun _ ->
       let skips =
         [ skipped "Enumerable.Select" (SkipReason.NotOurCode "System.Linq")
           skipped "Enumerable.Where" (SkipReason.NotOurCode "System.Linq")
@@ -46,7 +46,7 @@ let guardCoverageTests =
       line |> Expect.stringContains "names the async machine" "1 x an async or task state machine"
       (line.IndexOf "3 x", line.IndexOf "1 x") |> Expect.isLessThan "the bigger group comes first"
 
-    testCase "WHY — a click with no guards says it is not guarded and why, for every reason" <| fun _ ->
+    testCase "WHY - a click with no guards says it is not guarded and why, for every reason" <| fun _ ->
       let reasons =
         [ NotGuardedReason.SwitchedOff
           NotGuardedReason.NothingRan
@@ -59,21 +59,21 @@ let guardCoverageTests =
         (String.length "not guarded: ", line.Length) |> Expect.isLessThan "carries its reason"
       lines |> List.distinct |> List.length |> Expect.equal "no two reasons read the same" (List.length lines)
 
-    testCase "WHY — every skip reason has its own words" <| fun _ ->
+    testCase "WHY - every skip reason has its own words" <| fun _ ->
       let texts = allSkipReasons |> List.map SkipReason.describe
       texts |> List.distinct |> List.length |> Expect.equal "all different" (List.length texts)
       texts |> List.iter (fun text -> text |> Expect.isNotEmpty "and none is empty")
 
-    testCase "WHY — the detail a reason carries is on the row, so a refused patch says what the patcher said" <| fun _ ->
+    testCase "WHY - the detail a reason carries is on the row, so a refused patch says what the patcher said" <| fun _ ->
       SkipReason.describe (SkipReason.PatchRefused "method has no body")
       |> Expect.stringContains "the patcher's words" "method has no body"
 
-    testCase "WHY — a guard that fired is said, and one that did not is silent" <| fun _ ->
+    testCase "WHY - a guard that fired is said, and one that did not is silent" <| fun _ ->
       GuardCoverage.describeTrip GuardTrip.NotTripped |> Expect.equal "silent" ""
       GuardCoverage.describeTrip GuardTrip.LoopStopped |> Expect.stringContains "loop" "looping"
       GuardCoverage.describeTrip GuardTrip.StackLimitReached |> Expect.stringContains "stack" "stack"
 
-    testCase "WHY — the guarded count is the methods that got guards, and zero when nothing was guarded" <| fun _ ->
+    testCase "WHY - the guarded count is the methods that got guards, and zero when nothing was guarded" <| fun _ ->
       GuardCoverage.guardedCount (guarded [ "a"; "b"; "c" ] []) |> Expect.equal "three" 3
       GuardCoverage.guardedCount (GuardCoverage.NotGuarded NotGuardedReason.SwitchedOff) |> Expect.equal "none" 0
   ]
