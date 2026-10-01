@@ -66,15 +66,15 @@ module LiveCheckRelay =
     let gate = obj ()
     let mutable state : PumpState<'req> = LiveCheckPump.initial
 
-    /// Fold one event, then do what the fold asked, outside the lock.
+    /// Fold one event, then do what the fold asked, under the same lock, so the order the fold decided is the order
+    /// requests are reported in. Everything an effect does is short and never waits: a call or a wait is started and
+    /// left to raise its own event, and reporting only queues a message for the Elm loop.
     member private this.Raise(event: PumpEvent<'req, 'reply>) : unit =
-      let effects =
-        lock gate (fun () ->
-          let next, effects = LiveCheckPump.step supersedes state event
-          state <- next
-          effects)
-      for effect in effects do
-        this.Interpret effect
+      lock gate (fun () ->
+        let next, effects = LiveCheckPump.step supersedes state event
+        state <- next
+        for effect in effects do
+          this.Interpret effect)
 
     /// Run a continuation that raises events. One that throws must not leave a request in flight with nobody to end
     /// it, so it ends as an answer from a worker that is gone, which the pump turns into an unanswered request.
