@@ -52,6 +52,9 @@ type DeltaPayload =
     Il: byte array
     Updated: MethodId list
     AddedMethods: MethodId list
+    /// The MethodDef tokens the delta writes, in the baseline's numbering: the updated methods, then the added
+    /// ones. The apply side resolves them to the types it tells the metadata-update handlers about.
+    MethodTokens: int list
     Requires: RequiredFeature list }
 
 /// An exception the writer raises inside one prepare and turns into a refusal at the edge.
@@ -778,6 +781,7 @@ type DeltaChain private (state: ChainState) =
         Il = ilStream.ToArray()
         Updated = updates |> List.map (fun (v, _) -> v.Method)
         AddedMethods = addedMethods |> List.map (fun v -> v.Method)
+        MethodTokens = (updates |> List.map (fun (_, row) -> row.Token)) @ (addedWritten |> List.map (fun (row, _, _, _) -> row.Token))
         Requires = requires }
     PreparedDelta(
       payload,

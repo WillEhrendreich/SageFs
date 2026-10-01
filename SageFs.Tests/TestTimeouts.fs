@@ -28,6 +28,9 @@ module TestTimeouts =
   /// request through a started web host, a daemon failing a bad bind). A cold start on a loaded
   /// runner takes seconds, so this is generous.
   let patience = secs 20.
+  /// Ceiling on a child process that reads a 4 MB assembly twice, diffs and writes a delta for it five times, and
+  /// has the runtime apply it (DeltaChild `bench`). The first pass has the JIT in it and a loaded runner is slower.
+  let bigAssemblyDelta = secs 120.
   /// Ceiling on a wait that completes in the test's own process (a task settling, a file watcher
   /// reporting, a long poll answering) but goes through the thread pool and can be starved.
   let patienceInProcess = secs 10.

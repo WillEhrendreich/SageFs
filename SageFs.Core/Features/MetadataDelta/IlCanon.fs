@@ -340,3 +340,48 @@ module IlCanon =
                 (match body.LocalVariablesInitialized with
                  | true -> LocalsInit.ZeroInitialised
                  | false -> LocalsInit.Uninitialised) }
+
+  /// True only when two bodies are certainly the same, and cheaply: the IL bytes are identical, every token in them
+  /// names the same thing in each image, the locals are the same, and so are the exception regions. False means
+  /// "look closer", never "different": a body a rewriter laid out differently is the same code, which
+  /// `canonicalize` is for. Most bodies of two builds of one project are byte-identical, so this is what keeps a
+  /// second save from reading every method of a large assembly into instructions.
+  let sameWithoutLooking (previous: PeImage) (before: MethodBodyBlock) (next: PeImage) (after: MethodBodyBlock) : bool =
+    let bytes = before.GetILBytes()
+    let shape () =
+      System.MemoryExtensions.SequenceEqual(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte>(after.GetILBytes()))
+      && before.LocalVariablesInitialized = after.LocalVariablesInitialized
+      && before.ExceptionRegions.Length = after.ExceptionRegions.Length
+      && (before.LocalSignature.IsNil = after.LocalSignature.IsNil)
+    let locals () =
+      before.LocalSignature.IsNil
+      || previous.LocalSignature(previous.Reader.GetStandaloneSignature(before.LocalSignature).Signature)
+         = next.LocalSignature(next.Reader.GetStandaloneSignature(after.LocalSignature).Signature)
+    let regions () =
+      Seq.forall2
+        (fun (a: ExceptionRegion) (b: ExceptionRegion) ->
+          a.Kind = b.Kind
+          && a.TryOffset = b.TryOffset
+          && a.TryLength = b.TryLength
+          && a.HandlerOffset = b.HandlerOffset
+          && a.HandlerLength = b.HandlerLength
+          && a.FilterOffset = b.FilterOffset
+          && (a.CatchType.IsNil = b.CatchType.IsNil)
+          && (a.CatchType.IsNil || previous.Describe a.CatchType = next.Describe b.CatchType))
+        before.ExceptionRegions
+        after.ExceptionRegions
+    let tokens () =
+      match scan bytes with
+      | Result.Error _ -> false
+      | Result.Ok instructions ->
+        instructions
+        |> Array.forall (fun instruction ->
+          match instruction.Operand with
+          | RawOperand.Token (TokenKind.Entity, token) ->
+            entityTables.Contains(token >>> 24)
+            && previous.Describe(MetadataTokens.EntityHandle token) = next.Describe(MetadataTokens.EntityHandle token)
+          | RawOperand.Token (TokenKind.UserString, token) ->
+            let handle = MetadataTokens.UserStringHandle(token &&& 0xFFFFFF)
+            previous.Reader.GetUserString handle = next.Reader.GetUserString handle
+          | _ -> true)
+    shape () && locals () && regions () && tokens ()

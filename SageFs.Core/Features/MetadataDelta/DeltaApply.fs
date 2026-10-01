@@ -76,6 +76,19 @@ type ApplyOutcome =
   | Rejected of reason: string
 
 [<RequireQualifiedAccess>]
+type HandlerOutcome =
+  | Ran
+  | Threw of message: string
+
+/// One method of one `MetadataUpdateHandler`, run after an update.
+type HandlerRun =
+  { Handler: string
+    /// `ClearCache` or `UpdateApplication`, the two the runtime's contract names.
+    Step: string
+    Milliseconds: float
+    Outcome: HandlerOutcome }
+
+[<RequireQualifiedAccess>]
 module DeltaApply =
 
   let private modifiableVariable = "DOTNET_MODIFIABLE_ASSEMBLIES"
@@ -160,8 +173,30 @@ module DeltaApply =
   /// runtime's own (it drops the member lists reflection cached, so a method the delta added shows up in
   /// `GetMethods`) and the app's (a framework that cached a route table or a reflection result). This is the
   /// contract `dotnet watch` keeps; an update that skips it leaves caches that still describe the old code.
-  /// Returns what failed, by handler.
-  let private runUpdateHandlers () : string list =
+  /// The types a delta touched, for the handlers: each method the delta writes, resolved in the module, and the
+  /// type it sits in. A handler told "these types" clears what it cached for those; told nothing (`null`) it clears
+  /// everything, which on a large process is most of half a second (measured). A token that does not resolve
+  /// means the answer is not known, so the handlers are told nothing.
+  let updatedTypes (assembly: Assembly) (payload: DeltaPayload) : Type array =
+    let resolved =
+      payload.MethodTokens
+      |> List.map (fun token ->
+        try
+          match assembly.ManifestModule.ResolveMethod token with
+          | null -> ValueNone
+          | m -> ValueSome m.DeclaringType
+        with _ -> ValueNone)
+    match resolved |> List.exists (fun r -> r.IsNone) with
+    | true -> [||]
+    | false -> resolved |> List.choose (fun r -> match r with | ValueSome (NonNull t) -> Some t | _ -> None) |> List.distinct |> List.toArray
+
+  /// Returns every handler method that ran, with how long it took and whether it threw. `types` is what the
+  /// delta touched (empty means unknown).
+  let runUpdateHandlers (types: Type array) : HandlerRun list =
+    let argument : obj =
+      match types with
+      | [||] -> null
+      | _ -> box types
     let flags = BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic
     let handlers =
       AppDomain.CurrentDomain.GetAssemblies()
@@ -173,12 +208,25 @@ module DeltaApply =
         with _ -> [||])
       |> Array.distinct
     [ for handler in handlers do
-        for name in [ "ClearCache"; "UpdateApplication" ] do
-          match handler.GetMethod(name, flags, null, [| typeof<Type[]> |], null) with
+        for step in [ "ClearCache"; "UpdateApplication" ] do
+          match handler.GetMethod(step, flags, null, [| typeof<Type[]> |], null) with
           | null -> ()
           | method ->
-            try method.Invoke(null, [| null |]) |> ignore
-            with e -> yield sprintf "%s.%s: %s" handler.FullName name (match e.InnerException with | null -> e.Message | inner -> inner.Message) ]
+            let watch = Stopwatch.StartNew()
+            let outcome =
+              try
+                method.Invoke(null, [| argument |]) |> ignore
+                HandlerOutcome.Ran
+              with e -> HandlerOutcome.Threw (match e.InnerException with | null -> e.Message | inner -> inner.Message)
+            yield { Handler = handler.FullName; Step = step; Milliseconds = watch.Elapsed.TotalMilliseconds; Outcome = outcome } ]
+
+  /// What went wrong in a run of handlers, one line each.
+  let handlerFailures (runs: HandlerRun list) : string list =
+    runs
+    |> List.choose (fun run ->
+      match run.Outcome with
+      | HandlerOutcome.Ran -> None
+      | HandlerOutcome.Threw message -> Some (sprintf "%s.%s: %s" run.Handler run.Step message))
 
   /// Hand the delta to the runtime. Irreversible when it answers `Applied`.
   let apply (assembly: Assembly) (payload: DeltaPayload) : ApplyOutcome =
@@ -187,7 +235,7 @@ module DeltaApply =
     | false ->
       try
         MetadataUpdater.ApplyUpdate(assembly, ReadOnlySpan<byte>(payload.Metadata), ReadOnlySpan<byte>(payload.Il), ReadOnlySpan<byte>.Empty)
-        match runUpdateHandlers () with
+        match handlerFailures (runUpdateHandlers (updatedTypes assembly payload)) with
         | [] -> ApplyOutcome.Applied
         | failures -> ApplyOutcome.AppliedHandlersFailed failures
       with

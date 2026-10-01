@@ -14,6 +14,9 @@
 ///   check <meta> <il>        print what is known before an apply, without applying
 ///   capability               print what the process can do for a delta
 ///   time <meta> <il>         apply, and print how long the runtime took in milliseconds
+///   bench <a> <b> <n>        read both builds, diff and write the delta, n times from nothing, printing each
+///   second <b>               the next save after the last bench: commit its delta, prepare one for build b
+///   applylast                apply the delta the last bench wrote, and print how long the runtime took
 ///
 /// Everything it prints starts with `DELTACHILD `, one fact to a line.
 module SageFs.Tests.DeltaChild
@@ -33,13 +36,23 @@ let private prefix = "DELTACHILD "
 let private say (text: string) = printfn "%s%s" prefix text
 
 /// What the delta was, as far as applying it needs to know.
-let private payloadOf (meta: byte array) (il: byte array) (requires: RequiredFeature list) : DeltaPayload =
+let private payloadOf (meta: byte array) (il: byte array) (tokens: int list) (requires: RequiredFeature list) : DeltaPayload =
   { Generation = 0
     Metadata = meta
     Il = il
     Updated = []
     AddedMethods = []
+    MethodTokens = tokens
     Requires = requires }
+
+/// The method tokens a delta wrote, from the file the parent put beside it (empty when there is none).
+let private tokensIn (file: string) : int list =
+  match File.Exists file with
+  | false -> []
+  | true ->
+    File.ReadAllText(file).Split(',', StringSplitOptions.RemoveEmptyEntries)
+    |> Array.map int
+    |> Array.toList
 
 let private evaluateLines (assembly: Assembly) (late: bool) : string list =
   let prog = assembly.GetType "Gen.Prog"
@@ -78,6 +91,9 @@ let private describeOutcome (outcome: ApplyOutcome) : string =
 /// The child's work. Returns the exit code.
 let private runScript (directory: string) : int =
   let mutable assembly : Assembly = null
+  // The delta the last `bench` produced, for `applylast`, and the chain after it with the build it was made from, for `second`.
+  let mutable lastPayload : DeltaPayload voption = ValueNone
+  let mutable lastChain : (DeltaChain * PeImage) voption = ValueNone
   let path (name: string) = Path.Combine(directory, name)
   for line in File.ReadAllLines(path "script.txt") do
     match line.Split(' ', StringSplitOptions.RemoveEmptyEntries) with
@@ -89,9 +105,10 @@ let private runScript (directory: string) : int =
         say ("L " + l)
       say "EVAL end"
     | [| "apply"; meta; il |] ->
-      say ("APPLY " + describeOutcome (DeltaApply.apply assembly (payloadOf (File.ReadAllBytes(path meta)) (File.ReadAllBytes(path il)) [])))
+      let tokens = tokensIn (path (Path.ChangeExtension(meta, "tokens")))
+      say ("APPLY " + describeOutcome (DeltaApply.apply assembly (payloadOf (File.ReadAllBytes(path meta)) (File.ReadAllBytes(path il)) tokens [])))
     | [| "check"; meta; il |] ->
-      let payload = payloadOf (File.ReadAllBytes(path meta)) (File.ReadAllBytes(path il)) [ RequiredFeature.Baseline ]
+      let payload = payloadOf (File.ReadAllBytes(path meta)) (File.ReadAllBytes(path il)) [] [ RequiredFeature.Baseline ]
       match DeltaApply.check (DeltaApply.capability ()) assembly payload with
       | CapabilityCheck.Capable -> say "CHECK Capable"
       | CapabilityCheck.Incapable gaps ->
@@ -104,9 +121,66 @@ let private runScript (directory: string) : int =
       let m = File.ReadAllBytes(path meta)
       let i = File.ReadAllBytes(path il)
       let watch = Stopwatch.StartNew()
-      let outcome = DeltaApply.apply assembly (payloadOf m i [])
+      let outcome = DeltaApply.apply assembly (payloadOf m i [] [])
       watch.Stop()
       say (sprintf "TIME %.3f %s" watch.Elapsed.TotalMilliseconds (describeOutcome outcome))
+    | [| "bench"; baseline; next; count |]
+    | [| "bench"; baseline; next; count; "strip" |] as op ->
+      // Read both builds, diff them and write the delta, `count` times from nothing. The first is cold (the JIT
+      // has not seen this code); the rest are what a second save costs. With `strip` the baseline is an
+      // instrumented module and the probes are looked through.
+      let probes =
+        match op.Length with
+        | 5 -> ProbeStripping.StripCoverageProbes CoverageProbe.hitSymbol
+        | _ -> ProbeStripping.KeepEveryInstruction
+      for iteration in 1 .. int count do
+        let watch = Stopwatch.StartNew()
+        let before = PeImage.OfFile(path baseline)
+        let after = PeImage.OfFile(path next)
+        let read = watch.Elapsed.TotalMilliseconds
+        watch.Restart()
+        let chain = DeltaChain.Start(before, probes)
+        match chain.Prepare(Guid.NewGuid(), after) with
+        | PrepareOutcome.Ready prepared ->
+          lastPayload <- ValueSome prepared.Payload
+          lastChain <- ValueSome (chain.Commit prepared, after)
+          say (sprintf "BENCH %d read=%.1f prepare=%.1f metadata=%d il=%d updated=%d added=%d"
+                 iteration read watch.Elapsed.TotalMilliseconds prepared.Payload.Metadata.Length prepared.Payload.Il.Length
+                 prepared.Payload.Updated.Length prepared.Payload.AddedMethods.Length)
+        | PrepareOutcome.NothingChanged -> say (sprintf "BENCH %d nothing-changed" iteration)
+        | PrepareOutcome.Refused causes ->
+          say (sprintf "BENCH %d refused %s" iteration (String.Join("; ", causes |> List.map RudeCause.describe)))
+    | [| "second"; next2 |] ->
+      // The save after the one `bench` made: the chain has committed it, so the previous build is the one it was
+      // made from (already read), and only the new build is new.
+      match lastChain with
+      | ValueNone -> say "SECOND no-chain"
+      | ValueSome (chain, _) ->
+        let watch = Stopwatch.StartNew()
+        let after = PeImage.OfFile(path next2)
+        let read = watch.Elapsed.TotalMilliseconds
+        watch.Restart()
+        match chain.Prepare(Guid.NewGuid(), after) with
+        | PrepareOutcome.Ready prepared ->
+          say (sprintf "SECOND read=%.1f prepare=%.1f metadata=%d il=%d updated=%d added=%d"
+                 read watch.Elapsed.TotalMilliseconds prepared.Payload.Metadata.Length prepared.Payload.Il.Length
+                 prepared.Payload.Updated.Length prepared.Payload.AddedMethods.Length)
+        | PrepareOutcome.NothingChanged -> say "SECOND nothing-changed"
+        | PrepareOutcome.Refused causes -> say (sprintf "SECOND refused %s" (String.Join("; ", causes |> List.map RudeCause.describe)))
+    | [| "applylast" |] ->
+      match lastPayload with
+      | ValueNone -> say "TIME no-delta"
+      | ValueSome payload ->
+        // The runtime's call and the handlers after it, timed apart: they are different costs.
+        let watch = Stopwatch.StartNew()
+        System.Reflection.Metadata.MetadataUpdater.ApplyUpdate(assembly, ReadOnlySpan<byte>(payload.Metadata), ReadOnlySpan<byte>(payload.Il), ReadOnlySpan<byte>.Empty)
+        let applied = watch.Elapsed.TotalMilliseconds
+        watch.Restart()
+        let runs = DeltaApply.runUpdateHandlers (DeltaApply.updatedTypes assembly payload)
+        let failures = DeltaApply.handlerFailures runs
+        say (sprintf "TIME %.3f handlers=%.3f %s" applied watch.Elapsed.TotalMilliseconds (match failures with | [] -> "Applied" | f -> "handlers failed: " + String.Join("; ", f)))
+        for run in runs |> List.sortByDescending (fun r -> r.Milliseconds) |> List.truncate 4 do
+          say (sprintf "HANDLER %.3f ms %s.%s" run.Milliseconds run.Handler run.Step)
     | [||] -> ()
     | other -> say ("UNKNOWN " + String.Join(" ", other))
   0
@@ -166,7 +240,7 @@ let private startInfo (directory: string) (modifiable: ModifiableAssemblies) : P
 
 /// Run a script in a child. Both streams are drained into files while it runs, because a redirected pipe nobody reads
 /// fills and stops the child before it says anything.
-let run (directory: string) (modifiable: ModifiableAssemblies) (script: string list) : Task<ChildResult> =
+let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAssemblies) (script: string list) : Task<ChildResult> =
   task {
     File.WriteAllLines(Path.Combine(directory, "script.txt"), script)
     let stdoutPath = Path.Combine(directory, "stdout.txt")
@@ -179,12 +253,12 @@ let run (directory: string) (modifiable: ModifiableAssemblies) (script: string l
     child.Start() |> ignore
     child.BeginOutputReadLine()
     child.BeginErrorReadLine()
-    use cts = new CancellationTokenSource(TestTimeouts.patience)
+    use cts = new CancellationTokenSource(budget)
     try
       do! child.WaitForExitAsync cts.Token
     with :? OperationCanceledException ->
       child.Kill true
-      failwithf "the delta child did not end within %O (directory %s)" TestTimeouts.patience directory
+      failwithf "the delta child did not end within %O (directory %s)" budget directory
     // The no-argument wait returns once the redirected streams reached end of file.
     child.WaitForExit()
     stdoutFile.Flush()
@@ -199,6 +273,10 @@ let run (directory: string) (modifiable: ModifiableAssemblies) (script: string l
         Facts = facts
         Stderr = File.ReadAllText stderrPath }
   }
+
+/// Run a script in a child that is expected to end within `TestTimeouts.patience`.
+let run (directory: string) (modifiable: ModifiableAssemblies) (script: string list) : Task<ChildResult> =
+  runWithin TestTimeouts.patience directory modifiable script
 
 /// The lines of each `eval`, in order.
 let evalBlocks (result: ChildResult) : string list list =

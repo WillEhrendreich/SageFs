@@ -101,6 +101,7 @@ let private prepare (twin: Twin) (seed: uint64) (probes: ProbeStripping) (direct
       let il = sprintf "d%d.il" i
       File.WriteAllBytes(Path.Combine(directory, meta), prepared.Payload.Metadata)
       File.WriteAllBytes(Path.Combine(directory, il), prepared.Payload.Il)
+      File.WriteAllText(Path.Combine(directory, sprintf "d%d.tokens" i), String.Join(",", prepared.Payload.MethodTokens))
       deltas.Add((meta, il))
       versions.Add i
       match twin, i with
@@ -577,6 +578,80 @@ let metadataDeltaTests =
         result.Facts |> List.exists (fun f -> f.StartsWith "CHECK" && f.Contains "optimizations")
         |> Expect.isTrue (sprintf "the check says the module is optimized: %A" result.Facts)
         applyOutcomes result |> List.head |> Expect.stringStarts "and the runtime agrees" "RuntimeNotModifiable"
+      finally
+        removeQuietly directory
+    }
+
+    testTask "WHY - what a save costs on a big assembly: SageFs.Core.dll read twice, diffed, written, and applied by the runtime" {
+      let directory = scratch ()
+      try
+        let core = typeof<PeImage>.Assembly.Location
+        let build (source: string) (target: string) (edit: AssemblyDefinition -> unit) =
+          use assembly = AssemblyDefinition.ReadAssembly source
+          // Renamed so it loads beside the real SageFs.Core, and flagged unoptimized so the runtime will edit it.
+          assembly.Name.Name <- "CoreBench"
+          assembly.MainModule.Name <- "CoreBench.dll"
+          for attribute in assembly.CustomAttributes |> Seq.filter (fun c -> c.AttributeType.Name = "DebuggableAttribute") |> Seq.toList do
+            assembly.CustomAttributes.Remove attribute |> ignore
+          assembly.CustomAttributes.Add(debuggableAttribute assembly.MainModule)
+          edit assembly
+          assembly.Write target
+        // Some method bodies change: a nop in front of the first instruction of the first few plain methods.
+        let editFirst (count: int) (assembly: AssemblyDefinition) =
+          let plain (m: MethodDefinition) =
+            m.HasBody && m.Body.CodeSize >= 6 && not m.HasGenericParameters && not m.DeclaringType.HasGenericParameters
+            && not m.IsConstructor && not (m.DeclaringType.FullName.StartsWith "<StartupCode$")
+          let rec methodsOf (t: TypeDefinition) = seq { yield! t.Methods; for n in t.NestedTypes do yield! methodsOf n }
+          assembly.MainModule.Types
+          |> Seq.collect methodsOf
+          |> Seq.filter plain
+          |> Seq.truncate count
+          |> Seq.iter (fun m ->
+            let il = m.Body.GetILProcessor()
+            il.InsertBefore(m.Body.Instructions[0], il.Create OpCodes.Nop))
+        build core (Path.Combine(directory, "CoreBench.dll")) ignore
+        build core (Path.Combine(directory, "CoreBenchNext.dll")) (editFirst 3)
+        // The save after that one: the same three, and three more.
+        build core (Path.Combine(directory, "CoreBenchNext2.dll")) (editFirst 6)
+        // The baseline the worker really holds: the same module run through the real instrumenter (with its
+        // PDB, so it has sequence points to put probes in front of), then renamed and flagged like the other.
+        let instrumented = Path.Combine(directory, "instrumented", "SageFs.Core.dll")
+        Directory.CreateDirectory(Path.GetDirectoryName instrumented) |> ignore
+        File.Copy(core, instrumented)
+        File.Copy(Path.ChangeExtension(core, ".pdb"), Path.ChangeExtension(instrumented, ".pdb"))
+        let probes =
+          match CoverageInstrumenter.instrumentAssemblyInPlace instrumented with
+          | Result.Ok map -> map.TotalProbes
+          | Result.Error message -> failtestf "instrumenting SageFs.Core failed: %s" message
+        let benchBaseline = Path.Combine(directory, "CoreBenchInstrumented.dll")
+        build instrumented benchBaseline ignore
+        let iterations = 5
+        let field (name: string) (line: string) =
+          line.Split(' ') |> Array.pick (fun part -> match part.StartsWith(name + "=") with | true -> Some (Double.Parse(part.Substring(name.Length + 1), Globalization.CultureInfo.InvariantCulture)) | false -> None)
+        printfn "DELTA-BENCH machine: %d logical cores, %s, %s" Environment.ProcessorCount (Runtime.InteropServices.RuntimeInformation.OSDescription) Runtime.InteropServices.RuntimeInformation.FrameworkDescription
+        printfn "DELTA-BENCH subject: SageFs.Core.dll %d bytes (%d methods), three method bodies changed, n=%d iterations from nothing in one child process" (FileInfo(core).Length) (PeImage.OfFile(core).Reader.MethodDefinitions.Count) iterations
+        for label, baselineFile, strip in [ "plain baseline", "CoreBench.dll", ""; sprintf "instrumented baseline (%d probes), probes looked through" probes, Path.GetFileName benchBaseline, " strip" ] do
+          let! result =
+            DeltaChild.runWithin TestTimeouts.bigAssemblyDelta directory ModifiableAssemblies.Debug
+              [ sprintf "load %s" baselineFile; sprintf "bench %s CoreBenchNext.dll %d%s" baselineFile iterations strip; "second CoreBenchNext2.dll"; "applylast" ]
+          result.ExitCode |> Expect.equal (sprintf "the child lived: %s" result.Stderr) 0
+          let bench = result.Facts |> List.filter (fun f -> f.StartsWith "BENCH")
+          bench.Length |> Expect.equal (sprintf "every iteration printed a line: %A" result.Facts) iterations
+          bench |> List.iter (fun line -> line |> Expect.stringContains "each iteration wrote a delta of the three bodies" "updated=3")
+          let time = result.Facts |> List.find (fun f -> f.StartsWith "TIME")
+          time |> Expect.stringContains "the runtime applied the big module's delta" "Applied"
+          // The first iteration is cold (nothing JIT-compiled); the rest are what the next save costs.
+          let prepares = bench |> List.map (field "prepare")
+          let reads = bench |> List.map (field "read")
+          let warm = List.tail prepares |> List.sort
+          printfn "DELTA-BENCH [%s] read both builds (ms): %s" label (String.Join(", ", reads |> List.map (sprintf "%.0f")))
+          printfn "DELTA-BENCH [%s] diff and write (ms): cold %.0f, warm min %.0f median %.0f max %.0f; delta %s" label (List.head prepares) (List.head warm) (warm[warm.Length / 2]) (List.last warm) (bench |> List.head |> fun l -> l.Substring(l.IndexOf "metadata="))
+          let second = result.Facts |> List.find (fun f -> f.StartsWith "SECOND")
+          second |> Expect.stringContains "the save after it changed the three more bodies" "updated=3"
+          printfn "DELTA-BENCH [%s] second save, previous build already read (ms): %s" label second
+          printfn "DELTA-BENCH [%s] runtime ApplyUpdate (ms): %s" label time
+          for handler in result.Facts |> List.filter (fun f -> f.StartsWith "HANDLER") do
+            printfn "DELTA-BENCH [%s] slowest handlers: %s" label handler
       finally
         removeQuietly directory
     }

@@ -307,7 +307,8 @@ let casesOf (seed: uint64) (count: int) (chain: int) : (uint64 * Program list) l
 
 // -- compiling -------------------------------------------------------------------------------------------------
 
-let private debuggableAttribute (module': ModuleDefinition) : CustomAttribute =
+/// The DebuggableAttribute an unoptimized build carries, which is what makes a module editable.
+let debuggableAttribute (module': ModuleDefinition) : CustomAttribute =
   let modes = typeof<System.Diagnostics.DebuggableAttribute.DebuggingModes>
   let ctor = module'.ImportReference(typeof<System.Diagnostics.DebuggableAttribute>.GetConstructor [| modes |])
   let attribute = CustomAttribute ctor

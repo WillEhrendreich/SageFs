@@ -129,17 +129,23 @@ module MethodDiff =
     let interfaces =
       [ for impl in t.GetInterfaceImplementations() -> image.Describe (reader.GetInterfaceImplementation impl).Interface ]
       |> List.sort
-    [ sprintf "flags=%A" t.Attributes
-      sprintf "base=%s" baseType
-      sprintf "interfaces=%s" (String.Join(";", interfaces))
-      sprintf "generics=%d" (t.GetGenericParameters().Count) ]
+    // Concatenation, not sprintf: a large assembly has ten thousand types, and `%A` reflects over an enum.
+    [ "flags=" + string (int t.Attributes)
+      "base=" + baseType
+      "interfaces=" + String.Join(";", interfaces)
+      "generics=" + string (t.GetGenericParameters().Count) ]
 
   let private fieldsOf (image: PeImage) (handle: TypeDefinitionHandle) : string list =
     let reader = image.Reader
     [ for fieldHandle in reader.GetTypeDefinition(handle).GetFields() do
         let f = reader.GetFieldDefinition fieldHandle
-        yield sprintf "%s|%A|%s|%s" (reader.GetString f.Name) f.Attributes (image.FieldSignature f.Signature)
-                (String.Join(";", attributesOf image (entityOf TableIndex.Field (MetadataTokens.GetRowNumber fieldHandle)))) ]
+        yield
+          String.Join(
+            "|",
+            [ reader.GetString f.Name
+              string (int f.Attributes)
+              image.FieldSignature f.Signature
+              String.Join(";", attributesOf image (entityOf TableIndex.Field (MetadataTokens.GetRowNumber fieldHandle))) ]) ]
 
   /// Properties and events by name and accessors. The signature is carried by the accessors, which are methods.
   let private membersOf (image: PeImage) (handle: TypeDefinitionHandle) : string list =
@@ -152,17 +158,17 @@ module MethodDiff =
     [ for p in t.GetProperties() do
         let property = reader.GetPropertyDefinition p
         let accessors = property.GetAccessors()
-        yield sprintf "property %s|%A|%s|%s" (reader.GetString property.Name) property.Attributes (accessor accessors.Getter) (accessor accessors.Setter)
+        yield String.Join("|", [ "property " + reader.GetString property.Name; string (int property.Attributes); accessor accessors.Getter; accessor accessors.Setter ])
       for e in t.GetEvents() do
         let event = reader.GetEventDefinition e
         let accessors = event.GetAccessors()
-        yield sprintf "event %s|%s|%s" (reader.GetString event.Name) (accessor accessors.Adder) (accessor accessors.Remover) ]
+        yield String.Join("|", [ "event " + reader.GetString event.Name; accessor accessors.Adder; accessor accessors.Remover ]) ]
 
   let private parametersOf (image: PeImage) (m: MethodDefinition) : string list =
     let reader = image.Reader
     [ for handle in m.GetParameters() do
         let p = reader.GetParameter handle
-        yield sprintf "%d|%s|%A" p.SequenceNumber (reader.GetString p.Name) p.Attributes ]
+        yield String.Join("|", [ string p.SequenceNumber; reader.GetString p.Name; string (int p.Attributes) ]) ]
 
   let private isStaticInitializer (typeKey: string) (name: string) : bool =
     name = ".cctor" || typeKey.StartsWith("<StartupCode$", StringComparison.Ordinal)
@@ -266,6 +272,11 @@ module MethodDiff =
           | ValueNone, ValueNone -> verdict id MethodChange.Unchanged nextMethod
           | ValueSome _, ValueNone
           | ValueNone, ValueSome _ -> rude (RudeCause.MethodFlagsChanged (key, name))
+          | ValueSome before, ValueSome after when (match options.PreviousProbes with
+                                                    | ProbeStripping.KeepEveryInstruction -> IlCanon.sameWithoutLooking previous before next after
+                                                    | ProbeStripping.StripCoverageProbes _ -> false) ->
+            // Byte-identical and naming the same things: the common case, found without reading either into instructions.
+            verdict id MethodChange.Unchanged nextMethod
           | ValueSome before, ValueSome after ->
             match IlCanon.canonicalize previous before options.PreviousProbes, IlCanon.canonicalize next after ProbeStripping.KeepEveryInstruction with
             | Result.Error refusal, _
