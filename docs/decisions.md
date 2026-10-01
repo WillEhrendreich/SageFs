@@ -154,16 +154,35 @@ on which tests did not pass.
 Reopen it if: the engine can't answer a question an agent needs. Then extend the engine's record,
 don't build a runner beside it.
 
-### Still to do under this decision
+### One floor for "which tests does this change affect"
 
-Two functions pick "which tests does this change affect", and they do not share a floor.
-The live loop (`TestCycleEffects.decideAfterTypeCheck`) uses the symbol graph, coverage, and on any
-trigger (keystroke included) a file-scope narrow for body-only edits, and falls back to the whole suite only for a compiled
-file whose dependency graph is empty. The cohort landing gate (`AffectedTests.verificationTestSet`)
-uses coverage with a no-empty-escape floor. The code states the residual gap itself: if the
-dependency graph has not yet seen the test file that covers a symbol, the live narrow finds nothing,
-and only the landing gate's floor catches it. One selection rule with one floor, fail closed, is the
-goal. Nothing has been changed here yet.
+Two functions answer that question: the live loop (`TestCycleEffects.decideAfterTypeCheck`) and the
+cohort landing gate (`AffectedTests.verificationTestSet`). The landing gate never returns an empty set
+for a real diff against a real suite. The live loop used to, and an empty set reads as green.
+
+Now they share the floor. The live loop narrows with the symbol graph, coverage, and a file-scope
+narrow for body-only edits (every test that reaches a symbol the file declares). If all of that finds
+nothing for a compiled `.fs` file, on any trigger, it selects every discovered test and labels the
+decision `ConservativeFallback` with the reason. Before, that only happened for a save, or when
+symbol names had changed. A keystroke on a cold graph, and any edit to a file whose covering test the
+graph had not seen yet, both selected nothing. The run policy still decides whether a keystroke may
+run, and says `SuppressedByPolicy` when it does not. Scripts (`.fsx`) are evaluated, not compiled,
+so they keep their narrow answer.
+
+The cost is real: a compiled file no test reaches now re-runs the suite on each save, and on each
+keystroke for a category set to `OnEveryChange`. I took that over a pane that stays green on a
+regression. The way to make it cheaper is a better graph, not a smaller floor.
+
+The keystroke gate that cancels a type-check for "no change" had two holes, also closed. It threw away
+all whitespace, but F# reads indentation, so moving a line into or out of an offside block, or
+`x -1` to `x - 1`, looked like no edit. It now keeps each line's starting column and a single space
+between tokens, and still drops comments, blank lines, trailing spaces and CRLF. And a trivia keystroke
+used to cancel the check pending for the real edit typed just before it.
+
+Evidence: `SageFs.Tests/LiveTestingAfterTypeCheckScenarioTests.fs` ("Live testing never reads an empty
+selection as green", "Live testing keystroke trivia gate"), driven through
+`LiveTestCycleState.handleFcsResult` and `onKeystroke`.
+Reopen it if: the suite-per-save cost on unreached files turns out to hurt in practice. Fix the graph.
 
 ## One JSON facade over FSharp.SystemTextJson, not a source-generated backend
 

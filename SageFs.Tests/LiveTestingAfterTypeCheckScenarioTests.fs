@@ -66,11 +66,13 @@ let tests =
           SelectionPrecision.NoImpactedTests
       | other -> failtestf "expected a rebuild-and-run covering the edited file, got %A" other
 
-    // The other half of the contract: selecting on file scope must not mean
-    // selecting everything. A test that reaches nothing in the edited file
-    // stays unselected, or the fix would have traded a false green for a
-    // full-suite run on every save.
-    testCase "a body-only edit does not drag in tests that reach nothing in the edited file" <| fun _ ->
+    // The other half of the contract: when the narrow DOES find the covering
+    // test, selecting on file scope must not mean selecting everything (the
+    // first test above pins that). When it finds nothing at all, it must not
+    // mean selecting nothing either: no test the graph knows reaches the file,
+    // but the graph may not have seen the test that does, so the whole
+    // discovered set is queued and the decision says it widened.
+    testCase "a body-only edit that no known test reaches widens to the discovered tests and says so" <| fun _ ->
       let unrelated = mkTest "Other.Tests.should_greet" TestCategory.Unit
       let state =
         { LiveTestState.empty with
@@ -89,7 +91,13 @@ let tests =
           Map.empty
 
       outcome.Effects
-      |> Expect.isEmpty "a file no test reaches should not queue an unrelated test"
+      |> List.isEmpty
+      |> Expect.isFalse "an unreached compiled file must not read as green"
+      match outcome.Decision with
+      | Some decision ->
+        decision.Explanation.Precision
+        |> Expect.equal "the widening is labeled" SelectionPrecision.ConservativeFallback
+      | None -> failtest "expected a decision"
 
     // The keystroke cause is the as-you-type path: the type-check of a settled
     // buffer reports `Changed = []` for `a + b` -> `a - b` exactly as it does on
@@ -290,4 +298,228 @@ let tests =
         decision.Trust |> Expect.equal "no impacted tests should remain stale until the next meaningful run" FreshnessTrust.StaleAwaitingRerun
         outcome.Effects |> Expect.isEmpty "no impacted tests means no work"
       | None -> failtest "expected a no-impacted decision"
+  ]
+
+// ---------------------------------------------------------------------------
+// The keystroke trivia gate. A keystroke whose buffer normalizes to the last
+// one cancels the type-check and queues nothing, so the normalizer may only
+// drop what F# ignores. F# is offside-sensitive: where a token sits on its
+// line, and whether two tokens touch, changes what the program means.
+// ---------------------------------------------------------------------------
+
+let private triviaStart = System.DateTimeOffset(2026, 10, 1, 0, 0, 0, System.TimeSpan.Zero)
+
+let private isFcsRequest effect =
+  match effect with
+  | TestCycleEffect.RequestFcsTypeCheck _ -> true
+  | _ -> false
+
+/// Types `previous`, lets its check fire (so nothing is pending), types `next`,
+/// and says whether a type-check of `next` is requested.
+let private checkRequestedAfterEdit (previous: string) (next: string) : bool =
+  let s1 = LiveTestCycleState.empty |> LiveTestCycleState.onKeystroke previous "Lib.fs" triviaStart
+  let _, s2 = s1 |> LiveTestCycleState.tick (triviaStart + DebounceClock.pastFcs)
+  let editedAt = triviaStart + DebounceClock.pastFcs + DebounceClock.keyGap
+  let s3 = s2 |> LiveTestCycleState.onKeystroke next "Lib.fs" editedAt
+  let effects, _ = s3 |> LiveTestCycleState.tick (editedAt + DebounceClock.pastFcs)
+  List.exists isFcsRequest effects
+
+[<Tests>]
+let triviaNormalizationTests =
+  testList "Live testing keystroke trivia gate" [
+    // Moving a line into or out of an offside block changes which expression
+    // it belongs to. Dropping every whitespace character made these identical.
+    testCase "moving a line into an offside block is a change and gets type-checked" <| fun _ ->
+      checkRequestedAfterEdit
+        "let f x =\n  if x then\n    printfn \"a\"\n  printfn \"b\"\n"
+        "let f x =\n  if x then\n    printfn \"a\"\n    printfn \"b\"\n"
+      |> Expect.isTrue "the second printfn now runs only when x is true"
+
+    testCase "moving a line out of an offside block is a change and gets type-checked" <| fun _ ->
+      checkRequestedAfterEdit
+        "let f x =\n  if x then\n    printfn \"a\"\n    printfn \"b\"\n"
+        "let f x =\n  if x then\n    printfn \"a\"\n  printfn \"b\"\n"
+      |> Expect.isTrue "the second printfn now runs whatever x is"
+
+    testCase "joining two lines is a change and gets type-checked" <| fun _ ->
+      checkRequestedAfterEdit
+        "let f g x =\n  g\n  x\n"
+        "let f g x =\n  g x\n"
+      |> Expect.isTrue "two statements became one application"
+
+    testCase "a space between tokens is a change and gets type-checked" <| fun _ ->
+      checkRequestedAfterEdit "let y = x -1\n" "let y = x - 1\n"
+      |> Expect.isTrue "an application of x to -1 became a subtraction"
+
+    // What F# really ignores still does not start a run.
+    testCase "a comment, trailing spaces, blank lines and CRLF are still trivia" <| fun _ ->
+      let previous = "let f x =\n  if x then\n    1\n  else\n    2\n"
+      [ "let f x = // pick one\n  if x then\n    1\n  else\n    2\n"
+        "let f x =\n  if x then   \n    1\n  else\n    2\n"
+        "let f x =\n\n  if x then\n    1\n\n  else\n    2\n"
+        "let f x =\r\n  if x then\r\n    1\r\n  else\r\n    2\r\n"
+        "let f x =\n  if x   then\n    1\n  else\n    2\n"
+        "let f x = (* why *)\n  if x then\n    1\n  else\n    2\n" ]
+      |> List.iter (fun next ->
+        checkRequestedAfterEdit previous next
+        |> Expect.isFalse (sprintf "this edit moves no token, so no check: %A" next))
+
+    // A real edit followed, inside its debounce window, by a comment keystroke:
+    // the comment keystroke is trivia relative to the buffer BEFORE it, which was
+    // never checked. Cancelling the pending check drops the real edit.
+    testCase "a comment typed right after a real edit does not cancel that edit's check" <| fun _ ->
+      let s1 = LiveTestCycleState.empty |> LiveTestCycleState.onKeystroke "let add a b = a + b\n" "Lib.fs" triviaStart
+      let _, s2 = s1 |> LiveTestCycleState.tick (triviaStart + DebounceClock.pastFcs)
+      let editedAt = triviaStart + DebounceClock.pastFcs + DebounceClock.keyGap
+      let s3 = s2 |> LiveTestCycleState.onKeystroke "let add a b = a - b\n" "Lib.fs" editedAt
+      let commentedAt = editedAt + DebounceClock.keyGap
+      let s4 = s3 |> LiveTestCycleState.onKeystroke "let add a b = a - b // x\n" "Lib.fs" commentedAt
+      let effects, _ = s4 |> LiveTestCycleState.tick (commentedAt + DebounceClock.pastFcs)
+      effects
+      |> List.exists isFcsRequest
+      |> Expect.isTrue "the `+` to `-` edit must still be type-checked"
+  ]
+
+// ---------------------------------------------------------------------------
+// The live loop must never turn "the narrow found nothing" into a green pane.
+// These drive `LiveTestCycleState.handleFcsResult`, the function the keystroke
+// path really calls, so `onFcsComplete` (name diff, graph update) runs first
+// exactly as it does in the daemon.
+// ---------------------------------------------------------------------------
+
+let private libRefs : SymbolReference list =
+  [ { SymbolFullName = "Lib.add"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 } ]
+
+/// A graph built the way the daemon builds one: from a type-checked test file,
+/// through `SymbolGraphBuilder.updateGraph`, so it is registered per file and
+/// survives the graph update that `handleFcsResult` does before it decides.
+/// (A graph assigned straight to `SymbolToTests` is rebuilt from nothing by that
+/// update, which is a cold start, not a populated graph.) It knows `Other.greet`
+/// and nothing about `Lib.add`.
+let private graphThatHasNotSeenLib : TestDependencyGraph =
+  let otherTestFile : SymbolReference list =
+    [ { SymbolFullName = "Other.Tests.greets"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Other.Tests.fs"; Line = 1 }
+      { SymbolFullName = "Other.greet"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Other.Tests.fs"; Line = 2 } ]
+  SymbolGraphBuilder.updateGraph
+    LiveTestingDefaults.TestModuleIdentifier
+    LiveTestingDefaults.Framework
+    otherTestFile
+    "Other.Tests.fs"
+    TestDependencyGraph.empty
+
+/// A session that has already type-checked `Lib.fs` once, so a second check of
+/// the same symbols reports `Changed = []`: the body-only edit shape.
+let private afterFirstCheck trigger (tests: TestCase array) (graph: TestDependencyGraph) : LiveTestCycleState =
+  { LiveTestCycleState.empty with
+      TestState =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            DiscoveredTests = tests }
+      DepGraph = graph
+      AnalysisCache = { FileSymbols = Map.ofList [ "Lib.fs", libRefs ] }
+      LastTrigger = trigger
+      ActiveFile = Some "Lib.fs"
+      LatestContent = Some "module Lib\nlet add a b = a - b" }
+
+let private recheck (state: LiveTestCycleState) =
+  LiveTestCycleState.handleFcsResult (FcsTypeCheckResult.Success ("Lib.fs", libRefs)) state
+
+[<Tests>]
+let noEmptyEscapeTests =
+  testList "Live testing never reads an empty selection as green" [
+    // Cold start. The dependency graph has seen no test file at all, so the
+    // name delta (empty: same symbols) and the file-scope narrow (nothing in
+    // the graph) both find nothing. On a save that already widens to every
+    // discovered test; on a keystroke it selected nothing and said "no impacted
+    // tests", which the pane shows as green on a real regression.
+    testCase "a body-only keystroke edit with an empty dependency graph selects the discovered tests, not nothing" <| fun _ ->
+      let t1 = mkTest "Lib.Tests.adds" TestCategory.Unit
+      let t2 = mkTest "Other.Tests.greets" TestCategory.Unit
+      let effects, state' =
+        afterFirstCheck RunTrigger.Keystroke [| t1; t2 |] TestDependencyGraph.empty
+        |> recheck
+      match state'.TestState.LastDecision with
+      | Some decision ->
+        decision.Explanation.Precision
+        |> Expect.equal "nothing could be narrowed, so the decision must say it widened" SelectionPrecision.ConservativeFallback
+        decision.Explanation.SelectedTests
+        |> Array.sort
+        |> Expect.equal "every discovered test is selected" ([| t1.FullName; t2.FullName |] |> Array.sort)
+        effects
+        |> List.isEmpty
+        |> Expect.isFalse "a run must actually be queued"
+      | None -> failtest "expected a decision"
+
+    // Same cold start, same edit, on save: the existing behavior, pinned so the
+    // keystroke fix cannot regress it.
+    testCase "the same body-only edit on save with an empty graph still widens to the discovered tests" <| fun _ ->
+      let t1 = mkTest "Lib.Tests.adds" TestCategory.Unit
+      let _, state' =
+        afterFirstCheck RunTrigger.FileSave [| t1 |] TestDependencyGraph.empty
+        |> recheck
+      match state'.TestState.LastDecision with
+      | Some decision ->
+        decision.Explanation.SelectedTests |> Expect.equal "the one discovered test" [| t1.FullName |]
+      | None -> failtest "expected a decision"
+
+    // Policy still has the last word on a keystroke: a save-only category stays
+    // quiet, and the decision names the policy instead of reading as "no impacted
+    // tests".
+    testCase "the widened keystroke selection still honors a save-only policy and says so" <| fun _ ->
+      let t1 = mkTest "Lib.Tests.adds" TestCategory.Unit
+      let seeded = afterFirstCheck RunTrigger.Keystroke [| t1 |] TestDependencyGraph.empty
+      let state =
+        { seeded with
+            TestState = { seeded.TestState with RunPolicies = Map.ofList [ TestCategory.Unit, RunPolicy.OnSaveOnly ] } }
+      let effects, state' = recheck state
+      effects |> Expect.isEmpty "a save-only category must not run on a keystroke"
+      match state'.TestState.LastDecision with
+      | Some decision ->
+        decision.Explanation.Precision
+        |> Expect.equal "the silence is policy, not 'no impacted tests'" SelectionPrecision.SuppressedByPolicy
+      | None -> failtest "expected a decision"
+
+    // The graph is populated, but only with a test file that has nothing to do
+    // with `Lib.fs`: the test that covers `Lib.add` has not been type-checked in
+    // this session yet. The file-scope narrow finds nothing, on any trigger, and
+    // a non-empty graph used to mean "do not widen". The landing gate would not
+    // accept that (`AffectedTests.verificationTestSet` never returns empty for a
+    // real diff against a real suite), so the live loop does not either.
+    for trigger in [ RunTrigger.Keystroke; RunTrigger.FileSave; RunTrigger.ExplicitRun ] do
+      testCase (sprintf "a body-only edit on %A that no known test reaches widens instead of reading green" trigger) <| fun _ ->
+        let covering = mkTest "Lib.Tests.adds" TestCategory.Unit
+        let other = mkTest "Other.Tests.greets" TestCategory.Unit
+        Map.isEmpty graphThatHasNotSeenLib.SymbolToTests
+        |> Expect.isFalse "the graph is populated: this is not a cold start"
+        let effects, state' =
+          afterFirstCheck trigger [| covering; other |] graphThatHasNotSeenLib
+          |> recheck
+        match state'.TestState.LastDecision with
+        | Some decision ->
+          decision.Explanation.Precision
+          |> Expect.equal "the narrow found nothing, so the decision must say it widened" SelectionPrecision.ConservativeFallback
+          decision.Explanation.SelectedTests
+          |> Array.sort
+          |> Expect.equal "the test the graph has not seen yet is among the selection" ([| covering.FullName; other.FullName |] |> Array.sort)
+          decision.Explanation.Reason
+          |> System.String.IsNullOrWhiteSpace
+          |> Expect.isFalse "the decision says why it widened"
+          effects
+          |> List.isEmpty
+          |> Expect.isFalse "a run must actually be queued"
+        | None -> failtest "expected a decision"
+
+    // A script is evaluated, not compiled, so there is no stale DLL to distrust
+    // and nothing to widen: the floor is for compiled files only.
+    testCase "a body-only edit to a script file with a populated graph does not widen" <| fun _ ->
+      let other = mkTest "Other.Tests.greets" TestCategory.Unit
+      let seeded = afterFirstCheck RunTrigger.Keystroke [| other |] graphThatHasNotSeenLib
+      let state = { seeded with AnalysisCache = { FileSymbols = Map.ofList [ "Lib.fsx", libRefs ] } }
+      let _, state' =
+        LiveTestCycleState.handleFcsResult (FcsTypeCheckResult.Success ("Lib.fsx", libRefs)) state
+      match state'.TestState.LastDecision with
+      | Some decision ->
+        decision.Explanation.Precision
+        |> Expect.equal "a script no test reaches is genuinely unaffected" SelectionPrecision.NoImpactedTests
+      | None -> failtest "expected a decision"
   ]

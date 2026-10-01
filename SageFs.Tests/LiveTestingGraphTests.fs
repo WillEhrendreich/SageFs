@@ -962,13 +962,17 @@ let compositionTests = testList "compositionTests" [
   test "trivia-only keystroke keeps tree-sitter feedback but suppresses FCS" {
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let s0 = LiveTestCycleState.empty
-    let s1 = s0 |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let s2 = s1 |> LiveTestCycleState.onKeystroke "let  x = 1 // comment" "File.fs" (t0 + DebounceClock.keyAt 1)
-    let effects75, s75 = s2 |> LiveTestCycleState.tick (t0 + DebounceClock.keyAt 1 + DebounceClock.pastTreeSitter)
+    let s0' = s0 |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
+    // The first buffer is checked before the comment arrives: a trivia keystroke
+    // must not cancel a check that is still pending for an unchecked edit.
+    let _, s1 = s0' |> LiveTestCycleState.tick (t0 + DebounceClock.pastFcs)
+    let t1 = t0 + DebounceClock.pastFcs + DebounceClock.keyGap
+    let s2 = s1 |> LiveTestCycleState.onKeystroke "let  x = 1 // comment" "File.fs" (t1 + DebounceClock.keyAt 1)
+    let effects75, s75 = s2 |> LiveTestCycleState.tick (t1 + DebounceClock.keyAt 1 + DebounceClock.pastTreeSitter)
     effects75
     |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
     |> Expect.isTrue "tree-sitter should still fire for editor feedback"
-    let effects400, _ = s75 |> LiveTestCycleState.tick (t0 + DebounceClock.keyAt 1 + DebounceClock.pastFcs)
+    let effects400, _ = s75 |> LiveTestCycleState.tick (t1 + DebounceClock.keyAt 1 + DebounceClock.pastFcs)
     effects400
     |> List.exists (fun e -> match e with TestCycleEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isFalse "FCS should stay suppressed for trivia-only edits"
@@ -1092,7 +1096,9 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         Activation = LiveTestingActivation.Active
         DiscoveredTests = [| testCase |]
         RunPolicies = RunPolicyDefaults.defaults }
-    TestCycleEffects.afterTypeCheck [] "test.fs" RunTrigger.Keystroke graph ltState None Map.empty
+    // A script, not a compiled file: a compiled file with nothing narrowed
+    // widens to every discovered test (the no-empty-escape floor).
+    TestCycleEffects.afterTypeCheck [] "test.fsx" RunTrigger.Keystroke graph ltState None Map.empty
     |> Expect.isEmpty "no effect when no symbols"
   }
 ]
