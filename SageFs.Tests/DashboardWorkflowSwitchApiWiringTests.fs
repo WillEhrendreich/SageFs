@@ -67,7 +67,7 @@ let private startFakeApiServer (ops: SessionManagementOps) = task {
       SharedBindingScope = ref None
       SharedFeatureState = None
       ActivityTracker = SageFs.AgentActivityTracker.create ()
-      LiveSnapshotSink = None
+      LiveBindings = None
       CohortOwner = None
       GetDaemonHealth = fun () -> None }
 
@@ -84,7 +84,7 @@ let private startFakeApiServer (ops: SessionManagementOps) = task {
       GetWarmupContext = None
       GetFeatureState = None; RecordEval = None
       ActivityTracker = config.ActivityTracker
-      LiveSnapshotSink = None
+      LiveBindings = None
       CohortOwner = None
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }

@@ -97,7 +97,7 @@ let private mkHarness (answerStatus: string -> Async<WorkerResponse>) : Harness 
       GetFeatureState = None
       RecordEval = None
       ActivityTracker = AgentActivityTracker.create ()
-      LiveSnapshotSink = None
+      LiveBindings = None
       CohortOwner = None
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }

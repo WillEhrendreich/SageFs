@@ -77,6 +77,7 @@ type Capability =
   | BoundValues
   | FeatureGates
   | LiveValues
+  | WalkMode
   | Completions
   | TypeChecking
   | Disposal
@@ -179,6 +180,24 @@ let contract (label: string) (create: unit -> Async<IFsiSession>) (notYet: Capab
       Expect.equal "generation incremented" 1L generation.Value
       session.LiveValuesJson generation |> ignore
       Expect.equal "and again" 2L generation.Value)
+
+    case WalkMode "a new session walks in Safe mode: a getter that calls code is listed, not run" (fun session ->
+      mustSucceed session "type Probe() =\n  member _.Calls = string (List.length [ 1; 2; 3 ])\nlet probe = Probe()"
+      let json = session.LiveValuesJson(ref 0L)
+      Expect.stringContains "listed with its reason, not run" "GetterRunsCode" json)
+
+    case WalkMode "SetWalkMode Everything runs the getter, and Safe lists it again" (fun session ->
+      mustSucceed session "type Probe() =\n  member _.Calls = string (List.length [ 1; 2; 3 ])\nlet probe = Probe()"
+      Expect.equal "told" (WalkModeNow SageFs.Features.LiveValueTree.WalkMode.Everything) (session.SetWalkMode SageFs.Features.LiveValueTree.WalkMode.Everything)
+      let everything = session.LiveValuesJson(ref 0L)
+      Expect.isFalse "nothing is held back" (everything.Contains "GetterRunsCode")
+      Expect.equal "told" (WalkModeNow SageFs.Features.LiveValueTree.WalkMode.Safe) (session.SetWalkMode SageFs.Features.LiveValueTree.WalkMode.Safe)
+      Expect.stringContains "listed again" "GetterRunsCode" (session.LiveValuesJson(ref 0L)))
+
+    case WalkMode "SetWalkMode Off collapses a class" (fun session ->
+      mustSucceed session "type Probe() =\n  member _.Calls = string (List.length [ 1; 2; 3 ])\nlet probe = Probe()"
+      session.SetWalkMode SageFs.Features.LiveValueTree.WalkMode.Off |> ignore
+      Expect.stringContains "collapsed, with its reason" "ClassesCollapsed" (session.LiveValuesJson(ref 0L)))
 
     case Completions "Completions offers List.map after 'List.ma'" (fun session ->
       let items = session.Completions("List.ma", 7, "ma")
@@ -300,6 +319,14 @@ let tests =
     Integration.hostList "in-process session" [
       contract "InProcessFsiSession" newInProcess []
 
+      testAsync "a click is unavailable here, typed, because there is no host to contain a getter in" {
+        do!
+          withSession newInProcess (fun session ->
+            mustSucceed session "type Probe() =\n  member _.Calls = string (List.length [ 1; 2; 3 ])\nlet probe = Probe()"
+            match SageFs.WorkerProtocol.Serialization.tryDeserialize<SageFs.FsiHost.FsiProtocol.MemberOutcome> (session.EvaluateMember("probe", [ "Calls" ])) with
+            | Result.Ok(SageFs.FsiHost.FsiProtocol.MemberUnavailable SageFs.FsiHost.FsiProtocol.NoIsolatedHost) -> ()
+            | other -> failtestf "expected MemberUnavailable NoIsolatedHost, got %A" other)
+      }
     ]
 
     Integration.hostList "isolated host session: isolation from SageFs" [
@@ -335,5 +362,26 @@ let tests =
       // Capabilities the isolated host does not have yet would be listed here (each becomes a running case when
       // implemented). The list is empty: the whole contract runs, agent included.
       contract "RemoteFsiSession" newRemote []
+
+      testAsync "a click runs the getter in the host and answers with the binding walked again" {
+        do!
+          withSession newRemote (fun session ->
+            mustSucceed session "type Probe() =\n  member _.Calls = string (List.length [ 1; 2; 3 ])\nlet probe = Probe()"
+            match SageFs.WorkerProtocol.Serialization.tryDeserialize<SageFs.FsiHost.FsiProtocol.MemberOutcome> (session.EvaluateMember("probe", [ "Calls" ])) with
+            | Result.Ok(SageFs.FsiHost.FsiProtocol.MemberShown(shown, _)) ->
+              Expect.equal "the binding" "probe" shown.Name
+              Expect.isFalse "the clicked row now has its value" ((sprintf "%A" shown.Root).Contains "GetterRunsCode")
+            | other -> failtestf "expected MemberShown, got %A" other)
+      }
+
+      testAsync "in Everything mode a click is refused because every getter already ran" {
+        do!
+          withSession newRemote (fun session ->
+            mustSucceed session "type Probe() =\n  member _.Calls = string (List.length [ 1; 2; 3 ])\nlet probe = Probe()"
+            session.SetWalkMode SageFs.Features.LiveValueTree.WalkMode.Everything |> ignore
+            match SageFs.WorkerProtocol.Serialization.tryDeserialize<SageFs.FsiHost.FsiProtocol.MemberOutcome> (session.EvaluateMember("probe", [ "Calls" ])) with
+            | Result.Ok(SageFs.FsiHost.FsiProtocol.MemberRefused SageFs.FsiHost.FsiProtocol.EveryGetterAlreadyRan) -> ()
+            | other -> failtestf "expected a refusal, got %A" other)
+      }
     ]
   ]

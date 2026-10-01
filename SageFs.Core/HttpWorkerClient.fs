@@ -16,6 +16,12 @@ module HttpWorkerClient =
       "GET", sprintf "/status?replyId=%s" (Uri.EscapeDataString rid), None
     | WorkerMessage.GetLiveValues rid ->
       "GET", sprintf "/live-values?replyId=%s" (Uri.EscapeDataString rid), None
+    | WorkerMessage.EvaluateLiveMember(binding, path, rid) ->
+      "POST", "/live-values/evaluate",
+      Some (Serialization.serialize {| binding = binding; path = path; replyId = rid |})
+    | WorkerMessage.SetValueWalk(mode, rid) ->
+      "POST", "/live-values/mode",
+      Some (Serialization.serialize {| mode = ValueWalk.name mode; replyId = rid |})
     | WorkerMessage.EvalCode(code, rid) ->
       "POST", "/eval",
       Some (Serialization.serialize {| code = code; replyId = rid |})

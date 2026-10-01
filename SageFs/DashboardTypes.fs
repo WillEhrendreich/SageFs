@@ -1056,7 +1056,7 @@ type DashboardQueries = {
   GetSessionBindings: WorkerProtocol.SessionId -> Features.BindingExplorer.BindingInfo array
   /// Live reflection-walked binding tree for a session (debugger watch window),
   /// from the adaptive store. None until the first eval snapshot arrives.
-  GetLiveBindings: WorkerProtocol.SessionId -> Features.LiveValueTree.LiveValueSnapshot option
+  GetLiveBindings: WorkerProtocol.SessionId -> Features.LiveBindingsPane.PaneView option
   GetBindingScopeSnapshot: unit -> Features.BindingExplorer.BindingScopeSnapshot option
   GetLiveTestingStatus: unit -> string
   /// Whether live testing is currently Active or Inactive.

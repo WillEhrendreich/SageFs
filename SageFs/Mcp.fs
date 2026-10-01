@@ -54,9 +54,9 @@ module McpTools =
     RecordEval: (string -> string -> int64 -> unit) option
     /// In-memory agent activity tracker for multi-agent coordination.
     ActivityTracker: AgentActivityTracker.Tracker
-    /// Receives the live bound-value snapshot after each successful eval
-    /// (daemon wires this to the adaptive live-bindings store; None in tests).
-    LiveSnapshotSink: (string -> Features.LiveValueTree.LiveValueSnapshot -> unit) option
+    /// The live-bindings store, the pane's notes and the config's walk mode. Each successful eval pulls the session's live
+    /// values into it (the daemon wires it; None in tests).
+    LiveBindings: Features.LiveBindingsPane.Hub option
     /// The single per-daemon cohort owner (cohort-integration-plan.md Slice 2,
     /// item 9). `None` when no cohort owner was wired (most existing unit
     /// tests, which predate cohort support and never construct one) — cohort
@@ -1004,26 +1004,16 @@ module McpTools =
           // watch window). Pulled AFTER the eval reply, never attached to it
           // (roast-4 #2) — fire-and-forget so a slow or failed reflection
           // walk can never delay this eval's result to the caller.
-          match ctx.LiveSnapshotSink with
-          | Some sink ->
-            Async.Start (
-              async {
-                let! liveResult =
-                  routeToSession ctx sid
-                    (fun replyId -> WorkerProtocol.WorkerMessage.GetLiveValues (WorkerProtocol.SessionId.value replyId))
-                  |> Async.AwaitTask
-                match liveResult with
-                | Ok (WorkerProtocol.WorkerResponse.LiveValuesResult(_, json)) ->
-                  try
-                    let snap =
-                      WorkerProtocol.Serialization.deserialize<Features.LiveValueTree.LiveValueSnapshot> json
-                    sink sid { snap with SessionId = sid }
-                  with ex -> Log.warn "Failed to deserialize live value snapshot: %s" ex.Message
-                | Ok other ->
-                  Log.warn "Unexpected live-values response for %s: %A" sid other
-                | Error e ->
-                  Log.warn "Live value pull failed for %s: %A" sid e
-              })
+          match ctx.LiveBindings with
+          | Some hub ->
+            let ask : Features.LiveBindingsPane.Feed.Ask =
+              fun message ->
+                async {
+                  match! routeToSession ctx sid (fun _ -> message) |> Async.AwaitTask with
+                  | Ok response -> return Result.Ok response
+                  | Error routeError -> return Result.Error(routeErrorToSageFsError sid routeError)
+                }
+            Async.Start (Features.LiveBindingsPane.Feed.pull ask hub.Adaptive hub.Notes sid (fun () -> hub.ConfiguredWalk sid))
           | None -> ()
           match metadata |> Map.tryFind "assemblyLoadErrors" with
           | Some json ->

@@ -991,6 +991,56 @@ h2 {
   font-style: italic;
 }
 
+/* The pane header and a row listed without being read are single-column flow: everything wraps onto the next line,
+   nothing is pushed wider, and there is no breakpoint to get wrong. The click button is the uniform .session-btn square. */
+.live-pane-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.8rem;
+  margin: 0.3rem 0;
+  font-size: 0.7rem;
+  min-width: 0;
+}
+
+.live-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.live-held-count {
+  color: var(--fg-yellow);
+  white-space: nowrap;
+}
+
+.live-containment {
+  flex: 1 1 100%;
+  min-width: 0;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+
+.live-held-row {
+  min-width: 0;
+}
+
+.live-held-reason {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+
+.live-held-unknown .live-held-reason {
+  color: var(--fg-yellow);
+}
+
+.live-held-evaluating {
+  color: var(--fg-yellow);
+  font-size: 0.7rem;
+}
+
 .session-selected {
   background: var(--bg-selection);
   border-left: 3px solid var(--border-focus);

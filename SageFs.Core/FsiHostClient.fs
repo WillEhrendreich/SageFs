@@ -169,6 +169,7 @@ type FsiHostSession
           | Result.Ok(ValueResult(id, _) as answer) -> complete id answer
           | Result.Ok(LiveValuesResult(id, _) as answer) -> complete id answer
           | Result.Ok(MemberResult(id, _) as answer) -> complete id answer
+          | Result.Ok(WalkModeSet(id, _) as answer) -> complete id answer
           | Result.Ok(CheckResult(id, _) as answer) -> complete id answer
           | Result.Ok(SymbolsResult(id, _, _) as answer) -> complete id answer
           | Result.Ok(CompletionsResult(id, _) as answer) -> complete id answer
@@ -279,6 +280,15 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> EvaluateMember(id, binding, path)) with
       | Got(MemberResult(_, outcome)) -> return Answered outcome
       | Got other -> return HostGone(unexpected "evaluate member" other)
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
+    }
+
+  /// Choose how much of a class the live-values walk may run, from now on. Answers with the mode the host now holds.
+  member _.SetWalkMode(mode: SageFs.Features.LiveValueTree.WalkMode) : Async<HostCall<SageFs.Features.LiveValueTree.WalkMode>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> SetWalkMode(id, mode)) with
+      | Got(WalkModeSet(_, held)) -> return Answered held
+      | Got other -> return HostGone(unexpected "set walk mode" other)
       | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 

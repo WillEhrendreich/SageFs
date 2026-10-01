@@ -122,6 +122,10 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
   | WorkerMessage.DebugTestBegin(_, rid)
   | WorkerMessage.DebugTestContinue(_, _, rid) ->
     return WorkerResponse.DebugTestAnswer(rid, "{}")
+  | WorkerMessage.SetValueWalk(_, rid) ->
+    return WorkerResponse.LiveValuesResult(rid, "{}")
+  | WorkerMessage.EvaluateLiveMember(_, _, rid) ->
+    return WorkerResponse.LiveMemberResult(rid, "{}")
   | WorkerMessage.Shutdown ->
     return WorkerResponse.WorkerShuttingDown
 }

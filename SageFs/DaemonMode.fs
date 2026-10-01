@@ -2830,7 +2830,22 @@ let run
   let sharedFeatureState : SageFs.Features.FeatureHooks.FeaturePushState ref = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
   // Adaptive live-bindings store — per-session cval cells updated after each eval;
   // subscribers fire only when the snapshot actually changed (FSharp.Data.Adaptive).
-  let liveBindingsAdaptive = SageFs.Features.LiveBindingsAdaptive.create ()
+  // The hub also holds what the pane remembers beside the snapshot (the walk mode, the last click) and how to read a session's
+  // config for the mode it asks for. One value, shared by the dashboard, the MCP eval hook and the click and mode routes.
+  let liveBindingsHub : SageFs.Features.LiveBindingsPane.Hub =
+    { Adaptive = SageFs.Features.LiveBindingsAdaptive.create ()
+      Notes = SageFs.Features.LiveBindingsPane.PaneStore.create ()
+      ConfiguredWalk = fun sidStr ->
+        match WorkerProtocol.SessionId.validate sidStr with
+        | Error _ -> ValueWalk.standard
+        | Ok sid ->
+          match getSessionWorkingDirFromSnapshot readSnapshot sid with
+          | "" -> ValueWalk.standard
+          | workingDir ->
+            match DirectoryConfig.load workingDir with
+            | Some config -> config.ValueWalk
+            | None -> ValueWalk.standard }
+  let liveBindingsAdaptive = liveBindingsHub.Adaptive
 
   // Permanent binding-scope subscriber — updates sharedBindingScope on eval
   // completion regardless of MCP SSE client connectivity. Fixes the dashboard
@@ -2979,8 +2994,7 @@ let run
       SharedBindingScope = sharedBindingScope
       SharedFeatureState = Some sharedFeatureState
       ActivityTracker = activityTracker
-      LiveSnapshotSink = Some (fun sid snap ->
-        SageFs.Features.LiveBindingsAdaptive.update liveBindingsAdaptive sid snap)
+      LiveBindings = Some liveBindingsHub
       CohortOwner = Some cohortOwner
       GetDaemonHealth = getDaemonHealth
     } cts.Token
@@ -3243,6 +3257,10 @@ let run
   // session's memory is released at the moment it dies, not up to 5s later.
   let runStaleSweep () =
     let liveIds = retentionWorthySessionIds ()
+    liveBindingsHub.Notes.Keys
+    |> Seq.filter (fun k -> not (liveIds.Contains k))
+    |> Seq.toList
+    |> List.iter (SageFs.Features.LiveBindingsPane.PaneStore.remove liveBindingsHub.Notes)
     match sweepStaleSessionState liveIds liveBindingsAdaptive sharedFeatureState (elmRuntime.GetModel().RecentOutput) with
     | [] -> ()
     | stale -> log.LogInformation("Swept {Count} stale session state entries", stale.Length)
@@ -3612,7 +3630,7 @@ let run
       | None -> [||]
     GetBindingScopeSnapshot = fun () -> System.Threading.Volatile.Read(&sharedBindingScope.contents)
     GetLiveBindings = fun sessionId ->
-      SageFs.Features.LiveBindingsAdaptive.tryGet liveBindingsAdaptive (WorkerProtocol.SessionId.value sessionId)
+      SageFs.Features.LiveBindingsPane.viewOf liveBindingsHub (WorkerProtocol.SessionId.value sessionId)
     GetLiveTestingStatus = fun () ->
       let model = elmRuntime.GetModel()
       let activeId =
@@ -3761,25 +3779,10 @@ let run
         // reflection walk can never delay the caller's eval result. Fed into
         // the adaptive store; subscribers fire only on real change, and the
         // existing EvalCompleted → ModelChanged morph re-renders the panel.
+        let ask : SageFs.Features.LiveBindingsPane.Feed.Ask =
+          fun message -> proxyToSession getProxyStr notifyWorkerDiedStr sidStr message |> Async.AwaitTask
         Async.Start (
-          async {
-            let! liveResult =
-              proxyToSession getProxyStr notifyWorkerDiedStr sidStr
-                (WorkerProtocol.WorkerMessage.GetLiveValues (sprintf "live-%s" sidStr))
-              |> Async.AwaitTask
-            match liveResult with
-            | Ok (WorkerProtocol.WorkerResponse.LiveValuesResult(_, json)) ->
-              try
-                let snap =
-                  WorkerProtocol.Serialization.deserialize<SageFs.Features.LiveValueTree.LiveValueSnapshot> json
-                SageFs.Features.LiveBindingsAdaptive.update liveBindingsAdaptive sidStr { snap with SessionId = sidStr }
-              with ex ->
-                Log.warn "[DaemonMode] Failed to parse live value snapshot for %s: %s" sidStr ex.Message
-            | Ok other ->
-              Log.warn "[DaemonMode] Unexpected live-values response for %s: %A" sidStr other
-            | Error e ->
-              Log.warn "[DaemonMode] Live value pull failed for %s: %s" sidStr (SageFsError.describe e)
-          })
+          SageFs.Features.LiveBindingsPane.Feed.pull ask liveBindingsHub.Adaptive liveBindingsHub.Notes sidStr (fun () -> liveBindingsHub.ConfiguredWalk sidStr))
         return Ok msg
       | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
         let msg = SageFsError.describe err
@@ -3921,8 +3924,17 @@ let run
 
   let hotReloadProxyEndpoints = createHotReloadProxyEndpoints getWorkerBaseUrl httpClient stateChangedEvent
 
+  // The pane's click and mode switch are posted by the page, to the origin it was served from: the dashboard's own port. Same
+  // handlers the MCP port mounts for editors.
+  let liveBindingsEndpoints =
+    let askFor = SageFs.Server.McpServer.liveBindingsAskFor sessionOps.GetProxy
+    let hub = Some liveBindingsHub
+    [ Dashboard.mapPostRaw "/api/sessions/{sid}/live-values/evaluate" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsEvaluate askFor hub ctx)
+      Dashboard.mapPostRaw "/api/sessions/{sid}/live-values/mode" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsSetMode askFor hub ctx)
+      Dashboard.mapGetRaw "/api/sessions/{sid}/live-values/mode" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsReadMode askFor hub ctx) ]
+
   let dashboardTask =
-    startDashboardServer log bindHost daemonOrigins dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints) cts.Token
+    startDashboardServer log bindHost daemonOrigins dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints @ liveBindingsEndpoints) cts.Token
 
   // Workers handle their own warmup, middleware, and file watching.
   // The daemon just needs to wait for the MCP and dashboard servers.

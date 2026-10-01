@@ -18,11 +18,15 @@ module LiveBindingsAdaptive =
     SessionSnapshots: ConcurrentDictionary<string, cval<LiveValueTree.LiveValueSnapshot option>>
     /// Per-session generation counter — the last generation applied.
     SessionGenerations: ConcurrentDictionary<string, cval<int64>>
+    /// Raised after every update, with the session and the snapshot that is now current. How a change reaches the editors'
+    /// SSE stream, whether it came from an eval's pull, a click or a mode switch.
+    Updates: Event<string * LiveValueTree.LiveValueSnapshot>
   }
 
   let create () : State = {
     SessionSnapshots = ConcurrentDictionary<string, cval<LiveValueTree.LiveValueSnapshot option>>()
     SessionGenerations = ConcurrentDictionary<string, cval<int64>>()
+    Updates = Event<string * LiveValueTree.LiveValueSnapshot>()
   }
 
   /// Apply a new snapshot for a session. Runs inside a transaction so
@@ -36,6 +40,7 @@ module LiveBindingsAdaptive =
       let gen =
         state.SessionGenerations.GetOrAdd(sessionId, fun _ -> cval 0L)
       gen.Value <- snap.Generation)
+    state.Updates.Trigger((sessionId, snap))
 
   /// Subscribe to a session's snapshot. The callback fires on every real
   /// change (and once immediately with the current value if present).

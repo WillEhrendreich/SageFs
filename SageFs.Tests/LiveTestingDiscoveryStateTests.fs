@@ -28,7 +28,7 @@ let private mkCtxWithState (state: LiveTestState) : McpContext =
     GetWarmupContext = None
     GetFeatureState = None; RecordEval = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
-    LiveSnapshotSink = None
+    LiveBindings = None
     CohortOwner = None
     GetDaemonHealth = fun () -> None
     GetProcessTelemetry = fun () -> None }

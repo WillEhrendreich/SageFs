@@ -65,7 +65,7 @@ let private ctxFor (infos: SessionInfo list) (proxy: SessionProxy option) (switc
     GetFeatureState = None
     RecordEval = None
     ActivityTracker = AgentActivityTracker.create ()
-    LiveSnapshotSink = None
+    LiveBindings = None
     CohortOwner = None
     GetDaemonHealth = fun () -> None
     GetProcessTelemetry = fun () -> None }

@@ -110,7 +110,7 @@ let private startServer (worker: Worker) (discovered: TestCase list) = task {
       SharedBindingScope = ref None
       SharedFeatureState = None
       ActivityTracker = SageFs.AgentActivityTracker.create ()
-      LiveSnapshotSink = None
+      LiveBindings = None
       CohortOwner = None
       GetDaemonHealth = fun () -> None }
 
@@ -128,7 +128,7 @@ let private startServer (worker: Worker) (discovered: TestCase list) = task {
       GetFeatureState = None
       RecordEval = None
       ActivityTracker = config.ActivityTracker
-      LiveSnapshotSink = None
+      LiveBindings = None
       CohortOwner = None
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }

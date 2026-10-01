@@ -62,14 +62,14 @@
         <Compile Include="RuntimeCompat.fs" />
         <Compile Include="RuntimeSelection.fs" />
         <Compile Include="SessionKinds.fs" />
-        <!-- Dependency-free and also compiled into the isolated FSI host (config.fsx is evaluated there): it must
-             precede the protocol, which carries a DirectoryConfig. -->
-        <Compile Include="DirectoryConfigTypes.fs" />
         <!-- One source file, compiled into BOTH this assembly and the per-SDK generated FSI host: the wire
              protocol cannot drift because there is only one definition of it. -->
         <!-- LiveValueTree has no dependencies and is also compiled into the host, so the protocol can carry its
              snapshot type directly; it must precede the protocol here. -->
         <Compile Include="Features\LiveValueTree.fs" />
+        <!-- Dependency-free (it needs only LiveValueTree, for the walk mode a config can choose) and also compiled into the isolated
+             FSI host (config.fsx is evaluated there): it must precede the protocol, which carries a DirectoryConfig. -->
+        <Compile Include="DirectoryConfigTypes.fs" />
         <!-- Dependency-free like LiveValueTree, and also compiled into the host (it runs a getter on a filtered thread there). -->
         <Compile Include="ThreadSandbox.fs" />
         <Compile Include="Features\MemberEvaluation.fs" />
@@ -363,6 +363,8 @@
         <Compile Include="Middleware\HotReloadCore.fs" />
         <Compile Include="HostAgent.fs" />
         <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />
+        <!-- What the live-bindings pane knows beyond the tree (mode, last click, held-row count). Needs the protocol's MemberOutcome. -->
+        <Compile Include="Features\LiveBindingsPane.fs" />
         <Compile Include="FsiHostBuild.fs" />
         <Compile Include="FsiHostClient.fs" />
         <!-- No dependency on FileWatcher.fs itself (System/System.IO only) —
@@ -385,6 +387,7 @@
         <!-- The daemon's side of "debug this test": choose the test, ask the worker to hold it, say what the editor
              can attach to. After SessionMode (the ops) and HostAgent (the hold's types). -->
         <Compile Include="DebugTestRequest.fs" />
+        <Compile Include="WalkModeKeeper.fs" />
         <Compile Include="ConfigHost.fs" />
         <Compile Include="SessionAgent.fs" />
         <!-- Pure warmup open-replay decision core (extractOpensFromLines/

@@ -276,7 +276,7 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     GetWarmupContext = None
     GetFeatureState = None; RecordEval = None
     ActivityTracker = AgentActivityTracker.create ()
-    LiveSnapshotSink = None
+    LiveBindings = None
     CohortOwner = None
     GetDaemonHealth = fun () -> None
     GetProcessTelemetry = fun () -> None

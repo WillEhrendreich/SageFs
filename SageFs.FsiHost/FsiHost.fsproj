@@ -37,9 +37,9 @@
     <Compile Include="FsiNaming.fs" />
     <Compile Include="Timeouts.fs" />
     <Compile Include="Instrumentation.fs" />
+    <Compile Include="LiveValueTree.fs" />
     <Compile Include="DirectoryConfigTypes.fs" />
     <Compile Include="ConfigDsl.fs" />
-    <Compile Include="LiveValueTree.fs" />
     <Compile Include="ThreadSandbox.fs" />
     <Compile Include="MemberEvaluation.fs" />
     <Compile Include="TestProviderTypes.fs" />
