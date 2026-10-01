@@ -55,7 +55,48 @@ type DeltaPayload =
     /// The MethodDef tokens the delta writes, in the baseline's numbering: the updated methods, then the added
     /// ones. The apply side resolves them to the types it tells the metadata-update handlers about.
     MethodTokens: int list
+    /// The probe each updated method calls when its new body starts (empty unless the delta was prepared with
+    /// `EntryProbing.ProbeEntry`).
+    Probes: (MethodId * int64) list
     Requires: RequiredFeature list }
+
+/// The static method a patched body calls when it starts, as a reference the baseline may not have yet:
+/// `void Enter(int64)` on a type nested in another, in an assembly the running process has loaded.
+type ProbeTarget =
+  { AssemblyName: string
+    Version: Version
+    Culture: string
+    PublicKeyToken: byte array
+    OuterNamespace: string
+    OuterName: string
+    InnerName: string
+    MethodName: string }
+
+[<RequireQualifiedAccess>]
+module ProbeTarget =
+  /// The probe target for a public static `void M(int64)` on a type nested in another, read from the method itself so it
+  /// names exactly the assembly the process has loaded.
+  let ofMethod (hook: System.Reflection.MethodInfo) : ProbeTarget =
+    let inner = hook.DeclaringType
+    let outer = inner.DeclaringType
+    let assembly = inner.Assembly.GetName()
+    { AssemblyName = assembly.Name
+      Version = assembly.Version
+      Culture = (match assembly.CultureName with | null -> "" | culture -> culture)
+      PublicKeyToken = (match assembly.GetPublicKeyToken() with | null -> [||] | token -> token)
+      OuterNamespace = (match outer.Namespace with | null -> "" | ns -> ns)
+      OuterName = outer.Name
+      InnerName = inner.Name
+      MethodName = hook.Name }
+
+/// Whether the bodies a delta writes tell anyone they started. That is how a patch is seen running: the new body's
+/// first instruction is a call that records its probe, the way a detour's stub does.
+[<RequireQualifiedAccess>]
+type EntryProbing =
+  | NoProbes
+  /// Every updated method gets the probe `assign` names for it. An added method gets none: nothing runs it until a
+  /// caller does, and the caller's probe is what shows the patch live.
+  | ProbeEntry of target: ProbeTarget * assign: (MethodId -> int64)
 
 /// An exception the writer raises inside one prepare and turns into a refusal at the edge.
 exception internal RudeCauseRaised of RudeCause
@@ -406,12 +447,18 @@ type DeltaChain private (state: ChainState) =
   member _.Generation : int = state.Generation
 
   /// Compare `next` with what the process runs, and write the delta that takes it there.
-  member this.Prepare(encId: Guid, next: PeImage) : PrepareOutcome =
+  member this.Prepare(encId: Guid, next: PeImage) : PrepareOutcome = this.PrepareProbing(encId, next, EntryProbing.NoProbes)
+
+  /// `Prepare`, with the bodies it writes telling `probing` they started.
+  member this.PrepareProbing(encId: Guid, next: PeImage, probing: EntryProbing) : PrepareOutcome =
     let diff = MethodDiff.diff { PreviousProbes = (match state.Generation with | 0 -> state.Probes | _ -> ProbeStripping.KeepEveryInstruction) } state.Previous next
-    this.PrepareFrom(encId, next, diff)
+    this.PrepareFrom(encId, next, diff, probing)
 
   /// The writing half of `Prepare`, for a diff the caller already has.
-  member internal _.PrepareFrom(encId: Guid, next: PeImage, diff: ImageDiff) : PrepareOutcome =
+  member internal this.PrepareFrom(encId: Guid, next: PeImage, diff: ImageDiff) : PrepareOutcome =
+    this.PrepareFrom(encId, next, diff, EntryProbing.NoProbes)
+
+  member internal _.PrepareFrom(encId: Guid, next: PeImage, diff: ImageDiff, probing: EntryProbing) : PrepareOutcome =
     match ImageDiff.causes diff with
     | _ :: _ as causes -> PrepareOutcome.Refused causes
     | [] ->
@@ -419,7 +466,7 @@ type DeltaChain private (state: ChainState) =
     | [] -> PrepareOutcome.NothingChanged
     | writes ->
       try
-        PrepareOutcome.Ready (DeltaChain.write state encId next writes)
+        PrepareOutcome.Ready (DeltaChain.write state encId next writes probing)
       with
       | RudeCauseRaised cause -> PrepareOutcome.Refused [ cause ]
       | IlRefusalRaised refusal -> PrepareOutcome.Refused [ RudeCause.UnreadableBody ("(signature)", "(unknown)", refusal) ]
@@ -440,7 +487,7 @@ type DeltaChain private (state: ChainState) =
             Rows = pending.Rows
             Previous = pending.Next }
 
-  static member private write (state: ChainState) (encId: Guid) (next: PeImage) (writes: MethodVerdict list) : PreparedDelta =
+  static member private write (state: ChainState) (encId: Guid) (next: PeImage) (writes: MethodVerdict list) (probing: EntryProbing) : PreparedDelta =
     let baseline = state.Index.Image
     let baselineReader = baseline.Reader
     let nextReader = next.Reader
@@ -470,6 +517,65 @@ type DeltaChain private (state: ChainState) =
     for v in addedMethods do
       let rid = nextRow TableIndex.MethodDef
       addedRows[methodKey v.Method.TypeKey (v.Method.Name + "#" + v.Method.Signature)] <- rid
+
+    // An assembly reference the baseline has, or one more row for it.
+    let ensureAssembly (name: string) (version: Version) (culture: string) (publicKeyOrToken: byte array) (flags: AssemblyFlags) : int =
+      match state.Index.Assembly name, Map.tryFind name ledger.Value.Assemblies with
+      | ValueSome existing, _ -> existing
+      | _, Some existing -> existing
+      | _ ->
+        let rid = nextRow TableIndex.AssemblyRef
+        builder.AddAssemblyReference(
+          builder.GetOrAddString name,
+          version,
+          builder.GetOrAddString culture,
+          builder.GetOrAddBlob publicKeyOrToken,
+          flags,
+          BlobHandle()) |> ignore
+        let added = (0x23 <<< 24) ||| rid
+        touched.Add added |> ignore
+        ledger.Value <- { ledger.Value with Assemblies = Map.add name added ledger.Value.Assemblies }
+        added
+
+    // A type reference, by the text that names it, made up from its parts.
+    let ensureTypeRef (text: string) (scope: EntityHandle) (ns: string) (name: string) : int =
+      match state.Index.TypeRef text, Map.tryFind text ledger.Value.TypeRefs with
+      | ValueSome existing, _ -> existing
+      | _, Some existing -> existing
+      | _ ->
+        let rid = nextRow TableIndex.TypeRef
+        builder.AddTypeReference(scope, builder.GetOrAddString ns, builder.GetOrAddString name) |> ignore
+        let added = (0x01 <<< 24) ||| rid
+        touched.Add added |> ignore
+        ledger.Value <- { ledger.Value with TypeRefs = Map.add text added ledger.Value.TypeRefs }
+        added
+
+    let ensureMemberRef (text: string) (parent: int) (name: string) (signature: byte array) : int =
+      match state.Index.MemberRef text, Map.tryFind text ledger.Value.MemberRefs with
+      | ValueSome existing, _ -> existing
+      | _, Some existing -> existing
+      | _ ->
+        let rid = nextRow TableIndex.MemberRef
+        builder.AddMemberReference(MetadataTokens.EntityHandle parent, builder.GetOrAddString name, builder.GetOrAddBlob signature) |> ignore
+        let added = (0x0A <<< 24) ||| rid
+        touched.Add added |> ignore
+        ledger.Value <- { ledger.Value with MemberRefs = Map.add text added ledger.Value.MemberRefs }
+        added
+
+    // The call at the front of a patched body: `void Enter(int64)` on the probe target. Its rows are made once, on
+    // first use, and found by their text in every later delta.
+    let probeCall : Lazy<int> =
+      lazy
+        (match probing with
+         | EntryProbing.NoProbes -> invalidOp "a probe call was asked for and the delta has no probe target"
+         | EntryProbing.ProbeEntry (target, _) ->
+           let assembly = ensureAssembly target.AssemblyName target.Version target.Culture target.PublicKeyToken (enum<AssemblyFlags> 0)
+           let outerText = ReferenceText.typeRef (ReferenceText.assemblyScope target.AssemblyName) target.OuterNamespace target.OuterName
+           let outer = ensureTypeRef outerText (MetadataTokens.EntityHandle assembly) target.OuterNamespace target.OuterName
+           let innerText = ReferenceText.typeRef outerText "" target.InnerName
+           let inner = ensureTypeRef innerText (MetadataTokens.EntityHandle outer) "" target.InnerName
+           // Default calling convention, one parameter, returns void, takes an int64.
+           ensureMemberRef (ReferenceText.memberRef innerText target.MethodName "Void(Int64)") inner target.MethodName [| 0x00uy; 0x01uy; 0x01uy; 0x0Auy |])
 
     let rec map (token: int) : int =
       let table = token >>> 24
@@ -506,24 +612,7 @@ type DeltaChain private (state: ChainState) =
             | HandleKind.AssemblyReference ->
               let a = nextReader.GetAssemblyReference(Handles.assemblyRef t.ResolutionScope)
               let name = nextReader.GetString a.Name
-              let assembly =
-                match state.Index.Assembly name, Map.tryFind name ledger.Value.Assemblies with
-                | ValueSome existing, _ -> existing
-                | _, Some existing -> existing
-                | _ ->
-                  let rid = nextRow TableIndex.AssemblyRef
-                  builder.AddAssemblyReference(
-                    builder.GetOrAddString name,
-                    a.Version,
-                    builder.GetOrAddString(nextReader.GetString a.Culture),
-                    builder.GetOrAddBlob(nextReader.GetBlobBytes a.PublicKeyOrToken),
-                    a.Flags,
-                    BlobHandle()) |> ignore
-                  let added = (0x23 <<< 24) ||| rid
-                  touched.Add added |> ignore
-                  ledger.Value <- { ledger.Value with Assemblies = Map.add name added ledger.Value.Assemblies }
-                  added
-              MetadataTokens.EntityHandle assembly
+              MetadataTokens.EntityHandle(ensureAssembly name a.Version (nextReader.GetString a.Culture) (nextReader.GetBlobBytes a.PublicKeyOrToken) a.Flags)
             | HandleKind.TypeReference -> MetadataTokens.EntityHandle(map (MetadataTokens.GetToken t.ResolutionScope))
             | other -> raise (IlRefusalRaised (IlRefusal.UnsupportedSignature (sprintf "a type reference scoped by %A" other)))
           let rid = nextRow TableIndex.TypeRef
@@ -600,10 +689,10 @@ type DeltaChain private (state: ChainState) =
     let bodies = MethodBodyStreamEncoder ilStream
 
     /// Writes one body and says where it starts in the IL stream.
-    let writeBody (typeKey: string) (name: string) (body: MethodBodyBlock) : int =
+    let writeBody (typeKey: string) (name: string) (body: MethodBodyBlock) (probe: int64 voption) : int =
       try
         let il = body.GetILBytes()
-        let rewritten = Array.copy il
+        let patched = Array.copy il
         match IlCanon.scan il with
         | Result.Error refusal -> raise (IlRefusalRaised refusal)
         | Result.Ok instructions ->
@@ -620,8 +709,21 @@ type DeltaChain private (state: ChainState) =
                   | _ -> ()
                   let text = nextReader.GetUserString(MetadataTokens.UserStringHandle(token &&& 0xFFFFFF))
                   0x70000000 ||| MetadataTokens.GetHeapOffset(builder.GetOrAddUserString text)
-              BitConverter.TryWriteBytes(Span<byte>(rewritten, operandAt, 4), replacement) |> ignore
+              BitConverter.TryWriteBytes(Span<byte>(patched, operandAt, 4), replacement) |> ignore
             | _ -> ()
+        // A probe puts `ldc.i8 id; call Enter` in front of the body. Branches are relative, so only the exception
+        // regions (absolute offsets) move, by the length of what went in front.
+        let rewritten =
+          match probe with
+          | ValueNone -> patched
+          | ValueSome id ->
+            let prefix = Array.zeroCreate<byte> 14
+            prefix[0] <- 0x21uy
+            BitConverter.TryWriteBytes(Span<byte>(prefix, 1, 8), id) |> ignore
+            prefix[9] <- 0x28uy
+            BitConverter.TryWriteBytes(Span<byte>(prefix, 10, 4), probeCall.Value) |> ignore
+            Array.append prefix patched
+        let shift = rewritten.Length - il.Length
         let locals =
           match body.LocalSignature.IsNil with
           | true -> StandaloneSignatureHandle()
@@ -629,11 +731,13 @@ type DeltaChain private (state: ChainState) =
         let regions = body.ExceptionRegions
         let small =
           ExceptionRegionEncoder.IsSmallRegionCount regions.Length
-          && regions |> Seq.forall (fun r -> ExceptionRegionEncoder.IsSmallExceptionRegion(r.TryOffset, r.TryLength) && ExceptionRegionEncoder.IsSmallExceptionRegion(r.HandlerOffset, r.HandlerLength))
+          && regions |> Seq.forall (fun r -> ExceptionRegionEncoder.IsSmallExceptionRegion(r.TryOffset + shift, r.TryLength) && ExceptionRegionEncoder.IsSmallExceptionRegion(r.HandlerOffset + shift, r.HandlerLength))
         let written =
           bodies.AddMethodBody(
             rewritten.Length,
-            body.MaxStack,
+            (match probe with
+             | ValueSome _ -> max body.MaxStack 1
+             | ValueNone -> body.MaxStack),
             regions.Length,
             small,
             locals,
@@ -646,7 +750,11 @@ type DeltaChain private (state: ChainState) =
             match region.Kind, region.CatchType.IsNil with
             | ExceptionRegionKind.Catch, false -> MetadataTokens.EntityHandle(map (MetadataTokens.GetToken region.CatchType))
             | _ -> EntityHandle()
-          written.ExceptionRegions.Add(region.Kind, region.TryOffset, region.TryLength, region.HandlerOffset, region.HandlerLength, catchType, region.FilterOffset) |> ignore
+          let filter =
+            match region.Kind with
+            | ExceptionRegionKind.Filter -> region.FilterOffset + shift
+            | _ -> region.FilterOffset
+          written.ExceptionRegions.Add(region.Kind, region.TryOffset + shift, region.TryLength, region.HandlerOffset + shift, region.HandlerLength, catchType, filter) |> ignore
         written.Offset
       with IlRefusalRaised refusal -> raise (RudeCauseRaised (RudeCause.UnreadableBody (typeKey, name, refusal)))
 
@@ -668,7 +776,11 @@ type DeltaChain private (state: ChainState) =
       updates
       |> List.map (fun (v, row) ->
         let m = nextReader.GetMethodDefinition v.NextHandle
-        let offset = writeBody v.Method.TypeKey v.Method.Name (next.Pe.GetMethodBody m.RelativeVirtualAddress)
+        let probe =
+          match probing with
+          | EntryProbing.NoProbes -> ValueNone
+          | EntryProbing.ProbeEntry (_, assign) -> ValueSome (assign v.Method)
+        let offset = writeBody v.Method.TypeKey v.Method.Name (next.Pe.GetMethodBody m.RelativeVirtualAddress) probe
         row, offset)
 
     // Each added method: its body, its signature in the baseline's numbering, its parameters.
@@ -682,7 +794,7 @@ type DeltaChain private (state: ChainState) =
         let offset =
           match m.RelativeVirtualAddress with
           | 0 -> 0
-          | rva -> writeBody v.Method.TypeKey v.Method.Name (next.Pe.GetMethodBody rva)
+          | rva -> writeBody v.Method.TypeKey v.Method.Name (next.Pe.GetMethodBody rva) ValueNone
         let signature =
           try SignatureWalker(nextReader.GetBlobBytes m.Signature, map).Rewrite SignatureShape.MethodOrProperty
           with IlRefusalRaised refusal -> raise (RudeCauseRaised (RudeCause.UnreadableBody (v.Method.TypeKey, v.Method.Name, refusal)))
@@ -790,6 +902,10 @@ type DeltaChain private (state: ChainState) =
         Updated = updates |> List.map (fun (v, _) -> v.Method)
         AddedMethods = addedMethods |> List.map (fun v -> v.Method)
         MethodTokens = (updates |> List.map (fun (_, row) -> row.Token)) @ (addedWritten |> List.map (fun (row, _, _, _) -> row.Token))
+        Probes =
+          (match probing with
+           | EntryProbing.NoProbes -> []
+           | EntryProbing.ProbeEntry (_, assign) -> updates |> List.map (fun (v, _) -> v.Method, assign v.Method))
         Requires = requires }
     PreparedDelta(
       payload,

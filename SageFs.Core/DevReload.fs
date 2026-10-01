@@ -213,6 +213,9 @@ type ReloadReport = {
   /// The `ReloadOutcome` case name: Patched | PatchPending | NeverEntered |
   /// Restarted | NoEffect | RestartRequired | CompileFailed | KeptLiveState.
   Outcome: string
+  /// How a patch reached the process: `detour`, or `metadata-delta`. Empty when the outcome is not a patch. The wire
+  /// only carries it when it is not empty, so a payload for a restart is what it always was.
+  Mechanism: string
   /// How many of the definitions this save changed have been SEEN RUNNING their
   /// new code. A pending patch says 0: applied is not live. Zero is meaningful.
   Patched: int
@@ -272,7 +275,7 @@ type DevReloadEvent =
 
 module ReloadReport =
   /// The report for an event that carries no outcome of its own.
-  let none = { Outcome = ""; Patched = 0; Considered = 0; Message = ""; SuggestedAction = ""; Reasons = []; Kept = [] }
+  let none = { Outcome = ""; Mechanism = ""; Patched = 0; Considered = 0; Message = ""; SuggestedAction = ""; Reasons = []; Kept = [] }
 
 module DevReloadEvent =
 
@@ -319,14 +322,19 @@ module DevReloadEvent =
       match r.Kept with
       | [] -> ""
       | ks -> sprintf ""","kept":[%s]""" (ks |> List.map keptJson |> String.concat ",")
+    let mechanism =
+      match r.Mechanism with
+      | "" -> ""
+      | name -> sprintf ""","mechanism":%s""" (json name)
     sprintf
-      """"outcome":%s,"patched":%d,"considered":%d,"message":%s,"suggestedAction":%s,"reasons":[%s]%s"""
+      """"outcome":%s,"patched":%d,"considered":%d,"message":%s,"suggestedAction":%s,"reasons":[%s]%s%s"""
       (json r.Outcome)
       r.Patched
       r.Considered
       (json r.Message)
       (json r.SuggestedAction)
       (r.Reasons |> List.map refusalJson |> String.concat ",")
+      mechanism
       kept
 
   /// The bare JSON payload for one event — no SSE framing. `sseData` wraps

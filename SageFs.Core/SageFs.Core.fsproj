@@ -152,6 +152,10 @@
         <Compile Include="ShapeMigration.fs" />
         <Compile Include="Features\RegisteredHolder.fs" />
         <Compile Include="Features\RestartScope.fs" />
+        <!-- Before ReloadOutcome: a refusal of the metadata-delta route is a RestartReason, and names its RudeCause. Both files
+             depend on nothing. -->
+        <Compile Include="Features\MetadataDelta\RudeCause.fs" />
+        <Compile Include="Features\MetadataDelta\MetadataDeltaFlag.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
         <!-- Pure: when a patch is live (its new body has been seen running). After ReloadPlanning
@@ -198,8 +202,6 @@
         <!-- The metadata-delta emitter: reads two builds of a project and writes the delta that patches a
              running assembly's method bodies. Pure over System.Reflection.Metadata, off by default, and not
              wired into the planner yet. -->
-        <Compile Include="Features\MetadataDelta\RudeCause.fs" />
-        <Compile Include="Features\MetadataDelta\MetadataDeltaFlag.fs" />
         <Compile Include="Features\MetadataDelta\PeImage.fs" />
         <Compile Include="Features\MetadataDelta\IlCanon.fs" />
         <Compile Include="Features\MetadataDelta\MethodDiff.fs" />

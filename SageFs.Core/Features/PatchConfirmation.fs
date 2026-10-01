@@ -46,6 +46,8 @@ type PatchWatch =
     Considered: int
     /// Live values the save kept; they appear in whatever the watch resolves into.
     Kept: KeptValue list
+    /// How the patch reached the process: what it settles into says so, as the pending word did.
+    Mechanism: PatchMechanism
     First: DeclWatch
     Rest: DeclWatch list }
 
@@ -103,8 +105,7 @@ let watchedOfRedirected (redirected: string list) (probes: EntryProbe list) : Wa
 /// Begin watching a planner outcome. Only a pending patch is watched; it is
 /// announced as it is, and what it resolves into is `step`'s and `settle`'s.
 let start (watched: WatchedDecl list) (outcome: ReloadOutcome) : Begun =
-  match outcome with
-  | ReloadOutcome.PatchPending(_, considered, kept) ->
+  let watching (considered: int) (kept: KeptValue list) (mechanism: PatchMechanism) : Begun =
     match watched with
     | [] -> Begun.NothingToWatch(Outcome.NoEffect(considered, []))
     | first :: rest ->
@@ -112,9 +113,15 @@ let start (watched: WatchedDecl list) (outcome: ReloadOutcome) : Begun =
         outcome,
         { Considered = considered
           Kept = kept
+          Mechanism = mechanism
           First = DeclWatch.Unseen first
           Rest = rest |> List.map DeclWatch.Unseen }
       )
+  match outcome with
+  | ReloadOutcome.PatchPending(_, considered, kept) -> watching considered kept PatchMechanism.Detour
+  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(_, considered)) -> watching considered [] PatchMechanism.MetadataDelta
+  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched _)
+  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered _)
   | ReloadOutcome.Patched _
   | ReloadOutcome.NoEffect _
   | ReloadOutcome.Restarted _
@@ -134,9 +141,10 @@ let probesOf (watch: PatchWatch) : int64 list =
 
 let private confirmed (watch: PatchWatch) (live: DeclWatch list) : ReloadOutcome =
   let applied = List.length live
-  match watch.Kept with
-  | [] -> Outcome.Patched(applied, watch.Considered)
-  | first :: rest -> Outcome.KeptLiveState(applied, watch.Considered, first, rest)
+  match watch.Mechanism, watch.Kept with
+  | PatchMechanism.MetadataDelta, _ -> Outcome.ByMetadataDelta(MetadataDeltaOutcome.Patched(applied, watch.Considered))
+  | _, [] -> Outcome.Patched(applied, watch.Considered)
+  | _, first :: rest -> Outcome.KeptLiveState(applied, watch.Considered, first, rest)
 
 /// The bound passed: whatever has not run is named.
 let private expired (watch: PatchWatch) (live: DeclWatch list) : ReloadOutcome =
@@ -153,9 +161,10 @@ let private expired (watch: PatchWatch) (live: DeclWatch list) : ReloadOutcome =
       | DeclWatch.Unseen _
       | DeclWatch.Replaced _ -> false)
     |> List.length
-  match silent with
-  | first :: rest -> Outcome.NeverEntered(first, rest, seen, watch.Considered, watch.Kept)
-  | [] -> confirmed watch live
+  match silent, watch.Mechanism with
+  | first :: rest, PatchMechanism.MetadataDelta -> Outcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered(first, rest, seen, watch.Considered))
+  | first :: rest, _ -> Outcome.NeverEntered(first, rest, seen, watch.Considered, watch.Kept)
+  | [], _ -> confirmed watch live
 
 let private isLive (d: DeclWatch) =
   match d with

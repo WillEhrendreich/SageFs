@@ -52,6 +52,10 @@ type Op =
   | ApplyLast
   /// Call a static method of the loaded assembly that takes nothing, and print what it returned (a task is awaited).
   | Invoke of typeName: string * methodName: string
+  /// Allocate this many entry probes in the process's registry, so a delta written with probes 1 to n has them.
+  | AllocateProbes of count: int
+  /// Print each probe's status: `Entered`, `Superseded` or `NotEntered`.
+  | ReadProbes
 
 [<RequireQualifiedAccess>]
 module Op =
@@ -70,6 +74,8 @@ module Op =
     | Op.Second next -> "second " + next
     | Op.ApplyLast -> "applylast"
     | Op.Invoke (typeName, methodName) -> sprintf "invoke %s %s" typeName methodName
+    | Op.AllocateProbes count -> sprintf "allocateprobes %d" count
+    | Op.ReadProbes -> "readprobes"
 
   let parse (line: string) : Op voption =
     match line.Split(' ', StringSplitOptions.RemoveEmptyEntries) with
@@ -88,6 +94,11 @@ module Op =
     | [| "second"; next |] -> ValueSome (Op.Second next)
     | [| "applylast" |] -> ValueSome Op.ApplyLast
     | [| "invoke"; typeName; methodName |] -> ValueSome (Op.Invoke (typeName, methodName))
+    | [| "allocateprobes"; count |] ->
+      match Int32.TryParse count with
+      | true, n -> ValueSome (Op.AllocateProbes n)
+      | false, _ -> ValueNone
+    | [| "readprobes" |] -> ValueSome Op.ReadProbes
     | _ -> ValueNone
 
 /// What a line the child prints is about.
@@ -105,6 +116,8 @@ type FactKind =
   | Handler
   /// What a method called by `Invoke` returned, or the name of the exception it threw.
   | Invoked
+  /// The status of the probes, from `ReadProbes`: `1=Entered 2=NotEntered`.
+  | Probes
   /// The script had a line the child does not know.
   | Unknown
 
@@ -112,7 +125,7 @@ type FactKind =
 module FactKind =
   let all : FactKind list =
     [ FactKind.EvalBegin; FactKind.EvalEnd; FactKind.EvalLine; FactKind.Apply; FactKind.Check; FactKind.Capability
-      FactKind.Time; FactKind.Bench; FactKind.Second; FactKind.Handler; FactKind.Invoked; FactKind.Unknown ]
+      FactKind.Time; FactKind.Bench; FactKind.Second; FactKind.Handler; FactKind.Invoked; FactKind.Probes; FactKind.Unknown ]
 
   let tag (kind: FactKind) : string =
     match kind with
@@ -127,6 +140,7 @@ module FactKind =
     | FactKind.Second -> "SECOND"
     | FactKind.Handler -> "HANDLER"
     | FactKind.Invoked -> "INVOKED"
+    | FactKind.Probes -> "PROBES"
     | FactKind.Unknown -> "UNKNOWN"
 
 /// One thing the child said.
@@ -161,6 +175,7 @@ let private payloadOf (meta: byte array) (il: byte array) (tokens: int list) (re
     Updated = []
     AddedMethods = []
     MethodTokens = tokens
+    Probes = []
     Requires = requires }
 
 /// The method tokens a delta wrote, from the file the parent put beside it (empty when there is none).
@@ -212,6 +227,7 @@ let private runScript (directory: string) : int =
   // The delta the last `bench` produced, for `ApplyLast`, and the chain after it with the build it was made from, for `Second`.
   let mutable lastPayload : DeltaPayload voption = ValueNone
   let mutable lastChain : (DeltaChain * PeImage) voption = ValueNone
+  let mutable allocatedProbes = 0
   let path (name: string) = Path.Combine(directory, name)
   for line in File.ReadAllLines(path "script.txt") do
     match Op.parse line with
@@ -296,6 +312,14 @@ let private runScript (directory: string) : int =
         | :? TargetInvocationException as e -> "exc:" + e.InnerException.GetType().Name + " " + e.InnerException.Message
         | e -> "exc:" + e.GetType().Name + " " + e.Message
       say FactKind.Invoked (sprintf "%s.%s=%s" typeName methodName result)
+    | ValueSome (Op.AllocateProbes count) ->
+      for _ in 1 .. count do
+        allocatedProbes <- allocatedProbes + 1
+        SageFs.Middleware.EntryProbes.ProbeRegistry.Shared.Allocate(sprintf "probe-%d" allocatedProbes) |> ignore
+    | ValueSome Op.ReadProbes ->
+      let reading = SageFs.Middleware.EntryProbes.ProbeRegistry.Shared.Read [ 1L .. int64 allocatedProbes ]
+      say FactKind.Probes
+        (String.Join(" ", reading.Sightings |> List.map (fun s -> sprintf "%d=%A" s.Probe s.Status)))
     | ValueSome Op.ApplyLast ->
       match lastPayload with
       | ValueNone -> say FactKind.Time "no-delta"

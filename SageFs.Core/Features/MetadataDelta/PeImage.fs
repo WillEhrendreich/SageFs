@@ -49,6 +49,17 @@ type internal NameFolding private () =
   static member fold (name: string) : string =
     lineNumbers.Replace(name, MatchEvaluator(fun m -> match m.Value.StartsWith("@", StringComparison.Ordinal) with | true -> "@_" | false -> "_"))
 
+/// The text of a reference, spelled in one place so a reference the writer makes up matches the same reference read
+/// from an assembly that already has it.
+[<AbstractClass; Sealed>]
+type internal ReferenceText =
+  /// The scope of a type reference that sits in an assembly.
+  static member assemblyScope (assemblyName: string) : string = "asm:" + assemblyName
+  /// A type reference, by the text of its scope.
+  static member typeRef (scope: string) (ns: string) (name: string) : string = sprintf "tr:%s/%s.%s" scope ns name
+  /// A member reference, by the text of its parent and of its signature.
+  static member memberRef (parent: string) (name: string) (shape: string) : string = sprintf "mr:%s::%s#%s" parent name shape
+
 /// The keys of a module's types, and how many types fold to each name.
 [<AbstractClass; Sealed>]
 type internal TypeKeys =
@@ -154,11 +165,11 @@ type PeImage private (bytes: byte array) =
     let scope =
       match t.ResolutionScope.Kind with
       | HandleKind.AssemblyReference ->
-        "asm:" + reader.GetString(reader.GetAssemblyReference(Handles.assemblyRef t.ResolutionScope).Name)
+        ReferenceText.assemblyScope (reader.GetString(reader.GetAssemblyReference(Handles.assemblyRef t.ResolutionScope).Name))
       | HandleKind.TypeReference -> typeReferenceText (Handles.typeRef t.ResolutionScope)
       | HandleKind.ModuleReference -> "module"
       | _ -> "other"
-    sprintf "tr:%s/%s.%s" scope (reader.GetString t.Namespace) (reader.GetString t.Name)
+    ReferenceText.typeRef scope (reader.GetString t.Namespace) (reader.GetString t.Name)
 
   let signatures = SignatureText(reader, typeKey, typeReferenceText)
 
@@ -221,7 +232,7 @@ type PeImage private (bytes: byte array) =
             match m.GetKind() with
             | MemberReferenceKind.Field -> signatures.OfField m.Signature
             | _ -> signatures.OfMethod m.Signature
-          sprintf "mr:%s::%s#%s" parent (reader.GetString m.Name) shape
+          ReferenceText.memberRef parent (reader.GetString m.Name) shape
         | HandleKind.MethodSpecification ->
           let s = reader.GetMethodSpecification(Handles.methodSpec handle)
           sprintf "ms:%s<%s" (describe s.Method) (signatures.OfInstantiation s)

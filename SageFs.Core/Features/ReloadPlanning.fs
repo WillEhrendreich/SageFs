@@ -128,6 +128,11 @@ type ReloadChange =
   /// A generic function whose instantiations cannot all be listed, so a patch could leave one on the old
   /// body. Found at patch time, from the program's own code.
   | GenericInstantiationsUnknown of declaration: string * detail: string
+  /// A metadata delta against the assembly the worker loaded cannot carry this edit. The cause is the emitter's own and
+  /// names the declaration.
+  | RefusedByDelta of cause: SageFs.Features.MetadataDelta.RudeCause
+  /// The metadata-delta route cannot be used for this app right now (see `RestartReason.MetadataDeltaUnavailable`).
+  | DeltaUnavailable of why: string
 
 /// Live module state a patch has to respect. Rule 1 of hot-reload-state-spec.md:
 /// code changes land, state stays.
@@ -188,6 +193,8 @@ module ReloadChange =
     | ReloadChange.InstanceLayoutChanged (typeName, detail) ->
       sprintf "the fields of %s changed (%s)" typeName detail
     | ReloadChange.GenericInstantiationsUnknown (name, detail) -> sprintf "%s is generic, and %s" name detail
+    | ReloadChange.RefusedByDelta cause -> SageFs.Features.MetadataDelta.RudeCause.describe cause
+    | ReloadChange.DeltaUnavailable why -> sprintf "this app cannot take an in-place patch: %s" why
   let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
     first :: rest |> List.map describe |> String.concat "; "
 
@@ -243,6 +250,8 @@ module ReloadChange =
     | ReloadChange.ClosureShapeChanged (name, detail) -> RestartReason.ClosureShapeChanged (name, detail)
     | ReloadChange.InstanceLayoutChanged (typeName, detail) -> RestartReason.InstanceLayoutChanged (typeName, detail)
     | ReloadChange.GenericInstantiationsUnknown (name, detail) -> RestartReason.GenericInstantiationsUnknown (name, detail)
+    | ReloadChange.RefusedByDelta cause -> RestartReason.RudeEdit cause
+    | ReloadChange.DeltaUnavailable why -> RestartReason.MetadataDeltaUnavailable why
   let restartReasons (first: ReloadChange) (rest: ReloadChange list) : RestartReason list =
     first :: rest |> List.map restartReason
 

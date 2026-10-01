@@ -53,16 +53,30 @@ type Twin =
   /// The first changed method is reported unchanged, so its delta is never written.
   | DiffDropsAChange
 
+/// Whether the bodies a delta writes tell the process's probe registry they started.
+[<RequireQualifiedAccess>]
+type Probing =
+  | Unprobed
+  | Probed
+
 type private Prepared =
   { Directory: string
     /// The delta files in order, as `(meta, il)` names relative to the directory. An unchanged version has none.
     Deltas: (string * string) list
     /// The version each delta takes the process to, in the same order.
     Versions: int list
+    /// How many probes each delta writes, in the same order.
+    ProbeCounts: int list
+    /// The probes of the methods `eval` calls every time, which have to be Entered once everything has run.
+    ProbesOfCalledMethods: int64 list
     Problems: string list }
 
+/// The hook every probed body calls: `EntryHooks.Enter(int64)` in the SageFs.Core this process has loaded.
+let private probeTarget : ProbeTarget =
+  ProbeTarget.ofMethod (typeof<SageFs.Middleware.EntryProbes.EntryHooks>.GetMethod "Enter")
+
 /// The delta files for each step of a chain of versions, written beside the baseline copy.
-let private prepare (twin: Twin) (seed: uint64) (probes: ProbeStripping) (directory: string) (paths: string list) : Prepared =
+let private prepare (twin: Twin) (probing: Probing) (seed: uint64) (probes: ProbeStripping) (directory: string) (paths: string list) : Prepared =
   let baselineCopy = Path.Combine(directory, "base", "Gen.dll")
   Directory.CreateDirectory(Path.GetDirectoryName baselineCopy) |> ignore
   File.Copy(List.head paths, baselineCopy, true)
@@ -71,12 +85,31 @@ let private prepare (twin: Twin) (seed: uint64) (probes: ProbeStripping) (direct
   let deltas = ResizeArray<string * string>()
   let versions = ResizeArray<int>()
   let problems = ResizeArray<string>()
+  let probeCounts = ResizeArray<int>()
+  let calledProbes = ResizeArray<int64>()
+  // A save gets a fresh probe per method, asked for more than once while it is written, the way the registry
+  // hands them out: ids count up across saves and the same method keeps its id within one.
+  let mutable nextProbe = 0L
+  let mutable thisSave = System.Collections.Generic.Dictionary<MethodId, int64>()
+  let assign (method': MethodId) : int64 =
+    match thisSave.TryGetValue method' with
+    | true, id -> id
+    | false, _ ->
+      nextProbe <- nextProbe + 1L
+      thisSave[method'] <- nextProbe
+      nextProbe
+  let entryProbing =
+    match probing with
+    | Probing.Unprobed -> EntryProbing.NoProbes
+    | Probing.Probed -> EntryProbing.ProbeEntry (probeTarget, assign)
   for i in 1 .. paths.Length - 1 do
     let next = PeImage.OfFile paths[i]
     let encId = encIdFor seed i
+    thisSave <- System.Collections.Generic.Dictionary<MethodId, int64>()
+    let idsBefore = nextProbe
     let outcome =
       match twin, i with
-      | Twin.ChainForgetsItsLastDelta, 2 -> start.Prepare(encId, next)
+      | Twin.ChainForgetsItsLastDelta, 2 -> start.PrepareProbing(encId, next, entryProbing)
       | Twin.DiffDropsAChange, 1 ->
         let diff = MethodDiff.diff { PreviousProbes = probes } (PeImage.OfFile baselineCopy) next
         let dropped = ref false
@@ -91,7 +124,7 @@ let private prepare (twin: Twin) (seed: uint64) (probes: ProbeStripping) (direct
                     { v with Change = MethodChange.Unchanged }
                   | _ -> v) }
         chain.PrepareFrom(encId, next, tampered)
-      | _ -> chain.Prepare(encId, next)
+      | _ -> chain.PrepareProbing(encId, next, entryProbing)
     match outcome with
     | PrepareOutcome.NothingChanged -> ()
     | PrepareOutcome.Refused causes ->
@@ -104,18 +137,27 @@ let private prepare (twin: Twin) (seed: uint64) (probes: ProbeStripping) (direct
       File.WriteAllText(Path.Combine(directory, sprintf "d%d.tokens" i), String.Join(",", prepared.Payload.MethodTokens))
       deltas.Add((meta, il))
       versions.Add i
+      probeCounts.Add(int (nextProbe - idsBefore))
+      for (method', id) in prepared.Payload.Probes do
+        match method'.TypeKey = "Gen.Prog" && method'.Name.StartsWith "m" with
+        | true -> calledProbes.Add id
+        | false -> ()
       match twin, i with
       | Twin.ChainForgetsItsLastDelta, 1 -> ()
       | _ -> chain <- chain.Commit prepared
   { Directory = directory
     Deltas = List.ofSeq deltas
     Versions = List.ofSeq versions
+    ProbeCounts = List.ofSeq probeCounts
+    ProbesOfCalledMethods = List.ofSeq calledProbes
     Problems = List.ofSeq problems }
 
 /// What one case came to.
 type private CaseResult =
   { Seed: uint64
     Problems: string list
+    /// How many probes of patched methods the case read back, so a check that read nothing can be told from one that passed.
+    ProbesChecked: int
     Program: string }
 
 let private firstDifference (actual: string list) (expected: string list) : string =
@@ -124,7 +166,7 @@ let private firstDifference (actual: string list) (expected: string list) : stri
   | None -> sprintf "got %d lines, wanted %d" actual.Length expected.Length
 
 /// Compile a case, patch it version by version in a child, and compare every answer with the oracle.
-let private runCase (twin: Twin) (probes: ProbeStripping) (instrument: bool) (seed: uint64, versions: Program list) : Task<CaseResult> =
+let private runCase (twin: Twin) (probing: Probing) (probes: ProbeStripping) (instrument: bool) (seed: uint64, versions: Program list) : Task<CaseResult> =
   task {
     let directory = scratch ()
     try
@@ -134,15 +176,22 @@ let private runCase (twin: Twin) (probes: ProbeStripping) (instrument: bool) (se
         match SageFs.Tests.DeltaInstrumentation.instrumentInPlace baselinePath with
         | Result.Ok _ -> ()
         | Result.Error message -> failwithf "instrumenting the baseline failed: %s" message
-      let prepared = prepare twin seed probes directory paths
+      let prepared = prepare twin probing seed probes directory paths
       // The versions that came out with a delta, in order. A version that came out unchanged has none.
+      // A probed delta's probes are allocated in the process before it lands, the way the worker allocates them.
       let script =
         [ yield Op.Load "base/Gen.dll"
           yield Op.Eval
-          for (meta, il) in prepared.Deltas do
+          for ((meta, il), probeCount) in List.zip prepared.Deltas prepared.ProbeCounts do
+            match probing with
+            | Probing.Probed -> yield Op.AllocateProbes probeCount
+            | Probing.Unprobed -> ()
             yield Op.Apply (meta, il)
             yield Op.Eval
-          yield Op.EvalLate ]
+          yield Op.EvalLate
+          match probing with
+          | Probing.Probed -> yield Op.ReadProbes
+          | Probing.Unprobed -> () ]
       let! result = DeltaChild.run directory ModifiableAssemblies.Debug script
       let blocks = DeltaChild.evalBlocks result
       let applies = DeltaChild.applyOutcomes result
@@ -167,12 +216,25 @@ let private runCase (twin: Twin) (probes: ProbeStripping) (instrument: bool) (se
           match blocks[k] = expected with
           | true -> ()
           | false -> problems.Add(sprintf "evaluation %d (version %d): %s" k version (firstDifference blocks[k] expected)))
+      match probing with
+      | Probing.Unprobed -> ()
+      | Probing.Probed ->
+        // Every method the eval calls every time has run since its delta landed, so its probe says Entered.
+        let seen =
+          DeltaChild.factsOf FactKind.Probes result
+          |> List.collect (fun f -> f.Split(' ', StringSplitOptions.RemoveEmptyEntries) |> List.ofArray)
+          |> Set.ofList
+        for id in prepared.ProbesOfCalledMethods do
+          match Set.contains (sprintf "%d=Entered" id) seen with
+          | true -> ()
+          | false -> problems.Add(sprintf "probe %d of a patched method that ran was never entered (saw: %s)" id (String.Join(" ", seen)))
       match problems.Count, result.Stderr with
       | 0, _ | _, "" -> ()
       | _, stderr -> problems.Add(sprintf "child stderr: %s" (stderr.Substring(0, min 600 stderr.Length)))
       return
         { Seed = seed
           Problems = List.ofSeq problems
+          ProbesChecked = prepared.ProbesOfCalledMethods.Length
           Program = String.Join("\n---\n", versions |> List.map describe) }
     finally
       removeQuietly directory
@@ -189,7 +251,7 @@ let private scale : int =
 
 let private cases (seed: uint64) (count: int) (chain: int) : (uint64 * Program list) list = casesOf seed (count * scale) chain
 
-let private runCases (twin: Twin) (probes: ProbeStripping) (instrument: bool) (cases: (uint64 * Program list) list) : Task<CaseResult list> =
+let private runCases (twin: Twin) (probing: Probing) (probes: ProbeStripping) (instrument: bool) (cases: (uint64 * Program list) list) : Task<CaseResult list> =
   task {
     use gate = new SemaphoreSlim(concurrentChildren)
     let one (case: uint64 * Program list) : Task<CaseResult> =
@@ -197,9 +259,9 @@ let private runCases (twin: Twin) (probes: ProbeStripping) (instrument: bool) (c
         do! gate.WaitAsync()
         try
           try
-            return! runCase twin probes instrument case
+            return! runCase twin probing probes instrument case
           with e ->
-            return { Seed = fst case; Problems = [ e.Message ]; Program = "" }
+            return { Seed = fst case; Problems = [ e.Message ]; ProbesChecked = 0; Program = "" }
         finally
           gate.Release() |> ignore
       }
@@ -383,6 +445,8 @@ let metadataDeltaTests =
           Op.Bench ("a.dll", "b.dll", 3, BenchProbes.LookThrough)
           Op.Second "c.dll"
           Op.ApplyLast
+          Op.AllocateProbes 3
+          Op.ReadProbes
           Op.Invoke ("Ns.Type", "method") ]
       for op in ops do
         Op.parse (Op.toLine op) |> Expect.equal (sprintf "%A survives its own line" op) (ValueSome op)
@@ -516,31 +580,39 @@ let metadataDeltaTests =
     // -- the delta, applied --------------------------------------------------------------------------------
 
     testTask "WHY - a delta takes a running process to the next version of the program, for every instantiation, closure and added method" {
-      let! results = runCases Twin.Honest ProbeStripping.KeepEveryInstruction false (cases 1000UL 24 1)
+      let! results = runCases Twin.Honest Probing.Unprobed ProbeStripping.KeepEveryInstruction false (cases 1000UL 24 1)
       results |> List.filter (fun r -> not r.Problems.IsEmpty) |> List.length |> Expect.equal (report results) 0
     }
 
+    testTask "WHY - a body that tells the probe registry it started still computes what the interpreter computes, and every method that ran says so" {
+      let! one = runCases Twin.Honest Probing.Probed ProbeStripping.KeepEveryInstruction false (cases 1000UL 24 1)
+      let! three = runCases Twin.Honest Probing.Probed ProbeStripping.KeepEveryInstruction false (cases 3000UL 8 3)
+      let all = one @ three
+      all |> List.filter (fun r -> not r.Problems.IsEmpty) |> List.length |> Expect.equal (report all) 0
+      (all |> List.sumBy (fun r -> r.ProbesChecked), 0) |> Expect.isGreaterThan "the check read probes back, it did not pass by reading none"
+    }
+
     testTask "WHY - two and three deltas in a row each see what the one before added: the chain carries heaps, row counts and rows" {
-      let! two = runCases Twin.Honest ProbeStripping.KeepEveryInstruction false (cases 2000UL 12 2)
-      let! three = runCases Twin.Honest ProbeStripping.KeepEveryInstruction false (cases 3000UL 8 3)
+      let! two = runCases Twin.Honest Probing.Unprobed ProbeStripping.KeepEveryInstruction false (cases 2000UL 12 2)
+      let! three = runCases Twin.Honest Probing.Unprobed ProbeStripping.KeepEveryInstruction false (cases 3000UL 8 3)
       let all = two @ three
       all |> List.filter (fun r -> not r.Problems.IsEmpty) |> List.length |> Expect.equal (report all) 0
     }
 
     testTask "TWIN - a chain that forgot its last delta is caught: the same cases, run through it, come back red" {
-      let! results = runCases Twin.ChainForgetsItsLastDelta ProbeStripping.KeepEveryInstruction false (casesOf 2000UL 12 2)
+      let! results = runCases Twin.ChainForgetsItsLastDelta Probing.Unprobed ProbeStripping.KeepEveryInstruction false (casesOf 2000UL 12 2)
       (results |> List.filter (fun r -> not r.Problems.IsEmpty) |> List.length, 0) |> Expect.isGreaterThan "the check has teeth"
     }
 
     testTask "TWIN - a diff that drops a change is caught: the process keeps serving the old body" {
-      let! results = runCases Twin.DiffDropsAChange ProbeStripping.KeepEveryInstruction false (casesOf 1000UL 24 1)
+      let! results = runCases Twin.DiffDropsAChange Probing.Unprobed ProbeStripping.KeepEveryInstruction false (casesOf 1000UL 24 1)
       (results |> List.filter (fun r -> not r.Problems.IsEmpty) |> List.length, 0) |> Expect.isGreaterThan "the check has teeth"
     }
 
     // -- the baseline the process actually holds ------------------------------------------------------------
 
     testTask "WHY - the baseline is the Cecil-instrumented module the worker loads, and a delta computed against it takes the process to the next version" {
-      let! results = runCases Twin.Honest (ProbeStripping.StripCoverageProbes CoverageProbe.hitSymbol) true (cases 4000UL 16 1)
+      let! results = runCases Twin.Honest Probing.Unprobed (ProbeStripping.StripCoverageProbes CoverageProbe.hitSymbol) true (cases 4000UL 16 1)
       results |> List.filter (fun r -> not r.Problems.IsEmpty) |> List.length |> Expect.equal (report results) 0
     }
 
@@ -583,7 +655,7 @@ let metadataDeltaTests =
       let directory = scratch ()
       try
         let paths = compileAll directory [ fixedProgram; { fixedProgram with Methods = [ Plain (Lit 1); Plain (Lit 2); Plain (Lit 3) ] } ]
-        let prepared = prepare Twin.Honest 1UL ProbeStripping.KeepEveryInstruction directory paths
+        let prepared = prepare Twin.Honest Probing.Unprobed 1UL ProbeStripping.KeepEveryInstruction directory paths
         let meta, il = List.head prepared.Deltas
         let baseline = "base/Gen.dll"
         let! result =
@@ -600,7 +672,7 @@ let metadataDeltaTests =
       let directory = scratch ()
       try
         let paths = compileAll directory [ fixedProgram; { fixedProgram with Methods = [ Plain (Lit 1); Plain (Lit 2); Plain (Lit 3) ] } ]
-        let prepared = prepare Twin.Honest 1UL ProbeStripping.KeepEveryInstruction directory paths
+        let prepared = prepare Twin.Honest Probing.Unprobed 1UL ProbeStripping.KeepEveryInstruction directory paths
         let meta, il = List.head prepared.Deltas
         // Strip the DebuggableAttribute from the baseline copy, which is what a Release build is.
         let optimized = Path.Combine(directory, "optimized")
