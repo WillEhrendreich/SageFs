@@ -42,6 +42,8 @@ Start `sagefs` once. Then:
 | Values scroll away | Every binding in your session is shown live in the dashboard, top-down, and updates after each eval. |
 | Only you can drive it | An MCP server with [61 tools](docs/mcp-tools.md). An agent evals, type-checks and runs your tests in the same session you're looking at, and `run_tests` hands back a receipt so a stale pass never counts as green. |
 
+For the curious, there are three short write-ups on how it's done, each with the tools I learned from, what F# and .NET don't hand you, how SageFs gets it done, and where Microsoft's version is ahead: [how hot reload works](docs/how-hot-reload-works.md), [how live testing works](docs/how-live-testing-works.md), and [how SageFs opens projects plain FSI can't](docs/how-isolation-works.md).
+
 If you want to see how it got here, [what SageFs has become, stretch by stretch](docs/progress.md) goes through each change as before, now, why it matters, and a link to the code.
 
 I'm not going to pretend all of that is finished. [Live testing](docs/live-testing-as-you-type.md) and hot reload each have documented limits, written down next to the tests that pin them. But all of it runs today, and none of it is a mockup.
@@ -96,6 +98,8 @@ How you start the app matters, and I'd rather tell you than have you find out. A
 A detour landing isn't reported as live. A patched function stays `PatchPending` (the browser still refreshes, because the change may well be live) until its new body has been seen running, and then it becomes `Patched`. If ten seconds go by and it never ran, it's `NeverEntered`, and the message says to exercise it. An app nobody has clicked on yet looks exactly like that, so the wording stays at "unconfirmed". So does a function the JIT inlined into its caller, but only in a project built with optimizations. SageFs builds a session with `-p:Optimize=false`, where an F# `inline` call stays a call and the assembly is marked so the JIT does not inline either. If it finds an optimized build (a Release you built by hand), it marks the session Degraded and says so, because a patch can be bypassed there and nothing else would tell you. Nothing is claimed that wasn't observed.
 
 Your app's live state survives a save. A `let mutable` you didn't touch keeps its value, private ones included. Edit a mutable's initializer and the app keeps its live value, SageFs tells you what it kept, and the dashboard's Hot Reload panel (or the `reset_hot_reload_state` MCP tool) has a Reset for when you want the new initializer to run. Redefine a plain `let` value and it gets its new value, as long as nothing in the running app kept a copy of the old one. The app tells SageFs where every read of it went, so if startup put it in a closure, or a `lazy` cached it, or a handler that hands it on already ran, it's a restart that names who kept it, never a fake Patched. The details, and where that falls short, are in [docs/hot-reload.md](docs/hot-reload.md#values).
+
+> **Curious how this is possible on F#?** [How hot reload works](docs/how-hot-reload-works.md) covers the Erlang, Clojure and Smalltalk ideas it borrows, what .NET doesn't give F# by default, and how it compares with .NET's own hot reload.
 
 > **[docs/hot-reload.md](docs/hot-reload.md) is the authority.** It carries the full what-reloads / what-restarts table, each row pinned by an executable test. This README deliberately doesn't duplicate it, so the two can't drift apart. (No test measures reload latency, so no figure is quoted here.)
 
