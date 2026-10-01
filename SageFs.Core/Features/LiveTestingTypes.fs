@@ -3470,10 +3470,10 @@ module TestCycleEffects =
         && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
       // Fall back to all discovered tests when:
       // 1. changedSymbols changed but dep graph doesn't cover them (new code/not-yet-tracked symbols)
-      // 2. FileSave on a compiled file where the dep graph is empty — FCS can't see main project
-      //    symbols from the test session, so changedSymbols=[] even though the DLL is stale.
+      // 2. A compiled file where the dep graph is empty, on ANY trigger — FCS can't see main
+      //    project symbols from the test session, so changedSymbols=[] even though the DLL is
+      //    stale. A keystroke is no exception: selecting nothing reads as green on a regression.
       // Do NOT fall back when:
-      // - changedSymbols=[] on Keystroke with an empty dep graph (intermediate state)
       // - changedSymbols=[] with a non-empty dep graph, on any trigger — the
       //   file-scope narrow above has already had its turn by this point.
       //   This used to be justified as "FCS correctly reports no semantic
@@ -3483,11 +3483,9 @@ module TestCycleEffects =
       //   zero tests and report green on a regression.
       let isEmptyDepGraph =
         Map.isEmpty depGraph.SymbolToTests && Map.isEmpty depGraph.TransitiveCoverage
-      let isSaveOrExplicit =
-        trigger = RunTrigger.FileSave || trigger = RunTrigger.ExplicitRun
       let symbolsChanged = not (List.isEmpty changedSymbols)
       let shouldFallback =
-        Array.isEmpty affected && isCompiledFile && (symbolsChanged || (isSaveOrExplicit && isEmptyDepGraph))
+        Array.isEmpty affected && isCompiledFile && (symbolsChanged || isEmptyDepGraph)
       let effectiveAffected,
           precision,
           reason =
