@@ -1115,7 +1115,9 @@ let fileSizeBudgets =
       // deleting getStartupInfoJson and the unused
       // largeRepoAutoDiscoveryWarningThreshold. Still under the 4258 this
       // started the series at; never bump to paper over drift.
-      "SageFs/Mcp.fs", 4226
+      // 4226 -> 4219: JSON goes through SageFs.Json, so liveTestJsonOpts and the
+      // two ad hoc JsonSerializerOptions are gone.
+      "SageFs/Mcp.fs", 4219
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
@@ -1128,7 +1130,9 @@ let fileSizeBudgets =
       // (formatStatus, formatStatusJson, formatEnhancedStatus,
       // formatEnhancedStatusJson, formatProxyStatus) and formatLoadedProjectsLine
       // had no production caller, so they are gone.
-      "SageFs/McpAdapter.fs", 681
+      // 681 -> 676: the startup info options object is SageFs.Json's, and the
+      // structured eval result no longer carries three JsonIgnore attributes.
+      "SageFs/McpAdapter.fs", 676
       // 5100 -> 5160: a one-time bump for the live-testing-asyoutype-plan.md
       // Brief 4 keystone (EvalThenRunRequest, TestCycleEffect.
       // EvalBufferThenRunAffected, TestCycleEffects.redirectToEvalBuffer,

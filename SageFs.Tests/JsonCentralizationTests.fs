@@ -20,14 +20,7 @@ let private strayPattern =
 let private budgets : (string * int) list =
   [ "SageFs.Core/DevReload.fs", 1
     "SageFs.Core/SessionOperations.fs", 1
-    "SageFs.Core/SseWriter.fs", 1
-    "SageFs/Mcp.fs", 36
-    "SageFs/McpAdapter.fs", 5
-    "SageFs/McpResources.fs", 1
-    "SageFs/McpServer.fs", 9
-    "SageFs/McpStdioBridge.fs", 2
-    "SageFs/McpTools.fs", 2
-    "SageFs/SessionStatusPayload.fs", 1 ]
+    "SageFs.Core/SseWriter.fs", 1 ]
 
 /// Every non-test source file with its count of stray JSON calls, except the central module.
 let private actual : (string * int) list =

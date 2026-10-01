@@ -15,7 +15,6 @@ module SageFs.Server.McpResources
 /// single source of truth, never a second copy of it.
 
 open System.ComponentModel
-open System.Text.Json
 open System.Threading.Tasks
 open ModelContextProtocol.Server
 open SageFs.McpTools
@@ -29,15 +28,9 @@ let CohortStatusUri = "cohort://status"
 [<Literal>]
 let SessionsListUri = "sessions://list"
 
-/// CamelCase for resource content: this is a fresh, agent-facing JSON
-/// surface (unlike `McpServer.fs`'s `sseJsonOpts`, which predates this item
-/// and is reused as-is for the existing `cohort_matrix` SSE row rather than
-/// changed here). Same `JsonFSharpConverter` the rest of the codebase's JSON
-/// wire rows use.
-let private jsonOpts =
-  let opts = JsonSerializerOptions(PropertyNamingPolicy = JsonNamingPolicy.CamelCase)
-  opts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
-  opts
+/// CamelCase for resource content: this is an agent-facing JSON surface, unlike the
+/// `cohort_matrix` SSE row, which is written with keys as written (`Json.standard`).
+let private jsonOpts = SageFs.Json.optionsOf SageFs.Json.camelCase
 
 /// A `CohortFrame` for a cohort that has never had a command applied to it —
 /// used only when no `CohortOwner` is wired (most daemons/tests). "No

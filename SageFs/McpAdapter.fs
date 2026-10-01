@@ -169,17 +169,13 @@ module McpAdapter =
     [<JsonPropertyName("endColumn")>] EndColumn: int
   }
 
+  /// Written with `Json.omitNulls`: result, error and stdout are left out when null. (The F#
+  /// converter ignores a field marked `JsonIgnore(WhenWritingNull)` whether or not it is null.)
   type StructuredEvalResult = {
     [<JsonPropertyName("success")>] Success: bool
-    [<JsonPropertyName("result")>]
-    [<JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)>]
-    Result: string
-    [<JsonPropertyName("error")>]
-    [<JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)>]
-    Error: string
-    [<JsonPropertyName("stdout")>]
-    [<JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)>]
-    Stdout: string
+    [<JsonPropertyName("result")>] Result: string
+    [<JsonPropertyName("error")>] Error: string
+    [<JsonPropertyName("stdout")>] Stdout: string
     [<JsonPropertyName("diagnostics")>] Diagnostics: StructuredDiagnostic array
     [<JsonPropertyName("code")>] Code: string
   }
@@ -220,7 +216,7 @@ module McpAdapter =
           Diagnostics = diagnostics
           Code = response.EvaluatedCode }
 
-    JsonSerializer.Serialize(result)
+    Json.serialize (Json.omitNulls Json.standard) result
 
   /// Full warmup detail for LLM startup info — shows loaded assemblies,
   /// opened namespaces/modules, failures. Included in get_startup_info only.
@@ -544,8 +540,7 @@ Started: %s{timestamp} UTC"""
       startupProfileLoaded = config.StartupProfileLoaded |> Option.toObj
       startupTimestamp = config.StartupTimestamp.ToString("O")
     |}
-    let opts = JsonSerializerOptions(WriteIndented = true)
-    JsonSerializer.Serialize(data, opts)
+    Json.serialize (Json.indented Json.standard) data
 
   let formatDiagnosticsResult (diagnostics: Features.Diagnostics.Diagnostic array) : string =
     match Array.isEmpty diagnostics with
@@ -584,7 +579,7 @@ Started: %s{timestamp} UTC"""
                        endLine = d.Range.EndLine
                        endColumn = d.Range.EndColumn |} |}) |})
       |> List.toArray
-    System.Text.Json.JsonSerializer.Serialize(entries)
+    Json.serialize Json.standard entries
 
   /// Diagnostics as JSON array *items* (no enclosing brackets — callers
   /// interpolate into their own `"diagnostics":[%s]` field), spans included
@@ -637,7 +632,7 @@ Started: %s{timestamp} UTC"""
   /// was the one production call site that flattened this to a plain
   /// string instead (roast-7 §2, sagefs-roast.md Finding #2).
   let formatEvalStructuredError (err: SageFsError) : string =
-    JsonSerializer.Serialize(SageFsError.toJson err)
+    Json.serialize Json.standard (SageFsError.toJson err)
 
   /// Outbound size cap for MCP tool text results (roast-7 §13/§16 item 13).
   /// The only enforced limit before this was INBOUND — 4 MiB on the request

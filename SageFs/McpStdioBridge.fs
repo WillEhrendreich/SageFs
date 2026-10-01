@@ -107,9 +107,9 @@ let internal writeRejection (stdout: StdoutWriter) (msg: RpcMessage) (reason: st
   | RpcMessage.Request(id, _, _) ->
     let idJson =
       match id with
-      | RpcId.S s -> System.Text.Json.JsonSerializer.Serialize(s: string)
+      | RpcId.S s -> Json.serialize Json.standard s
       | RpcId.N n -> string n
-    let errMsg = System.Text.Json.JsonSerializer.Serialize(reason: string)
+    let errMsg = Json.serialize Json.standard reason
     stdout.WriteLine(sprintf """{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":%s}}""" idJson errMsg)
     // Loud on both channels: the client gets a proper JSON-RPC error, and
     // stderr gets the same reason so a human watching the process (or its

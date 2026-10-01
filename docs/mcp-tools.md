@@ -162,6 +162,7 @@ the final gate before you push.
 | `plan_ripple` | Plan cascade re-evaluation for changed cells using the live dependency graph. |
 | `preview_what_if` | Preview what would change if a binding had a different value, without executing. |
 | `decompose_pipeline` | Break an F# pipeline into stages, each classified pure / effectful / unknown. |
+| `visualize_domain_model` | Draw a union type as a state machine: an ASCII diagram plus JSON. Each state's `Fields` is a list of `[name, type]` pairs. |
 | `get_cell_dependencies` | The cell dependency graph with staleness annotations. |
 | `discover_features` | Context-aware feature discovery, ranked by relevance to the session state. |
 

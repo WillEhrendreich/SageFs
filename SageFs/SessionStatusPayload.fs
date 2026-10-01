@@ -128,7 +128,7 @@ module SessionStatusPayload =
   let serialize (facts: Facts) : string =
     let sessionState = facts.SessionState
 
-    System.Text.Json.JsonSerializer.Serialize(
+    Json.serialize Json.standard
       {| state = stateLabelOf sessionState
          scope = "Session"
          sessionId = facts.SessionId
@@ -144,7 +144,7 @@ module SessionStatusPayload =
          health = facts.Health
          lastRestart = lastRestartJson facts.LastRestart
          lastReload = SessionReload.toWire facts.LastReload
-         available = Affordances.availableTools sessionState |})
+         available = Affordances.availableTools sessionState |}
 
   // ── `wait_seconds` ─────────────────────────────────────────────────
   //

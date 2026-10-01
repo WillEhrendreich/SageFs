@@ -1249,7 +1249,7 @@ to reset. The dashboard's Hot Reload panel shows the same list with a Reset butt
                             ("Kept live state (each initializer runs when you reset it; pass its binding to this tool):\n"
                              + (lines |> List.map (sprintf "- %s") |> String.concat "\n"))
             | false ->
-                use content = new System.Net.Http.StringContent(System.Text.Json.JsonSerializer.Serialize({| binding = binding |}), System.Text.Encoding.UTF8, "application/json")
+                use content = new System.Net.Http.StringContent(SageFs.Json.serialize SageFs.Json.standard {| binding = binding |}, System.Text.Encoding.UTF8, "application/json")
                 let! resp = keptStateClient.PostAsync(workerUrl + "/hotreload/reset-state", content)
                 let! body = resp.Content.ReadAsStringAsync()
                 use doc = System.Text.Json.JsonDocument.Parse body
@@ -1320,7 +1320,7 @@ The mode new sessions start in is the `hotreload.reflectionReadMode` setting."""
                         | false, _ -> return sprintf "Error: %s" (SageFs.Features.KeptState.ReflectionReadsError.describe why)
                 | false, _ -> return "Error: this worker doesn't report reflection reads. It's older than the build that watches them."
             | false ->
-                use content = new System.Net.Http.StringContent(System.Text.Json.JsonSerializer.Serialize({| mode = mode |}), System.Text.Encoding.UTF8, "application/json")
+                use content = new System.Net.Http.StringContent(SageFs.Json.serialize SageFs.Json.standard {| mode = mode |}, System.Text.Encoding.UTF8, "application/json")
                 let! resp = keptStateClient.PostAsync(workerUrl + "/hotreload/reflection-mode", content)
                 let! body = resp.Content.ReadAsStringAsync()
                 use doc = System.Text.Json.JsonDocument.Parse body

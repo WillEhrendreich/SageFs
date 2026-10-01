@@ -114,7 +114,7 @@ type McpServerTracker() =
       | true -> return ()
       | false ->
         let jsonElement =
-          let json = JsonSerializer.Serialize(data)
+          let json = Json.serialize Json.standard data
           use doc = JsonDocument.Parse(json)
           doc.RootElement.Clone()
         let snapshot = servers |> Seq.map (fun kvp -> kvp.Key, kvp.Value) |> Seq.toArray
@@ -287,7 +287,7 @@ let structuredToolErrorResult (err: SageFsError) : CallToolResult =
   let result = CallToolResult()
   result.IsError <- Nullable true
   result.Content.Add(TextContentBlock(Text = SageFsError.describeForAgent err))
-  let json = JsonSerializer.Serialize(SageFsError.toJson err)
+  let json = Json.serialize Json.standard (SageFsError.toJson err)
   use doc = JsonDocument.Parse(json)
   result.StructuredContent <- Nullable(doc.RootElement.Clone())
   result
@@ -484,7 +484,7 @@ let private maxRequestBodyBytes = 4_194_304L
 let jsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (statusCode: int) (data: obj) = task {
   ctx.Response.StatusCode <- statusCode
   ctx.Response.ContentType <- "application/json"
-  let json = System.Text.Json.JsonSerializer.Serialize(data)
+  let json = Json.serialize Json.standard data
   do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(json))
 }
 
@@ -1492,11 +1492,11 @@ let wireModelChangeHandlers
               lt.TestState.Activation
               (LiveTestState.statusEntriesForSession sidStr lt.TestState
                |> Array.map (fun e -> e.Status))
-          System.Text.Json.JsonSerializer.Serialize(
+          Json.serialize Json.standard
             {| Enabled = lt.TestState.Activation = LiveTestingActivation.Active
                IsRunning = TestRunPhase.isAnyRunning lt.TestState.RunPhases
                Summary = {| Total = summary.Total; Passed = summary.Passed; Failed = summary.Failed
-                            Running = summary.Running; Stale = summary.Stale |} |}, ctx.SseJsonOpts)
+                            Running = summary.Running; Stale = summary.Stale |} |}
         with
         | :? System.Text.Json.JsonException as ex ->
           Log.error "[MCP] Test trace serialization error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
@@ -3228,11 +3228,11 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
         match matchingFile with
         | Some fullPath ->
           let fa = FileAnnotations.projectWithCoverage fullPath model.LiveTesting
-          let json = System.Text.Json.JsonSerializer.Serialize(fa, rctx.SseContext.SseJsonOpts)
+          let json = Json.serialize Json.standard fa
           do! jsonResponse ctx 200 json
         | None ->
           let fa = FileAnnotations.empty fileParam
-          let json = System.Text.Json.JsonSerializer.Serialize(fa, rctx.SseContext.SseJsonOpts)
+          let json = Json.serialize Json.standard fa
           do! jsonResponse ctx 200 json
     } :> Task
   ) |> ignore
@@ -3332,15 +3332,15 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
                   | Some r -> r.TestName
                   | None -> tid
                 {| TestId = tid; TestName = testName; Status = status |})
-            System.Text.Json.JsonSerializer.Serialize(
-              {| Symbol = sym; Tests = tests; TotalSymbols = graph.SymbolToTests.Count |})
+            Json.serialize Json.standard
+              {| Symbol = sym; Tests = tests; TotalSymbols = graph.SymbolToTests.Count |}
           | None ->
             let symbols =
               graph.SymbolToTests
               |> Map.toArray
               |> Array.map (fun (sym, tids) -> {| Symbol = sym; TestCount = tids.Length |})
-            System.Text.Json.JsonSerializer.Serialize(
-              {| Symbols = symbols; TotalSymbols = symbols.Length |})
+            Json.serialize Json.standard
+              {| Symbols = symbols; TotalSymbols = symbols.Length |}
         body, 200
       | None ->
         """{"error":"Elm model not available"}""", 503
@@ -3399,8 +3399,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       // dependency on `app`/`mcpContext`/`serverTracker`.
       let testEventBroadcast = Event<string>()
       let sessionEventBroadcast = Event<string>()
-      let sseJsonOpts = JsonSerializerOptions()
-      sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+      let sseJsonOpts = Json.optionsOf Json.standard
       // Every fresh LiveValueSnapshot now ALSO reaches editor clients over SSE
       // (roast-8 §2), not just the dashboard's own adaptive store — the inner
       // sink (when wired) still runs first and unchanged.

@@ -1238,7 +1238,7 @@ module McpTools =
           info |> Option.map (fun i -> (DateTime.UtcNow - i.CreatedAt).TotalSeconds)
         let! progress = ctx.SessionOps.GetWarmupProgress (toSessionId sid)
         return
-          System.Text.Json.JsonSerializer.Serialize(
+          Json.serialize Json.standard
             {| state = "Rebuilding"
                sessionId = sid
                status = WorkerProtocol.SessionLifecycleStatus.label status
@@ -1252,21 +1252,21 @@ module McpTools =
                boundSeconds = Timeouts.warmupAbsoluteMax.TotalSeconds + Timeouts.warmupReadyPollMax.TotalSeconds
                inactivityBoundSeconds = Timeouts.warmupInactivityLimit.TotalSeconds
                progress = progress
-               available = availableTools |})
+               available = availableTools |}
       | FaultedSession (sid, cause) ->
         let availableTools = Affordances.availableTools SessionState.Faulted
         return
-          System.Text.Json.JsonSerializer.Serialize(
+          Json.serialize Json.standard
             {| state = "Faulted"
                sessionId = sid
                faultReason = FaultCause.describe cause
                message = formatSessionResolution resolution
-               available = availableTools |})
+               available = availableTools |}
       | Routable sid ->
         // Defensive only — see INVARIANT above. Never expected in practice.
-        return System.Text.Json.JsonSerializer.Serialize({| state = "Rebuilding"; sessionId = sid; message = "" |})
+        return Json.serialize Json.standard {| state = "Rebuilding"; sessionId = sid; message = "" |}
       | Gone msg ->
-        return System.Text.Json.JsonSerializer.Serialize({| state = "NoSession"; message = msg |})
+        return Json.serialize Json.standard {| state = "NoSession"; message = msg |}
     }
 
   let getDaemonStatus (ctx: McpContext) : Task<string> =
@@ -1332,29 +1332,29 @@ module McpTools =
         anomalies = anomalyRows
         available = SageFs.Affordances.availableTools SageFs.SessionState.Uninitialized
       |}
-      return System.Text.Json.JsonSerializer.Serialize payload
+      return Json.serialize Json.standard payload
     }
 
   let private leaseDecisionJson kind decision : string =
     let kindName = SageFs.ExpensiveWorkLease.Kind.toToken kind
     match decision with
     | SageFs.ExpensiveWorkLease.Decision.Granted(leaseId, expiresAt) ->
-      System.Text.Json.JsonSerializer.Serialize(
+      Json.serialize Json.standard
         {| kind = kindName
            decision = "granted"
            leaseId = SageFs.ExpensiveWorkLease.LeaseId.value leaseId
-           expiresAt = expiresAt |})
+           expiresAt = expiresAt |}
     | SageFs.ExpensiveWorkLease.Decision.Wait(retryAfter, reason) ->
-      System.Text.Json.JsonSerializer.Serialize(
+      Json.serialize Json.standard
         {| kind = kindName
            decision = "wait"
            retryAfterSeconds = retryAfter.TotalSeconds
-           reason = reason |})
+           reason = reason |}
     | SageFs.ExpensiveWorkLease.Decision.Refused reason ->
-      System.Text.Json.JsonSerializer.Serialize(
+      Json.serialize Json.standard
         {| kind = kindName
            decision = "refused"
-           reason = reason |})
+           reason = reason |}
 
   let acquireWorkLease (agent: string) (kind: SageFs.ExpensiveWorkLease.Kind) : string =
     let holder = resolvedKey agent
@@ -1381,14 +1381,14 @@ module McpTools =
       let! resolution = resolveSessionId ctx agent sessionId workingDirectory
       match resolution with
       | Gone message ->
-        return System.Text.Json.JsonSerializer.Serialize(
+        return Json.serialize Json.standard (
           {| state = "NoSession"
              scope = "Session"
              message = message |})
       | WarmingUp (sid, status) | Unroutable (sid, status) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
         let targets = info |> Option.bind (fun value -> SessionProjectTarget.tryCreateMany value.Projects |> Result.toOption) |> Option.defaultValue []
-        return System.Text.Json.JsonSerializer.Serialize(
+        return Json.serialize Json.standard (
           {| state = "WarmingUp"
              scope = "Session"
              sessionId = sid
@@ -1403,7 +1403,7 @@ module McpTools =
       | FaultedSession (sid, cause) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
         let targets = info |> Option.bind (fun value -> SessionProjectTarget.tryCreateMany value.Projects |> Result.toOption) |> Option.defaultValue []
-        return System.Text.Json.JsonSerializer.Serialize(
+        return Json.serialize Json.standard (
           {| state = "Faulted"
              scope = "Session"
              sessionId = sid
@@ -2092,8 +2092,7 @@ module McpTools =
               let model : Features.DomainModelViz.StateMachineModel =
                 { TypeName = typeName; Cases = cases; Transitions = [] }
               let data = Features.DomainModelViz.StateMachineRenderer.renderAsData model
-              let opts = JsonSerializerOptions(WriteIndented = true)
-              JsonSerializer.Serialize(data, opts)
+              Json.serialize (Json.indented Json.standard) data
           | None ->
             sprintf "Could not extract DU cases from '%s'. Output: %s" typeName output
         | Ok other -> sprintf "Unexpected response: %A" other
@@ -2304,35 +2303,34 @@ module McpTools =
       | Some sessionInfo ->
       let current = sessionInfo.Workflow
       let cost = WorkflowTypes.TransitionCost.compute 0 0
-      let opts = JsonSerializerOptions(WriteIndented = true)
       let prevLabel = WorkflowTypes.SessionWorkflow.label current
       let targetLabel = WorkflowTypes.SessionWorkflow.label target
       let serializeOutcome outcome =
         match outcome with
         | WorkflowTypes.WorkflowSwitchOutcome.AlreadyActive (c, msg) ->
-          JsonSerializer.Serialize(
+          Json.serialize (Json.indented Json.standard)
             {| Outcome = "alreadyActive"
                PreviousWorkflow = prevLabel
                TargetWorkflow = targetLabel
                Cost = c; Switched = false
                NewSessionId = (None: string option)
-               Message = msg |}, opts)
+               Message = msg |}
         | WorkflowTypes.WorkflowSwitchOutcome.DryRunPreview (c, msg) ->
-          JsonSerializer.Serialize(
+          Json.serialize (Json.indented Json.standard)
             {| Outcome = "dryRunPreview"
                PreviousWorkflow = prevLabel
                TargetWorkflow = targetLabel
                Cost = c; Switched = false
                NewSessionId = (None: string option)
-               Message = msg |}, opts)
+               Message = msg |}
         | WorkflowTypes.WorkflowSwitchOutcome.Executed (_, _, c, sid, msg) ->
-          JsonSerializer.Serialize(
+          Json.serialize (Json.indented Json.standard)
             {| Outcome = "executed"
                PreviousWorkflow = prevLabel
                TargetWorkflow = targetLabel
                Cost = c; Switched = true
                NewSessionId = Some sid
-               Message = msg |}, opts)
+               Message = msg |}
       // 4. If same workflow kind, no-op
       match WorkflowTypes.SessionWorkflow.label current = WorkflowTypes.SessionWorkflow.label target with
       | true ->
@@ -2388,11 +2386,6 @@ module McpTools =
     }
 
   // ── Live Testing MCP Tools ──────────────────────────────────
-
-  let liveTestJsonOpts =
-    let o = JsonSerializerOptions(WriteIndented = false)
-    o.Converters.Add(JsonFSharpConverter())
-    o
 
   type FailureLocation = {
     FilePath: string
@@ -2530,7 +2523,7 @@ module McpTools =
         match failedTests.Length > 0 with
         | true -> resp["FailedTests"] <- box failedTests
         | false -> ()
-        return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+        return Json.serialize Json.standard resp
     }
 
   let rec setLiveTesting (ctx: McpContext) (enabled: bool) : Task<string> =
@@ -2695,7 +2688,7 @@ module McpTools =
                | true -> None
                | false -> Some "Live testing is not active. Call enable_live_testing to start test discovery and automatic re-runs."
       |}
-      Task.FromResult (JsonSerializer.Serialize(resp, liveTestJsonOpts))
+      Task.FromResult (Json.serialize Json.standard resp)
 
   let explainTestRun (ctx: McpContext) (testName: string) : Task<string> =
     task {
@@ -2748,7 +2741,7 @@ module McpTools =
                    | _ -> false |})
             ChangedSymbols = changedSymbols
           |}
-          return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+          return Json.serialize Json.standard resp
     }
 
   let queryTestCoverage (ctx: McpContext) (symbol: string) : Task<string> =
@@ -2779,7 +2772,7 @@ module McpTools =
                DisplayName = ct.DisplayName
                LastResult = resultStr |})
         |}
-        return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+        return Json.serialize Json.standard resp
     }
 
   /// Format file-level coverage annotations as JSON for the get_file_coverage MCP tool.
@@ -2831,7 +2824,7 @@ module McpTools =
         CoveragePercent = pct
       |}
     |}
-    JsonSerializer.Serialize(resp, liveTestJsonOpts)
+    Json.serialize Json.standard resp
 
   /// MCP tool: get per-line coverage data for a specific file.
   /// Resolves partial file paths, then computes line-level coverage from
@@ -2852,7 +2845,7 @@ module McpTools =
         match resolvedPath with
         | None ->
           let resp = {| FilePath = filePath; Error = "File not found in test sources or instrumentation maps" |}
-          return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+          return Json.serialize Json.standard resp
         | Some fullPath ->
           let annotations = Features.LiveTesting.FileAnnotations.projectWithCoverage fullPath cycleState
           return formatFileCoverageResponse annotations testState
@@ -3001,7 +2994,7 @@ module McpTools =
                         Summary = report.Summary |}
               | None -> None
             let resp = {| MatchCount = narrs.Length; Narratives = narrs; Diagnostics = diagnostics |}
-            return JsonSerializer.Serialize(resp, liveTestJsonOpts)
+            return Json.serialize Json.standard resp
     }
 
 
@@ -3570,7 +3563,7 @@ module McpTools =
              Performance = report.PerformanceContext |> Option.map (fun s -> {| Sparkline = s.Sparkline; P50Ms = s.P50Ms; P95Ms = s.P95Ms |})
              Summary = report.Summary |}
 
-        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+        return Json.serialize Json.standard jsonData
     }
 
   /// Coverage intelligence: joins failure narratives + coverage bitmaps + dep graph
@@ -3639,7 +3632,7 @@ module McpTools =
                CorrelatedFailures = r.CorrelatedFailures |> List.map string
                Summary = Features.CoverageIntel.CoverageIntel.summarize r |})
 
-        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+        return Json.serialize Json.standard jsonData
     }
 
   /// Impact forecast: joins eval timeline + cell dependency graph + performance data
@@ -3686,7 +3679,7 @@ module McpTools =
                RegressionCauses = r.RegressionCauses |> List.map (fun c -> c.ToString())
                Summary = Features.ImpactForecast.ImpactForecast.summarize r |})
 
-        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+        return Json.serialize Json.standard jsonData
     }
 
   /// Action prioritizer: merges all intelligence into a ranked "what to do next" queue.
@@ -3760,7 +3753,7 @@ module McpTools =
                   Reason = a.Reason |})
              Summary = Features.ActionPrioritizer.ActionPrioritizer.summarize report |}
 
-        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+        return Json.serialize Json.standard jsonData
     }
 
   /// List all discovered tests, optionally filtered by pattern or file path.
@@ -3788,7 +3781,7 @@ module McpTools =
           MaxResults = 200
         }
         let jsonData = Features.TestDiscovery.buildListing query locations unlocated
-        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+        return Json.serialize Json.standard jsonData
     }
 
   /// Expose the cell dependency graph with staleness annotations.
@@ -3816,7 +3809,7 @@ module McpTools =
                   UpstreamIds   = n.UpstreamIds
                   IsStale       = CellFreshness.isStale n.Staleness
                   StaleCauses   = CellFreshness.causes n.Staleness |}) |}
-        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+        return Json.serialize Json.standard jsonData
     }
 
   /// Discover and rank SageFs features relevant to the current session state.
@@ -3855,7 +3848,7 @@ module McpTools =
                 ExampleUsage      = s.ExampleUsage
                 WhyNow            = s.WhyNow
                 Relevance         = s.Relevance.ToString() |}) |}
-      return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+      return Json.serialize Json.standard jsonData
     }
 
   /// suggest_repair: compose explain_test_failure → extract causal symbol → preview_what_if
@@ -3955,7 +3948,7 @@ module McpTools =
                  PrimarySymbol = primarySymbol |> Option.toObj
                  RipplePlan    = ripplePlanOpt |> Option.toObj
                  Suggestion    = suggestion |}
-            return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+            return Json.serialize Json.standard jsonData
     }
 
   // ─── Run App / Stop App / List Runnable Projects ──────────────────────
@@ -3972,7 +3965,7 @@ module McpTools =
         AppRunOrchestration.runApp ctx.SessionOps (fun () -> DateTime.UtcNow) Timeouts.warmupReadyPollMax (toSessionId sid) request
       return
         match result with
-        | Ok state -> JsonSerializer.Serialize(appStateJson state, liveTestJsonOpts)
+        | Ok state -> Json.serialize Json.standard (appStateJson state)
         | Error e -> SageFsError.describeForAgent e
     })
 
@@ -3981,7 +3974,7 @@ module McpTools =
       let! result = AppRunOrchestration.stopApp ctx.SessionOps (toSessionId sid)
       return
         match result with
-        | Ok state -> JsonSerializer.Serialize(appStateJson state, liveTestJsonOpts)
+        | Ok state -> Json.serialize Json.standard (appStateJson state)
         | Error e -> SageFsError.describeForAgent e
     })
 
@@ -4003,7 +3996,7 @@ module McpTools =
              ActiveProject = info.ActiveProject |> Option.defaultValue ""
              App = AppRun.describeState info.App
              Projects = projects |}
-        return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+        return Json.serialize Json.standard jsonData
     })
 
   // ── Cohort tools (cohort-integration-plan.md Slice 2, item 9) ────────────
