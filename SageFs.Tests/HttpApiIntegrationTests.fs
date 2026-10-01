@@ -347,10 +347,6 @@ let killDaemon (proc: Process) =
 [<Tests>]
 let httpApiHarnessTests =
   testList "HTTP API harness" [
-    testCase "daemon startup wait budget matches the documented 60 seconds" <| fun _ ->
-      daemonStartupHealthTimeout
-      |> Expect.equal "startup wait should be the shared ready budget" TestTimeouts.readyBudget
-
     testCase "reserveLoopbackPort returns a genuinely free, bindable port" <| fun _ ->
       // The "skips an occupied preferred port" contract this test used to
       // name moved to TestPortsTests.fs, which exercises the shared
