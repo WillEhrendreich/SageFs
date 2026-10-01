@@ -101,18 +101,24 @@ module TriviaNormalization =
     let mutable inString = false
     let mutable inVerbatimString = false
     let mutable inTripleString = false
+    let mutable lineStart = 0
+    let mutable atLineStart = true
+    let mutable pendingSpace = false
 
-    let inline has count = i + count <= len
-    let inline ch offset = content[i + offset]
-    let inline startsWith (s: string) = has s.Length && content.AsSpan(i, s.Length).SequenceEqual(s.AsSpan())
+    let inline startsWith (s: string) = i + s.Length <= len && content.AsSpan(i, s.Length).SequenceEqual(s.AsSpan())
+    let inline newline () = atLineStart <- true; pendingSpace <- false; lineStart <- i + 1
+    // F# is offside-sensitive: a token's column and whether two tokens touch
+    // are meaning, so keep both. Only runs, blank lines and trailing space go.
+    let inline token () =
+      if atLineStart then sb.Append('\n').Append(' ', i - lineStart) |> ignore
+      elif pendingSpace then sb.Append(' ') |> ignore
+      atLineStart <- false; pendingSpace <- false
 
     while i < len do
       match inLineComment, blockDepth > 0, inTripleString, inVerbatimString, inString with
       | true, _, _, _, _ ->
-        match content[i] with
-        | '\r'
-        | '\n' -> inLineComment <- false
-        | _ -> ()
+        if content[i] = '\r' || content[i] = '\n' then inLineComment <- false
+        if content[i] = '\n' then newline ()
         i <- i + 1
       | false, true, _, _, _ ->
         if startsWith "(*" then
@@ -122,6 +128,7 @@ module TriviaNormalization =
           blockDepth <- blockDepth - 1
           i <- i + 2
         else
+          if content[i] = '\n' then newline ()
           i <- i + 1
       | false, false, true, _, _ ->
         if startsWith "\"\"\"" then
@@ -156,22 +163,31 @@ module TriviaNormalization =
           i <- i + 2
         elif startsWith "(*" then
           blockDepth <- 1
+          pendingSpace <- true
           i <- i + 2
+        elif content[i] = '\n' then
+          newline ()
+          i <- i + 1
+        elif Char.IsWhiteSpace content[i] then
+          pendingSpace <- true
+          i <- i + 1
         elif startsWith "@\"" then
+          token ()
           sb.Append("@\"") |> ignore
           inVerbatimString <- true
           i <- i + 2
         elif startsWith "\"\"\"" then
+          token ()
           sb.Append("\"\"\"") |> ignore
           inTripleString <- true
           i <- i + 3
         elif content[i] = '"' then
+          token ()
           sb.Append('"') |> ignore
           inString <- true
           i <- i + 1
-        elif Char.IsWhiteSpace content[i] then
-          i <- i + 1
         else
+          token ()
           sb.Append(content[i]) |> ignore
           i <- i + 1
 
@@ -3438,17 +3454,12 @@ module TestCycleEffects =
       let symbolAffectedSet = Set.ofArray symbolAffected
       let nameDeltaAffected =
         Array.append symbolAffected coverageAffected |> Array.distinct
-      // A body-only edit — `add a b = a + b` rewritten to `a - b` — moves no
-      // symbol NAMES, so `symbols.Changed` (a `Set<string>` difference) is
-      // empty and nothing above selects anything, even though the file's
-      // behavior just changed. Selecting on what the file CONTAINS instead of
-      // on what its name set DID closes that: every test reaching a symbol
-      // this type-check resolved in the file is a candidate. Every trigger,
-      // keystroke included: a half-typed buffer takes the `Failed` branch, and
-      // `PolicyFilter` below keeps a save-only category quiet per keystroke.
-      //
-      // If the graph has not yet seen the test file that covers this symbol,
-      // the narrow finds nothing; the floor below catches that.
+      // A body-only edit (`a + b` -> `a - b`) moves no symbol NAMES, so
+      // `symbols.Changed` is empty and nothing above selects anything. Select
+      // on what the file CONTAINS instead: every test reaching a symbol this
+      // type-check resolved in the file. Every trigger: a half-typed buffer
+      // takes the `Failed` branch, and `PolicyFilter` below keeps a save-only
+      // category quiet per keystroke. If nothing is found, the floor below.
       let fileScopeAffected =
         match
           Array.isEmpty nameDeltaAffected
@@ -3460,21 +3471,16 @@ module TestCycleEffects =
       let usedFileScope = not (Array.isEmpty fileScopeAffected)
       let affected =
         Array.append nameDeltaAffected fileScopeAffected |> Array.distinct
-      // For compiled projects, when dep graph/coverage can't identify specific
-      // affected tests, fall back to ALL discovered tests. The DLL is stale
-      // and needs rebuilding regardless — we just can't narrow the test set.
       let isCompiledFile =
         changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
         && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
-      // The NO-EMPTY-ESCAPE floor, shared with the landing gate
-      // (`AffectedTests.verificationTestSet`): when every narrow above found
-      // nothing for a compiled file, widen to ALL discovered tests, on any
-      // trigger, instead of reading an empty selection as green. Nothing found
-      // is not "nothing affected": `changedSymbols` is a `Set<string>` name
-      // difference, so a body rewrite looks the same as no edit, and the graph
-      // may not have seen the test file that covers this one (cold start, or a
-      // test file not type-checked yet). The run policy still decides whether a
-      // keystroke may run. Scripts (.fsx) are evaluated, not compiled: no floor.
+      // NO-EMPTY-ESCAPE floor, shared with the landing gate
+      // (`AffectedTests.verificationTestSet`): if every narrow above found
+      // nothing for a compiled file, widen to ALL discovered tests on any
+      // trigger. Nothing found is not "nothing affected": the name delta cannot
+      // see a body rewrite, and the graph may not have seen the covering test
+      // yet. Run policy still decides whether a keystroke runs. Scripts (.fsx)
+      // are evaluated, not compiled: no floor.
       let symbolsChanged = not (List.isEmpty changedSymbols)
       let shouldFallback = Array.isEmpty affected && isCompiledFile
       let effectiveAffected,
@@ -3967,9 +3973,10 @@ module LiveTestCycleState =
         let db =
           match triviaOnlyChange with
           | true ->
+              // No new check, but a pending one (for the edit BEFORE this
+              // keystroke, reading `LatestContent` when it fires) stays.
               { s.Debounce with
-                  TreeSitter = s.Debounce.TreeSitter |> DebounceChannel.submit content TestCycleDebounce.treeSitterDelayMs now
-                  Fcs = s.Debounce.Fcs |> DebounceChannel.cancel }
+                  TreeSitter = s.Debounce.TreeSitter |> DebounceChannel.submit content TestCycleDebounce.treeSitterDelayMs now }
           | false ->
               s.Debounce |> TestCycleDebounce.onKeystroke content filePath fcsDelay now
         let analysisIdentity = AnalysisIdentity.ofContent content
