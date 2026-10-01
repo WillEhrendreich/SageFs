@@ -126,6 +126,7 @@ A tour puts the editor in the same states every time, with no lemming:
 ```
 scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/demoenv-first-run.tour
 scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/demoenv-live-tests.tour
+scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/falco-hot-reload.tour falco-hello Program.fs
 dotnet LemDrive.dll nvim tour-check some.tour      # parse only, report every bad line
 dotnet LemDrive.dll nvim render shot.txt out.png   # draw a saved shot again
 ```
@@ -147,7 +148,14 @@ A tour file is one step per line (`#` starts a comment):
 status float, the project picker, a session warming up, a definition evaluated, a value evaluated, an
 error, and the 80x24, 200x50 and 140x40 terminals. `demoenv-live-tests.tour` covers live testing enabled, the gutter
 marker on a failing test, the test panel failing, the fix, the gutter and panel passing, and the narrow and
-wide panel.
+wide panel (it ends on `8 ✓ 1 ✖` and then `9 ✓` in the status line). `falco-hot-reload.tour` (fixture
+`falco-hello`) covers running the app from the editor, an edit, the save, the hot reload file picker and a
+narrow terminal. All three ran green against the shared daemon and left nothing in the dashboard. The
+three together are 13, 12 and 9 shots.
+
+Things a reviewer will see in them: after a save there is no message that the app was reloaded (the
+status line keeps `(Starting)`, the message line keeps `[SageFs] Warming up:`), and the pink gutter blocks on the
+`[<Tests>]` lines are still there after the status line says `9 ✓`.
 
 ## Files
 
@@ -161,7 +169,7 @@ wide panel.
 | `lib-nvim.sh`, `run-nvim-lemming`, `run-nvim-tour`, `oracle.sh` | The process plumbing: bubblewrap, tmux, port and file setup. No logic. |
 | `init.lua` | The Neovim config the lemming starts with: the plugin on the runtimepath, the F# filetype and parser, a status line that includes the plugin's own component. Configuration, not logic. |
 | `tasks/`, `tours/`, `LEMDRIVE.md` | What the lemming is asked, what a tour does, and the driver's README the lemming reads. |
-| `NvimTests/` | 47 tests: properties for ANSI to HTML, examples for the key notation, shell allow-list, command set and tour parser, and a round trip for tours. |
+| `NvimTests/` | 49 tests: properties for ANSI to HTML, examples for the key notation, shell allow-list, command set and tour parser, and a round trip for tours. |
 
 `dotnet run --project scripts/lemmings/ui/nvim/NvimTests` runs the tests.
 

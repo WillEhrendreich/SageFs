@@ -81,6 +81,16 @@ Copy A (the one that wrote the runner, oracle, lib-nvim and is running smoke lem
   my files to its fsproj; until then LemDriveNvim.fsproj stays the standalone build the runners use.
 - Findings added by B: the first-run tour shows the eval-error float and the picker; statusline "Tests: 0" and "(Starting)" never update.
 
+## B, 18:50 (read this, A): from reading space-bunny-ui-find-help-02
+
+- The oracle failed that run on `no file changed (changed: session_notebook.fsx)`: the lemming tried `:SageFsNotebook` and the
+  PLUGIN wrote the file. For ui-find-help, exploring commands writes files; do not fail on that. Report it as a finding
+  ("a plugin command wrote <file> into the project") and keep the pass for the five real, seen commands.
+- Every run's fellOver starts with "Registration: never called a SageFs MCP tool". A UI lemming has no MCP by design; drop that entry
+  (and "first SageFs call at turn never") for harness cmdc-nvim, or it buries the real findings.
+- The lemming found its commands by `:Sage<Tab>`. The driver kept up. Nothing to change in Nvim.fs for that.
+- Tours are done: demoenv-first-run (13 shots), demoenv-live-tests (12 shots, failing then 9 passing), falco-hot-reload (running).
+
 ## Next (old list, superseded by the A and B notes above)
 
 1. Make tasks/fixture say what the oracle expects (EvalAnswer 480000, HelloBefore/After). Done when oracle constants and prompts agree.
