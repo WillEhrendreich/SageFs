@@ -148,9 +148,11 @@ module McpBridge =
 
   type Policy = { MaxProbeAttempts: int }
 
-  /// 30 attempts — matches `Program.fs`'s existing `waitForDaemonReady`
-  /// (30 x 500ms = 15s), which this bridge replaces the client-side half of.
-  let defaultPolicy = { MaxProbeAttempts = 30 }
+  /// As many probes as fit in `Timeouts.daemonStartWait` at `Timeouts.stdioBridgeProbeInterval` apart: 30 on a
+  /// fast machine (15 s), more on a slow one. Matches `Program.fs`'s `waitForDaemonReady`, which this bridge
+  /// replaces the client-side half of.
+  let defaultPolicy =
+    { MaxProbeAttempts = int (System.Math.Ceiling(Timeouts.daemonStartWait / Timeouts.stdioBridgeProbeInterval)) }
 
   let private giveUpReason (policy: Policy) =
     sprintf

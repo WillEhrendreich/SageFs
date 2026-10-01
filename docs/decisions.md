@@ -1050,3 +1050,62 @@ Evidence: `SageFs.Host/RunAppDelta.fs`, `SageFs.Core/Features/PatchRoute.fs`, `S
 and the debugger row in `SageFs.Tests/HotReloadDebuggerTests.fs`.
 Reopen it if: the FSI host needs to see a delta, #19941 ships in an SDK (the emitter becomes the part that applies and confirms),
 or a client needs more than `mechanism` to tell the two routes apart.
+
+## Waits for the machine scale with a measured tier, and a start that runs out of patience retries with more
+
+A session could not start on a 2009 four core with a spinning disk until somebody raised a 30 second limit by hand.
+I measured it before changing anything (`scripts/machine-bench.fsx`, the numbers are in
+[Slow machines](TROUBLESHOOTING.md#slow-machines)). The first start builds the FSI host once and that took 40
+seconds there against 10 on a fast desktop. The inactivity limit was 30, so it killed the worker mid-build, and the
+restart policy started it again with the same 30, five times, then reported an exit code. So two things were wrong, and
+they got two fixes.
+
+The waits were written for one machine. Every duration in `Timeouts.fs` is now declared as either a wait for the
+machine (60 of them), scaled by the tier's factor, or fixed (94), with a reason. `TimeoutScalingTests` fails on a duration that is in
+neither list, so a new wait is decided the day it is added. The tier comes from a single-thread calibration (thread
+CPU time, because a busy machine stretches the wall clock of the same work 3 to 4 times and not the CPU time), the
+cores and any CPU quota, the memory a cgroup leaves, and whether the disk spins. It is the slowest of those, because a
+machine is as slow as its worst limit. The factors (1, 2, 5, 12) are set so the 30 s inactivity allowance
+sits 1.9 to 2.9 times above the longest silent stretch measured in a tier; the table with machine and run counts is
+in the troubleshooting page, and so is the tier I could only extrapolate.
+
+A timeout was a crash. A start that goes silent is now reported as a start timeout, with exit events switched off
+before the kill, and the manager retries it with twice the silence (never the same, never less, four attempts, never
+past the absolute bound). A first attempt is as patient as the tier or the machine's own recorded starts say, whichever
+is longer; the record is a smoothed mean plus four deviations, the way TCP estimates a round trip (RFC 6298), in
+`machine-profile.json`. A give-up carries what it waited for, how long, how many times, the tier, and what to do. I
+did not take an existing library's adaptive timeout: the rule is five lines and the part that matters is where it is
+applied.
+
+Rejected: letting the daemon's inactivity watcher count a live build child as progress, so a busy worker is never
+killed. It would fix this one stall and hide the next. The worker's own phase budgets (`hostBuildRun`,
+`fsiHostStartup`) are the right guard for a hung child, and they scale. Also rejected: probing the machine on every
+start. It is read from the profile, and probed once per data directory (about a fifth of a second).
+
+The proof is `SageFs.Simulation/StartEscalationSim.fs` and `StartLearningSim.fs`: seeded worlds over the real
+escalation, with a twin for the old identical-retry loop, a twin for a loop with no end, and a twin that never learns.
+The invariants (never-retry-with-a-smaller-budget, eventually-succeeds-if-the-machine-can, failure-names-the-wait,
+no-unbounded-loop, first-attempt-honours-what-was-learned, next-first-attempt-covers-the-last-start,
+stable-machines-stop-wasting) hold for the real code and fail on the twins. The live checks are in the troubleshooting
+page.
+
+What I haven't done. The tiers below `Constrained` are extrapolated: nothing I had access to is slower than a 2009 four
+core, and a machine twice as slow again is a guess with a safety factor on it. CPU quotas and cgroup limits are
+emulated here, a slower clock and a slower disk are not (they need root). A start whose silence is a build that is
+legitimately slower than the escalation reaches (a cold host build on a machine under heavy load, past the fourth
+attempt) is still given up on; the message says so and what to set. A stop costs 5 seconds on every machine, because
+the worker never answers the shutdown request in time (2 s) and the process never exits in its grace (3 s); that is a
+separate bug. Those waits are fixed on purpose: they are bounds before a kill, always spent in full, so scaling them
+would only make a stop slower on a slow machine. I haven't fixed the cause.
+
+One thing I learned on the way, so it isn't learned twice. A top-level `do` in an earlier file of an executable
+project doesn't run at all: F# initialises those files when something in them is first used. The first build set the
+tier from such a `do`, and the daemon log said the timeouts had been read before it. The settling is a `do` at the
+top of `SageFs/Program.fs`, the last file.
+
+Evidence: `SageFs.Core/MachineTier.fs`, `MachineProfile.fs`, `MachineCalibration.fs`, `StartLedger.fs`,
+`StartEscalation.fs`, `StartTimeoutDecision.fs`, `WorkerStartup.fs`, `Timeouts.fs`;
+`SageFs.Tests/TimeoutScalingTests.fs`, `StartEscalationTests.fs`, `StartEscalationSimTests.fs`,
+`SessionManagerStartEscalationTests.fs`; `scripts/machine-bench.fsx`.
+Reopen it if: a machine in the field starts slower than its tier's factor allows and the message did not say so, or a
+wait that is fixed turns out to be waiting on the machine.

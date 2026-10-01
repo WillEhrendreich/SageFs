@@ -35,6 +35,7 @@
          makes the host fail to COMPILE, which surfaces only as
          `HostUnavailable` and a silent fall back to default config. -->
     <Compile Include="FsiNaming.fs" />
+    <Compile Include="MachineTier.fs" />
     <Compile Include="Timeouts.fs" />
     <Compile Include="Instrumentation.fs" />
     <Compile Include="LiveValueTree.fs" />

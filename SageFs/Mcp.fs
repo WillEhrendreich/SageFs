@@ -1251,6 +1251,9 @@ module McpTools =
                // ready-poll's own bound.
                boundSeconds = Timeouts.warmupAbsoluteMax.TotalSeconds + Timeouts.warmupReadyPollMax.TotalSeconds
                inactivityBoundSeconds = Timeouts.warmupInactivityLimit.TotalSeconds
+               // The tier the waits above are scaled for: on a slow machine a longer wait is expected, and the
+               // progress text says so while a start is running.
+               machineTier = MachineTier.toString Timeouts.machineTier
                progress = progress
                available = availableTools |}
       | FaultedSession (sid, cause) ->
@@ -1259,6 +1262,7 @@ module McpTools =
           Json.serialize Json.standard
             {| state = "Faulted"
                sessionId = sid
+               machineTier = MachineTier.toString Timeouts.machineTier
                faultReason = FaultCause.describe cause
                message = formatSessionResolution resolution
                available = availableTools |}

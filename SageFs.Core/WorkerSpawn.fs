@@ -115,7 +115,12 @@ module WorkerSpawn =
     // `applyToWithForwarding` also forwards any environment a tool has asked to
     // pass through to every spawn (SAGEFS_FORWARD_PREFIXES), so an external
     // agent can reach a worker it does not launch.
-    SageFs.ProcessEnvironment.applyToWithForwarding psi (envVars @ RuntimeCompat.rollForwardEnv runtimeChoice)
+    //
+    // The worker is told this daemon's machine tier, so every wait it scales (the FSI host build, the
+    // host's start, its own probes) agrees with the daemon's instead of reading the machine again.
+    SageFs.ProcessEnvironment.applyToWithForwarding
+      psi
+      (envVars @ RuntimeCompat.rollForwardEnv runtimeChoice @ [ (MachineTier.envVar, MachineTier.toString Timeouts.machineTier) ])
 
     let proc = new Process()
     proc.StartInfo <- psi

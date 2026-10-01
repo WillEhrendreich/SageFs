@@ -1230,3 +1230,51 @@ module HygieneAges =
 
   /// Written to a quarter of an hour ago: a run that just crashed, inside every retention.
   let justNow = System.TimeSpan.FromMinutes 15.
+
+// ---- machine tier and start escalation ----
+
+/// Durations the machine tier and start escalation tests choose on purpose. They are the tests' own
+/// numbers: the production ones depend on the tier the test process happens to run on.
+module StartEscalationTimeouts =
+  let private secs (n: float) = System.TimeSpan.FromSeconds n
+  let private mins (n: float) = System.TimeSpan.FromMinutes n
+
+  /// How long a first attempt may be silent in the cases below. It matches what a `Fast` machine is
+  /// given, so the cases read like the field report.
+  let silenceAllowance = secs 30.
+
+  /// The longest a whole attempt may take in the cases below.
+  let absoluteBound = mins 10.
+
+  /// A healthy start that needs more than `silenceAllowance`: what the Phenom II X4 needed for a cold
+  /// FSI host build (about 40 s, measured on 2026-10-01).
+  let slowHealthyStart = secs 40.
+
+  /// The shortest start the teeth property uses: 1.3 times the 30 s a first attempt is allowed, so it always needs a
+  /// second attempt.
+  let slowStartFloor = secs 39.
+
+  /// A start that outlasts the first two attempts' allowances (30 s and 60 s) but not the third's.
+  let verySlowStart = secs 100.
+
+  /// A start on a quiet, fast machine.
+  let quickStart = secs 5.
+
+  /// How long a start has taken on this machine, as a history that has seen many.
+  let learnedStart = secs 90.
+
+  /// How much the learned starts vary.
+  let learnedDeviation = secs 10.
+
+  /// A made-up elapsed time for an estimate's first observation.
+  let firstObservation = secs 12.
+
+  /// A made-up later observation, longer than `firstObservation`.
+  let laterObservation = secs 20.
+
+  /// How long a real child process may stay silent in the tests that run the real `awaitWorkerPort`.
+  /// Short on purpose: for those tests the allowance has to EXPIRE, so a long one only slows them.
+  let shortSilence = System.TimeSpan.FromMilliseconds 400.
+
+  /// The absolute bound given to those tests: far past the silence allowance, never reached.
+  let shortAbsolute = System.TimeSpan.FromSeconds 30.

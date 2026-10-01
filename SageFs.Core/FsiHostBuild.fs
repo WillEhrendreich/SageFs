@@ -21,6 +21,7 @@ let hostSourceNames =
     "Measures.fs"
     "Utils.fs"
     "FsiNaming.fs"
+    "MachineTier.fs"
     "Timeouts.fs"
     "Instrumentation.fs"
     "LiveValueTree.fs"

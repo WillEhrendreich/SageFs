@@ -139,6 +139,9 @@ module McpSessionRouting =
       match status with
       | WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.Reported reason) when not (System.String.IsNullOrWhiteSpace reason) ->
         FaultCause.Recorded reason
+      // A start that ran out of patience on every attempt: the whole explanation, not "no reason recorded".
+      | WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.StartTimedOut failure) ->
+        FaultCause.Recorded (StartEscalation.describe failure)
       | WorkerProtocol.SessionLifecycleStatus.Stopped -> FaultCause.Stopped
       // default policy: this is only called for a status that's already been
       // classified as faulted-or-stopped; anything else has no reason to give.

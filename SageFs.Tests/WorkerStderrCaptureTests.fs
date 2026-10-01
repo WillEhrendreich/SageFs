@@ -39,7 +39,13 @@ let private spawnFailureReason (proc: Process) : Task<string> =
           | SessionManager.SessionCommand.WorkerSpawnFailed(_, _, why) -> reason.TrySetResult why |> ignore
           | _ -> ()
       })
-  SessionManager.awaitWorkerPort (SessionId.newId ()) proc inbox CancellationToken.None
+  SessionManager.awaitWorkerPort
+    StartLedger.closed
+    (SessionId.newId ())
+    proc
+    inbox
+    CancellationToken.None
+    (StartEscalation.firstBudget StageHistory.NeverSeen Timeouts.warmupInactivityLimit Timeouts.warmupAbsoluteMax)
   reason.Task.WaitAsync TestTimeouts.processStartPatience
 
 let private requireUnix () =
