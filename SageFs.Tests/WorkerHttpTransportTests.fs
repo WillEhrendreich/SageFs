@@ -84,9 +84,9 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
         rid,
         { Status = SessionStatus.Ready
           EvalCount = 42
-          AvgDurationMs = 100L
-          MinDurationMs = 5L
-          MaxDurationMs = 500L; Projects = []
+          AvgDurationMs = FixtureDurations.evalAvgMs
+          MinDurationMs = FixtureDurations.evalMinMs
+          MaxDurationMs = FixtureDurations.evalMaxMs; Projects = []
           StatusMessage = None
           CoreVersion = "0.0.0-test" })
   | WorkerMessage.EvalCode(code, rid) ->
@@ -128,7 +128,7 @@ let slowEvalHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
   match msg with
   | WorkerMessage.EvalCode(_, rid) ->
     // 3000ms gives a large margin over the 1000ms GetStatus threshold even on loaded CI machines
-    do! Async.Sleep 3000
+    do! Async.Sleep TestTimeouts.evalOutlastingStatusProbe
     return WorkerResponse.EvalResult(rid, Ok "done", [], Map.empty)
   | WorkerMessage.GetStatus rid ->
     // Status is always instant
@@ -137,9 +137,9 @@ let slowEvalHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
         rid,
         { Status = SessionStatus.Evaluating
           EvalCount = 1
-          AvgDurationMs = 0L
-          MinDurationMs = 0L
-          MaxDurationMs = 0L; Projects = []
+          AvgDurationMs = FixtureDurations.unmeasuredMs
+          MinDurationMs = FixtureDurations.unmeasuredMs
+          MaxDurationMs = FixtureDurations.unmeasuredMs; Projects = []
           StatusMessage = None
           CoreVersion = "0.0.0-test" })
   | _ -> return WorkerResponse.WorkerError (SageFsError.EvalFailed "unexpected")

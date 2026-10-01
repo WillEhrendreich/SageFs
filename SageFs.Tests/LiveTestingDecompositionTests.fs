@@ -59,15 +59,15 @@ let private sampleTests = [|
 let private sampleMaps : InstrumentationMap array = [||]
 
 /// How long the tree-sitter stage took in the made-up requests below.
-let private treeSitterStage = TimeSpan.FromMilliseconds 10.0
+let private treeSitterStage = FixtureDurations.shortStage
 
 /// How long the FCS stage took in the case that checks tree-sitter is the shorter stage:
 /// longer than `treeSitterStage`.
-let private slowerFcsStage = TimeSpan.FromMilliseconds 200.0
+let private slowerFcsStage = FixtureDurations.longerStage
 
 /// How long the FCS stage took in the queued rebuild that the lifecycle case promotes. The
 /// case never reads it back.
-let private queuedFcsStage = TimeSpan.FromMilliseconds 100.0
+let private queuedFcsStage = FixtureDurations.usualResult
 
 // ─────────────────────────────────────────────────────────────────────
 // § 1  TestRunRequest record

@@ -6,6 +6,11 @@ open SageFs
 open SageFs.EvalPipeline
 open SageFs.Measures
 
+/// A completed pipeline stage that took `elapsedMs` milliseconds. Every case states its own times,
+/// because the cases are about how the stage times compare: bar widths, the total, which is slowest.
+let private stage (name: string) (elapsedMs: float) (outcome: StageOutcome) : CompletedStage =
+  { Name = name; ElapsedMs = elapsedMs * 1.0<ms>; Outcome = outcome }
+
 [<Tests>]
 let flameRenderTests =
   testList "PipelineFlame render" [
@@ -14,8 +19,8 @@ let flameRenderTests =
       let trace = {
         Result = Ok "hello"
         Stages = [
-          { Name = "Parse"; ElapsedMs = 1.0<ms>; Outcome = StageOutcome.Succeeded }
-          { Name = "TypeCheck"; ElapsedMs = 3.0<ms>; Outcome = StageOutcome.Succeeded }
+          stage "Parse" 1.0 StageOutcome.Succeeded
+          stage "TypeCheck" 3.0 StageOutcome.Succeeded
         ]
       }
       PipelineFlame.render UiDensity.Minimal trace
@@ -25,8 +30,8 @@ let flameRenderTests =
       let trace = {
         Result = Ok 42
         Stages = [
-          { Name = "Parse"; ElapsedMs = 1.2<ms>; Outcome = StageOutcome.Succeeded }
-          { Name = "Eval"; ElapsedMs = 2.5<ms>; Outcome = StageOutcome.Succeeded }
+          stage "Parse" 1.2 StageOutcome.Succeeded
+          stage "Eval" 2.5 StageOutcome.Succeeded
         ]
       }
       let result = PipelineFlame.render UiDensity.Normal trace
@@ -37,8 +42,8 @@ let flameRenderTests =
       let trace = {
         Result = Ok ()
         Stages = [
-          { Name = "Parse"; ElapsedMs = 2.0<ms>; Outcome = StageOutcome.Succeeded }
-          { Name = "TypeCheck"; ElapsedMs = 8.0<ms>; Outcome = StageOutcome.Succeeded }
+          stage "Parse" 2.0 StageOutcome.Succeeded
+          stage "TypeCheck" 8.0 StageOutcome.Succeeded
         ]
       }
       let result = PipelineFlame.render UiDensity.Full trace
@@ -50,8 +55,8 @@ let flameRenderTests =
       let trace = {
         Result = Error (SageFsError.EvalFailed "boom")
         Stages = [
-          { Name = "Parse"; ElapsedMs = 1.0<ms>; Outcome = StageOutcome.Succeeded }
-          { Name = "Eval"; ElapsedMs = 0.5<ms>; Outcome = StageOutcome.Failed (SageFsError.EvalFailed "boom") }
+          stage "Parse" 1.0 StageOutcome.Succeeded
+          stage "Eval" 0.5 (StageOutcome.Failed (SageFsError.EvalFailed "boom"))
         ]
       }
       let result = PipelineFlame.render UiDensity.Full trace
@@ -74,8 +79,8 @@ let flameBarTests =
 
     testCase "bar width proportional to stage time" <| fun _ ->
       let stages = [
-        { Name = "Fast"; ElapsedMs = 1.0<ms>; Outcome = StageOutcome.Succeeded }
-        { Name = "Slow"; ElapsedMs = 9.0<ms>; Outcome = StageOutcome.Succeeded }
+        stage "Fast" 1.0 StageOutcome.Succeeded
+        stage "Slow" 9.0 StageOutcome.Succeeded
       ]
       let bars = PipelineFlame.buildBars 20 stages
       let fastBar = bars |> List.find (fun b -> b.Name = "Fast")
@@ -84,15 +89,15 @@ let flameBarTests =
 
     testCase "single stage gets full width" <| fun _ ->
       let stages = [
-        { Name = "Only"; ElapsedMs = 5.0<ms>; Outcome = StageOutcome.Succeeded }
+        stage "Only" 5.0 StageOutcome.Succeeded
       ]
       let bars = PipelineFlame.buildBars 20 stages
       bars.[0].Width |> Expect.equal "should be full width" 20
 
     testCase "bars have at least width 1" <| fun _ ->
       let stages = [
-        { Name = "Tiny"; ElapsedMs = 0.001<ms>; Outcome = StageOutcome.Succeeded }
-        { Name = "Big"; ElapsedMs = 100.0<ms>; Outcome = StageOutcome.Succeeded }
+        stage "Tiny" 0.001 StageOutcome.Succeeded
+        stage "Big" 100.0 StageOutcome.Succeeded
       ]
       let bars = PipelineFlame.buildBars 20 stages
       bars |> List.iter (fun b ->
@@ -111,8 +116,8 @@ let flameSummaryTests =
       let trace = {
         Result = Ok 42
         Stages = [
-          { Name = "A"; ElapsedMs = 1.5<ms>; Outcome = StageOutcome.Succeeded }
-          { Name = "B"; ElapsedMs = 2.5<ms>; Outcome = StageOutcome.Succeeded }
+          stage "A" 1.5 StageOutcome.Succeeded
+          stage "B" 2.5 StageOutcome.Succeeded
         ]
       }
       PipelineFlame.summary trace
@@ -121,7 +126,7 @@ let flameSummaryTests =
     testCase "summary shows pass for successful trace" <| fun _ ->
       let trace = {
         Result = Ok "ok"
-        Stages = [{ Name = "Run"; ElapsedMs = 1.0<ms>; Outcome = StageOutcome.Succeeded }]
+        Stages = [stage "Run" 1.0 StageOutcome.Succeeded]
       }
       PipelineFlame.summary trace
       |> Expect.stringContains "should say passed" "✓"
@@ -129,7 +134,7 @@ let flameSummaryTests =
     testCase "summary shows fail for error trace" <| fun _ ->
       let trace = {
         Result = Error (SageFsError.EvalFailed "x")
-        Stages = [{ Name = "Run"; ElapsedMs = 1.0<ms>; Outcome = StageOutcome.Failed (SageFsError.EvalFailed "x") }]
+        Stages = [stage "Run" 1.0 (StageOutcome.Failed (SageFsError.EvalFailed "x"))]
       }
       PipelineFlame.summary trace
       |> Expect.stringContains "should say failed" "✗"

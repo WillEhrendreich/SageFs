@@ -29,7 +29,7 @@ let private makeManifestWithTwoEntries () =
           CreatedAt = DateTimeOffset.UtcNow
           StoppedAt = None } ]
     DaemonManifestData.ActiveSessionId = Some "sess-aaa"
-    DaemonManifestData.CreatedAtMs = 1234567890L }
+    DaemonManifestData.CreatedAtMs = TestMagnitudes.fixedCreatedAtMs }
 
 [<Tests>]
 let manifestPayloadBoundaryTests =

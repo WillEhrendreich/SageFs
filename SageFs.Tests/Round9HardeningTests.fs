@@ -18,18 +18,18 @@ let w3SparklineWindowTests =
 
     testCase "outlier in old entries does not compress visible bars to minimum" <| fun _ ->
       let state = EvalTimeline.TimelineState.empty
-      // Simulate an old outlier at 10_000 ms followed by many small evals at ~10 ms
-      let entry0: EvalTimeline.TimelineEntry = { CellId = 0; StartMs = 0L; DurationMs = 10_000L; Status = EvalTimeline.Succeeded }
+      // Simulate an old outlier of ten seconds followed by many small evals at ~10 ms
+      let entry0: EvalTimeline.TimelineEntry = FixtureDurations.timelineEntry 0 FixtureDurations.outlierEvalMs EvalTimeline.Succeeded
       let stateWithOutlier = EvalTimeline.TimelineState.record entry0 state
       let stateWith21Entries =
         List.fold
           (fun s i ->
-            let e: EvalTimeline.TimelineEntry = { CellId = i + 1; StartMs = 0L; DurationMs = 10L; Status = EvalTimeline.Succeeded }
+            let e: EvalTimeline.TimelineEntry = FixtureDurations.timelineEntry (i + 1) 10L EvalTimeline.Succeeded
             EvalTimeline.TimelineState.record e s)
           stateWithOutlier
           [1..20]
       // The outlier is now at the tail (oldest). sparkline width=20 shows only the 20 recent 10ms bars.
-      // maxDur from visible window = 10.0 ms, not 10_000.0 ms → bars should be tall, not ▁.
+      // maxDur from visible window = 10.0 ms, not the outlier's ten seconds → bars should be tall, not ▁.
       let sparkline = EvalTimeline.sparkline 20 stateWith21Entries
       let lastBar = string sparkline.[sparkline.Length - 1]
       lastBar |> Expect.notEqual "most recent bar should not be collapsed to minimum" "▁"
@@ -38,7 +38,7 @@ let w3SparklineWindowTests =
       let state =
         List.fold
           (fun s i ->
-            let e: EvalTimeline.TimelineEntry = { CellId = i; StartMs = 0L; DurationMs = 100L; Status = EvalTimeline.Succeeded }
+            let e: EvalTimeline.TimelineEntry = FixtureDurations.timelineEntry i 100L EvalTimeline.Succeeded
             EvalTimeline.TimelineState.record e s)
           EvalTimeline.TimelineState.empty
           [0..9]

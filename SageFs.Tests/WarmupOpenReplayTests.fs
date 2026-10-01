@@ -305,7 +305,7 @@ let warmupOpenFailureSuggestedActionTests =
         Name = WarmupOpenFailure.DiscoveryWarningName
         Kind = OpenableKind.Namespace
         ErrorMessage = "Project assembly not found: /x.dll — run 'dotnet build' first."
-        Diagnostics = []; RetryCount = 1; DurationMs = 0.0
+        Diagnostics = []; RetryCount = 1; DurationMs = FixtureDurations.instantOpenMs
       }
       WarmupOpenFailure.suggestedAction f |> Expect.isNone "no separate suggestion needed"
     }
@@ -314,7 +314,7 @@ let warmupOpenFailureSuggestedActionTests =
       let f: WarmupOpenFailure = {
         Name = "WaitForGraph"; Kind = OpenableKind.Namespace
         ErrorMessage = "The namespace or module 'WaitForGraph' is not defined."
-        Diagnostics = []; RetryCount = 1; DurationMs = 0.0
+        Diagnostics = []; RetryCount = 1; DurationMs = FixtureDurations.instantOpenMs
       }
       match WarmupOpenFailure.suggestedAction f with
       | Some action ->

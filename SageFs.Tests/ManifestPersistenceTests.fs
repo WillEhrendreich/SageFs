@@ -16,7 +16,7 @@ let manifestBinaryTests = testList "DaemonManifest binary format" [
     let data = {
       Entries = []
       ActiveSessionId = None
-      CreatedAtMs = 1709500000000L
+      CreatedAtMs = TestMagnitudes.manifestCreatedAtMs
     }
     let bytes = ManifestWriter.write data
     let result = ManifestReader.read bytes
@@ -24,7 +24,7 @@ let manifestBinaryTests = testList "DaemonManifest binary format" [
     | Ok loaded ->
       loaded.Entries |> Expect.isEmpty "no entries"
       loaded.ActiveSessionId |> Expect.isNone "no active session"
-      loaded.CreatedAtMs |> Expect.equal "timestamp preserved" 1709500000000L
+      loaded.CreatedAtMs |> Expect.equal "timestamp preserved" TestMagnitudes.manifestCreatedAtMs
     | Error e -> failwithf "Round-trip failed: %s" e
 
   testCase "single alive session roundtrips" <| fun _ ->
@@ -63,7 +63,7 @@ let manifestBinaryTests = testList "DaemonManifest binary format" [
       CreatedAt = created
       StoppedAt = Some stopped
     }
-    let data = { Entries = [ entry ]; ActiveSessionId = None; CreatedAtMs = 0L }
+    let data = { Entries = [ entry ]; ActiveSessionId = None; CreatedAtMs = TestMagnitudes.epochMs }
     let bytes = ManifestWriter.write data
     match ManifestReader.read bytes with
     | Ok loaded ->
@@ -103,7 +103,7 @@ let manifestBinaryTests = testList "DaemonManifest binary format" [
     | Error e -> failwithf "Round-trip failed: %s" e
 
   testCase "CRC detects corruption" <| fun _ ->
-    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 0L }
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = TestMagnitudes.epochMs }
     let bytes = ManifestWriter.write data
     let corrupted = Array.copy bytes
     corrupted.[bytes.Length - 1] <- corrupted.[bytes.Length - 1] ^^^ 0xFFuy
@@ -135,11 +135,11 @@ let manifestBinaryTests = testList "DaemonManifest binary format" [
             SessionId = sprintf "session-%d" (rng.Next(10000))
             Projects = projects
             WorkingDir = sprintf "C:\\Code\\Proj%d" (rng.Next(100))
-            CreatedAt = DateTimeOffset.FromUnixTimeMilliseconds(int64 (rng.Next(1_000_000, 2_000_000)) * 1000L)
+            CreatedAt = DateTimeOffset.FromUnixTimeMilliseconds(int64 (rng.Next(TestMagnitudes.manifestSecondsLow, TestMagnitudes.manifestSecondsHigh)) * 1000L)
             StoppedAt =
               match rng.Next(2) with
               | 0 -> None
-              | _ -> Some (DateTimeOffset.FromUnixTimeMilliseconds(int64 (rng.Next(1_000_000, 2_000_000)) * 1000L))
+              | _ -> Some (DateTimeOffset.FromUnixTimeMilliseconds(int64 (rng.Next(TestMagnitudes.manifestSecondsLow, TestMagnitudes.manifestSecondsHigh)) * 1000L))
           }
       ]
       let activeId =
@@ -149,7 +149,7 @@ let manifestBinaryTests = testList "DaemonManifest binary format" [
       let manifest = {
         Entries = entries
         ActiveSessionId = activeId
-        CreatedAtMs = int64 (rng.Next(1_000_000, 2_000_000)) * 1000L
+        CreatedAtMs = int64 (rng.Next(TestMagnitudes.manifestSecondsLow, TestMagnitudes.manifestSecondsHigh)) * 1000L
       }
       let bytes = ManifestWriter.write manifest
       match ManifestReader.read bytes with
@@ -177,12 +177,12 @@ let manifestBinaryTests = testList "DaemonManifest binary format" [
 let manifestVersionTests = testList "DaemonManifest format version" [
 
   testCase "v1 format is accepted" <| fun _ ->
-    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 1L }
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = TestMagnitudes.oneMsAfterEpoch }
     let bytes = ManifestWriter.write data
     ManifestReader.read bytes |> Result.isOk |> Expect.isTrue "v1 should succeed"
 
   testCase "unknown format version is rejected" <| fun _ ->
-    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 1L }
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = TestMagnitudes.oneMsAfterEpoch }
     let bytes = ManifestWriter.write data
     // Patch format_version field (bytes 4-5) to v99
     let patched = Array.copy bytes
@@ -199,7 +199,7 @@ let manifestVersionTests = testList "DaemonManifest format version" [
     | Ok _ -> failwith "Should reject unknown format version"
 
   testCase "format version 0 is rejected" <| fun _ ->
-    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 1L }
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = TestMagnitudes.oneMsAfterEpoch }
     let bytes = ManifestWriter.write data
     let patched = Array.copy bytes
     patched.[4] <- 0uy; patched.[5] <- 0uy
@@ -234,7 +234,7 @@ let manifestHostileHeaderTests = testList "DaemonManifest hostile header rejecti
     patched
 
   testCase "inflated section count is rejected even with recomputed CRC" <| fun _ ->
-    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 1L }
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = TestMagnitudes.oneMsAfterEpoch }
     let bytes = ManifestWriter.write data
     let patched = tamperAndFixCrc bytes 8 (fun p ->
       let cb = System.BitConverter.GetBytes(0xFFFFFFu)
@@ -246,7 +246,7 @@ let manifestHostileHeaderTests = testList "DaemonManifest hostile header rejecti
     | Ok _ -> failwith "Should reject an inflated section count even with a valid CRC"
 
   testCase "declared total size mismatch is rejected even with recomputed CRC" <| fun _ ->
-    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 1L }
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = TestMagnitudes.oneMsAfterEpoch }
     let bytes = ManifestWriter.write data
     let patched = tamperAndFixCrc bytes 24 (fun p ->
       let cb = System.BitConverter.GetBytes(uint64 bytes.Length + 4096UL)
@@ -265,7 +265,7 @@ let manifestHostileHeaderTests = testList "DaemonManifest hostile header rejecti
       CreatedAt = DateTimeOffset.UtcNow
       StoppedAt = None
     }
-    let data = { Entries = [ entry ]; ActiveSessionId = None; CreatedAtMs = 1L }
+    let data = { Entries = [ entry ]; ActiveSessionId = None; CreatedAtMs = TestMagnitudes.oneMsAfterEpoch }
     let bytes = ManifestWriter.write data
     let patched = tamperAndFixCrc bytes 32 (fun p ->
       let cb = System.BitConverter.GetBytes(99u)
@@ -284,7 +284,7 @@ let manifestHostileHeaderTests = testList "DaemonManifest hostile header rejecti
       CreatedAt = DateTimeOffset.UtcNow
       StoppedAt = None
     }
-    let data = { Entries = [ entry ]; ActiveSessionId = Some "sess-ok"; CreatedAtMs = 1L }
+    let data = { Entries = [ entry ]; ActiveSessionId = Some "sess-ok"; CreatedAtMs = TestMagnitudes.oneMsAfterEpoch }
     let bytes = ManifestWriter.write data
     match ManifestReader.read bytes with
     | Ok loaded ->
@@ -390,7 +390,7 @@ let manifestCodecPropertyTests =
               Gen.choose (0, 6 * 24 * 60)
               |> Gen.map (fun minutes ->
                 let now = DateTimeOffset.UtcNow
-                Some (DateTimeOffset.FromUnixTimeMilliseconds(now.ToUnixTimeMilliseconds() - int64 minutes * 60_000L)))
+                Some (DateTimeOffset.FromUnixTimeMilliseconds(now.ToUnixTimeMilliseconds() - int64 minutes * TestMagnitudes.msPerMinute)))
             let! count = Gen.choose (0, 8)
             let! entries = Gen.listOfLength count (genEntry (Gen.oneof [ Gen.constant None; genRecent ]))
             let! active = Gen.oneof [ Gen.constant None; genHexId |> Gen.map Some ]

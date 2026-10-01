@@ -133,7 +133,7 @@ let private mkTestSourceLocations () : TestSourceLocation list =
 
 let private mkBindingValues () : BindingValue list =
   [ { Name = "x"; TypeSig = "int"; DisplayValue = "42"; IsTruncated = false
-      IsFunctionValue = false; CellIndex = 0; EvalDurationMs = 1.5; SourceLine = 1 } ]
+      IsFunctionValue = false; CellIndex = 0; EvalDurationMs = FixtureDurations.cellEvalMs; SourceLine = 1 } ]
 
 let private mkFsiBindings () : FsiBinding array =
   [| { Name = "x"; TypeSig = "int"; Value = Some "42"; ShadowCount = 0 } |]

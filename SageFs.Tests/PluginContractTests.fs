@@ -24,11 +24,11 @@ let mkTestWarmup (nFiles: int) (fails: (string * string) list) : WarmupContext =
       { Name = "Expecto"; Path = "/lib/Expecto.dll"; NamespaceCount = 2; ModuleCount = 3 }
     ]
     NamespacesOpened = [
-      { Name = "System"; Kind = OpenableKind.Namespace; Source = "auto"; DurationMs = 0.0 }
-      { Name = "Expecto"; Kind = OpenableKind.Module; Source = "auto"; DurationMs = 0.0 }
+      { Name = "System"; Kind = OpenableKind.Namespace; Source = "auto"; DurationMs = FixtureDurations.instantOpenMs }
+      { Name = "Expecto"; Kind = OpenableKind.Module; Source = "auto"; DurationMs = FixtureDurations.instantOpenMs }
     ]
-    FailedOpens = fails |> List.map (fun (n, e) -> { Name = n; Kind = OpenableKind.Namespace; ErrorMessage = e; Diagnostics = []; RetryCount = 1; DurationMs = 0.0 })
-    PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 150L }
+    FailedOpens = fails |> List.map (fun (n, e) -> { Name = n; Kind = OpenableKind.Namespace; ErrorMessage = e; Diagnostics = []; RetryCount = 1; DurationMs = FixtureDurations.instantOpenMs })
+    PhaseTiming = FixtureDurations.warmupTotalOnly 150L
     StartedAt = DateTimeOffset.UtcNow }
 
 let mkTestSessionCtx id projects warmup files : SessionContext =

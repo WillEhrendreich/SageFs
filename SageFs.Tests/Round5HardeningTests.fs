@@ -20,7 +20,7 @@ open SageFs.Features.Events
 let private makeManifestData activeId =
   { DaemonManifestData.Entries = []
     DaemonManifestData.ActiveSessionId = Some activeId
-    DaemonManifestData.CreatedAtMs = 0L }
+    DaemonManifestData.CreatedAtMs = TestMagnitudes.epochMs }
 
 [<Tests>]
 let manifestOverflowTests =

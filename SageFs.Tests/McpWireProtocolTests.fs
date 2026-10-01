@@ -135,13 +135,13 @@ let private minimalWarmup : WarmupContext =
     AssembliesLoaded = []
     NamespacesOpened = []
     FailedOpens = []
-    PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 0L }
+    PhaseTiming = FixtureDurations.warmupTotalOnly FixtureDurations.unmeasuredMs
     StartedAt = DateTimeOffset.UtcNow }
 
 [<Tests>]
 let sessionEventSerializationTests = testList "SessionEvent serialization" [
   test "WarmupContextSnapshot has correct type and sessionId" {
-    let evt = WarmupContextSnapshot("sess-1", { minimalWarmup with SourceFilesScanned = 5; PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 100L } })
+    let evt = WarmupContextSnapshot("sess-1", { minimalWarmup with SourceFilesScanned = 5; PhaseTiming = FixtureDurations.warmupTotalOnly 100L })
     let json = SseEvent.toJson evt
     expectJsonField json "type" "warmup_context_snapshot"
     expectJsonField json "sessionId" "sess-1"
@@ -157,8 +157,8 @@ let sessionEventSerializationTests = testList "SessionEvent serialization" [
     let evt = WarmupContextSnapshot("s", {
       minimalWarmup with
         AssembliesLoaded = [{ Name = "A"; Path = "/a.dll"; NamespaceCount = 10; ModuleCount = 3 }]
-        NamespacesOpened = [{ Name = "System"; Kind = OpenableKind.Namespace; Source = "auto"; DurationMs = 0.0 }]
-        FailedOpens = [{ Name = "Bad"; Kind = OpenableKind.Namespace; ErrorMessage = "err"; Diagnostics = []; RetryCount = 1; DurationMs = 0.0 }]
+        NamespacesOpened = [{ Name = "System"; Kind = OpenableKind.Namespace; Source = "auto"; DurationMs = FixtureDurations.instantOpenMs }]
+        FailedOpens = [{ Name = "Bad"; Kind = OpenableKind.Namespace; ErrorMessage = "err"; Diagnostics = []; RetryCount = 1; DurationMs = FixtureDurations.instantOpenMs }]
     })
     let json = SseEvent.toJson evt
     let doc = JsonDocument.Parse(json)

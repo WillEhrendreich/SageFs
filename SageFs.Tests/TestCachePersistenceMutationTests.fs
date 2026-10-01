@@ -16,6 +16,7 @@ open Expecto
 open Expecto.Flip
 open SageFs.Features
 open SageFs.Features.TestCacheTypes
+open SageFs.Tests
 
 let testCachePersistenceMutationTests = testList "TestCachePersistence mutations" [
 
@@ -45,12 +46,12 @@ let testCachePersistenceMutationTests = testList "TestCachePersistence mutations
       [ { TestId = "test.a"; BitmapWordCount = 2u; BitmapWords = [| 0x1122334455667788UL; 0xAABBCCDDEEFF0011UL |] }
         { TestId = "test.b"; BitmapWordCount = 0u; BitmapWords = [||] } ]
     ResultEntries =
-      [ { TestId = "test.a"; Outcome = Outcome.Pass; DurationMs = 12u; Message = None }
-        { TestId = "test.b"; Outcome = Outcome.AssertionFailed; DurationMs = 34u; Message = Some "expected 1, got 2" }
-        { TestId = "test.c"; Outcome = Outcome.TimedOut; DurationMs = 5000u; Message = Some "Timed out after 5s" } ]
+      [ { TestId = "test.a"; Outcome = Outcome.Pass; DurationMs = FixtureDurations.storedPassMs; Message = None }
+        { TestId = "test.b"; Outcome = Outcome.AssertionFailed; DurationMs = FixtureDurations.storedFailMs; Message = Some "expected 1, got 2" }
+        { TestId = "test.c"; Outcome = Outcome.TimedOut; DurationMs = FixtureDurations.storedTimeoutMs; Message = Some "Timed out after 5s" } ]
     FlakyEntries = []
     ImapGeneration = 7u
-    CreatedAtMs = 1234567890L
+    CreatedAtMs = TestMagnitudes.fixedCreatedAtMs
   }
 
   testCase "WHY — write_then_read_preserves_every_field_exactly — a lossy round-trip on any field is a silent data-corruption bug" <| fun () ->

@@ -12,10 +12,10 @@ open SageFs.Measures
 
 /// The duration of the result in the round-trip case. The case checks it comes back unchanged, so
 /// it is neither zero nor one of the shared fixture values.
-let private roundTripDuration = TimeSpan.FromMilliseconds 42.0
+let private roundTripDuration = FixtureDurations.roundTripDuration
 
 /// How long the earlier passing result in the narrative case says it took. Never read back.
-let private earlierPassDuration = TimeSpan.FromMilliseconds 50.0
+let private earlierPassDuration = FixtureDurations.slowResult
 
 [<Tests>]
 let affectedTestCycleTests = testList "affected-test cycle" [
@@ -795,12 +795,12 @@ let compositionTests = testList "compositionTests" [
         TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
     }
     let s1 = state |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let effects30, s30 = s1 |> LiveTestCycleState.tick (t0.AddMilliseconds(30.0))
+    let effects30, s30 = s1 |> LiveTestCycleState.tick (t0 + DebounceClock.partWayThroughTreeSitter)
     effects30 |> Expect.isEmpty "nothing at 30ms"
-    let effects51, s51 = s30 |> LiveTestCycleState.tick (t0.AddMilliseconds(51.0))
+    let effects51, s51 = s30 |> LiveTestCycleState.tick (t0 + DebounceClock.pastTreeSitter)
     effects51 |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
     |> Expect.isTrue "TS fires at 51ms"
-    let effects301, s301 = s51 |> LiveTestCycleState.tick (t0.AddMilliseconds(301.0))
+    let effects301, s301 = s51 |> LiveTestCycleState.tick (t0 + DebounceClock.pastFcs)
     effects301 |> List.exists (fun e -> match e with TestCycleEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isTrue "FCS request fires at 301ms"
     // Phase 2: FCS completes → handleFcsResult → for a compiled .fs file with
@@ -824,13 +824,13 @@ let compositionTests = testList "compositionTests" [
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let s0 = LiveTestCycleState.empty
     let s1 = s0 |> LiveTestCycleState.onKeystroke "l" "F.fs" t0
-    let s2 = s1 |> LiveTestCycleState.onKeystroke "le" "F.fs" (t0.AddMilliseconds(20.0))
-    let s3 = s2 |> LiveTestCycleState.onKeystroke "let" "F.fs" (t0.AddMilliseconds(40.0))
-    let s4 = s3 |> LiveTestCycleState.onKeystroke "let " "F.fs" (t0.AddMilliseconds(60.0))
-    let s5 = s4 |> LiveTestCycleState.onKeystroke "let x" "F.fs" (t0.AddMilliseconds(80.0))
-    let effects100, s100 = s5 |> LiveTestCycleState.tick (t0.AddMilliseconds(100.0))
+    let s2 = s1 |> LiveTestCycleState.onKeystroke "le" "F.fs" (t0 + DebounceClock.keyAt 1)
+    let s3 = s2 |> LiveTestCycleState.onKeystroke "let" "F.fs" (t0 + DebounceClock.keyAt 2)
+    let s4 = s3 |> LiveTestCycleState.onKeystroke "let " "F.fs" (t0 + DebounceClock.keyAt 3)
+    let s5 = s4 |> LiveTestCycleState.onKeystroke "let x" "F.fs" (t0 + DebounceClock.keyAt 4)
+    let effects100, s100 = s5 |> LiveTestCycleState.tick (t0 + DebounceClock.keyAt 5)
     effects100 |> Expect.isEmpty "nothing at 100ms (20ms after last keystroke)"
-    let effects131, _ = s100 |> LiveTestCycleState.tick (t0.AddMilliseconds(131.0))
+    let effects131, _ = s100 |> LiveTestCycleState.tick (t0 + DebounceClock.keyAt 4 + DebounceClock.pastTreeSitter)
     let tsCount =
       effects131
       |> List.filter (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
@@ -932,11 +932,11 @@ let compositionTests = testList "compositionTests" [
     let s0 = LiveTestCycleState.empty
     let s1 = s0 |> LiveTestCycleState.onKeystroke "let x = 1" "File1.fs" t0
     s1.ActiveFile |> Expect.equal "active is File1" (Some "File1.fs")
-    let s2 = s1 |> LiveTestCycleState.onKeystroke "let y = 2" "File2.fs" (t0.AddMilliseconds(30.0))
+    let s2 = s1 |> LiveTestCycleState.onKeystroke "let y = 2" "File2.fs" (t0 + DebounceClock.partWayThroughTreeSitter)
     s2.ActiveFile |> Expect.equal "active is File2" (Some "File2.fs")
-    let effects51, s51 = s2 |> LiveTestCycleState.tick (t0.AddMilliseconds(51.0))
+    let effects51, s51 = s2 |> LiveTestCycleState.tick (t0 + DebounceClock.pastTreeSitter)
     effects51 |> Expect.isEmpty "no TS at 51ms (file switched)"
-    let effects81, _ = s51 |> LiveTestCycleState.tick (t0.AddMilliseconds(81.0))
+    let effects81, _ = s51 |> LiveTestCycleState.tick (t0 + DebounceClock.partWayThroughTreeSitter + DebounceClock.pastTreeSitter)
     let hasTS =
       effects81
       |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
@@ -947,14 +947,14 @@ let compositionTests = testList "compositionTests" [
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let s0 = LiveTestCycleState.empty
     let s1 = s0 |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let effects1, s2 = s1 |> LiveTestCycleState.tick (t0.AddMilliseconds(51.0))
+    let effects1, s2 = s1 |> LiveTestCycleState.tick (t0 + DebounceClock.pastTreeSitter)
     let hasTS = effects1 |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
     hasTS |> Expect.isTrue "TS fires after first keystroke"
-    let s3 = s2 |> LiveTestCycleState.onKeystroke "let x = 2" "File.fs" (t0.AddMilliseconds(100.0))
-    let effects2, s4 = s3 |> LiveTestCycleState.tick (t0.AddMilliseconds(352.0))
+    let s3 = s2 |> LiveTestCycleState.onKeystroke "let x = 2" "File.fs" (t0 + DebounceClock.restartingEditAt)
+    let effects2, s4 = s3 |> LiveTestCycleState.tick (t0 + DebounceClock.insideRestartedFcs)
     let hasFCS = effects2 |> List.exists (fun e -> match e with TestCycleEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     hasFCS |> Expect.isFalse "FCS should NOT fire - debounce restarted by keystroke2"
-    let effects3, _ = s4 |> LiveTestCycleState.tick (t0.AddMilliseconds(401.0))
+    let effects3, _ = s4 |> LiveTestCycleState.tick (t0 + DebounceClock.restartingEditAt + DebounceClock.pastFcs)
     let hasFCS2 = effects3 |> List.exists (fun e -> match e with TestCycleEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     hasFCS2 |> Expect.isTrue "FCS fires after new debounce window"
   }
@@ -963,12 +963,12 @@ let compositionTests = testList "compositionTests" [
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let s0 = LiveTestCycleState.empty
     let s1 = s0 |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let s2 = s1 |> LiveTestCycleState.onKeystroke "let  x = 1 // comment" "File.fs" (t0.AddMilliseconds(20.0))
-    let effects75, s75 = s2 |> LiveTestCycleState.tick (t0.AddMilliseconds(75.0))
+    let s2 = s1 |> LiveTestCycleState.onKeystroke "let  x = 1 // comment" "File.fs" (t0 + DebounceClock.keyAt 1)
+    let effects75, s75 = s2 |> LiveTestCycleState.tick (t0 + DebounceClock.keyAt 1 + DebounceClock.pastTreeSitter)
     effects75
     |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
     |> Expect.isTrue "tree-sitter should still fire for editor feedback"
-    let effects400, _ = s75 |> LiveTestCycleState.tick (t0.AddMilliseconds(400.0))
+    let effects400, _ = s75 |> LiveTestCycleState.tick (t0 + DebounceClock.keyAt 1 + DebounceClock.pastFcs)
     effects400
     |> List.exists (fun e -> match e with TestCycleEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isFalse "FCS should stay suppressed for trivia-only edits"
@@ -979,7 +979,7 @@ let compositionTests = testList "compositionTests" [
     let s0 = LiveTestCycleState.empty
     let s1 = s0 |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
     s1.AnalysisCache.FileSymbols |> Expect.isEmpty "cache should be empty on first keystroke"
-    let effects, _ = s1 |> LiveTestCycleState.tick (t0.AddMilliseconds(51.0))
+    let effects, _ = s1 |> LiveTestCycleState.tick (t0 + DebounceClock.pastTreeSitter)
     let hasTS = effects |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
     hasTS |> Expect.isTrue "TS fires on first keystroke (cold start)"
   }

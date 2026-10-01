@@ -35,14 +35,14 @@ let private loadedAssembly : LoadedAssembly =
   { Name = "MyApp"; Path = "/bin/MyApp.dll"; NamespaceCount = 1; ModuleCount = 1 }
 
 let private openedNamespace : WarmUp.OpenedBinding =
-  { Name = "MyApp"; Kind = WarmUp.OpenableKind.Namespace; Source = "reflection"; DurationMs = 0.0 }
+  { Name = "MyApp"; Kind = WarmUp.OpenableKind.Namespace; Source = "reflection"; DurationMs = FixtureDurations.instantOpenMs }
 
 let private healthyWarmup : WarmupContext =
   { SourceFilesScanned = 1
     AssembliesLoaded = [ loadedAssembly ]
     NamespacesOpened = [ openedNamespace ]
     FailedOpens = []
-    PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 10L }
+    PhaseTiming = FixtureDurations.warmupTotalOnly 10L
     StartedAt = DateTimeOffset.UtcNow }
 
 let private nothingLoadedWarmup : WarmupContext =

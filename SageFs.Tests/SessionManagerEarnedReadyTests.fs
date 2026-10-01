@@ -71,9 +71,9 @@ let private readyProxy : SessionProxy =
           { Status = SessionStatus.Ready
             StatusMessage = None
             EvalCount = 0
-            AvgDurationMs = 0L
-            MinDurationMs = 0L
-            MaxDurationMs = 0L
+            AvgDurationMs = FixtureDurations.unmeasuredMs
+            MinDurationMs = FixtureDurations.unmeasuredMs
+            MaxDurationMs = FixtureDurations.unmeasuredMs
             Projects = []
             CoreVersion = "0.0.0-test" }
         return WorkerResponse.StatusResult(rid, snap)

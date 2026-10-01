@@ -49,9 +49,9 @@ let private roleVia (mode: LoadMode) : ClassifiedProject =
 let private healthyWarmup : WarmupContext =
   { SourceFilesScanned = 3
     AssembliesLoaded = [ { Name = "App"; Path = "/bin/App.dll"; NamespaceCount = 1; ModuleCount = 1 } ]
-    NamespacesOpened = [ { Name = "App"; Kind = OpenableKind.Namespace; Source = "reflection"; DurationMs = 0.0 } ]
+    NamespacesOpened = [ { Name = "App"; Kind = OpenableKind.Namespace; Source = "reflection"; DurationMs = FixtureDurations.instantOpenMs } ]
     FailedOpens = []
-    PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 42L }
+    PhaseTiming = FixtureDurations.warmupTotalOnly 42L
     StartedAt = DateTimeOffset.UtcNow }
 
 let private causes =

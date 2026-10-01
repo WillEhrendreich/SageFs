@@ -25,7 +25,7 @@ let private withTempDir run =
 let warmupInitBoundaryTests =
   testList "WarmupInitBoundary" [
     testCase "completeWarmup stops total timing at the namespace-open boundary" <| fun _ ->
-      let boundaryMs = 120L
+      let boundaryMs = FixtureDurations.warmupBoundaryMs
       let ctx : WarmupContext =
         WarmupContext.completeWarmup
           warmupStartedAt

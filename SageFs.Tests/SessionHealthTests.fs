@@ -21,10 +21,10 @@ let private loadedAssembly (name: string) : LoadedAssembly =
   { Name = name; Path = sprintf "/bin/%s.dll" name; NamespaceCount = 1; ModuleCount = 1 }
 
 let private openedNamespace (name: string) : OpenedBinding =
-  { Name = name; Kind = OpenableKind.Namespace; Source = "reflection"; DurationMs = 0.0 }
+  { Name = name; Kind = OpenableKind.Namespace; Source = "reflection"; DurationMs = FixtureDurations.instantOpenMs }
 
 let private failedOpen (name: string) (msg: string) : WarmupOpenFailure =
-  { Name = name; Kind = OpenableKind.Namespace; ErrorMessage = msg; Diagnostics = []; RetryCount = 1; DurationMs = 0.0 }
+  { Name = name; Kind = OpenableKind.Namespace; ErrorMessage = msg; Diagnostics = []; RetryCount = 1; DurationMs = FixtureDurations.instantOpenMs }
 
 /// A warmup context that genuinely loaded something — the "everything worked" baseline.
 let private healthyWarmup : WarmupContext =
@@ -32,7 +32,7 @@ let private healthyWarmup : WarmupContext =
     AssembliesLoaded = [ loadedAssembly "MyApp" ]
     NamespacesOpened = [ openedNamespace "MyApp" ]
     FailedOpens = []
-    PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 42L }
+    PhaseTiming = FixtureDurations.warmupTotalOnly 42L
     StartedAt = System.DateTimeOffset.UtcNow }
 
 /// Case 1 (measured live, reproduced against a real un-built project): Ready,

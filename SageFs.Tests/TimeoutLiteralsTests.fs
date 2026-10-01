@@ -4,7 +4,7 @@
 /// what the wait is for and why that long. This pins where an inline literal is still left:
 /// `TimeSpan.From...` with a number, `Task.Delay n`, `Thread.Sleep n`, `Async.Sleep n`, `.AddSeconds n` and
 /// its kin, `WaitForExit n`, `CancelAfter n`, a `...Ms = n` or `timeout = n` binding, and a bare digit-group
-/// number such as `60_000` (a millisecond count wearing no unit). Each file has a budget,
+/// number written with underscore groups (a millisecond count wearing no unit). Each file has a budget,
 /// the budgets only go DOWN, a file that is not listed has a budget of zero, and a file under its
 /// budget is stale. When the table is empty there is nowhere a magic duration can hide.
 module SageFs.Tests.TimeoutLiteralsTests
@@ -103,20 +103,12 @@ let private budgets : (string * int) list =
     "SageFs.Tests/LiveTestWatcherScopeTests.fs", 2
     "SageFs.Tests/LiveTestingBrowserTests.fs", 8
     "SageFs.Tests/LiveTestingCoverageTests.fs", 2
-    "SageFs.Tests/LiveTestingCycleTests.fs", 32
-    "SageFs.Tests/LiveTestingDecompositionTests.fs", 3
-    "SageFs.Tests/LiveTestingElmTests.fs", 11
-    "SageFs.Tests/LiveTestingGraphTests.fs", 22
     "SageFs.Tests/LiveTestingTypesTests.fs", 1
-    "SageFs.Tests/LoadModeTests.fs", 5
     "SageFs.Tests/LocalDataSqliteTests.fs", 1
     "SageFs.Tests/ManifestOwnerTests.fs", 2
-    "SageFs.Tests/ManifestPersistenceTests.fs", 17
     "SageFs.Tests/McpAdapterTests.fs", 4
     "SageFs.Tests/McpStdioBridgeE2ETests.fs", 2
     "SageFs.Tests/McpStdioBridgeSimTests.fs", 1
-    "SageFs.Tests/McpToolGateTests.fs", 3
-    "SageFs.Tests/McpWireProtocolTests.fs", 10
     "SageFs.Tests/MeasureTests.fs", 2
     "SageFs.Tests/MemoryShedSimTests.fs", 12
     "SageFs.Tests/MemorySupervisorTests.fs", 18
@@ -129,8 +121,6 @@ let private budgets : (string * int) list =
     "SageFs.Tests/PatchAnnouncerTests.fs", 1
     "SageFs.Tests/PeriodicManifestSaveDstTests.fs", 2
     "SageFs.Tests/PersistenceComplianceTests.fs", 1
-    "SageFs.Tests/PipelineFlameTests.fs", 17
-    "SageFs.Tests/PluginContractTests.fs", 7
     "SageFs.Tests/ProcessEnvironmentTests.fs", 1
     "SageFs.Tests/Program.fs", 2
     "SageFs.Tests/PureModulesComprehensiveTests.fs", 5
@@ -138,55 +128,26 @@ let private budgets : (string * int) list =
     "SageFs.Tests/ReloadBroadcastTests.fs", 2
     "SageFs.Tests/ReloadPlanningTests.fs", 6
     "SageFs.Tests/ResilientActorTests.fs", 4
-    "SageFs.Tests/ResolveSessionStatusReconciliationTests.fs", 3
     "SageFs.Tests/RestartJitterTests.fs", 1
     "SageFs.Tests/RestartPolicyTests.fs", 4
     "SageFs.Tests/RetryPolicyTests.fs", 7
-    "SageFs.Tests/Round10HardeningTests.fs", 16
-    "SageFs.Tests/Round5HardeningTests.fs", 1
-    "SageFs.Tests/Round6HardeningTests.fs", 1
     "SageFs.Tests/Round7HardeningTests.fs", 2
-    "SageFs.Tests/Round8HardeningTests.fs", 1
-    "SageFs.Tests/Round9HardeningTests.fs", 8
     "SageFs.Tests/SafeDirectoryWalkTests.fs", 1
-    "SageFs.Tests/SageFsAppTests.fs", 5
     "SageFs.Tests/SageFsConfigTests.fs", 1
-    "SageFs.Tests/SageFsEffectHandlerTests.fs", 7
     "SageFs.Tests/SageFsIOTests.fs", 7
-    "SageFs.Tests/SessionActivityTouchTests.fs", 3
     "SageFs.Tests/SessionCreationTests.fs", 1
-    "SageFs.Tests/SessionHealthSseTests.fs", 5
-    "SageFs.Tests/SessionHealthTests.fs", 6
-    "SageFs.Tests/SessionIsolationTests.fs", 3
     "SageFs.Tests/SessionLifecycleMutationTests.fs", 10
     "SageFs.Tests/SessionManagerAdmissionTests.fs", 2
-    "SageFs.Tests/SessionManagerEarnedReadyTests.fs", 3
-    "SageFs.Tests/SessionManagerRestartTombstoneTests.fs", 3
-    "SageFs.Tests/SessionManagerSpawnFirstRestartTests.fs", 9
     "SageFs.Tests/SessionPredicatesAndUiTests.fs", 1
-    "SageFs.Tests/SessionStatusPayloadTests.fs", 1
-    "SageFs.Tests/SessionStatusTruthTests.fs", 3
     "SageFs.Tests/ShutdownLifecycleTests.fs", 1
     "SageFs.Tests/SimulationTests.fs", 1
-    "SageFs.Tests/SseContractComplianceTests.fs", 1
-    "SageFs.Tests/SseFeatureFormatTests.fs", 6
-    "SageFs.Tests/StatusWaitTests.fs", 3
     "SageFs.Tests/StreamingProxyTests.fs", 4
-    "SageFs.Tests/SurfaceJsonWireTests.fs", 6
     "SageFs.Tests/SyntaxHighlightTests.fs", 1
-    "SageFs.Tests/TargetedVerifyMcpToolTests.fs", 3
-    "SageFs.Tests/TestCachePersistenceMutationTests.fs", 4
-    "SageFs.Tests/TimeoutLiteralsTests.fs", 1
     "SageFs.Tests/TimeoutsTests.fs", 10
     "SageFs.Tests/TweakSimDstTests.fs", 1
     "SageFs.Tests/VscodeCommandProofTests.fs", 2
     "SageFs.Tests/VscodeExtensionTests.fs", 13
-    "SageFs.Tests/WarmupContextTests.fs", 39
-    "SageFs.Tests/WarmupInitBoundaryTests.fs", 1
-    "SageFs.Tests/WarmupOpenReplayTests.fs", 2
-    "SageFs.Tests/WorkerHttpTransportTests.fs", 7
     "SageFs.Tests/WorkerLogFileTests.fs", 1
-    "SageFs.Tests/WorkerProtocolTests.fs", 4
     "SageFs.Tests/WorkflowSwitchTests.fs", 1
     "SageFs.Tests/WorkflowTransitionPropertyTests.fs", 1
     "SageFs.Tests/WorkflowTypesMutationTests.fs", 1 ]

@@ -19,7 +19,7 @@ let private factsWith (restart: SessionStatusPayload.LastRestart) : SessionStatu
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     CoreVersion = "0.0.0"
     EvalCount = 0
-    AverageDurationMs = 0L
+    AverageDurationMs = FixtureDurations.unmeasuredMs
     Health = SessionHealth.toJson SessionHealth.Healthy
     LastRestart = restart
     LastReload = SessionReload.NoReloadYet }

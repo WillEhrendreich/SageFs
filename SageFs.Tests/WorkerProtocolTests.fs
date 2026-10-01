@@ -38,7 +38,7 @@ let private genFiniteFloat =
   |> Gen.filter (fun f -> not (Double.IsNaN f || Double.IsInfinity f))
 
 /// Ticks spread over years 0001-6700 (Int32.MaxValue * 1e9 stays below DateTime.MaxValue).
-let private genTicks = Gen.choose (0, Int32.MaxValue) |> Gen.map (fun t -> int64 t * 1_000_000_000L)
+let private genTicks = Gen.choose (0, Int32.MaxValue) |> Gen.map (fun t -> int64 t * TestMagnitudes.tickStride)
 
 let private genWireDateTime =
   gen {
@@ -256,9 +256,9 @@ let workerProtocolTests =
         let status = {
           Status = SessionStatus.Ready
           EvalCount = 10
-          AvgDurationMs = 150L
-          MinDurationMs = 5L
-          MaxDurationMs = 1000L
+          AvgDurationMs = FixtureDurations.evalAvgMs
+          MinDurationMs = FixtureDurations.evalMinMs
+          MaxDurationMs = FixtureDurations.evalMaxMs
           StatusMessage = None
           Projects =
             [ { Path = "/src/App/App.fsproj"

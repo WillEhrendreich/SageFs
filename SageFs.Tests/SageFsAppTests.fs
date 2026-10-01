@@ -35,10 +35,10 @@ let mkHotPathSessionContext
         { Name = "Proj"; Path = "Proj.dll"; NamespaceCount = 2; ModuleCount = 1 }
       ]
       NamespacesOpened = [
-        { Name = "System"; Kind = OpenableKind.Namespace; Source = "warmup"; DurationMs = 12.0 }
+        { Name = "System"; Kind = OpenableKind.Namespace; Source = "warmup"; DurationMs = FixtureDurations.instantOpenMs }
       ]
       FailedOpens = []
-      PhaseTiming = { ScanSourceFilesMs = 10L; ScanAssembliesMs = 5L; OpenNamespacesMs = 7L; TotalMs = 22L }
+      PhaseTiming = FixtureDurations.warmupPhaseTiming 10L 5L 7L 22L
       StartedAt = startedAt
     }
     FileStatuses = [

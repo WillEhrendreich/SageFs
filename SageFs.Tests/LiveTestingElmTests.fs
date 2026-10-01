@@ -12,7 +12,7 @@ open SageFs.Measures
 
 
 /// How long the failing result in the assertion-message case says it took. Never read back.
-let private mismatchResultDuration = TimeSpan.FromMilliseconds 12.0
+let private mismatchResultDuration = FixtureDurations.usualResult
 
 // ── Elm Integration Tests ──
 
@@ -361,7 +361,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
   test "keystroke then tick past debounce fires TreeSitter parse" {
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let s = LiveTestCycleState.empty |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let effects, _ = s |> LiveTestCycleState.tick (t0.AddMilliseconds(51.0))
+    let effects, _ = s |> LiveTestCycleState.tick (t0 + DebounceClock.pastTreeSitter)
     effects
     |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
     |> Expect.isTrue "TreeSitter parse fires after debounce"
@@ -390,7 +390,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
                 DiscoveredTests = [|tc|]
                 Activation = LiveTestingActivation.Active } }
     let s1 = state |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let effects301, _ = s1 |> LiveTestCycleState.tick (t0.AddMilliseconds(301.0))
+    let effects301, _ = s1 |> LiveTestCycleState.tick (t0 + DebounceClock.pastFcs)
     effects301
     |> List.exists (fun e -> match e with TestCycleEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isTrue "FCS fires after 300ms debounce"
@@ -399,10 +399,10 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
   test "cycle goes idle after both debounces fire" {
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let s = LiveTestCycleState.empty |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let _, s51 = s |> LiveTestCycleState.tick (t0.AddMilliseconds(51.0))
-    let _, s301 = s51 |> LiveTestCycleState.tick (t0.AddMilliseconds(301.0))
+    let _, s51 = s |> LiveTestCycleState.tick (t0 + DebounceClock.pastTreeSitter)
+    let _, s301 = s51 |> LiveTestCycleState.tick (t0 + DebounceClock.pastFcs)
     s301 |> hasPendingWork |> Expect.isFalse "cycle idle after both debounces"
-    let effects500, _ = s301 |> LiveTestCycleState.tick (t0.AddMilliseconds(500.0))
+    let effects500, _ = s301 |> LiveTestCycleState.tick (t0 + DebounceClock.wellAfterBothWindows)
     effects500 |> Expect.isEmpty "no further effects after idle"
   }
 
@@ -410,9 +410,9 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let s0 = LiveTestCycleState.empty
     let s1 = s0 |> LiveTestCycleState.onKeystroke "l" "F.fs" t0
-    let s2 = s1 |> LiveTestCycleState.onKeystroke "le" "F.fs" (t0.AddMilliseconds(20.0))
-    let s3 = s2 |> LiveTestCycleState.onKeystroke "let" "F.fs" (t0.AddMilliseconds(40.0))
-    let effects, _ = s3 |> LiveTestCycleState.tick (t0.AddMilliseconds(91.0))
+    let s2 = s1 |> LiveTestCycleState.onKeystroke "le" "F.fs" (t0 + DebounceClock.keyAt 1)
+    let s3 = s2 |> LiveTestCycleState.onKeystroke "let" "F.fs" (t0 + DebounceClock.keyAt 2)
+    let effects, _ = s3 |> LiveTestCycleState.tick (t0 + DebounceClock.keyAt 2 + DebounceClock.pastTreeSitter)
     let tsEffects =
       effects |> List.choose (fun e -> match e with TestCycleEffect.ParseTreeSitter (c, _) -> Some c | _ -> None)
     tsEffects |> Expect.hasLength "exactly one parse" 1
@@ -497,7 +497,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
       { TestId = tc.Id
         TestName = tc.FullName
         Result = TestResult.Passed FixtureDurations.quickResult
-        Timestamp = now.AddSeconds(1.0)
+        Timestamp = now + TestTimeouts.clockTick
         Output = None }
     let cleared = LiveTesting.mergeResultsWithUpdatedStatusEntries stale [|newResult|]
     LiveTestState.orderedStatusEntries cleared |> Array.exists (fun e -> match e.Status with TestRunStatus.Passed _ -> true | _ -> false)
@@ -550,8 +550,8 @@ let fileContentChangedTests = testList "FileContentChanged" [
     let model = { (SageFsModel.initial()) with LiveTesting = { LiveTestCycleState.empty with TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } } }
     let afterKeystroke, _ = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/MyModule.fs", "let x = 1")) model
     let cycle = afterKeystroke.LiveTesting
-    let t51 = DateTimeOffset.UtcNow.AddMilliseconds(51.0)
-    let effects, _ = LiveTestCycleState.tick t51 cycle
+    let tTreeSitterDue = DateTimeOffset.UtcNow + DebounceClock.pastTreeSitter
+    let effects, _ = LiveTestCycleState.tick tTreeSitterDue cycle
     effects
     |> List.exists (fun e ->
       match e with

@@ -10,32 +10,9 @@ open SageFs.Tests.LiveTestingTestHelpers
 open SageFs.Measures
 
 
-// --- Stage timings the cycle-timing cases feed in ---
-//
-// Nothing waits for these. The cases that format a timing state the text they must produce
-// ("TS:0.8ms | FCS:142ms | Run:87ms (12)"), so the value is part of what the case pins, and each
-// name carries it: `treeSitter0p8ms` is the tree-sitter stage at 0.8 ms, `fcs142ms` the FCS stage
-// at 142 ms, `run87ms` the execution stage at 87 ms. A stage name is shared by every case that
-// uses that stage at that value.
-
-let private treeSitter0p5ms = TimeSpan.FromMilliseconds 0.5
-let private treeSitter0p8ms = TimeSpan.FromMilliseconds 0.8
-let private treeSitter1ms = TimeSpan.FromMilliseconds 1.0
-let private treeSitter1p2ms = TimeSpan.FromMilliseconds 1.2
-let private treeSitter1p5ms = TimeSpan.FromMilliseconds 1.5
-
-let private fcs50ms = TimeSpan.FromMilliseconds 50.0
-let private fcs85ms = TimeSpan.FromMilliseconds 85.0
-let private fcs100ms = TimeSpan.FromMilliseconds 100.0
-let private fcs142ms = TimeSpan.FromMilliseconds 142.0
-
-let private run30ms = TimeSpan.FromMilliseconds 30.0
-let private run42ms = TimeSpan.FromMilliseconds 42.0
-let private run50ms = TimeSpan.FromMilliseconds 50.0
-let private run87ms = TimeSpan.FromMilliseconds 87.0
-
-/// The duration of the passing result the end-to-end dispatch case sends in. Never read back.
-let private dispatchedResultDuration = TimeSpan.FromMilliseconds 42.0
+// The stage timings the cycle-timing cases feed in are `StageTimings` (TestTimeouts.fs): the
+// value is part of what each case pins, so each name carries it.
+open StageTimings
 
 // --- TestCycleTiming Tests (RED — stub returns 0.0) ---
 
@@ -449,7 +426,7 @@ let debounceChannelTests = testList "DebounceChannel" [
       DebounceChannel.empty<string>
       |> DebounceChannel.submit "first" 50<ms> t0
     let ch2 = ch |> DebounceChannel.submit "second" 50<ms> (t0.AddMilliseconds 20.0)
-    let staleOp = { Payload = "first"; RequestedAt = t0; DelayMs = 50<ms>; Generation = 1L }
+    let staleOp = { Payload = "first"; RequestedAt = t0; DelayMs = DebounceClock.treeSitterDelayMs; Generation = 1L }
     let ch3 = { ch2 with Pending = Some staleOp }
     let result, ch4 = DebounceChannel.tryFire (t0.AddMilliseconds 60.0) ch3
     result |> Expect.isNone "stale, discarded"
@@ -460,7 +437,7 @@ let debounceChannelTests = testList "DebounceChannel" [
     let ch =
       DebounceChannel.empty<string>
       |> DebounceChannel.submit "first" 50<ms> t0
-    let staleOp = { Payload = "first"; RequestedAt = t0; DelayMs = 50<ms>; Generation = 0L }
+    let staleOp = { Payload = "first"; RequestedAt = t0; DelayMs = DebounceClock.treeSitterDelayMs; Generation = 0L }
     let ch2 = { ch with Pending = Some staleOp }
     DebounceChannel.isStale ch2 |> Expect.isTrue "should be stale"
   }
@@ -858,26 +835,26 @@ let cycleStateTests = testList "LiveTestCycleState" [
         Debounce = {
           TreeSitter = {
             CurrentGeneration = 1L
-            Pending = Some { Payload = "let x = 1"; RequestedAt = t0; DelayMs = 50<ms>; Generation = 1L }
+            Pending = Some { Payload = "let x = 1"; RequestedAt = t0; DelayMs = DebounceClock.treeSitterDelayMs; Generation = 1L }
             LastCompleted = None
           }
           Fcs = {
             CurrentGeneration = 1L
-            Pending = Some { Payload = "File.fs"; RequestedAt = t0; DelayMs = 300<ms>; Generation = 1L }
+            Pending = Some { Payload = "File.fs"; RequestedAt = t0; DelayMs = DebounceClock.fcsDelayMs; Generation = 1L }
             LastCompleted = None
           }
         }
     }
-    let effects, s2 = state |> LiveTestCycleState.tick (t0.AddMilliseconds(301.0))
+    let effects, s2 = state |> LiveTestCycleState.tick (t0 + DebounceClock.pastFcs)
     effects |> Expect.isEmpty "no effects when no active file"
     s2.ActiveFile |> Expect.isNone "active file still None"
   }
 
   test "tick after keystroke delay fires tree-sitter parse" {
     let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
-    let t50 = t0.AddMilliseconds(51.0)
+    let tTreeSitterDue = t0 + DebounceClock.pastTreeSitter
     let s = LiveTestCycleState.empty |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let effects, _ = s |> LiveTestCycleState.tick t50
+    let effects, _ = s |> LiveTestCycleState.tick tTreeSitterDue
     effects
     |> List.exists (fun e ->
       match e with
@@ -888,9 +865,9 @@ let cycleStateTests = testList "LiveTestCycleState" [
 
   test "tick after full delay fires both tree-sitter and fcs" {
     let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
-    let t301 = t0.AddMilliseconds(301.0)
+    let tFcsDue = t0 + DebounceClock.pastFcs
     let s = LiveTestCycleState.empty |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let effects, _ = s |> LiveTestCycleState.tick t301
+    let effects, _ = s |> LiveTestCycleState.tick tFcsDue
     effects
     |> List.exists (fun e ->
       match e with
@@ -907,7 +884,7 @@ let cycleStateTests = testList "LiveTestCycleState" [
 
   test "tick with fcs debounce does NOT produce RunAffectedTests (deferred to afterTypeCheck)" {
     let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
-    let t301 = t0.AddMilliseconds(301.0)
+    let tFcsDue = t0 + DebounceClock.pastFcs
     let tc = mkTestCase "MyModule.myTest" TestFramework.Expecto TestCategory.Unit
     let depGraph = {
       TestDependencyGraph.empty with
@@ -921,7 +898,7 @@ let cycleStateTests = testList "LiveTestCycleState" [
         TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
     }
     let s = state |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let effects, _ = s |> LiveTestCycleState.tick t301
+    let effects, _ = s |> LiveTestCycleState.tick tFcsDue
     effects
     |> List.exists (fun e ->
       match e with
@@ -938,9 +915,9 @@ let cycleStateTests = testList "LiveTestCycleState" [
 
   test "file save shortens fcs debounce to 50ms" {
     let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
-    let t51 = t0.AddMilliseconds(51.0)
+    let tTreeSitterDue = t0 + DebounceClock.pastTreeSitter
     let s = LiveTestCycleState.empty |> LiveTestCycleState.onFileSave "File.fs" t0
-    let effects, _ = s |> LiveTestCycleState.tick t51
+    let effects, _ = s |> LiveTestCycleState.tick tTreeSitterDue
     effects
     |> List.exists (fun e ->
       match e with
@@ -957,11 +934,11 @@ let endToEndCycleTests = testList "End-to-end cycle" [
     let log = EffectDispatcher.create()
     let s0 = LiveTestCycleState.empty |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
     // at 30ms — nothing fires
-    let effects30, s30 = s0 |> LiveTestCycleState.tick (t0.AddMilliseconds(30.0))
+    let effects30, s30 = s0 |> LiveTestCycleState.tick (t0 + DebounceClock.partWayThroughTreeSitter)
     EffectDispatcher.dispatchAll log effects30
     log.Effects |> Expect.isEmpty "nothing at 30ms"
     // at 51ms — tree-sitter fires
-    let effects51, _ = s30 |> LiveTestCycleState.tick (t0.AddMilliseconds(51.0))
+    let effects51, _ = s30 |> LiveTestCycleState.tick (t0 + DebounceClock.pastTreeSitter)
     EffectDispatcher.dispatchAll log effects51
     log.Effects
     |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
@@ -973,15 +950,15 @@ let endToEndCycleTests = testList "End-to-end cycle" [
     let log = EffectDispatcher.create()
     let s0 = LiveTestCycleState.empty
              |> LiveTestCycleState.onKeystroke "l" "F.fs" t0
-             |> LiveTestCycleState.onKeystroke "le" "F.fs" (t0.AddMilliseconds(20.0))
-             |> LiveTestCycleState.onKeystroke "let" "F.fs" (t0.AddMilliseconds(40.0))
+             |> LiveTestCycleState.onKeystroke "le" "F.fs" (t0 + DebounceClock.keyAt 1)
+             |> LiveTestCycleState.onKeystroke "let" "F.fs" (t0 + DebounceClock.keyAt 2)
     // at 60ms from first keystroke — only 20ms from last, shouldn't fire
-    let effects60, _ = s0 |> LiveTestCycleState.tick (t0.AddMilliseconds(60.0))
+    let effects60, _ = s0 |> LiveTestCycleState.tick (t0 + DebounceClock.keyAt 3)
     EffectDispatcher.dispatchAll log effects60
     log.Effects |> Expect.isEmpty "burst resets debounce"
     // at 91ms from first (51ms from last) — fires
     EffectDispatcher.reset log
-    let effects91, _ = s0 |> LiveTestCycleState.tick (t0.AddMilliseconds(91.0))
+    let effects91, _ = s0 |> LiveTestCycleState.tick (t0 + DebounceClock.keyAt 2 + DebounceClock.pastTreeSitter)
     EffectDispatcher.dispatchAll log effects91
     log.Effects
     |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
@@ -1004,7 +981,7 @@ let endToEndCycleTests = testList "End-to-end cycle" [
     }
     let s = state |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
     // Phase 1: tick fires TS + FCS
-    let effects, s2 = s |> LiveTestCycleState.tick (t0.AddMilliseconds(301.0))
+    let effects, s2 = s |> LiveTestCycleState.tick (t0 + DebounceClock.pastFcs)
     effects
     |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
     |> Expect.isTrue "has tree-sitter"
@@ -1039,7 +1016,7 @@ let endToEndCycleTests = testList "End-to-end cycle" [
         TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Inactive }
     }
     let s = state |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let effects, _ = s |> LiveTestCycleState.tick (t0.AddMilliseconds(301.0))
+    let effects, _ = s |> LiveTestCycleState.tick (t0 + DebounceClock.pastFcs)
     // TS and FCS fire (debounce doesn't check enabled), but RunAffected should not
     effects
     |> List.exists (fun e -> match e with TestCycleEffect.RunAffectedTests _ -> true | _ -> false)
@@ -1061,7 +1038,7 @@ let endToEndCycleTests = testList "End-to-end cycle" [
         TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
     }
     let s = state |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let effects, _ = s |> LiveTestCycleState.tick (t0.AddMilliseconds(301.0))
+    let effects, _ = s |> LiveTestCycleState.tick (t0 + DebounceClock.pastFcs)
     effects
     |> List.exists (fun e -> match e with TestCycleEffect.RunAffectedTests _ -> true | _ -> false)
     |> Expect.isFalse "integration tests filtered out on keystroke"
@@ -1511,7 +1488,7 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
     let model3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid |], Some sessionIdStr))) model2
     let result = {
       TestRunResult.TestId = tid; TestName = "myTest should work"
-      Result = TestResult.Passed dispatchedResultDuration
+      Result = TestResult.Passed FixtureDurations.dispatchedResult
       Timestamp = System.DateTimeOffset.UtcNow
       Output = None
     }

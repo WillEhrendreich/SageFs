@@ -193,7 +193,7 @@ let private sid (text: string) = WorkerProtocol.SessionId.validate text |> Resul
 let private oneWarmup : WarmupContext =
   { SourceFilesScanned = 5
     AssembliesLoaded = [ { Name = "A"; Path = "/a.dll"; NamespaceCount = 10; ModuleCount = 3 } ]
-    NamespacesOpened = [ { Name = "System"; Kind = WarmUp.OpenableKind.Namespace; Source = "auto"; DurationMs = 1.5 } ]
+    NamespacesOpened = [ { Name = "System"; Kind = WarmUp.OpenableKind.Namespace; Source = "auto"; DurationMs = PinnedDurations.surfaceWireOpenedMs } ]
     FailedOpens =
       [ { Name = "Bad"
           Kind = WarmUp.OpenableKind.Module
@@ -202,8 +202,8 @@ let private oneWarmup : WarmupContext =
             [ { Message = "m"; Severity = "error"; ErrorNumber = 39; FileName = Some "f.fs"; StartLine = 1; EndLine = 2; StartColumn = 3; EndColumn = 4 }
               { Message = "n"; Severity = "warning"; ErrorNumber = 40; FileName = None; StartLine = 5; EndLine = 6; StartColumn = 7; EndColumn = 8 } ]
           RetryCount = 1
-          DurationMs = 2.0 } ]
-    PhaseTiming = { ScanSourceFilesMs = 1L; ScanAssembliesMs = 2L; OpenNamespacesMs = 3L; TotalMs = 6L }
+          DurationMs = FixtureDurations.instantOpenMs } ]
+    PhaseTiming = FixtureDurations.warmupPhaseTiming 1L 2L 3L 6L
     StartedAt = DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero) }
 
 let private finishedReload : SessionReload =

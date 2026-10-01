@@ -1071,7 +1071,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
               | false -> SessionStatus.Starting)
           return [sessionInfo status]
         }
-      SleepMs = fun _ -> async { do! Async.Sleep 10 }
+      SleepMs = fun _ -> async { do! Async.Sleep TestTimeouts.pollTight }
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -1171,7 +1171,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
               | false -> SessionStatus.Starting)
           return [sessionInfo status]
         }
-      SleepMs = fun _ -> async { do! Async.Sleep 10 }
+      SleepMs = fun _ -> async { do! Async.Sleep TestTimeouts.pollTight }
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -1355,8 +1355,8 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       AssembliesLoaded =
         [{ Name = "A"; Path = "A.dll"; NamespaceCount = 3; ModuleCount = 1 }]
       NamespacesOpened =
-        [{ Name = "System"; Kind = OpenableKind.Namespace; Source = "warmup"; DurationMs = 0.0 }]
-      FailedOpens = []; PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 500L }
+        [{ Name = "System"; Kind = OpenableKind.Namespace; Source = "warmup"; DurationMs = FixtureDurations.instantOpenMs }]
+      FailedOpens = []; PhaseTiming = FixtureDurations.warmupTotalOnly 500L
       SourceFilesScanned = 2; StartedAt = DateTimeOffset.UtcNow
     }
     let getWarmupCtx (sid: SessionId) = async {

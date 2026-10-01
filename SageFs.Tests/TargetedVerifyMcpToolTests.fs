@@ -10,7 +10,7 @@ open SageFs.McpTools
 open SageFs.WorkerProtocol
 
 let private dummyProxy (_: WorkerMessage) =
-  async { return WorkerResponse.StatusResult("reply", { Status = SessionStatus.Ready; StatusMessage = None; EvalCount = 0; AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = []; CoreVersion = "0.0.0-test" }) }
+  async { return WorkerResponse.StatusResult("reply", { Status = SessionStatus.Ready; StatusMessage = None; EvalCount = 0; AvgDurationMs = FixtureDurations.unmeasuredMs; MinDurationMs = FixtureDurations.unmeasuredMs; MaxDurationMs = FixtureDurations.unmeasuredMs; Projects = []; CoreVersion = "0.0.0-test" }) }
 
 let private mkSessionInfo status =
   { Id = SessionId.newId ()

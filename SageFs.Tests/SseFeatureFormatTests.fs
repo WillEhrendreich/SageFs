@@ -46,7 +46,7 @@ let sseFeatureFormatTests = testList "SSE Feature Formatters" [
   testCase "formatEvalTimelineEvent includes sparkline" <| fun _ ->
     let tl =
       EvalTimeline.TimelineState.empty
-      |> EvalTimeline.TimelineState.record { CellId = 0; StartMs = 0L; DurationMs = 50L; Status = EvalTimeline.Succeeded }
+      |> EvalTimeline.TimelineState.record (FixtureDurations.timelineEntry 0 50L EvalTimeline.Succeeded)
     let stats = EvalTimeline.timelineStats 10 tl
     let result = SageFs.SseWriter.formatEvalTimelineEvent opts (Some "s1") stats
     result |> Expect.stringStarts "should start with event type" "event: eval_timeline\n"
@@ -55,8 +55,8 @@ let sseFeatureFormatTests = testList "SSE Feature Formatters" [
   testCase "formatEvalTimelineEvent includes percentiles" <| fun _ ->
     let tl =
       EvalTimeline.TimelineState.empty
-      |> EvalTimeline.TimelineState.record { CellId = 0; StartMs = 0L; DurationMs = 50L; Status = EvalTimeline.Succeeded }
-      |> EvalTimeline.TimelineState.record { CellId = 1; StartMs = 100L; DurationMs = 200L; Status = EvalTimeline.Succeeded }
+      |> EvalTimeline.TimelineState.record (FixtureDurations.timelineEntry 0 50L EvalTimeline.Succeeded)
+      |> EvalTimeline.TimelineState.record (FixtureDurations.timelineEntryStartingAt 100L 1 200L EvalTimeline.Succeeded)
     let stats = EvalTimeline.timelineStats 20 tl
     let result = SageFs.SseWriter.formatEvalTimelineEvent opts (Some "s1") stats
     result |> Expect.stringContains "should contain p50" "p50Ms"

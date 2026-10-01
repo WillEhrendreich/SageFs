@@ -20,7 +20,7 @@ let w3TimelineStateTests =
   testList "W3 — TimelineState.record: prepend + MaxEntries cap" [
 
     let makeEntry cellId durationMs status =
-      { CellId = cellId; StartMs = 0L; DurationMs = durationMs; Status = status }
+      FixtureDurations.timelineEntry cellId durationMs status
 
     testCase "record adds entry (now newest-first)" <| fun _ ->
       let s0 = TimelineState.empty
