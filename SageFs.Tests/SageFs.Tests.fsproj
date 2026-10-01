@@ -596,6 +596,7 @@
         <Compile Include="HotReloadStateHarness.fs" />
         <Compile Include="HotReloadInlinedCalleeJourneyTests.fs" />
         <Compile Include="HotReloadStateOutcomeTests.fs" />
+        <Compile Include="HotReloadParityTests.fs" />
         <Compile Include="TieredCompilationCostBenchmark.fs" />
         <Compile Include="HotReloadKeptStateSurfaceTests.fs" />
         <Compile Include="DaemonStateChangeContractTests.fs" />
