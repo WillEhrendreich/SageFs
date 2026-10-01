@@ -197,6 +197,29 @@ module PlaywrightFixture =
 /// sections are <details> accordions collapsed by default, so journeys must
 /// open them before interacting with their contents.
 module DashboardDom =
+  /// Make the page view ONE specific session, the way a user does: click that session's Switch
+  /// button and wait until `#main` says it is viewing it. The dashboard's view is a client signal
+  /// and a bare load picks any live session, so a journey that edits one session's files has to
+  /// choose it, or it only works while that session is the only one.
+  let selectViewingSession (page: IPage) (sessionId: string) (budgetMs: int) = task {
+    let viewing () =
+      page.EvaluateAsync<string>(
+        "() => { var m = document.querySelector('#main'); return m ? (m.getAttribute('data-viewing-session-id') || '') : ''; }")
+    let! current = viewing ()
+    if current <> sessionId then
+      let button =
+        page.Locator(sprintf "#session-card-%s" sessionId)
+          .GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "show this session's output here"))
+      do! button.ClickAsync()
+    let deadline = System.DateTime.UtcNow.AddMilliseconds(float budgetMs)
+    let mutable reached = false
+    while not reached && System.DateTime.UtcNow < deadline do
+      let! now = viewing ()
+      reached <- (now = sessionId)
+      if not reached then do! System.Threading.Tasks.Task.Delay TestTimeouts.pollTight
+    if not reached then failwithf "the page never switched to viewing session %s within %dms" sessionId budgetMs
+  }
+
   /// Enable "expanded" dashboard mode. The extra session panels — Hot Reload,
   /// Live Testing, Bindings, Session Context, Friction, AND the New Session
   /// form — live inside `.expanded-only` wrappers (display:none in the default

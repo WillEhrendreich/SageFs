@@ -304,21 +304,6 @@ let private unwatchAll (runtime: HostRuntime) : Task<unit> =
     status |> Expect.equal (sprintf "unwatch-all should succeed: %s" body) 200
   }
 
-/// Make the primary (net11) session the one the dashboard shows. The dashboard journeys that run
-/// after these click Watch All and save into the net11 fixture, so they need the panel on that
-/// session. Which session is active otherwise depends on what the earlier cases touched, and left
-/// to that it was the net10 one in a clean run: the click armed net10, the saves went to an
-/// unwatched net11, and nothing reloaded.
-let private activatePrimary () : Task<unit> =
-  task {
-    let primary = targetOf HostRuntime.Net11
-    use! client = connect (int (Env.read Env.mcpPort))
-    let! sessionId, _ = sessionStatus client primary.FixtureDir
-    let url = sprintf "http://localhost:%s/api/sessions/switch" (Env.read Env.mcpPort)
-    let! status, body = postJson url (sprintf "{\"sessionId\":\"%s\"}" sessionId)
-    status |> Expect.equal (sprintf "switching the dashboard to the primary session should succeed: %s" body) 200
-  }
-
 /// One journey: save the helper's body, follow the save to its outcome, and
 /// check that the outcome and the page agree.
 let private journey (runtime: HostRuntime) (callee: Callee) : Task<unit> =
@@ -396,7 +381,6 @@ let private journeyCase (runtime: HostRuntime) (callee: Callee) =
               return Error ex
           }
         do! unwatchAll runtime
-        do! activatePrimary ()
         match outcome with
         | Ok () -> ()
         | Error ex -> System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex).Throw()

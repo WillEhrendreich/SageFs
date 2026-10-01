@@ -58,9 +58,31 @@ module HrEnv =
        | null | "" -> failwith "SAGEFS_HR_FIXTURE_DIR not set (run under --integration-hr)"
        | d -> d)
 
+  /// The daemon's own port, set by the runner: the HTTP API lives there, the dashboard one above.
+  let mcpPort =
+    lazy
+      (match Environment.GetEnvironmentVariable("SAGEFS_HR_MCP_PORT") with
+       | null | "" -> failwith "SAGEFS_HR_MCP_PORT not set (run under --integration-hr)"
+       | p -> p)
+
   let greetingFile = lazy Path.Combine(fixtureDir.Value, "Greeting.fs")
 
   let counterFile = lazy Path.Combine(fixtureDir.Value, "Counter.fs")
+
+/// The id of the session whose working directory is the primary fixture copy. Two sessions run
+/// under this tier (net10 and net11), and the journeys edit the net11 one.
+let private primarySessionId () = task {
+  use client = new HttpClient()
+  client.Timeout <- TestTimeouts.httpRequest
+  let! body = client.GetStringAsync(sprintf "http://localhost:%s/api/sessions" HrEnv.mcpPort.Value)
+  use doc = System.Text.Json.JsonDocument.Parse body
+  let wanted = Path.GetFullPath HrEnv.fixtureDir.Value
+  return
+    doc.RootElement.GetProperty("sessions").EnumerateArray()
+    |> Seq.tryFind (fun s -> String.Equals(Path.GetFullPath(s.GetProperty("workingDirectory").GetString()), wanted, StringComparison.Ordinal))
+    |> Option.map (fun s -> s.GetProperty("id").GetString())
+    |> Option.defaultWith (fun () -> failwithf "no session has working directory %s" wanted)
+}
 
 /// HTTP GET the running app's / route.
 // WHY this awaits rather than blocking: every caller is already inside a task,
@@ -162,6 +184,8 @@ let private hrPlaywrightTest name (body: IPage -> Task<unit>) =
       try
         let! _ = page.GotoAsync(
           sprintf "%s/dashboard" PlaywrightFixture.dashboardUrl)
+        let! primary = primarySessionId ()
+        do! DashboardDom.selectViewingSession page primary BrowserWaits.daemonWork
         do! body page
       finally
         PlaywrightFixture.closePage(page).GetAwaiter().GetResult()
