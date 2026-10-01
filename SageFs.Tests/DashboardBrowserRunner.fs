@@ -626,7 +626,11 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
   psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
   psi.ArgumentList.Add("--no-resume")
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
-  psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
+  // Live testing does not need hot reload, and with it on a worker that restarts (a rebuild) replays the
+  // session's evals under value-read tracking, whose getter hook throws on the patched `Hello.tests`
+  // (`ValueReadTracking.readerIdOf` reads `MetadataToken` of a dynamic method): discovery then finds zero
+  // tests. Hot reload has its own tier; this one measures and gates live testing.
+  psi.Environment["SAGEFS_HOT_RELOAD"] <- "false"
   let daemonOutLog = Path.Combine(dataDir, "daemon.stdout.log")
   let daemonErrLog = Path.Combine(dataDir, "daemon.stderr.log")
   psi.RedirectStandardOutput <- true

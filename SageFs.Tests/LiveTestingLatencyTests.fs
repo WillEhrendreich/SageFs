@@ -64,6 +64,9 @@ let private keystrokeToVerdict () : Task<unit> =
           Expect.stringContains "the fixture carries the line the edits flip" greenAdd original
           let buffer (line: string) = original.Replace(greenAdd, line)
           do! connect feed
+          // Start from rest: a confirmation build of an earlier test restarts the worker, and a sample must
+          // not pay for that.
+          do! awaitConfirmed feed http TestTimeouts.buildConfirmation
           let samples = ResizeArray<TimeSpan>()
           for i in 1 .. samplesPerPath + warmupEdits do
             let toRed = i % 2 = 1
@@ -78,15 +81,14 @@ let private keystrokeToVerdict () : Task<unit> =
             | true -> samples.Add(elapsed startedAt frame.ReceivedAt)
             | false -> ()
             // Let the run settle before the next edit, so each sample starts from rest.
-            let! _ =
-              expectFrame feed (sprintf "settling after keystroke %d" i) (settledWith (match toRed with | true -> 1 | false -> 0)) TestTimeouts.liveTestingVerdictCeiling
-            ()
+            do! awaitSettled feed http (match toRed with | true -> 1 | false -> 0) TestTimeouts.liveTestingVerdictCeiling
           reportAndGate "keystroke-to-verdict" (List.ofSeq samples) TestTimeouts.liveTestingKeystrokeP95Bound
         })
   }
 
 let private saveToGreen () : Task<unit> =
   task {
+    use http = new HttpClient(BaseAddress = baseUrl (), Timeout = TestTimeouts.httpRequest)
     let feed = openFeed ()
     let original = File.ReadAllText(helloPath ())
     let cleanup () : Task =
@@ -99,6 +101,7 @@ let private saveToGreen () : Task<unit> =
         task {
           Expect.stringContains "the fixture carries the line the saves flip" greenAdd original
           do! connect feed
+          do! awaitConfirmed feed http TestTimeouts.buildConfirmation
           let samples = ResizeArray<TimeSpan>()
           for i in 1 .. samplesPerPath + warmupEdits do
             // Red first (not timed), then the fix save (timed).

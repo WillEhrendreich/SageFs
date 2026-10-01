@@ -101,16 +101,46 @@ let openFeed () : SseFeed =
         cts.Cancel()
         pump }
 
+/// How much of a frame a timeout message quotes: enough to read the verdicts, short of a screenful per frame.
+let private quotedFrameLength = 1500
+
+/// One line per test of a `test_results_batch`: its name, its verdict and what it ran against. What a timeout
+/// quotes, because the raw frame is mostly fields nobody reads.
+let private batchSummary (data: string) : string =
+  try
+    use doc = JsonDocument.Parse data
+    match doc.RootElement.TryGetProperty "Entries" with
+    | false, _ -> data
+    | true, entries ->
+      entries.EnumerateArray()
+      |> Seq.map (fun e ->
+        let name = e.GetProperty("DisplayName").GetString()
+        let status = e.GetProperty("Status").GetProperty("Case").GetString()
+        let provenance =
+          match e.TryGetProperty "Provenance" with
+          | true, p -> p.GetProperty("Case").GetString()
+          | false, _ -> "?"
+        sprintf "%s=%s/%s" name status provenance)
+      |> String.concat "; "
+  with :? JsonException -> data
+
 /// Read frames until one satisfies `predicate`, or `budget` passes. The error names what was seen.
 let awaitFrame (feed: SseFeed) (what: string) (predicate: SseFrame -> bool) (budget: TimeSpan) : Task<Result<SseFrame, string>> =
   task {
     use cts = new CancellationTokenSource(budget)
     let seen = ResizeArray<string>()
+    // The newest frame of the two kinds a verdict or a decision rides on, so a timeout says what the stream
+    // last said and not only how many frames went by.
+    let latest = System.Collections.Generic.Dictionary<string, string>()
     let mutable found : SseFrame voption = ValueNone
     try
       while found.IsNone do
         let! frame = feed.Frames.ReadAsync(cts.Token)
         seen.Add frame.Event
+        match frame.Event with
+        | "test_results_batch" -> latest[frame.Event] <- batchSummary frame.Data
+        | "test_summary" -> latest[frame.Event] <- frame.Data
+        | _ -> ()
         match predicate frame with
         | true -> found <- ValueSome frame
         | false -> ()
@@ -122,8 +152,9 @@ let awaitFrame (feed: SseFeed) (what: string) (predicate: SseFrame -> bool) (bud
     | ValueNone ->
       return
         Result.Error(
-          sprintf "%s: no matching frame within %s. Frames seen meanwhile: %s"
-            what (budget.ToString()) (String.Join(", ", seen |> Seq.countBy id |> Seq.map (fun (e, n) -> sprintf "%s x%d" e n))))
+          sprintf "%s: no matching frame within %s. Frames seen meanwhile: %s. Newest: %s"
+            what (budget.ToString()) (String.Join(", ", seen |> Seq.countBy id |> Seq.map (fun (e, n) -> sprintf "%s x%d" e n)))
+            (String.Join(" | ", latest |> Seq.map (fun kv -> sprintf "%s %s" kv.Key (match kv.Value.Length > quotedFrameLength with | true -> kv.Value.Substring(0, quotedFrameLength) | false -> kv.Value)))))
   }
 
 /// `awaitFrame` that fails the test on a timeout.
@@ -207,6 +238,76 @@ let settledWith (failed: int) (frame: SseFrame) : bool =
       && root.GetProperty("Total").GetInt32() > 0)
   | _ -> false
 
+/// Whether the daemon's status says the suite is settled with this many failures and nothing running.
+let private statusIsSettledWith (failed: int) (statusJson: string) : bool =
+  use doc = JsonDocument.Parse statusJson
+  let summary = doc.RootElement.GetProperty("Summary")
+  summary.GetProperty("Running").GetInt32() = 0
+  && summary.GetProperty("Stale").GetInt32() = 0
+  && summary.GetProperty("Failed").GetInt32() = failed
+  && summary.GetProperty("Total").GetInt32() > 0
+
+/// Wait until the suite is settled with this many failures and nothing running. The stream may already
+/// have said so (a frame read while waiting for something else is gone), so the daemon's own status is
+/// asked first, and only if it is not settled yet does this wait for the next summary frame.
+let awaitSettled (feed: SseFeed) (http: HttpClient) (failed: int) (budget: TimeSpan) : Task<unit> =
+  task {
+    let! status = http.GetStringAsync "/api/live-testing/status"
+    match statusIsSettledWith failed status with
+    | true -> ()
+    | false ->
+      let! _ = expectFrame feed (sprintf "settling with %d failing" failed) (settledWith failed) budget
+      ()
+  }
+
+/// The run generation a `test_results_batch` frame is from (-1 for any other frame).
+let generationIn (frame: SseFrame) : int64 =
+  match frame.Event with
+  | "test_results_batch" ->
+    withJson frame (fun root ->
+      let generation = root.GetProperty "Generation"
+      match generation.ValueKind with
+      | JsonValueKind.Number -> generation.GetInt64()
+      | _ ->
+        // A single-case union written as an object: the number is the only digits in it.
+        System.Text.RegularExpressions.Regex.Match(generation.GetRawText(), "[0-9]+").Value |> int64)
+  | _ -> -1L
+
+/// A `test_results_batch` frame in which no row is still waiting for a real build to confirm it.
+let private batchIsConfirmed (frame: SseFrame) : bool =
+  match frame.Event with
+  | "test_results_batch" ->
+    withJson frame (fun root ->
+      match root.TryGetProperty "Entries" with
+      | true, entries ->
+        entries.EnumerateArray()
+        |> Seq.forall (fun e ->
+          match e.TryGetProperty "Provenance" with
+          | true, p -> p.GetProperty("Case").GetString() <> "Evaluated"
+          | false, _ -> true)
+      | false, _ -> false)
+  | _ -> false
+
+/// A `test_results_batch` frame in which some row ran against evaluated code that nothing has confirmed.
+let hasEvaluatedRow (frame: SseFrame) : bool =
+  match frame.Event with
+  | "test_results_batch" -> not (batchIsConfirmed frame)
+  | _ -> false
+
+/// Wait until every row says what a real build made of it (none is `Evaluated`), so a journey starts from a
+/// session whose last confirmation is over and cannot answer into the next journey's rows. Asks the daemon's
+/// status first, for the same reason `awaitSettled` does.
+let awaitConfirmed (feed: SseFeed) (http: HttpClient) (budget: TimeSpan) : Task<unit> =
+  task {
+    let! status = http.GetStringAsync "/api/live-testing/status"
+    use doc = JsonDocument.Parse status
+    match doc.RootElement.GetProperty("Unconfirmed").GetInt32() with
+    | 0 -> ()
+    | _ ->
+      let! _ = expectFrame feed "every row confirmed by a build" batchIsConfirmed budget
+      ()
+  }
+
 /// The `LastDecision` a `test_summary` frame carries: its precision, reason and selected tests.
 let decisionIn (frame: SseFrame) : (string * string * string list) voption =
   match frame.Event with
@@ -220,6 +321,17 @@ let decisionIn (frame: SseFrame) : (string * string * string list) voption =
           [ for t in d.GetProperty("SelectedTests").EnumerateArray() -> t.GetString() ])
       | _ -> ValueNone)
   | _ -> ValueNone
+
+/// The tests the `LastDecision` of a `test_summary` frame says it left out on purpose, by full name.
+let deferredIn (frame: SseFrame) : string list =
+  match frame.Event with
+  | "test_summary" ->
+    withJson frame (fun root ->
+      match root.TryGetProperty "LastDecision" with
+      | true, d when d.ValueKind = JsonValueKind.Object ->
+        [ for t in d.GetProperty("DeferredTests").EnumerateArray() -> t.GetString() ]
+      | _ -> [])
+  | _ -> []
 
 let sessionId (http: HttpClient) : Task<string> =
   task {

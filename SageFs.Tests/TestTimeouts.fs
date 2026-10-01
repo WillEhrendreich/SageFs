@@ -99,12 +99,20 @@ module TestTimeouts =
   /// Ceiling on an evaluated verdict being confirmed by a real build: the quiet window, a rebuild that
   /// restarts the worker, and a run against what it built. A passing run never waits it out.
   let buildConfirmation = secs 180.
-  /// Regression bound on the 95th percentile of keystroke-to-verdict. Set from the first measurement;
-  /// until it is measured nothing is gated, and the measurement still prints.
-  let liveTestingKeystrokeP95Bound = System.Threading.Timeout.InfiniteTimeSpan
-  /// Regression bound on the 95th percentile of save-to-green. Set from the first measurement; until it
-  /// is measured nothing is gated, and the measurement still prints.
-  let liveTestingSaveToGreenP95Bound = System.Threading.Timeout.InfiniteTimeSpan
+  /// How long a journey that has put Hello.fs back waits for the daemon to start judging the restored text
+  /// before it concludes the restore changed nothing. A restore that does change something is judged within a
+  /// second (a type-check and an eval), so this is several times that; only a restore that changes nothing
+  /// ever waits it out.
+  let liveTestingRestoreProbe = secs 5.
+  /// Regression bound on the 95th percentile of keystroke-to-verdict. First measurement: p95 742ms over
+  /// 20 edits on a 16-thread Ryzen 7 5800XT, Linux, a daemon owned by the runner and other jobs running
+  /// on the same machine. The bound is about four times that, because a cold or shared CI runner is slower
+  /// and a gate that flakes gets deleted; it still fails on the regressions that matter, which cost whole
+  /// seconds (a build or a worker restart on the keystroke path).
+  let liveTestingKeystrokeP95Bound = secs 3.
+  /// Regression bound on the 95th percentile of save-to-green. First measurement: p95 709ms over 20 saves
+  /// on the same machine and in the same conditions. Four times that, for the same reason.
+  let liveTestingSaveToGreenP95Bound = secs 3.
   /// The daemon's own wall-clock save fires 60s after start and does not get faster on a faster
   /// runner, so both resume waits (the save becoming durable, the second daemon rebuilding the
   /// session) are a generous multiple of it.
