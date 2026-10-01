@@ -32,9 +32,9 @@ let items : Item list =
       "After a save is patched into your running app, the REPL, the live bindings and the live tests can still be looking at the old code, and nothing tells you. I'm making that a named state every surface shows, and then I'll see whether refreshing the REPL host for you is cheap enough to do."
 
     item "agent-landings-reach-the-running-app" "An agent's landed work reaches your running app" Agents Now
-      NoLandmarkYet
+      (landmark "SageFs.Core/Features/TrunkFollow.fs" "step")
       [ "docs/how-hot-reload-works.md"; "docs/mcp-tools.md" ]
-      "When agents land work in the shared trunk, the app running there should pick it up live with its state kept, and the reload row should say how it got there. Today a landing is verified and merged but the trunk app doesn't hear about it, so a landing is going to count as a save."
+      "When agents land work in the shared trunk, the app running in the trunk session picks it up live with its state kept. `get_cohort_status` and the dashboard show each landing's result per file, including the mechanism, and a landing that needs a restart says why. A landing that fails verification never reaches the app."
 
     item "slow-machines-get-fitting-timeouts" "Slow machines get timeouts that fit them" Platform Now
       (landmark "SageFs.Core/MachineTier.fs" "MachineTier")

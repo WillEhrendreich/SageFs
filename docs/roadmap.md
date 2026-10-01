@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 2, Next 15, Later 17, Exploring 16. Already built: 6.
+On the page today: Now 1, Next 15, Later 17, Exploring 16. Already built: 7.
 
 ## Now
 
@@ -18,10 +18,6 @@ _Being built right now. Days to a few weeks._
 ### Hot reload
 
 - **The REPL says when it is behind.** After a save is patched into your running app, the REPL, the live bindings and the live tests can still be looking at the old code, and nothing tells you. I'm making that a named state every surface shows, and then I'll see whether refreshing the REPL host for you is cheap enough to do. ([how-hot-reload-works.md](how-hot-reload-works.md))
-
-### Agents and cohorts
-
-- **An agent's landed work reaches your running app.** When agents land work in the shared trunk, the app running there should pick it up live with its state kept, and the reload row should say how it got there. Today a landing is verified and merged but the trunk app doesn't hear about it, so a landing is going to count as a save. ([how-hot-reload-works.md](how-hot-reload-works.md), [mcp-tools.md](mcp-tools.md))
 
 ## Next
 
@@ -153,6 +149,10 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - **Saves to run_app apps patch in place.** A save to an app you started with run_app is handed to the runtime as a metadata delta, so the process keeps its state. On the test fixture a save was served in 1.8 to 2.6 seconds against 6 to 8.5 for the restart it replaced, and `SAGEFS_METADATA_DELTA=off` puts the old behavior back. Code: [`SageFs.Host/RunAppDelta.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Host/RunAppDelta.fs)
 - **Generic functions patch in every instantiation.** A save to a generic function reaches every instantiation the runtime compiled, including a float or struct first used after the save. If your code calls MakeGenericMethod anywhere, a save to a generic function still restarts and names why. Code: [`SageFs.Core/Middleware/HotReloadCore.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/HotReloadCore.fs)
 - **Hot reload save times are measured.** A test tier times saves against a real running app and fails if the p95 drifts. It's one machine and one small app, and I have no Microsoft figure to set it against. Code: [`SageFs.Tests/HotReloadLatency.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Tests/HotReloadLatency.fs)
+
+### Agents and cohorts
+
+- **An agent's landed work reaches your running app.** When agents land work in the shared trunk, the app running in the trunk session picks it up live with its state kept. `get_cohort_status` and the dashboard show each landing's result per file, including the mechanism, and a landing that needs a restart says why. A landing that fails verification never reaches the app. Code: [`SageFs.Core/Features/TrunkFollow.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/TrunkFollow.fs)
 
 ### Platform and install
 
