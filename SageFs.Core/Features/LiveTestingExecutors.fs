@@ -313,15 +313,35 @@ type ExpectoDisposition =
   | RunIt
   | SkipIt of ExpectoSkipCause
 
+/// Why a flattened Expecto test's focus state could not be read. The test is then never run.
+[<RequireQualifiedAccess>]
+type ExpectoFocusUnreadable =
+  | NoStateProperty
+  | NoFocusOnProperty
+  | StateWasNull
+  | FocusOnNotBool
+  | UnknownStateCase of caseName: string
+  | ReadThrew of message: string
+
+module ExpectoFocusUnreadable =
+  let describe (why: ExpectoFocusUnreadable) : string =
+    match why with
+    | ExpectoFocusUnreadable.NoStateProperty -> "this Expecto's FlatTest has no 'state' property"
+    | ExpectoFocusUnreadable.NoFocusOnProperty -> "this Expecto's FlatTest has no 'focusOn' property"
+    | ExpectoFocusUnreadable.StateWasNull -> "FlatTest.state was null"
+    | ExpectoFocusUnreadable.FocusOnNotBool -> "FlatTest.focusOn was not a bool"
+    | ExpectoFocusUnreadable.UnknownStateCase caseName -> sprintf "unknown Expecto FocusState case '%s'" caseName
+    | ExpectoFocusUnreadable.ReadThrew message -> sprintf "reading FlatTest.state failed: %s" message
+
 module ExpectoFocusState =
   /// The case name Expecto's union carries, read back into a closed set. An unknown name is an
   /// Error, never a guess: the caller must not run a test whose state it could not read.
-  let tryParse (caseName: string) : Result<ExpectoFocusState, string> =
+  let tryParse (caseName: string) : Result<ExpectoFocusState, ExpectoFocusUnreadable> =
     match caseName with
     | "Normal" -> Result.Ok ExpectoFocusState.Normal
     | "Focused" -> Result.Ok ExpectoFocusState.Focused
     | "Pending" -> Result.Ok ExpectoFocusState.Pending
-    | other -> Result.Error (sprintf "unknown Expecto FocusState case '%s'" other)
+    | other -> Result.Error (ExpectoFocusUnreadable.UnknownStateCase other)
 
 module ExpectoSkipCause =
   /// The reason a skipped test carries in its result and in the run receipt.
@@ -424,7 +444,7 @@ module BuiltInExecutors =
       /// What Expecto says about this test's focus state. An Error means the state could not be read,
       /// and the test is then never run: running a test whose state is unknown is how a pending test
       /// became a pass.
-      Focus: Result<ExpectoFlatFocus, string>
+      Focus: Result<ExpectoFlatFocus, ExpectoFocusUnreadable>
       /// Whether anything in the scanned assembly is focused, the same for every test in one lookup.
       Scope: ExpectoFocusScope
     }
@@ -670,7 +690,7 @@ module BuiltInExecutors =
       : Async<TestResult> =
       match rft.Focus with
       | Result.Error why ->
-        Log.warn "[LiveTesting] not running an Expecto test whose focus state could not be read: %s" why
+        Log.warn "[LiveTesting] not running an Expecto test whose focus state could not be read: %s" (ExpectoFocusUnreadable.describe why)
         async { return TestResult.NotRun }
       | Result.Ok flat ->
         match ExpectoDisposition.decide flat.State rft.Scope with
@@ -690,14 +710,14 @@ module BuiltInExecutors =
 
     /// Read one flattened test's state and focus from Expecto. Anything missing or unrecognised is an Error
     /// that says what, because the caller must not run a test whose state it could not read.
-    let private readFocus (cache: ReflectionCache) (flatTest: obj) : Result<ExpectoFlatFocus, string> =
+    let private readFocus (cache: ReflectionCache) (flatTest: obj) : Result<ExpectoFlatFocus, ExpectoFocusUnreadable> =
       match box cache.FlatTestStateProp, box cache.FlatTestFocusOnProp with
-      | null, _ -> Result.Error "this Expecto's FlatTest has no 'state' property"
-      | _, null -> Result.Error "this Expecto's FlatTest has no 'focusOn' property"
+      | null, _ -> Result.Error ExpectoFocusUnreadable.NoStateProperty
+      | _, null -> Result.Error ExpectoFocusUnreadable.NoFocusOnProperty
       | _ ->
         try
           match cache.FlatTestStateProp.GetValue(flatTest), cache.FlatTestFocusOnProp.GetValue(flatTest) with
-          | null, _ -> Result.Error "FlatTest.state was null"
+          | null, _ -> Result.Error ExpectoFocusUnreadable.StateWasNull
           | stateValue, (:? bool as focusOn) ->
             let case, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(stateValue, stateValue.GetType())
             ExpectoFocusState.tryParse case.Name
@@ -707,9 +727,9 @@ module BuiltInExecutors =
                   match focusOn with
                   | true -> ExpectoFocusScope.SomeFocused
                   | false -> ExpectoFocusScope.NoFocusedTests })
-          | _ -> Result.Error "FlatTest.focusOn was not a bool"
+          | _ -> Result.Error ExpectoFocusUnreadable.FocusOnNotBool
         with ex ->
-          Result.Error (sprintf "reading FlatTest.state failed: %s" ex.Message)
+          Result.Error (ExpectoFocusUnreadable.ReadThrew ex.Message)
 
     /// Flatten each named Expecto test value into FullName → ReflectedFlatTest. A binding whose value cannot
     /// be read or flattened is logged and contributes nothing. This is the seam buildLookup runs through, so

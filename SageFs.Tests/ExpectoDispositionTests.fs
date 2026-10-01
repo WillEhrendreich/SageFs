@@ -50,7 +50,9 @@ let expectoDispositionTests =
       ExpectoFocusState.tryParse "Focused" |> Expect.equal "Focused" (Result.Ok ExpectoFocusState.Focused)
       ExpectoFocusState.tryParse "Pending" |> Expect.equal "Pending" (Result.Ok ExpectoFocusState.Pending)
       match ExpectoFocusState.tryParse "Skipped" with
-      | Result.Error why -> why |> Expect.stringContains "the unknown name is in the message" "Skipped"
+      | Result.Error why ->
+        why |> Expect.equal "the unknown name travels with the error" (ExpectoFocusUnreadable.UnknownStateCase "Skipped")
+        ExpectoFocusUnreadable.describe why |> Expect.stringContains "and the description names it" "Skipped"
       | Result.Ok state -> failtestf "an unknown case name must not parse, got %A" state
 
     testCase "WHY — focus is on for the assembly when it is on for any test, and off for none" <| fun _ ->
@@ -69,7 +71,7 @@ let expectoDispositionTests =
       | Some cache ->
         let lookup = ExpectoExecutor.lookupFromBindings cache [ "Binding", (fun () -> box tree) ]
         let reflected = lookup |> Map.toList |> List.exactlyOne |> snd
-        let unreadable = { reflected with Focus = Result.Error "FlatTest has no state property" }
+        let unreadable = { reflected with Focus = Result.Error ExpectoFocusUnreadable.NoStateProperty }
         let! result = ExpectoExecutor.executeReflected cache unreadable CancellationToken.None
         result |> Expect.equal "it is reported as not run" TestResult.NotRun
         bodyRan.Value |> Expect.isFalse "the body must not run when its state is unknown"
