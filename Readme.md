@@ -42,6 +42,8 @@ Start `sagefs` once. Then:
 | Values scroll away | Every binding in your session is shown live in the dashboard, top-down, and updates after each eval. |
 | Only you can drive it | An MCP server with [61 tools](docs/mcp-tools.md). An agent evals, type-checks and runs your tests in the same session you're looking at, and `run_tests` hands back a receipt so a stale pass never counts as green. |
 
+If you want to see how it got here, [what SageFs has become, stretch by stretch](docs/progress.md) goes through each change as before, now, why it matters, and a link to the code.
+
 I'm not going to pretend all of that is finished. [Live testing](docs/live-testing-as-you-type.md) and hot reload each have documented limits, written down next to the tests that pin them. But all of it runs today, and none of it is a mockup.
 
 It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients all share live state at the same time.

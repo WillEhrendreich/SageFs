@@ -4,6 +4,7 @@ Here's where everything lives. If you're just trying to get running, start at th
 Everything else is reference material you can come back to when you need it.
 
 ## Start here
+- **[What SageFs has become](progress.md)**: what you had, what you have now, and why it matters, stretch by stretch since February, each change linked to its code
 - **[Get Started](../Readme.md#get-started)**: install, check your environment, start the daemon, connect an editor
 - **[Using SageFs with AI agents](agents.md)**: install the SageFs skill, so your agent uses the REPL instead of rebuilding, and pull it back when it drifts
 - **[Workflow Modes](workflow-modes.md)**: REPL, Live Testing, and Hot Reload: when to use which, and how the Live Testing *workflow* differs from the live-testing *toggle*
