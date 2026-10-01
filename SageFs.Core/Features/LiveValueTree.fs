@@ -36,6 +36,12 @@ module LiveValueTree =
     | SequenceNotEnumerated
     /// The walk is in `Off` mode, which does not open class instances.
     | ClassesCollapsed
+    /// A click ran the getter and it did not return within its deadline.
+    | EvaluationTimedOut
+    /// A click ran the getter and it threw.
+    | EvaluationThrew of message: string
+    /// A click was refused because the getter could not be run under containment here.
+    | EvaluationNotContained of why: string
 
   /// How a node's value should be rendered / expanded.
   [<RequireQualifiedAccess>]
@@ -364,6 +370,32 @@ module LiveValueTree =
     | true -> SequenceSource.Materialized
     | false -> SequenceSource.MayRunCode
 
+  /// Why running one getter on a click did not give a value. The host's containment pipeline produces these.
+  [<RequireQualifiedAccess>]
+  type MemberFailure =
+    | MemberTimedOut
+    | MemberThrew of message: string
+    | MemberNotContained of why: string
+
+  /// Runs one getter on one object and says what came back. The host supplies it, under containment; the
+  /// walk never runs a held getter itself.
+  type MemberRunner = PropertyInfo -> obj -> Result<obj, MemberFailure>
+
+  /// The one member a click asked for, named by the labels from the binding down to it.
+  [<RequireQualifiedAccess>]
+  type ForcedMember =
+    | Nothing
+    | At of path: string list * run: MemberRunner
+
+  /// What a walk does: its mode and, for a click, the one getter it may run through the given runner.
+  type Walk = { Mode: WalkMode; Force: ForcedMember }
+
+  let private reasonOf (failure: MemberFailure) : NotEvaluatedReason =
+    match failure with
+    | MemberFailure.MemberTimedOut -> NotEvaluatedReason.EvaluationTimedOut
+    | MemberFailure.MemberThrew message -> NotEvaluatedReason.EvaluationThrew message
+    | MemberFailure.MemberNotContained why -> NotEvaluatedReason.EvaluationNotContained why
+
   /// One line of a class's `Safe` view: a value that was read (or failed to be), or a member left alone.
   [<RequireQualifiedAccess>]
   type private Row =
@@ -376,6 +408,9 @@ module LiveValueTree =
     | NotEvaluatedReason.GetterLoops -> "not evaluated: the getter loops or calls itself"
     | NotEvaluatedReason.SequenceNotEnumerated -> "not evaluated: enumerating a sequence runs the code behind it"
     | NotEvaluatedReason.ClassesCollapsed -> "not evaluated: this mode does not open class instances"
+    | NotEvaluatedReason.EvaluationTimedOut -> "not evaluated: the getter did not return in time"
+    | NotEvaluatedReason.EvaluationThrew message -> sprintf "not evaluated: the getter threw: %s" message
+    | NotEvaluatedReason.EvaluationNotContained why -> sprintf "not evaluated: %s" why
 
   // ── Per-type shapes ───────────────────────────────────────────────
   //
@@ -500,7 +535,8 @@ module LiveValueTree =
     not (isNull value) && not (value.GetType().IsValueType) && not (visited.Add value)
 
   let rec private buildNode
-    (mode: WalkMode)
+    (walk: Walk)
+    (trail: string list)
     (visited: System.Collections.Generic.HashSet<obj>)
     (budget: int ref)
     (label: string)
@@ -544,7 +580,7 @@ module LiveValueTree =
             try
               captures
               |> Array.map (fun (name, fi) ->
-                let child = buildNode mode visited budget name (depth + 1) (fi.GetValue value)
+                let child = buildNode walk (label :: trail) visited budget name (depth + 1) (fi.GetValue value)
                 { child with BestEffort = true })
               |> Array.toList
             with _ -> []
@@ -552,7 +588,7 @@ module LiveValueTree =
             Children = children; BestEffort = true; Depth = depth }
         // Enumerating a lazy sequence runs the code that produces it, so `Safe` and `Off` leave it alone.
         | TypeShape.Dictionary SequenceSource.MayRunCode
-        | TypeShape.Sequence (_, SequenceSource.MayRunCode) when mode <> WalkMode.Everything ->
+        | TypeShape.Sequence (_, SequenceSource.MayRunCode) when walk.Mode <> WalkMode.Everything ->
           { Label = label; TypeName = typeName; Preview = describe NotEvaluatedReason.SequenceNotEnumerated
             Kind = NodeKind.NotEvaluated NotEvaluatedReason.SequenceNotEnumerated
             Children = []; BestEffort = false; Depth = depth }
@@ -564,7 +600,7 @@ module LiveValueTree =
                          |> truncateList |> fun s -> "map [" + s + "]"
           let children =
             entries |> List.truncate MaxChildren
-            |> List.mapi (fun i e -> buildNode mode visited budget (keyLabel e.Key) (depth + 1) e.Value)
+            |> List.mapi (fun i e -> buildNode walk (label :: trail) visited budget (keyLabel e.Key) (depth + 1) e.Value)
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
             Children = children; BestEffort = false; Depth = depth }
         | TypeShape.FSharpMap (keyProp, valueProp) ->
@@ -581,7 +617,7 @@ module LiveValueTree =
             |> truncateList |> fun s -> "map [" + s + "]"
           let children =
             entries
-            |> List.map (fun (k, v) -> buildNode mode visited budget (keyLabel k) (depth + 1) v)
+            |> List.map (fun (k, v) -> buildNode walk (label :: trail) visited budget (keyLabel k) (depth + 1) v)
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
             Children = children; BestEffort = false; Depth = depth }
         | TypeShape.Sequence (kind, _) ->
@@ -590,7 +626,7 @@ module LiveValueTree =
           let preview = shown |> List.map scalarPreview |> truncateList |> fun s -> "[" + s + "]"
           let children =
             shown
-            |> List.mapi (fun i item -> buildNode mode visited budget (sprintf "[%d]" i) (depth + 1) item)
+            |> List.mapi (fun i item -> buildNode walk (label :: trail) visited budget (sprintf "[%d]" i) (depth + 1) item)
           { Label = label; TypeName = typeName; Preview = preview; Kind = kind
             Children = children; BestEffort = false; Depth = depth }
         | TypeShape.Record (fieldNames, readFields) ->
@@ -603,7 +639,7 @@ module LiveValueTree =
             |> fun s -> "{ " + s + " }"
           let children =
             fields
-            |> Array.mapi (fun i f -> buildNode mode visited budget fieldNames.[i] (depth + 1) f)
+            |> Array.mapi (fun i f -> buildNode walk (label :: trail) visited budget fieldNames.[i] (depth + 1) f)
             |> Array.truncate MaxChildren
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Record
@@ -621,7 +657,7 @@ module LiveValueTree =
               case.CaseName + " " + args
           let children =
             case.FieldNames
-            |> Array.mapi (fun i name -> buildNode mode visited budget name (depth + 1) caseFields.[i])
+            |> Array.mapi (fun i name -> buildNode walk (label :: trail) visited budget name (depth + 1) caseFields.[i])
             |> Array.truncate MaxChildren
             |> Array.toList
           let kind = if case.CaseName = "Some" || case.CaseName = "None" then NodeKind.Option else NodeKind.Union
@@ -632,7 +668,7 @@ module LiveValueTree =
           let preview = fields |> Array.map scalarPreview |> Array.toList |> truncateList |> fun s -> "(" + s + ")"
           let children =
             fields
-            |> Array.mapi (fun i f -> buildNode mode visited budget (sprintf "item%d" (i + 1)) (depth + 1) f)
+            |> Array.mapi (fun i f -> buildNode walk (label :: trail) visited budget (sprintf "item%d" (i + 1)) (depth + 1) f)
             |> Array.truncate MaxChildren
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Tuple
@@ -645,7 +681,7 @@ module LiveValueTree =
             | System.Threading.Tasks.TaskStatus.RanToCompletion ->
               match t.GetProperty "Result" with
               | null -> []
-              | p -> [ buildNode mode visited budget "Result" (depth + 1) (p.GetValue value) ]
+              | p -> [ buildNode walk (label :: trail) visited budget "Result" (depth + 1) (p.GetValue value) ]
             | System.Threading.Tasks.TaskStatus.Faulted ->
               let why =
                 match task.Exception with
@@ -669,7 +705,7 @@ module LiveValueTree =
             | _ -> "WaitingForActivation"
           let children =
             match state, t.GetProperty "Result" with
-            | "RanToCompletion", p when not (isNull p) -> [ buildNode mode visited budget "Result" (depth + 1) (p.GetValue value) ]
+            | "RanToCompletion", p when not (isNull p) -> [ buildNode walk (label :: trail) visited budget "Result" (depth + 1) (p.GetValue value) ]
             | _ -> []
           { Label = label; TypeName = typeName; Preview = sprintf "ValueTask %s" state; Kind = NodeKind.Class
             Children = children; BestEffort = false; Depth = depth }
@@ -677,16 +713,16 @@ module LiveValueTree =
           let created = (t.GetProperty "IsValueCreated").GetValue value :?> bool
           let children =
             match created with
-            | true -> [ buildNode mode visited budget "Value" (depth + 1) ((t.GetProperty "Value").GetValue value) ]
+            | true -> [ buildNode walk (label :: trail) visited budget "Value" (depth + 1) ((t.GetProperty "Value").GetValue value) ]
             | false -> []
           { Label = label; TypeName = typeName; Kind = NodeKind.Class
             Preview = (match created with | true -> "Lazy (created)" | false -> "Lazy (not created)")
             Children = children; BestEffort = false; Depth = depth }
-        | TypeShape.Class _ when mode = WalkMode.Off ->
+        | TypeShape.Class _ when walk.Mode = WalkMode.Off ->
           { Label = label; TypeName = typeName; Preview = describe NotEvaluatedReason.ClassesCollapsed
             Kind = NodeKind.NotEvaluated NotEvaluatedReason.ClassesCollapsed
             Children = []; BestEffort = false; Depth = depth }
-        | TypeShape.Class (fields, members) when mode = WalkMode.Safe ->
+        | TypeShape.Class (fields, members) when walk.Mode = WalkMode.Safe ->
           // Fields are the object's real state and reading one runs nothing. A getter runs only when its
           // body is provably harmless. One that merely returns a field already shown is not shown twice.
           let shown = Collections.Generic.HashSet<string>(fields |> Array.map (fun (_, fi) -> fi.Name))
@@ -694,14 +730,26 @@ module LiveValueTree =
             fields
             |> Array.map (fun (name, fi) ->
               Row.Read (name, (try Ok (fi.GetValue value) with ex -> Error ex)))
+          let here = List.rev (label :: trail)
+          // A held getter runs only when a click named exactly this one, and then only through the runner.
+          let heldOrForced (p: PropertyInfo) (reason: NotEvaluatedReason) =
+            match walk.Force with
+            | ForcedMember.At (target, run) when target = here @ [ p.Name ] ->
+              let outcome =
+                try run p value
+                with ex -> Result.Error (MemberFailure.MemberThrew ex.Message)
+              (match outcome with
+               | Result.Ok v -> Row.Read (p.Name, Ok v)
+               | Result.Error failure -> Row.Held (p.Name, p.PropertyType.Name, reasonOf failure))
+            | _ -> Row.Held (p.Name, p.PropertyType.Name, reason)
           let memberRows =
             members
             |> Array.collect (fun (p, shape) ->
               match shape with
               | GetterShape.HiddenByAuthor -> [||]
               | GetterShape.ReturnsField f when shown.Contains f -> [||]
-              | GetterShape.CallsOtherCode -> [| Row.Held (p.Name, p.PropertyType.Name, NotEvaluatedReason.GetterRunsCode) |]
-              | GetterShape.ContainsLoop -> [| Row.Held (p.Name, p.PropertyType.Name, NotEvaluatedReason.GetterLoops) |]
+              | GetterShape.CallsOtherCode -> [| heldOrForced p NotEvaluatedReason.GetterRunsCode |]
+              | GetterShape.ContainsLoop -> [| heldOrForced p NotEvaluatedReason.GetterLoops |]
               | GetterShape.ReturnsField _ | GetterShape.ReturnsConstant | GetterShape.PureStraightLine ->
                 [| Row.Read (p.Name, (try Ok (p.GetValue value) with ex -> Error ex)) |])
           let rows = Array.append fieldRows memberRows |> Array.truncate MaxChildren
@@ -724,7 +772,7 @@ module LiveValueTree =
             |> Array.map (fun row ->
               match row with
               | Row.Read (l, Ok v) ->
-                (try buildNode mode visited budget l (depth + 1) v with _ -> errorNode l)
+                (try buildNode walk (label :: trail) visited budget l (depth + 1) v with _ -> errorNode l)
               | Row.Read (l, Error _) -> errorNode l
               | Row.Held (l, heldTypeName, reason) ->
                 { Label = l; TypeName = heldTypeName; Preview = describe reason; Kind = NodeKind.NotEvaluated reason
@@ -761,7 +809,7 @@ module LiveValueTree =
                   Children = []; BestEffort = false; Depth = depth + 1 }
               match read with
               | Ok v ->
-                try buildNode mode visited budget p.Name (depth + 1) v
+                try buildNode walk (label :: trail) visited budget p.Name (depth + 1) v
                 with _ -> errorNode
               | Error _ -> errorNode)
             |> Array.toList
@@ -771,10 +819,14 @@ module LiveValueTree =
         { Label = label; TypeName = t.Name; Preview = sprintf "<error: %s>" ex.Message
           Kind = NodeKind.Leaf; Children = []; BestEffort = false; Depth = depth }
 
-  /// Build the root node for a binding's value under `mode`.
-  let buildValueNodeIn (mode: WalkMode) (label: string) (value: obj) : LiveValueNode =
+  /// Build the root node for a binding's value under `walk`.
+  let buildValueNodeWith (walk: Walk) (label: string) (value: obj) : LiveValueNode =
     let visited = System.Collections.Generic.HashSet<obj>(HashIdentity.Reference)
-    buildNode mode visited (ref MaxNodes) label 0 value
+    buildNode walk [] visited (ref MaxNodes) label 0 value
+
+  /// Build the root node for a binding's value under `mode`, with nothing forced.
+  let buildValueNodeIn (mode: WalkMode) (label: string) (value: obj) : LiveValueNode =
+    buildValueNodeWith { Mode = mode; Force = ForcedMember.Nothing } label value
 
   /// The walk as it always was: every readable property of a class runs. For values the caller already
   /// trusts. The host uses `Safe`.

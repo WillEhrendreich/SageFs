@@ -52,7 +52,8 @@ let private genDiagnosticsAndText =
 let private allNodeKinds : LiveValueTree.NodeKind list =
   let reasons =
     Microsoft.FSharp.Reflection.FSharpType.GetUnionCases typeof<LiveValueTree.NotEvaluatedReason>
-    |> Array.map (fun case -> Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, [||]))
+    // Every payload a reason carries is a message, so a sample message fills each field.
+    |> Array.map (fun case -> Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, case.GetFields() |> Array.map (fun _ -> box "sample")))
   Microsoft.FSharp.Reflection.FSharpType.GetUnionCases typeof<LiveValueTree.NodeKind>
   |> Array.collect (fun case ->
     match case.GetFields().Length with
