@@ -572,6 +572,17 @@ module BuiltInExecutors =
           return mapException cache ex sw.Elapsed
       }
 
+    /// What actually went wrong when reading a test binding threw: reflection wraps whatever the getter (a
+    /// module's static initializer, here) raised in a TargetInvocationException whose own message says
+    /// nothing, so a log that printed only that left "zero tests" with no reason.
+    let describeBindingFailure (ex: exn) : string =
+      let rec root (e: exn) =
+        match e with
+        | :? TargetInvocationException as wrapped when not (isNull wrapped.InnerException) -> root wrapped.InnerException
+        | _ -> e
+      let cause = root ex
+      sprintf "%s: %s\n%s" (cause.GetType().Name) cause.Message (cause.StackTrace |> Option.ofObj |> Option.defaultValue "")
+
     /// Build a lookup from FullName → ReflectedFlatTest for leaf-level execution.
     let buildLookup (cache: ReflectionCache) (asm: Assembly) : Map<string, ReflectedFlatTest> =
       try
@@ -593,7 +604,7 @@ module BuiltInExecutors =
                   yield fullName, { TestCodeObj = testCode; Tag = tag } ]
                |> List.toArray
              with ex ->
-              Log.warn "[LiveTesting] buildLookup binding %s.%s failed: %s\n%s" t.FullName binding.Name ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+              Log.warn "[LiveTesting] buildLookup binding %s.%s failed: %s" t.FullName binding.Name (describeBindingFailure ex)
               [||]))
         |> Map.ofArray
       with ex ->
@@ -627,7 +638,7 @@ module BuiltInExecutors =
                           Category = CategoryDetection.categorize [] fullName TestFramework.Expecto [||] None } ]
               |> List.toArray
             with ex ->
-              Log.warn "[LiveTesting] discoverLeafTests binding %s.%s failed: %s\n%s" t.FullName binding.Name ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+              Log.warn "[LiveTesting] discoverLeafTests binding %s.%s failed: %s" t.FullName binding.Name (describeBindingFailure ex)
               [||]))
         |> Array.toList
       with

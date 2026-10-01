@@ -123,7 +123,7 @@ module BuildConfirmationInvariants =
           let loud (matches: ResultProvenance -> bool) =
             marksOf s |> List.exists (fun (_, marks) -> marks |> Map.exists (fun _ p -> matches p))
           match s.Event, activeBefore with
-          | ConfirmationEvent.BuildFinished (g, Error _), ValueSome active when g = active ->
+          | ConfirmationEvent.BuildFinished (g, BuildAnswer.DidNotBuild _), ValueSome active when g = active ->
             match loud (function ResultProvenance.BuildDisagrees (BuildDisagreement.BuildFailed _) -> true | _ -> false) with
             | true -> ValueNone
             | false -> ValueSome (sprintf "step %A: the build of the content in flight failed and nothing was said" s.Op)
@@ -143,8 +143,30 @@ module BuildConfirmationInvariants =
         | ConfirmationPhase.Idle -> Outcome.Holds
         | phase -> Outcome.Violated (sprintf "the machine is still %A after every wait was drained (%s)" phase (replay t)) }
 
+  /// answers-need-their-generation: an answer from a build or a run is only ever acted on when it is the answer
+  /// the machine is waiting for. An answer from an older generation that produced an effect (a run started, a
+  /// verdict marked) put the older build's word on a newer confirmation.
+  let answersNeedTheirGeneration : Invariant =
+    { Id = "answers-need-their-generation"
+      Description = "A step whose event answers generation g only has effects when the machine was waiting for generation g."
+      Check = fun t ->
+        firstViolation t (fun s ->
+          let waitingFor =
+            match s.Before.Phase with
+            | ConfirmationPhase.Building (_, g) | ConfirmationPhase.RunningBuilt (_, g) -> ValueSome g
+            | _ -> ValueNone
+          let answered =
+            match s.Event with
+            | ConfirmationEvent.BuildFinished (g, _) | ConfirmationEvent.BuiltRunFinished (g, _) | ConfirmationEvent.DeadlineReached g -> ValueSome g
+            | _ -> ValueNone
+          match answered, s.Effects with
+          | ValueNone, _ -> ValueNone
+          | ValueSome _, [] -> ValueNone
+          | ValueSome g, effects when waitingFor = ValueSome g -> ValueNone
+          | ValueSome g, effects -> ValueSome (sprintf "step %A answered generation %d but the machine was waiting for %A, and it produced %A" s.Op g waitingFor effects)) }
+
   let all : Invariant list =
-    [ noStaleConfirmation; singleFlight; burstsCoalesce; evalNeverDelayed; failureIsLoud; everyConfirmationResolves ]
+    [ noStaleConfirmation; singleFlight; burstsCoalesce; evalNeverDelayed; failureIsLoud; everyConfirmationResolves; answersNeedTheirGeneration ]
 
   /// The invariants that failed for a trace, if any (id, message).
   let violations (t: Trace) : (string * string) list =

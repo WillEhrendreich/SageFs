@@ -112,6 +112,7 @@
         <Compile Include="CreateSessionUx.fs" />
         <Compile Include="SessionStatusPayload.fs" />
         <Compile Include="CohortErrorMapping.fs" />
+        <Compile Include="LiveTestStatusView.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpRunTests.fs" />
 

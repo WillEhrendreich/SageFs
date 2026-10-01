@@ -74,6 +74,24 @@ let tests = testList "SseDedupKey" [
       (before <> after)
       |> Expect.isTrue "must detect run phase change"
 
+    testCase "key changes when an edit decides to run nothing, because the decision is what a client is waiting for" <| fun () ->
+      let decision (precision: SelectionPrecision) (deferred: string array) : LiveTestingDecision =
+        { Explanation =
+            { Cause = RerunCause.KeystrokeBuffered "/work/Hello.fs"
+              Precision = precision
+              ChangedSymbols = []
+              SelectedTests = [||]
+              DeferredTests = deferred
+              Reason = "held back" }
+          Trust = FreshnessTrust.Suppressed }
+      let withDecision (d: LiveTestingDecision) (model: SageFsModel) =
+        let ts = { model.LiveTesting.TestState with LastDecision = Some d }
+        { model with LiveTesting = { model.LiveTesting with TestState = ts } }
+      let before = baseModel |> withDecision (decision SelectionPrecision.NoImpactedTests [||]) |> SseDedupKey.fromModel
+      let after = baseModel |> withDecision (decision SelectionPrecision.SuppressedByPolicy [| "Hello.add" |]) |> SseDedupKey.fromModel
+      (before <> after)
+      |> Expect.isTrue "a decision that changed no row must still reach the stream"
+
     testCase "key changes when generation advances" <| fun () ->
       let before = SseDedupKey.fromModel baseModel
       let after = baseModel |> withGeneration 42 |> SseDedupKey.fromModel

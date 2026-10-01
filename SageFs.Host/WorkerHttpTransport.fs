@@ -21,6 +21,22 @@ open SageFs.WorkerProtocol
 
 module WorkerHttpTransport =
 
+  /// How a run's coverage is attributed. Probes are one shared array in the process, so a reading taken
+  /// while two tests run belongs to both: attribution to ONE test needs tests that do not overlap.
+  [<RequireQualifiedAccess>]
+  type private CoverageAttribution =
+    /// The process records coverage: tests run one at a time, a reading is taken after each, and it
+    /// belongs to the test that just ran.
+    | PerTest
+    /// Nothing here records coverage: tests run in parallel and no reading is sent.
+    | NotRecorded
+
+  /// What a run puts on the stream, in the order it happened.
+  [<RequireQualifiedAccess>]
+  type private StreamItem =
+    | Result of Features.LiveTesting.TestRunResult
+    | Coverage of HttpWorkerClient.CoverageFrame
+
   /// Opaque server handle — exposes BaseUrl and Dispose.
   type HttpWorkerServer internal (baseUrl: string, app: WebApplication) =
     member _.BaseUrl = baseUrl
@@ -487,18 +503,54 @@ module WorkerHttpTransport =
           ctx.Response.Headers["Cache-Control"] <- "no-cache"
           ctx.Response.Headers["Connection"] <- "keep-alive"
 
-          let channel = System.Threading.Channels.Channel.CreateUnbounded<Features.LiveTesting.TestRunResult>()
+          let channel = System.Threading.Channels.Channel.CreateUnbounded<StreamItem>()
           let mutable resultsEmitted = 0L
+
+          // Coverage is recorded by the instrumented assemblies IN the process that ran the tests: ask its
+          // agent. This first reading drains whatever warm-up, discovery or an earlier eval left behind, so
+          // the first test's reading is its own, and it says whether anything is recorded here at all.
+          let attribution =
+            match takeCoverage () with
+            | HostAgent.AgentAnswered (HostAgent.CoverageTaken _) -> CoverageAttribution.PerTest
+            | HostAgent.AgentAnswered HostAgent.NoCoverage -> CoverageAttribution.NotRecorded
+            | HostAgent.AgentUnavailable reason ->
+              Log.warn "[WorkerHttpTransport] no coverage for this run: %s" reason
+              CoverageAttribution.NotRecorded
+
+          let parallelism =
+            match attribution with
+            | CoverageAttribution.PerTest -> 1
+            | CoverageAttribution.NotRecorded -> maxParallelism
+
+          // A reading is taken the moment a test returns and sent right after that test's result.
+          let readings = System.Collections.Concurrent.ConcurrentDictionary<Features.LiveTesting.TestId, HttpWorkerClient.CoverageFrame>()
 
           let executionTask = task {
             try
               let onResult (result: Features.LiveTesting.TestRunResult) =
-                channel.Writer.TryWrite(result) |> ignore
-              let runTest = getRunTest()
+                channel.Writer.TryWrite(StreamItem.Result result) |> ignore
+                match readings.TryRemove result.TestId with
+                | true, frame -> channel.Writer.TryWrite(StreamItem.Coverage frame) |> ignore
+                | false, _ -> ()
+              let runTest =
+                let run = getRunTest()
+                match attribution with
+                | CoverageAttribution.NotRecorded -> run
+                | CoverageAttribution.PerTest ->
+                  fun (tc: Features.LiveTesting.TestCase) ->
+                    async {
+                      let! outcome = run tc
+                      match takeCoverage () with
+                      | HostAgent.AgentAnswered (HostAgent.CoverageTaken (count, words)) ->
+                        readings.[tc.Id] <- { TestId = tc.Id; Count = count; Words = words }
+                      | HostAgent.AgentAnswered HostAgent.NoCoverage -> ()
+                      | HostAgent.AgentUnavailable reason -> Log.warn "[WorkerHttpTransport] no coverage for %s: %s" tc.FullName reason
+                      return outcome
+                    }
               use cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted)
               try
                 do! Features.LiveTesting.TestOrchestrator.executeFiltered
-                      runTest onResult maxParallelism tests cts.Token
+                      runTest onResult parallelism tests cts.Token
                     |> Async.StartAsTask
               with ex ->
                 System.Diagnostics.Activity.Current
@@ -510,62 +562,63 @@ module WorkerHttpTransport =
           }
 
           // Start execution — don't await, let the channel reader loop drive the SSE stream
-          use _ = executionTask.ContinueWith(fun (t: Threading.Tasks.Task) ->
+          // Not `use`: a Task may only be disposed once it has completed, and this continuation has not
+          // necessarily run by the time the stream has been written. Disposing it here threw after the last
+          // frame, which the caller saw as "the response ended prematurely" under load.
+          executionTask.ContinueWith(fun (t: Threading.Tasks.Task) ->
             match t.IsFaulted with
             | true -> Log.error "[run-tests-stream] unhandled: %s" t.Exception.Message
             | false -> ()
-          )
+          ) |> ignore
 
           let writer = ctx.Response.Body
           let mutable keepReading = true
-          while keepReading do
-            let! canRead = channel.Reader.WaitToReadAsync(ctx.RequestAborted)
-            match canRead with
-            | true ->
-              let mutable hasItem = true
-              while hasItem do
-                let (success, result) = channel.Reader.TryRead()
-                match success with
-                | true ->
-                  let json = Serialization.serialize result
-                  let line = sprintf "data: %s\n\n" json
-                  let bytes = Text.Encoding.UTF8.GetBytes(line)
-                  do! writer.WriteAsync(bytes, 0, bytes.Length)
-                  do! writer.FlushAsync()
-                  resultsEmitted <- resultsEmitted + 1L
-                  Features.LiveTesting.LiveTestingInstrumentation.streamResultsEmitted.Add(1L)
-                | false ->
-                  hasItem <- false
-            | false ->
-              keepReading <- false
+          // A stream that dies half way reaches the caller only as "the response ended prematurely", which says
+          // nothing about why, so the reason is logged here, where it is known.
+          try
+            while keepReading do
+              let! canRead = channel.Reader.WaitToReadAsync(ctx.RequestAborted)
+              match canRead with
+              | true ->
+                let mutable hasItem = true
+                while hasItem do
+                  let (success, item) = channel.Reader.TryRead()
+                  match success with
+                  | true ->
+                    // Packed base64 words on the wire, not one JSON bool per probe: see CoverageBitmap.toBase64.
+                    let line =
+                      match item with
+                      | StreamItem.Result result ->
+                        resultsEmitted <- resultsEmitted + 1L
+                        Features.LiveTesting.LiveTestingInstrumentation.streamResultsEmitted.Add(1L)
+                        sprintf "data: %s\n\n" (Serialization.serialize result)
+                      | StreamItem.Coverage frame -> sprintf "event: coverage\ndata: %s\n\n" (Serialization.serialize frame)
+                    let bytes = Text.Encoding.UTF8.GetBytes(line)
+                    do! writer.WriteAsync(bytes, 0, bytes.Length)
+                    do! writer.FlushAsync()
+                  | false ->
+                    hasItem <- false
+              | false ->
+                keepReading <- false
 
-          let doneBytes = Text.Encoding.UTF8.GetBytes("event: done\ndata: {}\n\n")
+            let doneBytes = Text.Encoding.UTF8.GetBytes("event: done\ndata: {}\n\n")
 
-          // Coverage is recorded by the instrumented assemblies IN the process that ran the tests: ask its agent.
-          match takeCoverage () with
-          | HostAgent.AgentAnswered(HostAgent.CoverageTaken(count, words)) ->
-            // Packed base64 words on the wire, not one JSON bool per probe —
-            // see CoverageBitmap.toBase64 for the size rationale.
-            let coverageJson = Serialization.serialize {| count = count; words = words |}
-            let coverageLine = sprintf "event: coverage\ndata: %s\n\n" coverageJson
-            let coverageBytes = Text.Encoding.UTF8.GetBytes(coverageLine)
-            do! writer.WriteAsync(coverageBytes, 0, coverageBytes.Length)
+            do! writer.WriteAsync(doneBytes, 0, doneBytes.Length)
             do! writer.FlushAsync()
-          | HostAgent.AgentAnswered HostAgent.NoCoverage -> ()
-          | HostAgent.AgentUnavailable reason -> Log.warn "[WorkerHttpTransport] no coverage for this run: %s" reason
 
-          do! writer.WriteAsync(doneBytes, 0, doneBytes.Length)
-          do! writer.FlushAsync()
-
-          streamSw.Stop()
-          Features.LiveTesting.LiveTestingInstrumentation.streamDurationMs.Record(streamSw.Elapsed.TotalMilliseconds)
-          match isNull streamActivity with
-          | false ->
-            streamActivity.SetTag("stream.results_emitted", resultsEmitted) |> ignore
-            streamActivity.SetTag("stream.duration_ms", streamSw.Elapsed.TotalMilliseconds) |> ignore
-            streamActivity.Stop()
-            streamActivity.Dispose()
-          | true -> ()
+            streamSw.Stop()
+            Features.LiveTesting.LiveTestingInstrumentation.streamDurationMs.Record(streamSw.Elapsed.TotalMilliseconds)
+            match isNull streamActivity with
+            | false ->
+              streamActivity.SetTag("stream.results_emitted", resultsEmitted) |> ignore
+              streamActivity.SetTag("stream.duration_ms", streamSw.Elapsed.TotalMilliseconds) |> ignore
+              streamActivity.Stop()
+              streamActivity.Dispose()
+            | true -> ()
+          with
+          | ex when not (ex :? OperationCanceledException) ->
+            Log.error "[run-tests-stream] the stream failed after %d result(s): %s\n%s" resultsEmitted ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+            raise ex
       })) |> ignore
 
       map Routes.testDiscovery (Func<HttpContext, Task>(fun ctx -> task {

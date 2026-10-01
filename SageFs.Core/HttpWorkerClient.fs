@@ -155,6 +155,14 @@ module HttpWorkerClient =
     | StreamOutcome.TimedOut after -> Features.LiveTesting.NoResultReason.StreamStalled after
     | StreamOutcome.Cancelled -> Features.LiveTesting.NoResultReason.RunCancelled
 
+  /// What the worker streams, as `event: coverage`, right after each test's own result: the coverage
+  /// that test recorded and nothing else, as the probe count and the packed hit words
+  /// (`CoverageBitmap.toBase64`). One shape, written by the worker and read here.
+  type CoverageFrame =
+    { TestId: Features.LiveTesting.TestId
+      Count: int
+      Words: string }
+
   /// One SSE payload the worker streamed during a test run.
   [<RequireQualifiedAccess>]
   type private SseData =
@@ -310,16 +318,16 @@ module HttpWorkerClient =
           match data with
           | SseData.TestResult json -> deliverResult onResult json
           | SseData.Coverage json ->
-            try
-              // Wire format is packed base64 words (CoverageBitmap.toBase64),
-              // not one JSON bool per probe — unpacked back to a bool array
-              // here so onCoverage's contract is unchanged.
-              use doc = System.Text.Json.JsonDocument.Parse(json)
-              let count = doc.RootElement.GetProperty("count").GetInt32()
-              let words = doc.RootElement.GetProperty("words").GetString()
-              let hits =
-                Features.LiveTesting.CoverageBitmap.ofBase64 count words
-                |> Features.LiveTesting.CoverageBitmap.toBoolArray
-              onCoverage (Features.LiveTesting.TestId.TestId "") hits
-            with ex ->
-              Utils.Log.warn "[HttpWorkerClient] Coverage data parse failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")) ct)
+            match Serialization.tryDeserialize<CoverageFrame> json with
+            | Ok frame ->
+              try
+                // Packed base64 words (CoverageBitmap.toBase64), not one JSON bool per probe, unpacked
+                // back to a bool array here. The reading belongs to the test the frame names.
+                let hits =
+                  Features.LiveTesting.CoverageBitmap.ofBase64 frame.Count frame.Words
+                  |> Features.LiveTesting.CoverageBitmap.toBoolArray
+                onCoverage frame.TestId hits
+              with ex ->
+                Utils.Log.warn "[HttpWorkerClient] Coverage data could not be unpacked: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+            | Error error ->
+              Utils.Log.warn "[HttpWorkerClient] A coverage frame could not be read and was skipped: %s" (SageFsError.describe error)) ct)

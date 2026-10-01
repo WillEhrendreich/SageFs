@@ -120,6 +120,15 @@ let scopeTests =
       | Some d -> d.Explanation.Precision |> Expect.equal "held back by scope, said as policy" SelectionPrecision.SuppressedByPolicy
       | None -> failtest "expected a decision"
 
+    testCase "a scope request that would mean nothing or everything by accident is refused, with the reason" <| fun _ ->
+      TestScope.tryParse "only" [ " " ] |> Expect.equal "an include set of blanks" (Error ScopeRefusal.IncludeSetEmpty)
+      TestScope.tryParse "except" [] |> Expect.equal "an empty exclude set" (Error ScopeRefusal.ExcludeSetEmpty)
+      TestScope.tryParse "sometimes" [ "a" ] |> Expect.equal "an unknown mode" (Error (ScopeRefusal.UnknownMode "sometimes"))
+      TestScope.tryParse "every" [] |> Expect.equal "clearing the scope needs no pattern" (Ok TestScope.EveryTest)
+      TestScope.tryParse "EXCEPT" [ "a"; "" ] |> Expect.equal "mode is case-insensitive and blanks are dropped" (Ok (TestScope.AllExcept [ "a" ]))
+      TestScope.describeRefusal (ScopeRefusal.UnknownMode "sometimes")
+      |> Expect.stringContains "the refusal names the mode and the way out" "sometimes"
+
     testCase "TestScope.allows is the one rule: substring of the full name or the display name" <| fun _ ->
       TestScope.allows TestScope.EveryTest circle |> Expect.isTrue "every test"
       TestScope.allows (TestScope.OnlyMatching [ "rectangle" ]) rectangle |> Expect.isTrue "included"

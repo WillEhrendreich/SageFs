@@ -63,6 +63,7 @@ module BuildConfirmationSim =
 
   let private confirmationOf (content: int) : Confirmation =
     { Content = contentId content
+      File = "Sim.fs"
       Evaluated = testIds |> List.mapi (fun i id -> id, evaluatedVerdict content i) |> Map.ofList }
 
   /// One step of the fold, with the world as it was.
@@ -126,7 +127,7 @@ module BuildConfirmationSim =
       let afterEval, effects = BuildConfirmation.step machine event
       let started, more = BuildConfirmation.step afterEval ConfirmationEvent.QuietElapsed
       started, effects @ more
-    | Policy.SwallowsFailures, ConfirmationEvent.BuildFinished (_, Error _) ->
+    | Policy.SwallowsFailures, ConfirmationEvent.BuildFinished (_, BuildAnswer.DidNotBuild _) ->
       let next, effects = BuildConfirmation.step machine event
       next,
       effects
@@ -146,13 +147,13 @@ module BuildConfirmationSim =
     match op with
     | Op.Evaluated content -> ValueSome (ConfirmationEvent.EvaluatedRunFinished (confirmationOf content))
     | Op.EvaluatedNothing ->
-      ValueSome (ConfirmationEvent.EvaluatedRunFinished { Content = contentId (max 0 world.Latest); Evaluated = Map.empty })
+      ValueSome (ConfirmationEvent.EvaluatedRunFinished { Content = contentId (max 0 world.Latest); File = "Sim.fs"; Evaluated = Map.empty })
     | Op.Edited content -> ValueSome (ConfirmationEvent.ContentEdited (contentId content))
     | Op.Quiet -> ValueSome ConfirmationEvent.QuietElapsed
     | Op.BuildDone (which, ends) ->
       nth which (world.Started |> Map.toList |> List.map fst)
       |> ValueOption.map (fun g ->
-        ConfirmationEvent.BuildFinished (g, (match ends with | BuildEnds.Builds -> Ok () | BuildEnds.Fails -> Error "the build failed")))
+        ConfirmationEvent.BuildFinished (g, (match ends with | BuildEnds.Builds -> BuildAnswer.Built | BuildEnds.Fails -> BuildAnswer.DidNotBuild "the build failed")))
     | Op.RunDone (which, agreement) ->
       nth which (world.Running |> Map.toList |> List.map fst)
       |> ValueOption.map (fun g ->
@@ -173,25 +174,28 @@ module BuildConfirmationSim =
 
   /// Fold the effects into the world: what is now really started or running.
   let private applyEffects (world: World) (effects: ConfirmationEffect list) (event: ConfirmationEvent) : World =
-    let world =
-      match event with
-      | ConfirmationEvent.BuildFinished (g, _) -> { world with Started = Map.remove g world.Started }
-      | ConfirmationEvent.BuiltRunFinished (g, _) -> { world with Running = Map.remove g world.Running }
-      | ConfirmationEvent.DeadlineReached g -> { world with Started = Map.remove g world.Started; Running = Map.remove g world.Running }
-      | _ -> world
-    effects
-    |> List.fold
-      (fun w effect ->
-        match effect with
-        | ConfirmationEffect.StartBuild (g, confirmation) -> { w with Started = Map.add g confirmation w.Started }
-        | ConfirmationEffect.RunAgainstBuild (g, _) ->
-          match Map.tryFind g w.Started with
-          | Some confirmation -> { w with Started = Map.remove g w.Started; Running = Map.add g confirmation w.Running }
-          | None -> w
-        | ConfirmationEffect.AbandonBuild _
-        | ConfirmationEffect.StartQuietWindow
-        | ConfirmationEffect.Mark _ -> w)
-      world
+    let withEffects =
+      effects
+      |> List.fold
+        (fun w effect ->
+          match effect with
+          | ConfirmationEffect.StartBuild (g, confirmation) -> { w with Started = Map.add g confirmation w.Started }
+          | ConfirmationEffect.RunAgainstBuild (g, _) ->
+            match Map.tryFind g w.Started with
+            | Some confirmation -> { w with Started = Map.remove g w.Started; Running = Map.add g confirmation w.Running }
+            | None -> w
+          | ConfirmationEffect.AbandonBuild _
+          | ConfirmationEffect.StartQuietWindow
+          | ConfirmationEffect.Mark _ -> w)
+        world
+    // The answer was delivered, so the thing that answered is no longer waiting. A build that just finished
+    // has been moved to the runs waiting above, and a run that just finished leaves them here.
+    match event with
+    | ConfirmationEvent.BuildFinished (g, _) -> { withEffects with Started = Map.remove g withEffects.Started }
+    | ConfirmationEvent.BuiltRunFinished (g, _) -> { withEffects with Running = Map.remove g withEffects.Running }
+    | ConfirmationEvent.DeadlineReached g ->
+      { withEffects with Started = Map.remove g withEffects.Started; Running = Map.remove g withEffects.Running }
+    | _ -> withEffects
 
   let private runOp (policy: Policy) (world: World) (op: Op) : World =
     let latest =

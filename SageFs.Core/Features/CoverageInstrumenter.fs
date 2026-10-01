@@ -39,6 +39,46 @@ module CoverageInstrumenter =
           | false -> ()
     |]
 
+  /// Whether a method runs while a module or a type initializes: a static constructor, or anything in the
+  /// `<StartupCode$...>` classes F# compiles module-level values into. It runs once per process, in
+  /// whichever test touched the module first, so a test's own coverage cannot say what depends on it.
+  let runsAtStartup (m: MethodDefinition) : bool =
+    let rec insideStartupClass (t: TypeDefinition) =
+      match isNull t with
+      | true -> false
+      | false -> t.Name.StartsWith("<StartupCode$", StringComparison.Ordinal) || insideStartupClass t.DeclaringType
+    (m.IsConstructor && m.IsStatic) || insideStartupClass m.DeclaringType
+
+  /// The hash of `bytes` under the algorithm the compiler recorded for a document, when it is one we can compute.
+  let private checksumOf (algorithm: DocumentHashAlgorithm) (bytes: byte array) : byte array voption =
+    match algorithm with
+    | DocumentHashAlgorithm.SHA256 -> ValueSome (System.Security.Cryptography.SHA256.HashData bytes)
+    | DocumentHashAlgorithm.SHA1 -> ValueSome (System.Security.Cryptography.SHA1.HashData bytes)
+    | DocumentHashAlgorithm.MD5 -> ValueSome (System.Security.Cryptography.MD5.HashData bytes)
+    | _ -> ValueNone
+
+  /// The compiled text of each source file the sequence points name, as line hashes, kept ONLY for a file whose
+  /// bytes on disk still match the checksum the compiler wrote into the PDB. A file edited since the build, or one
+  /// with no usable checksum, has no entry: its line numbers cannot be trusted against the compiled code.
+  let baselinesOf (points: (MethodDefinition * Cil.SequencePoint * int) array) : SourceLineHashes array =
+    points
+    |> Array.choose (fun (_, sp, _) -> match isNull sp.Document with | true -> None | false -> Some sp.Document)
+    |> Array.distinctBy (fun doc -> doc.Url)
+    |> Array.choose (fun doc ->
+      try
+        match doc.Hash.Length > 0 && File.Exists doc.Url with
+        | false -> None
+        | true ->
+          let bytes = File.ReadAllBytes doc.Url
+          match checksumOf doc.HashAlgorithm bytes with
+          | ValueSome sum when System.MemoryExtensions.SequenceEqual(ReadOnlySpan<byte> sum, ReadOnlySpan<byte> doc.Hash) ->
+            use reader = new StreamReader(new MemoryStream(bytes), true)
+            Some { File = doc.Url; Lines = LineHash.ofText (reader.ReadToEnd()) }
+          | _ -> None
+      with ex ->
+        Log.warn "[CoverageInstrumenter] compiled text of %s could not be read: %s" doc.Url ex.Message
+        None)
+
   /// Inject the __SageFsCoverage static class into the module.
   let injectTracker (moduleDef: ModuleDefinition) (totalSlots: int) =
     let objectType = moduleDef.ImportReference(typeof<obj>)
@@ -218,7 +258,10 @@ module CoverageInstrumenter =
             TotalProbes = points.Length
             TrackerTypeName = "__SageFsCoverage"
             HitsFieldName = "Hits"
-            Source = MapSource.none }
+            Source =
+              { StartupSlots =
+                  points |> Array.choose (fun (m, _, slotId) -> match runsAtStartup m with | true -> Some slotId | false -> None)
+                Baselines = baselinesOf points } }
         let (_, hitMethod, _) =
           injectTracker moduleDef points.Length
         insertProbes hitMethod points

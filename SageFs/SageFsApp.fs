@@ -898,6 +898,156 @@ module SageFsUpdate =
         |> fun action -> Features.LiveTesting.QuarantineLogic.apply action q)
       quarantined
 
+  // ── Confirming an evaluated run against a real build ────────────────────────────────────────────────
+  // A keystroke's tests run against code the live session EVALUATED. Every row says which kind of code
+  // produced its verdict, and an evaluated verdict is confirmed (or contradicted) by a real build once the
+  // editing has gone quiet. The decision is the pure `BuildConfirmation.step`; this is only the wiring.
+
+  /// The provenance a run's results carry, by what the run ran against. A run against a confirming build
+  /// carries Compiled until the confirmation says what the build made of it.
+  let private provenanceOfBasis (basis: Features.LiveTesting.RunBasis) : Features.LiveTesting.ResultProvenance =
+    match basis with
+    | Features.LiveTesting.RunBasis.Evaluated _ -> Features.LiveTesting.ResultProvenance.Evaluated
+    | Features.LiveTesting.RunBasis.Compiled
+    | Features.LiveTesting.RunBasis.ConfirmingBuild _ -> Features.LiveTesting.ResultProvenance.Compiled
+
+  /// What each of these tests last said, reduced for comparison.
+  let private verdictsOf
+    (tests: Features.LiveTesting.TestId seq)
+    (state: Features.LiveTesting.LiveTestState)
+    : Map<Features.LiveTesting.TestId, Features.LiveTesting.RunVerdict> =
+    tests
+    |> Seq.map (fun id ->
+      id,
+      match Map.tryFind id state.LastResults with
+      | Some result -> Features.LiveTesting.RunVerdict.ofResult result.Result
+      | None -> Features.LiveTesting.RunVerdict.NoVerdict "no result")
+    |> Map.ofSeq
+
+  /// Carry out what a confirmation step asked for: mark the rows it names, and hand the world the effects it
+  /// cannot do itself. The run against a finished build is an ordinary run effect, with the basis recorded first.
+  let private applyConfirmation
+    (sessionId: string)
+    (effects: Features.LiveTesting.ConfirmationEffect list)
+    (model: SageFsModel)
+    : SageFsModel * SageFsEffect list =
+    effects
+    |> List.fold
+      (fun (current: SageFsModel, emitted: SageFsEffect list) effect ->
+        match effect with
+        | Features.LiveTesting.ConfirmationEffect.Mark (_, marks) ->
+          let changed = marks |> Map.keys |> Set.ofSeq
+          let marked, _ =
+            tryUpdateLiveTestingState (Some sessionId) (fun cycle ->
+              refreshStatusesForChangedIds cycle changed (fun state ->
+                { state with
+                    Provenances = marks |> Map.fold (fun all id mark -> Map.add id mark all) state.Provenances }),
+              ()) current
+          marked, emitted
+        | Features.LiveTesting.ConfirmationEffect.RunAgainstBuild (generation, tests) ->
+          let wanted = Set.ofList tests
+          let running, planned =
+            tryUpdateLiveTestingState (Some sessionId) (fun cycle ->
+              let toRun = cycle.TestState.DiscoveredTests |> Array.filter (fun tc -> wanted.Contains tc.Id)
+              let sessionMaps =
+                cycle.InstrumentationMaps |> Map.tryFind sessionId |> Option.defaultValue [||]
+              { cycle with RunBasis = Features.LiveTesting.RunBasis.ConfirmingBuild generation },
+              (toRun, sessionMaps)) current
+          let toRun, sessionMaps = planned |> Option.defaultValue ([||], [||])
+          let run =
+            match Array.isEmpty toRun with
+            | true -> []
+            | false ->
+              [ SageFsEffect.TestCycle (
+                  Features.LiveTesting.TestCycleEffect.RunAffectedTests
+                    { Tests = toRun
+                      Trigger = Features.LiveTesting.RunTrigger.ExplicitRun
+                      TreeSitterElapsed = TimeSpan.Zero
+                      FcsElapsed = TimeSpan.Zero
+                      SessionId = Some sessionId
+                      InstrumentationMaps = sessionMaps }) ]
+          running, emitted @ [ SageFsEffect.Confirm (sessionId, effect) ] @ run
+        | other -> current, emitted @ [ SageFsEffect.Confirm (sessionId, other) ])
+      (model, [])
+
+  /// A run just finished. If it ran against evaluated code, the evaluated verdicts are what a real build is
+  /// asked to confirm; if it ran against a confirming build, the build has now answered.
+  let private confirmFinishedRun (sessionId: string option) (model: SageFsModel) : SageFsModel * SageFsEffect list =
+    let stepped, outcome =
+      tryUpdateLiveTestingState sessionId (fun cycle ->
+        let owner =
+          Features.LiveTesting.LiveTestState.ownerSessionId cycle.TestState
+          |> Option.orElse sessionId
+          |> Option.defaultValue ""
+        let event =
+          match cycle.RunBasis with
+          | Features.LiveTesting.RunBasis.Compiled -> ValueNone
+          | Features.LiveTesting.RunBasis.Evaluated (content, tests) ->
+            ValueSome (
+              Features.LiveTesting.ConfirmationEvent.EvaluatedRunFinished
+                { Content = content
+                  File = cycle.ActiveFile |> Option.defaultValue ""
+                  Evaluated = verdictsOf tests cycle.TestState })
+          | Features.LiveTesting.RunBasis.ConfirmingBuild generation ->
+            match cycle.Confirmation.Phase with
+            | Features.LiveTesting.ConfirmationPhase.RunningBuilt (confirmation, running) when running = generation ->
+              ValueSome (
+                Features.LiveTesting.ConfirmationEvent.BuiltRunFinished
+                  (generation, verdictsOf (Map.keys confirmation.Evaluated) cycle.TestState))
+            | _ -> ValueNone
+        match event with
+        | ValueNone -> { cycle with RunBasis = Features.LiveTesting.RunBasis.Compiled }, ([], owner)
+        | ValueSome event ->
+          let machine, effects = Features.LiveTesting.BuildConfirmation.step cycle.Confirmation event
+          { cycle with Confirmation = machine; RunBasis = Features.LiveTesting.RunBasis.Compiled }, (effects, owner)) model
+    match outcome with
+    | Some (effects, owner) -> applyConfirmation owner effects stepped
+    | None -> model, []
+
+  /// A run just finished: when it ran against anything but compiled binaries, there is something to confirm
+  /// or to judge. Every ordinary run is Compiled and returns the model as it came.
+  let private completeRunBasis (sessionId: string option) (model: SageFsModel) : SageFsModel * SageFsEffect list =
+    let basisBefore =
+      match sessionId with
+      | Some sid -> (SageFsModel.cycleForSession sid model).RunBasis
+      | None -> model.LiveTesting.RunBasis
+    match basisBefore with
+    | Features.LiveTesting.RunBasis.Compiled -> model, []
+    | _ -> confirmFinishedRun sessionId model
+
+  /// One step of the confirmation machine of a session, from outside the run (the quiet window ending, a build
+  /// answering, a deadline passing, a newer buffer arriving).
+  let private stepConfirmation
+    (sessionId: string option)
+    (event: Features.LiveTesting.ConfirmationEvent)
+    (model: SageFsModel)
+    : SageFsModel * SageFsEffect list =
+    let before =
+      match sessionId with
+      | Some sid -> (SageFsModel.cycleForSession sid model).Confirmation
+      | None -> model.LiveTesting.Confirmation
+    let machine, effects = Features.LiveTesting.BuildConfirmation.step before event
+    // Nothing to do is the common case (every keystroke asks): the model is returned as it came.
+    match obj.ReferenceEquals(machine, before) with
+    | true -> model, []
+    | false ->
+      let stepped, owner =
+        tryUpdateLiveTestingState sessionId (fun cycle ->
+          { cycle with Confirmation = machine },
+          (Features.LiveTesting.LiveTestState.ownerSessionId cycle.TestState
+           |> Option.orElse sessionId
+           |> Option.defaultValue "")) model
+      applyConfirmation (owner |> Option.defaultValue "") effects stepped
+
+  /// A buffer arrived: a build of any other text is not worth finishing. Quiet when there is nothing to stop.
+  let private confirmContentEdited
+    (targetSession: string option)
+    (content: Features.LiveTesting.AnalysisIdentity)
+    (model: SageFsModel)
+    : SageFsEffect list * SageFsModel =
+    let stepped, effects = stepConfirmation targetSession (Features.LiveTesting.ConfirmationEvent.ContentEdited content) model
+    effects, stepped
+
   let private applyBufferedTestResults
     (sessionId: string option)
     (batches: Features.LiveTesting.TestRunResult array list)
@@ -916,11 +1066,19 @@ module SageFsUpdate =
       // across two checkouts of one repo) can never clobber each other.
       let model', outcome =
         tryUpdateLiveTestingState sessionId (fun cycle ->
+          let allResults = nonEmptyBatches |> List.collect Array.toList
+          // Each result is marked with what the run it belongs to ran against, BEFORE the rows are
+          // computed from it, so a row never shows a verdict with the wrong provenance.
+          let provenance = provenanceOfBasis cycle.RunBasis
+          let stamped =
+            { cycle.TestState with
+                Provenances =
+                  allResults
+                  |> List.fold (fun all result -> Map.add result.TestId provenance all) cycle.TestState.Provenances }
           let merged, changedEntries =
             Features.LiveTesting.LiveTesting.mergeBufferedResultsWithUpdatedStatusEntriesAndChangedEntries
-              cycle.TestState
+              stamped
               nonEmptyBatches
-          let allResults = nonEmptyBatches |> List.collect Array.toList
           let updatedHistory =
             allResults
             |> List.fold
@@ -1532,18 +1690,71 @@ module SageFsUpdate =
         let summary =
           model'.PendingRunSummary
           |> PendingRunSummary.toOutputLine
-        { model' with
-            PendingRunSummary = PendingRunSummary.empty
-            RecentOutput = SageFsModel.addOutputLine summary model'.RecentOutput },
-        replayEffects
-        |> Option.defaultValue []
-        |> List.map SageFsEffect.TestCycle
+        let completedModel =
+          { model' with
+              PendingRunSummary = PendingRunSummary.empty
+              RecentOutput = SageFsModel.addOutputLine summary model'.RecentOutput }
+        let completedEffects =
+          replayEffects
+          |> Option.defaultValue []
+          |> List.map SageFsEffect.TestCycle
+        // The run's results have all landed: confirm what ran against evaluated code, or judge what ran
+        // against a build.
+        let confirmedModel, confirmationEffects = completeRunBasis sessionId completedModel
+        confirmedModel, completedEffects @ confirmationEffects
 
-      | TuiEvent.EvaluatedRunBegan _
-      | TuiEvent.BuildConfirmation _
-      | TuiEvent.LivePauseChanged _
-      | TuiEvent.LiveScopeChanged _ ->
-        model, []
+      | TuiEvent.EvaluatedRunBegan (sessionId, content, testIds) ->
+        let began, _ =
+          tryUpdateLiveTestingState (Some sessionId) (fun cycle ->
+            { cycle with RunBasis = Features.LiveTesting.RunBasis.Evaluated (content, List.ofArray testIds) }, ()) model
+        began, []
+
+      | TuiEvent.BuildConfirmation (sessionId, event) ->
+        stepConfirmation (Some sessionId) event model
+
+      | TuiEvent.LivePauseChanged (sessionId, pause) ->
+        let changed, planned =
+          tryUpdateLiveTestingState sessionId (fun cycle ->
+            let wasPaused = cycle.TestState.Pause
+            let cycle' = { cycle with TestState = { cycle.TestState with Pause = pause } }
+            match wasPaused, pause with
+            | Features.LiveTesting.LivePause.Paused, Features.LiveTesting.LivePause.Live ->
+              // Resuming judges what went stale while paused. The session's evaluated code followed every
+              // edit meanwhile, so these run against it: the rows say so, and a real build confirms them.
+              let toRun = Features.LiveTesting.PolicyFilter.resumeSelection cycle'.TestState
+              match Array.isEmpty toRun with
+              | true -> cycle', []
+              | false ->
+                let owner = Features.LiveTesting.LiveTestState.ownerSessionId cycle'.TestState |> Option.orElse sessionId
+                let sessionMaps =
+                  owner
+                  |> Option.bind (fun sid -> Map.tryFind sid cycle'.InstrumentationMaps)
+                  |> Option.defaultValue [||]
+                let run =
+                  Features.LiveTesting.TestCycleEffect.RunAffectedTests
+                    { Tests = toRun
+                      Trigger = Features.LiveTesting.RunTrigger.FileSave
+                      TreeSitterElapsed = TimeSpan.Zero
+                      FcsElapsed = TimeSpan.Zero
+                      SessionId = owner
+                      InstrumentationMaps = sessionMaps }
+                // The tests that run are the ones the eval just produced: the session's copies of them are
+                // the compiled ones, which do not know about the edits made while paused. So the run goes
+                // through the same eval-then-run the keystroke path uses, when there is a buffer to eval;
+                // that path also records that the verdicts are evaluated ones.
+                cycle',
+                Features.LiveTesting.TestCycleEffects.redirectToEvalBuffer
+                  cycle'.LatestContent
+                  (cycle'.ActiveFile |> Option.defaultValue "")
+                  [ run ]
+            | _ -> cycle', []) model
+        changed, (planned |> Option.defaultValue [] |> List.map SageFsEffect.TestCycle)
+
+      | TuiEvent.LiveScopeChanged (sessionId, scope) ->
+        let scoped, _ =
+          tryUpdateLiveTestingState sessionId (fun cycle ->
+            { cycle with TestState = { cycle.TestState with Scope = scope } }, ()) model
+        scoped, []
 
       | TuiEvent.LiveTestingEnabled ->
         let lt =
@@ -1691,8 +1902,14 @@ module SageFsUpdate =
         Instrumentation.coverageBitmapsCollected.Add(1L)
         let model', _ =
           tryUpdateLiveTestingState sessionId (fun cycle ->
+            // A reading that hit nothing is "ran somewhere unrecorded" (after a keystroke eval the tests run
+            // against evaluated code, which the host's coverage read skips), not "covers nothing". It never
+            // replaces a recorded bitmap and never creates one: absent means unknown, and unknown is kept
+            // by every selection that narrows with coverage.
             let bitmaps =
-              testIds |> Array.fold (fun acc tid -> Map.add tid bitmap acc) cycle.TestState.TestCoverageBitmaps
+              match Features.LiveTesting.CoverageBitmap.popCount bitmap with
+              | 0 -> cycle.TestState.TestCoverageBitmaps
+              | _ -> testIds |> Array.fold (fun acc tid -> Map.add tid bitmap acc) cycle.TestState.TestCoverageBitmaps
             { cycle with TestState = { cycle.TestState with TestCoverageBitmaps = bitmaps } }, ()) model
         model', []
 
@@ -1926,41 +2143,48 @@ module SageFsUpdate =
             PerSessionLiveTesting = perSessionState' }, mappedEffects
 
     | SageFsMsg.BufferContentChanged (targetSession, filePath, content) ->
-      let isActive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
-      match isActive with
-      | false -> model, []
-      | true ->
-          let now = DateTimeOffset.UtcNow
-          match targetSession with
-          | Some sid when activeLiveTestingSessionId model = Some sid ->
-              let current = model.LiveTesting
-              let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-              match obj.ReferenceEquals(cycle', current) with
-              | true -> model, []
-              | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
-          | Some sid ->
-              let sessionExists =
-                model.Sessions.Sessions
-                |> List.exists (fun session -> SessionId.value session.Id = sid)
-              match sessionExists with
-              | false -> model, []
-              | true ->
-                  let current =
-                    model.PerSessionLiveTesting
-                    |> Map.tryFind sid
-                    |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
-                  let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-                  match obj.ReferenceEquals(cycle', current) with
-                  | true -> model, []
-                  | false ->
-                      { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' },
-                      pendingRebuildCancellationEffects current
-          | None ->
-              let current = model.LiveTesting
-              let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
-              match obj.ReferenceEquals(cycle', current) with
-              | true -> model, []
-              | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
+      let afterKeystroke : SageFsModel * SageFsEffect list =
+        let isActive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
+        match isActive with
+        | false -> model, []
+        | true ->
+            let now = DateTimeOffset.UtcNow
+            match targetSession with
+            | Some sid when activeLiveTestingSessionId model = Some sid ->
+                let current = model.LiveTesting
+                let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+                match obj.ReferenceEquals(cycle', current) with
+                | true -> model, []
+                | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
+            | Some sid ->
+                let sessionExists =
+                  model.Sessions.Sessions
+                  |> List.exists (fun session -> SessionId.value session.Id = sid)
+                match sessionExists with
+                | false -> model, []
+                | true ->
+                    let current =
+                      model.PerSessionLiveTesting
+                      |> Map.tryFind sid
+                      |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
+                    let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+                    match obj.ReferenceEquals(cycle', current) with
+                    | true -> model, []
+                    | false ->
+                        { model with PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.add sid cycle' },
+                        pendingRebuildCancellationEffects current
+            | None ->
+                let current = model.LiveTesting
+                let cycle' = current |> Features.LiveTesting.LiveTestCycleState.onKeystroke content filePath now
+                match obj.ReferenceEquals(cycle', current) with
+                | true -> model, []
+                | false -> { model with LiveTesting = cycle' }, pendingRebuildCancellationEffects current
+      // A buffer other than the one a real build is confirming: that confirmation is about text no longer being
+      // edited, so it stops here instead of spending a build on it.
+      let editedModel, editedEffects = afterKeystroke
+      let confirmationEffects, editedModel' =
+        confirmContentEdited targetSession (Features.LiveTesting.AnalysisIdentity.ofContent content) editedModel
+      editedModel', editedEffects @ confirmationEffects
 
     | SageFsMsg.FileContentChanged (filePath, content) ->
       let isActive = model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
@@ -2012,7 +2236,22 @@ module SageFsUpdate =
               let effects, cycle' =
                 cycle
                 |> Features.LiveTesting.LiveTestCycleState.handleFcsResult result
-              cycle', effects
+              // While paused, the tests an edit reaches are held back: they go stale, so resuming knows what to run.
+              let heldBack =
+                match cycle'.TestState.Pause, cycle'.TestState.LastDecision with
+                | Features.LiveTesting.LivePause.Paused, Some decision ->
+                  let names = Set.ofArray decision.Explanation.DeferredTests
+                  cycle'.TestState.DiscoveredTests
+                  |> Array.filter (fun test -> names.Contains test.FullName)
+                  |> Array.map (fun test -> test.Id)
+                  |> Set.ofArray
+                | _ -> Set.empty
+              match Set.isEmpty heldBack with
+              | true -> cycle', effects
+              | false ->
+                refreshStatusesForChangedIds cycle' heldBack (fun state ->
+                  { state with AffectedTests = Set.union state.AffectedTests heldBack }),
+                effects
           | false ->
               cycle, []) model
       match maybeEffects with

@@ -251,6 +251,15 @@ type TestScope =
   /// Every test except those matching one of these runs automatically.
   | AllExcept of patterns: string list
 
+/// Why a request for a scope was refused.
+[<RequireQualifiedAccess>]
+type ScopeRefusal =
+  /// An include set with no pattern in it would mean "nothing runs" by accident.
+  | IncludeSetEmpty
+  /// An exclude set with no pattern in it would mean "everything runs" by accident.
+  | ExcludeSetEmpty
+  | UnknownMode of mode: string
+
 // --- Assembly Info ---
 
 type AssemblyInfo = {
@@ -614,11 +623,16 @@ module InstrumentationMap =
     | 1 -> maps.[0]
     | _ ->
       let allSlots = maps |> Array.collect (fun m -> m.Slots)
+      // Each map's slot indexes start where the maps before it ended, exactly as the merged hits do.
+      let firstSlotOf = maps |> Array.scan (fun next m -> next + m.Slots.Length) 0
       { Slots = allSlots
         TotalProbes = allSlots.Length
         TrackerTypeName = "__SageFsCoverage"
         HitsFieldName = "Hits"
-        Source = MapSource.none }
+        Source =
+          { StartupSlots =
+              maps |> Array.mapi (fun i m -> m.Source.StartupSlots |> Array.map (fun slot -> slot + firstSlotOf.[i])) |> Array.concat
+            Baselines = maps |> Array.collect (fun m -> m.Source.Baselines) |> Array.distinctBy (fun b -> b.File) } }
 
 /// Pure functions for computing line-level coverage from IL probe data.
 module ILCoverage =
@@ -667,18 +681,41 @@ type ChangedLines =
 /// A stable hash of one source line. Stable across processes: the worker hashes the compiled
 /// text, the daemon hashes the buffer, and the two have to agree.
 module LineHash =
+  [<Literal>]
+  let private offsetBasis = 0xcbf29ce484222325UL
+
+  [<Literal>]
+  let private prime = 0x100000001b3UL
+
   /// FNV-1a over the UTF-16 code units of the line, without its line ending.
   let ofLine (line: string) : int64 =
-    failwith "not implemented: LineHash.ofLine"
+    let mutable hash = offsetBasis
+    for unit in line do
+      hash <- (hash ^^^ uint64 unit) * prime
+    int64 hash
 
   /// One hash per line of `text`, split on '\n' with a trailing '\r' ignored.
   let ofText (text: string) : int64 array =
-    failwith "not implemented: LineHash.ofText"
+    text.Split('\n') |> Array.map (fun line -> ofLine (line.TrimEnd '\r'))
 
 module LineEdit =
   /// Compare an edited buffer with the hashes of the compiled text.
   let between (baseline: int64 array) (edited: string) : ChangedLines =
-    failwith "not implemented: LineEdit.between"
+    match baseline.Length with
+    | 0 -> ChangedLines.NoBaseline
+    | _ ->
+      let now = LineHash.ofText edited
+      match now.Length = baseline.Length with
+      | false -> ChangedLines.Shifted
+      | true ->
+        ChangedLines.InPlace (
+          Set.ofSeq (
+            seq {
+              for i in 0 .. now.Length - 1 do
+                match now.[i] = baseline.[i] with
+                | true -> ()
+                | false -> yield i + 1
+            }))
 
 /// Why recorded coverage could not narrow an edit to the tests that run the changed lines.
 [<RequireQualifiedAccess>]
@@ -884,7 +921,38 @@ module CoverageBitmap =
     (bitmaps: Map<TestId, CoverageBitmap>)
     (discovered: TestId array)
     : LineNarrowing =
-    failwith "not implemented: CoverageBitmap.narrowByLines"
+    match lines with
+    | ChangedLines.Shifted -> LineNarrowing.Refused LineNarrowingRefusal.EditShifted
+    | ChangedLines.NoBaseline -> LineNarrowing.Refused LineNarrowingRefusal.NoBaseline
+    | ChangedLines.InPlace changed when Set.isEmpty changed -> LineNarrowing.Refused LineNarrowingRefusal.NothingChanged
+    | ChangedLines.InPlace changed ->
+      let merged = InstrumentationMap.merge maps
+      // A bitmap of another size was recorded against another instrumentation: not evidence about this one.
+      let usable = bitmaps |> Map.filter (fun _ bm -> merged.TotalProbes > 0 && bm.Count = merged.TotalProbes)
+      match Map.isEmpty usable with
+      | true -> LineNarrowing.Refused LineNarrowingRefusal.NoBitmaps
+      | false ->
+        let startup = Set.ofArray merged.Source.StartupSlots
+        let slotsOfLine (line: int) =
+          [ for i in 0 .. merged.Slots.Length - 1 do
+              let sp = merged.Slots.[i]
+              match sp.File = filePath && sp.Line <= line && line <= max sp.Line sp.EndLine with
+              | true -> yield i
+              | false -> () ]
+        let perLine = changed |> Set.toList |> List.map (fun line -> line, slotsOfLine line)
+        match perLine |> List.tryFind (fun (_, slots) -> List.isEmpty slots) with
+        | Some (line, _) -> LineNarrowing.Refused (LineNarrowingRefusal.ChangedLineHasNoProbe line)
+        | None ->
+          match perLine |> List.tryFind (fun (_, slots) -> slots |> List.exists startup.Contains) with
+          | Some (line, _) -> LineNarrowing.Refused (LineNarrowingRefusal.ChangedLineRunsAtStartup line)
+          | None ->
+            let probes = perLine |> List.collect snd
+            discovered
+            |> Array.filter (fun id ->
+              match Map.tryFind id usable with
+              | None -> true
+              | Some bm -> probes |> List.exists (fun slot -> isSet slot bm))
+            |> LineNarrowing.NarrowedTo
 
   /// The tests whose own recorded coverage reaches `line` of `filePath`, by line, for every line
   /// that has a sequence point some test hit. Tests are in discovery order.
@@ -894,7 +962,34 @@ module CoverageBitmap =
     (bitmaps: Map<TestId, CoverageBitmap>)
     (discovered: TestId array)
     : Map<int, TestId array> =
-    failwith "not implemented: CoverageBitmap.coveringTestsByLine"
+    let merged = InstrumentationMap.merge maps
+    match merged.TotalProbes with
+    | 0 -> Map.empty
+    | total ->
+      let fileSlots =
+        [| for i in 0 .. merged.Slots.Length - 1 do
+             match merged.Slots.[i].File = filePath with
+             | true -> yield i
+             | false -> () |]
+      let testsOfLine = System.Collections.Generic.Dictionary<int, ResizeArray<TestId>>()
+      for id in discovered do
+        match Map.tryFind id bitmaps with
+        | Some bm when bm.Count = total ->
+          for slot in fileSlots do
+            match isSet slot bm with
+            | false -> ()
+            | true ->
+              let sp = merged.Slots.[slot]
+              for line in sp.Line .. max sp.Line sp.EndLine do
+                match testsOfLine.TryGetValue line with
+                | true, tests ->
+                  // `discovered` is walked once, in order, so a test is only ever the last one in a line's list.
+                  match tests.Count > 0 && tests.[tests.Count - 1] = id with
+                  | true -> ()
+                  | false -> tests.Add id
+                | false, _ -> testsOfLine.[line] <- ResizeArray [ id ]
+        | _ -> ()
+      testsOfLine |> Seq.map (fun kv -> kv.Key, kv.Value.ToArray()) |> Map.ofSeq
 
   /// Merge all test bitmaps via OR, compute LineCoverage per line for a file.
   let computeLineCoverageForFile
@@ -2531,7 +2626,7 @@ module LiveTesting =
           | None -> RunPolicy.OnEveryChange
         Status = status
         PreviousStatus = prevStatus
-        Provenance = ResultProvenance.Compiled })
+        Provenance = Map.tryFind test.Id state.Provenances |> Option.defaultValue ResultProvenance.Compiled })
 
   /// Merge incoming discovered tests with existing ones, keyed by TestId.
   /// Incoming tests take priority for collisions (e.g., FSI redefining a test).
@@ -2662,7 +2757,8 @@ module LiveTesting =
             { entry with
                 CurrentPolicy = policy
                 Status = computeStatusForTest updated entry.Category entry.TestId
-                PreviousStatus = entry.Status }
+                PreviousStatus = entry.Status
+                Provenance = Map.tryFind entry.TestId updated.Provenances |> Option.defaultValue ResultProvenance.Compiled }
           statusEntries[index] <- updatedEntry
           changedEntries.Add updatedEntry
         | None -> ()
@@ -2705,7 +2801,8 @@ module LiveTesting =
             { entry with
                 CurrentPolicy = policy
                 Status = computeStatusForTest updated entry.Category entry.TestId
-                PreviousStatus = entry.Status }
+                PreviousStatus = entry.Status
+                Provenance = Map.tryFind entry.TestId updated.Provenances |> Option.defaultValue ResultProvenance.Compiled }
           index <- Map.add testId updatedEntry index
           changedEntries.Add updatedEntry
         | None -> ()
@@ -3186,10 +3283,52 @@ module TestProviderDescriptions =
 
 // --- Scope ---
 
+module LivePause =
+  let toWireValue (pause: LivePause) : string =
+    match pause with
+    | LivePause.Live -> "live"
+    | LivePause.Paused -> "paused"
+
 module TestScope =
+  let private matchesAny (patterns: string list) (test: TestCase) : bool =
+    patterns
+    |> List.exists (fun pattern ->
+      test.FullName.Contains(pattern, StringComparison.Ordinal)
+      || test.DisplayName.Contains(pattern, StringComparison.Ordinal))
+
   /// Whether an automatic run may touch this test.
   let allows (scope: TestScope) (test: TestCase) : bool =
-    true
+    match scope with
+    | TestScope.EveryTest -> true
+    | TestScope.OnlyMatching patterns -> matchesAny patterns test
+    | TestScope.AllExcept patterns -> not (matchesAny patterns test)
+
+  /// The scope as the status endpoint says it: a mode word and the patterns.
+  let toWire (scope: TestScope) =
+    match scope with
+    | TestScope.EveryTest -> {| Mode = "every"; Patterns = Array.empty<string> |}
+    | TestScope.OnlyMatching patterns -> {| Mode = "only"; Patterns = Array.ofList patterns |}
+    | TestScope.AllExcept patterns -> {| Mode = "except"; Patterns = Array.ofList patterns |}
+
+  /// A scope from a request: the mode word and the patterns. A mode that is not one of the three, and an
+  /// include or exclude set with no pattern in it (which would mean "nothing" or "everything" by accident),
+  /// are refused with why.
+  let tryParse (mode: string) (patterns: string list) : Result<TestScope, ScopeRefusal> =
+    let nonBlank = patterns |> List.filter (fun p -> not (String.IsNullOrWhiteSpace p))
+    match mode.ToLowerInvariant(), nonBlank with
+    | "every", _ -> Ok TestScope.EveryTest
+    | "only", [] -> Result.Error ScopeRefusal.IncludeSetEmpty
+    | "only", some -> Ok (TestScope.OnlyMatching some)
+    | "except", [] -> Result.Error ScopeRefusal.ExcludeSetEmpty
+    | "except", some -> Ok (TestScope.AllExcept some)
+    | other, _ -> Result.Error (ScopeRefusal.UnknownMode other)
+
+  /// What the refusal says to the caller.
+  let describeRefusal (refusal: ScopeRefusal) : string =
+    match refusal with
+    | ScopeRefusal.IncludeSetEmpty -> "an include set needs at least one pattern; use mode \"every\" to clear the scope"
+    | ScopeRefusal.ExcludeSetEmpty -> "an exclude set needs at least one pattern; use mode \"every\" to clear the scope"
+    | ScopeRefusal.UnknownMode other -> sprintf "unknown scope mode \"%s\": use \"every\", \"only\" or \"except\"" other
 
 // --- Policy Filter ---
 
@@ -3219,7 +3358,13 @@ module PolicyFilter =
 
   /// What resuming runs: the tests that went stale while paused, that the scope allows.
   let resumeSelection (state: LiveTestState) : TestCase array =
-    [||]
+    state.DiscoveredTests
+    |> Array.filter (fun test ->
+      state.AffectedTests.Contains test.Id
+      && TestScope.allows state.Scope test
+      && shouldRun
+           (Map.tryFind test.Category state.RunPolicies |> Option.defaultValue RunPolicy.OnEveryChange)
+           RunTrigger.FileSave)
 
 // --- Staleness Tracking ---
 

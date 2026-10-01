@@ -1,6 +1,7 @@
 namespace SageFs
 
 open System
+open System.Threading
 open SageFs.WorkerProtocol
 open SageFs.WarmUp
 open SageFs.Features.Diagnostics
@@ -163,6 +164,112 @@ module SageFsEffectHandler =
       EvalCount = 0
       UpSince = info.CreatedAt
       WorkingDirectory = info.WorkingDirectory }
+
+  // ── Confirming an evaluated run against a real build ────────────────────────────────────────────────
+  // The quiet window and the builds in flight are per session and private to this handler: nothing else
+  // reads them. Both are cancelled by replacing or abandoning them, never left to run into a newer state.
+
+  let private quietWindows = System.Collections.Concurrent.ConcurrentDictionary<string, CancellationTokenSource>()
+  let private confirmationBuilds = System.Collections.Concurrent.ConcurrentDictionary<struct (string * int64), CancellationTokenSource>()
+
+  let private confirmationEvent (dispatch: SageFsMsg -> unit) (sessionId: string) (event: Features.LiveTesting.ConfirmationEvent) =
+    // The events that carry a verdict about the build are logged: a confirmation that never says anything
+    // is the failure mode, and the log is where an operator looks for why.
+    match event with
+    | Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, outcome) ->
+      Utils.Log.info "[confirm] session %s build %d answered: %A" sessionId generation outcome
+    | Features.LiveTesting.ConfirmationEvent.DeadlineReached generation ->
+      Utils.Log.warn "[confirm] session %s build %d reached its deadline" sessionId generation
+    | _ -> ()
+    dispatch (SageFsMsg.Event (TuiEvent.BuildConfirmation (sessionId, event)))
+
+  /// (Re)start the session's quiet window: when it runs out without being restarted, the editing has gone quiet.
+  let private startQuietWindow (dispatch: SageFsMsg -> unit) (sessionId: string) =
+    let fresh = new CancellationTokenSource()
+    quietWindows.AddOrUpdate(
+      sessionId,
+      fresh,
+      fun _ older ->
+        older.Cancel()
+        older.Dispose()
+        fresh)
+    |> ignore
+    Async.Start(
+      async {
+        do! Async.Sleep Timeouts.liveTestConfirmationQuiet
+        confirmationEvent dispatch sessionId Features.LiveTesting.ConfirmationEvent.QuietElapsed
+      },
+      fresh.Token)
+
+  /// Stop a build in flight, if it still is: its answer is no longer wanted.
+  let private abandonConfirmationBuild (sessionId: string) (generation: int64) =
+    match confirmationBuilds.TryRemove(struct (sessionId, generation)) with
+    | true, source ->
+      source.Cancel()
+      source.Dispose()
+    | false, _ -> ()
+
+  /// Build the project for real, through the same rebuild the session already has, and say how it went. The
+  /// text must be on disk: a build cannot confirm what only the editor has, so when the file differs from the
+  /// evaluated content the confirmation stops (the rows stay evaluated) and says nothing it cannot back.
+  let private startConfirmationBuild
+    (deps: EffectDeps)
+    (dispatch: SageFsMsg -> unit)
+    (sessionId: string)
+    (generation: int64)
+    (confirmation: Features.LiveTesting.Confirmation) =
+    let source = new CancellationTokenSource()
+    Utils.Log.info "[confirm] session %s build %d starting" sessionId generation
+    confirmationBuilds.[struct (sessionId, generation)] <- source
+    let token = source.Token
+    let send = confirmationEvent dispatch sessionId
+    // The whole confirmation (the build, then the run against it) has one deadline. An answer that came in
+    // time makes this a no-op: the machine ignores a deadline for a generation that is no longer in flight.
+    Async.Start(
+      async {
+        do! Async.Sleep Timeouts.liveTestConfirmationDeadline
+        send (Features.LiveTesting.ConfirmationEvent.DeadlineReached generation)
+        abandonConfirmationBuild sessionId generation
+      },
+      token)
+    Async.Start(
+      async {
+        try
+          let onDisk =
+            match confirmation.File with
+            | "" -> ValueNone
+            | file ->
+              try ValueSome (Features.LiveTesting.AnalysisIdentity.ofContent (System.IO.File.ReadAllText file))
+              with _ -> ValueNone
+          match onDisk with
+          | ValueSome disk when disk <> confirmation.Content ->
+            send (Features.LiveTesting.ConfirmationEvent.ContentEdited disk)
+          | _ ->
+            match SessionId.validate sessionId with
+            | Error message -> send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild message))
+            | Ok sid ->
+              match! deps.RestartSession sid (SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker) with
+              | Error err ->
+                send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild (SageFsError.describe err)))
+              | Ok _ ->
+                match! RebuildReadyWait.await (deps.AwaitReady sid) deps.ReadyDeadline token with
+                | RebuildReadyWait.Outcome.Ready ->
+                  match deps.GetStreamingTestProxy sid with
+                  | Some _ -> send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.Built))
+                  | None ->
+                    send (
+                      Features.LiveTesting.ConfirmationEvent.BuildFinished (
+                        generation, Features.LiveTesting.BuildAnswer.DidNotBuild "the build finished but the session has no test proxy to run the tests against"))
+                | RebuildReadyWait.Outcome.Failed err ->
+                  send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild (SageFsError.describe err)))
+                | RebuildReadyWait.Outcome.DeadlineReached ->
+                  send (Features.LiveTesting.ConfirmationEvent.DeadlineReached generation)
+                | RebuildReadyWait.Outcome.Cancelled -> ()
+        with
+        | :? OperationCanceledException -> ()
+        | ex -> send (Features.LiveTesting.ConfirmationEvent.BuildFinished (generation, Features.LiveTesting.BuildAnswer.DidNotBuild ex.Message))
+      },
+      token)
 
   /// The main effect handler — plug into ElmProgram.ExecuteEffect
   let execute
@@ -504,6 +611,13 @@ module SageFsEffectHandler =
                 match Array.isEmpty toRun with
                 | true -> ()
                 | false ->
+                  // The run that follows ran against EVALUATED code: its results are marked so, and a real
+                  // build confirms them once the editing has gone quiet.
+                  dispatch (SageFsMsg.Event (
+                    TuiEvent.EvaluatedRunBegan (
+                      SessionId.value sid,
+                      Features.LiveTesting.AnalysisIdentity.ofContent req.Content,
+                      toRun |> Array.map (fun tc -> tc.Id))))
                   dispatch (SageFsMsg.Event (
                     TuiEvent.RunTestsRequested (Some (SessionId.value sid), toRun, None)))
               | Choice1Of2 _ -> ()
@@ -707,23 +821,35 @@ module SageFsEffectHandler =
                     let onResult (result: Features.LiveTesting.TestRunResult) =
                       receivedIds.Add(result.TestId) |> ignore
                       resultFlusher.Add(result)
-                    let onCoverage (_reportedFor: Features.LiveTesting.TestId) (hits: bool array) =
-                      let mergedMap = Features.LiveTesting.InstrumentationMap.merge instrumentationMaps
+                    // Each reading belongs to the one test the worker took it for, and is recorded against that
+                    // test alone. The line-coverage view gets the union of the run once, when the run ends: one
+                    // reading per test would replace it with the last test's alone.
+                    let mergedMap = Features.LiveTesting.InstrumentationMap.merge instrumentationMaps
+                    let unionOfRun = Array.zeroCreate<bool> mergedMap.TotalProbes
+                    let onCoverage (reportedFor: Features.LiveTesting.TestId) (hits: bool array) =
                       match mergedMap.TotalProbes > 0 && hits.Length = mergedMap.TotalProbes with
                       | true ->
-                        let coverage = Features.LiveTesting.InstrumentationMap.toCoverageState hits mergedMap
-                        dispatch (SageFsMsg.Event (TuiEvent.CoverageUpdated coverage))
+                        for probe in 0 .. hits.Length - 1 do
+                          match hits.[probe] with
+                          | true -> unionOfRun.[probe] <- true
+                          | false -> ()
                         let bitmap = Features.LiveTesting.CoverageBitmap.ofBoolArray hits
-                        dispatch (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (targetSession, testIds, bitmap)))
-                        match activity <> null with
-                        | true ->
-                          activity.SetTag("coverage.total_probes", hits.Length) |> ignore
-                          activity.SetTag("coverage.hit_probes", Features.LiveTesting.CoverageBitmap.popCount bitmap) |> ignore
-                          activity.SetTag("coverage.tests_in_batch", testIds.Length) |> ignore
-                        | false -> ()
+                        dispatch (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (targetSession, [| reportedFor |], bitmap)))
                       | false -> ()
                     let parallelism = max 4 (Environment.ProcessorCount / 2)
                     let! outcome = streamProxy tests parallelism onResult onCoverage ct // ct explicit, not ambient — see HttpWorkerClient.fs's safeAwait
+                    // A run that recorded nothing (its tests ran against evaluated code, which the host's coverage
+                    // read skips) leaves the last line-coverage view alone instead of blanking it.
+                    match Array.contains true unionOfRun with
+                    | true ->
+                      dispatch (SageFsMsg.Event (TuiEvent.CoverageUpdated (Features.LiveTesting.InstrumentationMap.toCoverageState unionOfRun mergedMap)))
+                      match activity <> null with
+                      | true ->
+                        activity.SetTag("coverage.total_probes", unionOfRun.Length) |> ignore
+                        activity.SetTag("coverage.hit_probes", unionOfRun |> Array.filter id |> Array.length) |> ignore
+                        activity.SetTag("coverage.tests_in_batch", testIds.Length) |> ignore
+                      | false -> ()
+                    | false -> ()
                     // Whichever way the stream ended — a clean end with gaps, a
                     // stall, a cancellation — every requested test that never
                     // reported gets a truthful NoResult saying why, so none is
@@ -828,5 +954,14 @@ module SageFsEffectHandler =
       // For now, this is a placeholder that satisfies exhaustive pattern matching
       async { () }
 
-    | SageFsEffect.Confirm (_sessionId, _effect) ->
-      async { () }
+    | SageFsEffect.Confirm (sessionId, confirmation) ->
+      async {
+        match confirmation with
+        | Features.LiveTesting.ConfirmationEffect.StartQuietWindow -> startQuietWindow dispatch sessionId
+        | Features.LiveTesting.ConfirmationEffect.StartBuild (generation, evaluated) ->
+          startConfirmationBuild deps dispatch sessionId generation evaluated
+        | Features.LiveTesting.ConfirmationEffect.AbandonBuild generation -> abandonConfirmationBuild sessionId generation
+        // The run against the build is an ordinary run effect the reducer emits beside this one.
+        | Features.LiveTesting.ConfirmationEffect.RunAgainstBuild _
+        | Features.LiveTesting.ConfirmationEffect.Mark _ -> ()
+      }

@@ -129,15 +129,15 @@ let buildConfirmationSimTests =
     ]
 
     testList "the twins reproduce the bugs the invariants exist for" [
-      testCase "REPRODUCED — the applies-stale-answers twin puts an older build's verdict on newer rows" <| fun _ ->
+      testCase "REPRODUCED: the applies-stale-answers twin acts on an older build's answer for a newer confirmation" <| fun _ ->
         let t = runAppliesStaleAnswers BuildConfirmationGenerators.supersededWhileBuilding
-        violations t |> List.map fst |> Expect.contains "no-stale-confirmation must fire" "no-stale-confirmation"
+        violations t |> List.map fst |> Expect.contains "answers-need-their-generation must fire" "answers-need-their-generation"
 
-      testCase "REPRODUCED — the builds-without-waiting twin spends a build on every pause in a burst" <| fun _ ->
+      testCase "REPRODUCED: the builds-without-waiting twin spends a build on every pause in a burst" <| fun _ ->
         let t = runBuildsWithoutWaiting BuildConfirmationGenerators.burst
         violations t |> List.map fst |> Expect.contains "bursts-coalesce must fire" "bursts-coalesce"
 
-      testCase "REPRODUCED — the swallows-failures twin says nothing when the build fails" <| fun _ ->
+      testCase "REPRODUCED: the swallows-failures twin says nothing when the build fails" <| fun _ ->
         let t = runSwallowsFailures BuildConfirmationGenerators.buildFails
         violations t |> List.map fst |> Expect.contains "failure-is-loud must fire" "failure-is-loud"
 

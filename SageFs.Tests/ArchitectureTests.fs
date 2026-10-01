@@ -1124,7 +1124,10 @@ let fileSizeBudgets =
       // a crashed host, refuses with the crash instead of the generic wait-for-Ready advice (a reset stays
       // admitted), and the eval formatter does not guess advice for the typed crash. Deliberate, reviewed;
       // ratchet back DOWN when this file is split.
-      "SageFs/Mcp.fs", 4229
+      // 4229 -> 4129: the live-testing status payload and the failure-location parser moved to
+      // LiveTestStatusView.fs, which paid for the pause/scope routes' call sites and left it below the
+      // 4229 it started at. Exact size.
+      "SageFs/Mcp.fs", 4129
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
@@ -1175,7 +1178,11 @@ let fileSizeBudgets =
       // 4353 -> 3371: the daemon-only live-testing cycle (what a type-check decides, the debounce,
       // the effects and the per-session cycle state) moved to LiveTestingCycle.fs, which the isolated
       // FSI host never compiles. Exact post-split size.
-      "SageFs.Core/Features/LiveTestingTypes.fs", 3371
+      // 3371 -> 3708: the live-testing parity work (per-test coverage and line narrowing, result
+      // provenance, pause and scope). Deliberate and reviewed; still below the 4353 this file stood at
+      // before the cycle moved out. The confirmation machine went to its own file (BuildConfirmation.fs)
+      // rather than here. Ratchet back DOWN when this file is split; never bump to paper over drift.
+      "SageFs.Core/Features/LiveTestingTypes.fs", 3708
       // 2900 -> 2950: a one-time bump for the roast UX-6 keystone (per-session
       // live-testing enable/disable — EnableLiveTestingForSession /
       // DisableLiveTestingForSession, resolveOrCreateLiveTestingTarget) — a
@@ -1206,7 +1213,10 @@ let fileSizeBudgets =
       // 3078 -> 3079: the HostCrashed arm of the session display mapping.
       // 3079 -> 2270: the effect handler (EffectDeps and everything that interprets a SageFsEffect)
       // moved to SageFsEffectHandler.fs. Exact post-split size.
-      "SageFs/SageFsApp.fs", 2270
+      // 2270 -> 2509: the reducer cases and helpers for result provenance, build confirmation, pause and
+      // scope. Deliberate and reviewed; still below the 3079 this file stood at before the effect handler
+      // moved out. Ratchet back DOWN when this file is split; never bump to paper over drift.
+      "SageFs/SageFsApp.fs", 2509
       "SageFs.Core/AppState.fs", 2000
       // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
       // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,

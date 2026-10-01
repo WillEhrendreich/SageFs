@@ -52,10 +52,11 @@ module BuildConfirmationGenerators =
     { Seed = 304
       Ops = [ Op.Evaluated 0; Op.Quiet; Op.Edited 1; Op.BuildDone(0, BuildEnds.Builds) ] }
 
-  /// A newer evaluated run arrives while the build runs: the older build's answer must not land on the newer rows.
+  /// A newer evaluated run arrives while the build runs, and a build of it starts: the older build then answers.
+  /// Its answer must not land on the newer rows.
   let supersededWhileBuilding : Scenario =
     { Seed = 305
-      Ops = [ Op.Evaluated 0; Op.Quiet; Op.Evaluated 1; Op.BuildDone(0, BuildEnds.Builds); Op.RunDone(0, Agreement.Differs) ] }
+      Ops = [ Op.Evaluated 0; Op.Quiet; Op.Evaluated 1; Op.Quiet; Op.BuildDone(0, BuildEnds.Builds); Op.RunDone(0, Agreement.Differs) ] }
 
   /// The build never answers.
   let hungBuild : Scenario =

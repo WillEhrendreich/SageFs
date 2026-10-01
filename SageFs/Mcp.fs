@@ -2397,37 +2397,6 @@ module McpTools =
 
   // ── Live Testing MCP Tools ──────────────────────────────────
 
-  type FailureLocation = {
-    FilePath: string
-    Line: int
-  }
-
-  module FailureLocationParser =
-    let private linePattern =
-      System.Text.RegularExpressions.Regex(
-        @"in\s+(.+?):line\s+(\d+)",
-        System.Text.RegularExpressions.RegexOptions.Compiled)
-
-    let private frameworkPrefixes = [| "Expecto"; "FSharp.Core"; "System."; "Microsoft." |]
-
-    /// Parse the first user-code location from a .NET stack trace.
-    let tryParse (stackTrace: string) : FailureLocation option =
-      match System.String.IsNullOrWhiteSpace stackTrace with
-      | true -> None
-      | false ->
-        stackTrace.Split([| '\n'; '\r' |], System.StringSplitOptions.RemoveEmptyEntries)
-        |> Array.tryPick (fun line ->
-          let m = linePattern.Match(line)
-          match m.Success with
-          | true ->
-            let filePath = m.Groups.[1].Value.Trim()
-            let isFramework =
-              frameworkPrefixes |> Array.exists (fun prefix -> filePath.Contains(prefix))
-            match isFramework with
-            | true -> None
-            | false -> Some { FilePath = filePath; Line = int m.Groups.[2].Value }
-          | false -> None)
-
   let rec getLiveTestStatus (ctx: McpContext) (agentName: string) (fileFilter: string option) : Task<string> =
     getLiveTestStatusForSession ctx agentName fileFilter None
 
@@ -2464,76 +2433,7 @@ module McpTools =
               ActiveSession.sessionId model.Sessions.ActiveSessionId
               |> Option.map WorkerProtocol.SessionId.value
               |> Option.defaultValue ""
-        let state = (SageFsModel.cycleForSession activeId model).TestState
-        let discoveryState = Features.LiveTesting.LiveTestState.discoveryState state
-        let discoveryRequiresEval = Features.LiveTesting.LiveTestState.requiresPrimingEval state
-        let sessionEntries =
-          Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state
-        let summary =
-          Features.LiveTesting.TestSummary.fromStatuses
-            state.Activation (sessionEntries |> Array.map (fun e -> e.Status))
-        let tests =
-          match fileFilter with
-          | Some f ->
-            let normalizedFilter = f.Replace('/', System.IO.Path.DirectorySeparatorChar).Replace('\\', System.IO.Path.DirectorySeparatorChar)
-            sessionEntries |> Array.filter (fun e ->
-              match e.Origin with
-              | Features.LiveTesting.TestOrigin.SourceMapped (file, _) ->
-                file = normalizedFilter
-                || file.EndsWith(normalizedFilter, System.StringComparison.OrdinalIgnoreCase)
-                || file.EndsWith(System.IO.Path.DirectorySeparatorChar.ToString() + normalizedFilter, System.StringComparison.OrdinalIgnoreCase)
-              | Features.LiveTesting.TestOrigin.ReflectionOnly -> false)
-            |> Some
-          | None -> None
-        let resp = System.Collections.Generic.Dictionary<string, obj>()
-        resp["Enabled"] <- box (state.Activation = Features.LiveTesting.LiveTestingActivation.Active)
-        resp["Summary"] <- box summary
-        resp["DiscoveryState"] <- box (Features.LiveTesting.LiveTestDiscoveryState.toWireValue discoveryState)
-        resp["DiscoveryHint"] <- box (Features.LiveTesting.LiveTestState.discoveryHint state)
-        resp["DiscoveryRequiresEval"] <- box discoveryRequiresEval
-        match state.LastDecision with
-        | Some decision -> resp["LastDecision"] <- box (Features.LiveTesting.LiveTestingDecision.toWireModel decision)
-        | None -> ()
-        match state.LastDiscoveryTime > System.DateTimeOffset.MinValue with
-        | true -> resp["LastDiscoveryTime"] <- box state.LastDiscoveryTime
-        | false -> ()
-        match tests with
-        | Some t -> resp["Tests"] <- box t
-        | None -> ()
-        let bitmapCount = Map.count state.TestCoverageBitmaps
-        match bitmapCount > 0 with
-        | true ->
-          let avgProbes =
-            state.TestCoverageBitmaps
-            |> Map.toSeq
-            |> Seq.map (fun (_, bm) -> Features.LiveTesting.CoverageBitmap.popCount bm)
-            |> Seq.averageBy float
-          resp["CoverageBitmapStats"] <- box {| TestsWithCoverage = bitmapCount; AvgHitProbes = avgProbes |}
-        | false -> ()
-        let failedEntries = match tests with | Some t -> t | None -> sessionEntries
-        let failedTests =
-          failedEntries
-          |> Array.choose (fun e ->
-            match e.Status with
-            | Features.LiveTesting.TestRunStatus.Failed (failure, duration) ->
-              let msg =
-                match failure with
-                | Features.LiveTesting.TestFailure.AssertionFailed m -> m
-                | Features.LiveTesting.TestFailure.ExceptionThrown (m, _) -> m
-                | Features.LiveTesting.TestFailure.TimedOut after -> sprintf "Timed out after %dms" (int after.TotalMilliseconds)
-              let location =
-                match failure with
-                | Features.LiveTesting.TestFailure.ExceptionThrown (_, st) ->
-                  FailureLocationParser.tryParse st
-                  |> Option.map (fun fl -> {| File = fl.FilePath; Line = fl.Line |})
-                | _ -> None
-              Some {| Name = e.DisplayName; Message = msg; DurationMs = int duration.TotalMilliseconds; Location = location |}
-            | _ -> None)
-          |> Array.truncate 20
-        match failedTests.Length > 0 with
-        | true -> resp["FailedTests"] <- box failedTests
-        | false -> ()
-        return Json.serialize Json.standard resp
+        return LiveTestStatusView.render activeId (SageFsModel.cycleForSession activeId model).TestState fileFilter
     }
 
   let rec setLiveTesting (ctx: McpContext) (enabled: bool) : Task<string> =

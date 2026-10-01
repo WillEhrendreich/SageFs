@@ -112,7 +112,7 @@ let confirmationFlowTests =
       let generation =
         confirmEffects (snd state)
         |> List.pick (function ConfirmationEffect.StartBuild (g, _) -> Some g | _ -> None)
-      let built = state |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, Ok ())))
+      let built = state |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, BuildAnswer.Built)))
       confirmEffects (snd built)
       |> List.exists (function ConfirmationEffect.RunAgainstBuild (g, tests) -> g = generation && List.sort tests = List.sort (List.ofArray ids) | _ -> false)
       |> Expect.isTrue "every evaluated test is run against the build"
@@ -129,7 +129,7 @@ let confirmationFlowTests =
       let builtResults = [| passed testA; failed testB; passed testC |]
       let after, _ =
         state
-        |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, Ok ())))
+        |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, BuildAnswer.Built)))
         |> runs sid builtResults
       match provenanceOf sid testB after with
       | ResultProvenance.BuildDisagrees (BuildDisagreement.ResultDiffers (evaluated, built)) ->
@@ -143,7 +143,7 @@ let confirmationFlowTests =
       let generation =
         confirmEffects (snd state)
         |> List.pick (function ConfirmationEffect.StartBuild (g, _) -> Some g | _ -> None)
-      let after, effects = state |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, Error "FS0039: The value 'main' is not defined")))
+      let after, effects = state |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, BuildAnswer.DidNotBuild "FS0039: The value 'main' is not defined")))
       for tc in everyTest do
         match provenanceOf sid tc after with
         | ResultProvenance.BuildDisagrees (BuildDisagreement.BuildFailed message) ->
@@ -164,7 +164,7 @@ let confirmationFlowTests =
       confirmEffects (snd abandoned)
       |> List.exists (function ConfirmationEffect.AbandonBuild g -> g = generation | _ -> false)
       |> Expect.isTrue "the build of older text is abandoned"
-      let late, _ = abandoned |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, Error "too late to matter")))
+      let late, _ = abandoned |> send (TuiEvent.BuildConfirmation (sid, ConfirmationEvent.BuildFinished (generation, BuildAnswer.DidNotBuild "too late to matter")))
       for tc in everyTest do
         provenanceOf sid tc late |> Expect.equal (sprintf "%s is untouched by an answer about older text" tc.DisplayName) ResultProvenance.Evaluated
   ]

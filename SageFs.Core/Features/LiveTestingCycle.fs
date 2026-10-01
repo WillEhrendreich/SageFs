@@ -131,9 +131,9 @@ module TestCycleEffects =
       // are evaluated, not compiled: no floor.
       let symbolsChanged = not (List.isEmpty changedSymbols)
       let shouldFallback = Array.isEmpty affected && isCompiledFile
-      let effectiveAffected,
-          precision,
-          reason =
+      let wideAffected,
+          widePrecision,
+          wideReason =
         match shouldFallback with
         | true ->
           state.DiscoveredTests |> Array.map (fun tc -> tc.Id),
@@ -167,6 +167,41 @@ module TestCycleEffects =
           affected,
           SelectionPrecision.CoverageApproximation,
           "Changed symbols found impacted tests and coverage evidence conservatively widened that set."
+      // An edit that moved no symbol name and changed only lines that recorded coverage speaks for
+      // selects the tests whose OWN coverage reaches those lines, not every test that reaches the
+      // function. Any doubt (a line number that cannot be trusted, a changed line with no probe or one
+      // that runs at startup, no coverage at all, an empty answer) keeps the wider selection above.
+      let narrowingMaps =
+        match LiveTestState.ownerSessionId state |> Option.bind (fun sid -> Map.tryFind sid instrumentationMaps) with
+        | Some maps -> maps
+        | None ->
+          match Map.toList instrumentationMaps with
+          | [ (_, maps) ] -> maps
+          | _ -> [||]
+      let lineNarrowed : TestId array voption =
+        match symbolsChanged || Array.isEmpty narrowingMaps with
+        | true -> ValueNone
+        | false ->
+          match
+            CoverageBitmap.narrowByLines
+              changedFilePath
+              symbols.Lines
+              narrowingMaps
+              state.TestCoverageBitmaps
+              (state.DiscoveredTests |> Array.map (fun tc -> tc.Id))
+          with
+          | LineNarrowing.NarrowedTo ids when not (Array.isEmpty ids) -> ValueSome ids
+          | LineNarrowing.NarrowedTo _
+          | LineNarrowing.Refused _ -> ValueNone
+      let effectiveAffected,
+          precision,
+          reason =
+        match lineNarrowed with
+        | ValueSome ids ->
+          ids,
+          SelectionPrecision.LineCoverageNarrowing,
+          "This edit changed only lines that recorded coverage speaks for, so SageFs selected the tests whose own coverage reaches those lines, plus any test with no recorded coverage."
+        | ValueNone -> wideAffected, widePrecision, wideReason
       match Array.isEmpty effectiveAffected with
       | true ->
         { Decision =
@@ -184,6 +219,13 @@ module TestCycleEffects =
         let affectedTests =
           state.DiscoveredTests
           |> Array.filter (fun tc -> affectedSet.Contains tc.Id)
+        // Automatic runs are held back by a pause and narrowed by the scope. Asking for tests by name never is.
+        let isAutomatic = trigger <> RunTrigger.ExplicitRun
+        let paused = isAutomatic && state.Pause = LivePause.Paused
+        let inScope =
+          match isAutomatic with
+          | true -> affectedTests |> Array.filter (TestScope.allows state.Scope)
+          | false -> affectedTests
         let filtered =
           let allMaps =
             instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
@@ -202,8 +244,11 @@ module TestCycleEffects =
             CoverageWeights = coverageWeights
             FlakyClassifications = flakyClassifications
           }
-          PolicyFilter.filterTests state.RunPolicies trigger affectedTests
-          |> TestPrioritization.prioritizeWithContext ctx
+          match paused with
+          | true -> [||]
+          | false ->
+            PolicyFilter.filterTests state.RunPolicies trigger inScope
+            |> TestPrioritization.prioritizeWithContext ctx
         let deferred =
           let selectedSet = filtered |> Array.map (fun tc -> tc.Id) |> Set.ofArray
           affectedTests
@@ -218,7 +263,13 @@ module TestCycleEffects =
               changedSymbols
               [||]
               deferred
-              "Affected tests were intentionally deferred by the current run policy, so ambient live testing stayed quiet on purpose."
+              (match paused, Array.isEmpty inScope with
+               | true, _ ->
+                 "Live testing is paused, so SageFs held every affected test back instead of running it. They stay stale until you resume."
+               | false, true ->
+                 "Every affected test is outside the live-testing scope, so SageFs left them alone. An explicit run still runs them."
+               | false, false ->
+                 "Affected tests were intentionally deferred by the current run policy, so ambient live testing stayed quiet on purpose.")
           | false ->
             LiveTestingDecision.fromSelection
               cause
@@ -228,6 +279,18 @@ module TestCycleEffects =
               deferred
               reason
         match Array.isEmpty filtered with
+        | true when paused ->
+          // Paused: the session's evaluated code still follows the buffer (an eval with no tests to run), so
+          // resuming judges the code as it is now. Only the runs are held back.
+          { Decision = Some decision
+            Effects =
+              [ TestCycleEffect.RunAffectedTests
+                  { Tests = [||]
+                    Trigger = trigger
+                    TreeSitterElapsed = TestCycleTiming.accumulatedTsElapsed lastTiming
+                    FcsElapsed = TestCycleTiming.accumulatedFcsElapsed lastTiming
+                    SessionId = LiveTestState.ownerSessionId state
+                    InstrumentationMaps = [||] } ] }
         | true ->
           { Decision = Some decision
             Effects = [] }
@@ -552,6 +615,8 @@ type LiveTestCycleState = {
   Compile: CompileBlock
   /// Where this session's confirmation of an evaluated run against a real build stands.
   Confirmation: ConfirmationMachine
+  /// What the run now in flight runs against, so its results are marked with where they came from.
+  RunBasis: RunBasis
 }
 
 module LiveTestCycleState =
@@ -574,6 +639,7 @@ module LiveTestCycleState =
     QueuedRebuild = None
     Compile = CompileBlock.NoCompileErrors
     Confirmation = BuildConfirmation.initial
+    RunBasis = RunBasis.Compiled
   }
 
   let liveTestingStatusBarForSession (activeSessionId: string) (state: LiveTestCycleState) : string =
@@ -885,7 +951,20 @@ module LiveTestCycleState =
       let symbols : FileSymbolDelta =
         { Changed = s1.ChangedSymbols
           InFile = refs |> List.map (fun r -> r.SymbolFullName) |> List.distinct
-          Lines = ChangedLines.NoBaseline }
+          Lines =
+            // Measured against the text the assembly was compiled from: recorded coverage is only
+            // meaningful in those lines. No buffer, or no compiled text for this file, is no baseline.
+            match s1.ActiveFile, s1.LatestContent with
+            | Some active, Some content when active = filePath ->
+              s1.InstrumentationMaps
+              |> Map.values
+              |> Seq.collect id
+              |> Seq.collect (fun map -> map.Source.Baselines)
+              |> Seq.tryFind (fun baseline -> baseline.File = filePath)
+              |> function
+                | Some baseline -> LineEdit.between baseline.Lines content
+                | None -> ChangedLines.NoBaseline
+            | _ -> ChangedLines.NoBaseline }
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
           symbols
@@ -948,7 +1027,10 @@ module LiveTestCycleState =
     (targetSession: string option)
     (s: LiveTestCycleState)
     : TestCycleEffect list =
+    // A pause holds automatic runs back: the tests stay stale and resuming runs them.
+    let pausedAutomatic = trigger <> RunTrigger.ExplicitRun && s.TestState.Pause = LivePause.Paused
     match Array.isEmpty affectedIds
+          || pausedAutomatic
           || s.TestState.Activation = LiveTestingActivation.Inactive
           || TestRunPhase.isSessionRunning targetSession s.TestState.RunPhases with
     | true -> []
@@ -957,6 +1039,7 @@ module LiveTestCycleState =
       let affectedTests =
         s.TestState.DiscoveredTests
         |> Array.filter (fun tc -> affectedIdSet.Contains tc.Id)
+        |> Array.filter (fun tc -> trigger = RunTrigger.ExplicitRun || TestScope.allows s.TestState.Scope tc)
       let filtered =
         PolicyFilter.filterTests s.TestState.RunPolicies trigger affectedTests
         |> TestPrioritization.prioritize s.TestState.LastResults

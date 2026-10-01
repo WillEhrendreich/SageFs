@@ -71,4 +71,16 @@ module SseDedupKey =
     match lt.Activation with
     | LiveTestingActivation.Active -> sb.Append('1') |> ignore
     | LiveTestingActivation.Inactive -> sb.Append('0') |> ignore
+    sb.Append('|') |> ignore
+    // What the last edit decided. An edit that selected nothing to run (held back by a pause or the scope,
+    // or no test reaches it) changes no row, so without this its decision, which is the answer to "why did
+    // nothing run", would never reach a client until some other change did.
+    match lt.LastDecision with
+    | Some decision ->
+      let explanation = decision.Explanation
+      sb.Append(LiveTestingDecision.causeToWireValue explanation.Cause).Append(',')
+        .Append(LiveTestingDecision.precisionToWireValue explanation.Precision).Append(',')
+        .Append(explanation.SelectedTests.Length).Append(',')
+        .Append(explanation.DeferredTests.Length) |> ignore
+    | None -> ()
     sb.ToString()
