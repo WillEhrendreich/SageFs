@@ -3924,8 +3924,17 @@ let run
 
   let hotReloadProxyEndpoints = createHotReloadProxyEndpoints getWorkerBaseUrl httpClient stateChangedEvent
 
+  // The pane's click and mode switch are posted by the page, to the origin it was served from: the dashboard's own port. Same
+  // handlers the MCP port mounts for editors.
+  let liveBindingsEndpoints =
+    let askFor = SageFs.Server.McpServer.liveBindingsAskFor sessionOps.GetProxy
+    let hub = Some liveBindingsHub
+    [ Dashboard.mapPostRaw "/api/sessions/{sid}/live-values/evaluate" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsEvaluate askFor hub ctx)
+      Dashboard.mapPostRaw "/api/sessions/{sid}/live-values/mode" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsSetMode askFor hub ctx)
+      Dashboard.mapGetRaw "/api/sessions/{sid}/live-values/mode" (fun _ -> ()) (fun () -> fun ctx -> SageFs.Server.McpServer.liveBindingsReadMode askFor hub ctx) ]
+
   let dashboardTask =
-    startDashboardServer log bindHost daemonOrigins dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints) cts.Token
+    startDashboardServer log bindHost daemonOrigins dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints @ liveBindingsEndpoints) cts.Token
 
   // Workers handle their own warmup, middleware, and file watching.
   // The daemon just needs to wait for the MCP and dashboard servers.
