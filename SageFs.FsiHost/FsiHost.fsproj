@@ -61,6 +61,7 @@
          watch before it detours a method. -->
     <Compile Include="EntryProbes.fs" />
     <Compile Include="ValueReads.fs" />
+    <Compile Include="GenericReload.fs" />
     <Compile Include="ValueReadTracking.fs" />
     <Compile Include="HotReloadCore.fs" />
     <Compile Include="HostAgent.fs" />

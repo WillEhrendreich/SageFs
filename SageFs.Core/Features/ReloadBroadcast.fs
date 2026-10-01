@@ -60,7 +60,8 @@ let private refusalCaseName (reason: RestartReason) =
   | RestartReason.UnverifiedCopy _ -> "UnverifiedCopy"
   | RestartReason.ClosureShapeChanged _ -> "ClosureShapeChanged"
   | RestartReason.InstanceLayoutChanged _ -> "InstanceLayoutChanged"
-  | RestartReason.GenericFunction _ -> "GenericFunction"
+  | RestartReason.GenericInstantiationsUnknown _ -> "GenericInstantiationsUnknown"
+  | RestartReason.GenericTypeMember _ -> "GenericTypeMember"
 
 let private refusalOf (reason: RestartReason) : DevReload.ReloadRefusal =
   { Case = refusalCaseName reason

@@ -144,7 +144,8 @@ type EntryHooks =
 /// Why no stub could be built for a function.
 [<RequireQualifiedAccess>]
 type StubFailure =
-  /// Only non-generic methods of a class (or static ones) are detoured, so only those get a stub.
+  /// Only static methods and methods of a class are detoured, and only once every generic parameter has a type,
+  /// so only those get a stub.
   | NotDetourable of declaration: string
   /// The runtime refused the method's signature or the IL.
   | CouldNotEmit of declaration: string * detail: string
@@ -152,14 +153,15 @@ type StubFailure =
 module StubFailure =
   let describe (failure: StubFailure) : string =
     match failure with
-    | StubFailure.NotDetourable declaration -> sprintf "%s is not a non-generic method of a class" declaration
+    | StubFailure.NotDetourable declaration -> sprintf "%s is not a static method, a method of a class, or still has an open generic parameter" declaration
     | StubFailure.CouldNotEmit(declaration, detail) -> sprintf "%s: %s" declaration detail
 
 let private stubs = List<DynamicMethod>()
 
 /// A method with `target`'s exact signature that records an entry under `probe`
 /// and then calls `target`. A detour can point at it in place of the target.
-/// Non-generic targets only, which is what hot reload detours. An Error says why
+/// Targets with no open generic parameter only (a generic method is stubbed once closed over its type
+/// arguments, see GenericReload.fs, and the shared body gets a stub of its own). An Error says why
 /// no stub could be built; the caller then detours straight at the target and that
 /// function can never be confirmed.
 ///
@@ -171,8 +173,10 @@ let private stubs = List<DynamicMethod>()
 /// on the old method again, which is detoured back to the stub.
 let stubFor (probe: EntryProbe) (target: MethodInfo) : Result<MethodInfo, StubFailure> =
   try
+    // A generic method that is still open has no code to call. One closed over its type arguments does, and
+    // gets a stub like any other method: that is how a value-type instantiation is detoured.
     let detourable =
-      not target.IsGenericMethod
+      not target.ContainsGenericParameters
       && (target.IsStatic || (not (isNull target.DeclaringType) && not target.DeclaringType.IsValueType))
     match detourable with
     | false -> Result.Error(StubFailure.NotDetourable probe.Declaration)

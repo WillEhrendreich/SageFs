@@ -125,9 +125,12 @@ type ReloadChange =
   /// An instance member's type gained, lost or re-typed a field, so the objects
   /// the running app already built are laid out without it. Found at patch time.
   | InstanceLayoutChanged of typeName: string * detail: string
-  /// A generic function. A patch reaches the instantiations that have already
-  /// run; one that runs later would still get the old body. Found at patch time.
-  | GenericFunction of declaration: string
+  /// A generic function whose instantiations cannot all be listed, so a patch could leave one on the old
+  /// body. Found at patch time, from the program's own code.
+  | GenericInstantiationsUnknown of declaration: string * detail: string
+  /// A member of a generic type: the type's arguments reach it through the object or the class, and a
+  /// patch does not carry them. Found at patch time.
+  | GenericTypeMember of typeName: string
 
 /// Live module state a patch has to respect. Rule 1 of hot-reload-state-spec.md:
 /// code changes land, state stays.
@@ -187,7 +190,8 @@ module ReloadChange =
       sprintf "the lambdas in %s changed shape (%s)" name detail
     | ReloadChange.InstanceLayoutChanged (typeName, detail) ->
       sprintf "the fields of %s changed (%s)" typeName detail
-    | ReloadChange.GenericFunction name -> sprintf "%s is generic" name
+    | ReloadChange.GenericInstantiationsUnknown (name, detail) -> sprintf "%s is generic, and %s" name detail
+    | ReloadChange.GenericTypeMember typeName -> sprintf "%s is a generic type" typeName
 
   let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
     first :: rest |> List.map describe |> String.concat "; "
@@ -243,7 +247,8 @@ module ReloadChange =
       RestartReason.NotYetSupported (sprintf "an in-place patch of '%s', because this app was started with run_app and runs outside the process SageFs patches" name)
     | ReloadChange.ClosureShapeChanged (name, detail) -> RestartReason.ClosureShapeChanged (name, detail)
     | ReloadChange.InstanceLayoutChanged (typeName, detail) -> RestartReason.InstanceLayoutChanged (typeName, detail)
-    | ReloadChange.GenericFunction name -> RestartReason.GenericFunction name
+    | ReloadChange.GenericInstantiationsUnknown (name, detail) -> RestartReason.GenericInstantiationsUnknown (name, detail)
+    | ReloadChange.GenericTypeMember typeName -> RestartReason.GenericTypeMember typeName
 
   let restartReasons (first: ReloadChange) (rest: ReloadChange list) : RestartReason list =
     first :: rest |> List.map restartReason

@@ -231,20 +231,20 @@ let genericRows : Row list = [
     Why = "an instance member of a generic type, on objects of three instantiations built at startup"
     Edits = [ "\"genericTypeInstance:A\"", "\"genericTypeInstance:B\"" ]
     Before = "genericTypeInstance:As|genericTypeInstance:Ar2|genericTypeInstance:A7"
-    After = "genericTypeInstance:Bs|genericTypeInstance:Br2|genericTypeInstance:B7"
-    Ending = Ending.Patches }
+    After = "genericTypeInstance:As|genericTypeInstance:Ar2|genericTypeInstance:A7"
+    Ending = Ending.Restarts "GenericTypeMember" }
   { Name = "genericTypeStatic"
     Why = "a static member of a generic type, called with three instantiations"
     Edits = [ "\"genericTypeStatic:A\"", "\"genericTypeStatic:B\"" ]
     Before = "genericTypeStatic:As|genericTypeStatic:Ar2|genericTypeStatic:A7"
-    After = "genericTypeStatic:Bs|genericTypeStatic:Br2|genericTypeStatic:B7"
-    Ending = Ending.Patches }
+    After = "genericTypeStatic:As|genericTypeStatic:Ar2|genericTypeStatic:A7"
+    Ending = Ending.Restarts "GenericTypeMember" }
   { Name = "genericMethodOnType"
     Why = "a generic method of a generic type, on objects of three instantiations of the type"
     Edits = [ "\"genericMethodOnType:A\"", "\"genericMethodOnType:B\"" ]
     Before = "genericMethodOnType:As1|genericMethodOnType:Ar2u|genericMethodOnType:A7r3"
-    After = "genericMethodOnType:Bs1|genericMethodOnType:Br2u|genericMethodOnType:B7r3"
-    Ending = Ending.Patches }
+    After = "genericMethodOnType:As1|genericMethodOnType:Ar2u|genericMethodOnType:A7r3"
+    Ending = Ending.Restarts "GenericTypeMember" }
 ]
 
 /// A generic function that is also reached through `MakeGenericMethod`. A detour cannot list the
