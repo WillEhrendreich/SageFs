@@ -89,12 +89,6 @@ let private budgets : (string * int) list =
     "SageFs.Tests/RestartPolicyTests.fs", 10
     "SageFs.Tests/RunAppSaveOutcomeTests.fs", 6
     "SageFs.Tests/TimeoutsTests.fs", 10
-    "SageFs.Tests/VscodeCommandProofTests.fs", 7
-    "SageFs.Tests/VscodeExtensionTests.fs", 8
-    "SageFs.Tests/WebAppHotReloadVerificationTests.fs", 12
-    "SageFs.Tests/WorkerHttpGuardTests.fs", 1
-    "SageFs.Tests/WorkerHttpTransportTests.fs", 1
-    "SageFs.Tests/WorkerStderrCaptureTests.fs", 1
     "SageFs.Tests/WorkflowSwitchTests.fs", 1
     "SageFs.Tests/WorkflowTransitionPropertyTests.fs", 1
     "SageFs.Tests/WorkflowTypesMutationTests.fs", 1 ]

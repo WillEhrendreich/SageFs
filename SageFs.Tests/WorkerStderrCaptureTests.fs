@@ -9,6 +9,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// A child that writes `lines` numbered lines to stderr and then exits without
 /// ever printing WORKER_PORT=, which is what a worker that crashes in startup
 /// looks like from the daemon's side.
@@ -39,7 +41,7 @@ let private spawnFailureReason (proc: Process) : Task<string> =
           | _ -> ()
       })
   SessionManager.awaitWorkerPort (SessionId.newId ()) proc inbox CancellationToken.None
-  reason.Task.WaitAsync(TimeSpan.FromSeconds 60.0)
+  reason.Task.WaitAsync TestTimeouts.processStartPatience
 
 let private requireUnix () =
   match OperatingSystem.IsWindows() with

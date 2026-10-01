@@ -37,6 +37,7 @@ open Expecto
 open Expecto.Flip
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private repoRoot =
   Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
@@ -122,7 +123,7 @@ let private startVirtualDisplay (xvfb: string) : Task<Process * string> = task {
   let server = Process.Start psi
   server.ErrorDataReceived.Add ignore
   server.BeginErrorReadLine()
-  let! line = server.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds 20.0)
+  let! line = server.StandardOutput.ReadLineAsync().WaitAsync TestTimeouts.patience
   match Int32.TryParse((line |> Option.ofObj |> Option.defaultValue "").Trim()) with
   | true, n -> return server, sprintf ":%d" n
   | _ ->
@@ -212,7 +213,7 @@ let private ensureFableArtifacts () : unit =
   | true -> ()
   | false ->
     let fileName, args = npmInvocation [ "ci" ]
-    runOrFail "npm ci" fileName args vscodeExtensionDir (TimeSpan.FromMinutes 5.0)
+    runOrFail "npm ci" fileName args vscodeExtensionDir TestTimeouts.npmInstallPatience
 
   let packageJson = Path.Combine(vscodeExtensionDir, "package.json")
 
@@ -220,7 +221,7 @@ let private ensureFableArtifacts () : unit =
   | false -> ()
   | true ->
     let fileName, args = npmInvocation [ "run"; "compile" ]
-    runOrFail "npm run compile" fileName args vscodeExtensionDir (TimeSpan.FromMinutes 10.0)
+    runOrFail "npm run compile" fileName args vscodeExtensionDir TestTimeouts.npmCompilePatience
 
   let testElectronSrc = Path.Combine(vscodeExtensionDir, "test-electron")
   match isStale launcherPath [ testElectronSrc; packageJson ]
@@ -228,7 +229,7 @@ let private ensureFableArtifacts () : unit =
   | false -> ()
   | true ->
     let fileName, args = npmInvocation [ "run"; "compile:test-electron" ]
-    runOrFail "npm run compile:test-electron" fileName args vscodeExtensionDir (TimeSpan.FromMinutes 10.0)
+    runOrFail "npm run compile:test-electron" fileName args vscodeExtensionDir TestTimeouts.npmCompilePatience
 
   for path, hint in
     [ launcherPath, "npm run compile:test-electron"
@@ -301,15 +302,15 @@ let private startDaemonWithWebLiveSession () : Fixture =
   daemon.BeginErrorReadLine()
 
   use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
-  client.Timeout <- TimeSpan.FromSeconds(5.0)
+  client.Timeout <- TestTimeouts.briefPatience
 
-  let healthDeadline = DateTime.UtcNow.AddSeconds(60.0)
+  let healthDeadline = DateTime.UtcNow.Add TestTimeouts.processStartPatience
   let mutable healthy = false
   while not healthy && DateTime.UtcNow < healthDeadline do
     try
       use _resp = client.GetAsync("/health").GetAwaiter().GetResult()
       healthy <- true
-    with _ -> Threading.Thread.Sleep(250)
+    with _ -> Threading.Thread.Sleep TestTimeouts.uiPoll
   match healthy with
   | false -> failwithf "daemon did not become healthy on port %d" mcpPort
   | true -> ()
@@ -343,7 +344,7 @@ let private startDaemonWithWebLiveSession () : Fixture =
         ready <- true
         sessionId <- s.GetProperty("id").GetString()
       | None -> ()
-    with _ -> Threading.Thread.Sleep(1000)
+    with _ -> Threading.Thread.Sleep TestTimeouts.slowPoll
   match faulted, ready with
   | true, _ -> failwithf "session Faulted during warmup. Sessions: %s" lastSessions
   | _, false -> failwithf "session never reached Ready within 300s. Last /api/sessions: %s" lastSessions

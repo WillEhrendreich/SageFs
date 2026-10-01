@@ -9,6 +9,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 // ─── HTTP wiring tests ─────────────────────────────────────────────
 // The worker HTTP server (SageFs.Host, the F#-executing surface) must be
 // guarded the same way the daemon's MCP + dashboard servers are: cross-site /
@@ -89,7 +91,7 @@ let private request
     match secFetchSite with
     | Some s -> req.Headers.TryAddWithoutValidation("Sec-Fetch-Site", s) |> ignore
     | None -> ()
-    use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(20.0))
+    use cts = new Threading.CancellationTokenSource(TestTimeouts.patience)
     let! resp = httpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token)
     return resp
   }

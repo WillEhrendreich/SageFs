@@ -10,6 +10,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 // ─── Route mapping tests ───────────────────────────────────────────
 
 [<Tests>]
@@ -225,7 +227,7 @@ let concurrencyTests =
           |> Async.StartAsTask
 
         // Give it a moment to start processing on the server
-        do! Task.Delay 200
+        do! Task.Delay TestTimeouts.workStartSettle
 
         // GetStatus should respond well before the eval finishes
         let sw = System.Diagnostics.Stopwatch.StartNew()

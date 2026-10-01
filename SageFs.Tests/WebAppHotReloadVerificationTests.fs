@@ -13,6 +13,7 @@ open SageFs
 open SageFs.WorkerProtocol
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ============================================================================
 // Deterministic end-to-end verification of the web-app hot-reload path:
@@ -134,9 +135,9 @@ let private spawnHost (sessionId: string) (hostLog: StringBuilder) =
         lock hostLog (fun () -> hostLog.AppendLine(line) |> ignore)
         line <- proc.StandardError.ReadLine()
     with _ -> ())
-  let ok = portLine.Task.Wait(TimeSpan.FromSeconds(120.0))
+  let ok = portLine.Task.Wait Timeouts.webAppPortReady
   if not ok then
-    failwithf "host did not print WORKER_PORT within 120s. Host log:\n%s" (hostLog.ToString())
+    failwithf "host did not print WORKER_PORT within %.0fs. Host log:\n%s" Timeouts.webAppPortReady.TotalSeconds (hostLog.ToString())
   let baseUrl = portLine.Task.Result.TrimEnd('/')
   let proxy = HttpWorkerClient.httpProxy baseUrl
   proc, baseUrl, proxy
@@ -157,15 +158,15 @@ let private waitReady (proxy: WorkerProtocol.SessionProxy) (hostLog: StringBuild
     try
       match proxy (WorkerProtocol.WorkerMessage.GetStatus(Guid.NewGuid().ToString("N"))) |> Async.RunSynchronously with
       | WorkerProtocol.WorkerResponse.StatusResult (_, s) when s.Status = SessionStatus.Ready -> ready <- true
-      | _ -> Thread.Sleep 500
+      | _ -> Thread.Sleep TestTimeouts.warmupPoll
     with _ ->
-      Thread.Sleep 500
+      Thread.Sleep TestTimeouts.warmupPoll
   if not ready then
     failwithf "session did not reach Ready within 180s. Host log:\n%s" (hostLog.ToString())
 
 let private httpGet (port: int) (path: string) =
   use client = new HttpClient()
-  client.Timeout <- TimeSpan.FromSeconds(30.0)
+  client.Timeout <- TestTimeouts.requestPatience
   try
     client.GetStringAsync(sprintf "http://127.0.0.1:%d%s" port path)
     |> Async.AwaitTask
@@ -179,7 +180,7 @@ let private httpGet (port: int) (path: string) =
 /// worker file watcher.
 let private watchAllFiles (baseUrl: string) =
   use client = new HttpClient()
-  client.Timeout <- TimeSpan.FromSeconds(10.0)
+  client.Timeout <- TestTimeouts.shortPatience
   use content = new StringContent("{}", Encoding.UTF8, "application/json")
   let resp = client.PostAsync(baseUrl + "/hotreload/watch-all", content) |> Async.AwaitTask |> Async.RunSynchronously
   resp.EnsureSuccessStatusCode() |> ignore
@@ -190,7 +191,7 @@ let private watchAllFiles (baseUrl: string) =
 /// watch set yet) and the reload would never fire.
 let private waitForWatched (baseUrl: string) (timeoutMs: int) =
   use client = new HttpClient()
-  client.Timeout <- TimeSpan.FromSeconds(10.0)
+  client.Timeout <- TestTimeouts.shortPatience
   let sw = Stopwatch.StartNew()
   let mutable watched = false
   while not watched && sw.ElapsedMilliseconds < int64 timeoutMs do
@@ -198,11 +199,11 @@ let private waitForWatched (baseUrl: string) (timeoutMs: int) =
       let resp = client.GetAsync(baseUrl + "/hotreload") |> Async.AwaitTask |> Async.RunSynchronously
       let json = resp.Content.ReadAsStringAsync() |> Async.AwaitTask |> Async.RunSynchronously
       if json.Contains("\"watchedCount\":0") then
-        Thread.Sleep 200
+        Thread.Sleep TestTimeouts.localHttpPoll
       else
         watched <- true
     with _ ->
-      Thread.Sleep 200
+      Thread.Sleep TestTimeouts.localHttpPoll
   if not watched then
     failwithf "no files were reported as watched within %dms" timeoutMs
 
@@ -212,7 +213,7 @@ let private waitForWatched (baseUrl: string) (timeoutMs: int) =
 /// under a second).
 let private openSseStream (baseUrl: string) : StreamReader =
   let client = new HttpClient()
-  client.Timeout <- TimeSpan.FromSeconds(60.0)
+  client.Timeout <- TestTimeouts.streamReadPatience
   let req = new HttpRequestMessage(HttpMethod.Get, baseUrl + "/__sagefs__/reload")
   req.Headers.Accept.ParseAdd("text/event-stream")
   let resp = client.Send(req, HttpCompletionOption.ResponseHeadersRead)
@@ -269,7 +270,7 @@ let private writeFixtureFile (path: string) (content: string) =
       File.WriteAllText(path, content)
       written <- true
     with :? IOException ->
-      Thread.Sleep 200
+      Thread.Sleep TestTimeouts.localHttpPoll
   if not written then
     failwithf "could not write fixture file %s within 15s (locked by a previous host?)" path
 
@@ -512,7 +513,7 @@ let webAppHotReloadVerificationTests =
           // 2. Repair the file — the fix must hot-reload into the running app.
           //    Brief pause so the FileSystemWatcher has re-armed after the
           //    failed eval's event burst before writing again.
-          Thread.Sleep 1000
+          Thread.Sleep TestTimeouts.watcherRearmSettle
           let repaired =
             original.Replace(
               "let greeting () = \"hello from sagefs\"",
@@ -620,7 +621,7 @@ let webAppHotReloadVerificationTests =
               let sw = Stopwatch.StartNew()
               let mutable v = shape name
               while v <> want && sw.ElapsedMilliseconds < 5000L do
-                Thread.Sleep 100
+                Thread.Sleep TestTimeouts.poll
                 v <- shape name
               v
             let served =

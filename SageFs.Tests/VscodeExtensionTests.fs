@@ -8,6 +8,7 @@ open Expecto.Flip
 open Microsoft.Playwright
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Deadline-based wait on an ACTUAL condition — never a fixed sleep. Probes
 /// every 100ms until `probe` is true or `timeoutMs` elapses; returns whether
@@ -19,7 +20,7 @@ let waitUntil (timeoutMs: int) (probe: unit -> Task<bool>) = task {
     let! ok = probe ()
     match ok with
     | true -> met <- true
-    | false -> do! Task.Delay 100
+    | false -> do! Task.Delay TestTimeouts.poll
   return met
 }
 
@@ -126,7 +127,7 @@ module VscodeFixture =
     if existing <> settings then
       // A previous VS Code instance may still be releasing the file after a
       // kill; retry until writable instead of failing the journey setup.
-      match writeWithRetry settingsPath settings (TimeSpan.FromSeconds 15.0) with
+      match writeWithRetry settingsPath settings TestTimeouts.fileLockRetryPatience with
       | true -> ()
       | false -> IO.File.WriteAllText(settingsPath, settings)
 
@@ -140,7 +141,7 @@ module VscodeFixture =
         try (DateTime.Now - p.StartTime).TotalMinutes < 30.0 with _ -> false)
     for p in recent do
       try p.Kill(true) with _ -> ()
-    use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds 10.0)
+    use cts = new Threading.CancellationTokenSource(TestTimeouts.shortPatience)
     for p in recent do
       try do! p.WaitForExitAsync(cts.Token) with _ -> ()
   }
@@ -168,7 +169,7 @@ module VscodeFixture =
 
   /// Whether the CDP endpoint currently answers /json/version.
   let cdpResponds () = task {
-    use client = new Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds 1.0)
+    use client = new Net.Http.HttpClient(Timeout = TestTimeouts.immediateReply)
     try
       let! resp =
         client.GetStringAsync(
@@ -205,7 +206,7 @@ module VscodeFixture =
         result <- Some b
       with :? PlaywrightException as ex ->
         lastError <- Some ex
-        if attempt < maxAttempts then do! Task.Delay 1000
+        if attempt < maxAttempts then do! Task.Delay TestTimeouts.slowPoll
       attempt <- attempt + 1
     match result with
     | Some b -> return b
@@ -449,7 +450,7 @@ module VscodeHelpers =
       if content <> null && content.Contains(text) then
         found <- true
       else
-        do! Task.Delay(250)
+        do! Task.Delay TestTimeouts.uiPoll
     return found
   }
 
@@ -462,7 +463,7 @@ module VscodeHelpers =
       if title.Contains(text) then
         found <- true
       else
-        do! Task.Delay(250)
+        do! Task.Delay TestTimeouts.uiPoll
     return found
   }
 
@@ -576,7 +577,7 @@ let extensionTests = testList "VSCode extension behavior" [
       let! statusText = VscodeHelpers.getStatusBarText page
       hasSageFs <-
         statusText.Contains("SageFs") || statusText.Contains("sagefs")
-      if not hasSageFs then do! Task.Delay(1000)
+      if not hasSageFs then do! Task.Delay TestTimeouts.slowPoll
     if not hasSageFs then
       let! _ = VscodeHelpers.screenshot page "ext-activate-fail"
       ()
