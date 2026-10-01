@@ -25,7 +25,6 @@ let private central = Set.ofList [ "SageFs.Core/Timeouts.fs"; "SageFs.Tests/Test
 /// What each file may still spell out itself. Ratchet down, never up.
 let private budgets : (string * int) list =
   [ "SageFs.Core/WorkflowTypes.fs", 1
-    "SageFs.Host/AppRunner.fs", 2
     "SageFs.Tests/AffordancesMutationTests.fs", 6
     "SageFs.Tests/AffordancesPropertyTests.fs", 2
     "SageFs.Tests/AgentActivityTrackerTests.fs", 3
@@ -190,17 +189,7 @@ let private budgets : (string * int) list =
     "SageFs.Tests/WorkerProtocolTests.fs", 4
     "SageFs.Tests/WorkflowSwitchTests.fs", 1
     "SageFs.Tests/WorkflowTransitionPropertyTests.fs", 1
-    "SageFs.Tests/WorkflowTypesMutationTests.fs", 1
-    "SageFs/CohortLandingVerify.fs", 1
-    "SageFs/DaemonMode.fs", 12
-    "SageFs/Dashboard.fs", 6
-    "SageFs/DashboardTypes.fs", 1
-    "SageFs/EnvCheck.fs", 1
-    "SageFs/McpStateHandlers.fs", 1
-    "SageFs/Program.fs", 2
-    "SageFs/SageFsApp.fs", 5
-    "SageFs/SessionStatusPayload.fs", 1
-    "SageFs/WorkerProxyWait.fs", 2 ]
+    "SageFs.Tests/WorkflowTypesMutationTests.fs", 1 ]
 
 /// Every source file with its count of inline timeout literals, except the central module.
 let private actual : (string * int) list =

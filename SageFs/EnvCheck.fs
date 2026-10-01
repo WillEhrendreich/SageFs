@@ -472,7 +472,7 @@ let checkFsiFromProbe (outcome: FsiProbeOutcome) =
   match outcome with
   | FsiStartedAndExited -> pass "F# Interactive" "dotnet fsi available"
   | FsiTimedOutAndKilled ->
-    fail "F# Interactive" "dotnet fsi did not start within 3s (probe process killed)"
+    fail "F# Interactive" (sprintf "dotnet fsi did not start within %gs (probe process killed)" Timeouts.fsiAvailabilityProbe.TotalSeconds)
           "dotnet fsi hung on startup — repair or reinstall the .NET SDK, and make sure `dotnet` resolves to a healthy installation."
   | FsiFailedToStart error ->
     fail "F# Interactive" "dotnet fsi not found" (sprintf "Ensure the .NET SDK is installed and `dotnet` is on your PATH: %s" error)
@@ -485,7 +485,7 @@ let checkFsiAvailable () =
     psi.UseShellExecute <- false
     psi.CreateNoWindow <- true
     use proc = Diagnostics.Process.Start(psi)
-    let exited = proc.WaitForExit(3000)
+    let exited = proc.WaitForExit(int Timeouts.fsiAvailabilityProbe.TotalMilliseconds)
     match exited with
     | true -> checkFsiFromProbe FsiStartedAndExited
     | false ->

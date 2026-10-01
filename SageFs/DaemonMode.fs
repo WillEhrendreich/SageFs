@@ -1340,7 +1340,7 @@ type LiveTestWatcherManager
   // under it fire FileContentChanged but never FileReloaded (a path with no
   // owning session must not be attributed to a fabricated one).
 
-  let debounceMs = 75
+  let debounceMs = int Timeouts.liveTestWatcherDebounce.TotalMilliseconds
   let normalizedFallback = fallbackDir |> Option.map System.IO.Path.GetFullPath
   let logger = Log.asILogger ()
   // 0 = not disposed, 1 = disposed. Guards against a second Dispose() call
@@ -1512,7 +1512,7 @@ type LiveTestWatcherManager
       match System.Threading.Interlocked.Exchange(&disposedFlag, 1) with
       | 1 -> () // already disposed — no-op, matches the original's idempotent Dispose
       | _ ->
-        try mailbox.PostAndReply((fun reply -> Shutdown reply), timeout = 5000) |> ignore
+        try mailbox.PostAndReply((fun reply -> Shutdown reply), timeout = int Timeouts.liveTestWatcherShutdown.TotalMilliseconds) |> ignore
         with :? System.TimeoutException -> Log.warn "[watcher] Shutdown timed out waiting for the mailbox"
 
 /// Cohort claim early-warning (multi-agent vision §5.1): resolve which
@@ -2983,7 +2983,8 @@ let run
       GetDaemonHealth = getDaemonHealth
     } cts.Token
 
-  let liveTestTickMs = 25
+  let liveTestTickMs = int Timeouts.liveTestTickActive.TotalMilliseconds
+  let liveTestIdleTickMs = int Timeouts.liveTestTickIdle.TotalMilliseconds
 
   // Test cycle tick timer — drives debounce channels for live testing.
   // Keep this comfortably below the 50ms tree-sitter debounce so as-you-type
@@ -3021,7 +3022,7 @@ let run
           | true ->
             System.Threading.Volatile.Write(&testCycleIdle.contents, 0)
             liveTestTickMs
-          | false -> 1000
+          | false -> liveTestIdleTickMs
       rescheduleTestCycle periodMs
     with ex ->
       log.LogWarning("TestCycleTimer callback threw unexpectedly: {Error}", ex.Message)
@@ -3076,6 +3077,7 @@ let run
 
   // Periodic agent activity cleanup — evicts stale entries from the activity tracker.
   // One-shot timer pattern (same as cache save) to prevent reentrancy.
+  let activityCleanupIntervalMs = int Timeouts.agentActivityCleanupInterval.TotalMilliseconds
   let mutable activityCleanupTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
   let activityCleanupCallback _ =
     try
@@ -3086,12 +3088,12 @@ let run
       | _ -> ()
     finally
       if not (isNull activityCleanupTimerRef) then
-        try activityCleanupTimerRef.Change(60_000, System.Threading.Timeout.Infinite) |> ignore
+        try activityCleanupTimerRef.Change(activityCleanupIntervalMs, System.Threading.Timeout.Infinite) |> ignore
         with :? System.ObjectDisposedException -> ()
   let activityCleanupTimer =
     let t = new System.Threading.Timer(
       System.Threading.TimerCallback(activityCleanupCallback),
-      null, 60_000, System.Threading.Timeout.Infinite)
+      null, activityCleanupIntervalMs, System.Threading.Timeout.Infinite)
     activityCleanupTimerRef <- t
     t
 
@@ -3104,7 +3106,7 @@ let run
   // restart. One-shot timer pattern (same as cache save / activity cleanup)
   // to prevent reentrancy; a generous 15-minute period because this walks
   // the OS temp directory and every sweep is otherwise a no-op.
-  let orphanTempDirSweepIntervalMs = 15 * 60 * 1000
+  let orphanTempDirSweepIntervalMs = int Timeouts.orphanTempDirSweepInterval.TotalMilliseconds
   let mutable orphanTempDirSweepTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
   let orphanTempDirSweepCallback _ =
     try
@@ -3130,6 +3132,7 @@ let run
   // the cohort's OWN MemberIds (ReadCohortState), decoupled from the display
   // tracker's short eviction that broke the earlier attempt.
   let cohortReaperRenewWindow = Timeouts.agentActivityFresh
+  let cohortReaperIntervalMs = int Timeouts.cohortReaperInterval.TotalMilliseconds
   let mutable cohortReaperTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
   let cohortReaperCallback _ =
     try
@@ -3150,12 +3153,12 @@ let run
       log.LogWarning("Cohort reaper tick threw unexpectedly: {Error}", ex.Message)
     // reschedule after this run (one-shot pattern, guards the shutdown race)
     if not (isNull cohortReaperTimerRef) then
-      try cohortReaperTimerRef.Change(60_000, System.Threading.Timeout.Infinite) |> ignore
+      try cohortReaperTimerRef.Change(cohortReaperIntervalMs, System.Threading.Timeout.Infinite) |> ignore
       with :? System.ObjectDisposedException -> ()
   let cohortReaperTimer =
     let t = new System.Threading.Timer(
       System.Threading.TimerCallback(cohortReaperCallback),
-      null, 60_000, System.Threading.Timeout.Infinite)
+      null, cohortReaperIntervalMs, System.Threading.Timeout.Infinite)
     cohortReaperTimerRef <- t
     t
 
@@ -3297,6 +3300,7 @@ let run
     | _ -> ())
 
   // Periodic session-watcher sync — ensures new sessions get watchers
+  let watcherSyncIntervalMs = int Timeouts.sessionWatcherSyncInterval.TotalMilliseconds
   let mutable watcherSyncTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
   let watcherSyncCallback _ =
     try
@@ -3307,12 +3311,12 @@ let run
       match isNull watcherSyncTimerRef with
       | true -> ()
       | false ->
-        try watcherSyncTimerRef.Change(5_000, System.Threading.Timeout.Infinite) |> ignore
+        try watcherSyncTimerRef.Change(watcherSyncIntervalMs, System.Threading.Timeout.Infinite) |> ignore
         with :? System.ObjectDisposedException -> ()
   let watcherSyncTimer =
     let t = new System.Threading.Timer(
       System.Threading.TimerCallback(watcherSyncCallback),
-      null, 5_000, System.Threading.Timeout.Infinite)
+      null, watcherSyncIntervalMs, System.Threading.Timeout.Infinite)
     watcherSyncTimerRef <- t
     t
 
@@ -3358,7 +3362,8 @@ let run
     | None -> None
     | Some ttl ->
       let ttlCheckIntervalMs =
-        max 1_000 (min 30_000 (int (ttl.TotalMilliseconds / 4.0)))
+        max (int Timeouts.ttlCheckFloor.TotalMilliseconds)
+          (min (int Timeouts.ttlCheckCeiling.TotalMilliseconds) (int (ttl.TotalMilliseconds / Timeouts.ttlChecksPerTtl)))
       let ttlCallback _ =
         try
           try

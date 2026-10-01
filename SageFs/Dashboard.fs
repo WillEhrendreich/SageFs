@@ -1135,7 +1135,7 @@ let buildNoSessionSnapshotWithSessionsSorted
       WorkingDir = ""
       WarmupProgress = ""
       WorkflowLabel = "Interactive"
-      EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+      EvalStats = { Count = 0; AvgMs = Timeouts.notRun.TotalMilliseconds; MinMs = Timeouts.notRun.TotalMilliseconds; MaxMs = Timeouts.notRun.TotalMilliseconds; Sparkline = ""; P50Ms = None; P95Ms = None }
       AlarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
       DaemonHealth = daemonHealthPanel
       FailureNarrativesPanel = failureNarrativesPanel
@@ -1263,7 +1263,7 @@ let createStreamHandler
     // also arrive as state events in the wired (event) mode; there the push is
     // event-driven and the TTL is short enough that the change is reflected on
     // the next push after the event.
-    let workerDataTtlMs = 2000
+    let workerDataTtlMs = int Timeouts.dashboardWorkerDataTtl.TotalMilliseconds
     let mutable lastWorkerFetch = DateTime.MinValue
     let mutable workerCache : DashboardWorkerCache option = None
     let tryGetFreshWorkerCache (sessionId: WorkerProtocol.SessionId) =
@@ -2693,7 +2693,7 @@ let createApiStateHandler
       // Heartbeat: when idle >15s, sends `: keepalive\n\n` SSE comment.
       let pushAgent = MailboxProcessor.Start((fun inbox ->
         let rec loop () = async {
-          let! msg = inbox.TryReceive(15_000)
+          let! msg = inbox.TryReceive(int Timeouts.legacyStateStreamKeepAlive.TotalMilliseconds)
           match msg with
           | None ->
             try
@@ -2708,7 +2708,7 @@ let createApiStateHandler
           | Some () ->
             while inbox.CurrentQueueLength > 0 do
               do! inbox.Receive()
-            do! Async.Sleep 100
+            do! Async.Sleep (int Timeouts.legacyStateStreamCoalesce.TotalMilliseconds)
             while inbox.CurrentQueueLength > 0 do
               do! inbox.Receive()
             try

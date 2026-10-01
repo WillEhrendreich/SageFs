@@ -693,7 +693,7 @@ module PipelineRailwayView =
           | false -> { Name = name; DurationMs = ms; Outcome = StageSuccess })
       TotalMs = totalMs }
 
-  let empty : PipelineRailwayView = { Stages = []; TotalMs = 0.0 }
+  let empty : PipelineRailwayView = { Stages = []; TotalMs = SageFs.Timeouts.notRun.TotalMilliseconds }
 
 /// Discover .fsproj and .sln/.slnx files in a directory.
 type DiscoveredProjects = {

@@ -150,7 +150,7 @@ module PendingRunSummary =
 
   let empty : PendingRunSummary =
     { Passed = 0; Failed = 0; Skipped = 0; Total = 0
-      TotalDurationMs = 0.0; NeverReportedCount = 0; NeverReportedReasons = [] }
+      TotalDurationMs = Timeouts.notRun.TotalMilliseconds; NeverReportedCount = 0; NeverReportedReasons = [] }
 
   let private addResult (agg: PendingRunSummary) (r: Features.LiveTesting.TestRunResult) : PendingRunSummary =
     let agg = { agg with Total = agg.Total + 1 }
@@ -2810,10 +2810,10 @@ module SageFsEffectHandler =
                       sidStr
                       restartStopwatch.Elapsed.TotalMilliseconds
                       msg
-                    let waitTimeoutMs = 30000
-                    let fastPollWindowMs = 1000
-                    let fastPollDelayMs = 50
-                    let slowPollDelayMs = 250
+                    let waitTimeoutMs = int Timeouts.rebuildReadyWait.TotalMilliseconds
+                    let fastPollWindowMs = int Timeouts.rebuildFastPollWindow.TotalMilliseconds
+                    let fastPollDelayMs = int Timeouts.rebuildFastPoll.TotalMilliseconds
+                    let slowPollDelayMs = int Timeouts.rebuildSlowPoll.TotalMilliseconds
                     let deadline = DateTimeOffset.UtcNow.AddMilliseconds(float waitTimeoutMs)
                     let waitStopwatch = System.Diagnostics.Stopwatch.StartNew()
                     let mutable readyObservedMs : float option = None

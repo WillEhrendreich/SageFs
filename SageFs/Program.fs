@@ -364,7 +364,7 @@ let private stopKillProcess (pid: int) =
       StopProcessGone (sprintf "process %d has already exited" pid)
     else
       proc.Kill()
-      proc.WaitForExit(3000) |> ignore
+      proc.WaitForExit(int Timeouts.stopKillExit.TotalMilliseconds) |> ignore
       StopKilled
   with ex ->
     StopProcessGone ex.Message
@@ -374,7 +374,7 @@ let private stopWaitForExit (pid: int) : StopWait =
   try
     use proc = System.Diagnostics.Process.GetProcessById(pid)
     // Room for a normal graceful shutdown (manifest save, stopping workers) before the fallback kill.
-    match proc.WaitForExit(30_000) with
+    match proc.WaitForExit(int Timeouts.stopGracefulExit.TotalMilliseconds) with
     | true -> StopWait.Exited
     | false -> StopWait.StillRunning
   with

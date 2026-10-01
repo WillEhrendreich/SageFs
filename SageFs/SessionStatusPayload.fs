@@ -185,7 +185,7 @@ module SessionStatusPayload =
       | StatusWait.TimedOut -> "TimedOut"
 
     /// The report for a call that did not wait.
-    let notWaited : WaitReport = { Outcome = StatusWait.NotNeeded; WaitedMs = 0L }
+    let notWaited : WaitReport = { Outcome = StatusWait.NotNeeded; WaitedMs = int64 Timeouts.notRun.TotalMilliseconds }
 
     /// What the caller asked for, as a TimeSpan: clamped, never refused.
     let clampSeconds (seconds: int) : System.TimeSpan =

@@ -28,13 +28,13 @@ module WorkerProxyWait =
   /// giving up and dispatching `NotRun`. Generous on purpose — the wait is
   /// bounded and only paid when the worker is genuinely absent, while the
   /// cost of cutting it short is a silently unrun suite.
-  [<Literal>]
-  let BudgetMs = 15000
+  /// The value is `Timeouts.workerProxyRegister`, in milliseconds.
+  let BudgetMs = int Timeouts.workerProxyRegister.TotalMilliseconds
 
   /// The first delay. Small, so a worker that is already up is picked up
-  /// immediately and the common case stays fast.
-  [<Literal>]
-  let FirstDelayMs = 50
+  /// immediately and the common case stays fast. The value is
+  /// `Timeouts.workerProxyFirstDelay`, in milliseconds.
+  let FirstDelayMs = int Timeouts.workerProxyFirstDelay.TotalMilliseconds
 
   /// Delays to try, growing, bounded by `budgetMs`.
   ///

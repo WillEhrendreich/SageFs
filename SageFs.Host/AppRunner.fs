@@ -559,7 +559,7 @@ type Runner(timeouts: StartTimeouts, setEnv: SetEnv) =
 
   interface IDisposable with
     member _.Dispose() =
-      try agent.PostAndReply((fun reply -> Shutdown reply), 15_000)
+      try agent.PostAndReply((fun reply -> Shutdown reply), int Timeouts.appRunnerShutdown.TotalMilliseconds)
       with :? TimeoutException -> SageFs.Utils.Log.warn "[AppRunner] Shutdown timed out"
       (agent :> IDisposable).Dispose()
 
@@ -567,7 +567,7 @@ type Runner(timeouts: StartTimeouts, setEnv: SetEnv) =
     member _.DisposeAsync() =
       ValueTask(task {
         try
-          do! agent.PostAndAsyncReply((fun reply -> Shutdown reply), 15_000) |> Async.StartAsTask
+          do! agent.PostAndAsyncReply((fun reply -> Shutdown reply), int Timeouts.appRunnerShutdown.TotalMilliseconds) |> Async.StartAsTask
         with :? TimeoutException -> SageFs.Utils.Log.warn "[AppRunner] Shutdown timed out"
         (agent :> IDisposable).Dispose() })
 

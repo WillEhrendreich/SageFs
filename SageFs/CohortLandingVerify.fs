@@ -135,8 +135,6 @@ let advance (tests: TestId list) (progress: RunProgress) (testState: LiveTestSta
 let awaitBudget () : TimeSpan =
   Timeouts.globalTestRun () + Timeouts.testRunAwaitSlack
 
-let private pollDelayMs = 200
-
 /// Run exactly `tests` in `sessionId` and AWAIT the pass/fail verdict — the
 /// blocking async-readback primitive cohort landing needs; the existing
 /// `/api/live-testing/run` path only queues and returns immediately.

@@ -22,7 +22,7 @@ module ModelChangeState =
     LastOutputCount = 0
     LastTestSsePushTicks = 0L
     LastTestTraceJson = ""
-    TestSseThrottleMs = 250L
+    TestSseThrottleMs = int64 Timeouts.testSseThrottle.TotalMilliseconds
     LastTestSummaryKey = ""
   }
 
