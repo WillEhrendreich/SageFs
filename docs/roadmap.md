@@ -96,7 +96,7 @@ _I want it and I roughly know how. Months to a year, and the order will move._
 
 ### Platform and install
 
-- **Hot reload checked on Windows and macOS.** The README says SageFs runs on Windows and macOS, but my CI is Linux only, so the detour has no test evidence on either and none on arm64. I need machines to close that. ([how-hot-reload-works.md](how-hot-reload-works.md), [Readme.md](../Readme.md))
+- **Hot reload checked on Windows and macOS.** My CI is Linux only, so the hot reload detour has no test evidence on Windows, macOS or arm64, and the docs say so. I need machines to close that. ([how-hot-reload-works.md](how-hot-reload-works.md), [Readme.md](../Readme.md))
 - **Start on login for Windows and macOS.** Linux gets a systemd user unit that starts the daemon for you. Nothing starts it at login on Windows or macOS yet. ([progress.md](progress.md))
 - **The getter sandbox beyond Linux x86-64.** Clicking a getter in the live-bindings pane runs it under a syscall filter that stops network use and file writes, on Linux x86-64 only. Elsewhere the getter runs under its deadline alone, and the pane says so. ([decisions.md](decisions.md))
 - **A token for every daemon call.** The daemon binds loopback only and checks Origin so a web page can't drive it, but nothing authenticates a local caller. A minted token the daemon requires would, and it's the same handle agents need for their own identity. ([mcp-tools.md](mcp-tools.md))

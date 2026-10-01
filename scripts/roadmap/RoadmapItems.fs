@@ -163,7 +163,7 @@ let items : Item list =
     item "hot-reload-on-windows-and-macos" "Hot reload checked on Windows and macOS" Platform Later
       NoLandmarkYet
       [ "docs/how-hot-reload-works.md"; "Readme.md" ]
-      "The README says SageFs runs on Windows and macOS, but my CI is Linux only, so the detour has no test evidence on either and none on arm64. I need machines to close that."
+      "My CI is Linux only, so the hot reload detour has no test evidence on Windows, macOS or arm64, and the docs say so. I need machines to close that."
 
     item "start-on-login-windows-macos" "Start on login for Windows and macOS" Platform Later
       NoLandmarkYet
