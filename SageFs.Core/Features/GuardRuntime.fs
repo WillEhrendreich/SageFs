@@ -53,7 +53,7 @@ type GuardAbortedException() =
 
 /// How many cells have a stop requested and have not retired. The hot path is one load of this: while it is zero, which
 /// is every moment nobody is being stopped, a check does nothing else.
-module internal GuardPending =
+module GuardPending =
   let mutable count = 0
 
 [<AbstractClass; Sealed>]
@@ -93,17 +93,24 @@ type Guard =
   /// This thread answers to no cell any more.
   static member Unbind() : unit = Guard.current <- null
 
+  // The next three are never inlined by the F# compiler into another assembly. Their bodies take the address of a
+  // module-level value, and a copy of that in the tests' or the simulation's IL names a start-up type that is not there
+  // (TypeLoadException in a Release build). They are not on the hot path: the JIT still inlines `Check`.
+
   /// The watchdog: from now on a check on the cell's thread throws. Safe to call twice, and after the cell retired.
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
   static member RequestStop(cell: GuardCell) : unit =
     match cell.RequestStop() with
     | GuardCellMove.Changed -> Interlocked.Increment(&GuardPending.count) |> ignore
     | GuardCellMove.Unchanged -> ()
 
   /// The thread is done. Whatever was requested is let go, once.
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
   static member Retire(cell: GuardCell) : unit =
     match cell.Retire() with
     | GuardCellMove.Changed -> Interlocked.Decrement(&GuardPending.count) |> ignore
     | GuardCellMove.Unchanged -> ()
 
   /// How many cells are asking for a stop right now.
-  static member Pending : int = Volatile.Read(&GuardPending.count)
+  static member Pending
+    with [<MethodImpl(MethodImplOptions.NoInlining)>] get () : int = Volatile.Read(&GuardPending.count)

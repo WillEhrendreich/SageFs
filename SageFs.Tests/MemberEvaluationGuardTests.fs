@@ -190,4 +190,21 @@ let realGuardsOnAbandonedThreadTests =
         release.Set()
       gone.Wait TestTimeouts.patienceBrief |> Expect.isTrue "when the thread ended the guards came off"
       target.HelperRan |> Expect.equal "the entry guard stopped the thread before the helper's body ran" 0
+
+    testCase "WHY - guarded code runs, and a guarded loop is stopped, on the thread the syscall filter is installed on" <| fun _ ->
+      match ThreadSandbox.availability () with
+      | Error reason -> skiptest (SandboxUnavailable.describe reason)
+      | Ok _ ->
+        let release = new ManualResetEventSlim(false)
+        let target = SageFs.Tests.GuardFixtures.FilteredSpinner(release)
+        let evaluator = Evaluator(limits 4, filtered SandboxPolicy.NoNetworkNoWritesNoSpawn, GuardsOn SageFs.Features.GuardPatcher.prepare)
+        try
+          let fine = evaluator.RunGuarded (typeof<SageFs.Tests.GuardFixtures.FilteredSpinner>.GetProperty "Fine") (box target)
+          fine.Outcome |> Expect.equal "the guarded getter returned under the filter" (Ok (box 7))
+          (SageFs.Features.GuardCoverage.guardedCount fine.Guards.Coverage, 0) |> Expect.isGreaterThan "and it was guarded"
+          let spun = evaluator.RunGuarded (typeof<SageFs.Tests.GuardFixtures.FilteredSpinner>.GetProperty "Spin") (box target)
+          spun.Outcome |> Expect.equal "timed out" (Error MemberFailure.MemberTimedOut)
+          spun.Guards.Trip |> Expect.equal "the loop guard stopped it on the filtered thread" GuardTrip.LoopStopped
+        finally
+          release.Set()
   ]

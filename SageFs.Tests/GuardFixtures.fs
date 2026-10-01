@@ -216,3 +216,12 @@ type Lingerer(release: System.Threading.ManualResetEventSlim, inside: System.Thr
   member this.Run : int =
     (ReleasableMachine(release, inside) :> IAsyncStateMachine).MoveNext()
     this.Helper()
+
+/// A getter that loops until released, for the case that runs it under the syscall filter.
+type FilteredSpinner(release: System.Threading.ManualResetEventSlim) =
+  member _.Fine : int = 7
+  member _.Spin : int =
+    let mutable i = 0
+    while not release.IsSet do
+      i <- i + 1
+    i

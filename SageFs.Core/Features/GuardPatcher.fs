@@ -19,12 +19,12 @@ type GuardLease =
     Release: unit -> unit }
 
 /// The two guard methods the woven code calls.
-module internal GuardMethods =
+module GuardMethods =
   let entry : MethodInfo = typeof<Guard>.GetMethod "EnterEnsure"
   let backEdge : MethodInfo = typeof<Guard>.GetMethod "Check"
 
 /// The Harmony half of the transpiler: Harmony's instructions into the pure model and back out.
-module internal GuardTranspilation =
+module GuardTranspilation =
 
   let private isBegin (block: ExceptionBlock) : bool = block.blockType <> ExceptionBlockType.EndExceptionBlock
 
@@ -164,7 +164,7 @@ type PatchRegistry(backend: PatchBackend, ledger: Ledger) =
   member _.HeldCount : int = lock gate (fun () -> held.Count)
 
 /// Harmony as the backend: our transpiler on, our transpiler off.
-module internal HarmonyBackend =
+module HarmonyBackend =
 
   let private harmony = lazy (Harmony "sagefs.getter-guards")
   let private weaveMethod = lazy (HarmonyMethod(typeof<GuardTranspiler>.GetMethod "Weave"))
