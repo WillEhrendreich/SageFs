@@ -149,7 +149,7 @@ let tests =
             })
       }
 
-      testAsync "a killed host completes the running eval with HostLost instead of hanging" {
+      testAsync "a killed host completes the running eval with HostCrashed instead of hanging" {
         do!
           withHost (fun started ->
             async {
@@ -159,11 +159,11 @@ let tests =
               let! finished = Task.WhenAny(running, Task.Delay(TestTimeouts.patience)) |> Async.AwaitTask
               Expect.isTrue "the pending eval completed" (obj.ReferenceEquals(finished, running))
               match running.Result with
-              | HostLost _ -> ()
-              | other -> failtestf "expected HostLost, got %A" other
+              | HostCrashed _ -> ()
+              | other -> failtestf "expected HostCrashed, got %A" other
               match! started.Session.Eval("1;;", CancellationToken.None) with
-              | HostLost _ -> ()
-              | other -> failtestf "later calls should also be HostLost, got %A" other
+              | HostCrashed _ -> ()
+              | other -> failtestf "later calls should also be HostCrashed, got %A" other
             })
       }
 

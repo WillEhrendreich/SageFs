@@ -213,6 +213,9 @@
         <Compile Include="FsiHostBuildTests.fs" />
         <Compile Include="FsiHostSdkRootTests.fs" />
         <Compile Include="FsiHostClientTests.fs" />
+        <Compile Include="FsiHostLostTests.fs" />
+        <Compile Include="HostCrashTests.fs" />
+        <Compile Include="HostCrashRecoveryTests.fs" />
         <Compile Include="FsiHostLimitsTests.fs" />
         <Compile Include="IsolatedFsiSessionTests.fs" />
         <Compile Include="FsiSessionContractTests.fs" />
