@@ -169,7 +169,7 @@ status line keeps `(Starting)`, the message line keeps `[SageFs] Warming up:`), 
 | `lib-nvim.sh`, `run-nvim-lemming`, `run-nvim-tour`, `oracle.sh` | The process plumbing: bubblewrap, tmux, port and file setup. No logic. |
 | `init.lua` | The Neovim config the lemming starts with: the plugin on the runtimepath, the F# filetype and parser, a status line that includes the plugin's own component. Configuration, not logic. |
 | `tasks/`, `tours/`, `LEMDRIVE.md` | What the lemming is asked, what a tour does, and the driver's README the lemming reads. |
-| `NvimTests/` | 49 tests: properties for ANSI to HTML, examples for the key notation, shell allow-list, command set and tour parser, and a round trip for tours. |
+| `NvimTests/` | 53 tests: properties for ANSI to HTML, examples for the key notation, shell allow-list, command set, timeline line and tour parser, a round trip for tours, and the summary filter that drops MCP-only findings. |
 
 `dotnet run --project scripts/lemmings/ui/nvim/NvimTests` runs the tests.
 

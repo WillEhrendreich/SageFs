@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# scripts/lemmings/ui/nvim/run-nvim-lemming <task> <free-model> [max-turns]
 # scripts/lemmings/ui/nvim/run-nvim-lemming <task> <free-model> <run-id|auto> [max-turns]
 #
 # One disposable Neovim trial: Command Code (cmdc) on a FREE model, handed a Neovim it can only
@@ -20,7 +21,14 @@ LEMMINGS=$(cd "$HERE/../.." && pwd)
 source "$LEMMINGS/lib-cmd.sh"
 source "$HERE/lib-nvim.sh"
 
-TASK=${1:?task} MODEL=${2:?free-model} ID=${3:?run-id} TURNS=${4:-60}
+TASK=${1:?task} MODEL=${2:?free-model}
+# Either `<task> <model> [max-turns]` (what scripts/lemmings/run-ui-lemming passes, the run id is
+# chosen for you, or taken from LEM_RUN_ID) or `<task> <model> <run-id|auto> [max-turns]`.
+if [[ ${3:-} =~ ^[0-9]+$ ]]; then
+  ID=${LEM_RUN_ID:-auto} TURNS=$3
+else
+  ID=${3:-${LEM_RUN_ID:-auto}} TURNS=${4:-60}
+fi
 [ -f "$HERE/tasks/$TASK.md" ] || { echo "no task: $HERE/tasks/$TASK.md" >&2; exit 2; }
 [ -f "$HERE/tasks/$TASK.env" ] || { echo "no task settings: $HERE/tasks/$TASK.env" >&2; exit 2; }
 # shellcheck disable=SC1090

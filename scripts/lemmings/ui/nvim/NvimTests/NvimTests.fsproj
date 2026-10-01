@@ -24,7 +24,9 @@
     <Compile Include="../NvimShot.fs" />
     <Compile Include="../Nvim.fs" />
     <Compile Include="../NvimTour.fs" />
+    <Compile Include="../NvimOracle.fs" />
     <Compile Include="AnsiTests.fs" />
+    <Compile Include="OracleTests.fs" />
     <Compile Include="DriverTests.fs" />
     <Compile Include="TourTests.fs" />
     <Compile Include="Program.fs" />
