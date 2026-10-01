@@ -96,9 +96,10 @@ LEM_EXTRA_BWRAP=(--bind "$OUT/screens" "$OUT/screens" --bind "$OUT/shots" "$OUT/
 LEM_EXTRA_ENV=("PATH=$RUN/bin/tools:$HOME/.dotnet:$HOME/.dotnet/tools:$CMDC_DIR:/usr/bin:/bin"
   "LEM_CDP_PORT=$CDP" "LEM_SCREENS_DIR=$OUT/screens" "LEM_RUN_DIR=$RUN" "LEM_TIMELINE=$OUT/timeline.ndjson" "NODE_NO_WARNINGS=1")
 # The daemon keeps no eval history another client can read, so the harness listens to its
-# /events stream for the whole run (the same stream the dashboard uses) and the oracle reads
-# the eval output of the lemming's own sessions from that file. Stopped by exact pid.
-curl -sN --max-time "$LEM_TIMEOUT_SECONDS" "http://localhost:$LEM_PORT/events" > "$OUT/daemon-events.sse" 2>/dev/null &
+# /events stream for the whole run (the same stream the dashboard uses). The oracle reads the
+# eval output of the lemming's own sessions from what it records, and the fellOver list lines
+# the records up against the actions clock. Stopped by exact pid.
+"${DRIVE[@]}" host events --port "$LEM_PORT" --out "$OUT/daemon-evals.tsv" --seconds "$LEM_TIMEOUT_SECONDS" > /dev/null 2>&1 &
 EVENTS_PID=$!
 lem_run_cmdc "$W" "$OUT/prompt.md" "$MODEL" "$TURNS" "$OUT/events.ndjson" "$OUT/cmdc.stderr"
 sleep 2

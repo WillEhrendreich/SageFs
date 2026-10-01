@@ -42,6 +42,36 @@ let toJson (e: Entry) : string =
   w.Flush()
   Encoding.UTF8.GetString(stream.ToArray())
 
+/// Reads one line back. None when it is not an entry.
+let parseLine (line: string) : Entry option =
+  try
+    use doc = JsonDocument.Parse line
+    let root = doc.RootElement
+    let text (name: string) =
+      match root.TryGetProperty name with
+      | true, v when v.ValueKind = JsonValueKind.String -> v.GetString() |> Option.ofObj |> Option.defaultValue ""
+      | _ -> ""
+    let number (name: string) =
+      match root.TryGetProperty name with
+      | true, v when v.ValueKind = JsonValueKind.Number -> v.GetInt64()
+      | _ -> 0L
+    let args =
+      match root.TryGetProperty "args" with
+      | true, a when a.ValueKind = JsonValueKind.Array ->
+        a.EnumerateArray() |> Seq.choose (fun v -> match v.ValueKind with | JsonValueKind.String -> v.GetString() |> Option.ofObj | _ -> None) |> List.ofSeq
+      | _ -> []
+    match text "command" with
+    | "" -> None
+    | command ->
+      Some { StartMs = number "startMs"; EndMs = number "endMs"; Editor = text "editor"; Command = command; Args = args; Outcome = text "outcome" }
+  with :? JsonException -> None
+
+/// Every entry in a timeline file, in the order written.
+let readAll (path: string) : Entry list =
+  match File.Exists path with
+  | false -> []
+  | true -> File.ReadAllLines path |> Array.choose parseLine |> List.ofArray
+
 /// Appends one line. Several driver processes can run at once (the lemming's and the
 /// harness's), so the file is opened for append with sharing and each entry goes down in a
 /// single write. A failure to log never fails the command.

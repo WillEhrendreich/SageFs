@@ -53,6 +53,8 @@ module LemTask =
 /// One thing the harness checks.
 type Check =
   | SessionEvaled of minEvals: int
+  /// A session under the run directory loaded a project whose path matches.
+  | SessionLoadsProject of pathPattern: string
   | WorkflowIs of pattern: string
   | StatusBarShows of pattern: string
   | FixtureTestsPass
@@ -67,6 +69,7 @@ module Check =
   let describe (c: Check) : string =
     match c with
     | SessionEvaled n -> sprintf "a session under the run directory evaluated at least %d time(s)" n
+    | SessionLoadsProject p -> sprintf "a session under the run directory loaded a project matching /%s/" p
     | WorkflowIs p -> sprintf "a session under the run directory has a workflow matching /%s/" p
     | StatusBarShows p -> sprintf "the status bar shows /%s/" p
     | FixtureTestsPass -> "the project's test suite passes (the harness ran it)"
@@ -86,7 +89,7 @@ let checksFor (t: LemTask) : Check list =
   match t with
   | UiEval -> [ SessionEvaled 1; EvalOutputSeen EvalOfParseSeedSeven ]
   | UiEditReeval -> [ SessionEvaled 1; EvalOutputSeen EvalOfParseSeedNegative; FixtureTestsPass ]
-  | UiLiveTests -> [ SessionEvaled 0; StatusBarShows @"\d+/\d+" ]
+  | UiLiveTests -> [ SessionLoadsProject @"\.Tests\.fsproj$"; StatusBarShows @"\d+/\d+" ]
   | UiHotReload -> [ WorkflowIs "(?i)hot"; SageFsViewsShow "(?i)watch(ing|ed)" ]
   | UiFindHelp -> [ AnswerNamesCommands "ANSWER.md" ]
 
@@ -204,15 +207,24 @@ let private runCheck (runDir: string) (workspace: string) (port: int) (sessions:
             match best.EvalCount >= n with
             | true -> Met(sprintf "session %s under the run directory has %d eval(s)" best.Id best.EvalCount)
             | false -> NotMet(sprintf "session %s has %d eval(s), wanted %d" best.Id best.EvalCount n)
+    | SessionLoadsProject pattern ->
+      return
+        match sessions with
+        | Result.Error e -> NotMet e
+        | Ok all ->
+          let mine = all |> List.filter (underWorkspace workspace)
+          match mine |> List.tryPick (fun s -> s.ProjectPaths |> List.tryFind (fun p -> Regex.IsMatch(p, pattern)) |> Option.map (fun p -> s.Id, p)) with
+          | Some(id, path) -> Met(sprintf "session %s loaded %s" id path)
+          | None -> NotMet(sprintf "no session under %s loaded a project matching /%s/ (%d session(s) under it)" workspace pattern mine.Length)
     | EvalOutputSeen pattern ->
-      let recorded = Path.Combine(runDir, "out", "daemon-events.sse")
+      let recorded = Path.Combine(runDir, "out", Daemon.RecordedEvalsFile)
       return
         match sessions, File.Exists recorded with
         | Result.Error e, _ -> NotMet e
-        | _, false -> NotMet "the harness recorded no daemon event stream (no out/daemon-events.sse)"
+        | _, false -> NotMet(sprintf "the harness recorded no daemon eval output (no out/%s)" Daemon.RecordedEvalsFile)
         | Ok all, true ->
           let ids = all |> List.filter (underWorkspace workspace) |> List.map (fun s -> s.Id)
-          let outputs = Daemon.evalOutputsIn (File.ReadAllText recorded) ids
+          let outputs = Daemon.evalOutputsIn (Daemon.readRecorded recorded) ids
           match outputs |> List.tryFind (fun o -> Regex.IsMatch(o, pattern)) with
           | Some _ -> Met(sprintf "an eval in session(s) %s printed /%s/" (String.Join(", ", ids)) pattern)
           | None -> NotMet(sprintf "none of the %d eval event(s) from session(s) %s printed /%s/" (List.length outputs) (String.Join(", ", ids)) pattern)

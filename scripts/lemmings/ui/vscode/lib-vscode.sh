@@ -184,6 +184,7 @@ vsc_write_profile() {
   "extensions.autoCheckUpdates": false,
   "telemetry.telemetryLevel": "off",
   "chat.disableAIFeatures": true,
+  "workbench.secondarySideBar.defaultVisibility": "hidden",
   "workbench.tips.enabled": false,
   "sagefs.mcpPort": ${LEM_PORT:-37749},
   "sagefs.dashboardPort": ${LEM_DASH_PORT:-37750},

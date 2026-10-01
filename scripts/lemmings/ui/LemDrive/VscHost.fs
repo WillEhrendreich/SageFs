@@ -1,5 +1,6 @@
 /// The harness's own commands on the VS Code window, run OUTSIDE the sandbox by the
 /// runner (`LemDrive host <verb> ...`). The lemming never sees these.
+///   host events --port N --out FILE        record the daemon's eval output for the run
 ///   host ready --cdp-port P [--wait S]     wait until the SageFs extension is up in the window
 ///   host snapshot --cdp-port P --out FILE  write the window as text (the end-of-run evidence)
 ///   host sessions --port N --out FILE      write the shared daemon's sessions, one line each
@@ -115,6 +116,52 @@ let private sessions (args: string list) : Task<Outcome> =
         return Output(sprintf "wrote %d session(s) to %s" all.Length out)
   }
 
+/// How long `host events` listens when no --seconds is given: longer than any run.
+[<Literal>]
+let DefaultListenSeconds = 3600
+
+/// host events --port N --out FILE [--seconds S]
+/// Listens to the daemon's /events stream (the stream the dashboard uses) and writes one line
+/// per `eval_diff` event: when it was heard, which session, and the output lines it added.
+/// Run in the background by the runner for the whole trial and stopped by exact pid.
+let private events (args: string list) : Task<Outcome> =
+  task {
+    let m = flags args
+    let port = intFlag m "port" Daemon.DefaultMcpPort
+    let seconds = intFlag m "seconds" DefaultListenSeconds
+    match Map.tryFind "out" m with
+    | None -> return BadUsage "host events needs --out FILE"
+    | Some out ->
+      let mutable count = 0
+      try
+        use client = new Net.Http.HttpClient(Timeout = Threading.Timeout.InfiniteTimeSpan)
+        use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds(float seconds))
+        let! resp = client.GetAsync(sprintf "http://localhost:%d/events" port, Net.Http.HttpCompletionOption.ResponseHeadersRead, cts.Token)
+        use resp = resp
+        let! stream = resp.Content.ReadAsStreamAsync cts.Token
+        use reader = new StreamReader(stream)
+        use writer = new StreamWriter(out, false, Text.UTF8Encoding(false))
+        writer.AutoFlush <- true
+        let mutable current = ""
+        let mutable reading = true
+        while reading do
+          let! line = reader.ReadLineAsync cts.Token
+          match line with
+          | null -> reading <- false
+          | l when l.StartsWith "event:" -> current <- l.Substring(6).Trim()
+          | l when l.StartsWith "data:" && current = Daemon.EvalDiffEvent ->
+            match Daemon.evalOutputOfEventData (Timeline.nowMs ()) (l.Substring(5).Trim()) with
+            | Some e ->
+              writer.WriteLine(Daemon.toRecordedLine e)
+              count <- count + 1
+            | None -> ()
+          | _ -> ()
+        return Output(sprintf "the event stream ended after %d eval event(s)" count)
+      with
+      | :? OperationCanceledException -> return Output(sprintf "listened for %d s, %d eval event(s)" seconds count)
+      | ex -> return DriveFailed(sprintf "could not listen to the daemon's events on %d: %s" port ex.Message)
+  }
+
 /// Reads back what `host sessions` wrote.
 let private readSessionsTsv (path: string) : Daemon.DaemonSession list =
   match File.Exists path with
@@ -154,6 +201,7 @@ let private foreign (args: string list) : Outcome =
 let cli (args: string list) : Outcome =
   match args with
   | "foreign" :: rest -> foreign rest
+  | "events" :: rest -> (events rest).GetAwaiter().GetResult()
   | "ready" :: rest -> (ready rest).GetAwaiter().GetResult()
   | "snapshot" :: rest -> (snapshot rest).GetAwaiter().GetResult()
   | "sessions" :: rest -> (sessions rest).GetAwaiter().GetResult()

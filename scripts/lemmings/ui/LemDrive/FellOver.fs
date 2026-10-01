@@ -73,22 +73,26 @@ let private clip (text: string) : string =
 type EvalFacts =
   { /// Evaluations in sessions under the run directory.
     OwnEvals: int
-    /// Sessions outside the run directory whose evals rose: id, working directory, rise.
-    Foreign: (string * string * int) list }
+    /// Sessions outside the run directory that printed eval output while the lemming's
+    /// evaluation attempts were running: id and working directory.
+    ReachedOutside: (string * string) list }
 
-/// A driver call that tries to evaluate: Alt+Enter, or a command or click that says "eval".
-let private triesToEvaluate (c: Call) : bool =
-  let lower = c.Command.ToLowerInvariant()
+/// Does a driver command line try to evaluate: Alt+Enter, or a command or click that says "eval".
+let tryingToEvaluate (commandLine: string) : bool =
+  let lower = commandLine.ToLowerInvariant()
   lower.Contains "alt+enter" || lower.Contains "alt+return" || lower.Contains "eval"
+
+let private triesToEvaluate (c: Call) : bool = tryingToEvaluate c.Command
 
 /// The lemming evaluated, and the editor sent it to a session that is not the lemming's own:
 /// the extension keeps using whichever session was active when the window opened.
 let private foreignEntries (calls: Call list) (facts: EvalFacts) : Entry list =
-  match calls |> List.exists triesToEvaluate, facts.OwnEvals, facts.Foreign with
-  | true, 0, (id, dir, rise) :: _ ->
+  match calls |> List.exists triesToEvaluate, facts.OwnEvals, facts.ReachedOutside with
+  | true, 0, (_ :: _ as outside) ->
+    let named = outside |> List.map (fun (id, dir) -> sprintf "%s (%s)" id dir) |> String.concat "; "
     [ { Stage = "Eval"
-        Symptom = "the lemming evaluated from the editor, but no evaluation reached a session under its run directory; one outside it took them"
-        Evidence = sprintf "session %s (%s) evaluated %d more time(s) during the run; the run's own sessions evaluated 0" id dir rise } ]
+        Symptom = "the lemming evaluated from the editor, but the output went to a session outside its run directory, and its own sessions evaluated nothing"
+        Evidence = sprintf "eval output appeared in %s while the lemming's evaluation calls ran" named } ]
   | _ -> []
 
 /// The entries for a run. `expectSession` is whether the task should have made a session;
@@ -140,30 +144,36 @@ let toJson (items: Entry list) : string =
 let write (runDir: string) (expectSession: bool) (sessionsOnDashboard: int) : int =
   let calls = readCalls (Path.Combine(runDir, "out", "screens"))
   let out = Path.Combine(runDir, "out")
-  let foreign =
-    let path = Path.Combine(out, "foreign.tsv")
+  let workspace = Path.Combine(runDir, "w")
+  let underWorkspace (dir: string) = dir = workspace || dir.StartsWith(workspace + "/")
+  // The sessions list read just before cleanup: id, evals and working directory of each.
+  let sessionRows =
+    let path = Path.Combine(out, "sessions.after.tsv")
     match File.Exists path with
     | false -> []
     | true ->
       File.ReadAllLines path
+      |> Array.skip 1
       |> Array.choose (fun l ->
         match l.Split('\t') with
-        | [| id; dir; rise |] -> (match Int32.TryParse rise with | true, n -> Some(id, dir, n) | _ -> None)
+        | [| id; _; evals; _; dir |] -> Some(id, (match Int32.TryParse evals with | true, n -> n | _ -> 0), dir)
         | _ -> None)
       |> List.ofArray
-  // The run's own evals: the sessions list read just before cleanup, sessions under the workspace.
-  let ownEvals =
-    let path = Path.Combine(out, "sessions.after.tsv")
-    let workspace = Path.Combine(runDir, "w")
-    match File.Exists path with
-    | false -> 0
-    | true ->
-      File.ReadAllLines path
-      |> Array.skip 1
-      |> Array.sumBy (fun l ->
-        match l.Split('\t') with
-        | [| _; _; evals; _; dir |] when dir = workspace || dir.StartsWith(workspace + "/") -> (match Int32.TryParse evals with | true, n -> n | _ -> 0)
-        | _ -> 0)
-  let items = entriesWithEvals calls expectSession sessionsOnDashboard { OwnEvals = ownEvals; Foreign = foreign }
+  let ownEvals = sessionRows |> List.sumBy (fun (_, evals, dir) -> if underWorkspace dir then evals else 0)
+  // Where the lemming's evaluation attempts went: the sessions that printed eval output while
+  // those driver calls were running (the recorded daemon stream against the actions clock).
+  let spans =
+    Timeline.readAll (Path.Combine(out, "timeline.ndjson"))
+    |> List.filter (fun t -> tryingToEvaluate (String.Join(" ", t.Command :: t.Args)))
+    |> List.map (fun t -> t.StartMs, t.EndMs)
+  let reached = Daemon.sessionsEvaluatingDuring (Daemon.readRecorded (Path.Combine(out, Daemon.RecordedEvalsFile))) spans
+  let outside =
+    reached
+    |> List.choose (fun id ->
+      match sessionRows |> List.tryFind (fun (sid, _, _) -> sid = id) with
+      | Some(_, _, dir) when underWorkspace dir -> None
+      | Some(_, _, dir) -> Some(id, dir)
+      | None -> Some(id, "a session that is gone or was created during the run"))
+  let items = entriesWithEvals calls expectSession sessionsOnDashboard { OwnEvals = ownEvals; ReachedOutside = outside }
   File.WriteAllText(Path.Combine(runDir, "out", "fellover.extra.json"), toJson items)
   List.length calls

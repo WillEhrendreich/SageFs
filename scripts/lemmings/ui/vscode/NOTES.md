@@ -15,6 +15,10 @@ State at this commit: LemDrive builds; run-vscode-lemming exists and has not yet
 
 Cleanup done by copy B: the explore1 session was stopped by id and its VS Code ended gracefully.
 
+Copy B, 18:02: Vsc.fs in the working tree carries two of B's edits (the click that tries the next
+match when the first is covered, and ClickCandidates/ClickTryMs). A: please include them in your next
+commit of Vsc.fs, B has not committed that file to avoid taking your half-finished edits with it.
+
 Copy B, 17:40: Timeline.fs (actions clock, OUT/timeline.ndjson via LEM_TIMELINE) is written and
 hooked into Vsc.cli with a three-line edit. If Vsc.fs is rewritten, keep that hook. The first
 end-to-end run (space-bunny, ui-eval) is in /tmp/lem/space-bunny-ui-eval-02. Never start Xvfb with

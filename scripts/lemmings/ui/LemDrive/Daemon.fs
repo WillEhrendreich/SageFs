@@ -165,23 +165,78 @@ let callTool (port: int) (tool: string) (arguments: (string * string) list) : Re
       finally close ()
   with ex -> Result.Error(sprintf "MCP call %s failed: %s" tool ex.Message)
 
-/// What the daemon's `/events` stream said about evaluation in the given sessions: the text
-/// of every `eval_diff` event for those session ids (the lines of eval output, with their
-/// results). The runner records the stream to a file for the whole run, because the daemon
-/// keeps no per-session eval history that another client can read.
-let evalOutputsIn (sseText: string) (sessionIds: string list) : string list =
-  let lines = sseText.Split('\n') |> Array.map (fun l -> l.TrimEnd('\r'))
-  [ for i in 0 .. lines.Length - 2 do
-      if lines[i] = "event: eval_diff" && lines[i + 1].StartsWith "data:" then
-        let data = lines[i + 1].Substring(5).Trim()
-        let mine =
-          try
-            use doc = JsonDocument.Parse data
-            match doc.RootElement.TryGetProperty "SessionId" with
-            | true, v when v.ValueKind = JsonValueKind.String -> sessionIds |> List.contains (v.GetString() |> Option.ofObj |> Option.defaultValue "")
-            | _ -> false
-          with :? JsonException -> false
-        if mine then yield data ]
+/// The one kind of daemon event the harness keeps: new lines of eval output in a session.
+[<Literal>]
+let EvalDiffEvent = "eval_diff"
+
+/// The file in out/ where the runner records the daemon's eval output for the run.
+[<Literal>]
+let RecordedEvalsFile = "daemon-evals.tsv"
+
+/// One thing the daemon said about evaluation, with when the harness heard it.
+type EvalOutput =
+  { AtMs: int64
+    SessionId: string
+    /// The lines of output that the evaluation added, joined with a newline.
+    Added: string }
+
+/// Reads one `eval_diff` event's data: the session and the output lines it added. None when
+/// it is not that shape.
+let evalOutputOfEventData (atMs: int64) (data: string) : EvalOutput option =
+  try
+    use doc = JsonDocument.Parse data
+    match prop "SessionId" doc.RootElement, prop "Lines" doc.RootElement with
+    | Some sid, Some lines when sid.ValueKind = JsonValueKind.String && lines.ValueKind = JsonValueKind.Array ->
+      let added =
+        lines.EnumerateArray()
+        |> Seq.choose (fun l ->
+          match str "Kind" l, str "Text" l with
+          | Some "added", Some t -> Some t
+          | _ -> None)
+        |> List.ofSeq
+      Some { AtMs = atMs; SessionId = sid.GetString() |> Option.ofObj |> Option.defaultValue ""; Added = String.Join("\n", added) }
+    | _ -> None
+  with :? JsonException -> None
+
+/// One recorded event as a line: epoch ms, session id, then the added text with newlines and
+/// tabs escaped so it stays on the one line.
+let toRecordedLine (e: EvalOutput) : string =
+  let flat = e.Added.Replace("\\", "\\\\").Replace("\n", "\\n").Replace("\t", " ")
+  sprintf "%d\t%s\t%s" e.AtMs e.SessionId flat
+
+let fromRecordedLine (line: string) : EvalOutput option =
+  match line.Split('\t') with
+  | [| ms; sid; text |] ->
+    match Int64.TryParse ms with
+    | true, at ->
+      let unescaped = text.Replace("\\n", "\n").Replace("\\\\", "\\")
+      Some { AtMs = at; SessionId = sid; Added = unescaped }
+    | false, _ -> None
+  | _ -> None
+
+/// The eval output the runner recorded from the daemon's `/events` stream for the whole run,
+/// because the daemon keeps no per-session eval history that another client can read.
+let readRecorded (path: string) : EvalOutput list =
+  match IO.File.Exists path with
+  | false -> []
+  | true -> IO.File.ReadAllLines path |> Array.choose fromRecordedLine |> List.ofArray
+
+/// The eval output of the given sessions.
+let evalOutputsIn (recorded: EvalOutput list) (sessionIds: string list) : string list =
+  recorded |> List.filter (fun e -> sessionIds |> List.contains e.SessionId) |> List.map (fun e -> e.Added)
+
+/// How long after a driver call ended an evaluation it started may still print: the result
+/// of an eval arrives after the call (which only presses the keys and reads the window).
+[<Literal>]
+let EvalLagMs = 8000L
+
+/// The sessions that printed eval output during any of the (start, end) spans, each widened
+/// by the lag: where the lemming's evaluation attempts actually went.
+let sessionsEvaluatingDuring (recorded: EvalOutput list) (spans: (int64 * int64) list) : string list =
+  recorded
+  |> List.filter (fun e -> spans |> List.exists (fun (s, f) -> e.AtMs >= s && e.AtMs <= f + EvalLagMs))
+  |> List.map (fun e -> e.SessionId)
+  |> List.distinct
 
 /// Sessions outside the run directory whose evaluation count rose between two readings of
 /// the sessions list, with how much. Other agents use the shared daemon at the same time, so
