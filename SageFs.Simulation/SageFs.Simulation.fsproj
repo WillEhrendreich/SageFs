@@ -98,6 +98,9 @@
         <Compile Include="GuardSim.fs" />
         <Compile Include="GuardSimInvariants.fs" />
         <Compile Include="GuardSimGenerators.fs" />
+        <Compile Include="DeltaRouteSim.fs" />
+        <Compile Include="DeltaRouteInvariants.fs" />
+        <Compile Include="DeltaRouteGenerators.fs" />
         <!-- Build confirmation DST: folds the real BuildConfirmation decision through evaluated
              runs, newer edits, quiet windows, builds that finish late or fail or hang, and
              deadlines firing in every order; twins apply stale answers, build without waiting

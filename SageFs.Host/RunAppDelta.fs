@@ -135,10 +135,14 @@ type Session private (assembly: Assembly, project: string, workingDir: string, b
             | SaveDecision.Apply, (PrepareOutcome.NothingChanged | PrepareOutcome.Refused _) ->
               return SaveResult.Restart(Refusal.Unavailable "the route decided to apply a delta that was not prepared", [])
             | SaveDecision.Apply, PrepareOutcome.Ready delta ->
-              match DeltaApply.check capability assembly delta.Payload with
-              | CapabilityCheck.Incapable found ->
+              match DeltaApply.check capability assembly delta.Payload, DeltaSession.decide standing running gaps (Preparation.Ready delta.FromGeneration) with
+              | CapabilityCheck.Incapable found, _ ->
                 return SaveResult.Restart(Refusal.Unavailable(found |> List.map DeltaApply.describeGap |> String.concat "; "), [])
-              | CapabilityCheck.Capable ->
+              // Asked again at the moment of the call, against the standing as it is then: the saves are taken one at a time,
+              // and this is what makes that a property of the decision and not only of the lock around it.
+              | CapabilityCheck.Capable, SaveDecision.Restart(first, rest) -> return SaveResult.Restart(first, rest)
+              | CapabilityCheck.Capable, SaveDecision.Unchanged -> return SaveResult.Unchanged
+              | CapabilityCheck.Capable, SaveDecision.Apply ->
                 watch.Restart()
                 let outcome = DeltaApply.apply assembly delta.Payload
                 let applyMs = watch.Elapsed.TotalMilliseconds
