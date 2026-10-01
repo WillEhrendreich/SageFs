@@ -291,3 +291,86 @@ let tests =
         outcome.Effects |> Expect.isEmpty "no impacted tests means no work"
       | None -> failtest "expected a no-impacted decision"
   ]
+
+// ---------------------------------------------------------------------------
+// The live loop must never turn "the narrow found nothing" into a green pane.
+// These drive `LiveTestCycleState.handleFcsResult`, the function the keystroke
+// path really calls, so `onFcsComplete` (name diff, graph update) runs first
+// exactly as it does in the daemon.
+// ---------------------------------------------------------------------------
+
+let private libRefs : SymbolReference list =
+  [ { SymbolFullName = "Lib.add"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 } ]
+
+/// A session that has already type-checked `Lib.fs` once, so a second check of
+/// the same symbols reports `Changed = []`: the body-only edit shape.
+let private afterFirstCheck trigger (tests: TestCase array) (graph: TestDependencyGraph) : LiveTestCycleState =
+  { LiveTestCycleState.empty with
+      TestState =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            DiscoveredTests = tests }
+      DepGraph = graph
+      AnalysisCache = { FileSymbols = Map.ofList [ "Lib.fs", libRefs ] }
+      LastTrigger = trigger
+      ActiveFile = Some "Lib.fs"
+      LatestContent = Some "module Lib\nlet add a b = a - b" }
+
+let private recheck (state: LiveTestCycleState) =
+  LiveTestCycleState.handleFcsResult (FcsTypeCheckResult.Success ("Lib.fs", libRefs)) state
+
+[<Tests>]
+let noEmptyEscapeTests =
+  testList "Live testing never reads an empty selection as green" [
+    // Cold start. The dependency graph has seen no test file at all, so the
+    // name delta (empty: same symbols) and the file-scope narrow (nothing in
+    // the graph) both find nothing. On a save that already widens to every
+    // discovered test; on a keystroke it selected nothing and said "no impacted
+    // tests", which the pane shows as green on a real regression.
+    testCase "a body-only keystroke edit with an empty dependency graph selects the discovered tests, not nothing" <| fun _ ->
+      let t1 = mkTest "Lib.Tests.adds" TestCategory.Unit
+      let t2 = mkTest "Other.Tests.greets" TestCategory.Unit
+      let effects, state' =
+        afterFirstCheck RunTrigger.Keystroke [| t1; t2 |] TestDependencyGraph.empty
+        |> recheck
+      match state'.TestState.LastDecision with
+      | Some decision ->
+        decision.Explanation.Precision
+        |> Expect.equal "nothing could be narrowed, so the decision must say it widened" SelectionPrecision.ConservativeFallback
+        decision.Explanation.SelectedTests
+        |> Array.sort
+        |> Expect.equal "every discovered test is selected" ([| t1.FullName; t2.FullName |] |> Array.sort)
+        effects
+        |> List.isEmpty
+        |> Expect.isFalse "a run must actually be queued"
+      | None -> failtest "expected a decision"
+
+    // Same cold start, same edit, on save: the existing behavior, pinned so the
+    // keystroke fix cannot regress it.
+    testCase "the same body-only edit on save with an empty graph still widens to the discovered tests" <| fun _ ->
+      let t1 = mkTest "Lib.Tests.adds" TestCategory.Unit
+      let _, state' =
+        afterFirstCheck RunTrigger.FileSave [| t1 |] TestDependencyGraph.empty
+        |> recheck
+      match state'.TestState.LastDecision with
+      | Some decision ->
+        decision.Explanation.SelectedTests |> Expect.equal "the one discovered test" [| t1.FullName |]
+      | None -> failtest "expected a decision"
+
+    // Policy still has the last word on a keystroke: a save-only category stays
+    // quiet, and the decision names the policy instead of reading as "no impacted
+    // tests".
+    testCase "the widened keystroke selection still honors a save-only policy and says so" <| fun _ ->
+      let t1 = mkTest "Lib.Tests.adds" TestCategory.Unit
+      let seeded = afterFirstCheck RunTrigger.Keystroke [| t1 |] TestDependencyGraph.empty
+      let state =
+        { seeded with
+            TestState = { seeded.TestState with RunPolicies = Map.ofList [ TestCategory.Unit, RunPolicy.OnSaveOnly ] } }
+      let effects, state' = recheck state
+      effects |> Expect.isEmpty "a save-only category must not run on a keystroke"
+      match state'.TestState.LastDecision with
+      | Some decision ->
+        decision.Explanation.Precision
+        |> Expect.equal "the silence is policy, not 'no impacted tests'" SelectionPrecision.SuppressedByPolicy
+      | None -> failtest "expected a decision"
+  ]
