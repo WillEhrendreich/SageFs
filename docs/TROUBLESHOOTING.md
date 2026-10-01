@@ -280,7 +280,11 @@ before it; and a hot-reload compile held the compiler past
 - Check the session's health. A project built with optimizations is reported as
   Degraded (see [When health says Degraded](#when-health-says-degraded))
 - A session whose directory is your home directory or a filesystem root is not
-  watched at all. See [Hot reload and file watching](hot-reload.md#file-watching)
+  watched at all. See [Hot reload and file watching](hot-reload.md#file-watching).
+  A daemon started with your home directory as its working directory hits this
+  for every request that names no directory, so start it from a project or a
+  neutral directory. The systemd unit in `contrib/systemd` runs it from
+  `~/.local/state/sagefs` for that reason
 
 ### Live testing not running
 

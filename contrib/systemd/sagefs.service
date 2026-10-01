@@ -13,6 +13,15 @@
 # launcher finds the runtime through DOTNET_ROOT, and a user unit does not read
 # your shell profile, so it is set here. Change both lines if dotnet lives
 # somewhere else.
+#
+# The daemon's working directory is NOT your home directory. A request that names
+# no working directory (a session create, get_available_projects) falls back to
+# the daemon's own cwd, so a daemon started in $HOME hands $HOME out as a session
+# root. SageFs refuses to watch a home directory (a recursive watch there would
+# spend an inotify watch on every directory under it), so a session rooted there
+# gets no hot reload and no live testing. StateDirectory=sagefs makes systemd
+# create ~/.local/state/sagefs (%S/sagefs) before the daemon starts, and
+# WorkingDirectory points at it. Open your sessions in a project directory.
 
 [Unit]
 Description=SageFs daemon (F# REPL, MCP server, dashboard)
@@ -21,7 +30,8 @@ After=network.target
 [Service]
 Type=simple
 Environment=DOTNET_ROOT=%h/.dotnet
-WorkingDirectory=%h
+StateDirectory=sagefs
+WorkingDirectory=%S/sagefs
 ExecStart=%h/.dotnet/tools/sagefs --supervised
 Restart=on-failure
 RestartSec=5

@@ -187,7 +187,7 @@ cp contrib/systemd/sagefs.service ~/.config/systemd/user/
 systemctl --user enable --now sagefs
 ```
 
-[`contrib/systemd/sagefs.service`](contrib/systemd/sagefs.service) is a user unit. It runs `~/.dotnet/tools/sagefs --supervised`, restarts it on failure, and starts it at login (`loginctl enable-linger $USER` if you want it at boot). `systemctl --user status sagefs` shows it, `journalctl --user -u sagefs` has its logs. When an agent then runs `sagefs mcp`, it finds your daemon already up and just bridges to it, so nothing it does can take the daemon down.
+[`contrib/systemd/sagefs.service`](contrib/systemd/sagefs.service) is a user unit. It runs `~/.dotnet/tools/sagefs --supervised`, restarts it on failure, and starts it at login (`loginctl enable-linger $USER` if you want it at boot). `systemctl --user status sagefs` shows it, `journalctl --user -u sagefs` has its logs. The unit runs the daemon from `~/.local/state/sagefs`, which systemd creates (`StateDirectory=`), and not from your home directory: a request that names no directory falls back to the daemon's cwd, and SageFs refuses to watch a home directory, so a daemon started in `$HOME` would give you sessions with no hot reload and no live testing ([`FileWatcher.fs`](SageFs.Core/FileWatcher.fs), `classifyWatchRoot`). When an agent then runs `sagefs mcp`, it finds your daemon already up and just bridges to it, so nothing it does can take the daemon down.
 
 ### 4. Connect your editor
 
