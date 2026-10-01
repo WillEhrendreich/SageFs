@@ -299,6 +299,7 @@
          <Compile Include="JsonCoreFilesTests.fs" />
          <Compile Include="EvalPreflightTests.fs" />
          <Compile Include="McpSwitchWorkflowTests.fs" />
+         <Compile Include="McpJsonWireTests.fs" />
          <Compile Include="ListTestsSessionScopeTests.fs" />
          <Compile Include="WorkerReadyCommitTests.fs" />
          <Compile Include="SupervisorWatchdogSimTests.fs" />

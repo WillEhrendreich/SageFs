@@ -102,7 +102,7 @@ type Io =
 /// the client sent it and is owed an answer, even though the bridge can't
 /// forward it. A `Notification`/`Response`/`Unparseable` has no id to
 /// answer against, so it's only logged to stderr — never silently dropped.
-let private writeRejection (stdout: StdoutWriter) (msg: RpcMessage) (reason: string) =
+let internal writeRejection (stdout: StdoutWriter) (msg: RpcMessage) (reason: string) =
   match msg with
   | RpcMessage.Request(id, _, _) ->
     let idJson =

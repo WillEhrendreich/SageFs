@@ -1228,7 +1228,7 @@ module McpTools =
   /// "Starting" while /api/sessions and the daemon log already knew Failed.
   /// INVARIANT: called only with WarmingUp / Unroutable / FaultedSession —
   /// Routable and Gone are handled by their own callers and never reach here.
-  let private renderWarmingOrFaulted (ctx: McpContext) (resolution: SessionResolution) : Task<string> =
+  let internal renderWarmingOrFaulted (ctx: McpContext) (resolution: SessionResolution) : Task<string> =
     task {
       match resolution with
       | WarmingUp (sid, status) | Unroutable (sid, status) ->
