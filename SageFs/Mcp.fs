@@ -180,7 +180,7 @@ module McpTools =
   /// AgentActivityTracker cleanup window (DaemonMode's periodic sweep evicts
   /// agents idle longer than this): an agent that has not recorded a tool
   /// call in this long is treated as gone.
-  let private staleAgentTimeout = TimeSpan.FromMinutes 5.0
+  let private staleAgentTimeout = Timeouts.agentPresenceEviction
 
   /// Opportunistic SessionMap eviction, run at the reads that surface
   /// occupancy (list_sessions / get_fsi_status) so the map converges no
@@ -1152,7 +1152,7 @@ module McpTools =
           let enrichedOutput =
             match filePath with
             | Some fp ->
-              let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+              let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) Timeouts.agentPresenceEviction DateTime.UtcNow
               let advisories = SessionOperations.FileOverlapAdvisory.compute (resolvedKey agentName) [fp] presences
               SessionOperations.CoordinationEnrichment.enrichEvalWithAdvisories advisories finalOutput
             | None -> finalOutput

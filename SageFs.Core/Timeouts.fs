@@ -304,6 +304,34 @@ module Timeouts =
 
   // -- Daemon / Server --
   let workerEndpointFetch = TimeSpan.FromMilliseconds(500.0)
+  /// How long the daemon waits for a worker's `/warmup-context` answer when the
+  /// Elm loop asks for a session's warmup context. A worker that is up answers
+  /// from memory, so a wait this long means it is wedged. No recorded reason
+  /// for 5s.
+  let workerWarmupContextFetch = TimeSpan.FromSeconds(5.0)
+  /// How long a dashboard action waits for the session's output buffer to commit
+  /// the output it just dispatched, so the action's reply does not race the SSE
+  /// stream's previous snapshot. If it passes, the action returns anyway (both
+  /// callers ignore the "committed" result). No recorded reason for 2s.
+  let outputCommitWait = TimeSpan.FromSeconds(2.0)
+  /// Daemon shutdown bounds. After Ctrl+C the watchdog forces the process out if
+  /// graceful shutdown has not finished.
+  let gracefulShutdownWatchdog = TimeSpan.FromSeconds(5.0)
+  /// How long shutdown waits for the owner to write the final manifest to disk
+  /// before it logs that the shutdown may not be recorded and carries on.
+  let shutdownManifestCommit = TimeSpan.FromSeconds(10.0)
+  /// How long shutdown waits for an in-flight test cycle timer callback to
+  /// return before it logs that the callback may still be running.
+  let testCycleTimerStop = TimeSpan.FromSeconds(3.0)
+  /// How long shutdown waits for an in-flight periodic manifest save to return,
+  /// so a late save cannot overwrite the shutdown manifest's stopped stamps.
+  let cacheSaveTimerStop = TimeSpan.FromSeconds(5.0)
+  /// How often the daemon asks the session manager to refresh every session's
+  /// status, so SSE subscribers see warmup progress (Starting to Ready). A poll
+  /// that should be an event: the session manager already knows when a status
+  /// changes. 10s because a steady-state refresh is cheap but a 2s cadence
+  /// dominated the dashboard's render budget.
+  let sessionStatusPoll = TimeSpan.FromSeconds(10.0)
   /// How long the daemon waits before listening again after a worker's reload
   /// stream closed on its own (WorkerReloadRelay). A worker that's gone by then
   /// has no URL in the snapshot and the relay just stops.

@@ -1117,11 +1117,11 @@ let performGracefulShutdown
   // mark these sessions alive again.
   let shutdownSync = manifestOwner.Commit (liveSyncMutation snapshot activeSessionId (Some now))
   try
-    let! committed = shutdownSync.WaitAsync(TimeSpan.FromSeconds 10.0)
+    let! committed = shutdownSync.WaitAsync(Timeouts.shutdownManifestCommit)
     logManifestCommit log LogLevel.Information "Shutdown manifest save" committed
   with
   | :? TimeoutException ->
-    log.LogWarning("Shutdown manifest save did not finish within 10s — this shutdown may not be recorded")
+    log.LogWarning("Shutdown manifest save did not finish within {Timeout}s — this shutdown may not be recorded", Timeouts.shutdownManifestCommit.TotalSeconds)
   | ex ->
     log.LogWarning("Shutdown manifest save failed: {Error}", ex.Message)
 
@@ -1856,7 +1856,7 @@ let createElmRuntime
         // asking anyway just logs a refused connection with a stack.
         match planWorkerFetch snapshot sidTyped with
         | WorkerFetchPlan.FetchFrom url ->
-          use timeoutCts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(5.0))
+          use timeoutCts = new System.Threading.CancellationTokenSource(Timeouts.workerWarmupContextFetch)
           use linkedCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token)
           let! resp =
             httpClient.GetStringAsync(System.Uri(sprintf "%s/warmup-context" url), linkedCts.Token)
@@ -2022,7 +2022,7 @@ let dispatchOutputAndWait
         | true -> committed.TrySetResult(true) |> ignore
         | false -> ())
     elmRuntime.Dispatch message
-    let! completed = System.Threading.Tasks.Task.WhenAny(committed.Task, System.Threading.Tasks.Task.Delay(2000))
+    let! completed = System.Threading.Tasks.Task.WhenAny(committed.Task, System.Threading.Tasks.Task.Delay(Timeouts.outputCommitWait))
     return obj.ReferenceEquals(completed, committed.Task) && committed.Task.Result
   }
 
@@ -3079,7 +3079,7 @@ let run
   let mutable activityCleanupTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
   let activityCleanupCallback _ =
     try
-      let outcome = AgentActivityTracker.cleanup activityTracker (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+      let outcome = AgentActivityTracker.cleanup activityTracker Timeouts.agentPresenceEviction DateTime.UtcNow
       match outcome with
       | SessionOperations.OccupancyCleanupOutcome.EvictedStale agents ->
         log.LogInformation("Agent cleanup: evicted stale agents: {Agents}", String.concat ", " agents)
@@ -3129,7 +3129,7 @@ let run
   // member's claims were never released on a live daemon. Renewal is keyed on
   // the cohort's OWN MemberIds (ReadCohortState), decoupled from the display
   // tracker's short eviction that broke the earlier attempt.
-  let cohortReaperRenewWindow = TimeSpan.FromMinutes 2.0
+  let cohortReaperRenewWindow = Timeouts.agentActivityFresh
   let mutable cohortReaperTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
   let cohortReaperCallback _ =
     try
@@ -3667,10 +3667,10 @@ let run
     GetSessionAgentBadges = fun sessionId ->
       let presences =
         AgentActivityTracker.getActivePresences
-          activityTracker (Some (WorkerProtocol.SessionId.value sessionId)) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+          activityTracker (Some (WorkerProtocol.SessionId.value sessionId)) Timeouts.agentPresenceEviction DateTime.UtcNow
       presences
       |> List.map (fun p ->
-        let freshness = SessionOperations.AgentPresence.freshness DateTime.UtcNow (TimeSpan.FromMinutes 2.0) p
+        let freshness = SessionOperations.AgentPresence.freshness DateTime.UtcNow Timeouts.agentActivityFresh p
         let cssClass =
           match freshness with
           | SessionOperations.AgentFreshness.Fresh -> "badge-agent"
@@ -3687,7 +3687,7 @@ let run
     GetSessionGuidanceCss = fun sessionId ->
       let presences =
         AgentActivityTracker.getActivePresences
-          activityTracker (Some (WorkerProtocol.SessionId.value sessionId)) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+          activityTracker (Some (WorkerProtocol.SessionId.value sessionId)) Timeouts.agentPresenceEviction DateTime.UtcNow
       let workers =
         presences
         |> List.filter (fun p -> p.Role = SessionOperations.OccupantRole.Worker)
@@ -3924,7 +3924,7 @@ let run
     e.Cancel <- true
     log.LogInformation("Shutting down...")
     // Start a watchdog — if graceful shutdown takes too long, force exit
-    System.Threading.Tasks.Task.Delay(5000).ContinueWith(fun (_: System.Threading.Tasks.Task) ->
+    System.Threading.Tasks.Task.Delay(Timeouts.gracefulShutdownWatchdog).ContinueWith(fun (_: System.Threading.Tasks.Task) ->
       log.LogWarning("Graceful shutdown timed out — forcing exit")
       // StopAll has its own graceful budget, but timer and watcher cleanup can
       // consume the watchdog window before it runs. Sweep the session PIDs from
@@ -3960,7 +3960,7 @@ let run
       cts.Token)
 
   // Brief yield to let servers bind their ports
-  do! System.Threading.Tasks.Task.Delay(200)
+  do! System.Threading.Tasks.Task.Delay(Timeouts.startupDelay)
 
   // Both host tasks run until `cts` is cancelled — completing on their own
   // this early means a required listener's bind failed (each one already
@@ -4067,7 +4067,7 @@ let run
       task {
         try
           while not cts.Token.IsCancellationRequested do
-            do! System.Threading.Tasks.Task.Delay(10_000, cts.Token)
+            do! System.Threading.Tasks.Task.Delay(Timeouts.sessionStatusPoll, cts.Token)
             elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
         with
         | :? OperationCanceledException -> ()
@@ -4110,12 +4110,12 @@ let run
   // W30(R12): Use Dispose(WaitHandle) for testCycleTimer — matches cacheSaveTimer treatment.
   // Bare Dispose() returns immediately; any in-flight 200ms tick callback could still be running
   // and call elmRuntime.Dispatch() after the elm runtime starts shutting down.
-  match! disposeTimerAndWait testCycleTimer (TimeSpan.FromSeconds 3.0) with
+  match! disposeTimerAndWait testCycleTimer Timeouts.testCycleTimerStop with
   | TimerStop.StillRunning -> log.LogWarning("testCycleTimer shutdown wait timed out — callback may still be running")
   | TimerStop.Joined -> ()
   // Wait for an in-flight cacheSaveCallback before performGracefulShutdown writes the
   // manifest, so a late periodic save cannot overwrite its StoppedAt stamps.
-  match! disposeTimerAndWait cacheSaveTimer (TimeSpan.FromSeconds 5.0) with
+  match! disposeTimerAndWait cacheSaveTimer Timeouts.cacheSaveTimerStop with
   | TimerStop.StillRunning -> log.LogWarning("cacheSaveTimer shutdown wait timed out — callback may still be running")
   | TimerStop.Joined -> ()
   // Dispose activity cleanup timer (best-effort, no wait needed — cleanup is idempotent)
