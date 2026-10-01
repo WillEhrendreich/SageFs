@@ -7,9 +7,9 @@ license: MIT
 # Working in F# with SageFs
 
 SageFs gives you a live F# REPL with the project already loaded. An eval takes
-milliseconds. A `dotnet build` takes minutes. So the REPL is the inner loop, and
-`dotnet build` / `dotnet test` / `dotnet run` is the final gate, run once when
-you are done. Do not use them to probe what an API looks like.
+milliseconds, a `dotnet build` minutes. So the REPL is the inner loop, and
+`dotnet build` / `test` / `run` is the final gate, run once when you are done,
+never to probe what an API looks like.
 
 ## First minute
 
@@ -28,7 +28,7 @@ you are done. Do not use them to probe what an API looks like.
    missing generated state itself, so do not run a shell build first.
 4. Warmup takes 15-30s. Call `get_session_status` with `wait_seconds=60`: it
    returns once the session is `Ready`, so no sleeping or polling. If `wait`
-   says `TimedOut`, call again. If it says `Faulted`, act on the reason it names.
+   says `TimedOut`, call again; on `Faulted`, act on the reason it names.
 
 ## The loop
 
@@ -40,32 +40,31 @@ you are done. Do not use them to probe what an API looks like.
 4. `hard_reset_fsi_session` with `rebuild=true`, so the session runs the real
    file. Only after persisting or an `.fsproj` change, not after every eval.
 5. Re-verify in the session, then commit.
-6. Final gate: the full build and the unfiltered test suite, once, at the end.
-   Run it in the background and keep working. To run tests, call
-   `run_tests`. It asks the engine `list_tests` reads and returns a receipt:
-   `Incomplete` is not green. Still running? Call again with the
-   `receipt_id`. Never `dotnet test` for that. Final gate: `dotnet run --project
-   <tests>` (Expecto `Exe`).
+6. Final gate, once, at the end, in the background: the full build and the
+   unfiltered suite, `dotnet run --project <tests>` (Expecto `Exe`), never
+   `dotnet test`. To run tests from the session, call `run_tests`: it returns a
+   receipt, `Incomplete` is not green, and you call again with the `receipt_id`
+   while it runs.
 
 ## Rules that bite before your first edit
 
 - Prove a change in the REPL before you write it to a file. Eval the new logic
   on real input and read the output first.
 - Edit with exact editor calls: read the region, replace that exact text. Never
-  `sed -i`, `python3 -c` rewrites or bulk regex edits: a silent no-op looks like
-  success. A repeated mechanical change is an `.fsx` run through SageFs that
-  asserts every replacement matched.
+  `sed -i`, `python3 -c` or bulk regex edits: a silent no-op looks like success.
+  Repeat a mechanical change as an `.fsx` run through SageFs that asserts every
+  replacement matched.
 - Never `#load` a file from a project the session already loaded. You get two
   copies of every type and a misleading "type is not compatible" error. `#load`
   only a pure file with no dependency on the loaded project.
-- Never `#r` a DLL the session already loaded from the project. Same two-copies
-  trap, and the lock blocks rebuilds.
+- Never `#r` a DLL the session already loaded from the project. Same trap; the
+  lock also blocks rebuilds.
 - To learn an API's or AST's shape, ask the session (reflect over the type, or
   parse a sample and print it). Never guess or start a `dotnet fsi` script.
 - "Operation could not be completed due to earlier error" means an earlier
   statement failed. Fix that statement. Do not reset the session.
-- A bare `Error` or `Ok` that resolves to the wrong type is shadowed by a union
-  case in scope. Write `Result.Error` / `Result.Ok`.
+- A bare `Error` or `Ok` resolving to the wrong type is shadowed by a union
+  case: write `Result.Error` / `Result.Ok`.
 - A filtered test run is never the acceptance check. A filter that matches
   nothing still prints `0 failed` and exits 0. Only an unfiltered run counts,
   and its `TRUST` line must say `ran=` the number you expect.
@@ -73,21 +72,13 @@ you are done. Do not use them to probe what an API looks like.
   the matching lease (see leases.md).
 - If the REPL fights you, do not fall back silently. Note the tool, input and
   full error; see troubleshooting.md.
-- Clean up. `stop_session` on every session you created. Kill only processes
-  you started, by exact PID, never by name.
+- Clean up: `stop_session` on every session you created; kill only processes
+  you started, by exact PID.
 
 ## Orchestrator hygiene
 
-If you start sub-agents, you are the one who tidies up after them.
-
-- Before you spawn: `get_workspace_hygiene` (or the `workspace:` line in `create_*_session`,
-  `get_session_status` and `get_daemon_status`). A pile of leftover worktrees means tidy first.
-- After an agent's work merges: `get_workspace_hygiene`, read the dry-run plan, then `tidy_workspace` with
-  `confirm=true` and the plan id. It only removes what is merged, build-output-only, orphaned or expired, and
-  re-checks each target right before it acts. Unmerged commits and uncommitted work are listed with the
-  command that saves them, never removed.
-- In every sub-agent brief: finish by removing nothing you do not own, and report your worktree path and
-  branch so the orchestrator can reap them.
+Tidy up after sub-agents: `get_workspace_hygiene` before you spawn, `tidy_workspace` (`confirm=true` plus its
+plan id) once their work merges. Brief them: remove nothing you do not own, report your worktree path and branch.
 
 ## Read more only when you need it
 
@@ -96,8 +87,8 @@ If you start sub-agents, you are the one who tidies up after them.
 | sessions.md | choosing or creating a session, checking the daemon version, a session stuck warming or Faulted |
 | loop.md | the loop is unclear, or you are tempted to run `dotnet build` mid-task |
 | editing.md | before your first edit, on a `#load` error, or on F# syntax that costs a build |
-| testing.md | running tests from the session, waiting on a slow gate, judging whether a green run covered anything |
+| testing.md | running tests from the session, a slow gate, judging whether a green run covered anything |
 | leases.md | starting a full build, test suite or app run yourself, or a lease came back denied |
-| troubleshooting.md | a tool errors, an eval disagrees with your code, or SageFs seems busy or broken (a stale daemon is the usual cause) |
-| claude-code.md | shell commands hit permission prompts in Claude Code |
+| troubleshooting.md | a tool errors, an eval disagrees with your code, or SageFs seems broken (usually a stale daemon) |
+| claude-code.md | shell commands hit permission prompts |
 | agents.md | writing a brief for a sub-agent, or the user says you have drifted off the REPL |

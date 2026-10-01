@@ -183,8 +183,6 @@ let private journey () : Task<unit> = task {
     write (Path.Combine(keep, "ok")) "ok"
     Directory.SetLastWriteTimeUtc(keep, DateTime.UtcNow - TimeSpan.FromHours(float i))
   let daemon = startDaemon sb
-  let mutable playwright : IPlaywright option = None
-  let mutable browser : IBrowser option = None
   try
     let! up = healthy daemon
     match up with
@@ -204,10 +202,8 @@ let private journey () : Task<unit> = task {
     Expect.isTrue prunedAtStart "the daemon's start-up housekeeping prunes a host nobody used for months"
     // A host that goes stale while the daemon runs is a leftover the plan lists, and tidy removes.
     let staleHost = plantStaleHost "sdk-10.0.100-stale-later"
-    let! pw = Playwright.CreateAsync()
-    playwright <- Some pw
-    let! b = pw.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
-    browser <- Some b
+    use! pw = Playwright.CreateAsync()
+    use! b = pw.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
     let! page = b.NewPageAsync()
     let errors = attachErrorCollector page
     let! _ = page.GotoAsync(sprintf "http://localhost:%d/dashboard" daemon.DashboardPort)
@@ -273,12 +269,6 @@ let private journey () : Task<unit> = task {
     // 7. Through all of it, not one console or page error.
     Expect.isEmpty (List.ofSeq errors) (sprintf "zero console and page errors across the journey, got: %s" (String.concat " | " errors))
   finally
-    match browser with
-    | Some b -> try (b.CloseAsync()).GetAwaiter().GetResult() with _ -> ()
-    | None -> ()
-    match playwright with
-    | Some p -> try p.Dispose() with _ -> ()
-    | None -> ()
     killDaemon daemon
 }
 

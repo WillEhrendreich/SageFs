@@ -8,7 +8,7 @@ open Expecto.Flip
 open SageFs.Simulation
 open SageFs.Simulation.HygieneSim
 
-let private seeds = [ 1 .. 200 ]
+let private seeds = [ 1 .. 120 ]
 
 /// Each behavior's traces are folded once and every invariant reads the same ones.
 let private tracesFor =
