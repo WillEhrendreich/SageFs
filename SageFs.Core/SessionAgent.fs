@@ -115,6 +115,10 @@ type SessionAgent =
   { DiscoverLoaded: unit -> HostAgent.AgentReply<HostAgent.Discovery>
     TakeCoverage: unit -> HostAgent.AgentReply<HostAgent.CoverageReading>
     RunTest: LiveTesting.TestCase -> Async<HostAgent.AgentReply<LiveTesting.TestResult>>
+    /// Hold one test where it runs, for a debugger.
+    DebugBegin: LiveTesting.TestCase -> Async<HostAgent.AgentReply<HostAgent.TestDebug.DebugBegin>>
+    /// Release a held test and wait up to the bound for it to finish.
+    DebugContinue: HostAgent.TestDebug.DebugTicket -> System.TimeSpan -> Async<HostAgent.AgentReply<HostAgent.TestDebug.DebugProgress>>
     ValueReads: string list -> HostAgent.AgentReply<SageFs.Middleware.ValueReads.ValueEvidence list>
     /// Wait until every probe has been sighted or the bound passes, then say what is known.
     AwaitEntries: int64 list -> System.TimeSpan -> Async<HostAgent.AgentReply<SageFs.Middleware.EntryProbes.EntryReading>>
@@ -132,6 +136,8 @@ let ofCurrentSession (current: unit -> FsiSession.IFsiSession) : SessionAgent =
   { DiscoverLoaded = fun () -> withSession (fun s -> s.DiscoverLoaded()) inactive
     TakeCoverage = fun () -> withSession (fun s -> s.TakeCoverage()) inactive
     RunTest = fun test -> withSession (fun s -> s.RunTest test) (async { return inactive })
+    DebugBegin = fun test -> withSession (fun s -> s.DebugBegin test) (async { return inactive })
+    DebugContinue = fun ticket park -> withSession (fun s -> s.DebugContinue(ticket, park)) (async { return inactive })
     ValueReads = fun values -> withSession (fun s -> s.ValueReads values) (HostAgent.AgentUnavailable "the session is not active")
     AwaitEntries = fun probes bound -> withSession (fun s -> s.AwaitEntries(probes, bound)) (async { return HostAgent.AgentUnavailable "the session is not active" })
     ReflectionReads = fun () -> withSession (fun s -> s.ReflectionReads()) (HostAgent.AgentUnavailable "the session is not active")

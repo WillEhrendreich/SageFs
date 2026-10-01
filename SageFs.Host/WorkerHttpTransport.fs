@@ -162,6 +162,9 @@ module WorkerHttpTransport =
     let runApp = WorkerRoute.Post "/run-app"
     let stopApp = WorkerRoute.Post "/stop-app"
     let awaitAppChange = WorkerRoute.Post "/await-app-change"
+    /// Hold one test for a debugger, and release it. Both change what the host is doing, so both are POSTs.
+    let debugTest = WorkerRoute.Post "/debug-test"
+    let debugTestContinue = WorkerRoute.Post "/debug-test-continue"
     let devReload = WorkerRoute.Get ("/__sagefs__/reload", GetAccess.CrossOriginStream)
     /// The last terminal `ReloadOutcome`, past the server boundary, for a
     /// client that cannot hold the `devReload` SSE stream open — a dashboard
@@ -183,6 +186,7 @@ module WorkerHttpTransport =
     Routes.hotReloadWatchProject; Routes.hotReloadUnwatchProject
     Routes.hotReloadWatchDirectory; Routes.hotReloadUnwatchDirectory
     Routes.runApp; Routes.stopApp; Routes.awaitAppChange
+    Routes.debugTest; Routes.debugTestContinue
     Routes.devReload; Routes.hotReloadLastOutcome
   ]
 
@@ -614,6 +618,27 @@ module WorkerHttpTransport =
         let runId = (jsonProp doc "runId").GetString()
         let rid = (jsonProp doc "replyId").GetString()
         return! respond' ctx (WorkerMessage.AwaitAppChange(runId, rid))
+      })) |> ignore
+
+      map Routes.debugTest (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        match Serialization.tryDeserialize<Features.LiveTesting.TestCase> ((jsonProp doc "test").GetRawText()) with
+        | Result.Error error -> return! rejectUnreadable ctx "test" error
+        | Result.Ok test ->
+          let rid = (jsonProp doc "replyId").GetString()
+          return! respond' ctx (WorkerMessage.DebugTestBegin(test, rid))
+      })) |> ignore
+
+      map Routes.debugTestContinue (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        match Serialization.tryDeserialize<TimeSpan> ((jsonProp doc "park").GetRawText()) with
+        | Result.Error error -> return! rejectUnreadable ctx "park" error
+        | Result.Ok park ->
+          let ticket = (jsonProp doc "ticket").GetString()
+          let rid = (jsonProp doc "replyId").GetString()
+          return! respond' ctx (WorkerMessage.DebugTestContinue(ticket, park, rid))
       })) |> ignore
 
       map Routes.shutdown (Func<HttpContext, Task>(fun ctx -> task {

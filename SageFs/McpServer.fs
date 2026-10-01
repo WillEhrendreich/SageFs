@@ -3232,6 +3232,49 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
                   |}
     } :> Task
   ) |> ignore
+  // Debug one test from an editor. `debug` holds the test in the session's test host and answers the process to attach to;
+  // `debug/continue` releases it once the editor's debugger is attached and waits for it to finish (see McpDebugTest).
+  let respondDebug (ctx: Microsoft.AspNetCore.Http.HttpContext) (code: int, wire: SageFs.DebugTestRequest.DebugWire) = task {
+    ctx.Response.StatusCode <- code
+    do! rawJsonResponse ctx (Json.serialize Json.camelCase wire)
+  }
+  app.MapPost("/api/live-testing/debug", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      use! json = readJsonBody ctx
+      let root = json.RootElement
+      let selector =
+        match tryGetJsonStringAliases root [ "testId"; "test_id" ], tryGetJsonStringAliases root [ "pattern"; "test"; "name" ] with
+        | Some id, _ -> Some(SageFs.DebugTestRequest.TestSelector.ById id)
+        | None, Some name -> Some(SageFs.DebugTestRequest.TestSelector.ByName name)
+        | None, None -> None
+      match selector with
+      | None ->
+        do! respondDebug ctx (SageFs.DebugTestRequest.toWire (SageFs.DebugTestRequest.DebugAnswer.BadRequest "Say which test to debug: pass testId (exact) or pattern (a name)."))
+      | Some selector ->
+        let request : McpDebugTest.DebugRequest =
+          { SessionId = tryGetJsonStringAliases root [ "sessionId"; "session_id"; "session" ]
+            WorkingDirectory = tryGetJsonStringAliases root [ "workingDirectory"; "working_directory" ]
+            Selector = selector }
+        let! answer = McpDebugTest.beginDebug rctx.McpContext request
+        do! respondDebug ctx answer
+    } :> Task
+  ) |> ignore
+  app.MapPost("/api/live-testing/debug/continue", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      use! json = readJsonBody ctx
+      let root = json.RootElement
+      match tryGetJsonStringAliases root [ "ticket" ] with
+      | None ->
+        do! respondDebug ctx (SageFs.DebugTestRequest.toWire (SageFs.DebugTestRequest.DebugAnswer.BadRequest "Pass the ticket the debug request answered with."))
+      | Some ticket ->
+        let request : McpDebugTest.ContinueRequest =
+          { SessionId = tryGetJsonStringAliases root [ "sessionId"; "session_id"; "session" ]
+            WorkingDirectory = tryGetJsonStringAliases root [ "workingDirectory"; "working_directory" ]
+            Ticket = ticket }
+        let! answer = McpDebugTest.continueDebug rctx.McpContext request
+        do! respondDebug ctx answer
+    } :> Task
+  ) |> ignore
   app.MapGet("/api/live-testing/file-annotations", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let fileParam = ctx.Request.Query.["file"].ToString()

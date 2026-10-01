@@ -122,6 +122,11 @@ type Request =
   | AgentTakeCoverage of id: int64
   /// Run one test. Runs beside the session thread, so a long test never blocks evals or completions.
   | AgentRunTest of id: int64 * test: LiveTesting.TestCase
+  /// Hold one test for a debugger. Answered at once with the process to attach to and the ticket that releases the test.
+  | AgentDebugBegin of id: int64 * test: LiveTesting.TestCase
+  /// Release a held test (the editor's debugger is attached), then wait up to `park` for it to finish. Runs beside the
+  /// session thread, like AgentRunTest: a test stopped on a breakpoint must not freeze evals.
+  | AgentDebugContinue of id: int64 * ticket: HostAgent.TestDebug.DebugTicket * park: TimeSpan
   /// Where each named module value's reads went, and which readers ran (hot reload rule 2).
   | AgentValueReads of id: int64 * values: string list
   /// Where rule 2's reflection reads stand. Answered beside the session thread.
@@ -149,6 +154,8 @@ type Response =
   | AgentAfterEvalResult of id: int64 * report: HostAgent.AfterEvalReport
   | AgentDiscoveryResult of id: int64 * discovery: HostAgent.Discovery
   | AgentTestResult of id: int64 * result: LiveTesting.TestResult
+  | AgentDebugBeginResult of id: int64 * answer: HostAgent.TestDebug.DebugBegin
+  | AgentDebugContinueResult of id: int64 * progress: HostAgent.TestDebug.DebugProgress
   | AgentLoadedAssembliesResult of id: int64 * names: string list
   | AgentCoverageResult of id: int64 * coverage: HostAgent.CoverageReading
   | AgentValueReadsResult of id: int64 * evidence: SageFs.Middleware.ValueReads.ValueEvidence list

@@ -380,6 +380,9 @@
         <Compile Include="FsiSession.fs" />
         <Compile Include="RemoteFsiSession.fs" />
         <Compile Include="IsolatedFsiSession.fs" />
+        <!-- The daemon's side of "debug this test": choose the test, ask the worker to hold it, say what the editor
+             can attach to. After SessionMode (the ops) and HostAgent (the hold's types). -->
+        <Compile Include="DebugTestRequest.fs" />
         <Compile Include="ConfigHost.fs" />
         <Compile Include="SessionAgent.fs" />
         <!-- Pure warmup open-replay decision core (extractOpensFromLines/

@@ -166,7 +166,10 @@ type StepResult =
   { State: State
     UpdatedMethods: string list
     DetourReport: DetourReport
-    Hook: LiveTestHookResult }
+    Hook: LiveTestHookResult
+    /// The tests this eval's own assembly defines. `Hook` also carries the project tests on the first scan, so this is
+    /// what tells a test an eval defined (no PDB, a debugger cannot stop in it) from one the project compiled.
+    EvalDefinedTests: TestId list }
 
 /// Merge per-assembly hook results into one: providers deduplicated by name, tests concatenated, the runners chained.
 let private mergeHooks (affected: TestId array) (results: LiveTestHookResult list) : LiveTestHookResult =
@@ -200,11 +203,12 @@ let afterEvalStep (executors: TestExecutor list) (logger: ILogger) (state: State
     | DiscoveryPolicy.WhenChanged -> false
   match not (List.isEmpty updated) || firstScan || forced with
   | false ->
-    { State = state; UpdatedMethods = updated; DetourReport = detourReport; Hook = LiveTestHookResult.empty }
+    { State = state; UpdatedMethods = updated; DetourReport = detourReport; Hook = LiveTestHookResult.empty; EvalDefinedTests = [] }
   | true ->
     let fromEval = LiveTestingHook.afterReload executors asm updated
+    let evalDefined = fromEval.DiscoveredTests |> Array.map (fun t -> t.Id) |> Array.toList
     match firstScan with
-    | false -> { State = state; UpdatedMethods = updated; DetourReport = detourReport; Hook = fromEval }
+    | false -> { State = state; UpdatedMethods = updated; DetourReport = detourReport; Hook = fromEval; EvalDefinedTests = evalDefined }
     | true ->
       // The first scan also covers the pre-built project assemblies, whose tests no eval ever redefined.
       let fromProjects =
@@ -215,7 +219,8 @@ let afterEvalStep (executors: TestExecutor list) (logger: ILogger) (state: State
       { State = { state with LiveTestInit = LiveTestInit.Done }
         UpdatedMethods = updated
         DetourReport = detourReport
-        Hook = mergeHooks fromEval.AffectedTestIds (fromEval :: fromProjects) }
+        Hook = mergeHooks fromEval.AffectedTestIds (fromEval :: fromProjects)
+        EvalDefinedTests = evalDefined }
 
 /// Whether this agent watches value reads, and the tracker when it does.
 [<RequireQualifiedAccess>]
@@ -230,6 +235,342 @@ let private notTrackingReport : SageFs.Middleware.ValueReads.ReflectionReadsRepo
     Notices = []
     Walks = 0L
     SiteHits = 0L }
+
+/// Debugging one test where it runs.
+///
+/// A debugger can only stop in code it can see symbols for, and the test runs in the process that loaded the user's code
+/// (the isolated FSI host, or the worker for an in-process session). So the editor attaches a .NET debugger to that
+/// process, and this module is the host's side of the hand-shake: hold the test until the editor says its debugger is
+/// attached, run it, and say how it went. `step` is the whole decision, pure over events (a clock never enters it: the
+/// expiry is an event the shell raises), so a simulation can drive it through every ordering. `DebugHold` is the thin
+/// shell that performs the effects.
+module TestDebug =
+
+  /// The handle the editor holds for the one test the host is keeping for it.
+  type DebugTicket = DebugTicket of string
+
+  /// Whether a debugger can stop in the test's code.
+  [<RequireQualifiedAccess>]
+  type SymbolSupport =
+    /// The test lives in a project assembly loaded from disk, which has a PDB: breakpoints bind.
+    | CompiledWithSymbols
+    /// An eval in this session defined the test. That code lives in a dynamic assembly, which has no PDB: the debugger
+    /// runs it but breakpoints in it do not bind. Rebuild (hard reset with rebuild) to debug the compiled copy.
+    | DefinedByEval
+
+  /// Whether the operating system lets a debugger attach to the host.
+  [<RequireQualifiedAccess>]
+  type AttachAccess =
+    | Open
+    | Blocked of reason: string
+
+  /// What the editor needs to attach: the process, and the ticket that releases the test.
+  type DebugTarget =
+    { Pid: int
+      Ticket: DebugTicket
+      TestId: TestId
+      TestName: string
+      Symbols: SymbolSupport
+      Access: AttachAccess
+      /// How long the host keeps the test held before it drops the hold.
+      HoldFor: TimeSpan }
+
+  [<RequireQualifiedAccess>]
+  type UnsupportedReason =
+    /// The host holds one test at a time, and this ticket still has it.
+    | HoldAlreadyOpen of DebugTicket
+    /// There is no host to ask (it ended, or its agent was never started).
+    | HostUnavailable of reason: string
+
+  /// The answer to "debug this test".
+  [<RequireQualifiedAccess>]
+  type DebugBegin =
+    | Held of DebugTarget
+    | Unsupported of UnsupportedReason
+
+  /// How a hold ended.
+  [<RequireQualifiedAccess>]
+  type DebugEnd =
+    /// A debugger was attached when the test was released, the test ran under it and finished.
+    | Attached of TestResult
+    /// Nobody released the test inside the bound, so it never ran.
+    | NoDebuggerWithin of bound: TimeSpan
+    /// The editor released the test but no debugger was attached to the host, so it never ran.
+    | ReleasedWithoutDebugger
+    /// The host holds nothing under this ticket (it was never issued, or the host restarted).
+    | NoSuchHold
+    /// The host ended while it held or ran the test.
+    | HostLost of reason: string
+
+  /// The answer to "continue": still going, or over.
+  [<RequireQualifiedAccess>]
+  type DebugProgress =
+    | StillRunning
+    | Ended of DebugEnd
+
+  /// What the host sees when the editor says it has attached.
+  [<RequireQualifiedAccess>]
+  type DebuggerPresence =
+    | DebuggerAttached
+    | NoDebugger
+
+  /// The host's one slot. Holding one test at a time bounds everything: a hold that ends stays in the slot until the
+  /// next Begin replaces it, so a late continue still finds its answer and nothing accumulates.
+  [<RequireQualifiedAccess>]
+  type Hold =
+    | Idle
+    | Holding of ticket: DebugTicket * test: TestCase
+    | Running of ticket: DebugTicket
+    | Ended of ticket: DebugTicket * outcome: DebugEnd
+
+  [<RequireQualifiedAccess>]
+  type HoldEvent =
+    | Begin of ticket: DebugTicket * test: TestCase
+    | Release of ticket: DebugTicket * presence: DebuggerPresence
+    | Expire of ticket: DebugTicket
+    | Finished of ticket: DebugTicket * result: TestResult
+    | HostEnding of reason: string
+
+  /// What the shell must do after an event.
+  [<RequireQualifiedAccess>]
+  type HoldEffect =
+    | ArmExpiry
+    | StartTest of ticket: DebugTicket * test: TestCase
+    | RefuseOpen of holder: DebugTicket
+    | NoEffect
+
+  /// The one transition function. An event that does not apply to the slot as it stands (a stale expiry, a second
+  /// release, a result for a hold that already ended) changes nothing.
+  let step (bound: TimeSpan) (hold: Hold) (event: HoldEvent) : Hold * HoldEffect =
+    match event, hold with
+    | HoldEvent.Begin(ticket, test), (Hold.Idle | Hold.Ended _) -> Hold.Holding(ticket, test), HoldEffect.ArmExpiry
+    | HoldEvent.Begin _, Hold.Holding(holder, _)
+    | HoldEvent.Begin _, Hold.Running holder -> hold, HoldEffect.RefuseOpen holder
+    | HoldEvent.Release(ticket, presence), Hold.Holding(held, test) when ticket = held ->
+      match presence with
+      | DebuggerPresence.DebuggerAttached -> Hold.Running ticket, HoldEffect.StartTest(ticket, test)
+      | DebuggerPresence.NoDebugger -> Hold.Ended(ticket, DebugEnd.ReleasedWithoutDebugger), HoldEffect.NoEffect
+    | HoldEvent.Expire ticket, Hold.Holding(held, _) when ticket = held ->
+      Hold.Ended(ticket, DebugEnd.NoDebuggerWithin bound), HoldEffect.NoEffect
+    | HoldEvent.Finished(ticket, result), Hold.Running running when ticket = running ->
+      Hold.Ended(ticket, DebugEnd.Attached result), HoldEffect.NoEffect
+    | HoldEvent.HostEnding reason, (Hold.Holding(ticket, _) | Hold.Running ticket) ->
+      Hold.Ended(ticket, DebugEnd.HostLost reason), HoldEffect.NoEffect
+    | _ -> hold, HoldEffect.NoEffect
+
+  /// What a ticket's holder is told about the slot. A hold still waiting for its release counts as still going: the
+  /// shell always releases before it observes, so that case is only ever seen between the two.
+  let observe (ticket: DebugTicket) (hold: Hold) : DebugProgress =
+    match hold with
+    | Hold.Running running when running = ticket -> DebugProgress.StillRunning
+    | Hold.Holding(held, _) when held = ticket -> DebugProgress.StillRunning
+    | Hold.Ended(ended, outcome) when ended = ticket -> DebugProgress.Ended outcome
+    | _ -> DebugProgress.Ended DebugEnd.NoSuchHold
+
+  /// Linux's Yama module decides who may ptrace a process that is not its child, and a debugger attaching is a ptrace.
+  [<RequireQualifiedAccess>]
+  type YamaScope =
+    /// No Yama (not Linux, or the module is off): nothing restricts attaching.
+    | NotRestricted
+    /// 0: any process of the same user may attach.
+    | SameUser
+    /// 1: only a parent, or a process the target has named, may attach.
+    | DescendantsOrNamed
+    /// 2: only a process with CAP_SYS_PTRACE.
+    | AdminOnly
+    /// 3: nobody, until reboot.
+    | Disabled
+    | Unrecognised of text: string
+
+  module YamaScope =
+    /// Read the text of /proc/sys/kernel/yama/ptrace_scope.
+    let parse (text: string) : YamaScope =
+      match text.Trim() with
+      | "0" -> YamaScope.SameUser
+      | "1" -> YamaScope.DescendantsOrNamed
+      | "2" -> YamaScope.AdminOnly
+      | "3" -> YamaScope.Disabled
+      | other -> YamaScope.Unrecognised other
+
+  /// What naming "any process" as allowed to trace this one came to.
+  [<RequireQualifiedAccess>]
+  type PtracerNaming =
+    | Named
+    | Refused of errno: int
+
+  /// Whether a debugger can attach, given Yama's scope. At scope 1 the host names any process as allowed to trace it
+  /// (`naming` runs that, and only then), which is the one case where the host can open the door itself.
+  let attachAccess (scope: YamaScope) (naming: unit -> PtracerNaming) : AttachAccess =
+    match scope with
+    | YamaScope.NotRestricted
+    | YamaScope.SameUser -> AttachAccess.Open
+    | YamaScope.DescendantsOrNamed ->
+      match naming () with
+      | PtracerNaming.Named -> AttachAccess.Open
+      | PtracerNaming.Refused errno ->
+        AttachAccess.Blocked(
+          sprintf
+            "kernel.yama.ptrace_scope is 1 and the host could not allow the debugger in (errno %d). Run `sudo sysctl kernel.yama.ptrace_scope=0`, or start the debugger as root."
+            errno
+        )
+    | YamaScope.AdminOnly ->
+      AttachAccess.Blocked
+        "kernel.yama.ptrace_scope is 2, so only root may attach. Run `sudo sysctl kernel.yama.ptrace_scope=0`, or start the debugger as root."
+    | YamaScope.Disabled ->
+      AttachAccess.Blocked "kernel.yama.ptrace_scope is 3, which turns attaching off until the machine reboots."
+    | YamaScope.Unrecognised text ->
+      AttachAccess.Blocked(
+        sprintf "kernel.yama.ptrace_scope holds '%s', which SageFs does not recognise, so it cannot say whether attaching will work." text
+      )
+
+  /// What the shell needs from the process it runs in. Injected so a hold can be driven without a debugger.
+  type DebuggerProbe =
+    { /// Is a managed debugger attached to this process right now.
+      Presence: unit -> DebuggerPresence
+      /// Make attaching possible for the length of a hold (a no-op where nothing stands in the way).
+      OpenForAttach: unit -> AttachAccess
+      /// Take back what OpenForAttach did.
+      CloseForAttach: unit -> unit }
+
+  module private Native =
+    [<System.Runtime.InteropServices.DllImport("libc", EntryPoint = "prctl", SetLastError = true)>]
+    extern int prctl(int option, unativeint arg2, unativeint arg3, unativeint arg4, unativeint arg5)
+
+  /// The prctl option that names the one process allowed to trace this one (PR_SET_PTRACER). All-ones names any process,
+  /// zero names none.
+  [<Literal>]
+  let private PrSetPtracer = 0x59616d61
+
+  let private yamaScopeFile = "/proc/sys/kernel/yama/ptrace_scope"
+
+  let private readYamaScope () : YamaScope =
+    match OperatingSystem.IsLinux() && System.IO.File.Exists yamaScopeFile with
+    | false -> YamaScope.NotRestricted
+    | true ->
+      try YamaScope.parse (System.IO.File.ReadAllText yamaScopeFile)
+      with ex -> YamaScope.Unrecognised ex.Message
+
+  /// The probe of the process this code runs in.
+  let systemProbe : DebuggerProbe =
+    { Presence =
+        fun () ->
+          match System.Diagnostics.Debugger.IsAttached with
+          | true -> DebuggerPresence.DebuggerAttached
+          | false -> DebuggerPresence.NoDebugger
+      OpenForAttach =
+        fun () ->
+          attachAccess (readYamaScope ()) (fun () ->
+            match Native.prctl(PrSetPtracer, UIntPtr.MaxValue, UIntPtr.Zero, UIntPtr.Zero, UIntPtr.Zero) with
+            | 0 -> PtracerNaming.Named
+            | _ -> PtracerNaming.Refused(System.Runtime.InteropServices.Marshal.GetLastWin32Error()))
+      CloseForAttach =
+        fun () ->
+          match OperatingSystem.IsLinux() with
+          | true ->
+            try Native.prctl(PrSetPtracer, UIntPtr.Zero, UIntPtr.Zero, UIntPtr.Zero, UIntPtr.Zero) |> ignore
+            with _ -> ()
+          | false -> () }
+
+  /// The shell around `step`: it mints tickets, runs the effects (the expiry timer, the test itself) and wakes whoever
+  /// waits on a hold. It holds a lock only around the pure transition; the effects run outside it.
+  [<Sealed>]
+  type DebugHold
+    (
+      pid: int,
+      probe: DebuggerProbe,
+      bound: TimeSpan,
+      runTest: TestCase -> Async<TestResult>,
+      symbolsOf: TestCase -> SymbolSupport
+    ) =
+    let gate = obj ()
+    let mutable hold = Hold.Idle
+    let counter = ref 0L
+    let mutable settled = System.Threading.Tasks.TaskCompletionSource<unit>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+    let mutable expiry = new System.Threading.CancellationTokenSource()
+
+    let isHolding (hold: Hold) =
+      match hold with
+      | Hold.Holding _ -> true
+      | _ -> false
+
+    let rec apply (event: HoldEvent) : HoldEffect =
+      let before, after, effect =
+        lock gate (fun () ->
+          let before = hold
+          let after, effect = step bound before event
+          hold <- after
+          before, after, effect)
+      // Leaving Holding closes the door the host opened and cancels the expiry that is no longer needed.
+      match isHolding before, isHolding after with
+      | true, false ->
+        probe.CloseForAttach()
+        lock gate (fun () -> expiry.Cancel())
+      | _ -> ()
+      match after with
+      | Hold.Ended _ ->
+        let waiters = lock gate (fun () -> settled)
+        waiters.TrySetResult() |> ignore
+      | _ -> ()
+      match effect with
+      | HoldEffect.StartTest(ticket, test) ->
+        Async.Start(
+          async {
+            let! outcome = runTest test |> Async.Catch
+            let result =
+              match outcome with
+              | Choice1Of2 result -> result
+              | Choice2Of2 ex -> TestResult.Failed(TestFailure.ExceptionThrown(ex.Message, string ex.StackTrace), TimeSpan.Zero)
+            apply (HoldEvent.Finished(ticket, result)) |> ignore
+          }
+        )
+      | HoldEffect.ArmExpiry
+      | HoldEffect.RefuseOpen _
+      | HoldEffect.NoEffect -> ()
+      effect
+
+    /// Hold the test for a debugger. The answer says which process to attach to and how to release the test.
+    member _.Begin(test: TestCase) : DebugBegin =
+      let ticket = DebugTicket(sprintf "debug-%d-%d" pid (System.Threading.Interlocked.Increment(&counter.contents)))
+      match apply (HoldEvent.Begin(ticket, test)) with
+      | HoldEffect.RefuseOpen holder -> DebugBegin.Unsupported(UnsupportedReason.HoldAlreadyOpen holder)
+      | _ ->
+        let cts = new System.Threading.CancellationTokenSource()
+        lock gate (fun () ->
+          settled <- System.Threading.Tasks.TaskCompletionSource<unit>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+          expiry.Dispose()
+          expiry <- cts)
+        let access = probe.OpenForAttach()
+        Async.Start(
+          async {
+            do! Async.Sleep bound
+            apply (HoldEvent.Expire ticket) |> ignore
+          },
+          cts.Token
+        )
+        DebugBegin.Held
+          { Pid = pid
+            Ticket = ticket
+            TestId = test.Id
+            TestName = test.DisplayName
+            Symbols = symbolsOf test
+            Access = access
+            HoldFor = bound }
+
+    /// Release the test if it is still held (the editor says its debugger is attached), then wait up to `park` for it to
+    /// finish. Safe to repeat: after the first call it only waits.
+    member _.Continue(ticket: DebugTicket, park: TimeSpan) : Async<DebugProgress> =
+      async {
+        apply (HoldEvent.Release(ticket, probe.Presence())) |> ignore
+        let progress, waitOn = lock gate (fun () -> observe ticket hold, settled.Task)
+        match progress with
+        | DebugProgress.StillRunning ->
+          let! _ = System.Threading.Tasks.Task.WhenAny(waitOn, System.Threading.Tasks.Task.Delay park) |> Async.AwaitTask
+          return lock gate (fun () -> observe ticket hold)
+        | DebugProgress.Ended _ -> return progress
+      }
+
+    /// The host is ending: whoever waits on a hold hears it ended rather than waiting out the bound.
+    member _.HostEnding(reason: string) : unit = apply (HoldEvent.HostEnding reason) |> ignore
 
 /// The agent of one process. It owns that process's reload registry (single owner: `AfterEval` is called from the one
 /// eval thread, and the lock makes any other caller safe), the runner for tests defined interactively, and the runner
@@ -252,7 +593,22 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
       AssemblyLoadErrors = state.AssemblyLoadErrors }
   let mutable dynamicRunner : Runner option = None
   let mutable projectRunner : Runner option = None
+  // The tests the newest scan found in eval'd code. They go with `dynamicRunner`: a scan replaces both.
+  let mutable evalDefinedTests : Set<TestId> = Set.empty
   let logger = Log.asILogger ()
+  let debugHold =
+    TestDebug.DebugHold(
+      Environment.ProcessId,
+      TestDebug.systemProbe,
+      Timeouts.debugHold,
+      (fun test ->
+        let runners = lock gate (fun () -> [ yield! Option.toList dynamicRunner; yield! Option.toList projectRunner ])
+        firstAnswer runners test),
+      (fun test ->
+        match lock gate (fun () -> Set.contains test.Id evalDefinedTests) with
+        | true -> TestDebug.SymbolSupport.DefinedByEval
+        | false -> TestDebug.SymbolSupport.CompiledWithSymbols)
+    )
 
   new(init, sources) = Agent(init, sources, BuiltInExecutors.builtIn)
 
@@ -281,7 +637,9 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
         state <- step.State
         // Tests defined interactively stay runnable across evals that discover nothing: only a scan replaces the runner.
         match step.Hook.DiscoveredTests.Length > 0 || not (List.isEmpty step.Hook.DetectedProviders) with
-        | true -> dynamicRunner <- Some step.Hook.RunTest
+        | true ->
+          dynamicRunner <- Some step.Hook.RunTest
+          evalDefinedTests <- Set.ofList step.EvalDefinedTests
         | false -> ()
         { UpdatedMethods = step.UpdatedMethods
           DetourReport = step.DetourReport
@@ -378,3 +736,13 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
     let runners =
       lock gate (fun () -> [ yield! Option.toList dynamicRunner; yield! Option.toList projectRunner ])
     firstAnswer runners test
+
+  /// Hold one test for a debugger: which process to attach to, and the ticket that releases the test.
+  member _.DebugBegin(test: TestCase) : TestDebug.DebugBegin = debugHold.Begin test
+
+  /// Release a held test (the editor's debugger is attached), then wait up to `park` for it to finish.
+  member _.DebugContinue(ticket: TestDebug.DebugTicket, park: TimeSpan) : Async<TestDebug.DebugProgress> =
+    debugHold.Continue(ticket, park)
+
+  /// The process is going away: a hold ends as lost rather than waiting out its bound.
+  member _.DebugHostEnding(reason: string) : unit = debugHold.HostEnding reason

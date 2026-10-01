@@ -58,6 +58,12 @@ module HttpWorkerClient =
     | WorkerMessage.AwaitAppChange(runId, rid) ->
       "POST", "/await-app-change",
       Some (Serialization.serialize {| runId = runId; replyId = rid |})
+    | WorkerMessage.DebugTestBegin(test, rid) ->
+      "POST", "/debug-test",
+      Some (Serialization.serialize {| test = test; replyId = rid |})
+    | WorkerMessage.DebugTestContinue(ticket, park, rid) ->
+      "POST", "/debug-test-continue",
+      Some (Serialization.serialize {| ticket = ticket; park = park; replyId = rid |})
     | WorkerMessage.Shutdown ->
       "POST", "/shutdown", None
 

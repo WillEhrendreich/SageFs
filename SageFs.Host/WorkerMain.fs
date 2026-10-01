@@ -140,6 +140,18 @@ let noAppRuns : AppRunHandlers = {
   AwaitChange = fun _ -> async { return AppRun.AppRunState.NotRunning }
 }
 
+/// How the worker holds a test for a debugger: asks the session's agent, which holds the test where the test runs.
+type DebugTestHandlers = {
+  Begin: Features.LiveTesting.TestCase -> Async<HostAgent.AgentReply<HostAgent.TestDebug.DebugBegin>>
+  Continue: HostAgent.TestDebug.DebugTicket -> TimeSpan -> Async<HostAgent.AgentReply<HostAgent.TestDebug.DebugProgress>>
+}
+
+/// For hosts that do not debug tests (test harnesses).
+let noDebugTests : DebugTestHandlers = {
+  Begin = fun _ -> async { return HostAgent.AgentUnavailable "this host does not debug tests." }
+  Continue = fun _ _ -> async { return HostAgent.AgentUnavailable "this host does not debug tests." }
+}
+
 /// The error a failed eval reports across the process boundary: a structured
 /// SageFsError the actor raised (e.g. EvalSupersededByReset) keeps its case;
 /// any other exception becomes `fallback` with the full exception text.
@@ -171,6 +183,7 @@ let handleMessage
   (getInitialDiscovery: unit -> Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list)
   (evalLiveTestFile: string -> string -> Async<Result<Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list, SageFsError>>)
   (appRuns: AppRunHandlers)
+  (debugTests: DebugTestHandlers)
   (msg: WorkerMessage)
   : Async<WorkerResponse> =
   async {
@@ -295,6 +308,24 @@ let handleMessage
     | WorkerMessage.AwaitAppChange(runId, replyId) ->
       let! state = appRuns.AwaitChange runId
       return WorkerResponse.AppRunResult(replyId, Ok state)
+
+    | WorkerMessage.DebugTestBegin(test, replyId) ->
+      let! reply = debugTests.Begin test
+      let answer =
+        match reply with
+        | HostAgent.AgentAnswered answer -> answer
+        | HostAgent.AgentUnavailable reason ->
+          HostAgent.TestDebug.DebugBegin.Unsupported(HostAgent.TestDebug.UnsupportedReason.HostUnavailable reason)
+      return WorkerResponse.DebugTestAnswer(replyId, WorkerProtocol.Serialization.serialize answer)
+
+    | WorkerMessage.DebugTestContinue(ticket, park, replyId) ->
+      let! reply = debugTests.Continue (HostAgent.TestDebug.DebugTicket ticket) park
+      let progress =
+        match reply with
+        | HostAgent.AgentAnswered progress -> progress
+        | HostAgent.AgentUnavailable reason ->
+          HostAgent.TestDebug.DebugProgress.Ended(HostAgent.TestDebug.DebugEnd.HostLost reason)
+      return WorkerResponse.DebugTestAnswer(replyId, WorkerProtocol.Serialization.serialize progress)
 
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
@@ -1895,10 +1926,15 @@ let run (sessionId: string) (port: int) = async {
       use cts = new CancellationTokenSource(Timeouts.appChangeAwait)
       return! AppRunner.awaitChange appRunner runId cts.Token |> Async.AwaitTask } }
 
+  let debugTests : DebugTestHandlers = {
+    Begin = fun test -> result.Agent.DebugBegin test
+    Continue = fun ticket park -> result.Agent.DebugContinue ticket park
+  }
+
   // Signal readiness over the pipe
   let handler =
     handleMessage actor result.GetSessionStatus result.GetEvalStats result.GetStatusMessage result.ProjectRoles
-      getRunTest setDynamicRunTest getInitialDiscovery evalLiveTestFile appRuns
+      getRunTest setDynamicRunTest getInitialDiscovery evalLiveTestFile appRuns debugTests
 
   let readyHandler (msg: WorkerMessage) = async {
     match msg with

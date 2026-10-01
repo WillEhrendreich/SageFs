@@ -366,6 +366,10 @@ module WorkerProtocol =
     | StopApp of scope: AppRun.StopScope * replyId: string
     /// Long poll: answered when the app is no longer Running with this run id.
     | AwaitAppChange of runId: string * replyId: string
+    /// Hold one test for a debugger. Answered at once with the process to attach to and the ticket that releases it.
+    | DebugTestBegin of test: Features.LiveTesting.TestCase * replyId: string
+    /// Release the held test (the editor's debugger is attached) and wait up to `park` for it to finish. Safe to repeat.
+    | DebugTestContinue of ticket: string * park: TimeSpan * replyId: string
     | Shutdown
 
   /// F# compiler diagnostic serialized for worker→daemon transport.
@@ -475,6 +479,10 @@ module WorkerProtocol =
         result: Result<Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list, SageFsError>
     | InstrumentationMapsResult of replyId: string * maps: Features.LiveTesting.InstrumentationMap array
     | AppRunResult of replyId: string * result: Result<AppRun.AppRunState, SageFsError>
+    /// Reply to DebugTestBegin and DebugTestContinue: the host agent's `TestDebug.DebugBegin` or `TestDebug.DebugProgress`
+    /// as wire JSON (those types live in the host's own sources, which this file precedes, so they cannot be named here;
+    /// the daemon read what it asked for back with `Serialization.tryDeserialize`).
+    | DebugTestAnswer of replyId: string * answerJson: string
     | WorkerReady
     | WorkerShuttingDown
     | WorkerError of SageFsError
@@ -499,7 +507,8 @@ module WorkerProtocol =
       | WorkerMessage.RunTests _
       | WorkerMessage.EvalLiveTestFile _
       | WorkerMessage.RunApp _
-      | WorkerMessage.StopApp _ -> true
+      | WorkerMessage.StopApp _
+      | WorkerMessage.DebugTestBegin _ -> true
       | WorkerMessage.CancelEval
       | WorkerMessage.ResetSession _
       | WorkerMessage.HardResetSession _
@@ -508,6 +517,7 @@ module WorkerProtocol =
       | WorkerMessage.GetTestDiscovery _
       | WorkerMessage.GetInstrumentationMaps _
       | WorkerMessage.AwaitAppChange _
+      | WorkerMessage.DebugTestContinue _
       | WorkerMessage.Shutdown -> false
 
   /// Wrapping helpers for `SessionProxy` — kept next to the type so every

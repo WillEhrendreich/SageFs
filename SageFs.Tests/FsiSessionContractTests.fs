@@ -228,6 +228,34 @@ let contract (label: string) (create: unit -> Async<IFsiSession>) (notYet: Capab
         | other -> failtestf "expected fails to fail, got %A" other
       })
 
+    caseAsync LiveTesting "a test defined in the session is held for a debugger in the session's own process, marked as having no symbols, and never runs without one" (fun session ->
+      async {
+        mustSucceed session (sprintf "#r @\"%s\"" expectoPath)
+        mustSucceed session probeTests
+        let report = afterEval session probeTests DetourPolicy.RegisterOnly DiscoveryPolicy.Forced
+        let named (fragment: string) =
+          match report.LiveTest.DiscoveredTests |> Array.tryFind (fun t -> t.FullName.EndsWith fragment) with
+          | Some test -> test
+          | None -> failtestf "%s was not discovered among %A" fragment (report.LiveTest.DiscoveredTests |> Array.map (fun t -> t.FullName))
+        let passes = named "passes"
+        let fails = named "fails"
+        match! session.DebugBegin passes with
+        | AgentAnswered(TestDebug.DebugBegin.Held target) ->
+          Expect.equal "the test it was asked to hold" passes.Id target.TestId
+          Expect.equal "an eval defined it, so there is no PDB" TestDebug.SymbolSupport.DefinedByEval target.Symbols
+          // The pid names a live process: the one a debugger would attach to.
+          use host = System.Diagnostics.Process.GetProcessById target.Pid
+          Expect.isFalse "the process is running" host.HasExited
+          match! session.DebugBegin fails with
+          | AgentAnswered(TestDebug.DebugBegin.Unsupported(TestDebug.UnsupportedReason.HoldAlreadyOpen holder)) ->
+            Expect.equal "the host holds one test at a time and names who has it" target.Ticket holder
+          | other -> failtestf "expected the second hold to be refused, got %A" other
+          match! session.DebugContinue(target.Ticket, TestTimeouts.patienceInProcess) with
+          | AgentAnswered(TestDebug.DebugProgress.Ended TestDebug.DebugEnd.ReleasedWithoutDebugger) -> ()
+          | other -> failtestf "no debugger is attached to the session's process, so the test must not run: got %A" other
+        | other -> failtestf "expected the test to be held, got %A" other
+      })
+
     case Coverage "a session with nothing instrumented has no coverage to take" (fun session ->
       match session.TakeCoverage() with
       | AgentAnswered reading -> Expect.equal "nothing instrumented" NoCoverage reading
