@@ -190,6 +190,11 @@ These are notes for the sagefs.nvim repo. I did not change the plugin.
 - `:SageFsSessions` lists `DemoEnv.Tests/DemoEnv.Tests.fsproj  Ready` with no working directory or id, so
   with several sessions of the same project nobody can tell which line is theirs (shot
   `session-picker-no-directories`).
+- The startup message says "Run :SageFsStart to begin". Without `sagefs` on PATH that command ends in a raw Lua
+  error and traceback (`E475: 'sagefs' is not executable`, `commands.lua:876 try_start`) instead of a sentence
+  that says SageFs is not installed. The editor sandbox has no `sagefs` on PATH on purpose, so a lemming can
+  never start a second daemon from the editor; `space-bunny-ui-eval-03` spent its 60 turns around that error and
+  never evaluated anything.
 - A cell's result is drawn at the end of the cell. When the cell is taller than the window, Alt-Enter
   shows nothing on screen at first.
 - On startup the plugin only offers to create a session when the daemon has none. On a shared daemon with
