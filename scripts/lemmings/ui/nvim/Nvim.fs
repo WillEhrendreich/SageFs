@@ -370,6 +370,7 @@ type DriveCommand =
   | NvimWait of seconds: int
   | NvimMessages
   | NvimShell of string
+  | NvimShot of name: string
 
 /// The one place command names are spelled. The client sends this name on the wire and
 /// the server parses it back with `parseCommand`.
@@ -381,6 +382,7 @@ let commandName (cmd: DriveCommand) : string =
   | NvimWait _ -> "nvim-wait"
   | NvimMessages -> "nvim-messages"
   | NvimShell _ -> "nvim-shell"
+  | NvimShot _ -> "nvim-shot"
 
 let commandArgument (cmd: DriveCommand) : string =
   match cmd with
@@ -390,6 +392,7 @@ let commandArgument (cmd: DriveCommand) : string =
   | NvimWait seconds -> string seconds
   | NvimMessages -> ""
   | NvimShell line -> line
+  | NvimShot name -> name
 
 let commandUsage =
   [ "keys <keys>           send keys, vim notation: ihello<Esc>  :w<CR>  <C-w>l  <M-CR>  (<lt> for a literal <)"
@@ -397,7 +400,15 @@ let commandUsage =
     "nvim-screen           show the editor screen, with cursor row/col, mode and the status line"
     "nvim-wait <seconds>   wait up to 30 seconds, then show the screen"
     "nvim-messages         show :messages"
-    "nvim-shell <cmd>      run one curl (localhost only), cat or ls in a second window" ]
+    "nvim-shell <cmd>      run one curl (localhost only), cat or ls in a second window"
+    "nvim-shot <name>      save a picture of the editor (a PNG with its colours, signs and text) for the review" ]
+
+/// A shot name becomes part of a file name, so it is short and plain.
+let private shotNameShape = Regex(@"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$", RegexOptions.Compiled)
+
+let parseShotName (name: string) : Result<string, string> =
+  if shotNameShape.IsMatch name then Result.Ok name
+  else Result.Error "a shot name is 1 to 40 letters, digits, - or _ and starts with a letter or digit"
 
 /// Aliases are accepted because a lemming that types `nvim screen` meant `nvim-screen`.
 let parseCommand (name: string) (rest: string list) : Result<DriveCommand, string> =
@@ -423,6 +434,11 @@ let parseCommand (name: string) (rest: string list) : Result<DriveCommand, strin
     match rest with
     | [] -> Result.Error "nvim-shell needs a command: curl, cat or ls"
     | _ -> Result.Ok(NvimShell(String.concat " " rest))
+  | "nvim-shot" | "shot" ->
+    match rest with
+    | [] -> Result.Ok(NvimShot "shot")
+    | [ name ] -> parseShotName name |> Result.map NvimShot
+    | _ -> Result.Error "nvim-shot takes one name, e.g. nvim-shot after-eval"
   | other ->
     Result.Error(sprintf "unknown command '%s'. The commands are:\n%s" other (String.concat "\n" commandUsage))
 
@@ -440,10 +456,12 @@ type Mode =
   | CommandLine
   | HitEnter
   | MorePrompt
+  | InputPrompt
   | Exited of status: int
 
 let modeText (mode: Mode) : string =
   match mode with
+  | InputPrompt -> "INPUT PROMPT (type the number or answer and press <CR>; q or <Esc> cancels)"
   | Normal -> "NORMAL"
   | InsertMode -> "INSERT"
   | Replace -> "REPLACE"
@@ -462,6 +480,7 @@ let detectMode (rows: string list) : Mode =
   match () with
   | _ when any "Press ENTER or type command to continue" -> HitEnter
   | _ when any "-- More --" -> MorePrompt
+  | _ when any "Type number and <Enter>" -> InputPrompt
   | _ when last.Contains "-- INSERT --" || last.Contains "-- (insert)" -> InsertMode
   | _ when last.Contains "-- VISUAL LINE --" -> VisualLine
   | _ when last.Contains "-- VISUAL BLOCK --" -> VisualBlock
@@ -609,6 +628,98 @@ let screenText (t: TmuxTarget) : Result<string, string> =
   snapshot t |> Result.map formatScreen
 
 // ---------------------------------------------------------------------------
+// Pictures: the editor with its colours, signs and virtual text, for the design review.
+// ---------------------------------------------------------------------------
+
+/// The pane's size in columns and rows, as tmux reports it.
+let paneSize (t: TmuxTarget) : Result<int * int, string> =
+  tmux t [ "display-message"; "-p"; "-t"; nvimWindow t; "#{pane_width} #{pane_height}" ]
+  |> Result.bind (fun text ->
+    match text.Trim().Split(' ') with
+    | [| w; h |] ->
+      match Int32.TryParse w, Int32.TryParse h with
+      | (true, wv), (true, hv) -> Result.Ok(wv, hv)
+      | _ -> Result.Error(sprintf "unexpected tmux pane size: %s" text)
+    | _ -> Result.Error(sprintf "unexpected tmux pane size: %s" text))
+
+/// The pane with its SGR colours, as `tmux capture-pane -e` writes it. No -J: a picture shows
+/// the pane row for row, so a long message that wraps stays wrapped.
+let captureAnsi (t: TmuxTarget) : Result<string, string> =
+  tmux t [ "capture-pane"; "-e"; "-p"; "-t"; nvimWindow t ]
+
+/// Resizes the editor's terminal (a tour step: the narrow 80x24 and the wide 200x50 views).
+let resizeEditor (t: TmuxTarget) (columns: int) (rows: int) : Result<unit, string> =
+  tmux t [ "resize-window"; "-t"; nvimWindow t; "-x"; string columns; "-y"; string rows ] |> Result.map ignore
+
+type ShotMeta =
+  { name: string
+    number: int
+    columns: int
+    rows: int
+    cellWidthPx: float
+    cellHeightPx: int
+    imageWidth: int
+    imageHeight: int
+    fontFamily: string
+    fontPx: int
+    mode: string
+    statusLine: string
+    capturedAt: string
+    png: string
+    ansi: string }
+
+let private shotFilePattern = Regex(@"^(\d{3,})-", RegexOptions.Compiled)
+
+/// Shots are numbered in the order they are taken, across lemming calls and tour steps alike.
+let nextShotNumber (shotsDir: string) : int =
+  if not (Directory.Exists shotsDir) then 1
+  else
+    Directory.GetFiles shotsDir
+    |> Array.choose (fun f ->
+      let m = shotFilePattern.Match(Path.GetFileName f)
+      if m.Success then Some(int m.Groups.[1].Value) else None)
+    |> Array.fold max 0
+    |> (+) 1
+
+/// Writes OUT/shots/NNN-name.png, .txt (the raw ANSI) and .json (what it was drawn with).
+let takeShot (t: TmuxTarget) (shotsDir: string) (name: string) : Result<ShotMeta * ScreenSnapshot, string> =
+  match parseShotName name with
+  | Result.Error e -> Result.Error e
+  | Result.Ok name ->
+    match snapshot t, captureAnsi t, paneSize t with
+    | Result.Error e, _, _
+    | _, Result.Error e, _
+    | _, _, Result.Error e -> Result.Error e
+    | Result.Ok snap, Result.Ok ansi, Result.Ok(columns, rows) ->
+      Directory.CreateDirectory shotsDir |> ignore
+      let number = nextShotNumber shotsDir
+      let stem = sprintf "%03d-%s" number name
+      let txt = Path.Combine(shotsDir, stem + ".txt")
+      let png = Path.Combine(shotsDir, stem + ".png")
+      File.WriteAllText(txt, ansi)
+      match Shot.renderPng (Ansi.render ansi) columns rows png with
+      | Result.Error e -> Result.Error e
+      | Result.Ok r ->
+        let meta =
+          { name = name
+            number = number
+            columns = columns
+            rows = rows
+            cellWidthPx = r.CellWidthPx
+            cellHeightPx = r.CellHeightPx
+            imageWidth = r.ImageWidth
+            imageHeight = r.ImageHeight
+            fontFamily = r.FontFamily
+            fontPx = r.FontPx
+            mode = modeText snap.Mode
+            statusLine = statusLine snap.Rows
+            capturedAt = DateTime.UtcNow.ToString("o")
+            png = stem + ".png"
+            ansi = stem + ".txt" }
+        File.WriteAllText(Path.Combine(shotsDir, stem + ".json"), JsonSerializer.Serialize(meta, JsonSerializerOptions(WriteIndented = true)))
+        Result.Ok(meta, snap)
+
+// ---------------------------------------------------------------------------
 // Doing a command.
 // ---------------------------------------------------------------------------
 
@@ -684,9 +795,24 @@ let private readMessages (t: TmuxTarget) : Result<string, string> =
           String.concat "\n----- next page -----\n" pages)))
   | Result.Error e, _ | _, Result.Error e -> Result.Error e
 
-let execute (t: TmuxTarget) (workspace: string) (cmd: DriveCommand) : Result<string, string> =
+/// Where a command runs and where its files go.
+type ExecContext =
+  { Tmux: TmuxTarget
+    Workspace: string
+    OutDir: string }
+
+let shotsDirOf (outDir: string) = Path.Combine(outDir, "shots")
+
+let execute (ctx: ExecContext) (cmd: DriveCommand) : Result<string, string> =
+  let t = ctx.Tmux
+  let workspace = ctx.Workspace
   let window = nvimWindow t
   match cmd with
+  | NvimShot name ->
+    takeShot t (shotsDirOf ctx.OutDir) name
+    |> Result.map (fun (meta, snap) ->
+      sprintf "[shot %03d-%s saved: a %dx%d PNG of the editor in colour. The design review reads it, you cannot open it, so here is the screen as text]\n%s"
+        meta.number meta.name meta.imageWidth meta.imageHeight (formatScreen snap))
   | Keys keys ->
     parseKeys keys
     |> bindResult (sendTokens t window)
@@ -757,16 +883,38 @@ let private writeScreenFile (cfg: ServeConfig) (n: int) (header: string) (text: 
   name
 
 let private nowIso () = DateTime.UtcNow.ToString("o")
+let private nowMs () = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+
+/// One line of OUT/timeline.ndjson per driver command: the "actions" clock for the temporal
+/// coupling analysis. Times are epoch milliseconds. A tour step writes the same record.
+type TimelineEntry =
+  { startMs: int64
+    endMs: int64
+    source: string
+    command: string
+    args: string
+    ok: bool }
+
+let timelinePath (outDir: string) = Path.Combine(outDir, "timeline.ndjson")
+
+let private timelineLock = obj ()
+
+let appendTimeline (outDir: string) (entry: TimelineEntry) : unit =
+  lock timelineLock (fun () ->
+    Directory.CreateDirectory outDir |> ignore
+    File.AppendAllText(timelinePath outDir, JsonSerializer.Serialize(entry, jsonOptions) + "\n"))
 
 let private handle (cfg: ServeConfig) (counter: int ref) (req: Request) : Response =
   counter.Value <- counter.Value + 1
   let n = counter.Value
   let started = Stopwatch.StartNew()
+  let startMs = nowMs ()
   let parsed = requestToCommand req
+  let ctx: ExecContext = { Tmux = cfg.Tmux; Workspace = cfg.Workspace; OutDir = cfg.OutDir }
   let result =
     match parsed with
     | Result.Error reason -> Result.Error reason
-    | Result.Ok cmd -> execute cfg.Tmux cfg.Workspace cmd
+    | Result.Ok cmd -> execute ctx cmd
   let ok, text =
     match result with
     | Result.Ok t -> true, t
@@ -785,6 +933,7 @@ let private handle (cfg: ServeConfig) (counter: int ref) (req: Request) : Respon
       jsonOptions
     )
   File.AppendAllText(callsLog cfg, line + "\n")
+  appendTimeline cfg.OutDir { startMs = startMs; endMs = nowMs (); source = "lemming"; command = req.cmd; args = req.arg; ok = ok }
   { ok = ok; text = text }
 
 let private quote (s: string) = "'" + s.Replace("'", "'\\''") + "'"
@@ -878,6 +1027,11 @@ let serve (cfg: ServeConfig) : int =
       )
     acceptLoop.Start()
     stop.Wait()
+    // The last picture of the run, for the review. Best effort: the editor may be gone.
+    (match takeShot cfg.Tmux (shotsDirOf cfg.OutDir) "final" with
+     | Result.Ok _ -> ()
+     | Result.Error e -> eprintfn "final shot not taken: %s" e)
+    Shot.shutdown ()
     0
 
 // ---------------------------------------------------------------------------
