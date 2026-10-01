@@ -271,11 +271,20 @@ type internal BaselineIndex(baseline: PeImage) =
   let typeSpecs = tableOf TableIndex.TypeSpec (fun row -> baseline.Describe(MetadataTokens.EntityHandle(TableIndex.TypeSpec, row)))
   let memberRefs = tableOf TableIndex.MemberRef (fun row -> baseline.Describe(MetadataTokens.EntityHandle(TableIndex.MemberRef, row)))
   let methodSpecs = tableOf TableIndex.MethodSpec (fun row -> baseline.Describe(MetadataTokens.EntityHandle(TableIndex.MethodSpec, row)))
+  // Fields by the text that names them. Two fields that fold to one name (`x@10` and `x@20` in one type) cannot be
+  // told apart, so neither is found, and a body that uses one is refused.
   let fields =
     lazy
       (let found = Dictionary<string, int>()
+       let ambiguous = HashSet<string>()
        for handle in reader.FieldDefinitions do
-         found.TryAdd(baseline.Describe(MetadataTokens.EntityHandle(TableIndex.Field, MetadataTokens.GetRowNumber handle)), MetadataTokens.GetToken(MetadataTokens.EntityHandle(TableIndex.Field, MetadataTokens.GetRowNumber handle))) |> ignore
+         let entity = MetadataTokens.EntityHandle(TableIndex.Field, MetadataTokens.GetRowNumber handle)
+         let key = baseline.Describe entity
+         match found.TryAdd(key, MetadataTokens.GetToken entity) with
+         | true -> ()
+         | false -> ambiguous.Add key |> ignore
+       for key in ambiguous do
+         found.Remove key |> ignore
        found)
   let assemblies =
     lazy

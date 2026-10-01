@@ -819,7 +819,12 @@ Three ways to deal with that. I took the third.
 What that costs: a method the delta patches runs without its probes until the next rebuild, so its coverage is gone for
 that long. I have not looked at what live testing does with a method that stops reporting.
 
-How I know it holds. A test pins the symbol against the real `CoverageInstrumenter`: it instruments an assembly and
+How I know it holds. The fixture's `Handlers.fs` is built twice with the real F# compiler (Debug), the second with the
+edits the `run_app` rows make and two lines added above everything. The first is run as the compiler wrote it and as the
+real instrumenter rewrote it. In a child process started with `DOTNET_MODIFIABLE_ASSEMBLIES=debug` the generic function
+gives the new text at an int, a string, a record and a double that had not run, the closure the app holds gives the new
+text, the instance member carries on counting (A#2 then B#3), the task body and an added method give the new text
+(`RealFSharpDeltaTests`, host tier, net11 here). A test pins the symbol against the real `CoverageInstrumenter`: it instruments an assembly and
 counts the calls to `Hit` (all of them found with the probes kept, none left once they are looked through). Another runs
 the loop for real: a program is compiled with Cecil, instrumented by the real instrumenter, loaded in a child process
 started with `DOTNET_MODIFIABLE_ASSEMBLIES=debug`, patched by the delta, and every answer has to be the one an
@@ -837,8 +842,12 @@ or event changed, a custom attribute changed, a signature changed (named separat
 or parameters changed, a virtual, constructor or generic method added, a changed static constructor or startup-class
 method (a delta replaces a body and never runs it again, so a module-level value would read as patched and keep its old
 value), closures that share a name changing in number, and a body it cannot read (`calli`, an unknown opcode or
-signature element). Closures are named after their line, so a line added above one renames it: the number is folded out
-and closures that then share a name are told apart by their order.
+signature element). The F# compiler puts line numbers in names, so a line added above anything renames it. Three kinds
+turned up and the number is folded out of all three: closure classes (`f@18-3`), the static fields of a file's startup
+class (`counter@49`), and the helper methods a Debug build writes for a task (`<Bind>__debug@59`). Names that then share
+a text inside one type are told apart by their order, and a different number of them is a refusal. The last two the
+Cecil tests could not have found. A real build of the run_app fixture did, the first time it was run with two lines
+added above everything: the startup class's fields "changed", its constructor "changed", and a helper "was removed".
 
 Things the soak found. A Cecil-written module with no string literal has no #US heap, and a delta adding the first
 literal reads as "no string associated with token". That is a refusal now, and the test programs keep one literal. After
@@ -866,7 +875,9 @@ child process, from nothing each time (the first has the JIT in it), then the ne
 | handlers after it | 7.6 ms | 9.9 ms |
 | delta | 432 bytes of metadata, 42 of IL | the same |
 
-Most of that is the diff reading 46k methods. A project one tenth the size is about a tenth of it. Two things bring it
+Those are one run. The same test a few minutes later, after the field and method folding was added, gave 0.62 to 0.72 s
+warm for the plain baseline on a quiet moment and 1.05 to 1.10 s on a busy one, so read them as ranges. Most of that is
+the diff reading 46k methods. A project one tenth the size is about a tenth of it. Two things bring it
 down further and are not done: keeping a fingerprint of each body of the previous build so a save reads only the new
 one, and checking only the types whose source file changed. The instrumented column cannot use the fast path for bodies
 that are byte-identical, because every instrumented body differs by its probes, so the first save against the worker's
@@ -874,7 +885,8 @@ real baseline is the slow one.
 
 Evidence: `SageFs.Core/Features/MetadataDelta/` (`PeImage.fs`, `IlCanon.fs`, `MethodDiff.fs`, `DeltaWriter.fs`,
 `DeltaApply.fs`, `RudeCause.fs`), `SageFs.Tests/MetadataDeltaTests.fs` with `DeltaProgram.fs`, `DeltaChild.fs` and
-`DeltaInstrumentation.fs` (the numbers above print as `DELTA-BENCH` lines in a run's output), and
+`DeltaInstrumentation.fs` (the numbers above print as `DELTA-BENCH` lines in a run's output),
+`SageFs.Tests/RealFSharpDeltaTests.fs`, and
 `SageFs.Tests/RunAppDeltaTests.fs`, the rows a `run_app` app has to pass once the planner uses this.
 Reopen it if: instrumentation stops being applied to the shadow copy, or live testing needs a patched method's
 coverage to survive the patch.

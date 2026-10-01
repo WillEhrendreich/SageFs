@@ -382,7 +382,8 @@ let metadataDeltaTests =
           Op.Bench ("a.dll", "b.dll", 5, BenchProbes.Keep)
           Op.Bench ("a.dll", "b.dll", 3, BenchProbes.LookThrough)
           Op.Second "c.dll"
-          Op.ApplyLast ]
+          Op.ApplyLast
+          Op.Invoke ("Ns.Type", "method") ]
       for op in ops do
         Op.parse (Op.toLine op) |> Expect.equal (sprintf "%A survives its own line" op) (ValueSome op)
       Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<Op>).Length
@@ -412,6 +413,20 @@ let metadataDeltaTests =
         match (DeltaChain.Start(PeImage.OfFile paths[0], ProbeStripping.KeepEveryInstruction)).Prepare(Guid.NewGuid(), PeImage.OfFile paths[1]) with
         | PrepareOutcome.NothingChanged -> ()
         | other -> failtestf "two compiles of one program should be no change, and this said %A" other
+      finally
+        removeQuietly directory
+
+    testCase "WHY - a field the compiler names after its line (counter@49 for a module-level value) is renamed by a line added above it, and nothing has changed" <| fun _ ->
+      let directory = scratch ()
+      try
+        compile fixedProgram (Path.Combine(directory, "plain.dll"))
+        let renamed (name: string) (target: string) =
+          rewrite (Path.Combine(directory, "plain.dll")) target (fun a -> (closureType a 2).Fields[0].Name <- name)
+        renamed "k@12" (Path.Combine(directory, "a.dll"))
+        renamed "k@13" (Path.Combine(directory, "b.dll"))
+        let diff = MethodDiff.diff { PreviousProbes = ProbeStripping.KeepEveryInstruction } (PeImage.OfFile(Path.Combine(directory, "a.dll"))) (PeImage.OfFile(Path.Combine(directory, "b.dll")))
+        diff.Refusals |> Expect.isEmpty "the field's number is not a change"
+        diff.Methods |> List.filter (fun v -> v.Change <> MethodChange.Unchanged) |> Expect.isEmpty "and no body that reads it is"
       finally
         removeQuietly directory
 

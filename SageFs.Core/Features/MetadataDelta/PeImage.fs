@@ -162,6 +162,33 @@ type PeImage private (bytes: byte array) =
 
   let signatures = SignatureText(reader, typeKey, typeReferenceText)
 
+  /// The identity of every method inside its type, by row number minus one: folded name, `#`, signature. The
+  /// F# Debug build names a helper after its line (`<Bind>__debug@59`), so the number is folded out of the name, and
+  /// methods of one type that then share an id are told apart by their order (`~0`, `~1`). Computed once for the whole
+  /// module: every method is asked for several times.
+  let methodIds : Lazy<string array> =
+    lazy
+      (let count = reader.GetTableRowCount TableIndex.MethodDef
+       let baseIds =
+         Array.init count (fun i ->
+           let m = reader.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(i + 1))
+           NameFolding.fold (reader.GetString m.Name) + "#" + signatures.OfMethod m.Signature)
+       let ids = Array.copy baseIds
+       for typeHandle in reader.TypeDefinitions do
+         let rows = reader.GetTypeDefinition(typeHandle).GetMethods() |> Seq.map (fun h -> MetadataTokens.GetRowNumber h - 1) |> Seq.toArray
+         let seen = Dictionary<string, int>()
+         let sizes = Dictionary<string, int>()
+         for row in rows do
+           sizes[baseIds[row]] <- (match sizes.TryGetValue baseIds[row] with | true, n -> n + 1 | false, _ -> 1)
+         for row in rows do
+           match sizes[baseIds[row]] with
+           | 1 -> ()
+           | _ ->
+             let ordinal = (match seen.TryGetValue baseIds[row] with | true, n -> n | false, _ -> 0)
+             seen[baseIds[row]] <- ordinal + 1
+             ids[row] <- baseIds[row] + "~" + string ordinal
+       ids)
+
   let described = Dictionary<EntityHandle, string>()
 
   let rec describe (handle: EntityHandle) : string =
@@ -175,17 +202,19 @@ type PeImage private (bytes: byte array) =
         | HandleKind.TypeSpecification -> signatures.OfEntity handle
         | HandleKind.MethodDefinition ->
           let m = reader.GetMethodDefinition(Handles.methodDef handle)
-          sprintf "md:%s::%s#%s" (typeKey (m.GetDeclaringType())) (reader.GetString m.Name) (signatures.OfMethod m.Signature)
+          "md:" + typeKey (m.GetDeclaringType()) + "::" + methodIds.Value[MetadataTokens.GetRowNumber handle - 1]
         | HandleKind.FieldDefinition ->
           let f = reader.GetFieldDefinition(Handles.fieldDef handle)
-          sprintf "fd:%s::%s#%s" (typeKey (f.GetDeclaringType())) (reader.GetString f.Name) (signatures.OfField f.Signature)
+          // A field F# makes for a module-level value is named after its line (`counter@49`), so a line added above it
+          // renames it, the same way it renames a closure.
+          sprintf "fd:%s::%s#%s" (typeKey (f.GetDeclaringType())) (NameFolding.fold (reader.GetString f.Name)) (signatures.OfField f.Signature)
         | HandleKind.MemberReference ->
           let m = reader.GetMemberReference(Handles.memberRef handle)
           let parent =
             match m.Parent.Kind with
             | HandleKind.MethodDefinition ->
               let owner = reader.GetMethodDefinition(Handles.methodDef m.Parent)
-              "md:" + typeKey (owner.GetDeclaringType()) + "::" + reader.GetString owner.Name
+              "md:" + typeKey (owner.GetDeclaringType()) + "::" + NameFolding.fold (reader.GetString owner.Name)
             | HandleKind.ModuleReference -> "module"
             | _ -> signatures.OfEntity m.Parent
           let shape =
@@ -232,6 +261,4 @@ type PeImage private (bytes: byte array) =
   member _.LocalSignature(blob: BlobHandle) : string list = signatures.OfLocals blob
 
   /// The identity of a method inside its type: name and signature.
-  member _.MethodId(handle: MethodDefinitionHandle) : string =
-    let m = reader.GetMethodDefinition handle
-    reader.GetString m.Name + "#" + signatures.OfMethod m.Signature
+  member _.MethodId(handle: MethodDefinitionHandle) : string = methodIds.Value[MetadataTokens.GetRowNumber handle - 1]

@@ -142,7 +142,7 @@ module MethodDiff =
         yield
           String.Join(
             "|",
-            [ reader.GetString f.Name
+            [ NameFolding.fold (reader.GetString f.Name)
               string (int f.Attributes)
               image.FieldSignature f.Signature
               String.Join(";", attributesOf image (entityOf TableIndex.Field (MetadataTokens.GetRowNumber fieldHandle))) ]) ]

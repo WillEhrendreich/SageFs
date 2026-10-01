@@ -50,6 +50,8 @@ type Op =
   | Second of next: string
   /// Apply the delta the last bench wrote, and print how long the runtime and the handlers took.
   | ApplyLast
+  /// Call a static method of the loaded assembly that takes nothing, and print what it returned (a task is awaited).
+  | Invoke of typeName: string * methodName: string
 
 [<RequireQualifiedAccess>]
 module Op =
@@ -67,6 +69,7 @@ module Op =
       sprintf "bench %s %s %d %s" baseline next passes (match probes with | BenchProbes.Keep -> "keep" | BenchProbes.LookThrough -> "look-through")
     | Op.Second next -> "second " + next
     | Op.ApplyLast -> "applylast"
+    | Op.Invoke (typeName, methodName) -> sprintf "invoke %s %s" typeName methodName
 
   let parse (line: string) : Op voption =
     match line.Split(' ', StringSplitOptions.RemoveEmptyEntries) with
@@ -84,6 +87,7 @@ module Op =
       | _ -> ValueNone
     | [| "second"; next |] -> ValueSome (Op.Second next)
     | [| "applylast" |] -> ValueSome Op.ApplyLast
+    | [| "invoke"; typeName; methodName |] -> ValueSome (Op.Invoke (typeName, methodName))
     | _ -> ValueNone
 
 /// What a line the child prints is about.
@@ -99,6 +103,8 @@ type FactKind =
   | Bench
   | Second
   | Handler
+  /// What a method called by `Invoke` returned, or the name of the exception it threw.
+  | Invoked
   /// The script had a line the child does not know.
   | Unknown
 
@@ -106,7 +112,7 @@ type FactKind =
 module FactKind =
   let all : FactKind list =
     [ FactKind.EvalBegin; FactKind.EvalEnd; FactKind.EvalLine; FactKind.Apply; FactKind.Check; FactKind.Capability
-      FactKind.Time; FactKind.Bench; FactKind.Second; FactKind.Handler; FactKind.Unknown ]
+      FactKind.Time; FactKind.Bench; FactKind.Second; FactKind.Handler; FactKind.Invoked; FactKind.Unknown ]
 
   let tag (kind: FactKind) : string =
     match kind with
@@ -120,6 +126,7 @@ module FactKind =
     | FactKind.Bench -> "BENCH"
     | FactKind.Second -> "SECOND"
     | FactKind.Handler -> "HANDLER"
+    | FactKind.Invoked -> "INVOKED"
     | FactKind.Unknown -> "UNKNOWN"
 
 /// One thing the child said.
@@ -278,6 +285,17 @@ let private runScript (directory: string) : int =
                prepared.Payload.Updated.Length prepared.Payload.AddedMethods.Length)
         | PrepareOutcome.NothingChanged -> say FactKind.Second "nothing-changed"
         | PrepareOutcome.Refused causes -> say FactKind.Second (sprintf "refused %s" (String.Join("; ", causes |> List.map RudeCause.describe)))
+    | ValueSome (Op.Invoke (typeName, methodName)) ->
+      let result =
+        try
+          let m = assembly.GetType(typeName).GetMethod(methodName, BindingFlags.Public ||| BindingFlags.Static, null, Type.EmptyTypes, null)
+          match m.Invoke(null, [||]) with
+          | :? System.Threading.Tasks.Task<string> as task -> task.Result
+          | other -> string other
+        with
+        | :? TargetInvocationException as e -> "exc:" + e.InnerException.GetType().Name + " " + e.InnerException.Message
+        | e -> "exc:" + e.GetType().Name + " " + e.Message
+      say FactKind.Invoked (sprintf "%s.%s=%s" typeName methodName result)
     | ValueSome Op.ApplyLast ->
       match lastPayload with
       | ValueNone -> say FactKind.Time "no-delta"
