@@ -103,7 +103,7 @@ Your app's live state survives a save. A `let mutable` you didn't touch keeps it
 
 > **Curious how this is possible on F#?** [How hot reload works](docs/how-hot-reload-works.md) covers the Erlang, Clojure and Smalltalk ideas it borrows, what .NET doesn't give F# by default, and how it compares with .NET's own hot reload.
 
-> **[docs/hot-reload.md](docs/hot-reload.md) is the authority.** It carries the full what-reloads / what-restarts table, each row pinned by an executable test. This README deliberately doesn't duplicate it, so the two can't drift apart. (No test measures reload latency, so no figure is quoted here.)
+> **[docs/hot-reload.md](docs/hot-reload.md) is the authority.** It carries the full what-reloads / what-restarts table, each row pinned by an executable test. This README deliberately doesn't duplicate it, so the two can't drift apart. (A test does measure it now, with the machine and run count stated on the page: a patched save is served in about a quarter of a second on my Ryzen 7 5800XT, and an app started with `run_app` restarts in about seven seconds. [The numbers and where the time goes](docs/how-hot-reload-works.md). Microsoft's pages give no figure to compare against, so I don't claim to beat one.)
 
 ### 🤖 AI Agent Support
 
