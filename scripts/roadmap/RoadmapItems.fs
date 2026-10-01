@@ -38,8 +38,8 @@ let items : Item list =
 
     item "slow-machines-get-fitting-timeouts" "Slow machines get timeouts that fit them" Platform Now
       (landmark "SageFs.Core/MachineTier.fs" "MachineTier")
-      [ "docs/configuration.md" ]
-      "On an old quad core the isolated FSI host takes about 38 seconds to start, and the fixed 30 second budget gave up and then retried with the same 30. I'm measuring how different machines really behave, scaling the waits to what each one can do, and making retries wait longer instead of repeating themselves."
+      [ "docs/TROUBLESHOOTING.md"; "docs/configuration.md" ]
+      "On an old quad core with a spinning disk a session never reached Ready, because the 30 second silence limit killed the worker mid-build and the retries repeated the same 30. SageFs now probes the machine, files it as Fast, Standard, Constrained or Minimal, and scales the waits that are for the machine. A start that runs out of patience retries with a longer one, and a give-up names the wait, the attempts and what to set. On that machine it now reaches Ready in about a minute cold and 17 seconds warm."
 
     item "workspace-hygiene" "SageFs tidies what agents leave behind" Platform Now
       (landmark "SageFs.Core/WorkspaceHygiene.fs" "classify")
