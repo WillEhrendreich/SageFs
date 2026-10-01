@@ -7,6 +7,14 @@ open SageFs.WorkflowTypes
 open System.Collections.Concurrent
 open System.Threading
 
+/// Timeouts a test chooses on purpose, named for what they are, so no test carries a bare number.
+/// A test that needs the PRODUCTION value takes it from `SageFs.Timeouts`, never from a copy here.
+module TestTimeouts =
+  /// The grace a console-app test gives an entry point before the runner calls it a console app.
+  /// Short on purpose: for that app the grace has to EXPIRE, so a long one only slows the test.
+  /// Web-app tests must not use it, because a cold host build on a loaded runner outlasts it.
+  let consoleAppGrace = System.TimeSpan.FromMilliseconds 500.
+
 /// Harness-root Verify configuration — the ONE place that owns the snapshot
 /// directory, the unique-prefix setting and the line-ending scrubber. Program.fs
 /// calls `configure` before any test runs; snapshot tests call `verify` and never

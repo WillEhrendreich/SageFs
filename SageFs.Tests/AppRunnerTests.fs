@@ -17,6 +17,7 @@ open SageFs
 open SageFs.AppRun
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private freePort () =
   use l = new TcpListener(IPAddress.Loopback, 0)
@@ -28,9 +29,14 @@ let private tempProject () =
   Directory.CreateDirectory dir |> ignore
   Path.Combine(dir, "App.fsproj")
 
-let private timeouts : AppRunner.StartTimeouts =
-  { HostAppearGrace = TimeSpan.FromMilliseconds 500.
-    HostStartTimeout = TimeSpan.FromSeconds 20. }
+/// For tests that start a web app: exactly what production uses (`Timeouts.appHostAppearGrace` and
+/// `Timeouts.appHostStart`). A shorter grace made a web app read as a console app (`Endpoint = NoServer`)
+/// when a cold ASP.NET host build on a loaded runner outlasted it.
+let private timeouts : AppRunner.StartTimeouts = AppRunner.defaultTimeouts
+
+/// For tests whose app is a console app: the grace has to EXPIRE for the runner to call it one, so it is short.
+let private consoleTimeouts : AppRunner.StartTimeouts =
+  { AppRunner.defaultTimeouts with HostAppearGrace = TestTimeouts.consoleAppGrace }
 
 let private noEnv : AppRunner.SetEnv = fun _ -> ()
 
@@ -131,7 +137,7 @@ let appRunnerTests =
 
     testTask "WHY — AppRunner.start — a console app that keeps running has no server because not every executable is a web app" {
       let release = TaskCompletionSource()
-      use runner = AppRunner.create timeouts noEnv
+      use runner = AppRunner.create consoleTimeouts noEnv
       let project = tempProject ()
       let! state = AppRunner.start runner project { Name = "Worker.main"; Invoke = fun _ -> release.Task.Wait(); 0 } (plan project)
       release.SetResult()
@@ -184,7 +190,7 @@ let appRunnerTests =
 
     testTask "WHY — AppRunner.stop — a console app is refused with a hint because it cannot be stopped in place" {
       let release = TaskCompletionSource()
-      use runner = AppRunner.create timeouts noEnv
+      use runner = AppRunner.create consoleTimeouts noEnv
       let project = tempProject ()
       let! _ = AppRunner.start runner project { Name = "Worker.main"; Invoke = fun _ -> release.Task.Wait(); 0 } (plan project)
       let! stopped = AppRunner.stop runner StopScope.CurrentApp

@@ -129,6 +129,16 @@ module Timeouts =
   /// reads the same, so the report says "unconfirmed, exercise it".
   let patchConfirmation = envOrDefault "SAGEFS_PATCH_CONFIRM_SECONDS" 10.0
 
+  // -- Running an app (run_app) --
+  /// How long an app's entry point may run before it builds a host. If it has not by then,
+  /// the app is treated as a console app with no server. The wait ends the moment a host
+  /// appears, so a generous value costs a web app nothing; it is the delay a console app
+  /// pays before it is recognised as one. A cold ASP.NET host build on a loaded machine
+  /// takes seconds, which is why this is not sub-second.
+  let appHostAppearGrace = envOrDefault "SAGEFS_APP_HOST_APPEAR_SECONDS" 10.0
+  /// How long a host that has been built may take to start listening.
+  let appHostStart = envOrDefault "SAGEFS_APP_HOST_START_SECONDS" 90.0
+
   // -- Restart / Backoff --
   let restartBaseBackoff = TimeSpan.FromSeconds(1.0)
   let restartMaxBackoff = TimeSpan.FromSeconds(30.0)

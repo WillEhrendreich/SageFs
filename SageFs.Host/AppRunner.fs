@@ -126,8 +126,8 @@ type StartTimeouts = {
 }
 
 let defaultTimeouts = {
-  HostAppearGrace = TimeSpan.FromSeconds 10.0
-  HostStartTimeout = TimeSpan.FromSeconds 90.0
+  HostAppearGrace = Timeouts.appHostAppearGrace
+  HostStartTimeout = Timeouts.appHostStart
 }
 
 let processEnv : SetEnv =
