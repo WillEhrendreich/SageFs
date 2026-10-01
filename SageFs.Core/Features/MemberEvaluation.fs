@@ -66,8 +66,16 @@ module MemberEvaluation =
   /// getters did not return.
   type Evaluator(limits: Limits, sandbox: Sandboxing) =
     let abandoned = ref 0
-    /// Weak, so a value the session lets go of is not kept alive by a click that gave up on it.
-    let unresponsive = ConditionalWeakTable<obj, obj>()
+    /// The getters, by name, that did not return on each value. Weak on the value, so a value the session lets go of
+    /// is not kept alive by a click that gave up on it. Per getter, so one stuck getter does not stop the others.
+    let unresponsive = ConditionalWeakTable<obj, Collections.Generic.HashSet<string>>()
+    let isQuarantined (target: obj) (name: string) =
+      match unresponsive.TryGetValue target with
+      | true, names -> lock names (fun () -> names.Contains name)
+      | false, _ -> false
+    let quarantine (target: obj) (name: string) =
+      let names = unresponsive.GetValue(target, fun _ -> Collections.Generic.HashSet<string>())
+      lock names (fun () -> names.Add name |> ignore)
 
     member _.Run (property: PropertyInfo) (target: obj) : Result<obj, MemberFailure> =
       match isNull target with
@@ -77,7 +85,7 @@ module MemberEvaluation =
       | true ->
         Result.Error (MemberFailure.MemberNotContained "too many earlier getters never returned, so no more are run until you restart the session")
       | false ->
-      match fst (unresponsive.TryGetValue target) with
+      match isQuarantined target property.Name with
       | true ->
         Result.Error (MemberFailure.MemberNotContained "this getter did not return on an earlier click, so it is not run again on this value")
       | false ->
@@ -116,7 +124,7 @@ module MemberEvaluation =
           (match finished.Wait limits.InterruptGrace with
            | true -> ()
            | false ->
-             unresponsive.TryAdd(target, obj()) |> ignore
+             quarantine target property.Name
              Interlocked.Increment(&abandoned.contents) |> ignore)
           Result.Error MemberFailure.MemberTimedOut
 

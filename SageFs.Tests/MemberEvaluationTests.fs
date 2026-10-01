@@ -86,6 +86,16 @@ let memberEvaluationTests =
       finally
         release.Set()
 
+    testCase "WHY — one getter that never returned does not stop the other getters on the same value from running" <| fun _ ->
+      let release = new ManualResetEventSlim(false)
+      let spinner = Gadget(release, new ManualResetEventSlim(false), new ManualResetEventSlim(false))
+      let evaluator = create (limits 2) unfiltered
+      try
+        evaluator.Run (property "Spins") (box spinner) |> Expect.equal "the spinner is abandoned" (Error MemberFailure.MemberTimedOut)
+        evaluator.Run (property "Quick") (box spinner) |> Expect.equal "a different getter on the same value still runs" (Ok (box 5))
+      finally
+        release.Set()
+
     testCase "WHY — past the cap of abandoned getters, nothing else is run until the session restarts" <| fun _ ->
       let release = new ManualResetEventSlim(false)
       let first = Gadget(release, new ManualResetEventSlim(false), new ManualResetEventSlim(false))
