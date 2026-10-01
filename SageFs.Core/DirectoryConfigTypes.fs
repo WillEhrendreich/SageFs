@@ -1,5 +1,49 @@
 namespace SageFs
 
+open SageFs.Features
+
+/// How much of a value the live-bindings pane may run to show it. A config.fsx writes it (`ValueWalk = WalkEverything`);
+/// the walk itself takes a `LiveValueTree.WalkMode`, and `ValueWalk.toWalkMode` is the one place the two meet.
+type ValueWalk =
+  /// Read fields, and run a getter only when its compiled body provably does nothing. Everything else is listed, with a click.
+  | WalkSafe
+  /// Run every readable public property, as the walk always did, under a deadline.
+  | WalkEverything
+  /// Do not open class instances at all.
+  | WalkOff
+
+module ValueWalk =
+  /// Every choice, in the order the pane offers them.
+  let all : ValueWalk list = [ WalkSafe; WalkEverything; WalkOff ]
+
+  /// What a new session does when its config says nothing.
+  let standard : ValueWalk = WalkSafe
+
+  let name (choice: ValueWalk) : string =
+    match choice with
+    | WalkSafe -> "Safe"
+    | WalkEverything -> "Everything"
+    | WalkOff -> "Off"
+
+  /// What choosing it means, for a tooltip: said plainly, including that Everything runs the user's getters.
+  let consequence (choice: ValueWalk) : string =
+    match choice with
+    | WalkSafe -> "Reads fields and runs only getters that provably do nothing. Every other getter is listed, and runs only when you click it."
+    | WalkEverything -> "Runs your getters: every public property of every class value, after every eval. That is your code running, and it can take time or change things."
+    | WalkOff -> "Does not open class instances. Records, unions, tuples, lists and maps still show."
+
+  let toWalkMode (choice: ValueWalk) : LiveValueTree.WalkMode =
+    match choice with
+    | WalkSafe -> LiveValueTree.WalkMode.Safe
+    | WalkEverything -> LiveValueTree.WalkMode.Everything
+    | WalkOff -> LiveValueTree.WalkMode.Off
+
+  let ofWalkMode (mode: LiveValueTree.WalkMode) : ValueWalk =
+    match mode with
+    | LiveValueTree.WalkMode.Safe -> WalkSafe
+    | LiveValueTree.WalkMode.Everything -> WalkEverything
+    | LiveValueTree.WalkMode.Off -> WalkOff
+
 /// Specifies how projects/solutions should be loaded for a session.
 type LoadStrategy =
   /// Load a specific solution file (.sln/.slnx)
@@ -26,7 +70,9 @@ type DirectoryConfig =
     /// Use for monorepos where each subdirectory is an independent project.
     IsRoot: bool
     /// Optional friendly name for auto-created sessions. Defaults to the directory name.
-    SessionName: string option }
+    SessionName: string option
+    /// How much of a value the live-bindings pane may run to show it. Safe unless the config says otherwise.
+    ValueWalk: ValueWalk }
 
 /// The default configuration, independent of any module named DirectoryConfig (the daemon and the host each have
 /// their own, and both point at this single definition).
@@ -37,4 +83,5 @@ module DirectoryConfigDefaults =
       DefaultArgs = []
       AutoOpenNamespaces = true
       IsRoot = false
-      SessionName = None }
+      SessionName = None
+      ValueWalk = ValueWalk.standard }

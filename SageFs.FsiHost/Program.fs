@@ -99,8 +99,8 @@ let private readValue (session: FsiEvaluationSession) (name: string) : ValueRead
     ValueText(typeNameOf bound.Value, text)
 
 /// The session's bound values walked into the bounded tree the dashboard renders. A failed walk yields an empty
-/// snapshot rather than an error: the watch window degrades, the session does not.
-let private liveValues (session: FsiEvaluationSession) (generation: int64) : LiveValueTree.LiveValueSnapshot =
+/// snapshot rather than an error: the watch window degrades, the session does not. `mode` is how much of a class it may run.
+let private liveValues (session: FsiEvaluationSession) (mode: LiveValueTree.WalkMode) (generation: int64) : LiveValueTree.LiveValueSnapshot =
   try
     let boundValues =
       session.GetBoundValues()
@@ -112,7 +112,7 @@ let private liveValues (session: FsiEvaluationSession) (generation: int64) : Liv
           try typeNameOf bound.Value
           with _ -> ""
         (bound.Name, typeSignature, value))
-    LiveValueTree.buildSnapshotWithin LiveValueTree.WalkMode.Safe Timeouts.liveValueBindingBudget "" generation boundValues
+    LiveValueTree.buildSnapshotWithin mode Timeouts.liveValueBindingBudget "" generation boundValues
   with _ -> LiveValueTree.buildSnapshot "" generation []
 
 /// The eval currently running, so Interrupt can reach it.
@@ -179,6 +179,9 @@ let private run (fsiArgs: string list) : int =
   let mutable running: Running option = None
   // The agent (hot reload + live testing) that lives beside the user's code. Written on the session thread, read by test runs.
   let agentState = ref AgentNotStarted
+  // How much of a class the live-values walk may run: one value for the whole session, read by the walk and by a click's
+  // re-walk, written by SetWalkMode. Safe until the daemon says otherwise.
+  let walkMode = ref LiveValueTree.WalkMode.Safe
   let refuse (id: int64) (reason: string) = send (AgentRefused(id, reason))
   // A click runs a getter the live-values walk would not. Where a syscall filter can be installed the getter runs under
   // it; where it cannot, it still runs on its own thread under a deadline, and every answer says which it was.
@@ -204,24 +207,26 @@ let private run (fsiArgs: string list) : int =
         match requests.Take() with
         | RunReadFlag(id, name) -> send (FlagResult(id, readFlag session name))
         | RunReadValue(id, name) -> send (ValueResult(id, readValue session name))
-        | RunReadLiveValues(id, generation) -> send (LiveValuesResult(id, liveValues session generation))
+        | RunReadLiveValues(id, generation) -> send (LiveValuesResult(id, liveValues session (Volatile.Read(&walkMode.contents)) generation))
         | RunEvaluateMember(id, binding, path) ->
           // Read the value on this thread (the session is not thread-safe), then run the getter on its own thread so a
           // getter that never returns cannot hold up the next eval.
+          let mode = Volatile.Read(&walkMode.contents)
           let found =
             session.GetBoundValues()
             |> List.filter (fun bound -> bound.Name = binding)
             |> List.rev
             |> List.tryHead
-          match found with
-          | None -> send (MemberResult(id, BindingNotFound binding))
-          | Some bound ->
+          match MemberClick.judge mode, found with
+          | Result.Error refusal, _ -> send (MemberResult(id, MemberRefused refusal))
+          | Result.Ok(), None -> send (MemberResult(id, BindingNotFound binding))
+          | Result.Ok(), Some bound ->
             let value = try bound.Value.ReflectionValue with _ -> null
             let signature = try typeNameOf bound.Value with _ -> ""
             let walkAgain () =
               try
                 let walk : LiveValueTree.Walk =
-                  { Mode = LiveValueTree.WalkMode.Safe
+                  { Mode = mode
                     Force = LiveValueTree.ForcedMember.At(binding :: path, memberEvaluator.Run) }
                 let root = LiveValueTree.buildValueNodeWith walk binding value
                 send (MemberResult(id, MemberShown({ Name = binding; TypeSignature = signature; Root = root }, containment)))
@@ -305,6 +310,10 @@ let private run (fsiArgs: string list) : int =
       | Result.Ok(ReadValue(id, name)) -> enqueue HostLimits.AskedOther id (RunReadValue(id, name))
       | Result.Ok(ReadLiveValues(id, generation)) -> enqueue HostLimits.AskedOther id (RunReadLiveValues(id, generation))
       | Result.Ok(EvaluateMember(id, binding, path)) -> enqueue HostLimits.AskedOther id (RunEvaluateMember(id, binding, path))
+      | Result.Ok(SetWalkMode(id, mode)) ->
+        // Beside the session thread: it is one write to a cell the walks read, and the next walk uses it.
+        Volatile.Write(&walkMode.contents, mode)
+        send (WalkModeSet(id, mode))
       | Result.Ok(Check(id, text)) -> enqueue HostLimits.AskedOther id (RunCheck(id, text))
       | Result.Ok(CheckWithSymbols(id, filePath, text)) -> enqueue HostLimits.AskedOther id (RunCheckWithSymbols(id, filePath, text))
       | Result.Ok(Complete(id, text, caret)) -> enqueue HostLimits.AskedOther id (RunComplete(id, text, caret))

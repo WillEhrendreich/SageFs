@@ -117,6 +117,7 @@ module DirectoryConfig =
             && cfg.DefaultArgs = empty.DefaultArgs
             && cfg.IsRoot = empty.IsRoot
             && cfg.SessionName = empty.SessionName
+            && cfg.ValueWalk = empty.ValueWalk
           match isBareOptOut with
           | true ->
             File.WriteAllText(path, autoOpenNamespacesOptInTemplate)

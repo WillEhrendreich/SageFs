@@ -100,12 +100,30 @@ type Containment =
   /// It ran on a thread under a deadline only: no syscall filter could be installed here, for this reason.
   | NotContained of why: SandboxUnavailable
 
+/// Why a click on a "not evaluated" row was not run: the walk mode the session is in already settled it.
+type MemberRefusal =
+  /// Everything mode ran every getter already, so there is nothing left to click.
+  | EveryGetterAlreadyRan
+  /// Off mode does not open class instances, so there is no row to click.
+  | ClassesAreCollapsed
+
+/// Why a click could not be asked of a session at all.
+type MemberUnavailableReason =
+  /// The session's FSI lives in the worker's own process, where there is no host to contain a getter in.
+  | NoIsolatedHost
+  /// The session's host is gone, for this reason.
+  | HostNotRunning of reason: string
+
 /// What a click on a "not evaluated" row came to.
 type MemberOutcome =
   /// The binding walked again with the clicked member run (or the reason it was not).
   | MemberShown of binding: LiveValueTree.LiveBindingValue * containment: Containment
   /// The session has no binding of that name any more (a reset or a rebind between the pane and the click).
   | BindingNotFound of name: string
+  /// The session's walk mode makes the click meaningless, and says so.
+  | MemberRefused of refusal: MemberRefusal
+  /// The click could not be put to the session, and says why.
+  | MemberUnavailable of reason: MemberUnavailableReason
 
 type Request =
   | Eval of id: int64 * code: string
@@ -119,6 +137,8 @@ type Request =
   /// again. `path` is the labels from the binding down to the member. Answered beside the session thread: a getter that
   /// never returns must never hold up an eval.
   | EvaluateMember of id: int64 * binding: string * path: string list
+  /// Choose how much of a class the live-values walk may run, from now on. The host keeps it for the life of the session.
+  | SetWalkMode of id: int64 * mode: LiveValueTree.WalkMode
   /// Parse + type-check a snippet against the session's current state and report diagnostics.
   | Check of id: int64 * text: string
   /// Like Check, plus the symbol references of error-free code (the live-testing cycle's type-check effect).
@@ -159,6 +179,7 @@ type Response =
   | ValueResult of id: int64 * reading: ValueReading
   | LiveValuesResult of id: int64 * snapshot: LiveValueTree.LiveValueSnapshot
   | MemberResult of id: int64 * outcome: MemberOutcome
+  | WalkModeSet of id: int64 * mode: LiveValueTree.WalkMode
   | CheckResult of id: int64 * diagnostics: FsiDiagnostic list
   | SymbolsResult of id: int64 * diagnostics: FsiDiagnostic list * symbols: WireSymbolRef list
   | CompletionsResult of id: int64 * items: WireCompletion list
@@ -400,6 +421,25 @@ let decodeRequest (line: string) : Result<Request, ProtocolError> = decode line
 let encodeResponse (response: Response) : string = encode response
 
 let decodeResponse (line: string) : Result<Response, ProtocolError> = decode line
+
+/// What a click on a "not evaluated" row means in each walk mode. A click only has something to do in Safe mode: in Everything
+/// the getters already ran, and in Off the class is not open. Pure, so the host's decision is testable without a host.
+module MemberClick =
+  let judge (mode: LiveValueTree.WalkMode) : Result<unit, MemberRefusal> =
+    match mode with
+    | LiveValueTree.WalkMode.Safe -> Result.Ok()
+    | LiveValueTree.WalkMode.Everything -> Result.Error EveryGetterAlreadyRan
+    | LiveValueTree.WalkMode.Off -> Result.Error ClassesAreCollapsed
+
+  let describeRefusal (refusal: MemberRefusal) : string =
+    match refusal with
+    | EveryGetterAlreadyRan -> "every getter already ran, because the walk is in Everything mode"
+    | ClassesAreCollapsed -> "class instances are not opened, because the walk is in Off mode"
+
+  let describeUnavailable (reason: MemberUnavailableReason) : string =
+    match reason with
+    | NoIsolatedHost -> "this session runs F# Interactive inside the worker, so a getter cannot be run under containment"
+    | HostNotRunning why -> sprintf "the session's host is gone: %s" why
 
 /// What the host process refuses, and how it says so. Pure decisions, plus the one file read at the edge
 /// (`readArgsFile`). Lives here, not in Program.fs, because Program.fs needs the F# compiler service and
