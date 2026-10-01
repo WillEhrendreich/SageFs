@@ -275,6 +275,10 @@ module TestTimeouts =
   /// Real time but tiny: the case waits on the walk giving up, and a longer one only slows it down.
   let blockedGetterBudget = System.TimeSpan.FromMilliseconds 150.
 
+  /// How long a test gives a getter that was told to stop (Thread.Interrupt) to leave its wait.
+  /// Real time but small: the case waits on the getter's own signal, this only bounds a getter that ignores it.
+  let interruptGrace = System.TimeSpan.FromMilliseconds 300.
+
   /// The timeout handed to a timer join. An idle timer has to be joined well inside it,
   /// not by sitting it out.
   let timerJoinTimeout = System.TimeSpan.FromSeconds 2.
