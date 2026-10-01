@@ -6,6 +6,12 @@ open VerifyTests
 
 [<EntryPoint>]
 let main argv =
+  // A guard test starts this assembly again to click a getter that would end its process (GuardChildTests). That is
+  // not a test run, so it answers and leaves before anything of the runner is set up.
+  match SageFs.Tests.GuardChild.tryRun argv with
+  | SageFs.Tests.GuardChild.ChildRun.Ran exitCode -> exitCode
+  | SageFs.Tests.GuardChild.ChildRun.NotAChild ->
+
   // Before any tier starts Expecto: its default logger swaps the console writers for an
   // ANSI writer whose two paths lock in opposite orders, which hung gate runs (see
   // RunnerLogging). One plain logger for every entry point below.

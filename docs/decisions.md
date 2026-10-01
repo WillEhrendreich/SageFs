@@ -322,6 +322,64 @@ Evidence: `SageFs.Core/Features/LiveBindingsPane.fs`, `SageFs.Core/DirectoryConf
 Reopen it if: the default mode surprises people more than Everything did, or a getter the classifier calls harmless turns out to do
 something. The classifier is the thing to fix then, not the default.
 
+## A clicked getter gets stack and loop guards, patched on for the length of the click
+
+The syscall filter doesn't stop a spin or a stack overflow, and an overflow ends the host process. So when a click
+runs a getter, `GuardPatcher` walks what that getter can reach and puts two guards into the IL of each method it can
+patch. An entry guard calls `RuntimeHelpers.EnsureSufficientExecutionStack`, so a recursion throws a catchable
+`InsufficientExecutionStackException` while about 128 KB are still free (the getter thread has 1 MiB). A check goes
+in front of every jump back, and it throws `GuardAbortedException` once the evaluator's watchdog has asked that
+thread to stop. The watchdog asks at the deadline, and every guarded loop on that thread ends within a few
+milliseconds. A `try ... with _ -> ()` inside the loop doesn't help the getter: the stop stays set, so the next check
+throws again. The guards come off when the click is over.
+
+This is Harmony on demand, not weave-on-load. It reaches types FSI defined (a dynamic assembly) as well as compiled
+DLLs that are already loaded, nothing is copied, and a rebuild needs nothing re-woven. The spike put the entry guard at
+about 2 ns a call and the loop check at about 0.01 ns an iteration, which is why only the reachable methods get the
+entry guard. The walk is breadth first, 12 calls deep and 64 methods at most, and anything past that is listed as
+unguarded on the row. Closures and the implementations behind an abstract or interface call come along.
+
+What the guards do not stop, said on the row as "not guarded: ..." and not hidden:
+- A loop in code we don't own. Framework and package methods are never patched (only the getter's own assembly and
+  FSI's dynamic assemblies are), so a spin inside a BCL or NuGet method runs until the deadline and the thread is
+  abandoned.
+- An async or task state machine. A throw at `MoveNext` entry escapes the machine's own try/catch and kills the
+  process, so `MoveNext` of an `IAsyncStateMachine` is skipped. A spinning `task` loop is only given up on. (An F#
+  `task` in a Debug build is closures, which are guarded; in Release it is a state machine, which is not. The rule
+  tested is the state machine.)
+- A native wait, `Thread.Sleep` and the like. `Thread.Interrupt` frees a managed wait, nothing frees a native one.
+- Regex backtracking. A process-wide `REGEX_DEFAULT_MATCH_TIMEOUT` would catch it, but it would also change every
+  regex in the user's own app for the life of the host, and the host's entry point isn't ours to edit, so it is not
+  set. If we ever do it, it goes in the host's start-up and the pane says so.
+- It is cooperative. A `finally` block runs with the stop still set, so cleanup can be cut short and state can be left
+  torn. Running frames are never rewritten, so a frame already inside a method keeps going until its next check.
+- Code the JIT inlined into an already compiled caller. A patch on the callee doesn't reach that copy.
+- Not tried: generics (skipped, listed as such), C# async, ReadyToRun or trimmed assemblies, Windows and macOS, PDB
+  carry-over.
+
+Hot reload is the one real design risk. Patching a method hot reload has detoured replaces the detour with the
+original at once, and taking our patch off does not put the detour back. A test reproduces it with raw Harmony
+(`Orig()` goes 99 to 42 and stays there). So `detourMethod` now marks the method in `DetourLedger` and takes our patch
+off before it detours, under the same gate our patcher takes, and the ledger remembers where each detour points. The
+walk never patches a detoured method: it follows the detour to the new body and patches that, and a detour whose body
+isn't known is refused with `DetouredByHotReload` on the row. A reload that lands during a click takes the guards off
+that method first.
+
+When a getter is abandoned (still running after the deadline and the grace), its guards stay on until its thread ends.
+The thread may still be inside guarded code, and its stop is still set, so the first guard it meets throws. Taking the
+patches off under it would let it run unchecked. The cap on abandoned getters bounds how many such leases there are,
+and a simulation (`SageFs.Simulation/GuardSim.fs`) folds the real registry, cells and lifecycle rule through every
+order of "thread ended", "click gave up", "reload" and "second click sharing a helper", with four twins that put the
+naive rules back.
+
+Evidence: `SageFs.Core/Features/GuardIl.fs`, `GuardRuntime.fs`, `GuardReachability.fs`, `GuardPatcher.fs`,
+`DetourLedger.fs`, `ClickLifecycle.fs`, `MemberEvaluation.fs`; `SageFs.Tests/GuardIlTests.fs` (the weave keeps results
+and every jump back has its check), `GuardChildTests.fs` (overflow, spin, catch-all, helper and wait in child
+processes, each with a control that runs with guards off and dies or hangs), `GuardCoexistenceTests.fs`,
+`GuardSimTests.fs`.
+Reopen it if: a getter in a library we don't patch is what people actually click on. Then the answer is a wider
+ownership rule, with the cost of patching more methods, not more cleverness in the walk.
+
 ## A dead FSI host is a state the session reports, and we don't restart it for the user
 
 Found live on 0.6.865: a thread in user code threw, the isolated FSI host aborted (exit 134), and the session stayed

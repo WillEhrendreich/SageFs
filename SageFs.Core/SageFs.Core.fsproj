@@ -72,6 +72,18 @@
         <Compile Include="DirectoryConfigTypes.fs" />
         <!-- Dependency-free like LiveValueTree, and also compiled into the host (it runs a getter on a filtered thread there). -->
         <Compile Include="ThreadSandbox.fs" />
+        <!-- Layer 2 of getter containment: guards for the code a clicked getter can reach. Dependency-free (System and
+             System.Reflection.Emit.OpCode only) and also compiled into the host, before MemberEvaluation which uses them. -->
+        <Compile Include="Features\GuardCoverage.fs" />
+        <Compile Include="Features\GuardRuntime.fs" />
+        <Compile Include="Features\GuardIl.fs" />
+        <!-- What the guards read and write: where hot reload re-pointed methods, which methods a getter reaches, and
+             the Harmony patcher. BCL, FSharp.Core and Harmony only, so they are in the host closure too. -->
+        <Compile Include="Features\DetourLedger.fs" />
+        <Compile Include="Features\GuardReachability.fs" />
+        <Compile Include="Features\GuardPatcher.fs" />
+        <!-- Who lets the guards go when a click and its thread part ways: one pure function, also folded by the guard simulation. -->
+        <Compile Include="Features\ClickLifecycle.fs" />
         <Compile Include="Features\MemberEvaluation.fs" />
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
@@ -85,6 +97,13 @@
         <EmbeddedResource Include="../SageFs.FsiHost/ConfigDsl.fs" LogicalName="FsiHost/ConfigDsl.fs" />
         <EmbeddedResource Include="Features\LiveValueTree.fs" LogicalName="FsiHost/LiveValueTree.fs" />
         <EmbeddedResource Include="ThreadSandbox.fs" LogicalName="FsiHost/ThreadSandbox.fs" />
+        <EmbeddedResource Include="Features\GuardCoverage.fs" LogicalName="FsiHost/GuardCoverage.fs" />
+        <EmbeddedResource Include="Features\GuardRuntime.fs" LogicalName="FsiHost/GuardRuntime.fs" />
+        <EmbeddedResource Include="Features\GuardIl.fs" LogicalName="FsiHost/GuardIl.fs" />
+        <EmbeddedResource Include="Features\DetourLedger.fs" LogicalName="FsiHost/DetourLedger.fs" />
+        <EmbeddedResource Include="Features\GuardReachability.fs" LogicalName="FsiHost/GuardReachability.fs" />
+        <EmbeddedResource Include="Features\GuardPatcher.fs" LogicalName="FsiHost/GuardPatcher.fs" />
+        <EmbeddedResource Include="Features\ClickLifecycle.fs" LogicalName="FsiHost/ClickLifecycle.fs" />
         <EmbeddedResource Include="Features\MemberEvaluation.fs" LogicalName="FsiHost/MemberEvaluation.fs" />
         <EmbeddedResource Include="TestProviderTypes.fs" LogicalName="FsiHost/TestProviderTypes.fs" />
         <EmbeddedResource Include="Features\LiveTestingTypes.fs" LogicalName="FsiHost/LiveTestingTypes.fs" />

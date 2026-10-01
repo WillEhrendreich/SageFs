@@ -41,6 +41,13 @@
     <Compile Include="DirectoryConfigTypes.fs" />
     <Compile Include="ConfigDsl.fs" />
     <Compile Include="ThreadSandbox.fs" />
+    <Compile Include="GuardCoverage.fs" />
+    <Compile Include="GuardRuntime.fs" />
+    <Compile Include="GuardIl.fs" />
+    <Compile Include="DetourLedger.fs" />
+    <Compile Include="GuardReachability.fs" />
+    <Compile Include="GuardPatcher.fs" />
+    <Compile Include="ClickLifecycle.fs" />
     <Compile Include="MemberEvaluation.fs" />
     <Compile Include="TestProviderTypes.fs" />
     <Compile Include="LiveTestingTypes.fs" />

@@ -91,6 +91,13 @@
         <Compile Include="PatchConfirmationSim.fs" />
         <Compile Include="PatchConfirmationInvariants.fs" />
         <Compile Include="PatchConfirmationGenerators.fs" />
+        <!-- Getter-guard DST: folds the real reachability walk, patch registry, stop cells and click
+             lifecycle through the watchdog, an abandoned thread, shared helpers and a reload during a
+             click; twins release at give-up, never retire a cell, unpatch without counting holders and
+             leave the patch on a reloaded method. -->
+        <Compile Include="GuardSim.fs" />
+        <Compile Include="GuardSimInvariants.fs" />
+        <Compile Include="GuardSimGenerators.fs" />
         <!-- Rule 2 read-provenance DST: folds the real ValueReads classifier,
              ledger and save check through every interleaving of reads, the
              startup window closing, probes coming off and saves; twins put

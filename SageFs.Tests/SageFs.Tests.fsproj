@@ -378,6 +378,22 @@
         <Compile Include="LiveBindingsPaneTests.fs" />
         <Compile Include="LiveBindingsWireTests.fs" />
         <Compile Include="LiveBindingsPanelTests.fs" />
+        <!-- Layer 2 of getter containment: guards woven into the code a clicked getter can reach. -->
+        <Compile Include="GuardCoverageTests.fs" />
+        <Compile Include="GuardRuntimeTests.fs" />
+        <Compile Include="GuardIlFixture.fs" />
+        <Compile Include="GuardIlTests.fs" />
+        <Compile Include="GuardFixtures.fs" />
+        <Compile Include="ClickLifecycleTests.fs" />
+        <Compile Include="PatchRegistryTests.fs" />
+        <Compile Include="GuardReachabilityTests.fs" />
+        <Compile Include="GuardPatcherTests.fs" />
+        <Compile Include="GuardCoexistenceTests.fs" />
+        <Compile Include="MemberEvaluationGuardTests.fs" />
+        <!-- The child half: Program.fs starts this assembly again as a guard child to click a getter that would end the process. -->
+        <Compile Include="GuardChild.fs" />
+        <Compile Include="GuardChildTests.fs" />
+        <Compile Include="GuardSimTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
         <Compile Include="StreamingProxyTests.fs" />
         <Compile Include="StreamingProxySimTests.fs" />
