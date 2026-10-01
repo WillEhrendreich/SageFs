@@ -124,11 +124,15 @@ module Timeouts =
   /// costs nothing; the bound only matters when a grandchild holds the pipe
   /// open. No recorded reason for 2s.
   let stderrDrainGrace = TimeSpan.FromSeconds(2.0)
+  /// How long the `dotnet build` of the FSI host (a cold build, once per host
+  /// version and SDK) may run before FsiHostBuild gives up. No recorded reason
+  /// for 5 minutes.
+  let hostBuildRun = envOrDefaultMinutes "SAGEFS_HOST_BUILD_MINUTES" 5.0
   /// How long a session start waits for another process's build of the same FSI
-  /// host to finish (the cross-process build lock in FsiHostBuild). A cold host
-  /// build is the slowest thing the lock guards, so this is a build-sized
-  /// budget. No recorded reason for 5 minutes.
-  let hostBuildLockWait = envOrDefaultMinutes "SAGEFS_HOST_BUILD_LOCK_MINUTES" 5.0
+  /// host to finish (the cross-process build lock in FsiHostBuild). The lock is
+  /// held for the whole build, so a waiter waits as long as the holder's build
+  /// may run.
+  let hostBuildLockWait = hostBuildRun
   /// How often the host build lock is retried while another process holds it.
   /// This is a poll; the lock is a file handle with no way to wait on it.
   let hostBuildLockPoll = TimeSpan.FromMilliseconds(200.0)

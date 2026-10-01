@@ -308,7 +308,7 @@ let ensureBuiltWith (dotnet: string) (selection: SdkSelection) (cacheRoot: strin
             dotnet
             [ "build"; "FsiHost.fsproj"; "-c"; "Release"; "-o"; Path.Combine(directory, "bin"); "--nologo"; "-v"; "q" ]
             source
-            300_000
+            (int Timeouts.hostBuildRun.TotalMilliseconds)
           |> Result.mapError (fun failure -> BuildFailed(sdkVersion, failure))
           |> Result.bind (fun _ ->
             match File.Exists dll with
