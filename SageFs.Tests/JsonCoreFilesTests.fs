@@ -325,7 +325,7 @@ let tests =
             Category = Features.LiveTesting.TestCategory.Unit
             CurrentPolicy = Features.LiveTesting.RunPolicy.OnEveryChange
             Status = Features.LiveTesting.TestRunStatus.Passed passedIn
-            PreviousStatus = Features.LiveTesting.TestRunStatus.Passed passedIn }
+            PreviousStatus = Features.LiveTesting.TestRunStatus.Passed passedIn; Provenance = Features.LiveTesting.ResultProvenance.Compiled }
         let payload : Features.LiveTesting.TestResultsBatchPayload =
           { Generation = Features.LiveTesting.RunGeneration 1
             Freshness = Features.LiveTesting.ResultFreshness.Fresh

@@ -106,6 +106,7 @@
         <Compile Include="SageFsAppTests.fs" />
         <Compile Include="SageFsUpdatePropertyTests.fs" />
         <Compile Include="SageFsEffectHandlerTests.fs" />
+        <Compile Include="LiveTestingCoverageStreamTests.fs" />
         <Compile Include="RebuildReadyWaitTests.fs" />
         <Compile Include="ElmLoopResilienceTests.fs" />
         <Compile Include="ElmLoopMsgLabelTests.fs" />
@@ -178,6 +179,7 @@
         <Compile Include="PatchConfirmationTests.fs" />
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
+        <Compile Include="BuildConfirmationSimTests.fs" />
         <Compile Include="ValueReadSimTests.fs" />
         <Compile Include="ReflectionReadSimTests.fs" />
         <Compile Include="EvalStoreMutationTests.fs" />
@@ -189,6 +191,11 @@
         <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
         <Compile Include="LiveTestingBrowserTests.fs" />
+        <Compile Include="LatencyStats.fs" />
+        <Compile Include="LatencyStatsTests.fs" />
+        <Compile Include="LtStream.fs" />
+        <Compile Include="LiveTestingLatencyTests.fs" />
+        <Compile Include="LiveTestingJourneyTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
         <Compile Include="DevReloadTests.fs" />
         <Compile Include="DevReloadLastOutcomeTests.fs" />
@@ -250,6 +257,9 @@
          <Compile Include="LiveTestingGoldenFixtureTests.fs" />
          <Compile Include="LiveTestingCycleTests.fs" />
         <Compile Include="LiveTestingCoverageTests.fs" />
+        <Compile Include="LiveTestingPerTestCoverageTests.fs" />
+        <Compile Include="LiveTestingProvenanceTests.fs" />
+        <Compile Include="LiveTestingScaleControlsTests.fs" />
         <Compile Include="TestSummaryCompletenessTests.fs" />
         <Compile Include="WorkerProxyWaitTests.fs" />
          <Compile Include="LiveTestingElmTests.fs" />

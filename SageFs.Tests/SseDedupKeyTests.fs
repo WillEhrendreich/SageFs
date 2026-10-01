@@ -17,7 +17,7 @@ let makeEntry (i: int) (status: TestRunStatus) : TestStatusEntry =
     Category = TestCategory.Unit
     CurrentPolicy = RunPolicy.OnEveryChange
     Status = status
-    PreviousStatus = TestRunStatus.Queued }
+    PreviousStatus = TestRunStatus.Queued; Provenance = ResultProvenance.Compiled }
 
 let baseModel = (SageFsModel.initial())
 

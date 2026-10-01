@@ -262,6 +262,8 @@ type SageFsEffect =
   | Editor of EditorEffect
   | TestCycle of Features.LiveTesting.TestCycleEffect
   | SwitchWorkflow of WorkflowTypes.SessionWorkflow
+  /// What the confirmation of an evaluated run against a real build asks the world to do.
+  | Confirm of sessionId: string * Features.LiveTesting.ConfirmationEffect
 
 /// The complete application state managed by the Elm loop.
 type SageFsModel = {
@@ -1537,6 +1539,12 @@ module SageFsUpdate =
         |> Option.defaultValue []
         |> List.map SageFsEffect.TestCycle
 
+      | TuiEvent.EvaluatedRunBegan _
+      | TuiEvent.BuildConfirmation _
+      | TuiEvent.LivePauseChanged _
+      | TuiEvent.LiveScopeChanged _ ->
+        model, []
+
       | TuiEvent.LiveTestingEnabled ->
         let lt =
           refreshStatusesKeepingEntries model.LiveTesting (fun s ->
@@ -2268,8 +2276,9 @@ type EffectDeps = {
   /// Get the proxy for a session
   GetProxy: SessionId -> SessionProxy option
   /// Get a streaming test execution proxy for a session.
-  /// The proxy streams test results and IL coverage hits.
-  GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> (bool array -> unit) -> System.Threading.CancellationToken -> Async<HttpWorkerClient.StreamOutcome>) option
+  /// The proxy streams test results and IL coverage hits. A coverage reading names the test it
+  /// was taken for: the worker takes it right after that test ran.
+  GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> (Features.LiveTesting.TestId -> bool array -> unit) -> System.Threading.CancellationToken -> Async<HttpWorkerClient.StreamOutcome>) option
   /// Create a new session
   CreateSession: SessionProjectTarget list -> string -> WorkflowTypes.SessionWorkflow -> Async<Result<SessionInfo, SageFsError>>
   /// Ensure the working directory has warmup auto-open disabled.
@@ -2957,7 +2966,7 @@ module SageFsEffectHandler =
                     let onResult (result: Features.LiveTesting.TestRunResult) =
                       receivedIds.Add(result.TestId) |> ignore
                       resultFlusher.Add(result)
-                    let onCoverage (hits: bool array) =
+                    let onCoverage (_reportedFor: Features.LiveTesting.TestId) (hits: bool array) =
                       let mergedMap = Features.LiveTesting.InstrumentationMap.merge instrumentationMaps
                       match mergedMap.TotalProbes > 0 && hits.Length = mergedMap.TotalProbes with
                       | true ->
@@ -3076,4 +3085,7 @@ module SageFsEffectHandler =
     | SageFsEffect.SwitchWorkflow _targetWorkflow ->
       // Phase 4 will implement the actual switch logic (create new session, migrate)
       // For now, this is a placeholder that satisfies exhaustive pattern matching
+      async { () }
+
+    | SageFsEffect.Confirm (_sessionId, _effect) ->
       async { () }

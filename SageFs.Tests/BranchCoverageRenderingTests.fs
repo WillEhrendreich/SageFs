@@ -21,7 +21,7 @@ let private tryFindType (name: string) =
 
 let private mkCovAnn line endLine endCol detail testIds branchCov : CoverageLineAnnotation =
   { Line = line; EndLine = endLine; EndColumn = endCol
-    Detail = detail; CoveringTestIds = testIds; BranchCoverage = branchCov }
+    Detail = detail; CoveringTestIds = testIds; CoveringTests = [||]; BranchCoverage = branchCov }
 
 let private mkFileAnns path covAnns : FileAnnotations =
   { FilePath = path; TestAnnotations = [||]; CoverageAnnotations = covAnns

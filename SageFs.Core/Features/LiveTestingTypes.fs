@@ -232,6 +232,25 @@ type RunTrigger =
   | FileSave
   | ExplicitRun
 
+/// Whether live testing is running tests as you edit. Paused, it still type-checks and keeps the
+/// session's evaluated code current; it only holds the test runs back, and the tests it held back
+/// show as stale until it is resumed. (Visual Studio's "pause", by hand.)
+[<RequireQualifiedAccess>]
+type LivePause =
+  | Live
+  | Paused
+
+/// Which tests an automatic run may touch. An explicit run ignores it: asking for a test by name
+/// always runs it. A pattern is a case-sensitive substring of the test's full name or display name,
+/// the same match an explicit run's `pattern` uses. (Visual Studio's playlist and exclude set.)
+[<RequireQualifiedAccess>]
+type TestScope =
+  | EveryTest
+  /// Only tests matching one of these run automatically.
+  | OnlyMatching of patterns: string list
+  /// Every test except those matching one of these runs automatically.
+  | AllExcept of patterns: string list
+
 // --- Assembly Info ---
 
 type AssemblyInfo = {
@@ -374,6 +393,50 @@ type TestRunStatus =
   | Stale
   | PolicyDisabled
 
+/// Why a real build contradicted what the live eval said.
+[<RequireQualifiedAccess>]
+type BuildDisagreement =
+  /// The project did not build. The message is the compiler's.
+  | BuildFailed of message: string
+  /// The build produced a different verdict for this test than the eval did.
+  | ResultDiffers of evaluated: string * built: string
+  /// The build or the run against it did not answer in time.
+  | BuildUnanswered of waited: string
+
+/// What code produced a test's current verdict. A keystroke's tests run against code the live session
+/// EVALUATED, which is not what a compiler would have made of the same text.
+[<RequireQualifiedAccess>]
+type ResultProvenance =
+  /// Ran against binaries a build produced (the session's start, an explicit run, a rebuild).
+  | Compiled
+  /// Ran against code evaluated in the live session. No real build has confirmed it.
+  | Evaluated
+  /// Evaluated, then re-run against a real build of the same content, and the two agreed.
+  | VerifiedByBuild
+  /// A real build of the same content contradicted the eval. Said loudly, with why.
+  | BuildDisagrees of BuildDisagreement
+
+module ResultProvenance =
+  let toWireValue (provenance: ResultProvenance) : string =
+    match provenance with
+    | ResultProvenance.Compiled -> "compiled"
+    | ResultProvenance.Evaluated -> "evaluated"
+    | ResultProvenance.VerifiedByBuild -> "verified_by_build"
+    | ResultProvenance.BuildDisagrees _ -> "build_disagrees"
+
+  /// One sentence a row or a status line can show.
+  let describe (provenance: ResultProvenance) : string =
+    match provenance with
+    | ResultProvenance.Compiled -> "ran against compiled binaries"
+    | ResultProvenance.Evaluated -> "ran against code evaluated in the session; no real build has confirmed it yet"
+    | ResultProvenance.VerifiedByBuild -> "evaluated, then confirmed by a real build"
+    | ResultProvenance.BuildDisagrees (BuildDisagreement.BuildFailed message) ->
+      sprintf "the real build failed, so this result is not confirmed: %s" message
+    | ResultProvenance.BuildDisagrees (BuildDisagreement.ResultDiffers (evaluated, built)) ->
+      sprintf "the real build disagrees: the eval said %s, the build says %s" evaluated built
+    | ResultProvenance.BuildDisagrees (BuildDisagreement.BuildUnanswered waited) ->
+      sprintf "the real build did not answer within %s, so this result is not confirmed" waited
+
 type TestStatusEntry = {
   TestId: TestId
   DisplayName: string
@@ -384,6 +447,8 @@ type TestStatusEntry = {
   CurrentPolicy: RunPolicy
   Status: TestRunStatus
   PreviousStatus: TestRunStatus
+  /// What code produced `Status`.
+  Provenance: ResultProvenance
 }
 
 [<RequireQualifiedAccess>]
@@ -492,6 +557,30 @@ type CoverageState = {
   Hits: bool array
 }
 
+/// A hash of every line of one source file, as the file was when the assembly was
+/// compiled. Kept only when the file's bytes matched the checksum the compiler wrote
+/// into the PDB, so a line number in the map and a line number in this array are the
+/// same line. A file whose checksum did not match has no entry: it is not known.
+type SourceLineHashes = {
+  File: string
+  Lines: int64 array
+}
+
+/// What a map knows about the compiled code beyond where its sequence points are.
+type MapSource = {
+  /// Slots (indexes into the map's `Slots`) that run while a module or a type initializes.
+  /// They run once per process, in whichever test touched the module first, so a test's own
+  /// coverage cannot say whether it depends on them.
+  StartupSlots: int array
+  /// The compiled text of each source file that has sequence points, by line hash.
+  Baselines: SourceLineHashes array
+}
+
+module MapSource =
+  /// A map that knows nothing beyond its sequence points. Every consumer treats this as
+  /// "cannot narrow by line", never as "nothing runs at startup".
+  let none : MapSource = { StartupSlots = [||]; Baselines = [||] }
+
 /// Maps instrumented sequence point slots to source locations.
 /// Created once per assembly instrumentation, reused across test runs.
 type InstrumentationMap = {
@@ -499,6 +588,7 @@ type InstrumentationMap = {
   TotalProbes: int
   TrackerTypeName: string
   HitsFieldName: string
+  Source: MapSource
 }
 
 module InstrumentationMap =
@@ -506,7 +596,8 @@ module InstrumentationMap =
     { Slots = [||]
       TotalProbes = 0
       TrackerTypeName = "__SageFsCoverage"
-      HitsFieldName = "Hits" }
+      HitsFieldName = "Hits"
+      Source = MapSource.none }
 
   /// Convert raw hit data + instrumentation map → CoverageState.
   let toCoverageState (hits: bool array) (map: InstrumentationMap) : CoverageState =
@@ -526,7 +617,8 @@ module InstrumentationMap =
       { Slots = allSlots
         TotalProbes = allSlots.Length
         TrackerTypeName = "__SageFsCoverage"
-        HitsFieldName = "Hits" }
+        HitsFieldName = "Hits"
+        Source = MapSource.none }
 
 /// Pure functions for computing line-level coverage from IL probe data.
 module ILCoverage =
@@ -560,6 +652,56 @@ module ILCoverage =
     match Map.tryFind filePath coverage with
     | None -> [||]
     | Some lineMap -> lineMap |> Map.toArray
+
+/// Which lines of a file an edit changed, measured against the text the assembly was compiled
+/// from. Line numbers in recorded coverage are only meaningful against that text.
+[<RequireQualifiedAccess>]
+type ChangedLines =
+  /// The line count did not move and exactly these (1-based) lines differ from the compiled text.
+  | InPlace of Set<int>
+  /// Lines were inserted or removed, so a line number in recorded coverage no longer names the same line.
+  | Shifted
+  /// There is no compiled text to compare against (no baseline for this file).
+  | NoBaseline
+
+/// A stable hash of one source line. Stable across processes: the worker hashes the compiled
+/// text, the daemon hashes the buffer, and the two have to agree.
+module LineHash =
+  /// FNV-1a over the UTF-16 code units of the line, without its line ending.
+  let ofLine (line: string) : int64 =
+    failwith "not implemented: LineHash.ofLine"
+
+  /// One hash per line of `text`, split on '\n' with a trailing '\r' ignored.
+  let ofText (text: string) : int64 array =
+    failwith "not implemented: LineHash.ofText"
+
+module LineEdit =
+  /// Compare an edited buffer with the hashes of the compiled text.
+  let between (baseline: int64 array) (edited: string) : ChangedLines =
+    failwith "not implemented: LineEdit.between"
+
+/// Why recorded coverage could not narrow an edit to the tests that run the changed lines.
+[<RequireQualifiedAccess>]
+type LineNarrowingRefusal =
+  /// No test has a stored coverage bitmap that matches the current instrumentation.
+  | NoBitmaps
+  /// The edit inserted or removed lines, so recorded line numbers no longer line up.
+  | EditShifted
+  /// No compiled text for this file to measure the edit against.
+  | NoBaseline
+  /// The edit changed no line relative to the compiled text.
+  | NothingChanged
+  /// A changed line has no sequence point, so no recorded coverage speaks for it.
+  | ChangedLineHasNoProbe of line: int
+  /// A changed line runs when the module initializes, once per process, in whichever test got there first.
+  | ChangedLineRunsAtStartup of line: int
+
+[<RequireQualifiedAccess>]
+type LineNarrowing =
+  /// Exactly the tests whose own recorded coverage reaches a changed line, plus every test with no
+  /// usable coverage (it is not known to be unaffected).
+  | NarrowedTo of TestId array
+  | Refused of LineNarrowingRefusal
 
 /// Packed bit-vector representation of coverage data.
 /// Uses uint64[] instead of bool[] for 8× memory reduction and SIMD-friendly comparison.
@@ -731,6 +873,29 @@ module CoverageBitmap =
           | true -> Some tid
           | false -> None)
 
+  /// Narrow an edit to the tests whose OWN recorded coverage reaches a changed line.
+  /// Fails closed: anything that makes a line number untrustworthy, or a changed line unspoken for,
+  /// is a refusal with its reason and the caller keeps its wider selection. A test with no
+  /// bitmap of the current size is kept, because it is not known to be unaffected.
+  let narrowByLines
+    (filePath: string)
+    (lines: ChangedLines)
+    (maps: InstrumentationMap array)
+    (bitmaps: Map<TestId, CoverageBitmap>)
+    (discovered: TestId array)
+    : LineNarrowing =
+    failwith "not implemented: CoverageBitmap.narrowByLines"
+
+  /// The tests whose own recorded coverage reaches `line` of `filePath`, by line, for every line
+  /// that has a sequence point some test hit. Tests are in discovery order.
+  let coveringTestsByLine
+    (filePath: string)
+    (maps: InstrumentationMap array)
+    (bitmaps: Map<TestId, CoverageBitmap>)
+    (discovered: TestId array)
+    : Map<int, TestId array> =
+    failwith "not implemented: CoverageBitmap.coveringTestsByLine"
+
   /// Merge all test bitmaps via OR, compute LineCoverage per line for a file.
   let computeLineCoverageForFile
     (filePath: string)
@@ -863,6 +1028,8 @@ type TestSummary = {
 type SelectionPrecision =
   | ExactDependencyMatch
   | CoverageApproximation
+  /// Narrowed to the tests whose own recorded coverage reaches the lines the edit changed.
+  | LineCoverageNarrowing
   | ConservativeFallback
   | NoImpactedTests
   | SuppressedByPolicy
@@ -898,6 +1065,7 @@ module LiveTestingDecision =
   let precisionToWireValue = function
     | SelectionPrecision.ExactDependencyMatch -> "exact_dependency_match"
     | SelectionPrecision.CoverageApproximation -> "coverage_approximation"
+    | SelectionPrecision.LineCoverageNarrowing -> "line_coverage_narrowing"
     | SelectionPrecision.ConservativeFallback -> "conservative_fallback"
     | SelectionPrecision.NoImpactedTests -> "no_impacted_tests"
     | SelectionPrecision.SuppressedByPolicy -> "suppressed_by_policy"
@@ -921,6 +1089,7 @@ module LiveTestingDecision =
   let trustFromPrecision = function
     | SelectionPrecision.ExactDependencyMatch -> FreshnessTrust.FreshExact
     | SelectionPrecision.CoverageApproximation
+    | SelectionPrecision.LineCoverageNarrowing
     | SelectionPrecision.ConservativeFallback -> FreshnessTrust.FreshApproximate
     | SelectionPrecision.NoImpactedTests -> FreshnessTrust.StaleAwaitingRerun
     | SelectionPrecision.SuppressedByPolicy -> FreshnessTrust.Suppressed
@@ -957,6 +1126,8 @@ module LiveTestingDecision =
       sprintf "why: exact (%d selected)" decision.Explanation.SelectedTests.Length
     | SelectionPrecision.CoverageApproximation ->
       sprintf "why: coverage widened (%d selected)" decision.Explanation.SelectedTests.Length
+    | SelectionPrecision.LineCoverageNarrowing ->
+      sprintf "why: line coverage (%d selected)" decision.Explanation.SelectedTests.Length
     | SelectionPrecision.ConservativeFallback ->
       sprintf "why: fallback rebuild (%d selected)" decision.Explanation.SelectedTests.Length
     | SelectionPrecision.SuppressedByPolicy ->
@@ -1560,6 +1731,12 @@ type LiveTestState = {
   /// never be mistaken for this run's, which is what makes a landing verdict
   /// attributable (roast F17 / cohort landing DST).
   ResultGenerations: Map<TestId, RunGeneration>
+  /// What code produced each test's `LastResults` entry. A test with no entry ran against compiled binaries.
+  Provenances: Map<TestId, ResultProvenance>
+  /// Whether automatic runs are held back. See `LivePause`.
+  Pause: LivePause
+  /// Which tests automatic runs may touch. See `TestScope`.
+  Scope: TestScope
 }
 
 [<RequireQualifiedAccess>]
@@ -1650,6 +1827,9 @@ module LiveTestState =
   let empty = {
     RunRequests = Map.empty
     ResultGenerations = Map.empty
+    Provenances = Map.empty
+    Pause = LivePause.Live
+    Scope = TestScope.EveryTest
     SourceLocations = Array.empty
     DiscoveredTests = Array.empty
     LastResults = Map.empty
@@ -2350,7 +2530,8 @@ module LiveTesting =
           | Some p -> p
           | None -> RunPolicy.OnEveryChange
         Status = status
-        PreviousStatus = prevStatus })
+        PreviousStatus = prevStatus
+        Provenance = ResultProvenance.Compiled })
 
   /// Merge incoming discovered tests with existing ones, keyed by TestId.
   /// Incoming tests take priority for collisions (e.g., FSI redefining a test).
@@ -3003,6 +3184,13 @@ module TestProviderDescriptions =
         description
       )
 
+// --- Scope ---
+
+module TestScope =
+  /// Whether an automatic run may touch this test.
+  let allows (scope: TestScope) (test: TestCase) : bool =
+    true
+
 // --- Policy Filter ---
 
 module PolicyFilter =
@@ -3028,6 +3216,10 @@ module PolicyFilter =
         |> Map.tryFind tc.Category
         |> Option.defaultValue RunPolicy.OnEveryChange
       shouldRun policy trigger)
+
+  /// What resuming runs: the tests that went stale while paused, that the scope allows.
+  let resumeSelection (state: LiveTestState) : TestCase array =
+    [||]
 
 // --- Staleness Tracking ---
 

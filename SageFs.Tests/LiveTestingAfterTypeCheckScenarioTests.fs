@@ -47,7 +47,7 @@ let tests =
 
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          { Changed = []; InFile = [ "Module.add" ] }
+          { Changed = []; InFile = [ "Module.add" ]; Lines = ChangedLines.NoBaseline }
           "Module.fs"
           RunTrigger.FileSave
           graph
@@ -82,7 +82,7 @@ let tests =
 
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          { Changed = []; InFile = [ "Module.add" ] }
+          { Changed = []; InFile = [ "Module.add" ]; Lines = ChangedLines.NoBaseline }
           "Module.fs"
           RunTrigger.FileSave
           graph
@@ -116,7 +116,7 @@ let tests =
 
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          { Changed = []; InFile = [ "Module.add" ] }
+          { Changed = []; InFile = [ "Module.add" ]; Lines = ChangedLines.NoBaseline }
           "Module.fs"
           RunTrigger.Keystroke
           graph
@@ -149,7 +149,7 @@ let tests =
 
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          { Changed = []; InFile = [ "Module.add" ] }
+          { Changed = []; InFile = [ "Module.add" ]; Lines = ChangedLines.NoBaseline }
           "Module.fs"
           RunTrigger.Keystroke
           graph
@@ -205,7 +205,7 @@ let tests =
         [| { Slots = [| { File = "Module.fs"; Line = 1; Column = 0; EndLine = 1; EndColumn = 10; BranchId = 0 } |]
              TotalProbes = 1
              TrackerTypeName = "t"
-             HitsFieldName = "h" } |]
+             HitsFieldName = "h"; Source = MapSource.none } |]
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
           (nameDelta [ "Module.add" ])

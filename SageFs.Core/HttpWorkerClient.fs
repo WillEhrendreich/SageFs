@@ -300,7 +300,7 @@ module HttpWorkerClient =
     : Features.LiveTesting.TestCase array
       -> int
       -> (Features.LiveTesting.TestRunResult -> unit)
-      -> (bool array -> unit)
+      -> (Features.LiveTesting.TestId -> bool array -> unit)
       -> System.Threading.CancellationToken
       -> Async<StreamOutcome> =
     let client = newStreamingClient baseUrl
@@ -320,6 +320,6 @@ module HttpWorkerClient =
               let hits =
                 Features.LiveTesting.CoverageBitmap.ofBase64 count words
                 |> Features.LiveTesting.CoverageBitmap.toBoolArray
-              onCoverage hits
+              onCoverage (Features.LiveTesting.TestId.TestId "") hits
             with ex ->
               Utils.Log.warn "[HttpWorkerClient] Coverage data parse failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")) ct)

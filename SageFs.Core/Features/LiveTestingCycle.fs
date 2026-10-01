@@ -37,6 +37,9 @@ type FileSymbolDelta = {
   Changed: string list
   /// Every symbol the type-check resolved in this file, changed or not.
   InFile: string list
+  /// Which lines the edit changed against the text the assembly was compiled from.
+  /// `NoBaseline` when that text is not known, which keeps selection as wide as before.
+  Lines: ChangedLines
 }
 
 module FileSymbolDelta =
@@ -44,7 +47,7 @@ module FileSymbolDelta =
   /// then degrades to the old name-only behavior with the conservative floor
   /// still in force, rather than pretending the file declares nothing.
   let ofChangedOnly (changed: string list) : FileSymbolDelta =
-    { Changed = changed; InFile = [] }
+    { Changed = changed; InFile = []; Lines = ChangedLines.NoBaseline }
 
 module TestCycleEffects =
   let fromTick
@@ -547,6 +550,8 @@ type LiveTestCycleState = {
   QueuedRebuild: QueuedRebuildState option
   /// What is holding this session's next test run back.
   Compile: CompileBlock
+  /// Where this session's confirmation of an evaluated run against a real build stands.
+  Confirmation: ConfirmationMachine
 }
 
 module LiveTestCycleState =
@@ -568,6 +573,7 @@ module LiveTestCycleState =
     PendingRebuild = None
     QueuedRebuild = None
     Compile = CompileBlock.NoCompileErrors
+    Confirmation = BuildConfirmation.initial
   }
 
   let liveTestingStatusBarForSession (activeSessionId: string) (state: LiveTestCycleState) : string =
@@ -878,7 +884,8 @@ module LiveTestCycleState =
       // travels with it — see `FileSymbolDelta`.
       let symbols : FileSymbolDelta =
         { Changed = s1.ChangedSymbols
-          InFile = refs |> List.map (fun r -> r.SymbolFullName) |> List.distinct }
+          InFile = refs |> List.map (fun r -> r.SymbolFullName) |> List.distinct
+          Lines = ChangedLines.NoBaseline }
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
           symbols

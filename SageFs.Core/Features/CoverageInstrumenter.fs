@@ -217,7 +217,8 @@ module CoverageInstrumenter =
           { Slots = slots
             TotalProbes = points.Length
             TrackerTypeName = "__SageFsCoverage"
-            HitsFieldName = "Hits" }
+            HitsFieldName = "Hits"
+            Source = MapSource.none }
         let (_, hitMethod, _) =
           injectTracker moduleDef points.Length
         insertProbes hitMethod points

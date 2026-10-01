@@ -832,11 +832,22 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
           try
             Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
             Environment.SetEnvironmentVariable("SAGEFS_LT_FIXTURE_DIR", sampleDir)
+            Environment.SetEnvironmentVariable("SAGEFS_LT_MCP_PORT", string mcpPort)
             let ltArgv =
               cliArgs
               |> Array.filter (fun a -> a <> "--integration-lt")
+            // One daemon, one session, one Hello.fs: everything that edits it runs in sequence. The
+            // journeys come first (they need the baseline run's coverage untouched by anything else),
+            // the browser tests next, and the latency measurement last, from a settled session.
+            let ltTests =
+              Expecto.Tests.testSequenced (
+                Expecto.Tests.testList
+                  "Live testing against the FromCSharp sample"
+                  [ LiveTestingJourneyTests.journeyTests
+                    LiveTestingBrowserTests.tests
+                    LiveTestingLatencyTests.latencyTests ])
             let result =
-              SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-lt" ltArgv LiveTestingBrowserTests.tests
+              SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-lt" ltArgv ltTests
             exitWith result
           finally
             restoreHello ()

@@ -1215,7 +1215,7 @@ module LiveTestStateIsolation =
       Category = TestCategory.Unit
       CurrentPolicy = RunPolicy.OnEveryChange
       Status = TestRunStatus.Passed System.TimeSpan.Zero
-      PreviousStatus = TestRunStatus.Detected }
+      PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled }
 
   let private mkState (entries: TestStatusEntry array) =
     { LiveTestState.empty with

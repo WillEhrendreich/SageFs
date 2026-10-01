@@ -32,7 +32,7 @@ let private mkInstrumentationMap (slots: SequencePoint array) = {
   Slots = slots
   TotalProbes = slots.Length
   TrackerTypeName = "TestTracker"
-  HitsFieldName = "hits"
+  HitsFieldName = "hits"; Source = MapSource.none
 }
 
 let private mkDepGraph symbolToTests transitiveCoverage = {

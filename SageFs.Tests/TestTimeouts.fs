@@ -92,6 +92,19 @@ module TestTimeouts =
   let readyBudget = secs 60.
   /// Four sample sessions, each loaded and evaluated in turn, all reaching Ready.
   let loadedSessionsReady = secs 90.
+  /// Ceiling on ONE measured edit reaching its verdict on the live-testing stream. A healthy edit takes
+  /// about a second; reaching this means the daemon stopped answering, and it is generous because a cold
+  /// runner pays for a type-check cache and a JIT that nobody warmed. A passing run never waits it out.
+  let liveTestingVerdictCeiling = secs 30.
+  /// Ceiling on an evaluated verdict being confirmed by a real build: the quiet window, a rebuild that
+  /// restarts the worker, and a run against what it built. A passing run never waits it out.
+  let buildConfirmation = secs 180.
+  /// Regression bound on the 95th percentile of keystroke-to-verdict. Set from the first measurement;
+  /// until it is measured nothing is gated, and the measurement still prints.
+  let liveTestingKeystrokeP95Bound = System.Threading.Timeout.InfiniteTimeSpan
+  /// Regression bound on the 95th percentile of save-to-green. Set from the first measurement; until it
+  /// is measured nothing is gated, and the measurement still prints.
+  let liveTestingSaveToGreenP95Bound = System.Threading.Timeout.InfiniteTimeSpan
   /// The daemon's own wall-clock save fires 60s after start and does not get faster on a faster
   /// runner, so both resume waits (the save becoming durable, the second daemon rebuilding the
   /// session) are a generous multiple of it.

@@ -56,12 +56,21 @@ type TestLineAnnotation = {
   Freshness: AnnotationFreshness
 }
 
+/// One test that runs a line, named so a hover can list it without a lookup.
+type CoveringTestRef = {
+  TestId: TestId
+  DisplayName: string
+}
+
 type CoverageLineAnnotation = {
   Line: int
   EndLine: int
   EndColumn: int
   Detail: CoverageStatus
   CoveringTestIds: TestId array
+  /// The tests whose own recorded coverage reaches this line (what Visual Studio calls
+  /// "N tests cover this"), in discovery order. Empty when no test has coverage recorded.
+  CoveringTests: CoveringTestRef array
   BranchCoverage: LineCoverage option
 }
 
@@ -368,6 +377,7 @@ module FileAnnotations =
               match Map.tryFind ca.Symbol g.SymbolToTests with
               | Some ids -> ids
               | None -> [||]
+          CoveringTests = [||]
           BranchCoverage = None })
       |> Array.sortBy (fun c -> c.Line)
     { FilePath = filePath
@@ -439,6 +449,7 @@ module FileAnnotations =
               match Map.tryFind ca.Symbol cycleState.DepGraph.SymbolToTests with
               | Some ids -> ids
               | None -> [||]
+            CoveringTests = [||]
             BranchCoverage = Map.tryFind ca.DefinitionLine lineCovMap })
         |> Array.sortBy (fun c -> c.Line)
       { base' with CoverageAnnotations = coverageLineAnnotations }

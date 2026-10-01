@@ -1340,7 +1340,7 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
       Category = TestCategory.Unit
       CurrentPolicy = RunPolicy.OnEveryChange
       Status = TestRunStatus.Passed FixtureDurations.slowResult
-      PreviousStatus = TestRunStatus.Detected
+      PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled
     }
     let testState = { LiveTestCycleState.empty.TestState with StatusIndex = TestStatusIndex.fromEntries [| entry |] }
     let state = { LiveTestCycleState.empty with TestState = testState }
@@ -1370,7 +1370,7 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
       Category = TestCategory.Unit
       CurrentPolicy = RunPolicy.OnEveryChange
       Status = TestRunStatus.Passed FixtureDurations.slowResult
-      PreviousStatus = TestRunStatus.Detected
+      PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled
     }
     let testState = { LiveTestCycleState.empty.TestState with StatusIndex = TestStatusIndex.fromEntries [| entry |] }
     let state = { LiveTestCycleState.empty with LastTiming = Some timing; TestState = testState }

@@ -333,6 +333,15 @@ type TuiEvent =
   | TestRunStartedAt of testIds: Features.LiveTesting.TestId array * sessionId: string * generation: Features.LiveTesting.RunGeneration
   | TestResultsBatch of sessionId: string option * results: Features.LiveTesting.TestRunResult array
   | TestRunCompleted of sessionId: string option
+  /// The session evaluated `content` (a buffer) and is about to run `testIds` against what it
+  /// evaluated. Results that arrive until the run completes ran against evaluated code, not a build.
+  | EvaluatedRunBegan of sessionId: string * content: Features.LiveTesting.AnalysisIdentity * testIds: Features.LiveTesting.TestId array
+  /// A step of the confirmation of an evaluated run against a real build (see `BuildConfirmation`).
+  | BuildConfirmation of sessionId: string * event: Features.LiveTesting.ConfirmationEvent
+  /// Pause or resume automatic test runs for a session (`None`: the one live testing is on for).
+  | LivePauseChanged of sessionId: string option * pause: Features.LiveTesting.LivePause
+  /// Set which tests automatic runs may touch for a session.
+  | LiveScopeChanged of sessionId: string option * scope: Features.LiveTesting.TestScope
   | LiveTestingEnabled
   | LiveTestingDisabled
   | AffectedTestsComputed of testIds: Features.LiveTesting.TestId array * changedSymbolNames: string list
