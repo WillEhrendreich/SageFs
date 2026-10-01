@@ -34,6 +34,7 @@ open Expecto.Flip
 
 module Harness = SageFs.Tests.HttpApiIntegrationTests
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ─── One daemon, one session, two independent clients ───────────────────────
 
@@ -53,13 +54,13 @@ let private daemon =
 let private clientA =
   lazy (
     let c = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" daemonPort))
-    c.Timeout <- TimeSpan.FromSeconds 60.0
+    c.Timeout <- TestTimeouts.daemonRequest
     c)
 
 let private clientB =
   lazy (
     let c = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" daemonPort))
-    c.Timeout <- TimeSpan.FromSeconds 60.0
+    c.Timeout <- TestTimeouts.daemonRequest
     c)
 
 do AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
@@ -122,7 +123,7 @@ let multiClientOutcomeTests =
         Harness.postJson a "/api/sessions/create"
           {| projects = ([||]: string array); workingDirectory = sharedDir |}
       createStatus |> Expect.equal (sprintf "client A creates the session (%s)" createBody) 200
-      let! ready, sessions = Harness.waitForReadySession a sharedDir (TimeSpan.FromSeconds 120.0)
+      let! ready, sessions = Harness.waitForReadySession a sharedDir SageFs.Timeouts.integrationDaemonReady
       ready |> Expect.isTrue (sprintf "the session reaches Ready. Sessions: %s" sessions)
 
       // CLIENT B sees exactly that session — not none, and not a second one of

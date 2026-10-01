@@ -7,6 +7,8 @@ open Expecto.Flip
 open SageFs.Features.LiveBindingsAdaptive
 open SageFs.Features.LiveValueTree
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private mkSnap (sessionId: string) (generation: int64) (names: string list) =
   let bindings =
     names
@@ -41,11 +43,11 @@ let liveBindingsAdaptiveTests = testList "LiveBindingsAdaptive" [
     let sub = subscribe store "sess1" (fun _ -> calls <- calls + 1)
     try
       // Give the initial callback a chance to fire (subscribers fire once with current value).
-      do! Task.Delay 200
+      do! Task.Delay TestTimeouts.callbackSettle
       let afterSubscribe = calls
       // Update with the SAME snapshot value — adaptive equality means no re-fire.
       update store "sess1" snap
-      do! Task.Delay 200
+      do! Task.Delay TestTimeouts.callbackSettle
       calls |> Expect.equal "no extra calls for identical snapshot" afterSubscribe
     finally
       sub.Dispose()
@@ -58,10 +60,10 @@ let liveBindingsAdaptiveTests = testList "LiveBindingsAdaptive" [
     let mutable calls = 0
     let sub = subscribe store "sess1" (fun _ -> calls <- calls + 1)
     try
-      do! Task.Delay 200
+      do! Task.Delay TestTimeouts.callbackSettle
       let snap2 = mkSnap "sess1" 2L [ "x"; "y" ]
       update store "sess1" snap2
-      do! Task.Delay 200
+      do! Task.Delay TestTimeouts.callbackSettle
       calls > 0 |> Expect.isTrue "subscriber fired on change"
     finally
       sub.Dispose()

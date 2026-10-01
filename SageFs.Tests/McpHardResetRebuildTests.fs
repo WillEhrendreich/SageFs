@@ -7,6 +7,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.McpTools
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// A hard reset against fake session ops that model the real registry
 /// read-your-own-write: UpdateSessionStatus posts to the SessionManager, whose
 /// snapshot GetSessionInfo reads back.
@@ -88,7 +90,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
 
 /// Waits for the background rebuild's final status notification.
 let private awaitOutcome (p: Probe) = task {
-  let! winner = Task.WhenAny(p.Finished.Task :> Task, Task.Delay 5000)
+  let! winner = Task.WhenAny(p.Finished.Task :> Task, Task.Delay TestTimeouts.eventCeiling)
   obj.ReferenceEquals(winner, p.Finished.Task) |> Expect.isTrue "the background rebuild must report an outcome"
   return p.Finished.Task.Result
 }

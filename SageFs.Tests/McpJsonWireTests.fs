@@ -18,6 +18,8 @@ open SageFs
 open SageFs.McpTools
 open SageFs.WorkerProtocol
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private lf (text: string) : string = text.Replace("\r\n", "\n")
 
 /// The default JSON encoder writes an apostrophe and any non-ASCII character as \uXXXX.
@@ -408,7 +410,7 @@ let tests =
           SageFs.Server.McpTools.SageFsTools(ctx, Microsoft.Extensions.Logging.Abstractions.NullLogger<SageFs.Server.McpTools.SageFsTools>.Instance)
         let! _ = tools.reset_hot_reload_state ("App.State.count", info.WorkingDirectory)
         let! _ = tools.set_reflection_read_mode ("probe-callers", info.WorkingDirectory)
-        let! finished = Task.WhenAny(serve, Task.Delay(TimeSpan.FromSeconds 20.0))
+        let! finished = Task.WhenAny(serve, Task.Delay TestTimeouts.patience)
         obj.ReferenceEquals(finished, serve) |> Expect.isTrue "the worker was asked twice"
         seen
         |> Seq.toList

@@ -8,6 +8,7 @@ open Microsoft.Playwright
 open SageFs.Tests.DashboardBrowserTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// LT-DASH browser journeys — real live-testing through the live dashboard:
 /// enable in the panel, watch the session's Expecto tests get discovered and
@@ -46,7 +47,7 @@ let private writeHello (content: string) =
       File.WriteAllText(LtEnv.helloFile.Value, content)
       written <- true
     with :? IOException ->
-      Threading.Thread.Sleep(200)
+      Threading.Thread.Sleep(TestTimeouts.retryInterval)
   Expect.isTrue written "Hello.fs should be writable within 15s"
 
 /// Read the current Hello.fs content.
@@ -81,7 +82,7 @@ let private ensureLiveTestingOn (page: IPage) = task {
         panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Enable"))
       let! count = enableBtn.CountAsync()
       if count > 0 then do! enableBtn.ClickAsync()
-      do! Task.Delay(500)
+      do! Task.Delay(TestTimeouts.pollInterval)
   Expect.isTrue on "live testing should reach ON within 15s"
 }
 

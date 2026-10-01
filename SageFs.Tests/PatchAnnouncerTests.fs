@@ -32,7 +32,11 @@ let private begunFor (names: (string * int64 list) list) : Begun =
 let private reading (statuses: (int64 * ProbeStatus) list) : EntryAnswer =
   EntryAnswer.HostSaw { Sightings = statuses |> List.map (fun (probe, status) -> { Probe = probe; Status = status }) }
 
-let private bound = TimeSpan.FromSeconds 10.0
+/// The bound a save normally waits for the host: the product's own.
+let private bound = Timeouts.patchConfirmation
+
+/// A bound that differs from the product's, to show the announcer hands on the one it is given.
+let private otherBound = TimeSpan.FromSeconds 7.0
 
 [<Tests>]
 let tests =
@@ -68,9 +72,9 @@ let tests =
       let seenBound = ref TimeSpan.Zero
       let waiter : EntryWaiter =
         fun probes b -> async { seenProbes.Value <- probes; seenBound.Value <- b; return reading [] }
-      do! PatchAnnouncer.announce waiter (TimeSpan.FromSeconds 7.0) (begunFor [ "A.f", [ 1L; 2L ]; "A.g", [ 3L ] ]) |> Async.StartAsTask
+      do! PatchAnnouncer.announce waiter otherBound (begunFor [ "A.f", [ 1L; 2L ]; "A.g", [ 3L ] ]) |> Async.StartAsTask
       seenProbes.Value |> List.sort |> Expect.equal "every watched probe" [ 1L; 2L; 3L ]
-      seenBound.Value |> Expect.equal "the bound passes through" (TimeSpan.FromSeconds 7.0)
+      seenBound.Value |> Expect.equal "the bound passes through" otherBound
     }
 
     testTask "WHY — a host that cannot be asked means nothing was observed, so the patch is never-entered, not confirmed" {

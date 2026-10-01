@@ -18,6 +18,8 @@ open SageFs.McpTools
 open SageFs.WorkerProtocol
 open SageFs.Tests.LiveTestingTestHelpers
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private framework = TestFramework.Expecto
 let private caseOf name = mkTestCase name framework TestCategory.Unit
 let private idOf name = TestId.create name framework
@@ -139,7 +141,7 @@ let private everything : RunTestsRequest =
     File = None
     Category = None
     Continue = None
-    Wait = TimeSpan.FromSeconds 10.0 }
+    Wait = TestTimeouts.runTestsWait }
 
 let private receiptOf (outcome: RunTestsOutcome) : RunReceipt =
   match outcome with
@@ -149,7 +151,7 @@ let private receiptOf (outcome: RunTestsOutcome) : RunReceipt =
 let private cases = [ caseOf "Suite.alpha"; caseOf "Suite.beta" ]
 
 /// Ceiling on any single wait. A test that reaches it has failed.
-let private patience = TimeSpan.FromSeconds 20.0
+let private patience = TestTimeouts.patience
 
 [<Tests>]
 let tests =
@@ -222,7 +224,7 @@ let tests =
       let engine = Engine(sid, cases, Map.empty)
       let ctx = ctxFor engine sid ready
       // The worker is silent for the whole (short) wait.
-      let! first = runTests ctx "agent" { everything with Wait = TimeSpan.FromMilliseconds 50.0 }
+      let! first = runTests ctx "agent" { everything with Wait = TestTimeouts.runTestsSilentWait }
       let rid =
         match receiptOf first with
         | RunReceipt.Pending (rid, _) | RunReceipt.Started (rid, _) -> rid

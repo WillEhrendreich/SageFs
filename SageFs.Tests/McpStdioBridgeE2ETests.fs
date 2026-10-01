@@ -8,6 +8,7 @@ open Expecto
 open Expecto.Flip
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private sageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
@@ -47,7 +48,7 @@ let private runBridgeSmokeTest () : Task<unit> =
     // The daemon this spawns needs real warmup time (build-free but still
     // ASP.NET Core startup) — generous but bounded, same order of magnitude
     // as HttpApiIntegrationTests' own daemon-readiness budget.
-    let readTimeout = TimeSpan.FromSeconds(90.0)
+    let readTimeout = TestTimeouts.daemonFirstOutput
 
     let readLineWithTimeout () : Task<string option> =
       task {
@@ -170,7 +171,7 @@ let private runPipelinedBatchReproTest () : Task<unit> =
     proc.ErrorDataReceived.Add(fun e -> match e.Data with null -> () | line -> stderrBuf.AppendLine(line) |> ignore)
     proc.BeginErrorReadLine()
 
-    let readTimeout = TimeSpan.FromSeconds(90.0)
+    let readTimeout = TestTimeouts.daemonFirstOutput
     let readLineWithTimeout () : Task<string option> =
       task {
         let readTask = proc.StandardOutput.ReadLineAsync()

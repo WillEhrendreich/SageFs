@@ -8,6 +8,7 @@ open SageFs.AppState
 open SageFs.WorkerProtocol
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 
@@ -42,7 +43,7 @@ let liveValuesReplyPathTests =
   Integration.hostList "Live values off the eval reply path" [
     testCase "WHY — an eval reply carries no liveValueSnapshot metadata because building it (reflection walk + JSON) must not sit between the eval finishing and the caller getting its result" <| fun _ ->
       let result = createActorResult ()
-      Thread.Sleep(50)
+      Thread.Sleep(TestTimeouts.threadStartSettle)
       let request = { Code = "let liveProbe = 42;;"; Args = Map.empty }
       let response =
         result.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))

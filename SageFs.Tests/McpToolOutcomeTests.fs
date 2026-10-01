@@ -63,6 +63,7 @@ open ModelContextProtocol.Protocol
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private fixtureDir =
   Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "McpToolOutcomeFixture")
@@ -96,7 +97,7 @@ let private connect (port: int) : Task<McpClient> =
 
 let private callTool (client: McpClient) (name: string) (args: (string * obj) list) : Task<string> =
   task {
-    use cts = new CancellationTokenSource(TimeSpan.FromSeconds 30.0)
+    use cts = new CancellationTokenSource(TestTimeouts.toolCall)
     let! result = client.CallToolAsync(name, readOnlyDict args, null, null, cts.Token)
     return textOf result
   }
@@ -123,7 +124,7 @@ let private pollToolUntil
       text <- t
       ready <- isReady t
       if not ready then
-        do! Task.Delay(TimeSpan.FromMilliseconds 250.0)
+        do! Task.Delay LiveTestingBudgets.pollInterval
     return text
   }
 
@@ -161,7 +162,7 @@ let private runToolOutcomeTail
         //    "BlindSpots":[...9 entries...],"CausalSymbols":[...,
         //    "SageFs.Tests.Fixtures.McpToolOutcome.Sample.subtract",...]}] ──
         let! coverageRaw =
-          pollToolUntil client "coverage_intel" [] (TimeSpan.FromSeconds 15.0) (fun raw ->
+          pollToolUntil client "coverage_intel" [] TestTimeouts.toolCacheCatchUp (fun raw ->
             try JsonDocument.Parse(raw: string).RootElement.GetArrayLength() > 0
             with _ -> false)
         let coverageDoc = JsonDocument.Parse(coverageRaw: string)
@@ -336,7 +337,7 @@ let private runToolOutcomeBody
         //    read DiscoveredTests directly rather than through list_tests'
         //    resolution path — still get their own independent gate. ──
         let! listAllRaw =
-          pollToolUntil client "list_tests" [] (TimeSpan.FromSeconds 15.0) (hasIntPropertyAtLeast "TotalCount" 3)
+          pollToolUntil client "list_tests" [] TestTimeouts.toolCacheCatchUp (hasIntPropertyAtLeast "TotalCount" 3)
         let listTestsReportsDiscoveredTests = hasIntPropertyAtLeast "TotalCount" 3 listAllRaw
 
         // ── break `subtract` on disk — a real Passed→Failed transition ──
@@ -355,7 +356,7 @@ let private runToolOutcomeBody
         let! explainRaw =
           pollToolUntil
             client "explain_test_failure" [ "test_name", box "subtract computes the difference" ]
-            (TimeSpan.FromSeconds 15.0) (hasIntPropertyAtLeast "MatchCount" 1)
+            TestTimeouts.toolCacheCatchUp (hasIntPropertyAtLeast "MatchCount" 1)
         explainRaw
         |> hasIntPropertyAtLeast "MatchCount" 1
         |> Expect.isTrue (
@@ -377,7 +378,7 @@ let private runToolOutcomeBody
         // ── diagnose: the composed report every agent is told replaces the
         //    other read-path calls — must surface the SAME failure ──
         let! diagnoseRaw =
-          pollToolUntil client "diagnose" [] (TimeSpan.FromSeconds 15.0) (hasIntPropertyAtLeast "FailureCount" 1)
+          pollToolUntil client "diagnose" [] TestTimeouts.toolCacheCatchUp (hasIntPropertyAtLeast "FailureCount" 1)
         diagnoseRaw
         |> hasIntPropertyAtLeast "FailureCount" 1
         |> Expect.isTrue (

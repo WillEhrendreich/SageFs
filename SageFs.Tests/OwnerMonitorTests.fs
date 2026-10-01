@@ -7,6 +7,21 @@ open Expecto
 open Expecto.Flip
 open SageFs.OwnerMonitor
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
+/// How much later (or earlier) a process that reused a dead owner's pid started than the
+/// owner did: a day, which is unambiguously a different process, not read jitter.
+let private pidReuseGap = TimeSpan.FromDays 1.0
+
+/// The jitter the fence tolerance has to exceed, so two reads of one process's start never
+/// disagree. Real cross-process skew is microseconds; this is far above it.
+let private readJitterCeiling = TimeSpan.FromMilliseconds 10.0
+
+/// The shortest gap a real pid reuse leaves between two processes that held the same pid
+/// (sequential pid allocation takes seconds to hours to wrap). The fence tolerance has to
+/// stay below it.
+let private shortestRealPidReuseGap = TimeSpan.FromMinutes 1.0
+
 /// Tests for the Core-owned, pid-and-start-time-fenced watchdog
 /// (multi-agent vision §3.1 rule 1, §10 item 2). Moved out of
 /// `SageFs.Host/WorkerMain.fs`'s `ParentMonitor` (still tested unchanged in
@@ -55,7 +70,7 @@ let isAliveTests = testList "OwnerMonitor.isAlive" [
   // would look like to the monitor.
   testCase "recycled pid does not keep the owner alive (start-time fence)" <| fun _ ->
     let self = Process.GetCurrentProcess()
-    let staleStartTicks = startTimeTicksOf self - TimeSpan.FromDays(1.0).Ticks
+    let staleStartTicks = startTimeTicksOf self - pidReuseGap.Ticks
     let owner = { Pid = self.Id; StartTimeTicks = Some staleStartTicks }
     isAlive (fun _ -> Some self) owner
     |> Expect.isFalse "a live process whose start time doesn't match the fence is a DIFFERENT process (pid reuse) and must be treated as dead"
@@ -106,15 +121,15 @@ let fenceTests = testList "OwnerMonitor.fenceMatches" [
     |> Expect.isFalse "just past the tolerance is a different process"
 
   testCase "a day apart is unambiguously pid reuse" <| fun _ ->
-    fenceMatches 1_000_000_000L (1_000_000_000L + TimeSpan.FromDays(1.0).Ticks)
+    fenceMatches 1_000_000_000L (1_000_000_000L + pidReuseGap.Ticks)
     |> Expect.isFalse "a process started a day later that reused the pid must read as dead"
 
   testCase "tolerance is far below any real pid-reuse gap and far above read jitter" <| fun _ ->
     // Sub-jiffy jitter is ~microseconds; a reused pid on Linux (sequential
     // allocation up to pid_max) is seconds-to-hours later. The tolerance sits
     // safely between: generous vs jitter, negligible vs reuse.
-    (startTimeToleranceTicks > TimeSpan.FromMilliseconds(10.0).Ticks
-     && startTimeToleranceTicks < TimeSpan.FromMinutes(1.0).Ticks)
+    (startTimeToleranceTicks > readJitterCeiling.Ticks
+     && startTimeToleranceTicks < shortestRealPidReuseGap.Ticks)
     |> Expect.isTrue "tolerance must exceed OS read jitter yet stay well under any realistic reuse gap"
 ]
 
@@ -128,7 +143,7 @@ let runTests = testList "OwnerMonitor.run" [
       let monitor =
         run (fun _ -> None) (Owner.ofPid 999999) cts (fun msg -> logLines.Value <- msg :: logLines.Value)
       let running = monitor |> Async.StartAsTask
-      let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay 10_000)
+      let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay TestTimeouts.monitorNotice)
       cts.IsCancellationRequested
       |> Expect.isTrue "cts should be cancelled after owner death detected"
       (not (List.isEmpty logLines.Value))
@@ -156,11 +171,11 @@ let runTests = testList "OwnerMonitor.run" [
     let cts = new CancellationTokenSource()
     try
       let self = Process.GetCurrentProcess()
-      let staleStartTicks = startTimeTicksOf self - TimeSpan.FromDays(1.0).Ticks
+      let staleStartTicks = startTimeTicksOf self - pidReuseGap.Ticks
       let owner = { Pid = self.Id; StartTimeTicks = Some staleStartTicks }
       let monitor = run (fun _ -> Some self) owner cts ignore
       let running = monitor |> Async.StartAsTask
-      let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay 10_000)
+      let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay TestTimeouts.monitorNotice)
       cts.IsCancellationRequested
       |> Expect.isTrue "a recycled pid must not keep the monitor from cancelling — the fence must detect it within a couple of poll intervals"
     finally

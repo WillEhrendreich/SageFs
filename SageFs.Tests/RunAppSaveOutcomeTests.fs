@@ -36,6 +36,7 @@ open SageFs
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private sharedTickerDir = Path.Combine(Http.repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker")
 
@@ -71,7 +72,7 @@ let private textOf (result: CallToolResult) : string =
 /// run_app may restart the session into HotReload first, so it needs patience.
 let private runApp (client: McpClient) : Task<string> =
   task {
-    use cts = new CancellationTokenSource(TimeSpan.FromSeconds 150.0)
+    use cts = new CancellationTokenSource(TestTimeouts.toolCallThatRestarts)
     let! result = client.CallToolAsync("run_app", readOnlyDict [ "project", box "" ], null, null, cts.Token)
     return textOf result
   }
@@ -107,7 +108,7 @@ let private waitForDashboard (http: HttpClient) (dashboardUrl: string) (timeout:
       let! text = dashboardText http dashboardUrl
       last <- text
       satisfied <- predicate text
-      if not satisfied then do! Task.Delay 1000
+      if not satisfied then do! Task.Delay TestTimeouts.slowPollInterval
     return satisfied, last
   }
 
@@ -133,14 +134,14 @@ let runAppSaveOutcomeTests =
       let port = Http.reserveLoopbackPort ()
       let dashboardUrl = sprintf "http://localhost:%d/dashboard" (port + 1)
       let! proc, httpClient = Http.startDaemonWithArgs port workDir [ "--no-resume" ]
-      let dashboardHttp = new HttpClient(Timeout = TimeSpan.FromSeconds 5.0)
+      let dashboardHttp = new HttpClient(Timeout = TestTimeouts.dashboardProbe)
 
       try
         let! createStatus, createBody = Http.createSession httpClient project workDir
         createStatus |> Expect.equal (sprintf "session create should succeed: %s" createBody) 200
 
         // A cold build (restore, compile) happens before the session is Ready.
-        let! ready, sessionsBody = Http.waitForReadySession httpClient workDir (TimeSpan.FromSeconds 240.0)
+        let! ready, sessionsBody = Http.waitForReadySession httpClient workDir TestTimeouts.sessionReadyColdBuild
         ready |> Expect.isTrue (sprintf "the ticker session should reach Ready. Sessions: %s" sessionsBody)
 
         use! client = connect port
@@ -149,7 +150,7 @@ let runAppSaveOutcomeTests =
 
         // Baseline: the app is live and printing the shipped message.
         let! (printing: bool), (before: string) =
-          waitForDashboard dashboardHttp dashboardUrl (TimeSpan.FromSeconds 60.0) (fun t -> t.Contains shippedMessage)
+          waitForDashboard dashboardHttp dashboardUrl TestTimeouts.appOutputAppears (fun t -> t.Contains shippedMessage)
         printing
         |> Expect.isTrue (sprintf "the running ticker should print '%s' before any edit. Last lines: %s" shippedMessage (lastTickerLines before))
 
@@ -158,7 +159,7 @@ let runAppSaveOutcomeTests =
 
         // A rebuild and restart is allowed; being told "Patched" while nothing changes is not.
         let! (changed: bool), (after: string) =
-          waitForDashboard dashboardHttp dashboardUrl (TimeSpan.FromSeconds 180.0) (fun t -> t.Contains marker)
+          waitForDashboard dashboardHttp dashboardUrl TestTimeouts.appOutputAfterSave (fun t -> t.Contains marker)
         changed
         |> Expect.isTrue
           (sprintf "the running app should print the edited message '%s' after the save. Last lines: %s" marker (lastTickerLines after))

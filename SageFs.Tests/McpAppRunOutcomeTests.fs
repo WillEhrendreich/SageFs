@@ -54,6 +54,7 @@ open ModelContextProtocol.Protocol
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private consoleTickerProject =
   Path.Combine(Http.repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker", "SageFs.Samples.ConsoleTicker.fsproj")
@@ -78,7 +79,7 @@ let private waitForProjectLoaded (client: System.Net.Http.HttpClient) (targetDir
   let expectedDir = targetDir.TrimEnd('/')
 
   while not loaded && DateTime.UtcNow - started < timeout do
-    do! Task.Delay(500)
+    do! Task.Delay(TestTimeouts.pollInterval)
     let! status, body = Http.getJson client "/api/sessions"
     lastBody <- body
     if status = 200 then
@@ -151,14 +152,14 @@ let private connect (port: int) : Task<McpClient> =
 /// (120s), so this tool call needs real patience, unlike a plain read tool.
 let private callToolPatient (client: McpClient) (name: string) (args: (string * obj) list) : Task<string> =
   task {
-    use cts = new CancellationTokenSource(TimeSpan.FromSeconds 150.0)
+    use cts = new CancellationTokenSource(TestTimeouts.toolCallThatRestarts)
     let! result = client.CallToolAsync(name, readOnlyDict args, null, null, cts.Token)
     return textOf result
   }
 
 let private callTool (client: McpClient) (name: string) (args: (string * obj) list) : Task<string> =
   task {
-    use cts = new CancellationTokenSource(TimeSpan.FromSeconds 30.0)
+    use cts = new CancellationTokenSource(TestTimeouts.toolCall)
     let! result = client.CallToolAsync(name, readOnlyDict args, null, null, cts.Token)
     return textOf result
   }
@@ -174,7 +175,7 @@ let mcpAppRunOutcomeTests =
         let! createStatus, createBody = Http.createSession httpClient consoleTickerProject consoleTickerDir
         createStatus |> Expect.equal "session create should succeed" 200
 
-        let! ready, sessionsBody = Http.waitForReadySession httpClient consoleTickerDir (TimeSpan.FromSeconds 60.0)
+        let! ready, sessionsBody = Http.waitForReadySession httpClient consoleTickerDir TestTimeouts.sessionReady
         ready
         |> Expect.isTrue (
           sprintf "console ticker session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
@@ -191,7 +192,7 @@ let mcpAppRunOutcomeTests =
         // So wait for the condition the action actually needs. Under load the
         // load takes longer than the state flip, which is why Ready alone was
         // not enough and why it moved between shards.
-        let! loaded = waitForProjectLoaded httpClient consoleTickerDir (TimeSpan.FromSeconds 90.0)
+        let! loaded = waitForProjectLoaded httpClient consoleTickerDir TestTimeouts.sessionBackAfterRestart
         loaded
         |> Expect.isTrue "the console ticker session should hold its project before run_app is called"
 
@@ -275,7 +276,7 @@ let mcpAppRunOutcomeTests =
         |> Expect.isFalse "hard_reset_fsi_session should report something"
 
         let! readyAfterReset, sessionsAfterReset =
-          Http.waitForReadySession httpClient consoleTickerDir (TimeSpan.FromSeconds 90.0)
+          Http.waitForReadySession httpClient consoleTickerDir TestTimeouts.sessionBackAfterRestart
         readyAfterReset
         |> Expect.isTrue (sprintf "session should come back Ready after hard reset. Sessions: %s" sessionsAfterReset)
 

@@ -18,7 +18,7 @@ let private literalPattern =
   Regex(@"TimeSpan\.From(Seconds|Milliseconds|Minutes|Hours|Days)\s*\(?\s*[0-9]|Task\.Delay\s*\(?\s*[0-9]|Thread\.Sleep\s*\(?\s*[0-9]", RegexOptions.Compiled)
 
 /// The files allowed to hold durations: the product's, and the ones a test picks on purpose.
-let private central = Set.ofList [ "SageFs.Core/Timeouts.fs"; "SageFs.Tests/TestInfrastructure.fs" ]
+let private central = Set.ofList [ "SageFs.Core/Timeouts.fs"; "SageFs.Tests/TestInfrastructure.fs"; "SageFs.Tests/LiveTestingBudgets.fs" ]
 
 /// What each file may still spell out itself. Ratchet down, never up.
 let private budgets : (string * int) list =
@@ -45,13 +45,9 @@ let private budgets : (string * int) list =
     "SageFs.Tests/JsonCoreFilesTests.fs", 1
     "SageFs.Tests/LandingCacheTests.fs", 2
     "SageFs.Tests/LifecyclePropertyTests.fs", 1
-    "SageFs.Tests/LiveBindingsAdaptiveTests.fs", 4
     "SageFs.Tests/LiveTestActivityTests.fs", 2
     "SageFs.Tests/LiveTestActivityWiringTests.fs", 2
-    "SageFs.Tests/LiveTestWatcherAtomicSaveTests.fs", 2
     "SageFs.Tests/LiveTestWatcherScopeTests.fs", 4
-    "SageFs.Tests/LiveTestingBrowserTests.fs", 2
-    "SageFs.Tests/LiveTestingBudgets.fs", 3
     "SageFs.Tests/LiveTestingCoreTests.fs", 3
     "SageFs.Tests/LiveTestingCoverageTests.fs", 9
     "SageFs.Tests/LiveTestingCycleTests.fs", 48
@@ -59,25 +55,13 @@ let private budgets : (string * int) list =
     "SageFs.Tests/LiveTestingElmTests.fs", 14
     "SageFs.Tests/LiveTestingGraphTests.fs", 20
     "SageFs.Tests/LiveTestingTypesTests.fs", 2
-    "SageFs.Tests/LiveValuesPullTests.fs", 1
     "SageFs.Tests/LocalDataRetentionTests.fs", 3
     "SageFs.Tests/LocalDataSqliteTests.fs", 3
     "SageFs.Tests/McpAdapterTests.fs", 8
-    "SageFs.Tests/McpAppRunOutcomeTests.fs", 6
-    "SageFs.Tests/McpHardResetRebuildTests.fs", 1
-    "SageFs.Tests/McpJsonWireTests.fs", 1
-    "SageFs.Tests/McpRunTestsTests.fs", 3
-    "SageFs.Tests/McpStdioBridgeE2ETests.fs", 2
-    "SageFs.Tests/McpToolExecutionTests.fs", 1
-    "SageFs.Tests/McpToolOutcomeTests.fs", 6
     "SageFs.Tests/MemorySupervisorTests.fs", 5
     "SageFs.Tests/MultiAgentCoordinationTests.fs", 4
-    "SageFs.Tests/MultiClientOutcomeTests.fs", 3
-    "SageFs.Tests/MultiTargetReferenceOutcomeTests.fs", 3
-    "SageFs.Tests/OriginGuardOutcomeTests.fs", 1
-    "SageFs.Tests/OwnerMonitorTests.fs", 7
-    "SageFs.Tests/ParentMonitorTests.fs", 1
-    "SageFs.Tests/PatchAnnouncerTests.fs", 3
+    "SageFs.Tests/OwnerMonitorTests.fs", 3
+    "SageFs.Tests/PatchAnnouncerTests.fs", 1
     "SageFs.Tests/PersistenceComplianceTests.fs", 1
     "SageFs.Tests/PureModulesComprehensiveTests.fs", 13
     "SageFs.Tests/QuarantineTests.fs", 1
@@ -87,7 +71,6 @@ let private budgets : (string * int) list =
     "SageFs.Tests/ReloadPlanningTests.fs", 2
     "SageFs.Tests/RestartJitterTests.fs", 4
     "SageFs.Tests/RestartPolicyTests.fs", 10
-    "SageFs.Tests/RunAppSaveOutcomeTests.fs", 6
     "SageFs.Tests/TimeoutsTests.fs", 10
     "SageFs.Tests/WorkflowSwitchTests.fs", 1
     "SageFs.Tests/WorkflowTransitionPropertyTests.fs", 1

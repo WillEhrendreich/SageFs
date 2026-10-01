@@ -8,6 +8,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.Server.DaemonMode
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private sid =
   match WorkerProtocol.SessionId.validate "aa000001" with
   | Ok id -> id
@@ -19,7 +21,7 @@ type private WatchOutcome =
   | NothingReported
 
 /// Watch a fresh directory holding Hello.fs, run `save` on it, and report what the
-/// live-test watcher said within five seconds.
+/// live-test watcher said within `TestTimeouts.eventCeiling`.
 let private watchAfter (save: string -> unit) = task {
   let dir = Directory.CreateTempSubdirectory "sagefs-watch-"
   let target = Path.Combine(dir.FullName, "Hello.fs")
@@ -35,9 +37,9 @@ let private watchAfter (save: string -> unit) = task {
     // ahead of watcher creation and be missed. (In production saves happen long
     // after a session is added, so this race never occurs there.)
     manager.WatchedDirectories |> ignore
-    do! Task.Delay 50 // small settle for the OS watcher to begin delivering events
+    do! Task.Delay TestTimeouts.threadStartSettle // small settle for the OS watcher to begin delivering events
     save target
-    let! winner = Task.WhenAny(reloaded.Task :> Task, Task.Delay(TimeSpan.FromSeconds 5.0))
+    let! winner = Task.WhenAny(reloaded.Task :> Task, Task.Delay TestTimeouts.eventCeiling)
     return
       match obj.ReferenceEquals(winner, reloaded.Task) with
       | true -> Reloaded reloaded.Task.Result

@@ -28,6 +28,7 @@ open Expecto.Flip
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private libProject =
   """<Project Sdk="Microsoft.NET.Sdk">
@@ -115,8 +116,8 @@ let private waitForSettled (client: HttpClient) (dir: string) (budget: TimeSpan)
       match mine with
       | Some "Ready" -> outcome <- Some Settled.Ready
       | Some "Faulted" -> outcome <- Some (Settled.Faulted body)
-      | _ -> do! System.Threading.Tasks.Task.Delay(500)
-    | _ -> do! System.Threading.Tasks.Task.Delay(500)
+      | _ -> do! System.Threading.Tasks.Task.Delay(TestTimeouts.pollInterval)
+    | _ -> do! System.Threading.Tasks.Task.Delay(TestTimeouts.pollInterval)
   return outcome |> Option.defaultValue (Settled.TimedOut lastBody)
 }
 
@@ -156,7 +157,7 @@ let multiTargetReferenceOutcomeTests =
         let! createStatus, createBody = Http.createSession http appProjectPath appDir
         createStatus |> Expect.equal (sprintf "session create is accepted (%s)" createBody) 200
 
-        let! settled = waitForSettled http appDir (TimeSpan.FromSeconds 180.0)
+        let! settled = waitForSettled http appDir TestTimeouts.multiTargetSettle
         match settled with
         | Settled.Ready -> ()
         | Settled.Faulted body ->

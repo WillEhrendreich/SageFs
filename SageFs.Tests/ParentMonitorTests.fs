@@ -7,6 +7,8 @@ open Expecto
 open Expecto.Flip
 open SageFs.Server.WorkerMain
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// Tests for the worker parent-death watchdog (issue #126).
 /// Workers self-exit when their daemon process dies, so hard kills
 /// (Task Manager, taskkill /F, crash, OS shutdown) don't orphan workers.
@@ -52,7 +54,7 @@ let parentMonitorRunTests = testList "ParentMonitor.run" [
       let monitor =
         ParentMonitor.run (fun _ -> None) 999999 cts (fun msg -> logLines.Value <- msg :: logLines.Value)
       let running = monitor |> Async.StartAsTask
-      let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay 10_000)
+      let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay TestTimeouts.monitorNotice)
       cts.IsCancellationRequested
       |> Expect.isTrue "cts should be cancelled after daemon death detected"
       (not (List.isEmpty logLines.Value))

@@ -390,6 +390,111 @@ module TestTimeouts =
   /// How far past the absolute warmup bound a scenario puts the elapsed time.
   let pastAbsoluteBy = System.TimeSpan.FromMinutes 1.
 
+  // --- tests L to R ---
+  // A ceiling is how long a wait may take before the test calls it failed. A test that reaches
+  // one has failed; it is never how a passing test finishes. Where a wait ends the moment the
+  // thing it waits on happens, a generous ceiling costs a passing test nothing.
+
+  // `patience` (20 s) is defined once, in the A to K section, and used here too.
+
+  /// Ceiling on one in-process event that arrives within milliseconds when it arrives at all
+  /// (a file watcher callback, a status notification from a background task).
+  let eventCeiling = System.TimeSpan.FromSeconds 5.
+
+  /// How fast a tool call that must not wait on a background rebuild has to return. The call
+  /// does no real work, so this only fails when it blocks.
+  let promptReturn = System.TimeSpan.FromSeconds 1.
+
+  /// How many of the owner monitor's own poll intervals a test waits for it to notice that
+  /// the process it watches is gone. The monitor polls on `SageFs.OwnerMonitor.pollIntervalMs`
+  /// (the worker's parent monitor uses the same value), so this follows the product's cadence.
+  let monitorPollsAllowed = 5
+
+  /// Ceiling on a process monitor noticing a dead or recycled pid and cancelling.
+  let monitorNotice =
+    System.TimeSpan.FromMilliseconds (float (SageFs.OwnerMonitor.pollIntervalMs * monitorPollsAllowed))
+
+  /// How long a test lets an in-process subscriber callback fire, or lets the same callback
+  /// show it does not fire a second time. There is no signal to wait on for "nothing happened".
+  let callbackSettle = System.TimeSpan.FromMilliseconds 200.
+
+  /// A pause for something just started on another thread (a watcher arming, an actor
+  /// beginning to receive) before the test acts on it. Paired with a barrier where one exists.
+  let threadStartSettle = System.TimeSpan.FromMilliseconds 50.
+
+  /// Pause between retries of an IO call that fails for a moment because another process holds
+  /// the file. The retry loop is bounded by its own deadline.
+  let retryInterval = System.TimeSpan.FromMilliseconds 200.
+
+  /// How often a wait re-reads a page or an HTTP endpoint it is waiting on. Sub-second so a
+  /// state that is already true is seen at once; the wait ends on the first read that passes.
+  let pollInterval = System.TimeSpan.FromMilliseconds 500.
+
+  /// How often a wait re-reads a slower source (the text a running app printed to the
+  /// dashboard), where a read costs a page render and half a second would only add load.
+  let slowPollInterval = System.TimeSpan.FromSeconds 1.
+
+  /// The wait a `run_tests` call asks for when the fake engine answers at once, so the call
+  /// returns when the engine does and never after the whole wait.
+  let runTestsWait = System.TimeSpan.FromSeconds 10.
+
+  /// The wait a `run_tests` call asks for when the fake worker is silent for all of it. The
+  /// call has to run out its wait to hand back a pending request id, so this is a delay the
+  /// test pays in full: short on purpose.
+  let runTestsSilentWait = System.TimeSpan.FromMilliseconds 50.
+
+  /// One MCP tool call that does no build and no restart. The daemon answers in milliseconds
+  /// once a session is Ready, so reaching this means the call is stuck.
+  let toolCall = System.TimeSpan.FromSeconds 30.
+
+  /// Slack added to a product bound when a test waits on a call that product bound limits.
+  /// It covers the thread-pool and scheduling noise between the product giving up and the
+  /// test seeing the answer.
+  let boundSlack = System.TimeSpan.FromSeconds 30.
+
+  /// One MCP tool call that may restart the session first (run_app moves an Interactive
+  /// session into HotReload, hard_reset_fsi_session respawns the worker). Both are bounded by
+  /// `SageFs.Timeouts.warmupReadyPollMax`, so the test waits that long plus slack.
+  let toolCallThatRestarts = SageFs.Timeouts.warmupReadyPollMax + boundSlack
+
+  /// One request from a test HTTP client to a daemon under load, where the daemon may be busy
+  /// warming a session. Past this the request is stuck, not slow.
+  let daemonRequest = System.TimeSpan.FromSeconds 60.
+
+  /// One probe of the dashboard inside a poll loop. Short because the loop retries; a probe
+  /// that hangs for longer only delays the next one.
+  let dashboardProbe = System.TimeSpan.FromSeconds 5.
+
+  /// The first line a spawned daemon writes to stdout. It needs real warmup time (ASP.NET Core
+  /// startup), so this is generous; the read ends as soon as the line arrives.
+  let daemonFirstOutput = System.TimeSpan.FromSeconds 90.
+
+  /// A session on a small project reaching Ready after create, with build output already on disk.
+  let sessionReady = System.TimeSpan.FromSeconds 60.
+
+  /// A session coming back Ready after a worker respawn, or holding its project once Ready.
+  /// Both are bounded by `SageFs.Timeouts.warmupReadyPollMax` on the product side, so a faulted
+  /// session reports before this runs out.
+  let sessionBackAfterRestart = System.TimeSpan.FromSeconds 90.
+
+  /// A session reaching Ready when the create also builds the project cold (restore and compile).
+  let sessionReadyColdBuild = System.TimeSpan.FromSeconds 240.
+
+  /// A multi-target sample reaching Ready or Faulted after create, built cold for each target.
+  let multiTargetSettle = System.TimeSpan.FromSeconds 180.
+
+  /// A console app started by run_app printing its first line to the dashboard.
+  let appOutputAppears = System.TimeSpan.FromSeconds 60.
+
+  /// A running app printing the edited text after a save. A rebuild and a restart are allowed
+  /// before the new text shows, so this is longer than the first line.
+  let appOutputAfterSave = System.TimeSpan.FromSeconds 180.
+
+  /// How long the tool layer's read caches (list_tests, coverage_intel, and the narrative
+  /// cache behind explain_test_failure and diagnose) may lag a state change the status endpoint
+  /// already confirmed. Waits poll and end early.
+  let toolCacheCatchUp = System.TimeSpan.FromSeconds 15.
+
 /// Harness-root Verify configuration — the ONE place that owns the snapshot
 /// directory, the unique-prefix setting and the line-ending scrubber. Program.fs
 /// calls `configure` before any test runs; snapshot tests call `verify` and never

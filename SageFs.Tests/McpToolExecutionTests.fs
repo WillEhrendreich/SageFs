@@ -88,7 +88,7 @@ let tests =
 
       let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
       let toolTask = tools.hard_reset_fsi_session(true, "")
-      let! completed = Task.WhenAny(toolTask, Task.Delay(1000))
+      let! completed = Task.WhenAny(toolTask, Task.Delay TestTimeouts.promptReturn)
 
       obj.ReferenceEquals(completed, toolTask)
       |> Expect.isTrue "tool call should return immediately for rebuild hard reset"
