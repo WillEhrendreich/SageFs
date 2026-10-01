@@ -59,23 +59,29 @@ Live testing is also a workflow, not only a toggle. See [Workflow Modes](workflo
 Completions and CodeLens are editor features backed by FSharp.Compiler.Service; they are not MCP tools. Neither
 is the type explorer, the call graph, the test-run policy control, or the test trace. Those are HTTP endpoints
 the editors and the dashboard call (`GET /api/dependency-graph`, `POST /api/live-testing/policy`,
-`GET /api/live-testing/test-trace`). The `get_completions` and `explore_type` members in `SageFs/McpTools.fs`
-carry a `[<Description>]` but no `[<McpServerTool>]` attribute, so they aren't part of the advertised tool
-surface at all. I checked, this table isn't guessing. [`LIVE_TESTING_GUIDE.md`](LIVE_TESTING_GUIDE.md) is the
+`GET /api/live-testing/test-trace`). The `get_completions`, `explore_type` and `visualize_domain_model`
+members in `SageFs/McpTools.fs` carry a `[<Description>]` but no `[<McpServerTool>]` attribute, so they aren't
+part of the advertised tool surface at all, and I found no HTTP route for `visualize_domain_model` either. In the
+domain model and pipeline row, the MCP cell is `decompose_pipeline`. I checked, this table isn't guessing. [`LIVE_TESTING_GUIDE.md`](LIVE_TESTING_GUIDE.md) is the
 authoritative list of what is and isn't an MCP tool.
 
 ## Hot Reload and Health
 
 Hot reload watches `.fs` files, emits the functions that changed, and uses Harmony to re-point those methods in
 the already-running process, including apps whose route table was built once at startup (the
-`module App.Program` + `let routes = [...]` pattern). Browser auto-refresh works.
+`module App.Program` + `let routes = [...]` pattern). Browser auto-refresh works. An app you start with `run_app`
+runs in the worker, out of the reload agent's reach. In v0.6.875 a save to one restarts it. On master (merged
+after v0.6.875, so not in a release yet) the save is patched into the running process as a metadata delta
+instead, and generic functions patch in every instantiation. [Hot Reload](hot-reload.md) says which is which.
 
 Because it re-points **methods**, a handler that is *called* per request reloads, and a handler whose output
 was *computed once* at startup cannot. Prefer `let getHome (ctx: HttpContext) = ...` over
-`let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. `let mutable` state, changed signatures, and
-changed types restart the app instead of patching it, and SageFs tells you that's what's happening rather than
-silently serving stale code. [Hot Reload](hot-reload.md) carries the full what-reloads / what-restarts table,
-each row pinned by an executable test; this page deliberately doesn't duplicate it.
+`let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. A `let mutable` you didn't touch keeps its live
+value across a save, and a changed signature is patched too (callers saved in the same save move onto the new
+method). What restarts the app is a type whose fields, cases or members changed, startup code, a value the running
+app kept a copy of, and a `let mutable` whose type changed. SageFs says which one it was rather than silently
+serving stale code. [Hot Reload](hot-reload.md) carries the full what-reloads / what-restarts table, each row
+pinned by an executable test; this page deliberately doesn't duplicate it.
 
 | Feature | VS Code | Neovim | Web Dashboard | MCP |
 |:--------|:-------:|:------:|:-------------:|:---:|

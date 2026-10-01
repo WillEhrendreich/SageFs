@@ -1,5 +1,7 @@
 # SageFs Live-Testing Discovery Reliability & Zero-Test Visibility Analysis
 
+> **Historical, from 2026-03-12.** This is an analysis I did of an earlier tree, and I haven't re-checked its findings against today's code. Treat the present-tense claims below ("CRITICAL SILENT-FAILURE PATHS", the line numbers in `Mcp.fs`, "`run_tests` has inverted logic") as what I found then. A lot has changed since. `run_tests`, for one, was removed and later rebuilt as a door into the live-testing engine that returns a receipt, where `Incomplete` is never green and an empty selection says so. For what live testing does today, read [how live testing works](docs/how-live-testing-works.md). It would sit better under `docs/internal/`.
+
 ## EXECUTIVE SUMMARY
 
 SageFs has **CRITICAL SILENT-FAILURE PATHS** where test discovery can report 0 tests without user-visible warnings:

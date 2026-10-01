@@ -10,7 +10,7 @@
         <!-- NuGet config -->
         <PackageId>SageFs</PackageId>
         <Authors>Will Ehrendreich</Authors>
-        <Description>SageFs — a functional F# REPL, MCP server, and live web development environment.</Description>
+        <Description>F# Interactive that already has your project loaded, re-runs the affected tests on unsaved edits, and patches your running app on save. VS Code, Neovim, a web dashboard and an MCP server for agents share one session.</Description>
         <Copyright>Copyright © 2025-2026 Will Ehrendreich</Copyright>
         <PackageTags>fsharp;functional;repl;interactive;shell;asp.net core;mcp;dashboard;sagefs</PackageTags>
         <PackageProjectUrl>https://github.com/WillEhrendreich/SageFs</PackageProjectUrl>

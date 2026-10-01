@@ -1,7 +1,7 @@
 {
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
-  "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
+  "description": "Inline F# evaluation, tests that re-run on your edits, and hot reload for your running app, all from one SageFs session.",
   "version": "0.6.875",
   "publisher": "willehrendreich",
   "license": "MIT",

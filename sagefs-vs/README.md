@@ -1,5 +1,7 @@
 # SageFs — Visual Studio Extension
 
+> **Deprecated, and no longer built, tested or published.** I checked on 2026-10-01: `ci-pipeline.fsx` and the publish workflow build and release the VS Code extension and the NuGet tool, and nothing in either touches `sagefs-vs/`. The source stays here as legacy code. A release won't carry a `.vsix` for Visual Studio, so don't look for one, and everything below describes the extension as it was when it last shipped. For an editor today, use [VS Code](../sagefs-vscode/README.md), Neovim or the web dashboard.
+
 A Visual Studio extension for [SageFs](../Readme.md) — the live F# development server. Evaluate F# code, see inline results, stream diagnostics into the Error List, get completions, manage sessions, control hot reload, and monitor live test status — all from within Visual Studio.
 
 ## Requirements

@@ -60,6 +60,12 @@ has the mechanism, the measurements and what it can't take.
 | `run_app`, metadata-delta route on | the worker | patched in place by a metadata delta, same process id | stays where it is |
 | `run_app`, route off | the worker | SageFs restarts it with your change and says why | reset by the restart |
 
+This route merged on 2026-10-01, after v0.6.875 was tagged, so it is on master and
+not in a release yet. In v0.6.875 a `run_app` save does what the bottom row says. The
+same goes for generics: patching a generic function in every instantiation is also
+merged and unreleased, and in v0.6.875 a save to one restarts the app and names
+`GenericFunction`.
+
 The route is on by default. Set `SAGEFS_METADATA_DELTA=off` in the daemon's
 environment and a `run_app` save restarts the app as it did before this route
 existed ([configuration](configuration.md)). Measured on my machine on the test fixture,
@@ -128,6 +134,12 @@ other jobs running on it. Each cell is the range of the 8 runs.
 | The same save, to the daemon saying `Patched` | 296 to 346 ms | 338 to 392 ms |
 | A save to an app `run_app` runs, to the restarted app's first response | 7.1 to 10.0 s | 7.7 to 16.2 s |
 
+The third row is a restart, and I took those 8 runs before the metadata-delta route
+existed (the route came in later the same day). With the route on, which is now the
+default on master, the same kind of save is a delta and is served in 1.8 to 2.6 s
+(measured separately, above). The tier's restart case has not been re-pointed at
+the route-off path since, so a fresh run of it on master may measure a delta save.
+
 About 200 ms of a patched save is the watcher's debounce (the worker says it
 started compiling at 201 to 202 ms every run), so most of the time is a fixed
 timer and not the patch. A restart is a rebuild, a new worker, a new FSI session
@@ -187,6 +199,9 @@ on .NET 11).
 | a generic function **called from another generic function**, or used as a **first-class value** | reloads | parity `genericNested`, `genericClosure` |
 | a **generic method** of a class, instance or static | reloads | parity `genericInstanceMethod`, `genericStaticMethod` |
 | a member of a **generic type**: an instance member, a static one, or a generic method of it | reloads. Each object keeps its own type argument, and the objects built before the save run the new body | parity `genericTypeInstance`, `genericTypeStatic`, `genericMethodOnType` |
+
+The generic rows merged on 2026-10-01 after v0.6.875 was tagged. They are on master
+and not in a release yet. In v0.6.875 a save to a generic function restarts the app.
 
 The planner only takes an edit as "just the lambdas" when nothing outside a
 lambda changed (it cuts every lambda out of both versions and compares what is
@@ -516,8 +531,11 @@ I'd rather you hear this from me than find it at 11pm.
   coarse on purpose. And `Patched` for a generic function means a new body was
   seen running and every body was patched in the same save, not that every
   instantiation has been called since.
-- **Adding a member to an existing type is a restart.** Microsoft's mechanism
-  supports it. Mine treats any change to a type's member list as a shape change.
+- **Adding a member to an existing type is a restart on the detour route.**
+  Microsoft's mechanism supports it. The detour route treats any change to a type's
+  member list as a shape change. The metadata-delta route for a `run_app` app takes
+  a method added to a type the app already runs, and restarts for an added field,
+  a virtual member or a constructor.
 
 - **A redefined value restarts once anything that hands it on has run.**
   Load the page that renders `greeting`, then edit `greeting`, and it's a

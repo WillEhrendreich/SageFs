@@ -1,5 +1,7 @@
 # Where type-migration stands, and what each piece buys
 
+> **Checked on 2026-10-01, partly.** This page is a working record, last written on 2026-09-30, and I haven't re-derived all of it. I did grep the "Reachable from a save?" column. `TranslationValidation`, `HolderRewrite` and `MigrationPlan` have no caller outside their own files and the tests, so "no caller yet" still holds for steps 3 to 5. Step 2 is less clear: `HolderRegistry` is referenced from `SageFs.Host/WorkerMain.fs` and `SageFs.Core/RestartBoundaries.fs`, so "no caller yet" for the holder may be out of date. The commit ids and the test counts further down are what they were on the day they were written.
+
 ## The chain, and where it is live
 
 | Step | Commit | Reachable from a save? |

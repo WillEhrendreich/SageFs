@@ -28,7 +28,9 @@ The loop:
 
 The skill is a folder, [`skills/sagefs/`](../skills/sagefs/). The agent loads
 [`SKILL.md`](../skills/sagefs/SKILL.md) on every F# task. It is short: the
-first-minute checklist, the loop, and the rules that bite before a first edit.
+first-minute checklist, the loop, the rules that bite before a first edit, and
+a few lines for an agent that spawns other agents (see
+[section 6](#6-after-a-day-of-sub-agents)).
 The other files in the folder are read only when their trigger comes up:
 - `sessions.md`: choosing a session, checking the daemon version
 - `loop.md`: why the REPL is the loop, and which tool answers what
@@ -156,3 +158,26 @@ write down the exact error, try the obvious fix once, and only then fall back
 for that one step, saying so. If your agent reports something like that,
 please [open an issue](https://github.com/WillEhrendreich/SageFs/issues) with
 the error. Every silent fallback is a bug that never gets fixed.
+
+## 6. After a day of sub-agents
+
+An orchestrator that hands work to sub-agents in their own git worktrees
+collects leftovers: the worktrees, the merged branches, the gate's checkouts,
+built FSI hosts, temp dirs, the odd orphaned process. They add up in disk
+and memory.
+
+Two MCP tools show it and tidy the part that is safe, and `sagefs hygiene`
+does the same from a shell. The skill tells an orchestrator to look before it
+spawns and tidy once the work has merged:
+
+- `get_workspace_hygiene` is a dry run. It lists each leftover with its size,
+  age and a standing that says why it is or isn't safe to reclaim, then a plan
+  with an id.
+- `tidy_workspace` runs only the safe part of that plan, and only with
+  `confirm=true` and the plan id you were shown. Each step looks at its target
+  again first. It never touches unmerged commits, uncommitted work, anything in
+  use, or anything it couldn't judge.
+
+[`mcp-tools.md`](mcp-tools.md#workspace-hygiene) has the details. The brief you
+give a sub-agent should say to remove nothing it doesn't own and to report its
+worktree path and branch, so the orchestrator knows what to reap.

@@ -26,8 +26,9 @@ dotnet tool install --global SageFs
 Verify: `sagefs --version` should print the version. If the command isn't
 found, make sure `~/.dotnet/tools` is on your `PATH`.
 
-**Requires**: .NET 10 SDK to install SageFs itself. Check with
-`dotnet --version`. Sessions can be on .NET 10 or .NET 11. Each
+**Requires**: the .NET 10 SDK or the .NET 11 SDK to install SageFs itself (the
+package carries a build for each, and `dotnet` picks the one that matches your
+SDK). Check with `dotnet --version`. Sessions can be on .NET 10 or .NET 11. Each
 session's host builds with whichever SDK `dotnet --version` reports in your
 project's folder, and runs on that SDK's runtime. That's your `global.json`
 pin if you have one, otherwise the newest SDK installed. So if an 11 preview
@@ -37,8 +38,12 @@ is installed and you want a project on 10, pin it.
 
 1. **Check if another instance is running**: `sagefs status`. If it shows a
    running daemon, stop it with `sagefs stop` or use the existing one.
-2. **Port in use**: Default is 37749. Use `--mcp-port 8080` to pick a different
-   port. In VS Code, set `sagefs.mcpPort` in settings.
+2. **Port in use**: Default is 37749 (the dashboard is the next port up). To
+   pick a different port for the daemon you want to keep, set
+   `SAGEFS_MCP_PORT=8080` in its environment. `--mcp-port 8080` on its own is
+   refused, because a daemon off the default port has to say who owns it
+   (`--owner-pid <pid>`) or when to give up (`--ttl 30m`). In VS Code, set
+   `sagefs.mcpPort` in settings.
 3. **Check the SageFs console window**: it logs startup errors to its
    own terminal window. Look for .NET SDK errors, missing project files, or
    compilation failures. The daemon also writes a log file
@@ -168,10 +173,13 @@ reload messages from inside the worker end up, one line each, as
 `<UTC time> [INF|DBG|WRN|ERR] message`. The session id is in `list_sessions` and
 on the dashboard. Each file is capped at 4 MiB. When the next line would pass
 that, the file moves to `<sessionId>.log.1`, replacing the previous one, so a
-session costs at most 8 MiB. Nothing deletes the files of sessions that have
-ended (I found no code that does, and my own data dir has hundreds), so a log
-for a session that no longer exists is just a file you can delete. If a worker
-can't open its log it says so on stderr and carries on without one.
+session costs at most 8 MiB. The daemon doesn't delete a log by itself. Workspace
+hygiene (`get_workspace_hygiene`, `sagefs hygiene`) lists a worker log as
+expired once it has gone 14 days without a write and its session is gone
+(`SAGEFS_WORKER_LOG_MAX_AGE_DAYS` changes that), and `tidy_workspace` or
+`sagefs hygiene --tidy` removes it when you confirm the plan. A log for a session
+that no longer exists is also just a file you can delete. If a worker can't open
+its log it says so on stderr and carries on without one.
 
 **The stderr tail.** While a worker is starting, the daemon keeps the last 200
 lines of its stderr. If the worker exits before it reports its port, goes quiet
@@ -190,9 +198,18 @@ reason in full.
 **A session is Degraded.** The session works, but something you'd expect to work
 won't, and the reason says what to do. `/health` and `/api/sessions` carry it as
 `health: { status, reason }` per session
-([`SessionHealth.fs`](../SageFs.Core/SessionHealth.fs)). Today there are three
-causes:
+([`SessionHealth.fs`](../SageFs.Core/SessionHealth.fs)). Today there are four
+causes, and the first can have several reasons:
 
+- A project was evaluated by MSBuild, but the host couldn't make everything
+  right for it ([`HostConcern`](../SageFs.Core/ProjectLoading.fs)). The reason
+  says which: the project's `runtimeconfig.json` couldn't be read so the host's
+  default runtime was a guess, its target framework isn't one SageFs recognises,
+  the project's FSharp.Core call sites couldn't be redirected to its own build
+  (code calling a member the host's FSharp.Core lacks will throw), or the project
+  carries its own FSharp.Compiler.Service, which the host can't replace with it.
+  Each reason names what to do. [How SageFs opens projects plain FSI can't](how-isolation-works.md)
+  has the rest.
 - A project was loaded by hand-parsing the `.fsproj` instead of MSBuild
   evaluation. Code evaluates, but there is no build output, so `run_app` and hot
   reload won't work. The reason names why MSBuild failed (it threw, it returned

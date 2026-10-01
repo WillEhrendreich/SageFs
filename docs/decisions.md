@@ -622,7 +622,11 @@ means changing what the closures' confirmation means too.
   runtime re-JITs every instantiation, the ones that exist and the ones to come, and no list is needed: that is
   `MetadataUpdater.ApplyUpdate` with a delta, which `dotnet/fsharp#19941` is building the compiler side of. A profiler's
   `RequestReJIT` and `SetILFunctionBody` do the same job from the other side (a native profiler the host would load, set
-  up at process start, which SageFs does start). Neither is planned.
+  up at process start, which SageFs does start). Neither is planned for the detour route. An app started with
+  `run_app` is the exception, and it came after this entry was written: the metadata-delta route in
+  [the entry at the bottom of this page](#a-run_app-save-is-patched-by-a-metadata-delta-in-the-worker-and-every-refusal-is-a-restart-that-names-why)
+  writes the delta itself and takes a generic body edit with no list of instantiations (row `generic` in
+  `RunAppDeltaTests.fs`). I haven't run the reflection rows (`genericReflection`, `genericDelegate`) through it.
 
 Evidence: `SageFs.Tests/HotReloadParityTests.fs` rows `generic`, `genericRef`, `genericKind` (a body that reads its own
 type argument), `genericLate` (a float and a struct first compiled after the save), `genericNested`, `genericClosure`,

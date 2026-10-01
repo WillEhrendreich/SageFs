@@ -42,7 +42,7 @@ here is a promise about your project: the end-to-end figures in the table below 
 | **Pause, include, exclude** | Pause on battery and debug, playlist, ignore file, memory caps | Pause and an include or exclude set; the rest is not copied, see [decisions.md](decisions.md) |
 | **Frameworks** | xUnit, NUnit, MSTest | + Expecto, TUnit, extensible; FsCheck `[<Property>]` tests are discovered and shown in the live panel |
 | **Clients** | Visual Studio only | Neovim, VS Code, web dashboard, MCP |
-| **Platform** | Windows only (ProjFS) | Cross-platform (.NET) |
+| **Platform** | Windows only (ProjFS) | A cross-platform .NET package, though my CI runs on Linux only |
 | **Cost** | ~$250/month Enterprise license | Free, MIT |
 
 The trigger mechanism is the same as VS Enterprise's. The advantages are speed, scope,

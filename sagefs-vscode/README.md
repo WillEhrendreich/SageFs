@@ -1,20 +1,21 @@
 # SageFs — VS Code Extension
 
-> **Live eval works today. Live testing and coverage are available, but still being stabilized.**
+> **Live eval, live testing, coverage and hot reload all run today, each with limits that are written down.** [The main README](../Readme.md) and [docs/](../docs/README.md) say what is solid and what isn't.
 
-SageFs brings live evaluation, instant test feedback, and coverage visualization to VS Code. No configuration needed — just press `Alt+Enter`.
+SageFs brings live evaluation, instant test feedback, and coverage visualization to VS Code. No configuration needed. Just press `Alt+Enter`.
 
 ## ✨ What You Get
 
 | Feature | What it does |
 |---------|-------------|
 | **Inline Results** | Expression values appear next to your code as you evaluate |
-| **Live Testing** | When live testing is enabled, save-triggered test updates can feed green ✓ / red ✗ gutter state (still stabilizing) |
+| **Live Testing** | When live testing is enabled, the affected tests re-run as you edit (saved or not) and feed green ✓ / red ✗ gutter state |
+| **Debug a failing test** | A failing test gets a Debug lens, a Debug link in its hover and Debug Test in the Test Explorer. It attaches a .NET debugger to the process that runs your tests. Breakpoints bind in your compiled project code, and not in code you evaluated in the session, which has no debug symbols |
 | **Coverage Gutters** | Colored bars show which lines are covered by tests |
 | **Failure Details** | Inline `⊘` markers show Expected vs Actual diffs |
 | **Failure Narratives** | Rich context: what changed, when it last passed, causal analysis |
 | **Test Source Jump** | Test Explorer items link to their source location automatically |
-| **Hot Reload** | Save a `.fs` file and SageFs reloads it via Harmony method patching. Browser refresh over SSE works; propagating changes into a running module-declared app is still being completed. |
+| **Hot Reload** | Save a `.fs` file and SageFs re-points the changed methods in the running app (Harmony), route tables built once at startup included, and your app's state stays. Browser refresh over SSE works. What patches and what restarts the app is in [docs/hot-reload.md](../docs/hot-reload.md). |
 | **Eval Performance** | Status bar sparkline with P50/P95/P99 eval latencies |
 
 > **Available on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) and [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs).**
@@ -28,7 +29,7 @@ SageFs brings live evaluation, instant test feedback, and coverage visualization
 3. **Open an F# project** in VS Code
 4. **Press `Alt+Enter`** on any expression — the daemon starts automatically and results appear inline
 
-That's it for evaluation. Live testing is available, but it does not auto-enable yet — use `SageFs: Enable Live Testing` once your test session is loaded.
+Live testing is a per-session toggle. If you pick the Live Testing workflow (`SageFs: Switch Workflow`) it is turned on for you once the session is ready. In the other workflows, run `SageFs: Enable Live Testing` once your test session is loaded.
 
 ---
 
@@ -150,7 +151,7 @@ Click the daemon status item to open the dashboard.
 - **Status bar** — Active project, eval count, test summary, eval performance sparkline. Click to open dashboard.
 - **Auto-start** — Detects `.fsproj`/`.sln`/`.slnx` files and offers to start SageFs automatically
 - **Ionide integration** — Hijacks Ionide's `FSI: Send Selection` commands so Alt+Enter routes through SageFs
-- **7 custom theme colors** — Inline result colors respect your VS Code theme
+- **11 custom theme colors** — Inline result and gutter colors respect your VS Code theme (the list is under `contributes.colors` in `package.json`)
 
 ---
 
@@ -240,7 +241,8 @@ code --install-extension sagefs-*.vsix
 | SageFs: Switch Session | — | Switch to a different session |
 | SageFs: Switch Project | — | Change which `.fsproj`/`.sln` the session loads |
 | SageFs: Browse for Project | — | Pick a project file from a file dialog |
-| SageFs: Switch Workflow | — | Switch the session between REPL and Live |
+| SageFs: Reconnect to Daemon | — | Re-open the connection to the daemon |
+| SageFs: Switch Workflow | — | Switch the session between REPL, Live Testing and Hot Reload |
 | SageFs: Stop Session | — | Stop the active session |
 | SageFs: Reset Session | — | Soft reset (clear definitions, keep session) |
 | SageFs: Hard Reset (Rebuild) | — | Full rebuild and reload |
@@ -273,6 +275,9 @@ The Sessions sidebar also has inline per-row actions (Switch To, Stop, Reset) �
 | SageFs: Enable Live Testing | — | Turn on live test execution |
 | SageFs: Disable Live Testing | — | Turn off live test execution |
 | SageFs: Run All Tests | — | Execute all tests now |
+| SageFs: Run This Test | — | Run one test (from the CodeLens above it) |
+| SageFs: Debug This Test | — | Hold one test, attach a .NET debugger to the process that runs it, release it |
+| SageFs: Show Covering Tests | — | The tests that cover a symbol (from a coverage CodeLens) |
 | SageFs: Set Test Run Policy | — | Configure per-category run policies |
 | SageFs: Show Test Call Graph | — | Visualize test dependency graph |
 | SageFs: Show Test Trace | — | Browse test cycle events |

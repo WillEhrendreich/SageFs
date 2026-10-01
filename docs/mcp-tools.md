@@ -9,8 +9,8 @@ work on SageFs itself, so if it's clunky, I feel it first.
 SageFs gates tools when you call them. `tools/list` always advertises the
 full catalog below, and SageFs doesn't filter what an MCP client sees there.
 Calling one is different: a call that doesn't apply to the current session
-state gets rejected with a structured error (`SageFs/Mcp.fs:686`,
-`enforceToolCallGate`), instead of a raw failure. Call `get_daemon_status`
+state gets rejected with a structured error (`enforceToolCallGate` in
+`SageFs/Mcp.fs`), instead of a raw failure. Call `get_daemon_status`
 for daemon health, then `get_session_status` to see which tools currently
 apply. In a warming-up session, for example, it
 reports `send_fsharp_code` as not yet available, even though the tool is
@@ -162,7 +162,6 @@ the final gate before you push.
 | `plan_ripple` | Plan cascade re-evaluation for changed cells using the live dependency graph. |
 | `preview_what_if` | Preview what would change if a binding had a different value, without executing. |
 | `decompose_pipeline` | Break an F# pipeline into stages, each classified pure / effectful / unknown. |
-| `visualize_domain_model` | Draw a union type as a state machine: an ASCII diagram plus JSON. Each state's `Fields` is a list of `[name, type]` pairs. |
 | `get_cell_dependencies` | The cell dependency graph with staleness annotations. |
 | `discover_features` | Context-aware feature discovery, ranked by relevance to the session state. |
 
@@ -191,6 +190,27 @@ sounds like a chore anyway.
 | `report_friction` | Record structured feedback about a confusing tool call. |
 | `manage_local_data` | See what SageFs stores under its data dir (rows, bytes, oldest row, retention rules), or clear it. |
 
+## Leases for expensive work
+
+A full build, a test suite and an app run each cost real memory. One night five
+agents did one each against a single daemon and nothing coordinated them, so
+the daemon's memory was already high by the time it could tell. An agent that
+starts one of these itself asks for a lease first and gets back Granted, Wait
+with a retry time, or Refused. SageFs's own session creation and
+`hard_reset_fsi_session rebuild=true` take their own leases, so an agent doesn't
+lease those. The full rules, for an agent, are in
+[`skills/sagefs/leases.md`](../skills/sagefs/leases.md).
+
+| Tool | What it does |
+|:---|:---|
+| `acquire_full_build_lease` | A lease for a full `dotnet build` you start yourself. |
+| `acquire_test_suite_lease` | A lease for a test-suite process you start yourself (`dotnet run --project <tests>` or `dotnet test`). SageFs has no tool that runs your suite for you. It runs its own tests through the live-testing engine, and you read them with `list_tests` or `run_tests`. |
+| `acquire_run_app_lease` | A lease for a run-app process you start yourself. SageFs's own `run_app` is a different thing and needs no lease from you. |
+| `release_work_lease` | Release a lease by the id a granted acquisition returned. A lease held by another connection is never released. |
+
+A lease that is never released is reclaimed when it expires, so an agent that
+crashes can't hold a slot forever.
+
 ## Workspace hygiene
 
 Agents and orchestrators leave things behind: worktrees, merged branches, the
@@ -198,7 +218,8 @@ gate's checkouts, built FSI hosts, test temp dirs, orphaned processes. These
 two tools show it and tidy the part that is safe. They are about the
 repository and the disk, not a session, so they work before one exists.
 `sagefs hygiene` prints the same plan from a shell, and `sagefs hygiene --tidy`
-runs the safe part of it.
+runs the safe part of it. Both take `--repo PATH` for a repository you are not
+standing in.
 
 | Tool | What it does |
 |:---|:---|
