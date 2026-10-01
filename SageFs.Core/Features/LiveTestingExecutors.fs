@@ -278,6 +278,77 @@ module AttributeDiscovery =
               (tc, runner))))
     |> Array.toList
 
+// --- Expecto focus: which tests Expecto itself would run ---
+
+/// Expecto's FocusState for one flattened test: `ptest` is Pending, `ftest` is Focused, and a pending
+/// or focused list passes its state down to every test inside it.
+[<RequireQualifiedAccess>]
+type ExpectoFocusState =
+  | Normal
+  | Focused
+  | Pending
+
+/// Whether anything in the scanned assembly is focused. Expecto then runs only the focused tests.
+[<RequireQualifiedAccess>]
+type ExpectoFocusScope =
+  | NoFocusedTests
+  | SomeFocused
+
+/// What Expecto says about one flattened test: its own state, and whether its test tree has focus on
+/// (Expecto's `FlatTest.focusOn`, which already counts a focused list that holds no test at all and
+/// ignores a focused test inside a pending list).
+type ExpectoFlatFocus = {
+  State: ExpectoFocusState
+  TreeFocus: ExpectoFocusScope
+}
+
+/// Why Expecto itself would not run a test.
+[<RequireQualifiedAccess>]
+type ExpectoSkipCause =
+  | Pending
+  | NotFocused
+
+[<RequireQualifiedAccess>]
+type ExpectoDisposition =
+  | RunIt
+  | SkipIt of ExpectoSkipCause
+
+module ExpectoFocusState =
+  /// The case name Expecto's union carries, read back into a closed set. An unknown name is an
+  /// Error, never a guess: the caller must not run a test whose state it could not read.
+  let tryParse (caseName: string) : Result<ExpectoFocusState, string> =
+    match caseName with
+    | "Normal" -> Result.Ok ExpectoFocusState.Normal
+    | "Focused" -> Result.Ok ExpectoFocusState.Focused
+    | "Pending" -> Result.Ok ExpectoFocusState.Pending
+    | other -> Result.Error (sprintf "unknown Expecto FocusState case '%s'" other)
+
+module ExpectoSkipCause =
+  /// The reason a skipped test carries in its result and in the run receipt.
+  let reason (cause: ExpectoSkipCause) : string =
+    match cause with
+    | ExpectoSkipCause.Pending -> "pending (ptest)"
+    | ExpectoSkipCause.NotFocused -> "not focused"
+
+module ExpectoFocusScope =
+  /// Focus is on for the whole assembly when it is on for any test in it, which is how Expecto
+  /// treats the one tree it builds from every [<Tests>] value.
+  let ofFlats (flats: ExpectoFlatFocus seq) : ExpectoFocusScope =
+    match flats |> Seq.exists (fun flat -> flat.TreeFocus = ExpectoFocusScope.SomeFocused) with
+    | true -> ExpectoFocusScope.SomeFocused
+    | false -> ExpectoFocusScope.NoFocusedTests
+
+module ExpectoDisposition =
+  /// Pending is skipped whatever else is focused. A Normal test is skipped when anything is focused.
+  /// A Focused test always runs. This is Expecto's own rule, checked against its runner in
+  /// ExpectoFocusTests.
+  let decide (state: ExpectoFocusState) (scope: ExpectoFocusScope) : ExpectoDisposition =
+    match state, scope with
+    | ExpectoFocusState.Pending, _ -> ExpectoDisposition.SkipIt ExpectoSkipCause.Pending
+    | ExpectoFocusState.Normal, ExpectoFocusScope.SomeFocused -> ExpectoDisposition.SkipIt ExpectoSkipCause.NotFocused
+    | ExpectoFocusState.Normal, ExpectoFocusScope.NoFocusedTests -> ExpectoDisposition.RunIt
+    | ExpectoFocusState.Focused, _ -> ExpectoDisposition.RunIt
+
 // --- Built-in framework executors ---
 
 module BuiltInExecutors =
@@ -334,6 +405,10 @@ module BuiltInExecutors =
       TestType: System.Type
       FlatTestNameProp: PropertyInfo
       FlatTestTestProp: PropertyInfo
+      /// FlatTest.state (Normal | Focused | Pending). May be absent in an Expecto that predates it.
+      FlatTestStateProp: PropertyInfo
+      /// FlatTest.focusOn: whether the test tree this test came from has focus on.
+      FlatTestFocusOnProp: PropertyInfo
       TestCodeTagProp: PropertyInfo
       AssertExceptionType: System.Type
       FailedExceptionType: System.Type
@@ -346,6 +421,12 @@ module BuiltInExecutors =
     type ReflectedFlatTest = {
       TestCodeObj: obj
       Tag: int
+      /// What Expecto says about this test's focus state. An Error means the state could not be read,
+      /// and the test is then never run: running a test whose state is unknown is how a pending test
+      /// became a pass.
+      Focus: Result<ExpectoFlatFocus, string>
+      /// Whether anything in the scanned assembly is focused, the same for every test in one lookup.
+      Scope: ExpectoFocusScope
     }
 
     /// Build the reflection cache from the Expecto assembly itself. Split out of tryBuildCache so a
@@ -379,6 +460,8 @@ module BuiltInExecutors =
             TestType = testType
             FlatTestNameProp = flatTestType.GetProperty("name")
             FlatTestTestProp = flatTestType.GetProperty("test")
+            FlatTestStateProp = flatTestType.GetProperty("state")
+            FlatTestFocusOnProp = flatTestType.GetProperty("focusOn")
             TestCodeTagProp = testCodeType.GetProperty("Tag")
             AssertExceptionType = expAsm.GetType("Expecto.AssertException")
             FailedExceptionType = expAsm.GetType("Expecto.FailedException")
@@ -468,10 +551,11 @@ module BuiltInExecutors =
                   ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
                 elapsed)
 
-    /// Execute a reflected test code via reflection.
+    /// Run a reflected test's body via reflection, whatever its focus state: executeReflected decides
+    /// first whether to call this at all.
     /// Tag 0=Sync (stest), 1=SyncWithCancel (stest), 2=Async (atest),
     /// 3=AsyncFsCheck (testConfig, stressConfig, test).
-    let executeReflected
+    let private runReflectedBody
       (cache: ReflectionCache)
       (rft: ReflectedFlatTest)
       (ct: CancellationToken)
@@ -575,6 +659,24 @@ module BuiltInExecutors =
           return mapException cache ex sw.Elapsed
       }
 
+    /// Execute one reflected test the way Expecto's own runner would. A pending test (`ptest`) and, when
+    /// anything is focused, a test that is not focused are reported as Skipped and their bodies never run.
+    /// A test whose state could not be read is reported as NotRun and never run: fail closed, because
+    /// running a test whose state is unknown is how a pending test used to come back as passed.
+    let executeReflected
+      (cache: ReflectionCache)
+      (rft: ReflectedFlatTest)
+      (ct: CancellationToken)
+      : Async<TestResult> =
+      match rft.Focus with
+      | Result.Error why ->
+        Log.warn "[LiveTesting] not running an Expecto test whose focus state could not be read: %s" why
+        async { return TestResult.NotRun }
+      | Result.Ok flat ->
+        match ExpectoDisposition.decide flat.State rft.Scope with
+        | ExpectoDisposition.SkipIt cause -> async { return TestResult.Skipped (ExpectoSkipCause.reason cause) }
+        | ExpectoDisposition.RunIt -> runReflectedBody cache rft ct
+
     /// What actually went wrong when reading a test binding threw: reflection wraps whatever the getter (a
     /// module's static initializer, here) raised in a TargetInvocationException whose own message says
     /// nothing, so a log that printed only that left "zero tests" with no reason.
@@ -586,31 +688,69 @@ module BuiltInExecutors =
       let cause = root ex
       sprintf "%s: %s\n%s" (cause.GetType().Name) cause.Message (cause.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
+    /// Read one flattened test's state and focus from Expecto. Anything missing or unrecognised is an Error
+    /// that says what, because the caller must not run a test whose state it could not read.
+    let private readFocus (cache: ReflectionCache) (flatTest: obj) : Result<ExpectoFlatFocus, string> =
+      match box cache.FlatTestStateProp, box cache.FlatTestFocusOnProp with
+      | null, _ -> Result.Error "this Expecto's FlatTest has no 'state' property"
+      | _, null -> Result.Error "this Expecto's FlatTest has no 'focusOn' property"
+      | _ ->
+        try
+          match cache.FlatTestStateProp.GetValue(flatTest), cache.FlatTestFocusOnProp.GetValue(flatTest) with
+          | null, _ -> Result.Error "FlatTest.state was null"
+          | stateValue, (:? bool as focusOn) ->
+            let case, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(stateValue, stateValue.GetType())
+            ExpectoFocusState.tryParse case.Name
+            |> Result.map (fun state ->
+              { State = state
+                TreeFocus =
+                  match focusOn with
+                  | true -> ExpectoFocusScope.SomeFocused
+                  | false -> ExpectoFocusScope.NoFocusedTests })
+          | _ -> Result.Error "FlatTest.focusOn was not a bool"
+        with ex ->
+          Result.Error (sprintf "reading FlatTest.state failed: %s" ex.Message)
+
     /// Flatten each named Expecto test value into FullName → ReflectedFlatTest. A binding whose value cannot
     /// be read or flattened is logged and contributes nothing. This is the seam buildLookup runs through, so
     /// a caller holding Expecto `Test` values (a test, the REPL) needs no assembly to scan.
+    ///
+    /// Focus is read across all the bindings before any test is stamped: Expecto builds one tree from every
+    /// [<Tests>] value, so a focused test in one binding makes the unfocused tests in every other binding
+    /// skipped. A binding that holds no test at all (an empty focused list) has nothing to read it from.
     let lookupFromBindings
       (cache: ReflectionCache)
       (bindings: (string * (unit -> obj)) list)
       : Map<string, ReflectedFlatTest> =
-      bindings
-      |> List.toArray
-      |> Array.collect (fun (propertyFullName, readValue) ->
-        try
-          let testValue = readValue ()
-          let flatTests = cache.ToTestCodeList.Invoke(null, [|testValue|])
-          let enumerable = flatTests :?> System.Collections.IEnumerable
-          [ for ft in enumerable do
-              let name = cache.FlatTestNameProp.GetValue(ft) :?> string list
-              let testCode = cache.FlatTestTestProp.GetValue(ft)
-              let tag = cache.TestCodeTagProp.GetValue(testCode) :?> int
-              let testPath = name |> String.concat "/"
-              let fullName = sprintf "%s/%s" propertyFullName testPath
-              yield fullName, { TestCodeObj = testCode; Tag = tag } ]
-          |> List.toArray
-        with ex ->
-          Log.warn "[LiveTesting] buildLookup binding %s failed: %s" propertyFullName (describeBindingFailure ex)
-          [||])
+      let flattened =
+        bindings
+        |> List.toArray
+        |> Array.collect (fun (propertyFullName, readValue) ->
+          try
+            let testValue = readValue ()
+            let flatTests = cache.ToTestCodeList.Invoke(null, [|testValue|])
+            let enumerable = flatTests :?> System.Collections.IEnumerable
+            [ for ft in enumerable do
+                let name = cache.FlatTestNameProp.GetValue(ft) :?> string list
+                let testCode = cache.FlatTestTestProp.GetValue(ft)
+                let tag = cache.TestCodeTagProp.GetValue(testCode) :?> int
+                let testPath = name |> String.concat "/"
+                let fullName = sprintf "%s/%s" propertyFullName testPath
+                yield fullName, testCode, tag, readFocus cache ft ]
+            |> List.toArray
+          with ex ->
+            Log.warn "[LiveTesting] buildLookup binding %s failed: %s" propertyFullName (describeBindingFailure ex)
+            [||])
+      let scope =
+        flattened
+        |> Array.choose (fun (_, _, _, focus) ->
+          match focus with
+          | Result.Ok flat -> Some flat
+          | Result.Error _ -> None)
+        |> ExpectoFocusScope.ofFlats
+      flattened
+      |> Array.map (fun (fullName, testCode, tag, focus) ->
+        fullName, { TestCodeObj = testCode; Tag = tag; Focus = focus; Scope = scope })
       |> Map.ofArray
 
     /// Build a lookup from FullName → ReflectedFlatTest for leaf-level execution.

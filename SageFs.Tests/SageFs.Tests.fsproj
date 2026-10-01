@@ -305,6 +305,7 @@
           <Compile Include="LiveTestingExecutorTests.fs" />
          <Compile Include="ExpectoPendingFixtureModule.fs" />
          <Compile Include="ExpectoPendingTests.fs" />
+         <Compile Include="ExpectoDispositionTests.fs" />
          <Compile Include="ArgsCleanupTests.fs" />
          <Compile Include="AssemblyResolverTests.fs" />
          <Compile Include="SseWriterTests.fs" />
