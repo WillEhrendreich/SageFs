@@ -465,9 +465,22 @@ let rec private declsIn
     | SynModuleDecl.Types(typeDefns = defns) ->
       let types =
         defns
-        |> List.map (fun (SynTypeDefn(typeInfo = SynComponentInfo(longId = ids; accessibility = access)) as defn) ->
-          { simpleDecl lines container (identText ids) DeclKind.TypeDecl (accessOf access) defn.Range with
-              Header = typeShape lines defn })
+        |> List.map (fun (SynTypeDefn(typeInfo = SynComponentInfo(longId = ids; accessibility = access); trivia = trivia) as defn) ->
+          // The text of a type is the type AS WRITTEN, from its keyword. The compiler's range for a type starts
+          // at its name, and only starts earlier when a doc comment or an attribute sits above it, so a type
+          // with neither used to come out as `AddedBox = { ... }`, which does not compile when it is emitted.
+          let keyword = trivia.LeadingKeyword.Range
+          let range = Range.unionRanges keyword defn.Range
+          let decl = simpleDecl lines container (identText ids) DeclKind.TypeDecl (accessOf access) range
+          match rangeText lines keyword with
+          // `and Other = ...` is a declaration of its own once it is taken out of its group, and a
+          // declaration of its own starts with `type`.
+          | "and" ->
+            { decl with
+                Text = "type" + slice lines (keyword.EndLine, keyword.EndColumn) (range.EndLine, range.EndColumn)
+                StartLine = keyword.StartLine
+                Header = typeShape lines defn }
+          | _ -> { decl with Header = typeShape lines defn })
       opens, found @ types, startups
     | SynModuleDecl.Exception(range = r) ->
       opens,
@@ -525,16 +538,20 @@ let private changeFor (decl: SourceDecl) =
   | DeclKind.NestedModuleDecl -> ReloadChange.ModuleChanged decl.Name
   | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
 
-let private removalFor (decl: SourceDecl) =
+/// What removing a declaration needs. A function, value or type taken out of the file leaves the running
+/// process as it was: the old one is still there for anything that already holds it, and the code that
+/// stopped using it is saved in the same breath (the build would not pass otherwise), so there is nothing to
+/// re-point and nothing to restart for. Only what runs at startup, or a module alias, is not like that.
+let private removalFor (decl: SourceDecl) : ReloadChange option =
   match decl.Kind with
-  | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
-  | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
+  | DeclKind.EntryPointDecl -> Some ReloadChange.EntryPointChanged
+  | DeclKind.StartupCode -> Some ReloadChange.StartupCodeChanged
+  | DeclKind.NestedModuleDecl -> Some(ReloadChange.DeclarationRemoved decl.Name)
   | DeclKind.TypeDecl
   | DeclKind.ValueDecl
   | DeclKind.MutableValueDecl
   | DeclKind.FunctionDecl
-  | DeclKind.ValueClosures
-  | DeclKind.NestedModuleDecl -> ReloadChange.DeclarationRemoved decl.Name
+  | DeclKind.ValueClosures -> None
 
 /// A declaration the running build never had. Reported as an ADDITION rather
 /// than as a change, because "type Cfg changed" for a type that did not exist
@@ -825,13 +842,19 @@ let private outcomeOf
     | DeclKind.ValueDecl, true -> lambdaOnlyValue baselineFile currentFile before current
     | _ -> None
   match Map.tryFind key baseline, current.Kind with
-  | None, DeclKind.FunctionDecl -> DeclOutcome.Patch current
+  // A declaration the running build never had has no compiled original to re-point, and it does not need one:
+  // it is defined in FSI, and the saved code that uses it is patched to call it. Only what runs at startup (an
+  // entry point, a bare expression) or a module alias cannot be added to a process that already started.
+  | None, DeclKind.FunctionDecl
+  | None, DeclKind.TypeDecl
+  | None, DeclKind.ValueDecl
+  | None, DeclKind.MutableValueDecl -> DeclOutcome.Patch current
   | None, _ -> DeclOutcome.Restart (additionFor current)
   | Some before, _ when normalize before.Text = normalize current.Text -> DeclOutcome.Unchanged
-  | Some before, DeclKind.FunctionDecl ->
-    match normalize before.Header = normalize current.Header with
-    | true -> DeclOutcome.Patch current
-    | false -> DeclOutcome.Restart (ReloadChange.SignatureChanged current.Name)
+  // A function whose signature changed is a NEW method as far as the running app goes: the old one is
+  // still there for whatever holds it, and the saved code that calls it has to change in the same save (the
+  // build would not pass otherwise), so those callers are patched onto the new one.
+  | Some _, DeclKind.FunctionDecl -> DeclOutcome.Patch current
   // Same SHAPE (see `typeShape`), different text: only member bodies moved, so
   // re-evaluating the type re-points its members instead of needing a restart.
   | Some before, DeclKind.TypeDecl when normalize before.Header = normalize current.Header ->
@@ -943,15 +966,24 @@ let private identifiersOf (text: string) : Set<string> =
   |> Seq.map (fun m -> m.Value)
   |> Set.ofSeq
 
+/// A type declaration as a file the parser takes. A declaration read from a file starts at its `type` keyword
+/// (see `declsIn`); one a caller built by hand may start at the name, so the keyword is put back when it is not there.
+let private hiddenTypeSource (typeDecl: SourceDecl) : string =
+  let firstCodeLine =
+    sourceLines typeDecl.Text
+    |> Array.map _.Trim()
+    |> Array.tryFind (fun l -> l <> "" && not (l.StartsWith("//", StringComparison.Ordinal)) && not (l.StartsWith("[<", StringComparison.Ordinal)))
+  match firstCodeLine with
+  | Some line when line.StartsWith("type ", StringComparison.Ordinal) -> "module __Hidden__\n" + typeDecl.Text
+  | _ -> "module __Hidden__\ntype " + typeDecl.Text
+
 /// The names a hidden type also exposes without ever spelling its own name: a
 /// union case (`Circle 1.0` never says `Shape`) or a record field (`{ Retries = 5 }`
 /// never says `Config`) both make a patch depend on the type just as much as
 /// spelling its name would — so both must count as "uses this hidden type".
 let private innerNamesOf (typeDecl: SourceDecl) : string list =
   try
-    // A TypeDecl's Text is captured from the SynTypeDefn's own range, which starts
-    // after the `type`/`and` keyword — put it back so the wrapped snippet parses.
-    let wrapped = "module __Hidden__\ntype " + typeDecl.Text
+    let wrapped = hiddenTypeSource typeDecl
     match Fantomas.FCS.Parse.parseFile false (SourceText.ofString wrapped) [] with
     | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = decls) ])), diagnostics
         when not (diagnostics |> List.exists (fun d -> d.Severity.IsError)) ->
@@ -988,7 +1020,7 @@ let private innerNamesOf (typeDecl: SourceDecl) : string list =
 /// name, and anything the names cannot settle is refused.
 let declaredRecordFields (typeDecl: SourceDecl) : string list option =
   try
-    let wrapped = "module __Hidden__\ntype " + typeDecl.Text
+    let wrapped = hiddenTypeSource typeDecl
     match Fantomas.FCS.Parse.parseFile false (SourceText.ofString wrapped) [] with
     | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = decls) ])), diagnostics
         when not (diagnostics |> List.exists (fun d -> d.Severity.IsError)) ->
@@ -1038,7 +1070,7 @@ let private fieldKindOf (typeText: string) : SageFs.TypeShapeMigration.FieldKind
 let recordShapeOf (typeDecl: SourceDecl) : SageFs.TypeShapeMigration.RecordShape =
   let fields =
     try
-      let wrapped = "module __Hidden__\ntype " + typeDecl.Text
+      let wrapped = hiddenTypeSource typeDecl
       match Fantomas.FCS.Parse.parseFile false (SourceText.ofString wrapped) [] with
       | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = decls) ])), diagnostics
           when not (diagnostics |> List.exists (fun d -> d.Severity.IsError)) ->
@@ -1209,7 +1241,7 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
   let removed =
     baselineKeyed
     |> List.filter (fun (key, _) -> not (Map.containsKey key now))
-    |> List.map (snd >> removalFor)
+    |> List.choose (snd >> removalFor)
   // A patch cannot see the file's non-public members (it is compiled in FSI,
   // outside the app's assembly) unless the same patch re-emits them.
   let patchedNames =
@@ -1291,12 +1323,24 @@ let private existedIn (before: FileDecls) (f: SourceDecl) =
     | other -> other
   before.Decls |> List.exists (fun d -> d.Kind = kind && d.Name = f.Name)
 
+/// Whether the running build has no compiled original this declaration could be re-pointed from: it did not
+/// exist, or it existed with another signature. Either way the saved code is a NEW method to the running app,
+/// defined in FSI, and what makes it live is the code that calls it being patched onto it, in the same save.
+let private isNewMethod (before: FileDecls) (f: SourceDecl) =
+  let kind =
+    match f.Kind with
+    | DeclKind.ValueClosures -> DeclKind.ValueDecl
+    | other -> other
+  let sameShape =
+    before.Decls |> List.exists (fun d -> d.Kind = kind && d.Name = f.Name && normalize d.Header = normalize f.Header)
+  not sameShape
+
 let confirmPatch (before: FileDecls) (patched: SourceDecl list) (reloadedMethods: string list) : PatchOutcome =
   let existed = existedIn before
   let detoured = reachedBy reloadedMethods
   let notDetoured =
     patched
-    |> List.filter (fun f -> existed f && not (detoured f))
+    |> List.filter (fun f -> existed f && not (isNewMethod before f) && not (detoured f))
     |> List.map (fun f -> ReloadChange.SignatureChanged f.Name)
   match notDetoured with
   | first :: rest -> PatchOutcome.RestartNeeded (first, rest)
@@ -1341,11 +1385,20 @@ let confirmPatchLanding
   // point to reach by definition, so for it the FSI copy IS what everything
   // calls and a redirect onto it is genuinely effective. Only a declaration the
   // running build already had must prove it reached a compiled entry point.
-  let landed, missed =
+  let landed =
     patched
-    |> List.partition (fun f ->
+    |> List.filter (fun f ->
       nameMatches reloadedMethods f
       && (nameMatches reachedRunningProcess f || not (existed f)))
+  // A declaration with no compiled original (added, or re-signed) is applied by being defined: there is nothing
+  // to re-point. It is counted as applied but never watched, because it has no probe to watch and no running
+  // code enters it until a caller does; the callers saved with it are what get watched.
+  let applied =
+    patched
+    |> List.filter (fun f -> not (List.contains f landed) && isNewMethod before f)
+  let missed =
+    patched
+    |> List.filter (fun f -> not (List.contains f landed) && not (isNewMethod before f))
   let reasons =
     missed
     |> List.map (fun f ->
@@ -1355,7 +1408,14 @@ let confirmPatchLanding
       | true, true -> RestartReason.PatchIneffective f.Name
       | true, false -> RestartReason.SignatureChanged f.Name
       | false, _ -> RestartReason.NewDeclaration f.Name)
-  landed, ReloadOutcome.ofPatchCounts (List.length landed) (List.length patched) reasons
+  // What is watched for running: the re-pointed declarations, whose probes are what the callers' runs show. A
+  // save that only ADDED declarations has none of those, so the added ones are watched, and with no probe they
+  // end as never-entered when nothing calls them, which is the truth about a function nothing calls yet.
+  let watched =
+    match landed with
+    | [] -> applied
+    | _ -> landed
+  watched, ReloadOutcome.ofPatchCounts (List.length landed + List.length applied) (List.length patched) reasons
 
 /// `confirmPatchLanding`'s outcome alone, for callers that only need the
 /// verdict. Patching at least one declaration is PENDING (see

@@ -346,3 +346,34 @@ Evidence: `SageFs.Tests/HotReloadParityTests.fs` rows `instance`, `instanceState
 net11.0; `SageFs.Tests/HotReloadClosureTests.fs` for what is registered.
 Reopen it if: a member needs to be added to a type (Microsoft's mechanism supports it), or a virtual member's dispatch
 turns out to differ between the old type and the new.
+## A save that adds, removes or re-signs a declaration lands without a restart
+
+Adding a type or a value, removing anything that isn't startup code, and changing a function's signature all restarted.
+The planner read each as "something the running build never had, or lost, or shaped differently", and a restart was
+the safe answer. It is safe, and it is also wrong for most of what a person does in an afternoon: add a helper and call
+it, delete one, add a parameter.
+
+What I did instead is say what is true. A declaration the running build never had needs no compiled original: it is
+defined in FSI, and the saved code that uses it is patched to call it, in the same save. A function whose signature
+changed is the same thing to the running app: a new method. The old one stays for whatever still holds it, and the
+callers saved with it are moved onto the new one. That is what Microsoft's mechanism does as well (the build forces
+every caller of a changed signature into the same edit). A removal leaves the old declaration in the process, and what
+stopped using it was saved in the same breath, so there is nothing to re-point and nothing to restart for.
+
+What still restarts: the entry point, a bare expression that runs at startup, a module alias, a change to a type's
+shape, and everything the earlier cases refuse.
+
+What the save says is counted honestly. A new declaration is "applied", not "seen running": it has no probe, because
+nothing runs it until a caller does. So the caller's probe is what makes the save Patched. A save that only adds
+something nothing calls yet ends as "not confirmed: the new code has not run", which is what is true of it.
+
+One thing to know. A caller in ANOTHER file keeps calling the old method until you save that file as well. The build
+would not pass until you did, so the window is short, but in it the old behaviour is what runs.
+
+A removal on its own, with nothing else changed, reports "no declaration change". It changed nothing in the running
+process, which is true, though it isn't the whole story.
+
+Evidence: `SageFs.Tests/HotReloadParityTests.fs` rows `addedFunction`, `addedType`, `addedValue`, `removed`, `signature`
+on net10.0 and net11.0; the planner rules in `SageFs.Tests/ReloadPlanningTests.fs`.
+Reopen it if: callers in other files turn out to bite (a cross-file check of who calls a changed signature would let it
+restart instead), or a removed declaration's old copy turns out to matter.

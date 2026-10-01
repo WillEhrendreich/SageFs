@@ -216,8 +216,18 @@ let private said (verdict: string) : string =
       |> Option.map (fun m -> sprintf " (%s)" (if m.Length > 200 then m.Substring(0, 200) + "..." else m))
       |> Option.defaultValue ""
     | false, _ -> ""
+  let shorten (m: string) = if m.Length > 300 then m.Substring(0, 300) + "..." else m
   match reasons with
-  | [] -> sprintf "%s/%s" (str v "type") (str v "outcome")
+  | [] ->
+    match str v "outcome" with
+    // A save that did not compile says what the compiler said, which is the whole story.
+    | "CompileFailed" ->
+      let diagnostics =
+        match v.TryGetProperty "diagnostics" with
+        | true, listed -> [ for d in listed.EnumerateArray() -> str d "message" ] |> String.concat " | "
+        | false, _ -> ""
+      sprintf "%s/%s (%s) %s" (str v "type") (str v "outcome") (shorten (str v "error")) (shorten diagnostics)
+    | _ -> sprintf "%s/%s" (str v "type") (str v "outcome")
   | _ -> sprintf "%s/%s %A%s" (str v "type") (str v "outcome") reasons firstMessage
 
 /// One row on a host of its own, start to finish. A row gets its own host because a save the

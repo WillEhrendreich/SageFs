@@ -209,3 +209,38 @@ let instanceRegistryTests =
       holdKey sameSay.MethodInfo |> Expect.notEqual "another class's Say is another entry" (holdKey say.MethodInfo)
       holdKey (typeof<System.String>.GetMethod("Concat", [| typeof<string>; typeof<string> |])) |> Expect.equal "a static method keeps its bare name" "Concat"
   ]
+[<Tests>]
+let typeTextTests =
+  let typesIn (source: string) = (declsOf source).Decls |> List.filter (fun d -> d.Kind = DeclKind.TypeDecl)
+  testList "ReloadPlanning type declarations are read from their keyword" [
+    testCase "WHY — extractDecls — a type with no doc comment keeps its `type` keyword, because the compiler's range starts at the name and a declaration emitted without the keyword does not compile" <| fun _ ->
+      match typesIn "module M\n\ntype AddedBox = { Text: string }\n" with
+      | [ box ] ->
+        box.Text |> Expect.equal "the type as written" "type AddedBox = { Text: string }"
+        box.StartLine |> Expect.equal "on the line of the keyword" 3
+      | other -> failtestf "expected one type, got %d" other.Length
+
+    testCase "WHY — extractDecls — a documented type starts at its doc comment, and the keyword is inside it" <| fun _ ->
+      match typesIn "module M\n\n/// A box.\ntype Box = { Text: string }\n" with
+      | [ box ] ->
+        box.Text |> Expect.stringContains "the keyword" "type Box = { Text: string }"
+        box.Text |> Expect.stringContains "the doc comment" "/// A box."
+      | other -> failtestf "expected one type, got %d" other.Length
+
+    testCase "WHY — extractDecls — a type that is the second of an `and` group is a declaration of its own, so it starts with `type`" <| fun _ ->
+      match typesIn "module M\n\ntype P = { X: int }\nand Q = { Y: int }\n" |> List.map (fun d -> d.Name, d.Text) with
+      | [ "P", p; "Q", q ] ->
+        p |> Expect.equal "the first as written" "type P = { X: int }"
+        q |> Expect.equal "the second without `and`" "type Q = { Y: int }"
+      | other -> failtestf "expected P and Q, got %A" other
+
+    testCase "WHY — recordShapeOf — a type that starts at its keyword is still read, because the field names are how a migration recognises a carried field" <| fun _ ->
+      match typesIn "module M\n\ntype Box = { Text: string; Count: int }\n" with
+      | [ box ] -> (recordShapeOf box).Fields |> List.map _.Name |> Expect.equal "both fields" [ "Text"; "Count" ]
+      | other -> failtestf "expected one type, got %d" other.Length
+
+    testCase "WHY — declaredRecordFields — a documented record is read too, which it was not while the keyword was prefixed twice" <| fun _ ->
+      match typesIn "module M\n\n/// A box.\ntype Box = { Text: string }\n" with
+      | [ box ] -> declaredRecordFields box |> Expect.equal "its field" (Some [ "Text" ])
+      | other -> failtestf "expected one type, got %d" other.Length
+  ]
