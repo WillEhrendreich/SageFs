@@ -423,48 +423,95 @@ module LiveValueTree =
     let visited = System.Collections.Generic.HashSet<obj>(HashIdentity.Reference)
     buildNode visited (ref MaxNodes) label 0 value
 
-  /// How many walks may be abandoned at once. A getter that never returns keeps its thread for the
-  /// life of the process, so past this many the walk stops starting new ones and says why.
+  /// How many walkers may be abandoned at once. A getter that never returns keeps its thread for
+  /// the life of the process, so past this many a pass stops starting replacements and says why.
   let [<Literal>] MaxAbandonedWalks = 16
 
-  /// Values a walk gave up on. Weak, so a value the session lets go of is not kept alive.
+  /// Values a pass gave up on. Weak, so a value the session lets go of is not kept alive.
   let private unresponsive = System.Runtime.CompilerServices.ConditionalWeakTable<obj, obj>()
   let private abandonedWalks = ref 0
 
-  /// `buildValueNode` with a deadline. Walking a value runs the user's property getters on whatever
-  /// thread asks, and the host asks from the thread every eval of the session runs on, so a getter
-  /// that never returns would stall every later eval. This walks on its own thread and gives up
-  /// after `budget`: the binding shows as unreadable, and the value is not walked again.
-  let buildValueNodeWithin (budget: TimeSpan) (label: string) (value: obj) : LiveValueNode =
+  let private unreadableNode (label: string) (value: obj) (why: string) : LiveValueNode =
     let t = if isNull value then typeof<obj> else value.GetType()
-    let unreadable (why: string) =
-      { Label = label; TypeName = t.Name; Preview = why; Kind = NodeKind.Leaf
-        Children = []; BestEffort = false; Depth = 0 }
-    let seenBefore = not (isNull value) && fst (unresponsive.TryGetValue value)
-    match seenBefore with
-    | true -> unreadable "a property getter on this value did not return on an earlier look, so it is not read again"
-    | false ->
-      match abandonedWalks.Value >= MaxAbandonedWalks with
-      | true -> unreadable "too many property getters did not return, so values are not read until the session restarts"
-      | false ->
-        let work =
-          System.Threading.Tasks.Task.Factory.StartNew(
-            (fun () -> buildValueNode label value),
-            System.Threading.Tasks.TaskCreationOptions.LongRunning)
-        let finished = try work.Wait budget with _ -> true
-        match finished with
-        | true -> (try work.Result with _ -> unreadable "reading this value threw")
+    { Label = label; TypeName = t.Name; Preview = why; Kind = NodeKind.Leaf
+      Children = []; BestEffort = false; Depth = 0 }
+
+  /// Walk `bindings` in order with a deadline for each one.
+  ///
+  /// Walking a value runs the user's property getters on whatever thread asks, and the host asks
+  /// from the thread every eval of the session runs on, so a getter that never returns would stall
+  /// every later eval. A walker thread takes the bindings in order and the caller waits for each
+  /// with `budget`. One thread serves the whole pass, so the cost of the guard is one thread start
+  /// per pass, not one per binding. When a binding misses its deadline the caller shows it as
+  /// unreadable, remembers the value so it is not walked again, retires that walker (which writes
+  /// nothing if it ever returns) and starts a fresh one at the next binding.
+  let walkWithin (budget: TimeSpan) (bindings: (string * obj)[]) : LiveValueNode[] =
+    let count = bindings.Length
+    let nodes : LiveValueNode[] = Array.zeroCreate count
+    let finished = Array.init count (fun _ -> new System.Threading.ManualResetEventSlim(false))
+    let gate = obj ()
+    let owner = ref 0
+    let walkFrom (first: int) =
+      let id = System.Threading.Interlocked.Increment(&owner.contents)
+      let run () =
+        let mutable index = first
+        while index < count && System.Threading.Volatile.Read(&owner.contents) = id do
+          let at = index
+          let label, value = bindings.[at]
+          let node =
+            match not (isNull value) && fst (unresponsive.TryGetValue value) with
+            | true -> unreadableNode label value "a property getter on this value did not return on an earlier look, so it is not read again"
+            | false ->
+              try buildValueNode label value
+              with _ -> unreadableNode label value "reading this value threw"
+          lock gate (fun () ->
+            match owner.Value = id && not finished.[at].IsSet with
+            | true ->
+              nodes.[at] <- node
+              finished.[at].Set()
+            | false -> ())
+          index <- index + 1
+        // A walker that was retired while stuck, and has now returned: it no longer counts.
+        match System.Threading.Volatile.Read(&owner.contents) = id with
+        | true -> ()
+        | false -> System.Threading.Interlocked.Decrement(&abandonedWalks.contents) |> ignore
+      let thread = System.Threading.Thread(run, IsBackground = true, Name = "sagefs-live-values")
+      thread.Start()
+    match count with
+    | 0 -> nodes
+    | _ ->
+      walkFrom 0
+      for i in 0 .. count - 1 do
+        match finished.[i].Wait budget with
+        | true -> ()
         | false ->
-          System.Threading.Interlocked.Increment(&abandonedWalks.contents) |> ignore
-          match isNull value with
-          | true -> ()
-          | false -> unresponsive.TryAdd(value, obj()) |> ignore
-          work.ContinueWith(
-            (fun (_: System.Threading.Tasks.Task<LiveValueNode>) ->
-              System.Threading.Interlocked.Decrement(&abandonedWalks.contents) |> ignore),
-            System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously)
-          |> ignore
-          unreadable (sprintf "a property getter did not return within %gs, so this value is not shown" budget.TotalSeconds)
+          let gaveUp =
+            lock gate (fun () ->
+              match finished.[i].IsSet with
+              | true -> false
+              | false ->
+                let label, value = bindings.[i]
+                nodes.[i] <- unreadableNode label value (sprintf "a property getter did not return within %gs, so this value is not shown" budget.TotalSeconds)
+                finished.[i].Set()
+                (match isNull value with
+                 | true -> ()
+                 | false -> unresponsive.TryAdd(value, obj()) |> ignore)
+                System.Threading.Interlocked.Increment(&abandonedWalks.contents) |> ignore
+                // Retire the stuck walker so it cannot write anything if it ever returns.
+                System.Threading.Interlocked.Increment(&owner.contents) |> ignore
+                true)
+          match gaveUp, i + 1 < count with
+          | true, true ->
+            match abandonedWalks.Value >= MaxAbandonedWalks with
+            | false -> walkFrom (i + 1)
+            | true ->
+              lock gate (fun () ->
+                for j in i + 1 .. count - 1 do
+                  let label, value = bindings.[j]
+                  nodes.[j] <- unreadableNode label value "too many property getters did not return, so values are not read until the session restarts"
+                  finished.[j].Set())
+          | _ -> ()
+      nodes
 
   /// Detect whether any node hit a truncation/cycle limit.
   let rec private hasTruncation (node: LiveValueNode) =
@@ -476,10 +523,11 @@ module LiveValueTree =
   /// `getBoundValues` returns (name, typeSignature, value) triples — the worker
   /// adapts FsiBoundValue into this shape so this module stays pure.
   ///
-  /// `build` turns one binding's value into its node. The host passes the deadline-bounded one so
-  /// a getter that never returns cannot stall the eval thread; everything else uses `buildSnapshot`.
+  /// `walk` turns the capped (name, value) pairs into their nodes, one per pair in the same order.
+  /// The host passes the deadline-bounded `walkWithin` so a getter that never returns cannot stall
+  /// the eval thread; everything else uses `buildSnapshot`.
   let buildSnapshotWith
-    (build: string -> obj -> LiveValueNode)
+    (walk: (string * obj)[] -> LiveValueNode[])
     (sessionId: string)
     (generation: int64)
     (boundValues: (string * string * obj) list)
@@ -493,10 +541,10 @@ module LiveValueTree =
     // to newest-first, truncate to the most recent MaxBindings, then reverse
     // back so the kept subset still displays oldest-of-the-kept first.
     let capped = boundValues |> List.rev |> List.truncate MaxBindings |> List.rev
+    let roots = walk (capped |> List.map (fun (name, _, value) -> name, value) |> Array.ofList)
     let bindings =
       capped
-      |> List.map (fun (name, typeSig, value) ->
-        { Name = name; TypeSignature = typeSig; Root = build name value })
+      |> List.mapi (fun i (name, typeSig, _) -> { Name = name; TypeSignature = typeSig; Root = roots.[i] })
     let truncated =
       (boundValues.Length > MaxBindings)
       || bindings |> List.exists (fun b -> hasTruncation b.Root)
@@ -509,4 +557,14 @@ module LiveValueTree =
     (generation: int64)
     (boundValues: (string * string * obj) list)
     : LiveValueSnapshot =
-    buildSnapshotWith buildValueNode sessionId generation boundValues
+    buildSnapshotWith (Array.map (fun (name, value) -> buildValueNode name value)) sessionId generation boundValues
+
+  /// A full snapshot where each binding gets `budget` to walk, so one value whose getter never
+  /// returns shows as unreadable instead of stalling the thread that asked. The host uses this.
+  let buildSnapshotWithin
+    (budget: TimeSpan)
+    (sessionId: string)
+    (generation: int64)
+    (boundValues: (string * string * obj) list)
+    : LiveValueSnapshot =
+    buildSnapshotWith (walkWithin budget) sessionId generation boundValues

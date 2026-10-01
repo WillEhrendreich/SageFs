@@ -295,7 +295,7 @@ type CountedGetter(reads: int ref) =
 
 /// Run a walk on its own thread so a walker that blocks fails the case at the patience ceiling
 /// instead of hanging the suite.
-let private walkWithin (walk: unit -> LiveValueNode) : Threading.Tasks.Task<LiveValueNode option> =
+let private returnsWithin (walk: unit -> 'T) : Threading.Tasks.Task<'T option> =
   task {
     let work = Threading.Tasks.Task.Factory.StartNew(walk, Threading.Tasks.TaskCreationOptions.LongRunning)
     let! winner = Threading.Tasks.Task.WhenAny(work, Threading.Tasks.Task.Delay TestTimeouts.patience)
@@ -312,7 +312,7 @@ let liveValueTreeAwaitableTests = testList "LiveValueTree members that wait or f
 
   testTask "WHY — a pending Task is described by its status and never waited on, because reading Result blocks the eval thread that every later eval needs" {
     let pending = Threading.Tasks.TaskCompletionSource<Result<int, string>>().Task
-    let! node = walkWithin (fun () -> rootOf (box pending))
+    let! node = returnsWithin (fun () -> rootOf (box pending))
     match node with
     | None -> failtest "the walk of a pending Task did not return: it waited on Result"
     | Some n ->
@@ -333,7 +333,7 @@ let liveValueTreeAwaitableTests = testList "LiveValueTree members that wait or f
 
   testTask "WHY — a pending ValueTask is not waited on either" {
     let pending = Threading.Tasks.ValueTask<int>(Threading.Tasks.TaskCompletionSource<int>().Task)
-    let! node = walkWithin (fun () -> rootOf (box pending))
+    let! node = returnsWithin (fun () -> rootOf (box pending))
     node |> Expect.isSome "the walk of a pending ValueTask returned"
   }
 
@@ -356,19 +356,27 @@ let liveValueTreeAwaitableTests = testList "LiveValueTree members that wait or f
     rootOf (box (CountedGetter reads)) |> ignore
     reads.Value |> Expect.equal "one read" 1
 
-  testTask "WHY — a getter that never returns costs one deadline, once, and is skipped after that, so a blocked value cannot stall every eval" {
+  testTask "WHY — a getter that never returns costs one deadline, once, and the bindings around it are still shown, so a blocked value cannot stall every eval or hide its neighbours" {
     let gate = Threading.Tasks.TaskCompletionSource<int>()
     let entered = ref 0
-    let blocked = BlockedGetter(gate, entered)
-    let! first = walkWithin (fun () -> buildValueNodeWithin TestTimeouts.blockedGetterBudget "v" (box blocked))
-    let! second = walkWithin (fun () -> buildValueNodeWithin TestTimeouts.blockedGetterBudget "v" (box blocked))
+    let bindings : (string * string * obj) list =
+      [ "before", "int", box 1
+        "stuck", "BlockedGetter", box (BlockedGetter(gate, entered))
+        "after", "int", box 2 ]
+    let snapshot () = buildSnapshotWithin TestTimeouts.blockedGetterBudget "" 1L bindings
+    let! first = returnsWithin snapshot
+    let! second = returnsWithin snapshot
     gate.TrySetResult 0 |> ignore
+    let previewOf (name: string) (s: LiveValueSnapshot) =
+      s.Bindings |> List.find (fun b -> b.Name = name) |> fun b -> b.Root.Preview
     match first, second with
     | Some one, Some two ->
-      one.Kind |> Expect.equal "the first walk gives up on the value" NodeKind.Leaf
-      one.Preview |> Expect.stringContains "it says why" "did not return"
-      two.Preview |> Expect.stringContains "the second walk skips it and says so" "did not return"
-      entered.Value |> Expect.equal "the getter was entered once, not once per walk" 1
-    | _ -> failtest "a walk of a blocked getter did not return within the patience ceiling"
+      previewOf "stuck" one |> Expect.stringContains "the first pass gives up on the value and says why" "did not return"
+      previewOf "before" one |> Expect.equal "the binding before it is shown" "1"
+      previewOf "after" one |> Expect.equal "the binding after it is still walked" "2"
+      previewOf "stuck" two |> Expect.stringContains "the second pass skips it and says so" "did not return"
+      previewOf "after" two |> Expect.equal "and still walks what follows it" "2"
+      entered.Value |> Expect.equal "the getter was entered once, not once per pass" 1
+    | _ -> failtest "a pass over a blocked getter did not return within the patience ceiling"
   }
 ]
