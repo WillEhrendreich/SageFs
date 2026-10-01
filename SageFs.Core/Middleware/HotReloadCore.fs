@@ -85,9 +85,11 @@ let getAllMethods (asm: Assembly) =
         | true -> currentPath
         | false -> t.Name :: currentPath
 
+      // Generic methods are registered too, though never detoured (`compatibleForDetour` refuses them): a
+      // save that edits one has to be able to name it, and it cannot be named if it was never seen.
       let staticMethods =
         t.GetMethods()
-        |> Array.filter (fun m -> m.IsStatic && not <| m.IsGenericMethod)
+        |> Array.filter (fun m -> m.IsStatic)
         |> Array.map (Method.make pathForChildren)
         |> Array.toList
 
@@ -100,8 +102,7 @@ let getAllMethods (asm: Assembly) =
         | true ->
           t.GetMethods(BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.DeclaredOnly)
           |> Array.filter (fun m ->
-            not m.IsGenericMethod
-            && not m.IsAbstract
+            not m.IsAbstract
             && not (m.IsDefined(typeof<CompilerGeneratedAttribute>, false)))
           |> Array.map (Method.make pathForChildren)
           |> Array.toList
@@ -1240,6 +1241,11 @@ let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newM
       && not (name = "get_it" || name = "set_it" || name = "get_asm")
 
     isDetourable newMethod
+    // A generic method is compiled once per instantiation that runs. Detouring the ones that have run
+    // leaves every instantiation that runs LATER on the old body (measured: the open definition cannot be
+    // detoured at all, and a closed one covers only itself), so a generic function is never detoured.
+    && not newMethod.MethodInfo.IsGenericMethod
+    && not existingMethod.MethodInfo.IsGenericMethod
     && existingMethod.MethodInfo.IsStatic = newMethod.MethodInfo.IsStatic
     && getParams existingMethod = getParams newMethod
     && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
@@ -1349,19 +1355,29 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave:
     // An instance member the app holds a copy of, whose new type is laid out differently: the objects the
     // app already built cannot run the new member, so the save is refused, and refused whole. One refusal
     // stops every detour of the save, so the running app is left exactly as it was.
+    //
+    // A generic function the app holds a copy of is refused the same way: its saved body would be compiled and
+    // reach nothing, because only the instantiations that already ran could be detoured.
+    //
+    // Only a SAVE is refused. An interactive eval that redefines a generic function or a class is the user
+    // running code, not asking for a patch of the running app, and it never was detoured.
     let refusals =
-      match hotReloadEnabled with
+      match hotReloadEnabled && isFileSave with
       | false -> []
       | true ->
         newMethods
-        |> List.filter (fun m -> not (known.Contains m.MethodInfo) && not m.MethodInfo.IsStatic)
+        |> List.filter (fun m -> not (known.Contains m.MethodInfo))
         |> List.choose (fun newest ->
           match Map.tryFind (holdKey newest.MethodInfo) st.AppHolds with
           | Some held when held <> newest.MethodInfo ->
-            try
-              layoutDifference held.DeclaringType newest.MethodInfo.DeclaringType
-              |> Option.map (fun detail -> DetourRefusal.InstanceLayoutChanged(held.DeclaringType.Name, detail))
-            with :? TypeLoadException -> None
+            match newest.MethodInfo.IsGenericMethod, newest.MethodInfo.IsStatic with
+            | true, _ -> Some(DetourRefusal.GenericFunction newest.FullName)
+            | false, true -> None
+            | false, false ->
+              try
+                layoutDifference held.DeclaringType newest.MethodInfo.DeclaringType
+                |> Option.map (fun detail -> DetourRefusal.InstanceLayoutChanged(held.DeclaringType.Name, detail))
+              with :? TypeLoadException -> None
           | _ -> None)
         |> List.distinct
 

@@ -209,6 +209,30 @@ let instanceRegistryTests =
       holdKey sameSay.MethodInfo |> Expect.notEqual "another class's Say is another entry" (holdKey say.MethodInfo)
       holdKey (typeof<System.String>.GetMethod("Concat", [| typeof<string>; typeof<string> |])) |> Expect.equal "a static method keeps its bare name" "Concat"
   ]
+
+let layoutGenericFunction<'T> (x: 'T) : 'T = x
+
+type LayoutGeneric() =
+  member _.Echo<'T>(x: 'T) : 'T = x
+
+[<Tests>]
+let genericRegistryTests =
+  let registered =
+    lazy (getAllMethods (System.Reflection.Assembly.GetExecutingAssembly()) |> List.filter (fun m -> m.FullName.Contains "HotReloadClosureTests."))
+  testList "HotReloadCore generic functions" [
+    testCase "WHY — getAllMethods — a generic function is registered, because a save that edits one has to be able to name it, and it cannot be named if it was never seen" <| fun _ ->
+      registered.Value
+      |> List.filter (fun m -> m.FullName.EndsWith("layoutGenericFunction", System.StringComparison.Ordinal))
+      |> List.map (fun m -> m.MethodInfo.IsGenericMethod)
+      |> Expect.equal "one, and it is generic" [ true ]
+
+    testCase "WHY — getAllMethods — a generic instance member is registered for the same reason" <| fun _ ->
+      registered.Value
+      |> List.filter (fun m -> m.FullName.EndsWith("LayoutGeneric.Echo", System.StringComparison.Ordinal))
+      |> List.map (fun m -> m.MethodInfo.IsGenericMethod)
+      |> Expect.equal "one, and it is generic" [ true ]
+  ]
+
 [<Tests>]
 let typeTextTests =
   let typesIn (source: string) = (declsOf source).Decls |> List.filter (fun d -> d.Kind = DeclKind.TypeDecl)

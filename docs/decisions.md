@@ -377,3 +377,25 @@ Evidence: `SageFs.Tests/HotReloadParityTests.fs` rows `addedFunction`, `addedTyp
 on net10.0 and net11.0; the planner rules in `SageFs.Tests/ReloadPlanningTests.fs`.
 Reopen it if: callers in other files turn out to bite (a cross-file check of who calls a changed signature would let it
 restart instead), or a removed declaration's old copy turns out to matter.
+
+## A generic function restarts and says so, because a detour of a generic function reaches only part of it
+
+A generic function is compiled once for every instantiation that runs, and the runtime keeps one body for all reference
+types and one for each value type. Measured against the Harmony we ship: detouring the open definition throws (and the
+process aborted on the next call), and detouring a closed instantiation changes that instantiation and nothing else. A
+call with a type that has not run yet is compiled from the old IL afterwards. So a patch of a generic function would be
+right for the calls that already happened and wrong for one that comes later, which is the kind of "Patched" this tool
+exists not to say. Microsoft's mechanism edits the method in place and does not have this problem; we do.
+
+The row that proves it (`generic`) saves an edit to `genericTag<'T>` that two call sites use with a string and an int.
+Both instantiations had run, so detouring them would have looked right. A third (a float) came out with the old body.
+
+Now a generic function is registered so a save can name it, never detoured, and a save that edits one that the app holds
+is refused with `GenericFunction`, which names the function. The refusal stops every detour of the save and the whole-file
+fallback is skipped, so the running app is left as it was. The remedy says what works: a function that is not generic is
+re-pointed, so if it only has to work for one type, annotate its arguments with it.
+
+Evidence: `SageFs.Tests/HotReloadParityTests.fs` row `generic` on net10.0 and net11.0, and the spike on a bare session
+in this change's commit message.
+Reopen it if: a way to detour every instantiation, present and future, shows up (a shared canonical body for reference
+types would cover half of it, and half is not a claim worth making).
