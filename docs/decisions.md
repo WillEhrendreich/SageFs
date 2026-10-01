@@ -207,9 +207,12 @@ worker was idle and the session said Ready. A stack dump of the FSI host showed 
 
 So a Task, a ValueTask and a Lazy are shown by their state, and `Result`, `Exception` and `Lazy.Value` are read
 only once there is a value to read. A property is read once per walk, not twice. For any other getter that
-blocks, each binding is walked on its own thread with a deadline (`Timeouts.liveValueBindingBudget`, 1 s). A
-binding that misses it shows as unreadable and is not walked again, and after 16 of those the pass says so and
-stops starting new ones. The cost of a blocked getter is one second, once.
+blocks, one walker thread takes the bindings in order and the caller waits on each with a deadline
+(`Timeouts.liveValueBindingBudget`, 1 s). A binding that misses it shows as unreadable and is not walked again,
+the stuck walker is retired, and a fresh one carries on with the next binding. After 16 of those the pass says so
+and stops starting new ones. The cost of a blocked getter is one second, once, and the bindings around it still
+show. The first version started a thread per binding and cost 80 times more on every eval (24.65 ms against 0.30
+ms for 200 bindings), so the guard is one thread per pass (0.40 ms).
 
 Evidence: `SageFs.Core/Features/LiveValueTree.fs`, `SageFs.Tests/LiveValueTreeTests.fs`, and the real-daemon case in
 `SageFs.Tests/HttpApiIntegrationTests.fs`.
