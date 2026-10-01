@@ -97,7 +97,7 @@ let tests =
         // A generous flat bound (10 minutes — the real fix's own absolute
         // ceiling) tolerates a large repo, which is exactly what makes it
         // blind to a session that has gone silent well within that window.
-        let t = runFlatBoundOnly (TimeSpan.FromMinutes 10.0) WarmupGenerators.warmupNeverFinishes
+        let t = runFlatBoundOnly WarmupGenerators.defaultBounds.Absolute WarmupGenerators.warmupNeverFinishes
         match t.Final.State with
         | WarmupSupervision.LifecycleState.Starting -> ()
         | other -> failtestf "expected the twin to reproduce the historical bug (left Starting), got %A" other
@@ -106,13 +106,13 @@ let tests =
         |> Expect.contains "silence-is-caught-by-inactivity must fire against the twin" "silence-is-caught-by-inactivity"
 
       testCase "the twin behaves like the real reducer once a real Ready/Faulted is actually reported" <| fun _ ->
-        let t = runFlatBoundOnly (TimeSpan.FromMinutes 10.0) WarmupGenerators.warmupFaultsHalfway
+        let t = runFlatBoundOnly WarmupGenerators.defaultBounds.Absolute WarmupGenerators.warmupFaultsHalfway
         match t.Final.State with
         | WarmupSupervision.LifecycleState.Faulted _ -> ()
         | other -> failtestf "the twin should still report a REAL fault correctly, got %A" other
 
       testCase "the twin still honors Stop — StopRequested's handling didn't change between real and twin" <| fun _ ->
-        let t = runFlatBoundOnly (TimeSpan.FromMinutes 10.0) WarmupGenerators.stopAfterFault
+        let t = runFlatBoundOnly WarmupGenerators.defaultBounds.Absolute WarmupGenerators.stopAfterFault
         t.Final.State |> Expect.equal "Stopped" WarmupSupervision.LifecycleState.Stopped
 
       testPropertyWithConfig simConfig
@@ -133,7 +133,7 @@ let tests =
               Bounds = bounds
               Events = [ LifecycleEvent.ClockAdvance silentFor; LifecycleEvent.PollTick PollObservation.StillWarming ] }
           let realT = run scenario
-          let twinT = runFlatBoundOnly (TimeSpan.FromMinutes 10.0) scenario
+          let twinT = runFlatBoundOnly WarmupGenerators.defaultBounds.Absolute scenario
           let realViolated = violations realT |> List.map fst |> List.contains "silence-is-caught-by-inactivity"
           let twinViolated = violations twinT |> List.map fst |> List.contains "silence-is-caught-by-inactivity"
           match realViolated, twinViolated with

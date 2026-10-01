@@ -24,33 +24,33 @@ open SageFs
 open SageFs.WarmupSupervision
 open SageFs.Tests.SharedGenerators
 
-let private bounds : Bounds =
-  { Absolute = TimeSpan.FromMinutes 10.0
-    Inactivity = TimeSpan.FromSeconds 30.0 }
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
+let private bounds : Bounds = SageFs.Simulation.WarmupGenerators.defaultBounds
 
 let private exampleTests = testList "decidePoll examples" [
   test "Ready observation marks ready regardless of elapsed, within bound" {
-    decidePoll bounds (TimeSpan.FromSeconds 5.0) TimeSpan.Zero (PollObservation.Ready "loaded")
+    decidePoll bounds TestTimeouts.warmupElapsedEarly TimeSpan.Zero (PollObservation.Ready "loaded")
     |> Expect.equal "MarkReady" (PollDecision.MarkReady "loaded")
   }
 
   test "Faulted observation with a reason marks faulted with that reason" {
-    decidePoll bounds (TimeSpan.FromSeconds 5.0) TimeSpan.Zero (PollObservation.Faulted (Some "boom"))
+    decidePoll bounds TestTimeouts.warmupElapsedEarly TimeSpan.Zero (PollObservation.Faulted (Some "boom"))
     |> Expect.equal "MarkFaulted boom" (PollDecision.MarkFaulted "boom")
   }
 
   test "Faulted observation with no reason gets the shared default reason" {
-    decidePoll bounds (TimeSpan.FromSeconds 5.0) TimeSpan.Zero (PollObservation.Faulted None)
+    decidePoll bounds TestTimeouts.warmupElapsedEarly TimeSpan.Zero (PollObservation.Faulted None)
     |> Expect.equal "MarkFaulted default" (PollDecision.MarkFaulted defaultFaultReason)
   }
 
   test "StillWarming within both bounds keeps polling" {
-    decidePoll bounds (TimeSpan.FromMinutes 1.0) (TimeSpan.FromSeconds 5.0) PollObservation.StillWarming
+    decidePoll bounds TestTimeouts.warmupElapsedInsideBounds TestTimeouts.warmupElapsedEarly PollObservation.StillWarming
     |> Expect.equal "KeepPolling" PollDecision.KeepPolling
   }
 
   test "StillWarming past the inactivity bound (but under the absolute bound) times out" {
-    match decidePoll bounds (TimeSpan.FromMinutes 1.0) (TimeSpan.FromSeconds 31.0) PollObservation.StillWarming with
+    match decidePoll bounds TestTimeouts.warmupElapsedInsideBounds (bounds.Inactivity + TestTimeouts.pastBoundBy) PollObservation.StillWarming with
     | PollDecision.TimedOut reason -> reason |> Expect.stringContains "mentions no progress" "no progress"
     | other -> failtestf "expected TimedOut, got %A" other
   }
@@ -60,24 +60,24 @@ let private exampleTests = testList "decidePoll examples" [
     // to near-zero on seeing Progressed; decidePoll itself always treats
     // Progressed as forward motion regardless of the elapsed/inactivity
     // clocks it's handed, exactly like Ready/Faulted.
-    decidePoll bounds (TimeSpan.FromMinutes 1.0) (TimeSpan.FromSeconds 31.0) PollObservation.Progressed
+    decidePoll bounds TestTimeouts.warmupElapsedInsideBounds (bounds.Inactivity + TestTimeouts.pastBoundBy) PollObservation.Progressed
     |> Expect.equal "KeepPolling" PollDecision.KeepPolling
   }
 
   test "ProbeFailed behaves exactly like StillWarming for the inactivity bound" {
-    match decidePoll bounds (TimeSpan.FromMinutes 1.0) (TimeSpan.FromSeconds 31.0) (PollObservation.ProbeFailed "connection refused") with
+    match decidePoll bounds TestTimeouts.warmupElapsedInsideBounds (bounds.Inactivity + TestTimeouts.pastBoundBy) (PollObservation.ProbeFailed "connection refused") with
     | PollDecision.TimedOut _ -> ()
     | other -> failtestf "expected TimedOut, got %A" other
   }
 
   test "elapsed past the absolute bound times out even with a fresh Progressed-reset inactivity clock" {
-    match decidePoll bounds (TimeSpan.FromMinutes 11.0) TimeSpan.Zero PollObservation.StillWarming with
+    match decidePoll bounds (bounds.Absolute + TestTimeouts.pastAbsoluteBy) TimeSpan.Zero PollObservation.StillWarming with
     | PollDecision.TimedOut reason -> reason |> Expect.stringContains "mentions absolute limit" "absolute limit"
     | other -> failtestf "expected TimedOut, got %A" other
   }
 
   test "absolute bound wins even over a Ready observation — no argument, no exceptions" {
-    match decidePoll bounds (TimeSpan.FromMinutes 11.0) TimeSpan.Zero (PollObservation.Ready "loaded") with
+    match decidePoll bounds (bounds.Absolute + TestTimeouts.pastAbsoluteBy) TimeSpan.Zero (PollObservation.Ready "loaded") with
     | PollDecision.TimedOut _ -> ()
     | other -> failtestf "expected TimedOut (absolute bound is absolute), got %A" other
   }
@@ -93,7 +93,7 @@ let private exampleTests = testList "decidePoll examples" [
 let private boundedReachTests = testList "BoundedReach (defect #1: unbounded silent warmup)" [
   testPropertyWithConfig propConfig "silence beyond the inactivity bound always reaches Faulted, never lingers in Starting" <|
     fun (PositiveInt extraSeconds) ->
-      let b = { Absolute = TimeSpan.FromMinutes 10.0; Inactivity = TimeSpan.FromSeconds 30.0 }
+      let b = bounds
       let silentFor = b.Inactivity + TimeSpan.FromSeconds(float extraSeconds)
       let model =
         run<unit> b [
@@ -107,7 +107,7 @@ let private boundedReachTests = testList "BoundedReach (defect #1: unbounded sil
   testPropertyWithConfig propConfig "a warmup that keeps progressing survives past the inactivity bound, up to the absolute bound" <|
     fun (PositiveInt tickCount) ->
       let ticks = min tickCount 20
-      let b = { Absolute = TimeSpan.FromMinutes 10.0; Inactivity = TimeSpan.FromSeconds 5.0 }
+      let b = { bounds with Inactivity = TestTimeouts.warmupInactivityShort }
       // Each cycle: advance 4s (under the 5s inactivity bound), then report
       // Progressed (which resets the inactivity clock in `step`). Repeating
       // this `ticks` times keeps the session alive for 4*ticks seconds even
@@ -115,7 +115,7 @@ let private boundedReachTests = testList "BoundedReach (defect #1: unbounded sil
       // that ongoing progress, not raw elapsed time, is what matters here.
       let events =
         [ for _ in 1 .. ticks do
-            yield LifecycleEvent.ClockAdvance (TimeSpan.FromSeconds 4.0)
+            yield LifecycleEvent.ClockAdvance TestTimeouts.warmupProgressStep
             yield LifecycleEvent.PollTick PollObservation.Progressed ]
       let model = run<unit> b events
       match model.State with
@@ -145,15 +145,15 @@ let private boundedReachTests = testList "BoundedReach (defect #1: unbounded sil
         | PollObservation.Progressed
         | PollObservation.StillWarming
         | PollObservation.ProbeFailed _ -> PollDecision.KeepPolling // BUG: no inactivity check at all
-    let b = { Absolute = TimeSpan.FromMinutes 10.0; Inactivity = TimeSpan.FromSeconds 30.0 }
-    let decision = brokenDecidePoll b (TimeSpan.FromMinutes 1.0) (TimeSpan.FromMinutes 5.0) PollObservation.StillWarming
+    let b = bounds
+    let decision = brokenDecidePoll b TestTimeouts.warmupElapsedInsideBounds TestTimeouts.warmupSilenceLong PollObservation.StillWarming
     // The broken version keeps polling despite 5 minutes of silence — this
     // is the exact bug fcs-trial-a hit (20+ minutes, no error). Asserting
     // it here proves the twin actually reproduces the old behavior, and by
     // contrast that the REAL decidePoll (exercised in the property above)
     // does NOT do this.
     decision |> Expect.equal "the broken version has no inactivity guard" PollDecision.KeepPolling
-    match decidePoll b (TimeSpan.FromMinutes 1.0) (TimeSpan.FromMinutes 5.0) PollObservation.StillWarming with
+    match decidePoll b TestTimeouts.warmupElapsedInsideBounds TestTimeouts.warmupSilenceLong PollObservation.StillWarming with
     | PollDecision.TimedOut _ -> ()
     | other -> failtestf "the REAL decidePoll must catch what the broken twin misses, got %A" other
   }
@@ -198,7 +198,7 @@ let private stopAlwaysWinsTests = testList "StopAlwaysWins (defect #2: stop_sess
   }
 
   test "a stop arriving WHILE starting (mid-warmup, no prior PollTick) yields Stopped, not left Starting" {
-    let model = run<unit> bounds [ LifecycleEvent.ClockAdvance (TimeSpan.FromSeconds 1.0); LifecycleEvent.StopRequested ]
+    let model = run<unit> bounds [ LifecycleEvent.ClockAdvance TestTimeouts.clockAdvanceSmall; LifecycleEvent.StopRequested ]
     model.State |> Expect.equal "Stopped" LifecycleState.Stopped
   }
 

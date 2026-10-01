@@ -5,6 +5,8 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 [<Tests>]
 let timeoutsTests = testList "Timeouts" [
 
@@ -34,11 +36,11 @@ let timeoutsTests = testList "Timeouts" [
       |> Expect.isOk "should accept 10min"
 
     testCase "accepts 30 seconds" <| fun _ ->
-      ValidTimeout.create (TimeSpan.FromSeconds(30.0))
+      ValidTimeout.create TestTimeouts.ordinaryValidTimeout
       |> Expect.isOk "should accept 30s"
 
     testCase "round-trips value" <| fun _ ->
-      let ts = TimeSpan.FromSeconds(42.0)
+      let ts = TestTimeouts.roundTripTimeout
       match ValidTimeout.create ts with
       | Ok vt -> ValidTimeout.value vt |> Expect.equal "should round-trip" ts
       | Error e -> failtestf "unexpected error: %s" e
@@ -66,12 +68,13 @@ let timeoutsTests = testList "Timeouts" [
       |> Expect.equal "should remain unchanged" before
 
     testCase "setPerTestTimeout accepts valid value" <| fun _ ->
-      let newVal = TimeSpan.FromSeconds(7.0)
+      let before = Timeouts.perTestDefault ()
+      let newVal = TestTimeouts.validPerTestTimeout
       Timeouts.setPerTestTimeout newVal
       Timeouts.perTestDefault ()
       |> Expect.equal "should update" newVal
-      // Restore default
-      Timeouts.setPerTestTimeout (TimeSpan.FromSeconds(5.0))
+      // Restore what it was
+      Timeouts.setPerTestTimeout before
 
     testCase "setGlobalTestRunTimeout rejects invalid value" <| fun _ ->
       let before = Timeouts.globalTestRun ()
@@ -80,12 +83,13 @@ let timeoutsTests = testList "Timeouts" [
       |> Expect.equal "should remain unchanged" before
 
     testCase "setGlobalTestRunTimeout accepts valid value" <| fun _ ->
-      let newVal = TimeSpan.FromMinutes(3.0)
+      let before = Timeouts.globalTestRun ()
+      let newVal = TestTimeouts.validGlobalRunTimeout
       Timeouts.setGlobalTestRunTimeout newVal
       Timeouts.globalTestRun ()
       |> Expect.equal "should update" newVal
-      // Restore default
-      Timeouts.setGlobalTestRunTimeout (TimeSpan.FromMinutes(2.0))
+      // Restore what it was
+      Timeouts.setGlobalTestRunTimeout before
   ]
 
   testList "Environment variable overrides" [

@@ -5,6 +5,8 @@ open Expecto
 open Expecto.Flip
 open SageFs.Watchdog
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let now = DateTime(2026, 2, 15, 0, 0, 0)
 let seed = SageFs.RestartPolicy.JitterSeed 1L
 
@@ -55,7 +57,7 @@ let watchdogDecisionTests = testList "Watchdog.decide" [
     match action with
     | Action.RestartDaemon delay ->
       Expect.equal "first restart delay is the 1s backoff, jittered by the seed"
-        (SageFs.RestartPolicy.withJitter defaultConfig.RestartPolicy seed (TimeSpan.FromSeconds 1.0)) delay
+        (SageFs.RestartPolicy.withJitter defaultConfig.RestartPolicy seed defaultConfig.RestartPolicy.BackoffBase) delay
       Expect.equal "restart count is 1" 1 newState.RestartState.RestartCount
     | other -> failtest (sprintf "expected RestartDaemon, got %A" other)
   }
@@ -68,7 +70,7 @@ let watchdogDecisionTests = testList "Watchdog.decide" [
     match action2 with
     | Action.RestartDaemon delay ->
       Expect.equal "second restart delay is the 2s backoff, jittered by the seed"
-        (SageFs.RestartPolicy.withJitter defaultConfig.RestartPolicy seed (TimeSpan.FromSeconds 2.0)) delay
+        (SageFs.RestartPolicy.withJitter defaultConfig.RestartPolicy seed (defaultConfig.RestartPolicy.BackoffBase * 2.0)) delay
       Expect.equal "restart count is 2" 2 s2.RestartState.RestartCount
     | other -> failtest (sprintf "expected RestartDaemon, got %A" other)
   }
@@ -110,8 +112,9 @@ let watchdogDecisionTests = testList "Watchdog.decide" [
     Expect.equal "jitter moves only the delay" plainState newState.RestartState
     match action with
     | Action.RestartDaemon delay ->
+      let backoff = defaultConfig.RestartPolicy.BackoffBase
       Expect.isTrue (sprintf "%A in band" delay)
-        (delay >= TimeSpan.FromSeconds 0.5 - TimeSpan.FromMilliseconds 1.0 && delay <= TimeSpan.FromSeconds 1.0 + TimeSpan.FromMilliseconds 1.0)
+        (delay >= backoff * 0.5 - TestTimeouts.boundaryMargin && delay <= backoff + TestTimeouts.boundaryMargin)
     | other -> failtestf "expected RestartDaemon, got %A" other
 
   test "recordStart updates PID and timestamp" {

@@ -7,6 +7,8 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// A fresh temp directory removed when `body` returns, so every test writes real
 /// files without leaving any behind.
 let private withTempDir (body: string -> 'a) : 'a =
@@ -49,7 +51,7 @@ let workerLogFormatTests =
   testList "WorkerLogFile line format and sinks" [
 
     testCase "WHY — formatLine — a line is a UTC timestamp, a level tag and the message, so a log read weeks later still orders and filters" <| fun _ ->
-      let at = DateTimeOffset(2026, 9, 30, 12, 34, 56, 789, TimeSpan.FromHours 2.0)
+      let at = DateTimeOffset(2026, 9, 30, 12, 34, 56, 789, TestTimeouts.sampleUtcOffset)
       WorkerLogFile.formatLine at WorkerLogLevel.Warn "Loader returned 0 projects"
       |> Expect.equal "format" "2026-09-30T10:34:56.789Z [WRN] Loader returned 0 projects"
 

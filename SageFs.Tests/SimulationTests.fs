@@ -11,6 +11,8 @@ open SageFs.Simulation.Scenario
 open SageFs.Simulation.Runner
 open SageFs.Simulation.Invariants
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// DST harness tests: every invariant in Invariants.all is claimed to be a
 /// TRUE property of the real supervision core, so a failure here is a genuine
 /// bug in RestartPolicy/SessionLifecycle — the failing scenario (seed + events)
@@ -142,17 +144,18 @@ let tests =
         assertHolds t
 
       testCase "spaced crashes in one window back off exponentially and give up at MaxRestarts" <| fun () ->
-        let t = run (Generators.spacedCrashes 6 (TimeSpan.FromSeconds 20.0))
+        let t = run (Generators.spacedCrashes 6 TestTimeouts.crashSpacingPastStartupWindow)
         // 20s gap > StartupCrashWindow (10s) => never a startup crash; all in
         // one window (< ResetWindow) => clean exponential backoff, cap 30s.
         let delays =
           t.Steps
           |> List.choose (fun s ->
             match s.Effect with StepEffect.Restarted d -> Some d | _ -> None)
+        let backoffBase = RestartPolicy.defaultPolicy.BackoffBase
         delays
-        |> Expect.equal "exponential backoff 1,2,4,8,16 s"
-             [ TimeSpan.FromSeconds 1.0; TimeSpan.FromSeconds 2.0; TimeSpan.FromSeconds 4.0
-               TimeSpan.FromSeconds 8.0; TimeSpan.FromSeconds 16.0 ]
+        |> Expect.equal "exponential backoff 1,2,4,8,16 times the base delay"
+             [ backoffBase; backoffBase * 2.0; backoffBase * 4.0
+               backoffBase * 8.0; backoffBase * 16.0 ]
         t.Steps
         |> List.exists (fun s -> match s.Effect with StepEffect.GaveUp _ -> true | _ -> false)
         |> Expect.isTrue "gives up at MaxRestarts (5) after the 6th crash"
@@ -185,24 +188,25 @@ let tests =
             StartTime = Generators.epoch
             Events =
               [ SimEvent.WorkerCrashed
-                SimEvent.ClockAdvance(TimeSpan.FromSeconds 20.0); SimEvent.WorkerCrashed
-                SimEvent.ClockAdvance(TimeSpan.FromSeconds 20.0); SimEvent.WorkerCrashed
-                SimEvent.ClockAdvance(TimeSpan.FromSeconds 20.0); SimEvent.WorkerCrashed
-                SimEvent.ClockAdvance(TimeSpan.FromSeconds 2.0);  SimEvent.WorkerCrashed ] } // rapid => startup
+                SimEvent.ClockAdvance TestTimeouts.crashSpacingPastStartupWindow; SimEvent.WorkerCrashed
+                SimEvent.ClockAdvance TestTimeouts.crashSpacingPastStartupWindow; SimEvent.WorkerCrashed
+                SimEvent.ClockAdvance TestTimeouts.crashSpacingPastStartupWindow; SimEvent.WorkerCrashed
+                SimEvent.ClockAdvance TestTimeouts.crashSpacingInsideStartupWindow;  SimEvent.WorkerCrashed ] } // rapid => startup
         let t = run scn
         let delays =
           t.Steps
           |> List.choose (fun s ->
             match s.Effect with StepEffect.Restarted d -> Some d | _ -> None)
         // 1,2,4,8s exponential, then the startup circuit breaker drops to 4s.
+        let backoffBase = policy.BackoffBase
         delays
-        |> Expect.equal "exponential 1,2,4,8 then a startup-crash drop to 4s within one window"
-             [ TimeSpan.FromSeconds 1.0; TimeSpan.FromSeconds 2.0; TimeSpan.FromSeconds 4.0
-               TimeSpan.FromSeconds 8.0; TimeSpan.FromSeconds 4.0 ]
+        |> Expect.equal "exponential 1,2,4,8 times the base, then a startup-crash drop to 4 times the base within one window"
+             [ backoffBase; backoffBase * 2.0; backoffBase * 4.0
+               backoffBase * 8.0; backoffBase * 4.0 ]
         // The dip is exactly the circuit-breaker delay (4x base = 4s), so the
         // exact, regime-free invariant still HOLDS.
         (List.last delays)
-        |> Expect.equal "the dip equals the circuit-breaker delay (4x base)" (TimeSpan.FromSeconds 4.0)
+        |> Expect.equal "the dip equals the circuit-breaker delay (4x base)" (backoffBase * 4.0)
         backoffMonotonicInWindow.Check t
         |> Expect.equal "monotonicity-with-circuit-breaker-exception holds" Outcome.Holds
     ]

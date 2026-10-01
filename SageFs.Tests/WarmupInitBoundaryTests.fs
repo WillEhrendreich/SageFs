@@ -25,6 +25,7 @@ let private withTempDir run =
 let warmupInitBoundaryTests =
   testList "WarmupInitBoundary" [
     testCase "completeWarmup stops total timing at the namespace-open boundary" <| fun _ ->
+      let boundaryMs = 120L
       let ctx : WarmupContext =
         WarmupContext.completeWarmup
           warmupStartedAt
@@ -34,7 +35,7 @@ let warmupInitBoundaryTests =
           []
           25L
           80L
-          120L
+          boundaryMs
 
       ctx.StartedAt
       |> Expect.equal "warmup should keep the original start timestamp" warmupStartedAt
@@ -51,12 +52,12 @@ let warmupInitBoundaryTests =
       ctx.PhaseTiming.TotalMs
       |> Expect.equal
         "post-warmup startup work should not inflate warmup total timing"
-        120L
+        boundaryMs
 
       WarmupContext.completionDuration ctx
       |> Expect.equal
         "completion duration should stay anchored at the warmup boundary"
-        (TimeSpan.FromMilliseconds 120.0)
+        (TimeSpan.FromMilliseconds (float boundaryMs))
 
     testCase "applyIfPresent reports missing startup profile without pretending it ran" <| fun _ ->
       let evalCalls = ResizeArray<string>()

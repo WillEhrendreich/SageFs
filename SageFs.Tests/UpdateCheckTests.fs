@@ -5,6 +5,8 @@ open Expecto
 open Expecto.Flip
 open SageFs
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private v (text: string) = System.Version.Parse text
 
 [<Tests>]
@@ -36,22 +38,22 @@ let tests =
 
     testList "shouldCheck" [
       testCase "never checked before is always due" <| fun _ ->
-        UpdateCheck.shouldCheck DateTimeOffset.UtcNow None (TimeSpan.FromHours 6.0)
+        UpdateCheck.shouldCheck DateTimeOffset.UtcNow None Timeouts.updateCheckInterval
         |> Expect.isTrue "due"
 
       testCase "checked well inside the interval is not due" <| fun _ ->
         let now = DateTimeOffset.UtcNow
-        UpdateCheck.shouldCheck now (Some(now - TimeSpan.FromMinutes 5.0)) (TimeSpan.FromHours 6.0)
+        UpdateCheck.shouldCheck now (Some(now - TestTimeouts.updateCheckRecent)) Timeouts.updateCheckInterval
         |> Expect.isFalse "not due"
 
       testCase "checked exactly at the interval boundary is due" <| fun _ ->
         let now = DateTimeOffset.UtcNow
-        UpdateCheck.shouldCheck now (Some(now - TimeSpan.FromHours 6.0)) (TimeSpan.FromHours 6.0)
+        UpdateCheck.shouldCheck now (Some(now - Timeouts.updateCheckInterval)) Timeouts.updateCheckInterval
         |> Expect.isTrue "due at boundary"
 
       testCase "checked past the interval is due" <| fun _ ->
         let now = DateTimeOffset.UtcNow
-        UpdateCheck.shouldCheck now (Some(now - TimeSpan.FromHours 7.0)) (TimeSpan.FromHours 6.0)
+        UpdateCheck.shouldCheck now (Some(now - (Timeouts.updateCheckInterval + TestTimeouts.updateCheckOverrun))) Timeouts.updateCheckInterval
         |> Expect.isTrue "due"
     ]
 

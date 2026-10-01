@@ -13,6 +13,8 @@ open Expecto.Flip
 open SageFs
 open System
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let config = Watchdog.defaultConfig
 let now = DateTime.UtcNow
 let seed = RestartPolicy.JitterSeed 1L
@@ -54,7 +56,7 @@ let watchdogMutationTests = testList "Watchdog mutations" [
   testCase "WHY — decide_notRunning_past_grace_restarts — a daemon past its grace period with no restart history must restart with the first backoff" <| fun () ->
     let started = now
     let state = { Watchdog.emptyState now with DaemonPid = Some 111; LastStartedAt = Some started }
-    let checkAt = started + config.GracePeriod + TimeSpan.FromSeconds 1.0
+    let checkAt = started + config.GracePeriod + TestTimeouts.pastBoundBy
     let expectedRestartState : RestartPolicy.State =
       { RestartCount = 1; LastRestartAt = Some checkAt; WindowStart = Some checkAt }
     Watchdog.decide config seed state Watchdog.DaemonStatus.NotRunning checkAt
@@ -73,7 +75,7 @@ let watchdogMutationTests = testList "Watchdog mutations" [
     let _, s4 = RestartPolicy.decide rp s3 (now.AddSeconds 33.0)
     let _, s5 = RestartPolicy.decide rp s4 (now.AddSeconds 44.0)
     let state = { Watchdog.emptyState now with DaemonPid = Some 111; LastStartedAt = Some started; RestartState = s5 }
-    let checkAt = started + config.GracePeriod + TimeSpan.FromSeconds 55.0
+    let checkAt = started + config.GracePeriod + TestTimeouts.exhaustedBudgetCheckOffset
     let expectedError = SageFsError.RestartLimitExceeded(5, rp.ResetWindow.TotalMinutes)
     let _, expectedRestartState = RestartPolicy.decide rp s5 checkAt
     Watchdog.decide config seed state Watchdog.DaemonStatus.NotRunning checkAt
