@@ -502,6 +502,9 @@ let awaitConfirmationMoment (feed: SseFeed) (http: HttpClient) (moment: Confirma
     let clock = Stopwatch.StartNew()
     let wanted = ConfirmationMoment.toWire moment
     let mutable reached = false
+    // The history says each thing once: a stream busy with a restart is hundreds of frames, and one note per frame
+    // would bury the ones that matter.
+    let mutable lastNote = ""
     while not reached do
       let! status = http.GetStringAsync "/api/live-testing/status"
       let struct (_, current) = confirmationStateOf status
@@ -523,7 +526,12 @@ let awaitConfirmationMoment (feed: SseFeed) (http: HttpClient) (moment: Confirma
         note feed (sprintf "the confirmation is %s%s" wanted (match sessionSays with "" -> "" | says -> sprintf ", and the session says %s" says))
         reached <- true
       | false ->
-        note feed (sprintf "waiting for the confirmation to be %s (it is %s, the session says %s)" wanted current sessionSays)
+        let waiting = sprintf "waiting for the confirmation to be %s (it is %s, the session says %s)" wanted current sessionSays
+        match waiting = lastNote with
+        | true -> ()
+        | false ->
+          note feed waiting
+          lastNote <- waiting
         let! _ =
           expectFrame feed (sprintf "the confirmation reaching %s" wanted) (fun _ -> true) (max TimeSpan.Zero (budget - clock.Elapsed))
         ()

@@ -202,6 +202,12 @@ let private editedWhileConfirmationIsIn (moment: ConfirmationMoment) () : Task<u
         expectFrame feed "the newest text's verdict, evaluated, on the test its edit turns red"
           (fun f -> verdictIn affectedTest f = Verdict.Failed && provenanceIn affectedTest f = "Evaluated")
           TestTimeouts.buildConfirmation
+      // The newest text is confirmed by a real build too, which replaces the worker a second time. That also leaves the
+      // session at rest on that text, so putting the original back is judged against what the build compiled.
+      let! _ =
+        expectFrame feed "the newest text confirmed by a real build, still red"
+          (fun f -> verdictIn affectedTest f = Verdict.Failed && provenanceIn affectedTest f = "VerifiedByBuild")
+          TestTimeouts.buildConfirmation
       blockedSummariesSeen feed
       |> Expect.isEmpty "no summary said the session was blocked by compile errors, because no text written was broken"
     })
