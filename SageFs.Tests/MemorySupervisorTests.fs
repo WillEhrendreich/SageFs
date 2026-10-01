@@ -30,6 +30,10 @@ let private idleUnderFloor = defaultThresholds.IdleAfter / 6.0
 /// Idle for a fifteenth of a floor: freshly touched.
 let private idleFreshlyTouched = defaultThresholds.IdleAfter / 15.0
 
+/// Bytes, written as whole gigabytes and megabytes.
+let private gb (n: int64) = n * TestMagnitudes.gigabyte
+let private mb (n: int64) = n * TestMagnitudes.megabyte
+
 let private mkSession id status isUserActive : SessionSnapshot =
   { Id = id; Status = status; IsUserActive = isUserActive }
 
@@ -41,7 +45,7 @@ let namedShapeTests =
   testList "MemorySupervisor.step — named shapes from the brief" [
 
     testCase "a 55GB daemon with 1GB free and five sessions: reap, shed idle, refuse" <| fun () ->
-      let critical = machine 55_000_000_000L 1_000_000_000L 62_000_000_000L
+      let critical = machine (gb 55L) (gb 1L) (gb 62L)
       let sessions =
         [ mkSession "active-viewed" SessionMemoryStatus.Active true
           mkSession "idle-2h" (SessionMemoryStatus.Idle idleWellPastFloor) false
@@ -60,7 +64,7 @@ let namedShapeTests =
       decision.Reason |> Expect.isSome "a refusal this severe must carry a reason"
 
     testCase "a healthy daemon still reaps a dead session, and does nothing else" <| fun () ->
-      let healthy = machine 500_000_000L 40_000_000_000L 64_000_000_000L
+      let healthy = machine (mb 500L) (gb 40L) (gb 64L)
       let sessions =
         [ mkSession "active" SessionMemoryStatus.Active true
           mkSession "dead" SessionMemoryStatus.Dead false ]
@@ -69,7 +73,7 @@ let namedShapeTests =
       decision.Actions |> Expect.equal "reap only — nothing else to do at Normal" [ ShedAction.ReapDeadSessions [ "dead" ] ]
 
     testCase "three faulted sessions with plenty of memory: still reaped, unconditionally" <| fun () ->
-      let healthy = machine 500_000_000L 40_000_000_000L 64_000_000_000L
+      let healthy = machine (mb 500L) (gb 40L) (gb 64L)
       let sessions =
         [ mkSession "f1" SessionMemoryStatus.Dead false
           mkSession "f2" SessionMemoryStatus.Dead false
@@ -118,7 +122,7 @@ let neverTouchesActiveTests =
   testList "MemorySupervisor.step — never sheds a user-active session" [
 
     testCase "every session active: refuses and reaps, but proposes stopping nobody" <| fun () ->
-      let critical = machine 55_000_000_000L 1_000_000_000L 62_000_000_000L
+      let critical = machine (gb 55L) (gb 1L) (gb 62L)
       let sessions =
         [ mkSession "a" (SessionMemoryStatus.Idle idleLongPastFloor) true
           mkSession "b" (SessionMemoryStatus.Idle idleLongPastFloor) true ]
@@ -128,7 +132,7 @@ let neverTouchesActiveTests =
       |> Expect.isFalse "both idle sessions are user-active — never a shedding target"
 
     testCase "idle-eligible but freshly touched (under the idle floor) is never shed" <| fun () ->
-      let pressured = machine 20_000_000_000L 3_000_000_000L 62_000_000_000L
+      let pressured = machine (gb 20L) (gb 3L) (gb 62L)
       let sessions = [ mkSession "fresh" (SessionMemoryStatus.Idle idleFreshlyTouched) false ]
       let decision = step defaultThresholds MemoryPressure.Normal pressured sessions
       decision.Actions
@@ -140,7 +144,7 @@ let neverTouchesActiveTests =
 let refusalReasonTests =
   testList "MemorySupervisor.step — a refusal always carries a reason" [
     testCase "RefuseNewSessions always carries a non-empty, human-readable reason" <| fun () ->
-      let critical = machine 55_000_000_000L 1_000_000_000L 62_000_000_000L
+      let critical = machine (gb 55L) (gb 1L) (gb 62L)
       let decision = step defaultThresholds MemoryPressure.Normal critical []
       match decision.Actions |> List.tryPick (function ShedAction.RefuseNewSessions r -> Some r | _ -> None) with
       | None -> failtest "expected a refusal at this pressure"

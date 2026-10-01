@@ -149,7 +149,7 @@ let sizeCappedWriterTests =
       withTempDir (fun dir ->
         let path = Path.Combine(dir, "d.log")
         use writer = openWriter path 256L
-        writer.Append(String('x', 10_000))
+        writer.Append(String('x', TestMagnitudes.entryLargerThanCap))
         (bytesOf path <= 256L) |> Expect.isTrue "within the cap")
 
     testCase "WHY — Append — multi-byte text is measured in bytes, not chars, so the cap holds for non-ASCII output" <| fun _ ->

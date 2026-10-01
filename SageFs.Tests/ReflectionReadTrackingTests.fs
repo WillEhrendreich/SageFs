@@ -148,7 +148,7 @@ let private hotReadGap = hotLoopWindow / 100.0
 /// slow trickle. Two fifths of the window.
 let private slowReadGap = hotLoopWindow * 0.4
 
-let private quiet = { Count = 1_000_000; Within = hotLoopWindow }
+let private quiet = { Count = TestMagnitudes.readCountNeverReached; Within = hotLoopWindow }
 
 let private verdictFor (app: App) (tracker: Tracker) =
   match tracker.Evidence [ app.ValueKey ] with

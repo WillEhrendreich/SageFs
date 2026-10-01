@@ -1044,7 +1044,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
         |> Expect.equal (sprintf "%d-probe round-trip" size) bits
 
     test "WHY — CoverageBitmap.toBase64 — the packed wire payload is far smaller than one JSON bool per probe because that is the whole point of packing it" {
-      let size = 10_000
+      let size = TestMagnitudes.packedProbeCount
       let bits = Array.init size (fun i -> i % 2 = 0)
       let bm = CoverageBitmap.ofBoolArray bits
       let packedBytes = (CoverageBitmap.toBase64 bm).Length

@@ -72,7 +72,7 @@ let tests =
         @ [ event "send_fsharp_code" FrictionOutcome.CompletedCleanly 60.0 ]
       match detect events |> List.filter (fun d -> d.Signal |> isSlowFirstSuccess) with
       | [ { Signal = FrictionSignal.SlowTimeToFirstSuccess(elapsed, failedBefore) } ] ->
-        elapsed |> DurationMs.value |> Expect.equal "elapsed should be the 60s gap in milliseconds" 60_000
+        elapsed |> DurationMs.value |> Expect.equal "elapsed should be the 60s gap in milliseconds" (60 * TestMagnitudes.msPerSecond)
         failedBefore |> Expect.equal "should count the 5 failed evals between create and first success" 5
       | other -> failtestf "expected exactly one SlowTimeToFirstSuccess signal, got %A" other
 

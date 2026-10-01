@@ -57,7 +57,7 @@ let private genEvent : Gen<SimEvent> =
 /// sole source of chaos here — the Scenario value itself is fully printable).
 let private genScenario : Gen<Scenario> =
   gen {
-    let! seed = Gen.choose (0, 1_000_000)
+    let! seed = Gen.choose (0, TestMagnitudes.seedBound)
     let! policy = genPolicy
     let! events = Gen.listOf genEvent
     return

@@ -18,7 +18,7 @@ let private pick (gen: Gen<'a>) = (Gen.sample 1 gen).[0]
 
 let private simConfig = { FsCheckConfig.defaultConfig with maxTest = 300 }
 
-let private genSeed: Gen<int> = Gen.choose (0, 1_000_000)
+let private genSeed: Gen<int> = Gen.choose (0, TestMagnitudes.seedBound)
 
 let private assertHolds (t: Trace) =
   match violations t with

@@ -76,7 +76,7 @@ let tests =
       ]
 
       match hardResetAfterCreateSignals (detect events) with
-      | [ gap ] -> DurationMs.value gap |> Expect.equal "gap should be 10s in ms" 10_000
+      | [ gap ] -> DurationMs.value gap |> Expect.equal "gap should be 10s in ms" (10 * TestMagnitudes.msPerSecond)
       | other -> failtestf "expected exactly one HardResetAfterCreate signal, got %A" other
 
     testCase "create_session then hard_reset_fsi_session 5 minutes later yields no HardResetAfterCreate" <| fun _ ->

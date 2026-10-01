@@ -13,7 +13,7 @@ let syntaxHighlightTests = testSequenced <| testList "SyntaxHighlight" [
     for _ in 1..1000 do
       SyntaxHighlight.tokenize theme code |> ignore
     let sw = Stopwatch.StartNew()
-    let n = 50_000
+    let n = TestMagnitudes.tokenizeRuns
     for _ in 1..n do
       SyntaxHighlight.tokenize theme code |> ignore
     sw.Stop()

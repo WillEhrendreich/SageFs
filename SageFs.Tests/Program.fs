@@ -412,7 +412,7 @@ let main argv =
     Console.SetOut originalOut
     try
       let stripped = System.Text.RegularExpressions.Regex.Replace(runCapture.ToString(), "\\[[0-9;?]*[a-zA-Z]", "")
-      let bounded = if stripped.Length > 200_000 then stripped.Substring(stripped.Length - 200_000) else stripped
+      let bounded = if stripped.Length > SageFs.Tests.TestMagnitudes.runCaptureCap then stripped.Substring(stripped.Length - SageFs.Tests.TestMagnitudes.runCaptureCap) else stripped
       let logPath = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "test-results", "last-run.log")
       System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName logPath) |> ignore
       System.IO.File.WriteAllText(logPath, bounded)

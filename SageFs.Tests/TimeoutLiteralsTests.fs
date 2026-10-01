@@ -102,22 +102,7 @@ let private budgets : (string * int) list =
     "SageFs.Tests/LiteralEditTests.fs", 3
     "SageFs.Tests/LiveTestWatcherScopeTests.fs", 2
     "SageFs.Tests/LiveTestingBrowserTests.fs", 8
-    "SageFs.Tests/LiveTestingCoverageTests.fs", 2
-    "SageFs.Tests/LiveTestingTypesTests.fs", 1
-    "SageFs.Tests/ManifestOwnerTests.fs", 2
-    "SageFs.Tests/McpStdioBridgeSimTests.fs", 1
-    "SageFs.Tests/MemoryShedSimTests.fs", 12
-    "SageFs.Tests/MemorySupervisorTests.fs", 18
-    "SageFs.Tests/ObservedFrictionResetThrashTests.fs", 1
-    "SageFs.Tests/ObservedFrictionResolutionTests.fs", 1
-    "SageFs.Tests/Program.fs", 2
-    "SageFs.Tests/ReflectionReadTrackingTests.fs", 1
-    "SageFs.Tests/SafeDirectoryWalkTests.fs", 1
-    "SageFs.Tests/SessionManagerAdmissionTests.fs", 2
-    "SageFs.Tests/SimulationTests.fs", 1
-    "SageFs.Tests/SyntaxHighlightTests.fs", 1
-    "SageFs.Tests/TweakSimDstTests.fs", 1
-    "SageFs.Tests/WorkerLogFileTests.fs", 1 ]
+    "SageFs.Tests/LiveTestingCoverageTests.fs", 2 ]
 
 /// Every source file with its count of inline timeout literals, except the central module.
 let private actual : (string * int) list =

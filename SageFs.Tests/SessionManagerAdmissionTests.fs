@@ -75,10 +75,10 @@ let tests =
       // unbounded by construction, so "no check at all" is what production
       // had before this fix.
       let unboundedDecision (_pending: int) (_capacity: int) : Result<unit, SageFsError> = Result.Ok ()
-      unboundedDecision 1_000_000 256
+      unboundedDecision TestMagnitudes.absurdBacklog 256
       |> Expect.equal "the old (absent) gate lets an arbitrarily large backlog through" (Result.Ok ())
       // ...and the REAL decision does not.
-      match SageFsError.admissionDecision 1_000_000 256 with
+      match SageFsError.admissionDecision TestMagnitudes.absurdBacklog 256 with
       | Result.Error (SageFsError.SupervisorBusy _) -> ()
       | other -> failtestf "the REAL admissionDecision must refuse a million-deep backlog, got %A" other
   ]

@@ -17,6 +17,10 @@ open SageFs.Simulation.MemoryShedInvariants
 /// never reaps, which is exactly the regression this whole effort exists to
 /// prevent.
 
+/// Bytes, written as whole gigabytes and megabytes.
+let private gb (n: int64) = n * TestMagnitudes.gigabyte
+let private mb (n: int64) = n * TestMagnitudes.megabyte
+
 let private simConfig = { FsCheckConfig.defaultConfig with maxTest = 300 }
 
 let private assertHolds (states: State list) =
@@ -51,9 +55,9 @@ let tests =
         let scenario =
           { Seed = -401
             Thresholds = defaultThresholds
-            MachineTotal = 62_000_000_000L
+            MachineTotal = gb 62L
             Events =
-              [ SimEvent.CreateSessionRequest("leaky", 5_000_000_000L)
+              [ SimEvent.CreateSessionRequest("leaky", gb 5L)
                 SimEvent.Tick
                 SimEvent.Fault "leaky"
                 SimEvent.Tick
@@ -89,17 +93,17 @@ let tests =
         let scenario =
           { Seed = -402
             Thresholds = defaultThresholds
-            MachineTotal = 62_000_000_000L
+            MachineTotal = gb 62L
             Events =
-              [ SimEvent.CreateSessionRequest("viewed", 1_000_000_000L)
+              [ SimEvent.CreateSessionRequest("viewed", gb 1L)
                 SimEvent.SetUserActive("viewed", true)
-                SimEvent.CreateSessionRequest("idle-long", 1_000_000_000L)
+                SimEvent.CreateSessionRequest("idle-long", gb 1L)
                 SimEvent.PassMinutes 45
-                SimEvent.CreateSessionRequest("dead", 1_000_000_000L)
+                SimEvent.CreateSessionRequest("dead", gb 1L)
                 SimEvent.Fault "dead"
-                SimEvent.ExternalMemoryDelta 58_000_000_000L
+                SimEvent.ExternalMemoryDelta (gb 58L)
                 SimEvent.Tick
-                SimEvent.CreateSessionRequest("refused-please", 1_000_000_000L) ] }
+                SimEvent.CreateSessionRequest("refused-please", gb 1L) ] }
         let states = trace SupervisorBehavior.Real scenario
         assertHolds states
         let final = List.last states
@@ -111,11 +115,11 @@ let tests =
         let scenario =
           { Seed = -403
             Thresholds = defaultThresholds
-            MachineTotal = 64_000_000_000L
+            MachineTotal = gb 64L
             Events =
-              [ SimEvent.CreateSessionRequest("f1", 500_000_000L)
-                SimEvent.CreateSessionRequest("f2", 500_000_000L)
-                SimEvent.CreateSessionRequest("f3", 500_000_000L)
+              [ SimEvent.CreateSessionRequest("f1", mb 500L)
+                SimEvent.CreateSessionRequest("f2", mb 500L)
+                SimEvent.CreateSessionRequest("f3", mb 500L)
                 SimEvent.Fault "f1"
                 SimEvent.Fault "f2"
                 SimEvent.WorkerHungDetected "f3"

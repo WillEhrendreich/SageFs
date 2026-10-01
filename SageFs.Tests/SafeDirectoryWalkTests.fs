@@ -109,7 +109,7 @@ let tests =
           Directory.CreateDirectory deepest |> ignore
         File.WriteAllText(Path.Combine(deepest, "Deep.fsproj"), "")
 
-        let shallowBounds : SafeDirectoryWalk.Bounds = { MaxDepth = 2; MaxEntries = 50_000 }
+        let shallowBounds : SafeDirectoryWalk.Bounds = { MaxDepth = 2; MaxEntries = TestMagnitudes.walkEntriesNotReached }
         let result = SafeDirectoryWalk.walkFiles root isFsproj noPrune shallowBounds
 
         result.Truncated |> Expect.isTrue "a tree 6 levels deep against a cap of 2 must report truncation"

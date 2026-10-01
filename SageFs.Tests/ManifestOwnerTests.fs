@@ -254,7 +254,7 @@ let rec private genAll (gens: Gen<'a> list) : Gen<'a list> =
       return x :: xs }
 
 let private genTime =
-  Gen.choose (0, 1_000_000)
+  Gen.choose (0, TestMagnitudes.seedBound)
   |> Gen.map (fun s -> DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000L + int64 s * 1000L))
 
 let private genRecord (id: string) : Gen<DaemonSessionRecord> = gen {
@@ -282,7 +282,7 @@ let private genState : Gen<DaemonManifestState> = gen {
       ActiveSessionId = active } }
 
 let private genPermutation (xs: 'a list) : Gen<'a list> = gen {
-  let! keys = xs |> List.map (fun _ -> Gen.choose (0, 1_000_000)) |> genAll
+  let! keys = xs |> List.map (fun _ -> Gen.choose (0, TestMagnitudes.seedBound)) |> genAll
   return List.zip keys xs |> List.sortBy fst |> List.map snd }
 
 let private genLive (ids: string list) : Gen<DaemonSessionRecord list> =

@@ -111,7 +111,7 @@ let tweakSimDstTests =
       // is to force compaction to run again and again over one trace, not
       // just once, so this is where the "sees across any number of
       // rounds" guarantee actually gets exercised.
-      let aggressivePolicy : TweakLog.RetentionPolicy = { UndoWindow = 1; MaxEvents = 2; MaxBytes = 100_000L }
+      let aggressivePolicy : TweakLog.RetentionPolicy = { UndoWindow = 1; MaxEvents = 2; MaxBytes = TestMagnitudes.tweakLogByteBudget }
 
       let aggressiveSettings =
         { TweakSim.defaultSettings with
