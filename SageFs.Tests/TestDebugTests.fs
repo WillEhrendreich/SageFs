@@ -223,6 +223,11 @@ let tests =
           reason |> Expect.stringContains "says what to change" "ptrace_scope=0"
           reason |> Expect.stringContains "says what happened" "errno 1"
         | AttachAccess.Open -> failtest "a refused naming must not read as open"
+        match attachAccess YamaScope.DescendantsOrNamed (fun () -> PtracerNaming.CouldNotCall "no libc") with
+        | AttachAccess.Blocked reason ->
+          reason |> Expect.stringContains "says what to change" "ptrace_scope=0"
+          reason |> Expect.stringContains "says why" "no libc"
+        | AttachAccess.Open -> failtest "a call that could not be made must not read as open"
 
       testCase "WHY: scopes 2 and 3 are blocked with what to do about it, and the host does not try to fix them" <| fun _ ->
         let naming () : PtracerNaming = failtest "the host cannot fix this scope, so it must not try"

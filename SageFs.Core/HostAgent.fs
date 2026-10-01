@@ -397,6 +397,8 @@ module TestDebug =
   type PtracerNaming =
     | Named
     | Refused of errno: int
+    /// The call itself could not be made (no such library or entry point on this libc).
+    | CouldNotCall of reason: string
 
   /// Whether a debugger can attach, given Yama's scope. At scope 1 the host names any process as allowed to trace it
   /// (`naming` runs that, and only then), which is the one case where the host can open the door itself.
@@ -412,6 +414,12 @@ module TestDebug =
           sprintf
             "kernel.yama.ptrace_scope is 1 and the host could not allow the debugger in (errno %d). Run `sudo sysctl kernel.yama.ptrace_scope=0`, or start the debugger as root."
             errno
+        )
+      | PtracerNaming.CouldNotCall reason ->
+        AttachAccess.Blocked(
+          sprintf
+            "kernel.yama.ptrace_scope is 1 and the host could not ask the kernel to allow the debugger in (%s). Run `sudo sysctl kernel.yama.ptrace_scope=0`, or start the debugger as root."
+            reason
         )
     | YamaScope.AdminOnly ->
       AttachAccess.Blocked
@@ -460,9 +468,13 @@ module TestDebug =
       OpenForAttach =
         fun () ->
           attachAccess (readYamaScope ()) (fun () ->
-            match Native.prctl(PrSetPtracer, UIntPtr.MaxValue, UIntPtr.Zero, UIntPtr.Zero, UIntPtr.Zero) with
-            | 0 -> PtracerNaming.Named
-            | _ -> PtracerNaming.Refused(System.Runtime.InteropServices.Marshal.GetLastWin32Error()))
+            try
+              match Native.prctl(PrSetPtracer, UIntPtr.MaxValue, UIntPtr.Zero, UIntPtr.Zero, UIntPtr.Zero) with
+              | 0 -> PtracerNaming.Named
+              | _ -> PtracerNaming.Refused(System.Runtime.InteropServices.Marshal.GetLastWin32Error())
+            with
+            | :? DllNotFoundException as ex -> PtracerNaming.CouldNotCall ex.Message
+            | :? EntryPointNotFoundException as ex -> PtracerNaming.CouldNotCall ex.Message)
       CloseForAttach =
         fun () ->
           match OperatingSystem.IsLinux() with
