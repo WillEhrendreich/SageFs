@@ -9,15 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 1, Next 15, Later 17, Exploring 16. Already built: 7.
-
-## Now
-
-_Being built right now. Days to a few weeks._
-
-### Hot reload
-
-- **The REPL says when it is behind.** After a save is patched into your running app, the REPL, the live bindings and the live tests can still be looking at the old code, and nothing tells you. I'm making that a named state every surface shows, and then I'll see whether refreshing the REPL host for you is cheap enough to do. ([how-hot-reload-works.md](how-hot-reload-works.md))
+On the page today: Now 0, Next 16, Later 17, Exploring 16. Already built: 8.
 
 ## Next
 
@@ -31,6 +23,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 ### Hot reload
 
 - **A REPL eval changes the running app.** An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. The other grafts FSI's own IL into a delta, and in a spike that worked and was served in milliseconds, but it isn't wired through a real worker and it has sharp edges. I'm building the write-to-source route first because it also keeps your change, then the faster one behind a flag. ([how-hot-reload-works.md](how-hot-reload-works.md))
+- **Level the REPL after a patch without losing it.** Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. I'd make the daemon re-fetch maps and discovery after any host swap and check the REPL is idle and empty first, then do it for you. ([decisions.md](decisions.md), [how-hot-reload-works.md](how-hot-reload-works.md))
 - **Nudge a value in the running app.** The engine for dragging a value in a running app and writing the result back to the source file is built and tested, with addressing that survives a rename and an undoable history. Nothing in the dashboard or the editors calls it yet, so today you can't use it. ([decisions.md](decisions.md))
 - **Callers in other files follow a signature change.** When a save re-signs a function, a caller in another file keeps calling the old method until you save that file too. The build wouldn't pass until you did, so the window is short, but the old behavior runs in it. A cross-file check of who calls what would close it. ([hot-reload.md](hot-reload.md), [decisions.md](decisions.md))
 
@@ -146,6 +139,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 
 ### Hot reload
 
+- **The REPL says when it is behind.** After a save is patched into your running app, the REPL and the live tests still run the build from before it. Nothing used to say so. Now the session carries a named state, and `get_session_status`, `list_sessions`, `send_fsharp_code`, `run_tests` and the dashboard card all say the REPL is behind, which declarations changed, and what bringing it level costs. Code: [`SageFs.Core/SessionManager.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SessionManager.fs)
 - **Saves to run_app apps patch in place.** A save to an app you started with run_app is handed to the runtime as a metadata delta, so the process keeps its state. On the test fixture a save was served in 1.8 to 2.6 seconds against 6 to 8.5 for the restart it replaced, and `SAGEFS_METADATA_DELTA=off` puts the old behavior back. Code: [`SageFs.Host/RunAppDelta.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Host/RunAppDelta.fs)
 - **Generic functions patch in every instantiation.** A save to a generic function reaches every instantiation the runtime compiled, including a float or struct first used after the save. If your code calls MakeGenericMethod anywhere, a save to a generic function still restarts and names why. Code: [`SageFs.Core/Middleware/HotReloadCore.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/HotReloadCore.fs)
 - **Hot reload save times are measured.** A test tier times saves against a real running app and fails if the p95 drifts. It's one machine and one small app, and I have no Microsoft figure to set it against. Code: [`SageFs.Tests/HotReloadLatency.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Tests/HotReloadLatency.fs)

@@ -29,7 +29,7 @@ let items : Item list =
     item "repl-says-when-behind" "The REPL says when it is behind" HotReload Now
       (landmark "SageFs.Core/SessionManager.fs" "ReplFreshness")
       [ "docs/how-hot-reload-works.md" ]
-      "After a save is patched into your running app, the REPL, the live bindings and the live tests can still be looking at the old code, and nothing tells you. I'm making that a named state every surface shows, and then I'll see whether refreshing the REPL host for you is cheap enough to do."
+      "After a save is patched into your running app, the REPL and the live tests still run the build from before it. Nothing used to say so. Now the session carries a named state, and `get_session_status`, `list_sessions`, `send_fsharp_code`, `run_tests` and the dashboard card all say the REPL is behind, which declarations changed, and what bringing it level costs."
 
     item "agent-landings-reach-the-running-app" "An agent's landed work reaches your running app" Agents Now
       (landmark "SageFs.Core/Features/TrunkFollow.fs" "step")
@@ -72,6 +72,11 @@ let items : Item list =
       NoLandmarkYet
       [ "docs/how-hot-reload-works.md" ]
       "An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. The other grafts FSI's own IL into a delta, and in a spike that worked and was served in milliseconds, but it isn't wired through a real worker and it has sharp edges. I'm building the write-to-source route first because it also keeps your change, then the faster one behind a flag."
+
+    item "level-the-repl-without-losing-it" "Level the REPL after a patch without losing it" HotReload Next
+      NoLandmarkYet
+      [ "docs/decisions.md"; "docs/how-hot-reload-works.md" ]
+      "Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. I'd make the daemon re-fetch maps and discovery after any host swap and check the REPL is idle and empty first, then do it for you."
 
     item "live-tweak-front-door" "Nudge a value in the running app" HotReload Next
       NoLandmarkYet
