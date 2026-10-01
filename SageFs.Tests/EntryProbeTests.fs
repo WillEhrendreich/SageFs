@@ -105,7 +105,7 @@ let tests =
         statusOf reading silent.Id |> Expect.equal "the one that did not" ProbeStatus.NotEntered
       }
 
-      testCase "WHY — committing only the OLDEST probe of a save supersedes the earlier saves' probes and leaves the save's own other probes, which is how several closures of one declaration are watched" <| fun _ ->
+      testCase "WHY - committing only the OLDEST probe of a save supersedes the earlier saves' probes and leaves the save's own other probes, which is how several closures of one declaration are watched" <| fun _ ->
         let registry = ProbeRegistry()
         let earlier = registry.Allocate "App.routes"
         let first = registry.Allocate "App.routes"
@@ -146,7 +146,7 @@ let tests =
           stub.GetParameters() |> Array.map _.ParameterType |> Expect.equal "same parameters" [| typeof<string>; typeof<string> |]
           stub.Invoke(null, [| box "a"; box "b" |]) |> Expect.equal "arguments reach the target in order" (box "a|b")
 
-      testCase "WHY — an instance member's stub takes the object first, so a detour from one object's method passes the object straight through" <| fun _ ->
+      testCase "WHY - an instance member's stub takes the object first, so a detour from one object's method passes the object straight through" <| fun _ ->
         let probe = ProbeRegistry.Shared.Allocate "ProbeInstance.Say"
         let target = typeof<ProbeInstance>.GetMethod "Say"
         match stubFor probe target with
@@ -158,7 +158,7 @@ let tests =
           |> Expect.equal "the member ran against the object it was handed" (box "hello world")
           statusOf (ProbeRegistry.Shared.Read [ probe.Id ]) probe.Id |> Expect.equal "called, so entered" ProbeStatus.Entered
 
-      testCase "WHY — a generic member gets no stub, because only the instantiations that already ran could be reached" <| fun _ ->
+      testCase "WHY - a generic member gets no stub, because only the instantiations that already ran could be reached" <| fun _ ->
         let probe = ProbeRegistry.Shared.Allocate "ProbeInstance.Echo"
         match stubFor probe (typeof<ProbeInstance>.GetMethod "Echo") with
         | Result.Ok _ -> failtest "a generic method must not be given a stub"

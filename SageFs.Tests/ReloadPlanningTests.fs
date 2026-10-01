@@ -98,7 +98,7 @@ let planReloadTests =
       | ReloadPlan.PatchKeepingState ([], LiveState.Redefined d, []) -> d.Name |> Expect.equal "getHome waits on the app's evidence" "getHome"
       | other -> failtestf "expected getHome to be planned as a redefinition, got %A" other
 
-    testCase "WHY — ReloadPlanning.planReload — a function signature edit is patched in as a new method because the callers saved with it are what the running app is moved onto, and the old method stays for whatever still holds it" <| fun _ ->
+    testCase "WHY - ReloadPlanning.planReload - a function signature edit is patched in as a new method because the callers saved with it are what the running app is moved onto, and the old method stays for whatever still holds it" <| fun _ ->
       plan (replace "let render (items: TodoItem list) =" "let render (title: string) (items: TodoItem list) =" baselineSource)
       |> patchedNames |> Expect.equal "render, with its new signature" [ "render" ]
 
@@ -106,23 +106,23 @@ let planReloadTests =
       plan (replace "  0\n" "  1\n" baselineSource)
       |> restartChanges |> Expect.equal "main changed" [ ReloadChange.EntryPointChanged ]
 
-    testCase "WHY — ReloadPlanning.planReload — removing a function leaves the running app as it was because the old one is still there for whatever holds it, and what stopped using it is saved in the same breath" <| fun _ ->
+    testCase "WHY - ReloadPlanning.planReload - removing a function leaves the running app as it was because the old one is still there for whatever holds it, and what stopped using it is saved in the same breath" <| fun _ ->
       plan (replace "let render (items: TodoItem list) =\n  sprintf \"%d remaining\" items.Length\n" "" baselineSource)
       |> patchedNames |> Expect.isEmpty "nothing to patch and nothing to restart"
 
-    testCase "WHY — ReloadPlanning.planReload — removing the entry point still requires a restart because it only runs at startup" <| fun _ ->
+    testCase "WHY - ReloadPlanning.planReload - removing the entry point still requires a restart because it only runs at startup" <| fun _ ->
       plan (replace "[<EntryPoint>]\nlet main args =\n  0\n" "" baselineSource)
       |> restartChanges |> Expect.equal "main removed" [ ReloadChange.EntryPointChanged ]
 
-    testCase "WHY — ReloadPlanning.planReload — a new type is patched in because it is defined in FSI and the saved code that uses it is patched to call it" <| fun _ ->
+    testCase "WHY - ReloadPlanning.planReload - a new type is patched in because it is defined in FSI and the saved code that uses it is patched to call it" <| fun _ ->
       plan (baselineSource + "\ntype Extra = { Note: string }\n")
       |> patchedNames |> Expect.equal "the new type" [ "Extra" ]
 
-    testCase "WHY — ReloadPlanning.planReload — a new value is patched in for the same reason as a new function" <| fun _ ->
+    testCase "WHY - ReloadPlanning.planReload - a new value is patched in for the same reason as a new function" <| fun _ ->
       plan (baselineSource + "\nlet label = \"todo\"\n")
       |> patchedNames |> Expect.equal "the new value" [ "label" ]
 
-    testCase "WHY — ReloadPlanning.planReload — a new bare expression still requires a restart because it runs at startup" <| fun _ ->
+    testCase "WHY - ReloadPlanning.planReload - a new bare expression still requires a restart because it runs at startup" <| fun _ ->
       plan (baselineSource + "\nprintfn \"hello\"\n")
       |> restartChanges |> Expect.equal "startup code" [ ReloadChange.StartupCodeChanged ]
 
@@ -233,7 +233,7 @@ let typeShapeAndLambdaTests =
     // The edit is inside the value's lambda, so the planner takes it as a closure patch (the value is not
     // redefined, so there is no "the value changed" to report). The patch is the value written out as a
     // function, and compiling it still needs the private function its initializer calls, which FSI can't reach.
-    testCase "WHY — ReloadPlanning.planReload — a lambda edit in a value whose initializer calls a private function still restarts, because FSI can't reach the private function to compile the patch" <| fun _ ->
+    testCase "WHY - ReloadPlanning.planReload - a lambda edit in a value whose initializer calls a private function still restarts, because FSI can't reach the private function to compile the patch" <| fun _ ->
       planFor "  fun () -> computedAtStartup" "  fun () -> computedAtStartup + \"!\""
       |> restartChanges
       |> Expect.equal "the private function the patch can't reach"
@@ -275,11 +275,11 @@ let confirmPatchTests =
 
     let resigned = { render with Header = "let render (title: string) (items: TodoItem list)"; Text = "let render (title: string) (items: TodoItem list) = title" }
 
-    testCase "WHY — ReloadPlanning.confirmPatch — a function whose signature changed needs no detour because it is a new method, and the callers saved with it are what the app is moved onto" <| fun _ ->
+    testCase "WHY - ReloadPlanning.confirmPatch - a function whose signature changed needs no detour because it is a new method, and the callers saved with it are what the app is moved onto" <| fun _ ->
       confirmPatch before [ resigned ] []
       |> Expect.equal "applied" PatchOutcome.Applied
 
-    testCase "WHY — ReloadPlanning.confirmPatchLanding — an added function is applied and the re-pointed caller is what is watched, because only the caller has a probe" <| fun _ ->
+    testCase "WHY - ReloadPlanning.confirmPatchLanding - an added function is applied and the re-pointed caller is what is watched, because only the caller has a probe" <| fun _ ->
       let caller = { render with Name = "caller"; Header = "let caller ()"; Text = "let caller () = 1" }
       let callerBefore = { before with Decls = before.Decls @ [ caller ] }
       let watched, outcome =
@@ -287,12 +287,12 @@ let confirmPatchTests =
       watched |> List.map _.Name |> Expect.equal "the caller" [ "caller" ]
       outcome |> Expect.equal "both applied, neither seen running yet" (Outcome.PatchPending (2, 2, []))
 
-    testCase "WHY — ReloadPlanning.confirmPatchLanding — a save that only adds is watched with no probe, so it ends never-entered when nothing calls it" <| fun _ ->
+    testCase "WHY - ReloadPlanning.confirmPatchLanding - a save that only adds is watched with no probe, so it ends never-entered when nothing calls it" <| fun _ ->
       let watched, outcome = confirmPatchLanding before [ helper ] [] []
       watched |> List.map _.Name |> Expect.equal "the added function" [ "helper" ]
       outcome |> Expect.equal "applied, nothing has run it" (Outcome.PatchPending (1, 1, []))
 
-    testCase "WHY — ReloadPlanning.confirmPatchLanding — a re-signed function is applied, not missed, because there was no compiled original to reach" <| fun _ ->
+    testCase "WHY - ReloadPlanning.confirmPatchLanding - a re-signed function is applied, not missed, because there was no compiled original to reach" <| fun _ ->
       let _, outcome = confirmPatchLanding before [ resigned ] [] []
       outcome |> Expect.equal "applied" (Outcome.PatchPending (1, 1, []))
   ]
@@ -647,7 +647,7 @@ let planReloadPropertyTests =
            Set.isSubset reasonsBefore reasonsAfter && reasonsAfter.Contains (expectedChangeFor target))
 
     testPropertyWithConfig config
-      "WHY — ReloadPlanning.planReload — removing a declaration that runs at startup requires a restart naming it, and removing any other leaves the running app as it was, because the old one is still there for whatever holds it"
+      "WHY - ReloadPlanning.planReload - removing a declaration that runs at startup requires a restart naming it, and removing any other leaves the running app as it was, because the old one is still there for whatever holds it"
     <| Prop.forAll
          (Arb.fromGen (gen {
             let! file = genUniqueFile

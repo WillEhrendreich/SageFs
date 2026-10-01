@@ -1031,24 +1031,31 @@ let private instanceFields (t: Type) : FieldInfo list =
 
 let private describeField (f: FieldInfo) = sprintf "%s: %s" f.Name f.FieldType.Name
 
-/// None when code compiled for `newer` can run on an object of `older`; otherwise what is different.
+/// Whether code compiled for one class can run on an object of another.
+[<RequireQualifiedAccess>]
+type LayoutFit =
+  /// It can: the two are laid out the same.
+  | SameLayout
+  /// It cannot, and this is what is different.
+  | Differs of detail: string
+
 /// Code compiled for one class reads an object of another by field offset, so the two have to be
 /// laid out the same: the same base, and the same fields, in the same order, of the same types.
-let layoutDifference (older: Type) (newer: Type) : string option =
+let layoutFit (older: Type) (newer: Type) : LayoutFit =
   let shape (t: Type) = instanceFields t |> List.map (fun f -> f.Name, f.FieldType)
   match older.IsGenericTypeDefinition || newer.IsGenericTypeDefinition, older.BaseType = newer.BaseType with
-  | true, _ -> Some "it is generic"
-  | _, false -> Some(sprintf "its base type is %s, not %s" (string newer.BaseType) (string older.BaseType))
-  | false, true when shape older = shape newer -> None
+  | true, _ -> LayoutFit.Differs "it is generic"
+  | _, false -> LayoutFit.Differs(sprintf "its base type is %s, not %s" (string newer.BaseType) (string older.BaseType))
+  | false, true when shape older = shape newer -> LayoutFit.SameLayout
   | false, true ->
     let wasFields = instanceFields older |> List.map describeField
     let nowFields = instanceFields newer |> List.map describeField
     let added = nowFields |> List.filter (fun f -> not (List.contains f wasFields))
     let lost = wasFields |> List.filter (fun f -> not (List.contains f nowFields))
     match added, lost with
-    | _ :: _, [] -> Some(sprintf "it now holds %s" (String.concat ", " added))
-    | [], _ :: _ -> Some(sprintf "it no longer holds %s" (String.concat ", " lost))
-    | _ -> Some "its fields are different"
+    | _ :: _, [] -> LayoutFit.Differs(sprintf "it now holds %s" (String.concat ", " added))
+    | [], _ :: _ -> LayoutFit.Differs(sprintf "it no longer holds %s" (String.concat ", " lost))
+    | _ -> LayoutFit.Differs "its fields are different"
 
 /// The instance methods two classes both declare with the same signature, older paired with newer.
 let private sharedInstanceMethods (older: Type) (newer: Type) : (MethodInfo * MethodInfo) list =
@@ -1105,8 +1112,9 @@ let private planClosures (request: ClosureRepoint) (oldTypes: Type list) (newTyp
         | _ ->
           List.zip group.Older group.Newer
           |> List.tryPick (fun (o, n) ->
-            layoutDifference o.Class n.Class
-            |> Option.map (fun why -> sprintf "in the lambda at line %d, %s" (request.WasStartLine + group.Lambda.WasFirst) why)))
+            match layoutFit o.Class n.Class with
+            | LayoutFit.SameLayout -> None
+            | LayoutFit.Differs why -> Some(sprintf "in the lambda at line %d, %s" (request.WasStartLine + group.Lambda.WasFirst) why)))
     match problems with
     | first :: _ -> ClosurePlan.Unmatched first
     | [] ->
@@ -1253,7 +1261,7 @@ let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newM
     // The new member is handed an object of the OLD type, so it is only the same member when the two types
     // are laid out alike. When they are not, the save is refused by name (`refusals` in `handleNewAsmFromRepl`).
     && (existingMethod.MethodInfo.IsStatic
-        || (layoutDifference existingMethod.MethodInfo.DeclaringType newMethod.MethodInfo.DeclaringType).IsNone)
+        || layoutFit existingMethod.MethodInfo.DeclaringType newMethod.MethodInfo.DeclaringType = LayoutFit.SameLayout)
   with
   | :? TypeLoadException as ex ->
     logger.LogDebug(
@@ -1375,8 +1383,9 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave:
             | false, true -> None
             | false, false ->
               try
-                layoutDifference held.DeclaringType newest.MethodInfo.DeclaringType
-                |> Option.map (fun detail -> DetourRefusal.InstanceLayoutChanged(held.DeclaringType.Name, detail))
+                match layoutFit held.DeclaringType newest.MethodInfo.DeclaringType with
+                | LayoutFit.SameLayout -> None
+                | LayoutFit.Differs detail -> Some(DetourRefusal.InstanceLayoutChanged(held.DeclaringType.Name, detail))
               with :? TypeLoadException -> None
           | _ -> None)
         |> List.distinct

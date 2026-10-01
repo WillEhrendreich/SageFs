@@ -101,7 +101,7 @@ let allTests =
         |> Array.exists (fun a -> a = "--multiemit-")
         |> Expect.isTrue "--multiemit- must always be present (even when hotReload=false) to enable cross-submission type+module pattern"
 
-      testCase "WHY — solutionToFsiArgs — hot reload compiles patches unoptimized because the app was built that way, and a patch of another shape cannot be matched closure for closure" <| fun _ ->
+      testCase "WHY - solutionToFsiArgs - hot reload compiles patches unoptimized because the app was built that way, and a patch of another shape cannot be matched closure for closure" <| fun _ ->
         solutionToFsiArgs quietLogger false true emptySolution
         |> Array.filter (fun a -> a = "--optimize-")
         |> Array.length

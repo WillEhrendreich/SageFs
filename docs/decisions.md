@@ -315,7 +315,7 @@ an async was refused as a different shape, and a lambda capturing a constant loo
 One refusal anywhere in a save stops every detour of it. The closures are matched first (nothing is detoured while
 matching), and only if every one fits does anything move, so a restart never leaves the app half updated.
 
-Evidence: `SageFs.Core/Middleware/HotReloadCore.fs` (`planClosureWork`, `applyClosureWork`, `layoutDifference`),
+Evidence: `SageFs.Core/Middleware/HotReloadCore.fs` (`planClosureWork`, `applyClosureWork`, `layoutFit`),
 `SageFs.Core/Features/ReloadPlanning.fs` (`lambdaDiff`), and the real-app rows in `SageFs.Tests/HotReloadParityTests.fs`
 (`inlineLambda`, `inlineCapture`, `taskLambda`, `asyncLambda`, `heldClosure`, `inlineNewCapture`) on net10.0 and
 net11.0. The pure rules are in `SageFs.Tests/HotReloadClosureTests.fs`.

@@ -59,7 +59,7 @@ let patchedNNResidualTests =
     // A new declaration used to be a restart (NoEffect, NewDeclaration). It no longer is: it is defined in FSI,
     // and the saved code that uses it is patched to call it. What has not changed is the pin: such a save is never
     // `Patched`, because nothing in the running app has run it. It is applied, and it ends never-entered.
-    testCase "WHY — a save that adds one new declaration and changes nothing else is applied, never Patched, and ends never-entered when nothing runs it" <| fun _ ->
+    testCase "WHY - a save that adds one new declaration and changes nothing else is applied, never Patched, and ends never-entered when nothing runs it" <| fun _ ->
       let before = declsOf baselineSource
       let current = declsOf (baselineSource + "\nlet helper (x: int) = x + 1\n")
       let patched = patchedDecls before current
@@ -75,7 +75,7 @@ let patchedNNResidualTests =
         | other -> failtestf "nothing ran helper, so the save must end never-entered, got %A" other
       | other -> failtestf "the added function has to be watched, got %A" other
 
-    testCase "WHY — the wire is never told Patched for a declaration nothing has run" <| fun _ ->
+    testCase "WHY - the wire is never told Patched for a declaration nothing has run" <| fun _ ->
       let before = declsOf baselineSource
       let current = declsOf (baselineSource + "\nlet helper (x: int) = x + 1\n")
       let outcome = confirmAllReached before (patchedDecls before current) []
@@ -88,7 +88,7 @@ let patchedNNResidualTests =
     // WHY — a save that BOTH changes an existing function and adds a new
     // one is applied as 2 of 2, and only the changed function is WATCHED. The added one has no probe and no
     // running code enters it until a caller does, so the caller's probe is what can make the save Patched.
-    testCase "WHY — a save that changes one function and adds another watches the changed one, because the added one has nothing to watch" <| fun _ ->
+    testCase "WHY - a save that changes one function and adds another watches the changed one, because the added one has nothing to watch" <| fun _ ->
       let before = declsOf baselineSource
       let edited =
         baselineSource.Replace(
@@ -99,7 +99,7 @@ let patchedNNResidualTests =
       let patched = patchedDecls before current
       patched |> List.map _.Name |> List.sort |> Expect.equal "both candidates are queued" [ "helper"; "render" ]
       // Only `render` existed before, and only `render` was actually
-      // detoured — Harmony has nothing to redirect `helper` onto. `helper` is applied by being defined; `render`
+      // detoured - Harmony has nothing to redirect `helper` onto. `helper` is applied by being defined; `render`
       // is what is watched, and it is what makes the save Patched once it has run.
       let watched, outcome = confirmPatchLanding before patched [ "Demo.Web.Program.render" ] [ "Demo.Web.Program.render" ]
       watched |> List.map _.Name |> Expect.equal "only the re-pointed function is watched" [ "render" ]
