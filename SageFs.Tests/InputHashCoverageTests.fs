@@ -25,7 +25,7 @@ let private threeFileMap : InstrumentationMap =
          mkSlot "C.fs" 1 |]
     TotalProbes = 4
     TrackerTypeName = "__SageFsCoverage"
-    HitsFieldName = "Hits" }
+    HitsFieldName = "Hits"; Source = MapSource.none }
 
 /// Hits slot 0 (A.fs) and slot 2 (B.fs); slot 1 (A.fs, again) and slot 3
 /// (C.fs) are not hit.
@@ -134,7 +134,7 @@ let ofCoverageTests =
         { Slots = [| mkSlot "Z.fs" 1 |]
           TotalProbes = 1
           TrackerTypeName = "__SageFsCoverage"
-          HitsFieldName = "Hits" }
+          HitsFieldName = "Hits"; Source = MapSource.none }
       let singleBitmap = CoverageBitmap.ofBoolArray [| true |]
       let onlyA : CoverageBitmap = CoverageBitmap.ofBoolArray [| true; false; false; false |]
 

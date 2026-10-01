@@ -371,6 +371,7 @@ let protocolSnapshotTests = testList "Protocol Snapshots" [
         Line = 42; EndLine = 0; EndColumn = 0
         Detail = CoverageStatus.Covered(2, CoverageHealth.AllPassing)
         CoveringTestIds = [| TestId.TestId "t1"; TestId.TestId "t2" |]
+        CoveringTests = [||]
         BranchCoverage = None
       }
       let root = serAndParse cla
@@ -596,7 +597,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
     testCase "partial coverage returns PartiallyCovered" <| fun () ->
       let map : InstrumentationMap = {
         Slots = [| mkSp "f.fs" 10 0 0; mkSp "f.fs" 10 10 1; mkSp "f.fs" 10 20 2 |]
-        TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h"
+        TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none
       }
       let bm = CoverageBitmap.ofBoolArray [| true; false; true |]
       let bms = Map.ofList [ TestId.TestId "t1", bm ]
@@ -607,7 +608,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
     testCase "all probes hit returns FullyCovered" <| fun () ->
       let map : InstrumentationMap = {
         Slots = [| mkSp "f.fs" 10 0 0; mkSp "f.fs" 10 10 1 |]
-        TotalProbes = 2; TrackerTypeName = "t"; HitsFieldName = "h"
+        TotalProbes = 2; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none
       }
       let bm = CoverageBitmap.ofBoolArray [| true; true |]
       let bms = Map.ofList [ TestId.TestId "t1", bm ]
@@ -618,7 +619,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
     testCase "no probes hit returns NotCovered" <| fun () ->
       let map : InstrumentationMap = {
         Slots = [| mkSp "f.fs" 10 0 0; mkSp "f.fs" 10 10 1 |]
-        TotalProbes = 2; TrackerTypeName = "t"; HitsFieldName = "h"
+        TotalProbes = 2; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none
       }
       let bm = CoverageBitmap.ofBoolArray [| false; false |]
       let bms = Map.ofList [ TestId.TestId "t1", bm ]
@@ -629,7 +630,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
     testCase "multiple tests OR coverage together" <| fun () ->
       let map : InstrumentationMap = {
         Slots = [| mkSp "f.fs" 10 0 0; mkSp "f.fs" 10 10 1; mkSp "f.fs" 10 20 2 |]
-        TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h"
+        TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none
       }
       let bm1 = CoverageBitmap.ofBoolArray [| true; false; false |]
       let bm2 = CoverageBitmap.ofBoolArray [| false; false; true |]
@@ -645,7 +646,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
     testCase "no matching bitmaps returns empty" <| fun () ->
       let map : InstrumentationMap = {
         Slots = [| mkSp "f.fs" 10 0 0 |]
-        TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h"
+        TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none
       }
       CoverageBitmap.computeLineCoverageForFile "f.fs" [| map |] Map.empty
       |> Expect.isEmpty "empty"
@@ -653,7 +654,7 @@ let branchCoverageTests = testList "Branch Coverage Wiring" [
     testCase "different file returns empty" <| fun () ->
       let map : InstrumentationMap = {
         Slots = [| mkSp "other.fs" 10 0 0 |]
-        TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h"
+        TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none
       }
       let bm = CoverageBitmap.ofBoolArray [| true |]
       let bms = Map.ofList [ TestId.TestId "t1", bm ]

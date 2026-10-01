@@ -626,7 +626,11 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
   psi.ArgumentList.Add(string (System.Diagnostics.Process.GetCurrentProcess().Id))
   psi.ArgumentList.Add("--no-resume")
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
-  psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
+  // Live testing does not need hot reload, and with it on a worker that restarts (a rebuild) replays the
+  // session's evals under value-read tracking, whose getter hook throws on the patched `Hello.tests`
+  // (`ValueReadTracking.readerIdOf` reads `MetadataToken` of a dynamic method): discovery then finds zero
+  // tests. Hot reload has its own tier; this one measures and gates live testing.
+  psi.Environment["SAGEFS_HOT_RELOAD"] <- "false"
   let daemonOutLog = Path.Combine(dataDir, "daemon.stdout.log")
   let daemonErrLog = Path.Combine(dataDir, "daemon.stderr.log")
   psi.RedirectStandardOutput <- true
@@ -832,11 +836,22 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
           try
             Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
             Environment.SetEnvironmentVariable("SAGEFS_LT_FIXTURE_DIR", sampleDir)
+            Environment.SetEnvironmentVariable("SAGEFS_LT_MCP_PORT", string mcpPort)
             let ltArgv =
               cliArgs
               |> Array.filter (fun a -> a <> "--integration-lt")
+            // One daemon, one session, one Hello.fs: everything that edits it runs in sequence. The
+            // journeys come first (they need the baseline run's coverage untouched by anything else),
+            // the browser tests next, and the latency measurement last, from a settled session.
+            let ltTests =
+              Expecto.Tests.testSequenced (
+                Expecto.Tests.testList
+                  "Live testing against the FromCSharp sample"
+                  [ LiveTestingJourneyTests.journeyTests
+                    LiveTestingBrowserTests.tests
+                    LiveTestingLatencyTests.latencyTests ])
             let result =
-              SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-lt" ltArgv LiveTestingBrowserTests.tests
+              SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-lt" ltArgv ltTests
             exitWith result
           finally
             restoreHello ()

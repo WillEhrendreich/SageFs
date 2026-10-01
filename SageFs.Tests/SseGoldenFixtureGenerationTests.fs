@@ -136,7 +136,7 @@ let private mkCoverageBatch () : TestResultsBatchPayload =
       Category = TestCategory.Unit
       CurrentPolicy = RunPolicy.OnEveryChange
       Status = TestRunStatus.Passed(TimeSpan.FromMilliseconds durationMs)
-      PreviousStatus = TestRunStatus.Running }
+      PreviousStatus = TestRunStatus.Running; Provenance = ResultProvenance.Compiled }
   { Generation = RunGeneration 1
     Freshness = ResultFreshness.Fresh
     Completion = BatchCompletion.Complete(2, 2)

@@ -82,7 +82,7 @@ let markAllStaleTests = testList "MarkAllStale" [
         Category = tc.Category
         CurrentPolicy = RunPolicy.OnEveryChange
         Status = TestRunStatus.Stale
-        PreviousStatus = TestRunStatus.Passed (ts 5.0)
+        PreviousStatus = TestRunStatus.Passed (ts 5.0); Provenance = ResultProvenance.Compiled
       }
       let payload =
         TestResultsBatchPayload.create

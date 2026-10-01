@@ -8,7 +8,7 @@ open SageFs.McpTools
 
 let private mkCovAnn line endLine endCol status testIds branchCov : CoverageLineAnnotation =
   { Line = line; EndLine = endLine; EndColumn = endCol
-    Detail = status; CoveringTestIds = testIds; BranchCoverage = branchCov }
+    Detail = status; CoveringTestIds = testIds; CoveringTests = [||]; BranchCoverage = branchCov }
 
 let private mkFileAnns path covAnns : FileAnnotations =
   { FilePath = path; TestAnnotations = [||]; CoverageAnnotations = covAnns

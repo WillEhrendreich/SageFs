@@ -8,7 +8,8 @@ open SageFs.Vscode.FileAnnotationCoverage
 let annotation health branchCoverage =
   { CoverageAnnotation.Line = 42
     Health = health
-    BranchCoverage = branchCoverage }
+    BranchCoverage = branchCoverage
+    CoveringTests = [] }
 
 let tests =
   testList "VS Code branch coverage contract" [

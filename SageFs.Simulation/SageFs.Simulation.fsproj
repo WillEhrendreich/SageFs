@@ -98,6 +98,13 @@
         <Compile Include="GuardSim.fs" />
         <Compile Include="GuardSimInvariants.fs" />
         <Compile Include="GuardSimGenerators.fs" />
+        <!-- Build confirmation DST: folds the real BuildConfirmation decision through evaluated
+             runs, newer edits, quiet windows, builds that finish late or fail or hang, and
+             deadlines firing in every order; twins apply stale answers, build without waiting
+             and swallow failures. -->
+        <Compile Include="BuildConfirmationSim.fs" />
+        <Compile Include="BuildConfirmationInvariants.fs" />
+        <Compile Include="BuildConfirmationGenerators.fs" />
         <!-- Rule 2 read-provenance DST: folds the real ValueReads classifier,
              ledger and save check through every interleaving of reads, the
              startup window closing, probes coming off and saves; twins put

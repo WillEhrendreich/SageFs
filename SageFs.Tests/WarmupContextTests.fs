@@ -472,15 +472,15 @@ let internalModuleOpenFilterTests =
   let coreTypes =
     // SageFs.Core is where WarmupReplayCache (internal) and Cohort (public) live.
     typeof<SageFs.Cohort.CohortCommand<string>>.Assembly.GetTypes()
-  testList "AppState.internalTopLevelModuleFullNames (roast-7 F7)" [
+  testList "OpenReplay.internalTopLevelModuleFullNames (roast-7 F7)" [
     test "WHY — an internal top-level module IS excluded, because opening it from the FSI session fails" {
-      AppState.internalTopLevelModuleFullNames coreTypes
+      SageFs.OpenReplay.internalTopLevelModuleFullNames coreTypes
       |> Set.contains "SageFs.WarmupReplayCache"
       |> Expect.isTrue "the internal module SageFs.WarmupReplayCache must be flagged for exclusion"
     }
 
     test "WHY — a PUBLIC top-level module is NOT excluded, because it opens fine and dropping it would break warmup" {
-      AppState.internalTopLevelModuleFullNames coreTypes
+      SageFs.OpenReplay.internalTopLevelModuleFullNames coreTypes
       |> Set.contains "SageFs.Cohort"
       |> Expect.isFalse "the public module SageFs.Cohort must NOT be excluded"
     }

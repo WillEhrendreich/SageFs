@@ -29,7 +29,7 @@ let private entry (tc: TestCase) (status: TestRunStatus) : TestStatusEntry =
     Category = tc.Category
     CurrentPolicy = RunPolicy.OnEveryChange
     Status = status
-    PreviousStatus = TestRunStatus.Detected }
+    PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled }
 
 let private activeModel () =
   let initial = SageFsModel.initial ()

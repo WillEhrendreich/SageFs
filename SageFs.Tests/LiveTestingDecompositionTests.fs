@@ -347,7 +347,7 @@ module TestStatusIndexTests =
       Origin = TestOrigin.ReflectionOnly
       Framework = TestFramework.Expecto; Category = TestCategory.Unit
       CurrentPolicy = RunPolicy.OnEveryChange
-      Status = status; PreviousStatus = TestRunStatus.Detected }
+      Status = status; PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled }
 
   /// TestStatusIndex.empty should be the zero element:
   /// no entries, no lookups, Materialized projection.
@@ -478,7 +478,7 @@ module LiveTestStateSubRecordTests =
       Origin = TestOrigin.ReflectionOnly
       Framework = TestFramework.Expecto; Category = TestCategory.Unit
       CurrentPolicy = RunPolicy.OnEveryChange
-      Status = status; PreviousStatus = TestRunStatus.Detected }
+      Status = status; PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled }
 
   let private mkTestCase' name =
     { Id = TestId.create name TestFramework.Expecto
@@ -603,7 +603,7 @@ module TestStatusIndexPropertyTests =
             Origin = TestOrigin.ReflectionOnly
             Framework = TestFramework.Expecto; Category = TestCategory.Unit
             CurrentPolicy = RunPolicy.OnEveryChange
-            Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected })
+            Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled })
         |> Array.ofList
       let idx = TestStatusIndex.fromEntries entries
       Map.count idx.Slots = entries.Length
@@ -621,7 +621,7 @@ module TestStatusIndexPropertyTests =
             Origin = TestOrigin.ReflectionOnly
             Framework = TestFramework.Expecto; Category = TestCategory.Unit
             CurrentPolicy = RunPolicy.OnEveryChange
-            Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected })
+            Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled })
         |> Array.ofList
       let idx = TestStatusIndex.fromEntries entries
       Map.count idx.Index = entries.Length
@@ -639,7 +639,7 @@ module TestStatusIndexPropertyTests =
             Origin = TestOrigin.ReflectionOnly
             Framework = TestFramework.Expecto; Category = TestCategory.Unit
             CurrentPolicy = RunPolicy.OnEveryChange
-            Status = (TestRunStatus.Passed TimeSpan.Zero); PreviousStatus = TestRunStatus.Detected })
+            Status = (TestRunStatus.Passed TimeSpan.Zero); PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled })
         |> Array.ofList
       let idx = TestStatusIndex.fromEntries entries
       idx.Slots
@@ -658,7 +658,7 @@ module TestStatusIndexPropertyTests =
             Origin = TestOrigin.ReflectionOnly
             Framework = TestFramework.Expecto; Category = TestCategory.Unit
             CurrentPolicy = RunPolicy.OnEveryChange
-            Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected })
+            Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled })
         |> Array.ofList
       let idx1 = TestStatusIndex.fromEntries entries
       let idx2 = TestStatusIndex.fromEntries idx1.Entries

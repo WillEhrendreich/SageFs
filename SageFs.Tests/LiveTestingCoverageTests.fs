@@ -1049,7 +1049,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
       { File = "A.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
       { File = "A.fs"; Line = 2; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 1 }
       { File = "B.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 2 }
-    |]; TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    |]; TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none } |]
     let mask = CoverageBitmap.buildFileMask "A.fs" maps
     CoverageBitmap.popCount mask |> Expect.equal "2 probes in A.fs" 2
     CoverageBitmap.isSet 0 mask |> Expect.isTrue "probe 0 (A.fs:1)"
@@ -1060,7 +1060,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
   test "buildFileMask with no matching file returns zero popcount" {
     let maps = [| { Slots = [|
       { File = "B.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
-    |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none } |]
     let mask = CoverageBitmap.buildFileMask "A.fs" maps
     CoverageBitmap.popCount mask |> Expect.equal "no probes" 0
   }
@@ -1070,7 +1070,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
       { File = "A.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
       { File = "A.fs"; Line = 2; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 1 }
       { File = "B.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 2 }
-    |]; TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    |]; TotalProbes = 3; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none } |]
     let t1 = mkTestId "ns" (TestFramework.Unknown "test_a")
     let t2 = mkTestId "ns" (TestFramework.Unknown "test_b")
     let bm1 = CoverageBitmap.ofBoolArray [| true; false; false |]
@@ -1085,7 +1085,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
   test "findCoverageAffected returns empty when no bitmaps exist" {
     let maps = [| { Slots = [|
       { File = "A.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
-    |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none } |]
     let affected = CoverageBitmap.findCoverageAffected "A.fs" maps Map.empty
     affected |> Array.isEmpty |> Expect.isTrue "no bitmaps = no coverage-based selection"
   }
@@ -1094,7 +1094,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
     let maps = [| { Slots = [|
       { File = "A.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
       { File = "A.fs"; Line = 2; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 1 }
-    |]; TotalProbes = 2; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    |]; TotalProbes = 2; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none } |]
     let t1 = mkTestId "ns" (TestFramework.Unknown "t1")
     let bm_wrong_size = CoverageBitmap.ofBoolArray [| true; false; true |]
     let bitmaps = Map.ofList [ t1, bm_wrong_size ]
@@ -1120,7 +1120,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
         SourceVersion = 0 }
     let maps = [| { Slots = [|
       { File = "Module.fs"; Line = 1; Column = 0; EndLine = 0; EndColumn = 0; BranchId = 0 }
-    |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h" } |]
+    |]; TotalProbes = 1; TrackerTypeName = "t"; HitsFieldName = "h"; Source = MapSource.none } |]
     let bm = CoverageBitmap.ofBoolArray [| true |]
     let state =
       { LiveTestState.empty with
@@ -1174,7 +1174,7 @@ let private mkTestSp file line col endLine endCol : SequencePoint =
   { File = file; Line = line; Column = col; EndLine = endLine; EndColumn = endCol; BranchId = 0 }
 
 let private mkTestMap (slots: SequencePoint array) : InstrumentationMap =
-  { Slots = slots; TotalProbes = slots.Length; TrackerTypeName = "T"; HitsFieldName = "H" }
+  { Slots = slots; TotalProbes = slots.Length; TrackerTypeName = "T"; HitsFieldName = "H"; Source = MapSource.none }
 
 [<Tests>]
 let rangeLookupTests = testList "FileAnnotations.projectWithCoverage range enrichment" [
@@ -1447,7 +1447,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
   test "InstrumentationMapsReady populates model maps" {
     let maps = [|
       { InstrumentationMap.Slots = [| { SequencePoint.File = "test.fs"; Line = 10; Column = 1; EndLine = 0; EndColumn = 0; BranchId = 0 } |]
-        TotalProbes = 1; TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits" }
+        TotalProbes = 1; TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits"; Source = MapSource.none }
     |]
     let model0 = (SageFsModel.initial())
     let model1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.InstrumentationMapsReady ("s1", maps))) model0
@@ -1475,7 +1475,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
     let sp = { SequencePoint.File = "src/MyFile.fs"; Line = 10; Column = 1; EndLine = 0; EndColumn = 0; BranchId = 0 }
     let imap = {
       InstrumentationMap.Slots = [| sp |]; TotalProbes = 1
-      TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits"
+      TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits"; Source = MapSource.none
     }
     let bitmap = CoverageBitmap.ofBoolArray [| true |]
     let state = {
@@ -1511,7 +1511,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
     let sp = { SequencePoint.File = "src/Other.fs"; Line = 5; Column = 1; EndLine = 0; EndColumn = 0; BranchId = 0 }
     let imap = {
       InstrumentationMap.Slots = [| sp |]; TotalProbes = 1
-      TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits"
+      TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits"; Source = MapSource.none
     }
     let state = {
       LiveTestState.empty with

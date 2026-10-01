@@ -366,12 +366,9 @@ let cleanStdout (raw: string) =
     | false -> ()
   sb.ToString()
 
-/// The one seam between the real, IO-backed `SessionPhase` and
-/// `EvalActorDecision.EvalPhase` (see SageFs.Core/EvalActorDecision.fs for
-/// the pure decision core this narrows into — `decide`, `EvalInput`,
-/// `EvalDecision`, and why that module is a standalone file rather than
-/// nested here). The only place a live `AppState` is looked at is to read
-/// the `SessionActivity` sitting next to it; it is never touched otherwise.
+/// The one seam between the IO-backed `SessionPhase` and the pure
+/// `EvalActorDecision.EvalPhase` (SageFs.Core/EvalActorDecision.fs, where
+/// `decide` lives). It reads only the `SessionActivity` beside the state.
 let phaseOf (phase: SessionPhase) : EvalActorDecision.EvalPhase =
   match phase with
   | Initializing _ -> EvalActorDecision.EvalPhase.Initializing
@@ -419,11 +416,6 @@ let evalFn (token: CancellationToken) =
 open System.Threading.Tasks
 open System.Threading
 open SageFs.OpenReplay
-
-/// Re-exported for backward compatibility — the tested surface used to live
-/// here; the implementation now lives in `SageFs.OpenReplay` alongside the
-/// rest of the pure open-replay decision core (see that file's header).
-let internalTopLevelModuleFullNames = OpenReplay.internalTopLevelModuleFullNames
 
 let internal resolveWarmupReplayPlan
   (logger: ILogger)
@@ -767,7 +759,6 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
         }
     logger.LogInfo (sprintf "  FSI session created in %dms, loading startup files..." sw.ElapsedMilliseconds)
     onProgress(1, 4, "FSI session created")
-
 
     // Chesterton's fence: evaluate the embedded base.fsx FIRST so the
     // feature-gate flags (_SageFsHotReload, _SageFsCompExpr) are bound before

@@ -3291,6 +3291,42 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       do! respond ctx result (Some "inactive")
     } :> Task
   ) |> ignore
+  // Scale controls (against Visual Studio's pause and its playlist/exclude set). Pause holds automatic runs
+  // back and keeps the session's evaluated code current; resume runs what went stale. The scope narrows
+  // what AUTOMATIC runs touch: an explicit run always runs what it asks for.
+  let dispatchLivePause (ctx: Microsoft.AspNetCore.Http.HttpContext) (pause: SageFs.Features.LiveTesting.LivePause) =
+    task {
+      let! targetSession = tryReadTargetSessionId ctx
+      match rctx.Dispatch with
+      | None -> do! jsonResponse ctx 503 {| success = false; error = "Elm loop not started" |}
+      | Some dispatch ->
+        dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.LivePauseChanged (targetSession, pause)))
+        do! jsonResponse ctx 200 {| success = true; pause = SageFs.Features.LiveTesting.LivePause.toWireValue pause |}
+    } :> Task
+  app.MapPost("/api/live-testing/pause", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    dispatchLivePause ctx SageFs.Features.LiveTesting.LivePause.Paused) |> ignore
+  app.MapPost("/api/live-testing/resume", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    dispatchLivePause ctx SageFs.Features.LiveTesting.LivePause.Live) |> ignore
+  app.MapPost("/api/live-testing/scope", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      use! json = readJsonBody ctx
+      let root = json.RootElement
+      let mode = tryGetJsonStringAliases root [ "mode" ] |> Option.defaultValue ""
+      let patterns =
+        match root.TryGetProperty "patterns" with
+        | true, items when items.ValueKind = System.Text.Json.JsonValueKind.Array ->
+          [ for item in items.EnumerateArray() -> item.GetString() ]
+        | _ -> []
+      let targetSession = tryGetJsonStringAliases root [ "sessionId"; "session_id"; "session" ]
+      match SageFs.Features.LiveTesting.TestScope.tryParse mode patterns, rctx.Dispatch with
+      | Error refusal, _ ->
+        do! jsonResponse ctx 400 {| success = false; error = SageFs.Features.LiveTesting.TestScope.describeRefusal refusal |}
+      | Ok _, None -> do! jsonResponse ctx 503 {| success = false; error = "Elm loop not started" |}
+      | Ok scope, Some dispatch ->
+        dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.LiveScopeChanged (targetSession, scope)))
+        do! jsonResponse ctx 200 {| success = true; scope = SageFs.Features.LiveTesting.TestScope.toWire scope |}
+    } :> Task
+  ) |> ignore
   app.MapPost("/api/live-testing/policy", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       use! json = readJsonBody ctx

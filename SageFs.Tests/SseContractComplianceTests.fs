@@ -71,7 +71,7 @@ let private mkTestResultsBatch (n: int) : TestResultsBatchPayload =
           Category = TestCategory.Unit
           CurrentPolicy = RunPolicy.OnEveryChange
           Status = TestRunStatus.Passed TestTimeouts.testElapsed
-          PreviousStatus = TestRunStatus.Passed TestTimeouts.testElapsed } |]
+          PreviousStatus = TestRunStatus.Passed TestTimeouts.testElapsed; Provenance = ResultProvenance.Compiled } |]
   { Generation = RunGeneration 1
     Freshness = ResultFreshness.Fresh
     Completion = BatchCompletion.Complete (n, n)
@@ -91,6 +91,7 @@ let private mkFileAnnotations () : FileAnnotations =
       [| { CoverageLineAnnotation.Line = 5; EndLine = 5; EndColumn = 40
            Detail = CoverageStatus.Covered (1, CoverageHealth.AllPassing)
            CoveringTestIds = [| TestId.TestId "t1" |]
+           CoveringTests = [||]
            BranchCoverage = None } |]
     InlineFailures = [||]
     CodeLenses = [||]

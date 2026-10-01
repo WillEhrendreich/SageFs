@@ -17,7 +17,7 @@ let private makeEntry (name: string) (status: TestRunStatus) : TestStatusEntry =
     Category = TestCategory.Unit
     CurrentPolicy = RunPolicy.OnEveryChange
     Status = status
-    PreviousStatus = TestRunStatus.Stale }
+    PreviousStatus = TestRunStatus.Stale; Provenance = ResultProvenance.Compiled }
 
 let private passEntry n  = makeEntry n (TestRunStatus.Passed TestTimeouts.reportedElapsed)
 let private failEntry n  = makeEntry n (TestRunStatus.Failed (TestFailure.AssertionFailed "boom", TestTimeouts.testElapsedOther))

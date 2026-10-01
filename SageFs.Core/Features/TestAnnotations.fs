@@ -56,12 +56,21 @@ type TestLineAnnotation = {
   Freshness: AnnotationFreshness
 }
 
+/// One test that runs a line, named so a hover can list it without a lookup.
+type CoveringTestRef = {
+  TestId: TestId
+  DisplayName: string
+}
+
 type CoverageLineAnnotation = {
   Line: int
   EndLine: int
   EndColumn: int
   Detail: CoverageStatus
   CoveringTestIds: TestId array
+  /// The tests whose own recorded coverage reaches this line (what Visual Studio calls
+  /// "N tests cover this"), in discovery order. Empty when no test has coverage recorded.
+  CoveringTests: CoveringTestRef array
   BranchCoverage: LineCoverage option
 }
 
@@ -368,6 +377,7 @@ module FileAnnotations =
               match Map.tryFind ca.Symbol g.SymbolToTests with
               | Some ids -> ids
               | None -> [||]
+          CoveringTests = [||]
           BranchCoverage = None })
       |> Array.sortBy (fun c -> c.Line)
     { FilePath = filePath
@@ -413,9 +423,31 @@ module FileAnnotations =
       match Map.tryFind (filePath, ca.Line) rangeLookup with
       | Some (endL, endC) -> { ca with EndLine = endL; EndColumn = endC }
       | None -> ca
+    // Which tests cover each line, from each test's OWN recorded coverage. When no test has coverage
+    // recorded for this file the annotation keeps what the dependency graph said (it is all there is).
+    let discoveredTests = cycleState.TestState.DiscoveredTests
+    let coveringByLine =
+      CoverageBitmap.coveringTestsByLine
+        filePath
+        allMaps
+        cycleState.TestState.TestCoverageBitmaps
+        (discoveredTests |> Array.map (fun t -> t.Id))
+    let displayNames = discoveredTests |> Array.map (fun t -> t.Id, t.DisplayName) |> Map.ofArray
+    let enrichWithCovering (ca: CoverageLineAnnotation) =
+      match Map.isEmpty coveringByLine with
+      | true -> ca
+      | false ->
+        let ids = Map.tryFind ca.Line coveringByLine |> Option.defaultValue [||]
+        { ca with
+            CoveringTestIds = ids
+            CoveringTests =
+              ids
+              |> Array.map (fun id ->
+                ({ TestId = id
+                   DisplayName = Map.tryFind id displayNames |> Option.defaultValue (TestId.value id) } : CoveringTestRef)) }
     let enrichWithBranch (anns: CoverageLineAnnotation array) =
       anns |> Array.map (fun ca ->
-        let ca' = enrichWithRange ca
+        let ca' = enrichWithRange ca |> enrichWithCovering
         match Map.tryFind ca'.Line lineCovMap with
         | Some lc -> { ca' with BranchCoverage = Some lc }
         | None -> ca')
@@ -439,7 +471,9 @@ module FileAnnotations =
               match Map.tryFind ca.Symbol cycleState.DepGraph.SymbolToTests with
               | Some ids -> ids
               | None -> [||]
-            BranchCoverage = Map.tryFind ca.DefinitionLine lineCovMap })
+            CoveringTests = [||]
+            BranchCoverage = Map.tryFind ca.DefinitionLine lineCovMap }
+          |> enrichWithCovering)
         |> Array.sortBy (fun c -> c.Line)
       { base' with CoverageAnnotations = coverageLineAnnotations }
 

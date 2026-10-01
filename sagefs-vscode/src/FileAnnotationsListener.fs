@@ -105,7 +105,12 @@ let parseFileAnnotations (data: obj) : FileAnnotations option =
             Some
               ({ Line = l
                  Health = parseCoverageHealth ann
-                 BranchCoverage = parseBranchCoverage ann } : CoverageAnnotation)
+                 BranchCoverage = parseBranchCoverage ann
+                 CoveringTests =
+                   tryFieldAny fieldArray [ "CoveringTests"; "coveringTests" ] ann
+                   |> Option.defaultValue [||]
+                   |> Array.choose (tryFieldAny fieldString [ "DisplayName"; "displayName" ])
+                   |> Array.toList } : CoverageAnnotation)
         | None -> None)
       |> Array.toList
     let inlineFailures =

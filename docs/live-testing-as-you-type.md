@@ -27,16 +27,19 @@ SageFs sends your unsaved buffer to the FSI session that already has your projec
 type-checks it there and evals it, so there is no copy of the repo and no MSBuild step in
 the loop. One thing is shared with VS: coverage comes from IL instrumentation. SageFs
 shadow-copies your project outputs and instruments them once, at session start. Nothing
-here has been timed end to end, so I'm not quoting a speed.
+here is a promise about your project: the end-to-end figures in the table below come from one machine and one small sample.
 
 | Dimension | VS Enterprise | SageFs |
 |-----------|--------------|--------|
 | **Trigger** | Unsaved edits | Unsaved edits |
-| **Speed** | Not documented | Not measured end to end. The path has a client debounce and a daemon one, see the budget below |
+| **Speed** | Not documented | Measured on one small project: verdict on the edited function's test about 0.7 s after the edit reaches the daemon (p50 712 ms, p95 783 ms, n=20), save to all green about 0.5 s (p50 542 ms, p95 631 ms, n=20), 16-thread Ryzen 7 5800XT, Linux. Details in [how-live-testing-works.md](how-live-testing-works.md) |
 | **Mechanism** | Copy of the repo on ProjFS → MSBuild → instrumented binaries → test run | Whole buffer → type-check in the live FSI session → eval → test run. Coverage instrumented once at session start |
 | **Broken code** | Build errors go to the Output window | A type error means no eval and no run. Last results stay, state is blocked. Tree-sitter still finds test locations |
 | **Scope** | Rebuilds the projects relevant to the edit | The whole edited file's buffer |
 | **Debugging a failing test** | Hover the glyph, pick the tests, Debug | VS Code only. Attaches a .NET debugger to the process that runs the test. Breakpoints bind in compiled project code. Code evaluated in the session has no PDB, so they do not bind there. Neovim does not have it yet. See the [guide](LIVE_TESTING_GUIDE.md#debugging-a-failing-test) |
+| **Coverage per line** | Per-line, from instrumented binaries of the real build | Per-line with the exact tests that reach it, from instrumented project outputs; tests of an instrumented project run one at a time |
+| **What a result ran against** | A real build | Each row says: evaluated code, a real build, a real build that agreed, or one that disagreed and why. A real build of the saved text confirms the eval after the editing goes quiet |
+| **Pause, include, exclude** | Pause on battery and debug, playlist, ignore file, memory caps | Pause and an include or exclude set; the rest is not copied, see [decisions.md](decisions.md) |
 | **Frameworks** | xUnit, NUnit, MSTest | + Expecto, TUnit, extensible; FsCheck `[<Property>]` tests are discovered and shown in the live panel |
 | **Clients** | Visual Studio only | Neovim, VS Code, web dashboard, MCP |
 | **Platform** | Windows only (ProjFS) | Cross-platform (.NET) |
@@ -158,7 +161,7 @@ recompiles dependents.
 | FSI eval (redefine binding) | 5-20ms |
 | Affected test execution | 10-500ms (depends on test count/complexity) |
 | SSE push | <5ms |
-| **Total end-to-end** | **not measured** (the figures above are the design target) |
+| **Total end-to-end** | **p50 712 ms, p95 783 ms** from the edit reaching the daemon to the verdict on the edited function's test, over 20 edits on the small FromCSharp sample (the client's own 300 ms pause is not in it, and the rows above are the design figures, not measurements of each step; the daemon's own type-check delay is in it) |
 
 Type-checking a single function in a warm FCS context is much faster than type-checking a
 whole file, which is another advantage of scope-level evaluation.

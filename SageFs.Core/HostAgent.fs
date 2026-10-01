@@ -637,6 +637,8 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
   let mutable projectRunner : Runner option = None
   // The tests the newest scan found in eval'd code. They go with `dynamicRunner`: a scan replaces both.
   let mutable evalDefinedTests : Set<TestId> = Set.empty
+  /// The loaded assemblies the instrumented ones were last found among, and the probe arrays found.
+  let mutable trackerCache : Assembly array * FieldInfo array = [||], [||]
   let logger = Log.asILogger ()
   let debugHold =
     TestDebug.DebugHold(
@@ -720,14 +722,23 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
   /// Take the coverage the instrumented assemblies recorded, and reset it for the next run. Coverage lives in the process
   /// that ran the tests, so only its agent can read it.
   member _.TakeCoverage() : CoverageReading =
-    let instrumentable =
-      sources.Loaded()
-      |> Array.filter (fun a -> try not a.IsDynamic && not (isNull a.Location) && a.Location <> "" with _ -> false)
-    match CoverageProbes.discoverAndCollectHits instrumentable with
+    // A reading is taken after EVERY test, so the instrumented assemblies are found once and reused for as
+    // long as the loaded assemblies are the same ones, instead of a type lookup in each of them per test.
+    let loaded = sources.Loaded()
+    let trackers =
+      let (seen, found) = System.Threading.Volatile.Read(&trackerCache)
+      match seen.Length = loaded.Length && Array.forall2 (fun (a: Assembly) (b: Assembly) -> obj.ReferenceEquals(a, b)) seen loaded with
+      | true -> found
+      | false ->
+        let instrumentable =
+          loaded |> Array.filter (fun a -> try not a.IsDynamic && not (isNull a.Location) && a.Location <> "" with _ -> false)
+        let found = CoverageProbes.findTrackers instrumentable
+        System.Threading.Volatile.Write(&trackerCache, (loaded, found))
+        found
+    match CoverageProbes.readAndClear trackers with
     | None -> NoCoverage
     | Some hits ->
       let bitmap = CoverageBitmap.ofBoolArray hits
-      CoverageProbes.discoverAndResetHits instrumentable
       CoverageTaken(bitmap.Count, CoverageBitmap.toBase64 bitmap)
 
   /// The simple names of every assembly the process has loaded, sorted and distinct: what a warmup check asks, since only

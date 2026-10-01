@@ -1235,7 +1235,7 @@ let sessionScopedIsolationTests = testList "session-scoped isolation" [
             { TestId = TestId.TestId "t1"; DisplayName = "session-a test"; FullName = "session-a test"
               Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
               Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
-              Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
+              Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled }
           |] }
     let filtered = LiveTestState.statusEntriesForSession "session-a" state
     filtered.Length |> Expect.equal "should have the one entry this (session-scoped) state carries" 1
@@ -1249,7 +1249,7 @@ let sessionScopedIsolationTests = testList "session-scoped isolation" [
             { TestId = TestId.TestId "t1"; DisplayName = "test1"; FullName = "test1"
               Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
               Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
-              Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
+              Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled }
           |] }
     let filtered = LiveTestState.statusEntriesForSession "" state
     filtered.Length |> Expect.equal "should return all entries" 1
@@ -1346,7 +1346,7 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
       Status = TestRunStatus.Passed FixtureDurations.usualResult
-      PreviousStatus = TestRunStatus.Detected }
+      PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled }
     let gen = RunGeneration.next RunGeneration.zero
     let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) LiveTestingActivation.Active [| entry |] None
     batch.Summary.Passed |> Expect.equal "one passed" 1
@@ -1379,7 +1379,7 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
       TestId = tid; DisplayName = "not_empty"; FullName = "Tests.not_empty"
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
-      Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
+      Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled }
     let gen = RunGeneration.zero
     let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) LiveTestingActivation.Active [| entry |] None
     TestResultsBatchPayload.isEmpty batch |> Expect.isFalse "should not be empty"

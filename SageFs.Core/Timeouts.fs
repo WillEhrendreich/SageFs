@@ -176,6 +176,16 @@ module Timeouts =
   /// change that queues one wakes the timer at once, so a save is never held
   /// back by this. No recorded reason for 1s.
   let liveTestTickIdle = TimeSpan.FromSeconds(1.0)
+  /// How long the editing must stay quiet after an evaluated run before a real build is spent confirming
+  /// its verdicts. A build restarts the session's worker, so it must not start on a pause between two
+  /// words that the next keystroke would throw away. Longer than the FCS pause, shorter than the time a
+  /// person spends reading a result before changing the code again. No recorded reason for 2s beyond
+  /// that: the measurement in the `--integration-lt` tier prints the real save-to-confirmed time.
+  let liveTestConfirmationQuiet = TimeSpan.FromSeconds(2.0)
+  /// How long a confirmation (the build, then the run against it) may take before its rows say the build
+  /// did not answer. A cold build of a large project can take minutes; past this the verdicts stay
+  /// evaluated and the rows say why they are not confirmed. No recorded reason for 3 minutes.
+  let liveTestConfirmationDeadline = TimeSpan.FromMinutes(3.0)
   /// How long the live-values walk waits on one binding before it gives up on it. Walking a
   /// value runs the user's property getters on the session's one eval thread, so a getter that
   /// never returns would stall every later eval. Past this the binding shows as unreadable and is

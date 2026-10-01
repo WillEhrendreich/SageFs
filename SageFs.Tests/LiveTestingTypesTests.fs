@@ -1117,7 +1117,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
     }
     test "merge single map returns identity" {
       let sp = { File = "a.fs"; Line = 1; Column = 0; EndLine = 1; EndColumn = 10; BranchId = 0 }
-      let map = { Slots = [| sp |]; TotalProbes = 1; TrackerTypeName = "T"; HitsFieldName = "H" }
+      let map = { Slots = [| sp |]; TotalProbes = 1; TrackerTypeName = "T"; HitsFieldName = "H"; Source = MapSource.none }
       let result = InstrumentationMap.merge [| map |]
       result.TotalProbes |> Expect.equal "one probe" 1
       result.Slots |> Expect.hasLength "one slot" 1
@@ -1125,8 +1125,8 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
     test "merge concatenates slots in order" {
       let sp1 = { File = "a.fs"; Line = 1; Column = 0; EndLine = 1; EndColumn = 10; BranchId = 0 }
       let sp2 = { File = "b.fs"; Line = 2; Column = 0; EndLine = 2; EndColumn = 10; BranchId = 0 }
-      let m1 = { Slots = [| sp1 |]; TotalProbes = 1; TrackerTypeName = "T"; HitsFieldName = "H" }
-      let m2 = { Slots = [| sp2 |]; TotalProbes = 1; TrackerTypeName = "T"; HitsFieldName = "H" }
+      let m1 = { Slots = [| sp1 |]; TotalProbes = 1; TrackerTypeName = "T"; HitsFieldName = "H"; Source = MapSource.none }
+      let m2 = { Slots = [| sp2 |]; TotalProbes = 1; TrackerTypeName = "T"; HitsFieldName = "H"; Source = MapSource.none }
       let result = InstrumentationMap.merge [| m1; m2 |]
       result.TotalProbes |> Expect.equal "two probes" 2
       result.Slots.[0].File |> Expect.equal "first slot file" "a.fs"
@@ -1134,14 +1134,14 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
     }
     test "toCoverageState with matching lengths" {
       let sp = { File = "a.fs"; Line = 1; Column = 0; EndLine = 1; EndColumn = 10; BranchId = 0 }
-      let map = { Slots = [| sp |]; TotalProbes = 1; TrackerTypeName = "T"; HitsFieldName = "H" }
+      let map = { Slots = [| sp |]; TotalProbes = 1; TrackerTypeName = "T"; HitsFieldName = "H"; Source = MapSource.none }
       let state = InstrumentationMap.toCoverageState [| true |] map
       state.Slots |> Expect.hasLength "one slot" 1
       state.Hits.[0] |> Expect.isTrue "hit"
     }
     test "toCoverageState with mismatched lengths returns empty" {
       let sp = { File = "a.fs"; Line = 1; Column = 0; EndLine = 1; EndColumn = 10; BranchId = 0 }
-      let map = { Slots = [| sp |]; TotalProbes = 1; TrackerTypeName = "T"; HitsFieldName = "H" }
+      let map = { Slots = [| sp |]; TotalProbes = 1; TrackerTypeName = "T"; HitsFieldName = "H"; Source = MapSource.none }
       let state = InstrumentationMap.toCoverageState [| true; false |] map
       state.Slots |> Expect.isEmpty "empty on mismatch"
       state.Hits |> Expect.isEmpty "empty hits on mismatch"

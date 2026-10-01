@@ -21,7 +21,7 @@ let private mkEntry (tid: string) (status: TestRunStatus) : TestStatusEntry =
     Category = TestCategory.Unit
     CurrentPolicy = RunPolicy.OnEveryChange
     Status = status
-    PreviousStatus = TestRunStatus.Detected }
+    PreviousStatus = TestRunStatus.Detected; Provenance = ResultProvenance.Compiled }
 
 [<Tests>]
 let cohortTestProjectionTests =
