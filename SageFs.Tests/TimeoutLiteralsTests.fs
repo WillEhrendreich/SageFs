@@ -33,9 +33,6 @@ let private budgets : (string * int) list =
     "SageFs.Tests/CustomPortOwnershipTests.fs", 2
     "SageFs.Tests/DaemonHealthTests.fs", 13
     "SageFs.Tests/DaemonOwnershipTests.fs", 30
-    "SageFs.Tests/DashboardBrowserRunner.fs", 12
-    "SageFs.Tests/DashboardBrowserTests.fs", 10
-    "SageFs.Tests/DashboardDisconnectIndicatorBrowserTests.fs", 3
     "SageFs.Tests/DashboardFailureNarrativesTests.fs", 4
     "SageFs.Tests/DashboardHealthTests.fs", 16
     "SageFs.Tests/DiagnosticianTests.fs", 1
@@ -47,7 +44,6 @@ let private budgets : (string * int) list =
     "SageFs.Tests/FlakyClassificationTests.fs", 5
     "SageFs.Tests/GcDumpCaptureTests.fs", 3
     "SageFs.Tests/HealthWatchWiringTests.fs", 2
-    "SageFs.Tests/HotReloadBrowserTests.fs", 11
     "SageFs.Tests/HttpApiIntegrationTests.fs", 1
     "SageFs.Tests/JsonCoreFilesTests.fs", 2
     "SageFs.Tests/LandingCacheTests.fs", 2

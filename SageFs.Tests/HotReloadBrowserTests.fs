@@ -9,6 +9,7 @@ open Microsoft.Playwright
 open SageFs.Tests.DashboardBrowserTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// The hot-reload panel's Watch All button, found by the accessibility rule the
 /// markup actually follows rather than an exact-name match it never promised.
@@ -69,7 +70,7 @@ module HrEnv =
 // the rule is to shrink the debt rather than raise the number.
 let private httpGet (url: string) = task {
   use client = new HttpClient()
-  client.Timeout <- TimeSpan.FromSeconds(10.0)
+  client.Timeout <- TestTimeouts.httpRequest
   try
     return! client.GetStringAsync(url + "/")
   with ex ->
@@ -85,7 +86,7 @@ let private waitForAppBody (url: string) (needle: string) (timeoutMs: int) = tas
       let! body = httpGet url
       if body.Contains needle then found <- body
     with _ -> ()
-    if found = "" then do! Task.Delay(250)
+    if found = "" then do! Task.Delay(TestTimeouts.pollService)
   Expect.isTrue (found <> "") (sprintf "app at %s never served '%s' within %dms" url needle timeoutMs)
   return found
 }
@@ -99,13 +100,13 @@ let private writeGreeting (content: string) =
       File.WriteAllText(HrEnv.greetingFile.Value, content)
       written <- true
     with :? IOException ->
-      Threading.Thread.Sleep(200)
+      Threading.Thread.Sleep(TestTimeouts.pollPage)
   Expect.isTrue written "Greeting.fs should be writable within 15s"
 
 /// GET one of the running app's routes, the body trimmed.
 let private appRoute (route: string) = task {
   use client = new HttpClient()
-  client.Timeout <- TimeSpan.FromSeconds(10.0)
+  client.Timeout <- TestTimeouts.httpRequest
   let! body = client.GetStringAsync(HrEnv.appUrl.Value + route)
   return body.Trim()
 }
@@ -119,7 +120,7 @@ let private writeFixtureFile (path: string) (content: string) = task {
       do! File.WriteAllTextAsync(path, content)
       written <- true
     with :? IOException ->
-      do! Task.Delay 200
+      do! Task.Delay TestTimeouts.pollPage
   written |> Expecto.Flip.Expect.isTrue (sprintf "%s should be writable within 15s" path)
 }
 
@@ -131,9 +132,9 @@ let private showsWithin (ms: int) (locator: ILocator) (text: string) = task {
   while not found && sw.ElapsedMilliseconds < int64 ms do
     let! content = locator.TextContentAsync()
     match content with
-    | null -> do! Task.Delay 200
+    | null -> do! Task.Delay TestTimeouts.pollPage
     | c when c.Contains text -> found <- true
-    | _ -> do! Task.Delay 200
+    | _ -> do! Task.Delay TestTimeouts.pollPage
   return found
 }
 
@@ -145,7 +146,7 @@ let private appServes (ms: int) (route: string) (want: string) = task {
   let! first = appRoute route
   let mutable served = first
   while served <> want && sw.ElapsedMilliseconds < int64 ms do
-    do! Task.Delay 250
+    do! Task.Delay TestTimeouts.pollService
     let! next = appRoute route
     served <- next
   return served
@@ -246,9 +247,9 @@ let tests =
               if not resaved && sw.ElapsedMilliseconds > 15_000L then
                 writeGreeting edited
                 resaved <- true
-              do! Task.Delay(1000)
+              do! Task.Delay(TestTimeouts.pollSlow)
           with _ ->
-            do! Task.Delay(1000)
+            do! Task.Delay(TestTimeouts.pollSlow)
         Expect.isTrue served
           (sprintf "hot reload should serve the new greeting from the running process (value A body: %s)" bodyA)
       finally
@@ -283,7 +284,7 @@ let tests =
           "compile error must not take down the running app (last valid behavior retained)"
 
         // 2. Repair — the fix must hot-reload into the running app.
-        Threading.Thread.Sleep(1000)
+        Threading.Thread.Sleep(TestTimeouts.startSettle)
         let repaired = original.Replace(valueAGreeting, valueBGreeting)
         writeGreeting repaired
         let! bodyB = waitForAppBody HrEnv.appUrl.Value "hello from hot reload (value B)" 45_000

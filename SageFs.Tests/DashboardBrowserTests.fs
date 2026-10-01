@@ -11,6 +11,7 @@ open Microsoft.Playwright
 open SageFs.Server.DashboardTypes
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Helpers for Playwright assertions inside Expecto.
 module PlaywrightExpect =
@@ -34,7 +35,7 @@ module PlaywrightExpect =
       let! c = locator.CountAsync()
       count <- c
       if count <> expected then
-        do! Task.Delay(200)
+        do! Task.Delay(TestTimeouts.pollPage)
     match count = expected with
     | true -> ()
     | false ->
@@ -56,7 +57,7 @@ module PlaywrightExpect =
       if content <> null && content.Contains(text) then
         found <- true
       else
-        do! Task.Delay(200)
+        do! Task.Delay(TestTimeouts.pollPage)
     Expect.isTrue found (sprintf "Expected '%s' within %dms" text ms)
   }
 
@@ -71,7 +72,7 @@ module PlaywrightExpect =
       if content <> null && content.Contains(text) then
         found <- true
       else
-        do! Task.Delay(250)
+        do! Task.Delay(TestTimeouts.pollService)
     Expect.isTrue found (sprintf "Expected '%s' in '%s' within %dms" text selector ms)
   }
 
@@ -89,7 +90,7 @@ module PlaywrightExpect =
       if content <> null && content.Contains("Ready") && content.Contains("Session:") then
         found <- true
       else
-        do! Task.Delay(250)
+        do! Task.Delay(TestTimeouts.pollService)
     Expect.isTrue found (sprintf "Expected SSE connection within %dms" ms)
   }
 
@@ -102,7 +103,7 @@ module PlaywrightExpect =
     while not cleared && sw.ElapsedMilliseconds < int64 ms do
       let! value = textarea.InputValueAsync()
       if value = "" then cleared <- true
-      else do! Task.Delay(200)
+      else do! Task.Delay(TestTimeouts.pollPage)
     Expect.isTrue cleared (sprintf "Expected textarea cleared within %dms" ms)
   }
 
@@ -549,7 +550,7 @@ module private NoSessionLanding =
 
   let private waitHealthy (budgetSeconds: float) (d: Daemon) : Task<bool> = task {
     use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.McpPort))
-    client.Timeout <- TimeSpan.FromSeconds(5.0)
+    client.Timeout <- TestTimeouts.httpProbe
     let deadline = DateTime.UtcNow.AddSeconds(budgetSeconds)
     let mutable healthy = false
     while not healthy && DateTime.UtcNow < deadline do
@@ -557,7 +558,7 @@ module private NoSessionLanding =
         let! resp = client.GetAsync("/health")
         resp.Dispose()
         healthy <- true
-      with _ -> do! Task.Delay(250)
+      with _ -> do! Task.Delay(TestTimeouts.pollService)
     return healthy
   }
 
@@ -569,7 +570,7 @@ module private NoSessionLanding =
     while not ok && sw.ElapsedMilliseconds < int64 budgetMs do
       let! result = condition ()
       if result then ok <- true
-      else do! Task.Delay(200)
+      else do! Task.Delay(TestTimeouts.pollPage)
     return ok
   }
 
@@ -579,7 +580,7 @@ module private NoSessionLanding =
   /// conflated wait.
   let private sessionsSnapshot (d: Daemon) : Task<(string * string * string) list> = task {
     use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.McpPort))
-    client.Timeout <- TimeSpan.FromSeconds(5.0)
+    client.Timeout <- TestTimeouts.httpProbe
     let! body = client.GetStringAsync("/api/sessions")
     use doc = System.Text.Json.JsonDocument.Parse(body)
     return
@@ -608,7 +609,7 @@ module private NoSessionLanding =
   /// what the daemon actually said.
   let private createSessionViaApi (d: Daemon) (project: string) (dir: string) : Task<Result<unit, string>> = task {
     use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.McpPort))
-    client.Timeout <- TimeSpan.FromSeconds(10.0)
+    client.Timeout <- TestTimeouts.httpRequest
     let payload =
       System.Text.Json.JsonSerializer.Serialize({| projects = [| project |]; workingDirectory = dir |})
     use content = new StringContent(payload, Text.Encoding.UTF8, "application/json")

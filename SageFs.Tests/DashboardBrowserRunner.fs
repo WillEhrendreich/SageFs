@@ -7,6 +7,8 @@ open System.Net.Http
 open System.Net.Sockets
 open Expecto
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// Run the [Integration] Dashboard browser journeys end to end, owning the
 /// daemon lifecycle in-process (no external workflow / runner script).
 ///
@@ -78,7 +80,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
   drain daemon.StandardError daemonErrLog
 
   use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
-  client.Timeout <- TimeSpan.FromSeconds(5.0)
+  client.Timeout <- TestTimeouts.httpProbe
 
   let dumpDaemonLogs () =
     for path in [ daemonOutLog; daemonErrLog ] do
@@ -126,7 +128,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
         use _resp = client.GetAsync("/health").GetAwaiter().GetResult()
         healthy <- true
       with _ ->
-        Threading.Thread.Sleep(250)
+        Threading.Thread.Sleep(TestTimeouts.pollService)
 
     if not healthy then
       eprintfn "Browser runner: daemon did not become healthy on port %d" mcpPort
@@ -163,7 +165,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
               |> Seq.exists (fun s ->
                 s.GetProperty("status").GetString() = "Ready")
           with _ ->
-            Threading.Thread.Sleep(1000)
+            Threading.Thread.Sleep(TestTimeouts.pollSlow)
 
         if not ready then
           eprintfn "Browser runner: session never reached Ready within 300s"
@@ -397,7 +399,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
   drain daemon.StandardError daemonErrLog
 
   use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
-  client.Timeout <- TimeSpan.FromSeconds(5.0)
+  client.Timeout <- TestTimeouts.httpProbe
 
   let dumpDaemonLogs () =
     for path in [ daemonOutLog; daemonErrLog ] do
@@ -445,7 +447,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
         use _resp = client.GetAsync("/health").GetAwaiter().GetResult()
         healthy <- true
       with _ ->
-        Threading.Thread.Sleep(250)
+        Threading.Thread.Sleep(TestTimeouts.pollService)
 
     if not healthy then
       eprintfn "HR runner: daemon did not become healthy on port %d" mcpPort
@@ -480,7 +482,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
               faulted <- true
             ready <- sessionStates |> List.contains "Ready"
           with _ ->
-            Threading.Thread.Sleep(1000)
+            Threading.Thread.Sleep(TestTimeouts.pollSlow)
 
         if faulted then
           eprintfn "HR runner: session Faulted during warmup"
@@ -510,9 +512,9 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
               if File.Exists appUrlFile then
                 appUrl <- File.ReadAllText(appUrlFile).Trim()
               else
-                Threading.Thread.Sleep(500)
+                Threading.Thread.Sleep(TestTimeouts.pollMedium)
             with _ ->
-              Threading.Thread.Sleep(500)
+              Threading.Thread.Sleep(TestTimeouts.pollMedium)
           if appUrl = "" then
             eprintfn "HR runner: app-url.txt was not written by the init profile"
             dumpDaemonLogs ()
@@ -610,7 +612,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
   drain daemon.StandardError daemonErrLog
 
   use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
-  client.Timeout <- TimeSpan.FromSeconds(5.0)
+  client.Timeout <- TestTimeouts.httpProbe
 
   let dumpDaemonLogs () =
     for path in [ daemonOutLog; daemonErrLog ] do
@@ -674,7 +676,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
         use _resp = client.GetAsync("/health").GetAwaiter().GetResult()
         healthy <- true
       with _ ->
-        Threading.Thread.Sleep(250)
+        Threading.Thread.Sleep(TestTimeouts.pollService)
 
     if not healthy then
       eprintfn "LT runner: daemon did not become healthy on port %d" mcpPort
@@ -707,7 +709,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
               faulted <- true
             ready <- sessionStates |> List.contains "Ready"
           with _ ->
-            Threading.Thread.Sleep(1000)
+            Threading.Thread.Sleep(TestTimeouts.pollSlow)
 
         if faulted then
           eprintfn "LT runner: session Faulted during warmup"
@@ -760,7 +762,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
             while not matched && DateTime.UtcNow < deadline do
               match getLiveTestingSummary () with
               | Some snap when predicate snap -> matched <- true
-              | _ -> Threading.Thread.Sleep(250)
+              | _ -> Threading.Thread.Sleep(TestTimeouts.pollService)
             matched
           syncPost "/api/live-testing/enable" "{}" |> ignore
           syncPost "/api/live-testing/policy" """{"category":"unit","policy":"every"}""" |> ignore

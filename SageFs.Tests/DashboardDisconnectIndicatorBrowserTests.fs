@@ -50,6 +50,7 @@ open Expecto
 open Microsoft.Playwright
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 /// Fast-but-not-flaky test values: heartbeat every 1s, stale after 3s (still
 /// comfortably the doctrine's 3x ratio). Production defaults (5s / 15s) stay
@@ -73,7 +74,7 @@ let private waitUntil (budgetMs: int) (condition: unit -> Task<bool>) : Task<boo
   while not ok && sw.ElapsedMilliseconds < int64 budgetMs do
     let! result = condition ()
     if result then ok <- true
-    else do! Task.Delay(200)
+    else do! Task.Delay(TestTimeouts.pollPage)
   return ok
 }
 
@@ -209,7 +210,7 @@ module private IsolatedDaemon =
   /// another suite's daemon answering on a released-then-reused port.
   let waitHealthy (budgetSeconds: float) (d: IsolatedDaemon) : Task<bool> = task {
     use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.DashboardPort))
-    client.Timeout <- TimeSpan.FromSeconds(5.0)
+    client.Timeout <- TestTimeouts.httpProbe
     let deadline = DateTime.UtcNow.AddSeconds(budgetSeconds)
     let mutable healthy = false
     while not healthy && not d.Process.HasExited && DateTime.UtcNow < deadline do
@@ -217,7 +218,7 @@ module private IsolatedDaemon =
         let! body = client.GetStringAsync("/api/daemon-info")
         healthy <- SageFs.Tests.TestInfrastructure.DaemonIdentity.reportsPid body d.Process.Id
       with _ -> ()
-      if not healthy then do! Task.Delay(250)
+      if not healthy then do! Task.Delay(TestTimeouts.pollService)
     return healthy
   }
 
