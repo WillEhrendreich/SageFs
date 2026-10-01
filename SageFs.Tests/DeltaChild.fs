@@ -5,20 +5,8 @@
 /// host: the host starts this assembly again with `--delta-child <directory>`, the child runs the script
 /// in `<directory>/script.txt` against the files beside it, prints what happened, and exits.
 ///
-/// The script is one operation per line:
-///
-///   load <file>              load the assembly at that path into the default load context
-///   eval | evallate          run every method and print what each returned. `evallate` adds the generic
-///                            method at a type that has not run yet
-///   apply <meta> <il>        hand a delta to the runtime and print the outcome
-///   check <meta> <il>        print what is known before an apply, without applying
-///   capability               print what the process can do for a delta
-///   time <meta> <il>         apply, and print how long the runtime took in milliseconds
-///   bench <a> <b> <n>        read both builds, diff and write the delta, n times from nothing, printing each
-///   second <b>               the next save after the last bench: commit its delta, prepare one for build b
-///   applylast                apply the delta the last bench wrote, and print how long the runtime took
-///
-/// Everything it prints starts with `DELTACHILD `, one fact to a line.
+/// A script is one `Op` per line, and what the child prints is one `Fact` per line. Both are closed sets with one
+/// place that spells them (`Op.toLine`, `Op.parse`, `FactKind.tag`), and a test round-trips every `Op`.
 module SageFs.Tests.DeltaChild
 
 open System
@@ -31,9 +19,132 @@ open System.Threading.Tasks
 open SageFs.Features.MetadataDelta
 open SageFs.Tests.DeltaProgram
 
+/// Whether `bench` looks through the coverage probes of its baseline.
+[<RequireQualifiedAccess>]
+type BenchProbes =
+  /// The baseline is a plain build.
+  | Keep
+  /// The baseline is an instrumented module and the probes are looked through.
+  | LookThrough
+
+/// What a script can ask of the child.
+[<RequireQualifiedAccess>]
+type Op =
+  /// Load the assembly at that path into the default load context.
+  | Load of file: string
+  /// Run every method and print what each returned.
+  | Eval
+  /// The same, with the generic method at a type that has not run yet.
+  | EvalLate
+  /// Hand a delta to the runtime and print the outcome. The method tokens it wrote are in the file beside it.
+  | Apply of meta: string * il: string
+  /// Print what is known before an apply, without applying.
+  | Check of meta: string * il: string
+  /// Print what the process can do for a delta.
+  | Capability
+  /// Apply, and print how long the runtime took in milliseconds.
+  | Time of meta: string * il: string
+  /// Read both builds, diff and write the delta, `passes` times from nothing, printing each.
+  | Bench of baseline: string * next: string * passes: int * probes: BenchProbes
+  /// The next save after the last bench: commit its delta, prepare one for this build.
+  | Second of next: string
+  /// Apply the delta the last bench wrote, and print how long the runtime and the handlers took.
+  | ApplyLast
+
+[<RequireQualifiedAccess>]
+module Op =
+
+  let toLine (op: Op) : string =
+    match op with
+    | Op.Load file -> "load " + file
+    | Op.Eval -> "eval"
+    | Op.EvalLate -> "evallate"
+    | Op.Apply (meta, il) -> sprintf "apply %s %s" meta il
+    | Op.Check (meta, il) -> sprintf "check %s %s" meta il
+    | Op.Capability -> "capability"
+    | Op.Time (meta, il) -> sprintf "time %s %s" meta il
+    | Op.Bench (baseline, next, passes, probes) ->
+      sprintf "bench %s %s %d %s" baseline next passes (match probes with | BenchProbes.Keep -> "keep" | BenchProbes.LookThrough -> "look-through")
+    | Op.Second next -> "second " + next
+    | Op.ApplyLast -> "applylast"
+
+  let parse (line: string) : Op voption =
+    match line.Split(' ', StringSplitOptions.RemoveEmptyEntries) with
+    | [| "load"; file |] -> ValueSome (Op.Load file)
+    | [| "eval" |] -> ValueSome Op.Eval
+    | [| "evallate" |] -> ValueSome Op.EvalLate
+    | [| "apply"; meta; il |] -> ValueSome (Op.Apply (meta, il))
+    | [| "check"; meta; il |] -> ValueSome (Op.Check (meta, il))
+    | [| "capability" |] -> ValueSome Op.Capability
+    | [| "time"; meta; il |] -> ValueSome (Op.Time (meta, il))
+    | [| "bench"; baseline; next; passes; probes |] ->
+      match Int32.TryParse passes, probes with
+      | (true, n), "keep" -> ValueSome (Op.Bench (baseline, next, n, BenchProbes.Keep))
+      | (true, n), "look-through" -> ValueSome (Op.Bench (baseline, next, n, BenchProbes.LookThrough))
+      | _ -> ValueNone
+    | [| "second"; next |] -> ValueSome (Op.Second next)
+    | [| "applylast" |] -> ValueSome Op.ApplyLast
+    | _ -> ValueNone
+
+/// What a line the child prints is about.
+[<RequireQualifiedAccess>]
+type FactKind =
+  | EvalBegin
+  | EvalEnd
+  | EvalLine
+  | Apply
+  | Check
+  | Capability
+  | Time
+  | Bench
+  | Second
+  | Handler
+  /// The script had a line the child does not know.
+  | Unknown
+
+[<RequireQualifiedAccess>]
+module FactKind =
+  let all : FactKind list =
+    [ FactKind.EvalBegin; FactKind.EvalEnd; FactKind.EvalLine; FactKind.Apply; FactKind.Check; FactKind.Capability
+      FactKind.Time; FactKind.Bench; FactKind.Second; FactKind.Handler; FactKind.Unknown ]
+
+  let tag (kind: FactKind) : string =
+    match kind with
+    | FactKind.EvalBegin -> "EVAL-BEGIN"
+    | FactKind.EvalEnd -> "EVAL-END"
+    | FactKind.EvalLine -> "EVAL-LINE"
+    | FactKind.Apply -> "APPLY"
+    | FactKind.Check -> "CHECK"
+    | FactKind.Capability -> "CAPABILITY"
+    | FactKind.Time -> "TIME"
+    | FactKind.Bench -> "BENCH"
+    | FactKind.Second -> "SECOND"
+    | FactKind.Handler -> "HANDLER"
+    | FactKind.Unknown -> "UNKNOWN"
+
+/// One thing the child said.
+type Fact =
+  { Kind: FactKind
+    Text: string }
+
 let private prefix = "DELTACHILD "
 
-let private say (text: string) = printfn "%s%s" prefix text
+let private say (kind: FactKind) (text: string) = printfn "%s%s %s" prefix (FactKind.tag kind) text
+
+let private parseFact (line: string) : Fact voption =
+  match line.StartsWith(prefix, StringComparison.Ordinal) with
+  | false -> ValueNone
+  | true ->
+    let rest = line.Substring prefix.Length
+    let tag, text =
+      match rest.IndexOf ' ' with
+      | -1 -> rest, ""
+      | i -> rest.Substring(0, i), rest.Substring(i + 1)
+    FactKind.all
+    |> List.tryFind (fun kind -> FactKind.tag kind = tag)
+    |> function
+      | Some kind -> ValueSome { Kind = kind; Text = text }
+      | None -> ValueNone
 
 /// What the delta was, as far as applying it needs to know.
 let private payloadOf (meta: byte array) (il: byte array) (tokens: int list) (requires: RequiredFeature list) : DeltaPayload =
@@ -91,49 +202,47 @@ let private describeOutcome (outcome: ApplyOutcome) : string =
 /// The child's work. Returns the exit code.
 let private runScript (directory: string) : int =
   let mutable assembly : Assembly = null
-  // The delta the last `bench` produced, for `applylast`, and the chain after it with the build it was made from, for `second`.
+  // The delta the last `bench` produced, for `ApplyLast`, and the chain after it with the build it was made from, for `Second`.
   let mutable lastPayload : DeltaPayload voption = ValueNone
   let mutable lastChain : (DeltaChain * PeImage) voption = ValueNone
   let path (name: string) = Path.Combine(directory, name)
   for line in File.ReadAllLines(path "script.txt") do
-    match line.Split(' ', StringSplitOptions.RemoveEmptyEntries) with
-    | [| "load"; file |] -> assembly <- AssemblyLoadContext.Default.LoadFromAssemblyPath(path file)
-    | [| "eval" |]
-    | [| "evallate" |] as op ->
-      say "EVAL begin"
-      for l in evaluateLines assembly (op[0] = "evallate") do
-        say ("L " + l)
-      say "EVAL end"
-    | [| "apply"; meta; il |] ->
+    match Op.parse line with
+    | ValueNone -> say FactKind.Unknown line
+    | ValueSome (Op.Load file) -> assembly <- AssemblyLoadContext.Default.LoadFromAssemblyPath(path file)
+    | ValueSome (Op.Eval | Op.EvalLate as op) ->
+      say FactKind.EvalBegin ""
+      for l in evaluateLines assembly (op = Op.EvalLate) do
+        say FactKind.EvalLine l
+      say FactKind.EvalEnd ""
+    | ValueSome (Op.Apply (meta, il)) ->
       let tokens = tokensIn (path (Path.ChangeExtension(meta, "tokens")))
-      say ("APPLY " + describeOutcome (DeltaApply.apply assembly (payloadOf (File.ReadAllBytes(path meta)) (File.ReadAllBytes(path il)) tokens [])))
-    | [| "check"; meta; il |] ->
+      say FactKind.Apply (describeOutcome (DeltaApply.apply assembly (payloadOf (File.ReadAllBytes(path meta)) (File.ReadAllBytes(path il)) tokens [])))
+    | ValueSome (Op.Check (meta, il)) ->
       let payload = payloadOf (File.ReadAllBytes(path meta)) (File.ReadAllBytes(path il)) [] [ RequiredFeature.Baseline ]
       match DeltaApply.check (DeltaApply.capability ()) assembly payload with
-      | CapabilityCheck.Capable -> say "CHECK Capable"
+      | CapabilityCheck.Capable -> say FactKind.Check "Capable"
       | CapabilityCheck.Incapable gaps ->
         for gap in gaps do
-          say ("CHECK " + DeltaApply.describeGap gap)
-    | [| "capability" |] ->
+          say FactKind.Check (DeltaApply.describeGap gap)
+    | ValueSome Op.Capability ->
       let c = DeltaApply.capability ()
-      say (sprintf "CAPABILITY support=%A environment=%A debugger=%A features=%s" c.Support c.Environment c.Debugger (String.Join(",", c.Features)))
-    | [| "time"; meta; il |] ->
+      say FactKind.Capability (sprintf "support=%A environment=%A debugger=%A features=%s" c.Support c.Environment c.Debugger (String.Join(",", c.Features)))
+    | ValueSome (Op.Time (meta, il)) ->
       let m = File.ReadAllBytes(path meta)
       let i = File.ReadAllBytes(path il)
       let watch = Stopwatch.StartNew()
       let outcome = DeltaApply.apply assembly (payloadOf m i [] [])
       watch.Stop()
-      say (sprintf "TIME %.3f %s" watch.Elapsed.TotalMilliseconds (describeOutcome outcome))
-    | [| "bench"; baseline; next; count |]
-    | [| "bench"; baseline; next; count; "strip" |] as op ->
-      // Read both builds, diff them and write the delta, `count` times from nothing. The first is cold (the JIT
-      // has not seen this code); the rest are what a second save costs. With `strip` the baseline is an
-      // instrumented module and the probes are looked through.
+      say FactKind.Time (sprintf "%.3f %s" watch.Elapsed.TotalMilliseconds (describeOutcome outcome))
+    | ValueSome (Op.Bench (baseline, next, passes, benchProbes)) ->
+      // Read both builds, diff them and write the delta, `passes` times from nothing. The first is cold (the JIT
+      // has not seen this code); the rest are what a second save costs.
       let probes =
-        match op.Length with
-        | 5 -> ProbeStripping.StripCoverageProbes CoverageProbe.hitSymbol
-        | _ -> ProbeStripping.KeepEveryInstruction
-      for iteration in 1 .. int count do
+        match benchProbes with
+        | BenchProbes.LookThrough -> ProbeStripping.StripCoverageProbes CoverageProbe.hitSymbol
+        | BenchProbes.Keep -> ProbeStripping.KeepEveryInstruction
+      for pass in 1 .. passes do
         let watch = Stopwatch.StartNew()
         let before = PeImage.OfFile(path baseline)
         let after = PeImage.OfFile(path next)
@@ -144,32 +253,34 @@ let private runScript (directory: string) : int =
         | PrepareOutcome.Ready prepared ->
           lastPayload <- ValueSome prepared.Payload
           lastChain <- ValueSome (chain.Commit prepared, after)
-          say (sprintf "BENCH %d read=%.1f prepare=%.1f metadata=%d il=%d updated=%d added=%d"
-                 iteration read watch.Elapsed.TotalMilliseconds prepared.Payload.Metadata.Length prepared.Payload.Il.Length
-                 prepared.Payload.Updated.Length prepared.Payload.AddedMethods.Length)
-        | PrepareOutcome.NothingChanged -> say (sprintf "BENCH %d nothing-changed" iteration)
+          say FactKind.Bench
+            (sprintf "%d read=%.1f prepare=%.1f metadata=%d il=%d updated=%d added=%d"
+               pass read watch.Elapsed.TotalMilliseconds prepared.Payload.Metadata.Length prepared.Payload.Il.Length
+               prepared.Payload.Updated.Length prepared.Payload.AddedMethods.Length)
+        | PrepareOutcome.NothingChanged -> say FactKind.Bench (sprintf "%d nothing-changed" pass)
         | PrepareOutcome.Refused causes ->
-          say (sprintf "BENCH %d refused %s" iteration (String.Join("; ", causes |> List.map RudeCause.describe)))
-    | [| "second"; next2 |] ->
-      // The save after the one `bench` made: the chain has committed it, so the previous build is the one it was
+          say FactKind.Bench (sprintf "%d refused %s" pass (String.Join("; ", causes |> List.map RudeCause.describe)))
+    | ValueSome (Op.Second next) ->
+      // The save after the one `Bench` made: the chain has committed it, so the previous build is the one it was
       // made from (already read), and only the new build is new.
       match lastChain with
-      | ValueNone -> say "SECOND no-chain"
+      | ValueNone -> say FactKind.Second "no-chain"
       | ValueSome (chain, _) ->
         let watch = Stopwatch.StartNew()
-        let after = PeImage.OfFile(path next2)
+        let after = PeImage.OfFile(path next)
         let read = watch.Elapsed.TotalMilliseconds
         watch.Restart()
         match chain.Prepare(Guid.NewGuid(), after) with
         | PrepareOutcome.Ready prepared ->
-          say (sprintf "SECOND read=%.1f prepare=%.1f metadata=%d il=%d updated=%d added=%d"
-                 read watch.Elapsed.TotalMilliseconds prepared.Payload.Metadata.Length prepared.Payload.Il.Length
-                 prepared.Payload.Updated.Length prepared.Payload.AddedMethods.Length)
-        | PrepareOutcome.NothingChanged -> say "SECOND nothing-changed"
-        | PrepareOutcome.Refused causes -> say (sprintf "SECOND refused %s" (String.Join("; ", causes |> List.map RudeCause.describe)))
-    | [| "applylast" |] ->
+          say FactKind.Second
+            (sprintf "read=%.1f prepare=%.1f metadata=%d il=%d updated=%d added=%d"
+               read watch.Elapsed.TotalMilliseconds prepared.Payload.Metadata.Length prepared.Payload.Il.Length
+               prepared.Payload.Updated.Length prepared.Payload.AddedMethods.Length)
+        | PrepareOutcome.NothingChanged -> say FactKind.Second "nothing-changed"
+        | PrepareOutcome.Refused causes -> say FactKind.Second (sprintf "refused %s" (String.Join("; ", causes |> List.map RudeCause.describe)))
+    | ValueSome Op.ApplyLast ->
       match lastPayload with
-      | ValueNone -> say "TIME no-delta"
+      | ValueNone -> say FactKind.Time "no-delta"
       | ValueSome payload ->
         // The runtime's call and the handlers after it, timed apart: they are different costs.
         let watch = Stopwatch.StartNew()
@@ -178,11 +289,10 @@ let private runScript (directory: string) : int =
         watch.Restart()
         let runs = DeltaApply.runUpdateHandlers (DeltaApply.updatedTypes assembly payload)
         let failures = DeltaApply.handlerFailures runs
-        say (sprintf "TIME %.3f handlers=%.3f %s" applied watch.Elapsed.TotalMilliseconds (match failures with | [] -> "Applied" | f -> "handlers failed: " + String.Join("; ", f)))
+        say FactKind.Time
+          (sprintf "%.3f handlers=%.3f %s" applied watch.Elapsed.TotalMilliseconds (match failures with | [] -> "Applied" | f -> "handlers failed: " + String.Join("; ", f)))
         for run in runs |> List.sortByDescending (fun r -> r.Milliseconds) |> List.truncate 4 do
-          say (sprintf "HANDLER %.3f ms %s.%s" run.Milliseconds run.Handler run.Step)
-    | [||] -> ()
-    | other -> say ("UNKNOWN " + String.Join(" ", other))
+          say FactKind.Handler (sprintf "%.3f ms %s.%s" run.Milliseconds run.Handler run.Step)
   0
 
 /// What running an argument list came to.
@@ -206,8 +316,7 @@ let tryRun (argv: string[]) : ChildRun =
 /// What a child printed and how it ended.
 type ChildResult =
   { ExitCode: int
-    /// The `DELTACHILD` lines, without the prefix.
-    Facts: string list
+    Facts: Fact list
     Stderr: string }
 
 /// Whether the child starts with the environment variable that makes modules editable.
@@ -240,9 +349,9 @@ let private startInfo (directory: string) (modifiable: ModifiableAssemblies) : P
 
 /// Run a script in a child. Both streams are drained into files while it runs, because a redirected pipe nobody reads
 /// fills and stops the child before it says anything.
-let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAssemblies) (script: string list) : Task<ChildResult> =
+let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAssemblies) (script: Op list) : Task<ChildResult> =
   task {
-    File.WriteAllLines(Path.Combine(directory, "script.txt"), script)
+    File.WriteAllLines(Path.Combine(directory, "script.txt"), script |> List.map Op.toLine)
     let stdoutPath = Path.Combine(directory, "stdout.txt")
     let stderrPath = Path.Combine(directory, "stderr.txt")
     use stdoutFile = new StreamWriter(stdoutPath)
@@ -265,8 +374,7 @@ let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAsse
     stderrFile.Flush()
     let facts =
       File.ReadAllLines stdoutPath
-      |> Array.filter (fun l -> l.StartsWith(prefix, StringComparison.Ordinal))
-      |> Array.map (fun l -> l.Substring prefix.Length)
+      |> Array.choose (fun l -> match parseFact l with | ValueSome fact -> Some fact | ValueNone -> None)
       |> Array.toList
     return
       { ExitCode = child.ExitCode
@@ -275,22 +383,24 @@ let runWithin (budget: TimeSpan) (directory: string) (modifiable: ModifiableAsse
   }
 
 /// Run a script in a child that is expected to end within `TestTimeouts.patience`.
-let run (directory: string) (modifiable: ModifiableAssemblies) (script: string list) : Task<ChildResult> =
+let run (directory: string) (modifiable: ModifiableAssemblies) (script: Op list) : Task<ChildResult> =
   runWithin TestTimeouts.patience directory modifiable script
 
-/// The lines of each `eval`, in order.
-let evalBlocks (result: ChildResult) : string list list =
-  let rec go (facts: string list) (current: string list option) (acc: string list list) =
-    match facts, current with
-    | [], _ -> List.rev acc
-    | "EVAL begin" :: rest, _ -> go rest (Some []) acc
-    | "EVAL end" :: rest, Some lines -> go rest None (List.rev lines :: acc)
-    | fact :: rest, Some lines when fact.StartsWith("L ", StringComparison.Ordinal) -> go rest (Some (fact.Substring 2 :: lines)) acc
-    | _ :: rest, _ -> go rest current acc
-  go result.Facts None []
+/// The text of each fact of one kind, in order.
+let factsOf (kind: FactKind) (result: ChildResult) : string list =
+  result.Facts |> List.filter (fun f -> f.Kind = kind) |> List.map (fun f -> f.Text)
 
-/// What each `apply` said, in order.
-let applyOutcomes (result: ChildResult) : string list =
-  result.Facts
-  |> List.filter (fun f -> f.StartsWith("APPLY ", StringComparison.Ordinal))
-  |> List.map (fun f -> f.Substring "APPLY ".Length)
+/// The lines of each `Eval`, in order.
+let evalBlocks (result: ChildResult) : string list list =
+  let blocks = ResizeArray<string list>()
+  let current = ResizeArray<string>()
+  for fact in result.Facts do
+    match fact.Kind with
+    | FactKind.EvalBegin -> current.Clear()
+    | FactKind.EvalLine -> current.Add fact.Text
+    | FactKind.EvalEnd -> blocks.Add(List.ofSeq current)
+    | _ -> ()
+  List.ofSeq blocks
+
+/// What each `Apply` said, in order.
+let applyOutcomes (result: ChildResult) : string list = factsOf FactKind.Apply result

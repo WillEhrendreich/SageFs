@@ -137,12 +137,12 @@ let private runCase (twin: Twin) (probes: ProbeStripping) (instrument: bool) (se
       let prepared = prepare twin seed probes directory paths
       // The versions that came out with a delta, in order. A version that came out unchanged has none.
       let script =
-        [ yield "load base/Gen.dll"
-          yield "eval"
+        [ yield Op.Load "base/Gen.dll"
+          yield Op.Eval
           for (meta, il) in prepared.Deltas do
-            yield sprintf "apply %s %s" meta il
-            yield "eval"
-          yield "evallate" ]
+            yield Op.Apply (meta, il)
+            yield Op.Eval
+          yield Op.EvalLate ]
       let! result = DeltaChild.run directory ModifiableAssemblies.Debug script
       let blocks = DeltaChild.evalBlocks result
       let applies = DeltaChild.applyOutcomes result
@@ -370,6 +370,26 @@ let metadataDeltaTests =
       let numberOfCases = Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<RudeCause>).Length
       causes.Length |> Expect.equal "this list names every case of the union" numberOfCases
 
+    testCase "WHY - every operation a child script can hold is written and read back as the same operation, and every fact kind has its own tag" <| fun _ ->
+      let ops =
+        [ Op.Load "a.dll"
+          Op.Eval
+          Op.EvalLate
+          Op.Apply ("d1.meta", "d1.il")
+          Op.Check ("d1.meta", "d1.il")
+          Op.Capability
+          Op.Time ("d1.meta", "d1.il")
+          Op.Bench ("a.dll", "b.dll", 5, BenchProbes.Keep)
+          Op.Bench ("a.dll", "b.dll", 3, BenchProbes.LookThrough)
+          Op.Second "c.dll"
+          Op.ApplyLast ]
+      for op in ops do
+        Op.parse (Op.toLine op) |> Expect.equal (sprintf "%A survives its own line" op) (ValueSome op)
+      Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<Op>).Length
+      |> Expect.equal "this list holds every case of Op, so a new case is a failing test until it is here" (ops |> List.map (fun op -> Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(op, typeof<Op>) |> fst |> fun c -> c.Name) |> List.distinct |> List.length)
+      FactKind.all |> List.map FactKind.tag |> List.distinct |> List.length |> Expect.equal "one tag per fact kind" FactKind.all.Length
+      Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<FactKind>).Length |> Expect.equal "and `all` holds every kind" FactKind.all.Length
+
     // -- the differ -----------------------------------------------------------------------------------------
 
     testCase "WHY - a recompile that only moves the lines closures are written on changes nothing, even though every closure is renamed" <| fun _ ->
@@ -552,9 +572,9 @@ let metadataDeltaTests =
         let meta, il = List.head prepared.Deltas
         let baseline = "base/Gen.dll"
         let! result =
-          DeltaChild.run directory ModifiableAssemblies.NotSet [ sprintf "load %s" baseline; "capability"; sprintf "check %s %s" meta il; sprintf "apply %s %s" meta il ]
+          DeltaChild.run directory ModifiableAssemblies.NotSet [ Op.Load baseline; Op.Capability; Op.Check (meta, il); Op.Apply (meta, il) ]
         result.ExitCode |> Expect.equal (sprintf "the child lived: %s" result.Stderr) 0
-        result.Facts |> List.filter (fun f -> f.StartsWith "CHECK") |> List.exists (fun f -> f.Contains "DOTNET_MODIFIABLE_ASSEMBLIES")
+        DeltaChild.factsOf FactKind.Check result |> List.exists (fun f -> f.Contains "DOTNET_MODIFIABLE_ASSEMBLIES")
         |> Expect.isTrue (sprintf "the check names the missing variable: %A" result.Facts)
         applyOutcomes result |> List.head |> Expect.stringStarts "the runtime refuses and the outcome says it cannot edit the assembly" "RuntimeNotModifiable"
       finally
@@ -573,9 +593,9 @@ let metadataDeltaTests =
         rewrite (Path.Combine(directory, "base", "Gen.dll")) (Path.Combine(optimized, "Gen.dll")) (fun a -> a.CustomAttributes.Clear())
         File.Copy(Path.Combine(directory, meta), Path.Combine(optimized, meta))
         File.Copy(Path.Combine(directory, il), Path.Combine(optimized, il))
-        let! result = DeltaChild.run optimized ModifiableAssemblies.Debug [ "load Gen.dll"; sprintf "check %s %s" meta il; sprintf "apply %s %s" meta il ]
+        let! result = DeltaChild.run optimized ModifiableAssemblies.Debug [ Op.Load "Gen.dll"; Op.Check (meta, il); Op.Apply (meta, il) ]
         result.ExitCode |> Expect.equal (sprintf "the child lived: %s" result.Stderr) 0
-        result.Facts |> List.exists (fun f -> f.StartsWith "CHECK" && f.Contains "optimizations")
+        DeltaChild.factsOf FactKind.Check result |> List.exists (fun f -> f.Contains "optimizations")
         |> Expect.isTrue (sprintf "the check says the module is optimized: %A" result.Facts)
         applyOutcomes result |> List.head |> Expect.stringStarts "and the runtime agrees" "RuntimeNotModifiable"
       finally
@@ -630,15 +650,20 @@ let metadataDeltaTests =
           line.Split(' ') |> Array.pick (fun part -> match part.StartsWith(name + "=") with | true -> Some (Double.Parse(part.Substring(name.Length + 1), Globalization.CultureInfo.InvariantCulture)) | false -> None)
         printfn "DELTA-BENCH machine: %d logical cores, %s, %s" Environment.ProcessorCount (Runtime.InteropServices.RuntimeInformation.OSDescription) Runtime.InteropServices.RuntimeInformation.FrameworkDescription
         printfn "DELTA-BENCH subject: SageFs.Core.dll %d bytes (%d methods), three method bodies changed, n=%d iterations from nothing in one child process" (FileInfo(core).Length) (PeImage.OfFile(core).Reader.MethodDefinitions.Count) iterations
-        for label, baselineFile, strip in [ "plain baseline", "CoreBench.dll", ""; sprintf "instrumented baseline (%d probes), probes looked through" probes, Path.GetFileName benchBaseline, " strip" ] do
+        for label, baselineFile, benchProbes in
+          [ "plain baseline", "CoreBench.dll", BenchProbes.Keep
+            sprintf "instrumented baseline (%d probes), probes looked through" probes, Path.GetFileName benchBaseline, BenchProbes.LookThrough ] do
           let! result =
             DeltaChild.runWithin TestTimeouts.bigAssemblyDelta directory ModifiableAssemblies.Debug
-              [ sprintf "load %s" baselineFile; sprintf "bench %s CoreBenchNext.dll %d%s" baselineFile iterations strip; "second CoreBenchNext2.dll"; "applylast" ]
+              [ Op.Load baselineFile
+                Op.Bench (baselineFile, "CoreBenchNext.dll", iterations, benchProbes)
+                Op.Second "CoreBenchNext2.dll"
+                Op.ApplyLast ]
           result.ExitCode |> Expect.equal (sprintf "the child lived: %s" result.Stderr) 0
-          let bench = result.Facts |> List.filter (fun f -> f.StartsWith "BENCH")
+          let bench = DeltaChild.factsOf FactKind.Bench result
           bench.Length |> Expect.equal (sprintf "every iteration printed a line: %A" result.Facts) iterations
           bench |> List.iter (fun line -> line |> Expect.stringContains "each iteration wrote a delta of the three bodies" "updated=3")
-          let time = result.Facts |> List.find (fun f -> f.StartsWith "TIME")
+          let time = DeltaChild.factsOf FactKind.Time result |> List.head
           time |> Expect.stringContains "the runtime applied the big module's delta" "Applied"
           // The first iteration is cold (nothing JIT-compiled); the rest are what the next save costs.
           let prepares = bench |> List.map (field "prepare")
@@ -646,11 +671,11 @@ let metadataDeltaTests =
           let warm = List.tail prepares |> List.sort
           printfn "DELTA-BENCH [%s] read both builds (ms): %s" label (String.Join(", ", reads |> List.map (sprintf "%.0f")))
           printfn "DELTA-BENCH [%s] diff and write (ms): cold %.0f, warm min %.0f median %.0f max %.0f; delta %s" label (List.head prepares) (List.head warm) (warm[warm.Length / 2]) (List.last warm) (bench |> List.head |> fun l -> l.Substring(l.IndexOf "metadata="))
-          let second = result.Facts |> List.find (fun f -> f.StartsWith "SECOND")
+          let second = DeltaChild.factsOf FactKind.Second result |> List.head
           second |> Expect.stringContains "the save after it changed the three more bodies" "updated=3"
           printfn "DELTA-BENCH [%s] second save, previous build already read (ms): %s" label second
           printfn "DELTA-BENCH [%s] runtime ApplyUpdate (ms): %s" label time
-          for handler in result.Facts |> List.filter (fun f -> f.StartsWith "HANDLER") do
+          for handler in DeltaChild.factsOf FactKind.Handler result do
             printfn "DELTA-BENCH [%s] slowest handlers: %s" label handler
       finally
         removeQuietly directory
@@ -659,9 +684,9 @@ let metadataDeltaTests =
     testTask "WHY - a process started the way a hot reload app is started reports it can take a delta" {
       let directory = scratch ()
       try
-        let! result = DeltaChild.run directory ModifiableAssemblies.Debug [ "capability" ]
+        let! result = DeltaChild.run directory ModifiableAssemblies.Debug [ Op.Capability ]
         result.ExitCode |> Expect.equal (sprintf "the child lived: %s" result.Stderr) 0
-        let line = result.Facts |> List.find (fun f -> f.StartsWith "CAPABILITY")
+        let line = DeltaChild.factsOf FactKind.Capability result |> List.head
         line |> Expect.stringContains "updates are supported" "support=Supported"
         line |> Expect.stringContains "the environment is the debug one" "environment=Debug"
         line |> Expect.stringContains "and the runtime lists the baseline capability" "Baseline"

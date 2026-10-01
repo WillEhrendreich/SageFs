@@ -41,7 +41,7 @@ type RawInstruction =
     Operand: RawOperand }
 
 and [<RequireQualifiedAccess>] RawOperand =
-  | None
+  | NoOperand
   /// An immediate, a variable index, or a branch offset relative to the next instruction.
   | Integer of int64
   /// The bit pattern of a float operand.
@@ -54,7 +54,7 @@ and [<RequireQualifiedAccess>] RawOperand =
 /// An operand in the canonical form.
 [<RequireQualifiedAccess>]
 type Operand =
-  | None
+  | NoOperand
   | Integer of int64
   | FloatBits of int64
   | Variable of int
@@ -153,7 +153,7 @@ module IlCanon =
 
   let private readOperand (il: byte array) (at: int) (code: OpCode) : RawOperand =
     match code.OperandType with
-    | OperandType.InlineNone -> RawOperand.None
+    | OperandType.InlineNone -> RawOperand.NoOperand
     | OperandType.ShortInlineBrTarget
     | OperandType.ShortInlineI -> RawOperand.Integer (int64 (sbyte il[at]))
     | OperandType.ShortInlineVar -> RawOperand.Integer (int64 il[at])
@@ -278,7 +278,7 @@ module IlCanon =
             target (next + int relative) |> Result.map (fun index -> { Op = op; Operand = Operand.Branch index })
           | (OperandType.ShortInlineVar | OperandType.InlineVar), RawOperand.Integer index ->
             Result.Ok { Op = op; Operand = Operand.Variable (int index) }
-          | _, RawOperand.None -> Result.Ok { Op = op; Operand = Operand.None }
+          | _, RawOperand.NoOperand -> Result.Ok { Op = op; Operand = Operand.NoOperand }
           | _, RawOperand.Integer value -> Result.Ok { Op = op; Operand = Operand.Integer value }
           | _, RawOperand.FloatBits bits -> Result.Ok { Op = op; Operand = Operand.FloatBits bits }
           | _, RawOperand.SwitchTable table ->

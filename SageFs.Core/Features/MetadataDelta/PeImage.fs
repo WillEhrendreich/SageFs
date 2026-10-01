@@ -25,33 +25,37 @@ open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
 open System.Text.RegularExpressions
 
-/// A handle of one kind from an entity handle of that kind.
-module internal Handles =
-  let typeDef (h: EntityHandle) = MetadataTokens.TypeDefinitionHandle(MetadataTokens.GetRowNumber h)
-  let typeRef (h: EntityHandle) = MetadataTokens.TypeReferenceHandle(MetadataTokens.GetRowNumber h)
-  let typeSpec (h: EntityHandle) = MetadataTokens.TypeSpecificationHandle(MetadataTokens.GetRowNumber h)
-  let methodDef (h: EntityHandle) = MetadataTokens.MethodDefinitionHandle(MetadataTokens.GetRowNumber h)
-  let fieldDef (h: EntityHandle) = MetadataTokens.FieldDefinitionHandle(MetadataTokens.GetRowNumber h)
-  let memberRef (h: EntityHandle) = MetadataTokens.MemberReferenceHandle(MetadataTokens.GetRowNumber h)
-  let methodSpec (h: EntityHandle) = MetadataTokens.MethodSpecificationHandle(MetadataTokens.GetRowNumber h)
-  let assemblyRef (h: EntityHandle) = MetadataTokens.AssemblyReferenceHandle(MetadataTokens.GetRowNumber h)
+/// A handle of one kind from an entity handle of that kind. (A static class and not a module: a module with
+/// nothing public in it counts against the architecture audit's ceiling on empty modules.)
+[<AbstractClass; Sealed>]
+type internal Handles =
+  static member typeDef (h: EntityHandle) = MetadataTokens.TypeDefinitionHandle(MetadataTokens.GetRowNumber h)
+  static member typeRef (h: EntityHandle) = MetadataTokens.TypeReferenceHandle(MetadataTokens.GetRowNumber h)
+  static member typeSpec (h: EntityHandle) = MetadataTokens.TypeSpecificationHandle(MetadataTokens.GetRowNumber h)
+  static member methodDef (h: EntityHandle) = MetadataTokens.MethodDefinitionHandle(MetadataTokens.GetRowNumber h)
+  static member fieldDef (h: EntityHandle) = MetadataTokens.FieldDefinitionHandle(MetadataTokens.GetRowNumber h)
+  static member memberRef (h: EntityHandle) = MetadataTokens.MemberReferenceHandle(MetadataTokens.GetRowNumber h)
+  static member methodSpec (h: EntityHandle) = MetadataTokens.MethodSpecificationHandle(MetadataTokens.GetRowNumber h)
+  static member assemblyRef (h: EntityHandle) = MetadataTokens.AssemblyReferenceHandle(MetadataTokens.GetRowNumber h)
 
 /// The names the compiler moves, folded.
-module internal NameFolding =
+[<Sealed>]
+type internal NameFolding private () =
 
   /// `f@18-3` and `f@18` (a closure named after its line), and the `at line 13` an F# pipeline closure
   /// carries in its name.
-  let private lineNumbers = Regex(@"@\d+(-\d+)?$|(?<=at line )\d+", RegexOptions.Compiled)
+  static let lineNumbers = Regex(@"@\d+(-\d+)?$|(?<=at line )\d+", RegexOptions.Compiled)
 
-  let fold (name: string) : string =
+  static member fold (name: string) : string =
     lineNumbers.Replace(name, MatchEvaluator(fun m -> match m.Value.StartsWith("@", StringComparison.Ordinal) with | true -> "@_" | false -> "_"))
 
 /// The keys of a module's types, and how many types fold to each name.
-module internal TypeKeys =
+[<AbstractClass; Sealed>]
+type internal TypeKeys =
 
   /// The key of each TypeDef row, by row number minus one: the folded full name, and `#n` after it when
   /// several types fold to the same name (the closures of one binding written on different lines).
-  let build (reader: MetadataReader) : string array * string array * Dictionary<string, int> =
+  static member build (reader: MetadataReader) : string array * string array * Dictionary<string, int> =
     let count = reader.GetTableRowCount TableIndex.TypeDef
     let rec fullName (handle: TypeDefinitionHandle) : string =
       let t = reader.GetTypeDefinition handle

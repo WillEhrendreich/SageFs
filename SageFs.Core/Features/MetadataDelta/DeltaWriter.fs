@@ -320,9 +320,8 @@ type internal KnownRows =
     LocalSignatures: Map<string, int>
     Methods: Map<string, MethodRow> }
 
-[<RequireQualifiedAccess>]
-module internal KnownRows =
-  let empty =
+  /// Nothing added yet.
+  static member Empty : KnownRows =
     { TypeRefs = Map.empty
       TypeSpecs = Map.empty
       MemberRefs = Map.empty
@@ -391,7 +390,7 @@ type DeltaChain private (state: ChainState) =
             Blob = reader.GetHeapSize HeapIndex.Blob
             Guid = reader.GetHeapSize HeapIndex.Guid }
         Added = Array.zeroCreate tableCount
-        Rows = KnownRows.empty
+        Rows = KnownRows.Empty
         Previous = baseline }
 
   /// How many deltas have been committed.
