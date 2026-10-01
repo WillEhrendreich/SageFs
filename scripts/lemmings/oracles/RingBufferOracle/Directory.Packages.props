@@ -1,0 +1,13 @@
+<Project>
+  <!-- The same versions the repo's Directory.Packages.props pins for the same packages, so the
+       oracle adds no dependency the repo does not already have. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Expecto" Version="11.0.0-alpha8" />
+    <PackageVersion Include="Expecto.FsCheck" Version="11.0.0-alpha8" />
+    <PackageVersion Include="FsCheck" Version="3.3.2" />
+    <PackageVersion Include="FSharp.Core" Version="11.0.101-preview7.26359.118" />
+  </ItemGroup>
+</Project>

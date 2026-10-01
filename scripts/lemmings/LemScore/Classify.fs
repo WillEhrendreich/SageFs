@@ -76,11 +76,22 @@ let private jsonSaysFailed (text: string) : bool =
       successFalse || errorSet
     with :? JsonException -> false
 
-/// Did this SageFs MCP call fail? An errored tool, a refused one, or a reply that is
-/// phrased as a refusal. A plain F# compile error inside an eval is the lemming's own
-/// bug and is not counted here.
+/// What an eval that did not compile or threw starts with. It is the lemming's own code
+/// failing, which is the RED step of the loop SageFs teaches, so it is counted apart from
+/// SageFs itself failing.
+let private evalFailurePrefix = "Error: Evaluation failed"
+
+let isEvalFailure (call: ToolCall) : bool =
+  isSagefsCall call
+  && (match sagefsToolName call with "send_fsharp_code" | "check_fsharp_code" -> true | _ -> false)
+  && call.Text.TrimStart().StartsWith(evalFailurePrefix, StringComparison.Ordinal)
+
+/// Did this SageFs MCP call fail? An errored tool (cmdc reports an MCP isError result as
+/// tool_errored), a refused one, or a reply phrased as a refusal. The lemming's own eval
+/// failing is not counted here (see isEvalFailure).
 let isSagefsError (call: ToolCall) : bool =
   match call.Outcome with
+  | _ when isEvalFailure call -> false
   | ToolErrored | ToolDeniedByPolicy -> true
   | ToolNeverFinished -> false
   | ToolSucceeded ->
@@ -88,6 +99,21 @@ let isSagefsError (call: ToolCall) : bool =
     errorPrefixes |> List.exists (fun p -> text.StartsWith(p, StringComparison.OrdinalIgnoreCase))
     || call.Text.Contains nextHint
     || jsonSaysFailed call.Text
+
+/// The sandbox's own scaffolding in `ps -eo pid,ppid,etimes,args` output; anything else
+/// still alive when cmdc exited was left by the lemming (a build server node, a stray app).
+let private scaffolding = [ "bwrap "; "bash -c"; "ps -eo"; "timeout "; "cmdc " ]
+
+let leftoverProcesses (psText: string) : string list =
+  psText.Split('\n')
+  |> Array.map _.Trim()
+  |> Array.filter (fun l -> l <> "")
+  |> Array.choose (fun line ->
+    // pid ppid etimes args...
+    match line.Split([| ' ' |], 4, StringSplitOptions.RemoveEmptyEntries) with
+    | [| _; _; _; args |] when not (scaffolding |> List.exists (fun s -> args.StartsWith(s, StringComparison.Ordinal))) -> Some args
+    | _ -> None)
+  |> Array.toList
 
 let sagefsCalls (stream: RunStream) : ToolCall list =
   stream.Calls |> List.filter isSagefsCall
@@ -118,7 +144,12 @@ let shellCommand (call: ToolCall) : string option =
 let private dotnetLoop = Regex(@"\bdotnet\s+(build|test|run|fsi|msbuild)\b", RegexOptions.Compiled)
 
 let private isSuccessfulEval (call: ToolCall) : bool =
-  isSagefsCall call && sagefsToolName call = "send_fsharp_code" && call.Outcome = ToolSucceeded && not (isSagefsError call)
+  isSagefsCall call && sagefsToolName call = "send_fsharp_code" && call.Outcome = ToolSucceeded
+  && not (isSagefsError call) && not (isEvalFailure call)
+
+/// How many evals failed as the lemming's own code (RED steps and typos alike).
+let evalFailures (stream: RunStream) : int =
+  stream.Calls |> List.filter isEvalFailure |> List.length
 
 // ---- provider ---------------------------------------------------------------------------
 
@@ -158,6 +189,15 @@ let private deniedFellOvers (calls: ToolCall list) : FellOver list =
     { Stage = ToolSurface
       Symptom = sprintf "called a tool that does not exist: %s" name
       Evidence = "Command Code refused it as not among the tools offered" })
+
+/// Command Code fixing up a tool input is how a weak model's schema mistakes show.
+let private repairFellOvers (repairs: (string * string) list) : FellOver list =
+  repairs
+  |> List.countBy id
+  |> List.map (fun ((tool, rules), n) ->
+    { Stage = (if tool.StartsWith(sagefsPrefix, StringComparison.Ordinal) then stageOfTool (tool.Substring sagefsPrefix.Length) else OtherTool)
+      Symptom = sprintf "Command Code had to repair the input of %s (%s)%s" tool rules (if n > 1 then sprintf " (x%d)" n else "")
+      Evidence = "the model sent parameters the tool does not take, or the wrong type" })
 
 let private faultedFellOvers (calls: ToolCall list) : FellOver list =
   calls
@@ -260,7 +300,7 @@ let private streamIsEmpty (stream: RunStream) : bool =
 let needsRecovery (facts: RunFacts) : bool =
   let sage = sagefsCalls facts.Stream
   sage |> List.exists isSagefsError
-  || facts.Stream.Calls |> List.exists (fun c -> c.Outcome = ToolErrored || c.Outcome = ToolDeniedByPolicy)
+  || facts.Stream.Calls |> List.exists (fun c -> c.Outcome = ToolDeniedByPolicy)
   || not (List.isEmpty facts.ResidueSessions)
   || facts.CmdcExit = CmdcExit.maxTurns
 
@@ -314,6 +354,7 @@ let assess (facts: RunFacts) : Assessment =
     registrationFellOvers facts
     @ errorFellOvers calls
     @ deniedFellOvers calls
+    @ repairFellOvers facts.Stream.Repairs
     @ faultedFellOvers calls
     @ loopFellOvers calls
     @ adoptionFellOvers calls

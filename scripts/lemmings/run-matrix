@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# scripts/lemmings/run-matrix <plan-file|-> [--concurrency N] [--max-turns N] [--quota-limit N]
+#                                           [--root DIR] [--runner PATH] [--dry-run]
+#
+# Runs a list of (fixture, task, model, rep) lemming runs with a concurrency cap (default 3),
+# unique run ids, and free-model quota awareness (a model that hits its quota twice gets no more
+# runs), then prints a table. The bookkeeping is F# (scripts/lemmings/LemMatrix); this file only
+# builds it when it is stale and starts it. See scripts/lemmings/README.md for the plan format.
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=lib-cmd.sh
+source "$HERE/lib-cmd.sh"
+DLL=$HERE/LemMatrix/bin/Release/net11.0/LemMatrix.dll
+lem_ensure_project LemMatrix "$DLL"
+exec env DOTNET_NOLOGO=1 dotnet "$DLL" "$@"

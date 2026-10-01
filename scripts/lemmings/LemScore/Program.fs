@@ -5,6 +5,11 @@
 ///   LemScore daemon-check [--port N]         gate on the shared daemon; prints KEY=VALUE lines
 ///   LemScore cleanup --workdir D --out F     read residue, stop exactly those sessions, verify
 ///   LemScore sessions-under --workdir D     list the shared daemon's sessions under a directory
+///   LemScore watch --workdir D --out F --stop-file S
+///                                            record the sessions the dashboard API shows under D until S exists
+///   LemScore replace-exact --file F --find S --replace S
+///                                            replace exactly one match, or refuse and say why
+///   LemScore expect --file F --pattern RE ...  every pattern must match the answer file
 ///   LemScore dll-version <path>              product version of a built SageFs.dll
 ///   LemScore score --run-dir D ...           write D/out/summary.json
 ///
@@ -28,9 +33,6 @@ module ExitCode =
   let refused = 2
   let daemonWontDo = 3
 
-/// How long the live catalog may take to list.
-let catalogTimeout = TimeSpan.FromSeconds 30.0
-
 /// `--flag value` pairs after the subcommand.
 let private flags (args: string list) : Map<string, string> =
   args
@@ -43,19 +45,6 @@ let private need (m: Map<string, string>) (key: string) : Result<string, string>
   | Some v -> Ok v
   | None -> Error (sprintf "missing --%s" key)
 
-let private liveCatalog () : Result<string, string> =
-  try
-    let psi = ProcessStartInfo("cmdc", "--list-models", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
-    psi.Environment["NO_COLOR"] <- "1"
-    use p = Process.Start psi
-    let out = p.StandardOutput.ReadToEndAsync()
-    match p.WaitForExit catalogTimeout with
-    | true -> Ok (out.GetAwaiter().GetResult())
-    | false ->
-      p.Kill true
-      Error "cmdc --list-models did not answer in time"
-  with ex -> Error (sprintf "could not run cmdc --list-models: %s" ex.Message)
-
 let private freeModelCommand (args: string list) : int =
   match args with
   | model :: rest ->
@@ -63,7 +52,7 @@ let private freeModelCommand (args: string list) : int =
     let catalogText =
       match Map.tryFind "catalog-file" m with
       | Some path -> Ok (File.ReadAllText path)
-      | None -> liveCatalog ()
+      | None -> Catalog.liveText ()
     match catalogText |> Result.bind (fun t -> Catalog.checkFree (Catalog.parse t) model) with
     | Ok entry ->
       printfn "%s is FREE: %s" entry.Id entry.Description
@@ -125,6 +114,43 @@ let private writeResidue (path: string) (report: CleanupReport) : unit =
   w.Flush()
   Directory.CreateDirectory(Path.GetDirectoryName path |> Option.ofObj |> Option.defaultValue ".") |> ignore
   File.WriteAllText(path, Encoding.UTF8.GetString(stream.ToArray()))
+
+let private writeSeen (path: string) (seen: SeenSession list) : unit =
+  use stream = new MemoryStream()
+  use w = new Utf8JsonWriter(stream, JsonWriterOptions(Indented = true))
+  w.WriteStartArray()
+  seen
+  |> List.iter (fun s ->
+    w.WriteStartObject()
+    w.WriteString("id", s.Seen.Id)
+    w.WriteString("status", s.Seen.Status)
+    w.WriteString("workingDirectory", s.Seen.WorkingDirectory)
+    w.WriteString("firstSeenUtc", s.FirstSeenUtc.ToString "o")
+    w.WriteEndObject())
+  w.WriteEndArray()
+  w.Flush()
+  Directory.CreateDirectory(Path.GetDirectoryName path |> Option.ofObj |> Option.defaultValue ".") |> ignore
+  File.WriteAllText(path, Encoding.UTF8.GetString(stream.ToArray()))
+
+/// Watches the shared daemon's sessions list for sessions under a run directory until the
+/// stop file appears; writes what it saw. This is the proof that a lemming's work showed up
+/// in the dashboard Will is watching.
+let private watchCommand (args: string list) : int =
+  let m = flags args
+  match need m "workdir", need m "out", need m "stop-file" with
+  | Ok workdir, Ok out, Ok stop ->
+    match validRunDir workdir with
+    | Error why ->
+      eprintfn "refused: %s" why
+      ExitCode.refused
+    | Ok dir ->
+      let port = Map.tryFind "port" m |> Option.map int |> Option.defaultValue defaultMcpPort
+      let seen = watch port dir stop (writeSeen out)
+      writeSeen out seen
+      ExitCode.ok
+  | Error e, _, _ | _, Error e, _ | _, _, Error e ->
+    eprintfn "usage: LemScore watch --workdir D --out FILE --stop-file FILE [--port N] (%s)" e
+    ExitCode.usage
 
 let private cleanupCommand (args: string list) : int =
   let m = flags args
@@ -254,6 +280,22 @@ let parseResidueIds (json: string) : string list =
     | _ -> []
   with :? JsonException -> []
 
+/// (id, status) of each session the watcher saw, read back from sessions.seen.json.
+let parseSeen (json: string) : (string * string) list =
+  try
+    use doc = JsonDocument.Parse json
+    match doc.RootElement.ValueKind with
+    | JsonValueKind.Array ->
+      doc.RootElement.EnumerateArray()
+      |> Seq.choose (fun s ->
+        match s.TryGetProperty "id", s.TryGetProperty "status" with
+        | (true, i), (true, st) when i.ValueKind = JsonValueKind.String && st.ValueKind = JsonValueKind.String -> Some (i.GetString(), st.GetString())
+        | _ -> None)
+      |> Seq.map (fun (i, st) -> (i |> Option.ofObj |> Option.defaultValue "", st |> Option.ofObj |> Option.defaultValue ""))
+      |> List.ofSeq
+    | _ -> []
+  with :? JsonException -> []
+
 let private oracleVerdictOf (text: string) : Result<OracleVerdict, string> =
   match text with
   | "skip" -> Ok OracleNotRun
@@ -285,7 +327,7 @@ let private harnessErrorJson (id: string) (model: string) (task: string) (why: s
   let input =
     { Id = id; Model = model; Harness = Cmdc; SagefsVersion = "unknown"; Task = task; Seconds = 0
       Facts = facts; Teardown = ExitedOnItsOwn; DaemonStart = None; DaemonEnd = None; DashboardUrl = ""
-      ChangedFiles = []; Extra = [ { Stage = Preflight; Symptom = "the harness could not score this run"; Evidence = why } ] }
+      SessionsSeen = []; SandboxProcessesLeft = []; ChangedFiles = []; Extra = [ { Stage = Preflight; Symptom = "the harness could not score this run"; Evidence = why } ] }
   render input { Outcome = HarnessError; Reason = why; Provider = None; FellOver = [] }
 
 let private scoreCommand (args: string list) : int =
@@ -333,6 +375,8 @@ let private scoreCommand (args: string list) : int =
               DaemonStart = snapshotOf m "start"
               DaemonEnd = endSnapshot port
               DashboardUrl = sprintf "http://localhost:%d/dashboard" (dashboardPortFor port)
+              SessionsSeen = readIfExists (Path.Combine(outDir, "sessions.seen.json")) |> Option.map parseSeen |> Option.defaultValue []
+              SandboxProcessesLeft = readIfExists (Path.Combine(outDir, "sbx", "ps.txt")) |> Option.map leftoverProcesses |> Option.defaultValue []
               ChangedFiles = changed
               Extra = extraFell }
           Ok (render input (assess facts))
@@ -355,6 +399,7 @@ let main argv =
   | "run-id" :: rest -> runIdCommand rest
   | "daemon-check" :: rest -> daemonCheckCommand rest
   | "cleanup" :: rest -> cleanupCommand rest
+  | "watch" :: rest -> watchCommand rest
   | "sessions-under" :: rest -> sessionsUnderCommand rest
   | "replace-exact" :: rest -> replaceExactCommand rest
   | "expect" :: rest -> expectCommand rest

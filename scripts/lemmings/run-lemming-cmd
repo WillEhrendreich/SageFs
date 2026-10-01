@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# scripts/lemmings/run-lemming-cmd <fixture> <task> <free-model> <run-id> [max-turns]
+#
+# One disposable trial: Command Code (cmdc) on a FREE model, given only what a new user has (the
+# project, the SageFs skill where cmdc discovers skills, the SageFs MCP server registered the way
+# the README says), does a task with SageFs. The harness records what happened, runs the task's
+# oracle itself, and writes <run-dir>/out/summary.json. See scripts/lemmings/README.md.
+#
+#   fixture    a directory under scripts/lemmings/fixtures (demoenv), or
+#              sagefs-copy:<path to a SageFs checkout or worktree>
+#   task       a file scripts/lemmings/tasks/<task>.md
+#   free-model a model the live `cmdc --list-models` marks FREE; anything else is refused
+#   run-id     <model-short>-<task>-<nn>, e.g. space-bunny-parse-seed-01, or "auto" for the next free one
+#
+# Every lemming is a client of the ONE shared SageFs daemon on 37749 (never started, stopped,
+# restarted or configured here), so Will can watch them all in its dashboard. Residue is read from
+# the dashboard API first and stopped by exact session id, only for sessions under this run.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=lib-cmd.sh
+source "$HERE/lib-cmd.sh"
+
+FIXTURE=${1:?fixture} TASK=${2:?task} MODEL=${3:?free-model} ID=${4:?run-id} TURNS=${5:-60}
+HARNESS=${LEM_HARNESS:-cmdc}
+[ -f "$HERE/tasks/$TASK.md" ] || { echo "no task: $HERE/tasks/$TASK.md" >&2; exit 2; }
+
+# Nothing is touched, and no model is called, until the model is confirmed FREE.
+lem_assert_free_model "$MODEL"
+[ "$ID" = auto ] && ID=$(lem_run_id "$MODEL" "$TASK")
+RUN=$LEM_ROOT/$ID
+[ -e "$RUN" ] && { echo "run $ID already exists: pick a new id" >&2; exit 2; }
+W=$RUN/w OUT=$RUN/out
+
+# The shared daemon must be up and have room. This refuses; it never starts one.
+lem_use_shared_daemon
+
+mkdir -p "$W" "$OUT"
+echo "run $ID: $MODEL on $FIXTURE/$TASK; dashboard http://localhost:${LEM_DASH_PORT}/dashboard (working directory $W)" >&2
+
+# ---- the fixture -------------------------------------------------------------------------
+
+# A SageFs checkout, without the things that would hand the lemming more than a new user has: no
+# .git (a fresh one is made below), no agent-instruction files, no private notes (only tracked
+# files are copied), and build output only for the projects a lemming loads (LEM_COPY_BUILD,
+# default SageFs.Core) so a session loads quickly.
+copy_sagefs() {
+  local src=$1 dst=$2
+  git -C "$src" rev-parse --git-dir > /dev/null 2>&1 || { echo "sagefs-copy: $src is not a git checkout" >&2; exit 2; }
+  (cd "$src" && git ls-files -z \
+    | grep -zv -e '^AGENTS.md$' -e '^CLAUDE.md$' -e '^\.claude/' -e '^\.commandcode/' -e '^\.agents/' -e '^\.mcp.json$' \
+    | xargs -0 cp --parents --reflink=auto -t "$dst")
+  local d
+  for d in ${LEM_COPY_BUILD:-SageFs.Core}; do
+    for sub in bin obj; do
+      if [ -d "$src/$d/$sub" ]; then
+        cp -a --reflink=auto "$src/$d/$sub" "$dst/$d/$sub"
+      else
+        echo "sagefs-copy: $src/$d/$sub does not exist, so the lemming's first session will have to build" >&2
+      fi
+    done
+  done
+}
+
+case $FIXTURE in
+  sagefs-copy:*) copy_sagefs "${FIXTURE#sagefs-copy:}" "$W" ;;
+  *)
+    [ -d "$HERE/fixtures/$FIXTURE" ] || { echo "no fixture: $HERE/fixtures/$FIXTURE" >&2; exit 2; }
+    cp -r --reflink=auto "$HERE/fixtures/$FIXTURE/." "$W/" ;;
+esac
+
+# Task setup (a seeded bug, say) happens BEFORE the baseline commit, so the diff is the lemming's.
+[ -x "$HERE/tasks/$TASK.setup.sh" ] && "$HERE/tasks/$TASK.setup.sh" "$W"
+
+# A real git repo with no remote: the lemming can commit locally and cannot push.
+git -C "$W" init -q
+# Build output and SageFs's own state are not the lemming's work; keep them out of the diff.
+printf '%s\n' 'bin/' 'obj/' '.SageFs/' >> "$W/.git/info/exclude"
+git -C "$W" config user.name lemming
+git -C "$W" config user.email lemming@lem.invalid
+git -C "$W" config commit.gpgsign false
+git -C "$W" add -- .
+git -C "$W" commit -q -m "lemming baseline"
+git -C "$W" tag lem-baseline
+
+cp "$HERE/tasks/$TASK.md" "$OUT/prompt.md"
+
+# LEM_PREPARE_ONLY=1 builds the fixture and stops, so a fixture or a task setup can be checked
+# without calling a model.
+if [ -n "${LEM_PREPARE_ONLY:-}" ]; then
+  echo "prepared $W (no model was called)" >&2
+  exit 0
+fi
+
+# ---- the run -----------------------------------------------------------------------------
+
+lem_run_cmdc "$W" "$OUT/prompt.md" "$MODEL" "$TURNS" "$OUT/events.ndjson" "$OUT/cmdc.stderr"
+
+# ---- afterwards, outside the sandbox -----------------------------------------------------
+
+# Residue first (read before anything is stopped), then exactly those sessions are stopped.
+lem_cleanup_sessions "$W"
+
+# What the lemming changed, relative to where it started.
+{ git -C "$W" diff --name-only lem-baseline; git -C "$W" ls-files --others --exclude-standard; } \
+  | sort -u > "$OUT/changed.txt"
+
+# The oracle decides. Never the model's claim.
+lem_run_oracle "$RUN" "$TASK"
+
+lem_score "$RUN" "$TASK" "$MODEL" "$HARNESS" "$LEM_ORACLE_EXIT"

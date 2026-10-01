@@ -296,6 +296,46 @@ let stopSession (mcpPort: int) (id: string) : Result<unit, string> =
   let body = JsonSerializer.Serialize {| sessionId = id |}
   tryPostJson (baseUrl mcpPort + "/api/sessions/stop") body |> Result.map ignore
 
+/// How often the watcher reads the sessions list while a lemming runs.
+let watchPollInterval = TimeSpan.FromSeconds 2.0
+
+/// A session of this lemming's run as the dashboard API showed it while the lemming was running.
+type SeenSession =
+  { Seen: SessionInfo
+    FirstSeenUtc: DateTime }
+
+/// Folds one reading of the sessions list into what has been seen so far (first sighting
+/// time kept, latest status kept).
+let observe (now: DateTime) (runDir: string) (seen: SeenSession list) (reading: SessionInfo list) : SeenSession list =
+  let mine = reading |> List.filter (belongsTo runDir)
+  let known = seen |> List.map (fun s -> s.Seen.Id) |> Set.ofList
+  let updated =
+    seen |> List.map (fun s ->
+      match mine |> List.tryFind (fun m -> m.Id = s.Seen.Id) with
+      | Some m -> { s with Seen = m }
+      | None -> s)
+  let fresh =
+    mine
+    |> List.filter (fun m -> not (known.Contains m.Id))
+    |> List.map (fun m -> { Seen = m; FirstSeenUtc = now })
+  updated @ fresh
+
+/// Polls the sessions list until `stopFile` exists, calling `onChange` whenever a new session
+/// has appeared. A read that fails is skipped, never fatal: a watcher must not hurt the run.
+let watch (mcpPort: int) (runDir: string) (stopFile: string) (onChange: SeenSession list -> unit) : SeenSession list =
+  let rec loop seen =
+    match IO.File.Exists stopFile with
+    | true -> seen
+    | false ->
+      let next =
+        match listSessions mcpPort with
+        | Ok reading -> observe DateTime.UtcNow runDir seen reading
+        | Error _ -> seen
+      if next.Length <> seen.Length then onChange next
+      Threading.Thread.Sleep watchPollInterval
+      loop next
+  loop []
+
 type CleanupReport =
   { Found: SessionInfo list
     Stops: (string * Result<unit, string>) list

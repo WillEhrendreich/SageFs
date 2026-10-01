@@ -31,6 +31,23 @@ let parse (text: string) : CatalogEntry list =
   |> Array.toList
   |> List.choose parseLine
 
+/// How long the live catalog may take to list.
+let catalogTimeout = TimeSpan.FromSeconds 30.0
+
+/// `cmdc --list-models`, as text. No colour, so the lines parse.
+let liveText () : Result<string, string> =
+  try
+    let psi = System.Diagnostics.ProcessStartInfo("cmdc", "--list-models", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
+    psi.Environment["NO_COLOR"] <- "1"
+    use p = System.Diagnostics.Process.Start psi
+    let out = p.StandardOutput.ReadToEndAsync()
+    match p.WaitForExit catalogTimeout with
+    | true -> Ok (out.GetAwaiter().GetResult())
+    | false ->
+      p.Kill true
+      Error "cmdc --list-models did not answer in time"
+  with ex -> Error (sprintf "could not run cmdc --list-models: %s" ex.Message)
+
 /// FREE has to be the first word of the description. A paid model whose blurb merely
 /// says "everything else free" does not count.
 let isMarkedFree (entry: CatalogEntry) : bool =
@@ -69,16 +86,27 @@ let shortName (model: string) : string =
 /// Width of the repetition number in a run id: space-bunny-parse-seed-01.
 let runNumberWidth = 2
 
+let private takenIds (root: string) : Set<string> =
+  match Directory.Exists root with
+  | true -> Directory.GetDirectories root |> Array.map Path.GetFileName |> Set.ofArray
+  | false -> Set.empty
+
+/// `count` unused ids `<model-short>-<task>-<nn>`, numbered upward from the first free one and
+/// never colliding with a directory under `root` or with `alsoTaken` (ids a caller has already
+/// handed out in this plan but not yet created on disk).
+let runIdsAvoiding (root: string) (alsoTaken: Set<string>) (model: string) (task: string) (count: int) : string list =
+  let prefix = sprintf "%s-%s-" (shortName model) task
+  let taken = Set.union (takenIds root) alsoTaken
+  let rec pick n acc =
+    match List.length acc = count with
+    | true -> List.rev acc
+    | false ->
+      let id = prefix + n.ToString().PadLeft(runNumberWidth, '0')
+      match taken.Contains id with
+      | true -> pick (n + 1) acc
+      | false -> pick (n + 1) (id :: acc)
+  pick 1 []
+
 /// The next unused `<model-short>-<task>-<nn>` under `root`.
 let nextRunId (root: string) (model: string) (task: string) : string =
-  let prefix = sprintf "%s-%s-" (shortName model) task
-  let taken =
-    match Directory.Exists root with
-    | true -> Directory.GetDirectories root |> Array.map Path.GetFileName |> Set.ofArray
-    | false -> Set.empty
-  let rec pick n =
-    let id = prefix + n.ToString().PadLeft(runNumberWidth, '0')
-    match taken.Contains id with
-    | true -> pick (n + 1)
-    | false -> id
-  pick 1
+  runIdsAvoiding root Set.empty model task 1 |> List.head

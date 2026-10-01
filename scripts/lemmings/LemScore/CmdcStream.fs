@@ -29,6 +29,9 @@ type Event =
   | ToolCompleted of id: string * name: string * text: string
   | ToolErroredEvent of id: string * name: string * text: string
   | ToolDeniedEvent of id: string * name: string
+  /// Command Code fixed up the model's tool input before sending it (tool_input_repaired,
+  /// tool_input_coerced): a sign the tool's schema is easy for a weak model to get wrong.
+  | InputRepaired of tool: string * rules: string
   | RunErrorEvent of text: string
   | RunEnd of stopReason: string * turnCount: int
   | Result of ResultLine
@@ -79,6 +82,14 @@ let private parseEvent (ev: JsonElement) : Event =
   | "tool_errored" ->
     ToolErroredEvent (str "toolCallId", str "toolName", tryProp "error" ev |> Option.map textOf |> Option.defaultValue "")
   | "tool_denied" -> ToolDeniedEvent (str "toolCallId", str "toolName")
+  | "tool_input_repaired" ->
+    let rules =
+      match tryProp "rulesFired" ev with
+      | Some a when a.ValueKind = JsonValueKind.Array ->
+        a.EnumerateArray() |> Seq.map (fun r -> r.ToString()) |> String.concat ","
+      | _ -> "unspecified"
+    InputRepaired (str "toolName", rules)
+  | "tool_input_coerced" -> InputRepaired (str "toolName", sprintf "coerced from %s" (str "rawType"))
   | "run_error" ->
     let text =
       tryProp "error" ev
@@ -133,12 +144,14 @@ type RunStream =
     Turns: int
     Calls: ToolCall list
     RunErrors: string list
+    /// (tool, rules) for every input Command Code had to repair.
+    Repairs: (string * string) list
     EndStopReason: string option
     Result: ResultLine option
     Unreadable: string list }
 
 let emptyStream : RunStream =
-  { SessionId = None; Turns = 0; Calls = []; RunErrors = []; EndStopReason = None; Result = None; Unreadable = [] }
+  { SessionId = None; Turns = 0; Calls = []; RunErrors = []; Repairs = []; EndStopReason = None; Result = None; Unreadable = [] }
 
 let private updateCall (id: string) (f: ToolCall -> ToolCall) (calls: ToolCall list) : ToolCall list =
   calls |> List.map (fun c -> if c.Id = id then f c else c)
@@ -162,6 +175,7 @@ let step (stream: RunStream) (event: Event) : RunStream =
     | false ->
       let call = { Id = id; Name = name; Input = "{}"; Turn = stream.Turns; Outcome = ToolDeniedByPolicy; Text = "" }
       { stream with Calls = call :: stream.Calls }
+  | InputRepaired (tool, rules) -> { stream with Repairs = (tool, rules) :: stream.Repairs }
   | RunErrorEvent text -> { stream with RunErrors = text :: stream.RunErrors }
   | RunEnd (stop, turns) -> { stream with EndStopReason = Some stop; Turns = max stream.Turns turns }
   | Result r -> { stream with Result = Some r }
@@ -170,7 +184,7 @@ let step (stream: RunStream) (event: Event) : RunStream =
 
 let ofLines (lines: string seq) : RunStream =
   let folded = lines |> Seq.map parseLine |> Seq.fold step emptyStream
-  { folded with Calls = List.rev folded.Calls; RunErrors = List.rev folded.RunErrors; Unreadable = List.rev folded.Unreadable }
+  { folded with Calls = List.rev folded.Calls; RunErrors = List.rev folded.RunErrors; Repairs = List.rev folded.Repairs; Unreadable = List.rev folded.Unreadable }
 
 /// The prefix Command Code gives every tool a registered MCP server exposes.
 let sagefsPrefix = "mcp__sagefs__"

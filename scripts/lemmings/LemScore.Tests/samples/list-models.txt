@@ -1,0 +1,119 @@
+Available models  ·  85 models
+
+Open Source
+
+deepseek/deepseek-v4-pro               hybrid-attention long-context reasoning
+deepseek/deepseek-v4-flash             fast hybrid-attention reasoning (default)
+deepseek/deepseek-v4-flash-vision-exp  fast hybrid-attention reasoning with vision
+deepseek/deepseek-v4-flash-fast        low-latency V4 Flash deployment
+deepseek/deepseek-v4.1-flash           V4.1 hybrid-attention reasoning with vision
+deepseek/deepseek-v4.1-flash-fast      High throughput V4.1 Flash
+moonshotai/kimi-k3                     long-horizon coding & knowledge work with 1M context
+moonshotai/kimi-k2.7-code              improved long-horizon coding with vision
+moonshotai/kimi-k2.7-code-highspeed    high-speed long-horizon coding with vision
+moonshotai/kimi-k2.6                   long-horizon coding with vision
+moonshotai/kimi-k2.5                   multimodal frontend coding
+z-ai/glm-5.3-flash                     fast, affordable GLM coding with 1M context
+z-ai/glm-5.3-flashx                    high-speed GLM-5.3 Flash with 1M context
+zai-org/glm-5.3                        frontier coding with emergent cyber capabilities
+zai-org/glm-5.2                        powerful coding with 1M context and long-horizon tasks
+zai-org/glm-5.2-fast                   high-throughput GLM-5.2 with 1M context
+zai-org/glm-5.1                        long-horizon autonomous coding agent
+zai-org/glm-5                          multi-mode thinking & long-range planning
+minimaxai/minimax-m3                   frontier coding, agents & native multimodality
+minimaxai/minimax-m2.7                 end-to-end software engineering agent
+minimaxai/minimax-m2.5                 cross-platform full-stack agentic dev
+xiaomi/mimo-v2.6-pro                   flagship multimodal agentic coding with 1M context
+xiaomi/mimo-v2.6-pro-ultraspeed        low-latency serving tier of MiMo V2.6 Pro
+xiaomi/mimo-v2.6-flash                 efficient multimodal agentic coding with 1M context
+xiaomi/mimo-v2.5-pro                   high-capability long-context agentic coding
+xiaomi/mimo-v2.5                       efficient long-context agentic coding
+qwen/qwen3.8-omni-flash                omni-modal understanding & multimedia agentic work
+qwen/qwen3.8-max-0902                  upgraded Qwen 3.8 Max: stronger coding & agentic tool use
+qwen/qwen3.8-max                       autonomous long-horizon coding & professional work
+qwen/qwen3.8-27b                       compact vision-language coding & agentic work
+qwen/qwen3.8-flash                     fast low-cost agentic coding & reasoning
+qwen/qwen3.7-max                       frontier coding & long-horizon agent execution
+qwen/qwen3.7-plus                      agentic coding & reasoning at lower cost
+qwen/qwen3.7-flash                     fast low-cost agentic coding & reasoning
+qwen/qwen3.6-max-preview               vibe coding & efficient agent execution
+qwen/qwen3.6-plus                      agentic coding & reasoning
+meituan/longcat-2.0                    trillion-parameter agentic coding with 1M context
+stepfun/step-5-preview                 600B sparse-MoE agentic coding with 1M context
+stepfun/step-3.7-flash                 multimodal sparse-MoE reasoning
+stepfun/step-3.5-flash                 fast sparse-MoE agentic reasoning
+tencent/hy3-paid                       sparse-MoE reasoning & agentic tool use
+tencent/hy4-preview                    agentic coding & sustained multi-step tool use
+nvidia/nemotron-3-ultra-550b-a55b      open reasoning model for long-horizon autonomous agents
+thinkingmachines/inkling               multimodal MoE reasoning
+thinkingmachines/inkling-small         lightweight MoE reasoning at lower cost and latency
+poolside/laguna-s-2.1-free             FREE open-weight agentic coding and long-horizon work
+inclusionai/ling-3.0-flash-sante:free  FREE health & medicine tuned lightweight-MoE, still strong on code
+inclusionai/ling-3.1-flash:free        FREE hybrid-reasoning MoE for coding & tool-using agents
+
+Stealth
+
+stealth/space-bunny-alpha              FREE stealth model with 1M context
+
+Anthropic
+
+claude-sonnet-5-5                      best combo of speed & intelligence (recommended)
+claude-sonnet-5                        prev Sonnet, still fast & capable
+claude-sonnet-4-6                      older Sonnet, still fast & capable
+claude-fable-5-1                       most capable for demanding reasoning & long-horizon agents
+claude-fable-5                         prev Fable, still strong for deep reasoning & agents
+claude-opus-5-5                        most intelligent Opus for agents and coding
+claude-opus-5                          prev flagship, still strong for agents and coding
+claude-opus-4-8                        older Opus, still strong for agents and coding
+claude-opus-4-7                        older Opus, still strong for agents and coding
+claude-haiku-4-5                       fastest & most compact, great for quick tasks
+
+OpenAI
+
+gpt-6-astra                            most capable OpenAI model for demanding reasoning & agents
+gpt-6.1-sol                            near-Astra performance for complex work at a lower cost
+gpt-6-sol                              built for complex coding & agentic workflows
+gpt-6-luna                             most efficient OpenAI model for focused, high-volume tasks
+gpt-5.6-sol                            frontier model for complex professional work
+gpt-5.6-terra                          balances intelligence and cost
+gpt-5.6-luna                           optimized for cost-sensitive workloads
+gpt-5.5                                latest frontier model for general complex work
+gpt-5.4                                frontier model for general complex work
+gpt-5.3-codex                          frontier coding model
+gpt-5.4-mini                           fast, cost-effective model for everyday tasks
+
+Google
+
+google/gemini-3.8-flash                newest Gemini Flash, improved core reasoning
+google/gemini-3.7-flash                higher-quality coding & agentic workflows, fewer tokens
+google/gemini-3.6-flash                previous Gemini Flash, still fast & capable
+google/gemini-3.5-flash                Pro-level coding proficiency, parallel agentic execution
+google/gemini-3.5-flash-lite           upgraded agentic capabilities, ideal for subagents
+google/gemini-3.1-flash-lite           high-volume workhorse model with implicit caching
+
+Sakana
+
+sakana/fugu-ultra                      multi-agent orchestration across frontier models
+
+Meta
+
+meta/muse-spark-1.1                    agentic performance, tool use, and computer use
+meta/muse-spark-1.2                    coding-optimized for agentic workflows and large codebases
+meta/muse-spark-1.2-contributor        Muse Spark 1.2 at ~95% off
+meta/muse-spark-1.3                    multimodal reasoning for long-horizon agentic and coding workflows
+meta/muse-spark-1.3-contributor        Muse Spark 1.3 at up to 95% off
+
+xAI
+
+xai/grok-4.5                           smartest model for coding, agentic tasks, knowledge work
+xai/grok-4.6                           frontier performance on coding, knowledge work, and STEM
+xai/grok-4.7                           coding and knowledge work, built for multi-hour tasks
+
+Pass the full id, or just the short name after the last "/":
+cmd --model moonshotai/kimi-k2.5
+cmd --model kimi-k2.5
+
+Docs:  https://commandcode.ai/docs/reference/cli/models
+
+Decision models (headless only)
+typesafe/jev  typed questions in, probabilities out, $0.042 per 1M input tokens, everything else free — Run it headlessly: cmd -p '{"state": "...", "questions": {"<name>": {"type": "noul", "instructions": "..."}}}' -m typesafe/jev

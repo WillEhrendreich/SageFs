@@ -28,6 +28,11 @@ type SummaryInput =
     DaemonStart: DaemonSnapshot option
     DaemonEnd: DaemonSnapshot option
     DashboardUrl: string
+    /// Sessions under the run directory that the dashboard API showed while the lemming ran,
+    /// as (id, last status). Empty when the watcher did not run or nothing appeared.
+    SessionsSeen: (string * string) list
+    /// Processes still alive in the sandbox when cmdc exited (they die with the sandbox).
+    SandboxProcessesLeft: string list
     ChangedFiles: string list
     Extra: FellOver list }
 
@@ -95,6 +100,8 @@ let render (input: SummaryInput) (assessment: Assessment) : string =
   w.WriteStartObject "sagefsMcp"
   w.WriteNumber("calls", sage.Length)
   w.WriteNumber("errorCount", sageErrors.Length)
+  w.WriteNumber("evalFailures", evalFailures facts.Stream)
+  w.WriteNumber("inputRepairs", facts.Stream.Repairs.Length)
   w.WriteStartArray "callSequence"
   sage |> List.iter (fun c -> w.WriteStringValue(sprintf "%d:%s%s" c.Turn (sagefsToolName c) (if isSagefsError c then "!" else "")))
   w.WriteEndArray()
@@ -122,6 +129,12 @@ let render (input: SummaryInput) (assessment: Assessment) : string =
   w.WriteNumber("sessionsCreatedByCalls", sage |> List.filter (fun c -> createTools.Contains(sagefsToolName c) && not (isSagefsError c)) |> List.length)
   w.WriteStartArray "sessionsLeftBehind"
   facts.ResidueSessions |> List.iter w.WriteStringValue
+  w.WriteEndArray()
+  w.WriteStartArray "sessionsSeenInDashboard"
+  input.SessionsSeen |> List.iter (fun (id, status) -> w.WriteStringValue(sprintf "%s (%s)" id status))
+  w.WriteEndArray()
+  w.WriteStartArray "sandboxProcessesLeft"
+  input.SandboxProcessesLeft |> List.iter (fun p -> w.WriteStringValue(clip 160 p))
   w.WriteEndArray()
   w.WriteStartArray "leaseCalls"
   sage

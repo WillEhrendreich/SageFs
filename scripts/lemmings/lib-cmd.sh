@@ -34,25 +34,30 @@ LEM_ROOT=${LEM_ROOT:-/tmp/lem}
 LEM_TOOL_DLL=$LEM_LIB_DIR/LemScore/bin/Release/net11.0/LemScore.dll
 LEM_TIMEOUT_SECONDS=${LEM_TIMEOUT_SECONDS:-1500}
 LEM_KILL_AFTER_SECONDS=30
+LEM_WATCH_STOP_SECONDS=15
 LEM_MODEL_CHECKED=
 
 # ---- the F# tool --------------------------------------------------------------------------
 
-# Builds LemScore when the dll is missing or older than a source file. flock keeps two
-# lemmings starting together from building at once.
-lem_ensure_tool() {
-  local stale=
-  if [ ! -f "$LEM_TOOL_DLL" ]; then
+# Builds an F# project under scripts/lemmings when its dll is missing or older than one of its
+# (or LemScore's) source files. flock keeps two lemmings starting together from building at once.
+#   lem_ensure_project <project-dir-name> <dll-path>
+lem_ensure_project() {
+  local name=${1:?project} dll=${2:?dll} stale=
+  if [ ! -f "$dll" ]; then
     stale=1
-  elif [ -n "$(find "$LEM_LIB_DIR/LemScore" -maxdepth 1 \( -name '*.fs' -o -name '*.fsproj' \) -newer "$LEM_TOOL_DLL" -print -quit)" ]; then
+  elif [ -n "$(find "$LEM_LIB_DIR/$name" "$LEM_LIB_DIR/LemScore" -maxdepth 1 \( -name '*.fs' -o -name '*.fsproj' \) -newer "$dll" -print -quit)" ]; then
     stale=1
   fi
   [ -z "$stale" ] && return 0
-  echo "lem: building LemScore" >&2
-  mkdir -p "$LEM_ROOT"; flock "$LEM_ROOT/.lemscore-build.lock" \
-    dotnet build "$LEM_LIB_DIR/LemScore/LemScore.fsproj" -c Release -nologo -v quiet >&2 \
-    || { echo "lem: LemScore failed to build" >&2; exit 4; }
+  echo "lem: building $name" >&2
+  mkdir -p "$LEM_ROOT"
+  flock "$LEM_ROOT/.lemscore-build.lock" \
+    dotnet build "$LEM_LIB_DIR/$name/$name.fsproj" -c Release -nologo -v quiet >&2 \
+    || { echo "lem: $name failed to build" >&2; exit 4; }
 }
+
+lem_ensure_tool() { lem_ensure_project LemScore "$LEM_TOOL_DLL"; }
 
 lem_tool() {
   lem_ensure_tool
@@ -202,7 +207,7 @@ lem_sandbox_exec() {
   lem_bw_base "$run_dir" "$run_dir/w"
   local -a bw=("${LEM_BW[@]}")
   [ -n "${LEM_ORACLE_NET:-}" ] || bw+=(--unshare-net)
-  [ "${#LEM_EXTRA_BWRAP[@]}" -gt 0 ] && bw+=("${LEM_EXTRA_BWRAP[@]}")
+  bw+=(${LEM_EXTRA_BWRAP[@]+"${LEM_EXTRA_BWRAP[@]}"})
   bwrap "${bw[@]}" timeout --kill-after="$LEM_KILL_AFTER_SECONDS" "$seconds" "$@"
 }
 
@@ -233,7 +238,15 @@ lem_run_cmdc() {
   for e in "${LEM_EXTRA_ENV[@]:-}"; do
     [ -n "$e" ] && bw+=(--setenv "${e%%=*}" "${e#*=}")
   done
-  [ "${#LEM_EXTRA_BWRAP[@]}" -gt 0 ] && bw+=("${LEM_EXTRA_BWRAP[@]}")
+  bw+=(${LEM_EXTRA_BWRAP[@]+"${LEM_EXTRA_BWRAP[@]}"})
+
+  # While the lemming runs, a watcher reads the shared daemon's sessions list (out/sessions.seen.json):
+  # the proof that this lemming's sessions showed up in the dashboard Will is watching.
+  rm -f "$run_dir/out/watch.stop"
+  lem_ensure_tool
+  DOTNET_NOLOGO=1 dotnet "$LEM_TOOL_DLL" watch --workdir "$workdir" --out "$run_dir/out/sessions.seen.json" \
+    --stop-file "$run_dir/out/watch.stop" --port "$LEM_PORT" > /dev/null 2>&1 &
+  local watch_pid=$!
 
   local prompt; prompt=$(cat "$prompt_file")
   local start; start=$(date +%s)
@@ -250,7 +263,18 @@ lem_run_cmdc() {
   LEM_EXIT=$?
   set -e
   LEM_SECONDS=$(( $(date +%s) - start ))
+  # Stop the watcher: it ends itself on the stop file; if it does not, kill that exact pid.
+  : > "$run_dir/out/watch.stop"
+  local waited=0
+  while kill -0 "$watch_pid" 2>/dev/null && [ "$waited" -lt "$LEM_WATCH_STOP_SECONDS" ]; do
+    sleep 1; waited=$((waited + 1))
+  done
+  kill -0 "$watch_pid" 2>/dev/null && kill "$watch_pid" 2>/dev/null
+  wait "$watch_pid" 2>/dev/null || true
 }
+
+# Expecto colours its summary line; oracles that read it strip the escape codes first.
+lem_strip_ansi() { sed -E 's/\x1B\[[0-9;?]*[A-Za-z]//g'; }
 
 # Runs scripts/lemmings/oracles/<task>.sh <run-dir> OUTSIDE the sandbox. Sets LEM_ORACLE_EXIT
 # (the script's exit code, or "skip" when the task has no oracle). Output goes to out/oracle.out.
