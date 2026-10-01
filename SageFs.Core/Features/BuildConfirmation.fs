@@ -84,6 +84,27 @@ type ConfirmationEffect =
   /// What the rows of these tests say now, for this content.
   | Mark of content: AnalysisIdentity * provenance: Map<TestId, ResultProvenance>
 
+module ConfirmationPhase =
+  /// The wire word for where a session's confirmation stands. `idle` is the only word that says nothing is in
+  /// flight: a session whose rows look settled can still be `building`, with a worker restart coming.
+  let toWireValue (phase: ConfirmationPhase) : string =
+    match phase with
+    | ConfirmationPhase.Idle -> "idle"
+    | ConfirmationPhase.Quiet _ -> "quiet"
+    | ConfirmationPhase.Building _ -> "building"
+    | ConfirmationPhase.RunningBuilt _ -> "running_built"
+
+module ConfirmationEvent =
+  /// One word for the log, saying which event a step folded.
+  let describe (event: ConfirmationEvent) : string =
+    match event with
+    | ConfirmationEvent.EvaluatedRunFinished _ -> "evaluated run finished"
+    | ConfirmationEvent.ContentEdited _ -> "other text edited"
+    | ConfirmationEvent.QuietElapsed -> "quiet window elapsed"
+    | ConfirmationEvent.BuildFinished (generation, _) -> sprintf "build %d finished" generation
+    | ConfirmationEvent.BuiltRunFinished (generation, _) -> sprintf "run against build %d finished" generation
+    | ConfirmationEvent.DeadlineReached generation -> sprintf "deadline for build %d reached" generation
+
 module RunVerdict =
   /// What a test run said, reduced to what a comparison needs.
   let ofResult (result: TestResult) : RunVerdict =
