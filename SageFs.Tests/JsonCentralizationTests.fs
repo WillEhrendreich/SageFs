@@ -23,7 +23,6 @@ let private budgets : (string * int) list =
     "SageFs.Core/SseWriter.fs", 1
     "SageFs/Mcp.fs", 36
     "SageFs/McpAdapter.fs", 5
-    "SageFs/McpFrictionRecorder.fs", 3
     "SageFs/McpResources.fs", 1
     "SageFs/McpServer.fs", 9
     "SageFs/McpStdioBridge.fs", 2
