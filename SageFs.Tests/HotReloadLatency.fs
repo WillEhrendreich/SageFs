@@ -127,24 +127,50 @@ type Elapsed =
 /// The series a latency gate judges. A closed set: each is printed under its own name and bounded on its own.
 [<RequireQualifiedAccess>]
 type Series =
+  /// A save the session patches in place (an app started from FSI).
   | PatchSaveToServed
   | PatchSaveToConfirmed
+  /// A save to an app `run_app` runs, on a daemon with the metadata-delta route OFF: SageFs rebuilds and relaunches it.
   | RestartSaveToServed
+  /// The same save, on a daemon with the route at its default (on): the running process takes it as a metadata delta.
+  | DeltaSaveToServed
+
+/// A change to the environment of the daemon a series is measured on.
+[<RequireQualifiedAccess>]
+type DaemonEnvironment =
+  | Set of name: string * value: string
+  /// Removed, so a variable the test process inherited cannot decide what the series measures.
+  | Clear of name: string
 
 module Series =
-  let all : Series list = [ Series.PatchSaveToServed; Series.PatchSaveToConfirmed; Series.RestartSaveToServed ]
+  let all : Series list =
+    [ Series.PatchSaveToServed; Series.PatchSaveToConfirmed; Series.RestartSaveToServed; Series.DeltaSaveToServed ]
 
   let name (series: Series) : string =
     match series with
     | Series.PatchSaveToServed -> "hr-patch-save-to-served"
     | Series.PatchSaveToConfirmed -> "hr-patch-save-to-confirmed"
     | Series.RestartSaveToServed -> "hr-restart-save-to-served"
+    | Series.DeltaSaveToServed -> "hr-delta-save-to-served"
 
   /// The path a series measures, for the line that breaks its stages down.
   let path (series: Series) : string =
     match series with
     | Series.PatchSaveToServed | Series.PatchSaveToConfirmed -> "hr-patch"
     | Series.RestartSaveToServed -> "hr-restart"
+    | Series.DeltaSaveToServed -> "hr-delta"
+
+  /// What the daemon a series is measured on has to be told. The route is read by the daemon when it starts a
+  /// worker, so a row that must run on one route gets a daemon of its own. The restart row turns the route off
+  /// (the same fixture edit is what a delta takes, so on the default it would time a delta under the name
+  /// restart), and the delta row clears the variable, so it times what a user who sets nothing gets.
+  let daemonEnvironment (series: Series) : DaemonEnvironment list =
+    let route = SageFs.Features.MetadataDelta.MetadataDeltaMode.environmentVariable
+    match series with
+    | Series.PatchSaveToServed | Series.PatchSaveToConfirmed -> []
+    | Series.RestartSaveToServed ->
+      [ DaemonEnvironment.Set (route, SageFs.Features.MetadataDelta.MetadataDeltaMode.toText SageFs.Features.MetadataDelta.MetadataDeltaMode.Off) ]
+    | Series.DeltaSaveToServed -> [ DaemonEnvironment.Clear route ]
 
 type Sample =
   { Compiling: Elapsed
@@ -167,8 +193,16 @@ type SampleRefusal =
   /// The series needs the verdict and a sample never reached it.
   | NeverConfirmed
 
+/// Why a series' samples are not the route the series is named for.
+[<RequireQualifiedAccess>]
+type RouteRefusal =
+  /// A restart series, and a save in it never started a new worker: it was patched, so the figure is not a restart's.
+  | SaveDidNotRestart
+  /// A delta series, and a save in it started a new worker: the delta route fell back to a restart.
+  | SaveRestarted
+
 module Sample =
-  let private after (savedAt: int64) (stage: Stage) (moment: Moment) : Result<Elapsed, SampleRefusal> =
+  let private after(savedAt: int64) (stage: Stage) (moment: Moment) : Result<Elapsed, SampleRefusal> =
     match moment with
     | Moment.NotObserved -> Ok Elapsed.Never
     | Moment.Observed stamp when stamp < savedAt -> Result.Error (SampleRefusal.BeforeTheSave stage)
@@ -217,8 +251,21 @@ module Sample =
   /// The times of one series over the samples, or why they cannot be read.
   let series (series: Series) (samples: Sample list) : Result<TimeSpan list, SampleRefusal> =
     match series with
-    | Series.PatchSaveToServed | Series.RestartSaveToServed -> samples |> collect (fun s -> Ok s.Served)
+    | Series.PatchSaveToServed | Series.RestartSaveToServed | Series.DeltaSaveToServed -> samples |> collect (fun s -> Ok s.Served)
     | Series.PatchSaveToConfirmed -> samples |> collect confirmedOf
+
+  /// Whether the samples took the route the series is named for. A restart is the only save on which a new
+  /// worker warms up, so a restart series whose samples never saw one measured something else, and a delta
+  /// series that saw one measured a restart. Without this a row keeps its name while the route under it changes.
+  let checkRoute (series: Series) (samples: Sample list) : Result<unit, RouteRefusal> =
+    let restarted (sample: Sample) =
+      match sample.Warming with
+      | Elapsed.After _ -> true
+      | Elapsed.Never -> false
+    match series with
+    | Series.RestartSaveToServed when not (List.forall restarted samples) -> Result.Error RouteRefusal.SaveDidNotRestart
+    | Series.DeltaSaveToServed when List.exists restarted samples -> Result.Error RouteRefusal.SaveRestarted
+    | Series.RestartSaveToServed | Series.DeltaSaveToServed | Series.PatchSaveToServed | Series.PatchSaveToConfirmed -> Ok ()
 
   let private reached (read: Sample -> Elapsed) (samples: Sample list) : TimeSpan list =
     samples |> List.choose (fun s -> match read s with | Elapsed.After d -> Some d | Elapsed.Never -> None)
@@ -402,11 +449,10 @@ let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Foll
     let mutable confirmedAt = Moment.NotObserved
     // The daemon serves one compile at a time, so a verdict that comes before the compile of THIS file started
     // belongs to an earlier save (the journey before this one ends with an unawaited restore of another file).
-    // A patched save is followed from its own `Compiling` frame on; a restart has no compile to wait for.
-    let mutable ownCompileStarted =
-      match following with
-      | Following.UntilPatched -> false
-      | Following.UntilServed -> true
+    // A save is followed from its own `Compiling` frame on. A restart is the exception: the worker decides it
+    // without a compile, so its own verdict (`Restarted`) counts without one. A delta save does compile, and the
+    // verdict of the save before it (a `Patched` arriving after the drain) must not be read as this save's.
+    let mutable ownCompileStarted = false
     let isOwnFile (file: string) = Path.GetFileName file = Path.GetFileName save.Path
     let note (frame: StampedFrame) =
       match frame.Frame, following with
@@ -421,10 +467,10 @@ let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Foll
       | ReloadFrame.Finished SageFs.ReloadCase.Patched, Following.UntilPatched -> confirmedAt <- Moment.Observed frame.At
       | ReloadFrame.Finished other, Following.UntilPatched ->
         failwithf "the save of %s ended as %s, and a patched save was wanted" save.Path (SageFs.ReloadCase.token other)
-      | ReloadFrame.Finished _, Following.UntilServed ->
-        match appliedAt with
-        | Moment.NotObserved -> appliedAt <- Moment.Observed frame.At
-        | Moment.Observed _ -> ()
+      | ReloadFrame.Finished case, Following.UntilServed ->
+        match appliedAt, ownCompileStarted || case = SageFs.ReloadCase.Restarted with
+        | Moment.NotObserved, true -> appliedAt <- Moment.Observed frame.At
+        | _ -> ()
       | ReloadFrame.WorkerWarming, _ ->
         match warmingAt with
         | Moment.NotObserved -> warmingAt <- Moment.Observed frame.At
@@ -623,18 +669,78 @@ let measurePatchedSaves () : Task<Sample list> =
         })
   }
 
-// ---- the restart path -----------------------------------------------------------------------
+// ---- the run_app paths: a restart and a delta -----------------------------------------------
 
-/// What the restart fixture serves as shipped.
+/// What the run_app fixture serves as shipped.
 let private restartShipped = "served from a run_app app"
 
-/// Measure `samplesPerPath` saves after `warmupEdits` to a web app `run_app` runs, on its own copy of
-/// the RunAppRestartFixture in a session of the same daemon. A save to such an app is a restart
-/// (`AppPlacement.InWorkerProcess`): SageFs rebuilds and relaunches it where it listened before.
-let measureRestartedSaves () : Task<Sample list> =
+/// A daemon started for one series, on a port and a data directory of its own.
+type private SeriesDaemon =
+  { McpPort: int
+    Stop: unit -> unit }
+
+/// Start the daemon `series` is measured on: owned by this process (so a killed test run cannot orphan it),
+/// its logs drained to files, with the environment `Series.daemonEnvironment` names.
+let private startSeriesDaemon (series: Series) : Task<SeriesDaemon> =
   task {
-    let env = HotReloadInlinedCalleeJourneyTests.Env.read
-    let mcpPort = int (env HotReloadInlinedCalleeJourneyTests.Env.mcpPort)
+    let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+    let mcpPort, _dashboardPort = TestInfrastructure.TestPorts.reservePair ()
+    let dataDir = RunnerDirs.create RunnerDirs.Family.HotReloadRuns
+    let self = Process.GetCurrentProcess()
+    let psi = ProcessStartInfo()
+    psi.FileName <- TestInfrastructure.SageFsBinary.path ()
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    psi.WorkingDirectory <- repoRoot
+    for arg in [ "--mcp-port"; string mcpPort; "--owner-pid"; string self.Id; "--owner-start"; string (self.StartTime.ToUniversalTime().Ticks); "--no-resume" ] do
+      psi.ArgumentList.Add arg
+    psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+    psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
+    for change in Series.daemonEnvironment series do
+      match change with
+      | DaemonEnvironment.Set (name, value) -> psi.Environment[name] <- value
+      | DaemonEnvironment.Clear name -> psi.Environment.Remove name |> ignore
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    let daemon = Process.Start psi
+    // Files drained by async readers: a redirected pipe nobody reads fills and stalls the child.
+    let drainTo (reader: StreamReader) (file: string) =
+      Task.Run(fun () ->
+        use writer = new StreamWriter(Path.Combine(dataDir, file), append = true)
+        let mutable line = reader.ReadLine()
+        while not (isNull line) do
+          writer.WriteLine line
+          line <- reader.ReadLine())
+    let drains = [ drainTo daemon.StandardOutput "daemon.stdout.log"; drainTo daemon.StandardError "daemon.stderr.log" ]
+    let stop () =
+      try
+        match daemon.HasExited with
+        | true -> ()
+        | false -> daemon.Kill(entireProcessTree = true)
+      with _ -> ()
+      try daemon.WaitForExit TestTimeouts.childExit |> ignore with _ -> ()
+      try Task.WaitAll(Array.ofList drains, TestTimeouts.childExit) |> ignore with _ -> ()
+      daemon.Dispose()
+      RunnerDirs.remove dataDir
+    use probe = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort), Timeout = TestTimeouts.httpProbe)
+    let deadline = DateTime.UtcNow.Add SageFs.Timeouts.integrationDaemonReady
+    let mutable healthy = false
+    while not healthy && DateTime.UtcNow < deadline do
+      try
+        use! _response = probe.GetAsync "/health"
+        healthy <- true
+      with _ -> do! Task.Delay TestTimeouts.pollService
+    match healthy with
+    | true -> return { McpPort = mcpPort; Stop = stop }
+    | false ->
+      stop ()
+      return failwithf "the daemon for %s never answered /health on port %d within %O" (Series.name series) mcpPort SageFs.Timeouts.integrationDaemonReady
+  }
+
+/// The saves of `series` against `seriesDaemon`, on a copy of the RunAppRestartFixture run by `run_app`.
+let private measureRunAppSavesOn (seriesDaemon: SeriesDaemon) : Task<Sample list> =
+  task {
+    let mcpPort = seriesDaemon.McpPort
     let daemon = sprintf "http://localhost:%d" mcpPort
     let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
     let fixtureSource = Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "RunAppRestartFixture")
@@ -705,3 +811,20 @@ let measureRestartedSaves () : Task<Sample list> =
           return samplesOf (List.ofSeq stamps)
         })
   }
+
+/// Measure `samplesPerPath` saves after `warmupEdits` to a web app `run_app` runs, in a session of a daemon started
+/// for `series` (see `Series.daemonEnvironment`). With the metadata-delta route off a save to such an app is a
+/// restart (`AppPlacement.InWorkerProcess`): SageFs rebuilds and relaunches it where it listened before. On the
+/// default route the same save is a delta. Only the two run_app series are measured this way.
+let measureRunAppSaves (series: Series) : Task<Sample list> =
+  match series with
+  | Series.RestartSaveToServed | Series.DeltaSaveToServed ->
+    task {
+      let! seriesDaemon = startSeriesDaemon series
+      try
+        return! measureRunAppSavesOn seriesDaemon
+      finally
+        seriesDaemon.Stop()
+    }
+  | Series.PatchSaveToServed | Series.PatchSaveToConfirmed ->
+    failwithf "%s is a patched save and is measured by measurePatchedSaves" (Series.name series)

@@ -16,11 +16,16 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 /// Nothing here times a function: a sample is the wall-clock gap between the first byte of the save
 /// and the first response that carries the new value.
 ///
-/// Three series, each printed as one `LATENCY` line with the sample count, the percentiles and the
+/// Four series, each printed as one `LATENCY` line with the sample count, the percentiles and the
 /// machine, and each gated on a bound taken from the first measurement (TestTimeouts):
 ///   * patch save-to-served: a save the session patches in place, to the first response with the new body.
 ///   * patch save-to-confirmed: the same save, to the verdict reaching `Patched` on the stream.
-///   * restart save-to-served: a save to an app `run_app` runs, which SageFs rebuilds and relaunches.
+///   * restart save-to-served: a save to an app `run_app` runs, on a daemon with SAGEFS_METADATA_DELTA=off,
+///     which SageFs rebuilds and relaunches.
+///   * delta save-to-served: the same save on a daemon with the variable cleared, the default route, which the
+///     running process takes as a metadata delta.
+/// The two run_app series each get a daemon of their own (the daemon reads the route when it starts a worker),
+/// and a series whose samples did not take the route it is named for fails (`Sample.checkRoute`).
 ///
 /// The first half of this file is the pure part (reading a frame, turning stamps into stages), and it
 /// runs in the default tier. The second half needs the daemon and runs under `--integration-hr`.
@@ -217,6 +222,9 @@ let pureTests =
 /// Report one series the way the LT tier does, then judge it against its bound.
 let private reportAndGate (series: Series) (samples: Sample list) (bound: TimeSpan) =
   let name = Series.name series
+  match Sample.checkRoute series samples with
+  | Result.Error refusal -> failtestf "%s: the saves did not take the route this series is named for (%A)" name refusal
+  | Ok () -> ()
   match Sample.series series samples |> Result.map summarize with
   | Result.Error refusal -> failtestf "%s: %A" name refusal
   | Ok (Result.Error refusal) -> failtestf "%s: nothing was measured (%A)" name refusal
@@ -245,10 +253,18 @@ let latencyTests =
         })
     Integration.dedicatedCaseTask
       "--integration-hr"
-      "HR latency: save to served on a save to an app run_app runs, which is restarted, p50 and p95 over many saves"
+      "HR latency: save to served on a save to an app run_app runs with the delta route off, which is restarted, p50 and p95 over many saves"
       (fun () ->
         task {
-          let! samples = measureRestartedSaves ()
+          let! samples = measureRunAppSaves Series.RestartSaveToServed
           reportAndGate Series.RestartSaveToServed samples TestTimeouts.hotReloadRestartServedP95Bound
+        })
+    Integration.dedicatedCaseTask
+      "--integration-hr"
+      "HR latency: save to served on a save to an app run_app runs on the default route, which is a metadata delta, p50 and p95 over many saves"
+      (fun () ->
+        task {
+          let! samples = measureRunAppSaves Series.DeltaSaveToServed
+          reportAndGate Series.DeltaSaveToServed samples TestTimeouts.hotReloadDeltaServedP95Bound
         })
   ]

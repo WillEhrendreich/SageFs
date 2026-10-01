@@ -139,6 +139,15 @@ module TestTimeouts =
   /// machine's load: the two runs that ended with a load average of 14 or more were the 15 and 16s ones. About four times
   /// the worst, because a build and a process start get slower on a cold runner by more than a request does.
   let hotReloadRestartServedP95Bound = secs 60.
+  /// Regression bound on the 95th percentile of save-to-served for the same save on the default route, where
+  /// the running process takes it as a metadata delta (an edit, a delta build, `ApplyUpdate`, the app serving
+  /// the new body). Measured twice, on a 16-thread Ryzen 7 5800XT, Linux, a daemon of its own and other jobs
+  /// on the machine: p50 1.64s and 1.55s, p95 2.25s and 2.23s over 20 saves each (min 1.50s, max 2.29s), and
+  /// the earlier fixture runs the docs quote were 1.8 to 2.6s. The saves fall on two levels, about 1.55s and 2.2s. The bound is about
+  /// four times the worst p95 seen, because a build gets slower on a cold runner by more than a request does;
+  /// it still fails when the route falls back to a restart (6.9 to 8.1s here), which `Sample.checkRoute`
+  /// also catches by name.
+  let hotReloadDeltaServedP95Bound = secs 10.
   /// The daemon's own wall-clock save fires 60s after start and does not get faster on a faster
   /// runner, so both resume waits (the save becoming durable, the second daemon rebuilding the
   /// session) are a generous multiple of it.
