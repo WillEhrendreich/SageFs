@@ -131,7 +131,7 @@ module SidebarCards =
       CreatedAt = now.AddMinutes -5.0; LastActivity = now.AddMinutes -3.0
       Status = WorkerProtocol.SessionLifecycleStatus.ofWorkerReport (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None }) status
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
-      ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
+      ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
   let card (session: WorkerProtocol.SessionInfo) = sessionCardOf now None 0 SessionHealth.Healthy session
 
@@ -363,7 +363,7 @@ let perSessionTestSummaryTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
+          WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -389,7 +389,7 @@ let perSessionTestSummaryTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
+          WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -423,7 +423,7 @@ let perSessionCoverageTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
+          WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -449,7 +449,7 @@ let perSessionCoverageTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
+          WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode

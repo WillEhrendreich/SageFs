@@ -55,7 +55,7 @@ let private mkHarness (answerStatus: string -> Async<WorkerResponse>) : Harness 
       ProjectRoles = []
       App = AppRun.AppRunState.NotRunning
       Rebuild = LastRebuild.NeverRebuilt
-      Reload = SessionReload.NoReloadYet }
+      Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
   let proxy : SessionProxy =
     fun msg ->
       async {

@@ -487,7 +487,7 @@ module SessionManager =
           ProjectRoles = session.ProjectRoles
           App = AppRun.acrossWorkerRestart session.Info.App
           Rebuild = session.Info.Rebuild
-          Reload = SessionReload.NoReloadYet
+          Reload = SessionReload.NoReloadYet; Freshness = ReplFreshness.InSync
         }
         let restarted = {
           Info = info
@@ -575,7 +575,7 @@ module SessionManager =
                   { session.Info with
                       Status = SessionLifecycleStatus.Restarting (PreviousWorker.ofPid (SessionLifecycleStatus.workerPid session.Info.Status))
                       Workflow = workflow
-                      Reload = SessionReload.afterWorkerSwap session.Info.Reload
+                      Reload = SessionReload.afterWorkerSwap session.Info.Reload; Freshness = ReplFreshness.afterWorkerSwap session.Info.Freshness
                       LastActivity = DateTime.UtcNow } }
           let newState =
             ManagerState.setPendingSwap id session
@@ -700,7 +700,7 @@ module SessionManager =
                   ProjectRoles = []
                   App = AppRun.AppRunState.NotRunning
                   Rebuild = LastRebuild.NeverRebuilt
-                  Reload = SessionReload.NoReloadYet
+                  Reload = SessionReload.NoReloadYet; Freshness = ReplFreshness.InSync
                 }
                 let managed = {
                   Info = info
@@ -1247,7 +1247,7 @@ module SessionManager =
 
         | SessionCommand.ReloadObserved(id, reload) ->
           match ManagerState.tryGetSession id state with
-          | Some session -> return ManagerState.addSession id { session with Info = { session.Info with Reload = reload } } state
+          | Some session -> return ManagerState.addSession id { session with Info = { session.Info with Reload = reload; Freshness = ReplFreshness.observe session.Info.Freshness reload } } state
           | None -> return state
 
         | SessionCommand.UpdateSessionStatus(id, newStatus) ->

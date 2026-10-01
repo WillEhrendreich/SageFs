@@ -96,13 +96,13 @@ let tests =
       |> Expect.equal "a restart names none" SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch
       mechanismOf """{"type":"patched","outcome":"Patched","mechanism":"telepathy"}"""
       |> Expect.equal "an unknown spelling is none, never a wrong one" SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch
-      let facts : ReloadFacts = { Case = ReloadCase.Patched; Patched = 1; Considered = 1; Message = "m"; SuggestedAction = ""; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta }
+      let facts : ReloadFacts = { Case = ReloadCase.Patched; Patched = 1; Considered = 1; Message = "m"; SuggestedAction = ""; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta; Declarations = [] }
       let wire = System.Text.Json.JsonSerializer.Serialize(SessionReload.toWire (SessionReload.Finished facts))
       wire |> Expect.stringContains "the daemon's own object says it" "\"mechanism\":\"metadata-delta\""
 
     testCase "WHY — describe says what a save did, and says so when nothing has been saved" <| fun _ ->
       SessionReload.describe SessionReload.NoReloadYet |> Expect.stringContains "nothing saved" "No hot reload yet"
       SessionReload.describe (SessionReload.Compiling (Some "/src/Ticker.fs")) |> Expect.stringContains "names the file" "Ticker.fs"
-      let facts : ReloadFacts = { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 1; Message = "restart the app to apply this"; SuggestedAction = "restart"; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch }
+      let facts : ReloadFacts = { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 1; Message = "restart the app to apply this"; SuggestedAction = "restart"; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch; Declarations = [] }
       SessionReload.describe (SessionReload.Finished facts) |> Expect.equal "the worker's wording" "restart the app to apply this"
   ]

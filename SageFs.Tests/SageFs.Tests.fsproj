@@ -29,6 +29,7 @@
         <Compile Include="McpServerOversizedRequestTests.fs" />
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpToolExecutionTests.fs" />
+        <Compile Include="ReplFreshnessSurfaceTests.fs" />
         <Compile Include="McpLlmInteropTests.fs" />
         <Compile Include="ManualProjectParseTests.fs" />
         <Compile Include="LoadedProjectReportingTests.fs" />
@@ -138,6 +139,7 @@
         <Compile Include="DashboardSnapshotTests.fs" />
         <Compile Include="DashboardDiscoverUxTests.fs" />
         <Compile Include="DashboardTestIdTests.fs" />
+        <Compile Include="ReplFreshnessDashboardTests.fs" />
         <Compile Include="OutputFollowTests.fs" />
         <Compile Include="PreviousSessionSortTests.fs" />
         <Compile Include="McpHardResetRebuildTests.fs" />
@@ -325,6 +327,7 @@
          <Compile Include="SessionManagerEarnedReadyTests.fs" />
          <Compile Include="SessionManagerRebuildOutcomeTests.fs" />
          <Compile Include="SessionReloadTests.fs" />
+         <Compile Include="ReplFreshnessTests.fs" />
          <Compile Include="AvailableProjectsDirectoryTests.fs" />
          <Compile Include="ToolSessionHandleTests.fs" />
          <Compile Include="ErrorCategoryTests.fs" />

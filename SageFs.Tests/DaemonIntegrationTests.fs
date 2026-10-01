@@ -84,7 +84,7 @@ let managerStateTests =
 
         App = SageFs.AppRun.AppRunState.NotRunning
         Rebuild = LastRebuild.NeverRebuilt
-        Reload = SessionReload.NoReloadYet
+        Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -128,7 +128,7 @@ let managerStateTests =
 
         App = SageFs.AppRun.AppRunState.NotRunning
         Rebuild = LastRebuild.NeverRebuilt
-        Reload = SessionReload.NoReloadYet
+        Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -173,7 +173,7 @@ let managerStateTests =
 
           App = SageFs.AppRun.AppRunState.NotRunning
           Rebuild = LastRebuild.NeverRebuilt
-          Reload = SessionReload.NoReloadYet
+          Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
         }
         { Info = info

@@ -88,6 +88,8 @@ module SessionStatusPayload =
     LastRestart: LastRestart
     /// What the worker last said a save did to the running process.
     LastReload: SessionReload
+    /// Whether the REPL and live tests run the same build as the app.
+    ReplFreshness: ReplFreshness
   }
 
   /// What a session's rebuild history says, in the payload's terms. The one
@@ -111,6 +113,22 @@ module SessionStatusPayload =
     match info with
     | Some session -> session.Reload
     | None -> SessionReload.NoReloadYet
+
+  /// Whether the REPL runs the app's build, off the session (no session, nothing to be behind).
+  let replFreshnessOfSession (info: WorkerProtocol.SessionInfo option) : ReplFreshness =
+    match info with
+    | Some session -> session.Freshness
+    | None -> ReplFreshness.InSync
+
+  /// Whether the REPL of this session runs the build the app runs, read off the registry's own record so every surface agrees. A
+  /// session the registry cannot answer for is level: there is nothing it is known to be behind.
+  let replFreshnessOf (ops: SessionManagementOps) (sid: string) : System.Threading.Tasks.Task<ReplFreshness> =
+    task {
+      try
+        let! info = ops.GetSessionInfo (McpSessionRouting.toSessionId sid)
+        return replFreshnessOfSession info
+      with _ -> return ReplFreshness.InSync
+    }
 
   /// How `lastRestart` appears in EVERY status shape (routable, warming,
   /// faulted). One function, so a shape cannot forget it: the warming shape did,
@@ -144,6 +162,7 @@ module SessionStatusPayload =
          health = facts.Health
          lastRestart = lastRestartJson facts.LastRestart
          lastReload = SessionReload.toWire facts.LastReload
+         replFreshness = ReplFreshness.toWire facts.ReplFreshness
          available = Affordances.availableTools sessionState |}
 
   // ── `wait_seconds` ─────────────────────────────────────────────────

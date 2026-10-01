@@ -272,7 +272,7 @@ module PatchMechanism =
 [<RequireQualifiedAccess>]
 type MetadataDeltaOutcome =
   /// The runtime took the delta, and nobody has seen the new code run. `applied` of `considered` changed methods wait.
-  | Pending of applied: int * considered: int
+  | Pending of applied: int * considered: int * declarations: string list
   /// The new bodies have been seen running.
   | Patched of patched: int * considered: int
   /// The bound passed and these changed methods' new bodies have not run (`first` and `rest`); `entered` have.
@@ -450,7 +450,7 @@ module ReloadOutcome =
         silent
         entered
         considered
-    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(applied, considered)) ->
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(applied, considered, _)) ->
       sprintf
         "Applied %d of %d changed method(s) by metadata delta, not confirmed yet: the new code has not run"
         applied

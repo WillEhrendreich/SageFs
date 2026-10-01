@@ -1636,6 +1636,16 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Attr.style (sprintf "font-size: 0.7rem; font-weight: bold; overflow-wrap: anywhere; margin-top: 2px; color: %s;" color) ]
                   [ textEnc line ]
               | None -> ()
+              // The REPL runs the build from before a patch the app took, so a call to what changed runs the OLD code. Its own
+              // line in the card's single column, always visible, never behind a hover: a REPL that lies silently is the failure.
+              match s.Freshness with
+              | ReplFreshness.InSync -> ()
+              | ReplFreshness.BehindApp _ ->
+                Elem.div
+                  [ Attr.class' "session-card-freshness"
+                    testid "session-card-freshness"
+                    Attr.create "role" "status" ]
+                  [ textEnc (ReplFreshness.banner s.Freshness) ]
               // Self-host staleness (F5b): this session adopted its own
               // SageFs.Core build and a newer one has since landed on disk —
               // its own line so it never cramps the badges, wrapping at any

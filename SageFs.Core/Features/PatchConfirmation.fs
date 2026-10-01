@@ -119,7 +119,7 @@ let start (watched: WatchedDecl list) (outcome: ReloadOutcome) : Begun =
       )
   match outcome with
   | ReloadOutcome.PatchPending(_, considered, kept) -> watching considered kept PatchMechanism.Detour
-  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(_, considered)) -> watching considered [] PatchMechanism.MetadataDelta
+  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(_, considered, _)) -> watching considered [] PatchMechanism.MetadataDelta
   | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched _)
   | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered _)
   | ReloadOutcome.Patched _

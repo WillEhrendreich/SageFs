@@ -584,6 +584,9 @@ module WorkerProtocol =
     /// What the worker last said a save did to the running process, recorded
     /// by SessionManager from the worker's reload stream.
     Reload: SessionReload
+    /// Whether the REPL and live tests run the same build as the app. Folded by SessionManager from the worker's reload stream,
+    /// and cleared when the worker is replaced.
+    Freshness: ReplFreshness
   }
 
   /// Utilities for deriving display-friendly paths from session metadata.

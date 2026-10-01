@@ -15,6 +15,7 @@ open SageFs.Features.LiveTesting
 open SageFs.Features.RunReceipts
 open SageFs.McpRunTests
 open SageFs.McpTools
+open SageFs.Server.McpTools
 open SageFs.WorkerProtocol
 open SageFs.Tests.LiveTestingTestHelpers
 
@@ -92,7 +93,10 @@ let private runRequests (engine: Engine) =
 
 let private proxy : SessionProxy = fun _ -> async { return failwith "the run_tests path never calls the worker proxy" }
 
-let private ctxFor (engine: Engine) (sid: string) (status: SessionLifecycleStatus) : McpContext =
+let rec private ctxFor (engine: Engine) (sid: string) (status: SessionLifecycleStatus) : McpContext =
+  ctxForFreshness engine sid status ReplFreshness.InSync
+
+and private ctxForFreshness (engine: Engine) (sid: string) (status: SessionLifecycleStatus) (freshness: ReplFreshness) : McpContext =
   let info : SessionInfo =
     { Id = SageFs.McpSessionRouting.toSessionId sid
       Name = None
@@ -107,7 +111,8 @@ let private ctxFor (engine: Engine) (sid: string) (status: SessionLifecycleStatu
       ProjectRoles = []
       App = AppRun.AppRunState.NotRunning
       Rebuild = LastRebuild.NeverRebuilt
-      Reload = SessionReload.NoReloadYet }
+      Reload = SessionReload.NoReloadYet
+      Freshness = freshness }
   let ops : SessionManagementOps =
     { SessionManagementOps.stub with
         GetProxy = fun _ -> Task.FromResult (Some proxy)
@@ -235,6 +240,33 @@ let tests =
       | RunReceipt.Ran ran -> ran.Verdict |> Expect.equal "all passed" RunVerdict.AllPassed
       | other -> failtestf "expected Ran, got %A" other
       runRequests engine |> List.length |> Expect.equal "asking again dispatched nothing new" 1
+    }
+
+    testTask "WHY — a run against a REPL that is behind its app says so on the result an agent reads, because those tests ran the build from before the patch" {
+      let behind = ReplFreshness.BehindApp (1, [ "Handlers.describe" ])
+      let engine = Engine(sid, cases, Map.empty)
+      let tools = SageFsTools(ctxForFreshness engine sid ready behind, Microsoft.Extensions.Logging.Abstractions.NullLogger<SageFsTools>.Instance)
+      let running = tools.run_tests("", "", "", 30, "", sid, "")
+      do! engine.RunDispatched.WaitAsync patience
+      engine.ReleaseWorker ()
+      let! (result: ModelContextProtocol.Protocol.CallToolResult) = running
+      let text = result.Content |> Seq.pick (fun c -> match c with :? ModelContextProtocol.Protocol.TextContentBlock as t -> Some t.Text | _ -> None)
+      text |> Expect.stringContains "the run is still reported" "Every requested test passed in this run"
+      text |> Expect.stringContains "and the REPL is said to be behind" "BEHIND"
+      text |> Expect.stringContains "with what to do" "hard_reset_fsi_session"
+      result.StructuredContent.Value.GetProperty("replFreshness").GetProperty("state").GetString()
+      |> Expect.equal "as a field too" "BehindApp"
+    }
+
+    testTask "WHY — a run against a level REPL carries no warning" {
+      let engine = Engine(sid, cases, Map.empty)
+      let tools = SageFsTools(ctxFor engine sid ready, Microsoft.Extensions.Logging.Abstractions.NullLogger<SageFsTools>.Instance)
+      let running = tools.run_tests("", "", "", 30, "", sid, "")
+      do! engine.RunDispatched.WaitAsync patience
+      engine.ReleaseWorker ()
+      let! (result: ModelContextProtocol.Protocol.CallToolResult) = running
+      let text = result.Content |> Seq.pick (fun c -> match c with :? ModelContextProtocol.Protocol.TextContentBlock as t -> Some t.Text | _ -> None)
+      text.Contains "BEHIND" |> Expect.isFalse "nothing to warn about"
     }
 
     testTask "WHY — a request id the engine has no record of claims nothing" {

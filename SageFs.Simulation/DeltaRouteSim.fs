@@ -328,7 +328,7 @@ module DeltaRouteSim =
             let probe = world.Registry.Allocate "m"
             world.Registry.Commit probe
             let outcome' : SageFs.Features.ReloadOutcome.ReloadOutcome =
-              SageFs.Features.ReloadOutcome.ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(1, 1))
+              SageFs.Features.ReloadOutcome.ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(1, 1, [ "m" ]))
             let begun = PatchConfirmation.start [ { Declaration = "m"; Probes = [ probe.Id ] } ] outcome'
             let watches =
               match begun with

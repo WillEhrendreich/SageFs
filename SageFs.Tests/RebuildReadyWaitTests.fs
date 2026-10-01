@@ -109,7 +109,7 @@ let private sessionInfo status : SessionInfo = {
   ProjectRoles = []
   App = SageFs.AppRun.AppRunState.NotRunning
   Rebuild = LastRebuild.NeverRebuilt
-  Reload = SessionReload.NoReloadYet
+  Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 }
 
 let private aProxy =

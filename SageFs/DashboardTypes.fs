@@ -855,6 +855,8 @@ type ParsedSession = {
   /// other cards classify with `warmup = None`, which `SessionHealth.classify`
   /// itself defines as "nothing to be suspicious about" (quiet, not a lie).
   Health: SessionHealth
+  /// Whether the REPL and live tests run the build the app runs. A card for a session whose app was patched in place says so.
+  Freshness: ReplFreshness
 }
 
 /// Best-effort live RSS of a worker process, by pid. Never throws: a pid
@@ -936,7 +938,8 @@ let sessionCardOf
     // Enriched (like TestSummary etc.) by buildSessionCardsFrom via a
     // DashboardQueries lookup; the base card carries no staleness.
     SelfHostStaleness = None
-    Health = health }
+    Health = health
+    Freshness = info.Freshness }
 
 /// Every session the sidebar lists — all but Stopped — in registry order (the
 /// same order the initial page and viewing reconciliation use).

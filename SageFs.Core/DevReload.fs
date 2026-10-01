@@ -235,6 +235,10 @@ type ReloadReport = {
   /// Live values the save kept. Empty unless you edited an initializer of
   /// state the app was holding.
   Kept: KeptStateReport list
+  /// The declarations a patch put in front of the process, by the names the compiled code gives them. Only a patch the
+  /// worker applied in its own process names them, because those are what the REPL, which runs the build from before the
+  /// patch, is then behind on. The wire only carries the field when there are some.
+  Declarations: string list
 }
 
 /// Events that flow to clients (browser overlay, editors) over the long-lived
@@ -275,7 +279,7 @@ type DevReloadEvent =
 
 module ReloadReport =
   /// The report for an event that carries no outcome of its own.
-  let none = { Outcome = ""; Mechanism = ""; Patched = 0; Considered = 0; Message = ""; SuggestedAction = ""; Reasons = []; Kept = [] }
+  let none = { Outcome = ""; Mechanism = ""; Patched = 0; Considered = 0; Message = ""; SuggestedAction = ""; Reasons = []; Kept = []; Declarations = [] }
 
 module DevReloadEvent =
 
@@ -326,8 +330,12 @@ module DevReloadEvent =
       match r.Mechanism with
       | "" -> ""
       | name -> sprintf ""","mechanism":%s""" (json name)
+    let declarations =
+      match r.Declarations with
+      | [] -> ""
+      | names -> sprintf ""","declarations":[%s]""" (names |> List.map json |> String.concat ",")
     sprintf
-      """"outcome":%s,"patched":%d,"considered":%d,"message":%s,"suggestedAction":%s,"reasons":[%s]%s%s"""
+      """"outcome":%s,"patched":%d,"considered":%d,"message":%s,"suggestedAction":%s,"reasons":[%s]%s%s%s"""
       (json r.Outcome)
       r.Patched
       r.Considered
@@ -335,6 +343,7 @@ module DevReloadEvent =
       (json r.SuggestedAction)
       (r.Reasons |> List.map refusalJson |> String.concat ",")
       mechanism
+      declarations
       kept
 
   /// The bare JSON payload for one event — no SSE framing. `sseData` wraps

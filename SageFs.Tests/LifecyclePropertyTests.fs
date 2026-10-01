@@ -1,4 +1,4 @@
-﻿module SageFs.Tests.LifecyclePropertyTests
+module SageFs.Tests.LifecyclePropertyTests
 
 open System
 open Expecto
@@ -146,7 +146,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
             App = SageFs.AppRun.AppRunState.NotRunning
             Rebuild = LastRebuild.NeverRebuilt
-            Reload = SessionReload.NoReloadYet
+            Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
           }
           Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
@@ -183,7 +183,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
           App = SageFs.AppRun.AppRunState.NotRunning
           Rebuild = LastRebuild.NeverRebuilt
-          Reload = SessionReload.NoReloadYet
+          Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
         }
         Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
@@ -220,7 +220,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
         App = SageFs.AppRun.AppRunState.NotRunning
         Rebuild = LastRebuild.NeverRebuilt
-        Reload = SessionReload.NoReloadYet
+        Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = url
@@ -260,7 +260,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
         App = SageFs.AppRun.AppRunState.NotRunning
         Rebuild = LastRebuild.NeverRebuilt
-        Reload = SessionReload.NoReloadYet
+        Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""

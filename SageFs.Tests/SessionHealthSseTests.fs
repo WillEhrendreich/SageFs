@@ -69,7 +69,7 @@ let private mkSessionInfo () : SessionInfo =
     LastActivity = at
     ActiveProject = None
     ProjectRoles = [ project ]
-    App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
+    App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 let private mkSseContext (getWarmup: string -> Task<WarmupContext option>) (broadcast: Event<string>) : SseContext =
   { GetElmModel = None
