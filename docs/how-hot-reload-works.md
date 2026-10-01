@@ -182,6 +182,34 @@ The F# compiler has no flag that writes those deltas in any released SDK. [dotne
 - A restart still resets the app, and any edit that needs one is still one.
 - A field added to a type, a lambda that starts capturing something, and a lambda added all restart. Microsoft's mechanism takes some of those in C#, and so does #19941's description. Mine writes the rows for a method body and for a method added to a type, and not yet for a field or a type.
 
+## A landing is a save in the trunk
+
+Agents explore in checkouts of their own, and what verifies lands in the cohort's integration branch through the landing gate. The trunk is the checkout the cohort lands into, a daemon-owned worktree that `set_integration_ref` makes beside the integration one, and a trunk session is any session whose working directory is that checkout. When a landing lands and the trunk session runs an app (`run_app`), the app serves it live: no restart, and the counter it holds in memory carries on.
+
+The landing doesn't take the file watcher's route there, because the watcher would race the git operation that wrote the files and report a second save that changed nothing over the first. The daemon tells the worker which files changed (`WorkerMessage.ApplySaves`) and the worker runs the same save pipeline a person's save takes, over each file, one at a time. The first terminal event that pipeline records for a file is its verdict, read from the same record `/hotreload/last-outcome` serves. A worker in a trunk session is told once, before the checkout moves, to take its saves from landings only (`SetSaveSource`), so a save a person makes in the trunk checkout isn't hot reloaded there.
+
+```
+ the cohort records LandingLanded        (a landing that is blocked or being verified never gets here)
+    v
+ session(s) in the trunk checkout: settled? Ready with a running app / no app / not available
+    v
+ worker: saves come from landings only   (SetSaveSource, before any file changes)
+    v
+ git: diff the trunk head against the commit, move the checkout to it
+    v
+ build the project the app runs          (only for a session that runs an app, only if a build input changed)
+    v
+ worker: the save pipeline over each changed file, in order
+    v
+ the line on get_cohort_status and the dashboard: file, case, mechanism, and the cause of a restart
+    v
+ a request runs the new body --> the same line says Patched
+```
+
+The decision (`TrunkFollow.step`) is pure. Landings are followed one at a time and in the order they landed, and one that lands while another is being followed waits. `TrunkFollowSimTests.fs` throws seeded landings, refusals, moves that end in any order, workers that patch, restart or go silent, and patched bodies that run before the answer that carries them, and checks four things: the trunk only acts on a landing that landed, in the order they landed, with none lost, and what it records matches what happened to the app (a restart is recorded as a restart and names its cause, and a verdict says `Patched` only after the worker reported the new body run). Six twins each put one bug back (act on a landing that is only being verified, follow newest first, drop a landing that lands mid-delivery, record a restart as a patch, record a patch as settled when it is applied, drop a report that arrives before its answer) and every one is caught.
+
+Three things I found building it, all in what was already there. A restart the worker asks for is carried out by the daemon, and when it finds nothing that holds the old shape it respawns the worker without a build, so the new process runs the build that was on disk. That is why the trunk builds the project before it tells a session that runs an app, and it is a cost: the build is the floor of a landing, a few seconds. A trunk session with no app isn't built, since nothing runs, and `run_app` starts the build the session loaded when it was created, so the status line tells you to rebuild it before `run_app`. And the verifying session keeps what it evaluated for a landing the gate blocked, so the landing after it is verified against that. The trunk isn't affected, since it only follows what lands, but a second landing after a blocked one can be blocked for the first one's change. The third I saw and haven't chased: in my first fixture two modules each had a function called `message`, and after the landing that edited one, the verifying session's test for the other returned the first one's text. Renaming one of them made it go away. The detour matcher pairs a re-evaluated function with compiled ones by name, and I'd look there first.
+
 ## Compared with .NET hot reload
 
 Microsoft's mechanism (`dotnet watch`, Visual Studio, C# Dev Kit) is Roslyn emitting metadata, IL and PDB deltas that the runtime applies to the loaded assembly with `MetadataUpdater.ApplyUpdate` ([docs](https://learn.microsoft.com/en-us/dotnet/api/system.reflection.metadata.metadataupdater.applyupdate)). Same assembly, same types, same static fields. That's a better mechanism than a detour: no second copy of a module, no state stand-ins, no inlined caller to catch. For an app SageFs starts with `run_app` it is the mechanism SageFs uses too, written by SageFs from two finished assemblies instead of by the compiler.
