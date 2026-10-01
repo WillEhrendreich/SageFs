@@ -116,28 +116,24 @@ let private pageFor (width: int) (html: string) : string =
 [<Tests>]
 let browserTests =
   testList "ReplFreshness on the session card (real browser)" [
-    testCase "[Integration] the banner wraps inside the card at every width and never overlaps, overflows or scrolls the card sideways" (fun () ->
-      let work = task {
-        let! playwright = Playwright.CreateAsync()
-        use _playwright = playwright
-        let! browser = playwright.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
-        try
-          let! page = browser.NewPageAsync()
-          let html = htmlOf [ card "0a2b3c4d" behind ]
-          let mutable heights = []
-          for width in widths do
-            do! page.SetViewportSizeAsync(width, 900)
-            do! page.SetContentAsync(pageFor width html)
-            let! problems = layoutProblems page
-            problems |> Expect.equal (sprintf "at %dpx wide nothing overflows or overlaps" width) ""
-            let! height = heightOfBanner page
-            heights <- (width, height) :: heights
-          let at (w: int) = heights |> List.find (fun (width, _) -> width = w) |> snd
-          // Wrapping, not shrinking or clipping: the narrower the card, the taller the banner.
-          Expect.isGreaterThan (sprintf "the banner is taller at 240px (%f) than at 1280px (%f), because it wraps" (at 240) (at 1280)) (at 240, at 1280)
-        finally
-          browser.CloseAsync().GetAwaiter().GetResult()
-      }
-      work.GetAwaiter().GetResult())
+    testTask "[Integration] the banner wraps inside the card at every width and never overlaps, overflows or scrolls the card sideways" {
+      let! (playwright: IPlaywright) = Playwright.CreateAsync()
+      // The driver lives as long as the test process, the way the other browser journeys' does; the browser is closed with the test.
+      let! (browser: IBrowser) = playwright.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
+      use _browser = (browser :> IAsyncDisposable)
+      let! (page: IPage) = browser.NewPageAsync()
+      let html = htmlOf [ card "0a2b3c4d" behind ]
+      let mutable heights = []
+      for width in widths do
+        do! page.SetViewportSizeAsync(width, 900)
+        do! page.SetContentAsync(pageFor width html)
+        let! problems = layoutProblems page
+        problems |> Expect.equal (sprintf "at %dpx wide nothing overflows or overlaps" width) ""
+        let! height = heightOfBanner page
+        heights <- (width, height) :: heights
+      let at (w: int) = heights |> List.find (fun (width, _) -> width = w) |> snd
+      // Wrapping, not shrinking or clipping: the narrower the card, the taller the banner.
+      Expect.isGreaterThan (sprintf "the banner is taller at 240px (%f) than at 1280px (%f), because it wraps" (at 240) (at 1280)) (at 240, at 1280)
+    }
     |> Integration.register (Integration.Dedicated "--integration-browser")
   ]

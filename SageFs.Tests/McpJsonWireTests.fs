@@ -100,7 +100,7 @@ let tests =
       let! text = getSessionStatus ctx "agent" (Some "aa11bb22") None
       text
       |> Expect.equal "WarmingUp payload"
-           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"lastReload":null,"lastRestart":null,"lifecycle":"Starting","loadedProjects":[],"scope":"Session","sessionId":"aa11bb22","state":"WarmingUp","target":[{"kind":"Bare","path":null}],"workerPid":4242,"workerPort":45000,"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
+           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"lastReload":null,"lastRestart":null,"lifecycle":"Starting","loadedProjects":[],"replFreshness":{"state":"InSync"},"scope":"Session","sessionId":"aa11bb22","state":"WarmingUp","target":[{"kind":"Bare","path":null}],"workerPid":4242,"workerPort":45000,"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
     }
 
     testTask "WHY — a faulted session writes the Faulted shape with the reason" {
@@ -109,7 +109,7 @@ let tests =
       let! text = getSessionStatus ctx "agent" (Some "cc33dd44") None
       text
       |> Expect.equal "Faulted payload"
-           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","reset_fsi_session","hard_reset_fsi_session","decompose_pipeline"],"faultReason":"warmup failed","lastReload":null,"lastRestart":null,"loadedProjects":[],"scope":"Session","sessionId":"cc33dd44","state":"Faulted","target":[{"kind":"Bare","path":null}],"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
+           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","reset_fsi_session","hard_reset_fsi_session","decompose_pipeline"],"faultReason":"warmup failed","lastReload":null,"lastRestart":null,"loadedProjects":[],"replFreshness":{"state":"InSync"},"scope":"Session","sessionId":"cc33dd44","state":"Faulted","target":[{"kind":"Bare","path":null}],"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
     }
 
     testTask "WHY — a ready session with no worker proxy is reported as WarmingUp, lifecycle as it is" {
@@ -118,7 +118,7 @@ let tests =
       let! text = getSessionStatus ctx "agent" (Some "ee55ff66") None
       text
       |> Expect.equal "unroutable payload"
-           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"lastReload":null,"lastRestart":null,"lifecycle":"Ready","loadedProjects":[],"scope":"Session","sessionId":"ee55ff66","state":"WarmingUp","target":[{"kind":"Bare","path":null}],"workerPid":4242,"workerPort":45000,"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
+           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"lastReload":null,"lastRestart":null,"lifecycle":"Ready","loadedProjects":[],"replFreshness":{"state":"InSync"},"scope":"Session","sessionId":"ee55ff66","state":"WarmingUp","target":[{"kind":"Bare","path":null}],"workerPid":4242,"workerPort":45000,"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
     }
 
     testTask "WHY — renderWarmingOrFaulted writes each of its four shapes" {

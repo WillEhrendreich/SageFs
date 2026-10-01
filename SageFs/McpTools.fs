@@ -569,7 +569,7 @@ let withEchoReply (ctx: McpContext) (toolName: string) (t: Task<HotReloadReply>)
 let withReplFreshness (freshness: SageFs.ReplFreshness) (structuredJson: string) : string =
   match System.Text.Json.Nodes.JsonNode.Parse structuredJson with
   | :? System.Text.Json.Nodes.JsonObject as root ->
-    root["replFreshness"] <- System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(SageFs.ReplFreshness.toWire freshness))
+    root["replFreshness"] <- System.Text.Json.Nodes.JsonNode.Parse(SageFs.Json.serialize SageFs.Json.standard (SageFs.ReplFreshness.toWire freshness))
     root.ToJsonString()
   | _ -> structuredJson
 
@@ -701,7 +701,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
           let! text, _outcome, diags, errOpt, freshness =
             match declaration with
             | SageFs.TopLevelDeclaration.NoDeclaration ->
-              evalFSharpCodeWithFreshness ctx agentName code OutputFormat.Text sid wd fp em bsl intentOpt
+              evalFSharpCodeWithOutcome ctx agentName code OutputFormat.Text sid wd fp em bsl intentOpt
             | found ->
               let hint = SageFs.EvalPreflight.hint found
               let err = SageFs.SageFsError.EvalFailed hint
@@ -2188,7 +2188,7 @@ If the run is still going when wait_seconds ends, the result carries a receipt_i
                 let! resolution = resolveSessionId ctx "mcp" request.SessionId request.WorkingDirectory
                 let! freshness =
                     match resolution with
-                    | Routable sid -> freshnessOfSession ctx sid
+                    | Routable sid -> SageFs.SessionStatusPayload.replFreshnessOf ctx.SessionOps sid
                     | _ -> Task.FromResult SageFs.ReplFreshness.InSync
                 return! withEchoRunTests ctx freshness (SageFs.McpRunTests.runTests ctx "mcp" request)
             }
