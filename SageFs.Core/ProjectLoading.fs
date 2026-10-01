@@ -1209,6 +1209,14 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
     // assembly. This prevents the canonical F# pattern (type T + module T) from breaking
     // across submission boundaries. Always enable to ensure type references remain valid.
     "--multiemit-"
+    // Hot reload compiles a patch the way the app was built. SageFs builds a session's project with
+    // `Optimize=false` (BuildOptimization), and FSI's own default is to optimize: it turns a `task { }`
+    // into a static state machine where the build made a chain of closures, and folds a captured
+    // constant into the closure, which changes the closure's fields. A patch compiled differently
+    // from the code it replaces cannot be matched against it closure for closure, so a lambda with a
+    // `task` or `async` in it would be a restart for no reason a user could name.
+    if hotReload then
+      "--optimize-"
     yield! allDlls |> Seq.map (sprintf "-r:%s")
     yield! sln.LibPaths |> Seq.map (sprintf "--lib:%s")
     yield! sln.OtherArgs

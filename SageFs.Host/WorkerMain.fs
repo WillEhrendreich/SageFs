@@ -1081,6 +1081,50 @@ let run (sessionId: string) (port: int) = async {
           | :? (Middleware.HotReloadCore.BindingOutcome list) as outcomes -> Some outcomes
           | _ -> None)
         |> Option.defaultValue []
+      /// Changes the host found it cannot patch once it had the compiled shapes in front of it, as the
+      /// planner's own vocabulary so they restart with a named reason.
+      let refusalsOf (response: EvalResponse) : Features.ReloadPlanning.ReloadChange list =
+        response.Metadata
+        |> Map.tryFind "hotReloadRefusals"
+        |> Option.bind (fun v ->
+          match v with
+          | :? (Middleware.HotReloadCore.DetourRefusal list) as refusals -> Some refusals
+          | _ -> None)
+        |> Option.defaultValue []
+        |> List.map (function
+          | Middleware.HotReloadCore.DetourRefusal.ClosureShapeChanged (declaration, detail) ->
+            Features.ReloadPlanning.ReloadChange.ClosureShapeChanged (declaration, detail)
+          | Middleware.HotReloadCore.DetourRefusal.InstanceLayoutChanged (typeName, detail) ->
+            Features.ReloadPlanning.ReloadChange.InstanceLayoutChanged (typeName, detail)
+          | Middleware.HotReloadCore.DetourRefusal.GenericFunction declaration ->
+            Features.ReloadPlanning.ReloadChange.GenericFunction declaration)
+      /// The lambdas a save edited, as the host needs them to find the closures the app already holds.
+      let closuresOf
+        (filePath: string)
+        (baseline: Features.ReloadPlanning.FileDecls)
+        (current: Features.ReloadPlanning.FileDecls)
+        (functions: Features.ReloadPlanning.SourceDecl list)
+        : Middleware.HotReloadCore.ClosureRepoint list =
+        functions
+        |> List.choose (fun d ->
+          Features.ReloadPlanning.lambdaEditsOf baseline current d
+          |> Option.map (fun patch ->
+            { Container = current.ModulePath @ d.Container
+              Binding = d.Name
+              Directive = Middleware.CompilationContext.lineDirective filePath d.StartLine
+              WasStartLine = patch.Was.StartLine
+              Lambdas =
+                patch.First :: patch.Rest
+                |> List.map (fun l ->
+                  ({ WasFirst = l.Was.FirstLine
+                     WasLast = l.Was.LastLine
+                     NowFirst = l.Now.FirstLine
+                     NowLast = l.Now.LastLine } : Middleware.HotReloadCore.ClosureLambda))
+              Strictness =
+                match d.Kind with
+                | Features.ReloadPlanning.DeclKind.ValueClosures -> Middleware.HotReloadCore.ClosureStrictness.Required
+                | _ -> Middleware.HotReloadCore.ClosureStrictness.BestEffort }
+            : Middleware.HotReloadCore.ClosureRepoint))
       let declinedBindingsOf (response: EvalResponse) : Middleware.HotReloadCore.DeclinedBinding list =
         response.Metadata
         |> Map.tryFind "hotReloadDeclinedBindings"
@@ -1365,7 +1409,9 @@ let run (sessionId: string) (port: int) = async {
               return! restartOrFallBack fileName (Features.ReloadPlanning.ReloadChange.UsesNonPublicMember (user, unreachable.Name)) []
             | Ok patch ->
             DevReload.broadcastCompiling (Some fileName)
-            let request = { Code = patch.Code; Args = Map.ofList ["hotReload", box true] }
+            let request =
+              { Code = patch.Code
+                Args = Map.ofList [ "hotReload", box true; "hotReloadClosures", box (closuresOf filePath baseline current functions) ] }
             match! evalWithinBudget request with
             | Error budget ->
               Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.evalTimedOut fileName budget)
@@ -1389,6 +1435,12 @@ let run (sessionId: string) (port: int) = async {
                   // below, where a `Patched(n, m)` success could bury it.
                   return! restartOrFallBack fileName first rest
                 | BindingEscalation.ExtraReasons extraReasons ->
+                // The host looked at the compiled shapes and found a change it cannot patch (a lambda
+                // that now captures something, an object laid out another way, a generic function).
+                // That is a restart with the reason named, never a patch that landed on nothing.
+                match refusalsOf response with
+                | first :: rest -> return! restartOrFallBack fileName first rest
+                | [] ->
                 match Features.ReloadPlanning.confirmPatch baseline functions reloaded with
                 | Features.ReloadPlanning.PatchOutcome.Applied ->
                   reloadBaselines.[IO.Path.GetFullPath filePath] <- current
@@ -1675,7 +1727,13 @@ let run (sessionId: string) (port: int) = async {
                            // a copy the app kept either, and it would reset
                            // every `let mutable` in the file on the way.
                            | Features.ReloadOutcome.RestartReason.ValueCopiedByApp _
-                           | Features.ReloadOutcome.RestartReason.ValueUntraceable _ -> true
+                           | Features.ReloadOutcome.RestartReason.ValueUntraceable _
+                           // The host already looked at the compiled shapes and found these cannot
+                           // be patched. Re-evaluating the whole file would not change that, and it
+                           // would re-declare every `let mutable` in the file on the way.
+                           | Features.ReloadOutcome.RestartReason.ClosureShapeChanged _
+                           | Features.ReloadOutcome.RestartReason.InstanceLayoutChanged _
+                           | Features.ReloadOutcome.RestartReason.GenericFunction _ -> true
                            | _ -> false) ->
                   let outcome = Features.ReloadOutcome.ReloadOutcome.RestartRequired restartReasons
                   Features.ReloadBroadcast.broadcastOutcome outcome

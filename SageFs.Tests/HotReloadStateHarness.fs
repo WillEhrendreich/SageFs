@@ -58,18 +58,34 @@ let hostExePath (runtime: HostRuntime) =
   | false, false ->
     failwithf "There's no %s host at %s. Build the solution in %s first, the state tests run against the host the daemon ships." (HostRuntime.moniker runtime) hostDir (buildConfiguration ())
 
-let private fixtureSourceDir () =
-  Path.Combine(repoRoot (), "SageFs.Tests", "fixtures", "HotReloadStateFixture")
+/// One checked-in fixture app the harness copies into a scratch project per run.
+type Fixture = {
+  /// The folder under SageFs.Tests/fixtures.
+  Folder: string
+  /// Sources the scratch project compiles, in order. The first is the one a test edits by default.
+  Sources: string list
+  /// The project's name, which is also the namespace the app's entry point lives in.
+  Project: string
+  /// The route the app answers once it is up.
+  ReadyRoute: string
+}
 
-/// Sources the scratch project compiles, in order.
-let private fixtureSources = [ "State.fs"; "App.fs" ]
+/// The live-state fixture: values a save has to leave alone.
+let stateFixture =
+  { Folder = "HotReloadStateFixture"
+    Sources = [ "State.fs"; "App.fs" ]
+    Project = "StateFixture"
+    ReadyRoute = "count" }
+
+let private fixtureSourceDir (fixture: Fixture) =
+  Path.Combine(repoRoot (), "SageFs.Tests", "fixtures", fixture.Folder)
 
 /// The scratch project. Written per run rather than checked in so the target
 /// framework is whatever the run asks for. It lives under the repo on purpose,
 /// so Directory.Packages.props pins FSharp.Core exactly like it does for the
 /// real fixtures, and the lock file is switched off because a scratch
 /// project's lock file is noise.
-let private fixtureProject (runtime: HostRuntime) =
+let private fixtureProject (fixture: Fixture) (runtime: HostRuntime) =
   String.concat "\n" [
     "<Project Sdk=\"Microsoft.NET.Sdk.Web\">"
     "  <PropertyGroup>"
@@ -79,7 +95,7 @@ let private fixtureProject (runtime: HostRuntime) =
     "    <RestoreLockedMode>false</RestoreLockedMode>"
     "  </PropertyGroup>"
     "  <ItemGroup>"
-    yield! fixtureSources |> List.map (sprintf "    <Compile Include=\"%s\" />")
+    yield! fixture.Sources |> List.map (sprintf "    <Compile Include=\"%s\" />")
     "  </ItemGroup>"
     "</Project>"
     "" ]
@@ -125,9 +141,9 @@ let sdkPin (runtime: HostRuntime) : string option =
     | [] -> failwith "The net10 state tests need a .NET 10 SDK installed (dotnet --list-sdks shows none). Install one from https://dotnet.microsoft.com/download/dotnet/10.0."
     | versions -> versions |> List.maxBy (fun v -> Version(v.Split('-').[0])) |> Some
 
-let private copyFixture (runtime: HostRuntime) =
+let private copyFixture (fixture: Fixture) (runtime: HostRuntime) =
   let runDir =
-    Path.Combine(fixtureSourceDir (), ".runs", sprintf "%s-%s" (HostRuntime.moniker runtime) (Guid.NewGuid().ToString("N")))
+    Path.Combine(fixtureSourceDir fixture, ".runs", sprintf "%s-%s" (HostRuntime.moniker runtime) (Guid.NewGuid().ToString("N")))
   Directory.CreateDirectory runDir |> ignore
   match sdkPin runtime with
   | Some sdk ->
@@ -135,14 +151,14 @@ let private copyFixture (runtime: HostRuntime) =
       Path.Combine(runDir, "global.json"),
       sprintf """{"sdk":{"version":"%s","rollForward":"latestPatch","allowPrerelease":false}}""" sdk)
   | None -> ()
-  for source in fixtureSources do
-    File.Copy(Path.Combine(fixtureSourceDir (), source), Path.Combine(runDir, source))
-  let project = Path.Combine(runDir, "StateFixture.fsproj")
-  File.WriteAllText(project, fixtureProject runtime)
+  for source in fixture.Sources do
+    File.Copy(Path.Combine(fixtureSourceDir fixture, source), Path.Combine(runDir, source))
+  let project = Path.Combine(runDir, fixture.Project + ".fsproj")
+  File.WriteAllText(project, fixtureProject fixture runtime)
   // The copies must be OLDER than the build, or the host decides the source
   // was edited after the build and re-evaluates it whole instead of patching.
   let past = DateTime.UtcNow.AddMinutes -5.0
-  for source in fixtureSources do
+  for source in fixture.Sources do
     File.SetLastWriteTimeUtc(Path.Combine(runDir, source), past)
   runDir, project
 
@@ -263,8 +279,8 @@ let private postJson (url: string) (body: string) = task {
 /// `configureRepo` runs against the scratch run dir before the host spawns —
 /// the worker's own CWD becomes that dir, so a `.SageFs/settings.json` it
 /// writes there is the repo layer `reflectionSettingsFor` resolves against.
-let startConfigured (runtime: HostRuntime) (configureRepo: string -> unit) : Task<RunningApp> = task {
-  let runDir, project = copyFixture runtime
+let startFixture (fixture: Fixture) (runtime: HostRuntime) (configureRepo: string -> unit) : Task<RunningApp> = task {
+  let runDir, project = copyFixture fixture runtime
   configureRepo runDir
   do! buildAsSageFsDoes runDir project
   let hostLog = StringBuilder()
@@ -283,18 +299,18 @@ let startConfigured (runtime: HostRuntime) (configureRepo: string -> unit) : Tas
   logText ()
   |> Expect.stringContains (sprintf "the app has to run on %s" (HostRuntime.moniker runtime)) wantRuntime
   let appPort, _ = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
-  let! _ = evalOk proxy (sprintf "StateFixture.App.run %d" appPort)
+  let! _ = evalOk proxy (sprintf "%s.App.run %d" fixture.Project appPort)
   let app =
     { Runtime = runtime
       RunDir = runDir
-      StateSource = Path.Combine(runDir, "State.fs")
+      StateSource = Path.Combine(runDir, List.head fixture.Sources)
       Host = proc
       WorkerUrl = workerUrl
       Proxy = proxy
       AppPort = appPort
       HostLog = hostLog }
-  do! until TestTimeouts.appFirstAnswer (fun () -> "the app never answered /count.\n" + logText ()) (fun () -> task {
-    let! _ = get app "count"
+  do! until TestTimeouts.appFirstAnswer (fun () -> sprintf "the app never answered /%s.\n%s" fixture.ReadyRoute (logText ())) (fun () -> task {
+    let! _ = get app fixture.ReadyRoute
     return true })
   let! status, body = postJson (workerUrl + "/hotreload/watch-all") "{}"
   status |> Expect.equal (sprintf "watch-all should succeed: %s" body) 200
@@ -303,6 +319,9 @@ let startConfigured (runtime: HostRuntime) (configureRepo: string -> unit) : Tas
     return not (json.Contains "\"watchedCount\":0") })
   return app
 }
+
+let startConfigured (runtime: HostRuntime) (configureRepo: string -> unit) : Task<RunningApp> =
+  startFixture stateFixture runtime configureRepo
 
 let start (runtime: HostRuntime) : Task<RunningApp> = startConfigured runtime (fun _ -> ())
 
@@ -318,10 +337,12 @@ let private isVerdict (payload: string) =
 /// watcher drops a second change to the same file inside `DoubleCompileGuardMs`
 /// on purpose. Two saves in a row have to be further apart than that or the
 /// product (correctly) sees one.
-let saveWithinBudget (budget: TimeSpan) (app: RunningApp) (find: string) (replace: string) : Task<string> = task {
-  let before = File.ReadAllText app.StateSource
-  let occurrences = before.Split([| find |], StringSplitOptions.None).Length - 1
-  occurrences |> Expect.equal (sprintf "the edit anchor has to appear exactly once in State.fs: %s" find) 1
+let saveEditsWithinBudget (budget: TimeSpan) (app: RunningApp) (source: string) (edits: (string * string) list) : Task<string> = task {
+  let before = File.ReadAllText source
+  for find, _ in edits do
+    let occurrences = before.Split([| find |], StringSplitOptions.None).Length - 1
+    occurrences |> Expect.equal (sprintf "the edit anchor has to appear exactly once in %s: %s" (Path.GetFileName source) find) 1
+  let after = edits |> List.fold (fun (text: string) (find, replace) -> text.Replace(find, replace)) before
   use req = new HttpRequestMessage(HttpMethod.Get, app.WorkerUrl + "/__sagefs__/reload")
   req.Headers.Accept.ParseAdd "text/event-stream"
   use streamClient = new HttpClient(Timeout = Timeout.InfiniteTimeSpan)
@@ -330,7 +351,7 @@ let saveWithinBudget (budget: TimeSpan) (app: RunningApp) (find: string) (replac
   use! stream = resp.Content.ReadAsStreamAsync()
   use reader = new StreamReader(stream)
   do! Task.Delay(DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
-  File.WriteAllText(app.StateSource, before.Replace(find, replace))
+  File.WriteAllText(source, after)
   use cts = new CancellationTokenSource(budget)
   let seen = ResizeArray<string>()
   let mutable verdict = ""
@@ -350,13 +371,21 @@ let saveWithinBudget (budget: TimeSpan) (app: RunningApp) (find: string) (replac
   match verdict with
   | "" ->
     return
-      failwithf "no verdict within %.0fs for the edit %s -> %s. Saw:\n%s\nHost log:\n%s"
-        budget.TotalSeconds find replace (String.concat "\n" seen) (RunningApp.log app)
+      failwithf "no verdict within %.0fs for the edit %A. Saw:\n%s\nHost log:\n%s"
+        budget.TotalSeconds edits (String.concat "\n" seen) (RunningApp.log app)
   | v -> return v
 }
 
+let saveWithinBudget (budget: TimeSpan) (app: RunningApp) (find: string) (replace: string) : Task<string> =
+  saveEditsWithinBudget budget app app.StateSource [ find, replace ]
+
 let save (app: RunningApp) (find: string) (replace: string) : Task<string> =
   saveWithinBudget TestTimeouts.saveVerdict app find replace
+
+/// Several edits to one file, written as ONE save: the way a user adds a helper and the
+/// call to it before pressing save.
+let saveEdits (app: RunningApp) (source: string) (edits: (string * string) list) : Task<string> =
+  saveEditsWithinBudget TestTimeouts.saveVerdict app source edits
 
 /// What a patch ends in. A save's first verdict is `pending` (applied, and the
 /// new code has not been seen running); once the app has run the patched code

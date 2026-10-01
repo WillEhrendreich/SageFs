@@ -16,7 +16,7 @@ let private nothingLoaded : AssemblySources = { Dynamic = noAssemblies; Loaded =
 let private emptyInit : AgentInit = { Projects = []; ResolveFrom = []; ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }
 
 let private request (detours: DetourPolicy) (discovery: DiscoveryPolicy) : AfterEval =
-  { EvaluatedCode = "let x = 1"; Detours = detours; Discovery = discovery; IsFileSave = false }
+  { EvaluatedCode = "let x = 1"; Detours = detours; Discovery = discovery; IsFileSave = false; Closures = [] }
 
 let private missingProject =
   Path.Combine(Path.GetTempPath(), "sagefs-host-agent-no-such-dir", "Missing.dll")
@@ -110,7 +110,7 @@ let tests =
               { EvaluatedCode = "module Shapes =\n  let plainHandler (who: string) = \"B\" + who"
                 Detours = DetourPolicy.ApplyDetours
                 Discovery = DiscoveryPolicy.WhenChanged
-                IsFileSave = true }
+                IsFileSave = true; Closures = [] }
 
           report.DetourReport.Redirected
           |> Expect.isNonEmpty "the compiled plainHandler must actually be re-pointed"
@@ -140,7 +140,7 @@ let tests =
       <| fun (code: string) ->
         let agent = Agent(emptyInit, nothingLoaded)
         let ask () =
-          agent.AfterEval { EvaluatedCode = code; Detours = DetourPolicy.RegisterOnly; Discovery = DiscoveryPolicy.WhenChanged; IsFileSave = false }
+          agent.AfterEval { EvaluatedCode = code; Detours = DetourPolicy.RegisterOnly; Discovery = DiscoveryPolicy.WhenChanged; IsFileSave = false; Closures = [] }
         ask () = ask ()
 
       testProperty "WHY — HostAgent.AfterEval — UpdatedMethods and DetourReport.Redirected never disagree, because UpdatedMethods IS the DetourReport's own Redirected list, not a second tally someone could forget to keep in sync"
@@ -148,7 +148,7 @@ let tests =
         let agent = Agent(emptyInit, nothingLoaded)
         [ for detours in [ DetourPolicy.ApplyDetours; DetourPolicy.RegisterOnly ] do
             for discovery in [ DiscoveryPolicy.WhenChanged; DiscoveryPolicy.Forced ] ->
-              let report = agent.AfterEval { EvaluatedCode = code; Detours = detours; Discovery = discovery; IsFileSave = false }
+              let report = agent.AfterEval { EvaluatedCode = code; Detours = detours; Discovery = discovery; IsFileSave = false; Closures = [] }
               report.UpdatedMethods = report.DetourReport.Redirected ]
         |> List.forall id
     ]

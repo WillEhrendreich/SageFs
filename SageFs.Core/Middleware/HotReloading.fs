@@ -253,7 +253,13 @@ let hotReloadingMiddleware next (request, st: AppState) =
         match Map.tryFind "liveTestRediscover" request.Args with
         | Some v when v = box true -> SageFs.HostAgent.DiscoveryPolicy.Forced
         | _ -> SageFs.HostAgent.DiscoveryPolicy.WhenChanged
-      match st.Session.AfterEval { EvaluatedCode = response.EvaluatedCode; Detours = detours; Discovery = discovery; IsFileSave = Map.containsKey "hotReload" request.Args } with
+      // A save that edited a lambda says which declarations' closures to re-point; the planner knows, the host
+      // only has the compiled classes.
+      let closures =
+        match Map.tryFind "hotReloadClosures" request.Args with
+        | Some (:? (ClosureRepoint list) as requested) -> requested
+        | _ -> []
+      match st.Session.AfterEval { EvaluatedCode = response.EvaluatedCode; Detours = detours; Discovery = discovery; IsFileSave = Map.containsKey "hotReload" request.Args; Closures = closures } with
       | SageFs.HostAgent.AgentUnavailable reason ->
         Log.warn "[HotReloading] the session's agent is unavailable, so this eval was not reloaded or scanned for tests: %s" reason
         response, st
@@ -334,6 +340,8 @@ let hotReloadingMiddleware next (request, st: AppState) =
               .Add("hotReloadCompiledCandidates", report.DetourReport.CompiledCandidates)
               .Add("hotReloadBindingOutcomes", report.DetourReport.Bindings)
               .Add("hotReloadDeclinedBindings", report.DetourReport.Declined)
+              // Changes the host found it cannot patch once the compiled shapes were in front of it.
+              .Add("hotReloadRefusals", report.DetourReport.Refusals)
           | false -> response.Metadata
         let metadata = metadata.Add("liveTestHookResult", report.LiveTest)
         let metadata = metadata.Add("liveTestRunTest", runTest)

@@ -96,7 +96,13 @@ unit tests on the decision, and I've said which is which.
 
 ### Code
 
-A change reaches the running app when it's a change to a **function body**:
+A change reaches the running app when it's a change to a **function body**, to
+the body of a **lambda** the app already holds, or to a **member** of an object
+it already built. The first table is the shape matrix (a named handler captured
+in a route table). The second is the parity matrix: the edits .NET Hot Reload
+takes for C# that the first one never asked about. Every row of the second
+starts a real host on .NET 10 and on .NET 11, saves a real file and reads what
+the same process serves, and it reads what the planner said about the save.
 
 | Shape | What happens | Pinned by (real app) |
 |---|---|---|
@@ -110,6 +116,42 @@ A change reaches the running app when it's a change to a **function body**:
 
 The shape matrix is `SageFs.Tests/WebAppHotReloadVerificationTests.fs` (it runs
 on .NET 11).
+
+| You save | What happens | Pinned by (real app, net10 + net11) |
+|---|---|---|
+| a lambda **written inline** in the route list (`"/", fun () -> ...`) | reloads. The lambda is a closure class and the list holds instances of it, so the class's `Invoke` is re-pointed | parity `inlineLambda` |
+| the same lambda **capturing a value** computed at startup, body edited, captures unchanged | reloads, and the closure keeps the value it captured | parity `inlineCapture` |
+| a lambda that holds a `task { }` or an `async { }` | reloads | parity `taskLambda`, `asyncLambda` |
+| a function that **hands back a closure** the route table kept, and the lambda inside it changes | reloads. The function is patched and so is the closure the table holds | parity `heldClosure` |
+| a named function whose body is a `task { }` or an `async { }` | reloads | parity `taskNamed`, `asyncNamed` |
+| the body of an **instance member** of an object built at startup | reloads, and the object is the same one, so its fields carry on (`A#1` before the save, `B#2` after it) | parity `instance`, `instanceState` |
+| a **new function** the saved code calls, with the call added in the same save | reloads. The new function is defined in FSI and the caller is patched onto it | parity `addedFunction` |
+| a **new type**, or a **new value**, the saved code uses | reloads, the same way | parity `addedType`, `addedValue` |
+| a function **taken out**, with the code that used it | reloads. The old one stays in the process for whatever holds it | parity `removed` |
+| a function that **gains a parameter**, with its callers saved in the same save | reloads. It is a new method to the running app, and the callers move onto it | parity `signature` |
+
+The planner only takes an edit as "just the lambdas" when nothing outside a
+lambda changed (it cuts every lambda out of both versions and compares what is
+left). A lambda edit is re-pointed only while the closure has room for it: the
+same captured values and the same lambdas inside it. See
+[the decision](decisions.md#a-lambda-in-a-route-list-reloads-by-re-pointing-its-closure-and-only-while-the-closure-has-room-for-the-change).
+The same goes for an instance member: the type has to keep its fields.
+
+**With a debugger attached.** Microsoft's pages say Hot Reload is not supported
+for F# while you debug it. Mine has no such rule written down, so I tested it: a
+real managed debugger (netcoredbg, pinned and checked by hash) is attached to the
+process the app runs in, the process itself says a debugger is attached, and then
+a lambda edit, an instance member edit, a named task and a signature change are
+saved. Each lands and ends `Patched`
+(`HotReloadDebuggerTests`, net10 + net11). What I did not test: stepping, a
+breakpoint inside patched code, or saving an edit to a method the debugger has
+stopped in. Nothing in that test sets a breakpoint.
+
+A save of added or re-signed code is **applied**, and it is **Patched** once the
+code that calls it has run. A save that only adds something nothing calls yet
+ends as "not confirmed: the new code has not run", which is true of it. A caller
+in **another file** keeps calling the old method until you save that file as
+well; the build would not pass until you do.
 
 ### What "patched" means
 
@@ -325,7 +367,14 @@ isn't the one running your app, tells you a restart is needed):
 | an immutable value the running app kept a copy of | see the values table. It's never reported as patched, and the reason names who kept it | rule 2 guard, `banner`, and the forced lazy (real app, net10 + net11) |
 | a `let mutable` whose type changed | see the state table | rule 4 (real app, net10 + net11) |
 | a function that uses a **private function, value or type** in its file | FSI would need that member's code, not just a field, and a patch can't see private members. Private `let mutable`s are fine (see above) | planner: `ReloadPlanningTests` "carried live state" |
-| a changed function or member **signature**, a new/removed declaration, a type whose fields, cases or members were added, removed or re-typed | the compiled assembly's shape no longer matches, and live instances were laid out by the old definition | planner: `ReloadPlanningTests`, `ReloadPlanningDecisionMutationTests` |
+| a type whose **fields, cases or members** were added, removed or re-typed | the compiled assembly's shape no longer matches, and live instances were laid out by the old definition | planner: `ReloadPlanningTests`, `ReloadPlanningDecisionMutationTests` |
+| the **entry point**, a bare expression that runs at startup, a module alias, added or removed | it takes effect when the process starts | planner: `ReloadPlanningTests` |
+| a lambda that **starts capturing** something it did not, or gains or loses a lambda inside it | the closures the app already built have no room for the change. It says `ClosureShapeChanged` and names the field | parity `inlineNewCapture` |
+| an instance member that starts reading a **constructor argument** (the compiler adds a field) | the objects the app already built do not have it. It says `InstanceLayoutChanged` and names the field | parity `instanceNewField` |
+| a **generic function** the app already holds | a detour reaches the instantiations that have run, and one that runs later would get the old body. It says `GenericFunction` and names it. If the function only has to work for one type, annotate its arguments with it and it is re-pointed like any other | parity `generic` |
+
+Each of those leaves the running app exactly as it was, and the whole save with
+it: one refusal anywhere in a save stops every detour of it.
 
 If a handler isn't picking up edits, check whether its value is **computed**
 rather than **a function**: `let getHome : HttpHandler = fun ctx -> ...` and
@@ -380,6 +429,21 @@ reported the same way, with a hint to raise `fs.inotify.max_user_instances`.
 ## Where it falls short right now
 
 I'd rather you hear this from me than find it at 11pm.
+
+- **A lambda edit in a project you built Release by hand restarts.** SageFs
+  builds your project with optimizations off, and its FSI compiles patches with
+  `--optimize-` to match. An assembly you built optimized has closures of
+  another shape (a `task { }` is a static state machine, a captured constant is
+  folded away), so the new lambda can't be matched to the old one and the save
+  says `ClosureShapeChanged`. Rebuild through SageFs and it holds.
+- **A caller in another file keeps the old method after a signature change.**
+  The saved callers move onto the new method; one you haven't saved yet still
+  calls the old one, until you save it.
+- **A generic function is a restart.** There is no way for a detour to reach
+  every instantiation, present and future, so it names the function and says so
+  rather than patching some calls.
+- **Adding a member to an existing type is a restart.** Microsoft's mechanism
+  supports it. Mine treats any change to a type's member list as a shape change.
 
 - **A redefined value restarts once anything that hands it on has run.**
   Load the page that renders `greeting`, then edit `greeting`, and it's a

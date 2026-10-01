@@ -428,3 +428,144 @@ twice), `SageFs.Tests/FsiHostLostTests.fs`, `SageFs.Tests/HostCrashTests.fs`, an
 `SageFs.Tests/HostCrashRecoveryTests.fs`.
 Reopen it if: users lose work to host crashes often enough that "tell them and let them reset" costs more than a
 restart that says what it dropped.
+
+## A lambda in a route list reloads by re-pointing its closure, and only while the closure has room for the change
+
+`get "/" (fun ctx -> ...)` has no name to re-point. The compiler turns the lambda into a closure class and the route
+list holds instances of it, which is why an edit to one used to restart: the planner read the whole list as a value the
+app had kept a copy of. The class has an `Invoke`, and the instances the app already built still run it, so a save that
+only changes lambda bodies detours the old class's `Invoke` to the new one's.
+
+The new `Invoke` is handed an OLD instance and reads what the lambda captured by field offset. That is only sound when
+the two classes have the same fields, in the same order, of the same types, so the host checks it and refuses
+otherwise. A lambda that starts capturing something, or gains or loses a lambda inside it, restarts and says
+`ClosureShapeChanged` with the field it saw. That is the same line Microsoft draws for C# (the captured set has to stay
+the same), for the same reason.
+
+Matching old closures to new ones. The compiler names a closure after its binding and the line of the lambda
+(`routes@72-3`, counted up in the order it makes them). The planner says which lambdas changed and where they sit,
+counted from the declaration's first line, and only says so when nothing OUTSIDE a lambda changed (it blanks every
+lambda out of both versions and compares what is left). The host reads those lines off the compiled assembly and off
+the code FSI just compiled. Measured on this machine: the name carries the raw line of the code FSI compiled and
+ignores the `# n "file"` directive, and the pipeline adds lines of its own (an `open`, a NoInlining attribute above
+each function), so the host finds the declaration by its directive line in the code that was evaluated and counts from
+there. Two lambdas that share a line cannot be told apart by name, so that edit does not take this path.
+
+A value edited only in its lambdas is emitted as a function (`let routes () : T = ...`). FSI compiles the same closures
+and defining a function runs nothing, so the new lambdas exist without the list being built a second time.
+
+Hot reload sessions compile with `--optimize-`. SageFs builds the project with `Optimize=false` and FSI's default is to
+optimize. Optimized, a `task { }` is a static state machine where the build made a chain of closures, and a captured
+constant is folded into the closure, which changes its fields. Measured: with FSI optimizing, a lambda holding a task or
+an async was refused as a different shape, and a lambda capturing a constant looked like it lost its capture. With
+`--optimize-` the patch has the same shape as the code it replaces and both patch.
+
+One refusal anywhere in a save stops every detour of it. The closures are matched first (nothing is detoured while
+matching), and only if every one fits does anything move, so a restart never leaves the app half updated.
+
+Evidence: `SageFs.Core/Middleware/HotReloadCore.fs` (`planClosureWork`, `applyClosureWork`, `layoutFit`),
+`SageFs.Core/Features/ReloadPlanning.fs` (`lambdaDiff`), and the real-app rows in `SageFs.Tests/HotReloadParityTests.fs`
+(`inlineLambda`, `inlineCapture`, `taskLambda`, `asyncLambda`, `heldClosure`, `inlineNewCapture`) on net10.0 and
+net11.0. The pure rules are in `SageFs.Tests/HotReloadClosureTests.fs`.
+Reopen it if: a closure the compiler makes cannot be matched by name and line (a generated one with no line), or FSI
+stops honouring `--optimize-`.
+
+## An instance member reloads by re-pointing it, and the object keeps its fields
+
+Hot reload registered module functions and static members and nothing else, so `member this.Render() = ...` on an
+object the app built at startup restarted, and the reason it gave (`the signature of Greeter changed`) was wrong. A
+member is a method like any other: the object the app holds calls it, and detouring the old method to the new one
+reaches that object. The edit lands, and the object is the same one, so its fields (a counter, a cache) carry on. The
+`instanceState` row reads `A#1` before the save and `B#2` after it.
+
+Same condition as for closures, same reason: the new member is handed an old object and reads fields by offset, so the
+new type has to have the old type's fields. A member that starts using a constructor argument gives the type a field
+the object does not have, and that restarts and says `InstanceLayoutChanged` with the field it saw.
+
+What counts as a member. Only what a class declares itself: not the `ToString` and `Equals` every type inherits, not
+the members the compiler writes for a record or union, not a struct's (`this` is a byref there) and not a generic type's.
+An instance property's getter is a plain member. A module's `get_x` and `set_x` are one mutable binding's pair, and the
+planner tears them down together or not at all, so only a module's accessors get that treatment.
+
+The held-copy record is keyed by name for a module function and by type and name for a member, so a `Render` on one
+class and a `Render` on another are not the same entry.
+
+Evidence: `SageFs.Tests/HotReloadParityTests.fs` rows `instance`, `instanceState`, `instanceNewField` on net10.0 and
+net11.0; `SageFs.Tests/HotReloadClosureTests.fs` for what is registered.
+Reopen it if: a member needs to be added to a type (Microsoft's mechanism supports it), or a virtual member's dispatch
+turns out to differ between the old type and the new.
+## A save that adds, removes or re-signs a declaration lands without a restart
+
+Adding a type or a value, removing anything that isn't startup code, and changing a function's signature all restarted.
+The planner read each as "something the running build never had, or lost, or shaped differently", and a restart was
+the safe answer. It is safe, and it is also wrong for most of what a person does in an afternoon: add a helper and call
+it, delete one, add a parameter.
+
+What I did instead is say what is true. A declaration the running build never had needs no compiled original: it is
+defined in FSI, and the saved code that uses it is patched to call it, in the same save. A function whose signature
+changed is the same thing to the running app: a new method. The old one stays for whatever still holds it, and the
+callers saved with it are moved onto the new one. That is what Microsoft's mechanism does as well (the build forces
+every caller of a changed signature into the same edit). A removal leaves the old declaration in the process, and what
+stopped using it was saved in the same breath, so there is nothing to re-point and nothing to restart for.
+
+What still restarts: the entry point, a bare expression that runs at startup, a module alias, a change to a type's
+shape, and everything the earlier cases refuse.
+
+What the save says is counted honestly. A new declaration is "applied", not "seen running": it has no probe, because
+nothing runs it until a caller does. So the caller's probe is what makes the save Patched. A save that only adds
+something nothing calls yet ends as "not confirmed: the new code has not run", which is what is true of it.
+
+One thing to know. A caller in ANOTHER file keeps calling the old method until you save that file as well. The build
+would not pass until you did, so the window is short, but in it the old behaviour is what runs.
+
+A removal on its own, with nothing else changed, reports "no declaration change". It changed nothing in the running
+process, which is true, though it isn't the whole story.
+
+Evidence: `SageFs.Tests/HotReloadParityTests.fs` rows `addedFunction`, `addedType`, `addedValue`, `removed`, `signature`
+on net10.0 and net11.0; the planner rules in `SageFs.Tests/ReloadPlanningTests.fs`.
+Reopen it if: callers in other files turn out to bite (a cross-file check of who calls a changed signature would let it
+restart instead), or a removed declaration's old copy turns out to matter.
+
+## A generic function restarts and says so, because a detour of a generic function reaches only part of it
+
+A generic function is compiled once for every instantiation that runs, and the runtime keeps one body for all reference
+types and one for each value type. Measured against the Harmony we ship: detouring the open definition throws (and the
+process aborted on the next call), and detouring a closed instantiation changes that instantiation and nothing else. A
+call with a type that has not run yet is compiled from the old IL afterwards. So a patch of a generic function would be
+right for the calls that already happened and wrong for one that comes later, which is the kind of "Patched" this tool
+exists not to say. Microsoft's mechanism edits the method in place and does not have this problem; we do.
+
+The row that proves it (`generic`) saves an edit to `genericTag<'T>` that two call sites use with a string and an int.
+Both instantiations had run, so detouring them would have looked right. A third (a float) came out with the old body.
+
+Now a generic function is registered so a save can name it, never detoured, and a save that edits one that the app holds
+is refused with `GenericFunction`, which names the function. The refusal stops every detour of the save and the whole-file
+fallback is skipped, so the running app is left as it was. The remedy says what works: a function that is not generic is
+re-pointed, so if it only has to work for one type, annotate its arguments with it.
+
+Evidence: `SageFs.Tests/HotReloadParityTests.fs` row `generic` on net10.0 and net11.0, and the spike on a bare session
+in this change's commit message.
+Reopen it if: a way to detour every instantiation, present and future, shows up (a shared canonical body for reference
+types would cover half of it, and half is not a claim worth making).
+
+## The debugger row downloads a pinned debugger and checks its hash, because the row has to be real
+
+"Does hot reload work while a debugger is attached" had no test, and Microsoft's answer for F# is "no". A faked row (a
+flag that says a debugger is attached, a mock) would be worse than none. The row attaches Samsung's netcoredbg to the
+FSI host, which is the process the route table lives in, asks that process whether a debugger is attached (and the twin
+asks the same of an unattached one and gets false), then does real saves. Managed attach on Linux goes through the
+runtime's own pipes, so it works without ptrace under the default Yama setting, and it works against .NET 10 and .NET 11.
+
+netcoredbg is MIT licensed and has a Linux x64 release. The Microsoft debugger (vsdbg) is licensed for use with Microsoft
+products only, so it is not an option. The release is pinned by URL and SHA-256, downloaded once into the fixture's
+`.runs` folder (which is git-ignored), and refused if the hash differs. A machine that is not Linux x64, or cannot reach
+GitHub the first time, fails the row and says why. It does not skip it.
+
+What it proves is narrow, and the doc says so: a save lands and runs in a process a debugger is attached to. It does not
+prove stepping, breakpoints in patched code, or an edit to a method the debugger is stopped in. Nothing sets a
+breakpoint.
+
+Evidence: `SageFs.Tests/HotReloadDebuggerTests.fs`.
+Reopen it if: breakpoints in patched code turn out to matter to users (that is a separate row, and a harder one: a
+detour rewrites the first bytes of the code a breakpoint may sit in), or CI cannot reach GitHub (cache the archive on
+the runner).

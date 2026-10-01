@@ -1796,7 +1796,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
               FsiSession.evalOrThrow fsiSession code CancellationToken.None
               let detours = match hotReload with true -> HostAgent.DetourPolicy.ApplyDetours | false -> HostAgent.DetourPolicy.RegisterOnly
               fsiSession.AfterEval
-                { EvaluatedCode = code; Detours = detours; Discovery = HostAgent.DiscoveryPolicy.WhenChanged; IsFileSave = false }
+                { EvaluatedCode = code; Detours = detours; Discovery = HostAgent.DiscoveryPolicy.WhenChanged; IsFileSave = false; Closures = [] }
               |> ignore
             let logFn msg = logger.LogInfo msg
             let outcome = StartupProfile.applyIfPresent workingDir evalFn logFn

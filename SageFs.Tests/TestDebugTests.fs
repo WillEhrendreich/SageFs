@@ -365,7 +365,7 @@ let tests =
       let sources : AssemblySources = { Dynamic = (fun () -> [| evalAssembly |]); Loaded = (fun () -> [||]) }
       let newAgent () = Agent(emptyInit, sources, [ executor ])
       let afterEval =
-        { EvaluatedCode = "let x = 1"; Detours = DetourPolicy.RegisterOnly; Discovery = DiscoveryPolicy.Forced; IsFileSave = false }
+        { EvaluatedCode = "let x = 1"; Detours = DetourPolicy.RegisterOnly; Discovery = DiscoveryPolicy.Forced; IsFileSave = false; Closures = [] }
 
       testCase "WHY: a test an eval defined is held with DefinedByEval, so the editor can say breakpoints in it will not bind" <| fun _ ->
         let agent = newAgent ()

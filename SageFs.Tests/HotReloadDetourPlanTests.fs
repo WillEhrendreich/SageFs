@@ -328,11 +328,21 @@ let mutableStateClassificationTests =
       ReloadChange.restartReason (ReloadChange.ValueCopied ("getHome", "the route table's closure"))
       |> Expect.equal "the app's evidence becomes the reason" (RestartReason.ValueCopiedByApp ("getHome", "the route table's closure"))
 
-    testCase "WHY — ReloadPlanning.restartReason — a declaration the running build never had reports NewDeclaration because there is no original to re-point" <| fun _ ->
-      let edited = mutableSource + "\ntype Extra = { Value: int }\n"
+    testCase "WHY - ReloadPlanning.restartReason - a bare expression the running build never had reports NewDeclaration through the startup-code reason, because it runs when the process starts and there is no process start to wait for" <| fun _ ->
+      let edited = mutableSource + "\nprintfn \"hello\"\n"
       planReload (declsOfSource mutableSource) (declsOfSource edited)
       |> reasonsOfPlan
-      |> Expect.equal "named as a new declaration" [ RestartReason.NewDeclaration "Extra" ]
+      |> Expect.equal "startup code is not something a running process can be given" [ RestartReason.StartupComputedValue "the module's startup code" ]
+
+    testCase "WHY - ReloadPlanning.restartReason - an added declaration that a restart is named for still reads as NewDeclaration" <| fun _ ->
+      ReloadChange.restartReason (ReloadChange.DeclarationAdded "Extra")
+      |> Expect.equal "the mapping is unchanged" (RestartReason.NewDeclaration "Extra")
+
+    testCase "WHY - ReloadPlanning.planReload - a type the running build never had is patched in, because it is defined in FSI and the code that uses it is patched to call it" <| fun _ ->
+      let edited = mutableSource + "\ntype Extra = { Value: int }\n"
+      match planReload (declsOfSource mutableSource) (declsOfSource edited) with
+      | ReloadPlan.PatchFunctions [ added ] -> added.Name |> Expect.equal "the new type" "Extra"
+      | other -> failtestf "expected the new type to be patched in, got %A" other
 
     testCase "WHY — ReloadPlanning.restartReason — the user-facing message for mutable state refuses to guess between carrying the value forward and resetting it" <| fun _ ->
       let message = ReloadOutcome.describeForUser (restartOutcome (ReloadChange.MutableStateChanged "requestCount") [])
@@ -380,10 +390,10 @@ let confirmPatchOutcomeTests =
       |> Expect.equal "no effect, with the reason"
         (ReloadOutcome.NoEffect(1, [ RestartReason.SignatureChanged "f" ]))
 
-    testCase "WHY — ReloadPlanning.confirmPatchAsOutcome — a function the running build never had is a NEW declaration because there is no captured closure to re-point" <| fun _ ->
+    testCase "WHY - ReloadPlanning.confirmPatchAsOutcome - a function the running build never had is applied, not missed, because it is defined in FSI and there is no compiled original to re-point; it is not Patched until something has run it" <| fun _ ->
       confirmAllReached (beforeWith []) [ fnDecl "brandNew" ] []
-      |> Expect.equal "no effect, named as new"
-        (ReloadOutcome.NoEffect(1, [ RestartReason.NewDeclaration "brandNew" ]))
+      |> Expect.equal "applied and unconfirmed"
+        (ReloadOutcome.PatchPending(1, 1, []))
 
     testCase "WHY — ReloadPlanning.confirmPatchAsOutcome — an outcome that changed nothing must not tell the browser to refresh because refreshing into identical code is what users read as 'hot reload is broken'" <| fun _ ->
       confirmAllReached (beforeWith [ "f" ]) [ fnDecl "f" ] []

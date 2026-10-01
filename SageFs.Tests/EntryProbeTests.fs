@@ -19,6 +19,14 @@ type ProbeTargets =
   [<MethodImpl(MethodImplOptions.NoInlining)>]
   static member Join(a: string, b: string) : string = a + "|" + b
 
+/// An object whose member a closure or an instance member edit re-points.
+type ProbeInstance(prefix: string) =
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  member _.Say(word: string) : string = prefix + word
+
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  member _.Echo<'T>(value: 'T) : 'T = value
+
 let private statusOf (reading: EntryReading) (id: int64) : ProbeStatus =
   reading.Sightings |> List.find (fun s -> s.Probe = id) |> fun s -> s.Status
 
@@ -97,6 +105,17 @@ let tests =
         statusOf reading silent.Id |> Expect.equal "the one that did not" ProbeStatus.NotEntered
       }
 
+      testCase "WHY - committing only the OLDEST probe of a save supersedes the earlier saves' probes and leaves the save's own other probes, which is how several closures of one declaration are watched" <| fun _ ->
+        let registry = ProbeRegistry()
+        let earlier = registry.Allocate "App.routes"
+        let first = registry.Allocate "App.routes"
+        let second = registry.Allocate "App.routes"
+        registry.Commit first
+        let reading = registry.Read [ earlier.Id; first.Id; second.Id ]
+        statusOf reading earlier.Id |> Expect.equal "an earlier save's closure is replaced" ProbeStatus.Superseded
+        statusOf reading first.Id |> Expect.equal "this save's own closure waits to run" ProbeStatus.NotEntered
+        statusOf reading second.Id |> Expect.equal "so does its sibling" ProbeStatus.NotEntered
+
       testTask "WHY — superseding a silent probe ends the wait for it, because it will never run" {
         let registry = ProbeRegistry(fun _ -> TaskCompletionSource<unit>().Task :> Task)
         let old = registry.Allocate "App.render"
@@ -126,6 +145,25 @@ let tests =
           stub.ReturnType |> Expect.equal "same return type" typeof<string>
           stub.GetParameters() |> Array.map _.ParameterType |> Expect.equal "same parameters" [| typeof<string>; typeof<string> |]
           stub.Invoke(null, [| box "a"; box "b" |]) |> Expect.equal "arguments reach the target in order" (box "a|b")
+
+      testCase "WHY - an instance member's stub takes the object first, so a detour from one object's method passes the object straight through" <| fun _ ->
+        let probe = ProbeRegistry.Shared.Allocate "ProbeInstance.Say"
+        let target = typeof<ProbeInstance>.GetMethod "Say"
+        match stubFor probe target with
+        | Result.Error failure -> failtestf "an instance member of a class must get a stub: %s" (StubFailure.describe failure)
+        | Result.Ok stub ->
+          stub.GetParameters() |> Array.map _.ParameterType
+          |> Expect.equal "the object, then the member's own parameters" [| typeof<ProbeInstance>; typeof<string> |]
+          stub.Invoke(null, [| box (ProbeInstance "hello "); box "world" |])
+          |> Expect.equal "the member ran against the object it was handed" (box "hello world")
+          statusOf (ProbeRegistry.Shared.Read [ probe.Id ]) probe.Id |> Expect.equal "called, so entered" ProbeStatus.Entered
+
+      testCase "WHY - a generic member gets no stub, because only the instantiations that already ran could be reached" <| fun _ ->
+        let probe = ProbeRegistry.Shared.Allocate "ProbeInstance.Echo"
+        match stubFor probe (typeof<ProbeInstance>.GetMethod "Echo") with
+        | Result.Ok _ -> failtest "a generic method must not be given a stub"
+        | Result.Error (StubFailure.NotDetourable _) -> ()
+        | Result.Error other -> failtestf "expected NotDetourable, got %A" other
 
       testCase "WHY — a stub that is never called leaves its probe NotEntered" <| fun _ ->
         let probe = ProbeRegistry.Shared.Allocate "ProbeTargets.Double.unused"

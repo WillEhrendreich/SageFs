@@ -593,6 +593,12 @@ let mapDiagnosticColumn (columnOffset: int) (col: int) = max 0 (col - columnOffs
 // Stable-identity reload (Run App)
 // ─────────────────────────────────────────────────────────────────
 
+/// The line directive that goes before a re-emitted declaration, so a diagnostic points at the user's file.
+/// One function for the emitter and for whoever has to FIND the declaration in the code FSI compiled:
+/// the two must write the same text.
+let lineDirective (filePath: string) (startLine: int) : string =
+  sprintf "# %d \"%s\"" startLine (filePath.Replace("\\", "\\\\").Replace("\"", "\\\""))
+
 /// Writes the patch text: the file's module path, then per container its opens,
 /// `open global.<compiled module>`, the stand-ins for carried state, and the
 /// re-emitted declarations. `standIns` pairs a carried declaration with its
@@ -605,7 +611,6 @@ let private renderPatch
     : PreprocessResult =
   let path = decls.ModulePath
   let pad depth = String.replicate depth "  "
-  let directiveFile = filePath.Replace("\\", "\\\\").Replace("\"", "\\\"")
 
   let emitDecl (indent: string) (f: SageFs.Features.ReloadPlanning.SourceDecl) =
     let text =
@@ -615,7 +620,7 @@ let private renderPatch
         | "" -> ""
         | _ -> indent + l)
       |> Array.toList
-    sprintf "# %d \"%s\"" f.StartLine directiveFile :: text
+    lineDirective filePath f.StartLine :: text
 
   /// One thing to write inside a container. Stand-ins go first, so the
   /// functions after them resolve the carried name to the stand-in.

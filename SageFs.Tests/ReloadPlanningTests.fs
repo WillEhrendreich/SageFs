@@ -6,6 +6,8 @@ open FsCheck
 open FsCheck.FSharp
 open SageFs.Features.ReloadPlanning
 
+type private Outcome = SageFs.Features.ReloadOutcome.ReloadOutcome
+
 let private baselineSource = """// header comment
 module Demo.Web.Program
 
@@ -96,17 +98,33 @@ let planReloadTests =
       | ReloadPlan.PatchKeepingState ([], LiveState.Redefined d, []) -> d.Name |> Expect.equal "getHome waits on the app's evidence" "getHome"
       | other -> failtestf "expected getHome to be planned as a redefinition, got %A" other
 
-    testCase "WHY — ReloadPlanning.planReload — a function signature edit requires a restart because callers were compiled against the old one" <| fun _ ->
+    testCase "WHY - ReloadPlanning.planReload - a function signature edit is patched in as a new method because the callers saved with it are what the running app is moved onto, and the old method stays for whatever still holds it" <| fun _ ->
       plan (replace "let render (items: TodoItem list) =" "let render (title: string) (items: TodoItem list) =" baselineSource)
-      |> restartChanges |> Expect.equal "render signature changed" [ ReloadChange.SignatureChanged "render" ]
+      |> patchedNames |> Expect.equal "render, with its new signature" [ "render" ]
 
     testCase "WHY — ReloadPlanning.planReload — an entry point edit requires a restart because it only runs at startup" <| fun _ ->
       plan (replace "  0\n" "  1\n" baselineSource)
       |> restartChanges |> Expect.equal "main changed" [ ReloadChange.EntryPointChanged ]
 
-    testCase "WHY — ReloadPlanning.planReload — removing a function requires a restart because running code may still call it" <| fun _ ->
+    testCase "WHY - ReloadPlanning.planReload - removing a function leaves the running app as it was because the old one is still there for whatever holds it, and what stopped using it is saved in the same breath" <| fun _ ->
       plan (replace "let render (items: TodoItem list) =\n  sprintf \"%d remaining\" items.Length\n" "" baselineSource)
-      |> restartChanges |> Expect.equal "render removed" [ ReloadChange.DeclarationRemoved "render" ]
+      |> patchedNames |> Expect.isEmpty "nothing to patch and nothing to restart"
+
+    testCase "WHY - ReloadPlanning.planReload - removing the entry point still requires a restart because it only runs at startup" <| fun _ ->
+      plan (replace "[<EntryPoint>]\nlet main args =\n  0\n" "" baselineSource)
+      |> restartChanges |> Expect.equal "main removed" [ ReloadChange.EntryPointChanged ]
+
+    testCase "WHY - ReloadPlanning.planReload - a new type is patched in because it is defined in FSI and the saved code that uses it is patched to call it" <| fun _ ->
+      plan (baselineSource + "\ntype Extra = { Note: string }\n")
+      |> patchedNames |> Expect.equal "the new type" [ "Extra" ]
+
+    testCase "WHY - ReloadPlanning.planReload - a new value is patched in for the same reason as a new function" <| fun _ ->
+      plan (baselineSource + "\nlet label = \"todo\"\n")
+      |> patchedNames |> Expect.equal "the new value" [ "label" ]
+
+    testCase "WHY - ReloadPlanning.planReload - a new bare expression still requires a restart because it runs at startup" <| fun _ ->
+      plan (baselineSource + "\nprintfn \"hello\"\n")
+      |> restartChanges |> Expect.equal "startup code" [ ReloadChange.StartupCodeChanged ]
 
     testCase "WHY — ReloadPlanning.planReload — a new function is patched in because nothing compiled references it yet" <| fun _ ->
       plan (baselineSource + "\nlet helper (x: int) = x + 1\n")
@@ -212,11 +230,14 @@ let typeShapeAndLambdaTests =
       planFor "fun who -> \"A\" + who" "fun who -> \"B\" + who"
       |> patchedNames |> Expect.equal "the lambda-bound value" [ "lambdaHandler" ]
 
-    testCase "WHY — ReloadPlanning.planReload — a value whose initializer calls a private function still restarts, because FSI can't reach the private function to run the new initializer" <| fun _ ->
+    // The edit is inside the value's lambda, so the planner takes it as a closure patch (the value is not
+    // redefined, so there is no "the value changed" to report). The patch is the value written out as a
+    // function, and compiling it still needs the private function its initializer calls, which FSI can't reach.
+    testCase "WHY - ReloadPlanning.planReload - a lambda edit in a value whose initializer calls a private function still restarts, because FSI can't reach the private function to compile the patch" <| fun _ ->
       planFor "  fun () -> computedAtStartup" "  fun () -> computedAtStartup + \"!\""
       |> restartChanges
-      |> Expect.equal "the value, and the private function it can't reach"
-           [ ReloadChange.ValueChanged "eagerHandler"; ReloadChange.UsesNonPublicMember ("eagerHandler", "computeEager") ]
+      |> Expect.equal "the private function the patch can't reach"
+           [ ReloadChange.UsesNonPublicMember ("eagerHandler", "computeEager") ]
   ]
 
 [<Tests>]
@@ -251,6 +272,29 @@ let confirmPatchTests =
     testCase "WHY — ReloadPlanning.confirmPatch — a detour of a same-suffixed method does not count because prerender is not render" <| fun _ ->
       confirmPatch before [ render ] [ "Demo.Web.Program.prerender" ]
       |> Expect.equal "restart for render" (PatchOutcome.RestartNeeded (ReloadChange.SignatureChanged "render", []))
+
+    let resigned = { render with Header = "let render (title: string) (items: TodoItem list)"; Text = "let render (title: string) (items: TodoItem list) = title" }
+
+    testCase "WHY - ReloadPlanning.confirmPatch - a function whose signature changed needs no detour because it is a new method, and the callers saved with it are what the app is moved onto" <| fun _ ->
+      confirmPatch before [ resigned ] []
+      |> Expect.equal "applied" PatchOutcome.Applied
+
+    testCase "WHY - ReloadPlanning.confirmPatchLanding - an added function is applied and the re-pointed caller is what is watched, because only the caller has a probe" <| fun _ ->
+      let caller = { render with Name = "caller"; Header = "let caller ()"; Text = "let caller () = 1" }
+      let callerBefore = { before with Decls = before.Decls @ [ caller ] }
+      let watched, outcome =
+        confirmPatchLanding callerBefore [ helper; caller ] [ "Demo.Web.Program.caller" ] [ "Demo.Web.Program.caller" ]
+      watched |> List.map _.Name |> Expect.equal "the caller" [ "caller" ]
+      outcome |> Expect.equal "both applied, neither seen running yet" (Outcome.PatchPending (2, 2, []))
+
+    testCase "WHY - ReloadPlanning.confirmPatchLanding - a save that only adds is watched with no probe, so it ends never-entered when nothing calls it" <| fun _ ->
+      let watched, outcome = confirmPatchLanding before [ helper ] [] []
+      watched |> List.map _.Name |> Expect.equal "the added function" [ "helper" ]
+      outcome |> Expect.equal "applied, nothing has run it" (Outcome.PatchPending (1, 1, []))
+
+    testCase "WHY - ReloadPlanning.confirmPatchLanding - a re-signed function is applied, not missed, because there was no compiled original to reach" <| fun _ ->
+      let _, outcome = confirmPatchLanding before [ resigned ] [] []
+      outcome |> Expect.equal "applied" (Outcome.PatchPending (1, 1, []))
   ]
 
 [<Tests>]
@@ -411,6 +455,7 @@ let private mkDecl (name: string) (kind: DeclKind) (access: DeclAccess) (body: s
     match kind with
     | DeclKind.FunctionDecl -> sprintf "let %s%s x" accessText name, sprintf "let %s%s x = %s" accessText name body
     | DeclKind.ValueDecl -> sprintf "let %s%s" accessText name, sprintf "let %s%s = %s" accessText name body
+    | DeclKind.ValueClosures -> sprintf "let %s%s" accessText name, sprintf "let %s%s () = %s" accessText name body
     | DeclKind.MutableValueDecl -> sprintf "let mutable %s%s" accessText name, sprintf "let mutable %s%s = %s" accessText name body
     | DeclKind.EntryPointDecl -> sprintf "let %s args" name, sprintf "[<EntryPoint>]\nlet %s args = %s" name body
     | DeclKind.TypeDecl -> "", sprintf "type %s%s = { Value: int } // %s" accessText name body
@@ -478,20 +523,22 @@ let private expectedChangeFor (d: SourceDecl) =
   | DeclKind.ValueDecl -> ReloadChange.ValueChanged d.Name
   | DeclKind.MutableValueDecl -> ReloadChange.MutableStateChanged d.Name
   | DeclKind.FunctionDecl -> ReloadChange.SignatureChanged d.Name
+  | DeclKind.ValueClosures -> ReloadChange.ValueChanged d.Name
   | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
   | DeclKind.NestedModuleDecl -> ReloadChange.ModuleChanged d.Name
   | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
 
-/// What removing a declaration must report.
-let private expectedRemovalFor (d: SourceDecl) =
+/// What removing a declaration must report, when it must report anything.
+let private expectedRemovalFor (d: SourceDecl) : ReloadChange option =
   match d.Kind with
-  | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
-  | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
+  | DeclKind.EntryPointDecl -> Some ReloadChange.EntryPointChanged
+  | DeclKind.StartupCode -> Some ReloadChange.StartupCodeChanged
+  | DeclKind.NestedModuleDecl -> Some(ReloadChange.DeclarationRemoved d.Name)
   | DeclKind.TypeDecl
   | DeclKind.ValueDecl
   | DeclKind.MutableValueDecl
   | DeclKind.FunctionDecl
-  | DeclKind.NestedModuleDecl -> ReloadChange.DeclarationRemoved d.Name
+  | DeclKind.ValueClosures -> None
 
 let private tokens (text: string) = text.Split([| ' '; '\n'; '('; ')' |], System.StringSplitOptions.RemoveEmptyEntries) |> Set.ofArray
 
@@ -600,7 +647,7 @@ let planReloadPropertyTests =
            Set.isSubset reasonsBefore reasonsAfter && reasonsAfter.Contains (expectedChangeFor target))
 
     testPropertyWithConfig config
-      "WHY — ReloadPlanning.planReload — removing any declaration requires a restart naming it because running code may still use it"
+      "WHY - ReloadPlanning.planReload - removing a declaration that runs at startup requires a restart naming it, and removing any other leaves the running app as it was, because the old one is still there for whatever holds it"
     <| Prop.forAll
          (Arb.fromGen (gen {
             let! file = genUniqueFile
@@ -609,5 +656,8 @@ let planReloadPropertyTests =
          (fun (file, removed) ->
            let target = file.Decls.[removed]
            let current = fileOf (file.Decls |> List.indexed |> List.filter (fun (i, _) -> i <> removed) |> List.map snd)
-           (reasonsOf (planReload file current)).Contains (expectedRemovalFor target))
+           let reasons = reasonsOf (planReload file current)
+           match expectedRemovalFor target with
+           | Some change -> reasons.Contains change
+           | None -> Set.isEmpty reasons)
   ]

@@ -6,6 +6,7 @@ module SageFs.Features.ReloadPlanning
 open System
 open Fantomas.FCS.Syntax
 open Fantomas.FCS.Text
+open Microsoft.FSharp.Reflection
 open SageFs.Features.ReloadOutcome
 
 [<RequireQualifiedAccess>]
@@ -20,6 +21,11 @@ type DeclKind =
   /// startup" is true of neither the problem nor the fix.
   | MutableValueDecl
   | FunctionDecl
+  /// A module-level value whose edit is confined to the bodies of its lambdas,
+  /// emitted as a FUNCTION (`let routes () : T = ...`) so FSI compiles the new
+  /// lambdas without running the value's initializer. Only the planner makes one,
+  /// from a `ValueDecl`; the baseline never holds one.
+  | ValueClosures
   | EntryPointDecl
   | NestedModuleDecl
   | StartupCode
@@ -111,6 +117,17 @@ type ReloadChange =
   /// running app would never call it. Known from where the app runs
   /// (`AppPlacement`), never from the source diff.
   | RunsOutsideAgent of name: string
+  /// The lambdas of a declaration changed in a way the closures the running app
+  /// already built cannot take: a lambda started capturing something it did not,
+  /// or gained or lost a lambda inside it. Found at patch time by comparing the
+  /// closures the compiler made for the old and the new text.
+  | ClosureShapeChanged of declaration: string * detail: string
+  /// An instance member's type gained, lost or re-typed a field, so the objects
+  /// the running app already built are laid out without it. Found at patch time.
+  | InstanceLayoutChanged of typeName: string * detail: string
+  /// A generic function. A patch reaches the instantiations that have already
+  /// run; one that runs later would still get the old body. Found at patch time.
+  | GenericFunction of declaration: string
 
 /// Live module state a patch has to respect. Rule 1 of hot-reload-state-spec.md:
 /// code changes land, state stays.
@@ -166,6 +183,11 @@ module ReloadChange =
         binding
     | ReloadChange.RunsOutsideAgent name ->
       sprintf "%s changed, and this app runs in the worker, where an in-place patch cannot reach it" name
+    | ReloadChange.ClosureShapeChanged (name, detail) ->
+      sprintf "the lambdas in %s changed shape (%s)" name detail
+    | ReloadChange.InstanceLayoutChanged (typeName, detail) ->
+      sprintf "the fields of %s changed (%s)" typeName detail
+    | ReloadChange.GenericFunction name -> sprintf "%s is generic" name
 
   let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
     first :: rest |> List.map describe |> String.concat "; "
@@ -219,6 +241,9 @@ module ReloadChange =
     // compiled in the FSI host. Until then SageFs restarts the app it started.
     | ReloadChange.RunsOutsideAgent name ->
       RestartReason.NotYetSupported (sprintf "an in-place patch of '%s', because this app was started with run_app and runs outside the process SageFs patches" name)
+    | ReloadChange.ClosureShapeChanged (name, detail) -> RestartReason.ClosureShapeChanged (name, detail)
+    | ReloadChange.InstanceLayoutChanged (typeName, detail) -> RestartReason.InstanceLayoutChanged (typeName, detail)
+    | ReloadChange.GenericFunction name -> RestartReason.GenericFunction name
 
   let restartReasons (first: ReloadChange) (rest: ReloadChange list) : RestartReason list =
     first :: rest |> List.map restartReason
@@ -440,9 +465,22 @@ let rec private declsIn
     | SynModuleDecl.Types(typeDefns = defns) ->
       let types =
         defns
-        |> List.map (fun (SynTypeDefn(typeInfo = SynComponentInfo(longId = ids; accessibility = access)) as defn) ->
-          { simpleDecl lines container (identText ids) DeclKind.TypeDecl (accessOf access) defn.Range with
-              Header = typeShape lines defn })
+        |> List.map (fun (SynTypeDefn(typeInfo = SynComponentInfo(longId = ids; accessibility = access); trivia = trivia) as defn) ->
+          // The text of a type is the type AS WRITTEN, from its keyword. The compiler's range for a type starts
+          // at its name, and only starts earlier when a doc comment or an attribute sits above it, so a type
+          // with neither used to come out as `AddedBox = { ... }`, which does not compile when it is emitted.
+          let keyword = trivia.LeadingKeyword.Range
+          let range = Range.unionRanges keyword defn.Range
+          let decl = simpleDecl lines container (identText ids) DeclKind.TypeDecl (accessOf access) range
+          match rangeText lines keyword with
+          // `and Other = ...` is a declaration of its own once it is taken out of its group, and a
+          // declaration of its own starts with `type`.
+          | "and" ->
+            { decl with
+                Text = "type" + slice lines (keyword.EndLine, keyword.EndColumn) (range.EndLine, range.EndColumn)
+                StartLine = keyword.StartLine
+                Header = typeShape lines defn }
+          | _ -> { decl with Header = typeShape lines defn })
       opens, found @ types, startups
     | SynModuleDecl.Exception(range = r) ->
       opens,
@@ -495,19 +533,25 @@ let private changeFor (decl: SourceDecl) =
   | DeclKind.ValueDecl -> ReloadChange.ValueChanged decl.Name
   | DeclKind.MutableValueDecl -> ReloadChange.MutableStateChanged decl.Name
   | DeclKind.FunctionDecl -> ReloadChange.SignatureChanged decl.Name
+  | DeclKind.ValueClosures -> ReloadChange.ValueChanged decl.Name
   | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
   | DeclKind.NestedModuleDecl -> ReloadChange.ModuleChanged decl.Name
   | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
 
-let private removalFor (decl: SourceDecl) =
+/// What removing a declaration needs. A function, value or type taken out of the file leaves the running
+/// process as it was: the old one is still there for anything that already holds it, and the code that
+/// stopped using it is saved in the same breath (the build would not pass otherwise), so there is nothing to
+/// re-point and nothing to restart for. Only what runs at startup, or a module alias, is not like that.
+let private removalFor (decl: SourceDecl) : ReloadChange option =
   match decl.Kind with
-  | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
-  | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
+  | DeclKind.EntryPointDecl -> Some ReloadChange.EntryPointChanged
+  | DeclKind.StartupCode -> Some ReloadChange.StartupCodeChanged
+  | DeclKind.NestedModuleDecl -> Some(ReloadChange.DeclarationRemoved decl.Name)
   | DeclKind.TypeDecl
   | DeclKind.ValueDecl
   | DeclKind.MutableValueDecl
   | DeclKind.FunctionDecl
-  | DeclKind.NestedModuleDecl -> ReloadChange.DeclarationRemoved decl.Name
+  | DeclKind.ValueClosures -> None
 
 /// A declaration the running build never had. Reported as an ADDITION rather
 /// than as a change, because "type Cfg changed" for a type that did not exist
@@ -520,7 +564,238 @@ let private additionFor (decl: SourceDecl) =
   | DeclKind.ValueDecl
   | DeclKind.MutableValueDecl
   | DeclKind.FunctionDecl
+  | DeclKind.ValueClosures
   | DeclKind.NestedModuleDecl -> ReloadChange.DeclarationAdded decl.Name
+
+// ── lambdas ──────────────────────────────────────────────────────────────────
+//
+// A lambda written inline (`get "/" (fun ctx -> ...)`) compiles to a closure
+// class, and the route list holds INSTANCES of it. There is no named method to
+// re-point, so an edit to the lambda's body was a restart. It does not have to
+// be: the closure class's `Invoke` is a method like any other, and the running
+// app's instances call it. This section reads an edit as "which lambdas changed",
+// and only says so when NOTHING outside a lambda changed, so a patch of the
+// lambdas is the whole edit.
+
+/// Where a lambda sits inside its declaration, in lines counted from the
+/// declaration's own first line. Relative, because the same declaration sits on
+/// a different line in the file the app was built from and in the file saved.
+type LambdaSpan = { FirstLine: int; LastLine: int }
+
+/// A lambda that exists on both sides of an edit and whose text changed.
+type LambdaEdit = { Was: LambdaSpan; Now: LambdaSpan }
+
+[<RequireQualifiedAccess>]
+type LambdaDiff =
+  /// Something outside the lambdas changed too, the lambdas were added or
+  /// removed, or the source is not readable well enough to say.
+  | NotLambdaOnly
+  /// Every difference is inside a lambda. Head and rest, so this case cannot be
+  /// built with no lambda in it.
+  | LambdasOnly of first: LambdaEdit * rest: LambdaEdit list
+
+/// Visits the nodes of a syntax tree. A node the visitor returns `true` for is
+/// taken as seen and its children are not visited.
+///
+/// By reflection over the tree's own unions, records, tuples and sequences
+/// rather than a hand-written walk of the sixty-odd `SynExpr` cases, because a
+/// walk that forgets a case would not fail: it would miss a lambda inside it and
+/// call an edit "outside the lambdas". Reflection cannot forget one.
+let rec private walkSyntax (visit: obj -> bool) (node: obj) : unit =
+  match node with
+  | null -> ()
+  | :? string -> ()
+  | _ ->
+    match visit node with
+    | true -> ()
+    | false ->
+      let t = node.GetType()
+      match FSharpType.IsUnion(t, true), FSharpType.IsRecord(t, true), FSharpType.IsTuple t with
+      | true, _, _ -> FSharpValue.GetUnionFields(node, t, true) |> snd |> Array.iter (walkSyntax visit)
+      | _, true, _ -> FSharpValue.GetRecordFields(node, true) |> Array.iter (walkSyntax visit)
+      | _, _, true -> FSharpValue.GetTupleFields node |> Array.iter (walkSyntax visit)
+      | _ ->
+        match node with
+        | :? System.Collections.IEnumerable as items -> for item in items do walkSyntax visit item
+        | _ -> ()
+
+let rec private moduleBindings (decls: SynModuleDecl list) : SynBinding list =
+  decls
+  |> List.collect (function
+    | SynModuleDecl.Let(bindings = bindings) -> bindings
+    | SynModuleDecl.NestedModule(decls = inner) -> moduleBindings inner
+    | _ -> [])
+
+/// The first line a binding's declaration covers: its first attribute, else its
+/// keyword. The same line `bindingDecl` records as `StartLine`.
+let private bindingFirstLine (binding: SynBinding) : int =
+  let (SynBinding(attributes = attributes; trivia = trivia)) = binding
+  match attributes with
+  | first :: _ -> first.Range.StartLine
+  | [] -> trivia.LeadingKeyword.Range.StartLine
+
+/// The binding a declaration was read from, found again in the parse of the
+/// file's source.
+let private bindingOf (source: string) (decl: SourceDecl) : (string array * SynBinding) option =
+  try
+    match Fantomas.FCS.Parse.parseFile false (SourceText.ofString source) [] with
+    | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = decls) ])), diagnostics
+        when not (diagnostics |> List.exists (fun d -> d.Severity.IsError)) ->
+      let lines = sourceLines source
+      moduleBindings decls
+      |> List.tryFind (fun (SynBinding(headPat = pat) as binding) ->
+        bindingFirstLine binding = decl.StartLine && patName lines pat = decl.Name)
+      |> Option.map (fun binding -> lines, binding)
+    | _ -> None
+  with _ -> None
+
+/// Every lambda directly inside an expression, outermost only, in source order.
+let private outermostLambdas (body: SynExpr) : range list =
+  let found = ResizeArray<range>()
+  walkSyntax
+    (fun node ->
+      match node with
+      | :? SynExpr as e ->
+        match e with
+        | SynExpr.Lambda _
+        | SynExpr.MatchLambda _ ->
+          found.Add e.Range
+          true
+        | _ -> false
+      | _ -> false)
+    (box body)
+  found |> Seq.sortBy (fun r -> r.StartLine, r.StartColumn) |> Seq.toList
+
+/// The text of `firstLine .. lastLine` with each lambda cut out and replaced by one
+/// marker character. Two versions of a declaration have the same outside exactly
+/// when nothing but lambda bodies differs.
+let private outsideLambdas (lines: string array) (firstLine: int) (lastLine: int) (lambdas: range list) : string =
+  let offsetOf (line: int) (column: int) =
+    let before = [ firstLine .. line - 1 ] |> List.sumBy (fun i -> lines.[i - 1].Length + 1)
+    before + column
+  let region = String.Join("\n", lines.[firstLine - 1 .. lastLine - 1])
+  lambdas
+  |> List.rev
+  |> List.fold
+    (fun (text: string) r ->
+      let start = offsetOf r.StartLine r.StartColumn
+      let stop = offsetOf r.EndLine r.EndColumn
+      text.Remove(start, stop - start).Insert(start, "\u0001"))
+    region
+
+/// What a declaration looks like as lambdas: its outside, and each lambda's
+/// text and span. None when the lambdas cannot be told apart by line, which the
+/// host's matching of closures to lambdas needs: two lambdas sharing a line would
+/// share a closure name's line.
+let private lambdaFacts (source: string) (decl: SourceDecl) : (string * (string * LambdaSpan) list) option =
+  match bindingOf source decl with
+  | None -> None
+  | Some (lines, SynBinding(expr = body)) ->
+    let lambdas = outermostLambdas body
+    let spans = lambdas |> List.map (fun r -> r.StartLine, r.EndLine)
+    let distinctLines =
+      List.pairwise spans |> List.forall (fun ((_, lastOfOne), (firstOfNext, _)) -> lastOfOne < firstOfNext)
+    // A value bound directly to a lambda is a METHOD, not a closure, so there is nothing here to find.
+    let isWholeBody = lambdas |> List.exists (fun r -> r.StartLine = body.Range.StartLine && r.StartColumn = body.Range.StartColumn && r.EndLine = body.Range.EndLine && r.EndColumn = body.Range.EndColumn)
+    match lambdas, distinctLines, isWholeBody with
+    | [], _, _ -> None
+    | _, false, _ -> None
+    | _, _, true -> None
+    | _ ->
+      let outside = outsideLambdas lines decl.StartLine decl.EndLine lambdas
+      let texts =
+        lambdas
+        |> List.map (fun r ->
+          rangeText lines r,
+          { FirstLine = r.StartLine - decl.StartLine; LastLine = r.EndLine - decl.StartLine })
+      Some(outside, texts)
+
+/// Reads an edit of a declaration as lambda edits. The declaration is read in the
+/// source the app was built from (`before`) and in the saved one (`now`).
+let lambdaDiff (before: FileDecls) (now: FileDecls) (was: SourceDecl) (is': SourceDecl) : LambdaDiff =
+  match before.RawSource, now.RawSource with
+  | Some oldSource, Some newSource ->
+    match lambdaFacts oldSource was, lambdaFacts newSource is' with
+    | Some (oldOutside, oldLambdas), Some (newOutside, newLambdas)
+        when normalize oldOutside = normalize newOutside && List.length oldLambdas = List.length newLambdas ->
+      let edits =
+        List.zip oldLambdas newLambdas
+        |> List.choose (fun ((oldText, oldSpan), (newText, newSpan)) ->
+          match normalize oldText = normalize newText with
+          | true -> None
+          | false -> Some { Was = oldSpan; Now = newSpan })
+      match edits with
+      | first :: rest -> LambdaDiff.LambdasOnly(first, rest)
+      | [] -> LambdaDiff.NotLambdaOnly
+    | _ -> LambdaDiff.NotLambdaOnly
+  | _ -> LambdaDiff.NotLambdaOnly
+
+/// The end of a binding's name, where `()` goes to turn the value into a function.
+let rec private nameEnd (pat: SynPat) : range option =
+  match pat with
+  | SynPat.Named(ident = SynIdent(ident, _)) -> Some ident.idRange
+  | SynPat.Typed(pat = inner)
+  | SynPat.Paren(pat = inner)
+  | SynPat.Attrib(pat = inner) -> nameEnd inner
+  | _ -> None
+
+/// A value's declaration written as a function, `let routes : T = ...` as
+/// `let routes () : T = ...`. FSI compiles the same lambdas into the same closure
+/// classes, and defining a function runs nothing, so the new lambdas exist without
+/// the value's initializer running a second time.
+let private asFunction (source: string) (decl: SourceDecl) : string option =
+  match bindingOf source decl with
+  | None -> None
+  | Some (lines, binding) ->
+    let (SynBinding(attributes = attributes; headPat = pat; trivia = trivia)) = binding
+    match nameEnd pat with
+    | None -> None
+    | Some name ->
+      let start =
+        match attributes with
+        | first :: _ -> first.Range.Start
+        | [] -> trivia.LeadingKeyword.Range.Start
+      let whole = binding.RangeOfBindingWithRhs
+      Some(
+        slice lines (start.Line, start.Column) (name.EndLine, name.EndColumn)
+        + " ()"
+        + slice lines (name.EndLine, name.EndColumn) (whole.EndLine, whole.EndColumn)
+      )
+
+/// The declaration to emit when an edited value changed only inside its lambdas: the
+/// value as a function, so its new lambdas compile and nothing runs.
+let private lambdaOnlyValue (before: FileDecls) (now: FileDecls) (was: SourceDecl) (is': SourceDecl) : SourceDecl option =
+  match lambdaDiff before now was is' with
+  | LambdaDiff.NotLambdaOnly -> None
+  | LambdaDiff.LambdasOnly _ ->
+    now.RawSource
+    |> Option.bind (fun source -> asFunction source is')
+    |> Option.map (fun text -> { is' with Kind = DeclKind.ValueClosures; Text = text })
+
+/// The lambdas a patched declaration changed, and the declaration as the running app was built from it.
+type LambdaPatch = {
+  Was: SourceDecl
+  First: LambdaEdit
+  Rest: LambdaEdit list
+}
+
+/// What the lambdas of a patched declaration did, for the declarations a patch
+/// emits: the value turned function (`ValueClosures`) and the function. None for a
+/// declaration with no lambda edit.
+let lambdaEditsOf (baseline: FileDecls) (current: FileDecls) (patched: SourceDecl) : LambdaPatch option =
+  let counterpart =
+    match patched.Kind with
+    | DeclKind.ValueClosures -> Some DeclKind.ValueDecl
+    | DeclKind.FunctionDecl -> Some DeclKind.FunctionDecl
+    | _ -> None
+  counterpart
+  |> Option.bind (fun kind ->
+    baseline.Decls
+    |> List.tryFind (fun d -> d.Kind = kind && d.Name = patched.Name && d.Container = patched.Container))
+  |> Option.bind (fun was ->
+    match lambdaDiff baseline current was patched with
+    | LambdaDiff.LambdasOnly(first, rest) -> Some { Was = was; First = first; Rest = rest }
+    | LambdaDiff.NotLambdaOnly -> None)
 
 [<RequireQualifiedAccess>]
 type private DeclOutcome =
@@ -553,15 +828,33 @@ let private keyed (decls: SourceDecl list) =
     ((d.Kind, d.Container, d.Name, n), d), Map.add (d.Kind, d.Container, d.Name) (n + 1) seen) Map.empty
   |> fst
 
-let private outcomeOf (baseline: Map<DeclKind * string list * string * int, SourceDecl>) (key, current: SourceDecl) =
+let private outcomeOf
+  (baselineFile: FileDecls)
+  (currentFile: FileDecls)
+  (baseline: Map<DeclKind * string list * string * int, SourceDecl>)
+  (key, current: SourceDecl)
+  =
+  // A value whose edit is confined to its lambdas does not need the value
+  // redefined (which is a restart whenever the app kept a copy of the list): the
+  // closures the app already holds are re-pointed instead.
+  let lambdaOnly (before: SourceDecl) =
+    match current.Kind, normalize before.Header = normalize current.Header with
+    | DeclKind.ValueDecl, true -> lambdaOnlyValue baselineFile currentFile before current
+    | _ -> None
   match Map.tryFind key baseline, current.Kind with
-  | None, DeclKind.FunctionDecl -> DeclOutcome.Patch current
+  // A declaration the running build never had has no compiled original to re-point, and it does not need one:
+  // it is defined in FSI, and the saved code that uses it is patched to call it. Only what runs at startup (an
+  // entry point, a bare expression) or a module alias cannot be added to a process that already started.
+  | None, DeclKind.FunctionDecl
+  | None, DeclKind.TypeDecl
+  | None, DeclKind.ValueDecl
+  | None, DeclKind.MutableValueDecl -> DeclOutcome.Patch current
   | None, _ -> DeclOutcome.Restart (additionFor current)
   | Some before, _ when normalize before.Text = normalize current.Text -> DeclOutcome.Unchanged
-  | Some before, DeclKind.FunctionDecl ->
-    match normalize before.Header = normalize current.Header with
-    | true -> DeclOutcome.Patch current
-    | false -> DeclOutcome.Restart (ReloadChange.SignatureChanged current.Name)
+  // A function whose signature changed is a NEW method as far as the running app goes: the old one is
+  // still there for whatever holds it, and the saved code that calls it has to change in the same save (the
+  // build would not pass otherwise), so those callers are patched onto the new one.
+  | Some _, DeclKind.FunctionDecl -> DeclOutcome.Patch current
   // Same SHAPE (see `typeShape`), different text: only member bodies moved, so
   // re-evaluating the type re-points its members instead of needing a restart.
   | Some before, DeclKind.TypeDecl when normalize before.Header = normalize current.Header ->
@@ -576,6 +869,8 @@ let private outcomeOf (baseline: Map<DeclKind * string list * string * int, Sour
       let shown = Option.defaultValue "(inferred)"
       DeclOutcome.Restart (ReloadChange.MutableStateRetyped (current.Name, shown was, shown now))
     | false, _, _ -> DeclOutcome.Restart (ReloadChange.MutableStateChanged current.Name)
+  | Some before, DeclKind.ValueDecl when (lambdaOnly before).IsSome ->
+    DeclOutcome.Patch (lambdaOnly before).Value
   // Rule 2: an edited public value can get its new value, if nothing in the
   // running app kept a copy of the old one. That's the app's call, not the
   // diff's, so the plan says "redefine" and the worker asks. A value that
@@ -671,15 +966,24 @@ let private identifiersOf (text: string) : Set<string> =
   |> Seq.map (fun m -> m.Value)
   |> Set.ofSeq
 
+/// A type declaration as a file the parser takes. A declaration read from a file starts at its `type` keyword
+/// (see `declsIn`); one a caller built by hand may start at the name, so the keyword is put back when it is not there.
+let private hiddenTypeSource (typeDecl: SourceDecl) : string =
+  let firstCodeLine =
+    sourceLines typeDecl.Text
+    |> Array.map _.Trim()
+    |> Array.tryFind (fun l -> l <> "" && not (l.StartsWith("//", StringComparison.Ordinal)) && not (l.StartsWith("[<", StringComparison.Ordinal)))
+  match firstCodeLine with
+  | Some line when line.StartsWith("type ", StringComparison.Ordinal) -> "module __Hidden__\n" + typeDecl.Text
+  | _ -> "module __Hidden__\ntype " + typeDecl.Text
+
 /// The names a hidden type also exposes without ever spelling its own name: a
 /// union case (`Circle 1.0` never says `Shape`) or a record field (`{ Retries = 5 }`
 /// never says `Config`) both make a patch depend on the type just as much as
 /// spelling its name would — so both must count as "uses this hidden type".
 let private innerNamesOf (typeDecl: SourceDecl) : string list =
   try
-    // A TypeDecl's Text is captured from the SynTypeDefn's own range, which starts
-    // after the `type`/`and` keyword — put it back so the wrapped snippet parses.
-    let wrapped = "module __Hidden__\ntype " + typeDecl.Text
+    let wrapped = hiddenTypeSource typeDecl
     match Fantomas.FCS.Parse.parseFile false (SourceText.ofString wrapped) [] with
     | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = decls) ])), diagnostics
         when not (diagnostics |> List.exists (fun d -> d.Severity.IsError)) ->
@@ -716,7 +1020,7 @@ let private innerNamesOf (typeDecl: SourceDecl) : string list =
 /// name, and anything the names cannot settle is refused.
 let declaredRecordFields (typeDecl: SourceDecl) : string list option =
   try
-    let wrapped = "module __Hidden__\ntype " + typeDecl.Text
+    let wrapped = hiddenTypeSource typeDecl
     match Fantomas.FCS.Parse.parseFile false (SourceText.ofString wrapped) [] with
     | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = decls) ])), diagnostics
         when not (diagnostics |> List.exists (fun d -> d.Severity.IsError)) ->
@@ -766,7 +1070,7 @@ let private fieldKindOf (typeText: string) : SageFs.TypeShapeMigration.FieldKind
 let recordShapeOf (typeDecl: SourceDecl) : SageFs.TypeShapeMigration.RecordShape =
   let fields =
     try
-      let wrapped = "module __Hidden__\ntype " + typeDecl.Text
+      let wrapped = hiddenTypeSource typeDecl
       match Fantomas.FCS.Parse.parseFile false (SourceText.ofString wrapped) [] with
       | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = decls) ])), diagnostics
           when not (diagnostics |> List.exists (fun d -> d.Severity.IsError)) ->
@@ -933,11 +1237,11 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
   let currentKeyed = keyed current.Decls
   let before = Map.ofList baselineKeyed
   let now = Map.ofList currentKeyed
-  let outcomes = currentKeyed |> List.map (outcomeOf before)
+  let outcomes = currentKeyed |> List.map (outcomeOf baseline current before)
   let removed =
     baselineKeyed
     |> List.filter (fun (key, _) -> not (Map.containsKey key now))
-    |> List.map (snd >> removalFor)
+    |> List.choose (snd >> removalFor)
   // A patch cannot see the file's non-public members (it is compiled in FSI,
   // outside the app's assembly) unless the same patch re-emits them.
   let patchedNames =
@@ -1012,14 +1316,31 @@ let reachedBy (names: string list) (f: SourceDecl) =
 
 /// Whether the running build already had this declaration, of the same kind.
 let private existedIn (before: FileDecls) (f: SourceDecl) =
-  before.Decls |> List.exists (fun d -> d.Kind = f.Kind && d.Name = f.Name)
+  // A value emitted as a function (`ValueClosures`) is a value in the running build.
+  let kind =
+    match f.Kind with
+    | DeclKind.ValueClosures -> DeclKind.ValueDecl
+    | other -> other
+  before.Decls |> List.exists (fun d -> d.Kind = kind && d.Name = f.Name)
+
+/// Whether the running build has no compiled original this declaration could be re-pointed from: it did not
+/// exist, or it existed with another signature. Either way the saved code is a NEW method to the running app,
+/// defined in FSI, and what makes it live is the code that calls it being patched onto it, in the same save.
+let private isNewMethod (before: FileDecls) (f: SourceDecl) =
+  let kind =
+    match f.Kind with
+    | DeclKind.ValueClosures -> DeclKind.ValueDecl
+    | other -> other
+  let sameShape =
+    before.Decls |> List.exists (fun d -> d.Kind = kind && d.Name = f.Name && normalize d.Header = normalize f.Header)
+  not sameShape
 
 let confirmPatch (before: FileDecls) (patched: SourceDecl list) (reloadedMethods: string list) : PatchOutcome =
   let existed = existedIn before
   let detoured = reachedBy reloadedMethods
   let notDetoured =
     patched
-    |> List.filter (fun f -> existed f && not (detoured f))
+    |> List.filter (fun f -> existed f && not (isNewMethod before f) && not (detoured f))
     |> List.map (fun f -> ReloadChange.SignatureChanged f.Name)
   match notDetoured with
   | first :: rest -> PatchOutcome.RestartNeeded (first, rest)
@@ -1064,11 +1385,20 @@ let confirmPatchLanding
   // point to reach by definition, so for it the FSI copy IS what everything
   // calls and a redirect onto it is genuinely effective. Only a declaration the
   // running build already had must prove it reached a compiled entry point.
-  let landed, missed =
+  let landed =
     patched
-    |> List.partition (fun f ->
+    |> List.filter (fun f ->
       nameMatches reloadedMethods f
       && (nameMatches reachedRunningProcess f || not (existed f)))
+  // A declaration with no compiled original (added, or re-signed) is applied by being defined: there is nothing
+  // to re-point. It is counted as applied but never watched, because it has no probe to watch and no running
+  // code enters it until a caller does; the callers saved with it are what get watched.
+  let applied =
+    patched
+    |> List.filter (fun f -> not (List.contains f landed) && isNewMethod before f)
+  let missed =
+    patched
+    |> List.filter (fun f -> not (List.contains f landed) && not (isNewMethod before f))
   let reasons =
     missed
     |> List.map (fun f ->
@@ -1078,7 +1408,14 @@ let confirmPatchLanding
       | true, true -> RestartReason.PatchIneffective f.Name
       | true, false -> RestartReason.SignatureChanged f.Name
       | false, _ -> RestartReason.NewDeclaration f.Name)
-  landed, ReloadOutcome.ofPatchCounts (List.length landed) (List.length patched) reasons
+  // What is watched for running: the re-pointed declarations, whose probes are what the callers' runs show. A
+  // save that only ADDED declarations has none of those, so the added ones are watched, and with no probe they
+  // end as never-entered when nothing calls them, which is the truth about a function nothing calls yet.
+  let watched =
+    match landed with
+    | [] -> applied
+    | _ -> landed
+  watched, ReloadOutcome.ofPatchCounts (List.length landed + List.length applied) (List.length patched) reasons
 
 /// `confirmPatchLanding`'s outcome alone, for callers that only need the
 /// verdict. Patching at least one declaration is PENDING (see
@@ -1126,6 +1463,7 @@ let confirmWholeFileLanding
       | DeclKind.ValueDecl -> true
       | DeclKind.TypeDecl
       | DeclKind.MutableValueDecl
+      | DeclKind.ValueClosures
       | DeclKind.EntryPointDecl
       | DeclKind.NestedModuleDecl
       | DeclKind.StartupCode -> false)

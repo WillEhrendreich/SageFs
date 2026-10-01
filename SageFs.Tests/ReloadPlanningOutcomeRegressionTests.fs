@@ -55,31 +55,40 @@ let patchedNNResidualTests =
 
     // WHY — THE regression, as one executable assertion: a save that ONLY
     // adds a declaration must never read as "patched into the running app".
-    testCase "WHY — a save that adds one new declaration and changes nothing else is NoEffect, not Patched" <| fun _ ->
+    //
+    // A new declaration used to be a restart (NoEffect, NewDeclaration). It no longer is: it is defined in FSI,
+    // and the saved code that uses it is patched to call it. What has not changed is the pin: such a save is never
+    // `Patched`, because nothing in the running app has run it. It is applied, and it ends never-entered.
+    testCase "WHY - a save that adds one new declaration and changes nothing else is applied, never Patched, and ends never-entered when nothing runs it" <| fun _ ->
       let before = declsOf baselineSource
       let current = declsOf (baselineSource + "\nlet helper (x: int) = x + 1\n")
       let patched = patchedDecls before current
       patched |> List.map _.Name |> Expect.equal "helper is the only patch candidate" [ "helper" ]
       // Nothing was detoured: a brand-new function has no old method in the
       // running process for Harmony to redirect.
-      match confirmAllReached before patched [] with
-      | ReloadOutcome.NoEffect(considered, [ RestartReason.NewDeclaration "helper" ]) ->
-        considered |> Expect.equal "one definition was put in front of the process" 1
-      | other -> failtestf "adding one declaration must be NoEffect with NewDeclaration, got %A" other
+      let watched, outcome = confirmPatchLanding before patched [] []
+      outcome |> Expect.equal "one definition applied, none seen running" (ReloadOutcome.PatchPending(1, 1, []))
+      match SageFs.Features.PatchConfirmation.start (SageFs.Features.PatchConfirmation.watchedOfLanded watched []) outcome with
+      | SageFs.Features.PatchConfirmation.Begun.Watching(_, watch) ->
+        match SageFs.Features.PatchConfirmation.settle { Sightings = [] } watch with
+        | SageFs.Features.PatchConfirmation.WatchStep.Settled(ReloadOutcome.NeverEntered("helper", [], 0, 1, [])) -> ()
+        | other -> failtestf "nothing ran helper, so the save must end never-entered, got %A" other
+      | other -> failtestf "the added function has to be watched, got %A" other
 
-    testCase "WHY — the wire must never tell the page to refresh for a declaration it cannot reach" <| fun _ ->
+    testCase "WHY - the wire is never told Patched for a declaration nothing has run" <| fun _ ->
       let before = declsOf baselineSource
       let current = declsOf (baselineSource + "\nlet helper (x: int) = x + 1\n")
       let outcome = confirmAllReached before (patchedDecls before current) []
-      Outcome.shouldRefreshBrowser outcome
-      |> Expect.isFalse "the running process did not change, so refreshing would serve stale-but-different code"
+      match outcome with
+      | ReloadOutcome.Patched _ -> failtest "a declaration nothing has run must not be reported as patched"
+      | _ -> ()
       Outcome.describe outcome
-      |> Expect.stringContains "the count reads as the non-event it is, not a success" "0 of 1"
+      |> Expect.stringContains "the count says it is applied and unconfirmed" "not confirmed yet"
 
     // WHY — a save that BOTH changes an existing function and adds a new
-    // one must report the partial truth: 1 of 2 landed, not 2 of 2 — the
-    // exact shape of the roast's "Patched(n, n)" complaint.
-    testCase "WHY — a save that changes one function and adds another reports the partial truth" <| fun _ ->
+    // one is applied as 2 of 2, and only the changed function is WATCHED. The added one has no probe and no
+    // running code enters it until a caller does, so the caller's probe is what can make the save Patched.
+    testCase "WHY - a save that changes one function and adds another watches the changed one, because the added one has nothing to watch" <| fun _ ->
       let before = declsOf baselineSource
       let edited =
         baselineSource.Replace(
@@ -90,10 +99,13 @@ let patchedNNResidualTests =
       let patched = patchedDecls before current
       patched |> List.map _.Name |> List.sort |> Expect.equal "both candidates are queued" [ "helper"; "render" ]
       // Only `render` existed before, and only `render` was actually
-      // detoured — Harmony has nothing to redirect `helper` onto.
-      match confirmAllReached before patched [ "Demo.Web.Program.render" ] with
-      | ReloadOutcome.PatchPending(patchedCount, considered, _) ->
-        patchedCount |> Expect.equal "only the existing, detoured function landed" 1
+      // detoured - Harmony has nothing to redirect `helper` onto. `helper` is applied by being defined; `render`
+      // is what is watched, and it is what makes the save Patched once it has run.
+      let watched, outcome = confirmPatchLanding before patched [ "Demo.Web.Program.render" ] [ "Demo.Web.Program.render" ]
+      watched |> List.map _.Name |> Expect.equal "only the re-pointed function is watched" [ "render" ]
+      match outcome with
+      | ReloadOutcome.PatchPending(applied, considered, _) ->
+        applied |> Expect.equal "the re-pointed function and the added one are both applied" 2
         considered |> Expect.equal "both candidates were considered" 2
-      | other -> failtestf "a mixed save must be PatchPending(1, 2), not %A" other
+      | other -> failtestf "a mixed save must be PatchPending(2, 2), not %A" other
   ]
