@@ -149,8 +149,8 @@ don't build a runner beside it.
 ### Still to do under this decision
 
 Two functions pick "which tests does this change affect", and they do not share a floor.
-The live loop (`TestCycleEffects.decideAfterTypeCheck`) uses the symbol graph, coverage, and on a
-save a file-scope narrow for body-only edits, and falls back to the whole suite only for a compiled
+The live loop (`TestCycleEffects.decideAfterTypeCheck`) uses the symbol graph, coverage, and on any
+trigger (keystroke included) a file-scope narrow for body-only edits, and falls back to the whole suite only for a compiled
 file whose dependency graph is empty. The cohort landing gate (`AffectedTests.verificationTestSet`)
 uses coverage with a no-empty-escape floor. The code states the residual gap itself: if the
 dependency graph has not yet seen the test file that covers a symbol, the live narrow finds nothing,

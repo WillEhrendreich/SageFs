@@ -91,14 +91,51 @@ let tests =
       outcome.Effects
       |> Expect.isEmpty "a file no test reaches should not queue an unrelated test"
 
-    // Keystrokes are excluded on purpose: a half-typed buffer resolves a
-    // shifting symbol set, and selecting on it would thrash the runner on
-    // every character.
-    testCase "a keystroke with no name change stays quiet instead of selecting by file scope" <| fun _ ->
+    // The keystroke cause is the as-you-type path: the type-check of a settled
+    // buffer reports `Changed = []` for `a + b` -> `a - b` exactly as it does on
+    // save, because the name set did not move. The save-only guard left this
+    // path selecting nothing, so the pane stayed green on a real regression.
+    testCase "a body-only keystroke edit selects the tests that reach the edited file" <| fun _ ->
+      let impacted = mkTest "Module.Tests.should_add" TestCategory.Unit
+      let unrelated = mkTest "Other.Tests.should_greet" TestCategory.Unit
+      let state =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            DiscoveredTests = [| impacted; unrelated |] }
+      let graph =
+        exactGraph [ "Module.add", [| impacted.Id |]
+                     "Other.greet", [| unrelated.Id |] ]
+
+      let outcome =
+        TestCycleEffects.decideAfterTypeCheck
+          { Changed = []; InFile = [ "Module.add" ] }
+          "Module.fs"
+          RunTrigger.Keystroke
+          graph
+          state
+          None
+          Map.empty
+
+      match outcome.Decision, outcome.Effects with
+      | Some decision, [ TestCycleEffect.RunAffectedTests req ] ->
+        req.Tests
+        |> Array.map (fun tc -> tc.Id)
+        |> Expect.equal "only the tests reaching the edited file should be selected" [| impacted.Id |]
+        decision.Explanation.Precision
+        |> Expect.notEqual
+          "a body-only keystroke edit must never be reported as 'no impacted tests'"
+          SelectionPrecision.NoImpactedTests
+      | other -> failtestf "expected a run covering the edited file on a keystroke, got %A" other
+
+    // Selecting on file scope per keystroke does not thrash the runner,
+    // because the run policy decides whether a keystroke may run: a category
+    // set to save-only stays quiet, and says so instead of reading as green.
+    testCase "a body-only keystroke edit honors a save-only run policy and says it deferred" <| fun _ ->
       let impacted = mkTest "Module.Tests.should_add" TestCategory.Unit
       let state =
         { LiveTestState.empty with
             Activation = LiveTestingActivation.Active
+            RunPolicies = Map.ofList [ TestCategory.Unit, RunPolicy.OnSaveOnly ]
             DiscoveredTests = [| impacted |] }
       let graph = exactGraph [ "Module.add", [| impacted.Id |] ]
 
@@ -113,7 +150,12 @@ let tests =
           Map.empty
 
       outcome.Effects
-      |> Expect.isEmpty "file-scope selection is a save-time decision, not a per-keystroke one"
+      |> Expect.isEmpty "a save-only category must not run on a keystroke"
+      match outcome.Decision with
+      | Some decision ->
+        decision.Explanation.Precision
+        |> Expect.equal "the silence is attributed to policy, not to 'no impacted tests'" SelectionPrecision.SuppressedByPolicy
+      | None -> failtest "expected a decision explaining the deferral"
 
     testCase "when only the dependency graph explains the change, afterTypeCheck should report an exact decision so the user can trust the surgical rerun" <| fun _ ->
       let impacted = mkTest "Module.Tests.should_add" TestCategory.Unit
