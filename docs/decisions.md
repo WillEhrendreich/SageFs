@@ -189,9 +189,29 @@ no names, so the gap between test and production was invisible.
 
 `TimeoutLiteralsTests` counts every inline duration (`TimeSpan.From...` with a number, `Task.Delay n`,
 `Thread.Sleep n`, `.AddSeconds n`, `WaitForExit n`, a `...Ms = n` binding, a bare `60_000`) outside the central
-files, with a budget per file that only goes down. About 780 sites were found on the first count and 62 product
-sites were named in one pass, which also woke a dead env var (`SAGEFS_BUILD_TIMEOUT_MINUTES`, read by nothing
-because `SessionBuild` had its own `600_000`).
+files, with a budget per file that only goes down. About 780 sites were found on the first count. The first
+pass named 62 product sites and woke a dead env var (`SAGEFS_BUILD_TIMEOUT_MINUTES`, read by nothing because
+`SessionBuild` had its own `600_000`). The rest followed, product and tests both, and the table is down to one
+row: `WorkflowTypes.fs`, which the VS Code contract scripts `#load` on their own and which can't reach `Timeouts`.
+About a hundred of the test hits weren't durations at all (byte sizes, seeds, counts), and those got names too.
 
 Evidence: `SageFs.Core/Timeouts.fs`, `SageFs.Tests/TestTimeouts.fs`, `SageFs.Tests/TimeoutLiteralsTests.fs`.
 Reopen it if: a constant stops saying why it is that long. Then fix the comment or the value, don't inline it.
+
+## Looking at a value never runs the user's code on the eval thread
+
+The live bindings pane walks every bound value after each eval, and it does that on the one thread the
+session evals on. A `Task` is a class, so the walk read `Task.Result`, which waits. Binding a pending Task at
+top level (`let t = client.GetAsync url`) hung every eval after it, and nothing looked wrong from outside: the
+worker was idle and the session said Ready. A stack dump of the FSI host showed the eval thread inside the walk.
+
+So a Task, a ValueTask and a Lazy are shown by their state, and `Result`, `Exception` and `Lazy.Value` are read
+only once there is a value to read. A property is read once per walk, not twice. For any other getter that
+blocks, each binding is walked on its own thread with a deadline (`Timeouts.liveValueBindingBudget`, 1 s). A
+binding that misses it shows as unreadable and is not walked again, and after 16 of those the pass says so and
+stops starting new ones. The cost of a blocked getter is one second, once.
+
+Evidence: `SageFs.Core/Features/LiveValueTree.fs`, `SageFs.Tests/LiveValueTreeTests.fs`, and the real-daemon case in
+`SageFs.Tests/HttpApiIntegrationTests.fs`.
+Reopen it if: a getter that is slow but finite shows up as unreadable often enough to matter. Then the budget is
+wrong, or the walk should move off the eval thread entirely and publish when it is ready.
