@@ -258,13 +258,27 @@ let private journey () : Task<unit> = task {
       let! disabled = (tidyButton page).IsDisabledAsync()
       Expect.isTrue disabled "the tidy control does nothing when nothing is safe" })
 
-    // 6. With the last two worktrees gone too, a rescan finds nothing at all.
+    // 6. With the last two worktrees gone, a rescan sees their branches on their own: the one at master is
+    //    merged and safe to delete, the one with a commit master lacks still needs a look.
     for name in [ "unmerged"; "dirty-real" ] do
       git sb.Repo [ "worktree"; "remove"; "--force"; paths.[name] ] |> ignore
+    let titleOf () = (page.Locator "#hygiene-panel summary").First
     do! DashboardDom.throughPanelReset (fun () -> openPanel page) 3 (fun () -> task {
+      let! before = (titleOf ()).TextContentAsync()
       do! (scanButton page).ClickAsync()
-      do! PlaywrightExpect.waitForText BrowserWaits.daemonWork (stateLine page) "Dry run: 0 safe to reclaim" })
-    do! PlaywrightExpect.waitForText BrowserWaits.pageProbe (tidyButton page) "Nothing to tidy"
+      // The state line already read "0 safe" after the tidy, so it cannot tell the rescan from the old
+      // snapshot. The title carries the leftover count, which two fewer worktrees must change.
+      let! _ =
+        page.WaitForFunctionAsync(
+          "before => { const t = document.querySelector('#hygiene-panel summary'); return !!t && t.textContent !== before; }",
+          before,
+          PageWaitForFunctionOptions(Timeout = Nullable(float32 BrowserWaits.daemonWork)))
+      do! PlaywrightExpect.waitForText BrowserWaits.daemonWork (tidyButton page) "Tidy 1 safe item" })
+    do! DashboardDom.throughPanelReset (fun () -> openPanel page) 3 (fun () -> task {
+      do! (tidyButton page).ClickAsync()
+      do! PlaywrightExpect.waitForText BrowserWaits.daemonWork (tidyButton page) "Nothing to tidy" })
+    Expect.isFalse (branchExists sb "worktree-agent-dirty-real") "the merged branch left behind by the removed worktree is gone"
+    Expect.isTrue (branchExists sb "worktree-agent-unmerged") "the branch with a commit master lacks stays"
 
     // 7. Through all of it, not one console or page error.
     Expect.isEmpty (List.ofSeq errors) (sprintf "zero console and page errors across the journey, got: %s" (String.concat " | " errors))
