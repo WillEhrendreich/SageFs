@@ -115,9 +115,45 @@ let private sessions (args: string list) : Task<Outcome> =
         return Output(sprintf "wrote %d session(s) to %s" all.Length out)
   }
 
+/// Reads back what `host sessions` wrote.
+let private readSessionsTsv (path: string) : Daemon.DaemonSession list =
+  match File.Exists path with
+  | false -> []
+  | true ->
+    File.ReadAllLines path
+    |> Array.skip 1
+    |> Array.choose (fun line ->
+      match line.Split('\t') with
+      | [| id; status; evals; workflow; workdir |] ->
+        let session : Daemon.DaemonSession =
+          { Id = id
+            Status = status
+            WorkingDirectory = workdir
+            ProjectPaths = []
+            Workflow = workflow
+            EvalCount = (match Int32.TryParse evals with | true, n -> n | _ -> 0)
+            Health = ""
+            LastReload = "" }
+        Some session
+      | _ -> None)
+    |> List.ofArray
+
+/// host foreign --run-dir D --before F --after F --out F
+/// Writes one line per session outside the run directory whose evals rose: id, working directory, rise.
+let private foreign (args: string list) : Outcome =
+  let m = flags args
+  match Map.tryFind "run-dir" m, Map.tryFind "before" m, Map.tryFind "after" m, Map.tryFind "out" m with
+  | Some runDir, Some before, Some after, Some out ->
+    let deltas = Daemon.foreignEvalDeltas runDir (readSessionsTsv before) (readSessionsTsv after)
+    let lines = deltas |> List.map (fun (s, d) -> sprintf "%s\t%s\t%d" s.Id s.WorkingDirectory d)
+    File.WriteAllText(out, String.Join("\n", lines) + (match lines with | [] -> "" | _ -> "\n"))
+    Output(sprintf "%d session(s) outside the run directory evaluated during the run" deltas.Length)
+  | _ -> BadUsage "host foreign needs --run-dir D --before F --after F --out F"
+
 /// `LemDrive host <verb> ...`
 let cli (args: string list) : Outcome =
   match args with
+  | "foreign" :: rest -> foreign rest
   | "ready" :: rest -> (ready rest).GetAwaiter().GetResult()
   | "snapshot" :: rest -> (snapshot rest).GetAwaiter().GetResult()
   | "sessions" :: rest -> (sessions rest).GetAwaiter().GetResult()

@@ -173,3 +173,16 @@ let recentEvents (port: int) (workingDirectory: string) (count: int) : Result<st
     match t.IndexOf "\n\n" with
     | -1 -> t
     | i -> t.Substring(0, i))
+
+/// Sessions outside the run directory whose evaluation count rose between two readings of
+/// the sessions list, with how much. Other agents use the shared daemon at the same time, so
+/// this is a lead and never proof by itself: it matters when the lemming's own session did
+/// nothing while the lemming was evaluating.
+let foreignEvalDeltas (runDir: string) (before: DaemonSession list) (after: DaemonSession list) : (DaemonSession * int) list =
+  after
+  |> List.filter (fun s -> not (belongsTo runDir s))
+  |> List.choose (fun s ->
+    let was = before |> List.tryFind (fun b -> b.Id = s.Id) |> Option.map (fun b -> b.EvalCount) |> Option.defaultValue 0
+    match s.EvalCount - was with
+    | d when d > 0 -> Some(s, d)
+    | _ -> None)

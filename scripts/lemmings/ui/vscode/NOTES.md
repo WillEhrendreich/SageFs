@@ -13,5 +13,9 @@ Both: commit small, explicit paths, `git status --short` before any write.
 
 State at this commit: LemDrive builds; run-vscode-lemming exists and has not yet been run end to end.
 
-Cleanup owed (copy B or whoever sees it first): sessions under /tmp/lem/explore1 on the shared daemon,
-and the VS Code started from scratchpad/explore-start.sh (touch /tmp/lem/explore1/out/stop ends it).
+Cleanup done by copy B: the explore1 session was stopped by id and its VS Code ended gracefully.
+
+Copy B, 17:40: Timeline.fs (actions clock, OUT/timeline.ndjson via LEM_TIMELINE) is written and
+hooked into Vsc.cli with a three-line edit. If Vsc.fs is rewritten, keep that hook. The first
+end-to-end run (space-bunny, ui-eval) is in /tmp/lem/space-bunny-ui-eval-02. Never start Xvfb with
+-displayfd or on :0 on this machine: it deleted the real desktop's /tmp/.X11-unix/X0 socket once.

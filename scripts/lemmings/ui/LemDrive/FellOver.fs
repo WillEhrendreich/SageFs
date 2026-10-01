@@ -69,6 +69,28 @@ let private clip (text: string) : string =
   | true -> flat.Substring(0, EvidenceWidth) + " ..."
   | false -> flat
 
+/// What the daemon's sessions list says about evaluation during the run.
+type EvalFacts =
+  { /// Evaluations in sessions under the run directory.
+    OwnEvals: int
+    /// Sessions outside the run directory whose evals rose: id, working directory, rise.
+    Foreign: (string * string * int) list }
+
+/// A driver call that tries to evaluate: Alt+Enter, or a command or click that says "eval".
+let private triesToEvaluate (c: Call) : bool =
+  let lower = c.Command.ToLowerInvariant()
+  lower.Contains "alt+enter" || lower.Contains "eval"
+
+/// The lemming evaluated, and the editor sent it to a session that is not the lemming's own:
+/// the extension keeps using whichever session was active when the window opened.
+let private foreignEntries (calls: Call list) (facts: EvalFacts) : Entry list =
+  match calls |> List.exists triesToEvaluate, facts.OwnEvals, facts.Foreign with
+  | true, 0, (id, dir, rise) :: _ ->
+    [ { Stage = "Eval"
+        Symptom = "the lemming evaluated from the editor, but no evaluation reached a session under its run directory; one outside it took them"
+        Evidence = sprintf "session %s (%s) evaluated %d more time(s) during the run; the run's own sessions evaluated 0" id dir rise } ]
+  | _ -> []
+
 /// The entries for a run. `expectSession` is whether the task should have made a session;
 /// `sessionsOnDashboard` is how many sessions the shared daemon listed under the run
 /// directory before cleanup.
@@ -92,6 +114,14 @@ let entries (calls: Call list) (expectSession: bool) (sessionsOnDashboard: int) 
     | _ -> []
   unused @ missingSession @ callEntries
 
+/// `entries`, plus what the sessions list says about where the lemming's evaluations went.
+let entriesWithEvals (calls: Call list) (expectSession: bool) (sessionsOnDashboard: int) (evalFacts: EvalFacts) : Entry list =
+  let all = entries calls expectSession sessionsOnDashboard
+  let foreign = foreignEntries calls evalFacts
+  // After the "never drove the editor" and missing-session entries, before the per-call ones.
+  let headCount = all |> List.takeWhile (fun e -> e.Stage = "Adoption" || e.Stage = "SessionCreate") |> List.length
+  List.take headCount all @ foreign @ List.skip headCount all
+
 let toJson (items: Entry list) : string =
   use stream = new MemoryStream()
   use w = new Utf8JsonWriter(stream, JsonWriterOptions(Indented = true))
@@ -109,6 +139,31 @@ let toJson (items: Entry list) : string =
 /// `LemDrive fellover --run-dir D --expect-session true|false --sessions N`
 let write (runDir: string) (expectSession: bool) (sessionsOnDashboard: int) : int =
   let calls = readCalls (Path.Combine(runDir, "out", "screens"))
-  let items = entries calls expectSession sessionsOnDashboard
+  let out = Path.Combine(runDir, "out")
+  let foreign =
+    let path = Path.Combine(out, "foreign.tsv")
+    match File.Exists path with
+    | false -> []
+    | true ->
+      File.ReadAllLines path
+      |> Array.choose (fun l ->
+        match l.Split('\t') with
+        | [| id; dir; rise |] -> (match Int32.TryParse rise with | true, n -> Some(id, dir, n) | _ -> None)
+        | _ -> None)
+      |> List.ofArray
+  // The run's own evals: the sessions list read just before cleanup, sessions under the workspace.
+  let ownEvals =
+    let path = Path.Combine(out, "sessions.after.tsv")
+    let workspace = Path.Combine(runDir, "w")
+    match File.Exists path with
+    | false -> 0
+    | true ->
+      File.ReadAllLines path
+      |> Array.skip 1
+      |> Array.sumBy (fun l ->
+        match l.Split('\t') with
+        | [| _; _; evals; _; dir |] when dir = workspace || dir.StartsWith(workspace + "/") -> (match Int32.TryParse evals with | true, n -> n | _ -> 0)
+        | _ -> 0)
+  let items = entriesWithEvals calls expectSession sessionsOnDashboard { OwnEvals = ownEvals; Foreign = foreign }
   File.WriteAllText(Path.Combine(runDir, "out", "fellover.extra.json"), toJson items)
   List.length calls

@@ -74,6 +74,7 @@ vsc_bwrap_args() {
     --proc /proc --dev /dev --tmpfs /tmp \
     --ro-bind "/tmp/.X11-unix/X${VSC_DISPLAY#:}" "/tmp/.X11-unix/X${VSC_DISPLAY#:}" \
     --bind "$run" "$run" \
+    --ro-bind "$HOME/.dotnet" "$HOME/.dotnet" \
     --clearenv \
     --setenv HOME "$run/.lem/home" \
     --setenv XDG_CONFIG_HOME "$run/.lem/home/.config" \
@@ -82,8 +83,10 @@ vsc_bwrap_args() {
     --setenv XDG_STATE_HOME "$run/.lem/home/.local/state" \
     --setenv TMPDIR "$run/.lem/tmp" \
     --setenv DISPLAY "$VSC_DISPLAY" \
-    --setenv PATH /usr/bin:/bin \
-    --chdir "$run"
+    --setenv DOTNET_ROOT "$HOME/.dotnet" --setenv DOTNET_NOLOGO 1 --setenv DOTNET_CLI_TELEMETRY_OPTOUT 1 \
+    --setenv DOTNET_CLI_HOME "$run/.lem/tmp" --setenv NODE_NO_WARNINGS 1 \
+    --setenv PATH "$run/bin/vsc-path:$HOME/.dotnet:/usr/bin:/bin" \
+    --chdir "$run/w"
 }
 
 # vsc_start_code <run-dir> <cdp-port> <extension-dir>   sets VSC_PID
@@ -101,7 +104,7 @@ vsc_start_code() {
     --remote-debugging-port="$port" --remote-allow-origins='*' \
     --ozone-platform=x11 --no-sandbox --disable-gpu --disable-workspace-trust \
     --new-window --disable-updates --skip-welcome --skip-release-notes \
-    "$run" > "$run/out/vscode.stdout" 2> "$run/out/vscode.stderr" &
+    "$run/w" > "$run/out/vscode.stdout" 2> "$run/out/vscode.stderr" &
   VSC_PID=$!
 }
 
@@ -199,6 +202,18 @@ vsc_install_tools() {
     printf '%s\n' '#!/bin/sh' "exec dotnet \"$run/bin/lemdrive/LemDrive.dll\" vsc $verb \"\$@\"" > "$run/bin/tools/vsc-$verb"
     chmod +x "$run/bin/tools/vsc-$verb"
   done
+}
+
+# The `sagefs` on PATH inside the window (the extension and a terminal call it, as for a real
+# user). It runs the read-only verbs against the build this trial uses and refuses the ones
+# that would stop, sweep or start a daemon: the daemon is Will's. Needs LEM_BRIDGE_CMD, which
+# lem_prepare_bridge sets (`dotnet <copied SageFs.dll> mcp`, or `sagefs mcp` for the published tool).
+vsc_install_shim() {
+  local run=$1 real
+  mkdir -p "$run/bin/vsc-path"
+  if [ "${LEM_BRIDGE_CMD[0]}" = dotnet ]; then real="dotnet ${LEM_BRIDGE_CMD[1]}"; else real=$(command -v sagefs); fi
+  printf '%s\n' '#!/bin/sh' "export LEM_SAGEFS_REAL='$real'" "exec dotnet \"$run/bin/lemdrive/LemDrive.dll\" shim sagefs \"\$@\"" > "$run/bin/vsc-path/sagefs"
+  chmod +x "$run/bin/vsc-path/sagefs"
 }
 
 # The desktop check: the real windows, one line each, so a leak is a diff. Writes the list to $1.

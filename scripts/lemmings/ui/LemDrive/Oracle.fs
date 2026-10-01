@@ -22,6 +22,10 @@ let DefaultDaemonPort = 37749
 [<Literal>]
 let DaemonReadSeconds = 10
 
+/// How many recent evals the history check reads.
+[<Literal>]
+let HistoryDepth = 30
+
 /// The fewest "SageFs:" command titles an answer must name to count as having found the
 /// extension's commands.
 [<Literal>]
@@ -57,6 +61,8 @@ type Check =
   | StatusBarShows of pattern: string
   | FixtureTestsPass
   | AnswerNamesCommands of file: string
+  /// The daemon's own eval history for the run's session (code and result) matches.
+  | EvalHistoryMatches of pattern: string
 
 module Check =
   let describe (c: Check) : string =
@@ -66,11 +72,20 @@ module Check =
     | StatusBarShows p -> sprintf "the status bar shows /%s/" p
     | FixtureTestsPass -> "the project's test suite passes (the harness ran it)"
     | AnswerNamesCommands f -> sprintf "%s names at least %d SageFs commands from the extension's package.json" f FewestCommandsNamed
+    | EvalHistoryMatches p -> sprintf "the daemon's eval history for the run's session matches /%s/" p
+
+/// What parseSeed (Some "7") prints in the history: the code, then "int option = Some 7".
+[<Literal>]
+let EvalOfParseSeedSeven = @"(?s)parseSeed.*7.*Some 7"
+
+/// After the fix, parseSeed on a negative string evaluates to None.
+[<Literal>]
+let EvalOfParseSeedNegative = @"(?s)parseSeed.*-.*None"
 
 let checksFor (t: LemTask) : Check list =
   match t with
-  | UiEval -> [ SessionEvaled 1 ]
-  | UiEditReeval -> [ SessionEvaled 1; FixtureTestsPass ]
+  | UiEval -> [ SessionEvaled 1; EvalHistoryMatches EvalOfParseSeedSeven ]
+  | UiEditReeval -> [ SessionEvaled 1; EvalHistoryMatches EvalOfParseSeedNegative; FixtureTestsPass ]
   | UiLiveTests -> [ SessionEvaled 0; StatusBarShows @"\d+/\d+" ]
   | UiHotReload -> [ WorkflowIs "(?i)hot" ]
   | UiFindHelp -> [ AnswerNamesCommands "ANSWER.md" ]
@@ -158,6 +173,15 @@ let private runCheck (runDir: string) (workspace: string) (port: int) (sessions:
             match best.EvalCount >= n with
             | true -> Met(sprintf "session %s under the run directory has %d eval(s)" best.Id best.EvalCount)
             | false -> NotMet(sprintf "session %s has %d eval(s), wanted %d" best.Id best.EvalCount n)
+    | EvalHistoryMatches pattern ->
+      // The history tool routes by working directory, which must then name exactly one session.
+      return
+        match Daemon.recentEvents port workspace HistoryDepth with
+        | Result.Error e -> NotMet(sprintf "could not read the eval history for %s: %s" workspace e)
+        | Ok history ->
+          match Regex.IsMatch(history, pattern) with
+          | true -> Met "the eval history shows the evaluation and its result"
+          | false -> NotMet(sprintf "no eval in the run's history matches /%s/; history: %s" pattern (history.Replace('\n', ' ')))
     | WorkflowIs pattern ->
       return
         match sessions with
