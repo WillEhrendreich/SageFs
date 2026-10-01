@@ -494,6 +494,22 @@ let rawJsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (json: string) 
   do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(json))
 }
 
+/// Answer GET /api/live-testing/file-annotations: the file's gutter annotations
+/// as a JSON object. A file the cycle knows nothing about gets the empty set
+/// for that path, so a client can always read an object off the wire.
+let writeFileAnnotations
+  (ctx: Microsoft.AspNetCore.Http.HttpContext)
+  (cycle: SageFs.Features.LiveTesting.LiveTestCycleState)
+  (fileParam: string)
+  : Task =
+  let entries = SageFs.Features.LiveTesting.LiveTestState.statusEntriesForSession "" cycle.TestState
+  let annotations =
+    match SageFs.Features.LiveTesting.FileAnnotations.resolveFilePath fileParam entries cycle.InstrumentationMaps with
+    | Some fullPath -> SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage fullPath cycle
+    | None -> SageFs.Features.LiveTesting.FileAnnotations.empty fileParam
+  ctx.Response.StatusCode <- 200
+  rawJsonResponse ctx (Json.serialize Json.standard annotations) :> Task
+
 /// Standard error body: `error` stays a client-compatible string (VS Code's
 /// parseOutcome reads it via fieldString), `errorDetails` carries the full
 /// SageFsError algebra (case/message/suggestedAction) for agents and logs.
@@ -3219,21 +3235,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       let fileParam = ctx.Request.Query.["file"].ToString()
       match rctx.SseContext.GetElmModel with
       | None -> do! jsonResponse ctx 503 {| error = "Elm loop not started" |}
-      | Some getModel ->
-        let model = getModel()
-        let lt = model.LiveTesting.TestState
-        let entries =
-          LiveTestState.statusEntriesForSession "" lt
-        let matchingFile = FileAnnotations.resolveFilePath fileParam entries model.LiveTesting.InstrumentationMaps
-        match matchingFile with
-        | Some fullPath ->
-          let fa = FileAnnotations.projectWithCoverage fullPath model.LiveTesting
-          let json = Json.serialize Json.standard fa
-          do! jsonResponse ctx 200 json
-        | None ->
-          let fa = FileAnnotations.empty fileParam
-          let json = Json.serialize Json.standard fa
-          do! jsonResponse ctx 200 json
+      | Some getModel -> do! writeFileAnnotations ctx (getModel()).LiveTesting fileParam
     } :> Task
   ) |> ignore
   app.MapGet("/api/live-testing/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

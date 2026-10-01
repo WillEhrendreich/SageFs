@@ -351,13 +351,21 @@ let tests =
            """{"at":"2026-01-02T03:04:05+00:00","count":3,"faultReason":"why","message":"done","nested":{"ok":false},"nothing":null,"ratio":0.5,"success":true,"tags":["a","b"]}"""
     }
 
-    testTask "WHY — jsonResponse given an already serialized string writes it as a JSON string, which the file-annotations route relies on today" {
+    testTask "WHY — the file-annotations route answers with the annotations as a JSON object, not as a string holding JSON" {
       let http = Microsoft.AspNetCore.Http.DefaultHttpContext()
       use body = new MemoryStream()
       http.Response.Body <- body
-      do! SageFs.Server.McpServer.jsonResponse http 200 (box """{"a":1}""")
-      System.Text.Encoding.UTF8.GetString(body.ToArray())
-      |> Expect.equal "response body" "\"{\\u0022a\\u0022:1}\""
+      let cycle = SageFs.Features.LiveTesting.LiveTestCycleState.empty
+      do! SageFs.Server.McpServer.writeFileAnnotations http cycle "NoSuch.fs"
+      let written = System.Text.Encoding.UTF8.GetString(body.ToArray())
+      let rootKind =
+        use parsed = System.Text.Json.JsonDocument.Parse written
+        parsed.RootElement.ValueKind
+      rootKind |> Expect.equal "a client reads an object straight off the wire" System.Text.Json.JsonValueKind.Object
+      written
+      |> Expect.equal "the body is exactly what the annotations serialize to"
+           (Json.serialize Json.standard (SageFs.Features.LiveTesting.FileAnnotations.empty "NoSuch.fs"))
+      http.Response.ContentType |> Expect.equal "it says it is JSON" "application/json"
     }
 
     // ---- SageFs/McpStdioBridge.fs ----
