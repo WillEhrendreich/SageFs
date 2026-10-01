@@ -66,11 +66,13 @@ let tests =
           SelectionPrecision.NoImpactedTests
       | other -> failtestf "expected a rebuild-and-run covering the edited file, got %A" other
 
-    // The other half of the contract: selecting on file scope must not mean
-    // selecting everything. A test that reaches nothing in the edited file
-    // stays unselected, or the fix would have traded a false green for a
-    // full-suite run on every save.
-    testCase "a body-only edit does not drag in tests that reach nothing in the edited file" <| fun _ ->
+    // The other half of the contract: when the narrow DOES find the covering
+    // test, selecting on file scope must not mean selecting everything (the
+    // first test above pins that). When it finds nothing at all, it must not
+    // mean selecting nothing either: no test the graph knows reaches the file,
+    // but the graph may not have seen the test that does, so the whole
+    // discovered set is queued and the decision says it widened.
+    testCase "a body-only edit that no known test reaches widens to the discovered tests and says so" <| fun _ ->
       let unrelated = mkTest "Other.Tests.should_greet" TestCategory.Unit
       let state =
         { LiveTestState.empty with
@@ -89,7 +91,13 @@ let tests =
           Map.empty
 
       outcome.Effects
-      |> Expect.isEmpty "a file no test reaches should not queue an unrelated test"
+      |> List.isEmpty
+      |> Expect.isFalse "an unreached compiled file must not read as green"
+      match outcome.Decision with
+      | Some decision ->
+        decision.Explanation.Precision
+        |> Expect.equal "the widening is labeled" SelectionPrecision.ConservativeFallback
+      | None -> failtest "expected a decision"
 
     // The keystroke cause is the as-you-type path: the type-check of a settled
     // buffer reports `Changed = []` for `a + b` -> `a - b` exactly as it does on
@@ -302,6 +310,23 @@ let tests =
 let private libRefs : SymbolReference list =
   [ { SymbolFullName = "Lib.add"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 } ]
 
+/// A graph built the way the daemon builds one: from a type-checked test file,
+/// through `SymbolGraphBuilder.updateGraph`, so it is registered per file and
+/// survives the graph update that `handleFcsResult` does before it decides.
+/// (A graph assigned straight to `SymbolToTests` is rebuilt from nothing by that
+/// update, which is a cold start, not a populated graph.) It knows `Other.greet`
+/// and nothing about `Lib.add`.
+let private graphThatHasNotSeenLib : TestDependencyGraph =
+  let otherTestFile : SymbolReference list =
+    [ { SymbolFullName = "Other.Tests.greets"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Other.Tests.fs"; Line = 1 }
+      { SymbolFullName = "Other.greet"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Other.Tests.fs"; Line = 2 } ]
+  SymbolGraphBuilder.updateGraph
+    LiveTestingDefaults.TestModuleIdentifier
+    LiveTestingDefaults.Framework
+    otherTestFile
+    "Other.Tests.fs"
+    TestDependencyGraph.empty
+
 /// A session that has already type-checked `Lib.fs` once, so a second check of
 /// the same symbols reports `Changed = []`: the body-only edit shape.
 let private afterFirstCheck trigger (tests: TestCase array) (graph: TestDependencyGraph) : LiveTestCycleState =
@@ -372,5 +397,49 @@ let noEmptyEscapeTests =
       | Some decision ->
         decision.Explanation.Precision
         |> Expect.equal "the silence is policy, not 'no impacted tests'" SelectionPrecision.SuppressedByPolicy
+      | None -> failtest "expected a decision"
+
+    // The graph is populated, but only with a test file that has nothing to do
+    // with `Lib.fs`: the test that covers `Lib.add` has not been type-checked in
+    // this session yet. The file-scope narrow finds nothing, on any trigger, and
+    // a non-empty graph used to mean "do not widen". The landing gate would not
+    // accept that (`AffectedTests.verificationTestSet` never returns empty for a
+    // real diff against a real suite), so the live loop does not either.
+    for trigger in [ RunTrigger.Keystroke; RunTrigger.FileSave; RunTrigger.ExplicitRun ] do
+      testCase (sprintf "a body-only edit on %A that no known test reaches widens instead of reading green" trigger) <| fun _ ->
+        let covering = mkTest "Lib.Tests.adds" TestCategory.Unit
+        let other = mkTest "Other.Tests.greets" TestCategory.Unit
+        Map.isEmpty graphThatHasNotSeenLib.SymbolToTests
+        |> Expect.isFalse "the graph is populated: this is not a cold start"
+        let effects, state' =
+          afterFirstCheck trigger [| covering; other |] graphThatHasNotSeenLib
+          |> recheck
+        match state'.TestState.LastDecision with
+        | Some decision ->
+          decision.Explanation.Precision
+          |> Expect.equal "the narrow found nothing, so the decision must say it widened" SelectionPrecision.ConservativeFallback
+          decision.Explanation.SelectedTests
+          |> Array.sort
+          |> Expect.equal "the test the graph has not seen yet is among the selection" ([| covering.FullName; other.FullName |] |> Array.sort)
+          decision.Explanation.Reason
+          |> System.String.IsNullOrWhiteSpace
+          |> Expect.isFalse "the decision says why it widened"
+          effects
+          |> List.isEmpty
+          |> Expect.isFalse "a run must actually be queued"
+        | None -> failtest "expected a decision"
+
+    // A script is evaluated, not compiled, so there is no stale DLL to distrust
+    // and nothing to widen: the floor is for compiled files only.
+    testCase "a body-only edit to a script file with a populated graph does not widen" <| fun _ ->
+      let other = mkTest "Other.Tests.greets" TestCategory.Unit
+      let seeded = afterFirstCheck RunTrigger.Keystroke [| other |] graphThatHasNotSeenLib
+      let state = { seeded with AnalysisCache = { FileSymbols = Map.ofList [ "Lib.fsx", libRefs ] } }
+      let _, state' =
+        LiveTestCycleState.handleFcsResult (FcsTypeCheckResult.Success ("Lib.fsx", libRefs)) state
+      match state'.TestState.LastDecision with
+      | Some decision ->
+        decision.Explanation.Precision
+        |> Expect.equal "a script no test reaches is genuinely unaffected" SelectionPrecision.NoImpactedTests
       | None -> failtest "expected a decision"
   ]
