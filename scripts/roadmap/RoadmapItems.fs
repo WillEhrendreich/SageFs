@@ -71,7 +71,7 @@ let items : Item list =
     item "repl-eval-reaches-the-running-app" "A REPL eval changes the running app" HotReload Next
       NoLandmarkYet
       [ "docs/how-hot-reload-works.md" ]
-      "An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs a 2 to 3 second build. The other remaps FSI's IL into delta rows, which is unproven. I'm measuring both before I pick."
+      "An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. The other grafts FSI's own IL into a delta, and in a spike that worked and was served in milliseconds, but it isn't wired through a real worker and it has sharp edges. I'm building the write-to-source route first because it also keeps your change, then the faster one behind a flag."
 
     item "live-tweak-front-door" "Nudge a value in the running app" HotReload Next
       NoLandmarkYet
