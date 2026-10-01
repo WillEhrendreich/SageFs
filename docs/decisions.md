@@ -307,3 +307,101 @@ twice), `SageFs.Tests/FsiHostLostTests.fs`, `SageFs.Tests/HostCrashTests.fs`, an
 `SageFs.Tests/HostCrashRecoveryTests.fs`.
 Reopen it if: users lose work to host crashes often enough that "tell them and let them reset" costs more than a
 restart that says what it dropped.
+
+## Coverage is attributed per test, so tests that touch instrumented code run one at a time
+
+Coverage used to be one bitmap per run batch, handed to every test in it. That is why a gutter could only say "this
+line is covered by something" and why selection widened to every test that reaches a function. The probes of a process
+are one shared array, so two tests running at once cannot be told apart by reading it. The worker therefore reads and
+clears the probes after each test and sends the reading as a coverage frame beside that test's result, and the daemon
+stores it against that test alone. To make the reading belong to one test, a run against a project with instrumented
+assemblies runs its tests one at a time. A run with no instrumented assembly keeps the parallel path, because there
+is nothing to attribute.
+
+What it costs: a suite of slow tests on an instrumented project is serial now, so its wall clock is the sum, not the
+longest. The reading itself is cheap, because the worker finds the probe arrays once per loaded assembly set and then
+reads and clears them in place. If that cost matters to you, the knob is not a faster read, it is a project with fewer
+slow tests in the live set, or running them through an explicit run.
+
+A line's `CoveringTests` list is exact when any test has coverage recorded for the file, and an empty list there
+means "no test hit this line", which is the honest answer. When nothing is recorded for the file the old graph-based
+list is kept. A reading that hit nothing never replaces a recorded bitmap: after a keystroke eval the tests run
+against dynamic code, which the probes cannot see, and an all-false reading would blank the gutter.
+
+Evidence: `SageFs.Host/WorkerHttpTransport.fs` (the attributed stream), `SageFs.Core/Features/CoverageProbes.fs`
+(`readAndClear`), `SageFs.Core/Features/TestAnnotations.fs`, `SageFs.Tests/LiveTestingPerTestCoverageTests.fs`,
+`SageFs.Tests/LiveTestingCoverageStreamTests.fs` and the real-path journey in
+`SageFs.Tests/LiveTestingJourneyTests.fs`.
+Reopen it if: a way to tell two overlapping tests apart appears (per-thread or per-async-context probes), or
+serial runs turn out to cost real users more than the attribution gives them.
+
+## A line edit selects only the tests that run that line, and every doubt widens it
+
+An edit that moves no symbol name used to select every test that reaches the function. With per-test coverage it can
+select only the tests whose own coverage reaches the lines that changed. The rules are all one-directional: any doubt
+keeps the wider selection.
+
+  - The buffer's lines are hashed (FNV-1a over the text) and compared with the hashes recorded when the assembly was
+    instrumented, so the "changed lines" are measured against the text the coverage describes, not against whatever
+    the last keystroke was.
+  - An edit that inserted or removed a line shifts every later line number, so it is not narrowed.
+  - A changed line with no sequence point has no coverage that speaks for it. A changed line that runs when the module
+    initializes runs once per process, in whichever test got there first, so it is not narrowed either.
+  - A test with no usable coverage is not known to be unaffected, so it is always included.
+  - An empty answer is not an answer: it widens.
+
+The decision says which way it went (`line_coverage_narrowing` against the graph-based precisions), so the status bar
+can show why a keystroke ran two tests and not twenty.
+
+Evidence: `CoverageBitmap.narrowByLines` and `LineEdit.between` in `SageFs.Core/Features/LiveTestingTypes.fs`,
+`SageFs.Core/Features/LiveTestingCycle.fs` (`decideAfterTypeCheck`), `SageFs.Tests/LiveTestingPerTestCoverageTests.fs`.
+Reopen it if: a narrowed run ever misses a test it should have run. That is the failure this design exists to make
+impossible, and a case for it should become a refusal rule, not a heuristic.
+
+## Every row says what it ran against, and a real build confirms or contradicts an evaluated verdict
+
+A keystroke's tests run against code the live session evaluated, not against a build. That is the fast path and it
+can be wrong in ways a build is not (the session has the whole project loaded, so a file can reach a module that
+comes after it in compile order, which the compiler refuses). A row used to look the same either way. Now each row
+carries a closed `ResultProvenance`: `Compiled` (a build produced what ran), `Evaluated` (ran against evaluated
+code, nothing has confirmed it), `VerifiedByBuild` (evaluated, then run against a real build of the same text, and
+the verdicts agree) and `BuildDisagrees` with the reason (`BuildFailed` with the compiler's message, `ResultDiffers`
+with both verdicts, `BuildUnanswered`). A disagreeing row's verdict is the build's, because that is what ships.
+
+The confirmation is a pure state machine (`BuildConfirmation.step`): an evaluated run opens it, the editing going
+quiet starts one build, a newer buffer abandons a build of older text, every answer carries the generation it was
+asked for, and a deadline turns silence into `BuildUnanswered`. It never delays the evaluated result, it never runs
+when nothing was evaluated, and a burst of keystrokes costs one build, for the last. The build is the session's own
+rebuild, so it is the same build the user would get.
+
+What it costs and where it stops: the rebuild restarts the session's worker, so FSI state and unsaved edits in other
+files do not survive it. The confirmation also refuses to confirm text that is not on disk (a build cannot confirm
+what only the editor has), so an unsaved buffer stays `Evaluated`, which is honest.
+
+Evidence: `SageFs.Core/Features/BuildConfirmation.fs`, `SageFs.Simulation/BuildConfirmationSim.fs` with its three
+twins (a build answer applied to the wrong generation, a build started without waiting for quiet, a failure that says
+nothing), `SageFs.Tests/BuildConfirmationSimTests.fs`, `SageFs.Tests/LiveTestingProvenanceTests.fs` and the journeys
+in `SageFs.Tests/LiveTestingJourneyTests.fs`.
+Reopen it if: restarting the worker for a confirmation loses something users notice. The way out is confirming in a
+second worker, which costs a second FSI host's memory.
+
+## Pause and an include or exclude set are enough; memory caps and battery detection are not copied
+
+Visual Studio's Live Unit Testing has playlists, an include and exclude list, a pause on battery and while debugging,
+and a memory cap on its test host. What closes the gap with the smallest design is two controls: pause (the session
+keeps type-checking and keeps its evaluated code current, and only holds the test runs back, so resuming judges the
+code as it is now) and a scope (every test, only the ones matching a pattern, or all but the ones matching) that
+automatic runs obey. An explicit run always runs what it names, so a scope never makes a test unrunnable.
+
+The rest needs no equivalent here:
+  - Pause on battery. The daemon has no business knowing whether a laptop is plugged in, and an editor can call the
+    pause route when it does.
+  - Pause while debugging. A debug session is the editor's, and it can pause live testing the same way.
+  - A memory cap. The test host is the FSI worker, which has its own limits and its own restart path, and a cap that
+    kills it mid-run is worse than a pause the user chose.
+  - Playlists. A scope pattern is a playlist that a user can write in one line.
+
+Evidence: `LivePause` and `TestScope` in `SageFs.Core/Features/LiveTestingTypes.fs`, the selection in
+`SageFs.Core/Features/LiveTestingCycle.fs`, the routes in `SageFs/McpServer.fs`,
+`SageFs.Tests/LiveTestingScaleControlsTests.fs` and the journeys in `SageFs.Tests/LiveTestingJourneyTests.fs`.
+Reopen it if: users with large suites ask for named groups that outlive a session.

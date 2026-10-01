@@ -42,14 +42,21 @@ And a default test run doesn't record which source lines a test touched. If you 
                                                    v
                        which tests?  name delta + dependency graph
                                      + coverage bitmaps (+ file scope on save)
+                                     + changed lines against per-test coverage
                                      nothing narrows a compiled file --> all discovered tests
                                                    v   (decision + "why" label)
+                       paused, or outside the scope? --> held back, said so
+                                                   v
                        eval the buffer into the live FSI session
                                                    |-- eval fails --> nothing runs
                                                    v
                        run the selected tests, stream results in batches
+                       (rows say "Evaluated")
                                                    v
-                       read the coverage bitmap --> stored, used by the next selection
+                       read each test's coverage --> stored per test, used by the next selection
+                                                   v
+                       quiet for 2 s --> one real build of the saved text, tests run again
+                       (rows say "VerifiedByBuild" or "BuildDisagrees")
 ```
 
 ### Session start: the recorder
@@ -90,7 +97,19 @@ Then the run. Each new run cancels the older one through a cancellation chain ([
 
 ### Coverage comes back around
 
-When the stream ends, the daemon asks the host's agent for the coverage the instrumented assemblies recorded, as a packed bitmap, and the agent resets the hits for the next run. Dynamic assemblies are skipped when reading, so only code loaded from disk is counted ([`HostAgent.fs`](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/HostAgent.fs#L320-L331), [`WorkerHttpTransport.fs`](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Host/WorkerHttpTransport.fs#L544-L555)). The bitmap is stored against every test in the batch ([`SageFsApp.fs`](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs/SageFsApp.fs#L1682-L1688)). That feeds the next selection, so it gets sharper as you work. It's also the soft spot. See below.
+After each test, the worker reads the coverage the instrumented assemblies recorded, as a packed bitmap, and clears the hits, so the reading belongs to that one test. It goes back as a coverage frame beside the test's result, and the daemon stores it against that test alone (`WorkerHttpTransport.fs`, `CoverageProbes.readAndClear`, `SageFsEffectHandler.fs`). The probes of a process are one shared array, so two tests running at once cannot be told apart, which is why a run against a project with instrumented assemblies runs its tests one at a time. A run with nothing instrumented keeps the parallel path. Dynamic assemblies are skipped when reading, so only code loaded from disk is counted, and a reading that hit nothing never replaces a recorded bitmap (after a keystroke eval the tests run against dynamic code, and an empty reading would blank the gutter).
+
+That does two things. The gutter and the file annotations list, per line, exactly the tests whose own recorded coverage reaches it. And selection can use it: an edit that moves no symbol name and changes only lines that recorded coverage speaks for selects only the tests that run those lines, labeled `line_coverage_narrowing`. The rules all point one way, toward running more. The buffer's lines are hashed and compared with the hashes of the text the assembly was compiled from, an edit that inserts or removes a line is not narrowed (every later line number moved), a changed line with no sequence point or one that runs when the module initializes is not narrowed, a test with no usable coverage is always included, and an empty answer widens (`CoverageBitmap.narrowByLines`, `LineEdit.between`, `decideAfterTypeCheck`). The reasoning, and the cost of the serial runs, are in [decisions.md](decisions.md).
+
+### What a row says it ran against
+
+A keystroke's tests run against code the session evaluated, not against a build, and every row now says which. `Compiled` is a build's output, `Evaluated` is evaluated code that nothing has confirmed, `VerifiedByBuild` is evaluated and then run again against a real build of the same text with the same verdict, and `BuildDisagrees` carries why: the compiler's message, both verdicts, or that the build never answered (`ResultProvenance` in `LiveTestingTypes.fs`). Once the editing has been quiet for two seconds, one build of the saved text is started through the session's own rebuild, and the tests run again against what it made. The verdict from the eval is on screen the whole time, the confirmation never delays it, an eval that ran no tests starts no build, and a burst of edits costs one build, for the last text. The decision is a pure state machine, `BuildConfirmation.step`, folded under seeded scenarios with three twins that reproduce the bugs its invariants exist for (`SageFs.Simulation/BuildConfirmationSim.fs`).
+
+Two limits. A build can only confirm what is on disk, so an unsaved buffer stays `Evaluated`. And the build is a rebuild of the session, which restarts the worker: FSI state and unsaved edits in other files do not survive it.
+
+### Pause and scope
+
+Pause holds test runs back while the session keeps type-checking and keeps its evaluated code current, so resuming judges the code as it is now: it evaluates the latest buffer again and runs the tests that went stale. A scope (every test, only the ones matching a pattern, or all but the ones matching) narrows what automatic runs touch, and an explicit run always runs what it names (`/api/live-testing/pause`, `/resume`, `/scope`). What Visual Studio has beyond that, and why it isn't copied, is in [decisions.md](decisions.md).
 
 ## Compared with Visual Studio Live Unit Testing
 
@@ -101,20 +120,22 @@ Live Unit Testing is Enterprise-only and shipped in Visual Studio 2017 ([launch 
 | What it builds | A private workspace copy of the repo with unsaved edits applied, scoped parallel MSBuild builds of the relevant projects ([configure](https://learn.microsoft.com/en-us/visualstudio/test/live-unit-testing?view=vs-2022), [better and faster](https://devblogs.microsoft.com/visualstudio/live-unit-testing-preview-better-and-faster/)) | No workspace. The buffer is type-checked and evaluated in the live FSI session |
 | Code that doesn't compile | Errors go to the Output window ([FAQ](https://learn.microsoft.com/en-us/visualstudio/test/live-unit-testing-faq?view=vs-2022)). What the glyphs show during a red build isn't documented | Nothing runs, last results stay, state says blocked |
 | Picking tests | "impacted tests". The mechanism isn't documented | Three signals, each decision labeled with its precision and reason |
-| Coverage | Per-line, with the count of tests that hit it, from instrumented binaries of the real build | One bitmap per run batch, so per-test attribution is approximate |
+| Coverage | Per-line, with the count of tests that hit it, from instrumented binaries of the real build | Per-line, with the exact tests that hit it, from instrumented binaries of your project outputs (not of a fresh build of your unsaved text). The price is that tests run one at a time on an instrumented project |
+| What a result ran against | Binaries from a real MSBuild of the solution | Each row says: evaluated code, a real build, a real build that agreed with the eval, or a real build that disagreed and why |
+| Pause, include and exclude | Pause on battery and on debug, a playlist, an ignore file, memory caps | Pause, and an include or exclude set that automatic runs obey. No battery or debugger detection and no memory cap, see [decisions.md](decisions.md) |
 | Debugging a failure | Hover the glyph, pick tests, Debug | None |
 | Frameworks | xUnit, NUnit, MSTest | Expecto, xUnit (v2 and v3), NUnit, MSTest, TUnit |
 | Languages | .NET. F# not mentioned on the current pages I read | F# |
 | Platform, cost | Windows, ProjFS-backed workspace, Enterprise edition | Windows, Linux, macOS (tree-sitter binaries per runtime id), MIT licensed |
 | Clients | Visual Studio | HTTP and SSE, so any editor. The VS Code client is in the repo. The Visual Studio extension is deprecated |
 
-Where Visual Studio is ahead, and I mean it. Debugging: you hover a glyph, pick the tests and debug them. It runs tests against binaries from a real MSBuild of your solution, which is what ships, while on the keystroke path mine run against FSI-evaluated code, and I haven't shown that code behaves identically in every case. A type-check in an FSI session isn't your project's compile, so things only the real build catches can pass here and fail in `dotnet build`. Its per-line glyphs, with a hover that lists the tests, are backed by coverage collected for the line, and mine is per batch. The whole-solution tooling is theirs too: a playlist, an ignore file, build hooks, pause on battery and on debug, memory caps ([configure](https://learn.microsoft.com/en-us/visualstudio/test/live-unit-testing?view=vs-2022)). The build happens in its own workspace so a regular build can't interfere, and mine shares the one session. And it's been shipping since 2017.
+Where Visual Studio is ahead, and I mean it. Debugging: you hover a glyph, pick the tests and debug them. It runs tests against binaries from a real MSBuild of your solution, which is what ships, while on the keystroke path mine run against FSI-evaluated code, and I haven't shown that code behaves identically in every case. A type-check in an FSI session isn't your project's compile, so things only the real build catches can pass here and fail in `dotnet build`. What I did about it is smaller than matching it: each row says what it ran against, and a real build of the saved text confirms or contradicts the eval after the editing goes quiet, with the compiler's own message when it fails. That makes the gap visible and short. It does not make it zero, and an unsaved buffer is never confirmed. The whole-solution tooling is theirs too: a playlist, an ignore file, build hooks, pause on battery and on debug, memory caps ([configure](https://learn.microsoft.com/en-us/visualstudio/test/live-unit-testing?view=vs-2022)). I have pause and an include or exclude set, and I wrote down why I didn't copy the rest ([decisions.md](decisions.md)). The build happens in its own workspace so a regular build can't interfere, and mine shares the one session, and my confirming build restarts it. And it's been shipping since 2017.
 
 What I think I do better is smaller than it sounds. There's no repo copy to get wrong, so the failures you hit are about your code. Comment and whitespace edits don't start a run, where Visual Studio starts a build "whenever it detects that source files have changed" and I found nothing in its docs that treats a comment edit differently. You can ask why a test ran. Expecto and FsCheck are first class. A failing FsCheck property carries its shrunk counterexample and is classed as a real failure, not a flake ([`FlakyClassification`](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/Features/LiveTestingTypes.fs#L1162-L1175)). And it runs on Linux.
 
 ## What's still rough
 
-Per-test coverage isn't per-test. One bitmap per run goes against every test in the batch, which should make selection run too much and not too little, as far as I can tell. I'd like it better than "as far as I can tell".
+Per-test coverage costs parallelism. To attribute a reading to one test, the tests of an instrumented project run one at a time. I measured the keystroke path on the small sample below and nothing else, so I can't tell you what it costs a suite of slow tests. Line narrowing widens on any doubt, and I've exercised it in unit tests and on the sample, not on a large project.
 
 On a keystroke, a body-only edit moves no symbol names, so the name signal is empty. Until [d6bd9e5e](https://github.com/WillEhrendreich/SageFs/commit/d6bd9e5e) the file-scope widening that covers this case ran only on a save or an explicit run, so `a + b` to `a - b` selected nothing while you typed and the pane stayed green. It now runs on a keystroke too, so the edit selects every test that reaches a symbol the edited file declares, and your run policy can still defer it and say so. Still open: with an empty dependency graph, or a graph that hasn't seen the test file that covers the symbol, that narrowing can find nothing, and I'm closing that.
 
@@ -122,7 +143,7 @@ The test-to-symbol graph attributes references to a test by a line-range heurist
 
 Expecto leaves come from reflection, so they have no source line. Tree-sitter finds the `[<Tests>]` binding but not each `testCase`, so a marker on one specific `testCase` line isn't something you get today. Expecto categories come from the test name only, so a slow database test without "integration" in its name runs on every change under the default policy ([`LiveTestingExecutors.fs`](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/Features/LiveTestingExecutors.fs#L616-L627)).
 
-Code redefined by an eval lives in a dynamic assembly, which the coverage read skips. I don't know what the markers show for a function you just edited.
+Code redefined by an eval lives in a dynamic assembly, which the coverage read skips. For a function you just edited the markers keep the last coverage that was recorded against a real build of it, so they describe the code as it was, not as you've typed it, until the confirming build runs the tests again.
 
 Tests run inside the FSI host process alongside your session. I read the timeout and the cancellation and didn't look into what a test that blocks a thread or kills the process does to the session.
 
@@ -130,7 +151,7 @@ There's a `DebugTest` code-lens command in the model that no client consumes ([`
 
 The flake rules (a window of ten runs, flaky at two flips with at least three samples) are numbers I picked ([`FlakyDefaults`](https://github.com/WillEhrendreich/SageFs/blob/bba42706/SageFs.Core/Features/LiveTestingTypes.fs#L1157-L1160)).
 
-I quote no latency figure because I haven't measured one. The README says the old per-stage numbers were pulled for that reason, and no test times the real save-to-green path ([`Readme.md`](https://github.com/WillEhrendreich/SageFs/blob/bba42706/Readme.md#L444)).
+Latency is measured now, on one machine and one small project, and that is all the figures say. The `--integration-lt` tier starts a daemon, opens the FromCSharp sample (11 Expecto tests), and times two paths through the daemon's own `/events` stream, 20 samples each after 2 warm-up edits (`LiveTestingLatencyTests.fs`, `LatencyStats.fs`). From the edit leaving the client to the verdict on the edited function's test: p50 712 ms, p95 783 ms, min 651 ms, max 793 ms (the editor's own 300 ms pause is not in it). From a save to the suite back at all green with nothing running: p50 542 ms, p95 631 ms, min 512 ms, max 649 ms. The machine was an AMD Ryzen 7 5800XT, 16 threads, 24 GiB as the runtime reports it, Linux, .NET 11.0.0-rc.1, with other jobs running on it, and I ran the tier several times: the p50s stayed within 700 to 720 ms and 536 to 620 ms. The tier fails if the p95 of either passes 3 s, about four times what I measured, so a cold CI runner doesn't flake it. I have no figure for a large solution, for a project with slow tests, or for the first edit after a restart (the two warm-up edits are dropped).
 
 ## If you want to poke at it
 
