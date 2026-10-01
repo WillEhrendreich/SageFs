@@ -366,6 +366,7 @@
         <Compile Include="DaemonOwnershipTests.fs" />
         <Compile Include="LiveValueTreeReference.fs" />
         <Compile Include="LiveValueTreeTests.fs" />
+        <Compile Include="ThreadSandboxTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
         <Compile Include="StreamingProxyTests.fs" />
         <Compile Include="StreamingProxySimTests.fs" />
