@@ -652,6 +652,8 @@
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="AgentGuidanceIntegrationTests.fs" />
+        <Compile Include="ProjectPinFixtures.fs" />
+        <Compile Include="ProjectPinOutcomeTests.fs" />
         <Compile Include="CohortAffordancesTests.fs" />
         <Compile Include="CohortPanelTests.fs" />
         <Compile Include="DashboardPanelVisibilityTests.fs" />

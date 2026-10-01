@@ -487,6 +487,10 @@ module TestTimeouts =
   /// A multi-target sample reaching Ready or Faulted after create, built cold for each target.
   let multiTargetSettle = System.TimeSpan.FromSeconds 180.
 
+  /// How many seconds one `get_session_status` call holds the request open for a warming session.
+  /// The tool clamps anything above its own ceiling (60), so a longer wait is a loop of these.
+  let sessionStatusLongWaitSeconds = 60
+
   /// A console app started by run_app printing its first line to the dashboard.
   let appOutputAppears = System.TimeSpan.FromSeconds 60.
 
