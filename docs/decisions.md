@@ -321,3 +321,28 @@ Evidence: `SageFs.Core/Middleware/HotReloadCore.fs` (`planClosureWork`, `applyCl
 net11.0. The pure rules are in `SageFs.Tests/HotReloadClosureTests.fs`.
 Reopen it if: a closure the compiler makes cannot be matched by name and line (a generated one with no line), or FSI
 stops honouring `--optimize-`.
+
+## An instance member reloads by re-pointing it, and the object keeps its fields
+
+Hot reload registered module functions and static members and nothing else, so `member this.Render() = ...` on an
+object the app built at startup restarted, and the reason it gave (`the signature of Greeter changed`) was wrong. A
+member is a method like any other: the object the app holds calls it, and detouring the old method to the new one
+reaches that object. The edit lands, and the object is the same one, so its fields (a counter, a cache) carry on. The
+`instanceState` row reads `A#1` before the save and `B#2` after it.
+
+Same condition as for closures, same reason: the new member is handed an old object and reads fields by offset, so the
+new type has to have the old type's fields. A member that starts using a constructor argument gives the type a field
+the object does not have, and that restarts and says `InstanceLayoutChanged` with the field it saw.
+
+What counts as a member. Only what a class declares itself: not the `ToString` and `Equals` every type inherits, not
+the members the compiler writes for a record or union, not a struct's (`this` is a byref there) and not a generic type's.
+An instance property's getter is a plain member. A module's `get_x` and `set_x` are one mutable binding's pair, and the
+planner tears them down together or not at all, so only a module's accessors get that treatment.
+
+The held-copy record is keyed by name for a module function and by type and name for a member, so a `Render` on one
+class and a `Render` on another are not the same entry.
+
+Evidence: `SageFs.Tests/HotReloadParityTests.fs` rows `instance`, `instanceState`, `instanceNewField` on net10.0 and
+net11.0; `SageFs.Tests/HotReloadClosureTests.fs` for what is registered.
+Reopen it if: a member needs to be added to a type (Microsoft's mechanism supports it), or a virtual member's dispatch
+turns out to differ between the old type and the new.

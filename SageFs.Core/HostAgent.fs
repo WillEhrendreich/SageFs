@@ -153,7 +153,12 @@ let startState (init: AgentInit) : State =
   // `handleNewAsmFromRepl`'s AppHolds update), so a `#load`ed app's own copy
   // wins the moment it is defined, exactly as before.
   let appHolds =
-    methods |> Map.map (fun _ ms -> (List.last ms).MethodInfo)
+    methods
+    |> Map.toList
+    |> List.collect snd
+    |> List.groupBy (fun m -> holdKey m.MethodInfo)
+    |> List.map (fun (key, ms) -> key, (List.last ms).MethodInfo)
+    |> Map.ofList
   { Methods = methods
     LastOpenModules = []
     LastAssembly = None

@@ -172,3 +172,40 @@ let layoutTests =
     testCase "WHY — layoutDifference — a different base type is a different layout" <| fun _ ->
       layoutDifference typeof<LayoutOld> typeof<LayoutOther> |> Expect.isSome "Object versus List"
   ]
+
+type LayoutRecord = { Value: int }
+
+type LayoutProperty() =
+  member _.Name = "x"
+
+[<Tests>]
+let instanceRegistryTests =
+  let registered =
+    lazy (getAllMethods (System.Reflection.Assembly.GetExecutingAssembly()) |> List.filter (fun m -> m.FullName.Contains "HotReloadClosureTests.Layout"))
+  let named (suffix: string) = registered.Value |> List.filter (fun m -> m.FullName.EndsWith(suffix, System.StringComparison.Ordinal))
+  testList "HotReloadCore instance members" [
+    testCase "WHY — getAllMethods — a class's own instance member is registered, because an edit to its body is a patch like a function's" <| fun _ ->
+      match named "LayoutOld.Say" with
+      | [ m ] -> m.MethodInfo.IsStatic |> Expect.isFalse "an instance member"
+      | other -> failtestf "expected one LayoutOld.Say, got %d" other.Length
+
+    testCase "WHY — getAllMethods — a member a class only inherits is not registered, because every type has a ToString and none of them is the user's code" <| fun _ ->
+      named "LayoutOld.ToString" |> Expect.isEmpty "not declared by LayoutOld"
+      named "LayoutOld.GetHashCode" |> Expect.isEmpty "not declared by LayoutOld"
+
+    testCase "WHY — getAllMethods — the members the compiler writes for a record are not registered, because nobody edits them" <| fun _ ->
+      named "LayoutRecord.Equals" |> Expect.isEmpty "generated"
+      named "LayoutRecord.GetHashCode" |> Expect.isEmpty "generated"
+
+    testCase "WHY — accessorRole — an instance property's getter is a plain member, because only a module's accessors are one mutable binding's pair" <| fun _ ->
+      match named "LayoutProperty.get_Name" with
+      | [ m ] -> accessorRole m |> Expect.equal "not a binding's getter" AccessorRole.Plain
+      | other -> failtestf "expected one LayoutProperty.get_Name, got %d" other.Length
+
+    testCase "WHY — holdKey — a module function is filed under its name and an instance member under its type and name, so two classes' same-named members are two entries" <| fun _ ->
+      let say = named "LayoutOld.Say" |> List.head
+      let sameSay = named "LayoutSame.Say" |> List.head
+      holdKey say.MethodInfo |> Expect.equal "type and member" "LayoutOld.Say"
+      holdKey sameSay.MethodInfo |> Expect.notEqual "another class's Say is another entry" (holdKey say.MethodInfo)
+      holdKey (typeof<System.String>.GetMethod("Concat", [| typeof<string>; typeof<string> |])) |> Expect.equal "a static method keeps its bare name" "Concat"
+  ]

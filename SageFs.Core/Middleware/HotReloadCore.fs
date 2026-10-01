@@ -23,6 +23,14 @@ type Method = {
     FullName = m.Name :: modulePath |> Seq.rev |> String.concat "."
   }
 
+/// What `State.AppHolds` files a method under: its name for a module function, and the type's name and
+/// its own for an instance member, so a `Render` of one class and a `Render` of another (or of a module)
+/// are not the same entry.
+let holdKey (m: MethodInfo) : string =
+  match m.IsStatic with
+  | true -> m.Name
+  | false -> m.DeclaringType.Name + "." + m.Name
+
 /// Whether initial live-test discovery has been performed.
 [<RequireQualifiedAccess>]
 type LiveTestInit =
@@ -77,11 +85,28 @@ let getAllMethods (asm: Assembly) =
         | true -> currentPath
         | false -> t.Name :: currentPath
 
-      let methods =
+      let staticMethods =
         t.GetMethods()
         |> Array.filter (fun m -> m.IsStatic && not <| m.IsGenericMethod)
         |> Array.map (Method.make pathForChildren)
         |> Array.toList
+
+      // The instance members a class declares itself. Not the ones it inherits (every type "has" ToString),
+      // not a struct's (`this` is a byref there), not a generic type's, and not the ones the compiler wrote
+      // for an F# record or union (Equals, GetHashCode, CompareTo): those are not code the user edits.
+      let instanceMethods =
+        match t.IsClass && not t.IsGenericTypeDefinition with
+        | false -> []
+        | true ->
+          t.GetMethods(BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.DeclaredOnly)
+          |> Array.filter (fun m ->
+            not m.IsGenericMethod
+            && not m.IsAbstract
+            && not (m.IsDefined(typeof<CompilerGeneratedAttribute>, false)))
+          |> Array.map (Method.make pathForChildren)
+          |> Array.toList
+
+      let methods = staticMethods @ instanceMethods
 
       let nestedTypes =
         try
@@ -369,9 +394,12 @@ let accessorRole (m: Method) : AccessorRole =
     match m.FullName.LastIndexOf '.' with
     | -1 -> bare
     | dot -> m.FullName.Substring(0, dot + 1) + bare
-  match name.StartsWith("get_", StringComparison.Ordinal), name.StartsWith("set_", StringComparison.Ordinal) with
-  | true, _ -> AccessorRole.Getter(qualify (name.Substring 4))
-  | _, true -> AccessorRole.Setter(qualify (name.Substring 4))
+  // Only a MODULE's accessors are the pair of one mutable binding. An instance property's accessors are
+  // members of an object, which a patch re-points like any other member.
+  match m.MethodInfo.IsStatic, name.StartsWith("get_", StringComparison.Ordinal), name.StartsWith("set_", StringComparison.Ordinal) with
+  | false, _, _ -> AccessorRole.Plain
+  | true, true, _ -> AccessorRole.Getter(qualify (name.Substring 4))
+  | true, _, true -> AccessorRole.Setter(qualify (name.Substring 4))
   | _ -> AccessorRole.Plain
 
 /// The qualified bindings the RUNNING code can write to. It is the running
@@ -840,7 +868,7 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
         | DetourApplied.Ineffective _
         | DetourApplied.Superseded _ -> true
         | DetourApplied.Failed _ -> false
-      match landed, Map.tryFind older.MethodInfo.Name appHolds with
+      match landed, Map.tryFind (holdKey older.MethodInfo) appHolds with
       | true, Some held when held = older.MethodInfo -> Some older.FullName
       | _ -> None)
     |> List.distinct
@@ -1212,9 +1240,14 @@ let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newM
       && not (name = "get_it" || name = "set_it" || name = "get_asm")
 
     isDetourable newMethod
+    && existingMethod.MethodInfo.IsStatic = newMethod.MethodInfo.IsStatic
     && getParams existingMethod = getParams newMethod
     && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
     && existingMethod.FullName.EndsWith(newMethod.FullName, StringComparison.Ordinal)
+    // The new member is handed an object of the OLD type, so it is only the same member when the two types
+    // are laid out alike. When they are not, the save is refused by name (`refusals` in `handleNewAsmFromRepl`).
+    && (existingMethod.MethodInfo.IsStatic
+        || (layoutDifference existingMethod.MethodInfo.DeclaringType newMethod.MethodInfo.DeclaringType).IsNone)
   with
   | :? TypeLoadException as ex ->
     logger.LogDebug(
@@ -1290,19 +1323,16 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave:
         // `#load`ed file's app has moved on to an FSI copy, so the app's own
         // copy is silently never a detour target again.
         let appHoldsPairs =
-          newMethodsByName
-          |> Map.toList
-          |> List.collect (fun (name, methods) ->
-            match Map.tryFind name st.AppHolds with
-            | None -> []
-            | Some held ->
-              methods
-              |> List.filter (fun m -> not (known.Contains m.MethodInfo) && m.MethodInfo <> held)
-              |> List.choose (fun newest ->
-                let heldMethod = { MethodInfo = held; FullName = newest.FullName }
-                match compatibleForDetour logger heldMethod newest with
-                | true -> Some(heldMethod, newest)
-                | false -> None))
+          newMethods
+          |> List.filter (fun m -> not (known.Contains m.MethodInfo))
+          |> List.choose (fun newest ->
+            match Map.tryFind (holdKey newest.MethodInfo) st.AppHolds with
+            | Some held when held <> newest.MethodInfo ->
+              let heldMethod = { MethodInfo = held; FullName = newest.FullName }
+              match compatibleForDetour logger heldMethod newest with
+              | true -> Some(heldMethod, newest)
+              | false -> None
+            | _ -> None)
 
         (existingPairs @ appHoldsPairs)
         |> List.distinctBy (fun (older, newer) -> older.MethodInfo, newer.MethodInfo)
@@ -1315,7 +1345,30 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave:
     // pre-this-eval value) is what turns "something with this name moved"
     // into "the copy the app actually calls moved" — see
     // `DetourReport.ReachedRunningProcess`.
-    let report = applyDetourPlan logger st.AppHolds detourPlan
+    //
+    // An instance member the app holds a copy of, whose new type is laid out differently: the objects the
+    // app already built cannot run the new member, so the save is refused, and refused whole. One refusal
+    // stops every detour of the save, so the running app is left exactly as it was.
+    let refusals =
+      match hotReloadEnabled with
+      | false -> []
+      | true ->
+        newMethods
+        |> List.filter (fun m -> not (known.Contains m.MethodInfo) && not m.MethodInfo.IsStatic)
+        |> List.choose (fun newest ->
+          match Map.tryFind (holdKey newest.MethodInfo) st.AppHolds with
+          | Some held when held <> newest.MethodInfo ->
+            try
+              layoutDifference held.DeclaringType newest.MethodInfo.DeclaringType
+              |> Option.map (fun detail -> DetourRefusal.InstanceLayoutChanged(held.DeclaringType.Name, detail))
+            with :? TypeLoadException -> None
+          | _ -> None)
+        |> List.distinct
+
+    let report =
+      match refusals with
+      | [] -> applyDetourPlan logger st.AppHolds detourPlan
+      | _ -> DetourReport.empty
 
     // A file-save (`isFileSave`) is an ATTEMPT to reach whatever the app
     // already holds — it must never redefine what "held" means, or a failed
@@ -1327,23 +1380,28 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave:
     // touched — a name this eval's assembly-wide rescan re-offers unchanged
     // keeps whatever was already captured, rather than guessing from
     // re-scanned order.
+    //
+    // One exception, for a method that did not exist at all: a function a save ADDED has no compiled
+    // copy, so the first FSI copy is the only one anything calls, and it has to be remembered as
+    // the held copy or the next save of it would find nothing to re-point and read as ineffective.
+    let freshByKey =
+      newMethods
+      |> List.filter (fun m -> not (known.Contains m.MethodInfo))
+      |> List.groupBy (fun m -> holdKey m.MethodInfo)
     let appHolds =
-      match isFileSave with
-      | true -> st.AppHolds
-      | false ->
-        newMethodsByName
-        |> Map.fold
-          (fun acc name methods ->
-            match methods |> List.filter (fun m -> not (known.Contains m.MethodInfo)) with
-            | [] -> acc
-            | fresh -> Map.add name (List.last fresh).MethodInfo acc)
-          st.AppHolds
+      freshByKey
+      |> List.fold
+        (fun (acc: Map<string, MethodInfo>) (key, fresh) ->
+          match isFileSave, Map.containsKey key acc with
+          | true, true -> acc
+          | _ -> Map.add key (List.last fresh).MethodInfo acc)
+        st.AppHolds
 
     { st with
         LastAssembly = Some asm
         Methods = mergedMethods
         AppHolds = appHolds },
-    report
+    { report with Refusals = refusals }
 
 
 let getOpenModules (replCode: string) st =
