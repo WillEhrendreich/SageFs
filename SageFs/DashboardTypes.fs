@@ -58,6 +58,9 @@ module DomIds =
   let [<Literal>] FailureNarratives = "failure-narratives"
   let [<Literal>] AlarmBanner = "alarm-banner"
   let [<Literal>] CohortPanel = "cohort-panel"
+  let [<Literal>] HygienePanel = "hygiene-panel"
+  let [<Literal>] HygieneScan = "hygiene-scan"
+  let [<Literal>] HygieneTidy = "hygiene-tidy"
   let [<Literal>] CohortMatrix = "cohort-matrix"
   let [<Literal>] CohortTerritory = "cohort-territory"
   let [<Literal>] CohortLanes = "cohort-lanes"
@@ -150,6 +153,7 @@ module Signals =
   let [<Literal>] SessionContextFilesOpen = "sessionContextFilesOpen"
   let [<Literal>] ShadowedBindingsOpen = "shadowedBindingsOpen"
   let [<Literal>] CohortPanelOpen = "cohortPanelOpen"
+  let [<Literal>] HygienePanelOpen = "hygienePanelOpen"
   /// The cohort matrix's character-grid fallback (§6.5 "an image is not a
   /// document") — collapsed by default; the PNG picture is the primary view.
   let [<Literal>] CohortMatrixTextOpen = "cohortMatrixTextOpen"
@@ -1239,6 +1243,9 @@ type DashboardSnapshot = {
   /// (cohort-integration-plan.md Slice 4). Daemon-scoped: rendered
   /// identically regardless of which session (if any) is being viewed.
   CohortPanel: XmlNode
+  /// What agents left behind on the machine, and the plan to tidy it (workspace hygiene). Rendered from the
+  /// daemon's cached scan, so it costs nothing per push.
+  HygienePanel: XmlNode
   /// Active project selection for "Run App" feature.
   ActiveProject: string option
   /// Classification of all projects in the session.

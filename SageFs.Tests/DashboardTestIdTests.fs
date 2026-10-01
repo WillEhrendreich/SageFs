@@ -48,6 +48,7 @@ let private mkSnap () : DashboardSnapshot =
     LiveTestingPanel = renderLiveTestingPanel Features.LiveTestActivity.LiveTestActivity.Off
     FrictionPanel = Elem.div [] []
     CohortPanel = Elem.div [] []
+    HygienePanel = Elem.div [] []
     ActiveProject = None
     ProjectRoles = []
     App = AppRun.AppRunState.NotRunning

@@ -173,11 +173,40 @@ let take (loc: Locations) (live: LiveFacts) : Snapshot =
     Plan = plan
     Summary = summarize leftovers plan }
 
+[<RequireQualifiedAccess>]
+type RefreshState =
+  | NotRefreshing
+  | Refreshing
+
+[<RequireQualifiedAccess>]
+type TidyState =
+  | NotTidying
+  | Tidying
+
+/// What the last tidy did, in numbers a person reads.
+type TidySummary =
+  { Removed: int
+    AlreadyGone: int
+    Skipped: int
+    Failed: int
+    ReclaimedBytes: int64
+    At: DateTime }
+
+let summarizeReport (report: Report) : TidySummary =
+  let count (matches: StepResult -> bool) = report.Executed |> List.filter (fun e -> matches e.Result) |> List.length
+  { Removed = count (function | StepResult.Ran(Outcome.Done _) -> true | _ -> false)
+    AlreadyGone = count (fun r -> r = StepResult.AlreadyGone)
+    Skipped = count (function | StepResult.Skipped _ -> true | _ -> false)
+    Failed = count (function | StepResult.Ran(Outcome.Failed _) -> true | _ -> false)
+    ReclaimedBytes = report.ReclaimedBytes
+    At = DateTime.UtcNow }
+
 /// The last snapshot per repo, refreshed when something changes (daemon start, a session created or stopped), never
 /// on a timer. A reply reads it; it never scans.
 module Cache =
   let private snapshots = ConcurrentDictionary<string, Snapshot>()
   let private inFlight = ConcurrentDictionary<string, Task<Snapshot>>()
+  let private tidied = ConcurrentDictionary<string, TidySummary>()
 
   let tryGet (repo: string) : Snapshot option =
     match snapshots.TryGetValue repo with
@@ -186,28 +215,100 @@ module Cache =
 
   let put (snapshot: Snapshot) : unit = snapshots.[snapshot.Repo] <- snapshot
 
+  /// Whether a scan of this repo is running right now.
+  let refreshState (repo: string) : RefreshState =
+    match inFlight.ContainsKey repo with
+    | true -> RefreshState.Refreshing
+    | false -> RefreshState.NotRefreshing
+
+  let lastTidy (repo: string) : TidySummary option =
+    match tidied.TryGetValue repo with
+    | true, s -> Some s
+    | _ -> None
+
+  let setTidied (repo: string) (summary: TidySummary) : unit = tidied.[repo] <- summary
+  let clearTidied (repo: string) : unit = tidied.TryRemove repo |> ignore
+
+  let private failures = ConcurrentDictionary<string, string>()
+  let private tidying = ConcurrentDictionary<string, DateTime>()
+
+  /// Why the last scan of the repo failed, until a scan succeeds.
+  let lastFailure (repo: string) : string option =
+    match failures.TryGetValue repo with
+    | true, why -> Some why
+    | _ -> None
+
+  /// Mark a tidy running (or finished). The dashboard says so at once instead of waiting for it.
+  let beginTidy (repo: string) : unit = tidying.[repo] <- DateTime.UtcNow
+  let endTidy (repo: string) : unit = tidying.TryRemove repo |> ignore
+
+  let isTidying (repo: string) : TidyState =
+    match tidying.ContainsKey repo with
+    | true -> TidyState.Tidying
+    | false -> TidyState.NotTidying
+
   /// Refresh in the background. A refresh already running for the repo is joined, not repeated.
   let refresh (loc: Locations) (live: unit -> LiveFacts) : Task<Snapshot> =
-    inFlight.GetOrAdd(
-      loc.Repo,
-      fun repo ->
-        Task.Run(fun () ->
+    // The entry is in the table before the scan starts, so a scan that finishes at once cannot remove it first.
+    let mine = TaskCompletionSource<Snapshot>(TaskCreationOptions.RunContinuationsAsynchronously)
+    let current = inFlight.GetOrAdd(loc.Repo, mine.Task)
+    match obj.ReferenceEquals(current, mine.Task) with
+    | false -> current
+    | true ->
+      Task.Run(fun () ->
+        try
           try
             let snapshot = take loc (live ())
             put snapshot
-            snapshot
-          finally
-            inFlight.TryRemove repo |> ignore))
+            failures.TryRemove loc.Repo |> ignore
+            mine.SetResult snapshot
+          with ex ->
+            failures.[loc.Repo] <- ex.Message
+            mine.SetException ex
+        finally
+          inFlight.TryRemove(System.Collections.Generic.KeyValuePair(loc.Repo, mine.Task)) |> ignore)
+      |> ignore
+      mine.Task
 
-/// The one-line nudge for a reply, from the cached snapshot of the repo the working directory belongs to. Silent
-/// while there is no snapshot yet (it is being taken) or the workspace is tidy.
-let nudgeFor (workingDirectory: string) : string option =
+/// What the dashboard's hygiene panel shows, a closed set: no repository to look at, one not scanned yet, a scan
+/// running, or a scan with what the last tidy did.
+[<RequireQualifiedAccess>]
+type TidiedBefore =
+  | NothingTidiedYet
+  | Tidied of TidySummary
+
+[<RequireQualifiedAccess>]
+type HygieneView =
+  | NoRepository
+  | NotScanned of repo: string
+  | Scanning of repo: string
+  | Tidying of repo: string
+  | ScanFailed of repo: string * reason: string
+  | Scanned of Snapshot * TidiedBefore
+
+/// The view for the repo a session is in. Reads the cache; never scans.
+let viewFor (workingDirectory: string) : HygieneView =
   match mainRepoOf workingDirectory with
-  | None -> None
+  | None -> HygieneView.NoRepository
   | Some repo ->
-    match Cache.tryGet repo with
-    | None -> None
-    | Some snapshot -> nudge snapshot.Summary
+    match Cache.isTidying repo, Cache.refreshState repo, Cache.tryGet repo, Cache.lastFailure repo with
+    | TidyState.Tidying, _, _, _ -> HygieneView.Tidying repo
+    | _, RefreshState.Refreshing, _, _ -> HygieneView.Scanning repo
+    | _, _, None, Some reason -> HygieneView.ScanFailed(repo, reason)
+    | _, _, None, None -> HygieneView.NotScanned repo
+    | _, _, Some snapshot, _ ->
+      match Cache.lastTidy repo with
+      | Some summary -> HygieneView.Scanned(snapshot, TidiedBefore.Tidied summary)
+      | None -> HygieneView.Scanned(snapshot, TidiedBefore.NothingTidiedYet)
+
+/// What a person sees as the facts the scan could not read off the disk, from the sessions the daemon runs and who
+/// made them (a tracker that knows which connections are still around, or none: then everyone is assumed to be).
+let liveFactsWith (sessions: (string * string) list) (tracker: AgentActivityTracker.Tracker option) : LiveFacts =
+  let isConnected (connectionId: string) =
+    match tracker with
+    | Some t -> AgentActivityTracker.getPresence t connectionId |> Option.isSome
+    | None -> true
+  liveFactsOf sessions (OwnerLedger.read DaemonState.SageFsDir) isConnected
 
 // ─── Tidy ───────────────────────────────────────────────────────────────
 
@@ -225,11 +326,16 @@ let tidy (loc: Locations) (live: unit -> LiveFacts) (shown: PlanId) : TidyOutcom
   match Confirmation.safeOnly plan shown with
   | Result.Error error -> TidyOutcome.NotConfirmed(error, plan)
   | Result.Ok confirmation ->
-    let effects = HygieneEdge.effects (HygieneEdge.realContext loc live)
-    let report = Executor.run effects (rootsOf loc) confirmation plan
-    let after = take loc (live ())
-    Cache.put after
-    TidyOutcome.Tidied(report, after)
+    Cache.beginTidy loc.Repo
+    try
+      let effects = HygieneEdge.effects (HygieneEdge.realContext loc live)
+      let report = Executor.run effects (rootsOf loc) confirmation plan
+      let after = take loc (live ())
+      Cache.put after
+      Cache.setTidied loc.Repo (summarizeReport report)
+      TidyOutcome.Tidied(report, after)
+    finally
+      Cache.endTidy loc.Repo
 
 /// The host cache's own housekeeping: prune hosts nobody has used for `DataRetention.hostCacheMaxAge` that are not the
 /// newest of an SDK the daemon resolves and that no process runs from. Same planner, same confirmation, same

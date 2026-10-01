@@ -71,6 +71,7 @@
         <Compile Include="HygieneGatherTests.fs" />
         <Compile Include="HygieneExecuteTests.fs" />
         <Compile Include="HygieneSurfaceTests.fs" />
+        <Compile Include="HygienePanelTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />
         <Compile Include="MemberTableTests.fs" />
         <Compile Include="CrossCheckoutOverlapTests.fs" />

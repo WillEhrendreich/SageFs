@@ -12,15 +12,12 @@ open SageFs.WorkspaceHygiene
 open SageFs.WorkspaceHygieneRender
 open SageFs.HygieneGather
 
-let private dataDir () : string = DaemonState.SageFsDir
-
 /// What the daemon knows that a scan of the disk cannot: its sessions, who created them, who is still connected.
 let liveFactsOf (ctx: McpContext) : Task<LiveFacts> =
   task {
     let! sessions = ctx.SessionOps.GetAllSessions()
     let pairs = sessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id, s.WorkingDirectory)
-    let isConnected (connectionId: string) = AgentActivityTracker.getPresence ctx.ActivityTracker connectionId |> Option.isSome
-    return HygieneService.liveFactsOf pairs (HygieneService.OwnerLedger.read (dataDir ())) isConnected
+    return HygieneService.liveFactsWith pairs (Some ctx.ActivityTracker)
   }
 
 /// The repository a call is about: the working directory it names, else the one repository its live sessions are in.
