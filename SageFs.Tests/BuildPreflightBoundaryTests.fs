@@ -10,6 +10,8 @@ open SageFs
 open SageFs.WorkerProtocol
 open SageFs.Server.DaemonMode
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private silentLogger =
   { new SageFs.Utils.ILogger with
       member _.LogInfo _ = ()
@@ -47,7 +49,7 @@ let tests =
       let ops = createSessionOps mailbox (fun () -> SessionManager.QuerySnapshot.empty) manifest
       try
         let create = ops.CreateSession [ SessionProjectTarget.Project project ] dir WorkflowTypes.SessionWorkflow.Interactive
-        let! completed = Task.WhenAny(create, Task.Delay 2000)
+        let! completed = Task.WhenAny(create, Task.Delay TestTimeouts.patienceTight)
         if not (obj.ReferenceEquals(completed, create :> Task)) then
           failtest "session create reached the mailbox instead of returning NeedsRebuild"
         let! result = create

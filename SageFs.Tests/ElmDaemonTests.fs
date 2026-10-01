@@ -9,6 +9,8 @@ open SageFs.WorkerProtocol
 open SageFs.Features.Diagnostics
 open SageFs.Tests.SharedGenerators
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// Test helpers for ElmDaemon
 module ElmDaemonTestHelpers =
 
@@ -178,7 +180,7 @@ let elmDaemonTests =
 
         runtime.Dispatch (
           SageFsMsg.Event (TuiEvent.EvalStarted ("s", "dispatched-code")))
-        let! _ = Tasks.Task.WhenAny(reached.Task, Tasks.Task.Delay 5000)
+        let! _ = Tasks.Task.WhenAny(reached.Task, Tasks.Task.Delay TestTimeouts.patienceBrief)
         reached.Task.IsCompleted
         |> Expect.isTrue "the dispatched message should reach the model"
       }
@@ -242,7 +244,7 @@ let elmDaemonTests =
           SageFsMsg.Editor (
             EditorAction.Submit))
 
-        let! _ = Tasks.Task.WhenAny(evalRequested.Task, Tasks.Task.Delay 5000)
+        let! _ = Tasks.Task.WhenAny(evalRequested.Task, Tasks.Task.Delay TestTimeouts.patienceBrief)
         evalRequested.Task.IsCompleted
         |> Expect.isTrue "the effect handler should send the eval to the worker"
       }

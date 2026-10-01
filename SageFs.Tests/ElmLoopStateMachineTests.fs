@@ -7,6 +7,8 @@ open System.Threading
 open System.Threading.Tasks
 open SageFs
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 type TestModel = { Count: int; Log: string list }
 type TestMsg = Increment | Decrement | AddLog of string | Reset | TriggerEffect of string
 type TestEffect = LogEffect of string | DelayedMsg of TestMsg
@@ -20,7 +22,7 @@ let waitForAsync (condition: unit -> bool) (timeoutMs: int) =
     let mutable ok = false
     while not ok && sw.ElapsedMilliseconds < int64 timeoutMs do
       if condition () then ok <- true
-      else do! Task.Delay 10
+      else do! Task.Delay TestTimeouts.pollTight
     return ok
   }
 
@@ -139,7 +141,7 @@ let elmLoopStateMachineTests =
 
       cts.Cancel()
       // Give drain thread time to exit
-      do! Task.Delay 50
+      do! Task.Delay TestTimeouts.settle
       // Dispatching after cancellation should not throw
       rt.Dispatch Increment
       rt.Dispatch Decrement

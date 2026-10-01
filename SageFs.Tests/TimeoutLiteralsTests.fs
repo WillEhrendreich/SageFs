@@ -25,11 +25,7 @@ let private budgets : (string * int) list =
   [ "SageFs.Tests/AffordancesMutationTests.fs", 12
     "SageFs.Tests/AffordancesPropertyTests.fs", 1
     "SageFs.Tests/AgentActivityTrackerTests.fs", 3
-    "SageFs.Tests/AppRunOrchestrationTests.fs", 4
-    "SageFs.Tests/AppRunnerTests.fs", 2
-    "SageFs.Tests/BatchFlusherTests.fs", 1
     "SageFs.Tests/BinaryFormatTests.fs", 8
-    "SageFs.Tests/BuildPreflightBoundaryTests.fs", 1
     "SageFs.Tests/CohortDogfoodIntegrationTests.fs", 1
     "SageFs.Tests/CohortLandingGitAcceptanceTests.fs", 2
     "SageFs.Tests/CohortMcpToolsIntegrationTests.fs", 1
@@ -49,32 +45,20 @@ let private budgets : (string * int) list =
     "SageFs.Tests/DashboardDisconnectIndicatorBrowserTests.fs", 3
     "SageFs.Tests/DashboardFailureNarrativesTests.fs", 4
     "SageFs.Tests/DashboardHealthTests.fs", 16
-    "SageFs.Tests/DevReloadTests.fs", 5
     "SageFs.Tests/DiagnosticianTests.fs", 1
-    "SageFs.Tests/DiagnosticsToolTests.fs", 1
     "SageFs.Tests/DstCoverageTests.fs", 7
     "SageFs.Tests/DstOracleTests.fs", 5
     "SageFs.Tests/DstSeedCorpusTests.fs", 1
-    "SageFs.Tests/ElmDaemonTests.fs", 2
-    "SageFs.Tests/ElmLoopResilienceTests.fs", 4
-    "SageFs.Tests/ElmLoopStateMachineTests.fs", 2
-    "SageFs.Tests/EntryProbeTests.fs", 4
-    "SageFs.Tests/EvalLatencyTraceTests.fs", 3
     "SageFs.Tests/EventExhaustivenessTests.fs", 2
     "SageFs.Tests/FalcoTests.fs", 1
     "SageFs.Tests/FlakyClassificationPropertyTests.fs", 2
     "SageFs.Tests/FlakyClassificationTests.fs", 5
-    "SageFs.Tests/FsiHostClientTests.fs", 6
-    "SageFs.Tests/GateAdmissionTests.fs", 5
     "SageFs.Tests/GcDumpCaptureTests.fs", 3
-    "SageFs.Tests/HealthSignalWiringTests.fs", 2
     "SageFs.Tests/HealthWatchWiringTests.fs", 2
     "SageFs.Tests/HotReloadBrowserTests.fs", 11
     "SageFs.Tests/HotReloadStateHarness.fs", 9
     "SageFs.Tests/HotReloadStateOutcomeTests.fs", 1
     "SageFs.Tests/HttpApiIntegrationTests.fs", 23
-    "SageFs.Tests/HttpOriginGuardTests.fs", 1
-    "SageFs.Tests/InlinedCalleeOutcomeTests.fs", 1
     "SageFs.Tests/JsonCoreFilesTests.fs", 2
     "SageFs.Tests/LandingCacheTests.fs", 2
     "SageFs.Tests/LifecyclePropertyTests.fs", 1

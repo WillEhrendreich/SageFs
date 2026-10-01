@@ -18,6 +18,8 @@ open Microsoft.Extensions.Hosting
 open SageFs.DevReload
 open SageFs
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 // ============================================================================
 // Property-based tests (FsCheck) — intent-surfacing
 // ============================================================================
@@ -573,7 +575,7 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
     })) |> ignore
     let cts = new CancellationTokenSource()
     let runTask = app.RunAsync(cts.Token)
-    do! Task.Delay(1000)
+    do! Task.Delay(TestTimeouts.startSettle)
     let addresses =
       (app :> IHost).Services.GetRequiredService<IServer>()
       |> fun s -> s.Features.Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()
@@ -586,7 +588,7 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
     body |> Expect.stringContains "should have body close" "</body>"
     client.Dispose()
     cts.Cancel()
-    do! app.StopAsync(TimeSpan.FromSeconds 5.0)
+    do! app.StopAsync(TestTimeouts.patienceBrief)
     do! (app :> IAsyncDisposable).DisposeAsync().AsTask()
     try do! runTask with _ -> ()
   }
@@ -607,7 +609,7 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
     })) |> ignore
     let cts = new CancellationTokenSource()
     let runTask = app.RunAsync(cts.Token)
-    do! Task.Delay(1000)
+    do! Task.Delay(TestTimeouts.startSettle)
     let addresses =
       (app :> IHost).Services.GetRequiredService<IServer>()
       |> fun s -> s.Features.Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()
@@ -632,7 +634,7 @@ let pipelineOrderingTests = testList "DevReload.PipelineOrdering" [
       ()
     client.Dispose()
     cts.Cancel()
-    do! app.StopAsync(TimeSpan.FromSeconds 5.0)
+    do! app.StopAsync(TestTimeouts.patienceBrief)
     do! (app :> IAsyncDisposable).DisposeAsync().AsTask()
     try do! runTask with _ -> ()
   }
@@ -861,7 +863,7 @@ let fileWatcherResilienceTests = testSequenced <| testList "FileWatcher resilien
           reported.TrySetResult change.FilePath |> ignore)
       try
         do! File.WriteAllTextAsync(Path.Combine(tempDir, "Probe.fs"), "module Probe")
-        let! _ = System.Threading.Tasks.Task.WhenAny(reported.Task, System.Threading.Tasks.Task.Delay 10_000)
+        let! _ = System.Threading.Tasks.Task.WhenAny(reported.Task, System.Threading.Tasks.Task.Delay TestTimeouts.patienceInProcess)
         reported.Task.IsCompleted
         |> Expect.isTrue "a .fs file written in the valid directory should be reported"
         let! (path: string) = reported.Task

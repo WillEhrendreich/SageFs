@@ -33,6 +33,10 @@ let private hostBuild : Lazy<string * int> =
        | Result.Ok(Reused dll) -> dll, int (sdk.Split('.').[0])
        | Result.Error reason -> failwith (describeBuildError reason))
 
+/// Code that sleeps for `TestTimeouts.runawayEval`, for the tests that must interrupt or kill it.
+let private runawayEvalCode =
+  sprintf "System.Threading.Thread.Sleep %d;;" (int TestTimeouts.runawayEval.TotalMilliseconds)
+
 type private Started =
   { Session: FsiHostSession
     Output: ConcurrentQueue<string> }
@@ -135,12 +139,12 @@ let tests =
         do!
           withHost (fun started ->
             async {
-              use cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds 700.0)
+              use cancel = new CancellationTokenSource(TestTimeouts.cancelAfter)
               let stopwatch = Stopwatch.StartNew()
-              match! started.Session.Eval("System.Threading.Thread.Sleep 60000;;", cancel.Token) with
+              match! started.Session.Eval(runawayEvalCode, cancel.Token) with
               | Completed(EvalInterrupted, _) -> ()
               | other -> failtestf "expected EvalInterrupted, got %A" other
-              Expect.isLessThan "interrupted long before the sleep would end" (stopwatch.Elapsed, TimeSpan.FromSeconds 20.0)
+              Expect.isLessThan "interrupted long before the sleep would end" (stopwatch.Elapsed, TestTimeouts.patience)
               do! evalOk started.Session "1 + 1;;"
             })
       }
@@ -149,10 +153,10 @@ let tests =
         do!
           withHost (fun started ->
             async {
-              let running = started.Session.Eval("System.Threading.Thread.Sleep 60000;;", CancellationToken.None) |> Async.StartAsTask
+              let running = started.Session.Eval(runawayEvalCode, CancellationToken.None) |> Async.StartAsTask
               do! Async.Sleep 500
               Process.GetProcessById(started.Session.ProcessId).Kill true
-              let! finished = Task.WhenAny(running, Task.Delay(TimeSpan.FromSeconds 20.0)) |> Async.AwaitTask
+              let! finished = Task.WhenAny(running, Task.Delay(TestTimeouts.patience)) |> Async.AwaitTask
               Expect.isTrue "the pending eval completed" (obj.ReferenceEquals(finished, running))
               match running.Result with
               | HostLost _ -> ()
@@ -167,7 +171,7 @@ let tests =
         let! started = startHost ()
         let pid = started.Session.ProcessId
         (started.Session :> IDisposable).Dispose()
-        let! finished = Task.WhenAny(started.Session.Exited, Task.Delay(TimeSpan.FromSeconds 20.0)) |> Async.AwaitTask
+        let! finished = Task.WhenAny(started.Session.Exited, Task.Delay(TestTimeouts.patience)) |> Async.AwaitTask
         Expect.isTrue "Exited completed" (obj.ReferenceEquals(finished, started.Session.Exited))
         Expect.isTrue "no process left behind" (try Process.GetProcessById(pid).HasExited with :? ArgumentException -> true)
       }

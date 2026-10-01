@@ -27,6 +27,8 @@ open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 [<Tests>]
 let healthSignalWiringTests =
   testList "The other three signals reach their sink, not just exist as sampling code" [
@@ -35,12 +37,12 @@ let healthSignalWiringTests =
       let! result =
         SageFs.Server.McpServer.timeHealthLatency observed.Add (fun () ->
           task {
-            do! Task.Delay 20
+            do! Task.Delay TestTimeouts.timedWork
             return "health-payload"
           })
       result |> Expect.equal "the wrapped work's own result still comes back" "health-payload"
       observed |> Expect.hasLength "exactly one reading per call" 1
-      (observed.[0], 20.0) |> Expect.isGreaterThanOrEqual "the Task.Delay(20) really elapsed"
+      (observed.[0], TestTimeouts.timedWork.TotalMilliseconds) |> Expect.isGreaterThanOrEqual "the delay inside the timed work really elapsed"
     }
 
     testCase "MailboxQueueDepth: DaemonMode.sampleMailboxQueueDepth reports the same counter checkMailboxAdmission reads"

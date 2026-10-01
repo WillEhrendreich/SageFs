@@ -5,6 +5,8 @@ open Expecto.Flip
 open SageFs
 open System.Threading
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 [<Tests>]
 let batchFlusherTests = testList "BatchFlusher never loses items and respects capacity" [
 
@@ -53,7 +55,7 @@ let batchFlusherTests = testList "BatchFlusher never loses items and respects ca
     // Poll up to 3 seconds (CI has ~10× variance vs dev machine under ThreadPool pressure)
     let deadline = System.Diagnostics.Stopwatch.GetTimestamp() + System.Diagnostics.Stopwatch.Frequency * 3L
     while flushed.Count = 0 && System.Diagnostics.Stopwatch.GetTimestamp() < deadline do
-      Thread.Sleep(20)
+      Thread.Sleep(TestTimeouts.pollFlush)
     (flushed.Count, 1) |> Expect.isGreaterThanOrEqual "timer flushed at least once within 3s"
     flushed.[0] |> Expect.sequenceEqual "contains the item" [|7|]
   }

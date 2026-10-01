@@ -10,6 +10,8 @@ open SageFs.WorkerProtocol
 open SageFs.AppRun
 open SageFs.ProjectLoading
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private sid =
   match SessionId.validate "0a0b0c0d" with
   | Ok id -> id
@@ -19,7 +21,7 @@ let private web = "/src/Web/Web.fsproj"
 let private api = "/src/Api/Api.fsproj"
 let private at = DateTime(2026, 9, 10, 12, 0, 0, DateTimeKind.Utc)
 let private clock () = at
-let private readyTimeout = TimeSpan.FromSeconds 5.0
+let private readyTimeout = TestTimeouts.handedReadyBound
 
 let private exe (path: string) : ClassifiedProject =
   { Path = path; Role = ProjectRole.Executable; PackageRefs = []; LoadMode = LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
@@ -307,7 +309,7 @@ let restartForChangesTests =
     ops, settleOn pick r
   let within (t: Task<AppRunState>) =
     task {
-      let! first = Task.WhenAny(t :> Task, Task.Delay(TimeSpan.FromSeconds 10.))
+      let! first = Task.WhenAny(t :> Task, Task.Delay(TestTimeouts.patienceInProcess))
       (first = (t :> Task)) |> Expect.isTrue "the restart reaches its final state instead of hanging"
       return t.Result
     }
@@ -414,7 +416,7 @@ let runOwnershipTests =
   let typeChange = SageFs.Features.ReloadPlanning.ReloadChange.TypeChanged "TodoItem"
   let within (label: string) (t: Task) =
     task {
-      let! first = Task.WhenAny(t, Task.Delay(TimeSpan.FromSeconds 10.))
+      let! first = Task.WhenAny(t, Task.Delay(TestTimeouts.patienceInProcess))
       (first = t) |> Expect.isTrue label
     }
   testList "AppRunOrchestration run ownership" [
@@ -519,7 +521,7 @@ let runOwnershipTests =
 let lostWatchTests =
   let within (label: string) (t: Task<AppRunState>) =
     task {
-      let! first = Task.WhenAny(t :> Task, Task.Delay(TimeSpan.FromSeconds 10.))
+      let! first = Task.WhenAny(t :> Task, Task.Delay(TestTimeouts.patienceInProcess))
       (first = (t :> Task)) |> Expect.isTrue label
       return t.Result
     }

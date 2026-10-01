@@ -25,6 +25,8 @@ open SageFs.Server
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 [<Tests>]
 let evalLatencyTraceTests = testList "EvalLatencyTrace" [
 
@@ -37,7 +39,7 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
   testCase "WHY (worker-side) — Requested/Finished alone never enters the ring — MorphWritten never fires inside the worker process, so this sample stays in flight forever on the worker's own tracker" <| fun _ ->
     let tracker = EvalLatencyTrace.Tracker(256)
     tracker.StampRequested() |> ignore
-    System.Threading.Thread.Sleep(2)
+    System.Threading.Thread.Sleep(TestTimeouts.measurableGap)
     tracker.StampFinished()
     tracker.Snapshot() |> Expect.equal "nothing completed — the worker never reaches MorphWritten" []
 
@@ -46,7 +48,7 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
     tracker.StampModelChanged()
     // A real, small, measurable gap — not a mock clock — so this proves the
     // Stopwatch-based math actually elapses time, not just that fields got set.
-    System.Threading.Thread.Sleep(2)
+    System.Threading.Thread.Sleep(TestTimeouts.measurableGap)
     tracker.StampPushReceived()
     tracker.StampMorphWritten()
     let snapshot = tracker.Snapshot()
@@ -75,7 +77,7 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
     // Push/Morph — it would linger forever if ModelChanged merged instead
     // of restarting.
     tracker.StampModelChanged()
-    System.Threading.Thread.Sleep(50)
+    System.Threading.Thread.Sleep(TestTimeouts.settle)
     // Second ModelChanged: this is the one a now-connected client's push
     // agent will actually observe and render.
     tracker.StampModelChanged()

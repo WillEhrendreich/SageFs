@@ -170,7 +170,7 @@ let accumulatedDiagnosticsTests =
         let uniqueCode = sprintf "let eventTest_%d: int = \"wrong\"" (System.Random.Shared.Next())
         let! _diags = result.Actor.PostAndAsyncReply(fun rc -> GetDiagnostics(uniqueCode, rc))
         // Give the event a moment to fire (it's synchronous in the actor loop, but subscription is async)
-        do! System.Threading.Tasks.Task.Delay(50)
+        do! System.Threading.Tasks.Task.Delay(TestTimeouts.settle)
         received
         |> Option.isSome
         |> Expect.isTrue "DiagnosticsChanged event should have fired"

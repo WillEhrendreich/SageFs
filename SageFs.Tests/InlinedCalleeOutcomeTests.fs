@@ -112,7 +112,7 @@ let private settled (applied: Applied) : Async<WatchStep> =
     match PatchConfirmation.start (watchedOfLanded applied.Landed applied.Report.DetourReport.Probes) applied.Planned with
     | Begun.NothingToWatch o -> return failtestf "a planner-confirmed patch must be watched, got %A" o
     | Begun.Watching(_, watch) ->
-      let! reading = applied.Agent.AwaitEntries(probesOf watch, TimeSpan.FromMilliseconds 300.0)
+      let! reading = applied.Agent.AwaitEntries(probesOf watch, SageFs.Tests.TestInfrastructure.TestTimeouts.entryAwaitBound)
       return settle reading watch
   }
 

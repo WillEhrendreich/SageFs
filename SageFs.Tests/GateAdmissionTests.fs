@@ -16,6 +16,8 @@ open SageFs.McpTools
 open SageFs.Server.McpTools
 open SageFs.WorkerProtocol
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 let private workingDirectory = "/work/gate-admission"
 
 /// A session with a fake worker. Every registry lookup and worker message lands
@@ -129,7 +131,7 @@ let tests =
 
     testTask "a gated eval resolves the session once and asks the worker for status once before evaluating" {
       let h = mkHarness answersReady
-      let! verdict = admit h (TimeSpan.FromSeconds 5.0)
+      let! verdict = admit h Timeouts.gateStatusProbe
       let! _ = runAdmitted (admitted verdict) (fun () -> sendCode h)
       entries h "GetAllSessions"
       |> Expect.equal "the working directory was matched against the registry once, by the gate" 1
@@ -148,7 +150,7 @@ let tests =
 
     testTask "the gate's admission is cleared once the body has run" {
       let h = mkHarness answersReady
-      let! verdict = admit h (TimeSpan.FromSeconds 5.0)
+      let! verdict = admit h Timeouts.gateStatusProbe
       let! _ = runAdmitted (admitted verdict) (fun () -> sendCode h)
       let! _ = sendCode h
       entries h "GetAllSessions"
@@ -157,7 +159,7 @@ let tests =
 
     testTask "an admission for a different call is not reused" {
       let h = mkHarness answersReady
-      let! verdict = admitToolCallWithin (TimeSpan.FromSeconds 5.0) h.Ctx "mcp" None None "send_fsharp_code"
+      let! verdict = admitToolCallWithin Timeouts.gateStatusProbe h.Ctx "mcp" None None "send_fsharp_code"
       let! _ = runAdmitted (admitted verdict) (fun () -> sendCode h)
       (entries h "GetAllSessions", 2)
       |> Expect.isGreaterThanOrEqual "the gate looked at no working directory, the body looked at one, so the body resolved again"
@@ -165,8 +167,8 @@ let tests =
 
     testTask "a hung worker is refused within the probe bound and the session is not marked Faulted" {
       let h = mkHarness neverAnswers
-      let probe = admit h (TimeSpan.FromMilliseconds 200.0)
-      let! winner = Task.WhenAny(probe, Task.Delay(TimeSpan.FromSeconds 10.0))
+      let probe = admit h TestTimeouts.hungProbeBound
+      let! winner = Task.WhenAny(probe, Task.Delay(TestTimeouts.patienceInProcess))
       Object.ReferenceEquals(winner, probe)
       |> Expect.isTrue "the gate answered instead of waiting on the worker"
       match probe.Result with

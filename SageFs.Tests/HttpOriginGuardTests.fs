@@ -15,6 +15,8 @@ open Microsoft.AspNetCore.Hosting
 open Microsoft.AspNetCore.Http
 open SageFs.Server
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 // The daemon's listeners: MCP and dashboard.
 let private mcpPort = 37749
 let private dashboardPort = 37750
@@ -261,7 +263,7 @@ let private post
     req.Content <- content
     for (name, value) in headers do
       req.Headers.TryAddWithoutValidation(name, value) |> ignore
-    use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds 20.0)
+    use cts = new Threading.CancellationTokenSource(TestTimeouts.patience)
     return! guardClient.SendAsync(req, cts.Token)
   }
 

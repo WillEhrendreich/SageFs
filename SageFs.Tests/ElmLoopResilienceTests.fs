@@ -8,6 +8,8 @@ open SageFs.Utils
 open System.Collections.Concurrent
 open System.Collections.Generic
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// Await a condition with a hard ceiling, without sleep-polling.
 /// The ElmLoop drain runs on a dedicated thread, so the async yield never
 /// starves the loop; returns true only when the condition was satisfied before
@@ -18,14 +20,14 @@ let waitForAsync (condition: unit -> bool) (timeoutMs: int) =
     let mutable ok = false
     while not ok && sw.ElapsedMilliseconds < int64 timeoutMs do
       if condition () then ok <- true
-      else do! Task.Delay 10
+      else do! Task.Delay TestTimeouts.pollTight
     return ok
   }
 
 /// Fixed bounded settle window for negative assertions (nothing-more-happens
 /// checks). A short delay is the only way to assert the absence of an event.
 let settleAsync () =
-  Task.Delay 50
+  Task.Delay TestTimeouts.settle
 
 type CoalescingMsg =
   | Gate
@@ -407,7 +409,7 @@ let elmLoopAlarmTests =
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
       rt.Dispatch 1
-      let! _ = Task.WhenAny(effSignal.Task, Task.Delay 2000)
+      let! _ = Task.WhenAny(effSignal.Task, Task.Delay TestTimeouts.patienceTight)
       let! fired = waitForAsync (fun () -> alarms |> Seq.exists (fun (p, _) -> p = "effect")) 2000
       fired |> Expect.isTrue "effect alarm should fire"
       let effectAlarms = alarms |> Seq.filter (fun (p, _) -> p = "effect") |> Seq.toList
@@ -485,7 +487,7 @@ let elmLoopBackpressureTests =
       rt.Dispatch 1                              // wake drain; model=0 hits gate
       let! _ = drainStarted.WaitAsync(2000)      // drain is now inside Update holding lock
       for _ in 1..300 do rt.Dispatch 1          // 300 msgs pile into ConcurrentQueue
-      do! Task.Delay 50                          // let all enqueues settle
+      do! Task.Delay TestTimeouts.settle         // let all enqueues settle
       releaseGate.Set()                          // unblock drain
 
       let! drained = waitForAsync (fun () -> processed.Count >= 301) 15000

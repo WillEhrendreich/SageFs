@@ -56,7 +56,7 @@ let private primaryUrl (state: AppRunState) =
   | other -> failtestf "expected a running web app, got %A" other
 
 let private getBody (url: string) = task {
-  use client = new HttpClient(Timeout = TimeSpan.FromSeconds 5.)
+  use client = new HttpClient(Timeout = TestTimeouts.httpProbe)
   return! client.GetStringAsync(url)
 }
 
@@ -272,7 +272,7 @@ let requireRestartTests =
         | other -> failtestf "expected Running, got %A" other
       let waiting = AppRunner.awaitChange runner runId CancellationToken.None
       let! _ = AppRunner.requireRestart runner typeChange [] SageFs.GranularRestart.RestartSubject.Worker (SageFs.LiveCount.Unconsulted "no liveness source in this test") (SageFs.MigrationWorth.NoValueToMigrate "no boundary declared a migration in this test")
-      let! first = Task.WhenAny(waiting :> Task, Task.Delay(TimeSpan.FromSeconds 10.))
+      let! first = Task.WhenAny(waiting :> Task, Task.Delay(TestTimeouts.patienceInProcess))
       (first = (waiting :> Task)) |> Expect.isTrue "the long-poll settles instead of waiting forever"
       match waiting.Result with
       | AppRunState.RestartRequired _ -> ()

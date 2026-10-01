@@ -11,6 +11,8 @@ open Expecto
 open Expecto.Flip
 open SageFs.Middleware.EntryProbes
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 type ProbeTargets =
   [<MethodImpl(MethodImplOptions.NoInlining)>]
   static member Double(x: int) : int = x * 2
@@ -67,7 +69,7 @@ let tests =
         let registry = ProbeRegistry(fun _ -> TaskCompletionSource<unit>().Task :> Task)
         let probe = registry.Allocate "App.render"
         registry.Enter probe.Id
-        let! reading = registry.Await([ probe.Id ], TimeSpan.FromHours 1.0) |> Async.StartAsTask
+        let! reading = registry.Await([ probe.Id ], TestTimeouts.unreachedBound) |> Async.StartAsTask
         statusOf reading probe.Id |> Expect.equal "already seen" ProbeStatus.Entered
       }
 
@@ -75,7 +77,7 @@ let tests =
         let neverElapses = TaskCompletionSource<unit>()
         let registry = ProbeRegistry(fun _ -> neverElapses.Task :> Task)
         let probe = registry.Allocate "App.render"
-        let waiting = registry.Await([ probe.Id ], TimeSpan.FromHours 1.0) |> Async.StartAsTask
+        let waiting = registry.Await([ probe.Id ], TestTimeouts.unreachedBound) |> Async.StartAsTask
         waiting.IsCompleted |> Expect.isFalse "nothing has run, so it is still waiting"
         registry.Enter probe.Id
         let! reading = waiting
@@ -88,7 +90,7 @@ let tests =
         let ran = registry.Allocate "App.a"
         let silent = registry.Allocate "App.b"
         registry.Enter ran.Id
-        let waiting = registry.Await([ ran.Id; silent.Id ], TimeSpan.FromSeconds 10.0) |> Async.StartAsTask
+        let waiting = registry.Await([ ran.Id; silent.Id ], SageFs.Timeouts.patchConfirmation) |> Async.StartAsTask
         waiting.IsCompleted |> Expect.isFalse "one probe is still silent, so it keeps waiting"
         bound.SetResult()
         let! reading = waiting
@@ -99,7 +101,7 @@ let tests =
       testTask "WHY — superseding a silent probe ends the wait for it, because it will never run" {
         let registry = ProbeRegistry(fun _ -> TaskCompletionSource<unit>().Task :> Task)
         let old = registry.Allocate "App.render"
-        let waiting = registry.Await([ old.Id ], TimeSpan.FromHours 1.0) |> Async.StartAsTask
+        let waiting = registry.Await([ old.Id ], TestTimeouts.unreachedBound) |> Async.StartAsTask
         let newer = registry.Allocate "App.render"
         registry.Commit newer
         let! reading = waiting
