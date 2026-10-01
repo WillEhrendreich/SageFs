@@ -12,10 +12,37 @@ open Microsoft.FSharp.Reflection
 /// records, lists, maps, unions, tuples and class properties are expanded.
 module LiveValueTree =
 
+  /// What the walk is allowed to run. Reading a record, a union, a tuple, a list or a map runs none of the
+  /// user's code, so every mode shows those the same way. The modes differ on a class instance and on a
+  /// lazy sequence, where looking at the value can mean running something.
+  [<RequireQualifiedAccess>]
+  type WalkMode =
+    /// Fields are read. A getter runs only when its compiled body can do nothing: a field read, a
+    /// constant, or straight-line arithmetic. Every other getter shows as "not evaluated", with why.
+    | Safe
+    /// Every readable public property runs, as the walk always did. The caller bounds it with a deadline.
+    | Everything
+    /// A class instance is collapsed and nothing of it is read.
+    | Off
+
+  /// Why a value was listed but not read. The row says so, never leaving it blank.
+  [<RequireQualifiedAccess>]
+  type NotEvaluatedReason =
+    /// The getter calls other code, which could take any time or change something.
+    | GetterRunsCode
+    /// The getter's body loops or calls itself, so reading it may never return.
+    | GetterLoops
+    /// A lazy sequence: enumerating it runs the code that produces it.
+    | SequenceNotEnumerated
+    /// The walk is in `Off` mode, which does not open class instances.
+    | ClassesCollapsed
+
   /// How a node's value should be rendered / expanded.
   [<RequireQualifiedAccess>]
   type NodeKind =
     | Leaf
+    /// Listed, not read. `Preview` says what the value is, the reason says why it was left alone.
+    | NotEvaluated of reason: NotEvaluatedReason
     | Record
     | List
     | Map
@@ -99,6 +126,257 @@ module LiveValueTree =
     | :? string as s -> s
     | _ -> truncateString (string value)
 
+  // ── What a getter's compiled body does ────────────────────────────
+  //
+  // A property getter is the user's code. Whether running it can hang, loop, overflow the stack or
+  // change something is a question about its compiled body, and the body is right there as IL. So the
+  // walk reads the IL once per getter and sorts it into one of the shapes below. The sort is
+  // conservative: an opcode it does not know is "calls other code", and so is a body it cannot read.
+
+  /// What a property getter's compiled body does.
+  [<RequireQualifiedAccess>]
+  type GetterShape =
+    /// `ldarg.0; ldfld f; ret`: returns a field. Reading the field shows the same value.
+    | ReturnsField of fieldName: string
+    /// Loads a literal and returns it.
+    | ReturnsConstant
+    /// Arithmetic and field reads with no call and no way back to an earlier instruction.
+    | PureStraightLine
+    /// Contains a call, an allocation or an opcode this reader does not recognise.
+    | CallsOtherCode
+    /// Branches back to an earlier instruction, or calls itself.
+    | ContainsLoop
+    /// The author marked it `DebuggerBrowsable(Never)`.
+    | HiddenByAuthor
+
+  type private Instr = {
+    Offset: int
+    Op: System.Reflection.Emit.OpCode
+    Operand: int64
+    Targets: int list
+  }
+
+  type private Decoding =
+    | At of int
+    | Broken of string
+
+  let private opCodeTable =
+    let table = Collections.Generic.Dictionary<int16, System.Reflection.Emit.OpCode>()
+    for f in typeof<System.Reflection.Emit.OpCodes>.GetFields(BindingFlags.Public ||| BindingFlags.Static) do
+      match f.GetValue null with
+      | :? System.Reflection.Emit.OpCode as oc -> table.[oc.Value] <- oc
+      | _ -> ()
+    table
+
+  /// Opcodes a getter may contain and still be provably harmless: stack and local shuffling, constants,
+  /// field reads, arithmetic, comparisons, conversions and branches. A branch is allowed here and
+  /// checked separately for going backwards.
+  let private harmlessOpCodes =
+    let o = typeof<System.Reflection.Emit.OpCodes>
+    [ "Nop"; "Ldarg_0"; "Ldarg_1"; "Ldarg_2"; "Ldarg_3"; "Ldarg_S"; "Ldarg"
+      "Ldloc_0"; "Ldloc_1"; "Ldloc_2"; "Ldloc_3"; "Ldloc_S"; "Ldloc"
+      "Stloc_0"; "Stloc_1"; "Stloc_2"; "Stloc_3"; "Stloc_S"; "Stloc"; "Starg_S"; "Starg"
+      "Ldnull"; "Ldc_I4_M1"; "Ldc_I4_0"; "Ldc_I4_1"; "Ldc_I4_2"; "Ldc_I4_3"; "Ldc_I4_4"; "Ldc_I4_5"
+      "Ldc_I4_6"; "Ldc_I4_7"; "Ldc_I4_8"; "Ldc_I4_S"; "Ldc_I4"; "Ldc_I8"; "Ldc_R4"; "Ldc_R8"; "Ldstr"
+      "Dup"; "Pop"; "Ldfld"; "Ldsfld"; "Ldlen"
+      "Add"; "Sub"; "Mul"; "Div"; "Div_Un"; "Rem"; "Rem_Un"; "And"; "Or"; "Xor"; "Shl"; "Shr"; "Shr_Un"
+      "Neg"; "Not"; "Ceq"; "Cgt"; "Cgt_Un"; "Clt"; "Clt_Un"
+      "Conv_I1"; "Conv_I2"; "Conv_I4"; "Conv_I8"; "Conv_R4"; "Conv_R8"; "Conv_U1"; "Conv_U2"; "Conv_U4"
+      "Conv_U8"; "Conv_R_Un"; "Conv_I"; "Conv_U"
+      "Ret"; "Br"; "Br_S"; "Brfalse"; "Brfalse_S"; "Brtrue"; "Brtrue_S"; "Beq"; "Beq_S"; "Bge"; "Bge_S"
+      "Bgt"; "Bgt_S"; "Ble"; "Ble_S"; "Blt"; "Blt_S"; "Bne_Un"; "Bne_Un_S"; "Bge_Un"; "Bge_Un_S"
+      "Bgt_Un"; "Bgt_Un_S"; "Ble_Un"; "Ble_Un_S"; "Blt_Un"; "Blt_Un_S" ]
+    |> List.map (fun name ->
+      match o.GetField name with
+      | null -> failwithf "System.Reflection.Emit.OpCodes has no field %s" name
+      | f -> (f.GetValue null :?> System.Reflection.Emit.OpCode).Value)
+    |> Collections.Generic.HashSet<int16>
+
+  let private fixedOperandSize (kind: System.Reflection.Emit.OperandType) =
+    match kind with
+    | System.Reflection.Emit.OperandType.InlineNone -> 0
+    | System.Reflection.Emit.OperandType.ShortInlineBrTarget
+    | System.Reflection.Emit.OperandType.ShortInlineI
+    | System.Reflection.Emit.OperandType.ShortInlineVar -> 1
+    | System.Reflection.Emit.OperandType.InlineVar -> 2
+    | System.Reflection.Emit.OperandType.InlineI8
+    | System.Reflection.Emit.OperandType.InlineR -> 8
+    | _ -> 4
+
+  /// Split a method body into instructions, or say why it cannot be split.
+  let private decode (il: byte[]) : Result<Instr[], string> =
+    let instrs = ResizeArray<Instr>()
+    let step (i: int) : Decoding =
+      let width, code =
+        match il.[i] = 0xFEuy && i + 1 < il.Length with
+        | true -> 2, int16 (0xFE00 ||| int il.[i + 1])
+        | false -> 1, int16 il.[i]
+      match opCodeTable.TryGetValue code with
+      | false, _ -> Broken (sprintf "unknown opcode %04X at %d" code i)
+      | true, op ->
+        let at = i + width
+        let size =
+          match op.OperandType with
+          | System.Reflection.Emit.OperandType.InlineSwitch ->
+            (match at + 4 <= il.Length with
+             | true -> 4 + 4 * BitConverter.ToInt32(il, at)
+             | false -> il.Length)
+          | kind -> fixedOperandSize kind
+        let next = at + size
+        match next > il.Length || size < 0 with
+        | true -> Broken (sprintf "operand runs past the end at %d" i)
+        | false ->
+          let operand, targets =
+            match op.OperandType with
+            | System.Reflection.Emit.OperandType.ShortInlineBrTarget ->
+              int64 (sbyte il.[at]), [ next + int (sbyte il.[at]) ]
+            | System.Reflection.Emit.OperandType.InlineBrTarget ->
+              let rel = BitConverter.ToInt32(il, at)
+              int64 rel, [ next + rel ]
+            | System.Reflection.Emit.OperandType.InlineSwitch ->
+              let count = BitConverter.ToInt32(il, at)
+              0L, [ for k in 0 .. count - 1 -> next + BitConverter.ToInt32(il, at + 4 + 4 * k) ]
+            | System.Reflection.Emit.OperandType.InlineVar -> int64 (BitConverter.ToUInt16(il, at)), []
+            | System.Reflection.Emit.OperandType.ShortInlineVar
+            | System.Reflection.Emit.OperandType.ShortInlineI -> int64 il.[at], []
+            | System.Reflection.Emit.OperandType.InlineNone
+            | System.Reflection.Emit.OperandType.InlineI8
+            | System.Reflection.Emit.OperandType.InlineR -> 0L, []
+            | _ -> int64 (BitConverter.ToInt32(il, at)), []
+          instrs.Add { Offset = i; Op = op; Operand = operand; Targets = targets }
+          At next
+    let mutable state = At 0
+    let mutable running = il.Length > 0
+    while running do
+      match state with
+      | At i when i < il.Length -> state <- step i
+      | _ -> running <- false
+    match state with
+    | Broken why -> Result.Error why
+    | At _ -> Result.Ok (instrs.ToArray())
+
+  let private isLdarg0 (i: Instr) =
+    let v = i.Op.Value
+    v = System.Reflection.Emit.OpCodes.Ldarg_0.Value
+    || ((v = System.Reflection.Emit.OpCodes.Ldarg.Value || v = System.Reflection.Emit.OpCodes.Ldarg_S.Value) && i.Operand = 0L)
+
+  let private isConstantLoad (i: Instr) =
+    match i.Op.Value with
+    | v when v = System.Reflection.Emit.OpCodes.Ldnull.Value || v = System.Reflection.Emit.OpCodes.Ldstr.Value -> true
+    | v when v = System.Reflection.Emit.OpCodes.Ldc_I4_S.Value || v = System.Reflection.Emit.OpCodes.Ldc_I4.Value
+             || v = System.Reflection.Emit.OpCodes.Ldc_I8.Value || v = System.Reflection.Emit.OpCodes.Ldc_R4.Value
+             || v = System.Reflection.Emit.OpCodes.Ldc_R8.Value -> true
+    | v -> v >= System.Reflection.Emit.OpCodes.Ldc_I4_M1.Value && v <= System.Reflection.Emit.OpCodes.Ldc_I4_8.Value
+           && i.Op.OperandType = System.Reflection.Emit.OperandType.InlineNone
+
+  let private isCall (i: Instr) =
+    i.Op.Value = System.Reflection.Emit.OpCodes.Call.Value || i.Op.Value = System.Reflection.Emit.OpCodes.Callvirt.Value
+
+  let private isReturn (i: Instr) = i.Op.Value = System.Reflection.Emit.OpCodes.Ret.Value
+
+  let private isHiddenFromDebugger (attributes: Collections.Generic.IList<CustomAttributeData>) =
+    attributes
+    |> Seq.exists (fun a ->
+      a.AttributeType = typeof<System.Diagnostics.DebuggerBrowsableAttribute>
+      && a.ConstructorArguments.Count = 1
+      && (match a.ConstructorArguments.[0].Value with
+          | :? int as state -> state = int System.Diagnostics.DebuggerBrowsableState.Never
+          | _ -> false))
+
+  /// Does this call instruction call the getter that contains it?
+  let private callsItself (getter: MethodInfo) (i: Instr) =
+    isCall i
+    && (try
+          match getter.Module.ResolveMethod(int i.Operand) with
+          | null -> false
+          | target -> target.MetadataToken = getter.MetadataToken && target.Module = getter.Module
+        with _ -> false)
+
+  /// Sort a property's getter by what its compiled body can do. Anything unreadable is `CallsOtherCode`.
+  let classifyGetter (property: PropertyInfo) : GetterShape =
+    match isHiddenFromDebugger (property.GetCustomAttributesData()) with
+    | true -> GetterShape.HiddenByAuthor
+    | false ->
+    match property.GetGetMethod true with
+    | null -> GetterShape.CallsOtherCode
+    | getter ->
+    match (try getter.GetMethodBody() with _ -> null) with
+    | null -> GetterShape.CallsOtherCode
+    | body ->
+    match decode (body.GetILAsByteArray()) with
+    | Result.Error _ -> GetterShape.CallsOtherCode
+    | Result.Ok all ->
+      let real = all |> Array.filter (fun i -> i.Op.Value <> System.Reflection.Emit.OpCodes.Nop.Value)
+      let fieldName (token: int64) =
+        try
+          match getter.Module.ResolveField(int token) with
+          | null -> GetterShape.CallsOtherCode
+          | f -> GetterShape.ReturnsField f.Name
+        with _ -> GetterShape.CallsOtherCode
+      match real with
+      | [| a; b; r |] when isLdarg0 a && b.Op.Value = System.Reflection.Emit.OpCodes.Ldfld.Value && isReturn r ->
+        fieldName b.Operand
+      | [| c; r |] when isConstantLoad c && isReturn r -> GetterShape.ReturnsConstant
+      | _ ->
+        let goesBack = all |> Array.exists (fun i -> i.Targets |> List.exists (fun t -> t <= i.Offset))
+        match goesBack || (all |> Array.exists (callsItself getter)) with
+        | true -> GetterShape.ContainsLoop
+        | false ->
+          match all |> Array.forall (fun i -> harmlessOpCodes.Contains i.Op.Value) with
+          | true -> GetterShape.PureStraightLine
+          | false -> GetterShape.CallsOtherCode
+
+  /// The label the field of a class is shown under: an auto-property's `Name@` field reads as `Name`, a
+  /// C# `<Name>k__BackingField` the same.
+  let private fieldLabel (rawName: string) =
+    match rawName.StartsWith("<", StringComparison.Ordinal), rawName.EndsWith("@", StringComparison.Ordinal) with
+    | true, _ ->
+      let endIdx = rawName.IndexOf('>')
+      (match endIdx > 1 with | true -> rawName.Substring(1, endIdx - 1) | false -> rawName)
+    | false, true -> rawName.TrimEnd '@'
+    | false, false -> rawName
+
+  /// Whether enumerating a sequence runs only a container's own code, or whatever produced it.
+  [<RequireQualifiedAccess>]
+  type private SequenceSource =
+    /// An array, or a framework or F# core collection that already holds its items.
+    | Materialized
+    /// Anything else: a `seq { }`, a LINQ query, a user type. Enumerating it runs code.
+    | MayRunCode
+
+  let private trustedCollectionAssemblies =
+    Collections.Generic.HashSet<string>(
+      [ "System.Private.CoreLib"; "System.Collections"; "System.Collections.Concurrent"
+        "System.Collections.Immutable"; "FSharp.Core" ])
+
+  let private sourceOf (t: Type) : SequenceSource =
+    let holdsItems =
+      t.IsArray
+      || (trustedCollectionAssemblies.Contains(t.Assembly.GetName().Name)
+          && (typeof<ICollection>.IsAssignableFrom t
+              || t.GetInterfaces()
+                 |> Array.exists (fun i ->
+                   i.IsGenericType
+                   && (let d = i.GetGenericTypeDefinition()
+                       d = typedefof<Collections.Generic.ICollection<_>>
+                       || d = typedefof<Collections.Generic.IReadOnlyCollection<_>>))))
+    match holdsItems with
+    | true -> SequenceSource.Materialized
+    | false -> SequenceSource.MayRunCode
+
+  /// One line of a class's `Safe` view: a value that was read (or failed to be), or a member left alone.
+  [<RequireQualifiedAccess>]
+  type private Row =
+    | Read of label: string * outcome: Result<obj, exn>
+    | Held of label: string * typeName: string * reason: NotEvaluatedReason
+
+  let private describe (reason: NotEvaluatedReason) : string =
+    match reason with
+    | NotEvaluatedReason.GetterRunsCode -> "not evaluated: the getter calls other code"
+    | NotEvaluatedReason.GetterLoops -> "not evaluated: the getter loops or calls itself"
+    | NotEvaluatedReason.SequenceNotEnumerated -> "not evaluated: enumerating a sequence runs the code behind it"
+    | NotEvaluatedReason.ClassesCollapsed -> "not evaluated: this mode does not open class instances"
+
   // ── Per-type shapes ───────────────────────────────────────────────
   //
   // How a value is walked depends only on its runtime type: whether it is a
@@ -121,10 +399,10 @@ module LiveValueTree =
     | Scalar
     /// An F# function value: its closure class's fields are the captures.
     | Closure of captures: (string * FieldInfo)[]
-    | Dictionary
+    | Dictionary of source: SequenceSource
     /// F# Map, enumerated as KeyValuePair entries.
     | FSharpMap of key: PropertyInfo * value: PropertyInfo
-    | Sequence of kind: NodeKind
+    | Sequence of kind: NodeKind * source: SequenceSource
     | Record of fieldNames: string[] * readFields: (obj -> obj[])
     | Union of readTag: (obj -> int) * cases: UnionCaseShape[]
     | Tuple of readFields: (obj -> obj[])
@@ -136,8 +414,9 @@ module LiveValueTree =
     /// A Lazy<T>: shown as created or not. `Value` is only read once it has been created, because
     /// reading it otherwise runs the user's factory.
     | Lazy
-    /// Any other type: its readable, non-indexed public instance properties.
-    | Class of properties: PropertyInfo[]
+    /// Any other type: its instance fields (what `Safe` shows first) and its readable, non-indexed public
+    /// properties, each with the shape of its getter (read once per type, from the compiled body).
+    | Class of fields: (string * FieldInfo)[] * members: (PropertyInfo * GetterShape)[]
 
   /// Compiler-decorated capture fields (`<captured>v__`) are labelled by the
   /// captured name.
@@ -159,13 +438,13 @@ module LiveValueTree =
       |> Array.map (fun fi -> captureLabel fi.Name, fi)
       |> TypeShape.Closure
     elif typeof<IDictionary>.IsAssignableFrom t then
-      TypeShape.Dictionary
+      TypeShape.Dictionary (sourceOf t)
     elif t.IsGenericType && t.GetGenericTypeDefinition() = typedefof<Map<string, obj>> then
       let entryType =
         typedefof<Collections.Generic.KeyValuePair<obj, obj>>.MakeGenericType(t.GetGenericArguments())
       TypeShape.FSharpMap (entryType.GetProperty "Key", entryType.GetProperty "Value")
     elif typeof<IEnumerable>.IsAssignableFrom t then
-      TypeShape.Sequence (if t.IsArray then NodeKind.Array else NodeKind.List)
+      TypeShape.Sequence ((if t.IsArray then NodeKind.Array else NodeKind.List), sourceOf t)
     elif FSharpType.IsRecord t then
       TypeShape.Record (
         FSharpType.GetRecordFields t |> Array.map (fun p -> p.Name),
@@ -188,10 +467,26 @@ module LiveValueTree =
     elif t.IsGenericType && t.GetGenericTypeDefinition() = typedefof<Lazy<_>> then
       TypeShape.Lazy
     else
-      t.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
-      |> Array.filter (fun p -> p.GetIndexParameters().Length = 0 && p.CanRead)
-      |> Array.truncate MaxChildren
-      |> TypeShape.Class
+      let members =
+        t.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
+        |> Array.filter (fun p -> p.GetIndexParameters().Length = 0 && p.CanRead)
+        |> Array.truncate MaxChildren
+        |> Array.map (fun p -> p, classifyGetter p)
+      // Fields from the most derived type up to, not including, object: a class's real state.
+      let rec fieldsUp (start: Type | null) =
+        match start with
+        | null -> []
+        | current when current = typeof<obj> || current = typeof<ValueType> -> []
+        | current ->
+          let declared =
+            current.GetFields(BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.DeclaredOnly)
+            |> Array.filter (fun fi ->
+              not (fi.Name.StartsWith("init@", StringComparison.Ordinal))
+              && not (isHiddenFromDebugger (fi.GetCustomAttributesData())))
+            |> Array.map (fun fi -> fieldLabel fi.Name, fi)
+            |> Array.toList
+          declared @ fieldsUp current.BaseType
+      TypeShape.Class (fieldsUp t |> List.toArray |> Array.truncate MaxChildren, members)
 
   let private shapes = System.Runtime.CompilerServices.ConditionalWeakTable<Type, TypeShape>()
   let private classifyCallback =
@@ -205,6 +500,7 @@ module LiveValueTree =
     not (isNull value) && not (value.GetType().IsValueType) && not (visited.Add value)
 
   let rec private buildNode
+    (mode: WalkMode)
     (visited: System.Collections.Generic.HashSet<obj>)
     (budget: int ref)
     (label: string)
@@ -248,13 +544,19 @@ module LiveValueTree =
             try
               captures
               |> Array.map (fun (name, fi) ->
-                let child = buildNode visited budget name (depth + 1) (fi.GetValue value)
+                let child = buildNode mode visited budget name (depth + 1) (fi.GetValue value)
                 { child with BestEffort = true })
               |> Array.toList
             with _ -> []
           { Label = label; TypeName = typeName; Preview = "<fun>"; Kind = NodeKind.Closure
             Children = children; BestEffort = true; Depth = depth }
-        | TypeShape.Dictionary ->
+        // Enumerating a lazy sequence runs the code that produces it, so `Safe` and `Off` leave it alone.
+        | TypeShape.Dictionary SequenceSource.MayRunCode
+        | TypeShape.Sequence (_, SequenceSource.MayRunCode) when mode <> WalkMode.Everything ->
+          { Label = label; TypeName = typeName; Preview = describe NotEvaluatedReason.SequenceNotEnumerated
+            Kind = NodeKind.NotEvaluated NotEvaluatedReason.SequenceNotEnumerated
+            Children = []; BestEffort = false; Depth = depth }
+        | TypeShape.Dictionary _ ->
           let d = value :?> IDictionary
           let entries = d |> Seq.cast<DictionaryEntry> |> Seq.truncate (MaxChildren + 1) |> Seq.toList
           let preview = entries |> List.truncate MaxChildren
@@ -262,7 +564,7 @@ module LiveValueTree =
                          |> truncateList |> fun s -> "map [" + s + "]"
           let children =
             entries |> List.truncate MaxChildren
-            |> List.mapi (fun i e -> buildNode visited budget (keyLabel e.Key) (depth + 1) e.Value)
+            |> List.mapi (fun i e -> buildNode mode visited budget (keyLabel e.Key) (depth + 1) e.Value)
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
             Children = children; BestEffort = false; Depth = depth }
         | TypeShape.FSharpMap (keyProp, valueProp) ->
@@ -279,16 +581,16 @@ module LiveValueTree =
             |> truncateList |> fun s -> "map [" + s + "]"
           let children =
             entries
-            |> List.map (fun (k, v) -> buildNode visited budget (keyLabel k) (depth + 1) v)
+            |> List.map (fun (k, v) -> buildNode mode visited budget (keyLabel k) (depth + 1) v)
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
             Children = children; BestEffort = false; Depth = depth }
-        | TypeShape.Sequence kind ->
+        | TypeShape.Sequence (kind, _) ->
           let items = (value :?> IEnumerable) |> Seq.cast<obj> |> Seq.truncate (MaxChildren + 1) |> Seq.toList
           let shown = items |> List.truncate MaxChildren
           let preview = shown |> List.map scalarPreview |> truncateList |> fun s -> "[" + s + "]"
           let children =
             shown
-            |> List.mapi (fun i item -> buildNode visited budget (sprintf "[%d]" i) (depth + 1) item)
+            |> List.mapi (fun i item -> buildNode mode visited budget (sprintf "[%d]" i) (depth + 1) item)
           { Label = label; TypeName = typeName; Preview = preview; Kind = kind
             Children = children; BestEffort = false; Depth = depth }
         | TypeShape.Record (fieldNames, readFields) ->
@@ -301,7 +603,7 @@ module LiveValueTree =
             |> fun s -> "{ " + s + " }"
           let children =
             fields
-            |> Array.mapi (fun i f -> buildNode visited budget fieldNames.[i] (depth + 1) f)
+            |> Array.mapi (fun i f -> buildNode mode visited budget fieldNames.[i] (depth + 1) f)
             |> Array.truncate MaxChildren
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Record
@@ -319,7 +621,7 @@ module LiveValueTree =
               case.CaseName + " " + args
           let children =
             case.FieldNames
-            |> Array.mapi (fun i name -> buildNode visited budget name (depth + 1) caseFields.[i])
+            |> Array.mapi (fun i name -> buildNode mode visited budget name (depth + 1) caseFields.[i])
             |> Array.truncate MaxChildren
             |> Array.toList
           let kind = if case.CaseName = "Some" || case.CaseName = "None" then NodeKind.Option else NodeKind.Union
@@ -330,7 +632,7 @@ module LiveValueTree =
           let preview = fields |> Array.map scalarPreview |> Array.toList |> truncateList |> fun s -> "(" + s + ")"
           let children =
             fields
-            |> Array.mapi (fun i f -> buildNode visited budget (sprintf "item%d" (i + 1)) (depth + 1) f)
+            |> Array.mapi (fun i f -> buildNode mode visited budget (sprintf "item%d" (i + 1)) (depth + 1) f)
             |> Array.truncate MaxChildren
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Tuple
@@ -343,7 +645,7 @@ module LiveValueTree =
             | System.Threading.Tasks.TaskStatus.RanToCompletion ->
               match t.GetProperty "Result" with
               | null -> []
-              | p -> [ buildNode visited budget "Result" (depth + 1) (p.GetValue value) ]
+              | p -> [ buildNode mode visited budget "Result" (depth + 1) (p.GetValue value) ]
             | System.Threading.Tasks.TaskStatus.Faulted ->
               let why =
                 match task.Exception with
@@ -367,7 +669,7 @@ module LiveValueTree =
             | _ -> "WaitingForActivation"
           let children =
             match state, t.GetProperty "Result" with
-            | "RanToCompletion", p when not (isNull p) -> [ buildNode visited budget "Result" (depth + 1) (p.GetValue value) ]
+            | "RanToCompletion", p when not (isNull p) -> [ buildNode mode visited budget "Result" (depth + 1) (p.GetValue value) ]
             | _ -> []
           { Label = label; TypeName = typeName; Preview = sprintf "ValueTask %s" state; Kind = NodeKind.Class
             Children = children; BestEffort = false; Depth = depth }
@@ -375,15 +677,66 @@ module LiveValueTree =
           let created = (t.GetProperty "IsValueCreated").GetValue value :?> bool
           let children =
             match created with
-            | true -> [ buildNode visited budget "Value" (depth + 1) ((t.GetProperty "Value").GetValue value) ]
+            | true -> [ buildNode mode visited budget "Value" (depth + 1) ((t.GetProperty "Value").GetValue value) ]
             | false -> []
           { Label = label; TypeName = typeName; Kind = NodeKind.Class
             Preview = (match created with | true -> "Lazy (created)" | false -> "Lazy (not created)")
             Children = children; BestEffort = false; Depth = depth }
-        | TypeShape.Class props ->
+        | TypeShape.Class _ when mode = WalkMode.Off ->
+          { Label = label; TypeName = typeName; Preview = describe NotEvaluatedReason.ClassesCollapsed
+            Kind = NodeKind.NotEvaluated NotEvaluatedReason.ClassesCollapsed
+            Children = []; BestEffort = false; Depth = depth }
+        | TypeShape.Class (fields, members) when mode = WalkMode.Safe ->
+          // Fields are the object's real state and reading one runs nothing. A getter runs only when its
+          // body is provably harmless. One that merely returns a field already shown is not shown twice.
+          let shown = Collections.Generic.HashSet<string>(fields |> Array.map (fun (_, fi) -> fi.Name))
+          let fieldRows =
+            fields
+            |> Array.map (fun (name, fi) ->
+              Row.Read (name, (try Ok (fi.GetValue value) with ex -> Error ex)))
+          let memberRows =
+            members
+            |> Array.collect (fun (p, shape) ->
+              match shape with
+              | GetterShape.HiddenByAuthor -> [||]
+              | GetterShape.ReturnsField f when shown.Contains f -> [||]
+              | GetterShape.CallsOtherCode -> [| Row.Held (p.Name, p.PropertyType.Name, NotEvaluatedReason.GetterRunsCode) |]
+              | GetterShape.ContainsLoop -> [| Row.Held (p.Name, p.PropertyType.Name, NotEvaluatedReason.GetterLoops) |]
+              | GetterShape.ReturnsField _ | GetterShape.ReturnsConstant | GetterShape.PureStraightLine ->
+                [| Row.Read (p.Name, (try Ok (p.GetValue value) with ex -> Error ex)) |])
+          let rows = Array.append fieldRows memberRows |> Array.truncate MaxChildren
+          let errorNode (rowLabel: string) =
+            { Label = rowLabel; TypeName = "error"; Preview = "<error>"; Kind = NodeKind.Leaf
+              Children = []; BestEffort = false; Depth = depth + 1 }
+          let preview =
+            rows
+            |> Array.map (fun row ->
+              match row with
+              | Row.Read (l, Ok v) ->
+                (try sprintf "%s = %s" l (scalarPreview v) with _ -> sprintf "%s = <error>" l)
+              | Row.Read (l, Error _) -> sprintf "%s = <error>" l
+              | Row.Held (l, _, _) -> sprintf "%s = …" l)
+            |> Array.toList
+            |> truncateList
+            |> fun s -> "{ " + s + " }"
+          let children =
+            rows
+            |> Array.map (fun row ->
+              match row with
+              | Row.Read (l, Ok v) ->
+                (try buildNode mode visited budget l (depth + 1) v with _ -> errorNode l)
+              | Row.Read (l, Error _) -> errorNode l
+              | Row.Held (l, heldTypeName, reason) ->
+                { Label = l; TypeName = heldTypeName; Preview = describe reason; Kind = NodeKind.NotEvaluated reason
+                  Children = []; BestEffort = false; Depth = depth + 1 })
+            |> Array.toList
+          { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Class
+            Children = children; BestEffort = false; Depth = depth }
+        | TypeShape.Class (_, members) ->
           // Class instance — public instance properties (best-effort for .NET types).
           // Each getter is read ONCE: the preview and the child come from the same read, because
           // a getter is the user's code and may have an effect.
+          let props = members |> Array.map fst
           let reads =
             props
             |> Array.map (fun p ->
@@ -408,7 +761,7 @@ module LiveValueTree =
                   Children = []; BestEffort = false; Depth = depth + 1 }
               match read with
               | Ok v ->
-                try buildNode visited budget p.Name (depth + 1) v
+                try buildNode mode visited budget p.Name (depth + 1) v
                 with _ -> errorNode
               | Error _ -> errorNode)
             |> Array.toList
@@ -418,10 +771,15 @@ module LiveValueTree =
         { Label = label; TypeName = t.Name; Preview = sprintf "<error: %s>" ex.Message
           Kind = NodeKind.Leaf; Children = []; BestEffort = false; Depth = depth }
 
-  /// Build the root node for a binding's value.
-  let buildValueNode (label: string) (value: obj) : LiveValueNode =
+  /// Build the root node for a binding's value under `mode`.
+  let buildValueNodeIn (mode: WalkMode) (label: string) (value: obj) : LiveValueNode =
     let visited = System.Collections.Generic.HashSet<obj>(HashIdentity.Reference)
-    buildNode visited (ref MaxNodes) label 0 value
+    buildNode mode visited (ref MaxNodes) label 0 value
+
+  /// The walk as it always was: every readable property of a class runs. For values the caller already
+  /// trusts. The host uses `Safe`.
+  let buildValueNode (label: string) (value: obj) : LiveValueNode =
+    buildValueNodeIn WalkMode.Everything label value
 
   /// How many walkers may be abandoned at once. A getter that never returns keeps its thread for
   /// the life of the process, so past this many a pass stops starting replacements and says why.
@@ -445,7 +803,7 @@ module LiveValueTree =
   /// per pass, not one per binding. When a binding misses its deadline the caller shows it as
   /// unreadable, remembers the value so it is not walked again, retires that walker (which writes
   /// nothing if it ever returns) and starts a fresh one at the next binding.
-  let walkWithin (budget: TimeSpan) (bindings: (string * obj)[]) : LiveValueNode[] =
+  let walkWithin (mode: WalkMode) (budget: TimeSpan) (bindings: (string * obj)[]) : LiveValueNode[] =
     let count = bindings.Length
     let nodes : LiveValueNode[] = Array.zeroCreate count
     let finished = Array.init count (fun _ -> new System.Threading.ManualResetEventSlim(false))
@@ -462,7 +820,7 @@ module LiveValueTree =
             match not (isNull value) && fst (unresponsive.TryGetValue value) with
             | true -> unreadableNode label value "a property getter on this value did not return on an earlier look, so it is not read again"
             | false ->
-              try buildValueNode label value
+              try buildValueNodeIn mode label value
               with _ -> unreadableNode label value "reading this value threw"
           lock gate (fun () ->
             match owner.Value = id && not finished.[at].IsSet with
@@ -562,9 +920,10 @@ module LiveValueTree =
   /// A full snapshot where each binding gets `budget` to walk, so one value whose getter never
   /// returns shows as unreadable instead of stalling the thread that asked. The host uses this.
   let buildSnapshotWithin
+    (mode: WalkMode)
     (budget: TimeSpan)
     (sessionId: string)
     (generation: int64)
     (boundValues: (string * string * obj) list)
     : LiveValueSnapshot =
-    buildSnapshotWith (walkWithin budget) sessionId generation boundValues
+    buildSnapshotWith (walkWithin mode budget) sessionId generation boundValues

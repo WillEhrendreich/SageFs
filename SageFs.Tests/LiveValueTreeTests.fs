@@ -363,7 +363,7 @@ let liveValueTreeAwaitableTests = testList "LiveValueTree members that wait or f
       [ "before", "int", box 1
         "stuck", "BlockedGetter", box (BlockedGetter(gate, entered))
         "after", "int", box 2 ]
-    let snapshot () = buildSnapshotWithin TestTimeouts.blockedGetterBudget "" 1L bindings
+    let snapshot () = buildSnapshotWithin WalkMode.Everything TestTimeouts.blockedGetterBudget "" 1L bindings
     let! first = returnsWithin snapshot
     let! second = returnsWithin snapshot
     gate.TrySetResult 0 |> ignore

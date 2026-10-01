@@ -10,31 +10,38 @@ open Expecto
 open Expecto.Flip
 open SageFs.Features.LiveValueTree
 
-/// Counts how often a getter or a sequence ran, so a case can prove it did not.
-type Effects private () =
-  static let mutable count = 0
-  static member Reset() = count <- 0
-  static member Count = count
-  static member Bump() : int =
+/// Counts how often a getter or a sequence ran, so a case can prove it did not. One per case: Expecto runs the
+/// cases of a list in parallel, so a shared counter would count another case's runs.
+type Counter() =
+  let mutable count = 0
+  member _.Count = count
+  member _.Bump() : int =
     count <- count + 1
     count
 
 /// One getter of each shape the classifier has to tell apart. None of the "bad" ones is ever read by a Safe walk.
-type PolicyProbe(name: string, n: int) =
+type PolicyProbe(name: string, n: int, counter: Counter) =
   member _.Name = name
   member val Auto = 1 with get, set
   member _.Const = 42
   member _.Twice = n + n
   member this.Len = this.Name.Length
-  member _.Next = Effects.Bump()
+  member _.Next = counter.Bump()
   [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
   member _.Hidden = 7
   /// A self tail call: F# compiles it to a loop, so reading it never returns.
   member this.Loops : int = this.Loops
 
+/// Only the effectful getter, for the `Everything` case: that mode really does run every getter, so a
+/// type with a looping one would never return.
+type EffectOnly(counter: Counter) =
+  member _.Next = counter.Bump()
+
 type Person = { Name: string; Age: int }
 
-let private probe () = box (PolicyProbe("x", 2))
+let private probeWith (counter: Counter) = box (PolicyProbe("x", 2, counter))
+
+let private probe () = probeWith (Counter())
 
 let private childOf (label: string) (node: LiveValueNode) =
   node.Children |> List.tryFind (fun c -> c.Label = label)
@@ -82,14 +89,14 @@ let safeWalkTests =
   testList "Safe walk never runs a getter it cannot prove harmless" [
 
     testCase "WHY — a computed getter with an effect is not run, so looking at a value cannot change it" <| fun _ ->
-      Effects.Reset()
-      buildValueNodeIn WalkMode.Safe "p" (probe ()) |> ignore
-      Effects.Count |> Expect.equal "no getter ran" 0
+      let counter = Counter()
+      buildValueNodeIn WalkMode.Safe "p" (probeWith counter) |> ignore
+      counter.Count |> Expect.equal "no getter ran" 0
 
     testCase "WHY — Everything mode is today's behavior and does run it, once" <| fun _ ->
-      Effects.Reset()
-      buildValueNodeIn WalkMode.Everything "p" (box (PolicyProbe("x", 2))) |> ignore
-      Effects.Count |> Expect.equal "the effectful getter ran once" 1
+      let counter = Counter()
+      buildValueNodeIn WalkMode.Everything "p" (box (EffectOnly counter)) |> ignore
+      counter.Count |> Expect.equal "the effectful getter ran once" 1
 
     testCase "WHY — a class is shown by its fields, which are its real state" <| fun _ ->
       let node = buildValueNodeIn WalkMode.Safe "p" (probe ())
@@ -119,11 +126,11 @@ let safeWalkTests =
       childOf "Hidden" (buildValueNodeIn WalkMode.Safe "p" (probe ())) |> Expect.isNone "hidden"
 
     testCase "WHY — a lazy sequence is not enumerated, because enumerating it runs the code that makes it" <| fun _ ->
-      Effects.Reset()
-      let lazySeq = seq { yield Effects.Bump() }
+      let counter = Counter()
+      let lazySeq = seq { yield counter.Bump() }
       let node = buildValueNodeIn WalkMode.Safe "s" (box lazySeq)
       node.Kind |> Expect.equal "not enumerated" (notEvaluated NotEvaluatedReason.SequenceNotEnumerated)
-      Effects.Count |> Expect.equal "the sequence never ran" 0
+      counter.Count |> Expect.equal "the sequence never ran" 0
 
     testCase "WHY — collections that already hold their items are still shown" <| fun _ ->
       for value in [ box [ 1; 2; 3 ]; box [| 1; 2; 3 |]; box (ResizeArray [ 1; 2; 3 ]); box (Set.ofList [ 1; 2; 3 ]) ] do
@@ -131,10 +138,10 @@ let safeWalkTests =
         node.Children |> List.length |> Expect.equal (sprintf "%s shows its three items" (value.GetType().Name)) 3
 
     testCase "WHY — Everything mode still enumerates a lazy sequence, as it always did" <| fun _ ->
-      Effects.Reset()
-      let node = buildValueNodeIn WalkMode.Everything "s" (box (seq { yield Effects.Bump() }))
+      let counter = Counter()
+      let node = buildValueNodeIn WalkMode.Everything "s" (box (seq { yield counter.Bump() }))
       node.Children |> List.length |> Expect.equal "one item shown" 1
-      Effects.Count |> Expect.equal "it ran once" 1
+      counter.Count |> Expect.equal "it ran once" 1
 
     testCase "WHY — a pending Task is shown by its status in every mode, never waited on" <| fun _ ->
       let pending = Threading.Tasks.TaskCompletionSource<int>().Task
@@ -147,11 +154,11 @@ let offModeTests =
   testList "Off walk" [
 
     testCase "WHY — a class instance is collapsed and nothing of it is read" <| fun _ ->
-      Effects.Reset()
-      let node = buildValueNodeIn WalkMode.Off "p" (probe ())
+      let counter = Counter()
+      let node = buildValueNodeIn WalkMode.Off "p" (probeWith counter)
       node.Kind |> Expect.equal "collapsed" (notEvaluated NotEvaluatedReason.ClassesCollapsed)
       node.Children |> Expect.isEmpty "no children"
-      Effects.Count |> Expect.equal "nothing ran" 0
+      counter.Count |> Expect.equal "nothing ran" 0
 
     testCase "WHY — records, unions, tuples, lists and maps look the same in every mode, because reading them runs no user code" <| fun _ ->
       let values : obj list =

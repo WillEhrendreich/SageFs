@@ -48,10 +48,16 @@ let private genDiagnosticsAndText =
     return text, diagnostics
   }
 
-/// Every fieldless case of NodeKind, taken from the type so a new case is generated without editing this file.
+/// Every NodeKind, taken from the types so a new case or a new reason is generated without editing this file.
 let private allNodeKinds : LiveValueTree.NodeKind list =
+  let reasons =
+    Microsoft.FSharp.Reflection.FSharpType.GetUnionCases typeof<LiveValueTree.NotEvaluatedReason>
+    |> Array.map (fun case -> Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, [||]))
   Microsoft.FSharp.Reflection.FSharpType.GetUnionCases typeof<LiveValueTree.NodeKind>
-  |> Array.map (fun case -> Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, [||]) :?> LiveValueTree.NodeKind)
+  |> Array.collect (fun case ->
+    match case.GetFields().Length with
+    | 0 -> [| Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, [||]) :?> LiveValueTree.NodeKind |]
+    | _ -> reasons |> Array.map (fun reason -> Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, [| reason |]) :?> LiveValueTree.NodeKind))
   |> Array.toList
 
 /// LiveValueNode is recursive (Children: LiveValueNode list); FsCheck's reflective generator recurses without
