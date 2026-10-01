@@ -2,8 +2,6 @@ namespace SageFs
 
 open System
 open System.IO
-open System.Text.Json
-open System.Text.Json.Serialization
 open SageFs.ProjectLoading
 
 open SageFs.WarmUp
@@ -75,15 +73,8 @@ module internal WarmupReplayCache =
     DiscoveryWarnings: string list
   }
 
-  let private jsonOptions =
-    let options =
-      JsonSerializerOptions(
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true
-      )
-
-    options.Converters.Add(JsonFSharpConverter())
-    options
+  /// camelCase keys, indented: the file is machine-written and sometimes read by a person.
+  let private profile = Json.indented Json.camelCase
 
   let private normalizePath (path: string) =
     match String.IsNullOrWhiteSpace path with
@@ -224,25 +215,59 @@ module internal WarmupReplayCache =
         |> normalizePath
         |> Some)
 
-  let tryLoad (path: string) =
+  /// What reading the cache file found.
+  [<RequireQualifiedAccess>]
+  type PlanLoad =
+    /// There is no cache file yet.
+    | NoFile
+    | Loaded of ReplayPlan
+    /// The file is there and is not a plan this version can read; `reason` says why.
+    | Unreadable of reason: string
+
+  let load (path: string) : PlanLoad =
     try
       match File.Exists path with
-      | false -> None
+      | false -> PlanLoad.NoFile
       | true ->
-        let json = File.ReadAllText path
-        let plan = JsonSerializer.Deserialize<ReplayPlan>(json, jsonOptions)
+        match Json.deserialize<ReplayPlan> profile (File.ReadAllText path) with
+        | Result.Ok plan -> PlanLoad.Loaded plan
+        | Result.Error error -> PlanLoad.Unreadable (JsonError.describe error)
+    with
+    | :? IOException as ex -> PlanLoad.Unreadable ex.Message
+    | :? UnauthorizedAccessException as ex -> PlanLoad.Unreadable ex.Message
 
-        match isNull (box plan) with
-        | true -> None
-        | false -> Some plan
-    with _ ->
-      None
+  let tryLoad (path: string) =
+    match load path with
+    | PlanLoad.Loaded plan -> Some plan
+    | PlanLoad.NoFile
+    | PlanLoad.Unreadable _ -> None
+
+  /// Why the cache did not answer, for the log line that says it missed.
+  [<RequireQualifiedAccess>]
+  type PlanMiss =
+    | NoFile
+    | Unreadable of reason: string
+    /// The plan is fine but was made for different inputs.
+    | FingerprintChanged
+
+  module PlanMiss =
+    let describe =
+      function
+      | PlanMiss.NoFile -> "no cache file"
+      | PlanMiss.Unreadable reason -> sprintf "the cache file could not be read: %s" reason
+      | PlanMiss.FingerprintChanged -> "the project's inputs changed"
+
+  let lookupValidPlan (path: string) (fingerprint: Fingerprint) : Result<ReplayPlan, PlanMiss> =
+    match load path with
+    | PlanLoad.Loaded plan when plan.Fingerprint = fingerprint -> Result.Ok plan
+    | PlanLoad.Loaded _ -> Result.Error PlanMiss.FingerprintChanged
+    | PlanLoad.NoFile -> Result.Error PlanMiss.NoFile
+    | PlanLoad.Unreadable reason -> Result.Error (PlanMiss.Unreadable reason)
 
   let tryLoadValidPlan (path: string) (fingerprint: Fingerprint) =
-    match tryLoad path with
-    | Some plan when plan.Fingerprint = fingerprint -> Some plan
-    | Some _
-    | None -> None
+    match lookupValidPlan path fingerprint with
+    | Result.Ok plan -> Some plan
+    | Result.Error _ -> None
 
   /// The cache is machine-generated and full of this machine's absolute paths, in a
   /// `.SageFs` folder that also holds files the user writes and commits (`config.fsx`,
@@ -284,7 +309,7 @@ module internal WarmupReplayCache =
     // Write to a temp file then atomically move it over `path`, matching the
     // rest of the persistence layer: a crash or a concurrent read never sees a
     // half-written cache. Worst case is a clean miss that triggers rediscovery.
-    let json = JsonSerializer.Serialize(plan, jsonOptions)
+    let json = Json.serialize profile plan
     let tmp = path + ".tmp"
     File.WriteAllText(tmp, json)
     File.Move(tmp, path, true)

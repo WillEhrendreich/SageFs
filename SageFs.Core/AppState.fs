@@ -415,12 +415,12 @@ let internal resolveWarmupReplayPlan
   async {
     match cachePath with
     | Some path ->
-      match tryLoadValidPlan path fingerprint with
-      | Some plan ->
+      match lookupValidPlan path fingerprint with
+      | Result.Ok plan ->
         logger.LogInfo (sprintf "  Warmup replay cache hit: %s" path)
         return plan
-      | None ->
-        logger.LogInfo "  Warmup replay cache miss — discovering warmup plan."
+      | Result.Error miss ->
+        logger.LogInfo (sprintf "  Warmup replay cache miss (%s) — discovering warmup plan." (PlanMiss.describe miss))
         let! plan = discoverPlan()
 
         match trySave path plan with

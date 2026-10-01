@@ -21,7 +21,6 @@ let private budgets : (string * int) list =
   [ "SageFs.Core/DevReload.fs", 1
     "SageFs.Core/SessionOperations.fs", 1
     "SageFs.Core/SseWriter.fs", 23
-    "SageFs.Core/WarmupReplayCache.fs", 3
     "SageFs/Mcp.fs", 36
     "SageFs/McpAdapter.fs", 5
     "SageFs/McpFrictionRecorder.fs", 3
