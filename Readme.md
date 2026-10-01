@@ -18,9 +18,9 @@ F# Interactive that already has your project loaded, re-runs your tests on unsav
 
 Hey, I'm Will. SageFs is the thing I wanted every time I sat there waiting on a rebuild just to find out whether one little function did what I thought it did.
 
-### What's wrong with F# Interactive
+### F# Interactive is amazing. Here's where it runs out of road.
 
-Everybody who's used `dotnet fsi` on a real project has hit the same wall.
+Type an expression, get the answer, no build step. FSI is one of the best things about F# and I use it all day. I'm not trying to replace it, SageFs *is* FSI underneath. But everybody who's used `dotnet fsi` on a real project has hit the same wall:
 
 - **It starts empty.** Your project, your packages and your `open`s are all on you, through `#r` and `#load`, every time.
 - **It's one process in one terminal.** A bad eval or a hang takes the session with it, and nothing else can use it while you do.

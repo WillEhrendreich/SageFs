@@ -2,7 +2,7 @@
 
 I kept describing SageFs as a list of features, and a list of features doesn't tell you what it's like to sit down with it. So this page goes by time instead. Each stretch says what you had when it started, what you have now, and then walks through the changes one at a time: what it was like before, what it's like now, why you'd care, a link to the code that does it, and what's still rough.
 
-If you only read one thing: F# Interactive on a real project has always made you do the work. You load the project yourself. You rebuild to find out if one function is right. You run `dotnet test` and wait. A web app means stop, build, start. SageFs is what happens when the REPL does that work for you, and over the last seven months it went from a daemon that held an FSI session to this:
+If you only read one thing: F# Interactive is amazing. Type an expression, get the answer, no build. SageFs is FSI underneath, and I use FSI all day. But on a real project it has always made you do the work. You load the project yourself. You rebuild to find out if one function is right. You run `dotnet test` and wait. A web app means stop, build, start. SageFs is what happens when the REPL does that work for you, and over the last seven months it went from a daemon that held an FSI session to this:
 
 - **Your project is already loaded, and "Ready" means it.** A session that loaded nothing says so, with a reason, instead of showing green.
 - **You edit a function and the tests that reach it re-run**, saved or not. A body-only edit like `a + b` to `a - b` can't select zero tests and read green anymore.
