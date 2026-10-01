@@ -34,6 +34,12 @@ let mkPresence
 let now = DateTime(2026, 3, 14, 22, 0, 0, DateTimeKind.Utc)
 let fiveMinTimeout = TimeSpan.FromMinutes 5.0
 
+/// How long ago an agent last called a tool, as a fraction of the freshness timeout it is
+/// judged against, so each case stays inside or outside the window whatever the window is.
+let private lastCalledInsideWindow = fiveMinTimeout * 0.4
+let private lastCalledOutsideWindow = fiveMinTimeout * 2.0
+let private lastCalledNearEdge = fiveMinTimeout * 0.6
+
 // ── SessionGuidance behavior ─────────────────────────────────────
 
 let sessionGuidanceTests = testList "SessionGuidance — session tells agents what to do" [
@@ -172,12 +178,12 @@ let sessionGuidancePropertyTests = testList "SessionGuidance properties" [
 let agentPresenceTests = testList "AgentPresence — freshness classification" [
 
   testCase "Agent within timeout is Fresh" <| fun _ ->
-    let presence = mkPresence "claude" "sess-1" [] (now - TimeSpan.FromMinutes 2.0)
+    let presence = mkPresence "claude" "sess-1" [] (now - lastCalledInsideWindow)
     AgentPresence.freshness now fiveMinTimeout presence
     |> Expect.equal "should be Fresh" AgentFreshness.Fresh
 
   testCase "Agent beyond timeout is Stale" <| fun _ ->
-    let presence = mkPresence "claude" "sess-1" [] (now - TimeSpan.FromMinutes 10.0)
+    let presence = mkPresence "claude" "sess-1" [] (now - lastCalledOutsideWindow)
     AgentPresence.freshness now fiveMinTimeout presence
     |> Expect.equal "should be Stale" AgentFreshness.Stale
 
@@ -187,7 +193,7 @@ let agentPresenceTests = testList "AgentPresence — freshness classification" [
     |> Expect.equal "at boundary should be Fresh" AgentFreshness.Fresh
 
   testCase "isStale and isFresh are mutually exclusive" <| fun _ ->
-    let presence = mkPresence "claude" "sess-1" [] (now - TimeSpan.FromMinutes 3.0)
+    let presence = mkPresence "claude" "sess-1" [] (now - lastCalledNearEdge)
     let stale = AgentPresence.isStale now fiveMinTimeout presence
     let fresh = AgentPresence.isFresh now fiveMinTimeout presence
     (stale <> fresh)

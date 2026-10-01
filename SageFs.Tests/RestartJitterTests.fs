@@ -30,6 +30,12 @@ let private withinBand (delay: TimeSpan) (jittered: TimeSpan) : bool =
   let lowerMs = min (delay.TotalMilliseconds * fraction) capMs
   jittered.TotalMilliseconds >= lowerMs - 1.0 && jittered.TotalMilliseconds <= upperMs + 1.0
 
+/// A delay in the middle of the policy's range, below the cap: the fourth backoff step.
+let private midBackoff = RestartPolicy.nextBackoff policy 4
+
+/// The slack a delay that went through a float round trip gets when it is compared with the cap.
+let private roundTripSlack = TimeSpan.FromMilliseconds 1.0
+
 let private sessionIds =
   [ "a1b2c3d4"; "b1c2d3e4"; "c1d2e3f4"; "d1e2f3a4"; "e1f2a3b4"; "f1a2b3c4"; "0a1b2c3d"; "1b2c3d4e" ]
 
@@ -56,7 +62,7 @@ let tests =
       Expect.isTrue (sprintf "attempt %d: %A vs %A" attempt jittered delay) (withinBand delay jittered)
 
     testCase "WHY — a delay already above the cap is pulled down to the cap, never past it" <| fun _ ->
-      let over = policy.BackoffMax + TimeSpan.FromSeconds 10.0
+      let over = policy.BackoffMax + policy.BackoffBase * 10.0
       [ 1L .. 200L ]
       |> List.iter (fun seed ->
         let jittered = RestartPolicy.withJitter policy (RestartPolicy.JitterSeed seed) over
@@ -67,7 +73,7 @@ let tests =
       let delays =
         [ 1L .. 1000L ]
         |> List.map (fun seed -> RestartPolicy.withJitter policy (RestartPolicy.JitterSeed seed) atCap)
-      let atTheCap = delays |> List.filter (fun d -> d >= policy.BackoffMax - TimeSpan.FromMilliseconds 1.0) |> List.length
+      let atTheCap = delays |> List.filter (fun d -> d >= policy.BackoffMax - roundTripSlack) |> List.length
       Expect.isLessThan "almost none sit on the cap" (atTheCap, 20)
       Expect.isGreaterThan "they use most of the half band" ((List.max delays - List.min delays).TotalMilliseconds, atCap.TotalMilliseconds * 0.4)
 
@@ -84,7 +90,7 @@ let tests =
       Expect.isTrue (sprintf "sample %f" sample) (sample >= 0.0 && sample < 1.0)
 
     testCase "WHY — a thousand sessions dying together do not all retry at the same instant" <| fun _ ->
-      let delay = TimeSpan.FromSeconds 8.0
+      let delay = midBackoff
       let delays =
         [ 1L .. 1000L ]
         |> List.map (fun seed -> RestartPolicy.withJitter policy (RestartPolicy.JitterSeed seed) delay)
@@ -104,7 +110,7 @@ let tests =
       Expect.isGreaterThan (sprintf "attempt %d has a spread" attempt) (distinct, 90)
 
     testCase "WHY — adjacent seeds are not adjacent delays" <| fun _ ->
-      let delay = TimeSpan.FromSeconds 8.0
+      let delay = midBackoff
       let at seed = RestartPolicy.withJitter policy (RestartPolicy.JitterSeed seed) delay
       let steps = [ 0L .. 99L ] |> List.map (fun seed -> abs ((at (seed + 1L) - at seed).TotalMilliseconds))
       // A weak mixer (seed / N) would step by the same tiny amount every time.

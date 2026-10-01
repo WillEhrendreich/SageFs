@@ -80,7 +80,7 @@ let lifecyclePropertyTests = testList "SessionLifecycle properties" [
     fun () ->
       let outcomes = [
         SessionLifecycle.ExitOutcome.Graceful
-        SessionLifecycle.ExitOutcome.RestartAfter(TimeSpan.FromSeconds 1.0, RestartPolicy.emptyState)
+        SessionLifecycle.ExitOutcome.RestartAfter(RestartPolicy.defaultPolicy.BackoffBase, RestartPolicy.emptyState)
         SessionLifecycle.ExitOutcome.Abandoned SageFsError.PipeClosed
       ]
       for outcome in outcomes do

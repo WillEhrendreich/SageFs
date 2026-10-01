@@ -256,17 +256,22 @@ let confirmPatchTests =
 [<Tests>]
 let baselineIsTrustworthyTests =
   let epoch = System.DateTime(2026, 1, 1, 0, 0, 0, System.DateTimeKind.Utc)
+  // How much older than the build a source file is when it was written well before it.
+  let writtenBeforeBuild = System.TimeSpan.FromMinutes 5.0
+  // How much newer than the build a source file is when it was edited right after it: any
+  // positive gap counts, so the smallest whole second.
+  let editedAfterBuild = System.TimeSpan.FromSeconds 1.0
   testList "ReloadPlanning baselineIsTrustworthy" [
     testCase "WHY — ReloadPlanning.baselineIsTrustworthy — a source file untouched since the build is a trustworthy baseline because it is exactly what the loaded assembly compiled from" <| fun _ ->
       baselineIsTrustworthy epoch epoch
       |> Expect.isTrue "source written at the same instant as the build is trustworthy"
 
     testCase "WHY — ReloadPlanning.baselineIsTrustworthy — a source file written before the build is trustworthy because the build necessarily read it as-is" <| fun _ ->
-      baselineIsTrustworthy epoch (epoch - System.TimeSpan.FromMinutes 5.0)
+      baselineIsTrustworthy epoch (epoch - writtenBeforeBuild)
       |> Expect.isTrue "source older than the build is trustworthy"
 
     testCase "WHY — ReloadPlanning.baselineIsTrustworthy — a source file edited after the build is NOT trustworthy because capturing it as \"baseline\" would silently absorb an edit the running assembly never saw, and planReload would then see current = baseline and never surface it" <| fun _ ->
-      baselineIsTrustworthy epoch (epoch + System.TimeSpan.FromSeconds 1.0)
+      baselineIsTrustworthy epoch (epoch + editedAfterBuild)
       |> Expect.isFalse "source newer than the build must not be trusted as the baseline"
   ]
 

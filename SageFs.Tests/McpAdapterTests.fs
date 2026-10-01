@@ -9,6 +9,18 @@ open SageFs
 open SageFs.AppState
 open SageFs.WorkflowTypes
 
+// The eval durations the EvalStats cases record. Totals, minimums, maximums and averages below
+// are derived from these, so each case states what it expects in terms of the inputs.
+
+/// A fast eval.
+let private fastEval = TimeSpan.FromMilliseconds 100.0
+
+/// An eval twice as long as the fast one.
+let private slowEval = TimeSpan.FromMilliseconds 200.0
+
+/// An eval three times as long as the fast one; the average of this and the fast one is `slowEval`.
+let private slowestEval = TimeSpan.FromMilliseconds 300.0
+
 [<Tests>]
 let tests =
   testList "MCP Adapter production code tests" [
@@ -353,20 +365,20 @@ let tests =
     <| fun _ ->
       let stats =
         Affordances.EvalStats.empty
-        |> Affordances.EvalStats.record (TimeSpan.FromMilliseconds 100.0)
-        |> Affordances.EvalStats.record (TimeSpan.FromMilliseconds 200.0)
+        |> Affordances.EvalStats.record fastEval
+        |> Affordances.EvalStats.record slowEval
       stats.EvalCount |> Expect.equal "two evals" 2
-      stats.TotalDuration |> Expect.equal "total 300ms" (TimeSpan.FromMilliseconds 300.0)
-      stats.MinDuration |> Expect.equal "min 100ms" (TimeSpan.FromMilliseconds 100.0)
-      stats.MaxDuration |> Expect.equal "max 200ms" (TimeSpan.FromMilliseconds 200.0)
+      stats.TotalDuration |> Expect.equal "total 300ms" (fastEval + slowEval)
+      stats.MinDuration |> Expect.equal "min 100ms" fastEval
+      stats.MaxDuration |> Expect.equal "max 200ms" slowEval
 
     testCase "EvalStats.averageDuration computes correct average"
     <| fun _ ->
       let stats =
         Affordances.EvalStats.empty
-        |> Affordances.EvalStats.record (TimeSpan.FromMilliseconds 100.0)
-        |> Affordances.EvalStats.record (TimeSpan.FromMilliseconds 300.0)
-      (Affordances.EvalStats.averageDuration stats) |> Expect.equal "avg 200ms" (TimeSpan.FromMilliseconds 200.0)
+        |> Affordances.EvalStats.record fastEval
+        |> Affordances.EvalStats.record slowestEval
+      (Affordances.EvalStats.averageDuration stats) |> Expect.equal "avg 200ms" slowEval
 
     testCase "EvalStats.averageDuration returns zero for empty stats"
     <| fun _ ->

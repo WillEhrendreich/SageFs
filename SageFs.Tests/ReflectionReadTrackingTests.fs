@@ -137,7 +137,18 @@ let private started (mode: ReflectionReadMode) (threshold: HotLoopThreshold) =
   tracker.EvalFinished true
   app, tracker, clock
 
-let private quiet = { Count = 1_000_000; Within = TimeSpan.FromSeconds 1.0 }
+/// The window the hot-loop cases count reads in: the product's own.
+let private hotLoopWindow = HotLoopThreshold.standard.Within
+
+/// A gap between reads so short that a read every gap is a hundred a second, far over a small
+/// threshold: a hot loop. A hundredth of the window.
+let private hotReadGap = hotLoopWindow / 100.0
+
+/// A gap between reads long enough that a handful of them never fill the window's threshold: a
+/// slow trickle. Two fifths of the window.
+let private slowReadGap = hotLoopWindow * 0.4
+
+let private quiet = { Count = 1_000_000; Within = hotLoopWindow }
 
 let private verdictFor (app: App) (tracker: Tracker) =
   match tracker.Evidence [ app.ValueKey ] with
@@ -275,9 +286,9 @@ let reflectionReadTrackingTests =
         tracker.ReflectionReads.Mode |> Expect.equal "and back" ReflectionReadMode.MarkOnReflect)
 
     testCase "WHY — a hot reflective loop raises one notice naming the value, the caller and the rate, and picking a mode answers it" <| fun _ ->
-      let app, tracker, clock = started ReflectionReadMode.MarkOnReflect { Count = 5; Within = TimeSpan.FromSeconds 1.0 }
+      let app, tracker, clock = started ReflectionReadMode.MarkOnReflect { Count = 5; Within = hotLoopWindow }
       for _ in 1 .. 20 do
-        clock.Advance(TimeSpan.FromMilliseconds 10.0)
+        clock.Advance hotReadGap
         app.ReadAndDrop.Invoke app.Greeting
       match tracker.ReflectionReads.Notices with
       | [ { Value = value; State = NoticeState.Asked notice } ] ->
@@ -292,9 +303,9 @@ let reflectionReadTrackingTests =
       | other -> failtestf "choosing a mode should answer it, got %A" other
 
     testCase "WHY — a slow trickle of reflective reads never asks" <| fun _ ->
-      let app, tracker, clock = started ReflectionReadMode.MarkOnReflect { Count = 5; Within = TimeSpan.FromSeconds 1.0 }
+      let app, tracker, clock = started ReflectionReadMode.MarkOnReflect { Count = 5; Within = hotLoopWindow }
       for _ in 1 .. 20 do
-        clock.Advance(TimeSpan.FromMilliseconds 400.0)
+        clock.Advance slowReadGap
         app.ReadAndDrop.Invoke app.Greeting
       tracker.ReflectionReads.Notices |> Expect.isEmpty "never hot"
 

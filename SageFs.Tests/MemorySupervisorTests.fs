@@ -14,6 +14,22 @@ open FsCheck
 open SageFs
 open SageFs.MemorySupervisor
 
+// How long a session has sat idle, as a multiple of the product's idle floor
+// (`defaultThresholds.IdleAfter`): the floor decides which sessions may be shed, so the
+// scenarios are written relative to it and follow it if it moves.
+
+/// Idle for four floors: well past the point where it may be shed.
+let private idleWellPastFloor = defaultThresholds.IdleAfter * 4.0
+
+/// Idle for ten floors: a long-idle session, still never shed while its user is active.
+let private idleLongPastFloor = defaultThresholds.IdleAfter * 10.0
+
+/// Idle for a sixth of a floor: recently used, so not shed.
+let private idleUnderFloor = defaultThresholds.IdleAfter / 6.0
+
+/// Idle for a fifteenth of a floor: freshly touched.
+let private idleFreshlyTouched = defaultThresholds.IdleAfter / 15.0
+
 let private mkSession id status isUserActive : SessionSnapshot =
   { Id = id; Status = status; IsUserActive = isUserActive }
 
@@ -28,8 +44,8 @@ let namedShapeTests =
       let critical = machine 55_000_000_000L 1_000_000_000L 62_000_000_000L
       let sessions =
         [ mkSession "active-viewed" SessionMemoryStatus.Active true
-          mkSession "idle-2h" (SessionMemoryStatus.Idle(TimeSpan.FromHours 2.0)) false
-          mkSession "idle-5m" (SessionMemoryStatus.Idle(TimeSpan.FromMinutes 5.0)) false
+          mkSession "idle-2h" (SessionMemoryStatus.Idle idleWellPastFloor) false
+          mkSession "idle-5m" (SessionMemoryStatus.Idle idleUnderFloor) false
           mkSession "dead" SessionMemoryStatus.Dead false
           mkSession "active-unviewed" SessionMemoryStatus.Active false ]
       let decision = step defaultThresholds MemoryPressure.Normal critical sessions
@@ -104,8 +120,8 @@ let neverTouchesActiveTests =
     testCase "every session active: refuses and reaps, but proposes stopping nobody" <| fun () ->
       let critical = machine 55_000_000_000L 1_000_000_000L 62_000_000_000L
       let sessions =
-        [ mkSession "a" (SessionMemoryStatus.Idle(TimeSpan.FromHours 5.0)) true
-          mkSession "b" (SessionMemoryStatus.Idle(TimeSpan.FromHours 5.0)) true ]
+        [ mkSession "a" (SessionMemoryStatus.Idle idleLongPastFloor) true
+          mkSession "b" (SessionMemoryStatus.Idle idleLongPastFloor) true ]
       let decision = step defaultThresholds MemoryPressure.Normal critical sessions
       decision.Actions
       |> List.exists (function ShedAction.StopIdleSessions _ -> true | _ -> false)
@@ -113,7 +129,7 @@ let neverTouchesActiveTests =
 
     testCase "idle-eligible but freshly touched (under the idle floor) is never shed" <| fun () ->
       let pressured = machine 20_000_000_000L 3_000_000_000L 62_000_000_000L
-      let sessions = [ mkSession "fresh" (SessionMemoryStatus.Idle(TimeSpan.FromMinutes 2.0)) false ]
+      let sessions = [ mkSession "fresh" (SessionMemoryStatus.Idle idleFreshlyTouched) false ]
       let decision = step defaultThresholds MemoryPressure.Normal pressured sessions
       decision.Actions
       |> List.exists (function ShedAction.StopIdleSessions _ -> true | _ -> false)

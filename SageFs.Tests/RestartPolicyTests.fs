@@ -14,35 +14,35 @@ let now = DateTime(2026, 2, 14, 12, 0, 0)
 let nextBackoffTests = testList "nextBackoff" [
   test "count 0 returns base" {
     nextBackoff defaultPolicy 0
-    |> Expect.equal "base delay" (TimeSpan.FromSeconds 1.0)
+    |> Expect.equal "base delay" defaultPolicy.BackoffBase
   }
   test "count 1 returns base (2^0 = 1)" {
     nextBackoff defaultPolicy 1
-    |> Expect.equal "1s" (TimeSpan.FromSeconds 1.0)
+    |> Expect.equal "1s" defaultPolicy.BackoffBase
   }
   test "count 2 returns 2s (2^1)" {
     nextBackoff defaultPolicy 2
-    |> Expect.equal "2s" (TimeSpan.FromSeconds 2.0)
+    |> Expect.equal "2s" (defaultPolicy.BackoffBase * 2.0)
   }
   test "count 3 returns 4s (2^2)" {
     nextBackoff defaultPolicy 3
-    |> Expect.equal "4s" (TimeSpan.FromSeconds 4.0)
+    |> Expect.equal "4s" (defaultPolicy.BackoffBase * 4.0)
   }
   test "count 4 returns 8s (2^3)" {
     nextBackoff defaultPolicy 4
-    |> Expect.equal "8s" (TimeSpan.FromSeconds 8.0)
+    |> Expect.equal "8s" (defaultPolicy.BackoffBase * 8.0)
   }
   test "count 5 returns 16s (2^4)" {
     nextBackoff defaultPolicy 5
-    |> Expect.equal "16s" (TimeSpan.FromSeconds 16.0)
+    |> Expect.equal "16s" (defaultPolicy.BackoffBase * 16.0)
   }
   test "count 6 returns 30s (capped)" {
     nextBackoff defaultPolicy 6
-    |> Expect.equal "capped at 30s" (TimeSpan.FromSeconds 30.0)
+    |> Expect.equal "capped at 30s" defaultPolicy.BackoffMax
   }
   test "very high count still capped" {
     nextBackoff defaultPolicy 100
-    |> Expect.equal "still 30s" (TimeSpan.FromSeconds 30.0)
+    |> Expect.equal "still 30s" defaultPolicy.BackoffMax
   }
 ]
 
@@ -51,7 +51,7 @@ let decideTests = testList "decide" [
     let decision, newState = decide defaultPolicy emptyState now
     match decision with
     | Decision.Restart delay ->
-      Expect.equal "1s delay" (TimeSpan.FromSeconds 1.0) delay
+      Expect.equal "1s delay" defaultPolicy.BackoffBase delay
     | Decision.GiveUp _ ->
       failtest "should restart, not give up"
     Expect.equal "count is 1" 1 newState.RestartCount
@@ -67,7 +67,7 @@ let decideTests = testList "decide" [
     let d2, s2 = decide defaultPolicy s1 (now.AddSeconds(30.0))
     match d2 with
     | Decision.Restart delay ->
-      Expect.equal "2s delay" (TimeSpan.FromSeconds 2.0) delay
+      Expect.equal "2s delay" (defaultPolicy.BackoffBase * 2.0) delay
     | Decision.GiveUp _ ->
       failtest "should restart"
     Expect.equal "count is 2" 2 s2.RestartCount

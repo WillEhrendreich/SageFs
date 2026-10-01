@@ -44,7 +44,6 @@ let private budgets : (string * int) list =
     "SageFs.Tests/HttpApiIntegrationTests.fs", 1
     "SageFs.Tests/JsonCoreFilesTests.fs", 1
     "SageFs.Tests/LandingCacheTests.fs", 2
-    "SageFs.Tests/LifecyclePropertyTests.fs", 1
     "SageFs.Tests/LiveTestActivityTests.fs", 2
     "SageFs.Tests/LiveTestActivityWiringTests.fs", 2
     "SageFs.Tests/LiveTestWatcherScopeTests.fs", 4
@@ -55,22 +54,17 @@ let private budgets : (string * int) list =
     "SageFs.Tests/LiveTestingElmTests.fs", 14
     "SageFs.Tests/LiveTestingGraphTests.fs", 20
     "SageFs.Tests/LiveTestingTypesTests.fs", 2
-    "SageFs.Tests/LocalDataRetentionTests.fs", 3
-    "SageFs.Tests/LocalDataSqliteTests.fs", 3
-    "SageFs.Tests/McpAdapterTests.fs", 8
-    "SageFs.Tests/MemorySupervisorTests.fs", 5
-    "SageFs.Tests/MultiAgentCoordinationTests.fs", 4
+    "SageFs.Tests/LocalDataSqliteTests.fs", 1
+    "SageFs.Tests/McpAdapterTests.fs", 3
+    "SageFs.Tests/MultiAgentCoordinationTests.fs", 1
     "SageFs.Tests/OwnerMonitorTests.fs", 3
     "SageFs.Tests/PatchAnnouncerTests.fs", 1
     "SageFs.Tests/PersistenceComplianceTests.fs", 1
-    "SageFs.Tests/PureModulesComprehensiveTests.fs", 13
+    "SageFs.Tests/PureModulesComprehensiveTests.fs", 2
     "SageFs.Tests/QuarantineTests.fs", 1
-    "SageFs.Tests/ReflectionReadTrackingTests.fs", 5
-    "SageFs.Tests/ReflectionReadsTests.fs", 1
     "SageFs.Tests/ReloadBroadcastTests.fs", 2
     "SageFs.Tests/ReloadPlanningTests.fs", 2
-    "SageFs.Tests/RestartJitterTests.fs", 4
-    "SageFs.Tests/RestartPolicyTests.fs", 10
+    "SageFs.Tests/RestartJitterTests.fs", 1
     "SageFs.Tests/TimeoutsTests.fs", 10
     "SageFs.Tests/WorkflowSwitchTests.fs", 1
     "SageFs.Tests/WorkflowTransitionPropertyTests.fs", 1

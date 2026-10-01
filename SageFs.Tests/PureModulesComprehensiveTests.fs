@@ -1218,15 +1218,13 @@ let rectTests = testList "Rect" [
 // RestartPolicy — supervision correctness
 // ═══════════════════════════════════════════════════════════
 
+/// The product's policy with a short reset window, so the window cases below need only a
+/// minute or two of fake time. Everything else is the default.
+let private shortResetWindow = TimeSpan.FromMinutes 1.0
+
 let restartPolicyTests = testList "RestartPolicy" [
-  let policy : RestartPolicy.Policy = {
-    MaxRestarts = 3
-    BackoffBase = TimeSpan.FromSeconds 1.0
-    BackoffMax = TimeSpan.FromSeconds 30.0
-    ResetWindow = TimeSpan.FromMinutes 1.0
-    StartupCrashWindow = TimeSpan.FromSeconds 10.0
-    StartupCrashMaxRestarts = 3
-  }
+  let policy : RestartPolicy.Policy =
+    { RestartPolicy.defaultPolicy with MaxRestarts = 3; ResetWindow = shortResetWindow }
   testList "nextBackoff" [
     test "count 0 returns base delay" {
       let d = RestartPolicy.nextBackoff policy 0
@@ -1273,7 +1271,7 @@ let restartPolicyTests = testList "RestartPolicy" [
       | RestartPolicy.Decision.Restart _, _ -> failwith "expected give up past limit"
     }
     test "window expiry resets count" {
-      let oldStart = now.AddMinutes(-2.0)
+      let oldStart = now - policy.ResetWindow * 2.0
       let state = { RestartPolicy.emptyState with RestartCount = 3; WindowStart = Some oldStart }
       match RestartPolicy.decide policy state now with
       | RestartPolicy.Decision.Restart _, newState ->
@@ -1281,7 +1279,7 @@ let restartPolicyTests = testList "RestartPolicy" [
       | RestartPolicy.Decision.GiveUp e, _ -> failwith (sprintf "expected reset, got %A" e)
     }
     test "window boundary is strict greater-than" {
-      let exactBoundary = now.AddMinutes(-1.0)
+      let exactBoundary = now - policy.ResetWindow
       let state = { RestartPolicy.emptyState with RestartCount = 3; WindowStart = Some exactBoundary }
       match RestartPolicy.decide policy state now with
       | RestartPolicy.Decision.GiveUp _, _ -> ()
@@ -2005,16 +2003,20 @@ let mcpAdapterPureTests = testList "McpAdapter pure" [
 // Watchdog — daemon supervision state machine
 // ═══════════════════════════════════════════════════════════
 
-let private mkWatchdogConfig maxRestarts (grace: float) =
-  { Watchdog.Config.CheckInterval = TimeSpan.FromSeconds(5.0: float)
-    RestartPolicy =
-      { Policy.MaxRestarts = maxRestarts
-        BackoffBase = TimeSpan.FromSeconds(1.0: float)
-        BackoffMax = TimeSpan.FromSeconds(30.0: float)
-        ResetWindow = TimeSpan.FromMinutes(5.0: float)
-        StartupCrashWindow = TimeSpan.FromSeconds(10.0)
-        StartupCrashMaxRestarts = 3 }
-    GracePeriod = TimeSpan.FromSeconds(grace) }
+/// The grace period every Watchdog.decide case below runs with. The cases put the daemon's last
+/// start inside it or beyond it, so they are written as fractions and multiples of it.
+let private watchdogGrace = TimeSpan.FromSeconds 10.0
+
+/// A daemon that started a third of the grace period ago: still inside it.
+let private startedInsideGrace (now: DateTime) = now - watchdogGrace * 0.3
+
+/// A daemon that started two grace periods ago: well past it.
+let private startedPastGrace (now: DateTime) = now - watchdogGrace * 2.0
+
+let private mkWatchdogConfig maxRestarts =
+  { Watchdog.Config.CheckInterval = Timeouts.watchdogInterval
+    RestartPolicy = { RestartPolicy.defaultPolicy with MaxRestarts = maxRestarts }
+    GracePeriod = watchdogGrace }
 
 let private watchdogSeed = RestartPolicy.JitterSeed 1L
 
@@ -2026,30 +2028,30 @@ let private mkWatchdogState pid lastStarted =
 
 let watchdogDecideTests = testList "Watchdog.decide" [
   test "Running daemon returns Wait" {
-    let cfg = mkWatchdogConfig 3 10.0
+    let cfg = mkWatchdogConfig 3
     let st = mkWatchdogState (Some 1234) (Some (DateTime(2025,1,1)))
     let now = DateTime(2025,1,1,0,1,0)
     let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.Running now
     action |> Expect.equal "wait" Watchdog.Action.Wait
   }
   test "NotRunning with no PID returns StartDaemon" {
-    let cfg = mkWatchdogConfig 3 10.0
+    let cfg = mkWatchdogConfig 3
     let st = mkWatchdogState None None
     let now = DateTime(2025,1,1,0,1,0)
     let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     action |> Expect.equal "start" Watchdog.Action.StartDaemon
   }
   test "NotRunning within grace period returns Wait" {
-    let cfg = mkWatchdogConfig 3 10.0
+    let cfg = mkWatchdogConfig 3
     let now = DateTime(2025,1,1,0,1,0)
-    let st = mkWatchdogState (Some 1234) (Some (now - TimeSpan.FromSeconds(3.0: float)))
+    let st = mkWatchdogState (Some 1234) (Some (startedInsideGrace now))
     let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     action |> Expect.equal "wait during grace" Watchdog.Action.Wait
   }
   test "NotRunning after grace period returns RestartDaemon" {
-    let cfg = mkWatchdogConfig 3 10.0
+    let cfg = mkWatchdogConfig 3
     let now = DateTime(2025,1,1,0,1,0)
-    let st = mkWatchdogState (Some 1234) (Some (now - TimeSpan.FromSeconds(20.0: float)))
+    let st = mkWatchdogState (Some 1234) (Some (startedPastGrace now))
     let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     match action with
     | Watchdog.Action.RestartDaemon delay ->
@@ -2057,10 +2059,10 @@ let watchdogDecideTests = testList "Watchdog.decide" [
     | other -> failwithf "Expected RestartDaemon, got %A" other
   }
   test "Max restarts reached returns GiveUp" {
-    let cfg = mkWatchdogConfig 3 10.0
+    let cfg = mkWatchdogConfig 3
     let now = DateTime(2025,1,1,0,1,0)
     let st =
-      { mkWatchdogState (Some 1234) (Some (now - TimeSpan.FromSeconds(20.0: float))) with
+      { mkWatchdogState (Some 1234) (Some (startedPastGrace now)) with
           RestartState = { RestartCount = 3; LastRestartAt = Some now; WindowStart = Some now } }
     let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     match action with
@@ -2068,21 +2070,21 @@ let watchdogDecideTests = testList "Watchdog.decide" [
     | other -> failwithf "Expected GiveUp, got %A" other
   }
   test "Unknown status returns Wait" {
-    let cfg = mkWatchdogConfig 3 10.0
+    let cfg = mkWatchdogConfig 3
     let st = mkWatchdogState (Some 1234) (Some (DateTime(2025,1,1)))
     let now = DateTime(2025,1,1,0,1,0)
     let action, _ = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.Unknown now
     action |> Expect.equal "wait on unknown" Watchdog.Action.Wait
   }
   test "Restart increments restart count" {
-    let cfg = mkWatchdogConfig 5 10.0
+    let cfg = mkWatchdogConfig 5
     let now = DateTime(2025,1,1,0,1,0)
-    let st = mkWatchdogState (Some 1234) (Some (now - TimeSpan.FromSeconds(20.0: float)))
+    let st = mkWatchdogState (Some 1234) (Some (startedPastGrace now))
     let _, newState = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now
     (newState.RestartState.RestartCount, 0) |> Expect.isGreaterThan "count incremented"
   }
   test "StartDaemon on no PID keeps no PID in state" {
-    let cfg = mkWatchdogConfig 3 10.0
+    let cfg = mkWatchdogConfig 3
     let st = mkWatchdogState None None
     let now = DateTime(2025,1,1,0,1,0)
     let _, newState = Watchdog.decide cfg watchdogSeed st Watchdog.DaemonStatus.NotRunning now

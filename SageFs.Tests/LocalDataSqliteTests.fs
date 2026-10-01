@@ -57,6 +57,8 @@ let private aggregateRows (dbPath: string) =
   use reader = command.ExecuteReader()
   [ while reader.Read() do yield reader.GetString 0, reader.GetString 1, reader.GetInt64 2 ]
 
+/// A friction retention policy small enough that a handful of rows exercises every bound: a
+/// short age window, three rows, two aggregate versions. Not the product's defaults.
 let private policy : LocalDataRetention.FrictionPolicy =
   { MaxAge = TimeSpan.FromDays 5.0; MaxRows = 3; MaxAggregateVersions = 2 }
 
@@ -130,7 +132,7 @@ let localDataSqliteTests =
         let _, depart = ledgerEntry 1L (t0.AddHours 1.0) joined (CohortCommand.Depart ada)
         port.Append join
         port.Append depart
-        CohortLedgerSqlite.Sqlite.pruneFinished (TimeSpan.FromDays 7.0) now.UtcDateTime path
+        CohortLedgerSqlite.Sqlite.pruneFinished DataRetention.cohortLedgerRetention now.UtcDateTime path
         |> Expect.equal "the finished cohort is cleared" (LocalDataRetention.LedgerDecision.Clear(depart.Clock, 2))
         port.ReadAll() |> Expect.isEmpty "nothing left on disk"
         (CohortLedgerSqlite.Sqlite.usage path).Rows |> Expect.equal "usage agrees" 0L)
@@ -142,7 +144,7 @@ let localDataSqliteTests =
         let ada = MemberTable.MemberId.Mcp "ada"
         let _, join = ledgerEntry 0L (now.UtcDateTime.AddDays -300.0) (CohortState.empty ()) (CohortCommand.Join(ada, JoinableRole.Implementer, None))
         port.Append join
-        CohortLedgerSqlite.Sqlite.pruneFinished (TimeSpan.FromDays 7.0) now.UtcDateTime path
+        CohortLedgerSqlite.Sqlite.pruneFinished DataRetention.cohortLedgerRetention now.UtcDateTime path
         |> Expect.equal "kept" (LocalDataRetention.LedgerDecision.KeepActive(LocalDataRetention.CohortActivity.Active(1, 0, 0)))
         port.ReadAll() |> List.length |> Expect.equal "the row is still there" 1)
   ]

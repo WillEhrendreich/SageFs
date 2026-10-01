@@ -24,7 +24,7 @@ let private rowOf (i: int) (versionByte: byte, ageHours: byte, kindByte: byte) :
 let private rowsOf (raw: (byte * byte * byte) list) = raw |> List.mapi rowOf
 
 let private policyOf (maxRows: byte) : FrictionPolicy =
-  { MaxAge = TimeSpan.FromDays 30.0; MaxRows = int maxRows % 60; MaxAggregateVersions = 2 }
+  { MaxAge = SageFs.DataRetention.frictionMaxAge; MaxRows = int maxRows % 60; MaxAggregateVersions = 2 }
 
 let private ids (rows: RetainedRow list) = rows |> List.map (fun r -> r.Id) |> Set.ofList
 
@@ -93,7 +93,7 @@ let localDataRetentionTests =
 
     testProperty "at most MaxAggregateVersions versions keep aggregates, the most recently seen ones" <|
       fun (seen: (byte * byte) list) ->
-        let policy = { MaxAge = TimeSpan.FromDays 30.0; MaxRows = 10; MaxAggregateVersions = 3 }
+        let policy = { MaxAge = SageFs.DataRetention.frictionMaxAge; MaxRows = 10; MaxAggregateVersions = 3 }
         let lastSeen =
           seen
           |> List.map (fun (v, hoursAgo) -> sprintf "0.5.%d" (int v % 8), now.AddHours(-(float hoursAgo)))
@@ -109,7 +109,7 @@ let localDataRetentionTests =
 
     testList "the cohort ledger" [
       let t0 = DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc)
-      let retention = TimeSpan.FromDays 7.0
+      let retention = SageFs.DataRetention.cohortLedgerRetention
       let joined, joinEntry = mkEntry 0L t0 (CohortState.empty ()) (CohortCommand.Join("ada", JoinableRole.Implementer, None))
       let _, departEntry = mkEntry 1L (t0.AddHours 1.0) joined (CohortCommand.Depart "ada")
 

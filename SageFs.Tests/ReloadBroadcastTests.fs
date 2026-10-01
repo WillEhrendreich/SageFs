@@ -22,6 +22,12 @@ module Outcome = SageFs.Features.ReloadOutcome.ReloadOutcome
 module Broadcast = SageFs.Features.ReloadBroadcast
 module Planning = SageFs.Features.ReloadPlanning
 
+/// How long a save waited for the compiler before it was dropped. The event reports it in seconds.
+let private queueWaited = TimeSpan.FromSeconds 60.0
+
+/// The eval budget a save ran out of, as the timed-out event reports it.
+let private evalBudget = TimeSpan.FromMinutes 5.0
+
 let private allOutcomes =
   [ ReloadOutcome.Patched(1, 3)
     ReloadOutcome.Patched(3, 3)
@@ -264,19 +270,19 @@ let reloadBroadcastTests =
     // the rest of the session, with no log, no SSE and no signal at all. The
     // recovery must be LOUD, and it must say what happens next.
     test "WHY — a save that could not even reach the compiler says so" {
-      let evt = Broadcast.compilerBusy "Handlers.fs" (TimeSpan.FromSeconds 60.0)
+      let evt = Broadcast.compilerBusy "Handlers.fs" queueWaited
       evt |> DevReloadEvent.refreshes |> Expect.isFalse "nothing compiled, so nothing may be fetched"
       match evt with
       | DevReloadEvent.NotApplied report ->
         report.Outcome |> Expect.equal "a client can branch on it" "CompilerBusy"
         report.Message |> Expect.stringContains "names the file that was dropped" "Handlers.fs"
-        report.Message |> Expect.stringContains "says how long it waited" "60"
+        report.Message |> Expect.stringContains "says how long it waited" (string (int queueWaited.TotalSeconds))
         report.SuggestedAction |> Expect.stringContains "says what to do about it" "Save again"
       | other -> failtestf "a busy compiler must be NotApplied, got %A" other
     }
 
     test "an eval that ran out of its budget is reported, not swallowed" {
-      let evt = Broadcast.evalTimedOut "Handlers.fs" (TimeSpan.FromMinutes 5.0)
+      let evt = Broadcast.evalTimedOut "Handlers.fs" evalBudget
       evt |> DevReloadEvent.refreshes |> Expect.isFalse "an unfinished eval changed nothing"
       match evt with
       | DevReloadEvent.NotApplied report ->

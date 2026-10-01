@@ -96,7 +96,7 @@ let modeTests =
           line.Contains "—" |> Expect.isFalse "no em dash"
   ]
 
-let private threshold = { Count = 5; Within = TimeSpan.FromSeconds 1.0 }
+let private threshold = { Count = 5; Within = HotLoopThreshold.standard.Within }
 
 let private ticks (ms: float) = int64 (TimeSpan.FromMilliseconds ms).Ticks
 
