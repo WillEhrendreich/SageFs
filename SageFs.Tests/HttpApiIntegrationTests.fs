@@ -765,6 +765,32 @@ let integrationTests =
       doc.Dispose()
     }
 
+    testTask "POST /exec still answers after a pending Task was bound at top level, because the live-values pass must not wait on it" {
+      let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
+      // A Task that never completes. Reading its Result waits for it, and the live-values pass ran
+      // that read on the thread every eval of the session runs on, so the NEXT eval never came back.
+      let bind =
+        {| code = "let pendingForever = System.Threading.Tasks.TaskCompletionSource<int>().Task;;"
+           working_directory = testProjectDir |}
+      let! bindStatus, _ = postJson client "/exec" bind
+      bindStatus |> Expect.equal "the binding evaluated" 200
+
+      let next = {| code = "let afterPending = 1 + 1;;" ; working_directory = testProjectDir |}
+      let answer = postJson client "/exec" next
+      let! winner = Task.WhenAny(answer, Task.Delay TestTimeouts.patience)
+      Expect.isTrue "the next eval answered instead of hanging behind the pending Task" (obj.ReferenceEquals(winner, answer))
+      let! status, body = answer
+      status |> Expect.equal "200 OK" 200
+      let doc = JsonDocument.Parse(body: string)
+      doc.RootElement.GetProperty("success").GetBoolean() |> Expect.isTrue "the eval succeeded"
+      doc.Dispose()
+
+      // Leave the shared session as the other cases expect it.
+      let! _, _ = postJson client "/reset" {||}
+      ()
+    }
+
     // ── Session lifecycle ───────────────────────────────────────
 
     testTask "POST /api/sessions/create creates a new session" {
