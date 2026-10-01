@@ -194,3 +194,25 @@ type LedgerOnly =
   static member Orig() : int = 1
   [<MethodImpl(MethodImplOptions.NoInlining)>]
   static member Repl() : int = 2
+
+/// An async machine, by hand, whose `MoveNext` waits for a release: nothing guards it, so a getter stuck in it is only
+/// ever given up on.
+[<CompilerGenerated>]
+type ReleasableMachine(release: System.Threading.ManualResetEventSlim, inside: System.Threading.ManualResetEventSlim) =
+  interface IAsyncStateMachine with
+    member _.MoveNext() =
+      inside.Set()
+      while not release.IsSet do
+        ()
+    member _.SetStateMachine(_) = ()
+
+/// A getter that gets stuck in the machine and, once released, goes on into a guarded helper.
+type Lingerer(release: System.Threading.ManualResetEventSlim, inside: System.Threading.ManualResetEventSlim) =
+  let mutable helperRan = 0
+  member _.HelperRan = System.Threading.Volatile.Read(&helperRan)
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  member _.Helper() : int =
+    System.Threading.Interlocked.Increment(&helperRan)
+  member this.Run : int =
+    (ReleasableMachine(release, inside) :> IAsyncStateMachine).MoveNext()
+    this.Helper()

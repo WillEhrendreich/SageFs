@@ -159,3 +159,35 @@ let memberEvaluationGuardTests =
           evaluate (preparing (Releases())) name (probe ()) |> ignore
         Guard.Pending |> Expect.equal "the count is where it was" before))
   ]
+
+/// The same step with the real patcher, in this process: nothing here can end it, because the only code that could is a
+/// state machine that waits for a release the test gives.
+[<Tests>]
+let realGuardsOnAbandonedThreadTests =
+  testList "real guards on a click whose thread is abandoned" [
+
+    testCase "WHY — the guards stay on while the abandoned thread runs, it is stopped the moment it enters guarded code, and they come off when it ends" <| fun _ ->
+      let release = new ManualResetEventSlim(false)
+      let inside = new ManualResetEventSlim(false)
+      let target = SageFs.Tests.GuardFixtures.Lingerer(release, inside)
+      let gone = new ManualResetEventSlim(false)
+      let prepared : GuardLease ref = ref { Coverage = GuardCoverage.NotGuarded NotGuardedReason.NothingRan; Release = ignore }
+      let preparer : GuardPreparer =
+        fun property value ->
+          let lease = SageFs.Features.GuardPatcher.prepare property value
+          prepared.Value <- lease
+          { lease with Release = (fun () -> lease.Release(); gone.Set()) }
+      let evaluator = Evaluator(limits 4, unfiltered, GuardsOn preparer)
+      let run = typeof<SageFs.Tests.GuardFixtures.Lingerer>.GetProperty "Run"
+      try
+        let evaluated = evaluator.RunGuarded run (box target)
+        evaluated.Outcome |> Expect.equal "given up on" (Error MemberFailure.MemberTimedOut)
+        evaluated.Guards.Trip |> Expect.equal "no guard stopped the machine" GuardTrip.NotTripped
+        inside.IsSet |> Expect.isTrue "the thread was in the machine"
+        gone.IsSet |> Expect.isFalse "the guards are still on: the abandoned thread may run guarded code"
+        (SageFs.Features.GuardPatcher.patchedCount (), 0) |> Expect.isGreaterThan "something of ours is still patched"
+      finally
+        release.Set()
+      gone.Wait TestTimeouts.patienceBrief |> Expect.isTrue "when the thread ended the guards came off"
+      target.HelperRan |> Expect.equal "the entry guard stopped the thread before the helper's body ran" 0
+  ]
