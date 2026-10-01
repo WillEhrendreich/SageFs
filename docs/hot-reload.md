@@ -538,11 +538,21 @@ I'd rather you hear this from me than find it at 11pm.
   that file is reset. The outcome says restart-required, which is true, but it
   doesn't say your state went with it. Start the app with `run_app` and SageFs
   patches it by metadata delta, or restarts it properly and says why.
-- **A metadata delta changes the app, and not the REPL.** The delta goes into the
-  process the app runs in, the worker. The FSI host, where `send_fsharp_code` and
-  live tests run, keeps the code of the last build until the session restarts or you
-  `hard_reset_fsi_session` with `rebuild`. A REPL call to a function you just saved
-  runs the old body. I haven't built the second delta that would update it.
+- **A metadata delta changes the app, and not the REPL, and the session says so.**
+  The delta goes into the process the app runs in, the worker. The FSI host, where
+  `send_fsharp_code`, `check_fsharp_code` and live tests run, keeps the code of the
+  last build, so a REPL call to a function you just saved runs the old body. I
+  measured it: the app served `closure:B` and the REPL answered `closure:A`. That is
+  not left as a note. The session carries it as `replFreshness` (`InSync` or
+  `BehindApp`, with the number of saves and what was patched), and it is a field in
+  `get_session_status` and `list_sessions`, a warning line after the result of every
+  `send_fsharp_code`, `check_fsharp_code` and `run_tests`, and a line on the
+  dashboard's session card. It clears when the worker is replaced. What brings it
+  level is `hard_reset_fsi_session` with `rebuild=true`, and the warning says what it
+  costs: it replaces the worker, so the running app stops with it and its in-memory
+  state is lost, and `run_app` starts it again. I did not make that automatic, and the
+  [decision](decisions.md#the-repl-is-behind-the-app-after-a-delta-and-the-session-says-so-instead-of-refreshing-it-behind-your-back)
+  says why.
 - **The build is the floor.** A save to a `run_app` app waits for `dotnet build`,
   1.6 to 2.4 seconds on my fixture, and everything after it is milliseconds. A
   detour has no build to wait for.

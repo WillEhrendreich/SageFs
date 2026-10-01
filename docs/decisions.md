@@ -1023,9 +1023,9 @@ Choices, and what each cost:
   worker spawns, the save's own build and the FSI host included. A route that is off puts neither in the environment.
 
 What it leaves undone: the FSI host keeps the code of the last build, so a REPL call to a function the save changed runs the
-old body until a restart or a `hard_reset_fsi_session` with `rebuild`. Making the host take the same delta needs the host
-started editable too, and it is where the guards patch, so I did not do it. A field added to a type, a new closure class
-and a lambda that starts capturing something still restart, and each says which.
+old body. That is a state the session carries and every surface shows, and the next entry is what I did about it and what I
+chose not to. A field added to a type, a new closure class and a lambda that starts capturing something still restart, and
+each says which.
 
 Measured on this machine (16 logical cores, Linux, .NET SDK 11.0.0-rc.1.26425.128; the run_app fixture; n = 6 saves, medians):
 file written to the new body served, 2.6 s on .NET 10 (twice) and 1.8 s then 2.6 s on .NET 11, the second with other builds running on the
@@ -1048,5 +1048,63 @@ Evidence: `SageFs.Host/RunAppDelta.fs`, `SageFs.Core/Features/PatchRoute.fs`, `S
 `SageFs.Tests/RunAppDeltaTests.fs` (the rows, the chain, the build that fails, the route off, and the cost, printed as
 `DELTA-COST`), `SageFs.Tests/DeltaRouteTests.fs`, `SageFs.Simulation/DeltaRoute*.fs` with `SageFs.Tests/DeltaRouteSimTests.fs`,
 and the debugger row in `SageFs.Tests/HotReloadDebuggerTests.fs`.
-Reopen it if: the FSI host needs to see a delta, #19941 ships in an SDK (the emitter becomes the part that applies and confirms),
-or a client needs more than `mechanism` to tell the two routes apart.
+Reopen it if: #19941 ships in an SDK (the emitter becomes the part that applies and confirms), or a client needs more than
+`mechanism` to tell the two routes apart.
+
+## The REPL is behind the app after a delta, and the session says so instead of refreshing it behind your back
+
+A delta goes into the worker, where the app runs. The FSI host, where `send_fsharp_code`, `check_fsharp_code` and live tests run,
+keeps the build from before it. I measured that rather than assume it: the app served `closure:B` and the REPL answered
+`closure:A`, on .NET 10 and 11 (`run_app repl freshness`). A tool that does that and says nothing is lying with every result,
+and the first version of this route did exactly that, in a paragraph of a doc.
+
+**What it is now.** `ReplFreshness` is `InSync | BehindApp of savesSince * declarations`, carried on `SessionInfo`. The session
+manager folds it from the reload reports it already receives: a save that a metadata delta took puts the REPL behind, counted once
+(its pending report and its confirmation are one save) and naming what it patched; a detour, a restart, a failed compile and a
+save that changed nothing do not. A confirmation seen with no pending report before it (a daemon that joined late) still puts the
+REPL behind, because silence is the one thing this state must not be. A replaced worker is built from the current build, so it
+clears the state. The worker's pending report carries `declarations` for this, which is the only reason that field exists.
+It is shown as a field in `get_session_status` (every shape) and `list_sessions` (text, JSON read model and `/api/sessions`), as
+a warning after the result of every `send_fsharp_code` (success and failure alike), `check_fsharp_code` and `run_tests`, as a
+field on their structured results, and as a line on the dashboard session card. The card line is a line of the card's single
+column, so a narrow card only wraps it; a real Chromium page checks that at five widths with the dashboard's own stylesheet.
+One test per surface, through the real tool member, reading the text an agent reads.
+
+**The remedy it names is honest about its price.** `hard_reset_fsi_session` with `rebuild=true` brings the REPL level, and it
+does that by replacing the worker, so the running app stops with it and its in-memory state is lost (`AppRun.acrossWorkerRestart`:
+a running app died with the old worker). That is the thing the delta route exists to avoid, so the warning says so.
+
+**Why I did not make the refresh automatic.** The REPL can be brought level without touching the app. The worker has its own
+hard reset of the FSI host (`WorkerMessage.HardResetSession` with no rebuild): measured, two runs each, it took 2.5 and 2.7 s on
+.NET 10 and 2.1 and 2.0 s on .NET 11, the REPL then answered the patched body, and the app kept its process and its state. I looked hard at doing
+that in the background after a save, off the eval path and coalesced across a burst, and stopped, for three reasons that each
+need their own work and one of which is silent:
+
+- It wipes the REPL. A new FSI session has none of the definitions the user or an agent made, and none of what an init script
+  defined. Doing it only when the REPL provably holds nothing needs an "idle and empty" check inside the eval actor (the router
+  cancels a running eval before a hard reset, so the check cannot be made outside it) and a look for a startup profile. I did not
+  build that.
+- It kills a test run in flight. Tests run in the FSI host, which the actor does not see as busy, so the actor's idle phase
+  proves nothing about them.
+- It desynchronises live testing without a sound. The daemon fetches each session's instrumentation maps and test discovery once,
+  when a worker becomes ready (`WorkerPostReady`). A new FSI host instruments a new copy of the assemblies, so probe numbering
+  changes under a map the daemon still holds, and coverage is then attributed to the wrong lines. A worker restart re-fetches both. The editor's
+  existing in-worker hard reset has the same exposure unless something else re-fetches, and I did not check which.
+
+Applying the same delta to the FSI host's copy is the other way to remove the gap, and it is blocked more fundamentally: the host
+reads coverage, and a patched method runs without its probes (a test pins that), so every patched method would read as uncovered in
+the one process that reports coverage; and it needs the host started editable, a protocol message, and the delta's apply code in
+the host's separate source list, where the guards patch with Harmony and the Harmony fence would refuse.
+
+So the gap is announced everywhere an agent or a person looks, in words that say what to do and what it costs, and it is not
+removed. What would remove it: the daemon re-fetching instrumentation maps and discovery after any FSI host swap, an actor-side
+idle-and-empty check, and the host's in-flight test count. Then the refresh is a background step with the loud state held until it
+finishes. Nothing here prevents it, and `ReplFreshness` is the state it would drive.
+
+Evidence: `SageFs.Core/SessionReload.fs` (`ReplFreshness`), `SageFs.Core/SessionManager.fs` (the fold and the clear),
+`SageFs.Tests/ReplFreshnessTests.fs` (the fold, the words, the wire), `SageFs.Tests/ReplFreshnessSurfaceTests.fs` (status, list,
+send, check), `SageFs.Tests/McpRunTestsTests.fs`, `SageFs.Tests/ReplFreshnessDashboardTests.fs` (the card, in HTML and in
+Chromium), `SageFs.Tests/SessionManagerRebuildOutcomeTests.fs` (the session carries it, a replaced worker clears it), and
+`SageFs.Tests/RunAppDeltaTests.fs` (`run_app repl freshness`, the measurement).
+Reopen it if: the daemon starts re-fetching maps and discovery after a host swap, or the FSI host can apply a delta and keep its
+coverage.

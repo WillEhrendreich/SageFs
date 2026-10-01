@@ -100,6 +100,10 @@ let tests =
       text |> Expect.stringContains "says the REPL and live tests run the build from before" "REPL and live tests"
       text |> Expect.stringContains "says what to do" "hard_reset_fsi_session"
       text |> Expect.stringContains "with the argument that does it" "rebuild=true"
+      // The remedy is honest about its price: it replaces the worker, and an app that was patched in place to keep its state dies with it.
+      text |> Expect.stringContains "says the running app stops with it" "running app stops"
+      text |> Expect.stringContains "and that its state goes" "state is lost"
+      text |> Expect.stringContains "and how to start it again" "run_app"
       ReplFreshness.describe (ReplFreshness.BehindApp (1, [ "A.f" ])) |> Expect.stringContains "one save is spelled as one" "1 save "
 
     testCase "WHY - a long list of declarations is cut with a count, never dropped silently, so the warning stays readable" <| fun _ ->

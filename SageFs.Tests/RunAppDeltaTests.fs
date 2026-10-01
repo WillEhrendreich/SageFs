@@ -338,6 +338,52 @@ let runAppDeltaTests =
       }
   ]
 
+// -- the REPL after a delta -----------------------------------------------------------------------------------------
+
+/// What the REPL answers to `code`, as the text the worker sends back.
+let private replEval (app: RunningApp) (code: string) : Task<string> = task {
+  let! answer = app.Proxy (SageFs.WorkerProtocol.WorkerMessage.EvalCode(code, Guid.NewGuid().ToString("N"))) |> Async.StartAsTask
+  match answer with
+  | SageFs.WorkerProtocol.WorkerResponse.EvalResult(_, Result.Ok text, _, _) -> return text
+  | other -> return sprintf "<%A>" other
+}
+
+[<Tests>]
+let runAppReplTests =
+  Integration.hostList "run_app repl freshness" [
+    for runtime in HostRuntime.all do
+      testTask (sprintf "[%s] the REPL answers the build from before a delta, and the worker's own reset of its FSI host brings it level without touching the app" (HostRuntime.moniker runtime)) {
+        let! app = startRunApp runtime
+        try
+          let! before = replEval app "RunAppDeltaFixture.Handlers.closure ()"
+          before |> Expect.stringContains "the REPL runs the first build" "closure:A!?"
+          let! pid = get app "pid"
+          let! _ = saveEdits app app.StateSource [ "\"closure:A\"", "\"closure:B\"" ]
+          let! served = settle app "closure" "closure:B!?"
+          served |> Expect.equal "the app serves the patched body" "closure:B!?"
+          let! stale = replEval app "RunAppDeltaFixture.Handlers.closure ()"
+          // The staleness this whole state exists to announce: the app serves the patched body, the REPL runs the old one.
+          stale |> Expect.stringContains "the REPL still answers the old body, which is why the session says it is behind" "closure:A!?"
+          let watch = System.Diagnostics.Stopwatch.StartNew()
+          let! reset = app.Proxy (SageFs.WorkerProtocol.WorkerMessage.HardResetSession(false, Guid.NewGuid().ToString("N"))) |> Async.StartAsTask
+          let resetMs = watch.Elapsed.TotalMilliseconds
+          match reset with
+          | SageFs.WorkerProtocol.WorkerResponse.HardResetResult(_, Result.Ok _) -> ()
+          | other -> failtestf "the worker's own hard reset of its FSI host should succeed: %A" other
+          let! level = replEval app "RunAppDeltaFixture.Handlers.closure ()"
+          let! pidAfter = get app "pid"
+          let! stillServing = get app "closure"
+          // The worker's own reset of the FSI host (no rebuild) brings the REPL level and leaves the app alone.
+          level |> Expect.stringContains "the REPL now answers the patched body" "closure:B!?"
+          stillServing |> Expect.equal "the app still serves it" "closure:B!?"
+          pidAfter |> Expect.equal "in the same process" pid
+          eprintfn "REPL-FRESHNESS [%s] the worker's own hard reset of its FSI host without a rebuild took %.0f ms, one run; the REPL then answered the patched body and the app kept its process"
+            (HostRuntime.moniker runtime) resetMs
+        finally
+          stop app
+      }
+  ]
+
 // -- what the route costs -------------------------------------------------------------------------------------------
 
 /// How many times each mode runs the call-heavy loop after a warm-up run.

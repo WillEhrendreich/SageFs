@@ -264,7 +264,7 @@ module ReplFreshness =
         | names when names.Length <= namedInWarning -> sprintf " (%s)" (String.concat ", " names)
         | names -> sprintf " (%s, and %d more)" (names |> List.truncate namedInWarning |> String.concat ", ") (names.Length - namedInWarning)
       sprintf
-        "The REPL is BEHIND the app: the app was patched in place on %s%s, and the REPL and live tests still run the build from before it, so a call to what changed runs the OLD code. hard_reset_fsi_session with rebuild=true brings them level."
+        "The REPL is BEHIND the app: the app was patched in place on %s%s, and the REPL and live tests still run the build from before it, so a call to what changed runs the OLD code. hard_reset_fsi_session with rebuild=true brings them level, and it replaces the worker, so the running app stops with it and its in-memory state is lost (run_app starts it again)."
         (plural saves "save")
         named
 
