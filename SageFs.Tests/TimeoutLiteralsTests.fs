@@ -17,8 +17,8 @@ let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..")
 let private literalPattern =
   Regex(@"TimeSpan\.From(Seconds|Milliseconds|Minutes|Hours|Days)\s*\(?\s*[0-9]|Task\.Delay\s*\(?\s*[0-9]|Thread\.Sleep\s*\(?\s*[0-9]", RegexOptions.Compiled)
 
-/// The one file allowed to hold the product's durations.
-let private central = Set.ofList [ "SageFs.Core/Timeouts.fs" ]
+/// The files allowed to hold durations: the product's, and the ones a test picks on purpose.
+let private central = Set.ofList [ "SageFs.Core/Timeouts.fs"; "SageFs.Tests/TestInfrastructure.fs" ]
 
 /// What each file may still spell out itself. Ratchet down, never up.
 let private budgets : (string * int) list =
@@ -108,7 +108,6 @@ let private budgets : (string * int) list =
     "SageFs.Tests/StatusWaitTests.fs", 3
     "SageFs.Tests/StreamingProxyTests.fs", 15
     "SageFs.Tests/TestExecutionReportTests.fs", 3
-    "SageFs.Tests/TestInfrastructure.fs", 4
     "SageFs.Tests/TestNarrationTests.fs", 13
     "SageFs.Tests/TestRunExplainerTests.fs", 5
     "SageFs.Tests/TestRunKeyTests.fs", 1

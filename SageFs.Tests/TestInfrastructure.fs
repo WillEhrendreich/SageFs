@@ -152,6 +152,244 @@ module TestTimeouts =
   /// One tick of a clock that carries no event.
   let clockTick = secs 1.
 
+  // --- tests S to Z ---
+
+  // Ceilings. A test that reaches one has failed: a ceiling is never how a passing test
+  // finishes, so a long one costs a green run nothing.
+
+  // `patience` (20 s) is defined once, in the section above, and used here too.
+
+  /// The ceiling on a wait for something a loaded machine still does within a few
+  /// seconds: a host starting or stopping, a child process dying, a call parking.
+  let shortPatience = System.TimeSpan.FromSeconds 10.
+
+  /// The ceiling on an in-process event that normally lands in milliseconds (an outcome
+  /// report, a timer firing, a callback). Five seconds absorbs a starved thread pool.
+  let briefPatience = System.TimeSpan.FromSeconds 5.
+
+  /// The ceiling on a cancellation or an expiry to take effect. It has to stay below the
+  /// read windows those tests prove were NOT waited out.
+  let cancelPatience = System.TimeSpan.FromSeconds 3.
+
+  /// The ceiling on a call documented to return at once, or a probe of a local endpoint
+  /// that should answer at once, while the work it started carries on in the background.
+  let immediateReply = System.TimeSpan.FromSeconds 1.
+
+  /// The ceiling on a real child process reaching a state that needs it to start up.
+  let processStartPatience = System.TimeSpan.FromSeconds 60.
+
+  /// The client timeout for one ordinary HTTP request to a local host that is already up.
+  let requestPatience = System.TimeSpan.FromSeconds 30.
+
+  /// The client timeout for a long-lived SSE read: the stream stays open for as long as
+  /// the test reads it, so this bounds the first byte, not the whole stream.
+  let streamReadPatience = System.TimeSpan.FromSeconds 60.
+
+  /// How long a file write is retried when a just-killed process may still hold the file.
+  let fileLockRetryPatience = System.TimeSpan.FromSeconds 15.
+
+  /// The ceiling on `npm ci` for the VS Code extension: a cold install downloads the tree.
+  let npmInstallPatience = System.TimeSpan.FromMinutes 5.
+
+  /// The ceiling on an `npm run compile*` of the VS Code extension (Fable plus tsc, cold).
+  let npmCompilePatience = System.TimeSpan.FromMinutes 10.
+
+  // Poll intervals: the pause between two looks at a condition that has no event to wait on.
+
+  /// Polling a value held in this process.
+  let inProcessPoll = System.TimeSpan.FromMilliseconds 10.
+
+  /// Polling an async condition (an actor's state, a task-returning probe).
+  let asyncConditionPoll = System.TimeSpan.FromMilliseconds 50.
+
+  /// Polling something outside the condition's own thread that changes within a second:
+  /// a child process exiting, a served value flipping, a UI probe.
+  let poll = System.TimeSpan.FromMilliseconds 100.
+
+  /// Polling a local HTTP endpoint or a file the worker writes.
+  let localHttpPoll = System.TimeSpan.FromMilliseconds 200.
+
+  /// Polling text in a VS Code window, or a daemon that is still binding its port.
+  let uiPoll = System.TimeSpan.FromMilliseconds 250.
+
+  /// Polling a host that is still warming: each probe is a real round trip, and a cold
+  /// runner takes a minute or more.
+  let warmupPoll = System.TimeSpan.FromMilliseconds 500.
+
+  /// Polling something that changes on the scale of seconds: a daemon's session list, a
+  /// status bar, a connection that is retried.
+  let slowPoll = System.TimeSpan.FromSeconds 1.
+
+  // Settles: real time a test lets pass because the effect under test needs it.
+
+  /// A real wall-clock gap so a timestamp taken after it is strictly later than one
+  /// taken before it, not the same tick.
+  let clockGap = System.TimeSpan.FromMilliseconds 30.
+
+  /// A moment for a server to start on a slow request before the test sends the next one.
+  let workStartSettle = System.TimeSpan.FromMilliseconds 200.
+
+  /// A pause for a file watcher to re-arm after a failed eval's burst of events.
+  let watcherRearmSettle = System.TimeSpan.FromSeconds 1.
+
+  /// A margin so small that it only separates "at a boundary" from "just past it", and a
+  /// rounding tolerance for a jittered span.
+  let boundaryMargin = System.TimeSpan.FromMilliseconds 1.
+
+  /// How far past a bound a scenario puts a value it needs to be unambiguously beyond.
+  let pastBoundBy = System.TimeSpan.FromSeconds 1.
+
+  /// How far past the restart grace the exhausted-restart-budget scenario checks: after
+  /// the fifth restart spaced eleven seconds apart, before any window resets.
+  let exhaustedBudgetCheckOffset = System.TimeSpan.FromSeconds 55.
+
+  // Windows and deadlines a test hands to the code under test.
+
+  /// An inactivity window that a stream the test serves ends well inside.
+  let streamWindowCleanEnd = System.TimeSpan.FromMilliseconds 500.
+
+  /// An inactivity window a stalled worker has to outlast so the proxy reports TimedOut.
+  let streamWindowStalled = System.TimeSpan.FromMilliseconds 150.
+
+  /// An inactivity window longer than the gap between lines of a slow, steady stream,
+  /// shorter than the whole stream: it must be re-armed by every line, not run once.
+  let streamWindowSteady = System.TimeSpan.FromMilliseconds 350.
+
+  /// A read window that must NOT be what ends a cancelled run.
+  let streamWindowNeverWaitedOut = System.TimeSpan.FromSeconds 10.
+
+  /// An inactivity window that nothing in the test waits for.
+  let inactivityWindowLong = System.TimeSpan.FromSeconds 30.
+
+  /// An inactivity window nobody touches, so it expires inside the test.
+  let inactivityWindowExpiring = System.TimeSpan.FromMilliseconds 50.
+
+  /// How long a command may hold the session manager's loop before a test's fast supervisor
+  /// watchdog calls it wedged. Real time but tiny: the wedge tests wait on the alarm, not a sleep.
+  let watchdogWedgeAfter = System.TimeSpan.FromMilliseconds 150.
+
+  /// How often a test's fast supervisor watchdog looks at the loop: a tenth of the wedge window.
+  let watchdogCheckEvery = System.TimeSpan.FromMilliseconds 15.
+
+  /// The timeout handed to a timer join. An idle timer has to be joined well inside it,
+  /// not by sitting it out.
+  let timerJoinTimeout = System.TimeSpan.FromSeconds 2.
+
+  /// A deadline far shorter than the work it bounds, so the deadline fires.
+  let deadlineTight = System.TimeSpan.FromMilliseconds 50.
+
+  /// Work that takes far longer than `deadlineTight`, so only the deadline can end it.
+  let slowWork = System.TimeSpan.FromSeconds 2.
+
+  /// A deadline the work finishes well inside.
+  let deadlineRoomy = System.TimeSpan.FromSeconds 5.
+
+  /// The `wait_seconds` a get_session_status test asks for, below the cap.
+  let statusWaitRequest = System.TimeSpan.FromSeconds 5.
+
+  /// A valid per-test timeout a settings test applies and then restores.
+  let validPerTestTimeout = System.TimeSpan.FromSeconds 7.
+
+  /// A valid whole-run timeout a settings test applies and then restores.
+  let validGlobalRunTimeout = System.TimeSpan.FromMinutes 3.
+
+  /// An ordinary timeout inside the range ValidTimeout accepts, neither edge.
+  let ordinaryValidTimeout = System.TimeSpan.FromSeconds 30.
+
+  /// A timeout with an unremarkable value, to prove ValidTimeout hands back what it took.
+  let roundTripTimeout = System.TimeSpan.FromSeconds 42.
+
+  /// The freshness window handed to the agent presence check. The tests stamp the last tool
+  /// call exactly this long before "now", and one tick later.
+  let agentFreshnessWindow = System.TimeSpan.FromMinutes 10.
+
+  /// How far beyond the update-check interval the last check was, in the test that proves a
+  /// check past the interval is due.
+  let updateCheckOverrun = System.TimeSpan.FromHours 1.
+
+  /// A last check recent enough to be well inside the update-check interval.
+  let updateCheckRecent = System.TimeSpan.FromMinutes 5.
+
+  // Scenario durations: inputs to a value under test, never waited on.
+
+  /// How long a test that passed took, where the value does not matter to the assertion.
+  let testElapsed = System.TimeSpan.FromMilliseconds 10.
+
+  /// A second elapsed, for a test that needs two results it can tell apart.
+  let testElapsedOther = System.TimeSpan.FromMilliseconds 20.
+
+  /// An elapsed that a formatting test feeds in and then looks for in the output.
+  let reportedElapsed = System.TimeSpan.FromMilliseconds 42.
+
+  /// How long a tree-sitter pass took in a diagnostics timing record.
+  let treeSitterElapsed = System.TimeSpan.FromMilliseconds 5.
+
+  /// How long an FCS pass took in a diagnostics timing record.
+  let fcsElapsed = System.TimeSpan.FromMilliseconds 10.
+
+  /// How long a reloaded file took to reload.
+  let fileReloadElapsed = System.TimeSpan.FromMilliseconds 50.
+
+  /// How long a warmup took, in a warmup-completed event.
+  let warmupElapsed = System.TimeSpan.FromSeconds 2.
+
+  /// How long a stream was silent before it was called stalled.
+  let streamStalledAfter = System.TimeSpan.FromSeconds 30.
+
+  /// The limit a timed-out test reports it hit.
+  let testTimeLimit = System.TimeSpan.FromSeconds 5.
+
+  /// How long ago a test last passed, in a failure narrative.
+  let timeSinceLastPass = System.TimeSpan.FromMinutes 5.
+
+  /// How long a session has gone unseen when the dashboard calls it stale.
+  let sessionStaleFor = System.TimeSpan.FromMinutes 15.
+
+  /// A session age so far past the idle threshold that only a state that is never idle
+  /// can explain a non-idle reading.
+  let sessionAgeFarPastIdle = System.TimeSpan.FromDays 30.
+
+  /// A session whose last activity was a day ago, long past the idle threshold.
+  let sessionAgeOneDay = System.TimeSpan.FromDays 1.
+
+  /// A restart estimate a scenario puts into a transition cost record by hand. It is not the
+  /// product's own estimate.
+  let sampleRestartEstimate = System.TimeSpan.FromSeconds 8.
+
+  /// The UTC offset a log timestamp carries (UTC+2).
+  let sampleUtcOffset = System.TimeSpan.FromHours 2.
+
+  // Simulation scenarios: virtual time. These are inputs the scenario feeds the clock, not
+  // waits the test makes.
+
+  /// The gap between crashes that is wider than the startup-crash window, so none counts
+  /// as a startup crash.
+  let crashSpacingPastStartupWindow = System.TimeSpan.FromSeconds 20.
+
+  /// The gap between crashes that falls inside the startup-crash window.
+  let crashSpacingInsideStartupWindow = System.TimeSpan.FromSeconds 2.
+
+  /// A silence long enough that the warmup inactivity bound has fired.
+  let warmupSilenceLong = System.TimeSpan.FromMinutes 5.
+
+  /// An elapsed well inside both warmup bounds.
+  let warmupElapsedInsideBounds = System.TimeSpan.FromMinutes 1.
+
+  /// An elapsed early in a warmup, inside the inactivity bound.
+  let warmupElapsedEarly = System.TimeSpan.FromSeconds 5.
+
+  /// The short inactivity bound the progress property runs under.
+  let warmupInactivityShort = System.TimeSpan.FromSeconds 5.
+
+  /// How far the clock advances between progress reports, under the short bound.
+  let warmupProgressStep = System.TimeSpan.FromSeconds 4.
+
+  /// A single small clock advance before a stop.
+  let clockAdvanceSmall = System.TimeSpan.FromSeconds 1.
+
+  /// How far past the absolute warmup bound a scenario puts the elapsed time.
+  let pastAbsoluteBy = System.TimeSpan.FromMinutes 1.
+
 /// Harness-root Verify configuration — the ONE place that owns the snapshot
 /// directory, the unique-prefix setting and the line-ending scrubber. Program.fs
 /// calls `configure` before any test runs; snapshot tests call `verify` and never
@@ -883,7 +1121,7 @@ let tempFrictionStore () : SageFs.Features.FrictionSqlite.FrictionStore =
 let waitFor (timeoutMs: int) (condition: unit -> bool) =
   let sw = System.Diagnostics.Stopwatch.StartNew()
   while not (condition ()) && sw.ElapsedMilliseconds < int64 timeoutMs do
-    Thread.Sleep 10
+    Thread.Sleep TestTimeouts.inProcessPoll
   condition ()
 
 /// Async version of waitFor for task-based tests.
@@ -895,7 +1133,7 @@ let waitForAsync (timeoutMs: int) (condition: unit -> System.Threading.Tasks.Tas
       let! ok = condition ()
       result <- ok
       if not result then
-        do! System.Threading.Tasks.Task.Delay 50
+        do! System.Threading.Tasks.Task.Delay TestTimeouts.asyncConditionPoll
     return result
   }
 
@@ -908,7 +1146,7 @@ let awaitCondition (timeoutMs: int) (condition: unit -> bool) =
     let mutable ok = false
     while not ok && sw.ElapsedMilliseconds < int64 timeoutMs do
       if condition () then ok <- true
-      else do! System.Threading.Tasks.Task.Delay 10
+      else do! System.Threading.Tasks.Task.Delay TestTimeouts.inProcessPoll
     return ok
   }
 
