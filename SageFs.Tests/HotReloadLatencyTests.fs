@@ -6,6 +6,7 @@ open Expecto
 open Expecto.Flip
 open SageFs.Tests.LatencyStats
 open SageFs.Tests.HotReloadLatency
+open SageFs.Features.MetadataDelta
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
@@ -135,6 +136,43 @@ let pureTests =
       names |> List.distinct |> List.length |> Expect.equal "names are distinct" (List.length names)
       for name in names do
         name |> Expect.stringContains "says it is hot reload" "hr-"
+
+    testCase "a save to a run_app app has two series, one per route, and each is named for the route it measures" <| fun _ ->
+      Series.all |> List.contains Series.DeltaSaveToServed |> Expect.isTrue "the delta route has its own series"
+      Series.name Series.DeltaSaveToServed |> Expect.equal "the delta series' name" "hr-delta-save-to-served"
+      Series.path Series.DeltaSaveToServed |> Expect.equal "the delta series' stage-line path" "hr-delta"
+      Series.name Series.RestartSaveToServed
+      |> Expect.notEqual "the restart series is not the delta one" (Series.name Series.DeltaSaveToServed)
+
+    testCase "the restart series is measured with the delta route off, the delta series on the route's default, and a patched save on neither" <| fun _ ->
+      let route = MetadataDeltaMode.environmentVariable
+      match Series.daemonEnvironment Series.RestartSaveToServed with
+      | [ DaemonEnvironment.Set (name, value) ] ->
+        name |> Expect.equal "it sets the route's own variable" route
+        MetadataDeltaMode.parse value |> Expect.equal "to a value the daemon reads as off" MetadataDeltaMode.Off
+      | other -> failtestf "the restart series must turn the route off and change nothing else: %A" other
+      // Clear, not leave alone: a variable the test process inherited must not decide what the delta row measures.
+      Series.daemonEnvironment Series.DeltaSaveToServed
+      |> Expect.equal "the delta series clears the variable, so the daemon runs the default" [ DaemonEnvironment.Clear route ]
+      MetadataDeltaMode.defaultMode |> Expect.equal "and the default is the route on" MetadataDeltaMode.On
+      Series.daemonEnvironment Series.PatchSaveToServed |> Expect.isEmpty "a patched save does not depend on the route"
+      Series.daemonEnvironment Series.PatchSaveToConfirmed |> Expect.isEmpty "nor does its confirmation"
+
+    testCase "a restart series refuses samples in which no new worker warmed up, and a delta series refuses samples that did" <| fun _ ->
+      let sample warming =
+        { Compiling = Elapsed.Never; Applied = Elapsed.Never; Warming = warming; Ready = Elapsed.Never; Served = ms 2000.; AnswerTook = Elapsed.Never; Confirmed = Elapsed.Never }
+      let restarted = sample (Elapsed.After (ms 2800.))
+      let notRestarted = sample Elapsed.Never
+      Sample.checkRoute Series.RestartSaveToServed [ restarted; restarted ]
+      |> Expect.equal "every sample restarted" (Ok ())
+      Sample.checkRoute Series.RestartSaveToServed [ restarted; notRestarted ]
+      |> Expect.equal "a save that did not restart is not a restart sample" (Result.Error RouteRefusal.SaveDidNotRestart)
+      Sample.checkRoute Series.DeltaSaveToServed [ notRestarted; notRestarted ]
+      |> Expect.equal "no sample restarted" (Ok ())
+      Sample.checkRoute Series.DeltaSaveToServed [ notRestarted; restarted ]
+      |> Expect.equal "a save that restarted is not a delta sample" (Result.Error RouteRefusal.SaveRestarted)
+      Sample.checkRoute Series.PatchSaveToServed [ notRestarted ]
+      |> Expect.equal "a patched save is not judged on the restart it never has" (Ok ())
 
     testCase "the stage line names the path, the count and the median of each stage" <| fun _ ->
       let sample served =
