@@ -1504,7 +1504,7 @@ let saveThemes (sageFsDir: string) (themes: Collections.Concurrent.ConcurrentDic
     | true -> ()
     let path = Path.Combine(sageFsDir, "themes.json")
     let dict = themes |> Seq.map (fun kv -> kv.Key, kv.Value) |> dict
-    let json = Text.Json.JsonSerializer.Serialize(dict, Text.Json.JsonSerializerOptions(WriteIndented = true))
+    let json = Json.serialize (Json.indented Json.standard) dict
     File.WriteAllText(path, json)
   with ex -> Log.warn "Failed to save themes to %s: %s\n%s" sageFsDir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
@@ -1516,12 +1516,11 @@ let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary
     match File.Exists(path) with
     | true ->
       let json = File.ReadAllText(path)
-      let dict = Text.Json.JsonSerializer.Deserialize<Collections.Generic.Dictionary<string, string>>(json)
-      match isNull dict with
-      | false ->
+      match Json.deserialize<Collections.Generic.Dictionary<string, string>> Json.standard json with
+      | Ok dict ->
         for kv in dict do
           result.[kv.Key] <- kv.Value
-      | true -> ()
+      | Error reason -> Log.warn "Themes file %s is not a readable theme map, using none: %s" path reason
     | false -> ()
   with ex -> Log.warn "Failed to load themes from %s: %s\n%s" sageFsDir ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
   result

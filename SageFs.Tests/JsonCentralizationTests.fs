@@ -28,7 +28,6 @@ let private budgets : (string * int) list =
     "SageFs.Core/WarmupReplayCache.fs", 3
     "SageFs.Core/WorkerProtocol.fs", 3
     "SageFs/Dashboard.fs", 4
-    "SageFs/DashboardTypes.fs", 3
     "SageFs/McpAdapter.fs", 5
     "SageFs/McpFrictionRecorder.fs", 3
     "SageFs/Mcp.fs", 36
