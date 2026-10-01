@@ -162,9 +162,14 @@ module LiveValueTree =
     Targets: int list
   }
 
+  /// Why a method body could not be split into instructions. The classifier treats every one as "calls other code".
+  type private DecodeFailure =
+    | UnknownOpcode of code: int16 * at: int
+    | OperandPastEnd of at: int
+
   type private Decoding =
     | At of int
-    | Broken of string
+    | Broken of DecodeFailure
 
   let private opCodeTable =
     let table = Collections.Generic.Dictionary<int16, System.Reflection.Emit.OpCode>()
@@ -210,7 +215,7 @@ module LiveValueTree =
     | _ -> 4
 
   /// Split a method body into instructions, or say why it cannot be split.
-  let private decode (il: byte[]) : Result<Instr[], string> =
+  let private decode (il: byte[]) : Result<Instr[], DecodeFailure> =
     let instrs = ResizeArray<Instr>()
     let step (i: int) : Decoding =
       let width, code =
@@ -218,7 +223,7 @@ module LiveValueTree =
         | true -> 2, int16 (0xFE00 ||| int il.[i + 1])
         | false -> 1, int16 il.[i]
       match opCodeTable.TryGetValue code with
-      | false, _ -> Broken (sprintf "unknown opcode %04X at %d" code i)
+      | false, _ -> Broken (UnknownOpcode (code, i))
       | true, op ->
         let at = i + width
         let size =
@@ -230,7 +235,7 @@ module LiveValueTree =
           | kind -> fixedOperandSize kind
         let next = at + size
         match next > il.Length || size < 0 with
-        | true -> Broken (sprintf "operand runs past the end at %d" i)
+        | true -> Broken (OperandPastEnd i)
         | false ->
           let operand, targets =
             match op.OperandType with
