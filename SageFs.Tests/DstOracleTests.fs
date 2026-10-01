@@ -11,6 +11,8 @@ open SageFs.Simulation.Scenario
 open SageFs.Simulation.ReferenceModel
 open SageFs.Simulation.Oracle
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// Brief B1 — reference-vs-candidate oracle for the supervision core.
 ///
 /// Stronger than the invariant suite (SimulationTests.fs): invariants assert
@@ -93,7 +95,7 @@ let tests =
         assertAgrees (Generators.crashStorm 20)
 
       testCase "spaced crashes in one window agree with the reference model" <| fun () ->
-        assertAgrees (Generators.spacedCrashes 6 (TimeSpan.FromSeconds 20.0))
+        assertAgrees (Generators.spacedCrashes 6 TestTimeouts.crashGapSpaced)
 
       testCase "circuit-breaker regime switch (dip case) agrees with the reference model" <| fun () ->
         // The scenario from SimulationTests.fs that pins the intended
@@ -106,10 +108,10 @@ let tests =
             StartTime = Generators.epoch
             Events =
               [ SimEvent.WorkerCrashed
-                SimEvent.ClockAdvance(TimeSpan.FromSeconds 20.0); SimEvent.WorkerCrashed
-                SimEvent.ClockAdvance(TimeSpan.FromSeconds 20.0); SimEvent.WorkerCrashed
-                SimEvent.ClockAdvance(TimeSpan.FromSeconds 20.0); SimEvent.WorkerCrashed
-                SimEvent.ClockAdvance(TimeSpan.FromSeconds 2.0);  SimEvent.WorkerCrashed ] } // rapid => startup
+                SimEvent.ClockAdvance(TestTimeouts.crashGapSpaced); SimEvent.WorkerCrashed
+                SimEvent.ClockAdvance(TestTimeouts.crashGapSpaced); SimEvent.WorkerCrashed
+                SimEvent.ClockAdvance(TestTimeouts.crashGapSpaced); SimEvent.WorkerCrashed
+                SimEvent.ClockAdvance(TestTimeouts.crashGapRapid); SimEvent.WorkerCrashed ] } // rapid => startup
         assertAgrees scn
     ]
 

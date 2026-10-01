@@ -9,6 +9,8 @@ open SageFs.Simulation.Scenario
 open SageFs.Simulation.Invariants
 open SageFs.Simulation.Coverage
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// Coverage-matrix tests (Brief B3): turns "the suite is green" into "the
 /// suite is green AND it actually exercised every branch it claims to."
 /// Answers the roast's §9 "is this vacuously green?" concern by computing,
@@ -28,10 +30,10 @@ let private varyPolicyCircuitBreakerScenario : Scenario =
     StartTime = Generators.epoch
     Events =
       [ SimEvent.WorkerCrashed
-        SimEvent.ClockAdvance(TimeSpan.FromSeconds 20.0); SimEvent.WorkerCrashed
-        SimEvent.ClockAdvance(TimeSpan.FromSeconds 20.0); SimEvent.WorkerCrashed
-        SimEvent.ClockAdvance(TimeSpan.FromSeconds 20.0); SimEvent.WorkerCrashed
-        SimEvent.ClockAdvance(TimeSpan.FromSeconds 2.0);  SimEvent.WorkerCrashed ] }
+        SimEvent.ClockAdvance(TestTimeouts.crashGapSpaced); SimEvent.WorkerCrashed
+        SimEvent.ClockAdvance(TestTimeouts.crashGapSpaced); SimEvent.WorkerCrashed
+        SimEvent.ClockAdvance(TestTimeouts.crashGapSpaced); SimEvent.WorkerCrashed
+        SimEvent.ClockAdvance(TestTimeouts.crashGapRapid); SimEvent.WorkerCrashed ] }
 
 /// A restart, then a clock advance past the ResetWindow (5 min), then another
 /// crash: deterministically produces a WindowReset (the second restart's
@@ -44,7 +46,7 @@ let private windowResetScenario : Scenario =
     StartTime = Generators.epoch
     Events =
       [ SimEvent.WorkerCrashed
-        SimEvent.ClockAdvance(TimeSpan.FromSeconds 400.0)
+        SimEvent.ClockAdvance(TestTimeouts.quietPastResetWindow)
         SimEvent.WorkerCrashed ] }
 
 /// A single graceful exit from the initial Ready state: deterministically
@@ -63,7 +65,7 @@ let private gracefulStopScenario : Scenario =
 let private defaultBattery : Trace list =
   [ for seed in 1 .. 300 -> Runner.run (Generators.fromSeed seed) ]
   @ [ Runner.run (Generators.crashStorm 20)
-      Runner.run (Generators.spacedCrashes 6 (TimeSpan.FromSeconds 20.0))
+      Runner.run (Generators.spacedCrashes 6 TestTimeouts.crashGapSpaced)
       Runner.run varyPolicyCircuitBreakerScenario
       Runner.run windowResetScenario
       Runner.run gracefulStopScenario ]
@@ -102,7 +104,7 @@ let tests =
         { Seed = 0
           Policy = RestartPolicy.defaultPolicy
           StartTime = Generators.epoch
-          Events = [ SimEvent.ClockAdvance(TimeSpan.FromSeconds 1.0) ] }
+          Events = [ SimEvent.ClockAdvance(TestTimeouts.clockTick) ] }
 
       let report = Coverage.over [ Runner.run clockOnlyScenario ]
 

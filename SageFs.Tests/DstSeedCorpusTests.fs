@@ -10,6 +10,8 @@ open SageFs.Simulation.Runner
 open SageFs.Simulation.Invariants
 open SageFs.Simulation.SeedCorpus
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// Brief B4: revision-stamped scenario identity + a saved-seed regression
 /// corpus. A `RevisionStamp` identifies a scenario by its CONTENT
 /// (Policy + Events), independent of the `Seed` field that happened to
@@ -54,7 +56,7 @@ let tests =
         |> Expect.notEqual "swapping the first event's kind changes the digest" (stamp mutated).Digest
 
       testCase "a policy field change also changes the digest" <| fun () ->
-        let baseScn = Generators.spacedCrashes 4 (TimeSpan.FromSeconds 20.0)
+        let baseScn = Generators.spacedCrashes 4 TestTimeouts.crashGapSpaced
         let mutated = { baseScn with Policy = { baseScn.Policy with MaxRestarts = baseScn.Policy.MaxRestarts + 1 } }
         (stamp baseScn).Digest
         |> Expect.notEqual "a changed Policy field changes the digest" (stamp mutated).Digest

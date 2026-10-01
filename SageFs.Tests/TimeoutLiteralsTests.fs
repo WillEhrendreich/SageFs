@@ -36,9 +36,6 @@ let private budgets : (string * int) list =
     "SageFs.Tests/DashboardFailureNarrativesTests.fs", 4
     "SageFs.Tests/DashboardHealthTests.fs", 16
     "SageFs.Tests/DiagnosticianTests.fs", 1
-    "SageFs.Tests/DstCoverageTests.fs", 7
-    "SageFs.Tests/DstOracleTests.fs", 5
-    "SageFs.Tests/DstSeedCorpusTests.fs", 1
     "SageFs.Tests/EventExhaustivenessTests.fs", 2
     "SageFs.Tests/FlakyClassificationPropertyTests.fs", 2
     "SageFs.Tests/FlakyClassificationTests.fs", 5
