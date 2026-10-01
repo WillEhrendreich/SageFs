@@ -22,6 +22,9 @@
     <Compile Include="Chord.fs" />
     <Compile Include="Guard.fs" />
     <Compile Include="VscCommand.fs" />
+    <Compile Include="Snapshot.fs" />
+    <Compile Include="Cdp.fs" />
+    <Compile Include="Vsc.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
