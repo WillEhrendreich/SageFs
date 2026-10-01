@@ -75,6 +75,35 @@ let directorySizeBytes (dir: string) : int64 =
     |> Seq.sumBy (fun f -> try FileInfo(f).Length with _ -> 0L)
   with _ -> 0L
 
+/// `sweep`, but only for directories nobody has written to for `minAge`: a run that just crashed keeps its
+/// leftovers for a person to read, and the sweep that comes later takes them. A zero age is no age filter.
+let sweepOlderThan
+  (parentDir: string)
+  (namePattern: string)
+  (markerFileName: string)
+  (liveness: int -> ShadowCopy.OwnerLiveness)
+  (minAge: TimeSpan)
+  (now: DateTime)
+  : (string * int64) list =
+  try
+    match Directory.Exists parentDir with
+    | false -> []
+    | true ->
+      Directory.GetDirectories(parentDir, namePattern)
+      |> Array.toList
+      |> List.filter (fun dir ->
+        match minAge > TimeSpan.Zero with
+        | false -> true
+        | true -> now - Directory.GetLastWriteTimeUtc dir >= minAge)
+      |> stale (readOwnerPid markerFileName) liveness
+      |> List.choose (fun dir ->
+        let size = directorySizeBytes dir
+        try
+          Directory.Delete(dir, true)
+          Some(dir, size)
+        with _ -> None)
+  with _ -> []
+
 /// Deletes every directory matching `namePattern` directly under
 /// `parentDir` whose owner (recorded via `markerFileName`) is provably
 /// gone. Best-effort per directory: a locked or partially-deleted
@@ -88,17 +117,5 @@ let sweep
   (markerFileName: string)
   (liveness: int -> ShadowCopy.OwnerLiveness)
   : (string * int64) list =
-  try
-    match Directory.Exists parentDir with
-    | false -> []
-    | true ->
-      Directory.GetDirectories(parentDir, namePattern)
-      |> Array.toList
-      |> stale (readOwnerPid markerFileName) liveness
-      |> List.choose (fun dir ->
-        let size = directorySizeBytes dir
-        try
-          Directory.Delete(dir, true)
-          Some(dir, size)
-        with _ -> None)
-  with _ -> []
+  sweepOlderThan parentDir namePattern markerFileName liveness TimeSpan.Zero DateTime.UtcNow
+

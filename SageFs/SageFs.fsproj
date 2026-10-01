@@ -95,6 +95,9 @@
         <Compile Include="CohortLedger.fs" />
         <Compile Include="LocalData.fs" />
         <Compile Include="CohortGit.fs" />
+        <Compile Include="HygieneGather.fs" />
+        <Compile Include="HygieneEdge.fs" />
+        <Compile Include="HygieneService.fs" />
         <Compile Include="FrictionReviewView.fs" />
         <Compile Include="McpFrictionRecorder.fs" />
         <Compile Include="PageChoices.fs" />
@@ -115,6 +118,7 @@
         <Compile Include="CohortErrorMapping.fs" />
         <Compile Include="LiveTestStatusView.fs" />
         <Compile Include="Mcp.fs" />
+        <Compile Include="McpHygiene.fs" />
         <Compile Include="McpRunTests.fs" />
         <Compile Include="McpDebugTest.fs" />
 

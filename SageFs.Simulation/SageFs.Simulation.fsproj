@@ -205,6 +205,12 @@
              a virtual clock; twins that never alarm / alarm on every tick. -->
         <Compile Include="SupervisorWatchdogSim.fs" />
         <Compile Include="SupervisorWatchdogInvariants.fs" />
+        <!-- Workspace hygiene DST: folds the real classify, planner, confirmation and executor through seeded
+             worlds of worktrees, branches and processes that get busy, collect work, get merged and lose their
+             owners while plans are made and run; twins skip the second look, force removals, kill by pid, plan
+             with side effects and count a removal twice. -->
+        <Compile Include="HygieneSim.fs" />
+        <Compile Include="HygieneSimInvariants.fs" />
     </ItemGroup>
 
     <ItemGroup>

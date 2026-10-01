@@ -253,7 +253,7 @@ let sseTests =
 // ── Update-check cache and theme file ──
 
 let private freshDir () =
-  let dir = Path.Combine(Path.GetTempPath(), "sagefs-surface-json-" + Guid.NewGuid().ToString("N"))
+  let dir = SageFs.Tests.RunnerDirs.scratchPath "surface-json-"
   Directory.CreateDirectory dir |> ignore
   dir
 

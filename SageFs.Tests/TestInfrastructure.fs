@@ -722,16 +722,22 @@ let withEnvVar (name: string) (value: string option) (f: unit -> 'T) : 'T =
     finally
       System.Environment.SetEnvironmentVariable(name, original))
 
+/// The one dir this test process keeps its throwaway databases in. It carries this process's marker and is removed when
+/// the process exits; a process that is killed leaves it for the next run's sweep. (4,400 loose `.db` files had piled up
+/// in /tmp, one per call.)
+let private testDatabaseDir : Lazy<string> =
+  lazy
+    (let dir = SageFs.Tests.RunnerDirs.create SageFs.Tests.RunnerDirs.Family.TestDatabases
+     System.AppDomain.CurrentDomain.ProcessExit.Add(fun _ -> SageFs.Tests.RunnerDirs.remove dir)
+     dir)
+
 /// Create a temporary file-based SQLite friction store for tests.
-/// Each call creates a new database file in the temp directory.
-/// The file is NOT automatically cleaned up — tests should delete it if needed,
-/// or rely on OS temp cleanup. For most unit tests, leaving small temp files
-/// is acceptable (they'll be cleaned eventually).
+/// Each call creates a new database file in this process's throwaway database dir, which goes when the process exits.
 let tempFrictionStore () : SageFs.Features.FrictionSqlite.FrictionStore =
   let dbPath =
     System.IO.Path.Combine(
-      System.IO.Path.GetTempPath(),
-      sprintf "sagefs-test-friction-%s.db" (System.Guid.NewGuid().ToString("N")))
+      testDatabaseDir.Value,
+      sprintf "friction-%s.db" (System.Guid.NewGuid().ToString("N")))
   let connStr = sprintf "Data Source=%s" dbPath
   let store = SageFs.Features.FrictionSqlite.Store.create connStr
   match store.Initialize() with

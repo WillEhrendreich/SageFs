@@ -791,7 +791,10 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
     [<McpServerTool>]
     [<Description("Get daemon-wide status: versions, health, memory pressure, machine memory, daemon/worker RSS and CPU, session counts, health anomalies, and safe lease summaries. Use this before trusting a session or starting expensive work.")>]
     member _.get_daemon_status() : Task<string> =
-        getDaemonStatus ctx |> withEcho ctx "get_daemon_status"
+        task {
+          let! json = getDaemonStatus ctx
+          return! SageFs.McpHygiene.withHygieneForDaemon ctx json
+        } |> withEcho ctx "get_daemon_status"
 
     [<McpServerTool>]
     [<Description("Get one session's status: explicit target, loaded projects, lifecycle, worker, workflow, evaluation state, health, and session-scoped facts. Use this to decide whether session-scoped work is safe; machine-wide facts are available from get_daemon_status.")>]
@@ -808,7 +811,10 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
-        getSessionStatusAwaiting ctx "mcp" sid wd wait_seconds |> withEcho ctx "get_session_status"
+        task {
+          let! json = getSessionStatusAwaiting ctx "mcp" sid wd wait_seconds
+          return! SageFs.McpHygiene.withHygieneForSession ctx session_id working_directory json
+        } |> withEcho ctx "get_session_status"
     [<McpServerTool>]
     [<Description("Acquire a lease for a caller-owned full build. The lease kind is fixed by this tool; use it only when SageFs will not run the build itself.")>]
     member _.acquire_full_build_lease() : Task<string> =
@@ -1440,7 +1446,12 @@ OUTPUT: JSON containing case names, fields per case, which cases are entry point
         workflow: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: create_project_session called: project={Project}, dir={Dir}, workflow={Workflow}", project, working_directory, workflow)
-        createSession ctx "mcp" [ SageFs.SessionProjectTarget.Project project ] working_directory workflow |> withEcho ctx "create_project_session"
+        task {
+          let! reply = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Project project ] working_directory workflow
+          let withLine = SageFs.McpHygiene.withHygieneLine ctx working_directory reply
+          SageFs.McpHygiene.refreshSoon ctx working_directory
+          return withLine
+        } |> withEcho ctx "create_project_session"
 
     [<McpServerTool>]
     [<Description("Create a new isolated FSI session for one explicit .sln or .slnx solution. The solution path is a primitive string; empty arrays and auto-discovery are not accepted. Use get_available_projects first, then get_session_status until the session is Ready or Faulted.")>]
@@ -1452,7 +1463,12 @@ OUTPUT: JSON containing case names, fields per case, which cases are entry point
         workflow: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: create_solution_session called: solution={Solution}, dir={Dir}, workflow={Workflow}", solution, working_directory, workflow)
-        createSession ctx "mcp" [ SageFs.SessionProjectTarget.Solution solution ] working_directory workflow |> withEcho ctx "create_solution_session"
+        task {
+          let! reply = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Solution solution ] working_directory workflow
+          let withLine = SageFs.McpHygiene.withHygieneLine ctx working_directory reply
+          SageFs.McpHygiene.refreshSoon ctx working_directory
+          return withLine
+        } |> withEcho ctx "create_solution_session"
 
     [<McpServerTool>]
     [<Description("Create a new isolated FSI session with no project or solution loaded. Bare is explicit and never triggers project discovery. Use get_session_status until the session is Ready or Faulted.")>]
@@ -1463,7 +1479,12 @@ OUTPUT: JSON containing case names, fields per case, which cases are entry point
         workflow: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: create_bare_session called: dir={Dir}, workflow={Workflow}", working_directory, workflow)
-        createSession ctx "mcp" [ SageFs.SessionProjectTarget.Bare ] working_directory workflow |> withEcho ctx "create_bare_session"
+        task {
+          let! reply = createSession ctx "mcp" [ SageFs.SessionProjectTarget.Bare ] working_directory workflow
+          let withLine = SageFs.McpHygiene.withHygieneLine ctx working_directory reply
+          SageFs.McpHygiene.refreshSoon ctx working_directory
+          return withLine
+        } |> withEcho ctx "create_bare_session"
 
     [<McpServerTool>]
     [<Description("""List all active FSI sessions with their metadata: session ID, project names, current status, working directory, and last activity timestamp.
@@ -1491,7 +1512,11 @@ NOTE: Stopping the last (or only) session will leave no active session. Create a
         [<Description("The session ID to stop (from list_sessions)")>] session_id: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: stop_session called: id={Id}", session_id)
-        stopSessionOwned ctx session_id |> withEcho ctx "stop_session"
+        task {
+          let! reply = stopSessionOwned ctx session_id
+          SageFs.McpHygiene.refreshForSessions ctx
+          return reply
+        } |> withEcho ctx "stop_session"
 
     [<McpServerTool>]
     [<Description("""Switch the active FSI session. All subsequent tool calls that accept working_directory will route to this session.
@@ -1615,6 +1640,49 @@ Retention runs on its own: friction keeps only the running version's rows, insid
             | Error message -> return sprintf "Error: %s" message
           | Error message -> return sprintf "Error: %s" message
         } |> withEcho ctx "manage_local_data"
+
+    [<McpServerTool>]
+    [<Description("""See what agents and orchestrators have left behind on this machine, and the plan that would tidy it. A dry run: nothing is touched.
+
+USE CASE:
+- Before you spawn sub-agents: check the repo is not already buried in leftover worktrees.
+- After an agent's work merges: see its worktree and branch listed as safe to remove.
+- When a reply says "workspace: N leftover worktrees ... call get_workspace_hygiene".
+
+WHAT IT LISTS (each with its size, age, who made it when known, and a standing that says WHY it is or is not safe):
+- agent worktrees and agent branches (merged, merged by rebase or squash, unmerged commits, uncommitted work, or in use by a session or process)
+- the local gate's checkouts and per-tier clones, built FSI hosts nobody has used for a month, worker logs, test runners' temp dirs, spawned-daemon registry entries, orphaned SageFs processes
+
+OUTPUT: the plan, split into safe to reclaim (merged, build output only, orphaned or expired), needs a look (unmerged commits or uncommitted work, each with the exact command that saves it first), and left alone with the reason. It ends with a plan id.
+
+To act on the safe part call tidy_workspace with confirm=true and that plan id. Nothing with unmerged commits or uncommitted work is ever removed by tidy.""")>]
+    member _.get_workspace_hygiene(
+        [<Description("A path inside the repository to look at. Optional when your sessions are all in one repository.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_workspace_hygiene called, dir={Dir}", working_directory)
+        SageFs.McpHygiene.getWorkspaceHygiene ctx working_directory |> withEcho ctx "get_workspace_hygiene"
+
+    [<McpServerTool>]
+    [<Description("""Reclaim what get_workspace_hygiene listed as safe: merged worktrees and branches, worktrees whose only changes are build output, orphaned or expired caches and temp dirs, orphaned processes.
+
+REQUIRES confirm=true AND the plan id get_workspace_hygiene gave you, passed as `plan`. A plan that changed since you looked is refused with nothing touched. Each step looks at its target again right before it acts, and skips (and reports) anything that became busy, gained uncommitted work or changed identity in between.
+
+NEVER touches: anything a session or process is using, a worktree with uncommitted work, a branch with commits the base branch lacks, anything it could not judge, or any path outside the directories SageFs manages.""")>]
+    member _.tidy_workspace(
+        [<Description("The plan id get_workspace_hygiene ended with.")>]
+        [<Optional; DefaultParameterValue("")>]
+        plan: string,
+        [<Description("Must be true. Without it nothing is done.")>]
+        [<Optional; DefaultParameterValue(false)>]
+        confirm: bool,
+        [<Description("A path inside the repository, as given to get_workspace_hygiene.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: tidy_workspace called, plan={Plan}, confirm={Confirm}", plan, confirm)
+        SageFs.McpHygiene.tidyWorkspace ctx working_directory plan confirm |> withEcho ctx "tidy_workspace"
 
     [<McpServerTool>]
     [<Description("""Get a compact local summary of MCP friction recorded by SageFs.

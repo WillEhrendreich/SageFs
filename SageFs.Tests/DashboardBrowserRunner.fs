@@ -32,9 +32,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
   // race for the same pair.
   let mcpPort, dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
 
-  let dataDir =
-    Path.Combine(Path.GetTempPath(), "sagefs-browser", Guid.NewGuid().ToString("N"))
-  Directory.CreateDirectory(dataDir) |> ignore
+  let dataDir = SageFs.Tests.RunnerDirs.create SageFs.Tests.RunnerDirs.Family.BrowserRuns
 
   let psi = Diagnostics.ProcessStartInfo()
   psi.FileName <- exe
@@ -116,6 +114,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
 
   let exitWith (code: int) =
     stopDaemon ()
+    SageFs.Tests.RunnerDirs.remove dataDir
     code
 
   try
@@ -186,7 +185,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
             cliArgs
             |> Array.filter (fun a -> a <> "--integration-browser")
           let result =
-            SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-browser" browserArgv (testList "browser journeys" [ DashboardBrowserTests.tests; LiveBindingsBrowserTests.tests ])
+            SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-browser" browserArgv (testList "browser journeys" [ DashboardBrowserTests.tests; LiveBindingsBrowserTests.tests; HygieneBrowserTests.tests ])
           exitWith result
   with ex ->
     eprintfn "Browser runner: %s" (ex.ToString())
@@ -288,8 +287,7 @@ File.WriteAllText(
 let prepareHotReloadFixture (repoRoot: string) (runtime: HotReloadStateHarness.HostRuntime) : string =
   let fixtureSrc =
     Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "WebAppFixture")
-  let dest =
-    Path.Combine(Path.GetTempPath(), "sagefs-hr", Guid.NewGuid().ToString("N"))
+  let dest = SageFs.Tests.RunnerDirs.create SageFs.Tests.RunnerDirs.Family.HotReloadRuns
   Directory.CreateDirectory(Path.Combine(dest, ".SageFs")) |> ignore
   // WHY every top-level *.fs/*.fsproj rather than a hardcoded list: a
   // hardcoded [ "Greeting.fs"; "App.fs"; "Program.fs"; "WebAppFixture.fsproj" ]
@@ -374,9 +372,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
   let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
   let mcpPort, dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
-  let dataDir =
-    Path.Combine(Path.GetTempPath(), "sagefs-hr", Guid.NewGuid().ToString("N"))
-  Directory.CreateDirectory(dataDir) |> ignore
+  let dataDir = SageFs.Tests.RunnerDirs.create SageFs.Tests.RunnerDirs.Family.HotReloadRuns
 
   // The primary copy runs on net11 and carries the dashboard journeys. The net10
   // copy exists for the journeys that have to hold on both runtimes.
@@ -460,6 +456,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
     stopDaemon ()
     try Directory.Delete(fixtureDir, true) with _ -> ()
     try Directory.Delete(net10FixtureDir, true) with _ -> ()
+    SageFs.Tests.RunnerDirs.remove dataDir
     code
 
   /// Create a HotReload session on a prepared fixture copy, wait until THAT
@@ -606,9 +603,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
   let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
   let mcpPort, dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
-  let dataDir =
-    Path.Combine(Path.GetTempPath(), "sagefs-lt", Guid.NewGuid().ToString("N"))
-  Directory.CreateDirectory(dataDir) |> ignore
+  let dataDir = SageFs.Tests.RunnerDirs.create SageFs.Tests.RunnerDirs.Family.LiveTestingRuns
 
   // The FromCSharp sample IN PLACE (central package management; a temp copy
   // outside the repo cannot resolve Expecto's version). Live-testing rebuilds
@@ -700,6 +695,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
 
   let exitWith (code: int) =
     stopDaemon ()
+    SageFs.Tests.RunnerDirs.remove dataDir
     code
 
   // Always restore Hello.fs if a journey left it mutated (belt and braces on

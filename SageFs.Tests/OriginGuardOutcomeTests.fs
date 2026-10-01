@@ -54,7 +54,7 @@ let private dashboardPort = mcpPort + 1
 /// a create that got through would genuinely succeed — the rejection cannot be
 /// mistaken for a path-validation failure.
 let private attackerTargetDir =
-  IO.Directory.CreateTempSubdirectory("sagefs-origin-guard-").FullName
+  SageFs.Tests.RunnerDirs.scratchDir "origin-guard-"
 
 let private daemon =
   lazy (

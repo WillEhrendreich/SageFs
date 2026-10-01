@@ -44,6 +44,10 @@
         <Compile Include="NativeResolution.fs" />
         <Compile Include="AppOutput.fs" />
         <Compile Include="Checkout.fs" />
+        <Compile Include="WorkspaceHygiene.fs" />
+        <Compile Include="WorkspaceHygieneRender.fs" />
+        <Compile Include="HygieneFs.fs" />
+        <Compile Include="GateReaper.fs" />
         <Compile Include="MemberTable.fs" />
         <Compile Include="Tutorial.fs" />
         <Compile Include="SageFsConfig.fs" />

@@ -12,6 +12,7 @@
         <Compile Include="TestTimeouts.fs" />
         <!-- Before TestInfrastructure: the trust ledger names a tier by its framework. -->
         <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
+        <Compile Include="RunnerDirs.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="RunnerLogging.fs" />
         <Compile Include="TestCountBadge.fs" />
@@ -64,6 +65,16 @@
         <Compile Include="WorkerMainTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="CheckoutTests.fs" />
+        <Compile Include="HygieneFixtures.fs" />
+        <Compile Include="WorkspaceHygieneTests.fs" />
+        <Compile Include="HygieneSimDstTests.fs" />
+        <Compile Include="HygieneSandbox.fs" />
+        <Compile Include="HygieneGatherTests.fs" />
+        <Compile Include="HygieneExecuteTests.fs" />
+        <Compile Include="GateReaperTests.fs" />
+        <Compile Include="RunnerDirsTests.fs" />
+        <Compile Include="HygieneSurfaceTests.fs" />
+        <Compile Include="HygienePanelTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />
         <Compile Include="MemberTableTests.fs" />
         <Compile Include="CrossCheckoutOverlapTests.fs" />
@@ -143,6 +154,7 @@
         <Compile Include="ThemePersistenceTests.fs" />
         <Compile Include="DashboardBrowserTests.fs" />
         <Compile Include="LiveBindingsBrowserTests.fs" />
+        <Compile Include="HygieneBrowserTests.fs" />
         <Compile Include="DashboardDisconnectIndicatorBrowserTests.fs" />
         <Compile Include="ElmDaemonTests.fs" />
         <Compile Include="SessionCreationTests.fs" />

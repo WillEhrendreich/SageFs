@@ -18,7 +18,7 @@ still listed. I went back and forth on filtering the list itself. For now
 the call-time gate is what's actually wired up, so that's what this doc
 promises.
 
-The full advertised set is 61 tools, grouped below. This is separate
+The full advertised set is 63 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those
 HTTP endpoints are not MCP tools.
@@ -190,6 +190,25 @@ sounds like a chore anyway.
 | `get_friction_report` | Structured JSON report of MCP pain points. |
 | `report_friction` | Record structured feedback about a confusing tool call. |
 | `manage_local_data` | See what SageFs stores under its data dir (rows, bytes, oldest row, retention rules), or clear it. |
+
+## Workspace hygiene
+
+Agents and orchestrators leave things behind: worktrees, merged branches, the
+gate's checkouts, built FSI hosts, test temp dirs, orphaned processes. These
+two tools show it and tidy the part that is safe. They are about the
+repository and the disk, not a session, so they work before one exists.
+`sagefs hygiene` prints the same plan from a shell, and `sagefs hygiene --tidy`
+runs the safe part of it.
+
+| Tool | What it does |
+|:---|:---|
+| `get_workspace_hygiene` | A dry run. Lists each leftover with its size, age, who made it and a standing that says why it is or is not safe to reclaim, then the plan: safe to reclaim, needs a look (with the command that saves the work first), and left alone with the reason. Ends with a plan id. |
+| `tidy_workspace` | Runs the safe part of that plan. Needs `confirm=true` and the plan id you were shown. Each step looks at its target again first and skips anything that became busy. Never touches unmerged commits, uncommitted work, anything in use, or anything it could not judge. |
+
+`create_*_session`, `get_session_status` and `get_daemon_status` add one line
+when a repo has more than a handful of leftover worktrees or the gate dir has
+grown past a threshold: `workspace: N leftover worktrees (X GB), M safe to
+reclaim: call get_workspace_hygiene`.
 
 ## Cohort and multi-agent coordination
 

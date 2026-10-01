@@ -1382,7 +1382,7 @@ let tests =
     do! PlaywrightExpect.isVisibleAsync altEnter "Alt+Enter listed"
     let ctrlL = page.GetByText("Ctrl+L")
     do! PlaywrightExpect.isVisibleAsync ctrlL "Ctrl+L listed"
-    let tabKey = page.GetByText("Tab")
+    let tabKey = page.GetByText("Tab", PageGetByTextOptions(Exact = Nullable true))
     do! PlaywrightExpect.isVisibleAsync tabKey "Tab listed"
     // Toggle closed, then open again. Each click's target lives inside the
     // same accordion, so reconfirm it is open right before every click —

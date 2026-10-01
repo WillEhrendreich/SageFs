@@ -87,6 +87,7 @@ type CliCommand =
   | Status
   | Check
   | Sweep of kill: bool
+  | Hygiene of tidy: bool * repo: string
   | DeprecatedClient of name: string
   | Daemon of args: string array
   | Jupyter of connectionFile: string
@@ -103,6 +104,12 @@ module CliCommand =
     | _ when args.Length > 0 && args.[0] = "status" -> Status
     | _ when args.Length > 0 && args.[0] = "check" -> Check
     | _ when args.Length > 0 && args.[0] = "sweep" -> Sweep (hasFlag "--kill")
+    | _ when args.Length > 0 && args.[0] = "hygiene" ->
+      let repo =
+        match args |> Array.tryFindIndex (fun a -> a = "--repo") with
+        | Some i when i + 1 < args.Length -> args.[i + 1]
+        | _ -> ""
+      Hygiene (hasFlag "--tidy", repo)
     | _ when args.Length > 0 && args.[0] = "play" && args.Length > 1 -> Play args.[1]
     | _ when args.Length > 0 && args.[0] = "play" -> ShowHelp
     | _ when args.Length > 0 && args.[0] = "mcp" -> Mcp args
@@ -273,6 +280,49 @@ let sweepCommand (kill: bool) =
     | false, 0 -> printfn "sweep: nothing reapable"
     | _ -> ()
     0
+
+/// The running daemon's sessions as (id, working directory), for the facts hygiene cannot read off the disk.
+/// Empty when no daemon answers; a scan then relies on the process table alone.
+let private fetchSessionDirectories (info: DaemonInfo) : (string * string) list =
+  try
+    use client = new System.Net.Http.HttpClient(Timeout = Timeouts.daemonSessionsProbe)
+    let resp = client.GetAsync(sprintf "http://localhost:%d/api/sessions" info.Port).Result
+    match resp.IsSuccessStatusCode with
+    | false -> []
+    | true ->
+      let doc = System.Text.Json.JsonDocument.Parse(resp.Content.ReadAsStringAsync().Result)
+      [ for s in doc.RootElement.GetProperty("sessions").EnumerateArray() ->
+          s.GetProperty("id").GetString(), s.GetProperty("workingDirectory").GetString() ]
+  with _ -> []
+
+/// `sagefs hygiene [--tidy] [--repo PATH]` — what agents left behind, as a dry-run plan. `--tidy` runs only the
+/// safe part, for the plan it just printed, and every step looks at its target again before it acts.
+let hygieneCommand (tidy: bool) (repoArg: string) (mcpPort: int) =
+  let start = match repoArg with | "" -> Environment.CurrentDirectory | given -> Path.GetFullPath given
+  match HygieneService.mainRepoOf start with
+  | None ->
+    eprintfn "hygiene: %s is not inside a git checkout. Run it from the repository, or pass --repo PATH." start
+    1
+  | Some repo ->
+    let loc = HygieneService.locationsFor repo
+    let daemon = DaemonState.readOnPort mcpPort
+    let sessions = match daemon with | Some info -> fetchSessionDirectories info | None -> []
+    let owners = HygieneService.OwnerLedger.read loc.DataDir
+    let connection = match daemon with | Some _ -> (fun (_: string) -> true) | None -> (fun (_: string) -> false)
+    let live () = HygieneService.liveFactsOf sessions owners connection
+    let snapshot = HygieneService.take loc (live ())
+    printfn "%s" (WorkspaceHygieneRender.renderPlan snapshot.Leftovers snapshot.Plan)
+    match tidy with
+    | false -> 0
+    | true ->
+      printfn ""
+      match HygieneService.tidy loc live snapshot.Plan.Id with
+      | HygieneService.TidyOutcome.Tidied(report, _) ->
+        printfn "%s" (WorkspaceHygieneRender.renderReport report)
+        0
+      | HygieneService.TidyOutcome.NotConfirmed _ ->
+        eprintfn "hygiene: the workspace changed while it was being looked at; run it again to see the new plan."
+        1
 
 type DaemonLaunchDecision =
   | AttachToExistingDaemon of DaemonInfo
@@ -490,6 +540,7 @@ let main args =
     printfn "       SageFs stop                     Stop running daemon"
     printfn "       SageFs status                   Show daemon info"
     printfn "       SageFs sweep [--kill]           Reap daemons whose owner process is gone"
+    printfn "       SageFs hygiene [--tidy]         Show what agents left behind (worktrees, gate checkouts, caches, temp dirs) as a dry-run plan; --tidy runs only the safe part"
     printfn "       SageFs play <ledger.jsonl>      Replay a portable cohort ledger file offline"
     printfn ""
     printfn "Options:"
@@ -577,6 +628,9 @@ let main args =
 
   | Sweep kill ->
     sweepCommand kill
+
+  | Hygiene(tidy, repo) ->
+    hygieneCommand tidy repo (parseMcpPort args)
 
   | Mcp mcpArgs ->
     let mcpPort = parseMcpPort mcpArgs

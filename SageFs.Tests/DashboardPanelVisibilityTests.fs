@@ -73,6 +73,7 @@ let private snapshotWith (activity: Features.LiveTestActivity.LiveTestActivity) 
     BindingsPanel = Elem.div [] []
     FrictionPanel = Elem.div [ Attr.id DomIds.FrictionPanel ] [ Text.raw "Friction" ]
     CohortPanel = Elem.div [] [ renderCohortPanel (frameOf ledger); renderCohortLanesPanel ledger ]
+    HygienePanel = Elem.div [] []
     ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning
     EvalToPixelP50Ms = None; EvalToPixelP99Ms = None }
 

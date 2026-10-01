@@ -152,7 +152,7 @@ let evalStatsDuplicateIdRegressionTests =
           ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
           BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []
           DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []
-          LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []
+          LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []; HygienePanel = Elem.div [] []
           ActiveProject = None; ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
           EvalToPixelP50Ms = None; EvalToPixelP99Ms = None }
@@ -185,7 +185,7 @@ let workflowBadgeTests =
           ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
           BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []
           DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []
-          LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []
+          LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []; HygienePanel = Elem.div [] []
           ActiveProject = None; ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
           EvalToPixelP50Ms = None; EvalToPixelP99Ms = None }
