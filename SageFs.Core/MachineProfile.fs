@@ -13,6 +13,30 @@ type StorageKind =
   /// Not Linux, or the device could not be traced from the data directory. Counts for nothing either way.
   | Unknown
 
+/// What a mount line of /proc/self/mountinfo says is under it. A btrfs mount's own device number is anonymous
+/// (it has no entry under /sys/dev/block), so the disk behind it is found from the source the line names.
+[<RequireQualifiedAccess>]
+type MountSource =
+  | Device of path: string
+  | NotADevice
+
+module MountSource =
+
+  /// The field that ends the optional fields of a mount line; the file system type and the source follow it.
+  [<Literal>]
+  let private Separator = "-"
+
+  /// The source of a mount line, when it is a device node (`/dev/...`). The separator is found, not counted:
+  /// the optional fields before it are any number.
+  let ofMountinfoLine (line: string) : MountSource =
+    let parts = line.Split(' ')
+    match Array.tryFindIndex (fun p -> p = Separator) parts with
+    | None -> MountSource.NotADevice
+    | Some i ->
+      match parts.Length > i + 2 && parts.[i + 2].StartsWith("/dev/", StringComparison.Ordinal) with
+      | true -> MountSource.Device parts.[i + 2]
+      | false -> MountSource.NotADevice
+
 /// Whether the single-thread timing was taken. A DU, not an option: "not measured" says why.
 [<RequireQualifiedAccess>]
 type Calibration =
@@ -350,16 +374,26 @@ module MachineProbeReader =
               let mount = parts.[4]
               let withSlash = (match mount.EndsWith "/" with | true -> mount | false -> mount + "/")
               match full = mount || full.StartsWith(withSlash, StringComparison.Ordinal) with
-              | true -> Some (mount.Length, parts.[2])
+              | true -> Some (mount.Length, parts.[2], MountSource.ofMountinfoLine line)
               | false -> None)
-          |> Array.sortByDescending fst
+          |> Array.sortByDescending (fun (length, _, _) -> length)
           |> Array.tryHead
         match owner with
         | None -> StorageKind.Unknown
-        | Some (_, majorMinor) ->
+        | Some (_, majorMinor, source) ->
           // /sys/dev/block/<maj:min> is the device. A partition keeps `queue/` on its parent disk; a
-          // device-mapper volume keeps it on itself, inherited from what it sits on.
-          match Directory.ResolveLinkTarget(Path.Combine("/sys/dev/block", majorMinor), true) with
+          // device-mapper volume keeps it on itself, inherited from what it sits on. A btrfs mount has no
+          // such entry, so its device is found from the source the mount line names (/dev/mapper/root is a
+          // link to /dev/dm-0, which /sys/class/block knows).
+          let byNumber = Path.Combine("/sys/dev/block", majorMinor)
+          let sysDevice =
+            match Directory.Exists byNumber, source with
+            | true, _ -> byNumber
+            | false, MountSource.Device dev ->
+              let real = (match File.ResolveLinkTarget(dev, true) with | null -> dev | t -> t.FullName)
+              Path.Combine("/sys/class/block", Path.GetFileName real)
+            | false, MountSource.NotADevice -> byNumber
+          match Directory.ResolveLinkTarget(sysDevice, true) with
           | null -> StorageKind.Unknown
           | target ->
             let parent = (match Path.GetDirectoryName target.FullName with | null -> "" | p -> p)
