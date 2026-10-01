@@ -76,6 +76,19 @@ you are done. Do not use them to probe what an API looks like.
 - Clean up. `stop_session` on every session you created. Kill only processes
   you started, by exact PID, never by name.
 
+## Orchestrator hygiene
+
+If you start sub-agents, you are the one who tidies up after them.
+
+- Before you spawn: `get_workspace_hygiene` (or the `workspace:` line in `create_*_session`,
+  `get_session_status` and `get_daemon_status`). A pile of leftover worktrees means tidy first.
+- After an agent's work merges: `get_workspace_hygiene`, read the dry-run plan, then `tidy_workspace` with
+  `confirm=true` and the plan id. It only removes what is merged, build-output-only, orphaned or expired, and
+  re-checks each target right before it acts. Unmerged commits and uncommitted work are listed with the
+  command that saves them, never removed.
+- In every sub-agent brief: finish by removing nothing you do not own, and report your worktree path and
+  branch so the orchestrator can reap them.
+
 ## Read more only when you need it
 
 | Read | When |
