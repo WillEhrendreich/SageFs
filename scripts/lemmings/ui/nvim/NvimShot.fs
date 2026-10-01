@@ -5,7 +5,7 @@
 // The browser is headless and runs in the harness process, outside every sandbox. It is given
 // an environment with no DISPLAY, WAYLAND_DISPLAY or XDG_RUNTIME_DIR, so it cannot reach the
 // desktop session even by accident.
-module LemDrive.Shot
+module LemDrive.NvimShot
 
 open System
 open System.Collections.Generic

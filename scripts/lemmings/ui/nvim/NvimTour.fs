@@ -14,7 +14,7 @@
 //   shell <curl|cat|ls ...>      the same read-only shell the lemming has
 //
 // Every step also writes a line to OUT/timeline.ndjson, so a recording can be lined up with it.
-module LemDrive.Tour
+module LemDrive.NvimTour
 
 open System
 open System.Diagnostics
@@ -42,6 +42,11 @@ type TourStep =
   | StepExpect of text: string * withinSeconds: int
   | StepResize of columns: int * rows: int
   | StepShell of string
+  /// Makes the session this run created (the one whose project path contains the text) the
+  /// shared daemon's active session, the way `:SageFsSessions` would. The plugin's live-testing
+  /// commands act on the daemon's ACTIVE session, which on a shared daemon is somebody else's.
+  /// The runner puts the previous active session back when the tour ends.
+  | StepActivate of projectContains: string
 
 /// The word a step starts with. The one place the step names are spelled.
 let stepWord (step: TourStep) : string =
@@ -53,6 +58,7 @@ let stepWord (step: TourStep) : string =
   | StepExpect _ -> "expect"
   | StepResize _ -> "resize"
   | StepShell _ -> "shell"
+  | StepActivate _ -> "activate"
 
 let private quoteText (text: string) : string =
   "\"" + text.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""
@@ -67,6 +73,7 @@ let formatStep (step: TourStep) : string =
   | StepExpect(text, within) -> sprintf "expect %s within %d" (quoteText text) within
   | StepResize(c, r) -> sprintf "resize %dx%d" c r
   | StepShell line -> "shell " + line
+  | StepActivate text -> "activate " + text
 
 type TourError =
   { Line: int
@@ -146,8 +153,10 @@ let parseLine (line: string) : Result<TourStep option, string> =
         else some (StepResize(c, r))
     | "shell" ->
       if rest = "" then Result.Error "shell needs a command: curl, cat or ls" else some (StepShell rest)
+    | "activate" ->
+      if rest = "" then Result.Error "activate needs part of the project path, e.g. activate DemoEnv.Tests" else some (StepActivate rest)
     | other ->
-      Result.Error(sprintf "unknown step '%s'. The steps are keys, type, wait, shot, expect, resize, shell" other)
+      Result.Error(sprintf "unknown step '%s'. The steps are keys, type, wait, shot, expect, resize, shell, activate" other)
 
 /// A whole tour file. Every bad line is reported with its number, not just the first.
 let parse (text: string) : Result<TourStep list, TourError list> =
@@ -204,8 +213,90 @@ let private expectOnScreen (ctx: Nvim.ExecContext) (text: string) (within: int) 
         poll ()
   poll ()
 
+/// The shared daemon, for the one step that needs it. Reads freely; writes only the active session.
+module private Daemon =
+  let private defaultPort = 37749
+  let private timeoutSeconds = 15
+
+  let private port =
+    match Int32.TryParse(Environment.GetEnvironmentVariable "SAGEFS_MCP_PORT") with
+    | true, p -> p
+    | _ -> defaultPort
+
+  let private client =
+    let c = new System.Net.Http.HttpClient()
+    c.Timeout <- TimeSpan.FromSeconds(float timeoutSeconds)
+    c
+
+  let private url (path: string) = sprintf "http://localhost:%d%s" port path
+
+  let private get (path: string) : Result<string, string> =
+    try Result.Ok(client.GetStringAsync(url path).GetAwaiter().GetResult())
+    with ex -> Result.Error(sprintf "GET %s: %s" path ex.Message)
+
+  let private post (path: string) (body: string) : Result<string, string> =
+    try
+      use content = new System.Net.Http.StringContent(body, Encoding.UTF8, "application/json")
+      let r = client.PostAsync(url path, content).GetAwaiter().GetResult()
+      let text = r.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+      if r.IsSuccessStatusCode then Result.Ok text else Result.Error(sprintf "POST %s answered %d: %s" path (int r.StatusCode) text)
+    with ex -> Result.Error(sprintf "POST %s: %s" path ex.Message)
+
+  type Listed =
+    { Id: string
+      WorkingDirectory: string
+      Projects: string list }
+
+  let private text (e: JsonElement) (name: string) =
+    match e.TryGetProperty name with
+    | true, v when v.ValueKind = JsonValueKind.String -> Option.ofObj (v.GetString()) |> Option.defaultValue ""
+    | _ -> ""
+
+  /// The id of the session the daemon currently treats as active.
+  let activeSessionId () : Result<string, string> =
+    get "/api/status"
+    |> Result.bind (fun body ->
+      try
+        use doc = JsonDocument.Parse body
+        Result.Ok(text doc.RootElement "sessionId")
+      with ex -> Result.Error ex.Message)
+
+  let sessions () : Result<Listed list, string> =
+    get "/api/sessions"
+    |> Result.bind (fun body ->
+      try
+        use doc = JsonDocument.Parse body
+        match doc.RootElement.TryGetProperty "sessions" with
+        | true, arr when arr.ValueKind = JsonValueKind.Array ->
+          Result.Ok
+            [ for s in arr.EnumerateArray() ->
+                { Id = text s "id"
+                  WorkingDirectory = text s "workingDirectory"
+                  Projects =
+                    match s.TryGetProperty "projects" with
+                    | true, p when p.ValueKind = JsonValueKind.Array -> [ for x in p.EnumerateArray() -> (if x.ValueKind = JsonValueKind.String then Option.ofObj (x.GetString()) |> Option.defaultValue "" else "") ]
+                    | _ -> [] } ]
+        | _ -> Result.Ok []
+      with ex -> Result.Error ex.Message)
+
+  let switchTo (id: string) : Result<unit, string> =
+    post "/api/sessions/switch" (JsonSerializer.Serialize {| sessionId = id |}) |> Result.map ignore
+
+/// The session this run created, by working directory and project, made the daemon's active one.
+let private activate (ctx: Nvim.ExecContext) (projectContains: string) : Result<string, string> =
+  let root = ctx.Workspace.TrimEnd('/')
+  Daemon.sessions ()
+  |> Result.bind (fun all ->
+    let mine = all |> List.filter (fun s -> s.WorkingDirectory = root || s.WorkingDirectory.StartsWith(root + "/"))
+    match mine |> List.tryFind (fun s -> s.Projects |> List.exists (fun p -> p.Contains projectContains)) with
+    | None ->
+      Result.Error(sprintf "no session under %s has a project containing '%s' (sessions here: %s)" root projectContains (mine |> List.map (fun s -> s.Id) |> String.concat ", "))
+    | Some s ->
+      Daemon.switchTo s.Id |> Result.map (fun () -> sprintf "session %s is now the daemon's active session" s.Id))
+
 let private runStep (ctx: Nvim.ExecContext) (step: TourStep) : Result<string, string> =
   match step with
+  | StepActivate text -> activate ctx text
   | StepKeys keys -> Nvim.execute ctx (Nvim.Keys keys) |> Result.map firstLine
   | StepType text -> Nvim.execute ctx (Nvim.NvimType text) |> Result.map firstLine
   | StepWait seconds -> Nvim.execute ctx (Nvim.NvimWait seconds) |> Result.map firstLine
@@ -224,20 +315,41 @@ let private runStep (ctx: Nvim.ExecContext) (step: TourStep) : Result<string, st
 let runSteps (ctx: Nvim.ExecContext) (name: string) (steps: TourStep list) : TourReport =
   let outcomes = ResizeArray<StepOutcome>()
   let mutable failed = false
-  steps
-  |> List.iteri (fun i step ->
-    if not failed then
+  // An activate step changes the shared daemon's active session. Remember what it was so it can
+  // be put back, whatever happens in between.
+  let previousActive =
+    if steps |> List.exists (function StepActivate _ -> true | _ -> false) then
+      Daemon.activeSessionId () |> Result.toOption |> Option.filter (fun id -> id <> "")
+    else None
+  let restoreActive () =
+    match previousActive with
+    | None -> ()
+    | Some id ->
       let start = nowMs ()
-      let result = runStep ctx step
-      let stop = nowMs ()
-      let ok, detail =
-        match result with
-        | Result.Ok d -> true, d
-        | Result.Error e -> false, e
-      if not ok then failed <- true
-      Nvim.appendTimeline ctx.OutDir { startMs = start; endMs = stop; source = "tour"; command = stepWord step; args = (formatStep step).Substring((stepWord step).Length).Trim(); ok = ok }
-      outcomes.Add { index = i + 1; step = formatStep step; ok = ok; detail = detail; startMs = start; endMs = stop })
-  { tour = name; passed = not failed; steps = List.ofSeq outcomes }
+      let result =
+        match Daemon.sessions () with
+        | Result.Ok all when all |> List.exists (fun s -> s.Id = id) -> Daemon.switchTo id |> Result.map (fun () -> sprintf "the daemon's active session is %s again" id)
+        | Result.Ok _ -> Result.Ok(sprintf "session %s is gone, nothing to restore" id)
+        | Result.Error e -> Result.Error e
+      let ok, detail = match result with Result.Ok d -> true, d | Result.Error e -> false, e
+      outcomes.Add { index = outcomes.Count + 1; step = "restore the daemon's active session"; ok = ok; detail = detail; startMs = start; endMs = nowMs () }
+  try
+    steps
+    |> List.iteri (fun i step ->
+      if not failed then
+        let start = nowMs ()
+        let result = runStep ctx step
+        let stop = nowMs ()
+        let ok, detail =
+          match result with
+          | Result.Ok d -> true, d
+          | Result.Error e -> false, e
+        if not ok then failed <- true
+        Nvim.appendTimeline ctx.OutDir (Nvim.timelineEntry "tour" (stepWord step) ((formatStep step).Substring((stepWord step).Length).Trim()) ok start stop)
+        outcomes.Add { index = i + 1; step = formatStep step; ok = ok; detail = detail; startMs = start; endMs = stop })
+  finally
+    restoreActive ()
+  { tour = name; passed = not failed && outcomes |> Seq.forall (fun o -> o.ok); steps = List.ofSeq outcomes }
 
 // ---------------------------------------------------------------------------
 // Command line: `nvim tour <file> <editor options>`, `nvim tour-check <file>`,
@@ -303,7 +415,7 @@ let run (args: string list) : int =
         File.WriteAllText(Path.Combine(out, "tour-report.json"), JsonSerializer.Serialize(report, JsonSerializerOptions(WriteIndented = true)))
         for s in report.steps do
           printfn "%s %02d %s  %s" (if s.ok then "ok  " else "FAIL") s.index s.step (firstLine s.detail)
-        Shot.shutdown ()
+        NvimShot.shutdown ()
         if report.passed then 0 else 1
     | Result.Error e, _, _, _, _, _, _, _ ->
       eprintfn "%s" e
@@ -328,10 +440,10 @@ let render (args: string list) : int =
       | Some c -> int c
       | None -> grid |> List.map List.length |> List.fold max Nvim.Limits.ScreenColumns
     let rows = match optionValue rest "--rows" with | Some r -> int r | None -> rows
-    match Shot.renderPng (Ansi.toHtml grid) columns rows png with
+    match NvimShot.renderPng (Ansi.toHtml grid) columns rows png with
     | Result.Ok r ->
       printfn "%s: %dx%d px" r.Png r.ImageWidth r.ImageHeight
-      Shot.shutdown ()
+      NvimShot.shutdown ()
       0
     | Result.Error e ->
       eprintfn "%s" e

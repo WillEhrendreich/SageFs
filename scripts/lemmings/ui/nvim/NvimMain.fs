@@ -14,9 +14,9 @@ let dispatch (args: string list) : int =
   | "oracle" :: rest -> NvimOracle.run rest
   | "summarize" :: rest -> NvimOracle.summarize rest
   | "annotate" :: rest -> NvimOracle.annotate rest
-  | "tour" :: rest -> Tour.run rest
-  | "tour-check" :: rest -> Tour.check rest
-  | "render" :: rest -> Tour.render rest
+  | "tour" :: rest -> NvimTour.run rest
+  | "tour-check" :: rest -> NvimTour.check rest
+  | "render" :: rest -> NvimTour.render rest
   | "daemon-state" :: rest ->
     match rest with
     | [ "--run"; dir ] -> NvimOracle.daemonState dir NvimOracle.Daemon.Port

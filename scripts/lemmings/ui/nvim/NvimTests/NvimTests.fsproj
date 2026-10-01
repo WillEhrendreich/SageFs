@@ -21,9 +21,9 @@
 
   <ItemGroup>
     <Compile Include="../Ansi.fs" />
-    <Compile Include="../Shot.fs" />
+    <Compile Include="../NvimShot.fs" />
     <Compile Include="../Nvim.fs" />
-    <Compile Include="../Tour.fs" />
+    <Compile Include="../NvimTour.fs" />
     <Compile Include="AnsiTests.fs" />
     <Compile Include="DriverTests.fs" />
     <Compile Include="TourTests.fs" />

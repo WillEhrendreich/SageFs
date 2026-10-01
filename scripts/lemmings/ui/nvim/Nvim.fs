@@ -473,9 +473,13 @@ let modeText (mode: Mode) : string =
   | MorePrompt -> "MORE PROMPT (press <Space> for more, q to quit)"
   | Exited status -> sprintf "EXITED (nvim ended with status %d)" status
 
-let detectMode (rows: string list) : Mode =
+/// `cursorRow` is the terminal cursor's row, counted from 1. In command-line mode the cursor sits on
+/// the last row, which is how it is told from a command that has already run and is only still
+/// printed there.
+let detectMode (rows: string list) (cursorRow: int) : Mode =
   let nonEmpty = rows |> List.filter (fun r -> r.Trim().Length > 0)
   let last = match List.tryLast rows with Some r -> r | None -> ""
+  let cursorOnLastRow = cursorRow >= rows.Length
   let any (needle: string) = rows |> List.exists (fun r -> r.Contains needle)
   match () with
   | _ when any "Press ENTER or type command to continue" -> HitEnter
@@ -486,7 +490,7 @@ let detectMode (rows: string list) : Mode =
   | _ when last.Contains "-- VISUAL BLOCK --" -> VisualBlock
   | _ when last.Contains "-- VISUAL --" -> Visual
   | _ when last.Contains "-- REPLACE --" -> Replace
-  | _ when last.StartsWith ":" || last.StartsWith "/" || last.StartsWith "?" -> CommandLine
+  | _ when cursorOnLastRow && (last.StartsWith ":" || last.StartsWith "/" || last.StartsWith "?") -> CommandLine
   | _ when nonEmpty.IsEmpty -> Normal
   | _ -> Normal
 
@@ -621,7 +625,7 @@ let snapshot (t: TmuxTarget) : Result<ScreenSnapshot, string> =
   | Result.Error e, _ -> Result.Error e
   | _, Result.Error e -> Result.Error e
   | Result.Ok(row, col, dead, status), Result.Ok rows ->
-    let mode = if dead then Exited status else detectMode rows
+    let mode = if dead then Exited status else detectMode rows row
     Result.Ok { Rows = rows; CursorRow = row; CursorCol = col; Mode = mode }
 
 let screenText (t: TmuxTarget) : Result<string, string> =
@@ -697,7 +701,7 @@ let takeShot (t: TmuxTarget) (shotsDir: string) (name: string) : Result<ShotMeta
       let txt = Path.Combine(shotsDir, stem + ".txt")
       let png = Path.Combine(shotsDir, stem + ".png")
       File.WriteAllText(txt, ansi)
-      match Shot.renderPng (Ansi.render ansi) columns rows png with
+      match NvimShot.renderPng (Ansi.render ansi) columns rows png with
       | Result.Error e -> Result.Error e
       | Result.Ok r ->
         let meta =
@@ -890,10 +894,22 @@ let private nowMs () = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
 type TimelineEntry =
   { startMs: int64
     endMs: int64
+    editor: string
+    /// "lemming" for a call through the socket, "tour" for a tour step.
     source: string
     command: string
-    args: string
-    ok: bool }
+    args: string list
+    /// "ok" or "failed", the same words the VS Code driver writes.
+    outcome: string }
+
+let timelineEntry (source: string) (command: string) (arg: string) (ok: bool) (startMs: int64) (endMs: int64) : TimelineEntry =
+  { startMs = startMs
+    endMs = endMs
+    editor = "nvim"
+    source = source
+    command = command
+    args = (if arg = "" then [] else [ arg ])
+    outcome = (if ok then "ok" else "failed") }
 
 let timelinePath (outDir: string) = Path.Combine(outDir, "timeline.ndjson")
 
@@ -933,7 +949,7 @@ let private handle (cfg: ServeConfig) (counter: int ref) (req: Request) : Respon
       jsonOptions
     )
   File.AppendAllText(callsLog cfg, line + "\n")
-  appendTimeline cfg.OutDir { startMs = startMs; endMs = nowMs (); source = "lemming"; command = req.cmd; args = req.arg; ok = ok }
+  appendTimeline cfg.OutDir (timelineEntry "lemming" req.cmd req.arg ok startMs (nowMs ()))
   { ok = ok; text = text }
 
 let private quote (s: string) = "'" + s.Replace("'", "'\\''") + "'"
@@ -1036,7 +1052,7 @@ let serve (cfg: ServeConfig) : int =
     (match takeShot cfg.Tmux (shotsDirOf cfg.OutDir) "final" with
      | Result.Ok _ -> ()
      | Result.Error e -> eprintfn "final shot not taken: %s" e)
-    Shot.shutdown ()
+    NvimShot.shutdown ()
     0
 
 // ---------------------------------------------------------------------------

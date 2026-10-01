@@ -114,14 +114,35 @@ let commandSet =
   ]
 
 [<Tests>]
+let timeline =
+  testList "the timeline line" [
+    testCase "one JSON line with epoch milliseconds, the editor, the command, an args array and an outcome" <| fun _ ->
+      let entry = Nvim.timelineEntry "lemming" "keys" ":w<CR>" true 1790894121442L 1790894121873L
+      use doc = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize entry)
+      let r = doc.RootElement
+      r.GetProperty("startMs").GetInt64() |> Expect.equal "start" 1790894121442L
+      r.GetProperty("endMs").GetInt64() |> Expect.equal "end" 1790894121873L
+      r.GetProperty("editor").GetString() |> Expect.equal "editor" "nvim"
+      r.GetProperty("command").GetString() |> Expect.equal "command" "keys"
+      r.GetProperty("args").EnumerateArray() |> Seq.map (fun a -> a.GetString()) |> List.ofSeq |> Expect.equal "args" [ ":w<CR>" ]
+      r.GetProperty("outcome").GetString() |> Expect.equal "outcome" "ok"
+
+    testCase "a command with no argument has an empty args array, and a failure says so" <| fun _ ->
+      let entry = Nvim.timelineEntry "tour" "shot" "" false 1L 2L
+      entry.args |> Expect.equal "no args" []
+      entry.outcome |> Expect.equal "failed" "failed"
+  ]
+
+[<Tests>]
 let screens =
   testList "what the screen header says" [
     testCase "modes are read off the bottom line and the prompts anywhere" <| fun _ ->
-      Nvim.detectMode [ "x"; "status"; "-- INSERT --" ] |> Expect.equal "insert" Nvim.InsertMode
-      Nvim.detectMode [ "x"; "status"; ":SageFs" ] |> Expect.equal "command line" Nvim.CommandLine
-      Nvim.detectMode [ "Press ENTER or type command to continue" ] |> Expect.equal "hit enter" Nvim.HitEnter
-      Nvim.detectMode [ "1: A"; "2: B"; "Type number and <Enter> (q or empty cancels):" ] |> Expect.equal "picker" Nvim.InputPrompt
-      Nvim.detectMode [ "x"; "status"; "" ] |> Expect.equal "normal" Nvim.Normal
+      Nvim.detectMode [ "x"; "status"; "-- INSERT --" ] 1 |> Expect.equal "insert" Nvim.InsertMode
+      Nvim.detectMode [ "x"; "status"; ":SageFs" ] 3 |> Expect.equal "command line: the cursor is on the last row" Nvim.CommandLine
+      Nvim.detectMode [ "x"; "status"; ":edit a.fs" ] 1 |> Expect.equal "a command that already ran is still printed, the cursor is elsewhere" Nvim.Normal
+      Nvim.detectMode [ "Press ENTER or type command to continue" ] 1 |> Expect.equal "hit enter" Nvim.HitEnter
+      Nvim.detectMode [ "1: A"; "2: B"; "Type number and <Enter> (q or empty cancels):" ] 3 |> Expect.equal "picker" Nvim.InputPrompt
+      Nvim.detectMode [ "x"; "status"; "" ] 1 |> Expect.equal "normal" Nvim.Normal
 
     testCase "the status line is the second row from the bottom" <| fun _ ->
       Nvim.statusLine [ "text"; "  DemoEnv.fs  1:1 SageFs  "; "" ] |> Expect.equal "trimmed" "DemoEnv.fs  1:1 SageFs"

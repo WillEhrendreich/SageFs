@@ -15,15 +15,15 @@
 
   <ItemGroup>
     <PackageReference Include="FSharp.Core" />
-    <!-- The package SageFs.Tests already uses; draws the terminal screenshots (Shot.fs). -->
+    <!-- The package SageFs.Tests already uses; draws the terminal screenshots (NvimShot.fs). -->
     <PackageReference Include="Microsoft.Playwright" />
   </ItemGroup>
 
   <ItemGroup>
     <Compile Include="Ansi.fs" />
-    <Compile Include="Shot.fs" />
+    <Compile Include="NvimShot.fs" />
     <Compile Include="Nvim.fs" />
-    <Compile Include="Tour.fs" />
+    <Compile Include="NvimTour.fs" />
     <Compile Include="NvimOracle.fs" />
     <Compile Include="NvimMain.fs" />
   </ItemGroup>

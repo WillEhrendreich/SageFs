@@ -1,0 +1,41 @@
+# Hot reload on the falco-hello fixture: run the app from the editor, change a route's text, save,
+# and see what the editor says and what the running app serves. Run it with:
+#   scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/falco-hot-reload.tour falco-hello Program.fs
+
+keys <CR>
+expect "SageFs"
+shot app-file-open
+
+keys :SageFsCreateSession<CR>
+expect "Select project to load"
+shot project-picker-one-project
+keys 1<CR>
+wait 15
+activate FalcoHello
+shot session-for-the-app
+
+# Run the app from the editor. The app picks its own port, so the next shot is where a person
+# would look for it.
+keys :SageFsRunApp<CR>
+wait 30
+shot app-starting
+keys :SageFsStatus<CR>
+wait 2
+shot status-with-app
+keys q
+
+# Change the route's text and save.
+keys :%s/Hello from Falco/Hello from Neovim/<CR>
+shot edit-unsaved
+keys :write<CR>
+wait 20
+shot hot-reload-after-save
+keys :SageFsHotReload<CR>
+wait 3
+shot hot-reload-file-picker
+keys <Esc>
+
+# A narrow terminal while a reload message may be on screen.
+resize 80x24
+shot hot-reload-narrow-80x24
+resize 140x40
