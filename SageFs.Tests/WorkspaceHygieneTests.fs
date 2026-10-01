@@ -163,6 +163,14 @@ let guardTests =
       | Result.Error(Refusal.OutsideKnownRoots _) -> ()
       | other -> failtestf "expected OutsideKnownRoots, got %A" other
 
+    testCase "a shared root like the temp dir only owns entries that carry SageFs's prefix" <| fun _ ->
+      match accept (tempRoot + "/somebody-elses-build") with
+      | Result.Error(Refusal.OutsideKnownRoots _) -> ()
+      | other -> failtestf "expected OutsideKnownRoots, got %A" other
+      match accept (tempRoot + "/sagefs-hr/abc") with
+      | Result.Ok _ -> ()
+      | Result.Error refusal -> failtestf "refused: %A" refusal
+
     testCase "a root itself is refused: only what is inside it can go" <| fun _ ->
       for root in roots.Entries |> List.map snd do
         match accept root with

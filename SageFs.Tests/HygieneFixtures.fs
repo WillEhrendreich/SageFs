@@ -22,7 +22,8 @@ let roots : Roots =
         RootKind.GateState, gateRoot
         RootKind.HostCache, hostRoot
         RootKind.DataDir, dataRoot
-        RootKind.TempRuns, tempRoot ] }
+        RootKind.TempRuns, tempRoot ]
+    NamePrefixes = [ RootKind.TempRuns, "sagefs-" ] }
 
 /// A resolver for paths that are real and not links: a path resolves to itself.
 let identityResolve (path: string) : Result<string, string> = Result.Ok path

@@ -67,6 +67,9 @@
         <Compile Include="HygieneFixtures.fs" />
         <Compile Include="WorkspaceHygieneTests.fs" />
         <Compile Include="HygieneSimDstTests.fs" />
+        <Compile Include="HygieneSandbox.fs" />
+        <Compile Include="HygieneGatherTests.fs" />
+        <Compile Include="HygieneExecuteTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />
         <Compile Include="MemberTableTests.fs" />
         <Compile Include="CrossCheckoutOverlapTests.fs" />

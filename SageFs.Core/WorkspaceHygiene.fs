@@ -293,7 +293,11 @@ type RootKind =
   | DataDir
   | TempRuns
 
-type Roots = { Entries: (RootKind * string) list }
+/// The directories SageFs manages. A root with a prefix (the OS temp dir, which is shared) only counts for
+/// entries directly inside it whose name starts with that prefix.
+type Roots =
+  { Entries: (RootKind * string) list
+    NamePrefixes: (RootKind * string) list }
 
 [<RequireQualifiedAccess>]
 type Refusal =
@@ -641,10 +645,18 @@ module Guard =
   let accept (roots: Roots) (resolve: string -> Result<string, string>) (path: string) : Result<Accepted, Refusal> =
     let normalized = normalize path
     let known = roots.Entries |> List.map (fun (kind, root) -> kind, normalize root)
+    // A root with a name prefix only owns the entries directly inside it that carry the prefix.
+    let namedRight (kind: RootKind) (root: string) : bool =
+      match roots.NamePrefixes |> List.tryFind (fun (k, _) -> k = kind) with
+      | None -> true
+      | Some(_, prefix) ->
+        let rest = normalized.Substring(root.Length + 1)
+        let first = rest.Split('/').[0]
+        first.StartsWith(prefix, StringComparison.Ordinal)
     match known |> List.tryFind (fun (_, root) -> root = normalized) with
     | Some _ -> Result.Error(Refusal.IsARoot normalized)
     | None ->
-      match known |> List.tryFind (fun (_, root) -> insideOf root normalized) with
+      match known |> List.tryFind (fun (kind, root) -> insideOf root normalized && namedRight kind root) with
       | None -> Result.Error(Refusal.OutsideKnownRoots normalized)
       | Some(kind, root) ->
         match resolve normalized, resolve root with

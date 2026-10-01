@@ -738,3 +738,20 @@ module DataRetention =
       match Double.TryParse(value) with
       | true, v when v > 0.0 -> TimeSpan.FromMinutes(v)
       | _ -> TimeSpan.FromHours(1.0)
+
+  // -- Workspace hygiene: how long what nobody owns is kept --
+
+  /// A built FSI host that no session has used for this long is pruned by the daemon's housekeeping. A host
+  /// rebuilds in a few minutes, so a month of disuse says that SDK and source combination is gone from daily
+  /// use, and 3 GB of 55 hosts is what no pruning cost one machine.
+  let hostCacheMaxAge = envOrDefaultDays "SAGEFS_HOST_CACHE_MAX_AGE_DAYS" 30.0
+  /// A gate checkout or tier clone whose invoking repo is still there is kept this long after its last gate,
+  /// so the next gate on the same repo stays warm. Past it the checkout is recreated in a few minutes.
+  let gateCheckoutRetention = envOrDefaultDays "SAGEFS_GATE_RETENTION_DAYS" 14.0
+  /// A test runner's temp data dir (and any other `sagefs-*` temp entry nobody records an owner for) is
+  /// reclaimable this long after it was last touched. A run takes minutes; two days leaves room for a
+  /// debugging session that wants the leftovers of the run that just failed.
+  let tempRunMaxAge = envOrDefaultDays "SAGEFS_TEMP_RUN_MAX_AGE_DAYS" 2.0
+  /// A worker's log is kept this long after its last write. Logs are what a person reads after a crash, and
+  /// a crash is looked at within days.
+  let workerLogMaxAge = envOrDefaultDays "SAGEFS_WORKER_LOG_MAX_AGE_DAYS" 14.0

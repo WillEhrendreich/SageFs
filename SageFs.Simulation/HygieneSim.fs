@@ -110,7 +110,7 @@ module HygieneSim =
 
   let repo = "/w"
   let worktreeRoot = "/w/.claude/worktrees"
-  let roots : Roots = { Entries = [ RootKind.AgentWorktrees, worktreeRoot ] }
+  let roots : Roots = { Entries = [ RootKind.AgentWorktrees, worktreeRoot ]; NamePrefixes = [] }
   let now = DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc)
 
   let pathOf (id: int) : string = sprintf "%s/agent-%d" worktreeRoot id

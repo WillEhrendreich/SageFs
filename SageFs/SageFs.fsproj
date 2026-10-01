@@ -95,6 +95,8 @@
         <Compile Include="CohortLedger.fs" />
         <Compile Include="LocalData.fs" />
         <Compile Include="CohortGit.fs" />
+        <Compile Include="HygieneGather.fs" />
+        <Compile Include="HygieneEdge.fs" />
         <Compile Include="FrictionReviewView.fs" />
         <Compile Include="McpFrictionRecorder.fs" />
         <Compile Include="PageChoices.fs" />
