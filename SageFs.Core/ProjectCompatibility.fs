@@ -99,7 +99,9 @@ type ProjectHostability =
 // discriminator — SDK-style projects never write a dotted .NET Framework
 // TFM or a dot-less modern one.
 let private netFrameworkShort = Regex(@"^net\d{2,3}$", RegexOptions.Compiled)
-let private netCoreDotted = Regex(@"^net(\d+)\.\d+$", RegexOptions.Compiled)
+// A platform-specific moniker (net8.0-windows, net8.0-windows10.0.19041.0, net8.0-android, net10.0-browser)
+// is still a modern .NET target framework: the platform decides where it runs, not what loads it.
+let private netCoreDotted = Regex(@"^net(\d+)\.\d+(?:-[A-Za-z]+[\d.]*)?$", RegexOptions.Compiled)
 
 /// Classify one TFM moniker, e.g. "net8.0", "net48", "netstandard2.0".
 ///
@@ -158,11 +160,9 @@ let readTargetFrameworks (fsprojXml: string) : Result<string list, ProjectReadEr
     with ex ->
       Error(ProjectReadError.MalformedXml ex.Message)
 
-/// Classify a whole project from its raw `.fsproj` XML text. Pure — no IO.
-let classify (fsprojXml: string) : ProjectHostability =
-  match readTargetFrameworks fsprojXml with
-  | Error err -> ProjectHostability.Indeterminate(describeReadError err)
-  | Ok tfms ->
+/// Classify a project from the target framework(s) it declares, after accounting for multi-targeting.
+/// Pure — no IO.
+let classifyTfms (tfms: string list) : ProjectHostability =
     let verdicts = tfms |> List.map classifyTfm
     let supported =
       verdicts
@@ -194,11 +194,84 @@ let classify (fsprojXml: string) : ProjectHostability =
           |> Option.defaultValue UnsupportedTfmReason.NetFramework
         ProjectHostability.NotHostable(tfms, reason)
 
-/// Read a `.fsproj` off disk and classify it. The one IO edge in this
-/// module — any failure to read the file (missing, permission denied, not
-/// actually readable text) is `Indeterminate`, never a refusal: a project
-/// SessionManager cannot even read is not one this classifier can be
-/// confident about.
+/// Classify a whole project from its raw `.fsproj` XML text. Pure — no IO.
+let classify (fsprojXml: string) : ProjectHostability =
+  match readTargetFrameworks fsprojXml with
+  | Error err -> ProjectHostability.Indeterminate(describeReadError err)
+  | Ok tfms -> classifyTfms tfms
+
+/// The target frameworks out of `dotnet msbuild -getProperty:TargetFramework -getProperty:TargetFrameworks`
+/// output: `{"Properties":{"TargetFramework":"net48","TargetFrameworks":""}}`. A single framework wins over
+/// the plural, as in MSBuild itself.
+let parseEvaluatedTargetFrameworks (json: string) : Result<string list, string> =
+  try
+    use document = System.Text.Json.JsonDocument.Parse json
+    let property (name: string) =
+      match document.RootElement.TryGetProperty "Properties" with
+      | true, properties ->
+        match properties.TryGetProperty name with
+        | true, value when value.ValueKind = System.Text.Json.JsonValueKind.String -> value.GetString().Trim()
+        | _ -> ""
+      | false, _ -> ""
+    match property "TargetFramework", property "TargetFrameworks" with
+    | "", "" -> Error "MSBuild evaluated neither TargetFramework nor TargetFrameworks"
+    | single, _ when single <> "" -> Ok [ single ]
+    | _, multi -> Ok(multi.Split(';') |> Array.map (fun s -> s.Trim()) |> Array.filter (fun s -> s <> "") |> Array.toList)
+  with ex -> Error(sprintf "MSBuild's answer was not JSON: %s" ex.Message)
+
+/// Asks MSBuild what the project's target frameworks are, props files and all. This is the real answer for
+/// a project whose `.fsproj` does not name one (a Directory.Build.props does), which the XML read cannot see.
+/// It runs in the project's folder, so a global.json picks the project's own SDK. Never throws, and gives up
+/// after `Timeouts.targetFrameworkEvaluation`: the worker evaluates the project again and decides then.
+let evaluateTargetFrameworks (projectPath: string) : Result<string list, string> =
+  try
+    let muxer =
+      match Environment.GetEnvironmentVariable "DOTNET_HOST_PATH" with
+      | null
+      | "" -> "dotnet"
+      | path -> path
+    let psi = System.Diagnostics.ProcessStartInfo(muxer)
+    for argument in [ "msbuild"; projectPath; "-getProperty:TargetFramework"; "-getProperty:TargetFrameworks"; "-nologo" ] do
+      psi.ArgumentList.Add argument
+    psi.WorkingDirectory <- Path.GetDirectoryName(Path.GetFullPath projectPath)
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.UseShellExecute <- false
+    psi.CreateNoWindow <- true
+    use proc = System.Diagnostics.Process.Start psi
+    // The answer is a line of JSON, far below a pipe's buffer, so the process can finish before anything
+    // reads it; reading after it has exited cannot block.
+    match proc.WaitForExit(int Timeouts.targetFrameworkEvaluation.TotalMilliseconds) with
+    | false ->
+      (try proc.Kill true with _ -> ())
+      Error(sprintf "`dotnet msbuild` did not answer within %O" Timeouts.targetFrameworkEvaluation)
+    | true when proc.ExitCode = 0 -> parseEvaluatedTargetFrameworks (proc.StandardOutput.ReadToEnd())
+    | true ->
+      let detail = proc.StandardError.ReadToEnd().Trim()
+      Error(sprintf "`dotnet msbuild` exited with %d: %s" proc.ExitCode detail)
+  with ex -> Error ex.Message
+
+/// Read a `.fsproj` off disk and classify it. A project that names its target framework is classified from
+/// the XML. One that does not (a Directory.Build.props sets it) is asked of MSBuild through `evaluate`, so a
+/// .NET Framework project is refused whether or not its project file says so. Any failure to read the file
+/// (missing, permission denied, not actually readable text) or to evaluate it is `Indeterminate`, never a
+/// refusal: the worker evaluates the project again and refuses or reports then
+/// (HostAdaptation.targetFrameworkFindings).
+let classifyProjectFileWith (evaluate: string -> Result<string list, string>) (path: string) : ProjectHostability =
+  try
+    let xml = File.ReadAllText path
+    match readTargetFrameworks xml with
+    | Error ProjectReadError.NoTargetFrameworkElement ->
+      match evaluate path with
+      | Ok tfms -> classifyTfms tfms
+      | Error why ->
+        ProjectHostability.Indeterminate(
+          sprintf "%s and MSBuild could not evaluate it (%s)" (describeReadError ProjectReadError.NoTargetFrameworkElement) why)
+    | _ -> classify xml
+  with ex ->
+    ProjectHostability.Indeterminate(sprintf "could not read '%s': %s" path ex.Message)
+
+/// The XML-only classification: no process is started. See `classifyProjectFileWith` for the evaluating one.
 let classifyProjectFile (path: string) : ProjectHostability =
   try
     classify (File.ReadAllText path)
@@ -278,13 +351,22 @@ let describeFableClient (project: string) (markers: string list) : string =
 /// either Hostable or Indeterminate (the conservative default when in
 /// doubt), matching today's behavior for anything this classifier can't
 /// read or doesn't recognise.
-let findUnhostable (projects: string list) : (string * string list * UnsupportedTfmReason) option =
+let private findUnhostableBy (classify: string -> ProjectHostability) (projects: string list) : (string * string list * UnsupportedTfmReason) option =
   projects
   |> List.tryPick (fun project ->
-    match classifyProjectFile project with
+    match classify project with
     | ProjectHostability.NotHostable(tfms, reason) -> Some(project, tfms, reason)
     | ProjectHostability.Hostable _
     | ProjectHostability.Indeterminate _ -> None)
+
+let findUnhostable (projects: string list) : (string * string list * UnsupportedTfmReason) option =
+  findUnhostableBy classifyProjectFile projects
+
+/// `findUnhostable`, asking MSBuild for the target framework of a project whose file does not name one.
+/// For the daemon's create path, which refuses BEFORE it builds: a .NET Framework project's build either
+/// fails on a missing targeting pack or succeeds into output no host can load, and neither says why.
+let findUnhostableEvaluated (projects: string list) : (string * string list * UnsupportedTfmReason) option =
+  findUnhostableBy (classifyProjectFileWith evaluateTargetFrameworks) projects
 
 /// One advisory line per project whose TOOLCHAIN means SageFs can only help
 /// with part of it — today, a Fable client, whose real runtime is a browser.

@@ -119,6 +119,82 @@ let tests =
         Expect.notEqual "identity" "0Harmony" HostHarmonyName
     ]
 
+    // A host built for the SDK carries the SDK's FSharp.Core. A project that pins a newer one runs on a host
+    // whose FSharp.Core IS that one, because the runtime will not take a newer app-local assembly from an
+    // extra manifest and refuses a second FSharp.Core in the default context. The variant is a cheap copy.
+    testList "ensureFSharpCoreVariant" [
+      let writeFakeHost (root: string) =
+        let bin = Path.Combine(root, "sdk-1.0.0-abc", "bin")
+        Directory.CreateDirectory(Path.Combine(bin, "cs")) |> ignore
+        for name, text in
+          [ "FsiHost.dll", "host"
+            "FsiHost.deps.json", "{}"
+            "FsiHost.runtimeconfig.json", "{}"
+            "FSharp.Core.dll", "sdk fsharp core"
+            "FSharp.Core.xml", "docs"
+            "FSharp.Compiler.Service.dll", "compiler service" ] do
+          File.WriteAllText(Path.Combine(bin, name), text)
+        File.WriteAllText(Path.Combine(bin, "cs", "FSharp.Core.resources.dll"), "satellite")
+        Path.Combine(bin, "FsiHost.dll")
+
+      let writeProjectCore (root: string) (text: string) =
+        let path = Path.Combine(root, "project", text, "FSharp.Core.dll")
+        Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
+        File.WriteAllText(path, text)
+        path
+
+      let ensure (hostDll: string) (core: string) =
+        match ensureFSharpCoreVariant hostDll core with
+        | Result.Ok variantDll -> variantDll
+        | Result.Error reason -> failtest (describeBuildError reason)
+
+      testCase "the variant's FSharp.Core is the project's, and the original host is untouched" <| fun _ ->
+        withTempCache (fun root ->
+          let hostDll = writeFakeHost root
+          let core = writeProjectCore root "project fsharp core"
+          let variantDll = ensure hostDll core
+          let variantBin = Path.GetDirectoryName variantDll
+          File.ReadAllText(Path.Combine(variantBin, "FSharp.Core.dll"))
+          |> Expect.equal "the project's FSharp.Core" "project fsharp core"
+          File.ReadAllText(Path.Combine(Path.GetDirectoryName hostDll, "FSharp.Core.dll"))
+          |> Expect.equal "the original host keeps the SDK's" "sdk fsharp core")
+
+      testCase "the host dll is a real copy, because the runtime finds the app folder from its real path" <| fun _ ->
+        withTempCache (fun root ->
+          let hostDll = writeFakeHost root
+          let variantDll = ensure hostDll (writeProjectCore root "core")
+          FileInfo(variantDll).LinkTarget |> Expect.isNull "FsiHost.dll is not a symbolic link"
+          for name in [ "FsiHost.deps.json"; "FsiHost.runtimeconfig.json" ] do
+            FileInfo(Path.Combine(Path.GetDirectoryName variantDll, name)).LinkTarget |> Expect.isNull (sprintf "%s is a real copy" name))
+
+      testCase "everything else of the host is there, the satellite folders too, and the old FSharp.Core docs are not" <| fun _ ->
+        withTempCache (fun root ->
+          let hostDll = writeFakeHost root
+          let variantBin = Path.GetDirectoryName(ensure hostDll (writeProjectCore root "core"))
+          File.ReadAllText(Path.Combine(variantBin, "FSharp.Compiler.Service.dll")) |> Expect.equal "the compiler service" "compiler service"
+          File.ReadAllText(Path.Combine(variantBin, "cs", "FSharp.Core.resources.dll")) |> Expect.equal "the satellite" "satellite"
+          File.Exists(Path.Combine(variantBin, "FSharp.Core.xml")) |> Expect.isFalse "docs belong to the SDK's build")
+
+      testCase "asking again for the same FSharp.Core reuses the variant, and a different one gets its own" <| fun _ ->
+        withTempCache (fun root ->
+          let hostDll = writeFakeHost root
+          let core = writeProjectCore root "core one"
+          let first = ensure hostDll core
+          let stamp = File.GetLastWriteTimeUtc first
+          ensure hostDll core |> Expect.equal "the same variant" first
+          File.GetLastWriteTimeUtc first |> Expect.equal "not rebuilt" stamp
+          let other = ensure hostDll (writeProjectCore root "core two")
+          other |> Expect.notEqual "a different FSharp.Core is a different folder" first)
+
+      testCase "a FSharp.Core that does not exist is an error that names it, not an exception" <| fun _ ->
+        withTempCache (fun root ->
+          let hostDll = writeFakeHost root
+          let missing = Path.Combine(root, "nowhere", "FSharp.Core.dll")
+          match ensureFSharpCoreVariant hostDll missing with
+          | Result.Error reason -> describeBuildError reason |> Expect.stringContains "names the file" "nowhere"
+          | Result.Ok variant -> failtestf "expected an error, got %s" variant)
+    ]
+
     testList "parseSdkList" [
       testCase "reads the version at the start of each line" <| fun _ ->
         parseSdkList "10.0.401 [/home/will/.dotnet/sdk]\n11.0.100-rc.1.26425.128 [/home/will/.dotnet/sdk]\n"

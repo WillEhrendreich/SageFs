@@ -244,4 +244,32 @@ let tests =
         |> Expect.isNone "System.Private.CoreLib has no FSharp.Core reference to rewrite"
       }
     ]
+
+    // The rewrite used to fail open: any exception was caught and logged, and the session carried on against
+    // the host's FSharp.Core with nothing to say so. A failure is a value now, and the session reports it.
+    testList "ProjectFSharpCoreIdentity.rewriteFileReference" [
+      test "a file that cannot be read is Failed with the reason, never an exception and never silently nothing" {
+        let missing = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sagefs-no-such-dir", "Gone.dll")
+        match ProjectFSharpCoreIdentity.rewriteFileReference (Set.singleton "irrelevant::key()") missing with
+        | ProjectFSharpCoreIdentity.RewriteResult.Failed detail -> detail |> Expect.isNotEmpty "says why"
+        | other -> failtestf "expected Failed, got %A" other
+      }
+
+      test "a file that is not a .NET assembly is Failed" {
+        let path = System.IO.Path.GetTempFileName()
+        try
+          System.IO.File.WriteAllText(path, "this is not an assembly")
+          match ProjectFSharpCoreIdentity.rewriteFileReference (Set.singleton "irrelevant::key()") path with
+          | ProjectFSharpCoreIdentity.RewriteResult.Failed _ -> ()
+          | other -> failtestf "expected Failed, got %A" other
+        finally
+          System.IO.File.Delete path
+      }
+
+      test "an assembly with nothing to redirect is NothingToRewrite, which is not a failure" {
+        let corlib = typeof<obj>.Assembly.Location
+        ProjectFSharpCoreIdentity.rewriteFileReference (Set.singleton "irrelevant::key()") corlib
+        |> Expect.equal "no FSharp.Core reference" ProjectFSharpCoreIdentity.RewriteResult.NothingToRewrite
+      }
+    ]
   ]

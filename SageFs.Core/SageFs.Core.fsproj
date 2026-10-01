@@ -325,7 +325,6 @@
         <Compile Include="AppRunOrchestration.fs" />
         <Compile Include="HttpWorkerClient.fs" />
         <Compile Include="HostManifest.fs" />
-        <Compile Include="VariantSelector.fs" />
         <Compile Include="HostAdaptation.fs" />
         <Compile Include="OrphanTempDirSweep.fs" />
         <Compile Include="HostCoreAdoption.fs" />

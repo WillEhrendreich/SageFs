@@ -84,6 +84,8 @@ module SessionHealth =
       match project.LoadMode with
       | LoadMode.ManualFallback cause ->
         Some (sprintf "%s: %s" (System.IO.Path.GetFileName project.Path) (FallbackCause.describe cause))
+      | LoadMode.EvaluatedWithConcerns concerns ->
+        Some (sprintf "%s: %s" (System.IO.Path.GetFileName project.Path) (concerns |> List.map HostConcern.describe |> String.concat " "))
       | LoadMode.Evaluated -> None)
 
   /// Each project whose assembly was built with optimizations, worded once by

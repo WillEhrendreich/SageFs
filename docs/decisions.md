@@ -74,21 +74,42 @@ Reopen it if: there's a cross-platform mechanism that's strictly stronger.
 
 ## When a project pins a version, adapt to it. Don't refuse.
 
-"Fail loud" is a diagnosis, not a fix. If a user's project pins a different FSharp.Core or
-System.Text.Json than the host was built with, the host re-initializes against the project's pins
-where the APIs are compatible, swaps in version-matched variants where SageFs's own code is
-coupled to the library, and moves feature dependencies out of the host entirely. Refusal is the
-last-resort safety net before any eval, never the first answer.
+"Fail loud" is a diagnosis, not a fix. If a user's project pins a different version of something than the
+host was built with, SageFs adapts where adapting is safe and says so where it isn't. Refusal is the
+last-resort safety net before any eval, never the first answer, except where running anyway would give a
+wrong answer without telling anyone.
 
-Where that stands, checked against the code on 2026-10-01: what exists is the isolated host with a tiny
-closure, the SDK's own FSharp.Core and compiler, a renamed Harmony, and a call-site rewrite that makes the
-project's own assembly bind to the host's FSharp.Core. Re-initializing against a project's pins and swapping in
-version-matched variants are designed (`HostAdaptation`, `VariantSelector`) and tested as pure logic, but nothing
-calls them and no variant assemblies exist. Two projects in one solution that resolve different versions of the
-same package, and a project that builds its own FSharp.Compiler.Service, are not covered by a test. Closing those
-is open work, and nothing here should claim it until a test does.
+Where that stands, checked against the code and pinned by outcome tests (`ProjectPinOutcomeTests`, host
+tier, each a real session on a small offline fixture project):
 
-Evidence: the recorded preferences in `CLAUDE.md`; the isolated FSI host design
+- A project's newer FSharp.Core, including one that only a NuGet package was compiled against, runs: the
+  session gets a host whose FSharp.Core is the project's. FSharp.Core is backward compatible, so the host's
+  own compiler service runs on it.
+- A project's System.Text.Json, or any shared-framework assembly, pinned newer than the framework's, runs:
+  the host is launched with an extra dependency manifest listing the project's copy.
+- A project's FSharp.Core that is the same version as the host's but a different build keeps the older
+  call-site rewrite for the project's own assembly.
+- Two projects in one session that pin different versions of one assembly are refused, with a message naming
+  both. One FSI process loads one version of an assembly, so picking either would run the other project against
+  the wrong one. FSharp.Core and shared-framework assemblies are exempt, because for those the newest is right.
+- A project that carries its own, newer FSharp.Compiler.Service is NOT adapted to. The host's own code is
+  compiled against the SDK's, so the project's copy cannot replace it. The session is Degraded and names the
+  versions and the way out (pin the SDK that ships that compiler service). A newer System.Text.Json can be
+  taken in because the host only uses it through its public API, which is not a promise anyone makes about a
+  compiler.
+- What the host could not make right (an unreadable runtimeconfig.json, a target framework nobody
+  recognises, a FSharp.Core rewrite that failed) is a Degraded session with the reason, on the dashboard, the
+  MCP status and `/api/sessions`. It used to be a log line.
+
+The variant-swapping half of the original design (version-matched Fantomas, Cecil and Harmony assemblies) is
+gone. The isolated host has none of those libraries in it, so no variant ever existed, and `VariantSelector`
+was deleted. `HostAdaptation` is the plan described above.
+
+Not covered, and nothing here claims it: two projects that pin a package at different PACKAGE versions
+with the same assembly version (the runtime cannot tell them apart, so nothing says anything), and a
+project that overrides a shared-framework assembly with something that is not API compatible.
+
+Evidence: `ProjectPinOutcomeTests`; `SageFs.Core/HostAdaptation.fs`; the isolated FSI host design
 (`SageFs.FsiHost`).
 Reopen it if: an adaptation turns out to be unsound for a specific library.
 

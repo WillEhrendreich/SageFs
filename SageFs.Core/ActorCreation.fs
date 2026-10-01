@@ -142,13 +142,14 @@ let createActorImmediate a =
   // `IsolatedFsiSession.start` is provably too late: something upstream always wins the race and re-derives
   // the loaded bytes from the project's original build output before that code ever runs (see
   // `IsolatedFsiSession.fixShadowCopiedFSharpCoreReferences`'s own doc comment for the live evidence).
-  let sln =
+  let sln, hostPrep =
     match a.FsiKind, shadowDir with
-    | SageFs.SessionKinds.Isolated, Some dir ->
-      match IsolatedFsiSession.fixShadowCopiedFSharpCoreReferences a.Logger a.LoadConfig.WorkingDir sln with
-      | Some fixedShadowDir -> { sln with LibPaths = fixedShadowDir :: sln.LibPaths }
-      | None -> sln
-    | _ -> sln
+    | SageFs.SessionKinds.Isolated, Some _ ->
+      let prep = IsolatedFsiSession.prepareHost a.Logger a.LoadConfig.WorkingDir sln
+      match prep.ShadowLibDir with
+      | Some fixedShadowDir -> { sln with LibPaths = fixedShadowDir :: sln.LibPaths }, prep
+      | None -> sln, prep
+    | _ -> sln, IsolatedFsiSession.noPreparation
 
   AspireSetup.configureAspireIfNeeded a.Logger sln
 
@@ -172,7 +173,7 @@ let createActorImmediate a =
     mkAppStateActor a.FsiKind a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled a.OnEvent tracedBuild sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetSessionStatus = getSessionStatus; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = SageFs.ProjectLoading.classifiedProjectsOf sln }
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetSessionStatus = getSessionStatus; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = SageFs.ProjectLoading.classifiedProjectsOf sln |> SageFs.ProjectLoading.withConcerns hostPrep.Concerns }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

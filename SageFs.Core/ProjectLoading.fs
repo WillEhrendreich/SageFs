@@ -27,13 +27,61 @@ type FallbackCause =
   /// runtime, and loading that SDK's MSBuild in-process would corrupt it.
   | SkippedNewerSdk of sdkMajor: int * hostMajor: int
 
+/// Something the FSI host could not make right for a project, and that the user has to be told about.
+/// Each of these used to be a log line: a session that is Ready and Healthy while one of them holds
+/// is a session that will give a wrong answer or an unhelpful exception later, with nothing to say why.
+[<RequireQualifiedAccess>]
+type HostConcern =
+  /// The runtime the project needs could not be read (a runtimeconfig.json that is not JSON, names no
+  /// framework, or names a version nobody can parse), so the host's default runtime was used on a guess.
+  | RuntimeUndetermined of reason: string
+  /// MSBuild evaluated the project to a target framework that is not a moniker SageFs recognises, so it
+  /// could not say whether the host can load it.
+  | TargetFrameworkUnrecognised of tfm: string * reason: string
+  /// The project's FSharp.Core call sites could not be redirected to the project's own build, so code
+  /// that calls a member the host's FSharp.Core lacks will throw MissingMethodException.
+  | FSharpCoreRewriteFailed of assembly: string * detail: string
+  /// The project references a FSharp.Compiler.Service that is not the one the host runs on. One process
+  /// holds one, and the host's own code is compiled against the SDK's, so the project's copy cannot
+  /// replace it.
+  | CompilerServiceShadowed of projectVersion: string * hostVersion: string * hostSdk: string
+
 /// How a project's options reached the session.
 [<RequireQualifiedAccess>]
 type LoadMode =
   | Evaluated
+  /// MSBuild evaluated the project, and the host could not make everything right for it. The session
+  /// evaluates code, so it is Degraded, not Failed; `concerns` is never empty.
+  | EvaluatedWithConcerns of concerns: HostConcern list
   /// Parsed from the .fsproj by hand. Source files load and code evaluates, but
   /// there is no build output, so there is nothing to run and nothing to patch.
   | ManualFallback of cause: FallbackCause
+
+module HostConcern =
+  /// The concern and what to do about it, in words a reader can act on. Never blank.
+  let describe (concern: HostConcern) : string =
+    match concern with
+    | HostConcern.RuntimeUndetermined reason ->
+      sprintf
+        "SageFs could not tell which .NET runtime this project needs (%s), so it started the session on the default runtime as a guess. Rebuild the project (dotnet build) so its runtimeconfig.json is rewritten, then hard_reset_fsi_session."
+        reason
+    | HostConcern.TargetFrameworkUnrecognised(tfm, reason) ->
+      sprintf
+        "This project targets '%s' and SageFs cannot say whether its FSI host can load that (%s). The session started anyway; if it fails to load the project's assemblies, target a plain netX.0 framework."
+        tfm
+        reason
+    | HostConcern.FSharpCoreRewriteFailed(assembly, detail) ->
+      sprintf
+        "SageFs could not redirect %s to the project's own FSharp.Core (%s), so it runs against the host's FSharp.Core. Code that calls a member only the project's build has will throw MissingMethodException. Building the project with `dotnet build -c Release` inlines most of those calls away."
+        assembly
+        detail
+    | HostConcern.CompilerServiceShadowed(projectVersion, hostVersion, hostSdk) ->
+      sprintf
+        "This project references FSharp.Compiler.Service %s, but the FSI host runs on .NET SDK %s's FSharp.Compiler.Service %s, and one process holds one. Code that calls a compiler-service member the host's copy lacks will throw MissingMethodException or TypeLoadException. Pin the SDK that ships FSharp.Compiler.Service %s in global.json and the session gets a host built with it."
+        projectVersion
+        hostSdk
+        hostVersion
+        projectVersion
 
 module FallbackCause =
   let private whatToDo =
@@ -942,6 +990,22 @@ let classifiedProjectsOf (sln: Solution) : ClassifiedProject list =
     |> List.filter (fun fp -> not (normalPaths.Contains fp.ProjectFileName))
     |> List.map (classifyFallbackProject sln.Mode)
   normal @ fallback
+
+/// Attaches what the host could not make right to the projects it is about, keyed by project path. A
+/// project that was parsed by hand keeps its fallback cause (the session is already Degraded for that and
+/// the host's concerns are about evaluated build output); a project with no concerns is returned as is.
+let withConcerns (concerns: (string * HostConcern) list) (roles: ClassifiedProject list) : ClassifiedProject list =
+  let samePath (a: string) (b: string) =
+    String.Equals(Path.GetFullPath a, Path.GetFullPath b, StringComparison.Ordinal)
+  roles
+  |> List.map (fun role ->
+    let mine = concerns |> List.filter (fun (project, _) -> samePath project role.Path) |> List.map snd
+    match mine, role.LoadMode with
+    | [], _ -> role
+    | _, LoadMode.ManualFallback _ -> role
+    | _, LoadMode.Evaluated -> { role with LoadMode = LoadMode.EvaluatedWithConcerns(List.distinct mine) }
+    | _, LoadMode.EvaluatedWithConcerns existing ->
+      { role with LoadMode = LoadMode.EvaluatedWithConcerns(List.distinct (existing @ mine)) })
 
 /// Best-effort target assembly for a fallback project: the manual fallback
 /// never builds, so there is no per-project TargetPath — only the flat DLL

@@ -76,6 +76,7 @@ type HostBuildError =
   | BuildFailed of sdkVersion: string * failure: ProcessFailure
   | BuildOutputMissing of dll: string
   | HarmonyUnavailable of path: string * detail: string
+  | FSharpCoreVariantUnavailable of fsharpCore: string * detail: string
 
 /// The one place a build error becomes text; every case says what to do about it where the user can act.
 let describeBuildError (error: HostBuildError) : string =
@@ -92,6 +93,11 @@ let describeBuildError (error: HostBuildError) : string =
   | BuildOutputMissing dll -> sprintf "the FSI host build succeeded but %s is missing" dll
   | HarmonyUnavailable(path, detail) ->
     sprintf "the FSI host's agent needs SageFs's Harmony (%s), which could not be prepared: %s (a broken SageFs install: reinstall the tool)" path detail
+  | FSharpCoreVariantUnavailable(fsharpCore, detail) ->
+    sprintf
+      "this project pins a newer FSharp.Core (%s) than the host's, and the host could not be prepared to run on it: %s. Check that the SageFs host cache folder is writable and has room."
+      fsharpCore
+      detail
 
 /// Pure: the cache directory name for an SDK version and the exact host sources. Any change to either changes it.
 let cacheKey (sdkVersion: string) (sources: (string * string) list) : string =
@@ -325,6 +331,76 @@ let ensureBuiltWith (dotnet: string) (selection: SdkSelection) (cacheRoot: strin
             | true ->
               File.WriteAllText(stamp, sdkVersion)
               Ok(Built dll)))))
+
+/// The files of a built host that must be real copies in a variant. The runtime resolves the app's folder
+/// from the host dll's real path, so a symlinked FsiHost.dll would run beside the ORIGINAL FSharp.Core.
+let private variantCopies = [ "FsiHost.dll"; "FsiHost.pdb"; "FsiHost.deps.json"; "FsiHost.runtimeconfig.json"; "FsiHost"; "FsiHost.exe" ]
+
+/// What the variant's FSharp.Core replaces. Its xml docs and satellite resources belong to the host's build.
+[<Literal>]
+let private FSharpCoreFile = "FSharp.Core.dll"
+
+let private linkOrCopyFile (source: string) (destination: string) : unit =
+  try File.CreateSymbolicLink(destination, source) |> ignore
+  with _ -> File.Copy(source, destination)
+
+let rec private linkOrCopyDirectory (source: string) (destination: string) : unit =
+  try Directory.CreateSymbolicLink(destination, source) |> ignore
+  with _ ->
+    Directory.CreateDirectory destination |> ignore
+    for file in Directory.GetFiles source do
+      File.Copy(file, Path.Combine(destination, Path.GetFileName file))
+    for directory in Directory.GetDirectories source do
+      linkOrCopyDirectory directory (Path.Combine(destination, Path.GetFileName directory))
+
+/// A copy of the built host at `hostDll` that runs on `fsharpCore` instead of the SDK's own FSharp.Core.
+///
+/// This is how a project that pins a NEWER FSharp.Core gets it in the host. The runtime will not take a
+/// newer copy of an app-local assembly from an extra dependency manifest (the host's own FSharp.Core is
+/// listed in its manifest, and the app wins), and a default-context load of a second FSharp.Core is
+/// refused. What does work is a host whose FSharp.Core IS the project's. FSharp.Core is backward
+/// compatible, so the host's compiler service, compiled against the SDK's, runs on the newer one.
+///
+/// The variant is content-addressed (host folder + the SHA-256 of the FSharp.Core), built once behind a
+/// cross-process lock, and cheap: only the files that must be real are copied; the rest are symbolic
+/// links to the original host (copies on a platform that refuses links).
+let ensureFSharpCoreVariant (hostDll: string) (fsharpCore: string) : Result<string, HostBuildError> =
+  let fail (detail: string) = Error(FSharpCoreVariantUnavailable(fsharpCore, detail))
+  try
+    let hostBin = Path.GetDirectoryName(hostDll: string)
+    let hostRoot = Path.GetDirectoryName(hostBin: string)
+    let hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes fsharpCore)).Substring(0, 12).ToLowerInvariant()
+    let variantRoot = hostRoot + "+fsharp-core-" + hash
+    let variantBin = Path.Combine(variantRoot, "bin")
+    let variantDll = Path.Combine(variantBin, "FsiHost.dll")
+    let stamp = Path.Combine(variantRoot, ".built")
+    let isBuilt () = File.Exists stamp && File.Exists variantDll
+    match isBuilt () with
+    | true -> Ok variantDll
+    | false ->
+      Directory.CreateDirectory variantRoot |> ignore
+      withBuildLock (Path.Combine(variantRoot, ".lock")) (int Timeouts.hostBuildLockWait.TotalMilliseconds) (fun () ->
+        match isBuilt () with
+        | true -> Ok variantDll
+        | false ->
+          // A half-built folder from a crash is not a variant.
+          (match Directory.Exists variantBin with
+           | true -> Directory.Delete(variantBin, true)
+           | false -> ())
+          Directory.CreateDirectory variantBin |> ignore
+          for file in Directory.GetFiles hostBin do
+            let name = Path.GetFileName file
+            let destination = Path.Combine(variantBin, name)
+            match name with
+            | FSharpCoreFile -> File.Copy(fsharpCore, destination)
+            | "FSharp.Core.xml" -> ()
+            | _ when List.contains name variantCopies -> File.Copy(file, destination)
+            | _ -> linkOrCopyFile file destination
+          for directory in Directory.GetDirectories hostBin do
+            linkOrCopyDirectory directory (Path.Combine(variantBin, Path.GetFileName directory))
+          File.WriteAllText(stamp, fsharpCore)
+          Ok variantDll)
+  with ex -> fail ex.Message
 
 /// Kept for callers that already know the version and nothing about where it lives.
 let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Result<HostBuild, HostBuildError> =

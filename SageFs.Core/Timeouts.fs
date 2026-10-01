@@ -70,6 +70,11 @@ module Timeouts =
   /// `dotnetSdkQuery`; a failure just means the normal in-process load runs as
   /// before. No recorded reason for 15s.
   let ambientSdkProbe = envOrDefault "SAGEFS_AMBIENT_SDK_PROBE_SECONDS" 15.0
+  /// How long `dotnet msbuild -getProperty:TargetFramework` may take when a project file does not
+  /// name its target framework (a Directory.Build.props sets it), before the daemon gives up asking
+  /// and lets the worker's own evaluation decide. It loads MSBuild once, which takes seconds on a
+  /// cold machine and nothing more. No recorded reason for 60s.
+  let targetFrameworkEvaluation = envOrDefault "SAGEFS_TARGET_FRAMEWORK_EVALUATION_SECONDS" 60.0
   /// How long one `dotnet-gcdump collect` may run. On a process this large it
   /// can take tens of seconds; this is generous without being an unbounded
   /// hang on a machine that is already struggling. No recorded reason for 120s.
