@@ -42,6 +42,25 @@ type JsonProfile =
     Nulls: JsonNulls
     Unions: JsonUnions }
 
+/// Why a payload could not be read. A closed set, so a caller can tell "this is not JSON of that
+/// shape" from "this profile cannot read that type" without parsing a message.
+[<RequireQualifiedAccess>]
+type JsonError =
+  /// The text is not valid JSON, or not JSON of the requested shape (a missing field, a wrong type).
+  | Malformed of detail: string
+  /// The requested type cannot be read by this profile.
+  | Unsupported of detail: string
+  /// The JSON was the literal null.
+  | NullDocument
+
+module JsonError =
+  /// What went wrong, in words, for a log line or an error response.
+  let describe (error: JsonError) : string =
+    match error with
+    | JsonError.Malformed detail -> sprintf "the JSON could not be read: %s" detail
+    | JsonError.Unsupported detail -> sprintf "the JSON could not be read into that type: %s" detail
+    | JsonError.NullDocument -> "the JSON was null"
+
 /// The one place SageFs serializes and deserializes JSON.
 ///
 /// .NET 11's System.Text.Json writes an F# union and .NET 10's throws "F# discriminated union
@@ -118,13 +137,17 @@ module Json =
     JsonSerializer.Serialize(value, optionsOf profile)
 
   /// A bad payload is an expected input, so the failure is a value that says why.
-  let deserialize<'T> (profile: JsonProfile) (text: string) : Result<'T, string> =
+  ///
+  /// The F# converter treats a record field of option type as required when the profile writes
+  /// nulls. To read a record that clients may send with optional fields left out, read with
+  /// `omitNulls`: that profile makes option fields skippable.
+  let deserialize<'T> (profile: JsonProfile) (text: string) : Result<'T, JsonError> =
     try
       let value = JsonSerializer.Deserialize<'T>(text, optionsOf profile)
       match isNull (box value) with
-      | true -> Error "the JSON was null"
+      | true -> Error JsonError.NullDocument
       | false -> Ok value
     with
-    | :? JsonException as ex -> Error ex.Message
-    | :? System.NotSupportedException as ex -> Error ex.Message
-    | :? System.ArgumentException as ex -> Error ex.Message
+    | :? JsonException as ex -> Error (JsonError.Malformed ex.Message)
+    | :? System.NotSupportedException as ex -> Error (JsonError.Unsupported ex.Message)
+    | :? System.ArgumentException as ex -> Error (JsonError.Malformed ex.Message)

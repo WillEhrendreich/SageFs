@@ -68,14 +68,14 @@ let tests =
 
     testCase "WHY — deserialize returns an Error that says why, never throws, because a bad payload is an expected input" <| fun _ ->
       match Json.deserialize<Sample> Json.standard "{ not json" with
-      | Error reason -> reason |> Expect.isNotEmpty "the reason is carried"
+      | Error error -> JsonError.describe error |> Expect.isNotEmpty "the reason is carried"
       | Ok value -> failtestf "expected an error, got %A" value
 
     testCase "WHY — a value survives a round trip, union and option included" <| fun _ ->
       let text = Json.serialize Json.standard sample
       match Json.deserialize<Sample> Json.standard text with
       | Ok back -> back |> Expect.equal "same value" sample
-      | Error reason -> failtestf "round trip failed: %s" reason
+      | Error error -> failtestf "round trip failed: %s" (JsonError.describe error)
 
     testProperty "WHY — every union case round-trips through every profile, so a profile can never lose a case" <| fun (level: int) (label: NonEmptyString) (weight: NormalFloat) ->
       let cases = [ Plain; Fancy level; Named (label.Get, weight.Get) ]
@@ -123,4 +123,27 @@ let goldenTests =
 
     testCase "WHY — the snake-case profile writes snake_case keys" <| fun _ ->
       Json.serialize Json.snakeCase {| someKey = 1 |} |> Expect.equal "snake" """{"some_key":1}"""
+  ]
+
+type WithOptional = { Id: int; Note: string option }
+
+[<Tests>]
+let optionalFieldTests =
+  testList "SageFs.Json optional fields" [
+
+    testCase "WHY — a client payload that leaves an optional field out is read by the omit-nulls profile, which is the profile to read such input with" <| fun _ ->
+      match Json.deserialize<WithOptional> (Json.omitNulls Json.standard) """{"Id":1}""" with
+      | Ok value -> value |> Expect.equal "the missing option is None" { Id = 1; Note = None }
+      | Error error -> failtestf "expected Ok, got %s" (JsonError.describe error)
+
+    testCase "WHY — the same payload under the null-writing profile is a Malformed error that names the missing field, never a thrown exception" <| fun _ ->
+      match Json.deserialize<WithOptional> Json.standard """{"Id":1}""" with
+      | Error (JsonError.Malformed detail) -> detail |> Expect.stringContains "names the field" "Note"
+      | other -> failtestf "expected Malformed, got %A" other
+
+    testCase "WHY — the literal null is a NullDocument for a type that can be null, and Malformed for an F# record, which cannot" <| fun _ ->
+      Json.deserialize<string> Json.standard "null" |> Expect.equal "a string can be null" (Error JsonError.NullDocument)
+      match Json.deserialize<WithOptional> Json.standard "null" with
+      | Error (JsonError.Malformed detail) -> detail |> Expect.stringContains "says what it found" "Null"
+      | other -> failtestf "expected Malformed for a record, got %A" other
   ]
