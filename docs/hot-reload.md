@@ -61,7 +61,7 @@ their apps inside FSI, where the agent is, so that is what they prove.
 
 ## The pipeline
 
-1. The file watcher detects `.fs`/`.fsx` changes (~500ms debounce).
+1. The file watcher detects `.fs`/`.fsx` changes. A burst of events from one save settles for 200ms ([`Timeouts.fileWatchDebounce`](../SageFs.Core/Timeouts.fs)), and a second event for a file within 500ms of its last compile is dropped as the same save ([`Timeouts.doubleCompileGuard`](../SageFs.Core/Timeouts.fs)).
 2. SageFs diffs the file against the source your loaded assembly was actually
    built from and emits only the **functions that changed**, against the
    compiled module's own identity. That keeps their parameter types as the
