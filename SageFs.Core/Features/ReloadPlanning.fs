@@ -672,7 +672,7 @@ let private identifiersOf (text: string) : Set<string> =
   |> Set.ofSeq
 
 /// The names a hidden type also exposes without ever spelling its own name: a
-/// union case (`Circle 1.0` never says `Shape`) or a record field (`{ Timeout = 5 }`
+/// union case (`Circle 1.0` never says `Shape`) or a record field (`{ Retries = 5 }`
 /// never says `Config`) both make a patch depend on the type just as much as
 /// spelling its name would — so both must count as "uses this hidden type".
 let private innerNamesOf (typeDecl: SourceDecl) : string list =
@@ -858,10 +858,10 @@ let private symbolUsesOf (source: string) : Result<FSharp.Compiler.CodeAnalysis.
     let sourceText = FSharp.Compiler.Text.SourceText.ofString source
     let projOptions, _ =
       checker.Value.GetProjectOptionsFromScript(fileName, sourceText, assumeDotNetFramework = false)
-      |> fun a -> Async.RunSynchronously(a, timeout = 10_000)
+      |> fun a -> Async.RunSynchronously(a, timeout = int SageFs.Timeouts.reloadPlanningCheck.TotalMilliseconds)
     let parseResults, answer =
       checker.Value.ParseAndCheckFileInProject(fileName, n, sourceText, projOptions)
-      |> fun a -> Async.RunSynchronously(a, timeout = 10_000)
+      |> fun a -> Async.RunSynchronously(a, timeout = int SageFs.Timeouts.reloadPlanningCheck.TotalMilliseconds)
     match answer with
     | FSharp.Compiler.CodeAnalysis.FSharpCheckFileAnswer.Aborted ->
       Error "the standalone type check was aborted"

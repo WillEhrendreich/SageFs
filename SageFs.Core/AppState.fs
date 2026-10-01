@@ -971,7 +971,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
           ErrorMessage = msg
           Diagnostics = []
           RetryCount = 1
-          DurationMs = 0.0
+          DurationMs = Timeouts.notRun.TotalMilliseconds
         })
       failed @ warningFailures
 
@@ -1546,7 +1546,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                       GC.WaitForPendingFinalizers()
                       GC.Collect()
                       async {
-                        do! Async.Sleep 500
+                        do! Async.Sleep (int Timeouts.dllLockRetryDelay.TotalMilliseconds)
                         return! SessionBuild.runBuildAsync [ projFile ] workingDir
                       }
                     | false -> async { return first }

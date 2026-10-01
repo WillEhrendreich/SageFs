@@ -17,7 +17,7 @@ module SageFs.Features.EvalResultSummary
 /// How large a printed eval result can get before it's summarised instead
 /// of returned whole. Comfortably above what a normal binding print looks
 /// like, far below the ~90,000-char wall that motivated this module.
-let maxResultChars = 4_000
+let maxResultChars = 4000
 
 /// What came back for a result we didn't return in full.
 type BoundedResult =

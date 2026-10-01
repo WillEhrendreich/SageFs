@@ -24,10 +24,10 @@ module TestTreemap =
                DurationMs = duration.TotalMilliseconds; Status = TreemapStatus.Failed }
       | TestRunStatus.Running ->
         Some { DisplayName = e.DisplayName; FullName = e.FullName
-               DurationMs = 0.0; Status = TreemapStatus.Running }
+               DurationMs = SageFs.Timeouts.notRun.TotalMilliseconds; Status = TreemapStatus.Running }
       | TestRunStatus.Skipped _ ->
         Some { DisplayName = e.DisplayName; FullName = e.FullName
-               DurationMs = 0.0; Status = TreemapStatus.Skipped }
+               DurationMs = SageFs.Timeouts.notRun.TotalMilliseconds; Status = TreemapStatus.Skipped }
       | _ -> None)
     |> Array.sortByDescending (fun e -> e.DurationMs)
 

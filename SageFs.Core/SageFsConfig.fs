@@ -66,7 +66,7 @@ let DefaultDashboardPort = 37750
 /// awaitWorkerPort any more — because SAGEFS_WORKER_STARTUP_TIMEOUT_MS may
 /// still be set in someone's environment; do not repurpose this name.
 let WorkerStartupTimeoutMs : int =
-  envInt "SAGEFS_WORKER_STARTUP_TIMEOUT_MS" 120_000
+  envInt "SAGEFS_WORKER_STARTUP_TIMEOUT_MS" (int Timeouts.legacyWorkerStartup.TotalMilliseconds)
 
 /// Admission ceiling for the SessionManager mailbox's queue
 /// (`MailboxProcessor<SessionCommand>.CurrentQueueLength`), mirroring

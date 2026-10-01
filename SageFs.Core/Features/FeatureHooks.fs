@@ -67,7 +67,7 @@ module FeaturePushState =
 let recordEval (code: string) (result: string) (durationMs: int64) (state: FeaturePushState) =
   let history = EvalStore.record code result durationMs System.DateTimeOffset.UtcNow state.History
   let timelineEntry: EvalTimeline.TimelineEntry =
-    { CellId = state.History.NextId; StartMs = 0L; DurationMs = durationMs; Status = EvalTimeline.Succeeded }
+    { CellId = state.History.NextId; StartMs = int64 SageFs.Timeouts.notRun.TotalMilliseconds; DurationMs = durationMs; Status = EvalTimeline.Succeeded }
   { state with
       History = history
       Scope = lazy (EvalStore.materializeScope history)

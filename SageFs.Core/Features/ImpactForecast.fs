@@ -50,8 +50,8 @@ module ImpactForecastReport =
 module ImpactForecast =
 
   /// Thresholds for recommendation classification
-  let [<Literal>] P95AcceptableMs = 500.0
-  let [<Literal>] P95InvestigateMs = 2000.0
+  let P95AcceptableMs = SageFs.Timeouts.impactP95Acceptable.TotalMilliseconds
+  let P95InvestigateMs = SageFs.Timeouts.impactP95Investigate.TotalMilliseconds
   let [<Literal>] DownstreamAcceptable = 5
   let [<Literal>] DownstreamInvestigate = 15
 

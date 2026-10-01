@@ -33,9 +33,9 @@ module McpToolAudit =
       SuccessCount = 0
       FailureCount = 0
       AffordanceViolations = 0
-      TotalDurationMs = 0.0
+      TotalDurationMs = Timeouts.notRun.TotalMilliseconds
       MinDurationMs = Double.MaxValue
-      MaxDurationMs = 0.0
+      MaxDurationMs = Timeouts.notRun.TotalMilliseconds
     }
 
     let record (durationMs: float) (outcome: ToolOutcome) (stats: ToolStats) =

@@ -37,7 +37,7 @@ module SafeDirectoryWalk =
   }
 
   module Bounds =
-    let standard : Bounds = { MaxDepth = 64; MaxEntries = 50_000 }
+    let standard : Bounds = { MaxDepth = 64; MaxEntries = 50000 }
 
   /// What a walk actually saw. `Truncated` must be surfaced to the caller,
   /// never swallowed — trusting a truncated `Files` list as if it were

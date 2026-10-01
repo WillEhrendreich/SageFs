@@ -219,7 +219,7 @@ let sdkRootOf (version: string) (listSdksOutput: string) : string option =
 
 /// The SDK version `dotnet` would use in `workingDir` (honouring global.json).
 let resolveSdkVersion (dotnet: string) (workingDir: string) : Result<string, HostBuildError> =
-  runCapture dotnet [ "--version" ] workingDir 30_000
+  runCapture dotnet [ "--version" ] workingDir (int Timeouts.dotnetSdkQuery.TotalMilliseconds)
   |> Result.map (fun output -> output.Trim())
   |> Result.mapError (fun failure -> SdkUnavailable(workingDir, failure))
 
@@ -229,7 +229,7 @@ let resolveSdk (dotnet: string) (workingDir: string) : Result<SdkSelection, Host
   resolveSdkVersion dotnet workingDir
   |> Result.map (fun version ->
     let root =
-      runCapture dotnet [ "--list-sdks" ] workingDir 30_000
+      runCapture dotnet [ "--list-sdks" ] workingDir (int Timeouts.dotnetSdkQuery.TotalMilliseconds)
       |> Result.toOption
       |> Option.bind (sdkRootOf version)
     { Version = version; DotnetRoot = root })
@@ -246,7 +246,7 @@ let parseSdkList (output: string) : string list =
 
 /// Every SDK installed on this machine. The host must build with each of them: FCS's API differs between SDKs.
 let installedSdkVersions (dotnet: string) : Result<string list, HostBuildError> =
-  runCapture dotnet [ "--list-sdks" ] (Path.GetTempPath()) 30_000
+  runCapture dotnet [ "--list-sdks" ] (Path.GetTempPath()) (int Timeouts.dotnetSdkQuery.TotalMilliseconds)
   |> Result.map parseSdkList
   |> Result.mapError (fun failure -> SdkUnavailable(Path.GetTempPath(), failure))
 

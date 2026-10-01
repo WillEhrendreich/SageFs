@@ -35,11 +35,11 @@ type Decision =
 let defaultThreshold = 3
 
 /// Interval between health probes of an established (Ready) worker.
-let defaultProbeIntervalMs = 5_000
+let defaultProbeIntervalMs = int Timeouts.workerHealthProbeInterval.TotalMilliseconds
 
 /// Default per-probe timeout: how long a single health round-trip is given
 /// to answer before it counts as `Missed`.
-let defaultProbeTimeoutMs = 3_000
+let defaultProbeTimeoutMs = int Timeouts.workerHealthProbeTimeout.TotalMilliseconds
 
 /// Pure decision: threshold + current miss streak + this probe's outcome ->
 /// what to do next.

@@ -15,7 +15,7 @@ open SageFs.ProjectLoading
 module WorkerPostReady =
 
   /// How often the watchdog asks the worker for its status.
-  let private readyPollIntervalMs = 1000
+  let private readyPollIntervalMs = int Timeouts.workerReadyPoll.TotalMilliseconds
 
   let private stackOf (ex: exn) = ex.StackTrace |> Option.ofObj |> Option.defaultValue ""
 

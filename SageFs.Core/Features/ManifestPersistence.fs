@@ -25,7 +25,7 @@ module ManifestTypes =
     let empty = {
       Entries = []
       ActiveSessionId = None
-      CreatedAtMs = 0L
+      CreatedAtMs = DateTimeOffset.UnixEpoch.ToUnixTimeMilliseconds()
     }
 
   /// Structured error returned by ManifestFile.load and DaemonPersistence.loadManifest.

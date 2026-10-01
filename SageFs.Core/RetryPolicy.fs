@@ -13,7 +13,7 @@ type RetryOutcome =
   | RetryAfter of delayMs: int<ms>
   | GiveUp of exn
 
-let defaults = { MaxRetries = 3; BaseDelayMs = 50<ms> }
+let defaults = { MaxRetries = 3; BaseDelayMs = int Timeouts.retryBaseDelay.TotalMilliseconds * 1<ms> }
 
 /// Calculate backoff with jitter: base * (attempt + 1) ± 50%
 let backoffMs (config: RetryConfig) (attempt: int) : int<ms> =

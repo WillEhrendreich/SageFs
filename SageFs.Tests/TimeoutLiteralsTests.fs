@@ -24,38 +24,7 @@ let private central = Set.ofList [ "SageFs.Core/Timeouts.fs"; "SageFs.Tests/Test
 
 /// What each file may still spell out itself. Ratchet down, never up.
 let private budgets : (string * int) list =
-  [ "SageFs.Core/AppState.fs", 2
-    "SageFs.Core/ConfigHost.fs", 1
-    "SageFs.Core/DevReload.fs", 9
-    "SageFs.Core/Features/EvalResultSummary.fs", 1
-    "SageFs.Core/Features/EvalStore.fs", 1
-    "SageFs.Core/Features/FeatureHooks.fs", 1
-    "SageFs.Core/Features/FsiOutputParser.fs", 1
-    "SageFs.Core/Features/GcDumpCapture.fs", 1
-    "SageFs.Core/Features/ImpactForecast.fs", 2
-    "SageFs.Core/Features/LiveTestingTypes.fs", 4
-    "SageFs.Core/Features/LiveValueTree.fs", 1
-    "SageFs.Core/Features/ManifestPersistence.fs", 1
-    "SageFs.Core/Features/ReloadPlanning.fs", 3
-    "SageFs.Core/Features/TestCachePersistence.fs", 1
-    "SageFs.Core/Features/TestTreemap.fs", 2
-    "SageFs.Core/Features/Tweak/LiteralEdit.fs", 1
-    "SageFs.Core/Features/Tweak/TweakLog.fs", 1
-    "SageFs.Core/FileWatcher.fs", 2
-    "SageFs.Core/FsiHostBuild.fs", 3
-    "SageFs.Core/IsolatedFsiSession.fs", 1
-    "SageFs.Core/McpToolAudit.fs", 2
-    "SageFs.Core/OwnerMonitor.fs", 1
-    "SageFs.Core/ProjectLoading.fs", 1
-    "SageFs.Core/RetryPolicy.fs", 1
-    "SageFs.Core/SafeDirectoryWalk.fs", 1
-    "SageFs.Core/SageFsConfig.fs", 1
-    "SageFs.Core/SessionManager.fs", 3
-    "SageFs.Core/WarmUp.fs", 1
-    "SageFs.Core/WarmupContext.fs", 4
-    "SageFs.Core/WorkerHealthProbe.fs", 2
-    "SageFs.Core/WorkerPostReady.fs", 1
-    "SageFs.Core/WorkflowTypes.fs", 1
+  [ "SageFs.Core/WorkflowTypes.fs", 1
     "SageFs.Host/AppRunner.fs", 2
     "SageFs.Tests/AffordancesMutationTests.fs", 6
     "SageFs.Tests/AffordancesPropertyTests.fs", 2

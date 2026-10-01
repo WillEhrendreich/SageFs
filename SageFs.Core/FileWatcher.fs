@@ -147,7 +147,7 @@ let shouldPruneDir (root: string) (dir: string) (hasCheckoutMarker: string -> bo
 /// `Directory.EnumerateFiles(_, _, AllDirectories)` would; it just has to
 /// say when it actually bites.
 [<Literal>]
-let MaxWatchableEntries = 50_000
+let MaxWatchableEntries = 50000
 
 /// The walk `watchableDirs` runs, parameterized on the cap so it can be
 /// proven against a small tree in a test without waiting to grow one to
@@ -210,7 +210,7 @@ let defaultWatchConfig dirs : WatchConfig = {
   Directories = dirs
   Extensions = [".fs"; ".fsx"; ".fsproj"]
   ExcludePatterns = []
-  DebounceMs = 200
+  DebounceMs = int Timeouts.fileWatchDebounce.TotalMilliseconds
 }
 
 /// What action to take when a file changes.

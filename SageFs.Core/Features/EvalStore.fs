@@ -67,7 +67,7 @@ type HistoryCap = private HistoryCap of int
 
 module HistoryCap =
   [<Literal>]
-  let StandardCells = 10_000
+  let StandardCells = 10000
 
   /// The daemon's cap: the most recent 10,000 cells.
   let standard = HistoryCap StandardCells

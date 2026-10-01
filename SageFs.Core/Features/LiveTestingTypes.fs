@@ -3250,7 +3250,7 @@ module TestCycleDebounce =
     Fcs = DebounceChannel.empty
   }
 
-  let treeSitterDelayMs = 50<ms>
+  let treeSitterDelayMs = int Timeouts.liveTestTreeSitterDebounce.TotalMilliseconds * 1<ms>
 
   let onKeystroke (content: string) (filePath: string) (fcsDelay: int<ms>) (now: DateTimeOffset) (db: TestCycleDebounce) =
     { db with
@@ -3716,9 +3716,9 @@ type AdaptiveDebounceConfig = {
 
 module AdaptiveDebounceConfig =
   let defaults = {
-    BaseTreeSitterMs = 50.0<ms>
-    BaseFcsMs = 300.0<ms>
-    MaxFcsMs = 2000.0<ms>
+    BaseTreeSitterMs = Timeouts.liveTestTreeSitterDebounce.TotalMilliseconds * 1.0<ms>
+    BaseFcsMs = Timeouts.liveTestFcsDebounce.TotalMilliseconds * 1.0<ms>
+    MaxFcsMs = Timeouts.liveTestFcsDebounceMax.TotalMilliseconds * 1.0<ms>
     BackoffMultiplier = 1.5
     ResetAfterSuccessCount = 3
   }

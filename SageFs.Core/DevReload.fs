@@ -9,35 +9,36 @@ open SageFs.Utils
 /// All timing/size constants that were previously scattered across
 /// FileWatcher.fs, DevReloadMiddleware.fs, and the inline JS.
 type DevReloadConfig = {
-  /// FileSystemWatcher debounce delay (ms). Default: 200
+  /// FileSystemWatcher debounce delay (ms). Default: `Timeouts.fileWatchDebounce`.
   FileWatcherDebounceMs: int
   /// FileSystemWatcher internal buffer size (bytes). Default: 65536 (64KB)
   FileWatcherBufferSizeBytes: int
   /// Max response body size for script injection (bytes). Default: 10MB
   MaxBodyBufferSizeBytes: int64
-  /// Double-compilation guard window (ms). Default: 500
+  /// Double-compilation guard window (ms). Default: `Timeouts.doubleCompileGuard`.
   DoubleCompileGuardMs: int
-  /// Browser SSE connection timeout (ms). Default: 3000
+  /// Browser SSE connection timeout (ms). Default: `Timeouts.reloadConnectTimeout`.
   SseConnectionTimeoutMs: int
-  /// Reload-bomb reset window (ms). Default: 5000
+  /// Reload-bomb reset window (ms). Default: `Timeouts.reloadCountResetWindow`.
   ReloadCountResetWindowMs: int
   /// Max reloads before pause. Default: 3
   ReloadGuardThreshold: int
-  /// Compile timer update interval in browser (ms). Default: 200
+  /// Compile timer update interval in browser (ms). Default: `Timeouts.compileTimerRedraw`.
   CompileTimerUpdateMs: int
   /// If compilation takes longer than this, show "click to reload"
-  /// instead of auto-reloading. Prevents blowing away in-progress work. Default: 3000
+  /// instead of auto-reloading. Prevents blowing away in-progress work.
+  /// Default: `Timeouts.autoReloadThreshold`.
   AutoReloadThresholdMs: int
-  /// Compile timer turns amber after this many ms. Default: 5000
+  /// Compile timer turns amber after this many ms. Default: `Timeouts.longCompileWarning`.
   LongCompileWarningMs: int
   /// How long one save waits for the previous save's compile before giving up
-  /// and REPORTING that it did (ms). Default: 60000.
+  /// and REPORTING that it did (ms). Default: `Timeouts.compileQueueWait`.
   ///
   /// Chesterton's fence: this wait used to be unbounded, which made one wedged
   /// eval silently disable hot reload for every other file for the rest of the
   /// session. Bounded, a stuck compiler is visible instead of invisible.
   CompileQueueWaitMs: int
-  /// Ceiling on ONE save's re-evaluation (ms). Default: 300000 (5 min).
+  /// Ceiling on ONE save's re-evaluation (ms). Default: `Timeouts.compileBudget`.
   ///
   /// This is the self-heal: the eval is posted with a token nothing else
   /// cancels, so without a deadline a single wedged submission owns the
@@ -47,19 +48,21 @@ type DevReloadConfig = {
 }
 
 module DevReloadConfig =
+  /// The record keeps its fields in milliseconds because the browser script
+  /// and the file watcher read them that way; each value is `Timeouts`'s.
   let defaults = {
-    FileWatcherDebounceMs = 200
+    FileWatcherDebounceMs = int Timeouts.fileWatchDebounce.TotalMilliseconds
     FileWatcherBufferSizeBytes = 65536
     MaxBodyBufferSizeBytes = 10L * 1024L * 1024L
-    DoubleCompileGuardMs = 500
-    SseConnectionTimeoutMs = 3000
-    ReloadCountResetWindowMs = 5000
+    DoubleCompileGuardMs = int Timeouts.doubleCompileGuard.TotalMilliseconds
+    SseConnectionTimeoutMs = int Timeouts.reloadConnectTimeout.TotalMilliseconds
+    ReloadCountResetWindowMs = int Timeouts.reloadCountResetWindow.TotalMilliseconds
     ReloadGuardThreshold = 3
-    CompileTimerUpdateMs = 200
-    AutoReloadThresholdMs = 3000
-    LongCompileWarningMs = 5000
-    CompileQueueWaitMs = 60_000
-    CompileBudgetMs = 300_000
+    CompileTimerUpdateMs = int Timeouts.compileTimerRedraw.TotalMilliseconds
+    AutoReloadThresholdMs = int Timeouts.autoReloadThreshold.TotalMilliseconds
+    LongCompileWarningMs = int Timeouts.longCompileWarning.TotalMilliseconds
+    CompileQueueWaitMs = int Timeouts.compileQueueWait.TotalMilliseconds
+    CompileBudgetMs = int Timeouts.compileBudget.TotalMilliseconds
   }
 
 /// Health status of the DevReload system. Queryable by any component

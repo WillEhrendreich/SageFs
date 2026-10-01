@@ -52,7 +52,7 @@ let private evaluateUncached (workingDir: string) (content: string) : Result<Dir
         Environment = []
         OnOutput = fun _ _ -> ()
         OnLog = ignore
-        StartupTimeoutMs = 120_000 }
+        StartupTimeoutMs = int Timeouts.fsiHostStartup.TotalMilliseconds }
     match Async.RunSynchronously(start options) with
     | Error reason -> Error(HostUnavailable(describeStartError reason))
     | Ok host ->

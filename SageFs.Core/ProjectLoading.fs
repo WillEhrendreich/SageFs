@@ -583,7 +583,7 @@ let private ambientSdkVersion (workingDir: string) : string option =
     psi.CreateNoWindow <- true
     use proc = Process.Start psi
     let stdout' = proc.StandardOutput.ReadToEndAsync()
-    match proc.WaitForExit 15_000 with
+    match proc.WaitForExit(int Timeouts.ambientSdkProbe.TotalMilliseconds) with
     | false ->
       (try proc.Kill true with _ -> ())
       None

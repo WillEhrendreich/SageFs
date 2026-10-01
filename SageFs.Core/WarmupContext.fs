@@ -46,14 +46,16 @@ module WarmupContext =
     TotalMs = nonNegative openPhaseMs
   }
 
-  let empty = {
-    SourceFilesScanned = 0
-    AssembliesLoaded = []
-    NamespacesOpened = []
-    FailedOpens = []
-    PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 0L }
-    StartedAt = System.DateTimeOffset.UtcNow
-  }
+  let empty =
+    let none = int64 Timeouts.notRun.TotalMilliseconds
+    {
+      SourceFilesScanned = 0
+      AssembliesLoaded = []
+      NamespacesOpened = []
+      FailedOpens = []
+      PhaseTiming = { ScanSourceFilesMs = none; ScanAssembliesMs = none; OpenNamespacesMs = none; TotalMs = none }
+      StartedAt = System.DateTimeOffset.UtcNow
+    }
 
   let completeWarmup
     startedAt

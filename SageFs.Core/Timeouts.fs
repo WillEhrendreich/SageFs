@@ -47,6 +47,44 @@ module Timeouts =
   let warmupInactivityLimit = envOrDefault "SAGEFS_WARMUP_INACTIVITY_SECONDS" 30.0
   let softResetCancellation = TimeSpan.FromMinutes(5.0)
   let initSessionCancellation = TimeSpan.FromMinutes(5.0)
+  /// How long a started FSI host process has to finish its startup handshake
+  /// (the one-shot config host in ConfigHost and the isolated session host in
+  /// IsolatedFsiSession) before the start is given up as failed. No recorded
+  /// reason for 120s.
+  let fsiHostStartup = envOrDefault "SAGEFS_FSI_HOST_STARTUP_SECONDS" 120.0
+  /// The default of the superseded `SAGEFS_WORKER_STARTUP_TIMEOUT_MS`
+  /// (`SageFsConfig.WorkerStartupTimeoutMs`). Nothing waits on it any more:
+  /// `warmupInactivityLimit` and `warmupAbsoluteMax` replaced a flat bound. It
+  /// stays only so a value someone has already set keeps parsing.
+  let legacyWorkerStartup = TimeSpan.FromSeconds(120.0)
+  /// How long a build that failed on a locked DLL waits, after forcing a GC to
+  /// drop in-process file handles, before it builds once more. No recorded
+  /// reason for 500ms.
+  let dllLockRetryDelay = TimeSpan.FromMilliseconds(500.0)
+  /// How long `dotnet --version` and `dotnet --list-sdks` may each take while
+  /// FsiHostBuild picks the SDK to build the FSI host with. They answer from
+  /// disk, so a wait this long means a hung muxer. No recorded reason for 30s.
+  let dotnetSdkQuery = envOrDefault "SAGEFS_DOTNET_SDK_QUERY_SECONDS" 30.0
+  /// How long ProjectLoading's `dotnet --version` pre-check may take before it
+  /// is killed. A hung probe must never hang a warmup, so this is shorter than
+  /// `dotnetSdkQuery`; a failure just means the normal in-process load runs as
+  /// before. No recorded reason for 15s.
+  let ambientSdkProbe = envOrDefault "SAGEFS_AMBIENT_SDK_PROBE_SECONDS" 15.0
+  /// How long one `dotnet-gcdump collect` may run. On a process this large it
+  /// can take tens of seconds; this is generous without being an unbounded
+  /// hang on a machine that is already struggling. No recorded reason for 120s.
+  let gcDumpCapture = envOrDefault "SAGEFS_GC_DUMP_CAPTURE_SECONDS" 120.0
+  /// How long the environment check lets a `dotnet fsi --exec` probe run before
+  /// it kills it and reports fsi as hung. No recorded reason for 3s.
+  let fsiAvailabilityProbe = TimeSpan.FromSeconds(3.0)
+  /// How long `sagefs stop` waits for the daemon's process to exit after the
+  /// shutdown request, which gives a normal graceful shutdown (manifest save,
+  /// stopping workers) room before the fallback kill.
+  let stopGracefulExit = envOrDefault "SAGEFS_STOP_GRACEFUL_SECONDS" 30.0
+  /// How long `sagefs stop` waits for the process to be gone after it killed it.
+  /// `processKillVerify` serves the same purpose in SessionManager at 2s; this
+  /// site had 3s and keeps it.
+  let stopKillExit = TimeSpan.FromSeconds(3.0)
 
   // -- HTTP / Worker Communication --
   let workerHttpRead = envOrDefault "SAGEFS_WORKER_HTTP_READ_SECONDS" 30.0
@@ -113,12 +151,71 @@ module Timeouts =
     | Ok _ -> lock _globalTestLock (fun () -> _globalTestRun <- t)
     | Error _ -> ()
 
+  // -- Live testing as you type --
+  /// How long typing must pause before the tree-sitter pass re-reads the
+  /// buffer for the as-you-type test feedback. Short, because tree-sitter is
+  /// cheap. No recorded reason for 50ms.
+  let liveTestTreeSitterDebounce = TimeSpan.FromMilliseconds(50.0)
+  /// The pause before the FCS typecheck pass starts after typing stops, before
+  /// any backoff. No recorded reason for 300ms.
+  let liveTestFcsDebounce = TimeSpan.FromMilliseconds(300.0)
+  /// The ceiling the FCS pause backs off to when typechecks keep being
+  /// cancelled by further typing. No recorded reason for 2s.
+  let liveTestFcsDebounceMax = TimeSpan.FromMilliseconds(2000.0)
+  /// How often the daemon's test cycle timer fires while a debounce is
+  /// pending. It only has to be well under `liveTestTreeSitterDebounce`, so the
+  /// feedback lands near the intended debounce and is not rounded up to a
+  /// coarser tick.
+  let liveTestTickActive = TimeSpan.FromMilliseconds(25.0)
+  /// How often the test cycle timer fires when no debounce is pending. A model
+  /// change that queues one wakes the timer at once, so a save is never held
+  /// back by this. No recorded reason for 1s.
+  let liveTestTickIdle = TimeSpan.FromSeconds(1.0)
+  /// The debounce of the daemon's live-test file watcher: a burst of events
+  /// from one save settles into one change. No recorded reason for 75ms.
+  let liveTestWatcherDebounce = TimeSpan.FromMilliseconds(75.0)
+  /// How long disposing the live-test file watcher waits for its mailbox to
+  /// acknowledge Shutdown before it logs that it timed out. No recorded reason
+  /// for 5s.
+  let liveTestWatcherShutdown = TimeSpan.FromSeconds(5.0)
+  /// The least time between two test-summary pushes to SSE subscribers while a
+  /// run is in progress. A finished run always pushes at once. No recorded
+  /// reason for 250ms.
+  let testSseThrottle = TimeSpan.FromMilliseconds(250.0)
+  /// A cell whose P95 eval time is over this is no longer acceptable on
+  /// latency alone (ImpactForecast): the recommendation is Investigate. No
+  /// recorded reason for 500ms.
+  let impactP95Acceptable = TimeSpan.FromMilliseconds(500.0)
+  /// A cell whose P95 eval time is over this is recommended for Refactor
+  /// (ImpactForecast). No recorded reason for 2s.
+  let impactP95Investigate = TimeSpan.FromMilliseconds(2000.0)
+  /// How long after a rebuild restart the live-testing pipeline waits for the
+  /// session to be Ready with a streaming test proxy before it reports the
+  /// rebuild as failed. No recorded reason for 30s.
+  let rebuildReadyWait = envOrDefault "SAGEFS_REBUILD_READY_SECONDS" 30.0
+  /// Right after a rebuild restart the readiness poll is quick, because a warm
+  /// restart is Ready within a second; this is how long that quick phase lasts.
+  /// No recorded reason for 1s.
+  let rebuildFastPollWindow = TimeSpan.FromMilliseconds(1000.0)
+  /// The readiness poll cadence inside `rebuildFastPollWindow`. This is a poll;
+  /// the session manager already knows when a session turns Ready.
+  let rebuildFastPoll = TimeSpan.FromMilliseconds(50.0)
+  /// The readiness poll cadence after `rebuildFastPollWindow`. A poll, like
+  /// `rebuildFastPoll`.
+  let rebuildSlowPoll = TimeSpan.FromMilliseconds(250.0)
+
   // -- Process Management --
   /// How long a `dotnet build` run by a session start or rebuild may take before
   /// SessionBuild kills it and the session faults with `BuildFailure.TimedOut`.
   /// Large repos need minutes; 10 matches the ValidTimeout max.
   let buildCompletion = envOrDefaultMinutes "SAGEFS_BUILD_TIMEOUT_MINUTES" 10.0
+  /// How long a process that was asked to stop (a worker after its Shutdown
+  /// message, the daemon during its own stop) gets to exit on its own before
+  /// the caller kills it. No recorded reason for 3s.
   let processNormalExit = TimeSpan.FromSeconds(3.0)
+  /// How long a process that was just killed gets to be gone before the caller
+  /// logs that it is not and carries on. No recorded reason for 2s.
+  let processKillVerify = TimeSpan.FromSeconds(2.0)
   /// How long the failure path waits for a worker's stderr reader to reach EOF
   /// once stdout has closed. stderr closes with the process, so this normally
   /// costs nothing; the bound only matters when a grandchild holds the pipe
@@ -180,7 +277,6 @@ module Timeouts =
   /// window as `cohortLeaseWindow` on purpose: a member's seat and the claims
   /// that name it age out together.
   let cohortSettledRetention = cohortLeaseWindow
-  let processKillVerify = TimeSpan.FromSeconds(2.0)
   let stdioFlush = TimeSpan.FromSeconds(5.0)
 
   // -- Agent presence --
@@ -262,6 +358,48 @@ module Timeouts =
   /// calls (an idle app, or a caller that kept its own copy of the old body)
   /// reads the same, so the report says "unconfirmed, exercise it".
   let patchConfirmation = envOrDefault "SAGEFS_PATCH_CONFIRM_SECONDS" 10.0
+  // The values `DevReload.DevReloadConfig.defaults` is built from. The record
+  // keeps its `...Ms` fields because the browser script and the file watcher
+  // read them in milliseconds.
+  /// How long a burst of file system events settles before the watcher reports
+  /// one change (the default watch config and `DevReloadConfig`). An editor
+  /// writes a save as several events. No recorded reason for 200ms.
+  let fileWatchDebounce = TimeSpan.FromMilliseconds(200.0)
+  /// A change to a file within this window of that file's last compile is
+  /// dropped as the watcher's duplicate event for one save, not a new edit.
+  /// No recorded reason for 500ms.
+  let doubleCompileGuard = TimeSpan.FromMilliseconds(500.0)
+  /// How long the browser's reload script waits for the hot reload event stream
+  /// to connect before it warns that it did not. No recorded reason for 3s.
+  let reloadConnectTimeout = TimeSpan.FromMilliseconds(3000.0)
+  /// How long after a reload the browser's reload script keeps counting
+  /// reloads toward its reload-loop guard before it resets the count. No
+  /// recorded reason for 5s.
+  let reloadCountResetWindow = TimeSpan.FromMilliseconds(5000.0)
+  /// How often the browser's compile timer redraws while a compile runs. No
+  /// recorded reason for 200ms.
+  let compileTimerRedraw = TimeSpan.FromMilliseconds(200.0)
+  /// A compile that takes longer than this shows "click to reload" instead of
+  /// reloading the page by itself, so a long compile cannot throw away work in
+  /// progress. No recorded reason for 3s.
+  let autoReloadThreshold = TimeSpan.FromMilliseconds(3000.0)
+  /// The browser's compile timer turns amber once a compile has run this long.
+  /// No recorded reason for 5s.
+  let longCompileWarning = TimeSpan.FromMilliseconds(5000.0)
+  /// How long one save waits for the previous save's compile before it gives up
+  /// and reports that it did. The wait used to be unbounded, which let one
+  /// wedged eval silently disable hot reload for every other file; bounded, a
+  /// stuck compiler shows up. No recorded reason for 60s.
+  let compileQueueWait = envOrDefault "SAGEFS_HOT_RELOAD_COMPILE_QUEUE_SECONDS" 60.0
+  /// Ceiling on one save's re-evaluation. The eval is posted with a token
+  /// nothing else cancels, so without a deadline one wedged submission owns the
+  /// compiler forever; with one the compiler is always handed back and the
+  /// next save goes through. No recorded reason for 5 minutes.
+  let compileBudget = envOrDefaultMinutes "SAGEFS_HOT_RELOAD_COMPILE_BUDGET_MINUTES" 5.0
+  /// How long the standalone FCS check that reload planning runs on a source
+  /// text may take, for each of its two steps (the script project options and
+  /// the type check). No recorded reason for 10s.
+  let reloadPlanningCheck = TimeSpan.FromSeconds(10.0)
 
   // -- Running an app (run_app) --
   /// How long an app's entry point may run before it builds a host. If it has not by then,
@@ -285,11 +423,18 @@ module Timeouts =
   /// it the request returns the app's state at that moment, so a caller that
   /// wants to keep watching asks again. No recorded reason for 5 minutes.
   let appChangeAwait = TimeSpan.FromMinutes(5.0)
+  /// How long disposing the app runner waits for its agent to acknowledge
+  /// Shutdown, which stops a running host first. If it passes, the dispose logs
+  /// that it timed out and goes on. No recorded reason for 15s.
+  let appRunnerShutdown = TimeSpan.FromSeconds(15.0)
 
   // -- Restart / Backoff --
   /// First delay before a crashed worker is restarted; later restarts double it
   /// (RestartPolicy.nextBackoff) up to `restartMaxBackoff`.
   let restartBaseBackoff = TimeSpan.FromSeconds(1.0)
+  /// The base of the generic retry backoff (`RetryPolicy.defaults`): attempt n
+  /// waits about n+1 times this, with jitter. No recorded reason for 50ms.
+  let retryBaseDelay = TimeSpan.FromMilliseconds(50.0)
   /// Cap on the restart delay, so a worker that keeps crashing is retried at
   /// least this often until the policy gives up.
   let restartMaxBackoff = TimeSpan.FromSeconds(30.0)
@@ -304,6 +449,41 @@ module Timeouts =
   // -- Watchdog / Supervision --
   let watchdogInterval = TimeSpan.FromSeconds(5.0)
   let watchdogGracePeriod = TimeSpan.FromSeconds(30.0)
+  /// How often an established (Ready) worker is probed for health.
+  let workerHealthProbeInterval = envOrDefault "SAGEFS_WORKER_PROBE_INTERVAL_SECONDS" 5.0
+  /// How long one health probe round-trip gets to answer before it counts as
+  /// missed. Three misses in a row restart the worker (`WorkerHealthProbe`).
+  let workerHealthProbeTimeout = envOrDefault "SAGEFS_WORKER_PROBE_TIMEOUT_SECONDS" 3.0
+  /// How often the watchdog asks a starting worker for its status until it is
+  /// Ready. A poll: the worker reports Ready only by answering this question.
+  let workerReadyPoll = envOrDefault "SAGEFS_WORKER_READY_POLL_SECONDS" 1.0
+  /// How often a worker checks that the process that owns it is still alive,
+  /// so a hard-killed owner cannot orphan it. A poll; a process exit has no
+  /// portable event to wait on from a non-parent.
+  let ownerLivenessPoll = envOrDefault "SAGEFS_OWNER_POLL_SECONDS" 2.0
+  /// How often the daemon evicts agents that have gone silent from the activity
+  /// tracker. A timer, one run after the last finishes.
+  let agentActivityCleanupInterval = envOrDefault "SAGEFS_AGENT_CLEANUP_SECONDS" 60.0
+  /// How often the cohort reaper renews the lease of each active member and
+  /// ticks the cohort so silent members depart. No recorded reason for 60s.
+  let cohortReaperInterval = envOrDefault "SAGEFS_COHORT_REAPER_SECONDS" 60.0
+  /// How often the daemon sweeps the OS temp directory for orphaned
+  /// `sagefs-host-adopt-*` and `sagefs-test` directories left by processes that
+  /// died. Generous, because the walk touches the temp directory and nearly
+  /// every sweep finds nothing.
+  let orphanTempDirSweepInterval = envOrDefaultMinutes "SAGEFS_ORPHAN_SWEEP_MINUTES" 15.0
+  /// How often the daemon makes sure every session has a file watcher and
+  /// sweeps stale ones, in case a state change event was missed. A poll that
+  /// the state change events already cover. No recorded reason for 5s.
+  let sessionWatcherSyncInterval = envOrDefault "SAGEFS_WATCHER_SYNC_SECONDS" 5.0
+  /// The shortest the daemon's idle-TTL check interval is made.
+  let ttlCheckFloor = TimeSpan.FromSeconds(1.0)
+  /// The longest the daemon's idle-TTL check interval is made.
+  let ttlCheckCeiling = TimeSpan.FromSeconds(30.0)
+  /// The idle-TTL check runs this many times per TTL (the interval is the TTL
+  /// divided by this, clamped to `ttlCheckFloor`..`ttlCheckCeiling`), so a
+  /// daemon exits close to its deadline however long the TTL is.
+  let ttlChecksPerTtl = 4.0
 
   // -- Dashboard / UI --
   let dashboardPollInterval = TimeSpan.FromMilliseconds(100.0)
@@ -314,6 +494,18 @@ module Timeouts =
   /// Client staleness budget: if no heartbeat arrives within this window the
   /// dashboard flips Signals.Connected=false and shows the disconnect banner.
   let dashboardStaleAfter = envOrDefault "SAGEFS_DASHBOARD_STALE_AFTER_SECONDS" 15.0
+  /// How long the dashboard reuses the last three worker fetches (eval stats,
+  /// hot reload state, warmup context) for a session before it fetches them
+  /// again. They are the dominant per-push cost. The render guard still morphs
+  /// any tick whose output differs, so a reused fetch cannot send stale HTML.
+  /// No recorded reason for 2s.
+  let dashboardWorkerDataTtl = TimeSpan.FromSeconds(2.0)
+  /// How long the legacy JSON state stream (the deprecated TUI client) may be
+  /// idle before it writes an SSE keepalive comment. No recorded reason for 15s.
+  let legacyStateStreamKeepAlive = TimeSpan.FromSeconds(15.0)
+  /// How long the legacy JSON state stream waits after the first state change
+  /// so a burst of changes becomes one push. No recorded reason for 100ms.
+  let legacyStateStreamCoalesce = TimeSpan.FromMilliseconds(100.0)
 
   // -- Daemon / Server --
   let workerEndpointFetch = TimeSpan.FromMilliseconds(500.0)
@@ -421,6 +613,23 @@ module Timeouts =
   /// Maximum time to poll a worker waiting for Ready status after spawn/restart.
   /// If exceeded, the session is faulted to prevent infinite WarmingUp states.
   let warmupReadyPollMax = envOrDefault "SAGEFS_WARMUP_READY_POLL_SECONDS" 120.0
+
+  // -- Waiting for a worker's test proxy (WorkerProxyWait) --
+  /// The ceiling on how long a live-testing run waits for a worker to register
+  /// its test proxy before it dispatches with none (every test then reports
+  /// NotRun). Generous on purpose: the wait is only paid when the worker is
+  /// absent, and cutting it short strands a real run: an earlier 750ms
+  /// schedule failed every run under the load of the integration tier.
+  let workerProxyRegister = envOrDefault "SAGEFS_WORKER_PROXY_WAIT_SECONDS" 15.0
+  /// The first delay of that wait. Small, so a worker that is already up is
+  /// picked up at once; later delays double up to `workerProxyRegister`.
+  let workerProxyFirstDelay = TimeSpan.FromMilliseconds(50.0)
+
+  // -- No time --
+  /// The elapsed time of work that did not run: an empty summary, a
+  /// placeholder result, a failure that was never timed. Not a bound; nothing
+  /// waits on it.
+  let notRun = TimeSpan.Zero
 
   // -- Test harness / integration --
   /// Deadline for a spawned test daemon to reach a readable Ready state.

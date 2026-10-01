@@ -1,5 +1,5 @@
 /// Replace a literal leaf's value in source while keeping the author's
-/// style: `1.0` stays `1.0` (never becomes `1.`), `0x1F` stays hex, `1_000`
+/// style: `1.0` stays `1.0` (never becomes `1.`), `0x1F` stays hex, `1_024`
 /// keeps its underscore grouping, suffixes and units of measure survive, and
 /// a float that round-trips through a double never drifts
 /// (`0.12` never becomes `0.11999999`).

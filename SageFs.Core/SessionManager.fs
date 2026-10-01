@@ -459,11 +459,11 @@ module SessionManager =
         if obj.ReferenceEquals(completed, shutdownTask) then
           let! _ = shutdownTask |> Async.AwaitTask
           ()
-        let exited = proc.WaitForExit(3000)
+        let exited = proc.WaitForExit(int Timeouts.processNormalExit.TotalMilliseconds)
         match exited with
         | false ->
           try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-          try proc.WaitForExit(2000) |> ignore with ex -> Log.warn "[SessionManager] WaitForExit after kill: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+          try proc.WaitForExit(int Timeouts.processKillVerify.TotalMilliseconds) |> ignore with ex -> Log.warn "[SessionManager] WaitForExit after kill: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         | true -> ()
       with ex ->
         Log.warn "[SessionManager] Graceful shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
@@ -471,7 +471,7 @@ module SessionManager =
         match procAlive with
         | true ->
           try proc.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Force kill failed: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-          try proc.WaitForExit(2000) |> ignore with ex2 -> Log.warn "[SessionManager] WaitForExit after force kill: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
+          try proc.WaitForExit(int Timeouts.processKillVerify.TotalMilliseconds) |> ignore with ex2 -> Log.warn "[SessionManager] WaitForExit after force kill: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         | false -> ()
       try proc.EnableRaisingEvents <- false with _ -> ()
       try proc.Dispose() with _ -> ()

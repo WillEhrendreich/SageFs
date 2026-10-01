@@ -81,8 +81,8 @@ let isAlive (getProcessById: int -> Process option) (owner: Owner) : bool =
       | Some expected -> fenceMatches expected (startTimeTicksOf p)
   with _ -> false
 
-/// Poll interval between owner liveness checks.
-let pollIntervalMs = 2000
+/// Poll interval between owner liveness checks, in milliseconds (`Timeouts.ownerLivenessPoll`).
+let pollIntervalMs = int Timeouts.ownerLivenessPoll.TotalMilliseconds
 
 /// A generic fail-safe threshold for any periodic self-check whose own
 /// success is a precondition for a liveness/lifetime decision — the daemon

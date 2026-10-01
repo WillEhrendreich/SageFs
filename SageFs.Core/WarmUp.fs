@@ -177,7 +177,7 @@ let private mkWarmupFailure
     match retryCounts.TryGetValue(name) with
     | true, count -> count
     | _ -> 0
-  DurationMs = 0.0
+  DurationMs = Timeouts.notRun.TotalMilliseconds
 }
 
 let private openWithRetryRichCore

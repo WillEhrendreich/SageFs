@@ -577,7 +577,7 @@ let start
                   | FsiHost.FsiProtocol.StdOut -> recorder.Write text
                   | FsiHost.FsiProtocol.StdErr -> logger.LogDebug(sprintf "[fsihost stderr] %s" (text.TrimEnd()))
               OnLog = fun line -> logger.LogDebug(sprintf "[fsihost] %s" line)
-              StartupTimeoutMs = 120_000 }
+              StartupTimeoutMs = int Timeouts.fsiHostStartup.TotalMilliseconds }
           match! start options with
           | Ok host ->
             logger.LogInfo(sprintf "  Isolated FSI host started: %s, FSharp.Core %s (pid %d)" host.Runtime host.FSharpCoreVersion host.ProcessId)

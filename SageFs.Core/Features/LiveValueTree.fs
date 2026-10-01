@@ -67,7 +67,7 @@ module LiveValueTree =
   /// Total node budget for one snapshot build. Depth × children bounds alone
   /// allow an exponential 50^depth expansion on hostile object graphs; this
   /// ref-based budget cuts the walk at a hard node count regardless of shape.
-  let [<Literal>] MaxNodes = 10_000
+  let [<Literal>] MaxNodes = 10000
 
   // ── Preview builders ──────────────────────────────────────────────
 

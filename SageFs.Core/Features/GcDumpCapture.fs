@@ -57,8 +57,9 @@ module GcDumpCapture =
 
   /// `dotnet-gcdump collect` on a process this size can legitimately take
   /// tens of seconds; generous without being an unbounded hang on an already
-  /// struggling machine.
-  let captureTimeoutMs = 120_000
+  /// struggling machine. The value is `Timeouts.gcDumpCapture`, in the
+  /// milliseconds `Task.Delay` takes.
+  let captureTimeoutMs = int SageFs.Timeouts.gcDumpCapture.TotalMilliseconds
 
   /// Where dotnet-gcdump is, or every directory we looked in and did not find
   /// it. A miss says where it looked because "not installed" is a useless

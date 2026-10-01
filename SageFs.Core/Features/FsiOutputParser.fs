@@ -134,7 +134,7 @@ let parseFsiValAtLine (lineNum: int) (line: string) : BindingValue option =
           IsTruncated   = isTruncated
           IsFunctionValue = isFun
           CellIndex     = 0
-          EvalDurationMs = 0.0
+          EvalDurationMs = SageFs.Timeouts.notRun.TotalMilliseconds
           SourceLine    = lineNum
         }
 

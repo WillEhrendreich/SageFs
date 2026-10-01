@@ -73,7 +73,7 @@ module TestCacheTypes =
       ResultEntries = []
       FlakyEntries = []
       ImapGeneration = 0u
-      CreatedAtMs = 0L
+      CreatedAtMs = System.DateTimeOffset.UnixEpoch.ToUnixTimeMilliseconds()
     }
 
 

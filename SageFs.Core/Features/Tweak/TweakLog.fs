@@ -73,7 +73,7 @@ module TweakLogLimits =
   let undoWindow = 200
 
   /// Per-session ceiling on event COUNT before compaction is due.
-  let maxEventsPerSession = 5_000
+  let maxEventsPerSession = 5000
 
   /// Per-session ceiling on the log's encoded BYTE size before compaction
   /// is due.
