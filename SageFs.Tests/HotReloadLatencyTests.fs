@@ -42,10 +42,13 @@ let private frameOf (sessionId: string) (reload: string) =
 [<Tests>]
 let pureTests =
   testList "Hot-reload latency, reading the stream and the stages" [
-    testCase "a compiling frame for the session reads as compiling" <| fun _ ->
+    testCase "a compiling frame for the session reads as compiling, naming the file it compiles" <| fun _ ->
       frameOf "s1" """{"state":"compiling","file":"/tmp/Greeting.fs"}"""
       |> ReloadFrame.ofData "s1"
-      |> Expect.equal "compiling" ReloadFrame.Compiling
+      |> Expect.equal "compiling" (ReloadFrame.Compiling "/tmp/Greeting.fs")
+      frameOf "s1" """{"state":"compiling"}"""
+      |> ReloadFrame.ofData "s1"
+      |> Expect.equal "compiling with no file" (ReloadFrame.Compiling "")
 
     testCase "a finished frame carries the outcome the worker named" <| fun _ ->
       for case in SageFs.ReloadCase.all do
@@ -82,6 +85,7 @@ let pureTests =
           WarmingAt = Moment.Observed (at (ms 2900.))
           ReadyAt = Moment.Observed (at (ms 6700.))
           ServedAt = Moment.Observed (at (ms 450.))
+          AnswerSentAt = Moment.Observed (at (ms 440.))
           ConfirmedAt = Moment.Observed (at (ms 470.)) }
       match Sample.ofStamps stamps with
       | Result.Error refusal -> failtestf "should read: %A" refusal
@@ -98,6 +102,7 @@ let pureTests =
         WarmingAt = Moment.NotObserved
         ReadyAt = Moment.NotObserved
         ServedAt = Moment.NotObserved
+        AnswerSentAt = Moment.NotObserved
         ConfirmedAt = Moment.NotObserved }
       |> Sample.ofStamps
       |> Expect.equal "never served" (Result.Error SampleRefusal.NeverServed)
@@ -109,13 +114,14 @@ let pureTests =
         WarmingAt = Moment.NotObserved
         ReadyAt = Moment.NotObserved
         ServedAt = Moment.Observed (at (ms 900.))
+        AnswerSentAt = Moment.Observed (at (ms 899.))
         ConfirmedAt = Moment.NotObserved }
       |> Sample.ofStamps
       |> Expect.equal "before the save" (Result.Error (SampleRefusal.BeforeTheSave Stage.Compiling))
 
     testCase "a series is the stage's times over the samples, and a series that needs a stage nobody reached is refused" <| fun _ ->
       let sample served confirmed =
-        { Compiling = Elapsed.Never; Applied = Elapsed.Never; Warming = Elapsed.Never; Ready = Elapsed.Never; Served = ms served; Confirmed = confirmed }
+        { Compiling = Elapsed.Never; Applied = Elapsed.Never; Warming = Elapsed.Never; Ready = Elapsed.Never; Served = ms served; AnswerTook = Elapsed.Never; Confirmed = confirmed }
       let samples = [ sample 300. (Elapsed.After (ms 350.)); sample 310. (Elapsed.After (ms 360.)) ]
       Sample.series Series.PatchSaveToServed samples
       |> Expect.equal "served" (Ok [ ms 300.; ms 310. ])
@@ -132,7 +138,7 @@ let pureTests =
 
     testCase "the stage line names the path, the count and the median of each stage" <| fun _ ->
       let sample served =
-        { Compiling = Elapsed.After (ms 210.); Applied = Elapsed.After (ms 300.); Warming = Elapsed.Never; Ready = Elapsed.Never; Served = ms served; Confirmed = Elapsed.After (ms (served + 20.)) }
+        { Compiling = Elapsed.After (ms 210.); Applied = Elapsed.After (ms 300.); Warming = Elapsed.Never; Ready = Elapsed.Never; Served = ms served; AnswerTook = Elapsed.Never; Confirmed = Elapsed.After (ms (served + 20.)) }
       let line = Sample.stageLine Series.PatchSaveToServed [ sample 320.; sample 340.; sample 360. ]
       line |> Expect.stringContains "starts the line" "STAGES hr-patch"
       line |> Expect.stringContains "the count" "n=3"
@@ -141,9 +147,17 @@ let pureTests =
       line |> Expect.stringContains "served 95th percentile" "served-p95=360.0ms"
       Expect.isFalse "a stage nobody reached is left out" (line.Contains "warming")
 
+    testCase "the samples line lists every save-to-served time in the order the saves were made" <| fun _ ->
+      let sample served answer =
+        { Compiling = Elapsed.Never; Applied = Elapsed.Never; Warming = Elapsed.Never; Ready = Elapsed.Never; Served = ms served; AnswerTook = answer; Confirmed = Elapsed.Never }
+      Sample.servedLine Series.PatchSaveToServed [ sample 258.4 Elapsed.Never; sample 341. Elapsed.Never; sample 259.6 Elapsed.Never ]
+      |> Expect.equal "in save order, whole milliseconds" "SAMPLES hr-patch served-ms=258,341,260"
+      Sample.servedLine Series.PatchSaveToServed [ sample 258.4 (Elapsed.After (ms 1.2)); sample 341. (Elapsed.After (ms 41.)); sample 259.6 Elapsed.Never ]
+      |> Expect.equal "with how long each answering request took" "SAMPLES hr-patch served-ms=258,341,260 answer-ms=1,41,-"
+
     testCase "a stage only some samples reached says how many" <| fun _ ->
       let sample warming =
-        { Compiling = Elapsed.Never; Applied = Elapsed.Never; Warming = warming; Ready = Elapsed.Never; Served = ms 9000.; Confirmed = Elapsed.Never }
+        { Compiling = Elapsed.Never; Applied = Elapsed.Never; Warming = warming; Ready = Elapsed.Never; Served = ms 9000.; AnswerTook = Elapsed.Never; Confirmed = Elapsed.Never }
       Sample.stageLine Series.RestartSaveToServed [ sample (Elapsed.After (ms 2800.)); sample Elapsed.Never ]
       |> Expect.stringContains "one of two reached it" "warming-p50=2800.0ms(1 of 2)"
 
@@ -172,9 +186,9 @@ let private reportAndGate (series: Series) (samples: Sample list) (bound: TimeSp
     let line = reportLine name (machine ()) summary
     eprintfn "%s" line
     printfn "%s" line
-    let stages = Sample.stageLine series samples
-    eprintfn "%s" stages
-    printfn "%s" stages
+    for extra in [ Sample.stageLine series samples; Sample.servedLine series samples ] do
+      eprintfn "%s" extra
+      printfn "%s" extra
     match gate bound summary with
     | GateVerdict.WithinBound _ -> ()
     | regressed -> failtest (sprintf "%s: %s" name (describeVerdict regressed))

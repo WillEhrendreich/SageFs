@@ -30,7 +30,8 @@ type ReloadFrame =
   | OtherSession
   /// The frame carries no reload (`reloadReported` is absent or null).
   | NotAReload
-  | Compiling
+  /// The worker started compiling `file` (empty when the frame names none).
+  | Compiling of file: string
   | Finished of SageFs.ReloadCase
   /// The session's new worker began warming up: a restart has built and started it.
   | WorkerWarming
@@ -68,7 +69,10 @@ module ReloadFrame =
         match root.ValueKind, root.TryGetProperty "reloadReported" with
         | JsonValueKind.Object, (true, reload) when reload.ValueKind = JsonValueKind.Object ->
           match reload.GetProperty("state").GetString() with
-          | "compiling" -> ReloadFrame.Compiling
+          | "compiling" ->
+            match reload.TryGetProperty "file" with
+            | true, file when file.ValueKind = JsonValueKind.String -> ReloadFrame.Compiling (file.GetString())
+            | _ -> ReloadFrame.Compiling ""
           | "finished" ->
             match reload.TryGetProperty "outcome" with
             | true, outcome when outcome.ValueKind = JsonValueKind.String ->
@@ -110,6 +114,8 @@ type SaveStamps =
     WarmingAt: Moment
     ReadyAt: Moment
     ServedAt: Moment
+    /// When the request that got the first new answer was sent. It can be before the patch landed (a request in flight).
+    AnswerSentAt: Moment
     ConfirmedAt: Moment }
 
 /// How long after the save a stage was reached, or that it never was.
@@ -147,6 +153,9 @@ type Sample =
     Ready: Elapsed
     /// Every sample was served: a save the app never showed is a failure, not a sample.
     Served: TimeSpan
+    /// How long the request that got the first new answer took, sent to answered. A `Served` that is mostly
+    /// this is the transport and not the patch.
+    AnswerTook: Elapsed
     Confirmed: Elapsed }
 
 [<RequireQualifiedAccess>]
@@ -181,11 +190,16 @@ module Sample =
               |> Result.bind (fun servedAfter ->
                 after stamps.SavedAt Stage.Confirmed stamps.ConfirmedAt
                 |> Result.map (fun confirmed ->
+                  let answerTook =
+                    match stamps.AnswerSentAt, served with
+                    | Moment.Observed sent, Moment.Observed answered when answered >= sent -> Elapsed.After (LtStream.elapsed sent answered)
+                    | _ -> Elapsed.Never
                   { Compiling = compiling
                     Applied = applied
                     Warming = warming
                     Ready = ready
                     Served = (match servedAfter with | Elapsed.After d -> d | Elapsed.Never -> TimeSpan.Zero)
+                    AnswerTook = answerTook
                     Confirmed = confirmed }))))))
 
   let private confirmedOf (sample: Sample) : Result<TimeSpan, SampleRefusal> =
@@ -208,6 +222,24 @@ module Sample =
 
   let private reached (read: Sample -> Elapsed) (samples: Sample list) : TimeSpan list =
     samples |> List.choose (fun s -> match read s with | Elapsed.After d -> Some d | Elapsed.Never -> None)
+
+  /// One line with every sample's save-to-served time in the order the saves were made, so a bimodal
+  /// or drifting series can be seen and not only summarised.
+  let servedLine (series: Series) (samples: Sample list) : string =
+    let served =
+      samples
+      |> List.map (fun s -> sprintf "%.0f" s.Served.TotalMilliseconds)
+      |> String.concat ","
+    // How long the answering request itself took, beside it, so transport time can be told from patch time.
+    let answer =
+      match samples |> List.exists (fun s -> s.AnswerTook <> Elapsed.Never) with
+      | false -> ""
+      | true ->
+        samples
+        |> List.map (fun s -> match s.AnswerTook with | Elapsed.After d -> sprintf "%.0f" d.TotalMilliseconds | Elapsed.Never -> "-")
+        |> String.concat ","
+        |> sprintf " answer-ms=%s"
+    sprintf "SAMPLES %s served-ms=%s%s" (Series.path series) served answer
 
   /// One line saying how long after the save each stage was reached (median and 95th percentile), so a
   /// wide spread can be traced to the stage that carries it. A stage no sample reached is left out, and
@@ -288,28 +320,40 @@ let private drain (feed: ReloadFeed) : unit =
   let mutable frame = Unchecked.defaultof<StampedFrame>
   while feed.Frames.TryRead(&frame) do ()
 
+/// The first response that said what was expected: when its request was sent and when it arrived.
+type private Answer = { SentAt: int64; At: int64 }
+
 /// Request `url` until a response says `expected`, and return the moment that response arrived.
 /// The clock is the response, not the request: a poll that asks every `pollTight` still stamps the
 /// first answer that carried the new value at the time it arrived, so the interval limits how soon
 /// the answer is asked for and never how late it is stamped. A refused connection is the app being
 /// restarted, and is asked again.
-let private firstResponseSaying (http: HttpClient) (url: string) (expected: string) (ct: CancellationToken) : Task<int64> =
+let private firstResponseSaying (http: HttpClient) (url: string) (expected: string) (ct: CancellationToken) : Task<Answer> =
   task {
-    let mutable servedAt = Moment.NotObserved
-    while servedAt = Moment.NotObserved do
+    let mutable answer = Moment.NotObserved
+    let mutable sentAt = 0L
+    let mutable lastBody = "(no response)"
+    while answer = Moment.NotObserved do
       try
+        sentAt <- Stopwatch.GetTimestamp()
         let! body = http.GetStringAsync(url, ct)
         let stamp = Stopwatch.GetTimestamp()
-        match body.Trim() = expected with
-        | true -> servedAt <- Moment.Observed stamp
+        lastBody <- body.Trim()
+        match lastBody = expected with
+        | true -> answer <- Moment.Observed stamp
         | false -> ()
       with
       | :? HttpRequestException -> ()
+      | :? OperationCanceledException when ct.IsCancellationRequested ->
+        failwithf "%s never said '%s'. The last answer was '%s'" url expected lastBody
       | :? TaskCanceledException when not ct.IsCancellationRequested -> ()
-      match servedAt with
-      | Moment.NotObserved -> do! Task.Delay(TestTimeouts.pollTight, ct)
+      match answer with
+      | Moment.NotObserved ->
+        try
+          do! Task.Delay(TestTimeouts.pollTight, ct)
+        with :? OperationCanceledException -> failwithf "%s never said '%s'. The last answer was '%s'" url expected lastBody
       | Moment.Observed _ -> ()
-    return (match servedAt with | Moment.Observed stamp -> stamp | Moment.NotObserved -> 0L)
+    return { SentAt = sentAt; At = (match answer with | Moment.Observed stamp -> stamp | Moment.NotObserved -> 0L) }
   }
 
 /// What a save is followed until.
@@ -356,12 +400,23 @@ let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Foll
     let mutable warmingAt = Moment.NotObserved
     let mutable readyAt = Moment.NotObserved
     let mutable confirmedAt = Moment.NotObserved
+    // The daemon serves one compile at a time, so a verdict that comes before the compile of THIS file started
+    // belongs to an earlier save (the journey before this one ends with an unawaited restore of another file).
+    // A patched save is followed from its own `Compiling` frame on; a restart has no compile to wait for.
+    let mutable ownCompileStarted =
+      match following with
+      | Following.UntilPatched -> false
+      | Following.UntilServed -> true
+    let isOwnFile (file: string) = Path.GetFileName file = Path.GetFileName save.Path
     let note (frame: StampedFrame) =
       match frame.Frame, following with
-      | ReloadFrame.Compiling, _ ->
-        match compilingAt with
-        | Moment.NotObserved -> compilingAt <- Moment.Observed frame.At
-        | Moment.Observed _ -> ()
+      | ReloadFrame.Compiling file, _ ->
+        match isOwnFile file, compilingAt with
+        | true, Moment.NotObserved ->
+          compilingAt <- Moment.Observed frame.At
+          ownCompileStarted <- true
+        | _ -> ()
+      | ReloadFrame.Finished _, Following.UntilPatched when not ownCompileStarted -> ()
       | ReloadFrame.Finished SageFs.ReloadCase.PatchPending, Following.UntilPatched -> appliedAt <- Moment.Observed frame.At
       | ReloadFrame.Finished SageFs.ReloadCase.Patched, Following.UntilPatched -> confirmedAt <- Moment.Observed frame.At
       | ReloadFrame.Finished other, Following.UntilPatched ->
@@ -387,7 +442,7 @@ let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Foll
           let! frame = feed.Frames.ReadAsync(cts.Token)
           note frame
       | Following.UntilServed -> ()
-      let! servedStamp = served
+      let! answer = served
       // What the stream sent while the app was being restarted has arrived by now: the stamps are kept as read.
       let mutable frame = Unchecked.defaultof<StampedFrame>
       while feed.Frames.TryRead(&frame) do note frame
@@ -397,7 +452,8 @@ let private saveAndFollow (feed: ReloadFeed) (http: HttpClient) (following: Foll
           AppliedAt = appliedAt
           WarmingAt = warmingAt
           ReadyAt = readyAt
-          ServedAt = Moment.Observed servedStamp
+          ServedAt = Moment.Observed answer.At
+          AnswerSentAt = Moment.Observed answer.SentAt
           ConfirmedAt = confirmedAt }
     with :? OperationCanceledException ->
       return failwithf "the save of %s was not followed to its end within %O (compiling %A, applied %A, confirmed %A)" save.Path budget compilingAt appliedAt confirmedAt
@@ -446,35 +502,43 @@ type private SessionCreateBody =
 /// within `Timeouts.doubleCompileGuard` of the last one it compiled, and nothing tells a client when
 /// that window has closed, so the saves alternate between two files instead of waiting a guard's
 /// worth out. Each edit puts a new tag in the body, so a response that carries it can only come from this save.
+///
+/// The files are taken as the journeys before this one left them (the called-callee journey leaves its
+/// helper at "B"), so the edit replaces whatever string literal follows the anchor and not a literal
+/// text, and what the route serves before the first save is read from the app.
 type private PatchTarget =
   { File: string
-    Find: string
-    Replace: string -> string
+    /// What comes right before the string literal the edits replace, once in the file.
+    Before: string
+    Literal: string -> string
     Route: string
-    /// What the route serves as shipped, and with a tag.
-    Original: string
+    /// What the route serves with a tag in the literal.
     Served: string -> string }
 
 let private greetingTarget =
   { File = "Greeting.fs"
-    Find = "let greeting () = \"hello from sagefs\""
-    Replace = fun tag -> sprintf "let greeting () = \"hello from sagefs %s\"" tag
+    Before = "let greeting () = \""
+    Literal = fun tag -> sprintf "hello from sagefs %s" tag
     Route = "/"
-    Original = "<h1>hello from sagefs</h1>"
     Served = fun tag -> sprintf "<h1>hello from sagefs %s</h1>" tag }
 
 let private calledTarget =
   { File = "CalledCallee.fs"
-    Find = "let calledHelper () : string = \"A\""
-    Replace = fun tag -> sprintf "let calledHelper () : string = \"B-%s\"" tag
+    Before = "let calledHelper () : string = \""
+    Literal = fun tag -> sprintf "B-%s" tag
     Route = "/callee/called"
-    Original = "A"
     Served = fun tag -> sprintf "B-%s" tag }
 
 let private requireOnce (what: string) (find: string) (text: string) : unit =
   match text.Split([| find |], StringSplitOptions.None).Length - 1 with
   | 1 -> ()
   | n -> failwithf "the edit anchor for %s has to appear exactly once, it appears %d times: %s" what n find
+
+/// `text` with the string literal after `target.Before` replaced by the one for `tag`.
+let private withTag (target: PatchTarget) (tag: string) (text: string) : string =
+  let start = text.IndexOf(target.Before, StringComparison.Ordinal) + target.Before.Length
+  let stop = text.IndexOf('"', start)
+  text.Substring(0, start) + target.Literal tag + text.Substring stop
 
 /// Wait for the stream to say anything, so a save made next is made to a connected feed.
 let private awaitConnected (feed: ReloadFeed) : Task<unit> =
@@ -504,17 +568,35 @@ let measurePatchedSaves () : Task<Sample list> =
     let feed = openReloadFeed mcpPort session.Id
     let targets = [| greetingTarget; calledTarget |]
     let originals = targets |> Array.map (fun t -> Path.Combine(dir, t.File), File.ReadAllText(Path.Combine(dir, t.File)))
-    Array.iter2 (fun (t: PatchTarget) (_, text) -> requireOnce t.File t.Find text) targets originals
+    Array.iter2 (fun (t: PatchTarget) (_, text) -> requireOnce t.File t.Before text) targets originals
+    // What each route serves before the first save, which is what the files going back must serve again.
+    let! servedAsFound =
+      targets
+      |> Array.map (fun t ->
+        task {
+          let! body = http.GetStringAsync(appUrl + t.Route)
+          return body.Trim()
+        })
+      |> Task.WhenAll
     let cleanup () : Task =
       task {
         // Each file goes back, the one saved last going last: two saves of one file inside the guard's window drop the second.
         for index in [ 0; 1 ] do
           let path, text = originals.[index]
           let target = targets.[index]
-          let! _ =
-            saveAndFollow feed http Following.UntilPatched TestTimeouts.saveVerdict
-              { Path = path; Content = text; Url = appUrl + target.Route; Expected = target.Original }
-          ()
+          // A file the measurement never changed is already as found, and writing it again is no save.
+          // Best effort: a restore that fails is said and does not hide the failure that got us here.
+          match File.ReadAllText path = text with
+          | true -> ()
+          | false ->
+            try
+              let! _ =
+                saveAndFollow feed http Following.UntilPatched TestTimeouts.saveVerdict
+                  { Path = path; Content = text; Url = appUrl + target.Route; Expected = servedAsFound.[index] }
+              ()
+            with ex ->
+              eprintfn "restoring %s did not finish: %s" path ex.Message
+              File.WriteAllText(path, text)
         let! _ = postJson http (hotReload + "/unwatch-all") "{}"
         do! feed.Stop()
       }
@@ -531,7 +613,7 @@ let measurePatchedSaves () : Task<Sample list> =
             let! saved =
               saveAndFollow feed http Following.UntilPatched TestTimeouts.saveVerdict
                 { Path = path
-                  Content = original.Replace(target.Find, target.Replace tag)
+                  Content = withTag target tag original
                   Url = appUrl + target.Route
                   Expected = target.Served tag }
             match i > warmupEdits with
