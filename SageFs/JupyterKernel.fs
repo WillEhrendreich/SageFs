@@ -153,7 +153,6 @@ module JupyterKernel =
         hmac.Hash |> Array.map (fun b -> b.ToString("x2")) |> String.concat ""
 
     let serializeHeader (h: MessageHeader) : string =
-      let opts = JsonSerializerOptions(PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower)
       let obj = {|
         msg_id = h.MsgId
         session = h.Session
@@ -162,7 +161,7 @@ module JupyterKernel =
         msg_type = h.MsgType
         version = h.Version
       |}
-      JsonSerializer.Serialize(obj, opts)
+      Json.serialize Json.snakeCase obj
 
     let deserializeHeader (json: string) : Result<MessageHeader, string> =
       try
@@ -199,18 +198,18 @@ module JupyterKernel =
           user_expressions = Map.empty<string, string>
           stop_on_error = true
         |}
-        JsonSerializer.Serialize(obj)
+        Json.serialize Json.standard obj
       | MessageContent.KernelInfoRequest ->
         "{}"
       | MessageContent.CompleteRequest r ->
         let obj = {| code = r.Code; cursor_pos = r.CursorPos |}
-        JsonSerializer.Serialize(obj)
+        Json.serialize Json.standard obj
       | MessageContent.ShutdownRequest restart ->
         let obj = {| restart = restart |}
-        JsonSerializer.Serialize(obj)
+        Json.serialize Json.standard obj
       | MessageContent.CheckCompleteRequest code ->
         let obj = {| code = code |}
-        JsonSerializer.Serialize(obj)
+        Json.serialize Json.standard obj
       | MessageContent.Raw json -> json
 
   // ── Kernel State Machine ──
@@ -348,7 +347,7 @@ module JupyterKernel =
           reply.HelpLinks
           |> List.map (fun (text, url) -> {| text = text; url = url |})
       |}
-      JsonSerializer.Serialize(obj)
+      Json.serialize Json.standard obj
 
     let handleExecuteRequest
       (handler: ExecuteHandler)
@@ -574,6 +573,9 @@ module JupyterKernel =
   /// without any I/O. The transport layer (ZMQ) is plugged in separately.
   module KernelLifecycle =
 
+    /// One string as a JSON string literal, for the IOPub bodies that are assembled by hand.
+    let private jsonText (text: string) : string = Json.serialize Json.standard text
+
     /// Configuration for a Jupyter kernel instance.
     type KernelConfig = {
       ConnectionFile: string
@@ -609,14 +611,14 @@ module JupyterKernel =
             | IOPubMessage.StreamOutput (name, text) ->
               PublishIOPub ("stream", sprintf """{"name": "%s", "text": %s}"""
                 (StreamName.toWire name)
-                (JsonSerializer.Serialize text))
+                (jsonText text))
             | IOPubMessage.ExecuteResultMessage (count, data) ->
-              let dataJson = data |> Map.toList |> List.map (fun (k, v) -> sprintf "%s: %s" (JsonSerializer.Serialize k) (JsonSerializer.Serialize v)) |> String.concat ", "
+              let dataJson = data |> Map.toList |> List.map (fun (k, v) -> sprintf "%s: %s" (jsonText k) (jsonText v)) |> String.concat ", "
               PublishIOPub ("execute_result", sprintf """{"execution_count": %d, "data": {%s}, "metadata": {}}""" count dataJson)
             | IOPubMessage.ErrorOutput (ename, evalue, traceback) ->
-              let tbJson = traceback |> List.map JsonSerializer.Serialize |> String.concat ", "
+              let tbJson = traceback |> List.map jsonText |> String.concat ", "
               PublishIOPub ("error", sprintf """{"ename": %s, "evalue": %s, "traceback": [%s]}"""
-                (JsonSerializer.Serialize ename) (JsonSerializer.Serialize evalue) tbJson)))
+                (jsonText ename) (jsonText evalue) tbJson)))
           @ [ SendReply (msg.Header, result.Reply |> function MessageContent.Raw s -> s | _ -> "{}") ]
           @ (match result.NewState.Status with
              | KernelStatus.ShuttingDown -> [ ShutdownRequested result.NewState.RestartOnShutdown ]
@@ -626,9 +628,9 @@ module JupyterKernel =
 
     /// Render a kernelspec JSON file for `jupyter kernelspec install`.
     let renderKernelSpecJson (spec: KernelSpec) : string =
-      let argvJson = spec.Argv |> List.map JsonSerializer.Serialize |> String.concat ", "
-      let displayJson = JsonSerializer.Serialize spec.DisplayName
-      let langJson = JsonSerializer.Serialize spec.Language
-      let interruptJson = JsonSerializer.Serialize spec.InterruptMode
+      let argvJson = spec.Argv |> List.map jsonText |> String.concat ", "
+      let displayJson = jsonText spec.DisplayName
+      let langJson = jsonText spec.Language
+      let interruptJson = jsonText spec.InterruptMode
       sprintf """{"argv": [%s], "display_name": %s, "language": %s, "interrupt_mode": %s}"""
         argvJson displayJson langJson interruptJson
