@@ -164,7 +164,10 @@ let parseDaemonState (json: string) : DaemonSession list =
     | _ -> []
   with _ -> []
 
-let private pluginCommandPattern = Regex(@"nvim_create_user_command\(\s*""(SageFs[A-Za-z]+)""", RegexOptions.Compiled)
+/// Two registration forms: a direct nvim_create_user_command call, and an entry in the
+/// simple_commands table (`name = "SageFsEval"`).
+let private pluginCommandPattern =
+  Regex(@"(?:nvim_create_user_command\(\s*|name\s*=\s*)""(SageFs[A-Za-z]+)""", RegexOptions.Compiled)
 
 /// Every user command the plugin registers, read from its source: the ground truth for
 /// "list five commands that exist".
@@ -221,8 +224,11 @@ let editorShowed (needle: string) (facts: RunFacts) : Check =
     (facts.Screens |> List.exists (fun s -> Regex.IsMatch(s.Text, needle)))
     (sprintf "looking for '%s' in %d captured screens" needle facts.Screens.Length)
 
-let workspaceUnchanged (facts: RunFacts) : Check =
-  check "no file changed" facts.ChangedFiles.IsEmpty (sprintf "changed: %s" (String.concat ", " facts.ChangedFiles))
+/// Commands the lemming ran may legitimately write a new file (an export, a notebook). What a
+/// read-only task must not do is change a file the project already had.
+let existingFilesUnchanged (facts: RunFacts) : Check =
+  let modified = git facts.Workspace [ "diff"; "--name-only"; "lem-baseline" ]
+  check "no existing file was modified" modified.IsEmpty (sprintf "modified: %s" (String.concat ", " modified))
 
 let fileChanged (suffix: string) (facts: RunFacts) : Check =
   check (sprintf "%s changed" suffix)
@@ -302,7 +308,7 @@ let verdictFor (task: UiTask) (facts: RunFacts) : Check list =
       answerContains Expect.EvalAnswer facts
       editorShowed Expect.EvalAnswer facts
       sessionAppeared facts
-      workspaceUnchanged facts ]
+      existingFilesUnchanged facts ]
   | UiEditReeval ->
     [ usedTheEditor facts
       fileChanged "DemoEnv/DemoEnv.fs" facts
@@ -324,7 +330,7 @@ let verdictFor (task: UiTask) (facts: RunFacts) : Check list =
   | UiFindHelp ->
     [ usedTheEditor facts
       namedRealCommands facts
-      workspaceUnchanged facts ]
+      existingFilesUnchanged facts ]
 
 let formatVerdict (checks: Check list) : string =
   checks
@@ -360,7 +366,12 @@ let private luaErrorMarkers = [ "Error executing Lua"; "E5108"; "E5113"; "stack 
 let private stuckPromptRun = 3
 let private connectedMarkers = [ "⚡"; "SageFs [" ]
 
-let findings (facts: RunFacts) : Finding list =
+let private needsSession (task: UiTask option) : bool =
+  match task with
+  | Some UiFindHelp -> false
+  | Some _ | None -> true
+
+let findings (task: UiTask option) (facts: RunFacts) : Finding list =
   let refused =
     facts.Calls
     |> List.filter (fun c -> not c.Ok)
@@ -389,7 +400,7 @@ let findings (facts: RunFacts) : Finding list =
     else [ { Symptom = NeverConnected; Evidence = sprintf "%d screens, none with a connected status" facts.Screens.Length } ]
   let noSession =
     match facts.Sessions with
-    | Some [] when not facts.Calls.IsEmpty -> [ { Symptom = NoSession; Evidence = "daemon-state.json lists no session under the run directory" } ]
+    | Some [] when needsSession task && not facts.Calls.IsEmpty -> [ { Symptom = NoSession; Evidence = "daemon-state.json lists no session under the run directory" } ]
     | _ -> []
   refused @ lua @ unreachable @ stuck @ never @ noSession
 
@@ -498,7 +509,7 @@ let summarize (args: string list) : int =
     let facts = loadFacts runDir (option args "--plugin" |> Option.defaultValue defaultPluginDir)
     let out = Path.Combine(runDir, "out")
     let extra =
-      findings facts
+      findings (option args "--task" |> Option.bind (fun t -> match tryParseTask t with Result.Ok task -> Some task | Result.Error _ -> None)) facts
       |> List.map (fun f -> {| stage = "Editor"; symptom = symptomText f.Symptom; evidence = f.Evidence |})
     File.WriteAllText(Path.Combine(out, "fellover.extra.json"), JsonSerializer.Serialize(extra, jsonOut))
     let byCommand = facts.Calls |> List.countBy (fun c -> c.Cmd) |> List.map (fun (k, v) -> k, v) |> dict

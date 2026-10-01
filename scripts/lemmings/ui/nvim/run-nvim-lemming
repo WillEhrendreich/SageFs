@@ -109,7 +109,7 @@ lem_cleanup_sessions "$W"
 # The oracle decides. Never the model's claim.
 if [ "$EDITOR_UP" = yes ]; then
   lem_run_oracle "$RUN" "$TASK"
-  DOTNET_NOLOGO=1 dotnet "$DRIVE_DLL" nvim summarize --run "$RUN" --plugin "$PLUGIN_DIR" >&2 || true
+  DOTNET_NOLOGO=1 dotnet "$DRIVE_DLL" nvim summarize --run "$RUN" --task "$TASK" --plugin "$PLUGIN_DIR" >&2 || true
 else
   LEM_ORACLE_EXIT=skip
 fi

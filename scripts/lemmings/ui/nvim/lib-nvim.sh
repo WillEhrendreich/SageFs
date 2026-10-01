@@ -28,9 +28,13 @@ lem_nvim_ensure_drive() {
   local proj=${LEM_DRIVE_PROJECT:-$LEM_NVIM_HERE/LemDriveNvim.fsproj}
   local built=$LEM_ROOT/.lemdrive
   mkdir -p "$LEM_ROOT" "$RUN/bin"
-  flock "$LEM_ROOT/.lemdrive-build.lock" \
-    dotnet build "$proj" -c Release -nologo -v quiet -o "$built" >&2 \
-    || { echo "lem-nvim: LemDrive failed to build" >&2; exit 4; }
+  if ! flock "$LEM_ROOT/.lemdrive-build.lock" dotnet build "$proj" -c Release -nologo -v quiet -o "$built" >&2; then
+    # A tool that is being edited can fail to build. A build that already exists is still a
+    # known tool, so use it, and say so in the run's own files.
+    [ -f "$built/LemDrive.dll" ] || { echo "lem-nvim: LemDrive failed to build and there is no earlier build" >&2; exit 4; }
+    echo "lem-nvim: LemDrive failed to build; using the earlier build in $built" >&2
+    mkdir -p "$OUT"; echo "LemDrive failed to build; the earlier build was used" > "$OUT/drive-build.warn"
+  fi
   cp -r --reflink=auto "$built" "$RUN/bin/lemdrive"
   DRIVE_DIR=$RUN/bin/lemdrive
   DRIVE_DLL=$DRIVE_DIR/LemDrive.dll
