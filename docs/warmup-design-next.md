@@ -1,17 +1,19 @@
 # Warmup Design: Next Steps
 
-Three design proposals for reducing SageFs warmup latency. Each is scoped to a specific concern: caching the replay plan, eagerly prewarming sessions, and measuring ReadyToRun impact.
+Two design proposals for reducing SageFs warmup latency: extending the replay cache, and measuring ReadyToRun impact. There used to be a third, eager prewarming of a standby worker. It is gone, and the end of this page says why.
 
-**Baseline architecture** (read `docs/fsi warmup.md` for full analysis):
+I checked this page against the tree on 2026-10-01. It names functions and types instead of line numbers, because the line numbers in the first version of this page had all moved. Where I say a thing exists, I looked at it that day.
+
+**Baseline architecture** (read [`fsi warmup.md`](fsi%20warmup.md) for the full analysis):
 
 | Phase | Function | Cost Profile |
 |---|---|---|
-| `creating_fsi` | `FsiEvaluationSession.Create(...)` in `AppState.fs:591–603` | JIT-dominated, 5–15s |
-| `scanning_sources` | `discoverWarmupReplayPlan` in `AppState.fs:401–575` | I/O-bound, ~100ms with parallel scan |
-| `loading_assemblies` | Reflection via `AssemblyLoadContext` in `AppState.fs:469–561` | I/O + reflection, variable |
-| `opening_namespaces` | `openWithRetryRichBatched` in `WarmUp.fs:199–231` | FSI eval-bound, 60–90% of total |
+| `creating_fsi` | `FsiEvaluationSession.Create(...)` in `SageFs.Core/AppState.fs` | JIT-dominated, 5 to 15 s |
+| `scanning_sources` | `discoverWarmupReplayPlan` in `SageFs.Core/AppState.fs` | I/O-bound, about 100 ms with parallel scan |
+| `loading_assemblies` | Reflection over the project's assemblies, same function | I/O and reflection, variable |
+| `opening_namespaces` | `WarmUp.openWithRetryRichBatched` in `SageFs.Core/WarmUp.fs` | FSI eval-bound, 60 to 90% of total |
 
-Current warmup timing is captured in `WarmupPhaseTiming` (`WarmUp.fs:36–41`) and logged at `AppState.fs:781–785`.
+The per-phase timing is a `WarmupPhaseTiming` record in `SageFs.Core/WarmUp.fs` (scan sources, scan assemblies, open namespaces, total), and `AppState.fs` logs the total when warmup finishes. The 5 to 15 s and 60 to 90% figures in the table are the first version's estimates. I haven't re-measured them for this edit.
 
 ---
 
@@ -19,45 +21,43 @@ Current warmup timing is captured in `WarmupPhaseTiming` (`WarmUp.fs:36–41`) a
 
 ### What Exists Today
 
-The warmup replay cache is **already implemented** in `WarmupReplayCache.fs`. It caches the *discovery* result — the list of namespaces/modules to open — so subsequent startups skip the source-file scanning and assembly reflection phases entirely.
+The warmup replay cache is already implemented in `SageFs.Core/WarmupReplayCache.fs`. It caches the discovery result, the list of namespaces and modules to open, so a later startup skips the source-file scanning and assembly reflection phases.
 
-**Current flow** (`AppState.fs:629–653`):
+**Current flow** (`resolveWarmupReplayPlan` in `AppState.fs`):
 
 ```
-buildFingerprintForSolution → fingerprint
+buildFingerprintForSolution -> fingerprint
 resolveWarmupReplayPlan(fingerprint):
-  cache hit?  → return cached ReplayPlan
-  cache miss? → discoverWarmupReplayPlan() → save → return
+  cache hit?  -> return the cached ReplayPlan
+  cache miss? -> discoverWarmupReplayPlan() -> save -> return
 ```
 
 **What's cached** (`WarmupReplayCache.ReplayPlan`):
-- `Fingerprint`: schema version, FSI args, file stamps (path + size + mtime) for startup files, source files, and assembly files
-- `SourceFilesScanned`: count
-- `AssembliesLoaded`: list of `LoadedAssembly` (name, path, namespace/module counts)
-- `NamesToOpen`: list of `(name, isModule)` pairs
+- `Fingerprint`: the schema version (5 today), whether namespaces are auto-opened, the FSI args, file stamps (path, size, mtime) for startup files, source files and assembly files, and a content hash for each project-definition file
+- `SourceFilesScanned`: a count
+- `AssembliesLoaded`: the assemblies with their namespace and module counts
+- `NamesToOpen`: each name with whether it is a module
+- `ProjectFileNames` and `DiscoveryWarnings`
 
-**Cache key**: structural equality on `Fingerprint`. If any file stamp changes (size or mtime), the fingerprint mismatches and the cache is invalidated.
+**Cache key**: structural equality on `Fingerprint`. A change to any stamped file, or to the content of a project file (a package version bump leaves path, size and mtime alone and still changes what a build exposes), makes the fingerprint differ and discovery runs again.
 
-**Storage**: JSON at `{projectDir}/.SageFs/warmup-replay-cache.json`, created by `tryGetCachePath` (`WarmupReplayCache.fs:132–143`).
+**Storage**: JSON at `{projectDir}/.SageFs/warmup-replay-cache.json`, from `tryGetCachePath`.
 
 ### What's NOT Cached
 
-The replay cache saves which namespaces to open, but the actual `EvalInteractionNonThrowing("open X;;")` calls still happen every startup. The opening phase (60–90% of warmup) is unaffected by the current cache.
+The cache saves which namespaces to open. The `open X;;` evaluations themselves still happen on every startup, so the opening phase, the biggest one, isn't helped.
 
 ### Proposed Extension: Pre-Compiled Warmup Assembly
 
-**Concept**: After a successful warmup, compile the entire `open` sequence into a DLL. On next startup, replace N individual `open X;;` FSI evals with a single `#r "warmup-precompiled.dll"`.
+Nothing like this exists in the tree: I searched for it on 2026-10-01 and found no precompiled-warmup code.
 
-**Cache key**: Same fingerprint as current replay cache — hash of FSI args + file stamps. Store the DLL alongside the JSON plan.
+**Concept**: after a successful warmup, compile the whole `open` sequence into a DLL. On the next startup, replace the N individual `open X;;` evals with one `#r "warmup-precompiled.dll"`.
 
-**Invalidation triggers**:
-- Any file in the fingerprint changes (source files, assembly files, startup files)
-- .NET SDK version change (detected via assembly file stamps changing after rebuild)
-- Schema version bump in `WarmupReplayCache.SchemaVersion`
+**Cache key**: the same fingerprint as the replay cache. The DLL would sit next to the JSON plan, at `{projectDir}/.SageFs/warmup-precompiled.dll`.
 
-**Storage format**: The compiled DLL at `{projectDir}/.SageFs/warmup-precompiled.dll`, keyed by the same fingerprint.
+**Invalidation**: any file in the fingerprint changes, the .NET SDK changes (visible as assembly stamps changing after a rebuild), or `WarmupReplayCache.SchemaVersion` is bumped.
 
-**Compilation step**: After warmup completes, emit a script like:
+**Compilation step**: after warmup completes, emit a script like:
 
 ```fsharp
 namespace WarmupPrecompiled
@@ -67,25 +67,25 @@ open MyProject.Domain
 // ... all opened namespaces
 ```
 
-Compile with `fsc --target:library --out:warmup-precompiled.dll warmup-script.fsx --reference:...`. This runs in the background after the first successful warmup, so it doesn't slow down the initial start.
+and compile it with `fsc --target:library --out:warmup-precompiled.dll warmup-script.fsx --reference:...` in the background, so it doesn't slow the first start.
 
-**On next startup**: If `warmup-precompiled.dll` exists and fingerprint matches, do `#r "{path}/warmup-precompiled.dll"` and `open WarmupPrecompiled` instead of the N individual opens.
+**On the next startup**: if the DLL exists and the fingerprint matches, do `#r "{path}/warmup-precompiled.dll"` and `open WarmupPrecompiled` in place of the individual opens.
 
 ### Risks
 
-1. **Assembly version mismatches**: If project DLLs are rebuilt but the fingerprint somehow doesn't catch it (unlikely given mtime stamps), the precompiled DLL references stale types. Mitigation: file stamps are high-fidelity — size + mtime changes on any rebuild.
+1. **Assembly version mismatches.** If project DLLs are rebuilt and the fingerprint somehow misses it, the precompiled DLL references stale types. File stamps and project-file hashes make that unlikely.
 
-2. **`open` side effects**: Some modules have `do` bindings that run on open. A precompiled assembly referencing these modules doesn't execute those side effects the same way FSI does. Mitigation: only cache the `open` list, not init scripts. `StartupProfile` (`StartupProfile.fs:41–48`) always runs after warmup regardless of cache.
+2. **`open` side effects.** Some modules have `do` bindings that run on open, and a precompiled assembly won't run them the way FSI does. The plan would be to cache only the `open` list and never init scripts. The startup profile (`StartupProfile.fs`) runs after warmup whatever the cache does.
 
-3. **Compilation latency**: Running `fsc` in the background adds CPU load after warmup. On low-core machines this could slow down the user's first interaction. Mitigation: lower priority, cancel if the session is restarted before compilation finishes.
+3. **Compilation latency.** Running `fsc` in the background adds CPU load after warmup, and on a low-core machine that could slow your first interaction. Lower its priority and cancel it if the session restarts first.
 
 ### Recommendation
 
-**Worth pursuing, but as a Phase 2 optimization.** The current replay cache already eliminates the scanning phase. The precompiled assembly would attack the opening phase, which is the real bottleneck. However, the implementation complexity (background `fsc` invocation, DLL management, error handling for stale DLLs) is non-trivial.
+Worth pursuing, as a second step. The replay cache already removes the scanning phase and the precompiled assembly would go after the opening phase, which is the real bottleneck. The work is not small, though: a background `fsc`, DLL management, and a plan for stale DLLs.
 
-**Concrete next step**: Instrument the opening phase to measure how much time is spent in `EvalInteractionNonThrowing` vs. FSI internal overhead. If the per-open cost is dominated by FSI compilation (not the `open` resolution itself), a precompiled DLL won't help much — the bottleneck is FSI's incremental compiler. If it's dominated by type resolution, the DLL approach could cut opening time by 80%+.
+**Concrete next step**: measure how much of the opening phase is `EvalInteractionNonThrowing` against FSI's own overhead. If the per-open cost is FSI compilation, a precompiled DLL won't help much. If it's type resolution, the DLL could cut opening time a lot. I haven't measured it.
 
-Add a histogram metric in `Instrumentation.fs`:
+A histogram per open batch and one for the whole phase, next to the other meters in `SageFs.Core/Instrumentation.fs`, would give that data:
 
 ```fsharp
 let warmupOpenPhaseMs =
@@ -98,76 +98,15 @@ let warmupOpenBatchMs =
     "Per-batch open duration during warmup")
 ```
 
-Record at `AppState.fs:726` (after `batchOpener`) and `AppState.fs:750` (total open phase). This gives real data to decide whether the precompiled approach is worthwhile.
+They'd be recorded around the batch opener and around the whole opening phase in `AppState.fs`. Neither metric exists yet.
 
 ---
 
-## 2. Eager Prewarm Design
+## 2. Eager Prewarm: superseded
 
-### What Exists Today
+The first version of this page described a standby worker pool as implemented and proposed warming standbys at daemon boot. The pool was removed (see "No standby worker pool" in [decisions.md](decisions.md#no-standby-worker-pool)): the spares cost memory and held ports, the boot contention cost startup time, and the restart path they were meant for was never wired to use them. A restart is now spawn-first: the replacement starts, the old worker keeps serving until the new one is ready, and then they swap. There is no `StandbyPool.fs` and nothing to prewarm into, so I removed the design instead of leaving it to describe code that isn't there.
 
-The **standby pool** is already implemented in `StandbyPool.fs` and wired into `SessionManager.fs:997–1060`. Key types:
-
-- `StandbyState`: `Warming | Ready | Invalidated` (`StandbyPool.fs:9–12`)
-- `StandbySession`: pre-warmed worker process with optional `SessionProxy` (`StandbyPool.fs:15–24`)
-- `StandbyKey`: config identifier — projects + workingDir + autoOpenNamespaces (`StandbyPool.fs:28–32`)
-- `PoolState`: `Map<StandbyKey, StandbySession>` (`StandbyPool.fs:138–141`)
-
-**Current trigger**: `StandbyPool.shouldWarmStandby` (`StandbyPool.fs:77–90`) returns true when the primary session is healthy (`Ready | Evaluating | Building`) and no standby exists for that key. The `SessionManager` posts `WarmStandby` after session creation succeeds (`SessionManager.fs:644`) and after restart completes (`SessionManager.fs:767`).
-
-**Current swap logic**: On `RestartSession`, `StandbyPool.decideRestart` (`StandbyPool.fs:111–120`) checks if a ready standby exists. If `rebuild=false` and standby is `Ready` with a valid `Proxy`, it swaps instantly. Otherwise, cold restart.
-
-### What's Missing: Daemon-Side Eager Prewarming
-
-The standby pool only warms *after* a primary session exists. There is no prewarming at daemon startup — the first session is always cold.
-
-**Proposed addition**: On daemon startup, after loading the binary manifest (`DaemonMode.fs` resume flow), immediately start warming a standby for each session configuration that was active in the previous daemon run.
-
-### Integration Points
-
-1. **Daemon boot** (`DaemonMode.fs:938–960`): After `loadManifest` returns previous session records, extract the `(projects, workingDir, autoOpenNamespaces)` tuples and post `WarmStandby` for each unique `StandbyKey` — *before* any client connects.
-
-2. **First client request**: When `CreateSession` arrives, check if a ready standby exists for that key via `PoolState.tryConsumeStandby`. If yes, swap it in as the primary. If no (still warming), fall through to normal cold creation — the standby continues warming and becomes available for the first *restart*.
-
-3. **MRU priority**: If the manifest contains multiple session configs, prewarm them in most-recently-used order. The manifest stores `CreatedAt` timestamps per session (`ManifestPersistence.fs:47–62`), so sort by recency.
-
-### Resource Constraints
-
-- **Memory**: Each FSI worker process consumes 200–500MB. On a 16GB machine, 2–3 standby workers is a reasonable ceiling. Add a `--max-standby` CLI flag (default: 1) to cap the pool.
-
-- **CPU**: Warmup is CPU-intensive (JIT + compilation). Running N warmups concurrently on an M-core machine causes contention. Limit concurrent warmup spawns to `max(1, ProcessorCount / 4)`.
-
-- **Stale standbys**: If the daemon boots and the user opens a different project than last time, the prewarmed standby is wasted. Mitigation: set a TTL (e.g., 5 minutes). If a standby isn't consumed within the TTL, kill the worker and reclaim memory.
-
-### Cancellation
-
-If an explicit `CreateSession` request arrives while a standby is still in `Warming` state, two options:
-
-1. **Let it finish**: The standby continues warming and becomes available for swap on next restart. The client gets a cold start this time but faster restarts later.
-2. **Cancel and redirect resources**: Kill the warming standby, redirect CPU to the primary session's warmup. This avoids the scenario where two sessions are warming simultaneously on a low-core machine.
-
-**Recommendation**: Option 1 (let it finish). The standby pool already handles this — if the standby isn't `Ready` when `decideRestart` runs, it returns `ColdRestart`. The standby keeps warming in the background and will be consumed on the next restart.
-
-### Concrete Next Steps
-
-1. **Add `--eager-prewarm` CLI flag** (default: off initially). When enabled, the daemon posts `WarmStandby` for manifest sessions on boot.
-
-2. **Extract prewarm configs from manifest**: In the daemon resume flow, after deduplicating session records, collect unique `StandbyKey` values and post them to `SessionManager`.
-
-3. **Add TTL eviction**: In the `SessionManager` mailbox loop, add a periodic timer (e.g., every 60s) that checks standby ages and kills workers older than `--standby-ttl` (default: 300s).
-
-4. **Metrics**: Record `Instrumentation.standbyWarmupMs` (already exists at line 67) when standbys complete. Add:
-
-   ```fsharp
-   let eagerPrewarmAttempts =
-     sessionMeter.CreateCounter<int64>(
-       "sagefs.standby.eager_prewarm_attempts_total",
-       description = "Total eager prewarm attempts at daemon boot")
-   let eagerPrewarmHits =
-     sessionMeter.CreateCounter<int64>(
-       "sagefs.standby.eager_prewarm_hits_total",
-       description = "Eager prewarmed standbys consumed by CreateSession")
-   ```
+If cold-start time becomes the main complaint, `decisions.md` says to reopen it from measurements, and the pool would be a design to write again, not a page to revive.
 
 ---
 
@@ -175,56 +114,39 @@ If an explicit `CreateSession` request arrives while a standby is still in `Warm
 
 ### What ReadyToRun Does
 
-`PublishReadyToRun` (R2R) pre-JITs IL to native code at publish time. The produced assemblies contain both IL (for portability) and native code (for fast startup). The JIT still runs for methods not covered by the R2R image, but the hot startup path is pre-compiled.
+`PublishReadyToRun` (R2R) pre-JITs IL to native code at publish time. The assemblies carry both IL and native code. The JIT still runs for methods the R2R image doesn't cover, but the hot startup path is precompiled.
 
-SageFs is published as a global dotnet tool (`PackAsTool=true` in `SageFs.fsproj:5`). R2R is compatible with tools — the NuGet package includes platform-specific native images.
+SageFs ships as a global dotnet tool (`PackAsTool` in `SageFs/SageFs.fsproj`). R2R works with tools, and the NuGet package would include platform-specific native images.
 
 ### Current State
 
-No R2R configuration exists. `SageFs.fsproj` has no `PublishReadyToRun` property. The tool runs with full JIT on every invocation.
+No R2R configuration exists. I grepped every `.fsproj` and `.props` in the repo for `ReadyToRun` on 2026-10-01 and found nothing, so the tool runs with full JIT on every invocation.
 
 ### What to Measure
 
-**Milestone 1: Process startup to FSI session creation**
-- Start: process entry point (`Program.fs` main)
-- End: `FsiEvaluationSession.Create` returns (`AppState.fs:593`)
-- This captures .NET runtime init + SageFs bootstrap + F# compiler JIT
+**Milestone 1: process startup to FSI session creation.** From the entry point in `Program.fs` to `FsiEvaluationSession.Create` returning. That captures runtime init, SageFs bootstrap and the F# compiler's JIT.
 
-**Milestone 2: JIT time during warmup**
-- Use `System.Runtime.JitInfo.GetCompiledMethodCount()` and `GetCompiledILBytes()` before and after warmup
-- Delta shows how much JIT work happens during the opening phase
-- R2R should reduce this delta significantly
+**Milestone 2: JIT time during warmup.** `System.Runtime.JitInfo.GetCompiledMethodCount()` and `GetCompiledILBytes()` before and after warmup. The delta is the JIT work in the opening phase, and R2R should shrink it.
 
-**Milestone 3: Total warmup wall clock**
-- Start: `warmupStartedAt` (`AppState.fs:582`)
-- End: `warmupCtx.PhaseTiming.TotalMs` (`AppState.fs:781`)
-- Already instrumented via `Instrumentation.startupDurationMs`
+**Milestone 3: total warmup wall clock.** From `warmupStartedAt` to `warmupCtx.PhaseTiming.TotalMs`, both in `AppState.fs`. `Instrumentation.startupDurationMs` is a different thing, the daemon's startup to ready, so don't use it for this.
 
-**Milestone 4: Binary size**
-- Before: current nupkg size (check `nupkg/*.nupkg` after `dotnet pack`)
-- After: nupkg size with R2R enabled
-- R2R typically increases binary size 2–3x for the affected assemblies
+**Milestone 4: binary size.** The nupkg size after `dotnet pack`, with and without R2R. R2R typically makes the affected assemblies 2 to 3 times larger.
 
 ### Test Procedure
 
 **Baseline (no R2R)**:
 
-```powershell
+```bash
 # Build and pack without R2R
 dotnet pack SageFs -o nupkg -c Release
-# Record nupkg size
-Get-ChildItem nupkg/*.nupkg | Select-Object Name, Length
-# Install and run
+ls -l nupkg/*.nupkg
+# Install it
 dotnet tool install --global SageFs --add-source nupkg --no-cache
-# Measure cold start (3 runs, take median)
-Measure-Command { SageFs --proj SageFs.Tests/SageFs.Tests.fsproj --headless --quit-after-warmup }
 ```
 
-Note: `--headless --quit-after-warmup` doesn't exist yet. For the experiment, add a temporary `--benchmark-warmup` flag that runs the full warmup pipeline and exits with timing on stdout. Or, use the existing `WarmupPhaseTiming` logged to the SageFs console.
+Then time a cold start three times and take the median. There is no `--headless --quit-after-warmup` flag (I checked the CLI on 2026-10-01), so the experiment needs a temporary flag that runs the full warmup and exits with the timing, or it can read the total that `WarmupPhaseTiming` logs.
 
-**With R2R**:
-
-Add to `SageFs.fsproj`:
+**With R2R**: add this to `SageFs/SageFs.fsproj` and repeat the measurement. R2R applies to Release builds, so Debug is unaffected.
 
 ```xml
 <PropertyGroup Condition="'$(Configuration)' == 'Release'">
@@ -232,38 +154,26 @@ Add to `SageFs.fsproj`:
 </PropertyGroup>
 ```
 
-Repeat the same measurement. R2R only applies to Release builds, so Debug is unaffected.
-
-**Cross-platform**: Run on both Windows (where R2R is well-tested) and Linux (WSL2 or CI). JIT behavior differs — Linux uses RyuJIT with different tiered compilation defaults.
+**Platforms**: CI runs on Linux only, so a Windows number would need a Windows machine. JIT behaviour and tiered compilation defaults differ between platforms, so I wouldn't carry a Linux figure over.
 
 ### Expected Impact
 
+These are guesses I wrote before measuring anything:
+
 | Metric | Expected Change | Confidence |
 |---|---|---|
-| Process startup → FSI create | 20–40% faster | High — R2R eliminates first-invocation JIT for SageFs code |
-| JIT bytes during warmup | 10–30% reduction | Medium — FSI's internal JIT is not covered by R2R |
-| Total warmup wall clock | 5–15% faster | Low-medium — most time is in FSI eval, not SageFs JIT |
-| Binary size | 2–3x larger nupkg | High — standard R2R overhead |
+| Process startup to FSI create | 20 to 40% faster | High. R2R removes first-invocation JIT for SageFs code |
+| JIT bytes during warmup | 10 to 30% less | Medium. FSI's own JIT isn't covered by R2R |
+| Total warmup wall clock | 5 to 15% faster | Low to medium. Most of the time is FSI eval, not SageFs JIT |
+| Binary size | 2 to 3 times larger nupkg | High. Standard R2R overhead |
 
 ### Why This Might NOT Help Much
 
-The F# compiler (`FSharp.Compiler.Service.dll`) is the biggest JIT consumer during warmup, and it's a NuGet dependency — not part of SageFs's own assemblies. R2R only pre-compiles assemblies in the SageFs tool package. FCS would need its own R2R treatment (which the F# team has not shipped).
+The F# compiler (`FSharp.Compiler.Service.dll`) is the biggest JIT consumer during warmup, and it's a NuGet dependency. R2R only precompiles assemblies in the SageFs tool package, so FCS would need its own R2R treatment, which the F# team hasn't shipped.
 
 ### Recommendation
 
-**Run the experiment before committing to R2R in the build.** The measurement is cheap (a few hours of benchmarking). If process startup improves by >20% but total warmup only improves by <5%, R2R may not be worth the 2–3x nupkg size increase for a global tool that's installed once and run frequently.
-
-If the data shows meaningful improvement, enable it conditionally in Release only:
-
-```xml
-<PropertyGroup Condition="'$(Configuration)' == 'Release'">
-  <PublishReadyToRun>true</PublishReadyToRun>
-</PropertyGroup>
-```
-
-This keeps Debug fast for development while optimizing the published tool.
-
-**Stretch goal**: If R2R shows promise, investigate `crossgen2` with composite mode to also pre-compile FCS and other large dependencies. This requires more build infrastructure but could address the real JIT bottleneck.
+Run the experiment before committing R2R to the build. If process startup improves by more than 20% but total warmup by under 5%, it may not be worth a nupkg 2 to 3 times the size for a tool that's installed once and run often. If the data is good, enable it for Release only. A stretch goal would be `crossgen2` in composite mode to precompile FCS as well, which needs more build work and goes at the real JIT bottleneck.
 
 ---
 
@@ -271,8 +181,7 @@ This keeps Debug fast for development while optimizing the published tool.
 
 | Design | Effort | Expected Gain | Existing Foundation |
 |---|---|---|---|
-| **Eager prewarm** | Low — wire manifest configs to `WarmStandby` on boot | 5–15s perceived latency (clock starts earlier) | StandbyPool fully implemented |
-| **R2R measurement** | Low — add one .fsproj property, run benchmarks | 5–15% total warmup (speculative) | None, clean experiment |
-| **Replay cache extension** | Medium — background `fsc`, DLL management | 50–80% of opening phase (speculative) | Replay cache JSON exists |
+| **R2R measurement** | Low: add one property, run benchmarks | 5 to 15% of total warmup (a guess) | None, a clean experiment |
+| **Replay cache extension** | Medium: background `fsc`, DLL management | 50 to 80% of the opening phase (a guess) | The replay cache JSON exists |
 
-Start with eager prewarm (lowest risk, uses existing code). Run R2R experiment in parallel (independent, no code conflict). Tackle replay cache extension only if instrumentation data shows the opening phase is the dominant bottleneck and FSI eval overhead is the cause.
+Run the R2R experiment first, since it's cheap and touches nothing else. Do the replay cache extension only if the instrumentation above shows the opening phase is the bottleneck and FSI eval overhead is the cause.

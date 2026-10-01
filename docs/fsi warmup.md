@@ -1,4 +1,13 @@
-Now I have a very clear picture of the warmup pipeline. Here's a thorough analysis of what's actually happening and what the realistic options are:
+> **Where this stands on 2026-10-01.** This page is an early analysis of warmup that I kept as written. I checked each of its ranked ideas against the tree, and the order below no longer describes the work.
+>
+> - **Batched namespace opens (idea 3 and step 1): done.** `WarmUp.openWithRetryRichBatched` opens names in batches, 8 at a time by default (`DefaultOpenBatchSize` in `SageFs.Core/WarmUp.fs`), so the loop is no longer one eval per name.
+> - **Eager daemon pre-warming (idea 1 and step 2): partly, by another route.** The daemon starts bare, so a new session is still created on demand. It does resume the sessions recorded by the last run when it starts (`--no-resume` skips that), so those begin warming before a client connects. The standby worker pool that was meant to prewarm was removed (see "No standby worker pool" in [decisions.md](decisions.md#no-standby-worker-pool)).
+> - **ReadyToRun (idea 4 and step 3): not tried.** No project file in the repo sets `PublishReadyToRun`. [warmup-design-next.md](warmup-design-next.md) has a measurement plan.
+> - **A warmup replay cache (idea 6 and step 4): done, under another name.** It is `.SageFs/warmup-replay-cache.json`, keyed by a fingerprint of file stamps and project-file content hashes, in `SageFs.Core/WarmupReplayCache.fs`. The file this page proposed was `.sagefs/warmup-cache.json`.
+> - **A pre-compiled warmup assembly (idea 2 and step 5): not built.**
+> - The "120s to under 30s" estimate at the bottom, and every "estimated gain", are guesses from when I wrote this page. I haven't measured any of them.
+>
+> The first line of the original, a chat opener, is gone.
 
 ---
 
