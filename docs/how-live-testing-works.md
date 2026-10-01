@@ -2,7 +2,7 @@
 
 As you edit an F# file, SageFs type-checks the unsaved buffer in the session that already has your project loaded, works out which tests that edit can affect, and runs them, so pass and fail marks move before you save. If the buffer doesn't type-check, nothing runs and the last results stay up, marked as blocked by compile errors, and every selection carries a label saying why those tests were picked.
 
-This page describes the tree at `e47b355b`, which is master on 2026-10-01, and every source link is a permalink to that commit. The last release, v0.6.870, predates the per-test coverage, result provenance, pause and scope, the shared selection floor, the whitespace-aware keystroke gate and debugging a failing test from VS Code that this page describes. They were merged on 2026-10-01 and are in the next release. Statements about Microsoft's products were read on 2026-10-01. I didn't run SageFs to write this page, so apart from the latency figures, which I quote as the `--integration-lt` tier recorded them, what follows is what the code says it does.
+This page describes the tree at `e47b355b`, which is master on 2026-10-01, and every source link is a permalink to that commit. Release v0.6.870, the last one when I wrote this, predates the per-test coverage, result provenance, pause and scope, the shared selection floor, the whitespace-aware keystroke gate and debugging a failing test from VS Code that this page describes. They were merged on 2026-10-01 and are in v0.6.875. Statements about Microsoft's products were read on 2026-10-01. I didn't run SageFs to write this page, so apart from the latency figures, which I quote as the `--integration-lt` tier recorded them, what follows is what the code says it does.
 
 ## What I learned from
 

@@ -2,7 +2,7 @@
 
 You save an F# file while your app is running, and the app starts running your new function bodies in the same process, with the counter you bumped and the cache you filled still where they were. When a save can't be patched in place, SageFs says so and names the reason, and it only says "patched" after it has watched the new code run.
 
-This page describes the tree at `e47b355b`, which is master on 2026-10-01, and every source link is a permalink to that commit. The last release, v0.6.870, predates the work on closures, instance members, added, removed and re-signed declarations, and the generic refusal that this page describes. That work was merged on 2026-10-01 and is in the next release. Statements about Microsoft's tools are dated 2026-10-01, because that's the day I checked and they're moving.
+This page describes the tree at `e47b355b`, which is master on 2026-10-01, and every source link is a permalink to that commit. Release v0.6.870, the last one when I wrote this, predates the work on closures, instance members, added, removed and re-signed declarations, and the generic refusal that this page describes. That work was merged on 2026-10-01 and is in v0.6.875. Statements about Microsoft's tools are dated 2026-10-01, because that's the day I checked and they're moving.
 
 ## What I borrowed
 

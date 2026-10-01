@@ -42,7 +42,7 @@ Start `sagefs` once. Then:
 | Values scroll away | Every binding in your session is shown live in the dashboard, top-down, and updates after each eval. |
 | Only you can drive it | An MCP server with [61 tools](docs/mcp-tools.md). An agent evals, type-checks and runs your tests in the same session you're looking at, and `run_tests` hands back a receipt so a stale pass never counts as green. |
 
-Most of the live testing and hot reload rows above merged on 2026-10-01 and are in the next release. They are not in v0.6.870. [The progress page](docs/progress.md#the-day-the-comparison-tables-lost-their-restart-and-none-rows-2026-10-01-84-commits-v06869-to-v06872-on-master-v06870-released) says which entry is which.
+Most of the live testing and hot reload rows above merged on 2026-10-01 and are in v0.6.875. They are not in v0.6.870. [The progress page](docs/progress.md#the-day-the-comparison-tables-lost-their-restart-and-none-rows-2026-10-01-84-commits-v06869-to-v06872-on-master-v06870-released) says which entry is which.
 
 For the curious, there are three short write-ups on how it's done, each with the tools I learned from, what F# and .NET don't hand you, how SageFs gets it done, and where Microsoft's version is ahead: [how hot reload works](docs/how-hot-reload-works.md), [how live testing works](docs/how-live-testing-works.md), and [how SageFs opens projects plain FSI can't](docs/how-isolation-works.md).
 
@@ -474,7 +474,7 @@ SageFs delivers that loop with a REPL-centered architecture, and goes past it: a
 | **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
 | **Price** | ~$250/month | **Free, MIT licensed** |
 
-Where Visual Studio is still ahead: it debugs several tests at once, it runs every result against a real build (mine confirms after two quiet seconds, and never for an unsaved buffer), it pauses on battery and while you debug, it has a memory cap and a right-click playlist, and it has been shipping since 2017. The plan for each, or the reason I didn't copy it, is in [how live testing works](docs/how-live-testing-works.md#compared-with-visual-studio-live-unit-testing). The rows on tests per line, what a result ran against, debugging, and pause merged on 2026-10-01 and are in the next release, not in v0.6.870.
+Where Visual Studio is still ahead: it debugs several tests at once, it runs every result against a real build (mine confirms after two quiet seconds, and never for an unsaved buffer), it pauses on battery and while you debug, it has a memory cap and a right-click playlist, and it has been shipping since 2017. The plan for each, or the reason I didn't copy it, is in [how live testing works](docs/how-live-testing-works.md#compared-with-visual-studio-live-unit-testing). The rows on tests per line, what a result ran against, debugging, and pause merged on 2026-10-01 and are in v0.6.875, not in v0.6.870.
 
 <details>
 <summary><strong>Three-speed feedback pipeline: how the sub-second path works</strong></summary>
