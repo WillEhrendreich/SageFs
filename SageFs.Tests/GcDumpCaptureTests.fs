@@ -13,6 +13,9 @@ open SageFs.Features
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
+/// How long a signal has stayed off baseline in the verdicts that are not meant to look long-held.
+let private briefSustain = TimeSpan.FromMinutes 1.0
+
 let private brokenRss : HealthAnomaly.Verdict =
   HealthAnomaly.Verdict.Broken
     { Signal = HealthAnomaly.SignalId.WorkerRss
@@ -34,7 +37,7 @@ let private drifting : HealthAnomaly.Verdict =
       BaselineStdDev = 40.0
       Direction = HealthAnomaly.SignalDirection.Increased
       DeviationInSigmas = 5.0
-      SustainedFor = TimeSpan.FromMinutes 1.0
+      SustainedFor = briefSustain
       SamplesSustained = 5 }
 
 [<Tests>]
@@ -63,7 +66,7 @@ let shouldCaptureTests =
             BaselineStdDev = 1.0
             Direction = HealthAnomaly.SignalDirection.Increased
             DeviationInSigmas = 200.0
-            SustainedFor = TimeSpan.FromMinutes 1.0
+            SustainedFor = briefSustain
             SamplesSustained = 10 }
       GcDumpCapture.shouldCapture false HealthAnomaly.SignalId.HealthLatency brokenLatency
       |> Expect.isFalse "a gcdump has nothing to say about a slow /health — only RSS"

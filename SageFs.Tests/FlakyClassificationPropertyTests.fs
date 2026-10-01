@@ -8,6 +8,9 @@ open SageFs.Features.LiveTesting
 
 let private tid name = TestId.TestId name
 
+/// How long a failed result says it ran. Classification reads the failure message, never this.
+let private failedAfter = TimeSpan.FromMilliseconds 10.0
+
 let private mkWindow (outcomes: TestOutcome list) =
   let mutable w = ResultWindow.create 10
   for o in outcomes do
@@ -121,7 +124,7 @@ let classificationStateTests = testList "classifyFlakiness state machine propert
         mkResult "prop"
           (TestResult.Failed
             (TestFailure.AssertionFailed "regular failure",
-             TimeSpan.FromMilliseconds 10.0)) ]
+             failedAfter)) ]
     match FlakyDetection.classifyFlakiness (tid "prop") history results with
     | FlakyClassification.Environmental _ -> true
     | _ -> false
@@ -142,7 +145,7 @@ let classificationStateTests = testList "classifyFlakiness state machine propert
         mkResult "prop"
           (TestResult.Failed
             (TestFailure.AssertionFailed msg,
-             TimeSpan.FromMilliseconds 10.0)) ]
+             failedAfter)) ]
     match FlakyDetection.classifyFlakiness (tid "prop") history results with
     | FlakyClassification.PropertyCounterexample ce -> ce = s
     | _ -> false

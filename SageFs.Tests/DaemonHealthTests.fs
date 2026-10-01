@@ -5,6 +5,9 @@ open Expecto
 open Expecto.Flip
 open SageFs.Features
 
+/// An uptime that no assertion in the snapshots using it depends on.
+let private settledUptime = TimeSpan.FromMinutes 10.0
+
 [<Tests>]
 let healthSnapshotTests =
   testList "DaemonHealth snapshot" [
@@ -110,7 +113,7 @@ let healthSnapshotTests =
       let snapshot = {
         DaemonPid = 1234
         DaemonPort = 37749
-        Uptime = TimeSpan.FromMinutes 10.0
+        Uptime = settledUptime
         Version = "0.6.820"
         SessionSummaries = [
           { SessionId = "abc123"; ProjectName = "MyLib"; Status = SessionHealthStatus.Ready; EvalCount = 5; LastActivity = DateTimeOffset.UtcNow }
@@ -129,7 +132,7 @@ let healthSnapshotTests =
       let snapshot = {
         DaemonPid = 1234
         DaemonPort = 37749
-        Uptime = TimeSpan.FromMinutes 10.0
+        Uptime = settledUptime
         Version = "0.6.820"
         SessionSummaries = [
           { SessionId = "abc123"; ProjectName = "MyLib"; Status = SessionHealthStatus.Ready; EvalCount = 5; LastActivity = DateTimeOffset.UtcNow }
@@ -203,7 +206,7 @@ let healthFormatTests =
       let snapshot = {
         DaemonPid = 4321
         DaemonPort = 37749
-        Uptime = TimeSpan.FromMinutes 10.0
+        Uptime = settledUptime
         Version = "0.5.761"
         SessionSummaries = [
           { SessionId = "ready"; ProjectName = "ReadyProject"; Status = SessionHealthStatus.Ready; EvalCount = 5; LastActivity = DateTimeOffset.UtcNow }

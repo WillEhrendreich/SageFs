@@ -15,6 +15,9 @@ open Expecto.Flip
 let private defaultPort = 37749
 let private customPort = 47001
 
+/// A ttl that satisfies the gate. The decision looks at whether a ttl is present, not how long it is.
+let private anyTtl = TimeSpan.FromMinutes 30.0
+
 [<Tests>]
 let customPortOwnershipTests =
   testList "Program.decideCustomPortOwnership" [
@@ -40,12 +43,12 @@ let customPortOwnershipTests =
     }
 
     test "a custom port with --ttl is allowed" {
-      Program.decideCustomPortOwnership defaultPort customPort None (Some (TimeSpan.FromMinutes 30.0))
+      Program.decideCustomPortOwnership defaultPort customPort None (Some anyTtl)
       |> Expect.equal "a ttl is enough" Program.CustomPortOwnershipDecision.Allowed
     }
 
     test "a custom port with both is allowed" {
-      Program.decideCustomPortOwnership defaultPort customPort (Some 12345) (Some (TimeSpan.FromMinutes 30.0))
+      Program.decideCustomPortOwnership defaultPort customPort (Some 12345) (Some anyTtl)
       |> Expect.equal "either is enough, both is fine" Program.CustomPortOwnershipDecision.Allowed
     }
   ]

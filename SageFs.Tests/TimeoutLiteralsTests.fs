@@ -22,27 +22,27 @@ let private central = Set.ofList [ "SageFs.Core/Timeouts.fs" ]
 
 /// What each file may still spell out itself. Ratchet down, never up.
 let private budgets : (string * int) list =
-  [ "SageFs.Tests/AffordancesMutationTests.fs", 12
+  [ "SageFs.Tests/AffordancesMutationTests.fs", 6
     "SageFs.Tests/AffordancesPropertyTests.fs", 1
     "SageFs.Tests/AgentActivityTrackerTests.fs", 3
-    "SageFs.Tests/BinaryFormatTests.fs", 8
-    "SageFs.Tests/CohortReaperTests.fs", 3
-    "SageFs.Tests/CohortRetentionTests.fs", 4
+    "SageFs.Tests/BinaryFormatTests.fs", 4
+    "SageFs.Tests/CohortReaperTests.fs", 1
+    "SageFs.Tests/CohortRetentionTests.fs", 3
     "SageFs.Tests/CoverageIntelTests.fs", 1
-    "SageFs.Tests/CrossCheckoutOverlapTests.fs", 2
-    "SageFs.Tests/CustomPortOwnershipTests.fs", 2
-    "SageFs.Tests/DaemonHealthTests.fs", 13
-    "SageFs.Tests/DaemonOwnershipTests.fs", 30
+    "SageFs.Tests/CrossCheckoutOverlapTests.fs", 1
+    "SageFs.Tests/CustomPortOwnershipTests.fs", 1
+    "SageFs.Tests/DaemonHealthTests.fs", 11
+    "SageFs.Tests/DaemonOwnershipTests.fs", 21
     "SageFs.Tests/DashboardFailureNarrativesTests.fs", 4
-    "SageFs.Tests/DashboardHealthTests.fs", 16
+    "SageFs.Tests/DashboardHealthTests.fs", 5
     "SageFs.Tests/DiagnosticianTests.fs", 1
     "SageFs.Tests/EventExhaustivenessTests.fs", 2
-    "SageFs.Tests/FlakyClassificationPropertyTests.fs", 2
-    "SageFs.Tests/FlakyClassificationTests.fs", 5
-    "SageFs.Tests/GcDumpCaptureTests.fs", 3
+    "SageFs.Tests/FlakyClassificationPropertyTests.fs", 1
+    "SageFs.Tests/FlakyClassificationTests.fs", 4
+    "SageFs.Tests/GcDumpCaptureTests.fs", 2
     "SageFs.Tests/HealthWatchWiringTests.fs", 2
     "SageFs.Tests/HttpApiIntegrationTests.fs", 1
-    "SageFs.Tests/JsonCoreFilesTests.fs", 2
+    "SageFs.Tests/JsonCoreFilesTests.fs", 1
     "SageFs.Tests/LandingCacheTests.fs", 2
     "SageFs.Tests/LifecyclePropertyTests.fs", 1
     "SageFs.Tests/LiveBindingsAdaptiveTests.fs", 4

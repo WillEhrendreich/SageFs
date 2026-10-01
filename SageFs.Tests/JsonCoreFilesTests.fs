@@ -315,6 +315,7 @@ let tests =
       testCase "WHY — a union inside a payload is written by the F# converter" <| fun _ ->
         let summary : Features.LiveTesting.TestSummary =
           { Total = 1; Passed = 1; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+        let passedIn = TimeSpan.FromMilliseconds 10.0
         let entry : Features.LiveTesting.TestStatusEntry =
           { TestId = Features.LiveTesting.TestId.TestId "t1"
             DisplayName = "t 1"
@@ -323,8 +324,8 @@ let tests =
             Framework = Features.LiveTesting.TestFramework.Expecto
             Category = Features.LiveTesting.TestCategory.Unit
             CurrentPolicy = Features.LiveTesting.RunPolicy.OnEveryChange
-            Status = Features.LiveTesting.TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)
-            PreviousStatus = Features.LiveTesting.TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0) }
+            Status = Features.LiveTesting.TestRunStatus.Passed passedIn
+            PreviousStatus = Features.LiveTesting.TestRunStatus.Passed passedIn }
         let payload : Features.LiveTesting.TestResultsBatchPayload =
           { Generation = Features.LiveTesting.RunGeneration 1
             Freshness = Features.LiveTesting.ResultFreshness.Fresh

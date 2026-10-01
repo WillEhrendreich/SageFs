@@ -18,6 +18,10 @@ open SageFs.Server
 
 let private entropy : Cohort.Entropy = [| 1uy |]
 
+/// How far either side of the lease window a tick lands, to put a member clearly inside or clearly
+/// past its lease.
+let private leaseMargin = TimeSpan.FromMinutes 1.0
+
 /// Apply one command through the real decide, ignoring refusals (a RenewLease
 /// of a non-member is a harmless no-op, exactly as in production).
 let inline private step (clock: DateTime) (st: CohortState<'m>) (cmd: CohortCommand<'m>) : CohortState<'m> =
@@ -58,9 +62,9 @@ let tests =
         |> fun s -> step t0 s (CohortCommand.Join(MemberTable.MemberId.Minted "idle", JoinableRole.Implementer, None))
         |> fun s -> step t0 s (CohortCommand.Join(MemberTable.MemberId.Minted "left", JoinableRole.Implementer, None))
         // "left" departs (its own tick past the lease, in isolation)
-        |> fun s -> step (t0 + Cohort.leaseWindow + TimeSpan.FromMinutes 1.0) s CohortCommand.Tick
+        |> fun s -> step (t0 + Cohort.leaseWindow + leaseMargin) s CohortCommand.Tick
       // After that Tick everyone silent is Departed. Re-join active + idle fresh.
-      let now = t0 + Cohort.leaseWindow + TimeSpan.FromMinutes 2.0
+      let now = t0 + Cohort.leaseWindow + leaseMargin + leaseMargin
       let s2 =
         s
         |> fun s -> step now s (CohortCommand.Join(MemberTable.MemberId.Minted "active", JoinableRole.Implementer, None))
@@ -104,7 +108,7 @@ let tests =
       let t0 = DateTime(2026, 1, 1, 12, 0, 0)
       let start = step t0 (CohortState.empty () : CohortState<string>) (CohortCommand.Join("idle", JoinableRole.Implementer, None))
       // One minute BEFORE the lease elapses: still Present.
-      let before = reaperTick (fun _ -> false) (t0 + Cohort.leaseWindow - TimeSpan.FromMinutes 1.0) start
+      let before = reaperTick (fun _ -> false) (t0 + Cohort.leaseWindow - leaseMargin) start
       presenceOf "idle" before |> Expect.equal "still Present just before the lease" (Some MemberPresence.Present)
       // At the lease window: reaped.
       let at = reaperTick (fun _ -> false) (t0 + Cohort.leaseWindow) start

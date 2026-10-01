@@ -19,6 +19,10 @@ let private t0 = DateTime(2026, 1, 1, 12, 0, 0)
 let private retention = settledRetention
 let private second = TimeSpan.FromSeconds 1.0
 
+/// How far past a boundary (the lease window, the point the cohort went silent) a tick lands, to
+/// be clearly on the far side of it.
+let private margin = TimeSpan.FromMinutes 1.0
+
 let private ent (n: int) : Entropy = [| byte (n &&& 0xff); byte ((n >>> 8) &&& 0xff) |]
 
 let private ok (clock: DateTime) (n: int) (st: CohortState<string>) (cmd: CohortCommand<string>) =
@@ -171,7 +175,7 @@ let private staleScene (n: int) : CohortState<string> * DateTime =
       (s2, 200)
     |> fst
   // the whole cohort goes silent past the lease: everyone departs, every claim orphans
-  let silent = t0 + leaseWindow + TimeSpan.FromMinutes 1.0
+  let silent = t0 + leaseWindow + margin
   let s4, _ = ok silent 900 s3 CohortCommand.Tick
   s4, silent
 
@@ -222,7 +226,7 @@ let retentionTests =
     test "a new Held claim on the same file supersedes the old orphan immediately, without waiting out the window" {
       let s, silent = staleScene 1
       let orphan = claimIdOf s (ClaimScope.File "/r/agent-1.fs")
-      let later = silent + TimeSpan.FromMinutes 1.0
+      let later = silent + margin
       let s1, _ = ok later 10 s (CohortCommand.Join("newcomer", JoinableRole.Implementer, None))
       let s2, _ = ok later 11 s1 (CohortCommand.AcquireClaim("newcomer", ClaimScope.File "/r/agent-1.fs", "taking over"))
       let fresh = s2.Claims |> Map.toList |> List.pick (fun (id, c) -> match c.State with ClaimState.Held _ -> Some id | _ -> None)

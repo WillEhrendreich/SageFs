@@ -8,6 +8,22 @@ open Expecto
 open Expecto.Flip
 open SageFs.DaemonOwnership
 
+// Spans the tests below reuse. The ttl parse tests spell their input and expected span out
+// instead, because the span is the thing under test there.
+
+/// One second: the shortest ttl a test uses, and the unit idle time is measured in.
+let private second = TimeSpan.FromSeconds 1.0
+/// A ttl long enough that a second of idle time is nowhere near it.
+let private longTtl = TimeSpan.FromMinutes 30.0
+/// A daemon that has been idle for a very long time.
+let private longIdle = TimeSpan.FromDays 1.0
+/// A ttl the caller passed explicitly, distinct from the nested-checkout default.
+let private explicitTtl = TimeSpan.FromMinutes 5.0
+/// The ttl from the reported bug: far above the client-activity cap.
+let private hugeTtl = TimeSpan.FromMinutes 60.0
+/// A ttl below the client-activity cap, so the window is the ttl itself.
+let private underCapTtl = TimeSpan.FromSeconds 30.0
+
 /// Phase 0 item 2 (multi-agent vision §3.1, §3.3, §10 item 2): daemon
 /// ownership, TTL, the daemon-info file, and `sagefs sweep`. Reaping is by
 /// recorded owner liveness ONLY — never by process name, never by PPID.
@@ -119,9 +135,9 @@ let nestedCheckoutTests = testList "isNestedCheckout / applyNestedCheckoutDefaul
     effective.DefaultedTtl |> Expect.isFalse "an explicit owner means no default TTL"
 
   testCase "nested but --ttl already given -> the explicit Ttl wins, not defaulted" <| fun _ ->
-    let args = { OwnershipArgs.empty with Ttl = Some (TimeSpan.FromMinutes 5.0) }
+    let args = { OwnershipArgs.empty with Ttl = Some explicitTtl }
     let effective = applyNestedCheckoutDefault true args
-    effective.Ttl |> Expect.equal "ttl" (Some (TimeSpan.FromMinutes 5.0))
+    effective.Ttl |> Expect.equal "ttl" (Some explicitTtl)
     effective.DefaultedTtl |> Expect.isFalse "an explicit ttl is not a default"
 ]
 
@@ -133,29 +149,29 @@ let shouldSelfTerminateTests = testList "shouldSelfTerminate" [
   // "a daemon with --ttl 1s and no clients exits" (§10 item 2's RED test).
   testCase "idle past the ttl with no sessions and no clients -> true" <| fun _ ->
     let now = DateTime.UtcNow
-    let ttl = TimeSpan.FromSeconds 1.0
-    let lastActive = now - TimeSpan.FromSeconds 2.0
+    let ttl = second
+    let lastActive = now - (second + second)
     shouldSelfTerminate now ttl lastActive false false
     |> Expect.isTrue "idle well past a 1s ttl with nobody around should self-terminate"
 
   testCase "not yet past the ttl -> false" <| fun _ ->
     let now = DateTime.UtcNow
-    let ttl = TimeSpan.FromMinutes 30.0
-    let lastActive = now - TimeSpan.FromSeconds 1.0
+    let ttl = longTtl
+    let lastActive = now - second
     shouldSelfTerminate now ttl lastActive false false
     |> Expect.isFalse "well within the ttl window"
 
   testCase "has live sessions -> never terminates regardless of elapsed time" <| fun _ ->
     let now = DateTime.UtcNow
-    let ttl = TimeSpan.FromSeconds 1.0
-    let lastActive = now - TimeSpan.FromDays 1.0
+    let ttl = second
+    let lastActive = now - longIdle
     shouldSelfTerminate now ttl lastActive true false
     |> Expect.isFalse "a live session must block self-termination"
 
   testCase "has clients -> never terminates regardless of elapsed time" <| fun _ ->
     let now = DateTime.UtcNow
-    let ttl = TimeSpan.FromSeconds 1.0
-    let lastActive = now - TimeSpan.FromDays 1.0
+    let ttl = second
+    let lastActive = now - longIdle
     shouldSelfTerminate now ttl lastActive false true
     |> Expect.isFalse "a connected client must block self-termination"
 
@@ -179,12 +195,12 @@ let shouldSelfTerminateTests = testList "shouldSelfTerminate" [
 let ttlClientActivityWindowTests = testList "ttlClientActivityWindow" [
 
   testCase "WHY — a long ttl (60m, the reported bug's exact value) is capped at 2 minutes, not reused whole" <| fun _ ->
-    ttlClientActivityWindow (TimeSpan.FromMinutes 60.0)
+    ttlClientActivityWindow hugeTtl
     |> Expect.equal "capped, never the raw (bug-reproducing) ttl" (TimeSpan.FromMinutes 2.0)
 
   testCase "WHY — a short ttl (30s) is never inflated past the ttl itself" <| fun _ ->
-    ttlClientActivityWindow (TimeSpan.FromSeconds 30.0)
-    |> Expect.equal "capped at the ttl, not the 2-minute default" (TimeSpan.FromSeconds 30.0)
+    ttlClientActivityWindow underCapTtl
+    |> Expect.equal "capped at the ttl, not the 2-minute default" underCapTtl
 
   testCase "WHY — the window can never exceed the ttl it serves" <| fun _ ->
     [ TimeSpan.FromSeconds 1.0; TimeSpan.FromMinutes 1.0; TimeSpan.FromMinutes 2.0
@@ -195,8 +211,8 @@ let ttlClientActivityWindowTests = testList "ttlClientActivityWindow" [
   testCase "the bug itself: the raw ttl would NOT equal the fixed window for a large ttl" <| fun _ ->
     // Proves this test has teeth: the pre-fix code (window = ttl) would fail
     // this exact assertion for any ttl above the 2-minute cap.
-    ttlClientActivityWindow (TimeSpan.FromMinutes 60.0)
-    |> Expect.notEqual "a broken 'window = ttl' implementation would equal 60m here" (TimeSpan.FromMinutes 60.0)
+    ttlClientActivityWindow hugeTtl
+    |> Expect.notEqual "a broken 'window = ttl' implementation would equal 60m here" hugeTtl
 ]
 
 // ─── isUsableSessionStatus ──────────────────────────────────────────────────

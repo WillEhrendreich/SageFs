@@ -11,6 +11,10 @@ open SageFs.Features.TestCacheTypes
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
+/// The span a stalled or timed-out result carries through a write and read. The format must keep
+/// any span; this one is only chosen to be non-zero and to survive being compared whole.
+let private timeoutSpan = TimeSpan.FromSeconds 30.0
+
 // ─── FsCheck Generators ──────────────────────────────────────────
 
 let genSafeString =
@@ -326,7 +330,7 @@ let stcMappingTests = testList "STC Mapping" [
     let tid = TestId.TestId "never-reported"
     let rr : TestRunResult = {
       TestId = tid; TestName = "never-reported"
-      Result = TestResult.NoResult (NoResultReason.StreamStalled (TimeSpan.FromSeconds 30.0))
+      Result = TestResult.NoResult (NoResultReason.StreamStalled timeoutSpan)
       Timestamp = DateTimeOffset.UtcNow; Output = None }
     let state = { LiveTestState.empty with LastResults = Map.ofList [ tid, rr ] }
     let restored =
@@ -374,7 +378,7 @@ let stcMappingTests = testList "STC Mapping" [
     let tid = TestId.TestId "kind-c"
     let rr : TestRunResult = {
       TestId = tid; TestName = "kind-c"
-      Result = TestResult.Failed (TestFailure.TimedOut (TimeSpan.FromSeconds 30.0), TimeSpan.FromSeconds 30.0)
+      Result = TestResult.Failed (TestFailure.TimedOut timeoutSpan, timeoutSpan)
       Timestamp = DateTimeOffset.UtcNow; Output = None }
     let state = { LiveTestState.empty with LastResults = Map.ofList [ tid, rr ] }
     let bytes = TestCacheWriter.write (TestCacheMapping.fromLiveTestState state)
@@ -383,8 +387,8 @@ let stcMappingTests = testList "STC Mapping" [
       let restored = TestCacheMapping.toLiveTestState data
       match restored.LastResults.[tid].Result with
       | TestResult.Failed (TestFailure.TimedOut after, duration) ->
-        after |> Expect.equal "timeout span preserved" (TimeSpan.FromSeconds 30.0)
-        duration |> Expect.equal "duration preserved" (TimeSpan.FromSeconds 30.0)
+        after |> Expect.equal "timeout span preserved" timeoutSpan
+        duration |> Expect.equal "duration preserved" timeoutSpan
       | other -> failwithf "expected TimedOut, got: %A" other
     | Error e -> failwithf "write→read failed: %s" e
 

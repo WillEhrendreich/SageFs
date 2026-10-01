@@ -109,19 +109,22 @@ let affordancesMutationTests = testList "Affordances mutations" [
   // ── EvalStats ─────────────────────────────────────────────────────────────
 
   testCase "WHY — evalStats_first_record_sets_min_max_equal_to_duration" <| fun () ->
-    let stats = Affordances.EvalStats.record (TimeSpan.FromSeconds 3.0) Affordances.EvalStats.empty
+    let duration = TimeSpan.FromSeconds 3.0
+    let stats = Affordances.EvalStats.record duration Affordances.EvalStats.empty
     (stats.EvalCount, stats.TotalDuration, stats.MinDuration, stats.MaxDuration)
     |> Expect.equal "the FIRST recorded duration must set count=1 and Total=Min=Max=that duration"
-      (1, TimeSpan.FromSeconds 3.0, TimeSpan.FromSeconds 3.0, TimeSpan.FromSeconds 3.0)
+      (1, duration, duration, duration)
 
   testCase "WHY — evalStats_second_record_tracks_true_min_and_max — min/max must not just track the latest value" <| fun () ->
+    let slow = TimeSpan.FromSeconds 5.0
+    let fast = TimeSpan.FromSeconds 1.0
     let stats =
       Affordances.EvalStats.empty
-      |> Affordances.EvalStats.record (TimeSpan.FromSeconds 5.0)
-      |> Affordances.EvalStats.record (TimeSpan.FromSeconds 1.0)
+      |> Affordances.EvalStats.record slow
+      |> Affordances.EvalStats.record fast
     (stats.EvalCount, stats.TotalDuration, stats.MinDuration, stats.MaxDuration)
     |> Expect.equal "after 5s then 1s: count=2, total=6s, min=1s (not 5s), max=5s (not 1s)"
-      (2, TimeSpan.FromSeconds 6.0, TimeSpan.FromSeconds 1.0, TimeSpan.FromSeconds 5.0)
+      (2, slow + fast, fast, slow)
 
   testCase "WHY — evalStats_averageDuration_divides_total_by_count" <| fun () ->
     let stats =

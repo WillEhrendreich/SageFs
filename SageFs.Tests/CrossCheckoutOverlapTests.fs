@@ -6,6 +6,9 @@ open Expecto.Flip
 open SageFs
 open SageFs.CrossCheckoutOverlap
 
+/// How long ago the other checkout touched the file: recent enough to be worth an advisory.
+let private touchedAgo = TimeSpan.FromMinutes 2.0
+
 /// RED tests for sagefs-multiagent-vision.md §10 Phase 0 item 5: a
 /// cross-checkout overlap advisory — "impl-x touched LiveTestActivity.fs
 /// 2m ago in worktree agent-77e1" — computed from repo-relative paths
@@ -34,7 +37,7 @@ let tests = testList "CrossCheckoutOverlap" [
       SessionId = "wt000077"
       Checkout = Checkout.Checkout.Worktree("/repo/.claude/worktrees/agent-77e1", "agent-77e1")
       RepoRelativeFiles = [ "SageFs.Core/Features/LiveTestActivity.fs" ]
-      LastActivity = now - TimeSpan.FromMinutes 2.0
+      LastActivity = now - touchedAgo
     }
     compute self [ other ]
     |> Expect.equal "should find one overlap on the shared file"
@@ -91,7 +94,7 @@ let tests = testList "CrossCheckoutOverlap" [
         SessionId = "wt000077"
         Checkout = Checkout.Checkout.Worktree("/repo/.claude/worktrees/agent-77e1", "agent-77e1")
         RepoRelativeFiles = []
-        LastActivity = now - TimeSpan.FromMinutes 2.0
+        LastActivity = now - touchedAgo
       }
       Files = [ "LiveTestActivity.fs" ]
     }

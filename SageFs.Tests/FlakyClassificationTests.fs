@@ -9,6 +9,10 @@ open SageFs.Features.LiveTesting
 
 let private tid name = TestId.TestId name
 
+/// How long a failed result says it ran in the tests that do not care. Classification reads the
+/// failure message, never this.
+let private failedAfter = TimeSpan.FromMilliseconds 50.0
+
 let private mkWindow (outcomes: TestOutcome list) =
   let mutable w = ResultWindow.create 10
   for o in outcomes do
@@ -104,7 +108,7 @@ let classifyFlakinessTests = testList "FlakyDetection.classifyFlakiness" [
     let results =
       Map.ofList [
         tid "t1",
-        mkResult "t1" (TestResult.Failed (TestFailure.AssertionFailed msg, TimeSpan.FromMilliseconds 50.0)) ]
+        mkResult "t1" (TestResult.Failed (TestFailure.AssertionFailed msg, failedAfter)) ]
     match FlakyDetection.classifyFlakiness (tid "t1") history results with
     | FlakyClassification.PropertyCounterexample ce ->
       ce |> Expect.equal "should have shrunk counterexample" "(0, \"\")"
@@ -116,7 +120,7 @@ let classifyFlakinessTests = testList "FlakyDetection.classifyFlakiness" [
     let results =
       Map.ofList [
         tid "t1",
-        mkResult "t1" (TestResult.Failed (TestFailure.AssertionFailed msg, TimeSpan.FromMilliseconds 50.0)) ]
+        mkResult "t1" (TestResult.Failed (TestFailure.AssertionFailed msg, failedAfter)) ]
     match FlakyDetection.classifyFlakiness (tid "t1") history results with
     | FlakyClassification.PropertyCounterexample ce ->
       ce |> Expect.equal "should have original counterexample" "(99, true)"
