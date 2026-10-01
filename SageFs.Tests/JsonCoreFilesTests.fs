@@ -253,6 +253,32 @@ let tests =
           """{"sessions":[{"createdAt":"2026-01-01T00:00:00Z","id":"abcd1234","lastActivity":"2026-01-01T00:00:00Z","name":"checkout","projects":["Foo.fsproj"],"status":"Ready","workflow":"REPL","workingDirectory":"/repo/checkout","worktreeBranch":null}]}"""
     ]
 
+    testList "DevReload compile-failure payload" [
+
+      let present : DevReload.DevReloadDiagnostic =
+        { File = "App.fs"; Line = 10; EndLine = 10; Column = 5; EndColumn = 15
+          Severity = "error"; DiagCode = Some "FS0001"; Message = "Type <mismatch>"
+          SourceContext = Some [| "let a = 1"; "let b = \"x\"" |]; SourceContextStartLine = Some 9 }
+
+      let absent : DevReload.DevReloadDiagnostic =
+        { present with DiagCode = None; SourceContext = None; SourceContextStartLine = None }
+
+      testCase "WHY — a present optional field is its bare value and an absent one is null, which is what devreload.js reads" <| fun _ ->
+        DevReload.DevReloadEvent.payloadJson (DevReload.CompilationFailed("2 errors", DevReload.ReloadReport.none, [ present; absent ]))
+        |> Expect.equal
+          "failed payload"
+          (String.concat
+            ""
+            [ "{\"type\":\"failed\",\"error\":\"2 errors\",\"outcome\":\"\",\"patched\":0,\"considered\":0,"
+              "\"message\":\"\",\"suggestedAction\":\"\",\"reasons\":[],\"diagnostics\":["
+              "{\"File\":\"App.fs\",\"Line\":10,\"EndLine\":10,\"Column\":5,\"EndColumn\":15,\"Severity\":\"error\","
+              "\"DiagCode\":\"FS0001\",\"Message\":\"Type \\u003Cmismatch\\u003E\","
+              "\"SourceContext\":[\"let a = 1\",\"let b = \\u0022x\\u0022\"],\"SourceContextStartLine\":9},"
+              "{\"File\":\"App.fs\",\"Line\":10,\"EndLine\":10,\"Column\":5,\"EndColumn\":15,\"Severity\":\"error\","
+              "\"DiagCode\":null,\"Message\":\"Type \\u003Cmismatch\\u003E\","
+              "\"SourceContext\":null,\"SourceContextStartLine\":null}]}" ])
+    ]
+
     testList "Features.KeptState JSON" [
 
       testCase "WHY — a reset outcome is one object whose strings are escaped the way the serializer escapes them" <| fun _ ->

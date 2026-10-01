@@ -137,6 +137,38 @@ module DevReloadDiagnostic =
             SourceContextStartLine = Some (startIdx + 1) }
     with _ -> diag
 
+  /// A diagnostic as the browser overlay reads it: an absent optional is null and a present one is
+  /// its bare value. They are plain nullable fields, not F# options, so the serializer writes the
+  /// same text on every runtime with no F# converter. This file is embedded into the isolated FSI
+  /// host, which has none, and .NET 10 cannot write an `option` the way .NET 11 does.
+  type Wire = {
+    File: string
+    Line: int
+    EndLine: int
+    Column: int
+    EndColumn: int
+    Severity: string
+    DiagCode: string
+    Message: string
+    SourceContext: string array
+    SourceContextStartLine: System.Nullable<int>
+  }
+
+  let toWire (diag: DevReloadDiagnostic) : Wire =
+    { File = diag.File
+      Line = diag.Line
+      EndLine = diag.EndLine
+      Column = diag.Column
+      EndColumn = diag.EndColumn
+      Severity = diag.Severity
+      DiagCode = (match diag.DiagCode with Some code -> code | None -> Unchecked.defaultof<string>)
+      Message = diag.Message
+      SourceContext = (match diag.SourceContext with Some lines -> lines | None -> Unchecked.defaultof<string array>)
+      SourceContextStartLine =
+        (match diag.SourceContextStartLine with
+         | Some line -> System.Nullable line
+         | None -> System.Nullable()) }
+
 /// One refusal, already rendered into the two strings a client needs.
 ///
 /// A client must never re-derive this wording. Re-deriving the REFRESH decision
@@ -265,6 +297,10 @@ module DevReloadEvent =
     | CompilationFailed(_, r, _) -> r
     | Compiling _ -> ReloadReport.none
 
+  /// A JSON value for a string or a list of plain records. This file is embedded into the isolated
+  /// FSI host, which compiles it without SageFs.Core or FSharp.SystemTextJson, so it cannot use
+  /// `SageFs.Json`. No F# union or option reaches the serializer: diagnostics go through
+  /// `DevReloadDiagnostic.toWire` first.
   let private json (value: obj) = System.Text.Json.JsonSerializer.Serialize value
 
   let private refusalJson (r: ReloadRefusal) =
@@ -313,7 +349,7 @@ module DevReloadEvent =
       // "diagnostics" (structured array) and the report. The browser script
       // checks for diagnostics first and falls back to the error string —
       // backward compatible with older injected scripts.
-      sprintf """{"type":"failed","error":%s,%s,"diagnostics":%s}""" (json summary) (reportFields r) (json diagnostics)
+      sprintf """{"type":"failed","error":%s,%s,"diagnostics":%s}""" (json summary) (reportFields r) (json (diagnostics |> List.map DevReloadDiagnostic.toWire))
 
   /// One SSE `data:` frame. Every string is JSON-serialised, so a filename, a
   /// multi-line message or a compiler diagnostic can never break the frame it
