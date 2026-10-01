@@ -26,20 +26,13 @@ let private budgets : (string * int) list =
     "SageFs.Tests/AffordancesPropertyTests.fs", 1
     "SageFs.Tests/AgentActivityTrackerTests.fs", 3
     "SageFs.Tests/BinaryFormatTests.fs", 8
-    "SageFs.Tests/CohortDogfoodIntegrationTests.fs", 1
-    "SageFs.Tests/CohortLandingGitAcceptanceTests.fs", 2
-    "SageFs.Tests/CohortMcpToolsIntegrationTests.fs", 1
     "SageFs.Tests/CohortReaperTests.fs", 3
     "SageFs.Tests/CohortRetentionTests.fs", 4
     "SageFs.Tests/CoverageIntelTests.fs", 1
     "SageFs.Tests/CrossCheckoutOverlapTests.fs", 2
     "SageFs.Tests/CustomPortOwnershipTests.fs", 2
     "SageFs.Tests/DaemonHealthTests.fs", 13
-    "SageFs.Tests/DaemonIdleRssTests.fs", 3
-    "SageFs.Tests/DaemonIntegrationTests.fs", 1
     "SageFs.Tests/DaemonOwnershipTests.fs", 30
-    "SageFs.Tests/DaemonResumeOutcomeTests.fs", 5
-    "SageFs.Tests/DaemonRssReturnsToBaselineTests.fs", 2
     "SageFs.Tests/DashboardBrowserRunner.fs", 12
     "SageFs.Tests/DashboardBrowserTests.fs", 10
     "SageFs.Tests/DashboardDisconnectIndicatorBrowserTests.fs", 3
@@ -50,15 +43,12 @@ let private budgets : (string * int) list =
     "SageFs.Tests/DstOracleTests.fs", 5
     "SageFs.Tests/DstSeedCorpusTests.fs", 1
     "SageFs.Tests/EventExhaustivenessTests.fs", 2
-    "SageFs.Tests/FalcoTests.fs", 1
     "SageFs.Tests/FlakyClassificationPropertyTests.fs", 2
     "SageFs.Tests/FlakyClassificationTests.fs", 5
     "SageFs.Tests/GcDumpCaptureTests.fs", 3
     "SageFs.Tests/HealthWatchWiringTests.fs", 2
     "SageFs.Tests/HotReloadBrowserTests.fs", 11
-    "SageFs.Tests/HotReloadStateHarness.fs", 9
-    "SageFs.Tests/HotReloadStateOutcomeTests.fs", 1
-    "SageFs.Tests/HttpApiIntegrationTests.fs", 23
+    "SageFs.Tests/HttpApiIntegrationTests.fs", 1
     "SageFs.Tests/JsonCoreFilesTests.fs", 2
     "SageFs.Tests/LandingCacheTests.fs", 2
     "SageFs.Tests/LifecyclePropertyTests.fs", 1

@@ -20,6 +20,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
+
 /// The runtimes the shipped host is built for. Every state outcome test runs
 /// once per case, so a gap on either one is a red test, not a footnote.
 [<RequireQualifiedAccess>]
@@ -100,7 +102,7 @@ module RunningApp =
 
 let private http =
   let client = new HttpClient()
-  client.Timeout <- TimeSpan.FromSeconds 30.0
+  client.Timeout <- TestTimeouts.httpDaemon
   client
 
 /// The SDK a real user on this runtime builds with. The isolated FSI host (the
@@ -198,7 +200,7 @@ let private spawnHost (runtime: HostRuntime) (runDir: string) (project: string) 
     |> ignore
   drain proc.StandardOutput
   drain proc.StandardError
-  let! winner = Task.WhenAny(port.Task, Task.Delay(TimeSpan.FromSeconds 120.0))
+  let! winner = Task.WhenAny(port.Task, Task.Delay(TestTimeouts.workerPortReport))
   match obj.ReferenceEquals(winner, port.Task) with
   | false ->
     try proc.Kill(entireProcessTree = true) with _ -> ()
@@ -227,7 +229,7 @@ let private until (budget: TimeSpan) (describe: unit -> string) (probe: unit -> 
     ok <- answer
     match ok with
     | true -> ()
-    | false -> do! Task.Delay 250
+    | false -> do! Task.Delay TestTimeouts.pollService
   match ok with
   | true -> ()
   | false -> failwithf "gave up after %.0fs: %s" budget.TotalSeconds (describe ())
@@ -245,7 +247,7 @@ let settle (app: RunningApp) (route: string) (want: string) : Task<string> = tas
   let! first = get app route
   let mutable served = first
   while served <> want && sw.ElapsedMilliseconds < 5000L do
-    do! Task.Delay 100
+    do! Task.Delay TestTimeouts.pollQuick
     let! next = get app route
     served <- next
   return served
@@ -271,7 +273,7 @@ let startConfigured (runtime: HostRuntime) (configureRepo: string -> unit) : Tas
   let proxy = HttpWorkerClient.httpProxy workerUrl
   let logText () = lock hostLog (fun () -> hostLog.ToString())
   do!
-    until (TimeSpan.FromSeconds 180.0) (fun () -> "the session never reached Ready.\n" + logText ()) (fun () -> task {
+    until TestTimeouts.workerSessionReady (fun () -> "the session never reached Ready.\n" + logText ()) (fun () -> task {
       match! proxy (WorkerMessage.GetStatus(Guid.NewGuid().ToString("N"))) |> Async.StartAsTask with
       | WorkerResponse.StatusResult(_, s) -> return s.Status = SessionStatus.Ready
       | _ -> return false })
@@ -292,12 +294,12 @@ let startConfigured (runtime: HostRuntime) (configureRepo: string -> unit) : Tas
       Proxy = proxy
       AppPort = appPort
       HostLog = hostLog }
-  do! until (TimeSpan.FromSeconds 30.0) (fun () -> "the app never answered /count.\n" + logText ()) (fun () -> task {
+  do! until TestTimeouts.appFirstAnswer (fun () -> "the app never answered /count.\n" + logText ()) (fun () -> task {
     let! _ = get app "count"
     return true })
   let! status, body = postJson (workerUrl + "/hotreload/watch-all") "{}"
   status |> Expect.equal (sprintf "watch-all should succeed: %s" body) 200
-  do! until (TimeSpan.FromSeconds 10.0) (fun () -> "no file was reported as watched") (fun () -> task {
+  do! until TestTimeouts.watchRegistered (fun () -> "no file was reported as watched") (fun () -> task {
     let! json = http.GetStringAsync(workerUrl + "/hotreload")
     return not (json.Contains "\"watchedCount\":0") })
   return app
@@ -355,7 +357,7 @@ let saveWithinBudget (budget: TimeSpan) (app: RunningApp) (find: string) (replac
 }
 
 let save (app: RunningApp) (find: string) (replace: string) : Task<string> =
-  saveWithinBudget (TimeSpan.FromSeconds 60.0) app find replace
+  saveWithinBudget TestTimeouts.saveVerdict app find replace
 
 /// What a patch ends in. A save's first verdict is `pending` (applied, and the
 /// new code has not been seen running); once the app has run the patched code
@@ -365,7 +367,7 @@ let save (app: RunningApp) (find: string) (replace: string) : Task<string> =
 let confirmed (app: RunningApp) : Task<string> = task {
   let last = ref ""
   do! until
-        (TimeSpan.FromSeconds 40.0)
+        TestTimeouts.patchOutcome
         (fun () -> sprintf "the patch was neither confirmed nor reported never-entered. Last verdict: %s" last.Value)
         (fun () -> task {
           let! json = http.GetStringAsync(app.WorkerUrl + "/hotreload/last-outcome")

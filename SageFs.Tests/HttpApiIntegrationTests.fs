@@ -15,6 +15,7 @@ open Expecto.Flip
 open SageFs.Features
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 // ─── Shared Helpers ───────────────────────────────────────────────
 
@@ -45,10 +46,10 @@ let smokeSampleProjectDir = Path.GetDirectoryName(smokeSampleProject)
 
 let sageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
-let private daemonStartupHealthPollInterval = TimeSpan.FromMilliseconds(100.0)
+let private daemonStartupHealthPollInterval = TestTimeouts.pollQuick
 
 let private daemonStartupHealthTimeout =
-  TimeSpan.FromSeconds(60.0)
+  TestTimeouts.readyBudget
 
 /// Does a /api/daemon-info payload identify THIS pid? Kept outside the task
 /// builder so parsing needs no `use` inside a resumable state machine.
@@ -137,7 +138,7 @@ let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = t
   let proc = Process.Start(psi)
   let client = new HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)
-  client.Timeout <- TimeSpan.FromSeconds(30.0)
+  client.Timeout <- TestTimeouts.httpDaemon
 
   // Ready means OUR daemon answers — not "something answers on this port".
   //
@@ -153,7 +154,7 @@ let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = t
   // message that says what happened instead of a misleading error later.
   use identity = new HttpClient()
   identity.BaseAddress <- Uri(sprintf "http://localhost:%d" (port + 1))
-  identity.Timeout <- TimeSpan.FromSeconds(5.0)
+  identity.Timeout <- TestTimeouts.httpProbe
   let mutable ready = false
   let mutable exitedEarly = false
   let mutable attempts = 0
@@ -226,7 +227,7 @@ let waitForReadySession (client: HttpClient) (targetDir: string) (timeout: TimeS
   let expectedDir = normalizeDir targetDir
 
   while not ready && DateTime.UtcNow - started < timeout do
-    do! Task.Delay(1000)
+    do! Task.Delay(TestTimeouts.pollSlow)
     let! status, body = getJson client "/api/sessions"
     lastBody <- body
     if status = 200 then
@@ -245,7 +246,7 @@ let waitForReadySession (client: HttpClient) (targetDir: string) (timeout: TimeS
 /// The daemon routes /exec by workingDirectory but does not auto-create,
 /// so tests that eval against a directory depend on this.
 let ensureSession (client: HttpClient) (projectPath: string) (targetDir: string) = task {
-  let! ready, _ = waitForReadySession client targetDir (TimeSpan.FromSeconds 5.0)
+  let! ready, _ = waitForReadySession client targetDir TestTimeouts.patienceBrief
   if not ready then
     let payload =
       {| projects = [| projectPath |]
@@ -330,7 +331,7 @@ let waitForLiveTestingStatus
       matched <- predicate snapshot
 
       if not matched then
-        do! Task.Delay(250)
+        do! Task.Delay(TestTimeouts.pollService)
 
     return matched, lastSnapshot, lastBody
   }
@@ -595,14 +596,14 @@ let integrationTests =
 
     testTask "GET /events SSE stream sends at least one event" {
       let client = getSharedClient()
-      let cts = new CancellationTokenSource(TimeSpan.FromSeconds(15.0))
+      let cts = new CancellationTokenSource(TestTimeouts.sseListen)
       let eventsReceived = System.Collections.Concurrent.ConcurrentBag<string>()
 
       let sseTask = task {
         try
           use sseClient = new HttpClient()
           sseClient.BaseAddress <- Uri(sprintf "http://localhost:%d" sharedPort)
-          sseClient.Timeout <- TimeSpan.FromSeconds(15.0)
+          sseClient.Timeout <- TestTimeouts.sseListen
           use! stream = sseClient.GetStreamAsync("/events")
           use reader = new StreamReader(stream)
 
@@ -617,7 +618,7 @@ let integrationTests =
       }
 
       // Let the SSE connection establish before triggering an event.
-      do! Task.Delay 200
+      do! Task.Delay TestTimeouts.connectSettle
       let payload = {| code = "1 + 2;;" ; working_directory = testProjectDir |}
       let! _, _ = postJson client "/exec" payload
 
@@ -629,7 +630,7 @@ let integrationTests =
 
     testTask "GET /diagnostics SSE responds with text/event-stream" {
       let client = getSharedClient()
-      let cts = new CancellationTokenSource(TimeSpan.FromSeconds(5.0))
+      let cts = new CancellationTokenSource(TestTimeouts.httpProbe)
       let req = new HttpRequestMessage(HttpMethod.Get, "/diagnostics")
       let! (resp: HttpResponseMessage) =
         client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token)
@@ -919,7 +920,7 @@ let httpApiRoutingTests =
         createStatus |> Expect.equal "session create should succeed" 200
 
         let! ready, sessionsBody =
-          waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
+          waitForReadySession client smokeSampleProjectDir TestTimeouts.readyBudget
 
         ready
         |> Expect.isTrue (sprintf "explicitly created session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
@@ -954,7 +955,7 @@ let httpApiRoutingTests =
         createStatus |> Expect.equal "session create should succeed" 200
 
         let! ready, sessionsBody =
-          waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
+          waitForReadySession client smokeSampleProjectDir TestTimeouts.readyBudget
 
         ready
         |> Expect.isTrue (sprintf "explicitly created session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
@@ -989,7 +990,7 @@ let httpApiRoutingTests =
         createStatus |> Expect.equal "session create should succeed" 200
 
         let! ready, sessionsBody =
-          waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
+          waitForReadySession client smokeSampleProjectDir TestTimeouts.readyBudget
 
         ready
         |> Expect.isTrue (sprintf "explicitly created session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
@@ -1035,7 +1036,7 @@ let httpApiRoutingTests =
         createStatus |> Expect.equal "session create should succeed" 200
 
         let! ready, sessionsBody =
-          waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
+          waitForReadySession client smokeSampleProjectDir TestTimeouts.readyBudget
         ready
         |> Expect.isTrue (sprintf "session should reach Ready before switching workflow. Create: %s Sessions: %s" createBody sessionsBody)
 
@@ -1068,11 +1069,11 @@ let httpApiRoutingTests =
         // before it is Ready (SessionManager.fs's `spawnFirst`) — poll until
         // the SAME session id settles into Ready under the new workflow.
         let started = DateTime.UtcNow
-        let timeout = TimeSpan.FromSeconds(60.0)
+        let timeout = TestTimeouts.readyBudget
         let mutable settled = false
         let mutable lastBody = ""
         while not settled && DateTime.UtcNow - started < timeout do
-          do! Task.Delay(500)
+          do! Task.Delay(TestTimeouts.pollMedium)
           let! _, body = getJson client "/api/sessions"
           lastBody <- body
           let doc = JsonDocument.Parse(body: string)
@@ -1147,7 +1148,7 @@ let httpApiLiveTestingCompiledProjectTests =
         createStatus |> Expect.equal "session create should succeed" 200
 
         let! ready, sessionsBody =
-          waitForReadySession client tempProjectDir (TimeSpan.FromSeconds(60.0))
+          waitForReadySession client tempProjectDir TestTimeouts.readyBudget
 
         ready
         |> Expect.isTrue (
@@ -1165,7 +1166,7 @@ let httpApiLiveTestingCompiledProjectTests =
         policyStatus |> Expect.equal "policy update should succeed" 200
 
         let! discovered, discoveredSnapshot, discoveredBody =
-          waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
+          waitForLiveTestingStatus client None TestTimeouts.readyBudget (fun snapshot ->
             snapshot.DiscoveryState = "ready_with_tests"
             && snapshot.Total >= 11)
 
@@ -1179,7 +1180,7 @@ let httpApiLiveTestingCompiledProjectTests =
             discoveredSnapshot)
 
         let! settledAfterDiscovery, settledSnapshot, settledBody =
-          waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
+          waitForLiveTestingStatus client None TestTimeouts.readyBudget (fun snapshot ->
             snapshot.Total >= 11
             && snapshot.Running = 0)
 
@@ -1209,7 +1210,7 @@ let httpApiLiveTestingCompiledProjectTests =
           runBody <- runBody'
 
           let! ready, snapshot, body =
-            waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
+            waitForLiveTestingStatus client None TestTimeouts.readyBudget (fun snapshot ->
               snapshot.Total >= 11
               && snapshot.Passed >= 11
               && snapshot.Failed = 0
@@ -1230,7 +1231,7 @@ let httpApiLiveTestingCompiledProjectTests =
         File.WriteAllText(helloPath, editedHello, utf8NoBom)
 
         let! failedAfterEdit, failedSnapshot, failedBody =
-          waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
+          waitForLiveTestingStatus client None TestTimeouts.readyBudget (fun snapshot ->
             snapshot.FailedTests
             |> List.exists (fun name -> name = "add infers int"))
 

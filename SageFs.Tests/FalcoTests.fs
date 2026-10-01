@@ -78,7 +78,7 @@ let evalCode (actor: AppActor) code =
 let testHttpGet (url: string) =
   task {
     use client = new HttpClient()
-    client.Timeout <- TimeSpan.FromSeconds(5.0)
+    client.Timeout <- SageFs.Tests.TestInfrastructure.TestTimeouts.httpProbe
 
     try
       let! response = client.GetAsync(url)

@@ -81,7 +81,7 @@ let private startIsolatedDaemon () : Task<Process * int> = task {
   let proc = Process.Start psi
   use client = new Net.Http.HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)
-  client.Timeout <- TimeSpan.FromSeconds 5.0
+  client.Timeout <- SageFs.Tests.TestInfrastructure.TestTimeouts.httpProbe
 
   // Deadline-based (not a fixed attempt count) so the poll cadence and the
   // give-up bound are independently named and configurable — same pattern as

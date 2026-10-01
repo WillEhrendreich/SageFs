@@ -72,10 +72,10 @@ module Infra = SageFs.Tests.TestInfrastructure
 /// How long to wait for the daemon's periodic save to make the session
 /// durable. The timer is wall-clock (60s from daemon start) and does not get
 /// faster on a faster runner, so the ceiling is a generous multiple of it.
-let private manifestDurabilityCeiling = TimeSpan.FromSeconds 150.0
+let private manifestDurabilityCeiling = Infra.TestTimeouts.daemonResumeCeiling
 
 /// How long the second daemon may take to rebuild the session.
-let private resumeCeiling = TimeSpan.FromSeconds 150.0
+let private resumeCeiling = Infra.TestTimeouts.daemonResumeCeiling
 
 /// Daemon 1's manifest-save cadence for this gate: small enough that the real
 /// periodic save fires in seconds rather than the production 60s default, so
@@ -118,7 +118,7 @@ let private startDaemonOnDataDir (port: int) (dataDir: string) (envOverrides: (s
   let proc = Process.Start(psi)
   let client = new HttpClient()
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)
-  client.Timeout <- TimeSpan.FromSeconds 30.0
+  client.Timeout <- Infra.TestTimeouts.httpDaemon
 
   let! healthy =
     Infra.waitForAsync 90_000 (fun () -> task {
@@ -203,7 +203,7 @@ let daemonResumeOutcomeTests =
         createStatus |> Expect.equal (sprintf "session create succeeds (%s)" createBody) 200
 
         let! ready, sessionsBody =
-          Harness.waitForReadySession client1 workingDir (TimeSpan.FromSeconds 120.0)
+          Harness.waitForReadySession client1 workingDir SageFs.Timeouts.integrationDaemonReady
         ready |> Expect.isTrue (sprintf "the session reaches Ready in daemon 1. Sessions: %s" sessionsBody)
 
         // ── The durability boundary ─────────────────────────────────────────
@@ -269,7 +269,7 @@ let daemonResumeOutcomeTests =
 
         // And it really is a live FSI in the new daemon, not a placeholder row.
         let! readyAgain, afterBody =
-          Harness.waitForReadySession client2 workingDir (TimeSpan.FromSeconds 120.0)
+          Harness.waitForReadySession client2 workingDir SageFs.Timeouts.integrationDaemonReady
         readyAgain
         |> Expect.isTrue (sprintf "the rebuilt session reaches Ready. Sessions: %s" afterBody)
 

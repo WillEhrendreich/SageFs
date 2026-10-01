@@ -270,7 +270,7 @@ let daemonCliTests =
 // This is the OTHER half of the fix: even when a bind loses a race, the
 // daemon itself must fail fast and say why, rather than announce readiness
 // over a listener nobody can reach.
-let private startupBindFailureCeiling = TimeSpan.FromSeconds 20.0
+let private startupBindFailureCeiling = SageFs.Tests.TestInfrastructure.TestTimeouts.patience
 
 [<Tests>]
 let daemonStartupFailsClosedTests =

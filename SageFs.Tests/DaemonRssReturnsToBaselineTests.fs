@@ -23,6 +23,7 @@ open Expecto.Flip
 open SageFs.Tests.HttpApiIntegrationTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
 
@@ -49,7 +50,7 @@ let tests =
       try
         // Let warmup settle (module init, JIT of the request pipeline) before
         // taking the baseline — otherwise "baseline" is really "mid-startup."
-        do! Threading.Tasks.Task.Delay(2000)
+        do! Threading.Tasks.Task.Delay(TestTimeouts.warmupSettle)
         let baselineMB = rssMB proc
 
         // Create all four, wait for each to reach Ready, then actually
@@ -59,7 +60,7 @@ let tests =
         for (dir, projFile) in sampleProjects do
           let! status, body = createSession client projFile dir
           status |> Expect.equal (sprintf "create for %s" dir) 200
-          let! ready, lastBody = waitForReadySession client dir (TimeSpan.FromSeconds 90.0)
+          let! ready, lastBody = waitForReadySession client dir TestTimeouts.loadedSessionsReady
           ready |> Expect.isTrue (sprintf "%s should reach Ready — last sessions body: %s (create body: %s)" dir lastBody body)
           let! _ = postJson client "/exec" {| code = "let x = [ for i in 1 .. 200 -> i * i ];; printfn \"%d\" x.Length"; working_directory = dir |}
           ()

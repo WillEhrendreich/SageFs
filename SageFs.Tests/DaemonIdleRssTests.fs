@@ -50,6 +50,7 @@ open Expecto.Flip
 open SageFs.Tests.HttpApiIntegrationTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
+module TestTimeouts = SageFs.Tests.TestInfrastructure.TestTimeouts
 
 let private rssMB (proc: Process) =
   proc.Refresh()
@@ -74,7 +75,7 @@ let private SoakMinutesEnvironmentVariable = "SAGEFS_IDLE_RSS_SOAK_MINUTES"
 /// a factor of five. Hunting an actual slow drip is what
 /// `SAGEFS_IDLE_RSS_SOAK_MINUTES` is for; that is a deliberate act, not
 /// something every contributor should pay for on every push.
-let private defaultWindow = TimeSpan.FromSeconds 60.0
+let private defaultWindow = TestTimeouts.idleRssWindow
 
 let private idleWindow () =
   match Environment.GetEnvironmentVariable SoakMinutesEnvironmentVariable with
@@ -110,7 +111,7 @@ let tests =
         // ASP.NET Core request pipeline's own first-hit cost) before taking
         // the baseline — otherwise "baseline" is really "mid-startup", the
         // same reasoning DaemonRssReturnsToBaselineTests.fs uses.
-        do! Threading.Tasks.Task.Delay(2000)
+        do! Threading.Tasks.Task.Delay(TestTimeouts.warmupSettle)
         let baselineMB = rssMB proc
 
         // No session created, no request beyond the readiness polling
@@ -120,7 +121,7 @@ let tests =
         // growth (a ramp, a step, a sawtooth) rather than just two endpoints —
         // that shape is what told us the incident was a steady walk and not a
         // one-off allocation.
-        let sampleEvery = TimeSpan.FromSeconds 15.0
+        let sampleEvery = TestTimeouts.idleRssSampleInterval
         let sampleCount = max 1 (int (window.TotalSeconds / sampleEvery.TotalSeconds))
         let samples = ResizeArray<int64>()
         samples.Add baselineMB

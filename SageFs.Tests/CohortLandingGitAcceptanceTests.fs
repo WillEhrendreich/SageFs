@@ -160,13 +160,13 @@ let private gitBackedPerformer (integrationWorktree: string) (mainRepo: string) 
 /// Poll cadence for `waitUntil` below — named rather than a bare literal, so
 /// the cadence and the give-up bound (`landingWaitBudget`) are independently
 /// visible at their use site.
-let private landingWaitPoll = TimeSpan.FromMilliseconds 25.0
+let private landingWaitPoll = SageFs.Tests.TestInfrastructure.TestTimeouts.pollLanding
 
 /// Give-up bound for a real-git-backed landing to reach a terminal state
 /// (Landed or Blocked). Generous relative to `landingWaitPoll` because each
 /// poll drives real `git` subprocesses (rebase/fast-forward), not an
 /// in-memory check.
-let private landingWaitBudget = TimeSpan.FromSeconds 30.0
+let private landingWaitBudget = SageFs.Tests.TestInfrastructure.TestTimeouts.landingBudget
 
 /// Polls (via `Flush` + a short async sleep, never `Thread.Sleep`) until
 /// `check` holds or `deadline` passes — completions from the real git
