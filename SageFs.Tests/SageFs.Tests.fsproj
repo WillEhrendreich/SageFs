@@ -634,6 +634,8 @@
         <Compile Include="WebAppHotReloadVerificationTests.fs" />
         <Compile Include="HotReloadStateHarness.fs" />
         <Compile Include="HotReloadInlinedCalleeJourneyTests.fs" />
+        <Compile Include="HotReloadLatency.fs" />
+        <Compile Include="HotReloadLatencyTests.fs" />
         <Compile Include="HotReloadStateOutcomeTests.fs" />
         <Compile Include="HotReloadParityTests.fs" />
         <Compile Include="HotReloadDebuggerTests.fs" />

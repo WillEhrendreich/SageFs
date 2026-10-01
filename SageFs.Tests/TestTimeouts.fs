@@ -116,6 +116,24 @@ module TestTimeouts =
   /// Regression bound on the 95th percentile of save-to-green. First measurement: p95 709ms over 20 saves
   /// on the same machine and in the same conditions. Four times that, for the same reason.
   let liveTestingSaveToGreenP95Bound = secs 3.
+  /// Regression bound on the 95th percentile of hot reload save-to-served (a patched save: the first byte
+  /// of the write to the first response carrying the new body, polled every `pollTight`). Measured: p95 298
+  /// to 353ms over eight runs of 20 saves each (372ms with eight busy loops beside it) on a 16-thread Ryzen
+  /// 7 5800XT, Linux, a daemon owned by the runner and other jobs on the same machine; 200ms of that is the
+  /// file watcher's debounce, a fixed timer. The bound is about four times the worst p95, because a cold or
+  /// shared CI runner is slower and a gate that flakes gets deleted; it still fails on what matters, a save
+  /// that takes whole seconds (a compile that fell back to the whole file, or a restart where a patch used to be).
+  let hotReloadPatchServedP95Bound = secs 1.5
+  /// Regression bound on the 95th percentile of hot reload save-to-confirmed (the daemon's verdict reaching
+  /// `Patched`, which needs the new code to have run). Measured: p95 338 to 392ms over the same eight runs
+  /// (418ms under load). Close to four times the worst, for the same reason.
+  let hotReloadPatchConfirmedP95Bound = secs 1.5
+  /// Regression bound on the 95th percentile of save-to-served for a save to an app `run_app` runs, which
+  /// SageFs rebuilds and relaunches (a build, a new worker, a new FSI session, a warm-up, then the app).
+  /// Measured: p95 7.7 to 16.2s over eight runs of 20 saves (p50 7.1 to 10.0s), and the spread follows the
+  /// machine's load: the two runs that ended with a load average of 14 or more were the 15 and 16s ones. About four times
+  /// the worst, because a build and a process start get slower on a cold runner by more than a request does.
+  let hotReloadRestartServedP95Bound = secs 60.
   /// The daemon's own wall-clock save fires 60s after start and does not get faster on a faster
   /// runner, so both resume waits (the save becoming durable, the second daemon rebuilding the
   /// session) are a generous multiple of it.

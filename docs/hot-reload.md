@@ -86,6 +86,35 @@ dispatches to the handler's method entry point, so re-pointing the method
 changes what the captured route serves. Harmony doesn't care that the
 delegate was created six minutes ago. It cares where the call ends up.
 
+### How long a save takes
+
+Measured by the `--integration-hr` tier on a real running app: the clock starts
+just before the first byte of the save is written and stops on a response the
+app sent or a frame the daemon pushed (`HotReloadLatency.fs`,
+`HotReloadLatencyTests.fs`). 20 saves per path after 2 warm-up saves, and the
+tier fails if a path's p95 passes its bound in `TestTimeouts.fs`. The app is the
+small `WebAppFixture`. The machine was an AMD Ryzen 7 5800XT, 16 threads,
+Linux, .NET 11.0.0-rc.1, and the tier ran 8 times in a row on 2026-10-01 with
+other jobs running on it. Each cell is the range of the 8 runs.
+
+| What | p50 | p95 |
+|---|---|---|
+| A patched save, to the first response with the new body | 258 to 306 ms | 298 to 353 ms |
+| The same save, to the daemon saying `Patched` | 296 to 346 ms | 338 to 392 ms |
+| A save to an app `run_app` runs, to the restarted app's first response | 7.1 to 10.0 s | 7.7 to 16.2 s |
+
+About 200 ms of a patched save is the watcher's debounce (the worker says it
+started compiling at 201 to 202 ms every run), so most of the time is a fixed
+timer and not the patch. A restart is a rebuild, a new worker, a new FSI session
+and a warm-up, and its spread follows how busy the machine is: one run on a quiet
+machine had a patch at p50 259 ms and p95 261 ms, and a restart at p50 6.8 s and
+p95 6.9 s. That is one
+machine and one small app. I have no figure for a large app, and Microsoft
+documents none for its hot reload (I re-read its Visual Studio, ASP.NET Core and
+`dotnet watch` pages on 2026-10-01), so there is nothing to compare these with.
+The stage-by-stage breakdown, the load runs and what I think is too slow are in
+[How SageFs hot reloads F#](how-hot-reload-works.md#how-long-a-save-takes).
+
 ## What reloads, and what needs a restart
 
 The rule I'm going for: code changes take effect, state stays, and SageFs
