@@ -1127,7 +1127,11 @@ let fileSizeBudgets =
       // 4229 -> 4129: the live-testing status payload and the failure-location parser moved to
       // LiveTestStatusView.fs, which paid for the pause/scope routes' call sites and left it below the
       // 4229 it started at. Exact size.
-      "SageFs/Mcp.fs", 4129
+      // 4129 -> 3945: the seven analysis tools (diagnose, coverage_intel, impact_forecast, suggest_next_action,
+      // suggest_repair, explain_test_failure, get_cell_dependencies) became pure functions of the model and the
+      // feature state in McpAnalysisViews.fs, and Mcp.fs keeps only their "not started" guards. The file is 3645
+      // lines, so this leaves 300 lines of headroom for the work that has to land here before the next split.
+      "SageFs/Mcp.fs", 3945
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

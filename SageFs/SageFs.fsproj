@@ -117,6 +117,7 @@
         <Compile Include="SessionStatusPayload.fs" />
         <Compile Include="CohortErrorMapping.fs" />
         <Compile Include="LiveTestStatusView.fs" />
+        <Compile Include="McpAnalysisViews.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpHygiene.fs" />
         <Compile Include="McpRunTests.fs" />
