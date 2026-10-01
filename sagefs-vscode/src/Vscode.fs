@@ -391,9 +391,57 @@ module Commands =
   let _executeCommand (c: obj) (command: string) : JS.Promise<obj> = jsNative
   let executeCommand (command: string) = _executeCommand commandsExports command
 
+  [<Emit("$0.executeCommand($1, $2)")>]
+  let _executeCommandWith (c: obj) (command: string) (argument: obj) : JS.Promise<obj> = jsNative
+  /// Run a command that takes one argument.
+  let executeCommandWith (command: string) (argument: obj) = _executeCommandWith commandsExports command argument
+
   [<Emit("$0.getCommands()")>]
   let _getCommands (c: obj) : JS.Promise<string array> = jsNative
   let getCommands () = _getCommands commandsExports
+
+// ── Debug API ───────────────────────────────────────────────────
+
+type [<AllowNullLiteral>] DebugSession =
+  abstract id: string
+  abstract name: string
+
+[<Import("debug", "vscode")>]
+let debugExports: obj = jsNative
+
+module Debug =
+  /// Start a debug session. Answers false when VS Code could not start it (no debugger of that type, an attach that failed).
+  [<Emit("$0.startDebugging($1, $2)")>]
+  let _startDebugging (d: obj) (folder: WorkspaceFolder option) (configuration: obj) : JS.Promise<bool> = jsNative
+  let startDebugging (folder: WorkspaceFolder option) (configuration: obj) = _startDebugging debugExports folder configuration
+
+  /// Stop a session. For an attach session that detaches the debugger and leaves the process running.
+  [<Emit("$0.stopDebugging($1)")>]
+  let _stopDebugging (d: obj) (session: DebugSession) : JS.Promise<unit> = jsNative
+  let stopDebugging (session: DebugSession) = _stopDebugging debugExports session
+
+  [<Emit("$0.onDidStartDebugSession($1)")>]
+  let _onDidStartDebugSession (d: obj) (handler: DebugSession -> unit) : Disposable = jsNative
+  let onDidStartDebugSession (handler: DebugSession -> unit) = _onDidStartDebugSession debugExports handler
+
+  [<Emit("$0.onDidTerminateDebugSession($1)")>]
+  let _onDidTerminateDebugSession (d: obj) (handler: DebugSession -> unit) : Disposable = jsNative
+  let onDidTerminateDebugSession (handler: DebugSession -> unit) = _onDidTerminateDebugSession debugExports handler
+
+// ── Extensions API ──────────────────────────────────────────────
+
+type [<AllowNullLiteral>] Extension =
+  abstract id: string
+  abstract packageJSON: obj
+
+[<Import("extensions", "vscode")>]
+let extensionsExports: obj = jsNative
+
+module Extensions =
+  /// Every extension VS Code knows, installed and enabled or not.
+  [<Emit("$0.all")>]
+  let _all (e: obj) : Extension array = jsNative
+  let all () = _all extensionsExports
 
 // ── Workspace API ───────────────────────────────────────────────
 
@@ -546,6 +594,11 @@ let newTestMessage (message: string) = _newTestMessage vscodeAll message
 [<Emit("new $0.CodeLens($1, $2)")>]
 let _newCodeLens (v: obj) (range: Range) (cmd: obj) : CodeLens = jsNative
 let newCodeLens (range: Range) (cmd: obj) = _newCodeLens vscodeAll range cmd
+
+/// Markdown for a hover, whose `command:` links may run `command` and nothing else.
+[<Emit("(() => { const m = new $0.MarkdownString($1); m.isTrusted = { enabledCommands: [$2] }; return m; })()")>]
+let _newMarkdownTrustingOnly (v: obj) (text: string) (command: string) : obj = jsNative
+let newMarkdownTrustingOnly (text: string) (command: string) = _newMarkdownTrustingOnly vscodeAll text command
 
 [<Emit("new $0.EventEmitter()")>]
 let _newEventEmitter (v: obj) : EventEmitter<'T> = jsNative

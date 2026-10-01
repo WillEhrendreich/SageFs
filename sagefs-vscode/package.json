@@ -169,6 +169,10 @@
         "title": "SageFs: Run This Test"
       },
       {
+        "command": "sagefs.debugTest",
+        "title": "SageFs: Debug This Test"
+      },
+      {
         "command": "sagefs.setRunPolicy",
         "title": "SageFs: Set Test Run Policy"
       },
@@ -488,6 +492,10 @@
         },
         {
           "command": "sagefs.runTest",
+          "when": "false"
+        },
+        {
+          "command": "sagefs.debugTest",
           "when": "false"
         },
         {

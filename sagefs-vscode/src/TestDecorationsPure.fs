@@ -52,13 +52,16 @@ type DecorationEntry = {
   ZeroBasedLine: int
   HoverText: string
   Bucket: DecorationBucket
+  /// The test the decoration is for, so a failing test's hover can offer to debug exactly that test.
+  TestId: string
 }
 
-let private mkEntry (line: int) (hoverText: string) (bucket: DecorationBucket) : DecorationEntry =
+let private mkEntry (line: int) (testId: VscTestId) (hoverText: string) (bucket: DecorationBucket) : DecorationEntry =
   { Line = line
     ZeroBasedLine = toZeroBasedLine line
     HoverText = hoverText
-    Bucket = bucket }
+    Bucket = bucket
+    TestId = VscTestId.value testId }
 
 let private notYetRunText (displayName: string) : string =
   sprintf "◆ %s (not yet run)" displayName
@@ -117,11 +120,11 @@ let decorationForTest
   | None -> None
   | Some line ->
     match result with
-    | None -> Some (mkEntry line (notYetRunText test.DisplayName) DecorationBucket.Running)
+    | None -> Some (mkEntry line test.Id (notYetRunText test.DisplayName) DecorationBucket.Running)
     | Some r ->
       let bucket, text =
         bucketForOutcome test.DisplayName freshness (narrativeText test.Id) r.DurationMs r.Outcome
-      Some (mkEntry line text bucket)
+      Some (mkEntry line test.Id text bucket)
 
 /// Every decoration for one file, already split into the three buckets
 /// `TestDecorations.applyToEditor` hands to `setDecorations`. Order within

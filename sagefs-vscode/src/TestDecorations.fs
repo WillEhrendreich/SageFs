@@ -104,6 +104,17 @@ let private toRangeOption (zeroBasedLine: int) (hoverText: string) : obj =
 let private toRanges (entries: DecorationEntry list) : ResizeArray<obj> =
   ResizeArray<obj>(entries |> List.map (fun e -> toRangeOption e.ZeroBasedLine e.HoverText))
 
+/// A failing test's mark: the hover is markdown and ends in a link that debugs that test. Only the debug command may run
+/// from it, so nothing a test's own message says can reach another command.
+let private toFailedRanges (entries: DecorationEntry list) : ResizeArray<obj> =
+  ResizeArray<obj>(
+    entries
+    |> List.map (fun e ->
+      createObj [
+        "range" ==> newRange e.ZeroBasedLine 0 e.ZeroBasedLine 0
+        "hoverMessage" ==> newMarkdownTrustingOnly (SageFs.Vscode.TestDebugPure.hoverWithDebugLink e.HoverText e.TestId) SageFs.Vscode.TestDebugPure.DebugCommandId
+      ]))
+
 let private toCoverageRanges (entries: CoverageEntry list) : ResizeArray<obj> =
   ResizeArray<obj>(entries |> List.map (fun e -> toRangeOption e.ZeroBasedLine e.HoverText))
 
@@ -126,7 +137,8 @@ let applyToEditor (state: VscLiveTestState) (editor: TextEditor) =
   let ranges entries = match show with true -> toRanges entries | false -> ResizeArray<obj>()
 
   passedType |> Option.iter (fun dt -> editor.setDecorations(dt, ranges decorations.Passed))
-  failedType |> Option.iter (fun dt -> editor.setDecorations(dt, ranges decorations.Failed))
+  let failedRanges = match show with true -> toFailedRanges decorations.Failed | false -> ResizeArray<obj>()
+  failedType |> Option.iter (fun dt -> editor.setDecorations(dt, failedRanges))
   runningType |> Option.iter (fun dt -> editor.setDecorations(dt, ranges decorations.Running))
 
 /// Apply coverage decorations to a single text editor

@@ -663,6 +663,46 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
 let runTests (pattern: string) (c: Client) =
   postCommand c "/api/live-testing/run" (jsonStringify {| pattern = pattern; category = "" |}) 60000
 
+// ── Debugging one test ───────────────────────────────────────────────────
+// The daemon answers with the same JSON shape for every status (DebugTestRequest.DebugWire), and with a non-2xx code for
+// the ones that mean "not done", so the body is read whatever the status code says. Only a body that is not that JSON, or no
+// answer at all, is a failure of the call itself.
+
+let private parseDebugAnswer (parsed: obj) : TestDebugPure.DebugAnswerView =
+  let text name = fieldString name parsed |> Option.defaultValue ""
+  { Status = text "status"
+    Message = text "message"
+    Pid = fieldInt "pid" parsed |> Option.defaultValue 0
+    Ticket = text "ticket"
+    TestId = text "testId"
+    TestName = text "testName"
+    Symbols = text "symbols"
+    SymbolsNote = text "symbolsNote"
+    Access = text "access"
+    AccessNote = text "accessNote"
+    HoldMs = fieldInt "holdMs" parsed |> Option.defaultValue 0
+    Outcome = text "outcome"
+    Detail = text "detail"
+    DurationMs = fieldFloat "durationMs" parsed |> Option.defaultValue 0.0 }
+
+let private postDebug (path: string) (body: string) (timeout: int) (c: Client) : JS.Promise<Result<TestDebugPure.DebugAnswerView, string>> =
+  promise {
+    try
+      let! resp = httpPost c path body timeout
+      return Ok (jsonParse resp.body |> parseDebugAnswer)
+    with err ->
+      return Error (string err)
+  }
+
+/// Hold one test in its host for a debugger. The answer names the process to attach to and the ticket that releases the test.
+let debugTest (testId: string) (c: Client) =
+  postDebug "/api/live-testing/debug" (jsonStringify {| testId = testId |}) 30000 c
+
+/// Release the held test (the debugger is attached) and wait for it to finish. The daemon waits up to 20 seconds and answers
+/// "still running" if the test is still going, so a test stopped on a breakpoint is asked about again and again.
+let debugContinue (ticket: string) (c: Client) =
+  postDebug "/api/live-testing/debug/continue" (jsonStringify {| ticket = ticket |}) 60000 c
+
 let enableLiveTesting (c: Client) =
   postCommand c "/api/live-testing/enable" "{}" 5000
 
