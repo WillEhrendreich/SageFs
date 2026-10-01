@@ -95,15 +95,24 @@ CMDC_DIR=$(dirname "$(command -v cmdc)")
 LEM_EXTRA_BWRAP=(--bind "$OUT/screens" "$OUT/screens" --bind "$OUT/shots" "$OUT/shots" --bind "$OUT/timeline.ndjson" "$OUT/timeline.ndjson")
 LEM_EXTRA_ENV=("PATH=$RUN/bin/tools:$HOME/.dotnet:$HOME/.dotnet/tools:$CMDC_DIR:/usr/bin:/bin"
   "LEM_CDP_PORT=$CDP" "LEM_SCREENS_DIR=$OUT/screens" "LEM_RUN_DIR=$RUN" "LEM_TIMELINE=$OUT/timeline.ndjson" "NODE_NO_WARNINGS=1")
+# The daemon keeps no eval history another client can read, so the harness listens to its
+# /events stream for the whole run (the same stream the dashboard uses) and the oracle reads
+# the eval output of the lemming's own sessions from that file. Stopped by exact pid.
+curl -sN --max-time "$LEM_TIMEOUT_SECONDS" "http://localhost:$LEM_PORT/events" > "$OUT/daemon-events.sse" 2>/dev/null &
+EVENTS_PID=$!
 lem_run_cmdc "$W" "$OUT/prompt.md" "$MODEL" "$TURNS" "$OUT/events.ndjson" "$OUT/cmdc.stderr"
+sleep 2
+kill "$EVENTS_PID" 2>/dev/null || true
 
 # What the editor shows when the lemming is done, then the harness's own checks, BEFORE cleanup.
 "${DRIVE[@]}" host snapshot --cdp-port "$CDP" --out "$OUT/final.snapshot.txt" > /dev/null 2>&1 || true
 LEM_CDP_PORT=$CDP LEM_SCREENS_DIR="$OUT/final" "${DRIVE[@]}" vsc shot final > /dev/null 2>&1 || true
 
 if [ "$TASK" = ui-edit-reeval ]; then
+  # The package restore needs the network; the code the lemming wrote then runs without it.
   set +e
-  lem_sandbox_exec "$RUN" 300 dotnet run --project DemoEnv.Tests > "$OUT/tests.out" 2>&1
+  LEM_ORACLE_NET=1 lem_sandbox_exec "$RUN" 300 dotnet restore DemoEnv.Tests > "$OUT/tests.out" 2>&1
+  lem_sandbox_exec "$RUN" 300 dotnet run --no-restore --project DemoEnv.Tests >> "$OUT/tests.out" 2>&1
   echo $? > "$OUT/tests.exit"
   set -e
 fi

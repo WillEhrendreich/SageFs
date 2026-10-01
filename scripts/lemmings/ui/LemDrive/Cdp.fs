@@ -201,6 +201,8 @@ let private readEditor (page: IPage) : Task<EditorFacts option> =
       let! lensTexts = texts lensLoc
       let lenses =
         List.zip lensTops lensTexts
+        // A lens VS Code has not rendered yet is an empty element; it says nothing.
+        |> List.filter (fun (_, text) -> not (String.IsNullOrWhiteSpace text))
         |> List.choose (fun (top, text) ->
           lineBelow top |> Option.map (fun n -> { Line = n; Kind = CodeLens; Text = text }))
       // Text the extension draws after a line is a pseudo-element's content.

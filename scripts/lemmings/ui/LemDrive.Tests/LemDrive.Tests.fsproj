@@ -24,6 +24,7 @@
     <Compile Include="SnapshotTests.fs" />
     <Compile Include="ShotTests.fs" />
     <Compile Include="HarnessTests.fs" />
+    <Compile Include="RunnerTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

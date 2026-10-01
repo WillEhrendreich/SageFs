@@ -165,14 +165,23 @@ let callTool (port: int) (tool: string) (arguments: (string * string) list) : Re
       finally close ()
   with ex -> Result.Error(sprintf "MCP call %s failed: %s" tool ex.Message)
 
-/// The recent evaluations of the one session using `workingDirectory`, oldest first.
-let recentEvents (port: int) (workingDirectory: string) (count: int) : Result<string, string> =
-  callTool port "get_recent_fsi_events" [ "working_directory", workingDirectory; "count", string count ]
-  |> Result.map (fun t ->
-    // The tool appends a push of daemon events after a blank line; the evals are the head.
-    match t.IndexOf "\n\n" with
-    | -1 -> t
-    | i -> t.Substring(0, i))
+/// What the daemon's `/events` stream said about evaluation in the given sessions: the text
+/// of every `eval_diff` event for those session ids (the lines of eval output, with their
+/// results). The runner records the stream to a file for the whole run, because the daemon
+/// keeps no per-session eval history that another client can read.
+let evalOutputsIn (sseText: string) (sessionIds: string list) : string list =
+  let lines = sseText.Split('\n') |> Array.map (fun l -> l.TrimEnd('\r'))
+  [ for i in 0 .. lines.Length - 2 do
+      if lines[i] = "event: eval_diff" && lines[i + 1].StartsWith "data:" then
+        let data = lines[i + 1].Substring(5).Trim()
+        let mine =
+          try
+            use doc = JsonDocument.Parse data
+            match doc.RootElement.TryGetProperty "SessionId" with
+            | true, v when v.ValueKind = JsonValueKind.String -> sessionIds |> List.contains (v.GetString() |> Option.ofObj |> Option.defaultValue "")
+            | _ -> false
+          with :? JsonException -> false
+        if mine then yield data ]
 
 /// Sessions outside the run directory whose evaluation count rose between two readings of
 /// the sessions list, with how much. Other agents use the shared daemon at the same time, so

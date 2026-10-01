@@ -79,7 +79,7 @@ type EvalFacts =
 /// A driver call that tries to evaluate: Alt+Enter, or a command or click that says "eval".
 let private triesToEvaluate (c: Call) : bool =
   let lower = c.Command.ToLowerInvariant()
-  lower.Contains "alt+enter" || lower.Contains "eval"
+  lower.Contains "alt+enter" || lower.Contains "alt+return" || lower.Contains "eval"
 
 /// The lemming evaluated, and the editor sent it to a session that is not the lemming's own:
 /// the extension keeps using whichever session was active when the window opened.
