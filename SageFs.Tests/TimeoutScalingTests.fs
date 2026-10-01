@@ -72,7 +72,7 @@ let private fixedTable : (string * FixedBecause) list =
       [ "statusWaitCap"; "sseKeepAlive"; "debugContinuePark"; "appChangeAwait"; "dashboardHeartbeat"
         "dashboardStaleAfter"; "dashboardWorkerDataTtl"; "legacyStateStreamKeepAlive"; "reloadStreamHeartbeat"
         "processStartTimeTolerance"; "fileWriteTimeTolerance" ]
-  @ all FixedBecause.Threshold [ "impactP95Acceptable"; "impactP95Investigate"; "memberEvaluationGrace" ]
+  @ all FixedBecause.Threshold [ "impactP95Acceptable"; "impactP95Investigate"; "memberEvaluationGrace"; "scaledWaitCeiling" ]
   @ all FixedBecause.Inert [ "legacyWorkerStartup"; "notRun" ]
   @ all FixedBecause.TestHarness
       [ "integrationDaemonReady"; "integrationWorkerRestart"; "browserJourneyWarmup"; "webAppHotReloadBuild"
@@ -94,7 +94,7 @@ let private machineScaled : Set<string> =
         "workerEndpointFetch"; "workerWarmupContextFetch"; "outputCommitWait"; "gracefulShutdownWatchdog"
         "shutdownManifestCommit"; "testCycleTimerStop"; "cacheSaveTimerStop"; "workerHttpServerStop"
         "startupDelay"; "workerShutdownDelay"; "stopSessionMailboxTimeout"; "supervisorWedgeAfter"
-        "sessionDispose"; "warmupReadyPollMax"; "workerProxyRegister" ]
+        "sessionDispose"; "warmupReadyPollMax"; "workerProxyRegister"; "daemonStartWait" ]
 
 /// Declared as another wait for the machine, so they scale through it.
 let private derivedFromMachine : (string * string) list =
@@ -102,6 +102,9 @@ let private derivedFromMachine : (string * string) list =
     "workflowSwitchRequest", "buildCompletion"
     "leaseTtlRebuild", "buildCompletion"
     "leaseTtlFullBuild", "buildCompletion" ]
+
+/// Declared as another fixed duration, or as no time at all, so there is no TimeSpan on their own line.
+let private derivedFromFixed : Set<string> = set [ "cohortSettledRetention"; "notRun" ]
 
 let private fixedNames : Set<string> = fixedTable |> List.map fst |> Set.ofList
 
@@ -128,7 +131,7 @@ let private declared : Map<string, string> =
       | true ->
         let name = m.Groups.[1].Value
         let text = declaration i
-        let isDuration = durationLine.IsMatch text || (derivedFromMachine |> List.exists (fun (n, _) -> n = name)) || name = "notRun"
+        let isDuration = durationLine.IsMatch text || (derivedFromMachine |> List.exists (fun (n, _) -> n = name)) || derivedFromFixed.Contains name
         match isDuration with
         | true -> yield name, text
         | false -> () ]
@@ -146,20 +149,20 @@ let tests =
 
     testCase "WHY — every duration is decided: it is a wait for the machine or it is fixed with a reason, and none is in both" <| fun _ ->
       let both = Set.intersect machineScaled fixedNames |> Set.toList
-      both |> Expect.isEmpty "no name is in both tables"
+      both |> Expect.equal "no name is in both tables" []
       let known = Set.unionMany [ machineScaled; fixedNames; derivedFromMachine |> List.map fst |> Set.ofList ]
       let undecided = declared |> Map.toList |> List.map fst |> List.filter (fun n -> not (known.Contains n))
-      undecided |> Expect.isEmpty "every duration in Timeouts.fs is in a table (add the new one, with its reason, to the right one)"
+      undecided |> Expect.equal "every duration in Timeouts.fs is in a table (add the new one, with its reason, to the right one)" []
       let gone = known |> Set.toList |> List.filter (fun n -> not (declared.ContainsKey n))
-      gone |> Expect.isEmpty "every name in a table is still declared (remove the deleted one)"
+      gone |> Expect.equal "every name in a table is still declared (remove the deleted one)" []
 
     testCase "WHY — a wait for the machine is declared with a scaling helper, so it cannot be left at its Fast value by accident" <| fun _ ->
       let unscaled = machineScaled |> Set.toList |> List.filter (fun n -> not (usesScaling declared.[n]))
-      unscaled |> Expect.isEmpty "each wait for the machine uses forMachine, envOrDefaultMachine or envOrDefaultMachineMinutes"
+      unscaled |> Expect.equal "each wait for the machine uses forMachine, envOrDefaultMachine or envOrDefaultMachineMinutes" []
 
     testCase "WHY — a fixed duration never uses a scaling helper, so the table and the code say the same thing" <| fun _ ->
       let scaled = fixedNames |> Set.toList |> List.filter (fun n -> usesScaling declared.[n])
-      scaled |> Expect.isEmpty "a fixed duration is declared with a bare TimeSpan or envOrDefault"
+      scaled |> Expect.equal "a fixed duration is declared with a bare TimeSpan or envOrDefault" []
 
     testCase "WHY — a derived wait is declared from a wait for the machine, so it scales through it" <| fun _ ->
       for name, source in derivedFromMachine do
@@ -167,8 +170,8 @@ let tests =
         declared.[name].Contains source |> Expect.isTrue (sprintf "%s is declared from %s" name source)
 
     testCase "WHY — the number of waits for the machine only goes up when a table says so (a ratchet on the count, with the reason a wait is fixed in the table above)" <| fun _ ->
-      machineScaled |> Set.count |> Expect.equal "waits for the machine" 66
-      fixedTable |> List.length |> Expect.equal "fixed durations" 86
+      machineScaled |> Set.count |> Expect.equal "waits for the machine" 67
+      fixedTable |> List.length |> Expect.equal "fixed durations" 87
 
     testCase "WHY — each machine constant in the running process equals its written value scaled for the process's tier, so the wiring is real and not only the text" <| fun _ ->
       let timeouts = typeof<ValidTimeout>.Assembly.GetType "SageFs.Timeouts"
@@ -199,7 +202,7 @@ let tests =
                      | _ -> TimeSpan.FromSeconds value)
                 let property = timeouts.GetProperty(name, BindingFlags.Public ||| BindingFlags.Static)
                 let actual = property.GetValue null :?> TimeSpan
-                let expected = MachineTier.scaleWait Timeouts.machineTier baseline
+                let expected = MachineTier.scaleWait Timeouts.scaledWaitCeiling Timeouts.machineTier baseline
                 match actual = expected with
                 | true -> yield name
                 | false -> failtestf "%s is %A, written as %A, so on tier %A it should be %A" name actual baseline Timeouts.machineTier expected ]

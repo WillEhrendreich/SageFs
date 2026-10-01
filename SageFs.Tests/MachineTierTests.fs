@@ -65,15 +65,16 @@ let tests =
       testCase "WHY — every tier's name parses back to it, in any case, so the override variable and the status text agree" <| fun _ ->
         for tier in MachineTier.all do
           MachineTier.tryParse (MachineTier.toString tier) |> Expect.equal "round trip" (Ok tier)
-          MachineTier.tryParse (MachineTier.toString tier).ToUpperInvariant() |> Expect.equal "upper case" (Ok tier)
+          MachineTier.tryParse ((MachineTier.toString tier).ToUpperInvariant()) |> Expect.equal "upper case" (Ok tier)
           MachineTier.tryParse ("  " + (MachineTier.toString tier).ToLowerInvariant() + " ") |> Expect.equal "lower case, padded" (Ok tier)
 
       testCase "WHY — a typo in the override is an error that lists what is accepted, not a silent fallback" <| fun _ ->
         match MachineTier.tryParse "Quick" with
         | Ok tier -> failtestf "expected an error, got %A" tier
-        | Error message ->
+        | Error error ->
+          error |> Expect.equal "the value that was refused" (TierParseError.NotATier "Quick")
           for tier in MachineTier.all do
-            message |> Expect.stringContains "names every accepted tier" (MachineTier.toString tier)
+            MachineTier.describeParseError error |> Expect.stringContains "names every accepted tier" (MachineTier.toString tier)
 
       testCase "WHY — an unset or unreadable environment value is Fast, the durations as written, so nothing is slowed by accident" <| fun _ ->
         MachineTier.ofEnvironmentValue null |> Expect.equal "unset" MachineTier.Fast
@@ -99,9 +100,9 @@ let tests =
         fun (PositiveInt seconds) ->
           let baseline = TimeSpan.FromSeconds(float seconds)
           [ for tier in MachineTier.all ->
-              let scaled = MachineTier.scaleWait tier baseline
+              let scaled = MachineTier.scaleWait Timeouts.scaledWaitCeiling tier baseline
               scaled >= baseline
-              && scaled <= max baseline MachineTier.scaledWaitCeiling
+              && scaled <= max baseline Timeouts.scaledWaitCeiling
               && (tier <> MachineTier.Fast || scaled = baseline) ]
           |> List.forall id
 
@@ -109,7 +110,7 @@ let tests =
         fun (PositiveInt seconds) ->
           let baseline = TimeSpan.FromSeconds(float seconds)
           MachineTier.all
-          |> List.map (fun tier -> MachineTier.scaleWait tier baseline)
+          |> List.map (fun tier -> MachineTier.scaleWait Timeouts.scaledWaitCeiling tier baseline)
           |> List.pairwise
           |> List.forall (fun (a, b) -> b >= a)
     ]
@@ -145,12 +146,13 @@ let tests =
 
       testPropertyWithConfig propConfig "the tier is the slowest of what the CPU, cores, memory and disk each give" <|
         Prop.forAll probeArb (fun probe ->
-          MachineProbe.tierOf probe
-          = ([ MachineProbe.speedTier probe.Calibration
-               MachineProbe.coreTier probe.LogicalCores
-               MachineProbe.memoryTier probe.AvailableMemoryMb
-               MachineProbe.storageTier probe.Storage ]
-             |> List.reduce MachineTier.slowest))
+          let expected =
+            [ MachineProbe.speedTier probe.Calibration
+              MachineProbe.coreTier probe.LogicalCores
+              MachineProbe.memoryTier probe.AvailableMemoryMb
+              MachineProbe.storageTier probe.Storage ]
+            |> List.reduce MachineTier.slowest
+          MachineProbe.tierOf probe = expected)
 
       testPropertyWithConfig propConfig "fewer cores never give a faster tier" <|
         Prop.forAll probeArb (fun probe ->
@@ -185,20 +187,20 @@ let tests =
     testList "what the machine teaches" [
 
       testCase "WHY — the first observation of a stage sets the mean to it and the deviation to half of it, as RFC 6298 says" <| fun _ ->
-        let estimate = StageEstimate.first StartStage.WorkerPort TestTimeouts.StartEscalationTimeouts.firstObservation.TotalMilliseconds
-        estimate.SmoothedMs |> Expect.equal "mean" TestTimeouts.StartEscalationTimeouts.firstObservation.TotalMilliseconds
-        estimate.DeviationMs |> Expect.equal "deviation" (TestTimeouts.StartEscalationTimeouts.firstObservation.TotalMilliseconds / 2.0)
+        let estimate = StageEstimate.first StartStage.WorkerPort StartEscalationTimeouts.firstObservation.TotalMilliseconds
+        estimate.SmoothedMs |> Expect.equal "mean" StartEscalationTimeouts.firstObservation.TotalMilliseconds
+        estimate.DeviationMs |> Expect.equal "deviation" (StartEscalationTimeouts.firstObservation.TotalMilliseconds / 2.0)
         estimate.Samples |> Expect.equal "samples" 1
         StageEstimate.timeout estimate
         |> Expect.equal "mean plus four deviations is three times the observation"
-             (TimeSpan.FromMilliseconds(TestTimeouts.StartEscalationTimeouts.firstObservation.TotalMilliseconds * 3.0))
+             (TimeSpan.FromMilliseconds(StartEscalationTimeouts.firstObservation.TotalMilliseconds * 3.0))
 
       testCase "WHY — a later observation moves the mean an eighth of the way and the deviation a quarter of the way, as RFC 6298 says" <| fun _ ->
-        let first = TestTimeouts.StartEscalationTimeouts.firstObservation.TotalMilliseconds
-        let later = TestTimeouts.StartEscalationTimeouts.laterObservation.TotalMilliseconds
+        let first = StartEscalationTimeouts.firstObservation.TotalMilliseconds
+        let later = StartEscalationTimeouts.laterObservation.TotalMilliseconds
         let estimate = StageEstimate.observe (StageEstimate.first StartStage.WorkerPort first) later
-        estimate.SmoothedMs |> Expect.floatClose Accuracy.high "mean" (first * 7.0 / 8.0 + later / 8.0)
-        estimate.DeviationMs |> Expect.floatClose Accuracy.high "deviation" ((first / 2.0) * 3.0 / 4.0 + (later - first) / 4.0)
+        estimate.SmoothedMs |> Expect.floatClose "mean" Accuracy.high (first * 7.0 / 8.0 + later / 8.0)
+        estimate.DeviationMs |> Expect.floatClose "deviation" Accuracy.high ((first / 2.0) * 3.0 / 4.0 + (later - first) / 4.0)
         estimate.Samples |> Expect.equal "samples" 2
 
       testPropertyWithConfig propConfig "steady observations converge: the timeout settles on the observation, from above" <|
@@ -220,9 +222,9 @@ let tests =
       testCase "WHY — a profile keeps one estimate per stage, and a second observation updates it instead of adding another" <| fun _ ->
         let profile =
           MachineProfile.ofProbe phenom
-          |> MachineProfile.observe StartStage.WorkerPort TestTimeouts.StartEscalationTimeouts.firstObservation.TotalMilliseconds
-          |> MachineProfile.observe StartStage.WorkerPort TestTimeouts.StartEscalationTimeouts.laterObservation.TotalMilliseconds
-          |> MachineProfile.observe StartStage.WorkerReady TestTimeouts.StartEscalationTimeouts.laterObservation.TotalMilliseconds
+          |> MachineProfile.observe StartStage.WorkerPort StartEscalationTimeouts.firstObservation.TotalMilliseconds
+          |> MachineProfile.observe StartStage.WorkerPort StartEscalationTimeouts.laterObservation.TotalMilliseconds
+          |> MachineProfile.observe StartStage.WorkerReady StartEscalationTimeouts.laterObservation.TotalMilliseconds
         profile.Stages |> List.length |> Expect.equal "one per stage" 2
         match MachineProfile.stage StartStage.WorkerPort profile with
         | StageHistory.Seen e -> e.Samples |> Expect.equal "two observations of the port stage" 2
@@ -234,7 +236,7 @@ let tests =
       testCase "WHY — a profile survives being written and read back through SageFs.Json, on this runtime" <| fun _ ->
         let profile =
           MachineProfile.ofProbe phenom
-          |> MachineProfile.observe StartStage.WorkerPort TestTimeouts.StartEscalationTimeouts.learnedStart.TotalMilliseconds
+          |> MachineProfile.observe StartStage.WorkerPort StartEscalationTimeouts.learnedStart.TotalMilliseconds
         let text = Json.serialize (Json.indented Json.standard) profile
         Json.deserialize<MachineProfile> Json.standard text
         |> Expect.equal "the same profile comes back" (Ok profile)
@@ -242,7 +244,7 @@ let tests =
 
     testList "which tier is in force" [
 
-      let neverProbed () : Result<MachineProbe, string> = failwith "the probe must not be taken"
+      let neverProbed () : Result<MachineProbe, MachineProbeError> = failwith "the probe must not be taken"
       let noProfile () = ProfileRead.NoProfile
 
       testCase "WHY — an override that names a tier wins over everything, and nothing else is read or measured" <| fun _ ->
@@ -272,7 +274,7 @@ let tests =
         resolved.Override |> Expect.equal "the rejected value is carried" (OverrideUse.Rejected "Quick")
 
       testCase "WHY — when even the probe fails the tier is Standard and the reason is kept, so a failure never makes a machine look fast" <| fun _ ->
-        let resolved = TierResolution.resolve null noProfile (fun () -> Error "no counters")
+        let resolved = TierResolution.resolve null noProfile (fun () -> Error (MachineProbeError.CouldNotProbe "no counters"))
         resolved.Tier |> Expect.equal "neutral" MachineTier.Standard
         resolved.Source |> Expect.equal "the reason" (TierSource.ProbeFailed "no counters")
     ]
@@ -286,7 +288,7 @@ let tests =
 
       testCase "WHY — a probe of this machine is plausible, so the reader is wired to real counters" <| fun _ ->
         match MachineProbeReader.read (Path.GetTempPath()) with
-        | Error reason -> failtestf "the probe failed: %s" reason
+        | Error error -> failtestf "the probe failed: %A" error
         | Ok probe ->
           probe.LogicalCores >= 1 |> Expect.isTrue "at least one core"
           probe.TotalMemoryMb > 0L |> Expect.isTrue "some memory"

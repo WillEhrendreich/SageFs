@@ -18,9 +18,11 @@
     </ItemGroup>
 
     <ItemGroup>
-        <!-- First: it depends on nothing, and files compiled early (Cohort, OwnerMonitor, TailBuffer,
-             WorkflowTypes, RestartPolicy) name their durations from it. It is also embedded into the
-             FSI host, which compiles it without SageFs.Core, so it must stay free of other SageFs files. -->
+        <!-- First: they depend on nothing but each other, and files compiled early (Cohort, OwnerMonitor,
+             TailBuffer, WorkflowTypes, RestartPolicy) name their durations from Timeouts. Both are also embedded
+             into the FSI host, which compiles them without SageFs.Core, so they must stay free of other
+             SageFs files. MachineTier is the closed set of tiers Timeouts scales its waits by. -->
+        <Compile Include="MachineTier.fs" />
         <Compile Include="Timeouts.fs" />
         <Compile Include="Editing.fs" />
         <Compile Include="TestProviderTypes.fs" />
@@ -46,6 +48,10 @@
         <Compile Include="Tutorial.fs" />
         <Compile Include="SageFsConfig.fs" />
         <Compile Include="Json.fs" />
+        <Compile Include="MachineCalibration.fs" />
+        <Compile Include="MachineProfile.fs" />
+        <Compile Include="StartLedger.fs" />
+        <Compile Include="StartEscalation.fs" />
         <Compile Include="UpdateCheck.fs" />
         <Compile Include="Settings.fs" />
         <Compile Include="SettingsStore.fs" />
@@ -91,6 +97,7 @@
         <EmbeddedResource Include="Measures.fs" LogicalName="FsiHost/Measures.fs" />
         <EmbeddedResource Include="Utils.fs" LogicalName="FsiHost/Utils.fs" />
         <EmbeddedResource Include="FsiNaming.fs" LogicalName="FsiHost/FsiNaming.fs" />
+        <EmbeddedResource Include="MachineTier.fs" LogicalName="FsiHost/MachineTier.fs" />
         <EmbeddedResource Include="Timeouts.fs" LogicalName="FsiHost/Timeouts.fs" />
         <EmbeddedResource Include="Instrumentation.fs" LogicalName="FsiHost/Instrumentation.fs" />
         <EmbeddedResource Include="DirectoryConfigTypes.fs" LogicalName="FsiHost/DirectoryConfigTypes.fs" />
@@ -342,6 +349,7 @@
         <Compile Include="SessionLifecycle.fs" />
         <Compile Include="WarmupSupervision.fs" />
         <Compile Include="WorkerEventGuard.fs" />
+        <Compile Include="StartTimeoutDecision.fs" />
         <Compile Include="ReadyTransport.fs" />
         <Compile Include="WorkerHealthProbe.fs" />
         <!-- MemoryPressure.fs itself now compiles earlier, just ahead of
@@ -359,6 +367,7 @@
         <Compile Include="SessionBuild.fs" />
         <Compile Include="ProjectResolution.fs" />
         <Compile Include="WorkerSpawn.fs" />
+        <Compile Include="WorkerStartup.fs" />
         <!-- The WorkerReady decision and what starts after it, split out of
              SessionManager.fs's WorkerReady arm. -->
         <Compile Include="WorkerReadyCommit.fs" />

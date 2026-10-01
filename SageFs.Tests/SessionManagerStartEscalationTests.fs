@@ -41,7 +41,8 @@ let private withHarness (run: Harness -> unit) =
           Ok ({ Process = Process.GetCurrentProcess(); AdoptedCore = None } : SessionManager.SpawnedWorker)
       AwaitWorkerPort = fun _ _ _ _ budget -> budgets.Add budget
       StopWorker = fun _ -> async { return () }
-      RunBuildAsync = fun _ _ -> async { return Ok "build ok" } }
+      RunBuildAsync = fun _ _ -> async { return Ok "build ok" }
+      Ledger = StartLedger.closed }
   let mailbox, _ =
     createWith
       runtime
@@ -67,7 +68,11 @@ let private withHarness (run: Harness -> unit) =
 let private createSession (harness: Harness) =
   match harness.Mailbox.PostAndReply(fun reply ->
     SessionCommand.CreateSession([ SageFs.SessionProjectTarget.Project "Test.fsproj" ], "/test", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
-  | Ok info -> info
+  | Ok info ->
+    // The create handler replies BEFORE it starts watching the worker, so a second round trip is what
+    // says the watch has begun: the mailbox handles one command at a time.
+    harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply)) |> ignore
+    info
   | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
 
 let private getSession (harness: Harness) (id: SessionId) =
@@ -202,29 +207,35 @@ let private collect (wanted: SessionCommand -> bool) : MailboxProcessor<SessionC
 let private shortBudget =
   StartEscalation.firstBudget StageHistory.NeverSeen shortSilence shortAbsolute
 
+let private killQuietly (child: Process) : unit =
+  try child.Kill(true) with _ -> ()
+
 [<Tests>]
 let realAwait =
   testList "awaitWorkerPort against a real child process" [
 
-    testTask "WHY — a worker that goes silent past its allowance is reported as a START TIMEOUT carrying the budget it was given, and is killed, not reported as a spawn failure the restart policy would retry identically" {
+    testTask "WHY — a worker that goes silent past its allowance is reported as a START TIMEOUT carrying the budget it was given, not as a spawn failure the restart policy would retry identically" {
       match OperatingSystem.IsWindows() with
       | true -> skiptest "needs a POSIX `sleep`"
       | false ->
-        use child = startSilentChild ()
-        let inbox, timedOut = collect (function SessionCommand.WorkerStartTimedOut _ | SessionCommand.WorkerSpawnFailed _ -> true | _ -> false)
-        use cancellation = new CancellationTokenSource()
-        awaitWorkerPort (SessionId.newId ()) child inbox cancellation.Token shortBudget
-        let! winner = Task.WhenAny(timedOut, Task.Delay TestTimeouts.patience)
-        Expect.isTrue "a command arrived before the patience ran out" (obj.ReferenceEquals(winner, timedOut))
-        match timedOut.Result with
-        | SessionCommand.WorkerStartTimedOut (_, pid, timeout, _) ->
-          pid |> Expect.equal "the pid of the silent child" child.Id
-          timeout.Budget |> Expect.equal "the budget it was given" shortBudget
-          timeout.Progress |> Expect.equal "it never said anything" ProgressSeen.NoneYet
-          (timeout.Waited >= shortSilence) |> Expect.isTrue "it waited the whole allowance"
-          let! exited = Task.WhenAny(child.WaitForExitAsync(), Task.Delay TestTimeouts.patience)
-          Expect.isTrue "the silent child was killed" child.HasExited
-        | other -> failtestf "expected WorkerStartTimedOut, got %A" other
+        let child = startSilentChild ()
+        let cancellation = new CancellationTokenSource()
+        try
+          let childPid = child.Id
+          let inbox, timedOut = collect (function SessionCommand.WorkerStartTimedOut _ | SessionCommand.WorkerSpawnFailed _ -> true | _ -> false)
+          awaitWorkerPort StartLedger.closed (SessionId.newId ()) child inbox cancellation.Token shortBudget
+          let! winner = Task.WhenAny(timedOut, Task.Delay TestTimeouts.patience)
+          Expect.isTrue "a command arrived before the patience ran out" (obj.ReferenceEquals(winner, timedOut))
+          match timedOut.Result with
+          | SessionCommand.WorkerStartTimedOut (_, pid, timeout, _) ->
+            pid |> Expect.equal "the pid of the silent child" childPid
+            timeout.Budget |> Expect.equal "the budget it was given" shortBudget
+            timeout.Progress |> Expect.equal "it never said anything" ProgressSeen.NoneYet
+            (timeout.Waited >= shortSilence) |> Expect.isTrue "it waited the whole allowance"
+          | other -> failtestf "expected WorkerStartTimedOut, got %A" other
+        finally
+          cancellation.Dispose()
+          killQuietly child
     }
 
     testTask "WHY — a worker that reports its port is recorded in the start ledger, so the next daemon already knows how long a start takes here" {
@@ -232,21 +243,21 @@ let realAwait =
       | true -> skiptest "needs a POSIX `sh`"
       | false ->
         let dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sagefs-await-" + Guid.NewGuid().ToString("N"))
+        let child = startPortChild ()
+        let cancellation = new CancellationTokenSource()
         try
-          StartLedger.close ()
-          StartLedger.initialise dir (MachineProfile.ofProbe { LogicalCores = 4; TotalMemoryMb = 8000L; AvailableMemoryMb = 4000L; Storage = StorageKind.Unknown; Calibration = Calibration.NotMeasured "test" })
-          use child = startPortChild ()
+          let ledger =
+            StartLedger.openAt dir (MachineProfile.ofProbe { LogicalCores = 4; TotalMemoryMb = 8000L; AvailableMemoryMb = 4000L; Storage = StorageKind.Unknown; Calibration = Calibration.NotMeasured "test" })
           let inbox, ready = collect (function SessionCommand.WorkerReady _ -> true | _ -> false)
-          use cancellation = new CancellationTokenSource()
-          awaitWorkerPort (SessionId.newId ()) child inbox cancellation.Token shortBudget
+          awaitWorkerPort ledger (SessionId.newId ()) child inbox cancellation.Token shortBudget
           let! winner = Task.WhenAny(ready, Task.Delay TestTimeouts.patience)
           Expect.isTrue "the port was reported" (obj.ReferenceEquals(winner, ready))
-          match StartLedger.history StartStage.WorkerPort with
+          match ledger.History StartStage.WorkerPort with
           | StageHistory.Seen estimate -> estimate.Samples |> Expect.equal "one observation" 1
           | StageHistory.NeverSeen -> failtest "the start was not recorded"
-          (try child.Kill(true) with _ -> ())
         finally
-          StartLedger.close ()
+          cancellation.Dispose()
+          killQuietly child
           try System.IO.Directory.Delete(dir, true) with _ -> ()
     }
   ]

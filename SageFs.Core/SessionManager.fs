@@ -98,6 +98,10 @@ module SessionManager =
     | WorkerReady of SessionId * workerPid: int * baseUrl: string * SessionProxy
     | WorkerTestDiscovery of SessionId * TestDiscoveryReport
     | WorkerSpawnFailed of SessionId * workerPid: int * string
+    /// A worker went silent for longer than its attempt was given. Not a crash: the manager decides, by
+    /// `StartEscalation`, whether to start it again with MORE patience or to give up and say what it waited for.
+    /// The string is the tail of the worker's stderr, kept to explain a give-up.
+    | WorkerStartTimedOut of SessionId * workerPid: int * StartTimeout * stderrTail: string
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
     | WorkerWarmupProgress of SessionId * progress: string
@@ -262,9 +266,12 @@ module SessionManager =
 
   type SessionManagerRuntime = {
     StartWorkerProcess: SessionId -> SessionProjectTarget list -> string -> bool -> WorkflowTypes.SessionWorkflow -> (int -> int -> unit) -> Result<SpawnedWorker, SageFsError>
-    AwaitWorkerPort: SessionId -> Process -> MailboxProcessor<SessionCommand> -> CancellationToken -> unit
+    AwaitWorkerPort: SessionId -> Process -> MailboxProcessor<SessionCommand> -> CancellationToken -> StartBudget -> unit
     StopWorker: ManagedSession -> Async<unit>
     RunBuildAsync: string list -> string -> Async<Result<string, SageFsError>>
+    /// What this machine has taught SageFs about how long a start takes: read for the first attempt's
+    /// patience, written when a start finishes. `StartLedger.closed` knows nothing and writes nothing.
+    Ledger: Ledger
   }
 
   /// A proxy that rejects calls while the worker is still starting up.
@@ -280,158 +287,24 @@ module SessionManager =
 
   let private runOnDedicatedThread = WorkerSpawn.runOnDedicatedThread
 
-  /// Read the worker's stdout until WORKER_PORT is reported, then post
-  /// a WorkerReady (or WorkerSpawnFailed) message back to the agent.
-  /// Runs completely off the agent loop — never blocks the MailboxProcessor.
-  /// Bounded by Timeouts.warmupInactivityLimit (reset on every
-  /// WARMUP_PROGRESS= line — silence, not slowness, is what trips this) and
-  /// Timeouts.warmupAbsoluteMax (the hard ceiling neither progress nor
-  /// silence can argue past). See WarmupSupervision.decidePoll for the pure
-  /// decision this mirrors.
+  /// Watch a starting worker (WorkerStartup.await does the reading and the timing) and post what it
+  /// reports back to the agent: progress, a port (WorkerReady), a spawn failure, or a START TIMEOUT, which
+  /// the agent retries with more patience instead of the restart policy repeating it identically.
+  /// Runs completely off the agent loop: it never blocks the MailboxProcessor.
   let awaitWorkerPort
+    (ledger: Ledger)
     (sessionId: SessionId)
     (proc: Process)
     (inbox: MailboxProcessor<SessionCommand>)
     (ct: CancellationToken)
+    (budget: StartBudget)
     =
-    Async.Start(async {
-      use cts =
-        CancellationTokenSource.CreateLinkedTokenSource(ct)
-      // Inactivity-bounded, not flat-bounded: reset on every WARMUP_PROGRESS=
-      // line so a large repo that is genuinely still discovering/compiling
-      // projects gets to keep going, while a process that goes SILENT — the
-      // "20+ minutes, no error, no sign of life" failure three onboarding
-      // trials hit (fcs-trial-a/b/c, 2026-09-22) — is caught within
-      // Timeouts.warmupInactivityLimit of the moment it stopped talking, not
-      // after some flat ceiling that a big-but-healthy warmup could also
-      // trip. absoluteDeadline is the hard ceiling neither progress nor
-      // silence can argue past.
-      let started = DateTime.UtcNow
-      let absoluteDeadline = started + Timeouts.warmupAbsoluteMax
-      let mutable timeoutReason : string option = None
-      cts.CancelAfter(Timeouts.warmupInactivityLimit)
-      let linkedCt = cts.Token
-      // Bounded: the last StderrTail.capacity lines, for the life of the worker.
-      // Read only when the worker exits or goes silent, to explain why.
-      let stderrTail = StderrTail.create ()
-      try
-        let stderrTask =
-          runOnDedicatedThread "sagefs-worker-stderr-reader" (fun () ->
-            try
-              let mutable line = proc.StandardError.ReadLine()
-              while not (isNull line) do
-                stderrTail.Push line
-                line <- proc.StandardError.ReadLine()
-            with _ -> ())
-        let mutable found = None
-        while Option.isNone found do
-          let! line = proc.StandardOutput.ReadLineAsync(linkedCt).AsTask() |> Async.AwaitTask
-          match isNull line with
-          | true ->
-            let workerPid = proc.Id
-            // stdout closed, so stderr is about to close too: let the reader
-            // finish (bounded) so the tail holds the worker's last words.
-            do! System.Threading.Tasks.Task.WhenAny(stderrTask, System.Threading.Tasks.Task.Delay StderrTail.drainGrace) |> Async.AwaitTask |> Async.Ignore
-            let stderrSummary = StderrTail.summary stderrTail
-            try proc.EnableRaisingEvents <- false with _ -> ()
-            try proc.Dispose() with _ -> ()
-            inbox.Post(
-              SessionCommand.WorkerSpawnFailed(
-                sessionId,
-                workerPid,
-                match String.IsNullOrWhiteSpace stderrSummary with
-                | true -> "Worker process exited before reporting port"
-                | false -> sprintf "Worker process exited before reporting port. stderr:\n%s" stderrSummary))
-            found <- Some ""
-          | false when DateTime.UtcNow > absoluteDeadline ->
-            // The absolute ceiling tripped exactly as this line arrived —
-            // treat it the same as the OperationCanceledException path below
-            // rather than accepting one more line past the hard bound.
-            timeoutReason <-
-              Some (StderrTail.withTail stderrTail (WarmupSupervision.absoluteTimeoutReason (DateTime.UtcNow - started)))
-            found <- Some ""
-          | false ->
-            match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
-            | true ->
-              let payload = line.Substring("WARMUP_PROGRESS=".Length)
-              inbox.Post(SessionCommand.WorkerWarmupProgress(sessionId, payload))
-              // Progress observed — reset the inactivity clock so a slow-but-
-              // working large-repo discovery isn't killed for being slow.
-              try cts.CancelAfter(Timeouts.warmupInactivityLimit) with :? ObjectDisposedException -> ()
-            | false ->
-              match line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) with
-              | true ->
-                found <- Some (line.Substring("WORKER_PORT=".Length))
-              | false -> ()
-        match found with
-        | Some baseUrl when baseUrl.Length > 0 ->
-          // Port found: disable the startup-timeout guard so the long-lived
-          // post-startup stdout read below can't trip it and kill a live worker.
-          cts.CancelAfter(System.Threading.Timeout.Infinite)
-          let proxy = HttpWorkerClient.httpProxy baseUrl
-          inbox.Post(SessionCommand.WorkerReady(sessionId, proc.Id, baseUrl, proxy))
-          // #82: keep reading stdout past the port line for a run_app'd app's
-          // APP_OUTPUT= lines (to EOF; read errors/EOF swallowed, not a spawn fail).
-          let appOutTask =
-            runOnDedicatedThread "sagefs-worker-stdout-reader" (fun () ->
-              try
-                let mutable l = proc.StandardOutput.ReadLine()
-                while not (isNull l) do
-                  (match AppOutput.tryParse l with
-                   | Some payload -> inbox.Post(SessionCommand.WorkerAppOutput(sessionId, payload))
-                   | None -> ())
-                  l <- proc.StandardOutput.ReadLine()
-              with _ -> ())
-          do! stderrTask |> Async.AwaitTask
-          do! appOutTask |> Async.AwaitTask
-        | Some _ ->
-          // Absolute-deadline branch above: found <- Some "" with a reason
-          // parked in timeoutReason, distinct from "process exited" (which
-          // already posted its own WorkerSpawnFailed before setting found).
-          match timeoutReason with
-          | Some reason ->
-            try proc.Kill(entireProcessTree = true) with ex2 ->
-              Log.warn "[SessionManager] Kill on absolute warmup deadline: %s" ex2.Message
-            try proc.EnableRaisingEvents <- false with _ -> ()
-            try proc.Dispose() with _ -> ()
-            inbox.Post(SessionCommand.WorkerSpawnFailed(sessionId, proc.Id, reason))
-          | None -> ()
-          do! stderrTask |> Async.AwaitTask
-        | None ->
-          do! stderrTask |> Async.AwaitTask
-      with
-      | :? OperationCanceledException when not ct.IsCancellationRequested ->
-        // Linked CTS fired with no line arriving within the inactivity
-        // window: the worker has gone SILENT, not merely slow — a
-        // Progressed observation would have reset this timer (see
-        // WarmupSupervision.decidePoll's Invariant 4). This is the fix for
-        // "warmup on a big repo is unbounded and silent": a healthy big
-        // repo keeps resetting this clock by printing WARMUP_PROGRESS=
-        // lines; a stuck one goes quiet and is caught within
-        // Timeouts.warmupInactivityLimit of going quiet.
-        try proc.Kill(entireProcessTree = true) with ex2 ->
-          Log.warn "[SessionManager] Kill on startup timeout: %s" ex2.Message
-        try proc.EnableRaisingEvents <- false with _ -> ()
-        try proc.Dispose() with _ -> ()
-        inbox.Post(
-          SessionCommand.WorkerSpawnFailed(
-            sessionId,
-            proc.Id,
-            StderrTail.withTail
-              stderrTail
-              (sprintf
-                "%s (set SAGEFS_WARMUP_INACTIVITY_SECONDS to adjust)"
-                (WarmupSupervision.inactivityTimeoutReason Timeouts.warmupInactivityLimit))))
-      | ex ->
-        try proc.Kill(entireProcessTree = true) with ex2 ->
-          Log.warn "[SessionManager] Kill on spawn failure: %s" ex2.Message
-        try proc.EnableRaisingEvents <- false with _ -> ()
-        try proc.Dispose() with _ -> ()
-        inbox.Post(
-          SessionCommand.WorkerSpawnFailed(
-            sessionId, proc.Id,
-            StderrTail.withTail stderrTail (sprintf "Failed to connect to worker: %s" ex.Message)))
-    }, ct)
+    WorkerStartup.await ledger proc ct budget
+      { OnProgress = fun payload -> inbox.Post(SessionCommand.WorkerWarmupProgress(sessionId, payload))
+        OnReady = fun workerPid baseUrl -> inbox.Post(SessionCommand.WorkerReady(sessionId, workerPid, baseUrl, HttpWorkerClient.httpProxy baseUrl))
+        OnSpawnFailed = fun workerPid reason -> inbox.Post(SessionCommand.WorkerSpawnFailed(sessionId, workerPid, reason))
+        OnStartTimedOut = fun workerPid timeout tail -> inbox.Post(SessionCommand.WorkerStartTimedOut(sessionId, workerPid, timeout, tail))
+        OnAppOutput = fun line -> inbox.Post(SessionCommand.WorkerAppOutput(sessionId, line)) }
 
   /// Stop a worker gracefully: send Shutdown with a bounded wait, then kill the
   /// whole process tree. The bounded wait is essential — HttpWorkerClient.httpProxy
@@ -486,14 +359,17 @@ module SessionManager =
   let private withAppSlot (slot: AppRun.AppSlot) (session: ManagedSession) : ManagedSession =
     { session with AppGeneration = slot.Generation; Info = { session.Info with App = slot.State } }
 
-  let private faultedTombstone (message: string) (session: ManagedSession) =
+  let private faultedTombstoneWith (reason: FaultReason) (session: ManagedSession) =
     { session with
         Proxy = pendingProxy
         WorkerBaseUrl = ""
         Info =
           { session.Info with
-              Status = SessionLifecycleStatus.Faulted (FaultReason.report message)
+              Status = SessionLifecycleStatus.Faulted reason
               LastActivity = DateTime.UtcNow } }
+
+  let private faultedTombstone (message: string) (session: ManagedSession) =
+    faultedTombstoneWith (FaultReason.report message) session
 
   /// How WorkerReadyCommit.plan reads and updates a session. A committed swap
   /// retires the old worker, and any app it hosted with it.
@@ -515,9 +391,10 @@ module SessionManager =
 
   let internal defaultRuntime = {
     StartWorkerProcess = startWorkerProcess
-    AwaitWorkerPort = awaitWorkerPort
+    AwaitWorkerPort = awaitWorkerPort StartLedger.shared
     StopWorker = stopWorker
     RunBuildAsync = SessionBuild.runBuildAsync
+    Ledger = StartLedger.shared
   }
 
   /// Everything the manager tells the outside world, plus the supervisor's alarm.
@@ -589,6 +466,7 @@ module SessionManager =
       (inbox: MailboxProcessor<SessionCommand>)
       (span: System.Diagnostics.Activity)
       (state: ManagerState)
+      (budget: StartBudget)
       : ManagerState * Result<unit, SageFsError> =
       let onExited workerPid exitCode =
         inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
@@ -629,7 +507,7 @@ module SessionManager =
         Instrumentation.sessionsRestarted.Add(1L)
         Instrumentation.coldRestarts.Add(1L)
         Instrumentation.succeedSpan span
-        runtime.AwaitWorkerPort id proc inbox ct
+        runtime.AwaitWorkerPort id proc inbox ct budget
         (newState, Ok ())
       | Error err ->
         let reason = SageFsError.describe err
@@ -703,7 +581,7 @@ module SessionManager =
             ManagerState.setPendingSwap id session
               { ManagerState.addSession id restarting state with
                   WarmupProgress = Map.remove id state.WarmupProgress }
-          runtime.AwaitWorkerPort id proc inbox ct
+          runtime.AwaitWorkerPort id proc inbox ct (StartTimeoutDecision.firstStartBudget runtime.Ledger)
           reply.Reply(Ok acceptedMessage)
           Instrumentation.sessionsRestarted.Add(1L)
           Instrumentation.succeedSpan span
@@ -844,8 +722,13 @@ module SessionManager =
                 Instrumentation.activeSessions.Add(1L)
                 Instrumentation.succeedSpan span
                 // Port discovery runs off the agent loop
-                runtime.AwaitWorkerPort sessionId proc inbox ct
-                return newState
+                runtime.AwaitWorkerPort sessionId proc inbox ct (StartTimeoutDecision.firstStartBudget runtime.Ledger)
+                // On a machine that starts slowly, say so now, so the wait is expected and has a size.
+                match StartTimeoutDecision.noticeProgress 1 (StartEscalation.notice Timeouts.machineTier (runtime.Ledger.History StartStage.WorkerPort)) with
+                | "" -> return newState
+                | payload ->
+                  onWarmupProgress sessionId payload
+                  return { newState with WarmupProgress = Map.add sessionId payload newState.WarmupProgress }
               | Error err ->
                 reply.Reply(Error err)
                 Instrumentation.failSpan span (sprintf "%A" err)
@@ -994,7 +877,7 @@ module SessionManager =
               Instrumentation.failSpan rebuildSpan msg
               return newState
             | Ok _buildMsg, None ->
-              let newState, spawnResult = spawnColdReplacement id session inbox rebuildSpan stateCleared
+              let newState, spawnResult = spawnColdReplacement id session inbox rebuildSpan stateCleared (StartTimeoutDecision.firstStartBudget runtime.Ledger)
               match spawnResult with
               | Ok () ->
                 reply.Reply(Ok "Hard reset complete — worker respawning with fresh assemblies.")
@@ -1130,6 +1013,42 @@ module SessionManager =
           | None ->
             return state
 
+        | SessionCommand.WorkerStartTimedOut(id, workerPid, timeout, stderrTail) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let currentPid = SessionLifecycleStatus.workerPid session.Info.Status
+            let pendingSwapPid =
+              ManagerState.tryGetPendingSwap id state
+              |> Option.bind (fun oldSession -> SessionLifecycleStatus.workerPid oldSession.Info.Status)
+            // The same pid guard as WorkerSpawnFailed: only the worker the session is waiting on may decide
+            // anything about it. What to do is StartTimeoutDecision's; this only carries it out.
+            let guard = WorkerEventGuard.classifySpawnFailed currentPid pendingSwapPid workerPid
+            match StartTimeoutDecision.decide Timeouts.machineTier (runtime.Ledger.History timeout.Stage) guard timeout stderrTail with
+            | StartTimeoutDecision.Decision.Ignore ->
+              Log.warn "[SessionManager] Ignoring stale start timeout for session %s (event pid %d != current pid %A)" (SessionId.value id) workerPid currentPid
+              return state
+            | StartTimeoutDecision.Decision.RevertSwap ->
+              match ManagerState.tryGetPendingSwap id state with
+              | Some oldSession ->
+                Log.warn "[SessionManager] Replacement worker for session %s said nothing for %.0fs; reverting to the still-serving old worker" (SessionId.value id) timeout.Waited.TotalSeconds
+                onSessionReady id
+                return ManagerState.clearPendingSwap id { ManagerState.addSession id oldSession state with WarmupProgress = Map.remove id state.WarmupProgress }
+              | None -> return state
+            | StartTimeoutDecision.Decision.Retry (budget, progress) ->
+              Log.warn "[SessionManager] Session %s: the worker said nothing for %.0fs (attempt %d of %d); starting it again and waiting up to %.0fs" (SessionId.value id) timeout.Waited.TotalSeconds timeout.Budget.Attempt StartEscalation.MaxAttempts budget.Inactivity.TotalSeconds
+              let retried, spawned = spawnColdReplacement id session inbox (Instrumentation.startSpan Instrumentation.sessionSource "session.start_retry" [("session.id", box id)]) state budget
+              match spawned with
+              | Ok () ->
+                onWarmupProgress id progress
+                return { retried with WarmupProgress = Map.add id progress retried.WarmupProgress }
+              | Error _ -> return retried // spawnColdReplacement already recorded the failure and told the callbacks
+            | StartTimeoutDecision.Decision.GiveUp (reason, message) ->
+              Log.warn "[SessionManager] Session %s could not start: %s" (SessionId.value id) message
+              onSessionReady id
+              onSessionFaulted id message
+              return ManagerState.addSession id (faultedTombstoneWith reason session) state
+          | None -> return state
+
         | SessionCommand.WorkerExited(id, workerPid, exitCode) ->
           let span = Instrumentation.startSpan Instrumentation.sessionSource "worker.exited"
                        [("session.id", box id); ("worker.pid", box workerPid); ("exit_code", box exitCode)]
@@ -1249,7 +1168,7 @@ module SessionManager =
                           Status = SessionLifecycleStatus.Starting { Pid = proc.Id; Port = None }
                           LastActivity = DateTime.UtcNow } }
               let newState = ManagerState.addSession id restarted state
-              runtime.AwaitWorkerPort id proc inbox ct
+              runtime.AwaitWorkerPort id proc inbox ct (StartTimeoutDecision.firstStartBudget runtime.Ledger)
               match isNull recoverySpan with
               | false -> recoverySpan.SetTag("recovery.outcome", "restarted") |> ignore
               | true -> ()
@@ -1339,7 +1258,7 @@ module SessionManager =
             // given: the fault is real, the cause unknown, and nobody guesses one.
             let resolvedStatus =
               match newStatus, SessionLifecycleStatus.faultReason session.Info.Status with
-              | SessionLifecycleStatus.Faulted (FaultReason.Unexplained _), Some (FaultReason.Reported _ as kept) ->
+              | SessionLifecycleStatus.Faulted (FaultReason.Unexplained _), Some ((FaultReason.Reported _ | FaultReason.StartTimedOut _) as kept) ->
                 SessionLifecycleStatus.Faulted kept
               // default policy: every other SessionLifecycleStatus is used
               // verbatim — the only special case this command handles is a
@@ -1393,6 +1312,9 @@ module SessionManager =
           | ProjectResolution.NoneRequested
           | ProjectResolution.Resolved ->
             let handle : WorkerHandle = { Pid = workerPid; Port = SessionLifecycleStatus.workerPort session.Info.Status }
+            // What this machine takes from spawning a worker to a session that can evaluate. A process that
+            // has already gone has no start time to read; then there is nothing to learn.
+            StartLedger.recordReady runtime.Ledger session.Process
             let updated =
               { session with
                   ProjectRoles = roles
@@ -1602,6 +1524,7 @@ module SessionManager =
           | SessionCommand.WorkerReady _
           | SessionCommand.WorkerTestDiscovery _
           | SessionCommand.WorkerSpawnFailed _
+          | SessionCommand.WorkerStartTimedOut _
           | SessionCommand.ScheduleRestart _
           | SessionCommand.WorkerWarmupProgress _
           | SessionCommand.WorkerAppOutput _

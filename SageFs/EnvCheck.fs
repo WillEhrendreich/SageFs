@@ -659,12 +659,23 @@ let checkBindHost () =
   | Error message ->
     fail "Bind host" "Bind host: SAGEFS_BIND_HOST is not a loopback address — the daemon will not start" message
 
+/// The machine tier the waits are scaled for, and how it was reached. Informational: a slow machine works, it
+/// just waits longer, and this is where a person can see that and why.
+let checkMachineTier () : CheckResult =
+  let factor = MachineTier.factor Timeouts.machineTier
+  match MachineStartup.current () with
+  | MachineStartup.Established.Done resolution ->
+    pass "Machine tier" (sprintf "%s Waits for the machine are scaled %gx." (TierResolutionDescription.describe resolution) factor)
+  | MachineStartup.Established.NotYet ->
+    pass "Machine tier" (sprintf "Machine tier %s. Waits for the machine are scaled %gx." (MachineTier.toString Timeouts.machineTier) factor)
+
 let runAll (dir: string) (mcpPort: int) (dashPort: int) =
   // One probe, shared by both port checks and the daemon row — a port held
   // by THIS daemon is reported as expected on both, not as a conflict.
   let daemonInfo = DaemonState.readOnPort mcpPort
   [ checkDotnetSdk ()
     checkFsiAvailable ()
+    checkMachineTier ()
     checkFsproj dir
     checkDirectoryConfig dir
     checkBindHost ()

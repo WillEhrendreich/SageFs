@@ -159,6 +159,9 @@ module WorkerProtocol =
   type FaultReason =
     | Reported of message: string
     | Unexplained of origin: FaultOrigin
+    /// A start that ran out of patience on every attempt it was given, with the whole story: what it
+    /// waited for, how long, how many times, on what tier, and what the machine usually does.
+    | StartTimedOut of failure: StartFailure
 
   module FaultReason =
     /// The reason for `message`; blank text is no reason at all.
@@ -170,6 +173,7 @@ module WorkerProtocol =
     /// The reason in words an agent or a person can act on. Never blank.
     let describe (reason: FaultReason) : string =
       match reason with
+      | FaultReason.StartTimedOut failure -> StartEscalation.describe failure
       | FaultReason.Reported message when not (String.IsNullOrWhiteSpace message) -> message
       | FaultReason.Reported _
       | FaultReason.Unexplained FaultOrigin.NotRecorded ->

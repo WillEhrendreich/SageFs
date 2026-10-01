@@ -2080,6 +2080,28 @@ let listenerBindFailureExitCode = 1
 /// idle — closing the "34 orphaned daemons" seam (S1) for daemons an
 /// agent, test, or demo runner spawns directly (not via a supervised
 /// worker, which already has `ParentMonitor`/`OwnerMonitor`).
+/// The machine tier was established in Program.fs before anything read `Timeouts`. Say what it is and how it
+/// was reached, and open the ledger that records how long a start takes on this machine, so the next
+/// daemon's first attempt already knows.
+let private reportMachineTierAndOpenLedger (log: Microsoft.Extensions.Logging.ILogger) : unit =
+  match MachineStartup.current () with
+  | MachineStartup.Established.Done resolution ->
+    log.LogInformation("{Tier}", TierResolutionDescription.describe resolution)
+    match Timeouts.machineTier = resolution.Tier with
+    | true -> ()
+    | false ->
+      log.LogWarning("Timeouts were read before the machine tier was established, so they are scaled for {Read} and not for {Tier}.", MachineTier.toString Timeouts.machineTier, MachineTier.toString resolution.Tier)
+    let profile = StartLedger.baseProfile DaemonState.SageFsDir resolution
+    match MachineProbeReader.readProfile DaemonState.SageFsDir with
+    | ProfileRead.Found _ -> ()
+    | ProfileRead.NoProfile | ProfileRead.Unreadable _ ->
+      match MachineProbeReader.writeProfile DaemonState.SageFsDir profile with
+      | Result.Ok () -> ()
+      | Result.Error (ProfileWriteError.CouldNotWrite (path, reason)) -> log.LogWarning("Could not write the machine profile {Path}: {Reason}", path, reason)
+    StartLedger.install (StartLedger.openAt DaemonState.SageFsDir profile)
+  | MachineStartup.Established.NotYet ->
+    log.LogWarning("The machine tier was not established at startup; waits are scaled for {Tier}.", MachineTier.toString Timeouts.machineTier)
+
 let run
   (bindHost: SageFs.SageFsConfig.LoopbackHost)
   (mcpPort: int)
@@ -2105,6 +2127,8 @@ let run
   let stateChangedEvent = infra.StateChangedEvent
 
   log.LogInformation("SageFs daemon v{Version} starting on port {Port}", version, mcpPort)
+
+  reportMachineTierAndOpenLedger log
 
   // Handle --prune: mark all alive sessions as stopped and exit
   // W36+W42(R14): handlePrune now returns Result<bool,string> and takes Task-returning checkFn.

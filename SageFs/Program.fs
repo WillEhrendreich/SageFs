@@ -70,13 +70,15 @@ let waitForDaemonReady
   =
   let mutable attempts = 0
   let mutable info = None
-  while attempts < 30 && Option.isNone info do
-    sleep 500
+  let probeMs = int Timeouts.stdioBridgeProbeInterval.TotalMilliseconds
+  let maxAttempts = int (Math.Ceiling(Timeouts.daemonStartWait / Timeouts.stdioBridgeProbeInterval))
+  while attempts < maxAttempts && Option.isNone info do
+    sleep probeMs
     info <- readOnPort mcpPort
     attempts <- attempts + 1
   match info with
   | Some daemon -> Ok daemon
-  | None -> Error (SageFsError.DaemonStartFailed "Daemon started but did not become ready in 15s")
+  | None -> Error (SageFsError.DaemonStartFailed (sprintf "Daemon started but did not become ready in %.0fs" Timeouts.daemonStartWait.TotalSeconds))
 
 
 /// CLI command parsed from arguments — replaces if/elif chain with pattern matching.
@@ -181,6 +183,10 @@ let decideCustomPortOwnership
 
 /// Run daemon mode (default behavior).
 let runDaemon (args: string array) =
+  // The machine's tier, worked out (override, profile or a probe) and published in this process's environment
+  // BEFORE anything reads `Timeouts`, so every wait for the machine is scaled for this machine and the
+  // workers the daemon starts are told the same tier.
+  MachineStartup.establish DaemonState.SageFsDir |> ignore
   // Fail fast on a non-loopback SAGEFS_BIND_HOST before anything binds. The
   // supervised watchdog's child daemon runs this check again.
   match SageFsConfig.BindHost with
@@ -472,6 +478,11 @@ let private fetchSessionCountHttp (info: DaemonInfo) : int option =
 [<EntryPoint>]
 let main args =
   let command = CliCommand.parse args
+  // Every command that waits on the machine (the daemon's own start, the stdio bridge, `status`, `check`)
+  // scales its waits for this machine's tier. Help and version read nothing and wait for nothing.
+  match command with
+  | ShowHelp | ShowVersion -> ()
+  | _ -> MachineStartup.establish DaemonState.SageFsDir |> ignore
   match command with
   | Mcp _ -> () // stdout IS the JSON-RPC protocol stream: no CRLF-normalizing wrapper, ever.
   | _ ->

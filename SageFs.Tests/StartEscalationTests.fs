@@ -14,6 +14,9 @@ open SageFs.Tests.StartEscalationTimeouts
 
 let private propConfig = { FsCheckConfig.defaultConfig with maxTest = 300 }
 
+/// A history of starts that all took exactly the same time.
+let private noDeviation : float = 0.0
+
 let private first = StartEscalation.firstBudget StageHistory.NeverSeen silenceAllowance absoluteBound
 
 let private silentTimeout (budget: StartBudget) : StartTimeout =
@@ -56,7 +59,7 @@ let tests =
 
       testCase "WHY — a history of quick starts does not shorten the tier's allowance, which also covers a cold host build" <| fun _ ->
         let quick =
-          StageHistory.Seen { Stage = StartStage.WorkerPort; SmoothedMs = quickStart.TotalMilliseconds; DeviationMs = 0.0; Samples = 20 }
+          StageHistory.Seen { Stage = StartStage.WorkerPort; SmoothedMs = quickStart.TotalMilliseconds; DeviationMs = noDeviation; Samples = 20 }
         (StartEscalation.firstBudget quick silenceAllowance absoluteBound).Inactivity
         |> Expect.equal "the tier's allowance stands" silenceAllowance
 
@@ -83,7 +86,7 @@ let tests =
 
       testCase "WHY — attempts are limited, so a hung start is given up on instead of retried for ever" <| fun _ ->
         let budgets, failure = schedule StageHistory.NeverSeen first
-        budgets |> List.length |> Expect.isLessThanOrEqual "within the limit" StartEscalation.MaxAttempts
+        (List.length budgets <= StartEscalation.MaxAttempts) |> Expect.isTrue "within the limit"
         failure.Attempts |> Expect.equal "the failure counts the attempts made" (List.length budgets)
 
       testCase "WHY — once the patience is at the absolute bound there is no retry with the same patience, only the failure" <| fun _ ->
@@ -148,6 +151,21 @@ let tests =
         text |> Expect.stringContains "the last tier" "SAGEFS_MACHINE_TIER=Minimal"
         text |> Expect.stringContains "the last thing it said" "2/4 loading"
         text |> Expect.stringContains "one attempt is not pluralised" "1 attempt waiting"
+    ]
+
+    testList "where the failure is read" [
+
+      testCase "WHY — the MCP and dashboard surfaces read a start failure as the whole explanation, never as 'no reason was recorded'" <| fun _ ->
+        let _, failure = schedule StageHistory.NeverSeen first
+        let status = WorkerProtocol.SessionLifecycleStatus.Faulted (WorkerProtocol.FaultReason.StartTimedOut failure)
+        McpSessionRouting.FaultCause.ofStatus status
+        |> Expect.equal "recorded, in words" (McpSessionRouting.FaultCause.Recorded (StartEscalation.describe failure))
+
+      testCase "WHY — a fault reason that is a start failure describes itself as the failure text, so /api/sessions' faultReason is the explanation" <| fun _ ->
+        let _, failure = schedule StageHistory.NeverSeen first
+        let reason = WorkerProtocol.FaultReason.StartTimedOut failure
+        WorkerProtocol.FaultReason.describe reason
+        |> Expect.stringContains "the description is the failure text" (StartStage.describe StartStage.WorkerPort)
     ]
 
     testList "telling a person the wait is expected" [

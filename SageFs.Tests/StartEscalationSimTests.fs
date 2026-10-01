@@ -49,7 +49,7 @@ let tests =
         let t = run StartEscalationGenerators.hangs
         (match t.Outcome with
          | StartOutcome.GaveUp (FailureReport.Named failure) ->
-           failure.Attempts |> Expect.isLessThanOrEqual "within the limit" StartEscalation.MaxAttempts
+           (failure.Attempts <= StartEscalation.MaxAttempts) |> Expect.isTrue "within the limit"
            failure.Tier |> Expect.equal "the tier is named" MachineTier.Standard
          | other -> failtestf "expected a named failure, got %A" other)
         assertHolds t
