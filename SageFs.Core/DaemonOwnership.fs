@@ -103,7 +103,7 @@ let isNestedCheckout (hasCheckoutMarker: string -> bool) (dir: string) : bool =
 /// checkout, with no explicit owner and no explicit TTL, would otherwise
 /// run forever unowned — the exact shape of the leaked worktree-agent
 /// daemons this closes (§2 seam S1). It defaults to a 30-minute TTL.
-let defaultTtlForNestedCheckout = TimeSpan.FromMinutes 30.0
+let defaultTtlForNestedCheckout = Timeouts.nestedCheckoutDaemonTtl
 
 type EffectiveOwnership = {
   OwnerPid: int option
@@ -155,7 +155,7 @@ let shouldSelfTerminate
 /// and at `ttl` itself for a shorter custom TTL (e.g. tests), so the window
 /// can never exceed the bound it is meant to serve.
 let ttlClientActivityWindow (ttl: TimeSpan) : TimeSpan =
-  min ttl (TimeSpan.FromMinutes 2.0)
+  min ttl Timeouts.agentActivityFresh
 
 /// Whether a session's own status still represents something genuinely
 /// usable — i.e. NOT a terminal, unusable state (`Faulted`: a worker that

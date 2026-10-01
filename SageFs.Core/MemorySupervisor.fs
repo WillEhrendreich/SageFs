@@ -71,7 +71,7 @@ module MemorySupervisor =
     ShedExitFrac = 0.30
     RefuseEnterFrac = 0.08
     RefuseExitFrac = 0.15
-    IdleAfter = TimeSpan.FromMinutes 30.0
+    IdleAfter = Timeouts.memoryIdleShedAfter
   }
 
   /// Delegates to the shared `MemoryPressure.nextFromAvailableFrac` — the

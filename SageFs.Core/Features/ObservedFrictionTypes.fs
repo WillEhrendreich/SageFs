@@ -97,11 +97,11 @@ module DetectorConfig =
     PollingMinCallsPerSuccess = 8
     PollingTools = Set.ofList [ "get_session_status" ]
     ResetThrashCount = 3
-    ResetThrashWindow = TimeSpan.FromSeconds 60.0
-    HardResetAfterCreateWindow = TimeSpan.FromSeconds 30.0
+    ResetThrashWindow = SageFs.Timeouts.frictionResetThrashWindow
+    HardResetAfterCreateWindow = SageFs.Timeouts.frictionHardResetAfterCreateWindow
     RepeatedErrorRun = 3
     RetryLoopAttempts = 3
-    SlowFirstSuccess = TimeSpan.FromSeconds 45.0
+    SlowFirstSuccess = SageFs.Timeouts.frictionSlowFirstSuccess
   }
 
 /// The ordered, scope-tagged slice a detector runs on. `Events` preserves

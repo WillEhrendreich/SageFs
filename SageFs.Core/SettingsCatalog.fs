@@ -141,7 +141,7 @@ module SettingsCatalog =
   let private defaultTimeout (seconds: float) : SettingValue =
     match ValidTimeout.create (TimeSpan.FromSeconds seconds) with
     | Ok t -> VTimeout t
-    | Error _ -> VTimeout (match ValidTimeout.create (TimeSpan.FromSeconds 5.0) with Ok t -> t | Error _ -> failwith "5s must be valid")
+    | Error _ -> VTimeout (match ValidTimeout.create Timeouts.perTestTimeoutFallback with Ok t -> t | Error _ -> failwith "the per-test timeout fallback must be valid")
 
   /// Live: the per-test timeout. Wires the previously-dead setTestTimeouts path
   /// — a validated runtime setter that nothing could reach — to a real edit.

@@ -245,7 +245,7 @@ module HostCoreAdoption =
   /// pipelines can nudge a timestamp by a few hundred ms without the bytes
   /// actually changing) so a same-version build is never flagged Stale
   /// purely from clock noise.
-  let private freshnessEpsilon = TimeSpan.FromSeconds 2.0
+  let private freshnessEpsilon = Timeouts.fileWriteTimeTolerance
 
   /// Pure: is the loaded SageFs.Core the newest build on disk?
   ///

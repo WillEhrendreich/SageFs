@@ -138,10 +138,92 @@ module Timeouts =
   // by `CohortLandingVerify.awaitBudget()` (globalTestRun + slack) instead.
   /// Poll cadence while waiting on the settle / rediscovery generation signals.
   let cohortLandingPoll = TimeSpan.FromMilliseconds(200.0)
+  /// How long a cohort member may be silent before the reaper departs it and
+  /// orphans its claims. Silence, not busyness, costs a seat: any tool call and
+  /// any eval renews the lease, so this is generous. No recorded reason for 30
+  /// minutes.
+  let cohortLeaseWindow = TimeSpan.FromMinutes(30.0)
+  /// How long settled cohort history (orphaned and released claims, departed
+  /// members, settled landings) stays before the sweep removes it. The same
+  /// window as `cohortLeaseWindow` on purpose: a member's seat and the claims
+  /// that name it age out together.
+  let cohortSettledRetention = cohortLeaseWindow
   let processKillVerify = TimeSpan.FromSeconds(2.0)
   let stdioFlush = TimeSpan.FromSeconds(5.0)
 
+  // -- Agent presence --
+  /// How long an agent may go without a tool call before it is treated as gone:
+  /// the activity tracker's periodic sweep evicts it, and SessionMap occupancy
+  /// claims older than this are dropped. No recorded reason for 5 minutes.
+  let agentPresenceEviction = TimeSpan.FromMinutes(5.0)
+  /// How recently an agent must have been active to count as present right now:
+  /// a fresh (not stale) dashboard badge, a cohort lease renewal by the reaper,
+  /// and the "is any client still around" window for daemon idle shutdown.
+  /// Shorter than `agentPresenceEviction`, so an active member is renewed before
+  /// its presence is evicted.
+  let agentActivityFresh = TimeSpan.FromMinutes(2.0)
+
+  // -- File and process time tolerances --
+  /// Slack when comparing a started process's start time to a recorded one. PID
+  /// reuse needs a process started seconds to hours later, so this sits far
+  /// above the read jitter and far below any realistic reuse gap. Protocol
+  /// constant, not tunable.
+  let processStartTimeTolerance = TimeSpan.FromSeconds(2.0)
+  /// Slack when comparing file write times: copy and build pipelines can move a
+  /// timestamp by a few hundred ms without the bytes changing, and a same-version
+  /// build must not be flagged stale from clock noise. Protocol constant, not
+  /// tunable.
+  let fileWriteTimeTolerance = TimeSpan.FromSeconds(2.0)
+
+  // -- Memory pressure --
+  /// How long a session may go without activity before the memory supervisor
+  /// may shed it under pressure. No recorded reason for 30 minutes.
+  let memoryIdleShedAfter = TimeSpan.FromMinutes(30.0)
+
+  // -- Expensive-work leases (ExpensiveWorkLease) --
+  // A lease TTL is how long a granted lease is good for before it is reclaimed
+  // as abandoned; it should exceed the work it guards.
+  /// Session create or warmup lease. No recorded reason for 5 minutes.
+  let leaseTtlSessionCreate = TimeSpan.FromMinutes(5.0)
+  /// Rebuild lease: the build kill timer, so a lease outlives a build exactly as
+  /// long as the build itself is allowed to run.
+  let leaseTtlRebuild = buildCompletion
+  /// Full `dotnet build` lease: the build kill timer, as for `leaseTtlRebuild`.
+  let leaseTtlFullBuild = buildCompletion
+  /// Test-suite run lease. No recorded reason for 15 minutes.
+  let leaseTtlTestSuite = TimeSpan.FromMinutes(15.0)
+  /// run_app lease. An app runs until stopped, so this is a long cap rather than
+  /// a work estimate. No recorded reason for 4 hours.
+  let leaseTtlRunApp = TimeSpan.FromHours(4.0)
+  // How long a refused lease request is told to wait before asking again, by
+  // memory pressure, before queue-position scaling and jitter.
+  /// Retry-after under normal memory pressure.
+  let leaseRetryAfterNormal = TimeSpan.FromSeconds(3.0)
+  /// Retry-after under tight memory pressure.
+  let leaseRetryAfterTight = TimeSpan.FromSeconds(10.0)
+  /// Retry-after under critical memory pressure.
+  let leaseRetryAfterCritical = TimeSpan.FromSeconds(30.0)
+  /// Floor on the jittered retry-after, so jitter near zero never reads as
+  /// "retry immediately".
+  let leaseMinRetryAfter = TimeSpan.FromMilliseconds(200.0)
+
+  // -- Friction detectors (ObservedFrictionTypes.DetectorConfig) --
+  /// Window in which repeated session resets count as thrash. No recorded
+  /// reason for 60s.
+  let frictionResetThrashWindow = TimeSpan.FromSeconds(60.0)
+  /// A hard reset this soon after a session was created is a friction signal.
+  /// No recorded reason for 30s.
+  let frictionHardResetAfterCreateWindow = TimeSpan.FromSeconds(30.0)
+  /// A first success later than this after session create is slow. Described in
+  /// the detector config as the warmup budget; it is not derived from
+  /// `warmupInactivityLimit` (30s) or `warmupAbsoluteMax` (10 minutes).
+  let frictionSlowFirstSuccess = TimeSpan.FromSeconds(45.0)
+
   // -- Hot reload --
+  /// The window in which a thousand reflective reads of one module value count
+  /// as a hot loop (ValueReads.HotLoopThreshold.standard). The count is 1000
+  /// there; no recorded reason for 1s.
+  let hotLoopWindow = TimeSpan.FromSeconds(1.0)
   /// How long a patched function may go without its new body running before the
   /// save reports it as never entered. A page that refreshes on the pending
   /// report usually runs the function within a second; a function nothing
@@ -222,6 +304,10 @@ module Timeouts =
   let supervisorWedgeAfter = envOrDefault "SAGEFS_SUPERVISOR_WEDGE_SECONDS" 30.0
   /// How often the supervisor's watchdog thread looks at the loop.
   let supervisorCheckInterval = TimeSpan.FromSeconds(2.0)
+  /// The idle TTL a daemon gets when it starts inside another checkout with no
+  /// explicit owner and no explicit TTL, so it cannot run forever unowned (the
+  /// leaked worktree-agent daemons). No recorded reason for 30 minutes.
+  let nestedCheckoutDaemonTtl = TimeSpan.FromMinutes(30.0)
 
   // -- Persistence --
   /// Cadence of the daemon's periodic manifest save (`periodicManifestSave`,

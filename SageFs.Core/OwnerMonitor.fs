@@ -45,7 +45,7 @@ let startTimeTicksOf (p: Process) : int64 =
 /// up to pid_max, so reuse takes far longer than seconds under any load), so
 /// a 2s tolerance sits orders of magnitude above the read jitter and orders
 /// of magnitude below any realistic reuse gap — it can never mask reuse.
-let startTimeToleranceTicks : int64 = TimeSpan.FromSeconds(2.0).Ticks
+let startTimeToleranceTicks : int64 = Timeouts.processStartTimeTolerance.Ticks
 
 /// Whether a live process's observed start-time ticks match a recorded fence,
 /// within `startTimeToleranceTicks`. Pure and directly testable (a real

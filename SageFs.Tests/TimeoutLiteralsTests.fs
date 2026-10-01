@@ -22,16 +22,7 @@ let private central = Set.ofList [ "SageFs.Core/Timeouts.fs" ]
 
 /// What each file may still spell out itself. Ratchet down, never up.
 let private budgets : (string * int) list =
-  [ "SageFs.Core/Cohort.fs", 2
-    "SageFs.Core/DaemonOwnership.fs", 2
-    "SageFs.Core/ExpensiveWorkLease.fs", 9
-    "SageFs.Core/Features/ObservedFrictionTypes.fs", 3
-    "SageFs.Core/HostCoreAdoption.fs", 1
-    "SageFs.Core/MemorySupervisor.fs", 1
-    "SageFs.Core/Middleware/ValueReads.fs", 1
-    "SageFs.Core/OwnerMonitor.fs", 1
-    "SageFs.Core/SettingsCatalog.fs", 1
-    "SageFs.Host/AppRunner.fs", 2
+  [ "SageFs.Host/AppRunner.fs", 2
     "SageFs.Host/WorkerHttpTransport.fs", 2
     "SageFs.Host/WorkerMain.fs", 1
     "SageFs.Tests/AffordancesMutationTests.fs", 12

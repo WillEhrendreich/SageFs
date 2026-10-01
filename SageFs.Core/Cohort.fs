@@ -351,7 +351,7 @@ module Cohort =
   /// any tool call and by `Evaluating`; the reaper is what makes silence cost
   /// something, so this is generous. `Clock` being a parameter means tests exert
   /// this via generated `DateTime` deltas, never a shortened constant.
-  let leaseWindow = TimeSpan.FromMinutes 30.0
+  let leaseWindow = Timeouts.cohortLeaseWindow
 
   /// How long SETTLED history stays in `CohortState` before `Retention.sweep`
   /// (run by every `Tick`) removes it: an orphaned claim (the conductor's
@@ -362,7 +362,7 @@ module Cohort =
   /// old. One window for all of them so a member's seat and the claims that
   /// name it age out together. Like `leaseWindow`, `Clock` is a parameter, so
   /// tests exert it via generated `DateTime` deltas, never a shortened value.
-  let settledRetention = TimeSpan.FromMinutes 30.0
+  let settledRetention = Timeouts.cohortSettledRetention
 
   module CohortState =
     let empty () : CohortState<'m> = {

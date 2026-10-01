@@ -842,7 +842,7 @@ type HotLoopThreshold =
 module HotLoopThreshold =
   /// A thousand reflective reads of one value inside a second is a loop, not
   /// a startup scan or a request handler.
-  let standard = { Count = 1000; Within = TimeSpan.FromSeconds 1.0 }
+  let standard = { Count = 1000; Within = SageFs.Timeouts.hotLoopWindow }
 
 /// What the rate of one value's reflective reads looks like right now.
 [<RequireQualifiedAccess>]

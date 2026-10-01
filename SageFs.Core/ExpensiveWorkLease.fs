@@ -71,15 +71,15 @@ module ExpensiveWorkLease =
 
     /// How long a granted lease is good for before it is reclaimed as
     /// abandoned. Real durations for a large repo, not a guess —
-    /// `Rebuild`/`FullBuild` mirror `SessionBuild.fs`'s own 600s build kill
+    /// `Rebuild`/`FullBuild` are `Timeouts.buildCompletion`, the build kill
     /// timer; `RunApp` is long-running by nature.
     let defaultTtl =
       function
-      | Kind.SessionCreateOrWarmup -> TimeSpan.FromMinutes 5.0
-      | Kind.Rebuild -> TimeSpan.FromMinutes 10.0
-      | Kind.FullBuild -> TimeSpan.FromMinutes 10.0
-      | Kind.TestSuiteRun -> TimeSpan.FromMinutes 15.0
-      | Kind.RunApp -> TimeSpan.FromHours 4.0
+      | Kind.SessionCreateOrWarmup -> Timeouts.leaseTtlSessionCreate
+      | Kind.Rebuild -> Timeouts.leaseTtlRebuild
+      | Kind.FullBuild -> Timeouts.leaseTtlFullBuild
+      | Kind.TestSuiteRun -> Timeouts.leaseTtlTestSuite
+      | Kind.RunApp -> Timeouts.leaseTtlRunApp
 
   /// Opaque lease identity — a caller can compare/release by it, never
   /// construct one, so "I made up my own lease id" cannot happen.
@@ -166,9 +166,9 @@ module ExpensiveWorkLease =
   /// instead of a single point in time.
   let private baseBackoff =
     function
-    | MemoryPressure.Normal -> TimeSpan.FromSeconds 3.0
-    | MemoryPressure.Tight -> TimeSpan.FromSeconds 10.0
-    | MemoryPressure.Critical -> TimeSpan.FromSeconds 30.0
+    | MemoryPressure.Normal -> Timeouts.leaseRetryAfterNormal
+    | MemoryPressure.Tight -> Timeouts.leaseRetryAfterTight
+    | MemoryPressure.Critical -> Timeouts.leaseRetryAfterCritical
 
   /// Full jitter, DETERMINISTICALLY derived from the request's own identity
   /// (never `System.Random`, which would make `request` impure and break
@@ -179,7 +179,7 @@ module ExpensiveWorkLease =
   /// instead of every one of them retrying on the identical tick (the
   /// classic thundering-herd failure of backoff without jitter; see AWS's
   /// "Exponential Backoff and Jitter").
-  let private minRetryAfter = TimeSpan.FromMilliseconds 200.0
+  let private minRetryAfter = Timeouts.leaseMinRetryAfter
 
   let private withJitter (holder: string) (kind: Kind) (seq: int64) (computed: TimeSpan) : TimeSpan =
     let h = HashCode.Combine(holder, kind, seq)
