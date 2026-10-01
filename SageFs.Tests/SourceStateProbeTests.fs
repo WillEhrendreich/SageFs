@@ -182,3 +182,53 @@ let probeTests =
         cleanUp first
         cleanUp second
   ]
+
+[<Tests>]
+let adapterTests =
+  let inSync = SourceState.InSync (minutesAfter -30, 3)
+  let stale = SourceState.Stale [ { Path = "A.fs"; Because = StaleBecause.EditedAfterBuild (minutesAfter -5, minutesAfter -30) } ]
+  testList "SourceStateProbe adapters" [
+
+    testCase "WHY — targeted_verify's loaded-definition state is current only for a source in sync, stale for a stale one, and unknown otherwise, so it refuses everything but in sync" <| fun _ ->
+      match SourceStateProbe.loadedDefinitionOf "behavior" inSync with
+      | Features.Verification.LoadedDefinitionState.ConfirmedCurrent artifact -> artifact |> Expect.equal "names what was loaded" "behavior"
+      | other -> failtestf "expected ConfirmedCurrent, got %A" other
+      match SourceStateProbe.loadedDefinitionOf "behavior" stale with
+      | Features.Verification.LoadedDefinitionState.ConfirmedStale (path, _) -> path |> Expect.equal "names the stale file" "A.fs"
+      | other -> failtestf "expected ConfirmedStale, got %A" other
+      [ SourceState.Rebuilding (minutesAfter -1); SourceState.Unknown (UnknownReason.Unreadable ("B.fs", "denied")); SourceState.Stale [] ]
+      |> List.iter (fun source ->
+        match SourceStateProbe.loadedDefinitionOf "behavior" source with
+        | Features.Verification.LoadedDefinitionState.UnknownLoadState reason -> reason |> Expect.isNotEmpty "says why"
+        | other -> failtestf "expected UnknownLoadState for %A, got %A" source other)
+
+    testCase "WHY — a session the registry has no record of is Unknown, never in sync" <| fun _ ->
+      match SourceStateProbe.ofSessionRecord None None with
+      | SourceState.Unknown _ -> ()
+      | other -> failtestf "expected Unknown, got %A" other
+
+    testCase "WHY — the session list puts a source line under every session, and a session with no reading says it was not read" <| fun _ ->
+      let info : WorkerProtocol.SessionInfo =
+        { Id = WorkerProtocol.SessionId.newId ()
+          Name = None
+          Projects = []
+          WorkingDirectory = "/work"
+          SolutionRoot = None
+          CreatedAt = DateTime.UtcNow
+          LastActivity = DateTime.UtcNow
+          Status = WorkerProtocol.SessionLifecycleStatus.Stopped
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive
+          ActiveProject = None
+          ProjectRoles = []
+          App = AppRun.AppRunState.NotRunning
+          Rebuild = LastRebuild.NeverRebuilt
+          Reload = SessionReload.NoReloadYet
+          Freshness = ReplFreshness.InSync }
+      let sid = WorkerProtocol.SessionId.value info.Id
+      SourceStateProbe.formatSessionList DateTime.UtcNow None (Map.ofList [ sid, stale ]) [ info ]
+      |> Expect.stringContains "a stale session is loud" "STALE SOURCE"
+      SourceStateProbe.formatSessionList DateTime.UtcNow None Map.empty [ info ]
+      |> Expect.stringContains "no reading is not in sync" "was read without a source check"
+      SourceStateProbe.formatSessionList DateTime.UtcNow None Map.empty []
+      |> Expect.equal "no sessions" "No active sessions."
+  ]

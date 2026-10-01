@@ -1885,6 +1885,8 @@ let createElmRuntime
               info |> Option.map (fun i -> sprintf "%A" i.Status)
               |> Option.defaultValue "Unknown"
             Warmup = warmup
+            // Empty on purpose. A list held here is a snapshot and cannot say what is on disk now: whether the build is behind the
+            // files is `SourceState`, read when a tool asks (SageFs/SourceStateProbe.fs), and nothing reads staleness from this list.
             FileStatuses = []
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             AutoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory (info |> Option.map (fun i -> i.WorkingDirectory) |> Option.defaultValue "")

@@ -206,7 +206,7 @@ module SourceStateSim =
     let line : ReceiptLine =
       { Id = TestId.TestId "t0"
         Name = "t0"
-        Outcome = LineOutcome.Passed (TimeSpan.FromMilliseconds 1.0) }
+        Outcome = LineOutcome.Passed TimeSpan.Zero }
     let receipt =
       RunReceipt.Ran
         { RequestId = RunRequestId Guid.Empty

@@ -14,6 +14,7 @@
         <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
         <Compile Include="RunnerDirs.fs" />
         <Compile Include="TestInfrastructure.fs" />
+        <Compile Include="SourceStateFixtures.fs" />
         <Compile Include="RunnerLogging.fs" />
         <Compile Include="TestCountBadge.fs" />
         <Compile Include="StableIdentityProbeFixture.fs" />
@@ -30,6 +31,7 @@
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpToolExecutionTests.fs" />
         <Compile Include="ReplFreshnessSurfaceTests.fs" />
+        <Compile Include="SourceStateSurfaceTests.fs" />
         <Compile Include="McpLlmInteropTests.fs" />
         <Compile Include="ManualProjectParseTests.fs" />
         <Compile Include="LoadedProjectReportingTests.fs" />

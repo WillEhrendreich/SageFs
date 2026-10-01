@@ -154,6 +154,40 @@ let private receiptOf (outcome: RunTestsOutcome) : RunReceipt =
 
 let private cases = [ caseOf "Suite.alpha"; caseOf "Suite.beta" ]
 
+// A project on disk the session has loaded, so a receipt can be read against real files (SourceStateFixtures).
+
+/// The session's context with the project on disk loaded, a worker that says when it loaded, the given rebuild record and
+/// the given REPL freshness.
+let private ctxOverProjectFresh (engine: Engine) (f: SourceStateFixtures.Project) (rebuild: LastRebuild) (freshness: ReplFreshness) : McpContext =
+  let baseCtx = ctxForFreshness engine sid ready freshness
+  let info : SessionInfo =
+    { Id = SageFs.McpSessionRouting.toSessionId sid
+      Name = None
+      Projects = [ f.ProjectFile ]
+      WorkingDirectory = f.Dir
+      SolutionRoot = None
+      Status = ready
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      CreatedAt = DateTime.UtcNow
+      LastActivity = DateTime.UtcNow
+      ActiveProject = None
+      ProjectRoles = [ SourceStateFixtures.classified f ]
+      App = AppRun.AppRunState.NotRunning
+      Rebuild = rebuild
+      Reload = SessionReload.NoReloadYet
+      Freshness = freshness }
+  { baseCtx with
+      SessionOps =
+        { baseCtx.SessionOps with
+            GetSessionInfo = fun _ -> Task.FromResult (Some info)
+            GetAllSessions = fun () -> Task.FromResult [ info ] }
+      GetWarmupContext = Some (fun _ -> Task.FromResult (Some (SourceStateFixtures.warmup f))) }
+
+let private ctxOverProject (engine: Engine) (f: SourceStateFixtures.Project) (rebuild: LastRebuild) : McpContext =
+  ctxOverProjectFresh engine f rebuild ReplFreshness.InSync
+
+let private withFixture = SourceStateFixtures.using
+
 /// Ceiling on any single wait. A test that reaches it has failed.
 let private patience = TestTimeouts.patience
 
@@ -189,17 +223,18 @@ let tests =
     }
 
     testTask "WHY — a run the worker answers comes back as a receipt the engine's own record backs: every test passed in THIS run" {
-      let engine = Engine(sid, cases, Map.empty)
-      let running = runTests (ctxFor engine sid ready) "agent" everything
-      do! engine.RunDispatched.WaitAsync patience
-      engine.ReleaseWorker ()
-      let! outcome = running
-      match receiptOf outcome with
-      | RunReceipt.Ran ran ->
-        ran.Verdict |> Expect.equal "all passed" RunVerdict.AllPassed
-        ran.Lines |> List.length |> Expect.equal "a line per test" 2
-      | other -> failtestf "expected Ran, got %A" other
-      runRequests engine |> List.length |> Expect.equal "exactly one run was requested" 1
+      do! withFixture (fun f -> task {
+        let engine = Engine(sid, cases, Map.empty)
+        let running = runTests (ctxOverProject engine f LastRebuild.NeverRebuilt) "agent" everything
+        do! engine.RunDispatched.WaitAsync patience
+        engine.ReleaseWorker ()
+        let! outcome = running
+        match receiptOf outcome with
+        | RunReceipt.Ran ran ->
+          ran.Verdict |> Expect.equal "all passed" RunVerdict.AllPassed
+          ran.Lines |> List.length |> Expect.equal "a line per test" 2
+        | other -> failtestf "expected Ran, got %A" other
+        runRequests engine |> List.length |> Expect.equal "exactly one run was requested" 1 })
     }
 
     testTask "WHY — a failing test makes the run SomeFailed" {
@@ -225,37 +260,39 @@ let tests =
     }
 
     testTask "WHY — a wait that runs out hands back the request id, and asking again with it returns the finished receipt from the same record" {
-      let engine = Engine(sid, cases, Map.empty)
-      let ctx = ctxFor engine sid ready
-      // The worker is silent for the whole (short) wait.
-      let! first = runTests ctx "agent" { everything with Wait = TestTimeouts.runTestsSilentWait }
-      let rid =
-        match receiptOf first with
-        | RunReceipt.Pending (rid, _) | RunReceipt.Started (rid, _) -> rid
-        | other -> failtestf "expected an in-flight receipt, got %A" other
-      // The worker answers, and the same request id now reads as finished.
-      engine.ReleaseWorker ()
-      let! second = runTests ctx "agent" { everything with Continue = Some rid }
-      match receiptOf second with
-      | RunReceipt.Ran ran -> ran.Verdict |> Expect.equal "all passed" RunVerdict.AllPassed
-      | other -> failtestf "expected Ran, got %A" other
-      runRequests engine |> List.length |> Expect.equal "asking again dispatched nothing new" 1
+      do! withFixture (fun f -> task {
+        let engine = Engine(sid, cases, Map.empty)
+        let ctx = ctxOverProject engine f LastRebuild.NeverRebuilt
+        // The worker is silent for the whole (short) wait.
+        let! first = runTests ctx "agent" { everything with Wait = TestTimeouts.runTestsSilentWait }
+        let rid =
+          match receiptOf first with
+          | RunReceipt.Pending (rid, _) | RunReceipt.Started (rid, _) -> rid
+          | other -> failtestf "expected an in-flight receipt, got %A" other
+        // The worker answers, and the same request id now reads as finished.
+        engine.ReleaseWorker ()
+        let! second = runTests ctx "agent" { everything with Continue = Some rid }
+        match receiptOf second with
+        | RunReceipt.Ran ran -> ran.Verdict |> Expect.equal "all passed" RunVerdict.AllPassed
+        | other -> failtestf "expected Ran, got %A" other
+        runRequests engine |> List.length |> Expect.equal "asking again dispatched nothing new" 1 })
     }
 
     testTask "WHY — a run against a REPL that is behind its app says so on the result an agent reads, because those tests ran the build from before the patch" {
-      let behind = ReplFreshness.BehindApp (1, [ "Handlers.describe" ])
-      let engine = Engine(sid, cases, Map.empty)
-      let tools = SageFsTools(ctxForFreshness engine sid ready behind, Microsoft.Extensions.Logging.Abstractions.NullLogger<SageFsTools>.Instance)
-      let running = tools.run_tests("", "", "", 30, "", sid, "")
-      do! engine.RunDispatched.WaitAsync patience
-      engine.ReleaseWorker ()
-      let! (result: ModelContextProtocol.Protocol.CallToolResult) = running
-      let text = result.Content |> Seq.pick (fun c -> match c with :? ModelContextProtocol.Protocol.TextContentBlock as t -> Some t.Text | _ -> None)
-      text |> Expect.stringContains "the run is still reported" "Every requested test passed in this run"
-      text |> Expect.stringContains "and the REPL is said to be behind" "BEHIND"
-      text |> Expect.stringContains "with what to do" "hard_reset_fsi_session"
-      result.StructuredContent.Value.GetProperty("replFreshness").GetProperty("state").GetString()
-      |> Expect.equal "as a field too" "BehindApp"
+      do! withFixture (fun f -> task {
+        let behind = ReplFreshness.BehindApp (1, [ "Handlers.describe" ])
+        let engine = Engine(sid, cases, Map.empty)
+        let tools = SageFsTools(ctxOverProjectFresh engine f LastRebuild.NeverRebuilt behind, Microsoft.Extensions.Logging.Abstractions.NullLogger<SageFsTools>.Instance)
+        let running = tools.run_tests("", "", "", 30, "", sid, "")
+        do! engine.RunDispatched.WaitAsync patience
+        engine.ReleaseWorker ()
+        let! (result: ModelContextProtocol.Protocol.CallToolResult) = running
+        let text = result.Content |> Seq.pick (fun c -> match c with :? ModelContextProtocol.Protocol.TextContentBlock as t -> Some t.Text | _ -> None)
+        text |> Expect.stringContains "the run is still reported" "Every requested test passed in this run"
+        text |> Expect.stringContains "and the REPL is said to be behind" "BEHIND"
+        text |> Expect.stringContains "with what to do" "hard_reset_fsi_session"
+        result.StructuredContent.Value.GetProperty("replFreshness").GetProperty("state").GetString()
+        |> Expect.equal "as a field too" "BehindApp" })
     }
 
     testTask "WHY — a run against a level REPL carries no warning" {
@@ -294,81 +331,10 @@ let categoryTests =
 
 // ── what the receipt says about its source ───────────────────────────────────────────────
 
-/// A project on disk (project file, one source, a build output) whose files are all older than the build, the build
-/// older than the worker's load: in sync until a test writes to something.
-type private SourceFixture =
-  { Dir: string
-    Project: string
-    Source: string
-    Dll: string }
-
-let private sourceT0 = DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc)
-let private sourceAt (minutes: int) = sourceT0.AddMinutes(float minutes)
-
-let private makeSourceFixture () : SourceFixture =
-  let dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "run-tests-source-%s" (Guid.NewGuid().ToString("N")))
-  System.IO.Directory.CreateDirectory(System.IO.Path.Combine(dir, "bin")) |> ignore
-  let project = System.IO.Path.Combine(dir, "Lib.fsproj")
-  let source = System.IO.Path.Combine(dir, "A.fs")
-  let dll = System.IO.Path.Combine(dir, "bin", "Lib.dll")
-  System.IO.File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><Compile Include=\"A.fs\" /></ItemGroup></Project>")
-  System.IO.File.WriteAllText(source, "module A")
-  System.IO.File.WriteAllText(dll, "assembly")
-  for file in [ project; source ] do System.IO.File.SetLastWriteTimeUtc(file, sourceAt -60)
-  System.IO.File.SetLastWriteTimeUtc(dll, sourceAt -30)
-  { Dir = dir; Project = project; Source = source; Dll = dll }
-
-let private dropSourceFixture (f: SourceFixture) = try System.IO.Directory.Delete(f.Dir, true) with _ -> ()
-
-/// The session's context with the project on disk loaded, a worker that says when it loaded, and the given rebuild record.
-let private ctxOverProject (engine: Engine) (f: SourceFixture) (rebuild: LastRebuild) : McpContext =
-  let baseCtx = ctxFor engine sid ready
-  let info : SessionInfo =
-    { Id = SageFs.McpSessionRouting.toSessionId sid
-      Name = None
-      Projects = [ f.Project ]
-      WorkingDirectory = f.Dir
-      SolutionRoot = None
-      Status = ready
-      Workflow = WorkflowTypes.SessionWorkflow.Interactive
-      CreatedAt = DateTime.UtcNow
-      LastActivity = DateTime.UtcNow
-      ActiveProject = None
-      ProjectRoles =
-        [ { Path = f.Project
-            Role = ProjectLoading.ProjectRole.Library
-            PackageRefs = []
-            LoadMode = ProjectLoading.LoadMode.Evaluated
-            Build = SageFs.BuildOptimization.Unoptimized } ]
-      App = AppRun.AppRunState.NotRunning
-      Rebuild = rebuild
-      Reload = SessionReload.NoReloadYet
-      Freshness = ReplFreshness.InSync }
-  let warmup : WarmupContext =
-    { WarmupContext.empty with
-        StartedAt = DateTimeOffset(sourceAt -10)
-        AssembliesLoaded = [ { Name = "Lib"; Path = f.Dll; NamespaceCount = 0; ModuleCount = 0 } ] }
-  { baseCtx with
-      SessionOps =
-        { baseCtx.SessionOps with
-            GetSessionInfo = fun _ -> Task.FromResult (Some info)
-            GetAllSessions = fun () -> Task.FromResult [ info ] }
-      GetWarmupContext = Some (fun _ -> Task.FromResult (Some warmup)) }
-
 let private ranOf (outcome: RunTestsOutcome) : RanReceipt =
   match receiptOf outcome with
   | RunReceipt.Ran ran -> ran
   | other -> failtestf "expected Ran, got %A" other
-
-let private withFixture (body: SourceFixture -> Task<unit>) : Task<unit> =
-  task {
-    let f = makeSourceFixture ()
-    let! outcome = (body f).ContinueWith(fun (t: Task<unit>) -> match t.IsFaulted with true -> Error (t.Exception :> exn) | false -> Ok ())
-    dropSourceFixture f
-    match outcome with
-    | Error e -> raise e
-    | Ok () -> ()
-  }
 
 [<Tests>]
 let sourceTests =
@@ -390,7 +356,7 @@ let sourceTests =
 
     testTask "WHY — the Nehemiah case: a source edited after the build, then run_tests, is passed-on-stale-source and names the file" {
       do! withFixture (fun f -> task {
-        System.IO.File.SetLastWriteTimeUtc(f.Source, sourceAt -2)
+        SourceStateFixtures.editSource f
         let engine = Engine(sid, cases, Map.empty)
         let running = runTests (ctxOverProject engine f LastRebuild.NeverRebuilt) "agent" everything
         do! engine.RunDispatched.WaitAsync patience
@@ -418,7 +384,7 @@ let sourceTests =
     testTask "WHY — a run dispatched while a rebuild is in progress says so: passed-while-rebuilding" {
       do! withFixture (fun f -> task {
         let engine = Engine(sid, cases, Map.empty)
-        let rebuilding = LastRebuild.Latest (RebuildOutcome.InProgress (sourceAt -1))
+        let rebuilding = LastRebuild.Latest (RebuildOutcome.InProgress (SourceStateFixtures.at -1))
         let running = runTests (ctxOverProject engine f rebuilding) "agent" everything
         do! engine.RunDispatched.WaitAsync patience
         engine.ReleaseWorker ()
@@ -431,7 +397,7 @@ let sourceTests =
         let engine = Engine(sid, cases, Map.empty)
         let running = runTests (ctxOverProject engine f LastRebuild.NeverRebuilt) "agent" everything
         do! engine.RunDispatched.WaitAsync patience
-        System.IO.File.SetLastWriteTimeUtc(f.Source, sourceAt -1)
+        SourceStateFixtures.editSource f
         engine.ReleaseWorker ()
         let! outcome = running
         (ranOf outcome).Verdict |> Expect.equal "stale, because of the edit during the run" RunVerdict.PassedOnStaleSource })
@@ -446,7 +412,7 @@ let sourceTests =
         engine.ReleaseWorker ()
         let! first = running
         let firstRan = ranOf first
-        System.IO.File.SetLastWriteTimeUtc(f.Source, sourceAt -1)
+        SourceStateFixtures.editSource f
         let! again = runTests ctx "agent" { everything with Continue = Some firstRan.RequestId }
         (ranOf again).Verdict |> Expect.equal "still what the run was" RunVerdict.AllPassed
         (ranOf again).Source |> Expect.equal "the same reading" firstRan.Source })
@@ -454,7 +420,7 @@ let sourceTests =
 
     testTask "WHY — the tool's structured result carries the source and the verdict token, so an agent branches on data" {
       do! withFixture (fun f -> task {
-        System.IO.File.SetLastWriteTimeUtc(f.Source, sourceAt -2)
+        SourceStateFixtures.editSource f
         let engine = Engine(sid, cases, Map.empty)
         let tools = SageFsTools(ctxOverProject engine f LastRebuild.NeverRebuilt, Microsoft.Extensions.Logging.Abstractions.NullLogger<SageFsTools>.Instance)
         let running = tools.run_tests("", "", "", 30, "", sid, "")

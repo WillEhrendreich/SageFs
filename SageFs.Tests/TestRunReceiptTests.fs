@@ -74,6 +74,12 @@ let private ran (receipt: RunReceipt) : RanReceipt =
   | RunReceipt.Ran r -> r
   | other -> failtestf "expected Ran, got %A" other
 
+/// A receipt read against a source in sync with the build, so its verdict is the tests' own. Read with no source check
+/// (`observe` alone) an all-passed run is never AllPassed: see SourceStateTests.
+let private observeInSync (requestId: RunRequestId) (state: LiveTestState) : RunReceipt =
+  TestRunReceipt.observe requestId state
+  |> TestRunReceipt.withSource (SourceState.InSync (DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc), 3))
+
 [<Tests>]
 let requestTests =
   testList "RequestedRuns.request records what was asked for" [
@@ -114,7 +120,7 @@ let observeTests =
       | other -> failtestf "expected Started, got %A" other
 
     testCase "WHY — every requested test passed by THIS run is AllPassed, with counts" <| fun _ ->
-      let receipt = finishedState [ "a", PassedHere; "b", PassedHere ] |> TestRunReceipt.observe requestId |> ran
+      let receipt = finishedState [ "a", PassedHere; "b", PassedHere ] |> observeInSync requestId |> ran
       receipt.Verdict |> Expect.equal "all passed" RunVerdict.AllPassed
       receipt.Counts |> Expect.equal "two passed, nothing else" { Passing = 2; Failing = 0; Skipping = 0; Unreported = 0 }
 
@@ -175,7 +181,7 @@ let propertyTests =
 
     testProperty "WHY — AllPassed exactly when tests were named and every one passed in this run; counts always add up to the lines" <| fun (picks: int list) ->
       let outcomes = outcomesOf picks
-      let receipt = finishedState outcomes |> TestRunReceipt.observe requestId |> ran
+      let receipt = finishedState outcomes |> observeInSync requestId |> ran
       let everyPassedHere = (not (List.isEmpty outcomes)) && outcomes |> List.forall (fun (_, o) -> o = PassedHere)
       let c = receipt.Counts
       (receipt.Verdict = RunVerdict.AllPassed) = everyPassedHere
@@ -226,7 +232,7 @@ let renderTests =
   testList "RunReceipts rendering" [
 
     testCase "WHY — an all-passed receipt says how many passed and in which run, and its JSON carries the tokens an agent branches on" <| fun _ ->
-      let receipt = finishedState [ "a", PassedHere; "b", PassedHere ] |> TestRunReceipt.observe requestId
+      let receipt = finishedState [ "a", PassedHere; "b", PassedHere ] |> observeInSync requestId
       TestRunReceipt.summarize receipt |> Expect.stringContains "counts" "2 passed"
       let json = TestRunReceipt.toJson receipt
       json["status"].GetValue<string>() |> Expect.equal "status token" "Ran"

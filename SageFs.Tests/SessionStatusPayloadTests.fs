@@ -23,7 +23,8 @@ let private factsWith (restart: SessionStatusPayload.LastRestart) : SessionStatu
     Health = SessionHealth.toJson SessionHealth.Healthy
     LastRestart = restart
     LastReload = SessionReload.NoReloadYet
-    ReplFreshness = ReplFreshness.InSync }
+    ReplFreshness = ReplFreshness.InSync
+    SourceState = SourceState.Unknown UnknownReason.NotAssessed }
 
 let private allKinds =
   [ SessionStatusPayload.RestartKind.InProgress
@@ -56,6 +57,18 @@ let lastRestartTests =
       |> List.distinct
       |> List.length
       |> Expect.equal "four kinds, four labels" (List.length allKinds)
+  ]
+
+[<Tests>]
+let sourceStateTests =
+  testList "SessionStatusPayload.sourceState" [
+
+    testCase "WHY — the payload carries the source state as its own field, next to replFreshness and never in place of it" <| fun _ ->
+      let stale = SourceState.Stale [ { Path = "src/A.fs"; Because = StaleBecause.EditedAfterBuild (System.DateTime(2026, 10, 1, 12, 5, 0, System.DateTimeKind.Utc), System.DateTime(2026, 10, 1, 12, 0, 0, System.DateTimeKind.Utc)) } ]
+      let json = SessionStatusPayload.serialize { factsWith SessionStatusPayload.LastRestart.NoneRecorded with SourceState = stale }
+      use doc = JsonDocument.Parse json
+      doc.RootElement.GetProperty("sourceState").GetProperty("state").GetString() |> Expect.equal "stale" "Stale"
+      doc.RootElement.GetProperty("replFreshness").GetProperty("state").GetString() |> Expect.equal "the REPL's own field is untouched" "InSync"
   ]
 
 [<Tests>]

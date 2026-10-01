@@ -154,11 +154,18 @@ module TestRunReceipt =
       | LineOutcome.Skipped _ -> { counts with Skipping = counts.Skipping + 1 }
       | LineOutcome.DidNotReport _ -> { counts with Unreported = counts.Unreported + 1 }) { Passing = 0; Failing = 0; Skipping = 0; Unreported = 0 }
 
-  /// AllPassed needs tests to have been named and every one to have passed here.
-  let verdictOf (counts: RunCounts) : RunVerdict =
+  /// AllPassed needs tests to have been named, every one to have passed here, and the source the build was made from to be in
+  /// sync with the files. Every other all-passed run says what the source was instead, so a pass over a build that is behind
+  /// the files, mid-rebuild, or of unknown currency is never spelled AllPassed.
+  let verdictOf (source: SourceState) (counts: RunCounts) : RunVerdict =
     let total = counts.Passing + counts.Failing + counts.Skipping + counts.Unreported
     match counts.Failing, counts.Passing = total && total > 0 with
-    | 0, true -> RunVerdict.AllPassed
+    | 0, true ->
+      match source with
+      | SourceState.InSync _ -> RunVerdict.AllPassed
+      | SourceState.Stale _ -> RunVerdict.PassedOnStaleSource
+      | SourceState.Rebuilding _ -> RunVerdict.PassedWhileRebuilding
+      | SourceState.Unknown _ -> RunVerdict.PassedOnUnknownSource
     | 0, false -> RunVerdict.Incomplete
     | _ -> RunVerdict.SomeFailed
 
@@ -183,17 +190,27 @@ module TestRunReceipt =
               Name = nameOf id
               Outcome = lineOutcome request.RequestedGeneration state id })
         let counts = countsOf lines
+        // Nothing has looked at the disk yet, so the source is not assessed and the verdict says so: `withSource` is what
+        // puts the real reading in.
+        let notAssessed = SourceState.Unknown UnknownReason.NotAssessed
         RunReceipt.Ran
           { RequestId = requestId
             Session = request.RequestedSession
             Generation = request.RequestedGeneration
-            Verdict = verdictOf counts
+            Verdict = verdictOf notAssessed counts
             Counts = counts
             Lines = lines
-            Source = SourceState.Unknown UnknownReason.NotAssessed }
+            Source = notAssessed }
 
-  /// The receipt with the source reading a run was made against. Skeleton: it changes nothing yet.
-  let withSource (source: SourceState) (receipt: RunReceipt) : RunReceipt = receipt
+  /// The receipt with the source reading a run was made against, and the verdict that follows from it. Only a run that
+  /// finished has a verdict, so every other receipt is returned as it is.
+  let withSource (source: SourceState) (receipt: RunReceipt) : RunReceipt =
+    match receipt with
+    | RunReceipt.Ran ran -> RunReceipt.Ran { ran with Source = source; Verdict = verdictOf source ran.Counts }
+    | RunReceipt.Refused _
+    | RunReceipt.Pending _
+    | RunReceipt.Started _
+    | RunReceipt.Unattributable _ -> receipt
 
   /// Every requested test that did not pass in this run. Fail-closed, and the
   /// same set `RequestedRuns.failingIn` reports for the cohort landing gate.
@@ -262,14 +279,18 @@ module TestRunReceipt =
         | RunVerdict.AllPassed -> "Every requested test passed in this run."
         | RunVerdict.SomeFailed -> "Some tests failed:"
         | RunVerdict.Incomplete -> "This is not green: not every test passed in this run."
-        | RunVerdict.PassedOnStaleSource
-        | RunVerdict.PassedWhileRebuilding
-        | RunVerdict.PassedOnUnknownSource -> ""
+        | RunVerdict.PassedOnStaleSource ->
+          "Every requested test passed, but on STALE source: they ran the build, not the files. This is not green."
+        | RunVerdict.PassedWhileRebuilding ->
+          "Every requested test passed, but a rebuild was in progress, so this says nothing about the edits it is picking up. This is not green."
+        | RunVerdict.PassedOnUnknownSource ->
+          "Every requested test passed, but whether the build is current could not be told. This is not green."
       let problems =
         ran.Lines
         |> List.filter (fun line -> match line.Outcome with LineOutcome.Passed _ -> false | _ -> true)
         |> List.map (fun line -> sprintf "  %s: %s" line.Name (lineDetail line.Outcome))
-      String.concat "\n" (head :: verdict :: problems)
+      let source = sprintf "Source: %s" (SourceState.describe ran.Source)
+      String.concat "\n" (head :: verdict :: problems @ [ source ])
 
   /// The receipt as data, with a stable token for every case so an agent branches on
   /// the token and never parses the text.
@@ -291,6 +312,8 @@ module TestRunReceipt =
       node["session"] <- System.Text.Json.Nodes.JsonValue.Create(ran.Session)
       node["generation"] <- System.Text.Json.Nodes.JsonValue.Create(RunGeneration.value ran.Generation)
       node["verdict"] <- System.Text.Json.Nodes.JsonValue.Create(RunVerdict.token ran.Verdict)
+      // The disk against the build the tests ran against: its own field, and not the REPL's `replFreshness`.
+      node["source"] <- System.Text.Json.Nodes.JsonNode.Parse(Json.serialize Json.standard (SourceState.toWire ran.Source))
       let counts = System.Text.Json.Nodes.JsonObject()
       counts["passing"] <- System.Text.Json.Nodes.JsonValue.Create(ran.Counts.Passing)
       counts["failing"] <- System.Text.Json.Nodes.JsonValue.Create(ran.Counts.Failing)

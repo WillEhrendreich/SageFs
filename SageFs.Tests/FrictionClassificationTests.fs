@@ -181,59 +181,33 @@ let sessionRoutingErrorTests =
     }
   ]
 
+/// A ready session at the working directory these tests route by, with the project on disk loaded and a worker that says when
+/// it loaded the build: whether the loaded definitions are behind the files is read off the disk.
+let private ctxOverProject (project: SourceStateFixtures.Project) : McpContext =
+  let info =
+    { mkSessionInfo (SessionId.newId ()) @"C:\Repos\Proj" (SessionLifecycleStatus.Ready { Pid = 1; Port = Some 1 }) with
+        ProjectRoles = [ SourceStateFixtures.classified project ] }
+  { mkCtx [ info ] (Some (fun () -> SageFsModel.initial())) with
+      GetWarmupContext = Some (fun _ -> Task.FromResult (Some (SourceStateFixtures.warmup project))) }
+
 [<Tests>]
 let targetedVerifyStaleTests =
   testList "targetedVerifyResult — stale loaded state" [
-    testCaseTask "WHY — a confirmed-stale loaded file is reported as a real SageFsError classifying to LoadedStateStale, with the SAME presentation text targetedVerify already produces" <| fun () -> task {
-      let sessionInfo = mkSessionInfo (SessionId.newId ()) @"C:\Repos\Proj" (SessionLifecycleStatus.Ready { Pid = 1; Port = Some 1 })
-      let sid = SessionId.value sessionInfo.Id
-      let staleFile : FileStatus =
-        { Path = "UserPreferences.fs"
-          Readiness = Stale
-          LastLoadedAt = Some DateTimeOffset.UtcNow
-          IsWatched = true }
-      let sessionContext : SessionContext =
-        { SessionId = sid
-          ProjectNames = [ "Fake" ]
-          WorkingDir = @"C:\Repos\Proj"
-          Status = "Ready"
-          Warmup = WarmupContext.empty
-          FileStatuses = [ staleFile ]
-          Workflow = WorkflowTypes.SessionWorkflow.Interactive
-          AutoOpenNamespaces = true }
-      let ctx =
-        mkCtx [ sessionInfo ] (Some (fun () -> { SageFsModel.initial() with SessionContext = Some sessionContext }))
+    testCaseTask "WHY — a file written after the build the session loaded is reported as a real SageFsError classifying to LoadedStateStale, with the SAME presentation text targetedVerify already produces" <| fun () ->
+      SourceStateFixtures.using (fun project -> task {
+        SourceStateFixtures.editSource project
+        let ctx = ctxOverProject project
+        let! expectedText = targetedVerify ctx "mcp" (Some @"C:\Repos\Proj") "UserPreferences.loadFromFile" None
+        let! actualText, blocker = targetedVerifyResult ctx "mcp" (Some @"C:\Repos\Proj") "UserPreferences.loadFromFile" None
 
-      let! expectedText = targetedVerify ctx "mcp" (Some @"C:\Repos\Proj") "UserPreferences.loadFromFile" None
-      let! actualText, blocker = targetedVerifyResult ctx "mcp" (Some @"C:\Repos\Proj") "UserPreferences.loadFromFile" None
+        actualText |> Expect.equal "targetedVerifyResult must present the identical text targetedVerify does" expectedText
+        match blocker with
+        | Some err -> blockerKindOf err |> Expect.equal "a stale source must classify as LoadedStateStale" BlockerKind.LoadedStateStale
+        | None -> failtest "expected a stale-loaded-state blocker" })
 
-      actualText |> Expect.equal "targetedVerifyResult must present the identical text targetedVerify does" expectedText
-      match blocker with
-      | Some err -> blockerKindOf err |> Expect.equal "a confirmed-stale file must classify as LoadedStateStale" BlockerKind.LoadedStateStale
-      | None -> failtest "expected a stale-loaded-state blocker"
-    }
-
-    testCaseTask "WHY — a current (non-stale) loaded file has no blocker" <| fun () -> task {
-      let sessionInfo = mkSessionInfo (SessionId.newId ()) @"C:\Repos\Proj" (SessionLifecycleStatus.Ready { Pid = 1; Port = Some 1 })
-      let sid = SessionId.value sessionInfo.Id
-      let currentFile : FileStatus =
-        { Path = "UserPreferences.fs"
-          Readiness = Loaded
-          LastLoadedAt = Some DateTimeOffset.UtcNow
-          IsWatched = true }
-      let sessionContext : SessionContext =
-        { SessionId = sid
-          ProjectNames = [ "Fake" ]
-          WorkingDir = @"C:\Repos\Proj"
-          Status = "Ready"
-          Warmup = WarmupContext.empty
-          FileStatuses = [ currentFile ]
-          Workflow = WorkflowTypes.SessionWorkflow.Interactive
-          AutoOpenNamespaces = true }
-      let ctx =
-        mkCtx [ sessionInfo ] (Some (fun () -> { SageFsModel.initial() with SessionContext = Some sessionContext }))
-
-      let! _, blocker = targetedVerifyResult ctx "mcp" (Some @"C:\Repos\Proj") "UserPreferences.loadFromFile" None
-      blocker |> Expect.isNone "a current loaded file must not be classified as a blocker"
-    }
+    testCaseTask "WHY — a project whose files are all older than its build has no blocker" <| fun () ->
+      SourceStateFixtures.using (fun project -> task {
+        let ctx = ctxOverProject project
+        let! _, blocker = targetedVerifyResult ctx "mcp" (Some @"C:\Repos\Proj") "UserPreferences.loadFromFile" None
+        blocker |> Expect.isNone "a source in sync with its build must not be classified as a blocker" })
   ]

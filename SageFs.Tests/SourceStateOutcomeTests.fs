@@ -150,9 +150,25 @@ let private rebuildRows (client: McpClient) (httpClient: Net.Http.HttpClient) : 
     let! during = sessionStatus client 0
     during.GetProperty("sourceState").GetProperty("state").GetString()
     |> Expect.equal (sprintf "while the rebuild runs the source is Rebuilding. Status: %s" (during.ToString())) "Rebuilding"
-    // The tool's own event-driven wait, not a sleep: it returns once the session is Ready.
-    let! ready = sessionStatus client (int SageFs.Timeouts.statusWaitCap.TotalSeconds)
-    ready.GetProperty("lifecycle").GetString() |> Expect.equal (sprintf "the session is Ready again. Status: %s" (ready.ToString())) "Ready"
+    // A run asked for while the rebuild runs says so, however it passes: the old worker is still serving the old build.
+    let! mid, midText = runTests client
+    stateOf mid |> Expect.equal (sprintf "the receipt says Rebuilding. Text: %s" midText) "Rebuilding"
+    verdictOf mid |> Expect.equal "a pass during a rebuild is never AllPassed" "PassedWhileRebuilding"
+    // The old worker stays Ready while the new build is made, so the status wait has nothing to park on. The rebuild is over when
+    // its record says it succeeded and the session is Ready.
+    let last = ref ""
+    let! rebuilt =
+      SageFs.Tests.TestInfrastructure.waitForAsync (int TestTimeouts.workerSessionReady.TotalMilliseconds) (fun () ->
+        task {
+          let! status = sessionStatus client 0
+          last.Value <- status.ToString()
+          let succeeded =
+            match status.TryGetProperty "lastRestart" with
+            | true, restart when restart.ValueKind = JsonValueKind.Object -> restart.GetProperty("outcome").GetString() = "Succeeded"
+            | _ -> false
+          return succeeded && status.GetProperty("lifecycle").GetString() = "Ready"
+        })
+    rebuilt |> Expect.isTrue (sprintf "the rebuild finishes and the session is Ready again. Last status: %s" last.Value)
     let! enableStatus, _ = Http.postJson httpClient "/api/live-testing/enable" {||}
     enableStatus |> Expect.equal "live testing can be enabled again" 200
     let! discovered, snapshot, body =

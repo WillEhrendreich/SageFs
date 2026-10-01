@@ -10,7 +10,10 @@ type LoadedAssembly = {
   ModuleCount: int
 }
 
-/// File readiness in the FSI session.
+/// File readiness in the FSI session, as a display state: what the dashboard colours a file. It decides nothing. Whether the
+/// build a session runs is behind the files on disk is `SourceState`, read off the disk when asked and never cached here, so
+/// no trust decision (`targeted_verify`, `run_tests`) reads this type. Nothing produces `Stale` any more than it ever did; it
+/// stays only because the dashboard still has a colour for it (SageFs/DashboardFragments.fs).
 type FileReadiness =
   | NotLoaded
   | Loaded
@@ -123,6 +126,9 @@ type SessionContext = {
   WorkingDir: string
   Status: string
   Warmup: WarmupContext
+  /// The files the dashboard lists for this session and the test-source mapping starts from. Empty where the daemon builds
+  /// this record itself (SageFs/DaemonMode.fs, SageFs/Mcp.fs). It is a snapshot the Elm model holds, so it cannot say what is
+  /// on disk now: that is `SourceState` (SageFs.Core/Features/SourceState.fs), and it is not read from here.
   FileStatuses: FileStatus list
   Workflow: WorkflowTypes.SessionWorkflow
   /// Whether warmup auto-open is enabled for this session's directory

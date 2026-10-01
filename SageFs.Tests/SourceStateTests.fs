@@ -281,6 +281,19 @@ let renderTests =
       [ staleA; rebuildingState; unknownState ]
       |> List.iter (fun state -> SourceState.banner state |> Expect.isNotEmpty (sprintf "a warning for %A" state))
 
+    testCase "WHY — a session list always has a source line: plain when in sync, and loud when not, so an absence is never read as fine" <| fun _ ->
+      SourceState.listLine inSync |> Expect.stringContains "in sync, plainly" "in sync"
+      SourceState.listLine staleA |> Expect.stringContains "stale, loudly" "STALE SOURCE"
+      SourceState.listLine rebuildingState |> Expect.stringContains "a rebuild is said" "rebuild"
+      SourceState.listLine unknownState |> Expect.stringContains "unknown says why" "A.fs"
+      SourceState.listLine (SourceState.Unknown UnknownReason.NoProjectLoaded) |> Expect.stringContains "a bare session says it has no project" "no project"
+
+    testCase "WHY — annotate keeps the result first and whole, and adds the warning only when the build is not known to be current" <| fun _ ->
+      SourceState.annotate inSync "result" |> Expect.equal "nothing added" "result"
+      let text = SourceState.annotate staleA "result"
+      text |> Expect.stringContains "the result is still first" "result\n\nWARNING"
+      text |> Expect.stringContains "and the warning says STALE" "STALE"
+
     testCase "WHY — a rebuild is described as in progress, with the old build still serving" <| fun _ ->
       SourceState.describe rebuildingState |> Expect.stringContains "says rebuild" "rebuild"
       SourceState.describe rebuildingState |> Expect.stringContains "says the old build keeps serving" "keeps serving"
@@ -307,7 +320,7 @@ let private receiptOf (outcomes: LineOutcome list) : RunReceipt =
       Lines = lines
       Source = SourceState.Unknown UnknownReason.NotAssessed }
 
-let private passed = LineOutcome.Passed (TimeSpan.FromMilliseconds 5.0)
+let private passed = LineOutcome.Passed FixtureDurations.usualResult
 
 let private verdictWith (source: SourceState) (outcomes: LineOutcome list) : RunVerdict =
   match TestRunReceipt.withSource source (receiptOf outcomes) with
@@ -341,7 +354,7 @@ let receiptTests =
       let id = TestId.create "a" TestFramework.Expecto
       let requested, generation = RequestedRuns.request (Some requestId) "s1" [ id ] LiveTestState.empty
       let running = RequestedRuns.started "s1" generation requested
-      let result = mkResult id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+      let result = mkResult id (TestResult.Passed FixtureDurations.usualResult)
       let finished =
         { RequestedRuns.stampResults (Some "s1") [ result ] running with
             LastResults = Map.ofList [ id, result ] }

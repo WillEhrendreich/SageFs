@@ -1379,6 +1379,17 @@ module McpTools =
       | SageFs.ExpensiveWorkLease.ReleaseOutcome.Released -> Ok "released"
       | SageFs.ExpensiveWorkLease.ReleaseOutcome.AlreadyGone -> Ok "already_gone_or_not_owned"
 
+  /// The worker's own warmup report for a session: when it loaded the build it runs, and which assemblies. None when the worker
+  /// cannot answer, which the source state then says as Unknown.
+  let warmupOf (ctx: McpContext) (sid: string) : Task<WarmupContext option> =
+    task {
+      match ctx.GetWarmupContext with
+      | None -> return None
+      | Some get ->
+        try return! get sid
+        with _ -> return None
+    }
+
   let private sessionStatusPayload
     (ctx: McpContext)
     (agent: string)
@@ -1408,6 +1419,8 @@ module McpTools =
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
+             // No worker to ask, so a rebuild in progress is what this shape can say about the source.
+             sourceState = SourceState.toWire (SourceStateProbe.ofSessionRecord info None)
              available = SageFs.Affordances.availableTools SageFs.SessionState.WarmingUp |})
       | FaultedSession (sid, cause) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1422,6 +1435,7 @@ module McpTools =
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
+             sourceState = SourceState.toWire (SourceStateProbe.ofSessionRecord info None)
              available = SageFs.Affordances.availableTools SageFs.SessionState.Faulted |})
       | Routable sid ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1469,7 +1483,8 @@ module McpTools =
               // result. Without this a failed rebuild was recorded and then
               // never shown, so it read exactly like one still running.
               LastRestart = SessionStatusPayload.lastRestartOfSession info (Some snapshot.CoreVersion)
-              LastReload = sessionInfo.Reload; ReplFreshness = sessionInfo.Freshness }
+              LastReload = sessionInfo.Reload; ReplFreshness = sessionInfo.Freshness
+              SourceState = SourceStateProbe.ofSession sessionInfo warmup }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
@@ -1567,6 +1582,7 @@ module McpTools =
                   WorkingDir = sessionInfo.WorkingDirectory
                   Status = WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status
                   Warmup = warmup
+                  // Empty on purpose: staleness is `SourceState`, read off the disk when asked (see DaemonMode.fs).
                   FileStatuses = []
                   Workflow = sessionInfo.Workflow
                   AutoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory sessionInfo.WorkingDirectory
@@ -2221,7 +2237,17 @@ module McpTools =
           let sid = WorkerProtocol.SessionId.value s.Id
           sid, occupantsForSession ctx sid)
         |> Map.ofList
-      return SessionOperations.formatSessionList System.DateTime.UtcNow (Some occupancyMap) sessions
+      // Each session's source line is read off the disk and the worker's own warmup report, all sessions at once.
+      let! sources =
+        sessions
+        |> List.map (fun s ->
+          task {
+            let sid = WorkerProtocol.SessionId.value s.Id
+            let! warmup = warmupOf ctx sid
+            return sid, SourceStateProbe.ofSession s warmup
+          })
+        |> Task.WhenAll
+      return SourceStateProbe.formatSessionList System.DateTime.UtcNow (Some occupancyMap) (Map.ofArray sources) sessions
     }
 
   /// Stop a session by ID.
@@ -2774,48 +2800,36 @@ module McpTools =
 
 
 
-  /// What a session's trustworthiness is judged from: its status, whether its loaded
-  /// files are stale, and any type-identity diagnostic. Shared by `targeted_verify`
-  /// and `run_tests` so both judge trust from one place. `artifact` names what was
-  /// loaded when the session reports no file list.
-  let sessionTrustObservation (ctx: McpContext) (sid: string) (artifact: string) =
+  /// What a session's trustworthiness is judged from, apart from whether its build is behind the files: its status and any
+  /// type-identity diagnostic. `loaded` is the loaded-definition state to judge by, when the caller has one. `run_tests` passes
+  /// none: a build behind the files is not a reason to refuse a run, it is what the receipt's `source` says about it.
+  let sessionStatusObservation (ctx: McpContext) (sid: string) (loaded: Features.Verification.LoadedDefinitionState option) =
     task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-      let status = info |> Option.map (fun session -> session.Status)
-      let loadedState,
-          sessionLoadedState =
-        match ctx.GetElmModel |> Option.map (fun getModel -> (getModel ()).SessionContext) |> Option.flatten with
-        | Some sessionCtx ->
-          let statuses =
-            match sessionCtx.SessionId = sid with
-            | true -> sessionCtx.FileStatuses
-            | false -> []
-          match statuses |> List.tryFind (fun file -> file.Readiness = FileReadiness.Stale) with
-          | Some stale ->
-            let lastLoaded = stale.LastLoadedAt |> Option.map string |> Option.defaultValue "unknown-loaded-version"
-            let state = Features.Verification.LoadedDefinitionState.ConfirmedStale (stale.Path, lastLoaded)
-            state, Some state
-          | None ->
-            let loaded =
-              statuses
-              |> List.filter (fun file -> file.Readiness = FileReadiness.Loaded)
-              |> List.map (fun file -> file.Path)
-              |> function
-                 | [] -> artifact
-                 | files -> String.concat ", " files
-            let state = Features.Verification.LoadedDefinitionState.ConfirmedCurrent loaded
-            state, Some state
-        | None ->
-          let state = Features.Verification.LoadedDefinitionState.UnknownLoadState "warmup file status unavailable"
-          state, None
       let observation : Features.Verification.SessionTrust.SessionObservation =
         { MatchingSessionIds = [ sid ]
-          SessionStatus = status
-          LoadedState = sessionLoadedState
+          SessionStatus = info |> Option.map (fun session -> session.Status)
+          LoadedState = loaded
           TypeIdentityDiagnostic =
             match typeIdentityDiagnostics.TryGetValue(sid) with
             | true, diag -> Some diag
             | _ -> None }
+      return observation
+    }
+
+  /// What `targeted_verify` judges a session by: its status, any type-identity diagnostic, and whether the loaded definitions
+  /// are behind the files on disk (the live `SourceState`, read when asked). `artifact` names what was loaded.
+  let sessionTrustObservation (ctx: McpContext) (sid: string) (artifact: string) =
+    task {
+      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+      let! warmup = warmupOf ctx sid
+      let loadedState = SourceStateProbe.loadedDefinitionOf artifact (SourceStateProbe.ofSessionRecord info warmup)
+      let judged =
+        match loadedState with
+        | Features.Verification.LoadedDefinitionState.UnknownLoadState _ -> None
+        | Features.Verification.LoadedDefinitionState.ConfirmedCurrent _
+        | Features.Verification.LoadedDefinitionState.ConfirmedStale _ -> Some loadedState
+      let! observation = sessionStatusObservation ctx sid judged
       return loadedState, observation
     }
 
