@@ -91,6 +91,42 @@ let tests =
       outcome.Effects
       |> Expect.isEmpty "a file no test reaches should not queue an unrelated test"
 
+    // The keystroke cause is the as-you-type path: the type-check of a settled
+    // buffer reports `Changed = []` for `a + b` -> `a - b` exactly as it does on
+    // save, because the name set did not move. The save-only guard left this
+    // path selecting nothing, so the pane stayed green on a real regression.
+    testCase "a body-only keystroke edit selects the tests that reach the edited file" <| fun _ ->
+      let impacted = mkTest "Module.Tests.should_add" TestCategory.Unit
+      let unrelated = mkTest "Other.Tests.should_greet" TestCategory.Unit
+      let state =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            DiscoveredTests = [| impacted; unrelated |] }
+      let graph =
+        exactGraph [ "Module.add", [| impacted.Id |]
+                     "Other.greet", [| unrelated.Id |] ]
+
+      let outcome =
+        TestCycleEffects.decideAfterTypeCheck
+          { Changed = []; InFile = [ "Module.add" ] }
+          "Module.fs"
+          RunTrigger.Keystroke
+          graph
+          state
+          None
+          Map.empty
+
+      match outcome.Decision, outcome.Effects with
+      | Some decision, [ TestCycleEffect.RunAffectedTests req ] ->
+        req.Tests
+        |> Array.map (fun tc -> tc.Id)
+        |> Expect.equal "only the tests reaching the edited file should be selected" [| impacted.Id |]
+        decision.Explanation.Precision
+        |> Expect.notEqual
+          "a body-only keystroke edit must never be reported as 'no impacted tests'"
+          SelectionPrecision.NoImpactedTests
+      | other -> failtestf "expected a run covering the edited file on a keystroke, got %A" other
+
     // Keystrokes are excluded on purpose: a half-typed buffer resolves a
     // shifting symbol set, and selecting on it would thrash the runner on
     // every character.
