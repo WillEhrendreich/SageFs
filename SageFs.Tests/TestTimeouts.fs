@@ -1126,3 +1126,23 @@ module BrowserWaits =
   let staleDetected = ms TestTimeouts.sseListen
   /// The banner clearing again after the daemon restarts.
   let reconnected = ms TestTimeouts.patience
+
+// ---- rebuild wait ----
+
+/// Durations the rebuild readiness wait tests choose on purpose.
+module RebuildWaitTimeouts =
+  /// A deadline the test means to hit. Short, so the one test that waits it out stays quick.
+  let deadlineToHit = System.TimeSpan.FromMilliseconds 150.
+
+  /// A deadline the test must not hit. A passing test never waits this out, and reaching it
+  /// would mean the wait under test never finished.
+  let deadlineNotHit = System.TimeSpan.FromSeconds 60.
+
+  /// How long a test lets the wait sit parked before it checks that nothing polled. The
+  /// removed poll ran every 50 ms for the first second, so this window would have held
+  /// several polls. Nothing can be awaited here, so it is a fixed settle.
+  let quietWindow = System.TimeSpan.FromMilliseconds 300.
+
+  /// How long a test lets a cancelled or superseded rebuild have to wrongly report. It has
+  /// no signal to wait for, because the right outcome is that nothing happens.
+  let nothingReportedWindow = System.TimeSpan.FromMilliseconds 200.
