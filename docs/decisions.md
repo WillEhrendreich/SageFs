@@ -156,3 +156,25 @@ uses coverage with a no-empty-escape floor. The code states the residual gap its
 dependency graph has not yet seen the test file that covers a symbol, the live narrow finds nothing,
 and only the landing gate's floor catches it. One selection rule with one floor, fail closed, is the
 goal. Nothing has been changed here yet.
+
+## One JSON facade over FSharp.SystemTextJson, not a source-generated backend
+
+.NET 11's `System.Text.Json` writes an F# union and .NET 10's throws, which broke `get_session_status` on the net10
+tool asset. The cause was 16 separate options objects and about 150 call sites each deciding for themselves, not the
+F# converter library, which was already a dependency and works on both runtimes. `SageFs.Json`
+(`SageFs.Core/Json.fs`) is the one place that serializes and deserializes: a closed set of named profiles over
+FSharp.SystemTextJson, golden-text tests that run in the net11 tier and the net10 tier, and a per-file ratchet in
+`JsonCentralizationTests` that only goes down.
+
+Serde.FS.Json (a source-generated, reflection-free backend) was evaluated against SageFs's real shapes and turned
+down. It throws on anonymous records (the dominant payload shape: 128 distinct shapes in three files), has no
+profiles, writes neither of the two pinned wires, converts floats through `Decimal` so .NET 10 and .NET 11 write
+different text, is 6 to 13 times slower to serialize with several times the allocation, needs a .NET 9.0.0 runtime to
+build, and has one maintainer and a 1.0 beta. It wins only on the first call in a fresh process, which a warm-up call
+removes. The full report is `serde-fs-evaluation-2026-09-30.md` (untracked), and the spike is on the branch
+`worktree-agent-af7099f03d7c43d44`.
+
+Evidence: `SageFs.Core/Json.fs`, `SageFs.Tests/JsonTests.fs`, `SageFs.Tests/JsonCentralizationTests.fs`.
+Reopen it if: Serde.FS reaches a stable 1.0 with more than one publisher, a generator that runs on the SDK's own
+runtime, floats that agree across runtimes, per-call options plus anonymous-record support, and a reader that is not
+slower than STJ. The report lists the five conditions.
