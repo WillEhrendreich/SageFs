@@ -667,3 +667,36 @@ Evidence: `LivePause` and `TestScope` in `SageFs.Core/Features/LiveTestingTypes.
 `SageFs.Core/Features/LiveTestingCycle.fs`, the routes in `SageFs/McpServer.fs`,
 `SageFs.Tests/LiveTestingScaleControlsTests.fs` and the journeys in `SageFs.Tests/LiveTestingJourneyTests.fs`.
 Reopen it if: users with large suites ask for named groups that outlive a session.
+
+## A save that finds the session busy is evaluated when the run ends, and "confirmed" means no build is in flight
+
+The provenance journey (`LT provenance: an evaluated verdict is confirmed by a real build`) failed about half the time
+on the release gate, and the save-to-green latency test failed the same way once. The journey wrote a file and waited
+for the verdict to show up as `Evaluated`. Sometimes it never did. Running the `--integration-lt` tier in a loop with
+every frame the feed saw printed on a timeout showed two things.
+
+The first is a product bug. After a type-check passes, the decision looks at the session, finds a run in flight, and
+emits nothing. The run it owes for later was only kept when the effect was a `RequestRebuild`, and the live path
+doesn't emit that any more (it evaluates the buffer instead, `redirectToEvalBuffer`). So the owed run was thrown away,
+and a save is the last event of an edit, so nothing asked again. The verdict for that save never arrived, until the
+next edit. Any run counts as busy, including the run that a confirmation's own worker restart causes. Now the queue
+keeps the evaluation (`QueuedMeans.EvaluateThenRun`, with the text that was checked) and `promoteQueuedRebuild` starts
+it when the busy run ends, if that text is still the newest. A rebuild is still queued as `RebuildThenRun` for the
+compile-failure path. The RED proof is `SageFs.Tests/LiveTestRebuildCycleTests.fs` (commit 92cc909c).
+
+The second is the journey waiting for the wrong thing. It waited for "no row is `Evaluated`" before it started. A
+confirmation's build restarts the worker, and the run that restart causes marks every row `Compiled` while the build
+is still going, so the rows said "confirmed" with a build in flight, and the journey edited a file in the middle of the
+restart. The status now carries `Confirmation` (`idle`, `quiet`, `building`, `running_built`), the machine's own
+phase, and the journeys wait for `idle`, asking again after each verdict or summary frame.
+
+Still open: an edit that arrives while a confirmation's worker restart is under way can be lost for a real user too
+(its type-check has no worker to answer it). The journeys now avoid it by waiting. The fix for users is for a check
+or an eval to wait for the session to be Ready (`AwaitReady`) before it uses the proxy. I haven't done that because I
+haven't seen it fail since the journeys stopped overlapping the restart, and the daemon log now says when a check
+blocks or doesn't answer, so it will show up if it matters.
+
+Evidence: `SageFs.Core/Features/LiveTestingCycle.fs` (`QueuedMeans`, `promoteQueuedRebuild`),
+`SageFs.Core/Features/BuildConfirmation.fs` (`ConfirmationPhase.toWireValue`), `SageFs/LiveTestStatusView.fs`,
+`SageFs.Tests/LiveTestingProvenanceTests.fs`, `SageFs.Tests/LtStream.fs` (`awaitConfirmed`, `describeHistory`).
+Reopen it if: a user reports a save with no verdict while a confirmation is building.
