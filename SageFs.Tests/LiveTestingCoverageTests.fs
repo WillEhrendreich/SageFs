@@ -1504,9 +1504,9 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
     // WHY: The coverage path requires both instrumentation maps AND collected bitmaps.
     // When bitmaps are absent (first run, not yet collected), the coverage path must be
     // bypassed entirely — we cannot use zero-data bitmaps to select which tests to run.
-    // This test uses Keystroke trigger (not FileSave) to isolate the coverage path behavior;
-    // FileSave on a compiled file with empty dep graph also triggers the compiled-file fallback
-    // (which is separately tested in LiveTestRebuildCycleTests), which would obscure this test's intent.
+    // This test uses a script (.fsx) to isolate the coverage path behavior: any trigger on a
+    // compiled file with nothing narrowed also triggers the no-empty-escape floor
+    // (tested in LiveTestingAfterTypeCheckScenarioTests), which would obscure this test's intent.
     let tid = TestId.TestId "ns.test2"
     let sp = { SequencePoint.File = "src/Other.fs"; Line = 5; Column = 1; EndLine = 0; EndColumn = 0; BranchId = 0 }
     let imap = {
@@ -1528,7 +1528,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
     let instrumentationMaps = Map.ofList [ "s1", [| imap |] ]
     let effects =
       TestCycleEffects.afterTypeCheck
-        [] "src/Other.fs" RunTrigger.Keystroke
+        [] "src/Other.fsx" RunTrigger.Keystroke
         TestDependencyGraph.empty state None instrumentationMaps
     effects
     |> List.isEmpty

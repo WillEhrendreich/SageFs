@@ -1096,7 +1096,9 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         Activation = LiveTestingActivation.Active
         DiscoveredTests = [| testCase |]
         RunPolicies = RunPolicyDefaults.defaults }
-    TestCycleEffects.afterTypeCheck [] "test.fs" RunTrigger.Keystroke graph ltState None Map.empty
+    // A script, not a compiled file: a compiled file with nothing narrowed
+    // widens to every discovered test (the no-empty-escape floor).
+    TestCycleEffects.afterTypeCheck [] "test.fsx" RunTrigger.Keystroke graph ltState None Map.empty
     |> Expect.isEmpty "no effect when no symbols"
   }
 ]
