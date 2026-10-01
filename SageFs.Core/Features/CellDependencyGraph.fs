@@ -21,12 +21,27 @@ type CellGraph = {
 let private containsIdentifier (name: string) (source: string) =
   IdentifierScan.occursAsFreeIdentifier name source
 
+/// What the MCP text path writes in front of a worker's eval output
+/// (`formatWorkerEvalResult` in Mcp.fs). The eval history stores that text, so
+/// the first `val` line of every statement arrives behind it, and a reader that
+/// only looks for a line starting `val ` misses it.
+[<Literal>]
+let McpResultPrefix = "Result: "
+
+/// One line of recorded eval output as the binding readers see it: trimmed,
+/// with the MCP result prefix taken off.
+let fsiOutputLine (line: string) : string =
+  let trimmed = line.Trim()
+  match trimmed.StartsWith(McpResultPrefix, System.StringComparison.Ordinal) with
+  | true -> trimmed.Substring(McpResultPrefix.Length).TrimStart()
+  | false -> trimmed
+
 /// Names bound by the `val` lines of FSI output, in output order. The name
 /// runs from after `val ` to the first ':' or space.
 let producedNames (fsiOutput: string) : string list =
   fsiOutput.Split('\n')
   |> Array.choose (fun line ->
-    let trimmed = line.Trim()
+    let trimmed = fsiOutputLine line
     match trimmed.StartsWith("val ") with
     | true ->
       let nameEnd = trimmed.IndexOfAny([| ':'; ' ' |], 4)
