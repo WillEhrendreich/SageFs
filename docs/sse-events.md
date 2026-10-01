@@ -45,10 +45,27 @@ The event names are defined in `allSseEventTypes` in `SageFs.Core/SseWriter.fs`.
 
 #### What the `live_bindings` walk does to your values
 
-The walk reads every bound value after each eval, which means it runs your
-property getters. Since 0.6.865 it is careful about the ways that can hurt
-(`SageFs.Core/Features/LiveValueTree.fs`, the reasoning is in
-[decisions.md](decisions.md#looking-at-a-value-never-runs-the-users-code-on-the-eval-thread)):
+The walk has a mode, per session, and the default is `Safe` (`SageFs.Core/Features/LiveValueTree.fs`; the reasoning is in
+[decisions.md](decisions.md#the-live-bindings-pane-starts-in-safe-mode-and-a-click-walks-the-binding-again)):
+
+| Mode | What it does with a class instance |
+|:---|:---|
+| `Safe` (default) | Reads fields. Runs a getter only when its compiled body provably does nothing. Every other getter is a `NotEvaluated` node. |
+| `Everything` | Runs every public getter, after every eval, under the one-second walk budget. That is your code running. |
+| `Off` | Does not open a class instance. Records, unions, tuples, lists and maps still show. |
+
+A mode is chosen with `POST /api/sessions/{sid}/live-values/mode` (`{"mode": "Safe" | "Everything" | "Off"}`), read back with
+`GET` on the same path, and set for new sessions in `.SageFs/config.fsx` with `ValueWalk = WalkSafe | WalkEverything | WalkOff`.
+
+A row the walk listed and did not read is a node whose `Kind` is `{"Case":"NotEvaluated","Fields":[<reason>]}`, and its `Preview`
+says why in words. The reason is one of `GetterRunsCode`, `GetterLoops`, `SequenceNotEnumerated`, `ClassesCollapsed`,
+`EvaluationTimedOut`, `EvaluationThrew` (with the message) and `EvaluationNotContained` (with why). The first two can be run on
+demand: `POST /api/sessions/{sid}/live-values/evaluate` with `{"binding": "box", "path": ["RunsCode"]}` runs that one getter on a
+dedicated thread under a deadline and, on Linux x86-64, a syscall filter, answers with what it came to (and a containment line to
+show), and replaces that binding's tree. The event is pushed again after a click and after a mode switch, not only after an eval.
+The last three reasons are what a click came to when it did not give a value: show "unknown" and the reason, never an empty row.
+
+Whatever the mode:
 
 - A `Task` is shown by its status. The walk never waits on it, and reads `Result`
   or `Exception` only once the task has finished. `ValueTask` is handled the same
@@ -63,14 +80,11 @@ property getters. Since 0.6.865 it is careful about the ways that can hurt
   still stuck, the pass says so and stops starting new ones until the session
   restarts.
 
-What this does not cover yet. A getter stuck in an infinite loop (a
-`member this.Self = this.Self` compiles to one, because F# makes the self-call a
-tail call) never returns, and the abandoned walker thread keeps spinning a core
-for the life of the host. The deadline hides it from the eval thread and does not
-stop it. A getter that overflows the stack kills the host process, and with it the
-session; nothing in the walk can catch that. The fix I have in mind is to stop
-running getters on types you wrote and show their fields instead, but that
-changes what the dashboard shows for a class instance, so I haven't done it.
+What this does not cover. In `Everything` mode a getter stuck in an infinite loop (a `member this.Self = this.Self` compiles to
+one, because F# makes the self-call a tail call) never returns, and the abandoned walker thread keeps spinning a core for the life
+of the host. A getter that overflows the stack kills the host process. `Safe` mode never runs those on its own. A click can still
+run one, and the containment (a deadline, and a syscall filter where the OS has one) does not stop a spin, an overflow or an
+in-memory effect. The same is true of a getter a click runs on an OS with no filter, and the pane says so.
 
 ### Live Testing
 

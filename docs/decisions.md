@@ -261,6 +261,48 @@ Evidence: `SageFs.Core/ThreadSandbox.fs`, `SageFs.Tests/ThreadSandboxTests.fs`.
 Reopen it if: arm64 gets a machine to verify on, or a getter that does I/O through an fd opened before the filter turns
 out to matter.
 
+## The live bindings pane starts in Safe mode, and a click walks the binding again
+
+The pane used to run every public getter of every class value after every eval. That is your code running, on a clock you
+didn't choose, and a getter that loops, blocks or does I/O makes the pane the thing that hurts you. So there are three
+modes, per session, and the default is the one that runs nothing of yours:
+
+- **Safe** reads fields, and runs a getter only when its compiled body provably does nothing (a field read, a constant,
+  straight-line arithmetic). Every other getter is listed with why it was not read, and a small button.
+- **Everything** is the old behaviour, under the one-second walk budget. The pane says what it does when you pick it, because
+  it runs your getters.
+- **Off** does not open a class instance at all. Records, unions, tuples, lists and maps show in every mode.
+
+Safe is the default because the other two have a cost you only pay if you ask. A mode you pick survives a reset and a hard
+reset of the session (the worker tells each new session before it first reads it). It does not survive the worker process
+restarting, and then `.SageFs/config.fsx` applies again: `{ DirectoryConfig.empty with ValueWalk = WalkEverything }`. The
+setting is a closed union, not a string, and the config only ever applies to a worker nobody has chosen a mode for, so it can
+never overrule a click on the pane.
+
+A click on a listed getter walks that one binding again, with that one getter run, and the new tree replaces the old one in the
+store. I didn't patch a value into the tree because the tree is the answer: if the getter threw, timed out or could not be
+contained, the row says so, and a row that says "unknown, and why" is the same shape as every other row. The click only means
+something in Safe mode. In Everything the getters already ran, and in Off the class is collapsed, so the host refuses with that
+reason and the pane shows it. The result goes through the same store an eval's pull feeds, so the dashboard and the editors'
+`live_bindings` event hear about a click the way they hear about an eval, and there is no second path to keep in sync.
+
+What the containment stops is in the entry above, and it is worth saying again where the click is. The getter runs on a dedicated
+thread under a 5 second deadline, and on Linux x86-64 under a seccomp filter that stops the network, writes and new processes. It
+does not stop a spin, a stack overflow or an in-memory effect. A getter that never returns is given up on at the deadline and its
+thread keeps spinning until the host restarts, so the browser journey that clicks one runs last. Everywhere else the getter runs
+under the deadline only, and the line under the pane header says "no I/O containment here" with the reason. A getter that mutates
+state in memory runs once, on your click, and is not undone.
+
+The pane's header shows the real mode as the pressed one of three buttons, how many rows are not evaluated, and the containment
+line of the last click. Rows and header wrap with no breakpoint, so no width can push a control off the pane or onto its neighbour.
+
+Evidence: `SageFs.Core/Features/LiveBindingsPane.fs`, `SageFs.Core/DirectoryConfigTypes.fs` (`ValueWalk`),
+`SageFs.FsiHost/FsiProtocol.fs` (`MemberClick.judge`), `SageFs/McpServer.fs` (`mapLiveBindingsRoutes`),
+`SageFs.Tests/LiveBindingsPaneTests.fs`, `SageFs.Tests/LiveBindingsPanelTests.fs`, and the real-browser journeys in
+`SageFs.Tests/LiveBindingsBrowserTests.fs`.
+Reopen it if: the default mode surprises people more than Everything did, or a getter the classifier calls harmless turns out to do
+something. The classifier is the thing to fix then, not the default.
+
 ## A dead FSI host is a state the session reports, and we don't restart it for the user
 
 Found live on 0.6.865: a thread in user code threw, the isolated FSI host aborted (exit 134), and the session stayed
