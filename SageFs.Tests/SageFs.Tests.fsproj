@@ -199,6 +199,11 @@
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
+        <Compile Include="TrunkFollowSimTests.fs" />
+        <Compile Include="TrunkFollowTests.fs" />
+        <Compile Include="TrunkFollowShellTests.fs" />
+        <Compile Include="TrunkPanelTests.fs" />
+        <Compile Include="TrunkGitTests.fs" />
         <Compile Include="LiveCheckPumpSimTests.fs" />
         <Compile Include="LiveCheckRelayTests.fs" />
         <Compile Include="ValueReadSimTests.fs" />
@@ -748,6 +753,7 @@
         <Compile Include="CohortIntegrationHeadTests.fs" />
         <Compile Include="CohortLandingGitAcceptanceTests.fs" />
         <Compile Include="CohortDogfoodIntegrationTests.fs" />
+        <Compile Include="TrunkLandingOutcomeTests.fs" />
         <Compile Include="CohortLedgerExportTests.fs" />
         <Compile Include="CohortPlayTests.fs" />
         <Compile Include="CohortPerfBudgetTests.fs" />

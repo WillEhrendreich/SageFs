@@ -3147,6 +3147,41 @@ let renderCohortLanesPanel (ledgerEntries: SageFs.Cohort.LedgerEntry<MemberTable
       ]
     ]
 
+/// What the trunk did with each landing that landed: whether the trunk session's running app took it, by which mechanism, and what
+/// the save pipeline said (a patch pending until its new body has run, a restart and the cause it names). A landing the trunk is
+/// following or has queued is listed as such. Renders nothing before the first landing lands, like the lane view.
+let renderTrunkPanel (machine: Features.TrunkFollow.TrunkMachine) : XmlNode =
+  let landingText (SageFs.Cohort.LandingId id) = id
+  let landings = machine.Records |> List.rev
+  let inFlight =
+    match machine.Phase with
+    | Features.TrunkFollow.Phase.Idle -> []
+    | Features.TrunkFollow.Phase.Moving l -> [ landingText l.Landing, "following: moving the trunk checkout" ]
+    | Features.TrunkFollow.Phase.Delivering (l, _, waiting, _) ->
+      [ landingText l.Landing, sprintf "following: waiting on session %s" (String.concat ", " waiting) ]
+  let queued = machine.Queued |> List.map (fun l -> landingText l.Landing, "queued behind the landing in flight")
+  match landings, inFlight, queued with
+  | [], [], [] -> Elem.div [] []
+  | _ ->
+    let count = List.length landings
+    signalDetails Signals.CohortTrunkOpen [ Attr.id DomIds.CohortTrunk; Attr.class' "panel"; Attr.style "margin-top: 0.4rem;" ] [
+      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
+        textEnc (sprintf "Trunk: %d landing%s followed" count (if count = 1 then "" else "s"))
+      ]
+      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
+        for id, text in inFlight @ queued do
+          Elem.li [ Attr.style "overflow-wrap: anywhere;" ] [
+            Elem.div [] [ textEnc id ]
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [ textEnc text ]
+          ]
+        for record in landings do
+          Elem.li [ Attr.style "overflow-wrap: anywhere;" ] [
+            Elem.div [] [ textEnc (sprintf "%s at %s" (landingText record.Landing) (record.Commit.Substring(0, min 8 record.Commit.Length))) ]
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [ textEnc (Features.TrunkFollow.describeVerdict record.Verdict) ]
+          ]
+      ]
+    ]
+
 /// §6.5's time-scrubber (Phase 2 item 16): "the scrubber over a CohortFrame
 /// SnapshotRing with per-tab Viewing and `f` = `fork_cohort` at the viewed
 /// seq". See `CohortScrubber.fs`'s module doc for why no `SnapshotRing`/

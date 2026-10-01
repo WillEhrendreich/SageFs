@@ -64,6 +64,8 @@ module DomIds =
   let [<Literal>] CohortMatrix = "cohort-matrix"
   let [<Literal>] CohortTerritory = "cohort-territory"
   let [<Literal>] CohortLanes = "cohort-lanes"
+  /// What the trunk did with each landing: the mechanism and outcome the trunk session's save pipeline reported.
+  let [<Literal>] CohortTrunk = "cohort-trunk"
   let [<Literal>] CohortScrubber = "cohort-scrubber"
   /// The workflow picker in the tabline — replaces the old read-only badge
   /// (roast §4.1/§4.2/§11 Island B item 4). One id, morphed in place both
@@ -162,6 +164,7 @@ module Signals =
   /// character grid applies to its PNG) — collapsed by default.
   let [<Literal>] CohortTerritoryTextOpen = "cohortTerritoryTextOpen"
   let [<Literal>] CohortLanesPanelOpen = "cohortLanesPanelOpen"
+  let [<Literal>] CohortTrunkOpen = "cohortTrunkOpen"
   /// The lane view's text-legend fallback (§6.5 "a picture is not a
   /// document"), same convention as `CohortTerritoryTextOpen` — collapsed by
   /// default.
@@ -1206,6 +1209,8 @@ type DashboardInfra = {
   /// full read per dashboard push is cheap the same way the friction
   /// panel's per-push SQLite read already is.
   ReadCohortLedger: unit -> Cohort.LedgerEntry<MemberTable.MemberId> list
+  /// What the trunk has done with each landing that landed (`TrunkFollowOwner.Handle.Read`): wait-free, like `ReadCohortFrame`.
+  ReadTrunk: unit -> Features.TrunkFollow.TrunkMachine
 }
 
 /// Complete snapshot of all dashboard state needed for a single full-page render.

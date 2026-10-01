@@ -123,6 +123,7 @@
         <Compile Include="McpDebugTest.fs" />
 
 
+        <Compile Include="TrunkFollowShell.fs" />
         <Compile Include="McpCohortIntegration.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />

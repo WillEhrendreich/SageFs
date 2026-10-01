@@ -1113,3 +1113,52 @@ Evidence: `SageFs.Core/MachineTier.fs`, `MachineProfile.fs`, `MachineCalibration
 `SessionManagerStartEscalationTests.fs`; `scripts/machine-bench.fsx`.
 Reopen it if: a machine in the field starts slower than its tier's factor allows and the message did not say so, or a
 wait that is fixed turns out to be waiting on the machine.
+
+## A landing is a save in the trunk, handed to the worker by the daemon and not seen by its watcher
+
+The cohort already landed agents' work: claims, a rebase in an integration worktree, a verification, a fast-forward of a ref.
+Nothing used the result. The live loop wants the other half: what lands is served by the running app, with its state, and the
+daemon says how. So there is now a **trunk checkout**, a second detached worktree that `set_integration_ref` makes, moved to a
+landing's commit after the landing has landed and never before. A **trunk session** is a session whose working directory is it,
+and nothing registers one: the working directory is the whole definition (`TrunkSessions.sessionsIn`).
+
+I did not use the integration worktree as the trunk. The gate rewrites it for every landing it verifies, before the verdict, and a
+trunk app there would have served changes that never landed. I did not let the worker's file watcher deliver the landing either.
+The checkout is written by git, in several files at once, and the watcher would run the same save the daemon is about to hand over
+and report a second save that changed nothing over the first, on the very row that is supposed to say what the landing did. So a
+worker in a trunk session is told, before the checkout moves, to take its saves from landings only (`SetSaveSource`), and the
+daemon hands it the files (`ApplySaves`). The worker runs its own pipeline over them, one at a time and in order, which is the
+pipeline a person's save takes, and the verdict is the first terminal event that pipeline records for the file. The cost is that
+a person's save in the trunk checkout is not hot reloaded there. The checkout is the daemon's, so I took it.
+
+The decision is pure (`TrunkFollow.step`) and one owner folds it (`TrunkFollowOwner`), the way `BuildConfirmation` and the cohort
+owner are built: a landing that lands while another is being followed waits, landings are followed in the order they landed, and
+a report that a patch settled that arrives before the answer carrying the patch is held and applied when the answer lands.
+The record says what the pipeline said and nothing more. `PatchPending` is not `Patched`; the worker's later report is what
+makes it `Patched`.
+
+The trunk builds the project before it tells a session that runs an app. The pipeline's patch lives in the running process, and
+what a later start, or the daemon's own respawn for a restart, runs is the build on disk. The daemon respawns a worker without a
+build when it finds nothing that holds the old shape (`RestartCost`), and a restart I provoked with a virtual member's new
+signature came back serving the old code. That decision is another area's and I left it alone; building first makes the trunk
+right whatever it decides. A session with no app is not built, because nothing runs, so its line says to rebuild before `run_app`.
+
+What I measured, one daemon on this machine with three MCP connections and a fixture app that counts its requests in memory (the
+five rows of `TrunkLandingOutcomeTests.fs`): a landing of one handler file ended `PatchPending by metadata-delta`, then
+`Patched` once a request ran it; the same process answered before and after, and its counter went on from where it was; a
+conflicting landing was refused with `RebaseConflict` and the app did not change; a restart-needing landing said `Restarted`
+with the cause the planner named, ended in a new process with the landed code and a count that started over; a landing with a red
+test was blocked and the trunk was told nothing.
+
+What it leaves undone: the verifying session keeps what it evaluated for a landing it blocked, so the landing after is verified
+against that, and the trunk row for a red test runs last for that reason. A function name two modules share was re-pointed in
+both by the verifying session's re-evaluation (one in my first fixture), which I did not chase. The trunk is one checkout per
+daemon, and the trunk record is in memory: a daemon restart forgets the lines, and the next landing's diff still brings the
+checkout to the integration head.
+
+Evidence: `SageFs.Core/Features/TrunkFollow.fs`, `TrunkFollowOwner.fs`, `TrunkSessions.fs`, `SageFs/TrunkFollowShell.fs`, the
+worker side in `SageFs.Host/WorkerMain.fs` (`applyLandedSaves`), `SageFs.Simulation/TrunkFollow*.fs` with
+`SageFs.Tests/TrunkFollowSimTests.fs`, `TrunkFollowTests.fs`, `TrunkFollowShellTests.fs`, and
+`SageFs.Tests/TrunkLandingOutcomeTests.fs`, the five rows against a real daemon.
+Reopen it if: a client needs the trunk lines as an SSE event or in `cohort://status`, a cohort gets more than one trunk, or the
+daemon stops respawning a worker without a build.

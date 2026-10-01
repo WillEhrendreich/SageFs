@@ -105,6 +105,15 @@
              runs, newer edits, quiet windows, builds that finish late or fail or hang, and
              deadlines firing in every order; twins apply stale answers, build without waiting
              and swallow failures. -->
+        <!-- Trunk follow DST: folds the real TrunkFollow decision through landings that land, are verified
+             and refused, checkout moves that end in any order, workers that patch, restart or go silent,
+             and patched bodies that run before the answer that carries them; twins act on a landing
+             before it lands, follow queued landings newest first, drop a landing that lands while another
+             is followed, record a restart as a patch, record a patch as settled before it ran and drop an
+             early report. -->
+        <Compile Include="TrunkFollowSim.fs" />
+        <Compile Include="TrunkFollowInvariants.fs" />
+        <Compile Include="TrunkFollowGenerators.fs" />
         <Compile Include="BuildConfirmationSim.fs" />
         <Compile Include="BuildConfirmationInvariants.fs" />
         <Compile Include="BuildConfirmationGenerators.fs" />

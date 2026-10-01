@@ -242,12 +242,37 @@ Two connections that pass the same name are still two different members.
 |:---|:---|
 | `join_cohort` | Join the daemon's shared coordination session. The first joiner becomes conductor. |
 | `leave_cohort` | Leave. Any claims you still hold are orphaned (the conductor must reassign them). |
-| `get_cohort_status` | Members, claims and fences, the test matrix, and the landing queue. Wait-free: reads a published snapshot. Also available on the `cohort://status` MCP resource for subscription. |
+| `get_cohort_status` | Members, claims and fences, the test matrix, the landing queue, and what the trunk did with each landing (see below). Wait-free: reads a published snapshot. The `cohort://status` MCP resource is the frame as JSON for subscription, and doesn't carry the trunk lines. |
 | `acquire_claim` | Take an exclusive claim over a file or project (`file:<path>` or `project:<path>`) so others know it's yours to edit. |
 | `release_claim` | Release a claim you hold. The presented fence must match the current one. |
 | `reassign_claim` | Conductor-only: reassign an orphaned claim to a present member. |
 | `request_landing` | Queue a landing: your commits are rebased onto the integration head, verified against affected tests, and fast-forwarded in. Landings are strictly serial (one FIFO queue). |
-| `set_integration_ref` | Conductor-only: configure the git ref that landings rebase onto, in a dedicated integration worktree. |
+| `set_integration_ref` | Conductor-only: configure the git ref that landings rebase onto, in a dedicated integration worktree, and the trunk checkout the landings are carried to. The reply names both (`worktree=` and `trunk=`). |
+
+### The trunk
+
+A landing that lands is carried into the app the trunk runs. The **trunk checkout** is a daemon-owned git worktree
+(`cohort-trunk` under the data dir, detached) that `set_integration_ref` creates beside the integration worktree. After a
+landing has landed, and only then, the daemon moves the trunk checkout to the landing's commit. A **trunk session** is a
+session whose working directory is that checkout: start one with `create_project_session` (`workflow` `hotreload`) and
+`run_app`. When it runs an app, the daemon tells its worker which files the landing changed and the worker runs the same save
+pipeline a person's save takes. The app serves the landing without a restart and keeps its in-memory state, or restarts and
+says why.
+
+`get_cohort_status` ends with one line per landing:
+
+```
+Trunk: checkout=/data/cohort-trunk landings (2):
+  trunk l-4f2a...: session c5121ff3: no running app to update (the trunk checkout holds the landing; rebuild the session before run_app, so the app starts from it)
+  trunk l-9be1...: session c5121ff3: Alice.fs PatchPending by metadata-delta
+```
+
+The case (`PatchPending`, `Patched`, `Restarted`, `RestartRequired`, `NoEffect`, `CompileFailed`) and the mechanism (`detour`,
+`metadata-delta`) are the ones `get_session_status` reports in `lastReload`. A patch is `PatchPending` until its new body has
+run, and the line changes to `Patched` when the worker says it has seen that. A restart names its cause on the line. A
+landing that was blocked, withdrawn or is still being verified never reaches the trunk, and a trunk session that runs no app
+only records the landing. A worker in a trunk session takes its saves from landings only, so a save a person makes in the
+trunk checkout is not hot reloaded there.
 
 ## Per-client config
 
