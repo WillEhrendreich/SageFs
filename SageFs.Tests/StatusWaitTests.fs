@@ -31,6 +31,7 @@ let private isServing (status: SessionLifecycleStatus) : bool =
   | SessionLifecycleStatus.Starting _
   | SessionLifecycleStatus.Building _
   | SessionLifecycleStatus.Faulted _
+  | SessionLifecycleStatus.HostCrashed _
   | SessionLifecycleStatus.Restarting _
   | SessionLifecycleStatus.Stopped -> false
 

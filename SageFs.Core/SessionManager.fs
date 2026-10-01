@@ -742,6 +742,7 @@ module SessionManager =
             | SessionLifecycleStatus.Ready _ | SessionLifecycleStatus.Evaluating _ -> answer (Ok ())
             | SessionLifecycleStatus.Faulted reason ->
               answer (Error (SageFsError.WorkerSpawnFailed (FaultReason.describe reason)))
+            | SessionLifecycleStatus.HostCrashed(_, crash) -> answer (Error (SageFsError.FsiHostCrashed crash))
             | SessionLifecycleStatus.Stopped ->
               answer (Error (SageFsError.WorkerSpawnFailed "the session stopped before it became Ready"))
             | SessionLifecycleStatus.Starting _ | SessionLifecycleStatus.Restarting _ | SessionLifecycleStatus.Building _ -> acc) state
@@ -1433,6 +1434,9 @@ module SessionManager =
                 WorkerHealthProbe.defaultThreshold
                 WorkerHealthProbe.defaultProbeIntervalMs
                 probeShouldContinue
+                (WorkerHealthProbe.syncRegistry
+                  (fun () -> Map.tryFind id snapshotRef.Value.Sessions |> Option.map (fun info -> info.Status))
+                  (fun status -> inbox.Post(SessionCommand.UpdateSessionStatus(id, status))))
                 onHealthRestart,
               ct)
             return newState

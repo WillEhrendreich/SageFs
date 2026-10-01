@@ -656,6 +656,8 @@ module McpTools =
   type GateProbe =
     /// The worker answered, and this is its state.
     | Answered of SessionState
+    /// The worker answered, and its FSI host is dead. The state alone (Faulted) would hide why.
+    | HostCrashed of HostCrash
     /// The worker did not answer within `bound`: it is busy or hung.
     | TimedOut of bound: TimeSpan
 
@@ -677,6 +679,8 @@ module McpTools =
         let! routeResult = probe
         return
           match routeResult with
+          | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, { Status = WorkerProtocol.SessionStatus.HostCrashed crash })) ->
+            GateProbe.HostCrashed crash
           | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
             GateProbe.Answered (WorkerProtocol.SessionStatus.toSessionState snapshot.Status)
           | _ -> GateProbe.Answered SessionState.Faulted
@@ -697,6 +701,11 @@ module McpTools =
         | GateProbe.Answered state ->
           Affordances.checkToolAvailability state toolName
           |> Result.mapError SageFsError.describeForAgent
+        // The tools a crashed session still offers (a reset) pass; every other is refused with the crash, not with
+        // the generic wait-for-Ready advice, which would be false.
+        | GateProbe.HostCrashed crash ->
+          Affordances.checkToolAvailability SessionState.Faulted toolName
+          |> Result.mapError (fun _ -> SageFsError.describeForAgent (SageFsError.FsiHostCrashed crash))
         | GateProbe.TimedOut waited ->
           Error (SageFsError.describeForAgent (SageFsError.WorkerTimeout (sessionId, "status check", waited.TotalSeconds)))
     }
@@ -890,7 +899,8 @@ module McpTools =
         sprintf "Result: %s%s" (stripAnsi output) diagStr
       | Error err ->
         let errText = SageFsError.describeForAgent err
-        let suggestion = errText |> ErrorMessages.categorize |> ErrorMessages.getSuggestion
+        // A typed crash already says what to do; guessing at its text would add the wrong advice.
+        let suggestion = match err with SageFsError.FsiHostCrashed _ -> "" | _ -> errText |> ErrorMessages.categorize |> ErrorMessages.getSuggestion
         let enhanced = WorkflowErrorContext.enhance workflow errText suggestion
         match String.IsNullOrEmpty enhanced with
         | true -> sprintf "Error: %s%s" errText diagStr

@@ -1,5 +1,6 @@
 namespace SageFs.Simulation
 
+open SageFs
 open SageFs.EvalActorDecision
 open SageFs.Simulation.EvalActorSim
 
@@ -136,7 +137,64 @@ module EvalActorInvariants =
             sprintf "expected %d non-poison ops to be processed, only %d were (died=%b, seed=%d, ops=%A)"
               expected actual t.Died t.Scenario.Seed t.Scenario.Ops) }
 
-  let all : Invariant list = [ queryLiveness; cancelIdempotence; cancelBlocksResubmit; noResurrection; loopSurvival ]
+  /// host-end-purpose: a host end that is purposeful (Retired) or belongs to a host a reset already replaced is
+  /// ALWAYS ignored, never marked as a crash of the current session. The retire-blind twin reports a stop as a
+  /// crash; the generation-blind one applies a replaced host's crash to the new session.
+  let hostEndPurpose : Invariant =
+    { Id = "host-end-purpose"
+      Description = "A purposeful host end, or the end of a host a reset already replaced, never marks the current session crashed."
+      Check = fun t ->
+        t.Final.Log
+        |> List.tryPick (fun e ->
+          match e.Input, e.Decision with
+          | EvalInput.HostEnded(_, HostEnd.Retired), EvalDecision.MarkHostCrashed _ ->
+            Some(sprintf "a purposeful end was marked as a crash (seed=%d, ops=%A)" t.Scenario.Seed t.Scenario.Ops)
+          | EvalInput.HostEnded(forGeneration, _), EvalDecision.MarkHostCrashed _ when forGeneration <> e.GenerationBefore ->
+            Some(sprintf "the crash of a replaced host was applied to the new session (seed=%d, ops=%A)" t.Scenario.Seed t.Scenario.Ops)
+          | _ -> None)
+        |> function
+           | Some msg -> Outcome.Violated msg
+           | None -> Outcome.Holds }
+
+  /// The log's own record of whether the current session is crashed when each entry is decided: set by a
+  /// `MarkHostCrashed`, cleared by a reset. Independent of the reducer's fold.
+  let private crashedBefore (chronological: LogEntry list) : (LogEntry * bool) list =
+    chronological
+    |> List.mapFold (fun crashed e ->
+      let after =
+        match e.Decision with
+        | EvalDecision.MarkHostCrashed _ -> true
+        | EvalDecision.AdvanceGenerationAndReset -> false
+        | _ -> crashed
+      (e, crashed), after) false
+    |> fst
+
+  /// crash-blocks-eval: once the host is known to be gone, no Submit is decided RunEval until a reset. The no-crash-gate
+  /// twin runs it, which is what production did.
+  let crashBlocksEval : Invariant =
+    { Id = "crash-blocks-eval"
+      Description = "After the host crashed, no Submit is run until a reset replaces the session."
+      Check = fun t ->
+        crashedBefore (List.rev t.Final.Log)
+        |> List.tryFind (fun (e, crashed) -> crashed && e.Input = EvalInput.Submit && e.Decision = EvalDecision.RunEval)
+        |> function
+           | Some _ -> Outcome.Violated(sprintf "an eval was run against a crashed session (seed=%d, ops=%A)" t.Scenario.Seed t.Scenario.Ops)
+           | None -> Outcome.Holds }
+
+  /// crash-reported-once: between two resets a crash is marked at most once. The reports-every-end twin marks it again.
+  let crashReportedOnce : Invariant =
+    { Id = "crash-reported-once"
+      Description = "A crash is marked once per session incarnation, however many times its end is delivered."
+      Check = fun t ->
+        crashedBefore (List.rev t.Final.Log)
+        |> List.tryFind (fun (e, crashed) -> crashed && (match e.Decision with EvalDecision.MarkHostCrashed _ -> true | _ -> false))
+        |> function
+           | Some _ -> Outcome.Violated(sprintf "a crash that was already marked was marked again (seed=%d, ops=%A)" t.Scenario.Seed t.Scenario.Ops)
+           | None -> Outcome.Holds }
+
+  let all : Invariant list =
+    [ queryLiveness; cancelIdempotence; cancelBlocksResubmit; noResurrection; loopSurvival
+      hostEndPurpose; crashBlocksEval; crashReportedOnce ]
 
   /// The invariants that failed for a trace, if any (id, message).
   let violations (t: Trace) : (string * string) list =

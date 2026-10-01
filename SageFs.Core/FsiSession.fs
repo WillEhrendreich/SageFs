@@ -29,9 +29,18 @@ type FsiEval =
   { Outcome: FsiEvalOutcome
     Diagnostics: Diagnostics.Diagnostic array }
 
+/// Whether the process the session's FSI lives in can end on its own, and how to learn that it did.
+type HostLifetime =
+  /// FSI is in this process, so it lives and dies with the worker; there is nothing separate to watch.
+  | SharesTheWorkerProcess
+  /// FSI is in a host process of its own. `ended` completes once, with how that process's life ended.
+  | SeparateHost of ended: System.Threading.Tasks.Task<HostEnd>
+
 [<AllowNullLiteral>]
 type IFsiSession =
   inherit IDisposable
+  /// Where the session's FSI lives, and the way to watch it die.
+  abstract HostLifetime: HostLifetime
   /// Evaluate a submission without throwing. Cancelling the token interrupts the eval.
   abstract Eval: code: string * cancellationToken: CancellationToken -> FsiEval
   /// Read a boolean feature gate.
@@ -106,6 +115,8 @@ type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
   let agent = Agent(init, currentProcess (fun () -> session.DynamicAssemblies))
 
   interface IFsiSession with
+    member _.HostLifetime = SharesTheWorkerProcess
+
     member _.Eval(code, cancellationToken) =
       let result, diagnostics = session.EvalInteractionNonThrowing(code, cancellationToken)
       { Outcome =

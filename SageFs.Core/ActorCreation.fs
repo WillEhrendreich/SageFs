@@ -70,6 +70,8 @@ type ActorResult = {
   DiagnosticsChanged: IEvent<Features.DiagnosticsStore.T>
   CancelEval: unit -> System.Threading.Tasks.Task<bool>
   GetSessionState: unit -> SessionState
+  /// What the worker reports as its status. Richer than the state: a crashed host keeps its crash.
+  GetSessionStatus: unit -> WorkerProtocol.SessionStatus
   GetEvalStats: unit -> Affordances.EvalStats
   GetWarmupFailures: unit -> WarmupFailure list
   GetWarmupContext: unit -> WarmupContext
@@ -166,11 +168,11 @@ let createActorImmediate a =
             |> Option.defaultValue "Unknown"
           { Tracing.NamedMiddleware.Name = name; Middleware = mw })
       Tracing.buildTracedPipeline named "CoreEval" evalFn
-  let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent =
+  let appActor, diagnosticsChanged, cancelEval, getSessionState, getSessionStatus, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent =
     mkAppStateActor a.FsiKind a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled a.OnEvent tracedBuild sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = SageFs.ProjectLoading.classifiedProjectsOf sln }
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetSessionStatus = getSessionStatus; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = SageFs.ProjectLoading.projectTargetsOf sln; ProjectRoles = SageFs.ProjectLoading.classifiedProjectsOf sln }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

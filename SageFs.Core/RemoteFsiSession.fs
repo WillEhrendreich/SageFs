@@ -76,6 +76,8 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
   member _.Host = host
 
   interface IFsiSession with
+    member _.HostLifetime = SeparateHost host.Ended
+
     member _.Eval(code, cancellationToken) =
       match wait (host.Eval(code, cancellationToken)) with
       | Completed(outcome, diagnostics) ->
@@ -87,6 +89,10 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
           Diagnostics = diagnostics |> List.map toDiagnostic |> List.toArray }
       | HostLost reason ->
         { Outcome = FsiFailed(InvalidOperationException reason)
+          Diagnostics = [||] }
+      // The structured case, so the worker boundary and the agent see a crash, not a sentence to classify.
+      | HostCrashed crash ->
+        { Outcome = FsiFailed(SageFsErrorException(SageFsError.FsiHostCrashed crash))
           Diagnostics = [||] }
 
     member _.ReadFlag(name) =

@@ -60,6 +60,9 @@ module WorkerProtocol =
     /// Sets "Building…" status in the UI so the tool doesn't appear hung.
     | Building of buildReason: string
     | Faulted
+    /// The worker is alive but the FSI host process it drives died on its own. The session's state was in
+    /// that host and is gone; a reset starts a fresh one.
+    | HostCrashed of crash: HostCrash
     | Restarting
     | Stopped
 
@@ -72,6 +75,7 @@ module WorkerProtocol =
       | SessionStatus.Evaluating -> "Evaluating"
       | SessionStatus.Building reason -> sprintf "Building (%s)" reason
       | SessionStatus.Faulted -> "Faulted"
+      | SessionStatus.HostCrashed _ -> "HostCrashed"
       | SessionStatus.Restarting -> "Restarting"
       | SessionStatus.Stopped -> "Stopped"
 
@@ -83,6 +87,7 @@ module WorkerProtocol =
       | SessionStatus.Evaluating -> SessionState.Evaluating
       | SessionStatus.Building _ -> SessionState.Evaluating
       | SessionStatus.Faulted -> SessionState.Faulted
+      | SessionStatus.HostCrashed _ -> SessionState.Faulted
       | SessionStatus.Restarting -> SessionState.WarmingUp
       | SessionStatus.Stopped -> SessionState.Faulted
 
@@ -94,6 +99,7 @@ module WorkerProtocol =
       | "Faulted" -> Result.Ok SessionStatus.Faulted
       | "Restarting" -> Result.Ok SessionStatus.Restarting
       | "Stopped" -> Result.Ok SessionStatus.Stopped
+      | "HostCrashed" -> Result.Error "HostCrashed carries the crash, which its label does not, so it cannot be parsed back"
       | s when s.StartsWith("Building (", StringComparison.Ordinal) ->
         let reason = s.[10 .. s.Length - 2]
         Result.Ok (SessionStatus.Building reason)
@@ -109,7 +115,7 @@ module WorkerProtocol =
       | SessionStatus.Starting | SessionStatus.Ready
       | SessionStatus.Evaluating | SessionStatus.Building _
       | SessionStatus.Restarting -> true
-      | SessionStatus.Faulted | SessionStatus.Stopped -> false
+      | SessionStatus.Faulted | SessionStatus.HostCrashed _ | SessionStatus.Stopped -> false
 
   /// A daemon-tracked worker process's id and, once it reports one, its HTTP port.
   type WorkerHandle = { Pid: int; Port: int option }
@@ -189,6 +195,9 @@ module WorkerProtocol =
     /// Worker is running a dotnet build or similar multi-second compilation step.
     | Building of buildReason: string * worker: WorkerHandle
     | Faulted of reason: FaultReason
+    /// The worker process is alive and still has its handle, but its FSI host died on its own. Not dead: a
+    /// reset through that worker is how the session comes back.
+    | HostCrashed of worker: WorkerHandle * crash: HostCrash
     /// A restart in flight, and what it is replacing (see `PreviousWorker`).
     | Restarting of previous: PreviousWorker
     | Stopped
@@ -200,6 +209,7 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Ready w
       | SessionLifecycleStatus.Evaluating w -> Some w.Pid
       | SessionLifecycleStatus.Building(_, w) -> Some w.Pid
+      | SessionLifecycleStatus.HostCrashed(w, _) -> Some w.Pid
       | SessionLifecycleStatus.Restarting previous -> PreviousWorker.pid previous
       | SessionLifecycleStatus.Faulted _ | SessionLifecycleStatus.Stopped -> None
 
@@ -208,6 +218,7 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Ready w
       | SessionLifecycleStatus.Evaluating w -> w.Port
       | SessionLifecycleStatus.Building(_, w) -> w.Port
+      | SessionLifecycleStatus.HostCrashed(w, _) -> w.Port
       | SessionLifecycleStatus.Faulted _
       | SessionLifecycleStatus.Restarting _
       | SessionLifecycleStatus.Stopped -> None
@@ -231,6 +242,7 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Ready _
       | SessionLifecycleStatus.Evaluating _
       | SessionLifecycleStatus.Building _
+      | SessionLifecycleStatus.HostCrashed _
       | SessionLifecycleStatus.Restarting _ -> false
 
     /// Update the port on a status that carries a worker handle; a no-op on
@@ -240,6 +252,7 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Ready w -> SessionLifecycleStatus.Ready { w with Port = port }
       | SessionLifecycleStatus.Evaluating w -> SessionLifecycleStatus.Evaluating { w with Port = port }
       | SessionLifecycleStatus.Building(reason, w) -> SessionLifecycleStatus.Building(reason, { w with Port = port })
+      | SessionLifecycleStatus.HostCrashed(w, crash) -> SessionLifecycleStatus.HostCrashed({ w with Port = port }, crash)
       | other -> other
 
     let label = function
@@ -248,6 +261,7 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Evaluating _ -> "Evaluating"
       | SessionLifecycleStatus.Building(reason, _) -> sprintf "Building (%s)" reason
       | SessionLifecycleStatus.Faulted _ -> "Faulted"
+      | SessionLifecycleStatus.HostCrashed _ -> "HostCrashed"
       | SessionLifecycleStatus.Restarting _ -> "Restarting"
       | SessionLifecycleStatus.Stopped -> "Stopped"
 
@@ -258,6 +272,7 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Evaluating _ -> SessionState.Evaluating
       | SessionLifecycleStatus.Building _ -> SessionState.Evaluating
       | SessionLifecycleStatus.Faulted _ -> SessionState.Faulted
+      | SessionLifecycleStatus.HostCrashed _ -> SessionState.Faulted
       | SessionLifecycleStatus.Restarting _ -> SessionState.WarmingUp
       | SessionLifecycleStatus.Stopped -> SessionState.Faulted
 
@@ -271,7 +286,7 @@ module WorkerProtocol =
       | SessionLifecycleStatus.Starting _ | SessionLifecycleStatus.Ready _
       | SessionLifecycleStatus.Evaluating _ | SessionLifecycleStatus.Building _
       | SessionLifecycleStatus.Restarting _ -> true
-      | SessionLifecycleStatus.Faulted _ | SessionLifecycleStatus.Stopped -> false
+      | SessionLifecycleStatus.Faulted _ | SessionLifecycleStatus.HostCrashed _ | SessionLifecycleStatus.Stopped -> false
 
     /// Reconcile the daemon's own lifecycle status with what the worker
     /// itself just self-reported (WorkerStatusSnapshot.Status, the simpler
@@ -313,6 +328,7 @@ module WorkerProtocol =
       | SessionStatus.Evaluating -> attributed SessionLifecycleStatus.Evaluating
       | SessionStatus.Building reason -> attributed (fun handle -> SessionLifecycleStatus.Building (reason, handle))
       | SessionStatus.Faulted -> SessionLifecycleStatus.Faulted (FaultReason.Unexplained FaultOrigin.WorkerSelfReported)
+      | SessionStatus.HostCrashed crash -> attributed (fun handle -> SessionLifecycleStatus.HostCrashed (handle, crash))
       | SessionStatus.Restarting -> SessionLifecycleStatus.Restarting (PreviousWorker.ofPid (workerPid current))
       | SessionStatus.Stopped -> SessionLifecycleStatus.Stopped
 

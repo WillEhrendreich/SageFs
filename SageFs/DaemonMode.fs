@@ -763,7 +763,9 @@ let planWorkerFetch (snapshot: SessionManager.QuerySnapshot) (sid: WorkerProtoco
     | WorkerProtocol.SessionLifecycleStatus.Starting _
     | WorkerProtocol.SessionLifecycleStatus.Ready _
     | WorkerProtocol.SessionLifecycleStatus.Evaluating _
-    | WorkerProtocol.SessionLifecycleStatus.Building _ ->
+    | WorkerProtocol.SessionLifecycleStatus.Building _
+    // The worker is alive; only its FSI host is gone, and the worker is who answers for that.
+    | WorkerProtocol.SessionLifecycleStatus.HostCrashed _ ->
       match Map.tryFind sid snapshot.WorkerBaseUrls with
       | Some url when url.Length > 0 -> WorkerFetchPlan.FetchFrom url
       | _ -> WorkerFetchPlan.NoEndpointYet info.Status

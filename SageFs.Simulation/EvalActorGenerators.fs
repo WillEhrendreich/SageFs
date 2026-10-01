@@ -1,6 +1,7 @@
 namespace SageFs.Simulation
 
 open System
+open SageFs
 open SageFs.Simulation.EvalActorSim
 
 /// Seeded, dependency-free generators for eval-actor scenarios (mirrors
@@ -17,6 +18,9 @@ module EvalActorGenerators =
        EvalOp.Reset
        EvalOp.StragglerFinished 1
        EvalOp.StragglerFinished 2
+       EvalOp.HostEnded(0, Crashed fixtureCrash)
+       EvalOp.HostEnded(1, Crashed fixtureCrash)
+       EvalOp.HostEnded(0, Retired)
        EvalOp.PoisonPill |]
 
   /// A general scenario: 3–12 ops over the full pool. Same seed => identical
@@ -81,3 +85,29 @@ module EvalActorGenerators =
   /// Submit afterward must be allowed again.
   let cancelRacingCompletion : Scenario =
     { Seed = 9; Ops = [ EvalOp.Submit; EvalOp.Cancel; EvalOp.StragglerFinished 0; EvalOp.Submit ] }
+
+  // ── Hosts that go away on their own ─────────────────────────────────────
+
+  /// The host dies while the session is idle, and an eval follows: nothing may be run against the dead host.
+  let crashThenSubmit : Scenario =
+    { Seed = 10; Ops = [ EvalOp.HostEnded(0, Crashed fixtureCrash); EvalOp.Submit ] }
+
+  /// A reset is how a crashed session comes back, and the eval after it runs.
+  let crashThenReset : Scenario =
+    { Seed = 11; Ops = [ EvalOp.HostEnded(0, Crashed fixtureCrash); EvalOp.Reset; EvalOp.Submit ] }
+
+  /// A stop or reset retires the host on purpose, with an eval in flight. That is not a crash.
+  let retireIsNotACrash : Scenario =
+    { Seed = 12; Ops = [ EvalOp.Submit; EvalOp.HostEnded(0, Retired); EvalOp.StragglerFinished 0; EvalOp.Submit ] }
+
+  /// The old host's crash arrives after a reset already replaced it. It belongs to a session that no longer exists.
+  let staleHostCrash : Scenario =
+    { Seed = 13; Ops = [ EvalOp.Reset; EvalOp.HostEnded(1, Crashed fixtureCrash); EvalOp.Submit ] }
+
+  /// The host dies under a running eval, and the eval's own failure lands after it. The session stays crashed.
+  let crashDuringEval : Scenario =
+    { Seed = 14; Ops = [ EvalOp.Submit; EvalOp.HostEnded(0, Crashed fixtureCrash); EvalOp.StragglerFinished 0 ] }
+
+  /// The same crash is delivered twice (the proactive path and a retry). It is reported once.
+  let crashReportedTwice : Scenario =
+    { Seed = 15; Ops = [ EvalOp.HostEnded(0, Crashed fixtureCrash); EvalOp.HostEnded(0, Crashed fixtureCrash) ] }

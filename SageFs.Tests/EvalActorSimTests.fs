@@ -146,6 +146,66 @@ let tests =
           |> Expect.isTrue "at least one seeded scenario must expose a bug under at least one twin"
     ]
 
+    testList "a host that dies on its own" [
+
+      testCase "crashThenSubmit: once the host is gone, no eval is run against it" <| fun _ ->
+        let t = run EvalActorGenerators.crashThenSubmit
+        let entries = t.Final.Log |> List.rev
+        entries |> List.head |> fun e -> e.Decision
+        |> Expect.equal "the crash is marked" (EvalDecision.MarkHostCrashed EvalActorSim.fixtureCrash)
+        match (entries |> List.last).Decision with
+        | EvalDecision.RejectEval(SageFs.SageFsError.FsiHostCrashed crash) -> crash |> Expect.equal "the refusal names the crash" EvalActorSim.fixtureCrash
+        | other -> failtestf "expected the Submit to be refused with the crash, got %A" other
+        assertHolds t
+
+      testCase "crashThenReset: a reset recovers, and the next eval runs" <| fun _ ->
+        let t = run EvalActorGenerators.crashThenReset
+        t.Final.Activity |> Expect.equal "the eval after the reset ran" (Activity.Evaluating t.Final.Generation)
+        assertHolds t
+
+      testCase "retireIsNotACrash: a purposeful end of the host does not take the session out of service" <| fun _ ->
+        let t = run EvalActorGenerators.retireIsNotACrash
+        t.Final.Log |> List.exists (fun e -> match e.Decision with EvalDecision.MarkHostCrashed _ -> true | _ -> false)
+        |> Expect.isFalse "nothing was marked crashed"
+        assertHolds t
+
+      testCase "staleHostCrash: the crash of a host a reset already replaced does not touch the new session" <| fun _ ->
+        let t = run EvalActorGenerators.staleHostCrash
+        (t.Final.Log |> List.rev |> List.last).Decision |> Expect.equal "the Submit after it runs" EvalDecision.RunEval
+        assertHolds t
+
+      testCase "crashDuringEval: the eval that finishes after the crash does not make the session Ready again" <| fun _ ->
+        let t = run EvalActorGenerators.crashDuringEval
+        t.Final.Activity |> Expect.equal "still crashed" (Activity.HostCrashed(t.Final.Generation, EvalActorSim.fixtureCrash))
+        assertHolds t
+
+      testCase "crashReportedTwice: the second report of the same crash changes nothing" <| fun _ ->
+        let t = run EvalActorGenerators.crashReportedTwice
+        let marks = t.Final.Log |> List.filter (fun e -> match e.Decision with EvalDecision.MarkHostCrashed _ -> true | _ -> false)
+        marks |> List.length |> Expect.equal "one mark" 1
+        assertHolds t
+
+      testCase "REPRODUCED — a retire-blind twin reports a purposeful stop as a crash" <| fun _ ->
+        violations (runRetireBlind EvalActorGenerators.retireIsNotACrash)
+        |> List.map fst
+        |> Expect.contains "host-end-purpose must fire" "host-end-purpose"
+
+      testCase "REPRODUCED — a generation-blind twin applies the crash of a replaced host to the new session" <| fun _ ->
+        violations (runStaleHostEndBlind EvalActorGenerators.staleHostCrash)
+        |> List.map fst
+        |> Expect.contains "host-end-purpose must fire" "host-end-purpose"
+
+      testCase "REPRODUCED — a twin with no crash gate runs an eval against the dead host (the live bug)" <| fun _ ->
+        violations (runNoCrashGate EvalActorGenerators.crashThenSubmit)
+        |> List.map fst
+        |> Expect.contains "crash-blocks-eval must fire" "crash-blocks-eval"
+
+      testCase "REPRODUCED — a twin that reports every end reports one crash twice" <| fun _ ->
+        violations (runReportsEveryEnd EvalActorGenerators.crashReportedTwice)
+        |> List.map fst
+        |> Expect.contains "crash-reported-once must fire" "crash-reported-once"
+    ]
+
     testList "determinism / replay" [
 
       testProperty "same seed => identical final state (real reducer)" <|

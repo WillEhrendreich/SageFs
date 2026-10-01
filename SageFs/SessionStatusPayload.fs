@@ -201,6 +201,7 @@ module SessionStatusPayload =
       | WorkerProtocol.SessionLifecycleStatus.Ready _
       | WorkerProtocol.SessionLifecycleStatus.Evaluating _
       | WorkerProtocol.SessionLifecycleStatus.Faulted _
+      | WorkerProtocol.SessionLifecycleStatus.HostCrashed _
       | WorkerProtocol.SessionLifecycleStatus.Stopped -> WaitPlan.DoNotPark
 
     /// How AwaitReady answered, in the payload's terms.

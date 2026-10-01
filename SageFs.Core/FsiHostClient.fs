@@ -22,6 +22,8 @@ open SageFs.ProcessEnvironment
 type EvalCall =
   | Completed of outcome: EvalOutcome * diagnostics: FsiDiagnostic list
   | HostLost of reason: string
+  /// The host process went away on its own while in service. Its state, and the session's, are gone.
+  | HostCrashed of crash: HostCrash
 
 /// A non-eval request's answer, or the fact that the host was lost first.
 type HostCall<'T> =
@@ -65,38 +67,84 @@ let private portPrefix = "FSIHOST_PORT="
 /// What a pending request is completed with: the host's response, or the reason it was lost.
 type private Reply =
   | Got of Response
-  | Gone of reason: string
+  | Gone of HostEnd
+
+let private describeEnd (hostEnd: HostEnd) : string =
+  match hostEnd with
+  | Retired -> "the FSI host session was disposed"
+  | Crashed crash -> HostCrash.describe crash
+
+/// The host process, as far as a session needs it: its id, when it exits (with its code), and a way to kill it.
+type HostProcess =
+  { Id: int
+    Exit: Task<int>
+    Kill: unit -> unit }
+
+module HostProcess =
+  let ofProcess (proc: Process) : HostProcess =
+    let exit = TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously)
+    proc.EnableRaisingEvents <- true
+    proc.Exited.Add(fun _ -> exit.TrySetResult(try proc.ExitCode with _ -> -1) |> ignore)
+    if proc.HasExited then exit.TrySetResult proc.ExitCode |> ignore
+    { Id = proc.Id
+      Exit = exit.Task
+      Kill = fun () -> (try proc.Kill true with _ -> ()) }
+
+/// The last lines the host wrote to stdout and stderr (bounded), and when it has finished writing. A host that
+/// crashes says why on its way out, so this is where the reason is.
+[<Sealed>]
+type HostOutputTail() =
+  let lines =
+    match TailBuffer<string>.TryCreate HostCrash.maxOutputLines with
+    | Result.Ok tail -> tail
+    | Result.Error error -> invalidOp (sprintf "HostCrash.maxOutputLines must be positive: %A" error)
+  let finished = TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+  member _.Add(line: string) : unit = lines.Push line
+  member _.Lines() : string array = lines.Snapshot()
+  /// Both of the host's output streams have reached the end.
+  member _.Finish() : unit = finished.TrySetResult() |> ignore
+  member _.Finished : Task = finished.Task
 
 /// One running isolated FSI host and the connection to it.
 [<Sealed; AllowNullLiteral>]
 type FsiHostSession
   (
-    proc: Process,
+    proc: HostProcess,
     client: TcpClient,
     reader: StreamReader,
     runtime: string,
     fsharpCore: string,
     argsFile: string,
     onOutput: OutputStream -> string -> unit,
-    onLog: string -> unit
+    onLog: string -> unit,
+    output: HostOutputTail
   ) =
   let writer = new StreamWriter(client.GetStream(), UTF8Encoding false, AutoFlush = true)
   let pending = ConcurrentDictionary<int64, TaskCompletionSource<Reply>>()
   let sendLock = obj ()
-  let lost = TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously)
-  let exited = TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously)
+  let lost = TaskCompletionSource<HostEnd>(TaskCreationOptions.RunContinuationsAsynchronously)
   let mutable nextId = 0L
   let mutable disposed = 0
 
-  let markLost (reason: string) =
-    if lost.TrySetResult reason then
+  /// The first end wins and completes every call still waiting; later ones change nothing.
+  let markEnded (hostEnd: HostEnd) =
+    if lost.TrySetResult hostEnd then
       for entry in pending.ToArray() do
-        entry.Value.TrySetResult(Gone reason) |> ignore
+        entry.Value.TrySetResult(Gone hostEnd) |> ignore
 
-  let describeExit () =
-    match proc.HasExited with
-    | true -> sprintf "the FSI host exited (code %d)" proc.ExitCode
-    | false -> "the connection to the FSI host closed"
+  /// How the host ended, once its connection is gone. Our own dispose is a purposeful end; anything else is a
+  /// crash, carrying the exit code (the process reports it a moment after the connection closes) and the end of
+  /// what the host wrote, which is where an unhandled exception is printed.
+  let settleEnd () : HostEnd =
+    match Volatile.Read(&disposed) with
+    | 1 -> Retired
+    | _ ->
+      let exit =
+        match proc.Exit.Wait Timeouts.fsiHostExitReport with
+        | true -> ExitedWith proc.Exit.Result
+        | false -> ConnectionClosed
+      output.Finished.Wait Timeouts.stderrDrainGrace |> ignore
+      Crashed(HostCrash.ofTail exit (output.Lines()))
 
   let complete (id: int64) (response: Response) =
     match pending.TryRemove id with
@@ -138,14 +186,9 @@ type FsiHostSession
     with ex ->
       onLog (sprintf "[fsihost] read loop ended: %s" ex.Message)
     // Give the process a moment to report its exit code, then fail everything still waiting.
-    proc.WaitForExit 2000 |> ignore
-    markLost (describeExit ())
+    markEnded (settleEnd ())
 
-  do
-    proc.EnableRaisingEvents <- true
-    proc.Exited.Add(fun _ -> exited.TrySetResult(try proc.ExitCode with _ -> -1) |> ignore)
-    if proc.HasExited then exited.TrySetResult proc.ExitCode |> ignore
-    Task.Run readLoop |> ignore
+  do Task.Run readLoop |> ignore
 
   let send (request: Request) : bool =
     lock sendLock (fun () ->
@@ -166,7 +209,7 @@ type FsiHostSession
         match send (make id) with
         | false ->
           pending.TryRemove id |> ignore
-          markLost (describeExit ())
+          markEnded (settleEnd ())
           return Gone lost.Task.Result
         | true ->
           // The connection may have dropped between the check and the registration.
@@ -184,7 +227,10 @@ type FsiHostSession
   member _.FSharpCoreVersion = fsharpCore
   member _.ProcessId = proc.Id
   /// Completes with the host's exit code when the process ends.
-  member _.Exited: Task<int> = exited.Task
+  member _.Exited: Task<int> = proc.Exit
+  /// Completes once, when the host's life is over: Retired if this session disposed it, Crashed if it went away on
+  /// its own. Whoever reports the crash (a call that was waiting, or a watcher) reads this same value.
+  member _.Ended: Task<HostEnd> = lost.Task
 
   /// Evaluate a submission. Cancelling the token interrupts the running eval.
   member _.Eval(code: string, cancellationToken: CancellationToken) : Async<EvalCall> =
@@ -192,7 +238,8 @@ type FsiHostSession
       match! roundTrip cancellationToken (fun id -> Eval(id, code)) with
       | Got(EvalResult(_, outcome, diagnostics)) -> return Completed(outcome, diagnostics)
       | Got other -> return HostLost(unexpected "eval" other)
-      | Gone reason -> return HostLost reason
+      | Gone(Crashed crash) -> return HostCrashed crash
+      | Gone Retired -> return HostLost(describeEnd Retired)
     }
 
   /// Read a boolean feature gate bound in the session.
@@ -201,7 +248,7 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> ReadFlag(id, name)) with
       | Got(FlagResult(_, reading)) -> return Answered reading
       | Got other -> return HostGone(unexpected "flag" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Read a bound name as display text.
@@ -210,7 +257,7 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> ReadValue(id, name)) with
       | Got(ValueResult(_, reading)) -> return Answered reading
       | Got other -> return HostGone(unexpected "value" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// The session's bound values as the bounded watch-window tree; the caller supplies the generation.
@@ -219,7 +266,7 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> ReadLiveValues(id, generation)) with
       | Got(LiveValuesResult(_, snapshot)) -> return Answered snapshot
       | Got other -> return HostGone(unexpected "live values" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Diagnostics for a snippet checked against the session's current state.
@@ -228,7 +275,7 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> Check(id, text)) with
       | Got(CheckResult(_, diagnostics)) -> return Answered diagnostics
       | Got other -> return HostGone(unexpected "check" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Diagnostics plus the symbol references of error-free code.
@@ -237,7 +284,7 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> CheckWithSymbols(id, filePath, text)) with
       | Got(SymbolsResult(_, diagnostics, symbols)) -> return Answered(diagnostics, symbols)
       | Got other -> return HostGone(unexpected "check with symbols" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Unsorted completion candidates at the caret, with the id to pass to `Describe`.
@@ -246,7 +293,7 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> Complete(id, text, caret)) with
       | Got(CompletionsResult(id, items)) -> return Answered(id, items)
       | Got other -> return HostGone(unexpected "complete" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// The description of candidate `index` of the `Complete` that returned `completionsId` (empty if superseded).
@@ -255,7 +302,7 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> Describe(id, completionsId, index)) with
       | Got(DescriptionResult(_, text)) -> return Answered text
       | Got other -> return HostGone(unexpected "describe" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Evaluate a config.fsx expression in the host and get the DirectoryConfig it builds (or why it does not).
@@ -264,7 +311,7 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> EvalConfig(id, content)) with
       | Got(ConfigResult(_, outcome)) -> return Answered outcome
       | Got other -> return HostGone(unexpected "config" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Start the agent (hot reload and live testing) beside the user's code, and learn which projects it could not load.
@@ -274,7 +321,7 @@ type FsiHostSession
       | Got(AgentStartResult(_, started)) -> return Answered started
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent start" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// The agent's work after an eval: methods redefined (detoured when asked) and the tests found.
@@ -284,7 +331,7 @@ type FsiHostSession
       | Got(AgentAfterEvalResult(_, report)) -> return Answered report
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent after-eval" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Where each named module value's reads went, and which readers ran (hot reload rule 2).
@@ -294,7 +341,7 @@ type FsiHostSession
       | Got(AgentValueReadsResult(_, evidence)) -> return Answered evidence
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent value reads" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Where rule 2's reflection reads stand in the host.
@@ -304,7 +351,7 @@ type FsiHostSession
       | Got(AgentReflectionReadsResult(_, report)) -> return Answered report
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent reflection reads" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Switch the reflection read mode of the app in the host.
@@ -314,7 +361,7 @@ type FsiHostSession
       | Got(AgentReflectionReadsResult(_, report)) -> return Answered report
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent set reflection mode" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Wait in the host until every probe has been sighted or the bound passes. Runs beside the session thread.
@@ -324,7 +371,7 @@ type FsiHostSession
       | Got(AgentEntriesResult(_, reading)) -> return Answered reading
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent await entries" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Scan what the host process has loaded for tests.
@@ -334,7 +381,7 @@ type FsiHostSession
       | Got(AgentDiscoveryResult(_, discovery)) -> return Answered discovery
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent discovery" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// The coverage the host process recorded since the last take.
@@ -344,7 +391,7 @@ type FsiHostSession
       | Got(AgentCoverageResult(_, coverage)) -> return Answered coverage
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent coverage" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// The simple names of the assemblies the host process has loaded.
@@ -354,7 +401,7 @@ type FsiHostSession
       | Got(AgentLoadedAssembliesResult(_, names)) -> return Answered names
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent loaded-assemblies" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Run one test in the host, beside the session thread.
@@ -364,7 +411,7 @@ type FsiHostSession
       | Got(AgentTestResult(_, result)) -> return Answered result
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent run-test" other)
-      | Gone reason -> return HostGone reason
+      | Gone hostEnd -> return HostGone(describeEnd hostEnd)
     }
 
   /// Interrupt whatever is running (no effect when idle).
@@ -375,9 +422,9 @@ type FsiHostSession
       if Interlocked.Exchange(&disposed, 1) = 0 then
         send Shutdown |> ignore
         (try
-          if not (proc.WaitForExit 5000) then proc.Kill true
+          if not (proc.Exit.Wait Timeouts.fsiHostShutdownGrace) then proc.Kill()
          with _ -> ())
-        markLost "the FSI host session was disposed"
+        markEnded Retired
         (try client.Close() with _ -> ())
         (try File.Delete argsFile with _ -> ())
 
@@ -392,13 +439,11 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
     let argsFile = Path.Combine(Path.GetTempPath(), sprintf "sagefs-fsihost-%s.args" (Guid.NewGuid().ToString "N"))
     File.WriteAllLines(argsFile, options.FsiArgs)
     let deleteArgsFile () = try File.Delete argsFile with _ -> ()
-    let recent = ConcurrentQueue<string>()
+    let tail = HostOutputTail()
     let log (line: string) =
-      recent.Enqueue line
-      while recent.Count > 40 do
-        recent.TryDequeue() |> ignore
+      tail.Add line
       options.OnLog line
-    let hostOutput () = recent.ToArray() |> String.concat "\n"
+    let hostOutput () = tail.Lines() |> String.concat "\n"
     let command = options.Dotnet + " " + options.HostDll
     let psi = ProcessStartInfo(options.Dotnet)
     psi.ArgumentList.Add options.HostDll
@@ -446,12 +491,13 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
             else log line
             line <- proc.StandardOutput.ReadLine()
           port.TrySetResult -1 |> ignore)
-      let _stderrPump =
+      let stderrPump =
         Task.Run(fun () ->
           let mutable line = proc.StandardError.ReadLine()
           while not (isNull line) do
             log line
             line <- proc.StandardError.ReadLine())
+      Task.WhenAll(_stdoutPump, stderrPump).ContinueWith(fun (_: Task) -> tail.Finish()) |> ignore
       match! withinTimeout (Async.AwaitTask port.Task) with
       | Choice2Of2 _ -> return fail proc (NoPortReported(options.StartupTimeoutMs, hostOutput ()))
       | Choice1Of2 portNumber when portNumber <= 0 -> return fail proc (ClosedBeforeReady(hostOutput ()))
@@ -482,5 +528,5 @@ let start (options: StartOptions) : Async<Result<FsiHostSession, StartError>> =
           | Choice1Of2 ConnectionEnded -> return fail proc (ClosedBeforeReady(hostOutput ()))
           | Choice1Of2(HostReady(runtime, fsharpCore)) ->
             return
-              Ok(new FsiHostSession(proc, tcp, reader, runtime, fsharpCore, argsFile, options.OnOutput, options.OnLog))
+              Ok(new FsiHostSession(HostProcess.ofProcess proc, tcp, reader, runtime, fsharpCore, argsFile, options.OnOutput, options.OnLog, tail))
   }
