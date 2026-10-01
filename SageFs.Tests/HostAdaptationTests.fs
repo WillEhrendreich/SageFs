@@ -203,6 +203,32 @@ let tests =
         |> Expect.isEmpty "not the compiler service"
     ]
 
+    testList "the IO edge" [
+      let sharedRoot () =
+        let runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory().TrimEnd(System.IO.Path.DirectorySeparatorChar)
+        System.IO.Path.GetDirectoryName(System.IO.Path.GetDirectoryName runtimeDir)
+
+      testCase "frameworkAssemblies reads the running runtime's assemblies, versions included" <| fun _ ->
+        let assemblies = frameworkAssemblies (sharedRoot ()) Environment.Version.Major
+        assemblies.ContainsKey "System.Text.Json" |> Expect.isTrue "System.Text.Json is in the shared framework"
+        assemblies["System.Text.Json"].Major |> Expect.equal "it is this runtime's" Environment.Version.Major
+        assemblies.ContainsKey "System.Private.CoreLib" |> Expect.isTrue "so is the core library"
+
+      testCase "a runtime that is not installed gives nothing, and asking again after installing it would see it" <| fun _ ->
+        let assemblies = frameworkAssemblies (System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sagefs-no-dotnet-here")) 99
+        assemblies.Count |> Expect.equal "nothing" 0
+
+      testCase "assemblyVersionOf is the version of a managed file and nothing for any other file" <| fun _ ->
+        assemblyVersionOf (typeof<obj>.Assembly.Location)
+        |> Expect.isSome "System.Private.CoreLib is managed"
+        let text = System.IO.Path.GetTempFileName()
+        try
+          System.IO.File.WriteAllText(text, "not an assembly")
+          assemblyVersionOf text |> Expect.isNone "text is not an assembly"
+        finally
+          System.IO.File.Delete text
+    ]
+
     testList "properties" [
       testProperty "no assembly is both overridden and in conflict, and a conflict never names fewer than two versions" <| fun (picks: (byte * byte * byte) list) ->
         let names = [| "FSharp.Core"; "System.Text.Json"; "PinLib"; "Other" |]

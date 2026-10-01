@@ -243,7 +243,7 @@ module HostAdaptation =
   /// `sharedRoot` is `<dotnet>/shared`; the runtime is the highest installed version of `major`, taken
   /// from Microsoft.NETCore.App and Microsoft.AspNetCore.App (the host references both). A framework or
   /// runtime that is not installed contributes nothing.
-  let frameworkAssemblies (sharedRoot: string) (major: int) : IReadOnlyDictionary<string, Version> =
+  let private readFrameworkAssemblies (sharedRoot: string) (major: int) : IReadOnlyDictionary<string, Version> =
     let result = Dictionary<string, Version>(StringComparer.OrdinalIgnoreCase)
     for framework in [ "Microsoft.NETCore.App"; "Microsoft.AspNetCore.App" ] do
       let frameworkDir = Path.Combine(sharedRoot, framework)
@@ -267,6 +267,20 @@ module HostAdaptation =
               result[name.Name] <- name.Version
             with _ -> () // a native library or a resource assembly: not a managed identity
     result :> IReadOnlyDictionary<string, Version>
+
+  let private frameworkCache = System.Collections.Concurrent.ConcurrentDictionary<struct (string * int), IReadOnlyDictionary<string, Version>>()
+
+  /// `readFrameworkAssemblies`, read once per runtime for the life of the process: a session start plans the
+  /// host twice, and opening some three hundred files each time is work the second time does not need. An
+  /// empty answer (the runtime is not installed) is not cached, so installing one is seen.
+  let frameworkAssemblies (sharedRoot: string) (major: int) : IReadOnlyDictionary<string, Version> =
+    match frameworkCache.TryGetValue(struct (sharedRoot, major)) with
+    | true, cached -> cached
+    | false, _ ->
+      let read = readFrameworkAssemblies sharedRoot major
+      match read.Count with
+      | 0 -> read
+      | _ -> frameworkCache.GetOrAdd(struct (sharedRoot, major), read)
 
   /// The assembly version of a managed file, when it has one.
   let assemblyVersionOf (path: string) : Version option =
