@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 3, Next 15, Later 17, Exploring 16. Already built: 5.
+On the page today: Now 2, Next 15, Later 17, Exploring 16. Already built: 6.
 
 ## Now
 
@@ -22,10 +22,6 @@ _Being built right now. Days to a few weeks._
 ### Agents and cohorts
 
 - **An agent's landed work reaches your running app.** When agents land work in the shared trunk, the app running there should pick it up live with its state kept, and the reload row should say how it got there. Today a landing is verified and merged but the trunk app doesn't hear about it, so a landing is going to count as a save. ([how-hot-reload-works.md](how-hot-reload-works.md), [mcp-tools.md](mcp-tools.md))
-
-### Platform and install
-
-- **Slow machines get timeouts that fit them.** On an old quad core the isolated FSI host takes about 38 seconds to start, and the fixed 30 second budget gave up and then retried with the same 30. I'm measuring how different machines really behave, scaling the waits to what each one can do, and making retries wait longer instead of repeating themselves. ([configuration.md](configuration.md))
 
 ## Next
 
@@ -160,6 +156,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 
 ### Platform and install
 
+- **Slow machines get timeouts that fit them.** On an old quad core the isolated FSI host takes about 38 seconds to start, and the fixed 30 second budget gave up and then retried with the same 30. I'm measuring how different machines really behave, scaling the waits to what each one can do, and making retries wait longer instead of repeating themselves. Code: [`SageFs.Core/MachineTier.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/MachineTier.fs)
 - **SageFs tidies what agents leave behind.** Agents leave worktrees, branches and gate checkouts behind, and on my machine 65 old gate records alone came to 17.6 GB. A dashboard panel, two MCP tools and `sagefs hygiene` list the leftovers and tidy only the safe ones, after you confirm the exact plan you were shown. Code: [`SageFs.Core/WorkspaceHygiene.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/WorkspaceHygiene.fs)
 
 ---
