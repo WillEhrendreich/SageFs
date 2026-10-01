@@ -58,7 +58,7 @@ let private baseInfo (app: AppRunState) : SessionInfo =
     LastActivity = at
     ActiveProject = None
     ProjectRoles = [ exeProject ]
-    App = app; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
+    App = app; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 /// A worker proxy that runs the app successfully and never reports a later
 /// change (AwaitAppChange never completes — the run-app response does not

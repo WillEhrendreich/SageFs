@@ -42,7 +42,7 @@ let private ctxWith (switchResult: Result<string, SageFsError>) : McpContext * C
       ProjectRoles = []
       App = AppRun.AppRunState.NotRunning
       Rebuild = LastRebuild.NeverRebuilt
-      Reload = SessionReload.NoReloadYet }
+      Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
   let ops : SessionManagementOps =
     { SessionManagementOps.stub with
         GetProxy = fun _ -> Task.FromResult (Some proxy)

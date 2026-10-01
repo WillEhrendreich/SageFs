@@ -59,7 +59,7 @@ module TestDeps =
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
       Rebuild = LastRebuild.NeverRebuilt
-      Reload = SessionReload.NoReloadYet
+      Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
     }
     let proxy (msg: WorkerMessage) =
       async {
@@ -138,7 +138,7 @@ module TestDeps =
             ProjectRoles = []
             App = SageFs.AppRun.AppRunState.NotRunning
             Rebuild = LastRebuild.NeverRebuilt
-            Reload = SessionReload.NoReloadYet
+            Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
           }
           return Result.Ok info
         }
@@ -625,7 +625,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
       Rebuild = LastRebuild.NeverRebuilt
-      Reload = SessionReload.NoReloadYet
+      Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
     }
     let warmup : WarmupContext = {
       AssembliesLoaded =
@@ -696,7 +696,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
                   Status = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive
-                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }]
+                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }]
       }
       AwaitReady = fun _ -> async { return Result.Ok () }
       ReadyDeadline = Timeouts.rebuildReadyWait
@@ -738,7 +738,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
                   Status = SessionLifecycleStatus.Starting { Pid = 0; Port = None }
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive
-                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }]
+                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }]
       }
       AwaitReady = fun _ -> async { return Result.Ok () }
       ReadyDeadline = Timeouts.rebuildReadyWait

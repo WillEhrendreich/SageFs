@@ -1572,7 +1572,7 @@ let run (sessionId: string) (port: int) = async {
             let considered = landed.Watched.Length
             let outcome =
               Features.ReloadOutcome.ReloadOutcome.ByMetadataDelta
-                (Features.ReloadOutcome.MetadataDeltaOutcome.Pending (considered, considered))
+                (Features.ReloadOutcome.MetadataDeltaOutcome.Pending (considered, considered, landed.Watched |> List.map _.Declaration))
             for failure in landed.HandlerFailures do
               Log.warn "Hot reload: a metadata-update handler threw after the delta landed: %s" failure
             announceDelta landed.Watched outcome

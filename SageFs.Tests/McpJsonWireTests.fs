@@ -43,7 +43,7 @@ let private infoWith (sid: string) (status: SessionLifecycleStatus) (workflow: W
     ProjectRoles = []
     App = AppRun.AppRunState.NotRunning
     Rebuild = LastRebuild.NeverRebuilt
-    Reload = SessionReload.NoReloadYet }
+    Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 let private ctxFor (infos: SessionInfo list) (proxy: SessionProxy option) (switchResult: Result<string, SageFsError>) : McpContext =
   let ops : SessionManagementOps =

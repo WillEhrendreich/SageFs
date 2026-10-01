@@ -56,7 +56,7 @@ let private mkSessionInfo (name: string) (workingDirectory: string) : SageFs.Wor
     Workflow = SageFs.WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = SageFs.LastRebuild.NeverRebuilt; Reload = SageFs.SessionReload.NoReloadYet }
+    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = SageFs.LastRebuild.NeverRebuilt; Reload = SageFs.SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 [<Tests>]
 let mcpResourcesTests = testList "MCP resources (item 12)" [

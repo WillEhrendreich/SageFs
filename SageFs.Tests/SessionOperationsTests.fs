@@ -1,4 +1,4 @@
-﻿module SageFs.Tests.SessionOperationsTests
+module SageFs.Tests.SessionOperationsTests
 
 open System
 open Expecto
@@ -24,7 +24,7 @@ let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo =
 
   App = SageFs.AppRun.AppRunState.NotRunning
   Rebuild = LastRebuild.NeverRebuilt
-  Reload = SessionReload.NoReloadYet
+  Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
 }
 
@@ -175,7 +175,7 @@ let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) (pid: in
 
   App = SageFs.AppRun.AppRunState.NotRunning
   Rebuild = LastRebuild.NeverRebuilt
-  Reload = SessionReload.NoReloadYet
+  Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
 }
 

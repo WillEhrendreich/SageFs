@@ -339,13 +339,19 @@ module SessionOperations =
       match Checkout.classify info.WorkingDirectory with
       | Checkout.Checkout.Worktree(_, branch) -> sprintf "  Worktree branch: %s" branch
       | Checkout.Checkout.MainCheckout _ | Checkout.Checkout.NotAGitCheckout -> ""
-    sprintf "%s  %s  %s  %s  %s\n  Started: %s  Last active: %s  Projects: %s%s%s"
+    // A REPL that is behind its app is the one thing in this entry a reader must not miss, so it has its own line.
+    let freshnessLabel =
+      match ReplFreshness.banner info.Freshness with
+      | "" -> ""
+      | warning -> sprintf "\n  %s" warning
+    sprintf "%s  %s  %s  %s  %s\n  Started: %s  Last active: %s  Projects: %s%s%s%s"
       (SessionId.value info.Id) name info.WorkingDirectory (SessionLifecycleStatus.label info.Status) pid
       (info.CreatedAt.ToString("yyyy-MM-dd HH:mm"))
       lastActive
       projects
       occLabel
       checkoutLabel
+      freshnessLabel
 
   /// Format a list of sessions for display, with optional per-session occupancy.
   let formatSessionList (now: DateTime) (occupancyMap: Map<string, SessionOccupancy list> option) (sessions: SessionInfo list) : string =
@@ -390,7 +396,8 @@ module SessionOperations =
            Projects = info.Projects
            CreatedAt = info.CreatedAt
            LastActivity = info.LastActivity
-           WorktreeBranch = worktreeBranch |})
+           WorktreeBranch = worktreeBranch
+           ReplFreshness = ReplFreshness.toWire info.Freshness |})
     JsonSerializer.Serialize({| Sessions = rows |}, opts)
 
   /// A cheap, deterministic "version" of the session list — the

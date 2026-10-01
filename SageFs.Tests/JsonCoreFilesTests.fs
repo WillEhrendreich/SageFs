@@ -50,7 +50,7 @@ let private sessionInfo (branchDir: string) : SessionInfo =
     ProjectRoles = []
     App = AppRun.AppRunState.NotRunning
     Rebuild = LastRebuild.NeverRebuilt
-    Reload = SessionReload.NoReloadYet }
+    Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 let private expectedCacheLines =
   [ "{"
@@ -250,7 +250,7 @@ let tests =
         SessionOperations.sessionsToJson opts [ sessionInfo "/repo/checkout" ]
         |> Expect.equal
           "sessions text"
-          """{"sessions":[{"createdAt":"2026-01-01T00:00:00Z","id":"abcd1234","lastActivity":"2026-01-01T00:00:00Z","name":"checkout","projects":["Foo.fsproj"],"status":"Ready","workflow":"REPL","workingDirectory":"/repo/checkout","worktreeBranch":null}]}"""
+          """{"sessions":[{"createdAt":"2026-01-01T00:00:00Z","id":"abcd1234","lastActivity":"2026-01-01T00:00:00Z","name":"checkout","projects":["Foo.fsproj"],"replFreshness":{"state":"InSync"},"status":"Ready","workflow":"REPL","workingDirectory":"/repo/checkout","worktreeBranch":null}]}"""
     ]
 
     testList "DevReload compile-failure payload" [

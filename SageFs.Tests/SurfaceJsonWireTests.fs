@@ -213,7 +213,8 @@ let private finishedReload : SessionReload =
       Considered = 3
       Message = "patched 2"
       SuggestedAction = ""
-      Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta }
+      Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta
+      Declarations = [] }
 
 let private sseCases : (string * SseEvent * string) list =
   let s = sid "0a000001"

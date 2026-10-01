@@ -249,9 +249,9 @@ let tests =
       let running = tools.run_tests("", "", "", 30, "", sid, "")
       do! engine.RunDispatched.WaitAsync patience
       engine.ReleaseWorker ()
-      let! result = running
+      let! (result: ModelContextProtocol.Protocol.CallToolResult) = running
       let text = result.Content |> Seq.pick (fun c -> match c with :? ModelContextProtocol.Protocol.TextContentBlock as t -> Some t.Text | _ -> None)
-      text |> Expect.stringContains "the run is still reported" "AllPassed"
+      text |> Expect.stringContains "the run is still reported" "Every requested test passed in this run"
       text |> Expect.stringContains "and the REPL is said to be behind" "BEHIND"
       text |> Expect.stringContains "with what to do" "hard_reset_fsi_session"
       result.StructuredContent.Value.GetProperty("replFreshness").GetProperty("state").GetString()
@@ -264,7 +264,7 @@ let tests =
       let running = tools.run_tests("", "", "", 30, "", sid, "")
       do! engine.RunDispatched.WaitAsync patience
       engine.ReleaseWorker ()
-      let! result = running
+      let! (result: ModelContextProtocol.Protocol.CallToolResult) = running
       let text = result.Content |> Seq.pick (fun c -> match c with :? ModelContextProtocol.Protocol.TextContentBlock as t -> Some t.Text | _ -> None)
       text.Contains "BEHIND" |> Expect.isFalse "nothing to warn about"
     }

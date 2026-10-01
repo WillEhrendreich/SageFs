@@ -1,4 +1,4 @@
-﻿module SageFs.Tests.SessionManagerCqrsTests
+module SageFs.Tests.SessionManagerCqrsTests
 
 open System
 open System.Threading
@@ -34,7 +34,7 @@ let mkSessionInfo (id: SessionId) status =
 
     App = SageFs.AppRun.AppRunState.NotRunning
     Rebuild = LastRebuild.NeverRebuilt
-    Reload = SessionReload.NoReloadYet
+    Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
   }
 

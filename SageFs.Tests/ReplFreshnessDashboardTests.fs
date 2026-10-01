@@ -129,7 +129,7 @@ let browserTests =
             do! page.SetViewportSizeAsync(width, 900)
             do! page.SetContentAsync(pageFor width html)
             let! problems = layoutProblems page
-            Expect.equal problems "" (sprintf "at %dpx wide: %s" width problems)
+            problems |> Expect.equal (sprintf "at %dpx wide nothing overflows or overlaps" width) ""
             let! height = heightOfBanner page
             heights <- (width, height) :: heights
           let at (w: int) = heights |> List.find (fun (width, _) -> width = w) |> snd

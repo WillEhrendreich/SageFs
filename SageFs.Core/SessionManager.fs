@@ -610,6 +610,7 @@ module SessionManager =
           App = AppRun.acrossWorkerRestart session.Info.App
           Rebuild = session.Info.Rebuild
           Reload = SessionReload.NoReloadYet
+          Freshness = ReplFreshness.InSync
         }
         let restarted = {
           Info = info
@@ -698,6 +699,8 @@ module SessionManager =
                       Status = SessionLifecycleStatus.Restarting (PreviousWorker.ofPid (SessionLifecycleStatus.workerPid session.Info.Status))
                       Workflow = workflow
                       Reload = SessionReload.afterWorkerSwap session.Info.Reload
+                      // The replacement is built from the current build, REPL included.
+                      Freshness = ReplFreshness.afterWorkerSwap session.Info.Freshness
                       LastActivity = DateTime.UtcNow } }
           let newState =
             ManagerState.setPendingSwap id session
@@ -823,6 +826,7 @@ module SessionManager =
                   App = AppRun.AppRunState.NotRunning
                   Rebuild = LastRebuild.NeverRebuilt
                   Reload = SessionReload.NoReloadYet
+                  Freshness = ReplFreshness.InSync
                 }
                 let managed = {
                   Info = info
@@ -1328,7 +1332,10 @@ module SessionManager =
 
         | SessionCommand.ReloadObserved(id, reload) ->
           match ManagerState.tryGetSession id state with
-          | Some session -> return ManagerState.addSession id { session with Info = { session.Info with Reload = reload } } state
+          | Some session ->
+            // The same report that says what the save did is what puts the REPL behind its app, when a delta took it.
+            let info = { session.Info with Reload = reload; Freshness = ReplFreshness.observe session.Info.Freshness reload }
+            return ManagerState.addSession id { session with Info = info } state
           | None -> return state
 
         | SessionCommand.UpdateSessionStatus(id, newStatus) ->

@@ -1063,12 +1063,23 @@ module McpTools =
   /// sniffing. The last two elements let `send_fsharp_code` return
   /// structured content (roast-7 §2) without re-deriving it from `output`.
   /// Most callers use `sendFSharpCode` (string-only view).
-  let evalFSharpCodeWithOutcome
+  /// Whether the REPL of this session runs the build the app runs. Read off the registry's own record, so every surface agrees.
+  /// A session the registry cannot answer for is level: there is nothing it is known to be behind.
+  let freshnessOfSession (ctx: McpContext) (sid: string) : Task<ReplFreshness> =
+    task {
+      try
+        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+        return SessionStatusPayload.replFreshnessOfSession info
+      with _ -> return ReplFreshness.InSync
+    }
+
+  /// `evalFSharpCodeWithOutcome`, and the freshness of the session the code ran in, for the caller that wants it as data.
+  let evalFSharpCodeWithFreshness
       (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat)
       (sessionId: string option) (workingDirectory: string option)
       (filePath: string option) (evalMode: string option) (blockStartLine: int option)
       (intent: string option)
-      : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option> =
+      : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option * ReplFreshness> =
     task {
       // The session the gate already resolved for this very call, if any.
       let! resolution = resolveAdmitted ctx "send_fsharp_code" agentName sessionId workingDirectory
@@ -1156,11 +1167,29 @@ module McpTools =
               let advisories = SessionOperations.FileOverlapAdvisory.compute (resolvedKey agentName) [fp] presences
               SessionOperations.CoordinationEnrichment.enrichEvalWithAdvisories advisories finalOutput
             | None -> finalOutput
-          return (enrichedOutput, outcome, allDiags, lastError)
+          // A REPL that is behind its app ran this against the build from before the patch. Said after the result, in the text a
+          // reader sees; a JSON result is data and keeps its shape (the freshness is its own value).
+          let! freshness = freshnessOfSession ctx sid
+          let shown =
+            match format with
+            | Text -> ReplFreshness.annotate freshness enrichedOutput
+            | Json -> enrichedOutput
+          return (shown, outcome, allDiags, lastError, freshness)
         }
       | other ->
         let err = SageFsError.SessionNotRoutable (formatSessionResolution other)
-        return (sprintf "Error: %s" (formatSessionResolution other), InfraFailure err, [], Some err)
+        return (sprintf "Error: %s" (formatSessionResolution other), InfraFailure err, [], Some err, ReplFreshness.InSync)
+    }
+
+  let evalFSharpCodeWithOutcome
+      (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat)
+      (sessionId: string option) (workingDirectory: string option)
+      (filePath: string option) (evalMode: string option) (blockStartLine: int option)
+      (intent: string option)
+      : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option> =
+    task {
+      let! text, outcome, diags, err, _ = evalFSharpCodeWithFreshness ctx agentName code format sessionId workingDirectory filePath evalMode blockStartLine intent
+      return text, outcome, diags, err
     }
 
   /// String-only view of evalFSharpCodeWithOutcome — keeps existing callers.
@@ -1399,6 +1428,7 @@ module McpTools =
              workerPort = WorkerProtocol.SessionLifecycleStatus.workerPort status
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
+             replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
              available = SageFs.Affordances.availableTools SageFs.SessionState.WarmingUp |})
       | FaultedSession (sid, cause) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1412,6 +1442,7 @@ module McpTools =
              loadedProjects = info |> Option.map (fun value -> value.ProjectRoles |> List.map _.Path) |> Option.defaultValue []
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
+             replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
              available = SageFs.Affordances.availableTools SageFs.SessionState.Faulted |})
       | Routable sid ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1459,7 +1490,8 @@ module McpTools =
               // result. Without this a failed rebuild was recorded and then
               // never shown, so it read exactly like one still running.
               LastRestart = SessionStatusPayload.lastRestartOfSession info (Some snapshot.CoreVersion)
-              LastReload = sessionInfo.Reload }
+              LastReload = sessionInfo.Reload
+              ReplFreshness = sessionInfo.Freshness }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
@@ -1789,7 +1821,9 @@ module McpTools =
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.CheckCode(code, WorkerProtocol.SessionId.value replyId))
-      return
+      // A check runs in the REPL's FSI host, against the build from before a patch the app took.
+      let! freshness = freshnessOfSession ctx sid
+      let report =
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.CheckResult(_, diags)) ->
           match List.isEmpty diags with
@@ -1811,6 +1845,7 @@ module McpTools =
             String.concat "\n" lines + "\n\n" + remediation
         | Ok other -> sprintf "Unexpected response: %A" other
         | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
+      return ReplFreshness.annotate freshness report
     })
 
   /// What a rebuild=true hard reset answers straight away; the outcome lands in

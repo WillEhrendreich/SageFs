@@ -926,6 +926,23 @@ h2 {
   white-space: normal;
 }
 
+/* The REPL is behind the app: a line of the card's own column, so a narrow card only wraps it. It never widens the card and
+   never overlaps the rows around it. */
+.session-row .session-card-freshness {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 2px 0 2px 6px;
+  border-left: 3px solid var(--fg-yellow);
+  color: var(--fg-yellow);
+  font-size: 0.7rem;
+  font-weight: bold;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
 .session-stopping {
   color: var(--fg-dim);
   font-style: italic;

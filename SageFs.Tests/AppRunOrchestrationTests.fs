@@ -44,7 +44,7 @@ let private session (workflow: WorkflowTypes.SessionWorkflow) (projects: Classif
     Workflow = workflow
     ActiveProject = None
     ProjectRoles = projects
-    App = app; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
+    App = app; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 let private webLive = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults
 let private interactive = WorkflowTypes.SessionWorkflow.Interactive

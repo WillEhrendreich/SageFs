@@ -31,7 +31,7 @@ let private infoWith (status: SessionLifecycleStatus) : SessionInfo =
     ProjectRoles = []
     App = SageFs.AppRun.AppRunState.NotRunning
     Rebuild = LastRebuild.NeverRebuilt
-    Reload = SessionReload.NoReloadYet }
+    Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 /// Wait for a task, failing the test rather than hanging when it does not finish.
 let private within (what: string) (task: Task<'a>) : Task<'a> =

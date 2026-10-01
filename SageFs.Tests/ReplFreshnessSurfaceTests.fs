@@ -50,7 +50,7 @@ let tests =
 
     testTask "WHY - send_fsharp_code puts the warning on the result when the REPL is behind, after the result, and keeps the result" {
       let tools = SageFsTools(ctxWith behind, NullLogger<SageFsTools>.Instance)
-      let! result = tools.send_fsharp_code("test", "let freshnessProbe = 41 + 1", "", "", "", 0, "")
+      let! (result: ModelContextProtocol.Protocol.CallToolResult) = tools.send_fsharp_code("test", "let freshnessProbe = 41 + 1", "", "", "", 0, "")
       let text = textOf result
       text |> Expect.stringContains "the result is still there" "freshnessProbe"
       warningWords text
@@ -60,14 +60,14 @@ let tests =
 
     testTask "WHY - send_fsharp_code says nothing extra when the REPL is level, and the structured result still says so" {
       let tools = SageFsTools(ctxWith ReplFreshness.InSync, NullLogger<SageFsTools>.Instance)
-      let! result = tools.send_fsharp_code("test", "let freshnessProbeLevel = 1", "", "", "", 0, "")
+      let! (result: ModelContextProtocol.Protocol.CallToolResult) = tools.send_fsharp_code("test", "let freshnessProbeLevel = 1", "", "", "", 0, "")
       (textOf result).Contains "BEHIND" |> Expect.isFalse "no warning"
       result.StructuredContent.Value.GetProperty("replFreshness").GetProperty("state").GetString() |> Expect.equal "level" "InSync"
     }
 
     testTask "WHY - a failing send_fsharp_code is warned too: an error from stale code is the one an agent most needs to be told about" {
       let tools = SageFsTools(ctxWith behind, NullLogger<SageFsTools>.Instance)
-      let! result = tools.send_fsharp_code("test", "let broken : int = \"not an int\"", "", "", "", 0, "")
+      let! (result: ModelContextProtocol.Protocol.CallToolResult) = tools.send_fsharp_code("test", "let broken : int = \"not an int\"", "", "", "", 0, "")
       result.IsError.HasValue |> Expect.isTrue "it is an error result"
       warningWords (textOf result)
     }
@@ -79,15 +79,15 @@ let tests =
     }
 
     testTask "WHY - get_session_status carries the state as a field, for a level session as well as a behind one" {
-      let readState (freshness: ReplFreshness) = task {
+      let readState (freshness: ReplFreshness) : Task<JsonElement> = task {
         let tools = SageFsTools(ctxWith freshness, NullLogger<SageFsTools>.Instance)
         let! text = tools.get_session_status("", "", 0)
         use doc = JsonDocument.Parse text
         return doc.RootElement.GetProperty("replFreshness").Clone()
       }
-      let! level = readState ReplFreshness.InSync
+      let! (level: JsonElement) = readState ReplFreshness.InSync
       level.GetProperty("state").GetString() |> Expect.equal "level" "InSync"
-      let! late = readState behind
+      let! (late: JsonElement) = readState behind
       late.GetProperty("state").GetString() |> Expect.equal "behind" "BehindApp"
       late.GetProperty("savesSince").GetInt32() |> Expect.equal "two saves" 2
       [ for d in late.GetProperty("declarations").EnumerateArray() -> d.GetString() ]

@@ -564,10 +564,19 @@ let withEchoReply (ctx: McpContext) (toolName: string) (t: Task<HotReloadReply>)
     return HotReloadReply.toCallToolResult { reply with Text = text }
   }
 
+/// A structured result with the REPL's freshness added as a field. The state is a field either way, so a client never has to read
+/// its absence as "level".
+let withReplFreshness (freshness: SageFs.ReplFreshness) (structuredJson: string) : string =
+  match System.Text.Json.Nodes.JsonNode.Parse structuredJson with
+  | :? System.Text.Json.Nodes.JsonObject as root ->
+    root["replFreshness"] <- System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(SageFs.ReplFreshness.toWire freshness))
+    root.ToJsonString()
+  | _ -> structuredJson
+
 /// The MCP result for `run_tests`: the receipt's plain-language text in the text block and
 /// the receipt as data in StructuredContent, so an agent branches on a token, never on prose.
 /// A refusal or an unattributable request is an error result; an in-flight or finished run is not.
-let withEchoRunTests (ctx: McpContext) (t: Task<SageFs.McpRunTests.RunTestsOutcome>) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+let withEchoRunTests (ctx: McpContext) (freshness: SageFs.ReplFreshness) (t: Task<SageFs.McpRunTests.RunTestsOutcome>) : Task<ModelContextProtocol.Protocol.CallToolResult> =
   task {
     let! outcome = t
     let text, structured, isError =
@@ -582,12 +591,13 @@ let withEchoRunTests (ctx: McpContext) (t: Task<SageFs.McpRunTests.RunTestsOutco
       | SageFs.McpRunTests.RunTestsOutcome.NotRoutable (message, _) -> sprintf "Error: %s" message, None, true
       | SageFs.McpRunTests.RunTestsOutcome.NoEngine ->
         "Error: run_tests needs the SageFs daemon. This process has no live-testing engine to ask.", None, true
-    let! shown = withEcho ctx "run_tests" (Task.FromResult text)
+    // The tests ran in the REPL's FSI host, which runs the build from before a delta the app took. Said after the receipt, and as a field.
+    let! shown = withEcho ctx "run_tests" (Task.FromResult (SageFs.ReplFreshness.annotate freshness text))
     let result = ModelContextProtocol.Protocol.CallToolResult()
     result.Content.Add(ModelContextProtocol.Protocol.TextContentBlock(Text = shown))
     structured
     |> Option.iter (fun node ->
-      use doc = System.Text.Json.JsonDocument.Parse(node.ToJsonString())
+      use doc = System.Text.Json.JsonDocument.Parse(withReplFreshness freshness (node.ToJsonString()))
       result.StructuredContent <- System.Nullable(doc.RootElement.Clone()))
     match isError with
     | true -> result.IsError <- System.Nullable true
@@ -688,14 +698,14 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
             match fp with
             | Some _ -> SageFs.TopLevelDeclaration.NoDeclaration
             | None -> SageFs.EvalPreflight.topLevelDeclaration code
-          let! text, _outcome, diags, errOpt =
+          let! text, _outcome, diags, errOpt, freshness =
             match declaration with
             | SageFs.TopLevelDeclaration.NoDeclaration ->
-              evalFSharpCodeWithOutcome ctx agentName code OutputFormat.Text sid wd fp em bsl intentOpt
+              evalFSharpCodeWithFreshness ctx agentName code OutputFormat.Text sid wd fp em bsl intentOpt
             | found ->
               let hint = SageFs.EvalPreflight.hint found
               let err = SageFs.SageFsError.EvalFailed hint
-              Task.FromResult (sprintf "Error: %s" hint, InfraFailure err, [], Some err)
+              Task.FromResult (sprintf "Error: %s" hint, InfraFailure err, [], Some err, SageFs.ReplFreshness.InSync)
           // Outbound size cap (roast-7 §13) applies to the text agents
           // actually read; the same bounded text feeds the JSON `result`
           // field so the two never disagree about what was returned.
@@ -712,6 +722,8 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
               SageFs.McpAdapter.formatEvalStructuredError err
             | None ->
               SageFs.McpAdapter.formatEvalStructuredSuccess boundedText diags
+          // Said as a field too, so a client branches on it and does not parse the warning out of the text.
+          let structuredJson = withReplFreshness freshness structuredJson
           try
             use doc = System.Text.Json.JsonDocument.Parse(structuredJson)
             result.StructuredContent <- System.Nullable(doc.RootElement.Clone())
@@ -2162,7 +2174,7 @@ If the run is still going when wait_seconds ends, the result carries a receipt_i
                 | false, _ -> Error (sprintf "receipt_id '%s' is not a receipt_id from an earlier run_tests call." raw)
         match continuation with
         | Error message ->
-            withEchoRunTests ctx (Task.FromResult (SageFs.McpRunTests.RunTestsOutcome.NotRoutable (message, None)))
+            withEchoRunTests ctx SageFs.ReplFreshness.InSync (Task.FromResult (SageFs.McpRunTests.RunTestsOutcome.NotRoutable (message, None)))
         | Ok continueWith ->
             let request : SageFs.McpRunTests.RunTestsRequest =
                 { SessionId = opt session_id
@@ -2172,7 +2184,14 @@ If the run is still going when wait_seconds ends, the result carries a receipt_i
                   Category = SageFs.McpRunTests.parseCategory category
                   Continue = continueWith
                   Wait = SageFs.SessionStatusPayload.StatusWait.clampSeconds wait_seconds }
-            withEchoRunTests ctx (SageFs.McpRunTests.runTests ctx "mcp" request)
+            task {
+                let! resolution = resolveSessionId ctx "mcp" request.SessionId request.WorkingDirectory
+                let! freshness =
+                    match resolution with
+                    | Routable sid -> freshnessOfSession ctx sid
+                    | _ -> Task.FromResult SageFs.ReplFreshness.InSync
+                return! withEchoRunTests ctx freshness (SageFs.McpRunTests.runTests ctx "mcp" request)
+            }
 
     [<McpServerTool>]
     [<Description("""List all discovered tests in the current session, optionally filtered by name pattern or file path.
