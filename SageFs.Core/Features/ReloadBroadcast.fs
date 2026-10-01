@@ -61,8 +61,6 @@ let private refusalCaseName (reason: RestartReason) =
   | RestartReason.ClosureShapeChanged _ -> "ClosureShapeChanged"
   | RestartReason.InstanceLayoutChanged _ -> "InstanceLayoutChanged"
   | RestartReason.GenericInstantiationsUnknown _ -> "GenericInstantiationsUnknown"
-  | RestartReason.GenericTypeMember _ -> "GenericTypeMember"
-
 let private refusalOf (reason: RestartReason) : DevReload.ReloadRefusal =
   { Case = refusalCaseName reason
     Message = RestartReason.describe reason

@@ -577,9 +577,6 @@ type DetourRefusal =
   /// A generic function whose instantiations could not all be listed, so a patch could leave one on the old
   /// body. The detail says what stops the list.
   | GenericInstantiationsUnknown of declaration: string * detail: string
-  /// A member of a generic type. The type's arguments reach the body through the object (an instance member)
-  /// or the class (a static one), not through the method, and nothing here carries them.
-  | GenericTypeMember of typeName: string
 
 /// Everything one eval did, in the vocabulary a user-facing outcome needs.
 type DetourReport = {
@@ -778,8 +775,8 @@ let prepareGenericUnit (logger: ILogger) (older: Method) (newer: Method) (instan
           try
             match body with
             | GenericReload.Body.Own args ->
-              let closedOlder = older.MethodInfo.MakeGenericMethod args
-              let closedNewer = newer.MethodInfo.MakeGenericMethod args
+              let closedOlder = GenericReload.closeOver older.MethodInfo args
+              let closedNewer = GenericReload.closeOver newer.MethodInfo args
               RuntimeHelpers.PrepareMethod closedOlder.MethodHandle
               RuntimeHelpers.PrepareMethod closedNewer.MethodHandle
               let probe = ProbeRegistry.Shared.Allocate newer.FullName
@@ -791,12 +788,12 @@ let prepareGenericUnit (logger: ILogger) (older: Method) (newer: Method) (instan
                   closedNewer :> MethodBase
               Result.Ok(done' @ [ GenericDetour.Own(closedOlder, target, probe) ])
             | GenericReload.Body.Shared representative ->
-              let closedOlder = older.MethodInfo.MakeGenericMethod representative
-              let canonical = older.MethodInfo.MakeGenericMethod(GenericReload.canonicalInstance representative)
+              let closedOlder = GenericReload.closeOver older.MethodInfo representative
+              let canonical = GenericReload.closeOver older.MethodInfo (GenericReload.canonicalInstance representative)
               match NativeDetours.bodyOf closedOlder = NativeDetours.bodyOf canonical with
               | false ->
                 // The runtime did not share this one after all: it has code of its own, like a value type's.
-                let closedNewer = newer.MethodInfo.MakeGenericMethod representative
+                let closedNewer = GenericReload.closeOver newer.MethodInfo representative
                 RuntimeHelpers.PrepareMethod closedNewer.MethodHandle
                 let probe = ProbeRegistry.Shared.Allocate newer.FullName
                 let target : MethodBase =
@@ -809,7 +806,7 @@ let prepareGenericUnit (logger: ILogger) (older: Method) (newer: Method) (instan
                 match GenericReload.sharedStub probe older.MethodInfo newer.MethodInfo representative with
                 | Result.Error why -> Result.Error why
                 | Result.Ok stub ->
-                  RuntimeHelpers.PrepareMethod(older.MethodInfo.MakeGenericMethod(representative).MethodHandle)
+                  RuntimeHelpers.PrepareMethod closedOlder.MethodHandle
                   Result.Ok(done' @ [ GenericDetour.Shared(closedOlder, stub, probe) ])
           with
           // A type argument of a stale FSI compilation unit cannot be loaded, so nothing can run it either.
@@ -1227,12 +1224,30 @@ type LayoutFit =
 /// Code compiled for one class reads an object of another by field offset, so the two have to be
 /// laid out the same: the same base, and the same fields, in the same order, of the same types.
 let layoutFit (older: Type) (newer: Type) : LayoutFit =
-  let shape (t: Type) = instanceFields t |> List.map (fun f -> f.Name, f.FieldType)
-  match older.IsGenericTypeDefinition || newer.IsGenericTypeDefinition, older.BaseType = newer.BaseType with
-  | true, _ -> LayoutFit.Differs "it is generic"
+  // The fields of a generic type are typed by its own type parameters, and the parameters of two copies of it
+  // are never equal, so two generic definitions are compared by shape (parameters named by position).
+  let shape (t: Type) =
+    instanceFields t
+    |> List.map (fun f ->
+      match t.IsGenericTypeDefinition with
+      | true -> f.Name, box (GenericReload.typeShape f.FieldType)
+      | false -> f.Name, box f.FieldType)
+  let baseShape (t: Type) =
+    match isNull t.BaseType with
+    | true -> ""
+    | false -> GenericReload.typeShape t.BaseType
+  let sameGenericity =
+    older.IsGenericTypeDefinition = newer.IsGenericTypeDefinition
+    && (not older.IsGenericTypeDefinition || older.GetGenericArguments().Length = newer.GetGenericArguments().Length)
+  let sameBase =
+    match older.IsGenericTypeDefinition with
+    | true -> baseShape older = baseShape newer
+    | false -> older.BaseType = newer.BaseType
+  match sameGenericity, sameBase with
+  | false, _ -> LayoutFit.Differs "it is generic in one version and not in the other, or has a different number of type parameters"
   | _, false -> LayoutFit.Differs(sprintf "its base type is %s, not %s" (string newer.BaseType) (string older.BaseType))
-  | false, true when shape older = shape newer -> LayoutFit.SameLayout
-  | false, true ->
+  | true, true when shape older = shape newer -> LayoutFit.SameLayout
+  | true, true ->
     let wasFields = instanceFields older |> List.map describeField
     let nowFields = instanceFields newer |> List.map describeField
     let added = nowFields |> List.filter (fun f -> not (List.contains f wasFields))
@@ -1494,17 +1509,16 @@ let planGenericWork (logger: ILogger) (isFileSave: bool) (st: State) (fresh: Met
     match isFileSave, heldCopy m with
     | true, Some _ -> [ DetourRefusal.GenericInstantiationsUnknown(m.FullName, GenericReload.Unreachable.describe why) ]
     | _ -> []
-  let inGenericType (m: Method) = m.MethodInfo.DeclaringType.IsGenericTypeDefinition
-  // The type arguments of a generic TYPE reach its members through the object (an instance) or the class
-  // (a static), not through the method, so nothing here carries them.
+  // A generic method, or a method of a generic type. A struct's members are handed the struct by address,
+  // which a stub cannot take, so a generic struct's members are named and left.
+  let inGenericStruct (m: Method) = m.MethodInfo.DeclaringType.IsGenericTypeDefinition && m.MethodInfo.DeclaringType.IsValueType
   let typeMembers =
     fresh
-    |> List.filter (fun m -> inGenericType m && not m.MethodInfo.IsAbstract)
+    |> List.filter (fun m -> GenericReload.isGenericDefinition m.MethodInfo && inGenericStruct m)
     |> List.collect (fun m ->
-      match isFileSave, heldCopy m with
-      | true, Some _ -> [ DetourRefusal.GenericTypeMember m.MethodInfo.DeclaringType.Name ]
-      | _ -> [])
-  let candidates = fresh |> List.filter (fun m -> m.MethodInfo.IsGenericMethodDefinition && not (inGenericType m))
+      refusal m (GenericReload.Unreachable.UnsupportedShape(sprintf "%s is a generic struct, and a struct's members are passed the struct by address" m.MethodInfo.DeclaringType.Name)))
+  let candidates =
+    fresh |> List.filter (fun m -> GenericReload.isGenericDefinition m.MethodInfo && not m.MethodInfo.IsAbstract && not (inGenericStruct m))
   let pairs =
     candidates
     |> List.collect (fun newest ->
@@ -1656,7 +1670,7 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave:
          |> List.choose (fun newest ->
            match Map.tryFind (holdKey newest.MethodInfo) st.AppHolds with
            | Some held when held <> newest.MethodInfo ->
-             match newest.MethodInfo.IsStatic || newest.MethodInfo.DeclaringType.IsGenericTypeDefinition with
+             match newest.MethodInfo.IsStatic with
              | true -> None
              | false ->
                try

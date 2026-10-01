@@ -77,28 +77,57 @@ type DefinitionKey =
 
 let keyOf (m: MethodBase) : DefinitionKey = { Module = m.Module; Token = m.MetadataToken }
 
-let rec private shapeOfType (t: Type) : string =
+/// A type with its generic parameters named by position, so a type of one copy of a generic declaration and
+/// the same type of another copy can be compared (the parameters of two definitions are never equal).
+let rec typeShape (t: Type) : string =
   match t with
   | _ when t.IsGenericParameter ->
     sprintf "!%s%d" (match isNull t.DeclaringMethod with | true -> "" | false -> "!") t.GenericParameterPosition
-  | _ when t.IsByRef -> shapeOfType (t.GetElementType()) + "&"
-  | _ when t.IsArray -> sprintf "%s[%d]" (shapeOfType (t.GetElementType())) (t.GetArrayRank())
+  | _ when t.IsByRef -> typeShape (t.GetElementType()) + "&"
+  | _ when t.IsArray -> sprintf "%s[%d]" (typeShape (t.GetElementType())) (t.GetArrayRank())
   | _ when t.IsGenericType ->
-    sprintf "%s<%s>" (t.GetGenericTypeDefinition().FullName) (t.GetGenericArguments() |> Array.map shapeOfType |> String.concat ",")
+    sprintf "%s<%s>" (t.GetGenericTypeDefinition().FullName) (t.GetGenericArguments() |> Array.map typeShape |> String.concat ",")
   | _ -> t.FullName
 
-/// The signature of a generic method definition with its generic parameters named by position, so the copy
-/// the app holds and the copy a save compiled can be told apart from a different method of the same name.
-let shapeOf (m: MethodInfo) : string =
-  sprintf "%b|%d|%s|%s"
-    m.IsStatic
-    (m.GetGenericArguments().Length)
-    (m.GetParameters() |> Array.map (fun p -> shapeOfType p.ParameterType) |> String.concat ",")
-    (shapeOfType m.ReturnType)
+/// How many type parameters the type a method is declared in has of its own.
+let private classArity (m: MethodBase) : int =
+  match isNull m.DeclaringType || not m.DeclaringType.IsGenericTypeDefinition with
+  | true -> 0
+  | false -> m.DeclaringType.GetGenericArguments().Length
 
-/// Both are generic method definitions of the same shape.
+/// The signature of a generic method (or a method of a generic type) with its generic parameters named by
+/// position, so the copy the app holds and the copy a save compiled can be told apart from a different
+/// method of the same name.
+let shapeOf (m: MethodInfo) : string =
+  sprintf "%b|%d|%d|%s|%s"
+    m.IsStatic
+    (classArity m)
+    (m.GetGenericArguments().Length)
+    (m.GetParameters() |> Array.map (fun p -> typeShape p.ParameterType) |> String.concat ",")
+    (typeShape m.ReturnType)
+
+/// A generic method definition, or a method of a generic type definition.
+let isGenericDefinition (m: MethodInfo) : bool = m.IsGenericMethodDefinition || classArity m > 0
+
+/// Both are generic definitions of the same shape.
 let sameShape (older: MethodInfo) (newer: MethodInfo) : bool =
-  older.IsGenericMethodDefinition && newer.IsGenericMethodDefinition && shapeOf older = shapeOf newer
+  isGenericDefinition older && isGenericDefinition newer && shapeOf older = shapeOf newer
+
+/// `definition` over `arguments`: the arguments of its type, then those of the method. The method of a closed
+/// type is found by its handle, since a closed type's methods are not the definition's.
+let closeOver (definition: MethodInfo) (arguments: Type[]) : MethodInfo =
+  let arity = classArity definition
+  let closedType =
+    match arity with
+    | 0 -> definition.DeclaringType
+    | _ -> definition.DeclaringType.MakeGenericType(Array.sub arguments 0 arity)
+  let onType =
+    match arity with
+    | 0 -> definition
+    | _ -> MethodBase.GetMethodFromHandle(definition.MethodHandle, closedType.TypeHandle) :?> MethodInfo
+  match definition.IsGenericMethodDefinition with
+  | true -> onType.MakeGenericMethod(Array.sub arguments arity (arguments.Length - arity))
+  | false -> onType
 
 // ── which instantiations the program can reach ───────────────────────────────
 
@@ -185,9 +214,18 @@ let reach (scanned: Assembly list) (targets: MethodInfo list) : Result<Reach, Un
       | true -> stop (Unreachable.TooManyInstantiations scanLimit)
       | false -> queue.Enqueue m
 
-  /// A closed generic type was built or called into: every member of it can run with its type arguments.
+  let record (index: int) (args: Type[]) =
+    match found.TryGetValue index with
+    | true, l -> if not (l.Exists(fun a -> sameArguments a args)) then l.Add args
+    | false, _ -> found.[index] <- List<Type[]>([ args ])
+
+  /// A closed generic type was built or called into: every member of it can run with its type arguments,
+  /// including the ones no IL names (a virtual or interface call reaches a member through the object).
   let enqueueType (t: Type) =
     for m in membersOf t do
+      match wantedIndex m with
+      | Some index when not m.IsGenericMethodDefinition -> record index (t.GetGenericArguments())
+      | _ -> ()
       match m.IsGenericMethodDefinition || m.IsAbstract with
       | true -> ()
       | false -> enqueue m
@@ -222,17 +260,19 @@ let reach (scanned: Assembly list) (targets: MethodInfo list) : Result<Reach, Un
               | _ -> ()
               // Which definition does it name, and over what?
               (match callee with
-               | :? MethodInfo as mi when mi.IsGenericMethod && not mi.IsGenericMethodDefinition ->
+               | :? MethodInfo as mi ->
                  match wantedIndex mi with
                  | Some index ->
-                   let args = mi.GetGenericArguments()
-                   match args |> Array.exists (fun t -> t.ContainsGenericParameters) with
-                   | true -> carrier <- true
-                   | false ->
-                     match found.TryGetValue index with
-                     | true, l -> if not (l.Exists(fun a -> sameArguments a args)) then l.Add args
-                     | false, _ -> found.[index] <- List<Type[]>([ args ])
-                   if inGenericContext then carrier <- true
+                   // The type's arguments, then the method's: what the definition is closed over.
+                   let classArgs = match mi.DeclaringType.IsGenericType with | true -> mi.DeclaringType.GetGenericArguments() | false -> [||]
+                   let methodArgs = match mi.IsGenericMethod with | true -> mi.GetGenericArguments() | false -> [||]
+                   let args = Array.append classArgs methodArgs
+                   match args.Length > 0, args |> Array.exists (fun t -> t.ContainsGenericParameters) with
+                   | false, _ -> ()
+                   | true, true -> carrier <- true
+                   | true, false ->
+                     record index args
+                     if inGenericContext then carrier <- true
                  | None -> ()
                | _ -> ())
               // Follow it into code of the program.
@@ -267,10 +307,13 @@ let reach (scanned: Assembly list) (targets: MethodInfo list) : Result<Reach, Un
   while queue.Count > 0 && stopped.IsNone do
     visit (queue.Dequeue())
 
+  // A member of a generic type is reached by whatever builds the type, and MakeGenericType builds it with
+  // any arguments, so the type is a carrier of its own members.
+  let membersOfGenericTypes = wanted |> List.exists (fun (_, t) -> classArity t > 0)
   match stopped with
   | Some why -> Error why
   | None ->
-    match madeGenericMethod, madeGenericType, carrier with
+    match madeGenericMethod, madeGenericType, carrier || membersOfGenericTypes with
     | Some caller, _, _ -> Error(Unreachable.MakesGenericMethods caller)
     | None, Some caller, true -> Error(Unreachable.MakesGenericTypes caller)
     | None, _, _ ->
@@ -324,31 +367,100 @@ let canonicalInstance (representative: Type[]) : Type[] =
 
 // ── the stub a shared body is detoured to ────────────────────────────────────
 
+/// How a call into a shared body says which instantiation it is for.
+[<RequireQualifiedAccess>]
+type Context =
+  /// The method has type parameters of its own: the hidden argument is the exact method.
+  | ExactMethod
+  /// An instance member of a generic class: the type arguments are the object's, and there is no hidden argument.
+  | TheObject
+  /// A static member of a generic class: the hidden argument is the exact class.
+  | ExactClass
+  /// A generic instance method of a generic class: the hidden argument is the exact method, which the runtime
+  /// will only turn back into a method when it is given the exact class, and that is the object's.
+  | ExactMethodOfTheObject
+  /// A static generic method of a generic class: the hidden argument is the exact method, and nothing at the
+  /// call says which class it belongs to.
+  | NotCarried
+
+/// How the shared body of `definition` is told which instantiation it runs for.
+let contextOf (definition: MethodInfo) : Context =
+  let inGenericClass = classArity definition > 0
+  match definition.IsGenericMethodDefinition, inGenericClass, definition.IsStatic with
+  | true, false, _ -> Context.ExactMethod
+  | true, true, false -> Context.ExactMethodOfTheObject
+  | true, true, true -> Context.NotCarried
+  | false, _, false -> Context.TheObject
+  | false, _, true -> Context.ExactClass
+
 /// Where a stub finds the exact new instantiation. Static, because IL can only call a static from a dynamic
 /// method.
 [<Sealed>]
 type SharedTargets private () =
-  static let newer = ConcurrentDictionary<int64, MethodInfo>()
-  static let resolved = ConcurrentDictionary<struct (int64 * nativeint), nativeint>()
+  static let plans = ConcurrentDictionary<int64, MethodInfo * MethodInfo>()
+  static let byHandle = ConcurrentDictionary<struct (int64 * nativeint), nativeint>()
+  static let byType = ConcurrentDictionary<struct (int64 * Type), nativeint>()
   static let mutable lastPlan = 0L
 
-  /// A plan: the new definition a shared body's calls are sent to. Returned to the stub's IL as a number.
-  static member Register(definition: MethodInfo) : int64 =
+  /// A plan: the copy the shared body belongs to and the new copy its calls are sent to. Returned to the stub's
+  /// IL as a number.
+  static member Register(older: MethodInfo, newer: MethodInfo) : int64 =
     let id = Interlocked.Increment(&lastPlan)
-    newer.[id] <- definition
+    plans.[id] <- (older, newer)
     id
+
+  /// The new body's entry for an instantiation: the type's arguments, then the method's.
+  static member private EntryFor(plan: int64, classArguments: Type[], methodArguments: Type[]) : nativeint =
+    let _, newer = plans.[plan]
+    let target = closeOver newer (Array.append classArguments methodArguments)
+    RuntimeHelpers.PrepareMethod target.MethodHandle
+    target.MethodHandle.GetFunctionPointer()
 
   /// The hidden argument of a call into a shared body is the exact method being called. Its type arguments
   /// are the ones to run the new body with, and the new body's entry for them is what the stub calls.
-  static member Resolve(plan: int64, instantiation: nativeint) : nativeint =
-    resolved.GetOrAdd(
+  static member ResolveMethod(plan: int64, instantiation: nativeint) : nativeint =
+    byHandle.GetOrAdd(
       struct (plan, instantiation),
       fun (struct (plan, instantiation)) ->
         let exact = MethodBase.GetMethodFromHandle(RuntimeMethodHandle.FromIntPtr instantiation) :?> MethodInfo
-        let definition = newer.[plan]
-        let target = definition.MakeGenericMethod(exact.GetGenericArguments())
-        RuntimeHelpers.PrepareMethod target.MethodHandle
-        target.MethodHandle.GetFunctionPointer()
+        let classArguments = match exact.DeclaringType.IsGenericType with | true -> exact.DeclaringType.GetGenericArguments() | false -> [||]
+        SharedTargets.EntryFor(plan, classArguments, exact.GetGenericArguments())
+    )
+
+  /// The hidden argument of a static member of a generic class is the exact class.
+  static member ResolveClass(plan: int64, instantiation: nativeint) : nativeint =
+    byHandle.GetOrAdd(
+      struct (plan, instantiation),
+      fun (struct (plan, instantiation)) ->
+        let exact = Type.GetTypeFromHandle(RuntimeTypeHandle.FromIntPtr instantiation)
+        SharedTargets.EntryFor(plan, exact.GetGenericArguments(), [||])
+    )
+
+  /// The class an object is an instance of that the member is declared in (the object's own, or one of its bases
+  /// when the member is inherited).
+  static member private ClassOf(plan: int64, receiver: obj) : Type =
+    let older, _ = plans.[plan]
+    let rec constructed (t: Type) : Type =
+      match isNull t with
+      | true -> failwithf "%s is not an instance of %s" (receiver.GetType().FullName) older.DeclaringType.FullName
+      | false when t.IsGenericType && t.GetGenericTypeDefinition() = older.DeclaringType -> t
+      | false -> constructed t.BaseType
+    constructed (receiver.GetType())
+
+  /// An instance member of a generic class runs against an object, and the object's class says what the type
+  /// arguments are.
+  static member ResolveObject(plan: int64, receiver: obj) : nativeint =
+    let exact = SharedTargets.ClassOf(plan, receiver)
+    byType.GetOrAdd(struct (plan, exact), fun (struct (plan, exact)) -> SharedTargets.EntryFor(plan, exact.GetGenericArguments(), [||]))
+
+  /// A generic instance method of a generic class: the class from the object, the method from the hidden argument.
+  static member ResolveMethodOfObject(plan: int64, receiver: obj, instantiation: nativeint) : nativeint =
+    byHandle.GetOrAdd(
+      struct (plan, instantiation),
+      fun (struct (plan, instantiation)) ->
+        let exact = SharedTargets.ClassOf(plan, receiver)
+        let method' = MethodBase.GetMethodFromHandle(RuntimeMethodHandle.FromIntPtr instantiation, exact.TypeHandle) :?> MethodInfo
+        SharedTargets.EntryFor(plan, exact.GetGenericArguments(), method'.GetGenericArguments())
     )
 
 let private stubs = List<DynamicMethod>()
@@ -372,7 +484,7 @@ let private returnsThroughBuffer (t: Type) : bool =
 /// body's, hidden argument included (after `this` for an instance method).
 let sharedStub (probe: EntryProbe) (older: MethodInfo) (newer: MethodInfo) (representative: Type[]) : Result<MethodInfo, Unreachable> =
   try
-    let exact = older.MakeGenericMethod(canonicalInstance representative)
+    let exact = closeOver older (canonicalInstance representative)
     let declared = exact.GetParameters() |> Array.map (fun p -> p.ParameterType)
     let abis = declared |> Array.map abiType
     match abis |> Array.tryPick (function | Error e -> Some e | Ok _ -> None), returnsThroughBuffer exact.ReturnType with
@@ -382,23 +494,59 @@ let sharedStub (probe: EntryProbe) (older: MethodInfo) (newer: MethodInfo) (repr
     | None, false ->
       let visible = abis |> Array.map (function | Ok t -> t | Error _ -> typeof<obj>)
       let ret = match abiType exact.ReturnType with | Ok t -> t | Error _ -> typeof<obj>
-      let self = match older.IsStatic with | true -> [||] | false -> [| older.DeclaringType |]
-      let parameters = Array.concat [ self; [| typeof<nativeint> |]; visible ]
+      // The object an instance member is called on. For a generic class its type has open parameters, and a
+      // reference is a reference whatever it refers to, so the stub takes it as an object.
+      let self =
+        match older.IsStatic, older.DeclaringType.IsGenericTypeDefinition with
+        | true, _ -> [||]
+        | false, true -> [| typeof<obj> |]
+        | false, false -> [| older.DeclaringType |]
+      let context = contextOf older
+      match context with
+      | Context.NotCarried ->
+        Error(
+          Unreachable.UnsupportedShape(
+            sprintf "%s is a static generic method of a generic class, and nothing at the call says which class it belongs to" older.Name
+          )
+        )
+      | _ ->
+      // Where the call says which instantiation it is for, and what comes before the member's own arguments.
+      let hidden : Type[] =
+        match context with
+        | Context.ExactMethod
+        | Context.ExactClass
+        | Context.ExactMethodOfTheObject -> [| typeof<nativeint> |]
+        | Context.TheObject
+        | Context.NotCarried -> [||]
+      let parameters = Array.concat [ self; hidden; visible ]
       let stub =
         DynamicMethod(sprintf "sagefs-shared-generic:%s" probe.Declaration, ret, parameters, typeof<EntryHooks>.Module, true)
       let il = stub.GetILGenerator()
       let entry = il.DeclareLocal(typeof<nativeint>)
-      let plan = SharedTargets.Register newer
+      let plan = SharedTargets.Register(older, newer)
       il.Emit(OpCodes.Ldc_I8, probe.Id)
       il.Emit(OpCodes.Call, typeof<EntryHooks>.GetMethod "Enter")
       il.Emit(OpCodes.Ldc_I8, plan)
-      il.Emit(OpCodes.Ldarg, int16 self.Length)
-      il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod "Resolve")
+      match context with
+      | Context.ExactMethod ->
+        il.Emit(OpCodes.Ldarg, int16 self.Length)
+        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod "ResolveMethod")
+      | Context.ExactClass ->
+        il.Emit(OpCodes.Ldarg, int16 self.Length)
+        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod "ResolveClass")
+      | Context.TheObject ->
+        il.Emit OpCodes.Ldarg_0
+        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod "ResolveObject")
+      | Context.ExactMethodOfTheObject ->
+        il.Emit OpCodes.Ldarg_0
+        il.Emit(OpCodes.Ldarg, 1s)
+        il.Emit(OpCodes.Call, typeof<SharedTargets>.GetMethod "ResolveMethodOfObject")
+      | Context.NotCarried -> ()
       il.Emit(OpCodes.Stloc, entry)
       for k in 0 .. self.Length - 1 do
         il.Emit(OpCodes.Ldarg, int16 k)
       for k in 0 .. visible.Length - 1 do
-        il.Emit(OpCodes.Ldarg, int16 (self.Length + 1 + k))
+        il.Emit(OpCodes.Ldarg, int16 (self.Length + hidden.Length + k))
       il.Emit(OpCodes.Ldloc, entry)
       let convention = match older.IsStatic with | true -> CallingConventions.Standard | false -> CallingConventions.HasThis
       il.EmitCalli(OpCodes.Calli, convention, ret, visible, null)

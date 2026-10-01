@@ -1097,9 +1097,7 @@ let run (sessionId: string) (port: int) = async {
           | Middleware.HotReloadCore.DetourRefusal.InstanceLayoutChanged (typeName, detail) ->
             Features.ReloadPlanning.ReloadChange.InstanceLayoutChanged (typeName, detail)
           | Middleware.HotReloadCore.DetourRefusal.GenericInstantiationsUnknown (declaration, detail) ->
-            Features.ReloadPlanning.ReloadChange.GenericInstantiationsUnknown (declaration, detail)
-          | Middleware.HotReloadCore.DetourRefusal.GenericTypeMember typeName ->
-            Features.ReloadPlanning.ReloadChange.GenericTypeMember typeName)
+            Features.ReloadPlanning.ReloadChange.GenericInstantiationsUnknown (declaration, detail))
       /// The lambdas a save edited, as the host needs them to find the closures the app already holds.
       let closuresOf
         (filePath: string)
@@ -1735,8 +1733,7 @@ let run (sessionId: string) (port: int) = async {
                            // would re-declare every `let mutable` in the file on the way.
                            | Features.ReloadOutcome.RestartReason.ClosureShapeChanged _
                            | Features.ReloadOutcome.RestartReason.InstanceLayoutChanged _
-                           | Features.ReloadOutcome.RestartReason.GenericInstantiationsUnknown _
-                           | Features.ReloadOutcome.RestartReason.GenericTypeMember _ -> true
+                           | Features.ReloadOutcome.RestartReason.GenericInstantiationsUnknown _ -> true
                            | _ -> false) ->
                   let outcome = Features.ReloadOutcome.ReloadOutcome.RestartRequired restartReasons
                   Features.ReloadBroadcast.broadcastOutcome outcome

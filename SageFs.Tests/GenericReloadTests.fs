@@ -103,6 +103,15 @@ let private shapeOld<'T> (x: 'T) : string = "old:" + typeof<'T>.Name
 let private shapeNew<'T> (x: 'T) : string = "new:" + typeof<'T>.Name
 
 [<MethodImpl(MethodImplOptions.NoInlining)>]
+let private againOld<'T> (x: 'T) : string = "first:" + typeof<'T>.Name
+
+[<MethodImpl(MethodImplOptions.NoInlining)>]
+let private againSecond<'T> (x: 'T) : string = "second:" + typeof<'T>.Name
+
+[<MethodImpl(MethodImplOptions.NoInlining)>]
+let private againThird<'T> (x: 'T) : string = "third:" + typeof<'T>.Name
+
+[<MethodImpl(MethodImplOptions.NoInlining)>]
 let private pairOld<'A, 'B> (a: 'A) (b: 'B) : string = sprintf "old:%s/%s" typeof<'A>.Name typeof<'B>.Name
 
 [<MethodImpl(MethodImplOptions.NoInlining)>]
@@ -113,6 +122,33 @@ let private structOld<'T> (x: 'T) : Point = { X = 1 }
 
 [<MethodImpl(MethodImplOptions.NoInlining)>]
 let private structNew<'T> (x: 'T) : Point = { X = 2 }
+
+/// The members of a generic type: the type's arguments reach an instance member through the object and a static
+/// member through the class, and the old and the new copy are laid out the same.
+type private HolderOld<'T>(v: 'T) =
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  member _.Show() : string = "old:" + typeof<'T>.Name + ":" + string v
+
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  static member Make(x: 'T) : string = "old:" + typeof<'T>.Name + ":" + string x
+
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  member _.Pair<'U>(u: 'U) : string = "old:" + typeof<'T>.Name + "/" + typeof<'U>.Name
+
+type private HolderNew<'T>(v: 'T) =
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  member _.Show() : string = "new:" + typeof<'T>.Name + ":" + string v
+
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  static member Make(x: 'T) : string = "new:" + typeof<'T>.Name + ":" + string x
+
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  member _.Pair<'U>(u: 'U) : string = "new:" + typeof<'T>.Name + "/" + typeof<'U>.Name
+
+let private holderMember (isOld: bool) (name: string) : Method =
+  let t = match isOld with | true -> typedefof<HolderOld<_>> | false -> typedefof<HolderNew<_>>
+  { MethodInfo = t.GetMethod(name, BindingFlags.Static ||| BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+    FullName = "GenericReloadTests.Holder." + name }
 
 let private testModule = typeof<Box>.DeclaringType
 
@@ -165,6 +201,22 @@ let tests =
         match GenericReload.reach [ carrying.Assembly ] [ carryingEcho ] with
         | Result.Error(GenericReload.Unreachable.MakesGenericTypes _) -> ()
         | other -> failtestf "a generic type could be made with any argument, got %A" other
+    ]
+
+    testList "which declaration a re-pointed member belongs to" [
+
+      testCase "WHY - the runtime names a generic type with its number of type parameters, and the source does not, so a member still belongs to its type" <| fun _ ->
+        let source = "module Parity\n\ntype GenHolder<'T>(v: 'T) =\n  member _.Show() : string = \"a\" + string v\n"
+        match SageFs.Features.ReloadPlanning.extractDecls source with
+        | Result.Error why -> failtestf "the source parses: %s" why
+        | Result.Ok file ->
+          match file.Decls |> List.tryFind (fun d -> d.Name = "GenHolder") with
+          | None -> failtest "the type is a declaration"
+          | Some decl ->
+            SageFs.Features.ReloadPlanning.reachedBy [ "ParityFixture.Parity.GenHolder`1.Show" ] decl
+            |> Expect.isTrue "a member of GenHolder`1 reaches GenHolder"
+            SageFs.Features.ReloadPlanning.reachedBy [ "ParityFixture.Parity.GenHolderOther`1.Show" ] decl
+            |> Expect.isFalse "a member of another type does not"
     ]
 
     testList "which instantiations share a body" [
@@ -240,6 +292,55 @@ let tests =
           pairOld { Value = 1 } 1 |> Expect.equal "(record,int)" "new:Box/Int32"
           pairOld "a" 2.5 |> Expect.equal "(string,float)" "new:String/Double"
           pairOld "a" "b" |> Expect.equal "(string,string) was not listed, so it is the old body" "old:String/String"
+
+      testCase "WHY - the members of a generic type are re-pointed too: an instance member finds its type arguments in the object, a static one in the class, a generic one in the method" <| fun _ ->
+        let objects = HolderOld("s"), HolderOld(1), HolderOld { Value = 3 }
+        let s, i, r = objects
+        s.Show() |> Expect.equal "old string" "old:String:s"
+        i.Show() |> Expect.equal "old int" "old:Int32:1"
+        HolderOld<string>.Make "m" |> Expect.equal "old static" "old:String:m"
+        s.Pair 1 |> Expect.equal "old generic method" "old:String/Int32"
+        let units =
+          [ "Show"; "Make"; "Pair" ]
+          |> List.map (fun name ->
+            let args =
+              match name with
+              | "Pair" -> [ [| typeof<string>; typeof<int> |]; [| typeof<int>; typeof<string> |]; [| typeof<Box>; typeof<int> |] ]
+              | _ -> [ [| typeof<string> |]; [| typeof<int> |]; [| typeof<Box> |]; [| typeof<float> |] ]
+            match prepareGenericUnit logger (holderMember true name) (holderMember false name) args with
+            | Result.Ok unit -> unit
+            | Result.Error why -> failtestf "%s: expected a unit, got %s" name (GenericReload.Unreachable.describe why))
+        let report = applyDetourPlan logger Map.empty noPlainDetours units
+        report.Failures |> Expect.equal "nothing failed" []
+        // Objects built BEFORE the save, of the OLD type, run the new member with their own type arguments.
+        s.Show() |> Expect.equal "string object" "new:String:s"
+        i.Show() |> Expect.equal "int object" "new:Int32:1"
+        r.Show() |> Expect.equal "a record object, whose body the string object's detour covers" "new:Box:{ Value = 3 }"
+        HolderOld<string>.Make "m" |> Expect.equal "static, string" "new:String:m"
+        HolderOld<Box>.Make { Value = 1 } |> Expect.equal "static, record" "new:Box:{ Value = 1 }"
+        HolderOld<float>.Make 2.5 |> Expect.equal "static, float, never compiled" "new:Double:2.5"
+        s.Pair 1 |> Expect.equal "generic method of a generic type" "new:String/Int32"
+        i.Pair "u" |> Expect.equal "the other way round" "new:Int32/String"
+        r.Pair 1 |> Expect.equal "(record, int) shares the (string, int) body" "new:Box/Int32"
+        // The teeth: (reference, reference) is a third shared body that nobody listed, so it is still the old one.
+        r.Pair "u" |> Expect.equal "an unlisted shared body is the old body" "old:Box/String"
+
+      testCase "WHY - a second save of the same function lands over the first, in the value-type bodies and in the shared one" <| fun _ ->
+        let older = definition "againOld"
+        let listed = [ [| typeof<int> |]; [| typeof<string> |]; [| typeof<Box> |] ]
+        againOld 1 |> Expect.equal "before any save" "first:Int32"
+        let save (newer: string) : unit =
+          match prepareGenericUnit logger older (definition newer) listed with
+          | Result.Error why -> failtestf "expected a unit, got %s" (GenericReload.Unreachable.describe why)
+          | Result.Ok unit ->
+            (applyDetourPlan logger Map.empty noPlainDetours [ unit ]).Failures |> Expect.equal "nothing failed" []
+        save "againSecond"
+        againOld 1 |> Expect.equal "after the first save, int" "second:Int32"
+        againOld "s" |> Expect.equal "after the first save, string" "second:String"
+        save "againThird"
+        againOld 1 |> Expect.equal "after the second save, int" "third:Int32"
+        againOld "s" |> Expect.equal "after the second save, string" "third:String"
+        againOld { Value = 1 } |> Expect.equal "after the second save, record" "third:Box"
 
       testCase "WHY - a shared body that returns a struct is refused, because the stub cannot place the return buffer" <| fun _ ->
         let older = definition "structOld"

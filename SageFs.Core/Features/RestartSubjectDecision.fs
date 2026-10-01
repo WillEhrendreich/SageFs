@@ -78,10 +78,7 @@ let private unscopeableOf (reason: ReloadOutcome.RestartReason) =
   | ReloadOutcome.RestartReason.InstanceLayoutChanged (typeName, _) ->
     Some(sprintf "live instances of '%s' were laid out without the new field, so a scoped restart could leave one behind" typeName)
   | ReloadOutcome.RestartReason.GenericInstantiationsUnknown (declaration, _) ->
-    Some(sprintf "'%s' is generic, and a scoped restart could leave an instantiation SageFs cannot list on the old body" declaration)
-  | ReloadOutcome.RestartReason.GenericTypeMember typeName ->
-    Some(sprintf "live instances of the generic type '%s' were built by the old code, so a scoped restart could leave one behind" typeName)
-  | ReloadOutcome.RestartReason.TypeShapeChanged (_, RestartScope.Scoped _) -> None
+    Some(sprintf "'%s' is generic, and a scoped restart could leave an instantiation SageFs cannot list on the old body" declaration)  | ReloadOutcome.RestartReason.TypeShapeChanged (_, RestartScope.Scoped _) -> None
 
 let ofReasons (reasons: ReloadOutcome.RestartReason list) : Decision =
   match reasons with

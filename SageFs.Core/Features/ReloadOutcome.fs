@@ -114,10 +114,6 @@ type RestartReason =
   /// instantiation no code names (reflection), a patch that is right for some calls and wrong for others
   /// is not one to claim. The detail says what stops the list.
   | GenericInstantiationsUnknown of declaration: string * detail: string
-  /// A member of a generic type. The type's arguments reach the body through the object (an instance
-  /// member) or the class (a static one), not through the method, so a patch of one generic method's
-  /// bodies does not carry them. A generic method of an ordinary type is not this case.
-  | GenericTypeMember of typeName: string
 
 module RestartReason =
 
@@ -164,9 +160,6 @@ module RestartReason =
       sprintf "the fields of '%s' changed (%s), and the objects the running app already built were laid out without them" typeName detail
     | RestartReason.GenericInstantiationsUnknown(declaration, detail) ->
       sprintf "'%s' is generic, and SageFs cannot list every instantiation the app can run (%s), so a patch could leave one on the old body" declaration detail
-    | RestartReason.GenericTypeMember typeName ->
-      sprintf "'%s' is a generic type, and the type arguments of an object reach its members through the object, which a patch does not carry" typeName
-
   /// What the user can actually do. Never empty — a refusal a user cannot act
   /// on is a dead end, and this is the field that stops it being one.
   let remedy =
@@ -218,9 +211,6 @@ module RestartReason =
         typeName
     | RestartReason.GenericInstantiationsUnknown(declaration, _) ->
       sprintf "Restart the app to pick it up. A generic function is re-pointed in every instantiation while the program's own code names them all; if '%s' only needs to work for one type, annotate its arguments with it and it is re-pointed like any other function." declaration
-    | RestartReason.GenericTypeMember typeName ->
-      sprintf "Restart the app to pick it up. The members of an ordinary type, and generic functions and methods that are not members of a generic type, are re-pointed in place; the members of '%s' are not yet." typeName
-
 /// A `let mutable` whose initializer you edited while the app was running. The
 /// app kept its live value (rule 3 of the state spec), and this is what the
 /// save says about it.
