@@ -399,3 +399,25 @@ Evidence: `SageFs.Tests/HotReloadParityTests.fs` row `generic` on net10.0 and ne
 in this change's commit message.
 Reopen it if: a way to detour every instantiation, present and future, shows up (a shared canonical body for reference
 types would cover half of it, and half is not a claim worth making).
+
+## The debugger row downloads a pinned debugger and checks its hash, because the row has to be real
+
+"Does hot reload work while a debugger is attached" had no test, and Microsoft's answer for F# is "no". A faked row (a
+flag that says a debugger is attached, a mock) would be worse than none. The row attaches Samsung's netcoredbg to the
+FSI host, which is the process the route table lives in, asks that process whether a debugger is attached (and the twin
+asks the same of an unattached one and gets false), then does real saves. Managed attach on Linux goes through the
+runtime's own pipes, so it works without ptrace under the default Yama setting, and it works against .NET 10 and .NET 11.
+
+netcoredbg is MIT licensed and has a Linux x64 release. The Microsoft debugger (vsdbg) is licensed for use with Microsoft
+products only, so it is not an option. The release is pinned by URL and SHA-256, downloaded once into the fixture's
+`.runs` folder (which is git-ignored), and refused if the hash differs. A machine that is not Linux x64, or cannot reach
+GitHub the first time, fails the row and says why. It does not skip it.
+
+What it proves is narrow, and the doc says so: a save lands and runs in a process a debugger is attached to. It does not
+prove stepping, breakpoints in patched code, or an edit to a method the debugger is stopped in. Nothing sets a
+breakpoint.
+
+Evidence: `SageFs.Tests/HotReloadDebuggerTests.fs`.
+Reopen it if: breakpoints in patched code turn out to matter to users (that is a separate row, and a harder one: a
+detour rewrites the first bytes of the code a breakpoint may sit in), or CI cannot reach GitHub (cache the archive on
+the runner).

@@ -60,7 +60,7 @@ type Row = {
   Ending: Ending
 }
 
-let private rows : Row list = [
+let rows : Row list = [
   // ── closures ──────────────────────────────────────────────────────────────
   { Name = "inlineLambda"
     Why = "a lambda written inline in the route list, so there is no named method to re-point"
@@ -195,7 +195,7 @@ let private reasonCases (verdict: string) : string list =
   | false, _ -> []
 
 /// What a row saw, in the words of the table the run ends with.
-type private Observed = {
+type Observed = {
   Row: Row
   /// What the worker said about the save: `type/outcome` and the restart reasons.
   Said: string
@@ -230,43 +230,49 @@ let private said (verdict: string) : string =
     | _ -> sprintf "%s/%s" (str v "type") (str v "outcome")
   | _ -> sprintf "%s/%s %A%s" (str v "type") (str v "outcome") reasons firstMessage
 
+/// One row against an app that is already running: read the route, save the row's edit, read the
+/// route again, and say what the worker claimed and what the process did.
+let exerciseRow (app: RunningApp) (row: Row) : Task<Observed> = task {
+  let! before = get app row.Name
+  let! verdict = saveEdits app app.StateSource row.Edits
+  // One read of the route: a stateful row counts its calls, so it cannot be read twice.
+  let! served = get app row.Name
+  let observed problem = { Row = row; Said = said verdict; Served = served; Problem = problem }
+  match before = row.Before with
+  | false -> return observed (sprintf "before the save the route served %A, not %A" before row.Before)
+  | true ->
+  match row.Ending with
+  | Ending.Patches ->
+    let outcome = str (json verdict) "type"
+    match outcome = "pending", served = row.After with
+    | false, _ -> return observed (sprintf "the save should be applied in place, and the worker said %s" (said verdict))
+    | true, false -> return observed (sprintf "the save said it was applied, and the process serves %A, not %A" served row.After)
+    | true, true ->
+      // The read above ran the patched body, so the worker can now say it was seen running.
+      let! confirmedVerdict = confirmed app
+      match str (json confirmedVerdict) "outcome" with
+      | "Patched" -> return observed ""
+      | other -> return observed (sprintf "the new body ran and the save ended %s, not Patched: %s" other confirmedVerdict)
+  | Ending.Restarts reason ->
+    let claims =
+      match str (json verdict) "outcome" = "Patched", str (json verdict) "type" = "pending" with
+      | true, _ -> Some "the worker claims a patch for a save that cannot land"
+      | _, true -> Some "the page was told to refresh into the same bytes"
+      | false, false -> None
+    match claims, served = row.After, reasonCases verdict = [ reason ] with
+    | Some problem, _, _ -> return observed problem
+    | None, false, _ -> return observed (sprintf "the process was changed (serves %A) by a save that says it needs a restart" served)
+    | None, true, false -> return observed (sprintf "the restart should name %s, and the worker said %s" reason (said verdict))
+    | None, true, true -> return observed ""
+}
+
 /// One row on a host of its own, start to finish. A row gets its own host because a save the
 /// product cannot patch leaves its edit on disk and the baseline behind, so every later save in
 /// that host would carry it too: one red row would make every row after it red for the wrong reason.
 let private runRow (runtime: HostRuntime) (row: Row) : Task<Observed> = task {
   let! app = startFixture parityFixture runtime ignore
   try
-    let! before = get app row.Name
-    let! verdict = saveEdits app app.StateSource row.Edits
-    // One read of the route: a stateful row counts its calls, so it cannot be read twice.
-    let! served = get app row.Name
-    let observed problem = { Row = row; Said = said verdict; Served = served; Problem = problem }
-    match before = row.Before with
-    | false -> return observed (sprintf "before the save the route served %A, not %A" before row.Before)
-    | true ->
-    match row.Ending with
-    | Ending.Patches ->
-      let outcome = str (json verdict) "type"
-      match outcome = "pending", served = row.After with
-      | false, _ -> return observed (sprintf "the save should be applied in place, and the worker said %s" (said verdict))
-      | true, false -> return observed (sprintf "the save said it was applied, and the process serves %A, not %A" served row.After)
-      | true, true ->
-        // The read above ran the patched body, so the worker can now say it was seen running.
-        let! confirmedVerdict = confirmed app
-        match str (json confirmedVerdict) "outcome" with
-        | "Patched" -> return observed ""
-        | other -> return observed (sprintf "the new body ran and the save ended %s, not Patched: %s" other confirmedVerdict)
-    | Ending.Restarts reason ->
-      let claims =
-        match str (json verdict) "outcome" = "Patched", str (json verdict) "type" = "pending" with
-        | true, _ -> Some "the worker claims a patch for a save that cannot land"
-        | _, true -> Some "the page was told to refresh into the same bytes"
-        | false, false -> None
-      match claims, served = row.After, reasonCases verdict = [ reason ] with
-      | Some problem, _, _ -> return observed problem
-      | None, false, _ -> return observed (sprintf "the process was changed (serves %A) by a save that says it needs a restart" served)
-      | None, true, false -> return observed (sprintf "the restart should name %s, and the worker said %s" reason (said verdict))
-      | None, true, true -> return observed ""
+    return! exerciseRow app row
   finally
     stop app
 }
