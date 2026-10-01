@@ -81,7 +81,9 @@ module HttpWorkerClient =
             client.PostAsync(path, content) |> Async.AwaitTask
         resp.EnsureSuccessStatusCode() |> ignore
         let! json = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
-        return Serialization.deserialize<WorkerResponse> json
+        match Serialization.tryDeserialize<WorkerResponse> json with
+        | Ok response -> return response
+        | Error error -> return WorkerResponse.WorkerError error
       }
 
   /// Cached proxy factory — reuses HttpClient instances per worker URL.
@@ -253,11 +255,16 @@ module HttpWorkerClient =
     let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
     new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
 
-  /// Deliver one streamed test result; the worker's `{}` keep-alive is skipped.
+  /// Deliver one streamed test result; the worker's `{}` keep-alive is skipped. A result line that
+  /// cannot be read is reported on stderr with its reason and skipped: its test then never reports,
+  /// and the caller gives it a NoResult, which is what happened.
   let private deliverResult (onResult: Features.LiveTesting.TestRunResult -> unit) (json: string) =
     match json with
     | "{}" -> ()
-    | _ -> onResult (Serialization.deserialize<Features.LiveTesting.TestRunResult> json)
+    | _ ->
+      match Serialization.tryDeserialize<Features.LiveTesting.TestRunResult> json with
+      | Ok result -> onResult result
+      | Error error -> eprintfn "SageFs: a streamed test result could not be read and was skipped: %s" (SageFsError.describe error)
 
   /// Create a streaming test proxy that reads SSE events from the worker.
   /// Each test result is dispatched individually via the onResult callback.

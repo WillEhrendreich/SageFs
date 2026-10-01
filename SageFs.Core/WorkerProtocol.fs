@@ -2,8 +2,6 @@ namespace SageFs
 
 open System
 open System.IO
-open System.Text.Json
-open System.Text.Json.Serialization
 open SageFs.ProjectLoading
 
 /// Cross-boundary protocol types shared between daemon and worker processes.
@@ -592,24 +590,26 @@ module WorkerProtocol =
       | Some root -> getLastSegment root
       | None -> getLastSegment info.WorkingDirectory
 
-  /// JSON serialization configured for F# discriminated unions (adjacent tag encoding).
+  /// The daemon-to-worker wire: `Json.workerWire` (camelCase keys, F# unions as adjacent tags).
+  /// This module is the wire's name inside the protocol; `SageFs.Json` owns how it is written.
   module Serialization =
-    /// Pre-configured JsonSerializerOptions with camelCase and F# union support.
-    let jsonOptions =
-      let opts = JsonSerializerOptions(PropertyNamingPolicy = JsonNamingPolicy.CamelCase)
-      opts.Converters.Add(
-        JsonFSharpConverter(
-          JsonUnionEncoding.AdjacentTag,
-          unionTagName = "type",
-          unionFieldsName = "value"
-        )
-      )
-      opts
+    /// The wire's options object, for the rare caller that needs one.
+    let jsonOptions = Json.optionsOf Json.workerWire
 
-    /// Serialize a value to JSON string using the configured options.
-    let serialize<'T> (value: 'T) =
-      JsonSerializer.Serialize(value, jsonOptions)
+    /// Serialize a value to the wire's JSON text.
+    let serialize<'T> (value: 'T) : string =
+      Json.serialize Json.workerWire value
 
-    /// Deserialize a JSON string to a typed value using the configured options.
-    let deserialize<'T> (json: string) =
-      JsonSerializer.Deserialize<'T>(json, jsonOptions)
+    /// Read wire JSON back into a value. A payload that does not parse, or does not have the
+    /// shape of `'T`, is an `Error` carrying why.
+    let tryDeserialize<'T> (json: string) : Result<'T, SageFsError> =
+      Json.deserialize<'T> Json.workerWire json
+      |> Result.mapError (fun error -> SageFsError.JsonParseError("the worker wire", JsonError.describe error))
+
+    /// `tryDeserialize` that raises a `JsonException` carrying the reason. It stays for the callers
+    /// in SageFs/ that still expect a value back; new code uses `tryDeserialize` and handles the
+    /// Error.
+    let deserialize<'T> (json: string) : 'T =
+      match tryDeserialize<'T> json with
+      | Result.Ok value -> value
+      | Result.Error error -> raise (System.Text.Json.JsonException(SageFsError.describe error))

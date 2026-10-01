@@ -58,11 +58,9 @@ module CohortLedgerExport =
           match acc with
           | Error _ -> acc
           | Ok entries ->
-            try
-              let entry = WorkerProtocol.Serialization.deserialize<LedgerEntry<MemberId>> (line.Trim())
-              Ok(entry :: entries)
-            with ex ->
-              Error(sprintf "line %d: %s" lineNo ex.Message))
+            match WorkerProtocol.Serialization.tryDeserialize<LedgerEntry<MemberId>> (line.Trim()) with
+            | Ok entry -> Ok(entry :: entries)
+            | Result.Error error -> Result.Error(sprintf "line %d: %s" lineNo (SageFsError.describe error)))
         (Ok [])
       |> Result.map List.rev
 

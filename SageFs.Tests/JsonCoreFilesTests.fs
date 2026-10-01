@@ -128,8 +128,23 @@ let tests =
       testCase "WHY — a value written by serialize is read back equal by deserialize" <| fun _ ->
         let original = WorkerResponse.EvalResult("r1", Ok "x", [], Map.ofList [ "k", "v" ])
         WorkerProtocol.Serialization.serialize original
-        |> WorkerProtocol.Serialization.deserialize<WorkerResponse>
-        |> Expect.equal "round trip" original
+        |> WorkerProtocol.Serialization.tryDeserialize<WorkerResponse>
+        |> Expect.equal "round trip" (Ok original)
+
+      testCase "WHY — wire text that is not JSON, or not the shape asked for, is an Error that says why" <| fun _ ->
+        [ WorkerProtocol.Serialization.tryDeserialize<WorkerResponse> "{ not json ]"
+          WorkerProtocol.Serialization.tryDeserialize<WorkerResponse> "{\"type\":\"NoSuchCase\"}"
+          WorkerProtocol.Serialization.tryDeserialize<WorkerResponse> "null" ]
+        |> List.map (function
+          | Ok _ -> "read"
+          | Error (SageFsError.JsonParseError(_, reason)) when not (String.IsNullOrWhiteSpace reason) -> "error with a reason"
+          | Error _ -> "some other error")
+        |> Expect.equal "each bad payload is an Error with a reason" [ "error with a reason"; "error with a reason"; "error with a reason" ]
+
+      testCase "WHY — deserialize, kept for callers that have not moved to tryDeserialize, raises a JsonException carrying the reason" <| fun _ ->
+        Expect.throwsT<System.Text.Json.JsonException>
+          "garbage raises"
+          (fun () -> WorkerProtocol.Serialization.deserialize<WorkerResponse> "{ not json ]" |> ignore)
     ]
 
     testList "DaemonInfoFile (daemon-info.json)" [

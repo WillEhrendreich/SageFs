@@ -13,7 +13,7 @@ open SageFs.Tests.SharedGenerators
 
 let roundTrip<'T> (value: 'T) =
   let json = Serialization.serialize value
-  let result = Serialization.deserialize<'T> json
+  let result = Serialization.tryDeserialize<'T> json |> Expect.wantOk "the wire text reads back"
   json, result
 
 // ── Wire generators ──

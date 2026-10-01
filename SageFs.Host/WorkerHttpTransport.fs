@@ -70,6 +70,13 @@ module WorkerHttpTransport =
     do! ctx.Response.WriteAsync(Serialization.serialize resp)
   }
 
+  /// A request field that is not the shape the wire says it is: a 400 that names the field and why.
+  let rejectUnreadable (ctx: HttpContext) (field: string) (error: SageFsError) : Task = task {
+    ctx.Response.StatusCode <- 400
+    ctx.Response.ContentType <- "application/json"
+    do! ctx.Response.WriteAsync(Serialization.serialize {| message = sprintf "the request's %s could not be read: %s" field (SageFsError.describe error) |})
+  }
+
   /// How the origin gate treats a request.
   [<RequireQualifiedAccess>]
   type RouteAccess =
@@ -445,10 +452,12 @@ module WorkerHttpTransport =
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let testsJson = (jsonProp doc "tests").GetRawText()
-        let tests = Serialization.deserialize<Features.LiveTesting.TestCase array> testsJson
-        let maxParallelism = (jsonProp doc "maxParallelism").GetInt32()
-        let rid = (jsonProp doc "replyId").GetString()
-        return! respond' ctx (WorkerMessage.RunTests(tests, maxParallelism, rid))
+        match Serialization.tryDeserialize<Features.LiveTesting.TestCase array> testsJson with
+        | Result.Error error -> return! rejectUnreadable ctx "tests" error
+        | Result.Ok tests ->
+          let maxParallelism = (jsonProp doc "maxParallelism").GetInt32()
+          let rid = (jsonProp doc "replyId").GetString()
+          return! respond' ctx (WorkerMessage.RunTests(tests, maxParallelism, rid))
       })) |> ignore
 
       map Routes.runTestsStream (Func<HttpContext, Task>(fun ctx -> task {
@@ -457,98 +466,106 @@ module WorkerHttpTransport =
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let testsJson = (jsonProp doc "tests").GetRawText()
-        let tests = Serialization.deserialize<Features.LiveTesting.TestCase array> testsJson
-        let maxParallelism = (jsonProp doc "maxParallelism").GetInt32()
-
-        match isNull streamActivity with
-        | false ->
-          streamActivity.SetTag("stream.test_count", tests.Length) |> ignore
-          streamActivity.SetTag("stream.max_parallelism", maxParallelism) |> ignore
-        | true -> ()
-
-        ctx.Response.ContentType <- "text/event-stream"
-        ctx.Response.Headers["Cache-Control"] <- "no-cache"
-        ctx.Response.Headers["Connection"] <- "keep-alive"
-
-        let channel = System.Threading.Channels.Channel.CreateUnbounded<Features.LiveTesting.TestRunResult>()
-        let mutable resultsEmitted = 0L
-
-        let executionTask = task {
-          try
-            let onResult (result: Features.LiveTesting.TestRunResult) =
-              channel.Writer.TryWrite(result) |> ignore
-            let runTest = getRunTest()
-            use cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted)
-            try
-              do! Features.LiveTesting.TestOrchestrator.executeFiltered
-                    runTest onResult maxParallelism tests cts.Token
-                  |> Async.StartAsTask
-            with ex ->
-              System.Diagnostics.Activity.Current
-              |> Option.ofObj
-              |> Option.iter (fun a -> a.SetTag("error", ex.Message) |> ignore)
-              Log.error "[run-tests-stream] execution error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-          finally
-            channel.Writer.TryComplete() |> ignore
-        }
-
-        // Start execution — don't await, let the channel reader loop drive the SSE stream
-        use _ = executionTask.ContinueWith(fun (t: Threading.Tasks.Task) ->
-          match t.IsFaulted with
-          | true -> Log.error "[run-tests-stream] unhandled: %s" t.Exception.Message
-          | false -> ()
-        )
-
-        let writer = ctx.Response.Body
-        let mutable keepReading = true
-        while keepReading do
-          let! canRead = channel.Reader.WaitToReadAsync(ctx.RequestAborted)
-          match canRead with
-          | true ->
-            let mutable hasItem = true
-            while hasItem do
-              let (success, result) = channel.Reader.TryRead()
-              match success with
-              | true ->
-                let json = Serialization.serialize result
-                let line = sprintf "data: %s\n\n" json
-                let bytes = Text.Encoding.UTF8.GetBytes(line)
-                do! writer.WriteAsync(bytes, 0, bytes.Length)
-                do! writer.FlushAsync()
-                resultsEmitted <- resultsEmitted + 1L
-                Features.LiveTesting.LiveTestingInstrumentation.streamResultsEmitted.Add(1L)
-              | false ->
-                hasItem <- false
+        match Serialization.tryDeserialize<Features.LiveTesting.TestCase array> testsJson with
+        | Result.Error error ->
+          match isNull streamActivity with
           | false ->
-            keepReading <- false
+            streamActivity.Stop()
+            streamActivity.Dispose()
+          | true -> ()
+          do! rejectUnreadable ctx "tests" error
+        | Result.Ok tests ->
+          let maxParallelism = (jsonProp doc "maxParallelism").GetInt32()
 
-        let doneBytes = Text.Encoding.UTF8.GetBytes("event: done\ndata: {}\n\n")
+          match isNull streamActivity with
+          | false ->
+            streamActivity.SetTag("stream.test_count", tests.Length) |> ignore
+            streamActivity.SetTag("stream.max_parallelism", maxParallelism) |> ignore
+          | true -> ()
 
-        // Coverage is recorded by the instrumented assemblies IN the process that ran the tests: ask its agent.
-        match takeCoverage () with
-        | HostAgent.AgentAnswered(HostAgent.CoverageTaken(count, words)) ->
-          // Packed base64 words on the wire, not one JSON bool per probe —
-          // see CoverageBitmap.toBase64 for the size rationale.
-          let coverageJson = Serialization.serialize {| count = count; words = words |}
-          let coverageLine = sprintf "event: coverage\ndata: %s\n\n" coverageJson
-          let coverageBytes = Text.Encoding.UTF8.GetBytes(coverageLine)
-          do! writer.WriteAsync(coverageBytes, 0, coverageBytes.Length)
+          ctx.Response.ContentType <- "text/event-stream"
+          ctx.Response.Headers["Cache-Control"] <- "no-cache"
+          ctx.Response.Headers["Connection"] <- "keep-alive"
+
+          let channel = System.Threading.Channels.Channel.CreateUnbounded<Features.LiveTesting.TestRunResult>()
+          let mutable resultsEmitted = 0L
+
+          let executionTask = task {
+            try
+              let onResult (result: Features.LiveTesting.TestRunResult) =
+                channel.Writer.TryWrite(result) |> ignore
+              let runTest = getRunTest()
+              use cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted)
+              try
+                do! Features.LiveTesting.TestOrchestrator.executeFiltered
+                      runTest onResult maxParallelism tests cts.Token
+                    |> Async.StartAsTask
+              with ex ->
+                System.Diagnostics.Activity.Current
+                |> Option.ofObj
+                |> Option.iter (fun a -> a.SetTag("error", ex.Message) |> ignore)
+                Log.error "[run-tests-stream] execution error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+            finally
+              channel.Writer.TryComplete() |> ignore
+          }
+
+          // Start execution — don't await, let the channel reader loop drive the SSE stream
+          use _ = executionTask.ContinueWith(fun (t: Threading.Tasks.Task) ->
+            match t.IsFaulted with
+            | true -> Log.error "[run-tests-stream] unhandled: %s" t.Exception.Message
+            | false -> ()
+          )
+
+          let writer = ctx.Response.Body
+          let mutable keepReading = true
+          while keepReading do
+            let! canRead = channel.Reader.WaitToReadAsync(ctx.RequestAborted)
+            match canRead with
+            | true ->
+              let mutable hasItem = true
+              while hasItem do
+                let (success, result) = channel.Reader.TryRead()
+                match success with
+                | true ->
+                  let json = Serialization.serialize result
+                  let line = sprintf "data: %s\n\n" json
+                  let bytes = Text.Encoding.UTF8.GetBytes(line)
+                  do! writer.WriteAsync(bytes, 0, bytes.Length)
+                  do! writer.FlushAsync()
+                  resultsEmitted <- resultsEmitted + 1L
+                  Features.LiveTesting.LiveTestingInstrumentation.streamResultsEmitted.Add(1L)
+                | false ->
+                  hasItem <- false
+            | false ->
+              keepReading <- false
+
+          let doneBytes = Text.Encoding.UTF8.GetBytes("event: done\ndata: {}\n\n")
+
+          // Coverage is recorded by the instrumented assemblies IN the process that ran the tests: ask its agent.
+          match takeCoverage () with
+          | HostAgent.AgentAnswered(HostAgent.CoverageTaken(count, words)) ->
+            // Packed base64 words on the wire, not one JSON bool per probe —
+            // see CoverageBitmap.toBase64 for the size rationale.
+            let coverageJson = Serialization.serialize {| count = count; words = words |}
+            let coverageLine = sprintf "event: coverage\ndata: %s\n\n" coverageJson
+            let coverageBytes = Text.Encoding.UTF8.GetBytes(coverageLine)
+            do! writer.WriteAsync(coverageBytes, 0, coverageBytes.Length)
+            do! writer.FlushAsync()
+          | HostAgent.AgentAnswered HostAgent.NoCoverage -> ()
+          | HostAgent.AgentUnavailable reason -> Log.warn "[WorkerHttpTransport] no coverage for this run: %s" reason
+
+          do! writer.WriteAsync(doneBytes, 0, doneBytes.Length)
           do! writer.FlushAsync()
-        | HostAgent.AgentAnswered HostAgent.NoCoverage -> ()
-        | HostAgent.AgentUnavailable reason -> Log.warn "[WorkerHttpTransport] no coverage for this run: %s" reason
 
-        do! writer.WriteAsync(doneBytes, 0, doneBytes.Length)
-        do! writer.FlushAsync()
-
-        streamSw.Stop()
-        Features.LiveTesting.LiveTestingInstrumentation.streamDurationMs.Record(streamSw.Elapsed.TotalMilliseconds)
-        match isNull streamActivity with
-        | false ->
-          streamActivity.SetTag("stream.results_emitted", resultsEmitted) |> ignore
-          streamActivity.SetTag("stream.duration_ms", streamSw.Elapsed.TotalMilliseconds) |> ignore
-          streamActivity.Stop()
-          streamActivity.Dispose()
-        | true -> ()
+          streamSw.Stop()
+          Features.LiveTesting.LiveTestingInstrumentation.streamDurationMs.Record(streamSw.Elapsed.TotalMilliseconds)
+          match isNull streamActivity with
+          | false ->
+            streamActivity.SetTag("stream.results_emitted", resultsEmitted) |> ignore
+            streamActivity.SetTag("stream.duration_ms", streamSw.Elapsed.TotalMilliseconds) |> ignore
+            streamActivity.Stop()
+            streamActivity.Dispose()
+          | true -> ()
       })) |> ignore
 
       map Routes.testDiscovery (Func<HttpContext, Task>(fun ctx -> task {
@@ -574,17 +591,21 @@ module WorkerHttpTransport =
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let project = (jsonProp doc "project").GetString()
-        let previous = SageFs.WorkerProtocol.Serialization.deserialize<AppRun.PreviousAddress> ((jsonProp doc "previous").GetRawText())
-        let rid = (jsonProp doc "replyId").GetString()
-        return! respond' ctx (WorkerMessage.RunApp(project, previous, rid))
+        match SageFs.WorkerProtocol.Serialization.tryDeserialize<AppRun.PreviousAddress> ((jsonProp doc "previous").GetRawText()) with
+        | Result.Error error -> return! rejectUnreadable ctx "previous" error
+        | Result.Ok previous ->
+          let rid = (jsonProp doc "replyId").GetString()
+          return! respond' ctx (WorkerMessage.RunApp(project, previous, rid))
       })) |> ignore
 
       map Routes.stopApp (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
-        let scope = SageFs.WorkerProtocol.Serialization.deserialize<AppRun.StopScope> ((jsonProp doc "scope").GetRawText())
-        let rid = (jsonProp doc "replyId").GetString()
-        return! respond' ctx (WorkerMessage.StopApp(scope, rid))
+        match SageFs.WorkerProtocol.Serialization.tryDeserialize<AppRun.StopScope> ((jsonProp doc "scope").GetRawText()) with
+        | Result.Error error -> return! rejectUnreadable ctx "scope" error
+        | Result.Ok scope ->
+          let rid = (jsonProp doc "replyId").GetString()
+          return! respond' ctx (WorkerMessage.StopApp(scope, rid))
       })) |> ignore
 
       map Routes.awaitAppChange (Func<HttpContext, Task>(fun ctx -> task {

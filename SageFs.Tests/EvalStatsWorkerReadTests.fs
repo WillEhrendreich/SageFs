@@ -79,7 +79,7 @@ let evalStatsWorkerReadTests =
       let snap = statusSnapshot 1 20468L 20468L 20468L
       let wire = Serialization.serialize (WorkerResponse.StatusResult("probe", snap))
       wire |> Expect.stringContains "the wire shape nests the snapshot one level down, as the roast measured" "\"value\":[\"probe\""
-      let roundTripped = Serialization.deserialize<WorkerResponse> wire
+      let roundTripped = Serialization.tryDeserialize<WorkerResponse> wire |> Expect.wantOk "the wire text reads back"
       let! (stats: Affordances.EvalStats) =
         getEvalStatsFromWorker (proxyReturning roundTripped) sid
       stats.EvalCount |> Expect.equal "evalCount should survive the real wire round-trip" 1

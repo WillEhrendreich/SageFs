@@ -748,7 +748,9 @@ let serializationRoundtripTests = testList "serialization roundtrip integration"
     }
 
     let json = SageFs.WorkerProtocol.Serialization.serialize original
-    let deserialized = SageFs.WorkerProtocol.Serialization.deserialize<LiveTestHookResultDto> json
+    let deserialized =
+      SageFs.WorkerProtocol.Serialization.tryDeserialize<LiveTestHookResultDto> json
+      |> Expect.wantOk "the wire text reads back"
 
     deserialized
     |> Expect.equal "roundtrip preserves data" original
@@ -770,7 +772,9 @@ let serializationRoundtripTests = testList "serialization roundtrip integration"
     }
 
     let json = SageFs.WorkerProtocol.Serialization.serialize hookResult
-    let deserialized = SageFs.WorkerProtocol.Serialization.deserialize<LiveTestHookResultDto> json
+    let deserialized =
+      SageFs.WorkerProtocol.Serialization.tryDeserialize<LiveTestHookResultDto> json
+      |> Expect.wantOk "the wire text reads back"
 
     let m0, sid = withKnownSession "/work/mod-session" (SageFsModel.initial())
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.ProvidersDetected deserialized.DetectedProviders)) m0
