@@ -78,6 +78,7 @@
         <Compile Include="TestsPane.fs" />
         <Compile Include="SessionTestAttribution.fs" />
         <Compile Include="SageFsApp.fs" />
+        <Compile Include="SageFsEffectHandler.fs" />
         <Compile Include="SageFsSseDedup.fs" />
         <Compile Include="SageFsDispatchReduction.fs" />
         <Compile Include="ElmDaemon.fs" />

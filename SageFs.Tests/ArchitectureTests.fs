@@ -1204,7 +1204,9 @@ let fileSizeBudgets =
       // 3094 -> 3078: the rebuild readiness poll became one await on AwaitReady
       // (RebuildReadyWait.fs). Exact size.
       // 3078 -> 3079: the HostCrashed arm of the session display mapping.
-      "SageFs/SageFsApp.fs", 3079
+      // 3079 -> 2270: the effect handler (EffectDeps and everything that interprets a SageFsEffect)
+      // moved to SageFsEffectHandler.fs. Exact post-split size.
+      "SageFs/SageFsApp.fs", 2270
       "SageFs.Core/AppState.fs", 2000
       // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
       // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,
