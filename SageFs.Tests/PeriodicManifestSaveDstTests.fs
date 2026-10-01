@@ -351,7 +351,7 @@ let tests =
         // still lands on schedule despite tick 1's failure.
         let scenario =
           { Seed = -1
-            IntervalSeconds = 5.0
+            IntervalSeconds = PinnedDurations.reproSaveIntervalSeconds
             Timeline = [ 1.0, Event.Create "00000002" ]
             CrashAt = 12.0
             PoisonTicks = Set.singleton 1 }
@@ -370,7 +370,7 @@ let tests =
         // failure, so it never saves ANYTHING, ever.
         let scenario =
           { Seed = -2
-            IntervalSeconds = 5.0
+            IntervalSeconds = PinnedDurations.reproSaveIntervalSeconds
             Timeline = [ 1.0, Event.Create "00000002" ]
             CrashAt = 27.0
             PoisonTicks = Set.singleton 1 }

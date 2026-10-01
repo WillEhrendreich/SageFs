@@ -36,7 +36,7 @@ let private reading (statuses: (int64 * ProbeStatus) list) : EntryAnswer =
 let private bound = Timeouts.patchConfirmation
 
 /// A bound that differs from the product's, to show the announcer hands on the one it is given.
-let private otherBound = TimeSpan.FromSeconds 7.0
+let private otherBound = TestTimeouts.patchBoundOther
 
 [<Tests>]
 let tests =

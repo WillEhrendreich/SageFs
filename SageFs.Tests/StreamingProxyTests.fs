@@ -173,7 +173,7 @@ let streamingProxyTests =
               do! ctx.Response.OutputStream.WriteAsync(bytes, 0, bytes.Length) |> Async.AwaitTask
               ctx.Response.OutputStream.Flush()
               // Hold the connection open without ever sending "event: done".
-              do! Async.Sleep 5000
+              do! Async.Sleep TestTimeouts.workerSilentFor
               ctx.Response.Close()
             with _ -> ()
           }
@@ -206,7 +206,7 @@ let streamingProxyTests =
               do! sendLine stream "event: start\n\n"
               started.TrySetResult true |> ignore
               // A worker that is still busy: nothing more for a long time.
-              do! Async.Sleep 10000
+              do! Async.Sleep TestTimeouts.workerSilentFor
             })
         let run = new CancellationTokenSource()
         try
@@ -246,7 +246,7 @@ let streamingProxyTests =
         // is even called, so the body could not possibly have started yet —
         // the sharpest form of the race.
         let url, listener =
-          serveOnce (fun stream -> async { do! Async.Sleep 10000 })
+          serveOnce (fun stream -> async { do! Async.Sleep TestTimeouts.workerSilentFor })
         let run = new CancellationTokenSource()
         try
           let proxy = streamingTestProxy TestTimeouts.streamWindowNeverWaitedOut url
@@ -268,7 +268,7 @@ let streamingProxyTests =
             async {
               for _ in 1 .. 6 do
                 do! sendLine stream "data: {}\n\n"
-                do! Async.Sleep 100
+                do! Async.Sleep TestTimeouts.streamLineGap
               do! sendLine stream "event: done\n\n"
             })
         try

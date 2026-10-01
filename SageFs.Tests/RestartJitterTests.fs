@@ -34,7 +34,7 @@ let private withinBand (delay: TimeSpan) (jittered: TimeSpan) : bool =
 let private midBackoff = RestartPolicy.nextBackoff policy 4
 
 /// The slack a delay that went through a float round trip gets when it is compared with the cap.
-let private roundTripSlack = TimeSpan.FromMilliseconds 1.0
+let private roundTripSlack = TestTimeouts.boundaryMargin
 
 let private sessionIds =
   [ "a1b2c3d4"; "b1c2d3e4"; "c1d2e3f4"; "d1e2f3a4"; "e1f2a3b4"; "f1a2b3c4"; "0a1b2c3d"; "1b2c3d4e" ]

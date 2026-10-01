@@ -8,19 +8,6 @@ open Expecto.Flip
 open SageFs.OwnerMonitor
 
 
-/// How much later (or earlier) a process that reused a dead owner's pid started than the
-/// owner did: a day, which is unambiguously a different process, not read jitter.
-let private pidReuseGap = TimeSpan.FromDays 1.0
-
-/// The jitter the fence tolerance has to exceed, so two reads of one process's start never
-/// disagree. Real cross-process skew is microseconds; this is far above it.
-let private readJitterCeiling = TimeSpan.FromMilliseconds 10.0
-
-/// The shortest gap a real pid reuse leaves between two processes that held the same pid
-/// (sequential pid allocation takes seconds to hours to wrap). The fence tolerance has to
-/// stay below it.
-let private shortestRealPidReuseGap = TimeSpan.FromMinutes 1.0
-
 /// Tests for the Core-owned, pid-and-start-time-fenced watchdog
 /// (multi-agent vision §3.1 rule 1, §10 item 2). Moved out of
 /// `SageFs.Host/WorkerMain.fs`'s `ParentMonitor` (still tested unchanged in
@@ -48,7 +35,7 @@ let isAliveTests = testList "OwnerMonitor.isAlive" [
       CreateNoWindow = true)
     psi.ArgumentList.Add("--help")
     use p = Process.Start(psi)
-    p.WaitForExit(10_000) |> ignore
+    p.WaitForExit(TestTimeouts.shortPatience) |> ignore
     isAlive (fun _ -> Some p) (Owner.ofPid p.Id)
     |> Expect.isFalse "exited process should be dead"
 
@@ -69,7 +56,7 @@ let isAliveTests = testList "OwnerMonitor.isAlive" [
   // would look like to the monitor.
   testCase "recycled pid does not keep the owner alive (start-time fence)" <| fun _ ->
     let self = Process.GetCurrentProcess()
-    let staleStartTicks = startTimeTicksOf self - pidReuseGap.Ticks
+    let staleStartTicks = startTimeTicksOf self - TestTimeouts.pidReuseGap.Ticks
     let owner = { Pid = self.Id; StartTimeTicks = Some staleStartTicks }
     isAlive (fun _ -> Some self) owner
     |> Expect.isFalse "a live process whose start time doesn't match the fence is a DIFFERENT process (pid reuse) and must be treated as dead"
@@ -96,39 +83,39 @@ let isAliveTests = testList "OwnerMonitor.isAlive" [
 let fenceTests = testList "OwnerMonitor.fenceMatches" [
 
   testCase "exact match is the same owner" <| fun _ ->
-    fenceMatches 1_000_000_000L 1_000_000_000L
+    fenceMatches FixtureDurations.ownerStartTicks FixtureDurations.ownerStartTicks
     |> Expect.isTrue "identical start ticks are the same process"
 
   testCase "observed cross-process jitter (166µs) is the same owner" <| fun _ ->
-    fenceMatches 1_000_000_000L (1_000_000_000L + 1661L)
+    fenceMatches FixtureDurations.ownerStartTicks (FixtureDurations.ownerStartTicks + 1661L)
     |> Expect.isTrue "the exact skew observed on Linux must be tolerated"
 
   testCase "skew just under the tolerance is the same owner" <| fun _ ->
-    fenceMatches 1_000_000_000L (1_000_000_000L + startTimeToleranceTicks - 1L)
+    fenceMatches FixtureDurations.ownerStartTicks (FixtureDurations.ownerStartTicks + startTimeToleranceTicks - 1L)
     |> Expect.isTrue "within tolerance is the same process"
 
   testCase "skew exactly at the tolerance is the same owner" <| fun _ ->
-    fenceMatches 1_000_000_000L (1_000_000_000L + startTimeToleranceTicks)
+    fenceMatches FixtureDurations.ownerStartTicks (FixtureDurations.ownerStartTicks + startTimeToleranceTicks)
     |> Expect.isTrue "the tolerance bound is inclusive"
 
   testCase "negative skew within tolerance is the same owner" <| fun _ ->
-    fenceMatches 1_000_000_000L (1_000_000_000L - 1661L)
+    fenceMatches FixtureDurations.ownerStartTicks (FixtureDurations.ownerStartTicks - 1661L)
     |> Expect.isTrue "skew is symmetric — the monitor may read earlier OR later than the fence"
 
   testCase "skew beyond the tolerance is pid reuse (a different process)" <| fun _ ->
-    fenceMatches 1_000_000_000L (1_000_000_000L + startTimeToleranceTicks + 1L)
+    fenceMatches FixtureDurations.ownerStartTicks (FixtureDurations.ownerStartTicks + startTimeToleranceTicks + 1L)
     |> Expect.isFalse "just past the tolerance is a different process"
 
   testCase "a day apart is unambiguously pid reuse" <| fun _ ->
-    fenceMatches 1_000_000_000L (1_000_000_000L + pidReuseGap.Ticks)
+    fenceMatches FixtureDurations.ownerStartTicks (FixtureDurations.ownerStartTicks + TestTimeouts.pidReuseGap.Ticks)
     |> Expect.isFalse "a process started a day later that reused the pid must read as dead"
 
   testCase "tolerance is far below any real pid-reuse gap and far above read jitter" <| fun _ ->
     // Sub-jiffy jitter is ~microseconds; a reused pid on Linux (sequential
     // allocation up to pid_max) is seconds-to-hours later. The tolerance sits
     // safely between: generous vs jitter, negligible vs reuse.
-    (startTimeToleranceTicks > readJitterCeiling.Ticks
-     && startTimeToleranceTicks < shortestRealPidReuseGap.Ticks)
+    (startTimeToleranceTicks > TestTimeouts.readJitterCeiling.Ticks
+     && startTimeToleranceTicks < TestTimeouts.shortestRealPidReuseGap.Ticks)
     |> Expect.isTrue "tolerance must exceed OS read jitter yet stay well under any realistic reuse gap"
 ]
 
@@ -170,7 +157,7 @@ let runTests = testList "OwnerMonitor.run" [
     let cts = new CancellationTokenSource()
     try
       let self = Process.GetCurrentProcess()
-      let staleStartTicks = startTimeTicksOf self - pidReuseGap.Ticks
+      let staleStartTicks = startTimeTicksOf self - TestTimeouts.pidReuseGap.Ticks
       let owner = { Pid = self.Id; StartTimeTicks = Some staleStartTicks }
       let monitor = run (fun _ -> Some self) owner cts ignore
       let running = monitor |> Async.StartAsTask

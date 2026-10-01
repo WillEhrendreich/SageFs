@@ -12,6 +12,7 @@ module SessionLifecycleMutationTests
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.Tests
 open SageFs.WorkerProtocol
 open System
 
@@ -59,11 +60,11 @@ let sessionLifecycleMutationTests = testList "SessionLifecycle mutations" [
     // Space restarts > StartupCrashWindow (10s) to avoid the circuit breaker,
     // then hit MaxRestarts (5) exactly on the 6th decision.
     let _, s1 = RestartPolicy.decide policy state0 now
-    let _, s2 = RestartPolicy.decide policy s1 (now.AddSeconds(11.0))
-    let _, s3 = RestartPolicy.decide policy s2 (now.AddSeconds(22.0))
-    let _, s4 = RestartPolicy.decide policy s3 (now.AddSeconds(33.0))
-    let _, s5 = RestartPolicy.decide policy s4 (now.AddSeconds(44.0))
-    let real, _ = RestartPolicy.decide policy s5 (now.AddSeconds(55.0))
+    let _, s2 = RestartPolicy.decide policy s1 (now + TestTimeouts.crashGapSpaced)
+    let _, s3 = RestartPolicy.decide policy s2 (now + TestTimeouts.crashGapSpaced * 2.0)
+    let _, s4 = RestartPolicy.decide policy s3 (now + TestTimeouts.crashGapSpaced * 3.0)
+    let _, s5 = RestartPolicy.decide policy s4 (now + TestTimeouts.crashGapSpaced * 4.0)
+    let real, _ = RestartPolicy.decide policy s5 (now + TestTimeouts.crashGapSpaced * 5.0)
     real
     |> Expect.equal "the 6th decision at RestartCount=5 must give up with RestartLimitExceeded(5, 5.0)"
       (RestartPolicy.Decision.GiveUp(SageFsError.RestartLimitExceeded(5, 5.0)))
@@ -78,9 +79,9 @@ let sessionLifecycleMutationTests = testList "SessionLifecycle mutations" [
   testCase "WHY — decide_window_expiry_resets_count_to_1 — old restarts must not count against a new window" <| fun () ->
     // Use state with restarts, but advance time past the reset window (5 min)
     let _, s1 = RestartPolicy.decide policy state0 now
-    let _, s2 = RestartPolicy.decide policy s1 (now.AddSeconds(1.0))
+    let _, s2 = RestartPolicy.decide policy s1 (now + TestTimeouts.crashGapRapid)
     let oldState = { s2 with WindowStart = Some (now - policy.ResetWindow * 2.0) }
-    let decideAt = now.AddSeconds(2.0)
+    let decideAt = now + TestTimeouts.crashGapRapid * 2.0
     let expectedState : RestartPolicy.State =
       { RestartCount = 1; LastRestartAt = Some decideAt; WindowStart = Some decideAt }
     RestartPolicy.decide policy oldState decideAt
@@ -91,9 +92,9 @@ let sessionLifecycleMutationTests = testList "SessionLifecycle mutations" [
     // Three rapid crashes within StartupCrashWindow (10s) — the 4th must give
     // up at StartupCrashMaxRestarts (3), not the higher MaxRestarts (5).
     let _, s1 = RestartPolicy.decide policy state0 now
-    let _, s2 = RestartPolicy.decide policy s1 (now.AddSeconds(1.0))
-    let _, s3 = RestartPolicy.decide policy s2 (now.AddSeconds(2.0))
-    let real, _ = RestartPolicy.decide policy s3 (now.AddSeconds(3.0))
+    let _, s2 = RestartPolicy.decide policy s1 (now + TestTimeouts.crashGapRapid)
+    let _, s3 = RestartPolicy.decide policy s2 (now + TestTimeouts.crashGapRapid * 2.0)
+    let real, _ = RestartPolicy.decide policy s3 (now + TestTimeouts.crashGapRapid * 3.0)
     real
     |> Expect.equal "the 4th rapid crash must give up with RestartLimitExceeded(3, 5.0), not restart"
       (RestartPolicy.Decision.GiveUp(SageFsError.RestartLimitExceeded(3, 5.0)))

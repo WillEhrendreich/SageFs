@@ -138,7 +138,7 @@ let private sendToDashboard (p: Probe) = sendTo dashboardPort p
 /// as that instead of as a bare connection-refused inside an assertion.
 let private awaitDashboardListener () = task {
   let! up =
-    Infra.waitForAsync 60_000 (fun () -> task {
+    Infra.waitForAsync (int TestTimeouts.readyBudget.TotalMilliseconds) (fun () -> task {
       try
         let! status, _ = sendToDashboard (probe HttpMethod.Get "/dashboard")
         return status > 0

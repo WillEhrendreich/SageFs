@@ -78,10 +78,10 @@ let measureTests =
         let op: SageFs.Features.LiveTesting.DebouncedOp<string> = {
           Payload = "test"
           RequestedAt = System.DateTimeOffset.UtcNow
-          DelayMs = 50<ms>
+          DelayMs = DebounceClock.treeSitterDelayMs
           Generation = 1L
         }
-        op.DelayMs |> Expect.equal "debounce delay" 50<ms>
+        op.DelayMs |> Expect.equal "debounce delay" DebounceClock.treeSitterDelayMs
       }
     ]
 
@@ -90,10 +90,10 @@ let measureTests =
         let entry: SageFs.Features.LiveTesting.TestTreemapEntry = {
           DisplayName = "test"
           FullName = "test"
-          DurationMs = 42.5
+          DurationMs = FixtureDurations.treemapEntryMs
           Status = SageFs.Features.LiveTesting.TreemapStatus.Passed
         }
-        entry.DurationMs |> Expect.equal "duration is 42.5" 42.5
+        entry.DurationMs |> Expect.equal "duration is the plain float it was given" FixtureDurations.treemapEntryMs
       }
     ]
   ]

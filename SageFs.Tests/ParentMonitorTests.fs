@@ -33,7 +33,7 @@ let parentMonitorAliveTests = testList "ParentMonitor.isDaemonAlive" [
       CreateNoWindow = true)
     psi.ArgumentList.Add("--help")
     use p = Process.Start(psi)
-    p.WaitForExit(10_000) |> ignore
+    p.WaitForExit(TestTimeouts.shortPatience) |> ignore
     ParentMonitor.isDaemonAlive (fun _ -> Some p) p.Id
     |> Expect.isFalse "exited process should be dead"
 

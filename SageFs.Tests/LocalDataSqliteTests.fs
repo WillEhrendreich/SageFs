@@ -60,7 +60,7 @@ let private aggregateRows (dbPath: string) =
 /// A friction retention policy small enough that a handful of rows exercises every bound: a
 /// short age window, three rows, two aggregate versions. Not the product's defaults.
 let private policy : LocalDataRetention.FrictionPolicy =
-  { MaxAge = TimeSpan.FromDays 5.0; MaxRows = 3; MaxAggregateVersions = 2 }
+  { MaxAge = TestTimeouts.smallRetentionWindow; MaxRows = 3; MaxAggregateVersions = 2 }
 
 let private rowsIn (usage: StoreUsage) (table: string) =
   usage.Tables |> List.find (fun t -> t.Table = table) |> fun t -> t.Rows

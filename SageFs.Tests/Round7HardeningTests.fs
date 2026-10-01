@@ -134,7 +134,7 @@ let w10ManifestStaleEntriesTests =
             Projects = ["a.fsproj"]
             WorkingDir = "C:\\a"
             CreatedAt = old
-            StoppedAt = Some (old.AddHours(1.0)) }  // stopped, old -> pruned
+            StoppedAt = Some (old + FixtureDurations.sessionRanFor) }  // stopped, old -> pruned
           { ManifestSessionEntry.SessionId = "new-alive"
             Projects = ["b.fsproj"]
             WorkingDir = "C:\\b"
@@ -158,7 +158,7 @@ let w10ManifestStaleEntriesTests =
             Projects = ["c.fsproj"]
             WorkingDir = "C:\\c"
             CreatedAt = recent
-            StoppedAt = Some (recent.AddHours(2.0)) }
+            StoppedAt = Some (recent + FixtureDurations.sessionRanFor) }
         ]
         ActiveSessionId = None
         CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()

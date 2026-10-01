@@ -23,10 +23,10 @@ module Broadcast = SageFs.Features.ReloadBroadcast
 module Planning = SageFs.Features.ReloadPlanning
 
 /// How long a save waited for the compiler before it was dropped. The event reports it in seconds.
-let private queueWaited = TimeSpan.FromSeconds 60.0
+let private queueWaited = TestTimeouts.compilerQueueWaited
 
 /// The eval budget a save ran out of, as the timed-out event reports it.
-let private evalBudget = TimeSpan.FromMinutes 5.0
+let private evalBudget = TestTimeouts.reloadEvalBudget
 
 let private allOutcomes =
   [ ReloadOutcome.Patched(1, 3)

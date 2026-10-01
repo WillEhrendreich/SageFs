@@ -257,10 +257,10 @@ let confirmPatchTests =
 let baselineIsTrustworthyTests =
   let epoch = System.DateTime(2026, 1, 1, 0, 0, 0, System.DateTimeKind.Utc)
   // How much older than the build a source file is when it was written well before it.
-  let writtenBeforeBuild = System.TimeSpan.FromMinutes 5.0
+  let writtenBeforeBuild = TestTimeouts.sourceWrittenBeforeBuildBy
   // How much newer than the build a source file is when it was edited right after it: any
   // positive gap counts, so the smallest whole second.
-  let editedAfterBuild = System.TimeSpan.FromSeconds 1.0
+  let editedAfterBuild = TestTimeouts.sourceEditedAfterBuildBy
   testList "ReloadPlanning baselineIsTrustworthy" [
     testCase "WHY — ReloadPlanning.baselineIsTrustworthy — a source file untouched since the build is a trustworthy baseline because it is exactly what the loaded assembly compiled from" <| fun _ ->
       baselineIsTrustworthy epoch epoch
@@ -328,7 +328,7 @@ let hiddenViaMembersTests =
   let unionSource =
     "module Demo.Shapes\n\ntype internal Shape =\n  | Circle of radius: float\n  | Square of side: float\n\nlet describe () =\n  Circle 1.0\n"
   let recordSource =
-    "module Demo.Config\n\ntype internal Config = { Timeout: int }\n\nlet build () =\n  { Timeout = 5 }\n"
+    "module Demo.Config\n\ntype internal Config = { Retries: int }\n\nlet build () =\n  { Retries = 5 }\n"
   let commentSource =
     "module Demo.Comment\n\nlet private secret () = 41\n\nlet answer () =\n  // secret is mentioned only here, never called\n  \"the word secret in a string\"\n  99\n"
   testList "ReloadPlanning access — case, field and prose uses" [
@@ -338,7 +338,7 @@ let hiddenViaMembersTests =
       |> Expect.equal "describe uses Shape via its case" [ ReloadChange.UsesNonPublicMember ("describe", "Shape") ]
 
     testCase "WHY — ReloadPlanning.planReload — a patch that builds a hidden record type's literal restarts because the literal never spells the type's own name" <| fun _ ->
-      planReload (declsOf recordSource) (declsOf (replace "{ Timeout = 5 }" "{ Timeout = 6 }" recordSource))
+      planReload (declsOf recordSource) (declsOf (replace "{ Retries = 5 }" "{ Retries = 6 }" recordSource))
       |> restartChanges
       |> Expect.equal "build uses Config via its field" [ ReloadChange.UsesNonPublicMember ("build", "Config") ]
 
@@ -352,7 +352,7 @@ let hiddenViaMembersTests =
 let exactSymbolResolutionTests =
   testList "ReloadPlanning access — exact FCS symbol resolution, not name matching" [
     testCase "WHY — ReloadPlanning.planReload — a function parameter that shadows a private module value does not force a restart because the patch never touches the private value" <| fun _ ->
-      let source = "module Demo.Shadow\n\nlet private timeout = 30\n\nlet describe (timeout: int) =\n  sprintf \"waiting %d\" timeout\n"
+      let source = "module Demo.Shadow\n\nlet private limit = 30\n\nlet describe (limit: int) =\n  sprintf \"waiting %d\" limit\n"
       planReload (declsOf source) (declsOf (replace "\"waiting %d\"" "\"wait %d\"" source))
       |> patchedNames
       |> Expect.equal "describe patches — its own parameter shadows the private value, it never references it" [ "describe" ]

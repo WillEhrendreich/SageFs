@@ -325,7 +325,7 @@ let private startDaemonWithWebLiveSession () : Fixture =
   | false -> failwithf "session create failed: %d" (int createStatus.StatusCode)
   | true -> ()
 
-  let readyDeadline = DateTime.UtcNow.AddSeconds(300.0)
+  let readyDeadline = DateTime.UtcNow + TestTimeouts.vscodeSessionReady
   let mutable ready = false
   let mutable faulted = false
   let mutable sessionId = ""
@@ -373,7 +373,7 @@ let private stopFixture (f: Fixture) =
   try
     if not f.DaemonProcess.HasExited then f.DaemonProcess.Kill(entireProcessTree = true)
   with _ -> ()
-  try f.DaemonProcess.WaitForExit(5000) |> ignore with _ -> ()
+  try f.DaemonProcess.WaitForExit(TestTimeouts.briefPatience) |> ignore with _ -> ()
   f.DaemonProcess.Dispose()
   try Directory.Delete(f.DataDir, true) with _ -> ()
   try Directory.Delete(f.UserDataDir, true) with _ -> ()

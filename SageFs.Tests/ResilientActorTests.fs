@@ -66,7 +66,7 @@ let resilientActorTests = testList "ResilientActor.wrapLoop" [
 
   testAsync "handles async exceptions" {
     let processMsg (state: int) (_msg: string) = async {
-      do! Async.Sleep 1
+      do! Async.Sleep TestTimeouts.yieldBeforeFault
       return failwith "async boom"
     }
     let wrapped = ResilientActor.wrapLoop nullLogger "test-actor" processMsg
@@ -90,7 +90,7 @@ let safeFireAndForgetTests = testList "SafeFireAndForget.startTask" [
     let mutable ran = false
     SafeFireAndForget.startTask nullLogger "test-task" (fun () ->
       task { ran <- true } :> System.Threading.Tasks.Task)
-    do! Async.Sleep 100
+    do! Async.Sleep TestTimeouts.fireAndForgetSettle
     ran |> Expect.isTrue "work should have run"
   }
 
@@ -104,7 +104,7 @@ let safeFireAndForgetTests = testList "SafeFireAndForget.startTask" [
           member _.LogError _ = () }
     SafeFireAndForget.startTask capturingLogger "test-task" (fun () ->
       task { return failwith "boom" } :> System.Threading.Tasks.Task)
-    do! Async.Sleep 100
+    do! Async.Sleep TestTimeouts.fireAndForgetSettle
     caught |> Expect.isTrue "exception should have been logged"
   }
 
@@ -118,7 +118,7 @@ let safeFireAndForgetTests = testList "SafeFireAndForget.startTask" [
           member _.LogError _ = () }
     SafeFireAndForget.startTask capturingLogger "test-task" (fun () ->
       task { return raise (OperationCanceledException("cancel")) } :> System.Threading.Tasks.Task)
-    do! Async.Sleep 100
+    do! Async.Sleep TestTimeouts.fireAndForgetSettle
     logCalled |> Expect.isFalse "cancellation should not be logged"
   }
 ]

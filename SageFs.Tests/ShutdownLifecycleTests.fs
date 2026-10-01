@@ -94,7 +94,7 @@ let mkHangingSession (proc: Process) =
     // A proxy that never responds — simulates a hung worker whose HTTP server
     // is wedged (the real proxy has no request timeout).
     Proxy = fun _ -> async {
-      do! Async.Sleep 60000
+      do! Async.Sleep TestTimeouts.hungWorkerReply
       return WorkerProtocol.WorkerResponse.WorkerReady }
     WorkerBaseUrl = ""
     Targets = [ SageFs.SessionProjectTarget.Bare ]

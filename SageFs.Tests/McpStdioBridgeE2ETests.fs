@@ -108,7 +108,7 @@ let private runBridgeSmokeTest () : Task<unit> =
         try
           proc.StandardInput.Close()
         with _ -> ()
-        proc.WaitForExit(15_000) |> ignore
+        proc.WaitForExit(TestTimeouts.patience) |> ignore
         match proc.HasExited with
         | false -> (try proc.Kill() with _ -> ())
         | true -> ()
@@ -224,7 +224,7 @@ let private runPipelinedBatchReproTest () : Task<unit> =
         try
           proc.StandardInput.Close()
         with _ -> ()
-        proc.WaitForExit(15_000) |> ignore
+        proc.WaitForExit(TestTimeouts.patience) |> ignore
         match proc.HasExited with
         | false -> (try proc.Kill() with _ -> ())
         | true -> ()

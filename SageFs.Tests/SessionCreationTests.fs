@@ -203,7 +203,7 @@ let tests = testSequenced <| testList "Session Creation" [
   // script text `"DirectoryConfig.empty"`, which asserts `.Load = AutoDetect`
   // AND `.AutoOpenNamespaces = true` together). Each of those four cases
   // started its own real isolated FSI host (`ConfigHost.evaluate`,
-  // `StartupTimeoutMs = 120_000`) to prove a claim DirectoryConfigTests.fs
+  // the host's startup timeout) to prove a claim DirectoryConfigTests.fs
   // already proves — see fsi-mechanism-extraction.md §2 R3. Nothing here was
   // unique; deleting them loses no coverage.
 

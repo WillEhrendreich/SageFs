@@ -32,13 +32,13 @@ let mkPresence
 }
 
 let now = DateTime(2026, 3, 14, 22, 0, 0, DateTimeKind.Utc)
-let fiveMinTimeout = TimeSpan.FromMinutes 5.0
+let freshnessWindow = TestTimeouts.agentFreshnessWindow
 
 /// How long ago an agent last called a tool, as a fraction of the freshness timeout it is
 /// judged against, so each case stays inside or outside the window whatever the window is.
-let private lastCalledInsideWindow = fiveMinTimeout * 0.4
-let private lastCalledOutsideWindow = fiveMinTimeout * 2.0
-let private lastCalledNearEdge = fiveMinTimeout * 0.6
+let private lastCalledInsideWindow = freshnessWindow * 0.4
+let private lastCalledOutsideWindow = freshnessWindow * 2.0
+let private lastCalledNearEdge = freshnessWindow * 0.6
 
 // ── SessionGuidance behavior ─────────────────────────────────────
 
@@ -179,23 +179,23 @@ let agentPresenceTests = testList "AgentPresence — freshness classification" [
 
   testCase "Agent within timeout is Fresh" <| fun _ ->
     let presence = mkPresence "claude" "sess-1" [] (now - lastCalledInsideWindow)
-    AgentPresence.freshness now fiveMinTimeout presence
+    AgentPresence.freshness now freshnessWindow presence
     |> Expect.equal "should be Fresh" AgentFreshness.Fresh
 
   testCase "Agent beyond timeout is Stale" <| fun _ ->
     let presence = mkPresence "claude" "sess-1" [] (now - lastCalledOutsideWindow)
-    AgentPresence.freshness now fiveMinTimeout presence
+    AgentPresence.freshness now freshnessWindow presence
     |> Expect.equal "should be Stale" AgentFreshness.Stale
 
   testCase "Agent exactly at timeout is Fresh" <| fun _ ->
-    let presence = mkPresence "claude" "sess-1" [] (now - fiveMinTimeout)
-    AgentPresence.freshness now fiveMinTimeout presence
+    let presence = mkPresence "claude" "sess-1" [] (now - freshnessWindow)
+    AgentPresence.freshness now freshnessWindow presence
     |> Expect.equal "at boundary should be Fresh" AgentFreshness.Fresh
 
   testCase "isStale and isFresh are mutually exclusive" <| fun _ ->
     let presence = mkPresence "claude" "sess-1" [] (now - lastCalledNearEdge)
-    let stale = AgentPresence.isStale now fiveMinTimeout presence
-    let fresh = AgentPresence.isFresh now fiveMinTimeout presence
+    let stale = AgentPresence.isStale now freshnessWindow presence
+    let fresh = AgentPresence.isFresh now freshnessWindow presence
     (stale <> fresh)
     |> Expect.isTrue "stale and fresh must be mutually exclusive"
 ]
@@ -212,8 +212,8 @@ let agentPresencePropertyTests = testList "AgentPresence freshness properties" [
           return presence
         }
       Prop.forAll (Arb.fromGen gen) (fun presence ->
-        AgentPresence.isStale now fiveMinTimeout presence
-          <> AgentPresence.isFresh now fiveMinTimeout presence)
+        AgentPresence.isStale now freshnessWindow presence
+          <> AgentPresence.isFresh now freshnessWindow presence)
 
   testPropertyWithConfig propConfig
     "Agent at or within timeout is always Fresh"
@@ -225,7 +225,7 @@ let agentPresencePropertyTests = testList "AgentPresence freshness properties" [
           return presence
         }
       Prop.forAll (Arb.fromGen gen) (fun presence ->
-        AgentPresence.isFresh now fiveMinTimeout presence)
+        AgentPresence.isFresh now freshnessWindow presence)
 ]
 
 // ── FileOverlapAdvisory tests ────────────────────────────────────

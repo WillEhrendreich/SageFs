@@ -70,7 +70,7 @@ let workflowTypesMutationTests = testList "WorkflowTypes mutations" [
   testCase "WHY — transitionCost_compute_maps_fields_without_swapping — evalCount and cellCount must land in their OWN fields, not swapped" <| fun () ->
     TransitionCost.compute 3 7
     |> Expect.equal "compute 3 7 must produce DefinitionsLost=3, CellsLost=7 (not swapped), 15s restart estimate"
-      { DefinitionsLost = 3; CellsLost = 7; EstimatedRestart = System.TimeSpan.FromSeconds 15.0 }
+      { DefinitionsLost = 3; CellsLost = 7; EstimatedRestart = TransitionCost.coldStartEstimate }
 
   // ── WorkflowSwitchOutcome ─────────────────────────────────────────────────
 

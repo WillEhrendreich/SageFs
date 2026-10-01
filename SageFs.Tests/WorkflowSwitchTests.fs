@@ -139,7 +139,7 @@ let transitionCostPropertyTests =
         cost.EstimatedRestart
         |> Expect.equal
           "restart should be the fixed cold-start estimate"
-          (System.TimeSpan.FromSeconds 15.0)
+          TransitionCost.coldStartEstimate
     ]
   ]
 

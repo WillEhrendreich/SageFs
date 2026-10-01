@@ -27,7 +27,7 @@ let private mkResult (isOk: bool) (n: int) : Result<int, SageFsError> =
   | false -> SageFsError.SessionNotFound (string n) |> Error
 
 let private runIO (io: SageFsIO<'A>) : Result<'A, SageFsError> =
-  Async.RunSynchronously(io, timeout = 5000)
+  Async.RunSynchronously(io, timeout = int TestTimeouts.briefPatience.TotalMilliseconds)
 
 // ── Monad laws ──────────────────────────────────────────────────────────
 
@@ -87,12 +87,12 @@ let ofExnTests =
       use cts = new Threading.CancellationTokenSource()
       let neverCompletes : Async<int> =
         async {
-          do! Async.Sleep(60000)
+          do! Async.Sleep TestTimeouts.runawayEval
           return 0
         }
       let classify (_: exn) = SageFsError.Unexpected (Exception "must not classify a cancellation")
       let io = SageFsIO.ofExn classify neverCompletes
-      cts.CancelAfter(50)
+      cts.CancelAfter(TestTimeouts.settle)
       let mutable cancelled = false
       try
         Async.RunSynchronously(io, cancellationToken = cts.Token) |> ignore
@@ -138,12 +138,12 @@ let raceTests =
     testCase "WHY — race returns the faster side's result" <| fun _ ->
       let slow : SageFsIO<string> =
         async {
-          do! Async.Sleep(2000)
+          do! Async.Sleep TestTimeouts.slowWork
           return Ok "slow"
         }
       let fast : SageFsIO<string> =
         async {
-          do! Async.Sleep(10)
+          do! Async.Sleep TestTimeouts.fastRaceSide
           return Ok "fast"
         }
       let result = SageFsIO.race slow fast |> runIO
@@ -152,12 +152,12 @@ let raceTests =
     testCase "WHY — race also returns a fast failure over a slow success" <| fun _ ->
       let slowSuccess : SageFsIO<string> =
         async {
-          do! Async.Sleep(2000)
+          do! Async.Sleep TestTimeouts.slowWork
           return Ok "slow"
         }
       let fastFailure : SageFsIO<string> =
         async {
-          do! Async.Sleep(10)
+          do! Async.Sleep TestTimeouts.fastRaceSide
           return Error (SageFsError.EvalFailed "fast failure")
         }
       let result = SageFsIO.race slowSuccess fastFailure |> runIO

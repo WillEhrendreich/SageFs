@@ -13,13 +13,13 @@ open SageFs.WorkflowTypes
 // are derived from these, so each case states what it expects in terms of the inputs.
 
 /// A fast eval.
-let private fastEval = TimeSpan.FromMilliseconds 100.0
+let private fastEval = FixtureDurations.evalFast
 
 /// An eval twice as long as the fast one.
-let private slowEval = TimeSpan.FromMilliseconds 200.0
+let private slowEval = FixtureDurations.evalSlow
 
 /// An eval three times as long as the fast one; the average of this and the fast one is `slowEval`.
-let private slowestEval = TimeSpan.FromMilliseconds 300.0
+let private slowestEval = FixtureDurations.evalSlowest
 
 [<Tests>]
 let tests =
@@ -151,7 +151,7 @@ let tests =
 
       let events = [
         (timestamp, "console", "let x = 1")
-        (timestamp.AddSeconds(1.0), "mcp:agent1", "val x: int = 1")
+        (timestamp + TestTimeouts.clockTick, "mcp:agent1", "val x: int = 1")
       ]
 
       let result = McpAdapter.formatEvents events

@@ -158,7 +158,7 @@ let workflowTransitionPropertyTests =
           let evalCount = normalize 500 rawEval
           let cellCount = normalize 200 rawCell
           let cost = TransitionCost.compute evalCount cellCount
-          cost.EstimatedRestart = TimeSpan.FromSeconds 15.0
+          cost.EstimatedRestart = TransitionCost.coldStartEstimate
     ]
 
     // ── (f) alreadyInWorkflow always returns AlreadyActive ─────

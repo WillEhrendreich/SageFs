@@ -160,7 +160,7 @@ let corruptionTests = testList "Corruption resilience contracts" [
 
 /// The duration the saved sample result reports. It is neither zero nor a default, so a duration
 /// lost on the round trip reads back as zero and fails the check.
-let private persistedDuration = TimeSpan.FromMilliseconds 42.0
+let private persistedDuration = FixtureDurations.roundTripDuration
 
 let private sampleTestState () : LiveTestState =
   let testId = TestId.TestId "SageFs.Tests.SampleTest"

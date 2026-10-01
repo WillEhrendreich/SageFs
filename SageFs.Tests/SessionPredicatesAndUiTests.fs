@@ -107,9 +107,9 @@ let sessionLifecycleTests = testList "SessionLifecycle" [
       let oldState : RestartPolicy.State = {
         RestartCount = policy.MaxRestarts
         LastRestartAt = Some now
-        WindowStart = Some (now.AddMinutes(-10.0))
+        WindowStart = Some (now - TestTimeouts.quietPastResetWindow)
       }
-      let later = now.AddMinutes(10.0)
+      let later = now + TestTimeouts.quietPastResetWindow
       match SessionLifecycle.onWorkerExited policy oldState 1 later with
       | SessionLifecycle.ExitOutcome.RestartAfter _ -> ()
       | other -> failwithf "Expected RestartAfter after window reset, got %A" other

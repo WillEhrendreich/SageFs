@@ -104,53 +104,20 @@ let private budgets : (string * int) list =
     "SageFs.Tests/LiveTestingBrowserTests.fs", 8
     "SageFs.Tests/LiveTestingCoverageTests.fs", 2
     "SageFs.Tests/LiveTestingTypesTests.fs", 1
-    "SageFs.Tests/LocalDataSqliteTests.fs", 1
     "SageFs.Tests/ManifestOwnerTests.fs", 2
-    "SageFs.Tests/McpAdapterTests.fs", 4
-    "SageFs.Tests/McpStdioBridgeE2ETests.fs", 2
     "SageFs.Tests/McpStdioBridgeSimTests.fs", 1
-    "SageFs.Tests/MeasureTests.fs", 2
     "SageFs.Tests/MemoryShedSimTests.fs", 12
     "SageFs.Tests/MemorySupervisorTests.fs", 18
-    "SageFs.Tests/MultiAgentCoordinationTests.fs", 1
     "SageFs.Tests/ObservedFrictionResetThrashTests.fs", 1
     "SageFs.Tests/ObservedFrictionResolutionTests.fs", 1
-    "SageFs.Tests/OriginGuardOutcomeTests.fs", 1
-    "SageFs.Tests/OwnerMonitorTests.fs", 18
-    "SageFs.Tests/ParentMonitorTests.fs", 1
-    "SageFs.Tests/PatchAnnouncerTests.fs", 1
-    "SageFs.Tests/PeriodicManifestSaveDstTests.fs", 2
-    "SageFs.Tests/PersistenceComplianceTests.fs", 1
-    "SageFs.Tests/ProcessEnvironmentTests.fs", 1
     "SageFs.Tests/Program.fs", 2
-    "SageFs.Tests/PureModulesComprehensiveTests.fs", 5
     "SageFs.Tests/ReflectionReadTrackingTests.fs", 1
-    "SageFs.Tests/ReloadBroadcastTests.fs", 2
-    "SageFs.Tests/ReloadPlanningTests.fs", 6
-    "SageFs.Tests/ResilientActorTests.fs", 4
-    "SageFs.Tests/RestartJitterTests.fs", 1
-    "SageFs.Tests/RestartPolicyTests.fs", 4
-    "SageFs.Tests/RetryPolicyTests.fs", 7
-    "SageFs.Tests/Round7HardeningTests.fs", 2
     "SageFs.Tests/SafeDirectoryWalkTests.fs", 1
-    "SageFs.Tests/SageFsConfigTests.fs", 1
-    "SageFs.Tests/SageFsIOTests.fs", 7
-    "SageFs.Tests/SessionCreationTests.fs", 1
-    "SageFs.Tests/SessionLifecycleMutationTests.fs", 10
     "SageFs.Tests/SessionManagerAdmissionTests.fs", 2
-    "SageFs.Tests/SessionPredicatesAndUiTests.fs", 1
-    "SageFs.Tests/ShutdownLifecycleTests.fs", 1
     "SageFs.Tests/SimulationTests.fs", 1
-    "SageFs.Tests/StreamingProxyTests.fs", 4
     "SageFs.Tests/SyntaxHighlightTests.fs", 1
-    "SageFs.Tests/TimeoutsTests.fs", 10
     "SageFs.Tests/TweakSimDstTests.fs", 1
-    "SageFs.Tests/VscodeCommandProofTests.fs", 2
-    "SageFs.Tests/VscodeExtensionTests.fs", 13
-    "SageFs.Tests/WorkerLogFileTests.fs", 1
-    "SageFs.Tests/WorkflowSwitchTests.fs", 1
-    "SageFs.Tests/WorkflowTransitionPropertyTests.fs", 1
-    "SageFs.Tests/WorkflowTypesMutationTests.fs", 1 ]
+    "SageFs.Tests/WorkerLogFileTests.fs", 1 ]
 
 /// Every source file with its count of inline timeout literals, except the central module.
 let private actual : (string * int) list =

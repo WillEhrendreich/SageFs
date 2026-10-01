@@ -10,12 +10,12 @@ open Microsoft.Playwright
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 /// Deadline-based wait on an ACTUAL condition — never a fixed sleep. Probes
-/// every 100ms until `probe` is true or `timeoutMs` elapses; returns whether
+/// every 100ms until `probe` is true or `timeout` elapses; returns whether
 /// the condition was met (callers assert or diagnose on false).
-let waitUntil (timeoutMs: int) (probe: unit -> Task<bool>) = task {
+let waitUntil (timeout: TimeSpan) (probe: unit -> Task<bool>) = task {
   let sw = Stopwatch.StartNew()
   let mutable met = false
-  while not met && sw.ElapsedMilliseconds < int64 timeoutMs do
+  while not met && sw.Elapsed < timeout do
     let! ok = probe ()
     match ok with
     | true -> met <- true
@@ -69,7 +69,7 @@ module VscodeFixture =
               CreateNoWindow = true)
           use p = Process.Start(psi)
           let line = p.StandardOutput.ReadLine()
-          p.WaitForExit(3000) |> ignore
+          p.WaitForExit(TestTimeouts.shimLookupExit) |> ignore
           if not (String.IsNullOrEmpty line) then
             // `where code` returns the shim (e.g. …\bin\code or …\bin\code.cmd)
             // Code.exe lives in the parent directory
@@ -178,10 +178,10 @@ module VscodeFixture =
   }
 
   /// Poll CDP /json/version until the endpoint responds.
-  let waitForCdp (timeoutMs: int) = task {
-    let! ready = waitUntil timeoutMs cdpResponds
+  let waitForCdp (timeout: TimeSpan) = task {
+    let! ready = waitUntil timeout cdpResponds
     if not ready then
-      failwithf "CDP port %d not available after %dms" cdpPort timeoutMs
+      failwithf "CDP port %d not available after %O" cdpPort timeout
   }
 
   /// Connect Playwright to the CDP endpoint, retrying through the race where
@@ -230,7 +230,7 @@ module VscodeFixture =
     | None ->
       do! killOrphans ()
       let pid = launchVscode workspaceDir disableExtensions
-      do! waitForCdp 30_000
+      do! waitForCdp TestTimeouts.editorPortReady
       let! playwright = Playwright.CreateAsync()
       pw <- Some playwright
       let! b = connectOverCdpWithRetry pid playwright 10
@@ -273,7 +273,7 @@ module VscodeFixture =
     // The next launch reuses the CDP port: wait until the old instance has
     // actually released it.
     let! _released =
-      waitUntil 10_000 (fun () -> task {
+      waitUntil TestTimeouts.editorPortReleased (fun () -> task {
         let! up = cdpResponds ()
         return not up })
     ()
@@ -356,18 +356,18 @@ module VscodeHelpers =
   /// focus from the quick-input, so the Enter that follows lands on the editor
   /// and the command silently never runs (observed: handlerEvidence='' with the
   /// command surfaced in the palette). Every other wait is a condition poll.
-  let private matcherSettleMs = 800
+  let private matcherSettle = TestTimeouts.matcherSettle
 
   let paletteVisible (page: IPage) () =
     page.Locator(".quick-input-widget").IsVisibleAsync()
 
   /// Wait (deadline) for the quick-input widget to be visible.
-  let waitForPalette (timeoutMs: int) (page: IPage) =
-    waitUntil timeoutMs (paletteVisible page)
+  let waitForPalette (timeout: TimeSpan) (page: IPage) =
+    waitUntil timeout (paletteVisible page)
 
   /// Wait (deadline) for the quick-input widget to close.
-  let waitForPaletteClosed (timeoutMs: int) (page: IPage) =
-    waitUntil timeoutMs (fun () -> task {
+  let waitForPaletteClosed (timeout: TimeSpan) (page: IPage) =
+    waitUntil timeout (fun () -> task {
       let! visible = paletteVisible page ()
       return not visible })
 
@@ -397,13 +397,13 @@ module VscodeHelpers =
     // fixed sleep can race (palette not open yet → keystrokes land in the
     // editor → command silently never runs).
     do! page.Keyboard.PressAsync("Control+Shift+p")
-    let! opened = waitForPalette 5_000 page
+    let! opened = waitForPalette TestTimeouts.paletteToggle page
     do! page.Keyboard.TypeAsync(SageFsPaletteCommand.title command)
-    do! Task.Delay(matcherSettleMs)
+    do! Task.Delay(matcherSettle)
     let! matches = page.EvaluateAsync<string[]>(quickPickRowsJs)
     do! page.Keyboard.PressAsync("Enter")
     // The palette closes once the command is dispatched.
-    let! closed = waitForPaletteClosed 5_000 page
+    let! closed = waitForPaletteClosed TestTimeouts.paletteToggle page
     return { Opened = opened; MatchesSeen = matches |> Array.toList; ClosedAfterEnter = closed }
   }
 
@@ -415,18 +415,18 @@ module VscodeHelpers =
   /// Open a file via Quick Open (Ctrl+P).
   let openFile (page: IPage) (filename: string) = task {
     do! page.Keyboard.PressAsync("Control+p")
-    let! _opened = waitForPalette 5_000 page
+    let! _opened = waitForPalette TestTimeouts.paletteToggle page
     do! page.Keyboard.TypeAsync(filename)
-    do! Task.Delay(matcherSettleMs)
+    do! Task.Delay(matcherSettle)
     do! page.Keyboard.PressAsync("Enter")
-    let! _closed = waitForPaletteClosed 5_000 page
+    let! _closed = waitForPaletteClosed TestTimeouts.paletteToggle page
     ()
   }
 
   /// Press Escape to dismiss any overlay.
   let dismiss (page: IPage) = task {
     do! page.Keyboard.PressAsync("Escape")
-    let! _closed = waitForPaletteClosed 2_000 page
+    let! _closed = waitForPaletteClosed TestTimeouts.paletteClosedAlready page
     ()
   }
 
@@ -540,7 +540,7 @@ let smokeTests = testList "VSCode fixture smoke" [
 
   vscodeUiTest "can open command palette" (fun page -> task {
     do! page.Keyboard.PressAsync("Control+Shift+p")
-    let! inputVisible = VscodeHelpers.waitForPalette 5_000 page
+    let! inputVisible = VscodeHelpers.waitForPalette TestTimeouts.paletteToggle page
     Expect.isTrue "command palette should be visible" inputVisible
     do! VscodeHelpers.dismiss page
   })
@@ -591,7 +591,7 @@ let extensionTests = testList "VSCode extension behavior" [
       "(() => { var el = document.querySelector('.panel'); " +
       "return el ? el.textContent : ''; })()"
     let! hasSageFsChannel =
-      waitUntil 10_000 (fun () -> task {
+      waitUntil TestTimeouts.panelRenders (fun () -> task {
         let! panelText = page.EvaluateAsync<string>(js)
         return panelText.Contains("SageFs") || panelText.Contains("sagefs") })
     if not hasSageFsChannel then
@@ -602,12 +602,12 @@ let extensionTests = testList "VSCode extension behavior" [
 
   vscodeExtTest "workspace loads with fsproj files" (fun page -> task {
     do! page.Keyboard.PressAsync("Control+p")
-    let! quickPickVisible = VscodeHelpers.waitForPalette 5_000 page
+    let! quickPickVisible = VscodeHelpers.waitForPalette TestTimeouts.paletteToggle page
     Expect.isTrue "quick pick should be visible" quickPickVisible
     do! page.Keyboard.TypeAsync(".fsproj")
     // File indexing is asynchronous: poll Quick Open until it lists a project.
     let! hasResults =
-      waitUntil 15_000 (fun () -> task {
+      waitUntil TestTimeouts.quickOpenIndexes (fun () -> task {
         let! resultsText = VscodeHelpers.selectorText page ".quick-input-list"
         return resultsText.Contains("fsproj") })
     do! VscodeHelpers.dismiss page

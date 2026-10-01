@@ -64,7 +64,7 @@ let decideTests = testList "decide" [
     // hit the circuit breaker and back off 4x — covered by
     // RestartPolicyCircuitBreakerTests.)
     let _, s1 = decide defaultPolicy emptyState now
-    let d2, s2 = decide defaultPolicy s1 (now.AddSeconds(30.0))
+    let d2, s2 = decide defaultPolicy s1 (now + TestTimeouts.crashGapSpaced)
     match d2 with
     | Decision.Restart delay ->
       Expect.equal "2s delay" (defaultPolicy.BackoffBase * 2.0) delay
@@ -78,9 +78,9 @@ let decideTests = testList "decide" [
     // MaxRestarts ceiling of 5.
     let mutable state = emptyState
     for i in 1..5 do
-      let _, s = decide defaultPolicy state (now.AddSeconds(float i * 30.0))
+      let _, s = decide defaultPolicy state (now + TestTimeouts.crashGapSpaced * float i)
       state <- s
-    let decision, _ = decide defaultPolicy state (now.AddSeconds(6.0 * 30.0))
+    let decision, _ = decide defaultPolicy state (now + TestTimeouts.crashGapSpaced * 6.0)
     match decision with
     | Decision.GiveUp error ->
       let desc = SageFsError.describe error
@@ -92,11 +92,11 @@ let decideTests = testList "decide" [
   test "window reset allows restart after cooldown" {
     let mutable state = emptyState
     for i in 1..5 do
-      let _, s = decide defaultPolicy state (now.AddSeconds(float i * 30.0))
+      let _, s = decide defaultPolicy state (now + TestTimeouts.crashGapSpaced * float i)
       state <- s
     // 6 minutes later — beyond the 5 minute reset window
     let decision, newState =
-      decide defaultPolicy state (now.AddMinutes(6.0))
+      decide defaultPolicy state (now + TestTimeouts.quietPastResetWindow)
     match decision with
     | Decision.Restart _ ->
       Expect.equal "count reset to 1" 1 newState.RestartCount
@@ -106,7 +106,7 @@ let decideTests = testList "decide" [
 
   test "window start is preserved across restarts" {
     let _, s1 = decide defaultPolicy emptyState now
-    let _, s2 = decide defaultPolicy s1 (now.AddSeconds(5.0))
+    let _, s2 = decide defaultPolicy s1 (now + TestTimeouts.crashGapRapid)
     Expect.equal "window start unchanged" (Some now) s2.WindowStart
   }
 ]

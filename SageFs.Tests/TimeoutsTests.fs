@@ -11,7 +11,7 @@ let timeoutsTests = testList "Timeouts" [
 
   testList "ValidTimeout.create" [
     testCase "rejects sub-second timeout" <| fun _ ->
-      ValidTimeout.create (TimeSpan.FromMilliseconds(500.0))
+      ValidTimeout.create PinnedDurations.belowTimeoutFloor
       |> Expect.isError "should reject 500ms"
 
     testCase "rejects zero timeout" <| fun _ ->
@@ -19,19 +19,19 @@ let timeoutsTests = testList "Timeouts" [
       |> Expect.isError "should reject zero"
 
     testCase "rejects negative timeout" <| fun _ ->
-      ValidTimeout.create (TimeSpan.FromSeconds(-1.0))
+      ValidTimeout.create PinnedDurations.negativeTimeout
       |> Expect.isError "should reject negative"
 
     testCase "rejects > 10min timeout" <| fun _ ->
-      ValidTimeout.create (TimeSpan.FromMinutes(11.0))
+      ValidTimeout.create PinnedDurations.aboveTimeoutCeiling
       |> Expect.isError "should reject 11 minutes"
 
     testCase "accepts 1 second (lower bound)" <| fun _ ->
-      ValidTimeout.create (TimeSpan.FromSeconds(1.0))
+      ValidTimeout.create PinnedDurations.timeoutFloor
       |> Expect.isOk "should accept 1s"
 
     testCase "accepts 10 minutes (upper bound)" <| fun _ ->
-      ValidTimeout.create (TimeSpan.FromMinutes(10.0))
+      ValidTimeout.create PinnedDurations.timeoutCeiling
       |> Expect.isOk "should accept 10min"
 
     testCase "accepts 30 seconds" <| fun _ ->
@@ -48,11 +48,11 @@ let timeoutsTests = testList "Timeouts" [
   testList "workerHttpRequest" [
     testCase "is bounded (never infinite) and matches the build cap" <| fun _ ->
       Timeouts.workerHttpRequest
-      |> Expect.equal "worker HTTP requests must not hang forever" (TimeSpan.FromMinutes(10.0))
+      |> Expect.equal "worker HTTP requests must not hang forever" PinnedDurations.workerHttpRequest
 
     testCase "is a positive bounded span usable as an HttpClient timeout" <| fun _ ->
       let t = Timeouts.workerHttpRequest
-      (t > TimeSpan.Zero && t <= TimeSpan.FromMinutes(10.0))
+      (t > TimeSpan.Zero && t <= PinnedDurations.workerHttpRequest)
       |> Expect.isTrue "must be a positive span within the 10-minute cap"
   ]
 
@@ -62,7 +62,7 @@ let timeoutsTests = testList "Timeouts" [
   testSequencedGroup "timeouts-global" <| testList "Thread-safe mutable timeouts" [
     testCase "setPerTestTimeout rejects invalid value" <| fun _ ->
       let before = Timeouts.perTestDefault ()
-      Timeouts.setPerTestTimeout (TimeSpan.FromMilliseconds(100.0))
+      Timeouts.setPerTestTimeout PinnedDurations.perTestTimeoutBelowFloor
       Timeouts.perTestDefault ()
       |> Expect.equal "should remain unchanged" before
 
@@ -121,14 +121,14 @@ let timeoutsTests = testList "Timeouts" [
   testList "Timeouts module static values" [
     testCase "healthCheck is 2 seconds" <| fun _ ->
       Timeouts.healthCheck
-      |> Expect.equal "should be 2s" (TimeSpan.FromSeconds(2.0))
+      |> Expect.equal "should be 2s" PinnedDurations.healthCheck
 
     testCase "processNormalExit is 3 seconds" <| fun _ ->
       Timeouts.processNormalExit
-      |> Expect.equal "should be 3s" (TimeSpan.FromSeconds(3.0))
+      |> Expect.equal "should be 3s" PinnedDurations.processNormalExit
 
     testCase "sseKeepAlive is 24 hours" <| fun _ ->
       Timeouts.sseKeepAlive
-      |> Expect.equal "should be 24h" (TimeSpan.FromHours(24.0))
+      |> Expect.equal "should be 24h" PinnedDurations.sseKeepAlive
   ]
 ]

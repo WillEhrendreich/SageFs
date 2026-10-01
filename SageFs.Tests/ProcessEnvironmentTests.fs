@@ -94,7 +94,7 @@ let realSpawnTests =
       ProcessEnvironment.applyTo psi []
       use proc = Process.Start psi
       let output = proc.StandardOutput.ReadToEnd()
-      proc.WaitForExit 5_000 |> ignore
+      proc.WaitForExit(TestTimeouts.briefPatience) |> ignore
       output.Contains "poison-value" |> Expect.isFalse "the child never sees the poisoned value"
 
     // The MSBuild-SDK-resolution failure is real and reproducible: MSBuildSDKsPath

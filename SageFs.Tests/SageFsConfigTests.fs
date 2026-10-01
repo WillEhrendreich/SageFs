@@ -26,7 +26,7 @@ let sageFsConfigTests =
       |> Expect.isGreaterThan "must be positive"
 
     testCase "WorkerStartupTimeoutMs default is at least 30 seconds" <| fun _ ->
-      (SageFsConfig.WorkerStartupTimeoutMs, 30_000)
+      (SageFsConfig.WorkerStartupTimeoutMs, int TestTimeouts.workerStartupFloor.TotalMilliseconds)
       |> Expect.isGreaterThan "at least 30s"
 
     testCase "RestartCount is non-negative" <| fun _ ->

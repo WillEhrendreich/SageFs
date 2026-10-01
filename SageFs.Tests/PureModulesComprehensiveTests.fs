@@ -435,7 +435,7 @@ let fileChangeActionEscalation = testList "fileChangeAction: escalation hierarch
 /// in bin/obj. Without this filter, every IDE save causes a double-
 /// rebuild and every build triggers an infinite rebuild loop.
 let tempFilesNeverTriggerRebuild = testList "shouldTriggerRebuild: temp/build artifacts filtered" [
-  let config = { Directories = []; Extensions = [".fs"; ".fsx"; ".fsproj"]; ExcludePatterns = []; DebounceMs = 500 }
+  let config = { Directories = []; Extensions = [".fs"; ".fsx"; ".fsproj"]; ExcludePatterns = []; DebounceMs = int Timeouts.fileWatchDebounce.TotalMilliseconds }
   for path, label in [
     "~MyFile.fs", "tilde-prefix"; "scratch.fs.tmp", "tmp-suffix"
     "src/obj/Debug/net10.0/test.fs", "obj dir"; "src/bin/Debug/net10.0/SageFs.dll", "bin dir"
@@ -448,7 +448,7 @@ let tempFilesNeverTriggerRebuild = testList "shouldTriggerRebuild: temp/build ar
 /// code, vendored deps, etc. If patterns were ignored after a refactor,
 /// generated files would trigger spurious rebuilds.
 let exclusionPatternsHonored = testList "shouldTriggerRebuild: exclusion patterns respected" [
-  let config ext pats = { Directories = []; Extensions = ext; ExcludePatterns = pats; DebounceMs = 500 }
+  let config ext pats = { Directories = []; Extensions = ext; ExcludePatterns = pats; DebounceMs = int Timeouts.fileWatchDebounce.TotalMilliseconds }
   test "excluded .fs file doesn't trigger" {
     shouldTriggerRebuild (config [".fs"] ["**/Generated/*"]) "src/Generated/Code.fs"
     |> Expect.isFalse "excluded"
@@ -463,7 +463,7 @@ let exclusionPatternsHonored = testList "shouldTriggerRebuild: exclusion pattern
 /// extensions means spurious rebuilds (slow). NOT firing on configured
 /// ones means stale code (dangerous).
 let onlyConfiguredExtensionsTrigger = testList "shouldTriggerRebuild: only configured extensions" [
-  let config exts = { Directories = []; Extensions = exts; ExcludePatterns = []; DebounceMs = 500 }
+  let config exts = { Directories = []; Extensions = exts; ExcludePatterns = []; DebounceMs = int Timeouts.fileWatchDebounce.TotalMilliseconds }
   test ".fs fires when configured" {
     shouldTriggerRebuild (config [".fs"]) "src/App.fs" |> Expect.isTrue ".fs"
   }
@@ -1220,7 +1220,7 @@ let rectTests = testList "Rect" [
 
 /// The product's policy with a short reset window, so the window cases below need only a
 /// minute or two of fake time. Everything else is the default.
-let private shortResetWindow = TimeSpan.FromMinutes 1.0
+let private shortResetWindow = TestTimeouts.restartResetWindowShort
 
 let restartPolicyTests = testList "RestartPolicy" [
   let policy : RestartPolicy.Policy =
@@ -2005,7 +2005,7 @@ let mcpAdapterPureTests = testList "McpAdapter pure" [
 
 /// The grace period every Watchdog.decide case below runs with. The cases put the daemon's last
 /// start inside it or beyond it, so they are written as fractions and multiples of it.
-let private watchdogGrace = TimeSpan.FromSeconds 10.0
+let private watchdogGrace = TestTimeouts.watchdogGracePeriod
 
 /// A daemon that started a third of the grace period ago: still inside it.
 let private startedInsideGrace (now: DateTime) = now - watchdogGrace * 0.3
