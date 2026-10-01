@@ -176,8 +176,8 @@ let guardChildTests =
       field "pending" child |> Expect.equal "the thread ended through the interrupt" "0"
     }
 
-    testTask "WHY — a spin inside a task is the stated limit: only the deadline gives up on it, the thread is abandoned, the process lives" {
-      let! child = runChild SpinsInATask
+    testTask "WHY — a spin inside an async state machine is the stated limit: only the deadline gives up on it, the thread is abandoned, the process lives" {
+      let! child = runChild SpinsInAStateMachine
       survived child
       field "result" child |> Expect.equal "timed out" "timed-out"
       field "trip" child |> Expect.equal "the state machine is not guarded" "none"

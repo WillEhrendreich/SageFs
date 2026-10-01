@@ -49,6 +49,7 @@ let guardCoverageTests =
     testCase "WHY — a click with no guards says it is not guarded and why, for every reason" <| fun _ ->
       let reasons =
         [ NotGuardedReason.SwitchedOff
+          NotGuardedReason.NothingRan
           NotGuardedReason.PatchingUnavailable "no patching here"
           NotGuardedReason.GetterSkipped SkipReason.AsyncStateMachine
           NotGuardedReason.PreparationFailed "it threw" ]

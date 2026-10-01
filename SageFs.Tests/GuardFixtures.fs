@@ -71,11 +71,21 @@ type Generics =
   [<MethodImpl(MethodImplOptions.NoInlining)>]
   static member Use(n: int) : int = Generics.Id n
 
-/// What the C# and F# compilers make for an `async` method, by hand.
+/// What the C# and F# compilers make for an `async` method, by hand, marked as the compiler marks its own.
+[<CompilerGenerated>]
 type FakeMachine() =
   interface IAsyncStateMachine with
     member _.MoveNext() = ()
     member _.SetStateMachine(_) = ()
+
+/// A getter that makes a state machine and runs it.
+[<AbstractClass; Sealed>]
+type BuildsMachine =
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  static member Go() : int =
+    let machine = FakeMachine()
+    (machine :> IAsyncStateMachine).MoveNext()
+    1
 
 /// A getter that builds a task, so a state machine is reachable from it.
 [<AbstractClass; Sealed>]

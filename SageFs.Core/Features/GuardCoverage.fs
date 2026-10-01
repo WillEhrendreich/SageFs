@@ -46,6 +46,9 @@ type GuardedMethods =
 type NotGuardedReason =
   /// Guards are switched off for this evaluator.
   | SwitchedOff
+  /// The getter was not run (there was no value, it did not return on an earlier click, or too many did not), so there
+  /// was nothing to guard.
+  | NothingRan
   /// Harmony cannot patch on this runtime or platform.
   | PatchingUnavailable of detail: string
   /// The getter itself is something the rules skip, so there was nothing to guard.
@@ -92,6 +95,7 @@ module NotGuardedReason =
   let describe (reason: NotGuardedReason) : string =
     match reason with
     | NotGuardedReason.SwitchedOff -> "guards are switched off"
+    | NotGuardedReason.NothingRan -> "the getter was not run"
     | NotGuardedReason.PatchingUnavailable detail -> sprintf "code cannot be patched here (%s)" detail
     | NotGuardedReason.GetterSkipped skip -> sprintf "the getter is %s" (SkipReason.describe skip)
     | NotGuardedReason.PreparationFailed detail -> sprintf "the guards could not be put on (%s)" detail

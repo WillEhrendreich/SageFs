@@ -77,6 +77,11 @@
         <Compile Include="Features\GuardCoverage.fs" />
         <Compile Include="Features\GuardRuntime.fs" />
         <Compile Include="Features\GuardIl.fs" />
+        <!-- What the guards read and write: where hot reload re-pointed methods, which methods a getter reaches, and
+             the Harmony patcher. BCL, FSharp.Core and Harmony only, so they are in the host closure too. -->
+        <Compile Include="Features\DetourLedger.fs" />
+        <Compile Include="Features\GuardReachability.fs" />
+        <Compile Include="Features\GuardPatcher.fs" />
         <Compile Include="Features\MemberEvaluation.fs" />
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
@@ -93,6 +98,9 @@
         <EmbeddedResource Include="Features\GuardCoverage.fs" LogicalName="FsiHost/GuardCoverage.fs" />
         <EmbeddedResource Include="Features\GuardRuntime.fs" LogicalName="FsiHost/GuardRuntime.fs" />
         <EmbeddedResource Include="Features\GuardIl.fs" LogicalName="FsiHost/GuardIl.fs" />
+        <EmbeddedResource Include="Features\DetourLedger.fs" LogicalName="FsiHost/DetourLedger.fs" />
+        <EmbeddedResource Include="Features\GuardReachability.fs" LogicalName="FsiHost/GuardReachability.fs" />
+        <EmbeddedResource Include="Features\GuardPatcher.fs" LogicalName="FsiHost/GuardPatcher.fs" />
         <EmbeddedResource Include="Features\MemberEvaluation.fs" LogicalName="FsiHost/MemberEvaluation.fs" />
         <EmbeddedResource Include="TestProviderTypes.fs" LogicalName="FsiHost/TestProviderTypes.fs" />
         <EmbeddedResource Include="Features\LiveTestingTypes.fs" LogicalName="FsiHost/LiveTestingTypes.fs" />

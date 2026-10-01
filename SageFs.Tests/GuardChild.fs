@@ -7,7 +7,7 @@ module SageFs.Tests.GuardChild
 open System
 open System.Reflection
 open System.Threading
-open System.Threading.Tasks
+open System.Runtime.CompilerServices
 open SageFs.Features
 open SageFs.Features.LiveValueTree
 open SageFs.Features.MemberEvaluation
@@ -20,14 +20,14 @@ type GuardScenario =
   | SpinsInsideACatchAll
   | SpinsInAHelper
   | BlocksOnAWait
-  | SpinsInATask
+  | SpinsInAStateMachine
   | RecursesForeverUnguarded
   | SpinsForeverUnguarded
 
 module GuardScenario =
 
   let all : GuardScenario list =
-    [ Returns; RecursesForever; SpinsForever; SpinsInsideACatchAll; SpinsInAHelper; BlocksOnAWait; SpinsInATask
+    [ Returns; RecursesForever; SpinsForever; SpinsInsideACatchAll; SpinsInAHelper; BlocksOnAWait; SpinsInAStateMachine
       RecursesForeverUnguarded; SpinsForeverUnguarded ]
 
   let toArgument (scenario: GuardScenario) : string =
@@ -38,7 +38,7 @@ module GuardScenario =
     | SpinsInsideACatchAll -> "spins-inside-a-catch-all"
     | SpinsInAHelper -> "spins-in-a-helper"
     | BlocksOnAWait -> "blocks-on-a-wait"
-    | SpinsInATask -> "spins-in-a-task"
+    | SpinsInAStateMachine -> "spins-in-a-state-machine"
     | RecursesForeverUnguarded -> "recurses-forever-unguarded"
     | SpinsForeverUnguarded -> "spins-forever-unguarded"
 
@@ -53,7 +53,7 @@ module GuardScenario =
     | SpinsInsideACatchAll -> "SwallowingSpin"
     | SpinsInAHelper -> "ViaHelper"
     | BlocksOnAWait -> "Blocked"
-    | SpinsInATask -> "TaskSpin"
+    | SpinsInAStateMachine -> "MachineSpin"
 
   /// The controls run with guards off, to show the scenario really would end the process or run forever.
   let guardingFor (scenario: GuardScenario) : Guarding =
@@ -66,7 +66,7 @@ module GuardScenario =
     | SpinsInsideACatchAll
     | SpinsInAHelper
     | BlocksOnAWait
-    | SpinsInATask -> GuardsOn GuardPatcher.prepare
+    | SpinsInAStateMachine -> GuardsOn GuardPatcher.prepare
 
   let parse (argument: string) : Result<GuardScenario, string> =
     match all |> List.tryFind (fun scenario -> toArgument scenario = argument) with
@@ -81,6 +81,18 @@ type Helpers =
     while true do
       i <- i + 1
     i
+
+/// What a compiler makes for an async method (marked as it marks its own), with a `MoveNext` that never ends. The F#
+/// `task` builder makes one of these in a Release build and closures in a Debug build, so the child builds its own: the
+/// rule under test is that a `MoveNext` is never guarded, and that has to be the same in both.
+[<System.Runtime.CompilerServices.CompilerGenerated>]
+type SpinningMachine() =
+  interface IAsyncStateMachine with
+    member _.MoveNext() =
+      let mutable i = 0
+      while true do
+        i <- i + 1
+    member _.SetStateMachine(_) = ()
 
 /// The getters. Plain code, the way a user writes it.
 type Victim() =
@@ -105,9 +117,9 @@ type Victim() =
   member _.Blocked : int =
     neverSet.Wait()
     0
-  member _.TaskSpin : int =
-    let spinning : Task<unit> = task { while true do () }
-    spinning.Result
+  member _.MachineSpin : int =
+    let machine = SpinningMachine()
+    (machine :> IAsyncStateMachine).MoveNext()
     0
 
 /// What the parent reads. One line, `key=value` pairs, nothing else on it.

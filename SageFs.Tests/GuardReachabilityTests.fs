@@ -74,9 +74,19 @@ let guardReachabilityTests =
       GuardReachability.eligibility (fun _ -> true) moveNext
       |> Expect.equal "an explicit interface implementation is still the machine's MoveNext" (Eligibility.Ineligible SkipReason.AsyncStateMachine)
 
-    testCase "WHY — a getter that builds an F# task reaches the machine's MoveNext and does not guard it" <| fun _ ->
-      let walk = GuardReachability.walk world WalkBudget.product (method typeof<MakesTask> "Go")
+    testCase "WHY — a getter that makes a state machine reaches its MoveNext and does not guard it" <| fun _ ->
+      let walk = GuardReachability.walk world WalkBudget.product (method typeof<BuildsMachine> "Go")
+      names walk.Eligible |> List.head |> Expect.equal "the getter comes first" "Go"
       skipReasons walk |> Expect.contains "the machine is skipped" SkipReason.AsyncStateMachine
+      walk.Skipped
+      |> List.exists (fun (m, reason) -> m.Name.EndsWith "MoveNext" && reason = SkipReason.AsyncStateMachine)
+      |> Expect.isTrue "and it is the MoveNext that is skipped"
+
+    testCase "WHY — whatever the compiler makes of an F# task (a state machine in Release, closures in Debug), no MoveNext of one is guarded" <| fun _ ->
+      let walk = GuardReachability.walk world WalkBudget.product (method typeof<MakesTask> "Go")
+      walk.Eligible
+      |> List.exists (fun m -> typeof<IAsyncStateMachine>.IsAssignableFrom m.DeclaringType && m.Name.EndsWith "MoveNext")
+      |> Expect.isFalse "no state machine's MoveNext is among what gets guarded"
 
     testCase "WHY — a dynamic method has no identity to patch and is skipped" <| fun _ ->
       let dynamicMethod = DynamicMethod("dyn", typeof<int>, [||])

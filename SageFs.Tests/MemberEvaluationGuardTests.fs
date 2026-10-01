@@ -152,10 +152,10 @@ let memberEvaluationGuardTests =
       releases.Released.Wait TestTimeouts.patienceBrief |> Expect.isTrue "when the thread ends the guards come off"
       releases.Count |> Expect.equal "once" 1
 
-    testSequenced
-    <| testCase "WHY — a click leaves no stop pending behind it, whether the loop was stopped, the wait freed or the getter returned" <| fun _ ->
-      let before = Guard.Pending
-      for name in [ "Quick"; "CheckedSpin"; "Waits"; "Overflows" ] do
-        evaluate (preparing (Releases())) name (probe ()) |> ignore
-      Guard.Pending |> Expect.equal "the count is where it was" before
+    testSequenced (
+      testCase "WHY — a click leaves no stop pending behind it, whether the loop was stopped, the wait freed or the getter returned" (fun _ ->
+        let before = Guard.Pending
+        for name in [ "Quick"; "CheckedSpin"; "Waits"; "Overflows" ] do
+          evaluate (preparing (Releases())) name (probe ()) |> ignore
+        Guard.Pending |> Expect.equal "the count is where it was" before))
   ]

@@ -248,6 +248,10 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
     // a later Harmony unpatch on this method would rewrite its entry and put
     // the OLD code back over this detour. Take them off first.
     ValueReadTracking.releaseBeforeDetour method
+    // The same, for the stack and loop guards a click on a live-value row puts on the code a getter reaches: they come
+    // off before the detour, and the method is recorded as re-pointed so no guard is put back on it. A guard taken off
+    // after the detour would put the old code back over it.
+    SageFs.Features.GuardPatcher.releaseBeforeDetour method
     // Snapshot pre-detour observable state for canary validation
     let preSnapshot = snapshotMethodState method
 
@@ -305,6 +309,16 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
     // remaining detours with it — leaving the app half-reloaded with no report.
     logger.LogWarning (sprintf "Hot-reload detour failed for %s: %s" method.Name ex.Message)
     DetourApplied.Failed (sprintf "%s: %s" method.Name ex.Message)
+
+/// Where a detour that landed points, for the guards: the NEW method's IL is what runs once the old entry jumps (the
+/// stub in between only records that it was entered and calls it). A detour that did not land says nothing, so the
+/// method stays recorded as re-pointed with no known body, and nothing is patched onto it.
+let private recordDetourBody (older: Method) (newer: Method) (applied: DetourApplied) : unit =
+  match applied with
+  | DetourApplied.Redirected
+  | DetourApplied.Ineffective _ -> SageFs.Features.DetourLedger.recordBody older.MethodInfo newer.MethodInfo
+  | DetourApplied.Superseded _
+  | DetourApplied.Failed _ -> ()
 
 /// Pairs each older method with a same-named, compatible method offered by the
 /// evaluated assembly: the older entry point gets detoured onto the newer one.
@@ -638,7 +652,9 @@ let private applyBindingDetour (logger: ILogger) (unit: AccessorPairDetour) : Bi
     unit.Legs
     |> List.map (fun (older, newer) ->
       logger.LogDebug("Updating accessor " + older.FullName)
-      detourMethod logger older.MethodInfo newer.MethodInfo)
+      let applied = detourMethod logger older.MethodInfo newer.MethodInfo
+      recordDetourBody older newer applied
+      applied)
     |> classifyBindingApplication unit.Binding
 
 /// The probe for one new body, and what a detour should point at in place of
@@ -668,7 +684,9 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
     |> List.map (fun (older, newer) ->
       logger.LogDebug("Updating method " + older.FullName)
       let _, target = targetFor newer
-      older, detourMethod logger older.MethodInfo target)
+      let applied = detourMethod logger older.MethodInfo target
+      recordDetourBody older newer applied
+      older, applied)
   // A probe counts once its body is what some old entry point now reaches. It
   // supersedes the earlier probe of the same function that never ran.
   let landedProbes =
