@@ -2679,14 +2679,12 @@ let run
                 (Features.LiveTesting.InputHashCoverage.sagefsSemanticsVersion ())
                 fileReader
                 binding.WorktreePath
+            // A test with no coverage at all has no key either, and a key that cannot see the code (a bitmap that hit nothing) is
+            // no key: `InputHashCoverage.trust` decides, and a test without one is always run and never cached.
             let inputHashOf (tid: Features.LiveTesting.TestId) : string option =
-              match merged.Slots.Length with
-              | 0 -> None
-              | _ ->
-                match Map.tryFind tid lt.TestState.TestCoverageBitmaps with
-                | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
-                  Some(Features.LiveTesting.InputHashCoverage.ofCoverage toolchain fileReader merged bm)
-                | _ -> None
+              match Map.tryFind tid lt.TestState.TestCoverageBitmaps with
+              | Some bm -> Features.LiveTesting.InputHashCoverage.trust toolchain fileReader merged bm |> Features.LiveTesting.InputHashCoverage.keyOf
+              | None -> None
             let runMisses toRun =
               Features.CohortLandingVerify.runTestsInSession elmRuntime awaitModelCondition observation sessionId toRun
             // Talks to the single owner via a message (roast-6 #7a) — never
