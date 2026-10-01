@@ -212,11 +212,14 @@ let typeShapeAndLambdaTests =
       planFor "fun who -> \"A\" + who" "fun who -> \"B\" + who"
       |> patchedNames |> Expect.equal "the lambda-bound value" [ "lambdaHandler" ]
 
-    testCase "WHY — ReloadPlanning.planReload — a value whose initializer calls a private function still restarts, because FSI can't reach the private function to run the new initializer" <| fun _ ->
+    // The edit is inside the value's lambda, so the planner takes it as a closure patch (the value is not
+    // redefined, so there is no "the value changed" to report). The patch is the value written out as a
+    // function, and compiling it still needs the private function its initializer calls, which FSI can't reach.
+    testCase "WHY — ReloadPlanning.planReload — a lambda edit in a value whose initializer calls a private function still restarts, because FSI can't reach the private function to compile the patch" <| fun _ ->
       planFor "  fun () -> computedAtStartup" "  fun () -> computedAtStartup + \"!\""
       |> restartChanges
-      |> Expect.equal "the value, and the private function it can't reach"
-           [ ReloadChange.ValueChanged "eagerHandler"; ReloadChange.UsesNonPublicMember ("eagerHandler", "computeEager") ]
+      |> Expect.equal "the private function the patch can't reach"
+           [ ReloadChange.UsesNonPublicMember ("eagerHandler", "computeEager") ]
   ]
 
 [<Tests>]
@@ -411,6 +414,7 @@ let private mkDecl (name: string) (kind: DeclKind) (access: DeclAccess) (body: s
     match kind with
     | DeclKind.FunctionDecl -> sprintf "let %s%s x" accessText name, sprintf "let %s%s x = %s" accessText name body
     | DeclKind.ValueDecl -> sprintf "let %s%s" accessText name, sprintf "let %s%s = %s" accessText name body
+    | DeclKind.ValueClosures -> sprintf "let %s%s" accessText name, sprintf "let %s%s () = %s" accessText name body
     | DeclKind.MutableValueDecl -> sprintf "let mutable %s%s" accessText name, sprintf "let mutable %s%s = %s" accessText name body
     | DeclKind.EntryPointDecl -> sprintf "let %s args" name, sprintf "[<EntryPoint>]\nlet %s args = %s" name body
     | DeclKind.TypeDecl -> "", sprintf "type %s%s = { Value: int } // %s" accessText name body
@@ -478,6 +482,7 @@ let private expectedChangeFor (d: SourceDecl) =
   | DeclKind.ValueDecl -> ReloadChange.ValueChanged d.Name
   | DeclKind.MutableValueDecl -> ReloadChange.MutableStateChanged d.Name
   | DeclKind.FunctionDecl -> ReloadChange.SignatureChanged d.Name
+  | DeclKind.ValueClosures -> ReloadChange.ValueChanged d.Name
   | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
   | DeclKind.NestedModuleDecl -> ReloadChange.ModuleChanged d.Name
   | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
@@ -491,6 +496,7 @@ let private expectedRemovalFor (d: SourceDecl) =
   | DeclKind.ValueDecl
   | DeclKind.MutableValueDecl
   | DeclKind.FunctionDecl
+  | DeclKind.ValueClosures
   | DeclKind.NestedModuleDecl -> ReloadChange.DeclarationRemoved d.Name
 
 let private tokens (text: string) = text.Split([| ' '; '\n'; '('; ')' |], System.StringSplitOptions.RemoveEmptyEntries) |> Set.ofArray

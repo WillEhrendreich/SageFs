@@ -45,7 +45,10 @@ type AfterEval =
     /// the app already holds and must never redefine what "held" means;
     /// everything else is the kind of eval that builds route tables and
     /// handler closures, so it updates State.AppHolds.
-    IsFileSave: bool }
+    IsFileSave: bool
+    /// Declarations the save changed the LAMBDAS of, whose closures the app already holds. Empty for
+    /// every eval that is not a file save that edited a lambda.
+    Closures: ClosureRepoint list }
 
 /// What the agent found. `UpdatedMethods` are the dotted names of the methods that were redefined.
 /// `DetourReport` is the full picture behind that count: which mutable bindings
@@ -188,10 +191,32 @@ let afterEvalStep (executors: TestExecutor list) (logger: ILogger) (state: State
     match request.Detours with
     | DetourPolicy.ApplyDetours -> true
     | DetourPolicy.RegisterOnly -> false
-  let state, detourReport =
+  // The closures of a lambda the save edited have no name to match: the planner says which declarations
+  // they belong to. They are matched BEFORE anything is detoured, because one refusal anywhere in a save
+  // stops every detour of it: the running app is never left half moved.
+  let closureWork =
+    match apply with
+    | true -> planClosureWork state.ProjectAssemblies asm request.EvaluatedCode request.Closures
+    | false -> ClosureWork.empty
+  let closuresAllowed = List.isEmpty closureWork.Refusals
+  let state, namedReport =
     state
     |> getOpenModules request.EvaluatedCode
-    |> handleNewAsmFromRepl logger apply request.IsFileSave asm
+    |> handleNewAsmFromRepl logger (apply && closuresAllowed) request.IsFileSave asm
+  // A closure that lands is as much "reached" as a re-pointed method of the compiled assembly: it IS the
+  // compiled class the app's instances were built from.
+  let closures =
+    match closuresAllowed, List.isEmpty namedReport.Refusals with
+    | true, true -> applyClosureWork logger closureWork
+    | _ -> { ClosureReport.empty with Refusals = closureWork.Refusals }
+  let detourReport =
+    { namedReport with
+        Redirected = namedReport.Redirected @ closures.Landed
+        ReachedRunningProcess = namedReport.ReachedRunningProcess @ closures.Landed
+        RedirectedFromCompiled = namedReport.RedirectedFromCompiled @ closures.Landed
+        Probes = namedReport.Probes @ closures.Probes
+        Refusals = namedReport.Refusals @ closures.Refusals
+        Failures = namedReport.Failures @ closures.Failures }
   let updated = detourReport.Redirected
   let firstScan = state.LiveTestInit = LiveTestInit.Pending && not (List.isEmpty state.ProjectAssemblies)
   let forced =

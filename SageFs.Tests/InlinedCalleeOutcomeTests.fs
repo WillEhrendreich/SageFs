@@ -96,7 +96,7 @@ let private applySave (modulePath: string list) (typeName: string) (methodName: 
       { EvaluatedCode = sprintf "module %s =\n  let %s (n: int) = n + 1000" typeName methodName
         Detours = DetourPolicy.ApplyDetours
         Discovery = DiscoveryPolicy.WhenChanged
-        IsFileSave = true }
+        IsFileSave = true; Closures = [] }
   report.DetourReport.Redirected |> Expect.isNonEmpty "the detour landed, which is what makes this case look like a success"
   report.DetourReport.ReachedRunningProcess |> Expect.isNonEmpty "the app holds the compiled copy that was re-pointed"
   let decl = declOf methodName

@@ -98,6 +98,20 @@ type RestartReason =
   /// once, that is a guess dressed as a fact — the honest default is a
   /// restart, not a claim this can't back up.
   | UnverifiedCopy of declaration: string
+  /// The lambdas of a declaration changed in a way the closures the running app
+  /// already built cannot take. A lambda's body is re-pointed in place while it
+  /// captures the same values and holds the same lambdas inside it; a lambda that
+  /// starts capturing something new, or gains or loses a lambda inside it, needs
+  /// a closure the app never built.
+  | ClosureShapeChanged of declaration: string * detail: string
+  /// An instance member's type gained, lost or re-typed a field, so the objects
+  /// the running app already built are laid out without it. A member's body is
+  /// re-pointed in place while the type's fields stay the same.
+  | InstanceLayoutChanged of typeName: string * detail: string
+  /// A generic function. A patch reaches the instantiations that have run; one
+  /// that runs later would still get the old body, and a patch that is right for
+  /// some calls and wrong for others is not one to claim.
+  | GenericFunction of declaration: string
 
 module RestartReason =
 
@@ -138,6 +152,12 @@ module RestartReason =
       sprintf
         "SageFs re-pointed a copy of '%s', but this file has no build baseline to confirm it's the copy the running app calls"
         declaration
+    | RestartReason.ClosureShapeChanged(declaration, detail) ->
+      sprintf "the lambdas in '%s' changed shape (%s), and the closures the running app already built have no room for the change" declaration detail
+    | RestartReason.InstanceLayoutChanged(typeName, detail) ->
+      sprintf "the fields of '%s' changed (%s), and the objects the running app already built were laid out without them" typeName detail
+    | RestartReason.GenericFunction declaration ->
+      sprintf "'%s' is generic, and a patch only reaches the instantiations that have already run: one that runs later would still get the old body" declaration
 
   /// What the user can actually do. Never empty — a refusal a user cannot act
   /// on is a dead end, and this is the field that stops it being one.
@@ -180,6 +200,16 @@ module RestartReason =
       "Restart the app to pick it up. Build through SageFs (it builds with -p:Optimize=false) and a redefined value can be checked and patched."
     | RestartReason.UnverifiedCopy _ ->
       "Restart the app to be sure this change takes effect. This file has no known-good build baseline yet — rebuild the project and hard_reset_fsi_session (rebuild=true) so future saves to it can be confirmed precisely."
+    | RestartReason.ClosureShapeChanged(declaration, _) ->
+      sprintf
+        "Restart the app to pick it up. A lambda's body reloads in place while it captures the same values and holds the same lambdas inside it; '%s' now captures something new or holds a different number of lambdas, which the closures already built cannot take."
+        declaration
+    | RestartReason.InstanceLayoutChanged(typeName, _) ->
+      sprintf
+        "Restart the app to pick it up. A member's body reloads in place while '%s' keeps the same fields; a member that starts using a constructor argument gives the type a new field, which the objects already built do not have."
+        typeName
+    | RestartReason.GenericFunction declaration ->
+      sprintf "Restart the app to pick it up. If '%s' only needs to work for one type, annotate its arguments with it: a function that is not generic is re-pointed in place." declaration
 
 /// A `let mutable` whose initializer you edited while the app was running. The
 /// app kept its live value (rule 3 of the state spec), and this is what the

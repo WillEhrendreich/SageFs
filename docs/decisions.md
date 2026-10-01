@@ -280,3 +280,44 @@ twice), `SageFs.Tests/FsiHostLostTests.fs`, `SageFs.Tests/HostCrashTests.fs`, an
 `SageFs.Tests/HostCrashRecoveryTests.fs`.
 Reopen it if: users lose work to host crashes often enough that "tell them and let them reset" costs more than a
 restart that says what it dropped.
+
+## A lambda in a route list reloads by re-pointing its closure, and only while the closure has room for the change
+
+`get "/" (fun ctx -> ...)` has no name to re-point. The compiler turns the lambda into a closure class and the route
+list holds instances of it, which is why an edit to one used to restart: the planner read the whole list as a value the
+app had kept a copy of. The class has an `Invoke`, and the instances the app already built still run it, so a save that
+only changes lambda bodies detours the old class's `Invoke` to the new one's.
+
+The new `Invoke` is handed an OLD instance and reads what the lambda captured by field offset. That is only sound when
+the two classes have the same fields, in the same order, of the same types, so the host checks it and refuses
+otherwise. A lambda that starts capturing something, or gains or loses a lambda inside it, restarts and says
+`ClosureShapeChanged` with the field it saw. That is the same line Microsoft draws for C# (the captured set has to stay
+the same), for the same reason.
+
+Matching old closures to new ones. The compiler names a closure after its binding and the line of the lambda
+(`routes@72-3`, counted up in the order it makes them). The planner says which lambdas changed and where they sit,
+counted from the declaration's first line, and only says so when nothing OUTSIDE a lambda changed (it blanks every
+lambda out of both versions and compares what is left). The host reads those lines off the compiled assembly and off
+the code FSI just compiled. Measured on this machine: the name carries the raw line of the code FSI compiled and
+ignores the `# n "file"` directive, and the pipeline adds lines of its own (an `open`, a NoInlining attribute above
+each function), so the host finds the declaration by its directive line in the code that was evaluated and counts from
+there. Two lambdas that share a line cannot be told apart by name, so that edit does not take this path.
+
+A value edited only in its lambdas is emitted as a function (`let routes () : T = ...`). FSI compiles the same closures
+and defining a function runs nothing, so the new lambdas exist without the list being built a second time.
+
+Hot reload sessions compile with `--optimize-`. SageFs builds the project with `Optimize=false` and FSI's default is to
+optimize. Optimized, a `task { }` is a static state machine where the build made a chain of closures, and a captured
+constant is folded into the closure, which changes its fields. Measured: with FSI optimizing, a lambda holding a task or
+an async was refused as a different shape, and a lambda capturing a constant looked like it lost its capture. With
+`--optimize-` the patch has the same shape as the code it replaces and both patch.
+
+One refusal anywhere in a save stops every detour of it. The closures are matched first (nothing is detoured while
+matching), and only if every one fits does anything move, so a restart never leaves the app half updated.
+
+Evidence: `SageFs.Core/Middleware/HotReloadCore.fs` (`planClosureWork`, `applyClosureWork`, `layoutDifference`),
+`SageFs.Core/Features/ReloadPlanning.fs` (`lambdaDiff`), and the real-app rows in `SageFs.Tests/HotReloadParityTests.fs`
+(`inlineLambda`, `inlineCapture`, `taskLambda`, `asyncLambda`, `heldClosure`, `inlineNewCapture`) on net10.0 and
+net11.0. The pure rules are in `SageFs.Tests/HotReloadClosureTests.fs`.
+Reopen it if: a closure the compiler makes cannot be matched by name and line (a generated one with no line), or FSI
+stops honouring `--optimize-`.

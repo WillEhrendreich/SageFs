@@ -73,6 +73,12 @@ let private unscopeableOf (reason: ReloadOutcome.RestartReason) =
     Some(sprintf "'%s' was inlined into its caller, so only a re-launch picks the edit up" declaration)
   | ReloadOutcome.RestartReason.UnverifiedCopy declaration ->
     Some(sprintf "'%s' changed and SageFs cannot check where its copies went, so nothing can be scoped safely" declaration)
+  | ReloadOutcome.RestartReason.ClosureShapeChanged (declaration, _) ->
+    Some(sprintf "'%s' holds closures the running app already built, so only a re-launch gives them the new shape" declaration)
+  | ReloadOutcome.RestartReason.InstanceLayoutChanged (typeName, _) ->
+    Some(sprintf "live instances of '%s' were laid out without the new field, so a scoped restart could leave one behind" typeName)
+  | ReloadOutcome.RestartReason.GenericFunction declaration ->
+    Some(sprintf "'%s' is generic, and a scoped restart would leave instantiations that already ran with the old body" declaration)
   | ReloadOutcome.RestartReason.TypeShapeChanged (_, RestartScope.Scoped _) -> None
 
 let ofReasons (reasons: ReloadOutcome.RestartReason list) : Decision =

@@ -144,7 +144,7 @@ type EntryHooks =
 /// Why no stub could be built for a function.
 [<RequireQualifiedAccess>]
 type StubFailure =
-  /// Only static, non-generic methods are detoured, so only those get a stub.
+  /// Only non-generic methods of a class (or static ones) are detoured, so only those get a stub.
   | NotDetourable of declaration: string
   /// The runtime refused the method's signature or the IL.
   | CouldNotEmit of declaration: string * detail: string
@@ -152,22 +152,36 @@ type StubFailure =
 module StubFailure =
   let describe (failure: StubFailure) : string =
     match failure with
-    | StubFailure.NotDetourable declaration -> sprintf "%s is not a static, non-generic method" declaration
+    | StubFailure.NotDetourable declaration -> sprintf "%s is not a non-generic method of a class" declaration
     | StubFailure.CouldNotEmit(declaration, detail) -> sprintf "%s: %s" declaration detail
 
 let private stubs = List<DynamicMethod>()
 
 /// A method with `target`'s exact signature that records an entry under `probe`
 /// and then calls `target`. A detour can point at it in place of the target.
-/// Static, non-generic targets only, which is what hot reload detours. An Error
-/// says why no stub could be built; the caller then detours straight at the
-/// target and that function can never be confirmed.
+/// Non-generic targets only, which is what hot reload detours. An Error says why
+/// no stub could be built; the caller then detours straight at the target and that
+/// function can never be confirmed.
+///
+/// An INSTANCE target gets a static stub that takes the instance as its first
+/// argument, which is how an instance method is called anyway, so a detour from
+/// one instance method to the stub passes `this` straight through. The stub calls
+/// the target with `call`, never `callvirt`: the instance it is handed is of the
+/// OLD type (that is the detour's point), and a virtual dispatch on it would land
+/// on the old method again, which is detoured back to the stub.
 let stubFor (probe: EntryProbe) (target: MethodInfo) : Result<MethodInfo, StubFailure> =
   try
-    match target.IsStatic && not target.IsGenericMethod with
+    let detourable =
+      not target.IsGenericMethod
+      && (target.IsStatic || (not (isNull target.DeclaringType) && not target.DeclaringType.IsValueType))
+    match detourable with
     | false -> Result.Error(StubFailure.NotDetourable probe.Declaration)
     | true ->
-      let parameters = target.GetParameters() |> Array.map (fun p -> p.ParameterType)
+      let declared = target.GetParameters() |> Array.map (fun p -> p.ParameterType)
+      let parameters =
+        match target.IsStatic with
+        | true -> declared
+        | false -> Array.append [| target.DeclaringType |] declared
       let stub =
         DynamicMethod(
           sprintf "sagefs-entry-probe:%s" probe.Declaration,

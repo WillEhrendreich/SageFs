@@ -58,6 +58,9 @@ let private refusalCaseName (reason: RestartReason) =
   | RestartReason.ValueCopiedByApp _ -> "ValueCopiedByApp"
   | RestartReason.ValueUntraceable _ -> "ValueUntraceable"
   | RestartReason.UnverifiedCopy _ -> "UnverifiedCopy"
+  | RestartReason.ClosureShapeChanged _ -> "ClosureShapeChanged"
+  | RestartReason.InstanceLayoutChanged _ -> "InstanceLayoutChanged"
+  | RestartReason.GenericFunction _ -> "GenericFunction"
 
 let private refusalOf (reason: RestartReason) : DevReload.ReloadRefusal =
   { Case = refusalCaseName reason

@@ -208,9 +208,17 @@ type private Observed = {
 let private said (verdict: string) : string =
   let v = json verdict
   let reasons = reasonCases verdict
+  let firstMessage =
+    match v.TryGetProperty "reasons" with
+    | true, listed ->
+      [ for r in listed.EnumerateArray() -> str r "message" ]
+      |> List.tryHead
+      |> Option.map (fun m -> sprintf " (%s)" (if m.Length > 200 then m.Substring(0, 200) + "..." else m))
+      |> Option.defaultValue ""
+    | false, _ -> ""
   match reasons with
   | [] -> sprintf "%s/%s" (str v "type") (str v "outcome")
-  | _ -> sprintf "%s/%s %A" (str v "type") (str v "outcome") reasons
+  | _ -> sprintf "%s/%s %A%s" (str v "type") (str v "outcome") reasons firstMessage
 
 /// One row on a host of its own, start to finish. A row gets its own host because a save the
 /// product cannot patch leaves its edit on disk and the baseline behind, so every later save in
