@@ -86,6 +86,78 @@ module McpRunTests =
           return current ()
     }
 
+  // ── what source a receipt reflects ───────────────────────────────────────────────────────
+  //
+  // The engine's record says what the tests did. It cannot say whether the build they ran against was behind the files on disk,
+  // because it never looks at the disk. The daemon does, at the edge: once when a run is dispatched, and once the first time
+  // the run is seen settled. The receipt carries the worse of the two (a file edited during the run counts), and that reading
+  // is frozen when the run settles, so the same receipt_id never reads differently because of an edit made after it finished.
+
+  [<RequireQualifiedAccess>]
+  type private SourceStamp =
+    /// Read when the run was dispatched; the run has not been seen settled.
+    | AtDispatch of SourceState
+    /// The worse of the dispatch reading and the one taken when the run was first seen settled. Final.
+    | Settled of SourceState
+
+  /// The stamps of recent runs, as many as the engine keeps requests for, twice over: a stamp for a request the engine has
+  /// forgotten is never read, and the bound keeps this from outliving the daemon's memory of the runs.
+  type private Stamps() =
+    let gate = obj ()
+    let stamps = System.Collections.Generic.Dictionary<RunRequestId, SourceStamp>()
+    let order = System.Collections.Generic.Queue<RunRequestId>()
+    let capacity = RequestedRuns.maxTracked * 2
+    member _.Find (requestId: RunRequestId) : SourceStamp voption =
+      lock gate (fun () -> match stamps.TryGetValue requestId with | true, stamp -> ValueSome stamp | false, _ -> ValueNone)
+    /// A new reading for the request. Once a request is `Settled` it keeps that reading.
+    member _.Put (requestId: RunRequestId) (stamp: SourceStamp) : SourceStamp =
+      lock gate (fun () ->
+        match stamps.TryGetValue requestId with
+        | true, (SourceStamp.Settled _ as final) -> final
+        | true, _ ->
+          stamps[requestId] <- stamp
+          stamp
+        | false, _ ->
+          stamps[requestId] <- stamp
+          order.Enqueue requestId
+          while order.Count > capacity do
+            stamps.Remove (order.Dequeue ()) |> ignore
+          stamp)
+
+  let private runStamps = Stamps()
+
+  /// The source state of a session as the daemon can read it now.
+  let private sourceOfSession (ctx: McpContext) (sid: string) : Task<SourceState> =
+    task {
+      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+      let! warmup = warmupOf ctx sid
+      return SourceStateProbe.ofSessionRecord info warmup
+    }
+
+  /// A receipt with the source it reflects. A run that has not finished has no verdict to qualify, so only a settled run is
+  /// read against the disk, and only once.
+  let private withReflectedSource (ctx: McpContext) (receipt: RunReceipt) : Task<RunReceipt> =
+    task {
+      match receipt with
+      | RunReceipt.Ran ran ->
+        let settle (atDispatch: SourceState) =
+          task {
+            let! atCompletion = sourceOfSession ctx ran.Session
+            match runStamps.Put ran.RequestId (SourceStamp.Settled (SourceState.worse atDispatch atCompletion)) with
+            | SourceStamp.Settled source
+            | SourceStamp.AtDispatch source -> return TestRunReceipt.withSource source receipt
+          }
+        match runStamps.Find ran.RequestId with
+        | ValueSome (SourceStamp.Settled source) -> return TestRunReceipt.withSource source receipt
+        | ValueSome (SourceStamp.AtDispatch atDispatch) -> return! settle atDispatch
+        // No reading was taken when this run was dispatched (its stamp aged out), so the run cannot be called in sync.
+        | ValueNone -> return! settle (SourceState.Unknown UnknownReason.NotAssessed)
+      | RunReceipt.Refused _
+      | RunReceipt.Pending _
+      | RunReceipt.Started _
+      | RunReceipt.Unattributable _ -> return receipt
+    }
+
   let private describeFilters (request: RunTestsRequest) : string =
     [ request.Pattern |> Option.map (sprintf "pattern=%s")
       request.File |> Option.map (sprintf "file=%s")
@@ -101,7 +173,8 @@ module McpRunTests =
       | Some dispatch, Some getModel ->
         match request.Continue with
         | Some requestId ->
-          let! receipt = awaitReceipt ctx getModel requestId None request.Wait
+          let! observed = awaitReceipt ctx getModel requestId None request.Wait
+          let! receipt = withReflectedSource ctx observed
           return RunTestsOutcome.Receipt receipt
         | None ->
           let! resolution = resolveSessionId ctx agent request.SessionId request.WorkingDirectory
@@ -111,7 +184,8 @@ module McpRunTests =
             let discovered = (cycleState ()).DiscoveredTests
             let matched =
               LiveTestCycleState.filterTestsForExplicitRun discovered request.File request.Pattern request.Category
-            let! _, observation = sessionTrustObservation ctx sid "run_tests"
+            // Whether the build is behind the files is not a reason to refuse a run: the receipt says it (`source`).
+            let! observation = sessionStatusObservation ctx sid None
             let trust = Verification.SessionTrust.classify observation
             match TestRunReceipt.plan trust discovered matched (describeFilters request) with
             | RunPlan.Refuse refusal -> return RunTestsOutcome.Receipt (RunReceipt.Refused refusal)
@@ -126,8 +200,12 @@ module McpRunTests =
                 return RunTestsOutcome.Receipt (RunReceipt.Refused RunRefusal.NotDiscovered)
               | CohortLandingVerify.Preflight.Dispatch dispatchCases ->
                 let requestId = RunRequestId.fresh ()
+                // The disk, as it is at the moment the run is asked for.
+                let! atDispatch = sourceOfSession ctx sid
+                runStamps.Put requestId (SourceStamp.AtDispatch atDispatch) |> ignore
                 dispatch (SageFsMsg.Event (TuiEvent.RunTestsRequested (Some sid, dispatchCases, Some requestId)))
-                let! receipt = awaitReceipt ctx getModel requestId (Some dispatchCases.Length) request.Wait
+                let! observed = awaitReceipt ctx getModel requestId (Some dispatchCases.Length) request.Wait
+                let! receipt = withReflectedSource ctx observed
                 return RunTestsOutcome.Receipt receipt
           | other ->
             let! blocker = sessionRoutingError ctx request.SessionId request.WorkingDirectory other

@@ -357,6 +357,8 @@
         <Compile Include="Features\CohortLedgerExport.fs" />
         <Compile Include="CrossCheckoutOverlap.fs" />
         <Compile Include="Features\Verification.fs" />
+        <!-- Is the build this session runs behind the files on disk? A pure decision over what an edge read. -->
+        <Compile Include="Features\SourceState.fs" />
         <!-- run_tests's receipt: a pure read of the engine's own request record. -->
         <Compile Include="Features\TestRunReceipt.fs" />
         <Compile Include="EvalPreflight.fs" />

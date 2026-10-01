@@ -15,6 +15,7 @@ open SageFs.Features.CellDependenciesReport
 open SageFs.Utils
 open SageFs.McpSessionRouting
 open SageFs.McpRouteError
+open SageFs.McpAnalysisViews
 
 /// MCP tool implementations — all tools route through SessionManager.
 /// There is no "local embedded session" — every session is a worker.
@@ -1378,6 +1379,17 @@ module McpTools =
       | SageFs.ExpensiveWorkLease.ReleaseOutcome.Released -> Ok "released"
       | SageFs.ExpensiveWorkLease.ReleaseOutcome.AlreadyGone -> Ok "already_gone_or_not_owned"
 
+  /// The worker's own warmup report for a session: when it loaded the build it runs, and which assemblies. None when the worker
+  /// cannot answer, which the source state then says as Unknown.
+  let warmupOf (ctx: McpContext) (sid: string) : Task<WarmupContext option> =
+    task {
+      match ctx.GetWarmupContext with
+      | None -> return None
+      | Some get ->
+        try return! get sid
+        with _ -> return None
+    }
+
   let private sessionStatusPayload
     (ctx: McpContext)
     (agent: string)
@@ -1407,6 +1419,8 @@ module McpTools =
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
+             // No worker to ask, so a rebuild in progress is what this shape can say about the source.
+             sourceState = SourceState.toWire (SourceStateProbe.ofSessionRecord info None)
              available = SageFs.Affordances.availableTools SageFs.SessionState.WarmingUp |})
       | FaultedSession (sid, cause) ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1421,6 +1435,7 @@ module McpTools =
              lastRestart = SessionStatusPayload.lastRestartJson (SessionStatusPayload.lastRestartOfSession info None)
              lastReload = SessionReload.toWire (SessionStatusPayload.lastReloadOfSession info)
              replFreshness = ReplFreshness.toWire (SessionStatusPayload.replFreshnessOfSession info)
+             sourceState = SourceState.toWire (SourceStateProbe.ofSessionRecord info None)
              available = SageFs.Affordances.availableTools SageFs.SessionState.Faulted |})
       | Routable sid ->
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1468,7 +1483,8 @@ module McpTools =
               // result. Without this a failed rebuild was recorded and then
               // never shown, so it read exactly like one still running.
               LastRestart = SessionStatusPayload.lastRestartOfSession info (Some snapshot.CoreVersion)
-              LastReload = sessionInfo.Reload; ReplFreshness = sessionInfo.Freshness }
+              LastReload = sessionInfo.Reload; ReplFreshness = sessionInfo.Freshness
+              SourceState = SourceStateProbe.ofSession sessionInfo warmup }
         | _, _ ->
           return! renderWarmingOrFaulted ctx resolution
     }
@@ -1566,6 +1582,7 @@ module McpTools =
                   WorkingDir = sessionInfo.WorkingDirectory
                   Status = WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status
                   Warmup = warmup
+                  // Empty on purpose: staleness is `SourceState`, read off the disk when asked (see DaemonMode.fs).
                   FileStatuses = []
                   Workflow = sessionInfo.Workflow
                   AutoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory sessionInfo.WorkingDirectory
@@ -2220,7 +2237,17 @@ module McpTools =
           let sid = WorkerProtocol.SessionId.value s.Id
           sid, occupantsForSession ctx sid)
         |> Map.ofList
-      return SessionOperations.formatSessionList System.DateTime.UtcNow (Some occupancyMap) sessions
+      // Each session's source line is read off the disk and the worker's own warmup report, all sessions at once.
+      let! sources =
+        sessions
+        |> List.map (fun s ->
+          task {
+            let sid = WorkerProtocol.SessionId.value s.Id
+            let! warmup = warmupOf ctx sid
+            return sid, SourceStateProbe.ofSession s warmup
+          })
+        |> Task.WhenAll
+      return SourceStateProbe.formatSessionList System.DateTime.UtcNow (Some occupancyMap) (Map.ofArray sources) sessions
     }
 
   /// Stop a session by ID.
@@ -2764,196 +2791,45 @@ module McpTools =
           return formatFileCoverageResponse annotations testState
     }
 
-  /// The dependency graph of the current FeaturePushState — materialized once
-  /// per history version from the indexed eval store and shared by all readers.
-  let private buildCellGraphFromState (state: Features.FeatureHooks.FeaturePushState) : Features.CellDependencyGraph.CellGraph =
-    Features.FeatureHooks.cellGraph state
-
-  /// Convert BindingScopeSnapshot active bindings to Ghostwriter ScopeBinding list.
-  let private toScopeBindings (snapshot: Features.BindingExplorer.BindingScopeSnapshot) : Features.ScopeBinding list =
-    snapshot.ActiveBindings
-    |> Map.toList
-    |> List.map (fun (_key, info) ->
-      { Features.ScopeBinding.Name = info.Name
-        TypeSig = info.TypeSig
-        Value = info.Value })
-
-  /// Convert a CoverageVerdict to its JSON string representation.
-  let private verdictString (v: Features.CoverageIntel.CoverageVerdict) =
-    match v with
-    | Features.CoverageIntel.WellCovered -> "WellCovered"
-    | Features.CoverageIntel.PartialBlindSpot -> "PartialBlindSpot"
-    | Features.CoverageIntel.DiagnosticBlindSpot -> "DiagnosticBlindSpot"
-
-  /// Convert a CoverageIntelReport to a JSON-serializable anonymous record.
-  let toCoverageIntelJson (report: Features.CoverageIntel.CoverageIntelReport) =
-    {| CoveragePercent = report.CoveragePercent
-       CoveredBranches = report.CoveredBranches
-       TotalBranches = report.TotalBranches
-       Verdict = verdictString report.Verdict
-       BlindSpots =
-         report.BlindSpots |> List.map (fun g ->
-           {| FilePath = g.FilePath
-              Line = g.Line
-              EndLine = g.EndLine
-              BranchId = g.BranchId
-              NearestCoveredLine = g.NearestCoveredLine |})
-       CorrelatedFailures =
-         report.CorrelatedFailures |> List.map Features.LiveTesting.TestId.value
-       Summary = Features.CoverageIntel.CoverageIntel.summarize report |}
-
   let explainTestFailure (ctx: McpContext) (testName: string) : Task<string> =
     task {
       match ctx.GetElmModel with
       | None -> return "Failure narrative not available — Elm loop not started."
-      | Some getModel ->
-        let model = getModel ()
-        let testState = model.LiveTesting.TestState
-        let allMaps =
-          model.LiveTesting.InstrumentationMaps
-          |> Map.values
-          |> Seq.collect id
-          |> Array.ofSeq
-        let bitmaps = testState.TestCoverageBitmaps
-        let depGraph = model.LiveTesting.DepGraph
-        let hasMaps = allMaps.Length > 0
-        let matchingTests =
-          testState.DiscoveredTests
-          |> Array.filter (fun tc ->
-            tc.FullName.Contains(testName, StringComparison.OrdinalIgnoreCase)
-            || tc.DisplayName.Contains(testName, StringComparison.OrdinalIgnoreCase))
-        match matchingTests with
-        | [||] -> return sprintf "No test found matching '%s'." testName
-        | tests ->
-          let narratives =
-            tests
-            |> Array.choose (fun tc ->
-              Map.tryFind tc.Id testState.Cached.FailureNarratives
-              |> Option.map (fun (n: Features.LiveTesting.FailureNarrative) ->
-                let changes =
-                  n.CausalChanges |> List.map (fun c ->
-                    match c with
-                    | Features.LiveTesting.CausalChange.SymbolChanged s -> {| Kind = "symbol"; Name = s |}
-                    | Features.LiveTesting.CausalChange.FileChanged f -> {| Kind = "file"; Name = f |}
-                    | Features.LiveTesting.CausalChange.Unknown -> {| Kind = "unknown"; Name = "" |})
-                let propViolation =
-                  n.PropertyViolation |> Option.map (fun pv ->
-                    {| PropertyName = pv.PropertyName
-                       ShrunkCounterexample = pv.ShrunkCounterexample
-                       AlgebraicCategory = pv.AlgebraicCategory |})
-                let coverageIntel =
-                  match hasMaps with
-                  | false -> None
-                  | true ->
-                    let causalFiles =
-                      n.CausalChanges
-                      |> List.choose (fun c ->
-                        match c with
-                        | Features.LiveTesting.CausalChange.FileChanged f -> Some f
-                        | _ -> None)
-                    let report =
-                      Features.CoverageIntel.CoverageIntel.composeForFailure
-                        tc.Id tc.DisplayName n causalFiles allMaps bitmaps depGraph
-                    Some (toCoverageIntelJson report)
-                {| TestId = Features.LiveTesting.TestId.value tc.Id
-                   DisplayName = tc.DisplayName
-                   Summary = n.Summary
-                   LastPassedAt = n.LastPassedAt
-                   TimeSinceLastPass = n.TimeSinceLastPass |> Option.map (fun ts -> ts.TotalSeconds)
-                   CausalChanges = changes
-                   PropertyViolation = propViolation
-                   CoverageIntel = coverageIntel |}))
-          match narratives with
-          | [||] ->
-            let failingCount =
-              tests |> Array.filter (fun tc ->
-                match Map.tryFind tc.Id testState.LastResults with
-                | Some r ->
-                  match r.Result with
-                  | Features.LiveTesting.TestResult.Failed _ -> true
-                  | _ -> false
-                | None -> false) |> Array.length
-            match failingCount with
-            | 0 -> return sprintf "Test(s) matching '%s' are not currently failing — no narrative available." testName
-            | _ -> return sprintf "Test(s) matching '%s' are failing but no narrative was computed (may not have transitioned from passing)." testName
-          | narrs ->
-            // Enrich with diagnostic report if feature state is available
-            let diagnostics =
-              match ctx.GetFeatureState with
-              | Some getState ->
-                let state = getState ()
-                let graph = buildCellGraphFromState state
-                let failuresForDiag =
-                  tests
-                  |> Array.choose (fun tc ->
-                    Map.tryFind tc.Id testState.Cached.FailureNarratives
-                    |> Option.map (fun n -> (tc.Id, tc.DisplayName, n)))
-                  |> Array.toList
-                let scopeBindings =
-                  toScopeBindings (Features.FeatureHooks.scope state)
-                let report =
-                  Features.Diagnostician.Diagnostician.compose
-                    graph failuresForDiag scopeBindings state.CachedTimeline
-                Some {| Severity = report.Severity.ToString()
-                        AffectedCells = report.AffectedCells
-                        SuggestionCount = report.SuggestedFixes.Length
-                        TopSuggestions =
-                          report.SuggestedFixes
-                          |> List.truncate 3
-                          |> List.map (fun s -> {| Code = s.Code; Explanation = s.Explanation |})
-                        Performance =
-                          report.PerformanceContext
-                          |> Option.map (fun s -> {| Sparkline = s.Sparkline; P50Ms = s.P50Ms; P95Ms = s.P95Ms |})
-                        Summary = report.Summary |}
-              | None -> None
-            let resp = {| MatchCount = narrs.Length; Narratives = narrs; Diagnostics = diagnostics |}
-            return Json.serialize Json.standard resp
+      | Some getModel -> return explainTestFailureJson (getModel ()) (ctx.GetFeatureState |> Option.map (fun getState -> getState ())) testName
     }
 
 
 
-  /// What a session's trustworthiness is judged from: its status, whether its loaded
-  /// files are stale, and any type-identity diagnostic. Shared by `targeted_verify`
-  /// and `run_tests` so both judge trust from one place. `artifact` names what was
-  /// loaded when the session reports no file list.
-  let sessionTrustObservation (ctx: McpContext) (sid: string) (artifact: string) =
+  /// What a session's trustworthiness is judged from, apart from whether its build is behind the files: its status and any
+  /// type-identity diagnostic. `loaded` is the loaded-definition state to judge by, when the caller has one. `run_tests` passes
+  /// none: a build behind the files is not a reason to refuse a run, it is what the receipt's `source` says about it.
+  let sessionStatusObservation (ctx: McpContext) (sid: string) (loaded: Features.Verification.LoadedDefinitionState option) =
     task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-      let status = info |> Option.map (fun session -> session.Status)
-      let loadedState,
-          sessionLoadedState =
-        match ctx.GetElmModel |> Option.map (fun getModel -> (getModel ()).SessionContext) |> Option.flatten with
-        | Some sessionCtx ->
-          let statuses =
-            match sessionCtx.SessionId = sid with
-            | true -> sessionCtx.FileStatuses
-            | false -> []
-          match statuses |> List.tryFind (fun file -> file.Readiness = FileReadiness.Stale) with
-          | Some stale ->
-            let lastLoaded = stale.LastLoadedAt |> Option.map string |> Option.defaultValue "unknown-loaded-version"
-            let state = Features.Verification.LoadedDefinitionState.ConfirmedStale (stale.Path, lastLoaded)
-            state, Some state
-          | None ->
-            let loaded =
-              statuses
-              |> List.filter (fun file -> file.Readiness = FileReadiness.Loaded)
-              |> List.map (fun file -> file.Path)
-              |> function
-                 | [] -> artifact
-                 | files -> String.concat ", " files
-            let state = Features.Verification.LoadedDefinitionState.ConfirmedCurrent loaded
-            state, Some state
-        | None ->
-          let state = Features.Verification.LoadedDefinitionState.UnknownLoadState "warmup file status unavailable"
-          state, None
       let observation : Features.Verification.SessionTrust.SessionObservation =
         { MatchingSessionIds = [ sid ]
-          SessionStatus = status
-          LoadedState = sessionLoadedState
+          SessionStatus = info |> Option.map (fun session -> session.Status)
+          LoadedState = loaded
           TypeIdentityDiagnostic =
             match typeIdentityDiagnostics.TryGetValue(sid) with
             | true, diag -> Some diag
             | _ -> None }
+      return observation
+    }
+
+  /// What `targeted_verify` judges a session by: its status, any type-identity diagnostic, and whether the loaded definitions
+  /// are behind the files on disk (the live `SourceState`, read when asked). `artifact` names what was loaded.
+  let sessionTrustObservation (ctx: McpContext) (sid: string) (artifact: string) =
+    task {
+      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+      let! warmup = warmupOf ctx sid
+      let loadedState = SourceStateProbe.loadedDefinitionOf artifact (SourceStateProbe.ofSessionRecord info warmup)
+      let judged =
+        match loadedState with
+        | Features.Verification.LoadedDefinitionState.UnknownLoadState _ -> None
+        | Features.Verification.LoadedDefinitionState.ConfirmedCurrent _
+        | Features.Verification.LoadedDefinitionState.ConfirmedStale _ -> Some loadedState
+      let! observation = sessionStatusObservation ctx sid judged
       return loadedState, observation
     }
 
@@ -3077,7 +2953,7 @@ module McpTools =
         match state.EvalHistory with
         | [] -> return "No eval history — evaluate some cells first."
         | _ ->
-          let graph = buildCellGraphFromState state
+          let graph = cellGraphOf state
           let cellIds =
             changedCellIds.Split([| ','; ' ' |], System.StringSplitOptions.RemoveEmptyEntries)
             |> Array.choose (fun s -> match System.Int32.TryParse(s) with | true, v -> Some v | _ -> None)
@@ -3111,7 +2987,7 @@ module McpTools =
         match state.EvalHistory with
         | [] -> return "No eval history — evaluate some cells first."
         | _ ->
-          let graph = buildCellGraphFromState state
+          let graph = cellGraphOf state
           let scope =
             Features.FeatureHooks.scope state
           let existingBinding = scope.ActiveBindings |> Map.tryFind bindingName
@@ -3217,7 +3093,7 @@ module McpTools =
         match state.EvalHistory with
         | [] -> return "No eval history — nothing to export."
         | _ ->
-          let graph = buildCellGraphFromState state
+          let graph = cellGraphOf state
           let entries = Features.SessionScribe.SessionScribe.fromGraph graph
           let name = projectName |> Option.defaultValue "SageFs Session"
           return Features.SessionScribe.SessionScribe.exportFsx name entries
@@ -3400,83 +3276,7 @@ module McpTools =
       match ctx.GetElmModel, ctx.GetFeatureState with
       | None, _ -> return "Diagnosis not available — Elm loop not started."
       | _, None -> return "Diagnosis not available — no active session."
-      | Some getModel, Some getState ->
-        let model = getModel ()
-        let state = getState ()
-
-        let graph = buildCellGraphFromState state
-
-        // Collect all failing tests with their narratives
-        let testState = model.LiveTesting.TestState
-        let failuresWithNarratives =
-          testState.DiscoveredTests
-          |> Array.choose (fun tc ->
-            match Map.tryFind tc.Id testState.LastResults with
-            | Some r ->
-              match r.Result with
-              | Features.LiveTesting.TestResult.Failed _ ->
-                let narrative =
-                  match Map.tryFind tc.Id testState.Cached.FailureNarratives with
-                  | Some n -> n
-                  | None ->
-                    { Features.LiveTesting.FailureNarrative.LastPassedAt = None
-                      TimeSinceLastPass = None
-                      CausalChanges = []
-                      PropertyViolation = None
-                      Summary = "No narrative available" }
-                Some (tc.Id, tc.DisplayName, narrative)
-              | _ -> None
-            | None -> None)
-          |> Array.toList
-
-        // Get scope bindings for Ghostwriter suggestions
-        let scopeBindings =
-          toScopeBindings (Features.FeatureHooks.scope state)
-
-        let report =
-          Features.Diagnostician.Diagnostician.compose
-            graph
-            failuresWithNarratives
-            scopeBindings
-            state.CachedTimeline
-
-        // Format as both structured JSON and human summary
-        let jsonData =
-          {| FailureCount = report.Failures.Length
-             Severity = report.Severity.ToString()
-             AffectedCellCount = report.AffectedCells.Length
-             RippleStepCount =
-               match report.RipplePlan with
-               | Some p -> p.Steps.Length
-               | None -> 0
-             SuggestionCount = report.SuggestedFixes.Length
-             Failures =
-               report.Failures
-               |> List.map (fun f ->
-                 {| TestName = f.TestName
-                    CausalCells = f.CausalCells
-                    CausalChanges =
-                      f.Narrative.CausalChanges
-                      |> List.map (fun c ->
-                        match c with
-                        | Features.LiveTesting.CausalChange.SymbolChanged s -> {| Kind = "symbol"; Name = s |}
-                        | Features.LiveTesting.CausalChange.FileChanged p -> {| Kind = "file"; Name = p |}
-                        | Features.LiveTesting.CausalChange.Unknown -> {| Kind = "unknown"; Name = "" |})
-                    PropertyViolation =
-                      f.Narrative.PropertyViolation
-                      |> Option.map (fun pv ->
-                        {| PropertyName = pv.PropertyName
-                           ShrunkCounterexample = pv.ShrunkCounterexample
-                           AlgebraicCategory = pv.AlgebraicCategory |}) |})
-             Suggestions =
-               report.SuggestedFixes
-               |> List.truncate 5
-               |> List.map (fun s ->
-                 {| Code = s.Code; Explanation = s.Explanation; Confidence = s.Confidence |})
-             Performance = report.PerformanceContext |> Option.map (fun s -> {| Sparkline = s.Sparkline; P50Ms = s.P50Ms; P95Ms = s.P95Ms |})
-             Summary = report.Summary |}
-
-        return Json.serialize Json.standard jsonData
+      | Some getModel, Some getState -> return diagnoseJson (getModel ()) (getState ())
     }
 
   /// Coverage intelligence: joins failure narratives + coverage bitmaps + dep graph
@@ -3485,67 +3285,7 @@ module McpTools =
     task {
       match ctx.GetElmModel with
       | None -> return "Coverage intel not available — Elm loop not started."
-      | Some getModel ->
-        let model = getModel ()
-        let cycleState = model.LiveTesting
-        let testState = cycleState.TestState
-
-        let failuresWithNarratives =
-          testState.DiscoveredTests
-          |> Array.choose (fun tc ->
-            match Map.tryFind tc.Id testState.LastResults with
-            | Some r ->
-              match r.Result with
-              | Features.LiveTesting.TestResult.Failed _ ->
-                let narrative =
-                  match Map.tryFind tc.Id testState.Cached.FailureNarratives with
-                  | Some n -> n
-                  | None ->
-                    { Features.LiveTesting.FailureNarrative.LastPassedAt = None
-                      TimeSinceLastPass = None
-                      CausalChanges = []
-                      PropertyViolation = None
-                      Summary = "No narrative available" }
-                Some (tc.Id, tc.DisplayName, narrative)
-              | _ -> None
-            | None -> None)
-          |> Array.toList
-
-        let allMaps =
-          cycleState.InstrumentationMaps
-          |> Map.values |> Seq.collect id |> Seq.toArray
-
-        let causalFileResolver (symbols: string list) =
-          symbols
-          |> List.collect (fun sym ->
-            cycleState.DepGraph.PerFileIndex
-            |> Map.toList
-            |> List.choose (fun (file, symMap) ->
-              match Map.containsKey sym symMap with
-              | true -> Some file
-              | false -> None))
-          |> List.distinct
-
-        let reports =
-          Features.CoverageIntel.CoverageIntel.compose
-            failuresWithNarratives causalFileResolver allMaps
-            testState.TestCoverageBitmaps cycleState.DepGraph
-
-        let jsonData =
-          reports |> List.map (fun r ->
-            {| TestId = r.TestId
-               TestName = r.TestName
-               Verdict = r.Verdict.ToString()
-               CoveragePercent = r.CoveragePercent
-               CoveredBranches = r.CoveredBranches
-               TotalBranches = r.TotalBranches
-               CausalSymbols = r.CausalSymbols
-               BlindSpots = r.BlindSpots |> List.map (fun g ->
-                 {| File = g.FilePath; Line = g.Line; Branch = g.BranchId |})
-               CorrelatedFailures = r.CorrelatedFailures |> List.map string
-               Summary = Features.CoverageIntel.CoverageIntel.summarize r |})
-
-        return Json.serialize Json.standard jsonData
+      | Some getModel -> return coverageIntelJson (getModel ())
     }
 
   /// Impact forecast: joins eval timeline + cell dependency graph + performance data
@@ -3555,44 +3295,7 @@ module McpTools =
       match ctx.GetElmModel, ctx.GetFeatureState with
       | None, _ -> return "Impact forecast not available — Elm loop not started."
       | _, None -> return "Impact forecast not available — no active session."
-      | Some getModel, Some getState ->
-        let model = getModel ()
-        let state = getState ()
-        let graph = buildCellGraphFromState state
-
-        let targetCells =
-          match cellIdOpt with
-          | Some cid -> [ cid ]
-          | None -> graph.Cells |> Map.toList |> List.map fst
-
-        let reports =
-          targetCells
-          |> List.map (fun cellId ->
-            let downstream = Features.CellDependencyGraph.transitiveStale graph cellId
-            let timeline = state.CachedTimeline
-            let timelineStats =
-              Features.EvalTimeline.timelineStats 20 state.CachedTimeline
-            let durations =
-              timeline.Entries
-              |> List.filter (fun e -> e.CellId = cellId)
-              |> List.map (fun e -> float e.DurationMs)
-              |> List.rev |> List.truncate 10
-            let p50 = timelineStats.P50Ms |> Option.defaultValue 0.0
-            let p95 = timelineStats.P95Ms |> Option.defaultValue 0.0
-            Features.ImpactForecast.ImpactForecast.analyzeCell cellId p50 p95 durations downstream)
-
-        let jsonData =
-          reports |> List.map (fun r ->
-            {| CellId = r.CellId
-               P50Ms = r.P50Ms
-               P95Ms = r.P95Ms
-               DurationTrend = r.DurationTrendMs
-               DownstreamCellCount = r.DownstreamCellCount
-               Recommendation = r.Recommendation.ToString()
-               RegressionCauses = r.RegressionCauses |> List.map (fun c -> c.ToString())
-               Summary = Features.ImpactForecast.ImpactForecast.summarize r |})
-
-        return Json.serialize Json.standard jsonData
+      | Some _, Some getState -> return impactForecastJson (getState ()) cellIdOpt
     }
 
   /// Action prioritizer: merges all intelligence into a ranked "what to do next" queue.
@@ -3601,72 +3304,7 @@ module McpTools =
       match ctx.GetElmModel, ctx.GetFeatureState with
       | None, _ -> return "Action suggestions not available — Elm loop not started."
       | _, None -> return "Action suggestions not available — no active session."
-      | Some getModel, Some getState ->
-        let model = getModel ()
-        let state = getState ()
-
-        let cycleState = model.LiveTesting
-        let testState = cycleState.TestState
-
-        // Build coverage intel reports
-        let failuresWithNarratives =
-          testState.DiscoveredTests
-          |> Array.choose (fun tc ->
-            match Map.tryFind tc.Id testState.LastResults with
-            | Some r ->
-              match r.Result with
-              | Features.LiveTesting.TestResult.Failed _ ->
-                let narrative =
-                  match Map.tryFind tc.Id testState.Cached.FailureNarratives with
-                  | Some n -> n
-                  | None ->
-                    { Features.LiveTesting.FailureNarrative.LastPassedAt = None
-                      TimeSinceLastPass = None; CausalChanges = []; PropertyViolation = None
-                      Summary = "No narrative available" }
-                Some (tc.Id, tc.DisplayName, narrative)
-              | _ -> None
-            | None -> None)
-          |> Array.toList
-
-        let allMaps =
-          cycleState.InstrumentationMaps
-          |> Map.values |> Seq.collect id |> Seq.toArray
-        let coverageReports =
-          Features.CoverageIntel.CoverageIntel.compose
-            failuresWithNarratives
-            (fun _ -> [])
-            allMaps testState.TestCoverageBitmaps cycleState.DepGraph
-
-        // Real per-cell durations from EvalTimeline (was `[]` for every cell).
-        let graph = buildCellGraphFromState state
-        let stats = Features.EvalTimeline.timelineStats 20 state.CachedTimeline
-        let p50, p95 = stats.P50Ms |> Option.defaultValue 0.0, stats.P95Ms |> Option.defaultValue 0.0
-        let impactReports =
-          graph.Cells |> Map.toList |> List.map (fun (cellId, _) ->
-            let ds = state.CachedTimeline.Entries |> List.filter (fun e -> e.CellId = cellId)
-            let durations = ds |> List.truncate 10 |> List.map (fun e -> float e.DurationMs)
-            Features.ImpactForecast.ImpactForecast.analyzeCell cellId p50 p95 durations
-              (Features.CellDependencyGraph.transitiveStale graph cellId))
-        // Changed cells = the most recently evaluated cell (roast: was EVERY cell, always stale).
-        let changedCellIds =
-          state.CachedTimeline.Entries |> List.tryHead
-          |> Option.map (fun e -> e.CellId) |> Option.toList |> Set.ofList
-        let frictionSignalReports = Features.McpFrictionRecorder.Recorder.computeFrictionSignalReports ctx.FrictionStore
-        let report =
-          Features.ActionPrioritizer.ActionPrioritizer.compose
-            graph coverageReports impactReports changedCellIds frictionSignalReports
-        let jsonData =
-          {| HealthGrade = report.HealthGrade.ToString()
-             TotalFailures = report.TotalFailures
-             TotalBlindSpots = report.TotalBlindSpots
-             TotalRegressions = report.TotalRegressions
-             Actions = report.Actions |> List.truncate 10 |> List.map (fun a ->
-               {| Kind = a.Kind.ToString()
-                  Priority = a.Priority
-                  Reason = a.Reason |})
-             Summary = Features.ActionPrioritizer.ActionPrioritizer.summarize report |}
-
-        return Json.serialize Json.standard jsonData
+      | Some getModel, Some getState -> return nextActionJson (getModel ()) (getState ()) ctx.FrictionStore
     }
 
   /// List all discovered tests, optionally filtered by pattern or file path.
@@ -3678,7 +3316,7 @@ module McpTools =
       | Some getModel, Some getState ->
         let model = getModel ()
         let state = getState ()
-        let graph = buildCellGraphFromState state
+        let graph = cellGraphOf state
         // partitionForListing, not resolveTestLocations: the latter silently
         // drops every ReflectionOnly test (see ResolvedTest). The caller's OWN
         // session's tests, never Primary's (SessionTestAttribution.listable).
@@ -3702,27 +3340,7 @@ module McpTools =
     task {
       match ctx.GetFeatureState with
       | None -> return "Cell dependency graph not available — no active session."
-      | Some getState ->
-        let state = getState ()
-        let graph = buildCellGraphFromState state
-        // Pass empty changed set — graph structure and wiring is always useful.
-        // Callers can use plan_ripple with a specific cell to see staleness impact.
-        let report = Features.CellDependenciesReport.CellDependenciesReport.compose graph Set.empty
-        let jsonData =
-          {| TotalCells    = report.TotalCells
-             TotalStale    = report.TotalStale
-             TotalEdges    = report.TotalEdges
-             StaleCellIds  = report.StaleCellIds
-             Summary       = report.Summary
-             Nodes         = report.Nodes |> List.map (fun n ->
-               {| Id            = n.Id
-                  Produces      = n.Produces
-                  Consumes      = n.Consumes
-                  DownstreamIds = n.DownstreamIds
-                  UpstreamIds   = n.UpstreamIds
-                  IsStale       = CellFreshness.isStale n.Staleness
-                  StaleCauses   = CellFreshness.causes n.Staleness |}) |}
-        return Json.serialize Json.standard jsonData
+      | Some getState -> return cellDependenciesJson (getState ())
     }
 
   /// Discover and rank SageFs features relevant to the current session state.
@@ -3764,104 +3382,13 @@ module McpTools =
       return Json.serialize Json.standard jsonData
     }
 
-  /// suggest_repair: compose explain_test_failure → extract causal symbol → preview_what_if
-  /// V1: surfaces the causal symbol + current binding + ripple plan without suggesting a new value.
+  /// suggest_repair: the repair view over the failing test's narrative (McpAnalysisViews.suggestRepairJson).
   let suggestRepair (ctx: McpContext) (testName: string) : Task<string> =
     task {
       match ctx.GetElmModel, ctx.GetFeatureState with
       | None, _ | _, None ->
         return "suggest_repair requires an active session with live testing. Start SageFs with a test project first."
-      | Some getModel, Some getState ->
-        let model = getModel ()
-        let testState = model.LiveTesting.TestState
-        let state = getState ()
-        let matchingTests =
-          testState.DiscoveredTests
-          |> Array.filter (fun tc ->
-            tc.FullName.Contains(testName, StringComparison.OrdinalIgnoreCase)
-            || tc.DisplayName.Contains(testName, StringComparison.OrdinalIgnoreCase))
-        match matchingTests with
-        | [||] ->
-          return sprintf "No test found matching '%s'. Use list_tests to see available tests." testName
-        | tests ->
-          let narrativeOpt =
-            tests |> Array.tryPick (fun tc -> Map.tryFind tc.Id testState.Cached.FailureNarratives)
-          match narrativeOpt with
-          | None ->
-            let testNames = tests |> Array.map (fun tc -> tc.DisplayName) |> String.concat ", "
-            return
-              sprintf
-                "No failure narrative for '%s' (%s). The test may not have transitioned Passed→Failed recently, or live testing may not be running. Call run_tests to trigger a run, then retry."
-                testName testNames
-          | Some narrative ->
-            let allChanges =
-              narrative.CausalChanges
-              |> List.map (fun c ->
-                match c with
-                | Features.LiveTesting.CausalChange.SymbolChanged s -> {| Kind = "symbol"; Name = s |}
-                | Features.LiveTesting.CausalChange.FileChanged f   -> {| Kind = "file";   Name = f |}
-                | Features.LiveTesting.CausalChange.Unknown         -> {| Kind = "unknown"; Name = "" |})
-            let primarySymbol =
-              narrative.CausalChanges
-              |> List.tryPick (fun c ->
-                match c with
-                | Features.LiveTesting.CausalChange.SymbolChanged s -> Some s
-                | _ -> None)
-            // Build ripple plan for primary symbol if it's in session bindings
-            let ripplePlanOpt =
-              match primarySymbol, state.EvalHistory with
-              | None, _ | _, [] -> None
-              | Some sym, _ ->
-                let graph = buildCellGraphFromState state
-                let scope =
-                  Features.FeatureHooks.scope state
-                match scope.ActiveBindings |> Map.tryFind sym with
-                | None -> None
-                | Some binding ->
-                  let currentCode = binding.Value |> Option.defaultValue "?"
-                  let typeSig = binding.TypeSig
-                  let override' = Features.WhatIf.createOverride sym currentCode "<your-fix>" typeSig
-                  let plan = Features.WhatIf.planWhatIf graph override'
-                  let steps =
-                    plan.RippleSteps
-                    |> List.map (fun step ->
-                      {| CellId = step.CellId
-                         Code = step.Code |> fun c -> if c.Length > 60 then c.[..57] + "..." else c
-                         Status =
-                           match step.Status with
-                           | Features.Pending     -> "pending"
-                           | Features.Evaluating  -> "evaluating"
-                           | Features.Succeeded _ -> "succeeded"
-                           | Features.Failed _    -> "failed"
-                           | Features.Skipped _   -> "skipped" |})
-                  Some {| Symbol = sym; CurrentCode = currentCode; TypeSig = typeSig; AffectedCellCount = plan.AffectedCells.Length; RippleSteps = steps |}
-            let timeSince =
-              narrative.TimeSinceLastPass
-              |> Option.map (fun ts -> sprintf "%.0fs" ts.TotalSeconds)
-              |> Option.defaultValue "unknown"
-            let suggestion =
-              match primarySymbol, ripplePlanOpt with
-              | None, _ ->
-                sprintf
-                  "This test broke ~%s ago. No symbol-level causal changes were detected — review the file changes above and check recent edits manually."
-                  timeSince
-              | Some sym, None ->
-                sprintf
-                  "'%s' is the likely cause, but it's not in the current session bindings. Re-evaluate the cell that defines '%s', then retry suggest_repair."
-                  sym sym
-              | Some sym, Some plan ->
-                sprintf
-                  "'%s' (%s) is the likely cause. Call `preview_what_if \"%s\" \"<new-value>\"` to preview the ripple before applying. %d cells downstream will re-evaluate."
-                  sym plan.TypeSig sym plan.AffectedCellCount
-            let jsonData =
-              {| TestName      = testName
-                 Summary       = narrative.Summary
-                 TimeSinceLastPass = timeSince
-                 CausalChanges = allChanges
-                 PrimarySymbol = primarySymbol |> Option.toObj
-                 RipplePlan    = ripplePlanOpt |> Option.toObj
-                 Suggestion    = suggestion |}
-            return Json.serialize Json.standard jsonData
+      | Some getModel, Some getState -> return suggestRepairJson (getModel ()) (getState ()) testName
     }
 
   // ─── Run App / Stop App / List Runnable Projects ──────────────────────

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A compiled Expecto project for SageFs.Tests/SourceStateOutcomeTests.fs: the receipt `run_tests` hands back must
+       say whether the build the tests ran against is behind the files on disk. Its own project, touched by nothing else
+       in the repo, because the gate edits its sources on disk, rebuilds it, and makes a directory of it unreadable. The
+       sources are in three places on purpose (a source, a test file, and one in a sub directory) so a row can edit one
+       and leave the others. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <LangVersion>preview</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Domain.fs" />
+    <Compile Include="Sub\Extra.fs" />
+    <Compile Include="DomainTests.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Expecto" />
+    <PackageReference Include="YoloDev.Expecto.TestSdk" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+  </ItemGroup>
+
+</Project>

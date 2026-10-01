@@ -90,6 +90,9 @@ module SessionStatusPayload =
     LastReload: SessionReload
     /// Whether the REPL and live tests run the same build as the app.
     ReplFreshness: ReplFreshness
+    /// Whether the build the session runs is behind the files on disk. Not the REPL's freshness: that is the REPL behind the
+    /// app, this is the disk ahead of the build.
+    SourceState: SourceState
   }
 
   /// What a session's rebuild history says, in the payload's terms. The one
@@ -163,6 +166,7 @@ module SessionStatusPayload =
          lastRestart = lastRestartJson facts.LastRestart
          lastReload = SessionReload.toWire facts.LastReload
          replFreshness = ReplFreshness.toWire facts.ReplFreshness
+         sourceState = SourceState.toWire facts.SourceState
          available = Affordances.availableTools sessionState |}
 
   // ── `wait_seconds` ─────────────────────────────────────────────────

@@ -14,6 +14,7 @@
         <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
         <Compile Include="RunnerDirs.fs" />
         <Compile Include="TestInfrastructure.fs" />
+        <Compile Include="SourceStateFixtures.fs" />
         <Compile Include="RunnerLogging.fs" />
         <Compile Include="TestCountBadge.fs" />
         <Compile Include="StableIdentityProbeFixture.fs" />
@@ -30,6 +31,7 @@
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpToolExecutionTests.fs" />
         <Compile Include="ReplFreshnessSurfaceTests.fs" />
+        <Compile Include="SourceStateSurfaceTests.fs" />
         <Compile Include="McpLlmInteropTests.fs" />
         <Compile Include="ManualProjectParseTests.fs" />
         <Compile Include="LoadedProjectReportingTests.fs" />
@@ -201,6 +203,8 @@
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
+        <Compile Include="SourceStateProbeTests.fs" />
+        <Compile Include="SourceStateSimTests.fs" />
         <Compile Include="TrunkFollowSimTests.fs" />
         <Compile Include="TrunkFollowTests.fs" />
         <Compile Include="TrunkFollowShellTests.fs" />
@@ -341,6 +345,7 @@
          <Compile Include="FirstRunLinuxTests.fs" />
          <Compile Include="McpStdioBridgeOwnershipTests.fs" />
          <Compile Include="TestRunReceiptTests.fs" />
+         <Compile Include="SourceStateTests.fs" />
          <Compile Include="McpRunTestsTests.fs" />
          <Compile Include="JsonTests.fs" />
          <Compile Include="JsonCentralizationTests.fs" />
@@ -495,6 +500,7 @@
         <Compile Include="DstCoverageTests.fs" />
         <Compile Include="McpToolOutcomeTests.fs" />
         <Compile Include="ExpectoPendingOutcomeTests.fs" />
+        <Compile Include="SourceStateOutcomeTests.fs" />
         <Compile Include="McpAppRunOutcomeTests.fs" />
         <Compile Include="DstShrinkTests.fs" />
         <Compile Include="OriginGuardOutcomeTests.fs" />

@@ -26,23 +26,10 @@ let private mkSessionInfo status =
     ProjectRoles = []
     App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
-let private mkSessionContext sid files =
-  { SessionId = sid
-    ProjectNames = [ "SageFs.Tests" ]
-    WorkingDir = @"C:\Code\Repos\SageFs"
-    Status = "Ready"
-    Warmup = WarmupContext.empty
-    FileStatuses = files
-    Workflow = WorkflowTypes.SessionWorkflow.Interactive
-    AutoOpenNamespaces = true }
-
-let private mkFile path readiness =
-  { Path = path
-    Readiness = readiness
-    LastLoadedAt = Some DateTimeOffset.UtcNow
-    IsWatched = true }
-
-let private mkCtx (sessionInfo: SessionInfo) (sessionContext: SessionContext option) : McpContext =
+/// The session has the project on disk loaded, and its worker says when it loaded the build: whether the loaded definitions
+/// are behind the files is read off the disk (SourceStateFixtures), not off a file list the Elm model carries.
+let private mkCtx (session: SessionInfo) (project: SourceStateFixtures.Project) : McpContext =
+  let sessionInfo = { session with ProjectRoles = [ SourceStateFixtures.classified project ] }
   let diagEvent = Event<Features.DiagnosticsStore.T>()
   { FrictionStore = None
     DiagnosticsChanged = diagEvent.Publish
@@ -55,12 +42,9 @@ let private mkCtx (sessionInfo: SessionInfo) (sessionContext: SessionContext opt
     SessionMap = ConcurrentDictionary<string, string>()
     McpPort = 0
     Dispatch = None
-    GetElmModel =
-      Some (fun () ->
-        { SageFsModel.initial() with
-            SessionContext = sessionContext })
+    GetElmModel = Some (fun () -> SageFsModel.initial())
     GetElmRegions = None
-    GetWarmupContext = None
+    GetWarmupContext = Some (fun _ -> Task.FromResult (Some (SourceStateFixtures.warmup project)))
     GetFeatureState = None; RecordEval = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
     LiveBindings = None
@@ -71,25 +55,26 @@ let private mkCtx (sessionInfo: SessionInfo) (sessionContext: SessionContext opt
 [<Tests>]
 let tests =
   testList "targeted_verify MCP tool" [
-    testCaseTask "targeted_verify prefers snippet-first when the session is trustworthy" <| fun () -> task {
-      let sessionInfo = mkSessionInfo SessionStatus.Ready
-      let sid = SessionId.value sessionInfo.Id
-      let ctx =
-        mkCtx sessionInfo (Some (mkSessionContext sid [ mkFile "UserPreferences.fs" Loaded ]))
+    testCaseTask "targeted_verify prefers snippet-first when the session is trustworthy" <| fun () ->
+      SourceStateFixtures.using (fun project -> task {
+        let ctx = mkCtx (mkSessionInfo SessionStatus.Ready) project
+        let! output = targetedVerify ctx "mcp" (Some @"C:\Code\Repos\SageFs") "UserPreferences.loadFromFile" None
+        output |> Expect.stringContains "should recommend snippet-first local proof" "snippet" })
 
-      let! output = targetedVerify ctx "mcp" (Some @"C:\Code\Repos\SageFs") "UserPreferences.loadFromFile" None
-      output |> Expect.stringContains "should recommend snippet-first local proof" "snippet"
-    }
+    testCaseTask "targeted_verify refuses green when a file was written after the build the session loaded" <| fun () ->
+      SourceStateFixtures.using (fun project -> task {
+        SourceStateFixtures.editSource project
+        let ctx = mkCtx (mkSessionInfo SessionStatus.Ready) project
+        let! output = targetedVerify ctx "mcp" (Some @"C:\Code\Repos\SageFs") "UserPreferences.loadFromFile" None
+        output |> Expect.stringContains "should explain stale session state" "stale definitions" })
 
-    testCaseTask "targeted_verify refuses green when loaded files are stale" <| fun () -> task {
-      let sessionInfo = mkSessionInfo SessionStatus.Ready
-      let sid = SessionId.value sessionInfo.Id
-      let ctx =
-        mkCtx sessionInfo (Some (mkSessionContext sid [ mkFile "UserPreferences.fs" Stale ]))
-
-      let! output = targetedVerify ctx "mcp" (Some @"C:\Code\Repos\SageFs") "UserPreferences.loadFromFile" None
-      output |> Expect.stringContains "should explain stale session state" "stale definitions"
-    }
+    testCaseTask "targeted_verify refuses green while a rebuild is in progress, because the session still runs the build from before it" <| fun () ->
+      SourceStateFixtures.using (fun project -> task {
+        let rebuilding = { mkSessionInfo SessionStatus.Ready with Rebuild = LastRebuild.Latest (RebuildOutcome.InProgress (SourceStateFixtures.at -1)) }
+        let ctx = mkCtx rebuilding project
+        let! output = targetedVerify ctx "mcp" (Some @"C:\Code\Repos\SageFs") "UserPreferences.loadFromFile" None
+        (output.Contains "snippet-first") |> Expect.isFalse "must not recommend a plan over a build that is being replaced"
+        output |> Expect.stringContains "says why" "rebuild" })
 
     // Was "targeted_verify plans exact guard when one is named," asserting the
     // guard name appeared in a "Plan: ..." sentence. That passed only because
@@ -101,19 +86,15 @@ let tests =
     // response is real follow-on work (wiring actual evidence collection into
     // the Mcp.fs call site) — out of scope here; this test now asserts the
     // corrected, honest behavior instead of the bug it used to ride on.
-    testCaseTask "targeted_verify reports missing evidence honestly even when an exact guard is named" <| fun () -> task {
-      let sessionInfo = mkSessionInfo SessionStatus.Ready
-      let sid = SessionId.value sessionInfo.Id
-      let ctx =
-        mkCtx sessionInfo (Some (mkSessionContext sid [ mkFile "UserPreferences.fs" Loaded ]))
-
-      let! output =
-        targetedVerify
-          ctx
-          "mcp"
-          (Some @"C:\Code\Repos\SageFs")
-          "UserPreferences.loadFromFile"
-          (Some "Tests.UserPreferences.guard")
-      output |> Expect.stringContains "should say no evidence was collected, not a plan sentence" "No snippet or exact-test evidence"
-    }
+    testCaseTask "targeted_verify reports missing evidence honestly even when an exact guard is named" <| fun () ->
+      SourceStateFixtures.using (fun project -> task {
+        let ctx = mkCtx (mkSessionInfo SessionStatus.Ready) project
+        let! output =
+          targetedVerify
+            ctx
+            "mcp"
+            (Some @"C:\Code\Repos\SageFs")
+            "UserPreferences.loadFromFile"
+            (Some "Tests.UserPreferences.guard")
+        output |> Expect.stringContains "should say no evidence was collected, not a plan sentence" "No snippet or exact-test evidence" })
   ]
