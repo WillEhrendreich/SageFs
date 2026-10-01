@@ -97,8 +97,11 @@ module TestTimeouts =
   /// runner pays for a type-check cache and a JIT that nobody warmed. A passing run never waits it out.
   let liveTestingVerdictCeiling = secs 30.
   /// Ceiling on an evaluated verdict being confirmed by a real build: the quiet window, a rebuild that
-  /// restarts the worker, and a run against what it built. A passing run never waits it out.
-  let buildConfirmation = secs 180.
+  /// restarts the worker, and a run against what it built. A passing run never waits it out. It outlasts the
+  /// product's own deadline for a confirmation (`Timeouts.liveTestConfirmationDeadline`) by the margin of one
+  /// verdict, so a confirmation that never answers is reported by the daemon on the row (`BuildUnanswered`)
+  /// and not by this wait giving up a moment before the daemon does.
+  let buildConfirmation = SageFs.Timeouts.liveTestConfirmationDeadline + liveTestingVerdictCeiling
   /// How long a journey that has put Hello.fs back waits for the daemon to start judging the restored text
   /// before it concludes the restore changed nothing. A restore that does change something is judged within a
   /// second (a type-check and an eval), so this is several times that; only a restore that changes nothing

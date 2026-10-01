@@ -243,6 +243,26 @@ let private daemonLogTail () : string =
         sprintf "--- %s: every [confirm] line ---\n%s\n--- last 60 lines ---\n%s" (Path.GetFileName path) (String.Join("\n", confirm)) (String.Join("\n", tail))
     with ex -> sprintf "(could not read the daemon log: %s)" ex.Message
 
+/// What the daemon's status says now, for the end of a timeout: the counts, whether a confirmation is in flight and how
+/// many rows are unconfirmed. A timeout that only shows frames cannot say whether the daemon was idle or mid-build.
+let private statusSnapshot () : Task<string> =
+  task {
+    try
+      use http = new HttpClient(BaseAddress = baseUrl (), Timeout = TestTimeouts.httpRequest)
+      let! body = http.GetStringAsync "/api/live-testing/status"
+      use doc = JsonDocument.Parse body
+      let root = doc.RootElement
+      let text (name: string) =
+        match root.TryGetProperty name with
+        | true, v -> v.ToString()
+        | false, _ -> "?"
+      let summary = root.GetProperty("Summary")
+      return
+        sprintf "confirmation=%s unconfirmed=%s pause=%s generation=%s summary=%s"
+          (text "Confirmation") (text "Unconfirmed") (text "Pause") (text "Generation") (summary.GetRawText())
+    with ex -> return sprintf "(status unavailable: %s)" ex.Message
+  }
+
 /// Read frames until one satisfies `predicate`, or `budget` passes. The error names what was seen.
 let awaitFrame (feed: SseFeed) (what: string) (predicate: SseFrame -> bool) (budget: TimeSpan) : Task<Result<SseFrame, string>> =
   task {
@@ -283,10 +303,11 @@ let expectFrame (feed: SseFeed) (what: string) (predicate: SseFrame -> bool) (bu
     | Ok frame -> return frame
     | Result.Error error ->
       // The counts in `error` say what kind of frame went by; this says in what order, with every verdict and
-      // what it ran against, and what the daemon logged meanwhile.
+      // what it ran against, what the daemon says its state is, and what it logged meanwhile.
+      let! status = statusSnapshot ()
       return
-        failwithf "%s\n--- every frame the feed saw, in order (ms since the first) ---\n%s\n--- daemon log ---\n%s"
-          error (describeHistory feed) (daemonLogTail ())
+        failwithf "%s\n--- daemon status now ---\n%s\n--- every frame the feed saw, in order (ms since the first) ---\n%s\n--- daemon log ---\n%s"
+          error status (describeHistory feed) (daemonLogTail ())
   }
 
 /// Throw away whatever is queued, so the next wait only sees what happens after now.
@@ -399,6 +420,12 @@ let generationIn (frame: SseFrame) : int64 =
         System.Text.RegularExpressions.Regex.Match(generation.GetRawText(), "[0-9]+").Value |> int64)
   | _ -> -1L
 
+/// How many rows still ran against evaluated code, and where the session's confirmation stands, from the
+/// daemon's status.
+let private confirmationStateOf (statusJson: string) : struct (int * string) =
+  use doc = JsonDocument.Parse statusJson
+  struct (doc.RootElement.GetProperty("Unconfirmed").GetInt32(), doc.RootElement.GetProperty("Confirmation").GetString())
+
 /// A `test_results_batch` frame in which no row is still waiting for a real build to confirm it.
 let private batchIsConfirmed (frame: SseFrame) : bool =
   match frame.Event with
@@ -420,18 +447,29 @@ let hasEvaluatedRow (frame: SseFrame) : bool =
   | "test_results_batch" -> not (batchIsConfirmed frame)
   | _ -> false
 
-/// Wait until every row says what a real build made of it (none is `Evaluated`), so a journey starts from a
-/// session whose last confirmation is over and cannot answer into the next journey's rows. Asks the daemon's
-/// status first, for the same reason `awaitSettled` does.
+/// Wait until the session's confirmation of an evaluated run is over, so a journey starts from a session that no
+/// build is still working for: a build in flight restarts the worker, and an edit made meanwhile has nothing to
+/// be evaluated by, and its answer would land in the next journey's rows.
+///
+/// The rows alone cannot say so. A confirmation's build restarts the worker, and the run the restart causes marks
+/// every row `Compiled` while the confirmation is still building, so for a while no row is `Evaluated` and a
+/// build is nevertheless in flight. The status's `Confirmation` is the machine's own phase and `idle` is the only
+/// word that says nothing is in flight. Asks the status first, for the same reason `awaitSettled` does, and asks
+/// it again after each verdict batch or summary (a confirmation ends in one: its marks) rather than on a timer.
 let awaitConfirmed (feed: SseFeed) (http: HttpClient) (budget: TimeSpan) : Task<unit> =
   task {
-    let! status = http.GetStringAsync "/api/live-testing/status"
-    use doc = JsonDocument.Parse status
-    match doc.RootElement.GetProperty("Unconfirmed").GetInt32() with
-    | 0 -> ()
-    | _ ->
-      let! _ = expectFrame feed "every row confirmed by a build" batchIsConfirmed budget
-      ()
+    let clock = Stopwatch.StartNew()
+    let mutable resting = false
+    while not resting do
+      let! status = http.GetStringAsync "/api/live-testing/status"
+      match confirmationStateOf status with
+      | struct (_, "idle") -> resting <- true
+      | _ ->
+        note feed "waiting for the confirmation to end"
+        let! _ =
+          expectFrame feed "the confirmation ending (a verdict or a summary, after which the status says idle)"
+            (fun f -> f.Event = "test_results_batch" || f.Event = "test_summary") (max TimeSpan.Zero (budget - clock.Elapsed))
+        ()
   }
 
 /// The `LastDecision` a `test_summary` frame carries: its precision, reason and selected tests.
