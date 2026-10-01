@@ -16,7 +16,10 @@
 ///   shot editor-only --region editor    ... plus a crop of one part (repeat --region)
 ///   resize 1024 700                     set the window size
 ///   expect-text SageFs: ready           wait until the window shows that text (default 20 s)
-///   expect-text --within 60 11/11       ... or give it longer, up to 120 s
+///   expect-text --within 60 11/11       ... or give it longer, up to 300 s
+///   expect-session --within 240         wait until this run's own session on the daemon is Ready
+///   set-workflow HotReload              the harness puts this run's session in that workflow
+///                                       (Interactive, LiveTesting or HotReload)
 ///   replace DemoEnv/DemoEnv.fs "Some value" "Some (value + 1)"
 ///                                       change a workspace file on disk, exactly one match
 module LemDrive.Tour
@@ -30,11 +33,13 @@ let DefaultExpectSeconds = 20
 
 /// The longest an expect-text may be given.
 [<Literal>]
-let MostExpectSeconds = 120
+let MostExpectSeconds = 300
 
 type Step =
   | Run of VscCommand
   | ExpectText of text: string * withinSeconds: int
+  | ExpectSession of withinSeconds: int
+  | SetWorkflow of workflow: string
   | Replace of path: string * find: string * replacement: string
 
 /// A step and the line of the file it came from.
@@ -45,7 +50,7 @@ type Tour = { Steps: Placed list }
 /// The verbs a tour file understands. `command` is the palette; the rest are the
 /// driver's own verbs, plus the two a tour adds.
 let tourVerbs : string list =
-  [ "command"; "key"; "click"; "type"; "open"; "wait"; "shot"; "resize"; "expect-text"; "replace" ]
+  [ "command"; "key"; "click"; "type"; "open"; "wait"; "shot"; "resize"; "expect-text"; "expect-session"; "set-workflow"; "replace" ]
 
 /// Splits `"a b" "c \"d\""` into its quoted pieces. Escapes: \" \\ \n \t.
 let quotedPieces (text: string) : Result<string list, string> =
@@ -108,6 +113,21 @@ let private parseExpect (rest: string) : Result<Step, string> =
     | false, _ -> Result.Error(sprintf "--within needs a whole number of seconds, not '%s'" n)
   | _ -> build DefaultExpectSeconds rest
 
+/// The workflow names the daemon's workflow route accepts.
+let workflows : string list = [ "Interactive"; "LiveTesting"; "HotReload" ]
+
+/// `expect-session [--within N]`: this run's own session on the shared daemon is Ready. A text match
+/// on the Sessions view cannot tell this run's session from another agent's, the daemon can.
+let private parseExpectSession (rest: string) : Result<Step, string> =
+  match rest.Split([| ' ' |], StringSplitOptions.RemoveEmptyEntries) |> List.ofArray with
+  | [] -> Ok(ExpectSession DefaultExpectSeconds)
+  | [ "--within"; n ] ->
+    match Int32.TryParse n with
+    | true, s when s >= 1 && s <= MostExpectSeconds -> Ok(ExpectSession s)
+    | true, _ -> Result.Error(sprintf "--within is 1 to %d seconds" MostExpectSeconds)
+    | false, _ -> Result.Error(sprintf "--within needs a whole number of seconds, not '%s'" n)
+  | _ -> Result.Error "expect-session takes only --within <seconds>"
+
 /// The text after the verb, as the file wrote it.
 let private afterVerb (line: string) (verb: string) : string = line.Substring(verb.Length).Trim()
 
@@ -118,12 +138,22 @@ let parseLine (line: string) : Result<Step, string> =
   let rest = afterVerb line verb
   let words = rest.Split([| ' ' |], StringSplitOptions.RemoveEmptyEntries) |> List.ofArray
   match verb with
-  | "command" -> VscCommand.parse [ "palette"; rest ] |> Result.map Run
+  | "command" ->
+    // A tour wants the command it names, not the first fuzzy match: the title must be exact.
+    match VscCommand.parse [ "palette"; rest ] with
+    | Ok(Palette t) -> Ok(Run(PaletteExact t))
+    | Ok other -> Ok(Run other)
+    | Result.Error e -> Result.Error e
   | "type" -> VscCommand.parse [ "type"; rest ] |> Result.map Run
   | "click" -> VscCommand.parse [ "click"; rest ] |> Result.map Run
   | "open" -> VscCommand.parse [ "open"; rest ] |> Result.map Run
   | "key" | "wait" | "shot" | "resize" -> VscCommand.parse (verb :: words) |> Result.map Run
   | "expect-text" -> parseExpect rest
+  | "expect-session" -> parseExpectSession rest
+  | "set-workflow" ->
+    match words with
+    | [ w ] when workflows |> List.contains w -> Ok(SetWorkflow w)
+    | _ -> Result.Error(sprintf "set-workflow takes one of: %s" (String.Join(", ", workflows)))
   | "replace" ->
     match words with
     | [] -> Result.Error "replace needs a path, the text to find and the text to put there"
@@ -154,12 +184,38 @@ let parse (text: string) : Result<Tour, string list> =
   | [], _ -> Ok { Steps = parsed |> List.choose (function Ok p -> Some p | Result.Error _ -> None) }
   | errs, _ -> Result.Error errs
 
+/// The placeholder a step's text may carry for this run's own session id, which only the daemon
+/// knows once the session exists (the Switch Session picker lists sessions by id).
+[<Literal>]
+let SessionPlaceholder = "{session}"
+
+let private mentionsSession (text: string) : bool = text.Contains SessionPlaceholder
+
+/// True when running the step needs this run's session id.
+let usesSession (s: Step) : bool =
+  match s with
+  | Run(Palette t) | Run(PaletteExact t) | Run(Click t) | Run(Type t) -> mentionsSession t
+  | ExpectText(t, _) -> mentionsSession t
+  | Run _ | ExpectSession _ | SetWorkflow _ | Replace _ -> false
+
+/// The step with the placeholder replaced by the session id.
+let withSession (id: string) (s: Step) : Step =
+  let fill (t: string) = t.Replace(SessionPlaceholder, id)
+  match s with
+  | Run(Palette t) -> Run(Palette(fill t))
+  | Run(PaletteExact t) -> Run(PaletteExact(fill t))
+  | Run(Click t) -> Run(Click(fill t))
+  | Run(Type t) -> Run(Type(fill t))
+  | ExpectText(t, n) -> ExpectText(fill t, n)
+  | other -> other
+
 /// One line saying what a step does, for the tour's log.
 let describe (s: Step) : string =
   match s with
   | Run c ->
     match c with
-    | Palette t -> sprintf "command: %s" t
+    | Palette t -> sprintf "command (first match): %s" t
+    | PaletteExact t -> sprintf "command: %s" t
     | Key chords -> sprintf "key: %s" (String.Join(" ", chords |> List.map Chord.describe))
     | Click t -> sprintf "click: %s" t
     | Type t -> sprintf "type: %s" t
@@ -171,4 +227,6 @@ let describe (s: Step) : string =
     | Snapshot -> "snapshot"
     | Tour f -> sprintf "tour: %s" f
   | ExpectText(t, s) -> sprintf "expect-text (within %d s): %s" s t
+  | ExpectSession s -> sprintf "expect-session (within %d s): this run's session is Ready" s
+  | SetWorkflow w -> sprintf "set-workflow: %s (the harness asks the daemon; the extension's own Switch Workflow cannot, see TOURS.md)" w
   | Replace(p, f, r) -> sprintf "replace in %s: \"%s\" -> \"%s\"" p f r

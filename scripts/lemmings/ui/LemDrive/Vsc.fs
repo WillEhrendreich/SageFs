@@ -230,7 +230,9 @@ let private openPicker (c: Cdp.Connection) (chord: string) : Task<bool> =
     return! waitFor PickerOpenMs (pickerOpen c)
   }
 
-let private palette (c: Cdp.Connection) (text: string) : Task<Outcome> =
+/// Runs a palette command. In exact mode the row must be titled exactly `text`; the focused row
+/// is moved to it with the arrow keys, and if there is no such row nothing is run.
+let private palette (exact: bool) (c: Cdp.Connection) (text: string) : Task<Outcome> =
   task {
     match Guard.check text with
     | Result.Error e -> return Refused e
@@ -247,13 +249,28 @@ let private palette (c: Cdp.Connection) (text: string) : Task<Outcome> =
           do! c.Page.Keyboard.PressAsync(toPlaywright escapeChord)
           return DriveFailed(sprintf "no command matches \"%s\". Nothing was run." text)
         | rows ->
-          let chosen = rows |> List.tryFind (fun r -> r.Focused) |> Option.orElse (List.tryHead rows)
-          let label = chosen |> Option.map (fun r -> r.Label) |> Option.defaultValue ""
+          let focusedIndex = rows |> List.tryFindIndex (fun r -> r.Focused) |> Option.defaultValue 0
+          let wanted =
+            match exact with
+            | false -> Ok focusedIndex
+            | true ->
+              match exactRowIndex (rows |> List.map (fun r -> r.Label)) text with
+              | Some i -> Ok i
+              | None -> Result.Error(sprintf "the palette does not offer a command titled \"%s\" right now (a when-clause may hide it). It offers: %s" text (String.Join("; ", rows |> List.truncate 5 |> List.map (fun r -> r.Label))))
+          match wanted with
+          | Result.Error e ->
+            do! c.Page.Keyboard.PressAsync(toPlaywright escapeChord)
+            return DriveFailed e
+          | Ok index ->
+          let label = rows[index].Label
           match Guard.check label with
           | Result.Error e ->
             do! c.Page.Keyboard.PressAsync(toPlaywright escapeChord)
             return Refused e
           | Ok() ->
+            // Move the focus to the wanted row (a no-op unless it is not the focused one).
+            for _ in 1 .. abs (index - focusedIndex) do
+              do! c.Page.Keyboard.PressAsync(match index > focusedIndex with | true -> "ArrowDown" | false -> "ArrowUp")
             do! c.Page.Keyboard.PressAsync(toPlaywright enterChord)
             let others = rows |> List.filter (fun r -> Some r.Label <> Some label) |> List.truncate 4 |> List.map (fun r -> r.Label)
             let also = match others with | [] -> "" | o -> sprintf " (other matches: %s)" (String.Join("; ", o))
@@ -290,6 +307,10 @@ let private snapshot (c: Cdp.Connection) : Task<Outcome> =
 /// How often an expect-text looks at the window again.
 [<Literal>]
 let ExpectPollMs = 500
+
+/// How long the daemon may take to accept a workflow change, which restarts the session's worker.
+[<Literal>]
+let WorkflowRequestSeconds = 120
 
 /// The run directory the harness named, when it did. A shot's activation line and a tour's file
 /// changes need it; a plain call without it still works.
@@ -341,7 +362,8 @@ let rec private run (c: Cdp.Connection) (screen: Screen) (cmd: VscCommand) : Tas
       | Tour file -> return! runTour c screen file
       | Wait s -> return! waitSeconds c s
       | Click target -> return! click c target
-      | Palette text -> return! palette c text
+      | Palette text -> return! palette false c text
+      | PaletteExact text -> return! palette true c text
       | Open path -> return! openFile c path
       | Type text ->
         let! r = typeText c text
@@ -374,6 +396,72 @@ and private expectText (c: Cdp.Connection) (text: string) (seconds: int) : Task<
       match found with
       | true -> Ok()
       | false -> Result.Error(sprintf "the window never showed \"%s\" within %d s" text seconds)
+  }
+
+/// Asks the daemon to put THIS run's session (and only it) in a workflow. The request carries a
+/// Content-Length: the extension's own Switch Workflow sends a chunked body, which the daemon's
+/// workflow route reads as no workflow at all, so that command cannot be used in a tour.
+and private setWorkflow (workflow: string) : Task<Result<string, string>> =
+  task {
+    match runDirOf () with
+    | None -> return Result.Error "set-workflow needs LEM_RUN_DIR (the harness sets it)"
+    | Some runDir ->
+      match Daemon.sessions Daemon.DefaultMcpPort with
+      | Result.Error e -> return Result.Error e
+      | Ok all ->
+        match all |> List.filter (Daemon.belongsTo (IO.Path.Combine(runDir, "w"))) with
+        | [] -> return Result.Error "set-workflow: the daemon has no session under the run directory"
+        | s :: _ ->
+          try
+            use client = new Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(float WorkflowRequestSeconds))
+            use body = new Net.Http.StringContent(sprintf "{\"workflow\":\"%s\"}" workflow, Text.Encoding.UTF8, "application/json")
+            let! resp = client.PostAsync(sprintf "http://localhost:%d/api/sessions/%s/workflow" Daemon.DefaultMcpPort s.Id, body)
+            let! text = resp.Content.ReadAsStringAsync()
+            match resp.IsSuccessStatusCode with
+            | true -> return Ok(sprintf "session %s asked to switch to %s: %s" s.Id workflow text)
+            | false -> return Result.Error(sprintf "the daemon refused the workflow change (HTTP %d): %s" (int resp.StatusCode) text)
+          with ex -> return Result.Error(sprintf "set-workflow failed: %s" ex.Message)
+  }
+
+/// Fills {session} in a step with this run's session id, read from the daemon.
+and private resolveSession (step: Tour.Step) : Task<Result<Tour.Step, string>> =
+  task {
+    match Tour.usesSession step, runDirOf () with
+    | false, _ -> return Ok step
+    | true, None -> return Result.Error "a step uses {session} but LEM_RUN_DIR is not set"
+    | true, Some runDir ->
+      match Daemon.sessions Daemon.DefaultMcpPort with
+      | Result.Error e -> return Result.Error(sprintf "cannot read the daemon's sessions for {session}: %s" e)
+      | Ok all ->
+        match all |> List.filter (Daemon.belongsTo (IO.Path.Combine(runDir, "w"))) with
+        | s :: _ -> return Ok(Tour.withSession s.Id step)
+        | [] -> return Result.Error "{session}: the daemon has no session under the run directory yet"
+  }
+
+/// Waits until this run's own session (under <run>/w) on the shared daemon is Ready. Read only.
+and private expectSessionReady (seconds: int) : Task<Result<string, string>> =
+  task {
+    match runDirOf () with
+    | None -> return Result.Error "expect-session needs LEM_RUN_DIR (the harness sets it)"
+    | Some runDir ->
+      let workspace = IO.Path.Combine(runDir, "w")
+      let started = Diagnostics.Stopwatch.StartNew()
+      let mutable outcome : Result<string, string> option = None
+      let mutable last = "the daemon has no session under the run directory yet"
+      while outcome.IsNone && started.Elapsed.TotalSeconds < float seconds do
+        match Daemon.sessions Daemon.DefaultMcpPort with
+        | Result.Error e -> last <- e
+        | Ok all ->
+          match all |> List.filter (Daemon.belongsTo workspace) with
+          | [] -> last <- "the daemon has no session under the run directory yet"
+          | mine ->
+            match mine |> List.tryFind (fun s -> s.Status = "Ready") with
+            | Some s -> outcome <- Some(Ok(sprintf "session %s is Ready" s.Id))
+            | None -> last <- sprintf "session state: %s" (String.Join(", ", mine |> List.map (fun s -> sprintf "%s %s" s.Id s.Status)))
+        match outcome with
+        | Some _ -> ()
+        | None -> do! sleep ExpectPollMs
+      return (match outcome with | Some o -> o | None -> Result.Error(sprintf "no Ready session within %d s (%s)" seconds last))
   }
 
 /// Changes a workspace file on disk, once, and only if the text to find occurs exactly once.
@@ -409,10 +497,20 @@ and private runTour (c: Cdp.Connection) (screen: Screen) (file: string) : Task<O
         let total = List.length tour.Steps
         for (i, placed) in tour.Steps |> List.indexed do
           let label = sprintf "[%d/%d] line %d  %s" (i + 1) total placed.Line (Tour.describe placed.Step)
+          let! resolved = resolveSession placed.Step
           let! result =
             task {
-              match placed.Step with
+              match resolved with
+              | Result.Error e -> return DriveFailed e
+              | Ok step ->
+              match step with
               | Tour.Run cmd -> return! run c screen cmd
+              | Tour.SetWorkflow workflow ->
+                let! r = setWorkflow workflow
+                return (match r with | Ok m -> Output m | Result.Error e -> DriveFailed e)
+              | Tour.ExpectSession seconds ->
+                let! r = expectSessionReady seconds
+                return (match r with | Ok m -> Output m | Result.Error e -> DriveFailed e)
               | Tour.ExpectText(text, seconds) ->
                 let! r = expectText c text seconds
                 return (match r with | Ok() -> Output "found" | Result.Error e -> DriveFailed e)

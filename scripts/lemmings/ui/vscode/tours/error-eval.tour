@@ -1,0 +1,32 @@
+# An error state: Alt+Enter on a line that does not compile. The error comes back inline after the
+# line, with the diagnostics. Whether it fits, and where it is cut off, depends on the window size, so
+# it is shot at two. The typed text is not saved, so the file on disk stays as it was.
+resize 1280 800
+expect-text SageFs
+wait 12
+click SageFs
+wait 2
+command SageFs: Create Session
+wait 2
+key enter
+expect-session --within 240
+wait 3
+command SageFs: Switch Session
+wait 2
+type {session}
+key enter
+wait 3
+
+open DemoEnv/DemoEnv.fs
+wait 3
+click open System
+key end
+type nonexistentThing(
+shot typed-1280x800 --region editor --region statusbar
+key alt+enter
+wait 10
+shot eval-error-1280x800 --region editor --region statusbar --region panel
+
+resize 1024 700
+wait 2
+shot eval-error-1024x700 --region editor --region statusbar

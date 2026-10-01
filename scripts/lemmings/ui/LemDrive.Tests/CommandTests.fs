@@ -25,6 +25,18 @@ let tests =
     testCase "palette takes the rest as the command text" <| fun _ ->
       parse [ "palette"; "SageFs:"; "Create"; "Session" ] |> Expect.equal "palette" (Ok(Palette "SageFs: Create Session"))
 
+    testCase "a tour's command wants the exact title, not the first fuzzy match" <| fun _ ->
+      let rows = [ "SageFs: Disable Live Testing, similar commands"; "SageFs: Enable Live Testing" ]
+      exactRowIndex rows "SageFs: Enable Live Testing" |> Expect.equal "the second row" (Some 1)
+      exactRowIndex rows "sagefs: disable live testing" |> Expect.equal "any case, suffix ignored" (Some 0)
+      exactRowIndex [ "SageFs: Disable Live Testing" ] "SageFs: Enable Live Testing" |> Expect.isNone "hidden by a when-clause"
+      exactRowIndex [] "x" |> Expect.isNone "no rows"
+
+    testCase "the command line has no way to ask for an exact palette match" <| fun _ ->
+      match parse [ "palette"; "SageFs: Create Session" ] with
+      | Ok(Palette _) -> ()
+      | other -> failtestf "a lemming's palette is the first-match one: %A" other
+
     testCase "open refuses an absolute path" <| fun _ ->
       parse [ "open"; "/etc/passwd" ] |> Expect.isError "absolute"
 

@@ -56,6 +56,9 @@ type VscCommand =
   | Key of sequence: Chord list
   | Type of text: string
   | Palette of command: string
+  /// Only a tour makes this one: runs the command whose title is exactly this text, and fails
+  /// without running anything when the palette does not offer it (a when-clause may hide it).
+  | PaletteExact of command: string
   | Open of relativePath: string
   | Wait of seconds: int
   | Shot of name: string * regions: Region list
@@ -74,6 +77,7 @@ let verb (c: VscCommand) : string =
   | Key _ -> "key"
   | Type _ -> "type"
   | Palette _ -> "palette"
+  | PaletteExact _ -> "palette"
   | Open _ -> "open"
   | Wait _ -> "wait"
   | Shot _ -> "shot"
@@ -94,6 +98,19 @@ let usageLine (verbName: string) : string =
   | "resize" -> sprintf "resize <width> <height>  set the window size, %d to %d pixels each way" MinWindowPixels MaxWindowPixels
   | "tour" -> "tour <tour-file>         run a tour file step by step (see TOURS.md)"
   | other -> other
+
+/// The suffix VS Code adds to a palette row it has grouped with similar commands.
+[<Literal>]
+let SimilarCommandsSuffix = ", similar commands"
+
+/// The index of the palette row whose title is exactly `text` (any case, the "similar commands"
+/// suffix ignored), if the palette offers one.
+let exactRowIndex (rows: string list) (text: string) : int option =
+  let bare (label: string) =
+    (match label.EndsWith(SimilarCommandsSuffix, StringComparison.OrdinalIgnoreCase) with
+     | true -> label.Substring(0, label.Length - SimilarCommandsSuffix.Length)
+     | false -> label).Trim().ToLowerInvariant()
+  rows |> List.tryFindIndex (fun r -> bare r = text.Trim().ToLowerInvariant())
 
 let usage : string =
   String.Join("\n", "usage: vsc <command>" :: (verbs |> List.map (fun v -> "  " + usageLine v)))

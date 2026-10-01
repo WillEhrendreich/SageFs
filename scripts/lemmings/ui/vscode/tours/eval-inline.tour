@@ -1,0 +1,28 @@
+# An eval result inline: Alt+Enter on a line of DemoEnv.fs, with the CodeLens above it, at two sizes.
+resize 1280 800
+expect-text SageFs
+wait 12
+click SageFs
+wait 2
+command SageFs: Create Session
+wait 2
+key enter
+expect-session --within 240
+wait 3
+command SageFs: Switch Session
+wait 2
+type {session}
+key enter
+wait 3
+
+open DemoEnv/DemoEnv.fs
+wait 3
+shot before-eval-1280x800 --region editor --region statusbar
+click open System
+key alt+enter
+wait 8
+shot after-alt-enter-1280x800 --region editor --region statusbar
+
+resize 1024 700
+wait 2
+shot after-alt-enter-1024x700 --region editor --region statusbar

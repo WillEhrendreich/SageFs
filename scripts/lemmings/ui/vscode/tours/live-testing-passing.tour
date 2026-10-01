@@ -1,0 +1,50 @@
+# The same failing test, fixed in the editor and saved: live testing reruns and everything passes.
+# Same shots as live-testing-failing, so the two read side by side, at two sizes.
+resize 1280 800
+expect-text SageFs
+wait 12
+click SageFs
+wait 2
+command SageFs: Create Session
+wait 2
+key enter
+expect-session --within 240
+wait 3
+command SageFs: Switch Session
+wait 2
+type {session}
+key enter
+wait 3
+
+command SageFs: Enable Live Testing
+expect-text --within 120 1 failed
+
+# Line 43 of DemoEnv.fs is "| true, value -> Some value". Replace it, then save.
+open DemoEnv/DemoEnv.fs
+wait 3
+key ctrl+g
+wait 1
+type 43
+key enter
+key home
+key shift+end
+type | true, value when value >= 0 -> Some value
+shot fix-typed-1280x800 --region editor --region statusbar
+key ctrl+s
+# The rerun after a compiled-file change starts with a rebuild, and a rebuild waits behind other
+# agents' test-suite leases on the shared daemon, so give it time.
+expect-text --within 300 9 passed
+open DemoEnv.Tests/DemoEnvTests.fs
+wait 5
+shot editor-1280x800 --region editor --region statusbar
+
+click Testing
+wait 3
+shot test-explorer-1280x800 --region sidebar --region editor
+click SageFs
+wait 2
+shot sagefs-views-1280x800 --region sidebar
+
+resize 1024 700
+wait 2
+shot editor-1024x700 --region editor --region statusbar

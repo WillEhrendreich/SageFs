@@ -1,0 +1,38 @@
+# Hot reload: a session in the Hot Reload workflow, every file watched, then a save that changes
+# parseSeed. DemoEnv is a library with no running app, so there is no "patched" line to wait for;
+# this records what the extension shows for the watch state and for the save, at two sizes.
+# The workflow is set by the harness (set-workflow): the extension's own Switch Workflow sends a
+# chunked body that the daemon reads as no workflow, see error-switch-workflow.tour.
+resize 1280 800
+expect-text SageFs
+wait 12
+click SageFs
+wait 2
+command SageFs: Create Session
+wait 2
+key enter
+expect-session --within 240
+wait 3
+command SageFs: Switch Session
+wait 2
+type {session}
+key enter
+wait 3
+
+set-workflow HotReload
+wait 30
+expect-session --within 240
+wait 5
+shot hot-reload-session-1280x800 --region sidebar --region statusbar
+
+command SageFs: Watch All Files
+wait 5
+shot watching-1280x800 --region sidebar --region statusbar
+replace DemoEnv/DemoEnv.fs "| true, value -> Some value" "| true, value when value >= 0 -> Some value"
+open DemoEnv/DemoEnv.fs
+wait 15
+shot after-save-1280x800 --region sidebar --region editor --region statusbar --region panel
+
+resize 1024 700
+wait 2
+shot after-save-1024x700 --region sidebar --region statusbar

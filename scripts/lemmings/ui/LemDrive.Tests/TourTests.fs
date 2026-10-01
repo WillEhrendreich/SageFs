@@ -48,12 +48,14 @@ let tests =
         resize 1024 700
         expect-text SageFs: ready
         expect-text --within 60 11/11 passed
+        expect-session --within 240
+        expect-session
         replace DemoEnv/DemoEnv.fs "Some value" "Some (value + 1)"
         """
       steps text
       |> Expect.equal
         "the steps, in order"
-        [ Run(Palette "SageFs: Create Session")
+        [ Run(PaletteExact "SageFs: Create Session")
           Run(Key [ { Modifiers = [ Chord.Alt ]; Key = Chord.Named Chord.Enter } ])
           Run(Click "Sessions")
           Run(Type "let x = 1")
@@ -64,6 +66,8 @@ let tests =
           Run(Resize(1024, 700))
           ExpectText("SageFs: ready", DefaultExpectSeconds)
           ExpectText("11/11 passed", 60)
+          ExpectSession 240
+          ExpectSession DefaultExpectSeconds
           Replace("DemoEnv/DemoEnv.fs", "Some value", "Some (value + 1)") ]
 
     testCase "comments and blank lines are ignored, and line numbers count them" <| fun _ ->
@@ -89,6 +93,18 @@ let tests =
       errors "replace a.fs \"only one\"" |> List.length |> Expect.equal "one text refused" 1
       errors "replace a.fs \"\" \"x\"" |> List.length |> Expect.equal "empty find refused" 1
 
+    testCase "set-workflow takes only the three workflows the daemon knows" <| fun _ ->
+      steps "set-workflow HotReload" |> Expect.equal "hot reload" [ SetWorkflow "HotReload" ]
+      errors "set-workflow Turbo" |> List.length |> Expect.equal "unknown refused" 1
+      errors "set-workflow" |> List.length |> Expect.equal "none refused" 1
+
+    testCase "{session} is filled in where a step's text carries it" <| fun _ ->
+      let step = Run(Type "{session}")
+      usesSession step |> Expect.isTrue "it uses the session"
+      withSession "b380bce0" step |> Expect.equal "filled" (Run(Type "b380bce0"))
+      usesSession (Run(Wait 1)) |> Expect.isFalse "a wait does not"
+      withSession "x" (ExpectText("row {session}", 5)) |> Expect.equal "expect-text too" (ExpectText("row x", 5))
+
     testCase "replace understands escapes in its quoted texts" <| fun _ ->
       steps "replace a.fs \"say \\\"hi\\\"\" \"line1\\nline2\""
       |> Expect.equal "unescaped" [ Replace("a.fs", "say \"hi\"", "line1\nline2") ]
@@ -98,8 +114,10 @@ let tests =
       errors "replace /etc/x \"a\" \"b\"" |> List.length |> Expect.equal "absolute refused" 1
 
     testCase "expect-text bounds its wait" <| fun _ ->
-      errors "expect-text --within 500 x" |> List.length |> Expect.equal "too long" 1
+      errors "expect-text --within 301 x" |> List.length |> Expect.equal "too long" 1
       errors "expect-text" |> List.length |> Expect.equal "no text" 1
+      errors "expect-session --within 0" |> List.length |> Expect.equal "session wait bounded too" 1
+      errors "expect-session soon" |> List.length |> Expect.equal "session wait takes only --within" 1
 
     testCase "a step that is the command line's own refusal is a line error" <| fun _ ->
       errors "open ../secret" |> List.length |> Expect.equal "open refuses .." 1
@@ -111,7 +129,7 @@ let tests =
 
     testCase "every example tour that ships parses, and every shot name in it is unique" <| fun _ ->
       let files = Directory.GetFiles(toursDir (), "*.tour")
-      Expect.isGreaterThan "there are example tours" (Array.length files, 0)
+      Expect.isGreaterThan "there are example tours" (Array.length files, 6)
       for file in files do
         match Tour.parse (File.ReadAllText file) with
         | Result.Error errs -> failtestf "%s does not parse: %s" (Path.GetFileName file) (String.Join("; ", errs))
