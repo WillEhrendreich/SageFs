@@ -373,6 +373,7 @@
         <Compile Include="ThreadSandboxTests.fs" />
         <Compile Include="LiveValueGetterPolicyTests.fs" />
         <Compile Include="MemberEvaluationTests.fs" />
+        <Compile Include="ValueWalkSettingTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
         <Compile Include="StreamingProxyTests.fs" />
         <Compile Include="StreamingProxySimTests.fs" />

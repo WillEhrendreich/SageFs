@@ -76,6 +76,14 @@ let evaluateTests = Integration.hostList "DirectoryConfig.evaluate" [
     let config = evalOk """{ DirectoryConfig.empty with SessionName = Some "my-service" }"""
     config.SessionName |> Expect.equal "should parse SessionName" (Some "my-service"))
 
+  testCase "loads valueWalk override" (fun () ->
+    let config = evalOk """{ DirectoryConfig.empty with ValueWalk = WalkOff }"""
+    config.ValueWalk |> Expect.equal "should parse ValueWalk" WalkOff)
+
+  testCase "valueWalk defaults to Safe" (fun () ->
+    let config = evalOk "DirectoryConfig.empty"
+    config.ValueWalk |> Expect.equal "the default runs nothing of the user's" WalkSafe)
+
   testCase "invalid expression returns Error" (fun () ->
     let result = DirectoryConfig.evaluate "this is not valid F#"
     result |> Expect.isError "should return error for invalid expression")
@@ -176,6 +184,21 @@ let ensureAutoOpenOptOutTests = Integration.hostList "DirectoryConfig.ensureAuto
         failtestf "expected RequiresManualEdit, got %A" other
     finally
       Directory.Delete(tempDir, true))
+
+  testCase "opting back in never rewrites a config that also chose how values are walked" (fun () ->
+    let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())
+    let configDir = Path.Combine(tempDir, ".SageFs")
+    Directory.CreateDirectory(configDir) |> ignore
+    let path = Path.Combine(configDir, "config.fsx")
+    File.WriteAllText(path, """{ DirectoryConfig.empty with AutoOpenNamespaces = false; ValueWalk = WalkEverything }""")
+    try
+      let original = File.ReadAllText path
+      match DirectoryConfig.ensureAutoOpenNamespacesOptIn tempDir with
+      | Ok (AutoOpenNamespacesOptInResult.RequiresManualEdit _) ->
+        (File.ReadAllText path) |> Expect.equal "the user's ValueWalk choice is still there" original
+      | other -> failtestf "expected RequiresManualEdit, got %A" other
+    finally
+      Directory.Delete(tempDir, true))
 ]
 
 /// The isolated-host evaluation of config.fsx: what comes back for each way a script can go right or wrong.
@@ -200,7 +223,7 @@ let configHostTests =
 
     testCase "the full record round-trips: every field reaches the daemon" (fun () ->
       let script =
-        """{ DirectoryConfig.empty with Load = Projects ["A.fsproj"]; InitScript = Some "init.fsx"; DefaultArgs = ["--x"]; AutoOpenNamespaces = false; IsRoot = true; SessionName = Some "demo" }"""
+        """{ DirectoryConfig.empty with Load = Projects ["A.fsproj"]; InitScript = Some "init.fsx"; DefaultArgs = ["--x"]; AutoOpenNamespaces = false; IsRoot = true; SessionName = Some "demo"; ValueWalk = WalkEverything }"""
       match ConfigHost.evaluate Environment.CurrentDirectory script with
       | Ok config ->
         config
@@ -211,7 +234,8 @@ let configHostTests =
                DefaultArgs = [ "--x" ]
                AutoOpenNamespaces = false
                IsRoot = true
-               SessionName = Some "demo" }
+               SessionName = Some "demo"
+               ValueWalk = WalkEverything }
       | Error error -> failtest (ConfigHost.describeError error))
 
     testCase "the same script text is evaluated once: the second answer is cached and identical" (fun () ->
