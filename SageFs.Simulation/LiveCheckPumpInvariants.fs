@@ -40,7 +40,7 @@ module LiveCheckPumpInvariants =
   /// two excuses, and each says so.
   let newestEditAlwaysJudged : Invariant =
     { Id = "newest-edit-always-judged"
-      Description = "After the worker is Ready and every call has come back, the newest request was answered; only a faulted session may leave it unanswered, and then it says why."
+      Description = "After the worker is Ready and every call has come back, the newest request was answered; only a faulted session or a wait that ran out of time may leave it unanswered, and each says why."
       Check = fun t ->
         match List.tryLast t.Requests with
         | None -> Outcome.Holds

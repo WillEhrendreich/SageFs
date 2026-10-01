@@ -174,6 +174,8 @@ module SageFsEffectHandler =
           | Choice1Of2 response -> return WorkerReply.Replied response
           | Choice2Of2 ex -> return WorkerReply.Silent ex.Message
       }
+    // The bound is the one a rebuild gives the same wait (`ReadyDeadline`): a replacement that is not Ready by then is
+    // a failed rebuild, and a check that waited longer would be waiting for a worker the rebuild has given up on.
     let awaitReady =
       async {
         match! RebuildReadyWait.await (deps.AwaitReady sid) deps.ReadyDeadline CancellationToken.None with
