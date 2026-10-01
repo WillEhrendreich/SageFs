@@ -786,3 +786,95 @@ Evidence: `SageFs.Core/Features/LiveTestingCycle.fs` (`QueuedMeans`, `promoteQue
 `SageFs.Core/Features/BuildConfirmation.fs` (`ConfirmationPhase.toWireValue`), `SageFs/LiveTestStatusView.fs`,
 `SageFs.Tests/LiveTestingProvenanceTests.fs`, `SageFs.Tests/LtStream.fs` (`awaitConfirmed`, `describeHistory`).
 Reopen it if: a user reports a save with no verdict while a confirmation is building.
+
+## A metadata delta is computed against the module the worker actually loaded, looking through its coverage probes
+
+An app started with `run_app` restarts on every function save, about six seconds. The runtime can do better: a metadata
+delta applied with `MetadataUpdater.ApplyUpdate` changes method bodies of the loaded assembly in place, for every
+instantiation of a generic method (past and future), for the closure objects the app holds and for the objects an
+instance member runs on. dotnet/fsharp#19941 (Nat Elkins, a community contribution, unmerged) writes those deltas from
+inside the compiler behind a flag no released SDK has. So this is a SageFs-owned emitter that reads two finished
+assemblies, the one the process loaded and a fresh build of the project, and writes the delta. No code is taken from the
+PR. It is off unless `SAGEFS_METADATA_DELTA` is on, and nothing in the product calls it yet.
+
+Which file does the worker load? Not the compiler's output. `createActorImmediate` shadow-copies every project DLL,
+instruments the COPY in place with Cecil (a probe in front of every sequence point, 26,931 of them on SageFs.Core), and
+hands the shadow paths on as the session's project targets, which is what `AppRunner.resolveProjectAssembly` loads with
+`Assembly.LoadFrom`. So the metadata the runtime holds is a Cecil-written module whose every method body differs from
+what the compiler wrote by its probes, and whose rows are numbered Cecil's way.
+
+Three ways to deal with that. I took the third.
+
+- Instrument the new build the same way before diffing. Probe slots are numbered across the whole assembly in sequence
+  point order, so an edit that adds a sequence point renumbers every probe after it, and every method after it would read
+  as changed. I did not build this, that is from reading `collectSequencePoints`.
+- Do not instrument a module that will be hot reloaded. It costs the live-testing coverage of exactly the apps people
+  watch, and instrumentation runs before anything knows the app will be hot reloaded.
+- Diff against what is loaded, and look through the probes. A body is compared as instructions with token operands
+  replaced by the text of what they name, branch targets as instruction indices and short forms folded to long ones, so
+  a Cecil rewrite, a few bytes more or fewer, or a renumbered row is not a change. `StripCoverageProbes` drops each
+  `ldc.i4 slot; call __SageFsCoverage::Hit` pair and sends a branch that landed on a probe to the instruction the probe
+  was in front of.
+
+What that costs: a method the delta patches runs without its probes until the next rebuild, so its coverage is gone for
+that long. I have not looked at what live testing does with a method that stops reporting.
+
+How I know it holds. A test pins the symbol against the real `CoverageInstrumenter`: it instruments an assembly and
+counts the calls to `Hit` (all of them found with the probes kept, none left once they are looked through). Another runs
+the loop for real: a program is compiled with Cecil, instrumented by the real instrumenter, loaded in a child process
+started with `DOTNET_MODIFIABLE_ASSEMBLIES=debug`, patched by the delta, and every answer has to be the one an
+interpreter gives for the next version. 16 seeds in the gate, 192 in a soak, all green.
+
+What it carries: a new body for any method, with every token re-expressed in the loaded module's numbering (an existing
+row when it names the same thing, a new AssemblyRef, TypeRef, TypeSpec, MemberRef, MethodSpec or StandAloneSig row when
+it does not), string literals, exception regions, and a method added to a type the process already runs. Deltas chain:
+the second sees the heaps and rows the first added. 1, 2 and 3 generations are checked: 24, 12 and 8 seeds in the gate,
+288, 144 and 96 in a soak (`SAGEFS_DELTA_SCALE=12`).
+
+What it refuses, each with its own cause (`RudeCause`, 15 of them): a type or method removed, a type added (a new lambda
+adds a closure class, so that restarts), a field added or changed, a type's base, interfaces or flags changed, a property
+or event changed, a custom attribute changed, a signature changed (named separately for a virtual member), method flags
+or parameters changed, a virtual, constructor or generic method added, a changed static constructor or startup-class
+method (a delta replaces a body and never runs it again, so a module-level value would read as patched and keep its old
+value), closures that share a name changing in number, and a body it cannot read (`calli`, an unknown opcode or
+signature element). Closures are named after their line, so a line added above one renames it: the number is folded out
+and closures that then share a name are told apart by their order.
+
+Things the soak found. A Cecil-written module with no string literal has no #US heap, and a delta adding the first
+literal reads as "no string associated with token". That is a refusal now, and the test programs keep one literal. After
+an update `GetMethods` did not list a method the delta added until the metadata-update handlers ran, which is the
+contract `dotnet watch` keeps, so the apply side runs them. Told "everything" the runtime's `ClearCache` took 405 ms of
+the 410; told the types the delta touched it takes 0.4 ms, so the payload carries the method tokens it writes.
+
+Limits I know of and have not closed. An unchanged method with a `calli` refuses the whole save, because the body is
+read before it is compared. Custom attribute changes are compared as text of constructor and value, except
+`CompilationMappingAttribute`, which F# numbers by position. A method that is running when the update lands keeps its old
+frames, from the docs, not tested. A method a Harmony detour already points at, and the debugger-attached
+`NotSupportedException`, I read in the runtime source and did not run. Linux x64 only.
+
+What it costs, measured on this machine (16 logical cores, Linux, .NET 11.0.0-rc.1.26425.128, a machine other agents
+were building on) with SageFs.Core.dll as the subject: 9.4 MB, 46,153 methods, three bodies changed. n = 5 passes in one
+child process, from nothing each time (the first has the JIT in it), then the next save once:
+
+| | plain baseline | instrumented baseline, probes looked through |
+|---|---|---|
+| read both builds | 40 to 109 ms | 42 to 96 ms |
+| diff and write, first pass | 2.0 s | 2.8 s |
+| diff and write, passes 2 to 5 | 0.83 to 0.98 s | 1.25 to 1.38 s |
+| the save after, previous build already read | 0.61 s | 0.73 s |
+| `ApplyUpdate` | 5.3 ms | 7.1 ms |
+| handlers after it | 7.6 ms | 9.9 ms |
+| delta | 432 bytes of metadata, 42 of IL | the same |
+
+Most of that is the diff reading 46k methods. A project one tenth the size is about a tenth of it. Two things bring it
+down further and are not done: keeping a fingerprint of each body of the previous build so a save reads only the new
+one, and checking only the types whose source file changed. The instrumented column cannot use the fast path for bodies
+that are byte-identical, because every instrumented body differs by its probes, so the first save against the worker's
+real baseline is the slow one.
+
+Evidence: `SageFs.Core/Features/MetadataDelta/` (`PeImage.fs`, `IlCanon.fs`, `MethodDiff.fs`, `DeltaWriter.fs`,
+`DeltaApply.fs`, `RudeCause.fs`), `SageFs.Tests/MetadataDeltaTests.fs` with `DeltaProgram.fs`, `DeltaChild.fs` and
+`DeltaInstrumentation.fs` (the numbers above print as `DELTA-BENCH` lines in a run's output), and
+`SageFs.Tests/RunAppDeltaTests.fs`, the rows a `run_app` app has to pass once the planner uses this.
+Reopen it if: instrumentation stops being applied to the shadow copy, or live testing needs a patched method's
+coverage to survive the patch.
