@@ -270,6 +270,13 @@ let private connectFromPoolThread (port: int) : Task =
     do! client.ConnectAsync(IPAddress.Loopback, port).WaitAsync(TestTimeouts.patienceInProcess)
   }
 
+/// The work on the filtered thread adds 1 up to this, and the answer is n(n+1)/2.
+let private summedUpTo = 10000
+let private expectedSum = summedUpTo * (summedUpTo + 1) / 2
+
+/// Generation 0, the cheapest collection.
+let private youngestGeneration = 0
+
 /// A blocking connect on whichever thread calls it.
 let private connectHere (port: int) =
   use client = new TcpClient()
@@ -484,9 +491,10 @@ let realThreadTests =
       requireLinuxX64 ()
       let! outcome =
         runSandboxed NoNetworkNoWritesNoSpawn (fun () ->
-          let sum = Seq.sum (seq { for i in 1 .. 10_000 -> i })
-          GC.Collect()
-          GC.WaitForPendingFinalizers()
+          let sum = Seq.sum (seq { for i in 1 .. summedUpTo -> i })
+          // A young-generation collection still suspends and resumes every thread, which is what the filter
+          // must not break. A full blocking collection would pause the rest of the suite for a long time.
+          GC.Collect youngestGeneration
           let inner = ref 0
           let t = Thread((fun () -> inner.Value <- sum), IsBackground = true)
           t.Start()
@@ -495,8 +503,8 @@ let realThreadTests =
           sum, inner.Value, compiled)
       match outcome with
       | Completed (sum, fromThread, compiled) ->
-        sum |> Expect.equal "ordinary work" 50_005_000
-        fromThread |> Expect.equal "a thread started from the filtered one ran" 50_005_000
+        sum |> Expect.equal "ordinary work" expectedSum
+        fromThread |> Expect.equal "a thread started from the filtered one ran" expectedSum
         compiled |> Expect.isTrue "a compiled regex JITs under the filter"
       | other -> failtestf "expected Completed, got %A" other
     }
