@@ -776,13 +776,83 @@ is still going, so the rows said "confirmed" with a build in flight, and the jou
 restart. The status now carries `Confirmation` (`idle`, `quiet`, `building`, `running_built`), the machine's own
 phase, and the journeys wait for `idle`, asking again after each verdict or summary frame.
 
-Still open: an edit that arrives while a confirmation's worker restart is under way can be lost for a real user too
-(its type-check has no worker to answer it). The journeys now avoid it by waiting. The fix for users is for a check
-or an eval to wait for the session to be Ready (`AwaitReady`) before it uses the proxy. I haven't done that because I
-haven't seen it fail since the journeys stopped overlapping the restart, and the daemon log now says when a check
-blocks or doesn't answer, so it will show up if it matters.
+That left one hole, an edit that arrives while a confirmation's worker restart is under way. I didn't fix it then,
+because I hadn't seen it fail once the journeys stopped overlapping the restart. It was real, and the next entry is
+the fix.
 
 Evidence: `SageFs.Core/Features/LiveTestingCycle.fs` (`QueuedMeans`, `promoteQueuedRebuild`),
 `SageFs.Core/Features/BuildConfirmation.fs` (`ConfirmationPhase.toWireValue`), `SageFs/LiveTestStatusView.fs`,
 `SageFs.Tests/LiveTestingProvenanceTests.fs`, `SageFs.Tests/LtStream.fs` (`awaitConfirmed`, `describeHistory`).
 Reopen it if: a user reports a save with no verdict while a confirmation is building.
+
+## A check or an eval asks a worker only when one is Ready, and waits for one while it is being replaced
+
+The hole I left open in the entry above was real. Typing while a confirmation's build replaces the worker lost the
+edit, and I could show it through the real daemon: write a valid file, wait for its verdict to be `Evaluated`, wait
+for the status to say the confirmation is `building` and the session `Restarting`, then save a second edit that turns
+one test red. The second verdict never came. I gave it three and a half minutes and the daemon logged nothing for it.
+
+Three things were wrong, and they sit on one path.
+
+1. The old worker keeps serving while the project builds, then `SessionManager` parks it and spawns the replacement
+   with no worker URL registered. `withSession` answered a check or an eval that found no proxy with an `EvalFailed`
+   and nothing else. A save is the last event of an edit, so nothing asked again.
+2. After the replacement's `WorkerReady` commits, its proxy exists while the session is still `Starting`. A worker
+   that isn't Active answers a type-check with no diagnostics and no symbols (`AppState`, the type-check query), and
+   the daemon read that as a clean check. That can lift a compile block or select nothing.
+3. A worker retired under a call throws, and that came back as `Cancelled` with nothing asking again.
+
+I didn't see the false `blocked_by_compile_errors` the last agent saw in one failing run, and I can't say which of
+these produced it. A worker answering for a project it hasn't loaded yet is the likeliest, which is why the fix
+doesn't trust any answer from a worker that wasn't Ready.
+
+The fix is a pure decision, `LiveCheckPump.step`, with the daemon side in `SageFs/LiveCheckRelay.fs`.
+
+- A request reads what the session manager says about the worker (`viewOf`: Ready or Evaluating with a proxy is
+  Serving that pid, Starting, Restarting and Building are Arriving even when a proxy exists, Faulted, crashed and
+  stopped are Gone with the reason). If one is Serving, it is asked. If one is Arriving, the request waits on the
+  manager's own `AwaitReady`, which answers the instant the session is Ready, so nothing polls. If none is coming,
+  the request ends unanswered and says why.
+- An answer is believed only when the worker that gave it is still the Ready worker that was asked. A call that came
+  back from a retired worker, or while the session isn't Ready, counts for nothing and the request is asked again.
+  Each redo needs the manager to have changed its mind, so it can't spin. A worker the manager calls Ready that
+  doesn't answer ends the request unanswered, because asking it again would be a loop with nothing to end it.
+- A newer type-check for a file replaces an older one that wasn't answered, so only the newest text gets a verdict
+  and the answer for text that was typed over is never reported. Evals are the opposite, each is owed its run, in
+  order. One relay per session, kind and file.
+- Nothing unanswered is ever reported as an error in the user's code. It is a cancelled check, as before, with the
+  reason in the daemon log.
+- The wait is bounded by `ReadyDeadline` (30 s), the bound a rebuild already gives the same wait. A replacement that
+  isn't Ready by then is a failed rebuild, and a check waiting longer would be waiting for a worker the rebuild gave
+  up on. After the deadline the check ends cancelled and the next edit asks fresh.
+
+The proof is `SageFs.Simulation/LiveCheckPumpSim.fs`: a seeded world of edits, a worker that stops, spawns, warms or
+faults, calls that come back from whichever worker is there by then, and waits that end in any order. The invariants
+are newest-edit-always-judged, no-false-blocked, no-false-clear, no-stale-apply, asks-only-a-ready-worker,
+single-flight, every-request-ends-exactly-once, every-request-runs-in-order, stale-waits-do-nothing and
+everything-resolves. Five twins each put one bug back (drop what can't be asked, ask any proxy, trust an answer
+without looking again, apply an older answer, ask while a call is in flight) and each one is caught. Two journeys in
+the `--integration-lt` tier type the second edit while the session says Restarting under a building confirmation
+and while the confirmation runs its tests, and expect the newest verdict and no summary that says blocked. The
+first one failed before the fix and passes after. I didn't see the second one fail on the unfixed code, so it is a
+pin: with the worker Ready the old path was fine.
+
+What I haven't done. A check that waits out the 30 s is dropped, not retried when the worker comes later. The
+confirming build still restarts the worker, and everything in FSI state goes with it (the entry above). And the
+other effects that read a proxy (`RunAffectedTests`, discovery) still drop a request that finds none. The check and
+the eval are the two that decide whether an edit is judged, so those are the ones I moved.
+
+One thing I found on the way and left alone. Line narrowing measures a save against the text the last build compiled,
+not against the last text that was evaluated. In the second journey the first edit's build was the baseline when the
+journey put the original file back, so the restore looked like a change to one line, selected one test, and left the
+test the second edit had turned red as it was (the daemon's own decision names the one test). The journeys now wait
+for the second text's confirmation, which moves the baseline. A user who types, waits for a build, makes a red edit
+and puts it back within the quiet window can meet the same thing. It's a separate fix in the line-narrowing
+baseline, and I haven't made it.
+
+Evidence: `SageFs.Core/Features/LiveCheckPump.fs`, `SageFs/LiveCheckRelay.fs`, `SageFs/SageFsEffectHandler.fs`
+(`relayFor`, `RequestFcsTypeCheck`, `EvalBufferThenRunAffected`), `SageFs.Simulation/LiveCheckPumpSim.fs`,
+`SageFs.Tests/LiveCheckPumpSimTests.fs`, `SageFs.Tests/LiveCheckRelayTests.fs`, `SageFs.Tests/LiveTestingJourneyTests.fs`
+(`editedWhileConfirmationIsIn`).
+Reopen it if: a user reports a save with no verdict after the worker restarted, or the daemon log shows
+`no worker was Ready in time` for a check on a project whose warmup is slower than 30 s.
