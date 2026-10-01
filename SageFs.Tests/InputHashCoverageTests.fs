@@ -191,3 +191,47 @@ let toolchainFingerprintTests =
       |> Expect.notEqual "a SageFs semantics-version change must shift the toolchain fingerprint even when the user toolchain is byte-identical" (InputHashCoverage.toolchainFingerprint "sfs-v2" rd "/repo")
     }
   ]
+
+/// A cache key is only a key if it can see the code. A bitmap with nothing hit covers no file, so its hash is the toolchain
+/// fingerprint alone, the same for every edit, and a verdict cached under it answers for code it never looked at. That is how a
+/// landing whose test had gone red landed green: the key matched the pass recorded for an earlier landing.
+[<Tests>]
+let trustTests =
+  testList "InputHashCoverage.trust (a hash that cannot see the code is no key)" [
+
+    test "a bitmap with nothing hit is not a key, whatever the files say" {
+      let nothingHit = CoverageBitmap.ofBoolArray [| false; false; false; false |]
+      InputHashCoverage.trust "fixed-test-toolchain" (reader contents) threeFileMap nothingHit
+      |> Expect.equal "covering nothing is untrusted" (HashTrust.Untrusted UntrustedHash.CoversNothing)
+    }
+
+    test "a bitmap with a slot hit is a key, and it is the hash of the files it covers" {
+      InputHashCoverage.trust "fixed-test-toolchain" (reader contents) threeFileMap aAndBBitmap
+      |> Expect.equal "the trusted hash is ofCoverage's" (HashTrust.Trusted (ofCov (reader contents) threeFileMap aAndBBitmap))
+    }
+
+    test "a bitmap of another size than the map is not a key" {
+      let stale = CoverageBitmap.ofBoolArray [| true; true |]
+      InputHashCoverage.trust "fixed-test-toolchain" (reader contents) threeFileMap stale
+      |> Expect.equal "a stale bitmap is untrusted, with the sizes" (HashTrust.Untrusted (UntrustedHash.BitmapDoesNotMatchMap (2, 4)))
+    }
+
+    test "no instrumentation at all is not a key" {
+      let uninstrumented : InstrumentationMap = { threeFileMap with Slots = [||]; TotalProbes = 0 }
+      InputHashCoverage.trust "fixed-test-toolchain" (reader contents) uninstrumented emptyBitmap
+      |> Expect.equal "nothing to cover is untrusted" (HashTrust.Untrusted UntrustedHash.NoInstrumentation)
+    }
+
+    testProperty "a trusted hash always changes when a file it covers changes, and a bitmap that hits nothing is never trusted" <|
+      fun (hits: bool array) (edit: NonEmptyString) ->
+        let hits = Array.append hits (Array.create threeFileMap.Slots.Length false) |> Array.truncate threeFileMap.Slots.Length
+        let bitmap = CoverageBitmap.ofBoolArray hits
+        let before = InputHashCoverage.trust "fixed-test-toolchain" (reader contents) threeFileMap bitmap
+        let covered = InputHashCoverage.coveredFiles threeFileMap bitmap
+        match before, covered with
+        | HashTrust.Untrusted UntrustedHash.CoversNothing, [] -> true
+        | HashTrust.Trusted h, file :: _ ->
+          let edited = contents |> Map.add file (contents[file] + "\n" + edit.Get)
+          InputHashCoverage.trust "fixed-test-toolchain" (reader edited) threeFileMap bitmap <> HashTrust.Trusted h
+        | _ -> false
+  ]
