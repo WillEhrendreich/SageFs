@@ -349,8 +349,13 @@ let private keepTieringLapsesAndFailsClosed (runtime: HostRuntime) =
         |> ignore)
     try
       let! (first: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
-      first.Watch
-      |> Expect.equal (sprintf "keep-tiering starts out watching like tiering-off does. The choice only decides whether the watch can lapse.\nHost log:\n%s" (RunningApp.log app)) SageFs.Middleware.ValueReads.ReflectionWatchStatus.Watching
+      // Whether the runtime has already recompiled the method by this first look is its background compiler's call
+      // (the gate saw a lapse here under five parallel tiers). Watching or already Lapsed both leave the contract below
+      // testable; only a watch that could not be put on is a different test.
+      match first.Watch with
+      | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Watching
+      | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Lapsed _ -> ()
+      | other -> failtestf "keep-tiering must start out watching like tiering-off does, or already have lapsed; got %A\nHost log:\n%s" other (RunningApp.log app)
       let mutable lapsed = false
       let mutable calls = 0
       while not lapsed && calls < 80 do
