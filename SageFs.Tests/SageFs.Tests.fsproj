@@ -373,6 +373,11 @@
         <Compile Include="ThreadSandboxTests.fs" />
         <Compile Include="LiveValueGetterPolicyTests.fs" />
         <Compile Include="MemberEvaluationTests.fs" />
+        <!-- Layer 2 of getter containment: guards woven into the code a clicked getter can reach. -->
+        <Compile Include="GuardCoverageTests.fs" />
+        <Compile Include="GuardRuntimeTests.fs" />
+        <Compile Include="GuardIlFixture.fs" />
+        <Compile Include="GuardIlTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
         <Compile Include="StreamingProxyTests.fs" />
         <Compile Include="StreamingProxySimTests.fs" />
