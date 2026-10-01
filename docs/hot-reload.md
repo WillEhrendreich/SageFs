@@ -63,8 +63,7 @@ has the mechanism, the measurements and what it can't take.
 The route is on by default. Set `SAGEFS_METADATA_DELTA=off` in the daemon's
 environment and a `run_app` save restarts the app as it did before this route
 existed ([configuration](configuration.md)). Measured on my machine on the test fixture,
-a save is served in 2.6 s on .NET 10 and 1.8 s on .NET 11, against about 7.5 s
-and 5.8 s for the restart it replaces.
+a save is served in 1.8 to 2.6 s, against 6 to 8.5 s for the restart it replaces.
 
 What a delta takes and what it doesn't, from the emitter's own refusals
 (`RudeCause`): a new body for a method, a closure body, a task body, a method added to a

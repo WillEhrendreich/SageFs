@@ -26,8 +26,8 @@ module MetadataDeltaMode =
 
   /// What a process gets when nothing says otherwise. On, because the whole host tier and the browser journeys pass with the
   /// route on, a save is patched in about a third of the time a restart took and keeps the app's state, and being editable
-  /// costs a call-heavy loop nothing measurable on a build SageFs already makes unoptimized (docs/decisions.md has the
-  /// numbers). `SAGEFS_METADATA_DELTA=off` is the way back.
+  /// costs a call-heavy loop between nothing and 16 percent on a build SageFs already makes unoptimized (docs/decisions.md
+  /// has the numbers). `SAGEFS_METADATA_DELTA=off` is the way back.
   let defaultMode : MetadataDeltaMode = MetadataDeltaMode.On
 
   /// The spellings below turn it on or off. Anything else, an empty value included, is the default.

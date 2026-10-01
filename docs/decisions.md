@@ -958,17 +958,18 @@ started editable too, and it is where the guards patch, so I did not do it. A fi
 and a lambda that starts capturing something still restart, and each says which.
 
 Measured on this machine (16 logical cores, Linux, .NET SDK 11.0.0-rc.1.26425.128; the run_app fixture; n = 6 saves, medians):
-file written to the new body served, 2.6 s on .NET 10 and 1.8 s on .NET 11. The build is 2.4 s and 1.6 s of that, the diff and the
-delta written 5 ms, the runtime's call with its handlers 1 ms. A restart pays that build and then starts a process, host to
-the app answering 5.0 s and 4.5 s in the same run. Being editable cost a call-heavy loop (50 million calls of a method the
-compiler may not inline, five runs after a warm-up) 489 ms against 481 ms on .NET 10 and 444 against 448 on .NET 11. I had expected
-about 1.3 times from an earlier study. The build SageFs makes is already unoptimized, so the process was paying most of it before.
+file written to the new body served, 2.6 s on .NET 10 (twice) and 1.8 s then 2.6 s on .NET 11, the second with other builds running on the
+machine. The build is 1.6 to 2.4 s of that, the diff and the delta written 5 ms, the runtime's call with its handlers 1 ms. A restart pays
+that build and then starts a process, host to the app answering 4.4 to 5.6 s. Being editable cost a call-heavy loop (50 million calls of a
+method the compiler may not inline, five runs after a warm-up) 489 ms against 481 ms on .NET 10 and 444 against 448 on .NET 11 the first
+time, and 573 against 493 (1.16 times) and 470 against 481 the second. I had expected about 1.3 times from an earlier study. The build
+SageFs makes is already unoptimized, so the process was paying most of it before.
 
 It is on by default for a hot reload worker, and `SAGEFS_METADATA_DELTA=off` is the way back. The bar I set was: the whole host
 tier and the browser journeys green with it on, a save served in a small fraction of a restart, and no cost I could measure on
 the process for being editable. With the variable on, the host tier ran 312 tests, 307 passed and 5 are ignored by design,
 none failed (`TRUST tier=--integration-host ... verdict=Trusted`), and the 8 browser journeys of `--integration-hr` passed. A
-save was served in a third of what a restart took, and the loop cost nothing measurable. What I weighed against it: the REPL
+save was served in about a third of what a restart took, and the loop cost between nothing and 16 percent. What I weighed against it: the REPL
 and live tests keep the last build's code (above), which a restart used to refresh, and every number here is one fixture
 on one machine. I took the first as a documented limit, because a REPL in a hot reload session has always shown the code of the
 last build or reset, and the second as the reason the escape hatch is one variable.
