@@ -80,35 +80,45 @@ type GuardTranspiler =
   static member Weave(instructions: IEnumerable<CodeInstruction>) : IEnumerable<CodeInstruction> =
     GuardTranspilation.weave instructions
 
+/// Whether a method took the patch.
+[<RequireQualifiedAccess>]
+type Acquired =
+  | Held
+  | Refused of SkipReason
+
+/// What one patch attempt came to.
+[<RequireQualifiedAccess>]
+type PatchAttempt =
+  | Patched
+  | PatchFailed of detail: string
+
+/// How a method gets our patch and loses it. Harmony in the product; a recording fake in the guard simulation, so the
+/// registry's own rules (who holds what, when a patch goes on and comes off) are folded thousands of times a second
+/// without patching real code.
+type PatchBackend =
+  { Patch: MethodBase -> PatchAttempt
+    Unpatch: MethodBase -> unit }
+
 /// Which methods have our patch on them, and for whom. A patch goes on when the first lease wants a method and comes
 /// off when the last one lets go, so two clicks on getters that share a helper do not take each other's guards off.
-module internal GuardPatches =
+/// Everything happens under one gate, which is also the gate a detour takes, so a patch and a hot-reload detour never
+/// interleave on one method.
+type PatchRegistry(backend: PatchBackend, ledger: Ledger) =
+  let gate = obj ()
+  let held = Dictionary<nativeint, MethodBase * HashSet<int>>()
+  let mutable nextLease = 0
 
-  [<RequireQualifiedAccess>]
-  type Acquired =
-    | Held
-    | Refused of SkipReason
-
-  let private harmony = lazy (Harmony "sagefs.getter-guards")
-  let private gate = obj ()
-  let private held = Dictionary<nativeint, MethodBase * HashSet<int>>()
-  let private weaveMethod = lazy (HarmonyMethod(typeof<GuardTranspiler>.GetMethod "Weave"))
-
-  let private identity (m: MethodBase) : nativeint =
+  let identity (m: MethodBase) : nativeint =
     try m.MethodHandle.Value
     with _ -> 0n
 
-  /// Takes our patch off `m`. The caller holds the gate. A patch that will not come off stays on, which is harmless
-  /// (the guards only ever throw on a thread that was asked to stop) and is said once.
-  let private unpatch (m: MethodBase) : unit =
-    try harmony.Value.Unpatch(m, HarmonyPatchType.Transpiler, harmony.Value.Id)
-    with ex -> Log.warn "[Guards] could not take the guards off %s: %s" m.Name ex.Message
+  /// A new lease number, for the clicks that will hold methods.
+  member _.NewLease() : int = Interlocked.Increment(&nextLease)
 
-  /// `lease` wants `m` guarded. A method hot reload has re-pointed is refused here, under the same gate that
-  /// `releaseBeforeDetour` takes, so a detour and a patch never interleave on one method.
-  let acquire (lease: int) (m: MethodBase) : Acquired =
+  /// `lease` wants `m` guarded. A method hot reload has re-pointed is refused, said on the row.
+  member _.Acquire(lease: int, m: MethodBase) : Acquired =
     lock gate (fun () ->
-      match DetourLedger.resolve m with
+      match ledger.Resolve m with
       | Detour.DetouredTo _
       | Detour.DetouredElsewhere -> Acquired.Refused SkipReason.DetouredByHotReload
       | Detour.NotDetoured ->
@@ -118,14 +128,14 @@ module internal GuardPatches =
           owners.Add lease |> ignore
           Acquired.Held
         | false, _ ->
-          try
-            harmony.Value.Patch(m, transpiler = weaveMethod.Value) |> ignore
+          match backend.Patch m with
+          | PatchAttempt.Patched ->
             held.[key] <- (m, HashSet<int>([ lease ]))
             Acquired.Held
-          with ex -> Acquired.Refused (SkipReason.PatchRefused ex.Message))
+          | PatchAttempt.PatchFailed detail -> Acquired.Refused (SkipReason.PatchRefused detail))
 
   /// `lease` is done with `m`. Idempotent. The patch comes off when no lease is left.
-  let release (lease: int) (m: MethodBase) : unit =
+  member _.Release(lease: int, m: MethodBase) : unit =
     lock gate (fun () ->
       let key = identity m
       match held.TryGetValue key with
@@ -134,26 +144,55 @@ module internal GuardPatches =
         match owners.Count with
         | 0 ->
           held.Remove key |> ignore
-          unpatch patched
+          backend.Unpatch patched
         | _ -> ()
       | false, _ -> ())
 
   /// Hot reload is about to detour `m`: our patch comes off whoever holds it, and nothing goes back on. Taking the
   /// patch off AFTER the detour would put the old code back over it.
-  let releaseBeforeDetour (m: MethodBase) : unit =
-    DetourLedger.markDetoured m
+  member _.ReleaseBeforeDetour(m: MethodBase) : unit =
+    ledger.MarkDetoured m
     lock gate (fun () ->
       let key = identity m
       match held.TryGetValue key with
       | true, (patched, _) ->
         held.Remove key |> ignore
-        unpatch patched
+        backend.Unpatch patched
       | false, _ -> ())
 
   /// How many methods carry our patch right now.
-  let count () : int = lock gate (fun () -> held.Count)
+  member _.HeldCount : int = lock gate (fun () -> held.Count)
+
+/// Harmony as the backend: our transpiler on, our transpiler off.
+module internal HarmonyBackend =
+
+  let private harmony = lazy (Harmony "sagefs.getter-guards")
+  let private weaveMethod = lazy (HarmonyMethod(typeof<GuardTranspiler>.GetMethod "Weave"))
+
+  let private patch (m: MethodBase) : PatchAttempt =
+    try
+      harmony.Value.Patch(m, transpiler = weaveMethod.Value) |> ignore
+      PatchAttempt.Patched
+    with ex -> PatchAttempt.PatchFailed ex.Message
+
+  /// A patch that will not come off stays on, which is harmless (the guards only ever throw on a thread that was asked
+  /// to stop) and is said once.
+  let private unpatch (m: MethodBase) : unit =
+    try harmony.Value.Unpatch(m, HarmonyPatchType.Transpiler, harmony.Value.Id)
+    with ex -> Log.warn "[Guards] could not take the guards off %s: %s" m.Name ex.Message
+
+  let backend : PatchBackend = { Patch = patch; Unpatch = unpatch }
+
+  /// The id our patches carry, so a caller can ask Harmony who is on a method.
+  let ownerId () : string = harmony.Value.Id
 
 module GuardPatcher =
+
+  /// The registry of the process: the real patcher, the real ledger hot reload writes to.
+  let shared : PatchRegistry = PatchRegistry(HarmonyBackend.backend, DetourLedger.shared)
+
+  /// The id our patches carry on a method, for asking Harmony who is on it.
+  let patchOwnerId () : string = HarmonyBackend.ownerId ()
 
   let private callOpcodes = [ OpCodes.Call; OpCodes.Callvirt; OpCodes.Newobj; OpCodes.Ldftn; OpCodes.Ldvirtftn; OpCodes.Jmp ]
 
@@ -170,27 +209,25 @@ module GuardPatcher =
     with ex -> CalleeRead.Unreadable ex.Message
 
   /// How many methods carry our patch right now.
-  let patchedCount () : int = GuardPatches.count ()
+  let patchedCount () : int = shared.HeldCount
 
   /// Hot reload is about to detour `m`: the guards on it come off first. Hot reload calls this from `detourMethod`.
-  let releaseBeforeDetour (m: MethodBase) : unit = GuardPatches.releaseBeforeDetour m
-
-  let private nextLease = ref 0
+  let releaseBeforeDetour (m: MethodBase) : unit = shared.ReleaseBeforeDetour m
 
   let private nameOf = GuardReachability.nameOf
 
-  /// Guards everything `root` can reach in the given world, for as long as the lease lasts.
-  let prepareWith (world: WalkWorld) (budget: WalkBudget) (root: MethodBase) : GuardLease =
-    let lease = Interlocked.Increment(&nextLease.contents)
+  /// Guards everything `root` can reach in the given world through the given registry, for as long as the lease lasts.
+  let prepareIn (registry: PatchRegistry) (world: WalkWorld) (budget: WalkBudget) (root: MethodBase) : GuardLease =
+    let lease = registry.NewLease()
     let walk = GuardReachability.walk world budget root
     let acquired = List<MethodBase>()
     let refused = List<SkippedMethod>()
-    let releaseAll () = for m in acquired.ToArray() do GuardPatches.release lease m
+    let releaseAll () = for m in acquired.ToArray() do registry.Release(lease, m)
     try
       for m in walk.Eligible do
-        match GuardPatches.acquire lease m with
-        | GuardPatches.Acquired.Held -> acquired.Add m
-        | GuardPatches.Acquired.Refused reason -> refused.Add { Method = nameOf m; Reason = reason }
+        match registry.Acquire(lease, m) with
+        | Acquired.Held -> acquired.Add m
+        | Acquired.Refused reason -> refused.Add { Method = nameOf m; Reason = reason }
       let skipped =
         (walk.Skipped |> List.map (fun (m, reason) -> { Method = nameOf m; Reason = reason })) @ List.ofSeq refused
       let coverage =
@@ -203,6 +240,10 @@ module GuardPatcher =
       releaseAll ()
       { Coverage = GuardCoverage.NotGuarded (NotGuardedReason.PreparationFailed ex.Message)
         Release = ignore }
+
+  /// Guards everything `root` can reach in the given world, for as long as the lease lasts.
+  let prepareWith (world: WalkWorld) (budget: WalkBudget) (root: MethodBase) : GuardLease =
+    prepareIn shared world budget root
 
   /// The method that really runs when `getter` is read on `target`: the most derived override, not the declaration.
   let implementationFor (target: obj) (getter: MethodInfo) : MethodInfo =

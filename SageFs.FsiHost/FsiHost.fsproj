@@ -47,6 +47,7 @@
     <Compile Include="DetourLedger.fs" />
     <Compile Include="GuardReachability.fs" />
     <Compile Include="GuardPatcher.fs" />
+    <Compile Include="ClickLifecycle.fs" />
     <Compile Include="MemberEvaluation.fs" />
     <Compile Include="TestProviderTypes.fs" />
     <Compile Include="LiveTestingTypes.fs" />

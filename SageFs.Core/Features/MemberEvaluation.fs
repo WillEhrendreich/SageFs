@@ -103,14 +103,6 @@ module MemberEvaluation =
     | Completed (Result.Ok _)
     | Unavailable _ -> GuardTrip.NotTripped
 
-  /// Where a click stands, so the thread and the click agree on who lets the guards go.
-  type private ClickPhase =
-    | Running
-    /// The click gave up on the thread. Its guards stay on until the thread ends, because it may still be running
-    /// guarded code, and a guard that was taken off under it would let it run unchecked.
-    | Abandoned
-    | Ended
-
   /// Runs getters one click at a time. One per host: it carries the count of abandoned threads and the values whose
   /// getters did not return.
   type Evaluator(limits: Limits, sandbox: Sandboxing, guarding: Guarding) =
@@ -161,15 +153,13 @@ module MemberEvaluation =
           | 0 -> (try lease.Release () with _ -> ())
           | _ -> ()
         let phase = ref ClickPhase.Running
-        // Moves the click to `next` unless it already left `Running`, and says where it was.
-        let moveTo (next: ClickPhase) : ClickPhase =
+        // The click and the thread move the phase without seeing each other; the rule for who releases is
+        // `ClickLifecycle.step`, which the guard simulation folds too.
+        let happened (event: ClickEvent) : GuardDuty =
           lock phase (fun () ->
-            let before = phase.Value
-            match before with
-            | ClickPhase.Running -> phase.Value <- next
-            | ClickPhase.Abandoned
-            | ClickPhase.Ended -> ()
-            before)
+            let next, duty = ClickLifecycle.step phase.Value event
+            phase.Value <- next
+            duty)
         let cell = GuardCell()
         let worker : (Thread | null) ref = ref null
         let outcome : SandboxOutcome<Result<obj, exn>> ref =
@@ -194,12 +184,13 @@ module MemberEvaluation =
             outcome.Value <- (try sandbox work with e -> Threw e)
           finally
             Guard.Retire cell
-            let before = moveTo ClickPhase.Ended
+            let duty = happened ClickEvent.ThreadEnded
             finished.Set()
-            match before with
-            | ClickPhase.Abandoned -> letGo ()
-            | ClickPhase.Running
-            | ClickPhase.Ended -> ()
+            match duty with
+            | GuardDuty.ReleaseNow -> letGo ()
+            | GuardDuty.LeaveToTheClick
+            | GuardDuty.LeaveToTheThread
+            | GuardDuty.NothingToDo -> ()
         let thread = Thread(ThreadStart body, GetterStackBytes, IsBackground = true, Name = "sagefs-member-eval")
         thread.Start()
         let evaluated (result: Result<obj, MemberFailure>) (trip: GuardTrip) : MemberEvaluated =
@@ -231,13 +222,14 @@ module MemberEvaluation =
             letGo ()
             evaluated (Result.Error MemberFailure.MemberTimedOut) (tripOfOutcome outcome.Value)
           | false ->
-            match moveTo ClickPhase.Abandoned with
-            | ClickPhase.Running ->
+            match happened ClickEvent.GaveUp with
+            | GuardDuty.LeaveToTheThread ->
               quarantine target property.Name
               Interlocked.Increment(&abandoned.contents) |> ignore
               evaluated (Result.Error MemberFailure.MemberTimedOut) GuardTrip.NotTripped
-            | ClickPhase.Abandoned
-            | ClickPhase.Ended ->
+            | GuardDuty.ReleaseNow
+            | GuardDuty.LeaveToTheClick
+            | GuardDuty.NothingToDo ->
               // It finished in the instant between the wait and the verdict: nothing is abandoned.
               letGo ()
               evaluated (Result.Error MemberFailure.MemberTimedOut) (tripOfOutcome outcome.Value)

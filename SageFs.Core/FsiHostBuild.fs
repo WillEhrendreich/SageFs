@@ -33,6 +33,7 @@ let hostSourceNames =
     "DetourLedger.fs"
     "GuardReachability.fs"
     "GuardPatcher.fs"
+    "ClickLifecycle.fs"
     "MemberEvaluation.fs"
     "TestProviderTypes.fs"
     "LiveTestingTypes.fs"

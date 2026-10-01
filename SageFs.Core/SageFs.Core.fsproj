@@ -82,6 +82,8 @@
         <Compile Include="Features\DetourLedger.fs" />
         <Compile Include="Features\GuardReachability.fs" />
         <Compile Include="Features\GuardPatcher.fs" />
+        <!-- Who lets the guards go when a click and its thread part ways: one pure function, also folded by the guard simulation. -->
+        <Compile Include="Features\ClickLifecycle.fs" />
         <Compile Include="Features\MemberEvaluation.fs" />
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
@@ -101,6 +103,7 @@
         <EmbeddedResource Include="Features\DetourLedger.fs" LogicalName="FsiHost/DetourLedger.fs" />
         <EmbeddedResource Include="Features\GuardReachability.fs" LogicalName="FsiHost/GuardReachability.fs" />
         <EmbeddedResource Include="Features\GuardPatcher.fs" LogicalName="FsiHost/GuardPatcher.fs" />
+        <EmbeddedResource Include="Features\ClickLifecycle.fs" LogicalName="FsiHost/ClickLifecycle.fs" />
         <EmbeddedResource Include="Features\MemberEvaluation.fs" LogicalName="FsiHost/MemberEvaluation.fs" />
         <EmbeddedResource Include="TestProviderTypes.fs" LogicalName="FsiHost/TestProviderTypes.fs" />
         <EmbeddedResource Include="Features\LiveTestingTypes.fs" LogicalName="FsiHost/LiveTestingTypes.fs" />
