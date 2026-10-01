@@ -199,7 +199,14 @@ let exerciseRow (app: RunningApp) (row: Row) : Task<Observed> = task {
         let! confirmedVerdict = confirmed app
         let final = json confirmedVerdict
         // The first verdict said Pending, by the same mechanism: a client reads `mechanism`, never the words.
+        // The pending report names what it patched: the daemon counts it against the REPL, which still runs the old build.
+        let declared =
+          match (json verdict).TryGetProperty "declarations" with
+          | true, names -> [ for n in names.EnumerateArray() -> n.GetString() ]
+          | false, _ -> []
         match prop final "outcome", prop final "mechanism", prop (json verdict) "outcome", prop (json verdict) "mechanism" with
+        | "Patched", "metadata-delta", "PatchPending", "metadata-delta" when List.isEmpty declared ->
+          return observed served "the pending report names no declaration, so the REPL cannot be told what it is behind on"
         | "Patched", "metadata-delta", "PatchPending", "metadata-delta" -> return observed served ""
         | "Patched", mechanism, _, _ when mechanism <> "metadata-delta" ->
           return observed served (sprintf "the save ended Patched by %A, not by metadata delta: %s" mechanism (shorten (prop final "message")))

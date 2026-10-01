@@ -135,6 +135,19 @@ let private reloadOf (harness: Harness) (id: SessionId) : SessionReload =
   | Some session -> session.Info.Reload
   | None -> failtestf "expected session %s to exist" (SessionId.value id)
 
+let private freshnessOf (harness: Harness) (id: SessionId) : ReplFreshness =
+  match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(id, reply)) with
+  | Some session -> session.Info.Freshness
+  | None -> failtestf "expected session %s to exist" (SessionId.value id)
+
+let private deltaFacts (case: ReloadCase) (declarations: string list) : SessionReload =
+  SessionReload.Finished
+    { Case = case; Patched = 1; Considered = 1; Message = "m"; SuggestedAction = ""
+      Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta; Declarations = declarations }
+
+let private deltaPending (declarations: string list) = deltaFacts ReloadCase.PatchPending declarations
+let private deltaPatched (declarations: string list) = deltaFacts ReloadCase.Patched declarations
+
 let private restartRequired : SessionReload =
   SessionReload.Finished
     { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 2; Message = "restart the app to apply this"; SuggestedAction = "restart"; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch }
@@ -172,6 +185,26 @@ let reloadTests =
         harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, restartRequired))
         let! _ = harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, RestartPlan.RespawnOnly, reply))
         reloadOf harness info.Id |> Expect.equal "the new worker has not been saved to" SessionReload.NoReloadYet })
+    }
+
+    testTask "WHY — a delta that landed in the worker puts the session's REPL behind its app, and the session carries that for every surface to read" {
+      do! withHarness (async { return Ok "unused" }) (fun harness -> task {
+        let info = createSession harness
+        freshnessOf harness info.Id |> Expect.equal "a fresh session is level" ReplFreshness.InSync
+        harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, deltaPending [ "Handlers.describe" ]))
+        freshnessOf harness info.Id |> Expect.equal "behind after the first save" (ReplFreshness.BehindApp (1, [ "Handlers.describe" ]))
+        harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, deltaPatched [ "Handlers.describe" ]))
+        harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, restartRequired))
+        freshnessOf harness info.Id |> Expect.equal "the confirmation and an unrelated verdict change nothing" (ReplFreshness.BehindApp (1, [ "Handlers.describe" ])) })
+    }
+
+    testTask "WHY — a replacement worker is built fresh, so it is level again, by a respawn and by a rebuild alike" {
+      for plan in [ RestartPlan.RespawnOnly; RestartPlan.Rebuild GranularRestart.RestartSubject.Worker ] do
+        do! withHarness (async { return Ok "build ok" }) (fun harness -> task {
+          let info = createSession harness
+          harness.Mailbox.Post(SessionCommand.ReloadObserved(info.Id, deltaPending [ "Handlers.describe" ]))
+          let! _ = harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, plan, reply))
+          freshnessOf harness info.Id |> Expect.equal (sprintf "level after %A" plan) ReplFreshness.InSync })
     }
 
     testTask "WHY — a swap keeps a Restarted verdict, because the swap is the restart it reports and an agent reading status right after would otherwise see nothing happened" {
