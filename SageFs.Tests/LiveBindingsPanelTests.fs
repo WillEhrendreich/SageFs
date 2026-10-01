@@ -120,9 +120,9 @@ let headerTests =
       html.Contains "not evaluated" |> Expect.isFalse "no count"
 
     testCase "the last click's containment line is shown, and absent before any click" <| fun _ ->
-      let ran = ClickAnswered(MemberShown(box [], ContainedBy SandboxPolicy.NoNetworkNoWritesNoSpawn))
+      let ran = ClickAnswered(MemberShown(box [], ContainedBy SandboxPolicy.NoNetworkNoWritesNoSpawn, { Coverage = GuardCoverage.NotGuarded NotGuardedReason.SwitchedOff; Trip = GuardTrip.NotTripped }))
       panel (view WalkSafe ran [ box [] ]) |> Expect.stringContains "contained" "ran under a syscall filter"
-      let uncontained = ClickAnswered(MemberShown(box [], NotContained NotLinux))
+      let uncontained = ClickAnswered(MemberShown(box [], NotContained NotLinux, { Coverage = GuardCoverage.NotGuarded NotGuardedReason.SwitchedOff; Trip = GuardTrip.NotTripped }))
       panel (view WalkSafe uncontained [ box [] ]) |> Expect.stringContains "not contained, with why" "no I/O containment here: "
       (panel (view WalkSafe NoClickYet [ box [] ])).Contains "syscall filter" |> Expect.isFalse "nothing before a click"
 

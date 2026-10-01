@@ -117,7 +117,7 @@ type MemberUnavailableReason =
 /// What a click on a "not evaluated" row came to.
 type MemberOutcome =
   /// The binding walked again with the clicked member run (or the reason it was not).
-  | MemberShown of binding: LiveValueTree.LiveBindingValue * containment: Containment
+  | MemberShown of binding: LiveValueTree.LiveBindingValue * containment: Containment * guards: GuardOutcome
   /// The session has no binding of that name any more (a reset or a rebind between the pane and the click).
   | BindingNotFound of name: string
   /// The session's walk mode makes the click meaningless, and says so.

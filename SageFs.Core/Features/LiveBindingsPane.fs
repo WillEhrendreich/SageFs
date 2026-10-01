@@ -49,13 +49,22 @@ module LiveBindingsPane =
     | NothingClickedYet
     | LineSays of text: string
 
+  /// The containment sentence plus what the guards covered and whether one stopped the getter.
+  let private withGuards (containment: string) (guards: GuardOutcome) : string =
+    let trip = GuardCoverage.describeTrip guards.Trip
+    match trip with
+    | "" -> sprintf "%s; %s" containment (GuardCoverage.describe guards.Coverage)
+    | stopped -> sprintf "%s; %s; %s" containment (GuardCoverage.describe guards.Coverage) stopped
+
   let containmentLine (report: ClickReport) : ContainmentLine =
     match report with
     | NoClickYet -> NothingClickedYet
     | ClickAnswered outcome ->
       match outcome with
-      | MemberShown(_, ContainedBy _) -> LineSays "ran under a syscall filter (no network, no file writes, no new processes)"
-      | MemberShown(_, NotContained why) -> LineSays(sprintf "no I/O containment here: %s" (SandboxUnavailable.describe why))
+      | MemberShown(_, ContainedBy _, guards) ->
+        LineSays(withGuards "ran under a syscall filter (no network, no file writes, no new processes)" guards)
+      | MemberShown(_, NotContained why, guards) ->
+        LineSays(withGuards (sprintf "no I/O containment here: %s" (SandboxUnavailable.describe why)) guards)
       | MemberRefused refusal -> LineSays(sprintf "not run: %s" (MemberClick.describeRefusal refusal))
       | MemberUnavailable reason -> LineSays(sprintf "not run: %s" (MemberClick.describeUnavailable reason))
       | BindingNotFound name -> LineSays(sprintf "not run: %s is not in the session any more" name)
@@ -234,7 +243,7 @@ module LiveBindingsPane =
             | Some snapshot ->
               let next =
                 match outcome with
-                | MemberShown(replacement, _) ->
+                | MemberShown(replacement, _, _) ->
                   match replaceBinding now replacement snapshot with
                   | Replaced replaced -> replaced
                   | NotInSnapshot _ -> { snapshot with CapturedAt = now }

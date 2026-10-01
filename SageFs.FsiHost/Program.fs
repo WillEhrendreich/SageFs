@@ -189,9 +189,9 @@ let private run (fsiArgs: string list) : int =
     match ThreadSandbox.availability () with
     | Result.Ok _ ->
       ContainedBy SandboxPolicy.NoNetworkNoWritesNoSpawn,
-      MemberEvaluation.create MemberEvaluation.productLimits (MemberEvaluation.filtered SandboxPolicy.NoNetworkNoWritesNoSpawn)
+      MemberEvaluation.createGuarded MemberEvaluation.productLimits (MemberEvaluation.filtered SandboxPolicy.NoNetworkNoWritesNoSpawn)
     | Result.Error why ->
-      NotContained why, MemberEvaluation.create MemberEvaluation.productLimits MemberEvaluation.unfiltered
+      NotContained why, MemberEvaluation.createGuarded MemberEvaluation.productLimits MemberEvaluation.unfiltered
   /// Run agent work that needs a started agent; a failure is reported as a refusal, never a crash of the host.
   let withAgent (id: int64) (work: HostAgent.Agent -> unit) =
     match Volatile.Read(&agentState.contents) with
@@ -225,11 +225,17 @@ let private run (fsiArgs: string list) : int =
             let signature = try typeNameOf bound.Value with _ -> ""
             let walkAgain () =
               try
+                // What the click's guards covered, said on the row. Nothing ran unless the walk reached the member.
+                let guards = ref { Coverage = GuardCoverage.NotGuarded NotGuardedReason.NothingRan; Trip = GuardTrip.NotTripped }
+                let runner (property: System.Reflection.PropertyInfo) (target: obj) =
+                  let evaluated = memberEvaluator.RunGuarded property target
+                  guards.Value <- evaluated.Guards
+                  evaluated.Outcome
                 let walk : LiveValueTree.Walk =
                   { Mode = mode
-                    Force = LiveValueTree.ForcedMember.At(binding :: path, memberEvaluator.Run) }
+                    Force = LiveValueTree.ForcedMember.At(binding :: path, runner) }
                 let root = LiveValueTree.buildValueNodeWith walk binding value
-                send (MemberResult(id, MemberShown({ Name = binding; TypeSignature = signature; Root = root }, containment)))
+                send (MemberResult(id, MemberShown({ Name = binding; TypeSignature = signature; Root = root }, containment, guards.Value)))
               with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
             Thread(walkAgain, IsBackground = true, Name = "sagefs-member-click").Start()
         | RunCheck(id, text) ->

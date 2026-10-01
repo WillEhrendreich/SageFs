@@ -196,22 +196,26 @@ let tests =
               | other -> failtestf "expected a snapshot, got %A" other
 
               match! started.Session.EvaluateMember("g", [ "Len" ]) with
-              | Answered (MemberShown (binding, containment)) ->
+              | Answered (MemberShown (binding, containment, guards)) ->
                 childOf "Len" binding |> Option.map (fun c -> c.Preview) |> Expect.equal "the click ran Len" (Some "4")
                 childOf "Spin" binding |> Option.map (fun c -> c.Kind)
                 |> Expect.equal "Spin was not run by the click on Len" (Some (SageFs.Features.LiveValueTree.NodeKind.NotEvaluated SageFs.Features.LiveValueTree.NotEvaluatedReason.GetterLoops))
                 expectContainmentMatchesPlatform containment
+                match guards.Coverage with
+                | SageFs.Features.GuardCoverage.Guarded _ -> ()
+                | other -> failtestf "the click should have run with guards on, got %A" other
               | other -> failtestf "expected the walked binding, got %A" other
 
               match! started.Session.EvaluateMember("g", [ "Spin" ]) with
-              | Answered (MemberShown (binding, _)) ->
+              | Answered (MemberShown (binding, _, guards)) ->
+                guards.Trip |> Expect.equal "a guard stopped the loop, so no thread is left spinning" SageFs.Features.GuardTrip.LoopStopped
                 childOf "Spin" binding |> Option.map (fun c -> c.Kind)
                 |> Expect.equal "the looping getter is given up on, with the reason" (Some (SageFs.Features.LiveValueTree.NodeKind.NotEvaluated SageFs.Features.LiveValueTree.NotEvaluatedReason.EvaluationTimedOut))
               | other -> failtestf "expected the walked binding, got %A" other
 
               // The host is still serving: the abandoned getter did not take it down.
               match! started.Session.EvaluateMember("g", [ "Len" ]) with
-              | Answered (MemberShown (binding, _)) ->
+              | Answered (MemberShown (binding, _, _)) ->
                 childOf "Len" binding |> Option.map (fun c -> c.Preview) |> Expect.equal "still answers after a timeout" (Some "4")
               | other -> failtestf "expected the walked binding, got %A" other
 

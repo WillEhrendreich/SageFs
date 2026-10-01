@@ -76,7 +76,7 @@ let replaceTests =
 
 [<Tests>]
 let containmentTests =
-  let shown containment = MemberShown(binding "a" (node "a" NodeKind.Leaf []), containment)
+  let shown containment = MemberShown(binding "a" (node "a" NodeKind.Leaf []), containment, { Coverage = GuardCoverage.NotGuarded NotGuardedReason.SwitchedOff; Trip = GuardTrip.NotTripped })
   testList "the containment line of the last click" [
     testCase "before any click there is no line" <| fun _ ->
       LiveBindingsPane.containmentLine LiveBindingsPane.NoClickYet
@@ -225,14 +225,14 @@ let feedTests =
       let worker = FakeWorker(readingOf LiveBindingsPane.ChosenByUser WalkSafe [ binding "box" (held "Size" NotEvaluatedReason.GetterRunsCode); binding "other" (node "other" NodeKind.Leaf []) ])
       do! LiveBindingsPane.Feed.pull worker.Ask adaptive notes "s1" (fun () -> WalkSafe)
       let after = binding "box" (node "box" NodeKind.Class [ node "Size" NodeKind.Leaf [] ])
-      worker.ClickAnswers(MemberShown(after, NotContained NotLinux))
+      worker.ClickAnswers(MemberShown(after, NotContained NotLinux, { Coverage = GuardCoverage.NotGuarded NotGuardedReason.SwitchedOff; Trip = GuardTrip.NotTripped }))
       let! outcome = LiveBindingsPane.Feed.evaluateMember worker.Ask adaptive notes "s1" "box" [ "Size" ]
-      outcome |> Expect.equal "answered" (Result.Ok(MemberShown(after, NotContained NotLinux)))
+      outcome |> Expect.equal "answered" (Result.Ok(MemberShown(after, NotContained NotLinux, { Coverage = GuardCoverage.NotGuarded NotGuardedReason.SwitchedOff; Trip = GuardTrip.NotTripped })))
       let stored = (Features.LiveBindingsAdaptive.tryGet adaptive "s1").Value
       stored.Bindings.[0] |> Expect.equal "replaced" after
       stored.Generation |> Expect.equal "same walk" 3L
       (LiveBindingsPane.PaneStore.notesOf notes "s1").Click
-      |> Expect.equal "remembered" (LiveBindingsPane.ClickAnswered(MemberShown(after, NotContained NotLinux)))
+      |> Expect.equal "remembered" (LiveBindingsPane.ClickAnswered(MemberShown(after, NotContained NotLinux, { Coverage = GuardCoverage.NotGuarded NotGuardedReason.SwitchedOff; Trip = GuardTrip.NotTripped })))
     }
 
     testAsync "a refused click still reaches every subscriber, because its line changed" {

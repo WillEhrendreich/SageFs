@@ -368,7 +368,7 @@ let tests =
           withSession newRemote (fun session ->
             mustSucceed session "type Probe() =\n  member _.Calls = string (List.length [ 1; 2; 3 ])\nlet probe = Probe()"
             match SageFs.WorkerProtocol.Serialization.tryDeserialize<SageFs.FsiHost.FsiProtocol.MemberOutcome> (session.EvaluateMember("probe", [ "Calls" ])) with
-            | Result.Ok(SageFs.FsiHost.FsiProtocol.MemberShown(shown, _)) ->
+            | Result.Ok(SageFs.FsiHost.FsiProtocol.MemberShown(shown, _, _)) ->
               Expect.equal "the binding" "probe" shown.Name
               Expect.isFalse "the clicked row now has its value" ((sprintf "%A" shown.Root).Contains "GetterRunsCode")
             | other -> failtestf "expected MemberShown, got %A" other)
