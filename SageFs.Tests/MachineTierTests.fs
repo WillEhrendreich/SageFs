@@ -59,6 +59,34 @@ let private probeGen : Gen<MachineProbe> =
 
 let private probeArb = Arb.fromGen probeGen
 
+/// Three lines of a real /proc/self/mountinfo, from the 2009 machine on 2026-10-01: a btrfs root on a
+/// device-mapper volume (whose anonymous 0:29 is no block device, so the disk has to be found from the
+/// source), a vfat boot partition, and a tmpfs.
+let private btrfsLine = "32 2 0:29 /@ / rw,relatime shared:1 - btrfs /dev/mapper/root rw,compress=zstd:3,space_cache=v2,subvolid=272,subvol=/@"
+let private vfatLine = "103 32 8:1 / /boot rw,relatime shared:212 - vfat /dev/sda1 rw,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro"
+let private tmpfsLine = "211 32 0:53 / /tmp rw,nosuid,nodev shared:152 - tmpfs tmpfs rw,size=4051844k,nr_inodes=1048576,inode64,huge=advise,usrquota"
+/// A line with no optional fields, where the separator is the seventh field and not the eighth.
+let private noOptionalFieldsLine = "36 25 0:32 / /mnt rw,relatime - ext4 /dev/sdb1 rw"
+
+[<Tests>]
+let mountSourceTests =
+  testList "Machine tier: the device under a mount" [
+
+    testCase "WHY — a btrfs root names its device-mapper volume, because btrfs has no block device of its own to trace" <| fun _ ->
+      MountSource.ofMountinfoLine btrfsLine |> Expect.equal "the source after the file system type" (MountSource.Device "/dev/mapper/root")
+
+    testCase "a partition names itself" <| fun _ ->
+      MountSource.ofMountinfoLine vfatLine |> Expect.equal "the partition" (MountSource.Device "/dev/sda1")
+
+    testCase "a line with no optional fields is read at the same place" <| fun _ ->
+      MountSource.ofMountinfoLine noOptionalFieldsLine |> Expect.equal "the separator is found, not counted" (MountSource.Device "/dev/sdb1")
+
+    testCase "WHY — a tmpfs and a line that is not a mount line name no device, so nothing is guessed from them" <| fun _ ->
+      MountSource.ofMountinfoLine tmpfsLine |> Expect.equal "tmpfs is not a device" MountSource.NotADevice
+      MountSource.ofMountinfoLine "" |> Expect.equal "empty" MountSource.NotADevice
+      MountSource.ofMountinfoLine "garbage" |> Expect.equal "no separator" MountSource.NotADevice
+  ]
+
 [<Tests>]
 let tests =
   testList "Machine tier" [

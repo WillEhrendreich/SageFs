@@ -18,6 +18,8 @@
 //   --label TEXT     a name for this run in the output (a tier, a machine)
 //   --env K=V        extra environment for the daemon, repeatable (a timeout override)
 //   --nice           run the daemon at nice 19 (Linux/macOS)
+//   --memory-cap S   run the DAEMON (and what it starts, not this harness) in a systemd user scope with this
+//                    memory limit and no swap, e.g. 1500M (Linux with systemd)
 //   --ready-cap S    give a session this many seconds to reach Ready (default 600)
 //   --out FILE       also write the raw samples as JSON
 //   --keep           do not delete --work at the end
@@ -57,6 +59,8 @@ type Options =
     Label: string
     Env: (string * string) list
     Nice: bool
+    /// A systemd MemoryMax value for the daemon's scope; empty means no cap.
+    MemoryCap: string
     ReadyCap: TimeSpan
     Out: string
     Keep: bool
@@ -73,6 +77,7 @@ let defaultOptions =
     Label = ""
     Env = []
     Nice = false
+    MemoryCap = ""
     ReadyCap = TimeSpan.FromSeconds 600.0
     Out = ""
     Keep = false
@@ -94,6 +99,7 @@ let rec parseArgs (o: Options) (rest: string list) : Options =
     if i <= 0 then failwithf "--env wants K=V, got %s" v
     parseArgs { o with Env = o.Env @ [ (v.Substring(0, i), v.Substring(i + 1)) ] } tl
   | "--nice" :: tl -> parseArgs { o with Nice = true } tl
+  | "--memory-cap" :: v :: tl -> parseArgs { o with MemoryCap = v } tl
   | "--ready-cap" :: v :: tl -> parseArgs { o with ReadyCap = TimeSpan.FromSeconds(float v) } tl
   | "--out" :: v :: tl -> parseArgs { o with Out = Path.GetFullPath v } tl
   | "--keep" :: tl -> parseArgs { o with Keep = true } tl
@@ -357,10 +363,16 @@ let startDaemon (dataDir: string) (hostCache: string) : Daemon =
   if opts.ReuseProfile && File.Exists carriedProfile then File.Copy(carriedProfile, Path.Combine(dataDir, "machine-profile.json"), true)
   Directory.CreateDirectory hostCache |> ignore
   let dll = Path.Combine(opts.SageFsDir, "SageFs.dll")
-  let exe, args =
+  let daemonCommand =
     match opts.Nice with
-    | true -> "nice", sprintf "-n 19 dotnet \"%s\" --mcp-port %d --ttl 30m" dll opts.Port
-    | false -> "dotnet", sprintf "\"%s\" --mcp-port %d --ttl 30m" dll opts.Port
+    | true -> sprintf "nice -n 19 dotnet \"%s\" --mcp-port %d --ttl 30m" dll opts.Port
+    | false -> sprintf "dotnet \"%s\" --mcp-port %d --ttl 30m" dll opts.Port
+  let exe, args =
+    match opts.MemoryCap with
+    | "" ->
+      let first = daemonCommand.IndexOf ' '
+      daemonCommand.Substring(0, first), daemonCommand.Substring(first + 1)
+    | cap -> "systemd-run", sprintf "--user --scope -q -p MemoryMax=%s -p MemorySwapMax=0 %s" cap daemonCommand
   let psi = ProcessStartInfo(exe, args, WorkingDirectory = fixtureDir, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true)
   // Nothing of the caller's SageFs configuration may leak in: it would change what is measured.
   for k in psi.Environment.Keys |> Seq.toList do
