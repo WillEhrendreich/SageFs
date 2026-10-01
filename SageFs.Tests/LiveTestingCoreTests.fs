@@ -8,6 +8,8 @@ open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 
+module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
+
 // --- TestId Tests (GREEN — already correct) ---
 
 [<Tests>]
@@ -609,9 +611,9 @@ let categoryDetectionTests = testList "CategoryDetection" [
 let testSummaryDetailTests = testList "TestSummary" [
   test "fromStatuses counts correctly" {
     let statuses = [|
-      TestRunStatus.Passed (TimeSpan.FromMilliseconds 5.0)
-      TestRunStatus.Passed (TimeSpan.FromMilliseconds 3.0)
-      TestRunStatus.Failed (TestFailure.AssertionFailed "x", TimeSpan.FromMilliseconds 1.0)
+      TestRunStatus.Passed FixtureDurations.usualResult
+      TestRunStatus.Passed FixtureDurations.quickResult
+      TestRunStatus.Failed (TestFailure.AssertionFailed "x", FixtureDurations.fastResult)
       TestRunStatus.Stale
       TestRunStatus.Running
       TestRunStatus.PolicyDisabled

@@ -8,6 +8,15 @@ open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 
+module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
+
+/// A passing result's duration with a fractional part, so the tooltip case can check that the
+/// whole-millisecond part ("12") is rendered.
+let private tooltipDuration = TimeSpan.FromMilliseconds 12.5
+
+/// The duration of the passing result the enrichment case feeds in. Never read back.
+let private enrichmentDuration = TimeSpan.FromMilliseconds 100.0
+
 // --- TestDependencyGraph Tests (RED — stub returns empty) ---
 
 [<Tests>]
@@ -481,7 +490,7 @@ let annotationTests = testList "Gutter Annotations" [
         |]
         DiscoveredTests = [| test1 |]
         LastResults = Map.ofList [
-          test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+          test1.Id, mkResult test1.Id (TestResult.Passed FixtureDurations.usualResult)
         ]
         Activation = LiveTestingActivation.Active
     }
@@ -498,14 +507,14 @@ let annotationTests = testList "Gutter Annotations" [
   }
 
   test "tooltip includes duration for passed tests" {
-    let status = TestRunStatus.Passed (TimeSpan.FromMilliseconds 12.5)
+    let status = TestRunStatus.Passed tooltipDuration
     let tip = StatusToGutter.tooltip "test1" status
     tip |> Expect.stringContains "check mark" "\u2713"
     tip |> Expect.stringContains "duration" "12"
   }
 
   test "tooltip shows failure message" {
-    let status = TestRunStatus.Failed (TestFailure.AssertionFailed "expected 42 got 0", TimeSpan.FromMilliseconds 1.0)
+    let status = TestRunStatus.Failed (TestFailure.AssertionFailed "expected 42 got 0", FixtureDurations.fastResult)
     let tip = StatusToGutter.tooltip "test1" status
     tip |> Expect.stringContains "cross mark" "\u2717"
     tip |> Expect.stringContains "message" "expected 42 got 0"
@@ -578,8 +587,8 @@ let coverageProjectionExtendedTests = testList "Coverage Projection Extended" [
   let mkResult tid res =
     { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow; Output = None }
   let results = Map.ofList [
-    test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
-    test2.Id, mkResult test2.Id (TestResult.Passed (TimeSpan.FromMilliseconds 3.0))
+    test1.Id, mkResult test1.Id (TestResult.Passed FixtureDurations.usualResult)
+    test2.Id, mkResult test2.Id (TestResult.Passed FixtureDurations.quickResult)
   ]
 
   test "symbolCoverage returns NotCovered for unknown symbol" {
@@ -603,7 +612,7 @@ let coverageProjectionExtendedTests = testList "Coverage Projection Extended" [
 
   test "symbolCoverage returns Covered with not all passing when test fails" {
     let failedResults =
-      Map.add test1.Id (mkResult test1.Id (TestResult.Failed (TestFailure.AssertionFailed "bad", TimeSpan.FromMilliseconds 1.0))) results
+      Map.add test1.Id (mkResult test1.Id (TestResult.Failed (TestFailure.AssertionFailed "bad", FixtureDurations.fastResult))) results
     let graph = {
       TestDependencyGraph.empty with
         TransitiveCoverage = Map.ofList [ "Module.add", [| test1.Id |] ]
@@ -770,7 +779,7 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
     let results = Map.ofList [
-      tid1, { TestId = tid1; TestName = "test1"; Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0); Timestamp = DateTimeOffset.UtcNow; Output = None }
+      tid1, { TestId = tid1; TestName = "test1"; Result = TestResult.Passed FixtureDurations.usualResult; Timestamp = DateTimeOffset.UtcNow; Output = None }
     ]
     match CoverageCorrelation.testsForSymbol graph tests results "MyModule.add" with
     | CoverageDetail.Covered infos ->
@@ -801,7 +810,7 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
     let graph = { TestDependencyGraph.empty with TransitiveCoverage = Map.ofList ["Prod.validate", [| tid |]] }
     let annotations = [| { Symbol = "Prod.validate"; FilePath = "prod.fs"; DefinitionLine = 42; Status = CoverageStatus.Covered (1, CoverageHealth.AllPassing); BranchCoverage = BranchCoverage.Unknown } |]
     let tests = [| { Id = tid; FullName = "Tests.lineTest"; DisplayName = "lineTest"; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit } |]
-    let results = Map.ofList [ tid, { TestId = tid; TestName = "lineTest"; Result = TestResult.Passed (TimeSpan.FromMilliseconds 3.0); Timestamp = DateTimeOffset.UtcNow; Output = None } ]
+    let results = Map.ofList [ tid, { TestId = tid; TestName = "lineTest"; Result = TestResult.Passed FixtureDurations.quickResult; Timestamp = DateTimeOffset.UtcNow; Output = None } ]
     match CoverageCorrelation.testsForLine annotations graph tests results "prod.fs" 42 with
     | CoverageDetail.Covered infos ->
       infos.Length |> Expect.equal "1 test" 1
@@ -1252,7 +1261,7 @@ let rangeLookupTests = testList "FileAnnotations.projectWithCoverage range enric
     let sp = mkTestSp filePath 10 4 15 20
     let maps = [| mkTestMap [| sp |] |]
     let tid = TestId.TestId "test1"
-    let passed = TestResult.Passed(System.TimeSpan.FromMilliseconds 100.0)
+    let passed = TestResult.Passed enrichmentDuration
     let depGraph =
       { TestDependencyGraph.empty with
           SymbolToTests = Map.ofList [ "MyModule.foo", [| tid |] ] }

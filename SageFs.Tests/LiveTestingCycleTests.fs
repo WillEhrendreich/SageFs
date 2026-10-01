@@ -9,6 +9,35 @@ open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 open SageFs.Measures
 
+module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
+
+// --- Stage timings the cycle-timing cases feed in ---
+//
+// Nothing waits for these. The cases that format a timing state the text they must produce
+// ("TS:0.8ms | FCS:142ms | Run:87ms (12)"), so the value is part of what the case pins, and each
+// name carries it: `treeSitter0p8ms` is the tree-sitter stage at 0.8 ms, `fcs142ms` the FCS stage
+// at 142 ms, `run87ms` the execution stage at 87 ms. A stage name is shared by every case that
+// uses that stage at that value.
+
+let private treeSitter0p5ms = TimeSpan.FromMilliseconds 0.5
+let private treeSitter0p8ms = TimeSpan.FromMilliseconds 0.8
+let private treeSitter1ms = TimeSpan.FromMilliseconds 1.0
+let private treeSitter1p2ms = TimeSpan.FromMilliseconds 1.2
+let private treeSitter1p5ms = TimeSpan.FromMilliseconds 1.5
+
+let private fcs50ms = TimeSpan.FromMilliseconds 50.0
+let private fcs85ms = TimeSpan.FromMilliseconds 85.0
+let private fcs100ms = TimeSpan.FromMilliseconds 100.0
+let private fcs142ms = TimeSpan.FromMilliseconds 142.0
+
+let private run30ms = TimeSpan.FromMilliseconds 30.0
+let private run42ms = TimeSpan.FromMilliseconds 42.0
+let private run50ms = TimeSpan.FromMilliseconds 50.0
+let private run87ms = TimeSpan.FromMilliseconds 87.0
+
+/// The duration of the passing result the end-to-end dispatch case sends in. Never read back.
+let private dispatchedResultDuration = TimeSpan.FromMilliseconds 42.0
+
 // --- TestCycleTiming Tests (RED — stub returns 0.0) ---
 
 [<Tests>]
@@ -48,7 +77,7 @@ let TestCycleTimingTests = testList "TestCycleTiming" [
 let TestCycleTimingExtendedTests = testList "TestCycleTiming extended" [
   test "fcsMs returns 0 for tree-sitter only" {
     let t = {
-      Depth = TestCycleDepth.TreeSitterOnly (TimeSpan.FromMilliseconds 1.0)
+      Depth = TestCycleDepth.TreeSitterOnly treeSitter1ms
       TotalTests = 0; AffectedTests = 0
       Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
     }
@@ -58,7 +87,7 @@ let TestCycleTimingExtendedTests = testList "TestCycleTiming extended" [
 
   test "fcsMs returns value for ThroughFcs" {
     let t = {
-      Depth = TestCycleDepth.ThroughFcs (TimeSpan.FromMilliseconds 1.0, TimeSpan.FromMilliseconds 142.0)
+      Depth = TestCycleDepth.ThroughFcs (treeSitter1ms, fcs142ms)
       TotalTests = 10; AffectedTests = 5
       Trigger = RunTrigger.FileSave; Timestamp = DateTimeOffset.UtcNow
     }
@@ -69,7 +98,7 @@ let TestCycleTimingExtendedTests = testList "TestCycleTiming extended" [
   test "totalMs sums all stages" {
     let t = {
       Depth = TestCycleDepth.ThroughExecution (
-        TimeSpan.FromMilliseconds 1.0, TimeSpan.FromMilliseconds 100.0, TimeSpan.FromMilliseconds 50.0)
+        treeSitter1ms, fcs100ms, run50ms)
       TotalTests = 10; AffectedTests = 3
       Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
     }
@@ -79,7 +108,7 @@ let TestCycleTimingExtendedTests = testList "TestCycleTiming extended" [
 
   test "toStatusBar tree-sitter only" {
     let t = {
-      Depth = TestCycleDepth.TreeSitterOnly (TimeSpan.FromMilliseconds 0.8)
+      Depth = TestCycleDepth.TreeSitterOnly treeSitter0p8ms
       TotalTests = 0; AffectedTests = 0
       Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
     }
@@ -90,7 +119,7 @@ let TestCycleTimingExtendedTests = testList "TestCycleTiming extended" [
   test "toStatusBar full cycle" {
     let t = {
       Depth = TestCycleDepth.ThroughExecution (
-        TimeSpan.FromMilliseconds 0.8, TimeSpan.FromMilliseconds 142.0, TimeSpan.FromMilliseconds 87.0)
+        treeSitter0p8ms, fcs142ms, run87ms)
       TotalTests = 47; AffectedTests = 12
       Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
     }
@@ -224,9 +253,9 @@ let cycleStatusBarTests = testList "cycle Status Bar" [
   test "full cycle timing formats correctly" {
     let timing = {
       Depth = TestCycleDepth.ThroughExecution (
-        TimeSpan.FromMilliseconds 0.8,
-        TimeSpan.FromMilliseconds 142.0,
-        TimeSpan.FromMilliseconds 87.0)
+        treeSitter0p8ms,
+        fcs142ms,
+        run87ms)
       TotalTests = 100; AffectedTests = 12
       Trigger = RunTrigger.Keystroke
       Timestamp = DateTimeOffset.UtcNow
@@ -240,7 +269,7 @@ let cycleStatusBarTests = testList "cycle Status Bar" [
 
   test "tree-sitter only timing shows partial" {
     let timing = {
-      Depth = TestCycleDepth.TreeSitterOnly (TimeSpan.FromMilliseconds 0.5)
+      Depth = TestCycleDepth.TreeSitterOnly treeSitter0p5ms
       TotalTests = 100; AffectedTests = 0
       Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
     }
@@ -273,7 +302,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
       LiveTestState.empty with
         DiscoveredTests = [| test1 |]
         LastResults = Map.ofList [
-          test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+          test1.Id, mkResult test1.Id (TestResult.Passed FixtureDurations.usualResult)
         ]
         Activation = LiveTestingActivation.Active
     }
@@ -334,7 +363,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
         RunPhases = Map.ofList ["s", Running gen]; LastGeneration = gen
     }
     let newResults = [|
-      mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+      mkResult test1.Id (TestResult.Passed FixtureDurations.slowResult)
     |]
     let finalized =
       SageFsUpdate.recomputeStatuses
@@ -351,12 +380,12 @@ let statusEntryTests = testList "StatusEntry Computation" [
       LiveTestState.empty with
         DiscoveredTests = [| test1 |]; Activation = LiveTestingActivation.Active
         LastResults = Map.ofList [
-          test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+          test1.Id, mkResult test1.Id (TestResult.Passed FixtureDurations.usualResult)
         ]
     }
     let state = state |> LiveTestState.withStatusEntries (LiveTesting.computeStatusEntries state)
     let newResults = [|
-      mkResult test1.Id (TestResult.Failed (TestFailure.AssertionFailed "oops", TimeSpan.FromMilliseconds 1.0))
+      mkResult test1.Id (TestResult.Failed (TestFailure.AssertionFailed "oops", FixtureDurations.fastResult))
     |]
     let finalized =
       SageFsUpdate.recomputeStatuses
@@ -1185,9 +1214,9 @@ let TestCycleTimingDispatchTests = testList "cycle timing dispatch" [
 
     let timing = {
       Depth = TestCycleDepth.ThroughExecution (
-        System.TimeSpan.FromMilliseconds 1.2,
-        System.TimeSpan.FromMilliseconds 85.0,
-        System.TimeSpan.FromMilliseconds 42.0)
+        treeSitter1p2ms,
+        fcs85ms,
+        run42ms)
       TotalTests = 10
       AffectedTests = 3
       Trigger = RunTrigger.Keystroke
@@ -1207,9 +1236,9 @@ let TestCycleTimingDispatchTests = testList "cycle timing dispatch" [
   test "TestCycleTiming.toStatusBar formats correctly for ThroughExecution" {
     let timing = {
       Depth = TestCycleDepth.ThroughExecution (
-        System.TimeSpan.FromMilliseconds 1.2,
-        System.TimeSpan.FromMilliseconds 85.0,
-        System.TimeSpan.FromMilliseconds 42.0)
+        treeSitter1p2ms,
+        fcs85ms,
+        run42ms)
       TotalTests = 10
       AffectedTests = 3
       Trigger = RunTrigger.Keystroke
@@ -1221,7 +1250,7 @@ let TestCycleTimingDispatchTests = testList "cycle timing dispatch" [
 
   test "TestCycleTiming.toStatusBar formats TreeSitterOnly" {
     let timing = {
-      Depth = TestCycleDepth.TreeSitterOnly (System.TimeSpan.FromMilliseconds 0.8)
+      Depth = TestCycleDepth.TreeSitterOnly treeSitter0p8ms
       TotalTests = 5
       AffectedTests = 0
       Trigger = RunTrigger.Keystroke
@@ -1234,8 +1263,8 @@ let TestCycleTimingDispatchTests = testList "cycle timing dispatch" [
   test "TestCycleTiming.toStatusBar formats ThroughFcs" {
     let timing = {
       Depth = TestCycleDepth.ThroughFcs (
-        System.TimeSpan.FromMilliseconds 1.5,
-        System.TimeSpan.FromMilliseconds 142.0)
+        treeSitter1p5ms,
+        fcs142ms)
       TotalTests = 20
       AffectedTests = 5
       Trigger = RunTrigger.FileSave
@@ -1247,7 +1276,7 @@ let TestCycleTimingDispatchTests = testList "cycle timing dispatch" [
 
   test "new timing replaces old timing" {
     let timing1 = {
-      Depth = TestCycleDepth.TreeSitterOnly (System.TimeSpan.FromMilliseconds 0.5)
+      Depth = TestCycleDepth.TreeSitterOnly treeSitter0p5ms
       TotalTests = 5
       AffectedTests = 0
       Trigger = RunTrigger.Keystroke
@@ -1255,9 +1284,9 @@ let TestCycleTimingDispatchTests = testList "cycle timing dispatch" [
     }
     let timing2 = {
       Depth = TestCycleDepth.ThroughExecution (
-        System.TimeSpan.FromMilliseconds 1.0,
-        System.TimeSpan.FromMilliseconds 100.0,
-        System.TimeSpan.FromMilliseconds 50.0)
+        treeSitter1ms,
+        fcs100ms,
+        run50ms)
       TotalTests = 10
       AffectedTests = 3
       Trigger = RunTrigger.FileSave
@@ -1294,8 +1323,8 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
         Trigger = RunTrigger.FileSave
         FilePath = "/projects/sample/src/MyTest.fs"
         AnalysisIdentity = None
-        TreeSitterElapsed = TimeSpan.FromMilliseconds 5.0
-        FcsElapsed = TimeSpan.FromMilliseconds 10.0
+        TreeSitterElapsed = FixtureDurations.usualResult
+        FcsElapsed = FixtureDurations.slowResult
         SessionId = Some "session-1"
         InstrumentationMaps = [||] }
     let state =
@@ -1310,9 +1339,9 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
   test "returns timing only when tests are empty" {
     let timing = {
       Depth = TestCycleDepth.ThroughExecution (
-        TimeSpan.FromMilliseconds 1.0,
-        TimeSpan.FromMilliseconds 50.0,
-        TimeSpan.FromMilliseconds 30.0)
+        treeSitter1ms,
+        fcs50ms,
+        run30ms)
       TotalTests = 5
       AffectedTests = 2
       Trigger = RunTrigger.FileSave
@@ -1334,7 +1363,7 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
       Framework = TestFramework.Expecto
       Category = TestCategory.Unit
       CurrentPolicy = RunPolicy.OnEveryChange
-      Status = TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)
+      Status = TestRunStatus.Passed FixtureDurations.slowResult
       PreviousStatus = TestRunStatus.Detected
     }
     let testState = { LiveTestCycleState.empty.TestState with StatusIndex = TestStatusIndex.fromEntries [| entry |] }
@@ -1347,9 +1376,9 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
   test "returns combined timing and tests" {
     let timing = {
       Depth = TestCycleDepth.ThroughExecution (
-        TimeSpan.FromMilliseconds 1.0,
-        TimeSpan.FromMilliseconds 50.0,
-        TimeSpan.FromMilliseconds 30.0)
+        treeSitter1ms,
+        fcs50ms,
+        run30ms)
       TotalTests = 5
       AffectedTests = 2
       Trigger = RunTrigger.FileSave
@@ -1364,7 +1393,7 @@ let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
       Framework = TestFramework.Expecto
       Category = TestCategory.Unit
       CurrentPolicy = RunPolicy.OnEveryChange
-      Status = TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)
+      Status = TestRunStatus.Passed FixtureDurations.slowResult
       PreviousStatus = TestRunStatus.Detected
     }
     let testState = { LiveTestCycleState.empty.TestState with StatusIndex = TestStatusIndex.fromEntries [| entry |] }
@@ -1392,7 +1421,7 @@ let cycleBenchmarkTests = testList "[Benchmark] cycle Core Benchmark" [
     let results =
       tests.[..149] |> Array.map (fun t ->
         t.Id, { TestId = t.Id; TestName = t.DisplayName
-                Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
+                Result = TestResult.Passed FixtureDurations.usualResult
                 Timestamp = DateTimeOffset.UtcNow; Output = None }) |> Map.ofArray
     let locs = tests |> Array.mapi (fun i t ->
       { AttributeName = "Test"; FunctionName = sprintf "t%d" i; FilePath = "editor"
@@ -1432,7 +1461,7 @@ let cycleBenchmarkTests = testList "[Benchmark] cycle Core Benchmark" [
     let results =
       tests.[..799] |> Array.map (fun t ->
         t.Id, { TestId = t.Id; TestName = t.DisplayName
-                Result = TestResult.Passed (TimeSpan.FromMilliseconds 3.0)
+                Result = TestResult.Passed FixtureDurations.quickResult
                 Timestamp = DateTimeOffset.UtcNow; Output = None }) |> Map.ofArray
     let locs = tests |> Array.mapi (fun i t ->
       { AttributeName = "Test"; FunctionName = sprintf "t%d" i; FilePath = "editor"
@@ -1483,7 +1512,7 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
     let model3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid |], Some sessionIdStr))) model2
     let result = {
       TestRunResult.TestId = tid; TestName = "myTest should work"
-      Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 42.0)
+      Result = TestResult.Passed dispatchedResultDuration
       Timestamp = System.DateTimeOffset.UtcNow
       Output = None
     }
@@ -1497,8 +1526,8 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
 
   test "test summary produces correct counts" {
     let statuses = [|
-      TestRunStatus.Passed (System.TimeSpan.FromMilliseconds 10.0)
-      TestRunStatus.Failed (TestFailure.AssertionFailed "oops", System.TimeSpan.FromMilliseconds 5.0)
+      TestRunStatus.Passed FixtureDurations.slowResult
+      TestRunStatus.Failed (TestFailure.AssertionFailed "oops", FixtureDurations.usualResult)
     |]
     let summary = TestSummary.fromStatuses LiveTestingActivation.Active statuses
     summary.Total |> Expect.equal "total should be 2" 2
@@ -1533,7 +1562,7 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
     let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (s1Str, [| tc1 |]))) m2a
 
     let m3a, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid1 |], Some s1Str))) m3
-    let r1 = { TestRunResult.TestId = tid1; TestName = "t1"; Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0); Timestamp = System.DateTimeOffset.UtcNow; Output = None }
+    let r1 = { TestRunResult.TestId = tid1; TestName = "t1"; Result = TestResult.Passed FixtureDurations.slowResult; Timestamp = System.DateTimeOffset.UtcNow; Output = None }
     let m3b, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some s1Str, [| r1 |]))) m3a
     let m3c, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some s1Str))) m3b
 
@@ -1552,7 +1581,7 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
     |> Expect.isFalse "s1's test must not leak into s2's (now Primary) cycle"
 
     let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid2 |], Some s2Str))) m4
-    let r2 = { TestRunResult.TestId = tid2; TestName = "t2"; Result = TestResult.Failed (TestFailure.AssertionFailed "boom", System.TimeSpan.FromMilliseconds 5.0); Timestamp = System.DateTimeOffset.UtcNow; Output = None }
+    let r2 = { TestRunResult.TestId = tid2; TestName = "t2"; Result = TestResult.Failed (TestFailure.AssertionFailed "boom", FixtureDurations.usualResult); Timestamp = System.DateTimeOffset.UtcNow; Output = None }
     let m6, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some s2Str, [| r2 |]))) m5
 
     let s1Status = (SageFsModel.cycleForSession s1Str m6).TestState.LastResults |> Map.tryFind tid1

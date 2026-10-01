@@ -16,11 +16,14 @@ let private mkResult (testId: TestId) (result: TestResult) : TestRunResult =
 
 let private mkTestId (name: string) : TestId = TestId.create name (TestFramework.Unknown "x")
 
+/// What every made-up result in this file says it took. Never read back.
+let private resultDuration = TimeSpan.FromSeconds 1.0
+
 let private passedResult (testId: TestId) : TestRunResult =
-  mkResult testId (TestResult.Passed(TimeSpan.FromSeconds 1.0))
+  mkResult testId (TestResult.Passed resultDuration)
 
 let private failedResult (testId: TestId) : TestRunResult =
-  mkResult testId (TestResult.Failed(TestFailure.AssertionFailed "boom", TimeSpan.FromSeconds 1.0))
+  mkResult testId (TestResult.Failed(TestFailure.AssertionFailed "boom", resultDuration))
 
 let private sessionId = "session-a"
 

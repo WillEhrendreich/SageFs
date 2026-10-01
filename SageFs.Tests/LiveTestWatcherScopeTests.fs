@@ -21,6 +21,15 @@ open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 
+module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
+
+/// How long the tree-sitter stage took in the second pending rebuild of the scope case. It is
+/// not the first rebuild's value, so a mix-up between the two would show. Never read back.
+let private secondRebuildTreeSitterStage = TimeSpan.FromMilliseconds 7.0
+
+/// How long the FCS stage took in the second pending rebuild. Never read back.
+let private secondRebuildFcsStage = TimeSpan.FromMilliseconds 12.0
+
 // ── helpers ─────────────────────────────────────────────────────────
 
 /// Build a minimal SessionSnapshot for a given session id + working dir.
@@ -883,8 +892,8 @@ let stream5Tests =
           Trigger = RunTrigger.FileSave
           FilePath = fileA
           AnalysisIdentity = None
-          TreeSitterElapsed = TimeSpan.FromMilliseconds 5.0
-          FcsElapsed = TimeSpan.FromMilliseconds 10.0
+          TreeSitterElapsed = FixtureDurations.usualResult
+          FcsElapsed = FixtureDurations.slowResult
           SessionId = None
           InstrumentationMaps = [||] }
       let pendingB =
@@ -893,8 +902,8 @@ let stream5Tests =
           Trigger = RunTrigger.FileSave
           FilePath = fileB
           AnalysisIdentity = None
-          TreeSitterElapsed = TimeSpan.FromMilliseconds 7.0
-          FcsElapsed = TimeSpan.FromMilliseconds 12.0
+          TreeSitterElapsed = secondRebuildTreeSitterStage
+          FcsElapsed = secondRebuildFcsStage
           SessionId = Some bSid
           InstrumentationMaps = [||] }
       let model =

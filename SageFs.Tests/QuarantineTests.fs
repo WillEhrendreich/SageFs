@@ -7,6 +7,8 @@ open FsCheck
 open SageFs
 open SageFs.Features.LiveTesting
 
+module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
+
 // --- Helpers ---
 
 let private tid name = TestId.TestId name
@@ -245,7 +247,7 @@ let wiredIntoProductionTests = testList "QuarantineLogic wired into production" 
     let batchResult : TestRunResult =
       { TestId = flakyId
         TestName = "FlakyTest"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
+        Result = TestResult.Passed FixtureDurations.usualResult
         Timestamp = now
         Output = None }
 

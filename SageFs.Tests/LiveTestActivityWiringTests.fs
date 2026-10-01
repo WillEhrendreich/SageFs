@@ -9,10 +9,12 @@ open SageFs.Features.LiveTesting
 open SageFs.Features.LiveTestActivity
 open SageFs.Tests.LiveTestingTestHelpers
 
+module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
+
 let private sid = "aa000001"
 let private otherSid = "bb000002"
-let private passed = TestRunStatus.Passed (TimeSpan.FromMilliseconds 5.)
-let private failed = TestRunStatus.Failed (TestFailure.AssertionFailed "boom", TimeSpan.FromMilliseconds 5.)
+let private passed = TestRunStatus.Passed FixtureDurations.usualResult
+let private failed = TestRunStatus.Failed (TestFailure.AssertionFailed "boom", FixtureDurations.usualResult)
 
 let private sessionIdOf (value: string) =
   match WorkerProtocol.SessionId.validate value with

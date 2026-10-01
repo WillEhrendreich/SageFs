@@ -8,6 +8,8 @@ open FsCheck.FSharp
 open SageFs.Features.LiveTesting
 open SageFs.Tests.SharedGenerators
 
+module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
+
 let mkLiveTestCase
   (fullName: string)
   (displayName: string)
@@ -295,7 +297,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
 
   testList "FlakyDetection" [
     test "outcomeOf Pass is Pass" {
-      FlakyDetection.outcomeOf (TestResult.Passed(TimeSpan.FromMilliseconds 5.0))
+      FlakyDetection.outcomeOf (TestResult.Passed FixtureDurations.usualResult)
       |> Expect.equal "should be Pass" TestOutcome.Pass
     }
     test "outcomeOf Failed is Fail" {
@@ -360,7 +362,7 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
 
   testList "StatusToGutter" [
     test "Passed maps to TestPassed" {
-      StatusToGutter.fromTestStatus (TestRunStatus.Passed(TimeSpan.FromMilliseconds 5.0))
+      StatusToGutter.fromTestStatus (TestRunStatus.Passed FixtureDurations.usualResult)
       |> Expect.equal "should be TestPassed" GutterIcon.TestPassed
     }
     test "Failed maps to TestFailed" {

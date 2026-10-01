@@ -43,17 +43,13 @@ let private budgets : (string * int) list =
     "SageFs.Tests/HealthWatchWiringTests.fs", 2
     "SageFs.Tests/HttpApiIntegrationTests.fs", 1
     "SageFs.Tests/JsonCoreFilesTests.fs", 1
-    "SageFs.Tests/LandingCacheTests.fs", 2
-    "SageFs.Tests/LiveTestActivityTests.fs", 2
-    "SageFs.Tests/LiveTestActivityWiringTests.fs", 2
-    "SageFs.Tests/LiveTestWatcherScopeTests.fs", 4
-    "SageFs.Tests/LiveTestingCoreTests.fs", 3
-    "SageFs.Tests/LiveTestingCoverageTests.fs", 9
-    "SageFs.Tests/LiveTestingCycleTests.fs", 48
-    "SageFs.Tests/LiveTestingDecompositionTests.fs", 4
-    "SageFs.Tests/LiveTestingElmTests.fs", 14
-    "SageFs.Tests/LiveTestingGraphTests.fs", 20
-    "SageFs.Tests/LiveTestingTypesTests.fs", 2
+    "SageFs.Tests/LandingCacheTests.fs", 1
+    "SageFs.Tests/LiveTestWatcherScopeTests.fs", 2
+    "SageFs.Tests/LiveTestingCoverageTests.fs", 2
+    "SageFs.Tests/LiveTestingCycleTests.fs", 14
+    "SageFs.Tests/LiveTestingDecompositionTests.fs", 3
+    "SageFs.Tests/LiveTestingElmTests.fs", 1
+    "SageFs.Tests/LiveTestingGraphTests.fs", 2
     "SageFs.Tests/LocalDataSqliteTests.fs", 1
     "SageFs.Tests/McpAdapterTests.fs", 3
     "SageFs.Tests/MultiAgentCoordinationTests.fs", 1
@@ -61,7 +57,6 @@ let private budgets : (string * int) list =
     "SageFs.Tests/PatchAnnouncerTests.fs", 1
     "SageFs.Tests/PersistenceComplianceTests.fs", 1
     "SageFs.Tests/PureModulesComprehensiveTests.fs", 2
-    "SageFs.Tests/QuarantineTests.fs", 1
     "SageFs.Tests/ReloadBroadcastTests.fs", 2
     "SageFs.Tests/ReloadPlanningTests.fs", 2
     "SageFs.Tests/RestartJitterTests.fs", 1

@@ -58,6 +58,17 @@ let private sampleTests = [|
 
 let private sampleMaps : InstrumentationMap array = [||]
 
+/// How long the tree-sitter stage took in the made-up requests below.
+let private treeSitterStage = TimeSpan.FromMilliseconds 10.0
+
+/// How long the FCS stage took in the case that checks tree-sitter is the shorter stage:
+/// longer than `treeSitterStage`.
+let private slowerFcsStage = TimeSpan.FromMilliseconds 200.0
+
+/// How long the FCS stage took in the queued rebuild that the lifecycle case promotes. The
+/// case never reads it back.
+let private queuedFcsStage = TimeSpan.FromMilliseconds 100.0
+
 // ─────────────────────────────────────────────────────────────────────
 // § 1  TestRunRequest record
 // ─────────────────────────────────────────────────────────────────────
@@ -82,8 +93,8 @@ module TestRunRequestTests =
     test "TestRunRequest distinguishes tree-sitter from FCS elapsed" {
       let req = {
         TestRunRequest.empty with
-          TreeSitterElapsed = TimeSpan.FromMilliseconds 10.0
-          FcsElapsed = TimeSpan.FromMilliseconds 200.0
+          TreeSitterElapsed = treeSitterStage
+          FcsElapsed = slowerFcsStage
       }
       (req.TreeSitterElapsed, req.FcsElapsed)
       |> Expect.isLessThan "tree-sitter should be shorter"
@@ -244,8 +255,8 @@ module RebuildLifecycleTests =
         Trigger = RunTrigger.FileSave
         FilePath = "Foo.fs"
         AnalysisIdentity = Some identity
-        TreeSitterElapsed = TimeSpan.FromMilliseconds 10.0
-        FcsElapsed = TimeSpan.FromMilliseconds 100.0
+        TreeSitterElapsed = treeSitterStage
+        FcsElapsed = queuedFcsStage
         SessionId = Some "sess1234"
         InstrumentationMaps = [||]
       }

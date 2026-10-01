@@ -9,6 +9,15 @@ open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 open SageFs.Measures
 
+module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
+
+/// The duration of the result in the round-trip case. The case checks it comes back unchanged, so
+/// it is neither zero nor one of the shared fixture values.
+let private roundTripDuration = TimeSpan.FromMilliseconds 42.0
+
+/// How long the earlier passing result in the narrative case says it took. Never read back.
+let private earlierPassDuration = TimeSpan.FromMilliseconds 50.0
+
 [<Tests>]
 let affectedTestCycleTests = testList "affected-test cycle" [
   test "dep graph lookup finds affected tests" {
@@ -892,7 +901,7 @@ let compositionTests = testList "compositionTests" [
     let passedResult = {
       TestId = tc1.Id
       TestName = tc1.FullName
-      Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
+      Result = TestResult.Passed FixtureDurations.usualResult
       Timestamp = now
       Output = None
     }
@@ -911,7 +920,7 @@ let compositionTests = testList "compositionTests" [
     stalified.AffectedTests |> Set.contains tc1.Id |> Expect.isTrue "tc1 is affected"
     stalified.AffectedTests |> Set.contains tc2.Id |> Expect.isFalse "tc2 not affected"
     match stalified.LastResults |> Map.tryFind tc1.Id with
-    | Some r -> r.Result |> Expect.equal "tc1 result preserved as Passed" (TestResult.Passed(TimeSpan.FromMilliseconds(5.0)))
+    | Some r -> r.Result |> Expect.equal "tc1 result preserved as Passed" (TestResult.Passed FixtureDurations.usualResult)
     | None -> failtest "tc1 result should still exist"
     let entry = stalified.StatusIndex.Entries |> Array.find (fun e -> e.TestId = tc1.Id)
     match entry.Status with
@@ -1148,7 +1157,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
         Origin = TestOrigin.SourceMapped ("editor", 5)
         Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
     |]
-    let dur = System.TimeSpan.FromMilliseconds 10.0
+    let dur = FixtureDurations.slowResult
     let result = {
       TestId = tid; TestName = "Tests.prev_passed"
       Result = TestResult.Passed dur; Timestamp = System.DateTimeOffset.UtcNow; Output = None }
@@ -1205,7 +1214,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
       Id = tid; FullName = "Tests.round_trip"; DisplayName = "round_trip"
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; Labels = [] }
-    let dur = System.TimeSpan.FromMilliseconds 42.0
+    let dur = roundTripDuration
     let result = {
       TestId = tid; TestName = "Tests.round_trip"
       Result = TestResult.Passed dur; Timestamp = System.DateTimeOffset.UtcNow; Output = None }
@@ -1249,7 +1258,7 @@ let sseEnrichmentTests = testList "SSE enrichment round-trip" [
         AffectedTests = Set.ofList [tid] }
     let result = {
       TestId = tid; TestName = "Tests.stale_edit"
-      Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0)
+      Result = TestResult.Passed FixtureDurations.slowResult
       Timestamp = System.DateTimeOffset.UtcNow; Output = None }
     let merged = LiveTesting.mergeResults state [| result |]
     let entries = LiveTesting.computeStatusEntries merged
@@ -1402,7 +1411,7 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
     let results = Map.ofList [
       addTestId, {
         TestId = addTestId; TestName = "addTest"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
+        Result = TestResult.Passed FixtureDurations.usualResult
         Timestamp = DateTimeOffset.UtcNow; Output = None
       }
     ]
@@ -1996,18 +2005,18 @@ let flakyDetectionTests = testList "FlakyDetection" [
     ResultWindow.countFlips w1 = ResultWindow.countFlips w2
 
   test "outcomeOf maps Passed to Pass" {
-    FlakyDetection.outcomeOf (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    FlakyDetection.outcomeOf (TestResult.Passed FixtureDurations.slowResult)
     |> Expect.equal "Passed→Pass" TestOutcome.Pass
   }
 
   test "outcomeOf maps Failed to Fail" {
-    FlakyDetection.outcomeOf (TestResult.Failed (TestFailure.AssertionFailed "msg", TimeSpan.FromMilliseconds 10.0))
+    FlakyDetection.outcomeOf (TestResult.Failed (TestFailure.AssertionFailed "msg", FixtureDurations.slowResult))
     |> Expect.equal "Failed→Fail" TestOutcome.Fail
   }
 
   test "recordResult creates window for new test" {
     let tid = TestId.create "t1" TestFramework.Expecto
-    let updated = FlakyDetection.recordResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 5.0)) Map.empty
+    let updated = FlakyDetection.recordResult tid (TestResult.Passed FixtureDurations.usualResult) Map.empty
     Expect.isTrue "should have entry" (Map.containsKey tid updated)
     (Map.find tid updated).Count |> Expect.equal "1 result" 1
   }
@@ -2040,7 +2049,7 @@ let flakyDetectionTests = testList "FlakyDetection" [
     let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
     let pass : TestRunResult =
       { TestId = TestId.TestId "x"; TestName = "t"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 50.0)
+        Result = TestResult.Passed earlierPassDuration
         Timestamp = now.AddMinutes(-5.0); Output = None }
     let n =
       FailureNarrativeBuilder.buildNarrative now (Some pass) [] []
@@ -2067,7 +2076,7 @@ let flakyDetectionTests = testList "FlakyDetection" [
     let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
     let pass : TestRunResult =
       { TestId = TestId.TestId "x"; TestName = "t"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Result = TestResult.Passed FixtureDurations.fastResult
         Timestamp = now.AddMinutes(-2.0); Output = None }
     let n =
       FailureNarrativeBuilder.buildNarrative now (Some pass)
@@ -2082,7 +2091,7 @@ let flakyDetectionTests = testList "FlakyDetection" [
     let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
     let pass : TestRunResult =
       { TestId = TestId.TestId "x"; TestName = "t"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Result = TestResult.Passed FixtureDurations.fastResult
         Timestamp = now.AddMinutes(-1.0); Output = None }
     let n =
       FailureNarrativeBuilder.buildNarrative now (Some pass)
@@ -2096,7 +2105,7 @@ let flakyDetectionTests = testList "FlakyDetection" [
     let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
     let pass : TestRunResult =
       { TestId = TestId.TestId "x"; TestName = "t"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Result = TestResult.Passed FixtureDurations.fastResult
         Timestamp = now.AddMinutes(-1.0); Output = None }
     let n =
       FailureNarrativeBuilder.buildNarrative now (Some pass)
@@ -2111,7 +2120,7 @@ let flakyDetectionTests = testList "FlakyDetection" [
     let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
     let pass : TestRunResult =
       { TestId = TestId.TestId "x"; TestName = "t"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Result = TestResult.Passed FixtureDurations.fastResult
         Timestamp = now.AddMinutes(-1.0); Output = None }
     let n =
       FailureNarrativeBuilder.buildNarrative now (Some pass) [ "combine" ] []
@@ -2137,12 +2146,12 @@ let flakyDetectionTests = testList "FlakyDetection" [
     let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
     let pass : TestRunResult =
       { TestId = TestId.TestId "x"; TestName = "t"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Result = TestResult.Passed FixtureDurations.fastResult
         Timestamp = now.AddMinutes(-30.0); Output = None }
     let n =
       FailureNarrativeBuilder.buildNarrative now (Some pass)
         [] [ "/src/Slow.fs" ] FlakyClassification.Stable
-        (TestFailure.TimedOut (TimeSpan.FromSeconds 5.0))
+        (TestFailure.TimedOut (Timeouts.perTestDefault ()))
     n.Summary.Contains("minutes ago") |> Expect.isTrue "should mention time"
     n.CausalChanges
     |> Expect.equal "file change" [ CausalChange.FileChanged "/src/Slow.fs" ]
@@ -2186,7 +2195,7 @@ let flakyDetectionTests = testList "FlakyDetection" [
     let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
     let pass : TestRunResult =
       { TestId = TestId.TestId "x"; TestName = "t"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Result = TestResult.Passed FixtureDurations.fastResult
         Timestamp = now.AddMinutes(-10.0); Output = None }
     let n1 = FailureNarrativeBuilder.buildNarrative now (Some pass) [ "A.f" ] [] FlakyClassification.Stable (TestFailure.AssertionFailed "x")
     let n2 = FailureNarrativeBuilder.buildNarrative now (Some pass) [ "A.f" ] [] FlakyClassification.Stable (TestFailure.AssertionFailed "x")
@@ -2198,7 +2207,7 @@ let flakyDetectionTests = testList "FlakyDetection" [
     let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
     let pass : TestRunResult =
       { TestId = TestId.TestId "x"; TestName = "t"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Result = TestResult.Passed FixtureDurations.fastResult
         Timestamp = now.AddHours(-3.0); Output = None }
     let n = FailureNarrativeBuilder.buildNarrative now (Some pass) [] [] FlakyClassification.Stable (TestFailure.AssertionFailed "x")
     n.Summary.Contains("hours ago") |> Expect.isTrue "should say hours"
@@ -2208,7 +2217,7 @@ let flakyDetectionTests = testList "FlakyDetection" [
     let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
     let pass : TestRunResult =
       { TestId = TestId.TestId "x"; TestName = "t"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Result = TestResult.Passed FixtureDurations.fastResult
         Timestamp = now.AddDays(-5.0); Output = None }
     let n = FailureNarrativeBuilder.buildNarrative now (Some pass) [] [] FlakyClassification.Stable (TestFailure.AssertionFailed "x")
     n.Summary.Contains("days ago") |> Expect.isTrue "should say days"
@@ -2218,7 +2227,7 @@ let flakyDetectionTests = testList "FlakyDetection" [
     let now = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
     let pass : TestRunResult =
       { TestId = TestId.TestId "x"; TestName = "t"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 1.0)
+        Result = TestResult.Passed FixtureDurations.fastResult
         Timestamp = now.AddMinutes(-1.0); Output = None }
     let n =
       FailureNarrativeBuilder.buildNarrative now (Some pass)

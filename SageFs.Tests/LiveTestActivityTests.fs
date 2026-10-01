@@ -7,8 +7,10 @@ open FsCheck
 open SageFs.Features.LiveTesting
 open SageFs.Features.LiveTestActivity
 
-let private passed = TestRunStatus.Passed (TimeSpan.FromMilliseconds 5.)
-let private failed = TestRunStatus.Failed (TestFailure.AssertionFailed "boom", TimeSpan.FromMilliseconds 5.)
+module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
+
+let private passed = TestRunStatus.Passed FixtureDurations.usualResult
+let private failed = TestRunStatus.Failed (TestFailure.AssertionFailed "boom", FixtureDurations.usualResult)
 
 /// One status per case index, so FsCheck can build arbitrary mixes.
 let private statusOf (i: int) : TestRunStatus =

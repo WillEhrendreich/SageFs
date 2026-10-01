@@ -495,6 +495,25 @@ module TestTimeouts =
   /// already confirmed. Waits poll and end early.
   let toolCacheCatchUp = System.TimeSpan.FromSeconds 15.
 
+/// Durations a test makes up as data, not waits: how long a fabricated test result or pipeline
+/// stage says it took. Nothing sleeps for them. A case that asserts on a duration (a formatter,
+/// a sum) names its own inputs in its file; these are for the values a case builds only because
+/// the type needs a duration, where the number is never read back.
+module FixtureDurations =
+  // --- tests L to R ---
+
+  /// A result so fast that only the fact it finished matters.
+  let fastResult = System.TimeSpan.FromMilliseconds 1.
+
+  /// A short result, between `fastResult` and `usualResult`.
+  let quickResult = System.TimeSpan.FromMilliseconds 3.
+
+  /// The duration a made-up passing or failing result reports when no case cares.
+  let usualResult = System.TimeSpan.FromMilliseconds 5.
+
+  /// A result slower than `usualResult`, for cases that need two results to differ in time.
+  let slowResult = System.TimeSpan.FromMilliseconds 10.
+
 /// Harness-root Verify configuration — the ONE place that owns the snapshot
 /// directory, the unique-prefix setting and the line-ending scrubber. Program.fs
 /// calls `configure` before any test runs; snapshot tests call `verify` and never

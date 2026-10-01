@@ -10,6 +10,11 @@ open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 open SageFs.Measures
 
+module FixtureDurations = SageFs.Tests.TestInfrastructure.FixtureDurations
+
+/// How long the failing result in the assertion-message case says it took. Never read back.
+let private mismatchResultDuration = TimeSpan.FromMilliseconds 12.0
+
 // ── Elm Integration Tests ──
 
 let rec private makeAnalysisIdentityValue (fieldType: Type) (value: string) =
@@ -267,8 +272,8 @@ let stalenessTests = testList "Staleness" [
     LiveTestState.empty with
       DiscoveredTests = [| test1; test2 |]
       LastResults = Map.ofList [
-        test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
-        test2.Id, mkResult test2.Id (TestResult.Passed (TimeSpan.FromMilliseconds 3.0))
+        test1.Id, mkResult test1.Id (TestResult.Passed FixtureDurations.usualResult)
+        test2.Id, mkResult test2.Id (TestResult.Passed FixtureDurations.quickResult)
       ]
       Activation = LiveTestingActivation.Active
   }
@@ -449,7 +454,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     let result : TestRunResult =
       { TestId = tc.Id
         TestName = tc.FullName
-        Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
+        Result = TestResult.Passed FixtureDurations.usualResult
         Timestamp = now
         Output = None }
     let merged = LiveTesting.mergeResultsWithUpdatedStatusEntries state [|result|]
@@ -472,7 +477,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     let result : TestRunResult =
       { TestId = tc.Id
         TestName = tc.FullName
-        Result = TestResult.Passed(TimeSpan.FromMilliseconds(5.0))
+        Result = TestResult.Passed FixtureDurations.usualResult
         Timestamp = now
         Output = None }
     let state =
@@ -492,7 +497,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     let newResult : TestRunResult =
       { TestId = tc.Id
         TestName = tc.FullName
-        Result = TestResult.Passed(TimeSpan.FromMilliseconds(3.0))
+        Result = TestResult.Passed FixtureDurations.quickResult
         Timestamp = now.AddSeconds(1.0)
         Output = None }
     let cleared = LiveTesting.mergeResultsWithUpdatedStatusEntries stale [|newResult|]
@@ -1011,7 +1016,7 @@ let mkSourceMappedTestCase name fw =
 
 let mkPassedResult tid =
   { TestId = tid; TestName = TestId.value tid
-    Result = TestResult.Passed (TimeSpan.FromMilliseconds 10.0)
+    Result = TestResult.Passed FixtureDurations.slowResult
     Timestamp = DateTimeOffset.UtcNow.AddSeconds(-5.0); Output = None }
 
 [<Tests>]
@@ -1132,7 +1137,7 @@ let runningToStaleOnFileSaveTests = testList "Running → Stale on file save" [
 let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
   test "mergeResults preserves AffectedTests (no clearing)" {
     let tid = TestId.create "TestA" TestFramework.Expecto
-    let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let result = mkResult tid (TestResult.Passed FixtureDurations.slowResult)
     let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestState.empty with
@@ -1147,7 +1152,7 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
 
   test "streaming result shows Passed while RunPhase is still Running" {
     let tid = TestId.create "TestA" TestFramework.Expecto
-    let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let result = mkResult tid (TestResult.Passed FixtureDurations.slowResult)
     let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestState.empty with
@@ -1164,7 +1169,7 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
 
   test "mergeResults preserves RunPhase as Running" {
     let tid = TestId.create "TestA" TestFramework.Expecto
-    let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let result = mkResult tid (TestResult.Passed FixtureDurations.slowResult)
     let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestState.empty with
@@ -1182,7 +1187,7 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
 let sessionScopedIsolationTests = testList "session-scoped isolation" [
   test "NotRun does not overwrite Passed result" {
     let tid = TestId.TestId "t1"
-    let passed = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let passed = mkResult tid (TestResult.Passed FixtureDurations.slowResult)
     let notRun = mkResult tid TestResult.NotRun
     let state1 = LiveTesting.mergeResults LiveTestState.empty [| passed |]
     let state2 = LiveTesting.mergeResults state1 [| notRun |]
@@ -1196,7 +1201,7 @@ let sessionScopedIsolationTests = testList "session-scoped isolation" [
 
   test "NotRun does not overwrite Failed result" {
     let tid = TestId.TestId "t1"
-    let failed = mkResult tid (TestResult.Failed (TestFailure.AssertionFailed "nope", TimeSpan.FromMilliseconds 5.0))
+    let failed = mkResult tid (TestResult.Failed (TestFailure.AssertionFailed "nope", FixtureDurations.usualResult))
     let notRun = mkResult tid TestResult.NotRun
     let state1 = LiveTesting.mergeResults LiveTestState.empty [| failed |]
     let state2 = LiveTesting.mergeResults state1 [| notRun |]
@@ -1341,7 +1346,7 @@ let batchPayloadTests = testList "TestResultsBatchPayload" [
       TestId = tid; DisplayName = "payload_fresh"; FullName = "Tests.payload_fresh"
       Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
       Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
-      Status = TestRunStatus.Passed (System.TimeSpan.FromMilliseconds 5.0)
+      Status = TestRunStatus.Passed FixtureDurations.usualResult
       PreviousStatus = TestRunStatus.Detected }
     let gen = RunGeneration.next RunGeneration.zero
     let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh (BatchCompletion.Complete(1, 1)) LiveTestingActivation.Active [| entry |] None
@@ -1489,10 +1494,10 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     |]
     let results = [|
       { TestId = tid1; TestName = "test1"
-        Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
+        Result = TestResult.Passed FixtureDurations.usualResult
         Timestamp = DateTimeOffset.UtcNow; Output = None }
       { TestId = tid2; TestName = "test2"
-        Result = TestResult.Failed (TestFailure.AssertionFailed "Expected 42 got 43", TimeSpan.FromMilliseconds 12.0)
+        Result = TestResult.Failed (TestFailure.AssertionFailed "Expected 42 got 43", mismatchResultDuration)
         Timestamp = DateTimeOffset.UtcNow; Output = None }
     |]
 
