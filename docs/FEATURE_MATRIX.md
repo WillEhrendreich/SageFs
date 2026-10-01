@@ -111,7 +111,7 @@ pinned by an executable test; this page deliberately doesn't duplicate it.
 | Hard reset | Command palette | `:SageFsHardReset` |
 | Switch project | Command palette | `:SageFsSwitchProject` |
 | Enable / disable live testing | Command palette | `:SageFsEnableTesting` / `:SageFsDisableTesting` |
-| Switch workflow | Command palette | `:SageFsWorkflow live\|repl` |
+| Switch workflow | Command palette | None yet. `:SageFsWorkflow` shows the current workflow and does not switch it; use the dashboard dropdown or `switch_workflow` |
 | Open dashboard | Command palette | `:SageFsDashboard` |
 
 > The Neovim column is a copy of the plugin's own keymaps, which live in the separate [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim#keymaps) repository. That README is authoritative, and nothing in this repo verifies it. This table used to list `<leader>se` / `<leader>sf` / `<leader>sc`, which the plugin doesn't bind: it puts everything under `<leader>r` precisely because LazyVim reserves `<leader>s` for Search. It also listed `:SageFsResetSession` and `:SageFsToggleLiveTesting`, neither of which exists. Both were my mistakes, now fixed.

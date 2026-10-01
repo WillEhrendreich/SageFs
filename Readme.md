@@ -187,7 +187,7 @@ cp contrib/systemd/sagefs.service ~/.config/systemd/user/
 systemctl --user enable --now sagefs
 ```
 
-[`contrib/systemd/sagefs.service`](contrib/systemd/sagefs.service) is a user unit. It runs `~/.dotnet/tools/sagefs --supervised`, restarts it on failure, and starts it at login (`loginctl enable-linger $USER` if you want it at boot). `systemctl --user status sagefs` shows it, `journalctl --user -u sagefs` has its logs. When an agent then runs `sagefs mcp`, it finds your daemon already up and just bridges to it, so nothing it does can take the daemon down.
+[`contrib/systemd/sagefs.service`](contrib/systemd/sagefs.service) is a user unit. It runs `~/.dotnet/tools/sagefs --supervised`, restarts it on failure, and starts it at login (`loginctl enable-linger $USER` if you want it at boot). `systemctl --user status sagefs` shows it, `journalctl --user -u sagefs` has its logs. The unit runs the daemon from `~/.local/state/sagefs`, which systemd creates (`StateDirectory=`), and not from your home directory: a request that names no directory falls back to the daemon's cwd, and SageFs refuses to watch a home directory, so a daemon started in `$HOME` would give you sessions with no hot reload and no live testing ([`FileWatcher.fs`](SageFs.Core/FileWatcher.fs), `classifyWatchRoot`). When an agent then runs `sagefs mcp`, it finds your daemon already up and just bridges to it, so nothing it does can take the daemon down.
 
 ### 4. Connect your editor
 
@@ -272,7 +272,7 @@ Live testing is *also* a per-session toggle that works in any of the three workf
 
 Use your editor's command to switch workflows:
 
-- **Neovim**: `:SageFsWorkflow live` or `:SageFsWorkflow repl`. The plugin's command documents only those two, so reach for MCP if you want `livetesting`
+- **Neovim**: not from the editor yet. `:SageFsWorkflow` takes no argument and shows the current workflow only (I read the plugin's `commands.lua` on 2026-10-01). Use the dashboard or MCP
 - **VS Code**: Command Palette → `SageFs: Switch Workflow`. This hits `POST /api/sessions/{sid}/workflow` directly, which restarts the same session id in place
 - **MCP**: `switch_workflow` with `target` = `repl` | `livetesting` | `live` (⚠️ `live` means Hot Reload, not live testing; the alias predates the third workflow). This one creates a *new* session in the target workflow and stops the old one
 - **Web dashboard**: a real dropdown next to your session now, not a read-only badge. Pick a workflow and it switches, restarting the same session id in place, same as VS Code

@@ -38,24 +38,6 @@ let run (cmd: string) (args: string) (workDir: string) =
   if p.ExitCode <> 0 then
     failwithf "FAILED (exit %d): %s %s" p.ExitCode cmd args
 
-let runAllowCodes (codes: int list) (cmd: string) (args: string) (workDir: string) =
-  let fileName, arguments =
-    if RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-       && not (cmd.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) then
-      "cmd.exe", sprintf "/c %s %s" cmd args
-    else
-      cmd, args
-  let psi =
-    ProcessStartInfo(
-      FileName = fileName,
-      Arguments = arguments,
-      WorkingDirectory = workDir,
-      UseShellExecute = false)
-  let p = Process.Start(psi)
-  p.WaitForExit()
-  if p.ExitCode <> 0 && not (List.contains p.ExitCode codes) then
-    failwithf "FAILED (exit %d): %s %s" p.ExitCode cmd args
-
 let target =
   match fsi.CommandLineArgs |> Array.tryItem 1 with
   | Some t -> t.ToLowerInvariant()
@@ -114,8 +96,9 @@ printfn "  Build succeeded."
 // --- Step 4 (optional): Test ---
 if target = "test" || target = "all" then
   printfn "=== Test ==="
-  // Expecto exit code 2 = no TTY (cosmetic), treat as success
-  runAllowCodes [2] "dotnet" "run --no-build --project SageFs.Tests -- --summary" rootDir
+  // Any non-zero exit fails the build. The suite exits 1 or 2 when a test failed or errored and 3 when nothing
+  // ran or the count does not match (TrustSignal in TestInfrastructure.fs), so none of them is cosmetic.
+  run "dotnet" "run --no-build --project SageFs.Tests -- --summary" rootDir
   printfn "  Tests passed."
 
 // --- Step 5 (optional): Pack + Install ---

@@ -108,6 +108,32 @@ let webLiveFs0037IncludesSwitchHint =
     enhanced
     |> Expect.stringContains "should preserve original suggestion" suggestion
 
+/// WHY: the hint is a list of the places a user can actually switch from. It was written when the dashboard
+/// had no switch route and said so in its own comment, so it left the dashboard out. The dashboard now has
+/// the workflow dropdown (`/dashboard/switch-workflow`, which calls `POST /api/sessions/{sid}/workflow`), and
+/// the hint has to be built from the same list that says which clients switch, so the two cannot drift.
+/// Neovim is not on it: `:SageFsWorkflow` takes no argument and only shows the current workflow.
+let hintNamesEveryClientThatCanSwitch =
+  testCase
+    "the hint names every client that can switch a workflow, the dashboard among them" <| fun _ ->
+    let workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
+    let enhanced =
+      WorkflowErrorContext.enhance workflow "error FS0037: Duplicate definition of type 'Foo'" "💡 Tip."
+
+    WorkflowErrorContext.SwitchSurface.all
+    |> List.contains WorkflowErrorContext.SwitchSurface.WebDashboard
+    |> Expect.isTrue "the dashboard can switch a workflow, so it is one of the surfaces"
+
+    for surface in WorkflowErrorContext.SwitchSurface.all do
+      enhanced
+      |> Expect.stringContains
+           (sprintf "the hint names %A" surface)
+           (WorkflowErrorContext.SwitchSurface.describe surface)
+
+    // A client that cannot switch is never offered as the remedy.
+    enhanced.Contains "Neovim" |> Expect.isFalse "Neovim cannot switch a workflow yet"
+    enhanced.Contains "SageFsWorkflow" |> Expect.isFalse "its :SageFsWorkflow only shows the current workflow"
+
 /// WHY: In REPL mode, FS0037 means a genuine duplicate — the user defined the same type
 /// name twice in the same ;; block. The workflow switcher is irrelevant here.
 /// Adding "switch to REPL" when already in REPL would be nonsensical.
@@ -133,6 +159,7 @@ let tests = testList "WorkflowErrorContext" [
   ]
   testList "Scenarios — user-facing error guidance" [
     webLiveFs0037IncludesSwitchHint
+    hintNamesEveryClientThatCanSwitch
     interactiveFs0037NoSwitchHint
   ]
 ]

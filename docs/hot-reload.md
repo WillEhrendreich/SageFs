@@ -133,12 +133,16 @@ other jobs running on it. Each cell is the range of the 8 runs.
 | A patched save, to the first response with the new body | 258 to 306 ms | 298 to 353 ms |
 | The same save, to the daemon saying `Patched` | 296 to 346 ms | 338 to 392 ms |
 | A save to an app `run_app` runs, to the restarted app's first response | 7.1 to 10.0 s | 7.7 to 16.2 s |
+| The same save with the metadata-delta route on (the default), to the running app's first response | 1.55 to 1.64 s (2 runs) | 2.23 to 2.25 s (2 runs) |
 
 The third row is a restart, and I took those 8 runs before the metadata-delta route
-existed (the route came in later the same day). With the route on, which is now the
-default on master, the same kind of save is a delta and is served in 1.8 to 2.6 s
-(measured separately, above). The tier's restart case has not been re-pointed at
-the route-off path since, so a fresh run of it on master may measure a delta save.
+existed (the route came in later the same day). The tier now has a row for each
+route and starts a daemon of its own for each: the restart row runs with
+`SAGEFS_METADATA_DELTA=off`, and the delta row clears the variable so it times the
+default. Each row checks that its saves took the route it is named for, and fails if
+they didn't. The fourth row is two runs on the same machine on 2026-10-01 (20 saves each,
+fastest 1.50 s, slowest 2.29 s), and the same runs' restart row gave p50 7.19 and
+7.01 s and p95 7.81 and 11.32 s. Its gate is 10 s.
 
 About 200 ms of a patched save is the watcher's debounce (the worker says it
 started compiling at 201 to 202 ms every run), so most of the time is a fixed

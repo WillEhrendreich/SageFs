@@ -6,6 +6,7 @@ open Expecto
 open Expecto.Flip
 open SageFs.Tests.LatencyStats
 open SageFs.Tests.HotReloadLatency
+open SageFs.Features.MetadataDelta
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
@@ -15,11 +16,16 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 /// Nothing here times a function: a sample is the wall-clock gap between the first byte of the save
 /// and the first response that carries the new value.
 ///
-/// Three series, each printed as one `LATENCY` line with the sample count, the percentiles and the
+/// Four series, each printed as one `LATENCY` line with the sample count, the percentiles and the
 /// machine, and each gated on a bound taken from the first measurement (TestTimeouts):
 ///   * patch save-to-served: a save the session patches in place, to the first response with the new body.
 ///   * patch save-to-confirmed: the same save, to the verdict reaching `Patched` on the stream.
-///   * restart save-to-served: a save to an app `run_app` runs, which SageFs rebuilds and relaunches.
+///   * restart save-to-served: a save to an app `run_app` runs, on a daemon with SAGEFS_METADATA_DELTA=off,
+///     which SageFs rebuilds and relaunches.
+///   * delta save-to-served: the same save on a daemon with the variable cleared, the default route, which the
+///     running process takes as a metadata delta.
+/// The two run_app series each get a daemon of their own (the daemon reads the route when it starts a worker),
+/// and a series whose samples did not take the route it is named for fails (`Sample.checkRoute`).
 ///
 /// The first half of this file is the pure part (reading a frame, turning stamps into stages), and it
 /// runs in the default tier. The second half needs the daemon and runs under `--integration-hr`.
@@ -136,6 +142,43 @@ let pureTests =
       for name in names do
         name |> Expect.stringContains "says it is hot reload" "hr-"
 
+    testCase "a save to a run_app app has two series, one per route, and each is named for the route it measures" <| fun _ ->
+      Series.all |> List.contains Series.DeltaSaveToServed |> Expect.isTrue "the delta route has its own series"
+      Series.name Series.DeltaSaveToServed |> Expect.equal "the delta series' name" "hr-delta-save-to-served"
+      Series.path Series.DeltaSaveToServed |> Expect.equal "the delta series' stage-line path" "hr-delta"
+      Series.name Series.RestartSaveToServed
+      |> Expect.notEqual "the restart series is not the delta one" (Series.name Series.DeltaSaveToServed)
+
+    testCase "the restart series is measured with the delta route off, the delta series on the route's default, and a patched save on neither" <| fun _ ->
+      let route = MetadataDeltaMode.environmentVariable
+      match Series.daemonEnvironment Series.RestartSaveToServed with
+      | [ DaemonEnvironment.Set (name, value) ] ->
+        name |> Expect.equal "it sets the route's own variable" route
+        MetadataDeltaMode.parse value |> Expect.equal "to a value the daemon reads as off" MetadataDeltaMode.Off
+      | other -> failtestf "the restart series must turn the route off and change nothing else: %A" other
+      // Clear, not leave alone: a variable the test process inherited must not decide what the delta row measures.
+      Series.daemonEnvironment Series.DeltaSaveToServed
+      |> Expect.equal "the delta series clears the variable, so the daemon runs the default" [ DaemonEnvironment.Clear route ]
+      MetadataDeltaMode.defaultMode |> Expect.equal "and the default is the route on" MetadataDeltaMode.On
+      Series.daemonEnvironment Series.PatchSaveToServed |> Expect.isEmpty "a patched save does not depend on the route"
+      Series.daemonEnvironment Series.PatchSaveToConfirmed |> Expect.isEmpty "nor does its confirmation"
+
+    testCase "a restart series refuses samples in which no new worker warmed up, and a delta series refuses samples that did" <| fun _ ->
+      let sample warming =
+        { Compiling = Elapsed.Never; Applied = Elapsed.Never; Warming = warming; Ready = Elapsed.Never; Served = ms 2000.; AnswerTook = Elapsed.Never; Confirmed = Elapsed.Never }
+      let restarted = sample (Elapsed.After (ms 2800.))
+      let notRestarted = sample Elapsed.Never
+      Sample.checkRoute Series.RestartSaveToServed [ restarted; restarted ]
+      |> Expect.equal "every sample restarted" (Ok ())
+      Sample.checkRoute Series.RestartSaveToServed [ restarted; notRestarted ]
+      |> Expect.equal "a save that did not restart is not a restart sample" (Result.Error RouteRefusal.SaveDidNotRestart)
+      Sample.checkRoute Series.DeltaSaveToServed [ notRestarted; notRestarted ]
+      |> Expect.equal "no sample restarted" (Ok ())
+      Sample.checkRoute Series.DeltaSaveToServed [ notRestarted; restarted ]
+      |> Expect.equal "a save that restarted is not a delta sample" (Result.Error RouteRefusal.SaveRestarted)
+      Sample.checkRoute Series.PatchSaveToServed [ notRestarted ]
+      |> Expect.equal "a patched save is not judged on the restart it never has" (Ok ())
+
     testCase "the stage line names the path, the count and the median of each stage" <| fun _ ->
       let sample served =
         { Compiling = Elapsed.After (ms 210.); Applied = Elapsed.After (ms 300.); Warming = Elapsed.Never; Ready = Elapsed.Never; Served = ms served; AnswerTook = Elapsed.Never; Confirmed = Elapsed.After (ms (served + 20.)) }
@@ -179,6 +222,9 @@ let pureTests =
 /// Report one series the way the LT tier does, then judge it against its bound.
 let private reportAndGate (series: Series) (samples: Sample list) (bound: TimeSpan) =
   let name = Series.name series
+  match Sample.checkRoute series samples with
+  | Result.Error refusal -> failtestf "%s: the saves did not take the route this series is named for (%A)" name refusal
+  | Ok () -> ()
   match Sample.series series samples |> Result.map summarize with
   | Result.Error refusal -> failtestf "%s: %A" name refusal
   | Ok (Result.Error refusal) -> failtestf "%s: nothing was measured (%A)" name refusal
@@ -207,10 +253,18 @@ let latencyTests =
         })
     Integration.dedicatedCaseTask
       "--integration-hr"
-      "HR latency: save to served on a save to an app run_app runs, which is restarted, p50 and p95 over many saves"
+      "HR latency: save to served on a save to an app run_app runs with the delta route off, which is restarted, p50 and p95 over many saves"
       (fun () ->
         task {
-          let! samples = measureRestartedSaves ()
+          let! samples = measureRunAppSaves Series.RestartSaveToServed
           reportAndGate Series.RestartSaveToServed samples TestTimeouts.hotReloadRestartServedP95Bound
+        })
+    Integration.dedicatedCaseTask
+      "--integration-hr"
+      "HR latency: save to served on a save to an app run_app runs on the default route, which is a metadata delta, p50 and p95 over many saves"
+      (fun () ->
+        task {
+          let! samples = measureRunAppSaves Series.DeltaSaveToServed
+          reportAndGate Series.DeltaSaveToServed samples TestTimeouts.hotReloadDeltaServedP95Bound
         })
   ]
