@@ -303,6 +303,9 @@
          <Compile Include="DomainModelVizTests.fs" />
          <Compile Include="ExpectoModuleBindingFixture.fs" />
           <Compile Include="LiveTestingExecutorTests.fs" />
+         <Compile Include="ExpectoPendingFixtureModule.fs" />
+         <Compile Include="ExpectoPendingTests.fs" />
+         <Compile Include="ExpectoDispositionTests.fs" />
          <Compile Include="ArgsCleanupTests.fs" />
          <Compile Include="AssemblyResolverTests.fs" />
          <Compile Include="SseWriterTests.fs" />
@@ -491,6 +494,7 @@
         <Compile Include="WorkflowSwitchSimTests.fs" />
         <Compile Include="DstCoverageTests.fs" />
         <Compile Include="McpToolOutcomeTests.fs" />
+        <Compile Include="ExpectoPendingOutcomeTests.fs" />
         <Compile Include="McpAppRunOutcomeTests.fs" />
         <Compile Include="DstShrinkTests.fs" />
         <Compile Include="OriginGuardOutcomeTests.fs" />
