@@ -4,7 +4,7 @@ open Falco
 open Falco.Routing
 open Microsoft.AspNetCore.Builder
 
-let hello : HttpHandler = Response.ofPlainText "Hello from the fixture"
+let hello : HttpHandler = Response.ofPlainText "Hello from Falco"
 
 let health : HttpHandler = Response.ofPlainText "ok"
 
