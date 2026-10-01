@@ -86,7 +86,7 @@ let private pendingRebuildWithProvenance
       | other -> failtestf "unexpected PendingRebuildState field %s" other)
   FSharpValue.MakeRecord(typeof<PendingRebuildState>, values) :?> PendingRebuildState
 
-let private activeModelWithPending pending =
+let private activeModelWithPending (pending: PendingRebuildState) =
   { SageFsModel.initial() with
       LiveTesting =
         { LiveTestCycleState.empty with

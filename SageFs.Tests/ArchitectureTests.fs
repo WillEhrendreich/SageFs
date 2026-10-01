@@ -1172,7 +1172,10 @@ let fileSizeBudgets =
       // 4355 -> 4353: the live-loop floor and the whitespace-aware trivia
       // normalizer paid for themselves by deleting the superseded fallback
       // conditions and comments. Exact size, per the rule above.
-      "SageFs.Core/Features/LiveTestingTypes.fs", 4353
+      // 4353 -> 3371: the daemon-only live-testing cycle (what a type-check decides, the debounce,
+      // the effects and the per-session cycle state) moved to LiveTestingCycle.fs, which the isolated
+      // FSI host never compiles. Exact post-split size.
+      "SageFs.Core/Features/LiveTestingTypes.fs", 3371
       // 2900 -> 2950: a one-time bump for the roast UX-6 keystone (per-session
       // live-testing enable/disable — EnableLiveTestingForSession /
       // DisableLiveTestingForSession, resolveOrCreateLiveTestingTarget) — a
