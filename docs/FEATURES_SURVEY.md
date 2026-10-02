@@ -175,7 +175,7 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Module**: SageFs.Features.LiveTesting
 - **Types**: TestCase, TestResult, TestSummary, FailureNarrative, CausalChange, TestId, etc.
 - **Functions**: testStatusLabel, narrateFailure, etc.
-- **MCP Tool**: ❌ No (data structures, exposed via get_live_test_status)
+- **MCP Tool**: ❌ No (read live-testing status via `get_session_status`)
 - **SSE Emission**: ✅ YES - formatTestSummaryEvent, formatTestResultsBatchEvent, formatFailureNarrativesEvent
 - **Tests**: ✅ LiveTestingTypesTests.fs, LiveTestingCoreTests.fs
 - **Status**: LIT (SSE emission in McpServer.fs)
@@ -302,52 +302,55 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 
 ## WIRING SUMMARY
 
-### MCP-Wired Features (45 methods across 19 modules):
-1. **send_fsharp_code** → EvalPipeline
-2. **load_fsharp_script** → EvalPipeline
-3. **get_recent_fsi_events** → Replay
-4. **get_fsi_status** → DaemonHealth + SessionManager
-5. **get_startup_info** → SageFsApp
-6. **get_available_projects** → ProjectLoading
-7. **reset_fsi_session** → SessionManager
-8. **hard_reset_fsi_session** → SessionManager
-9. **check_fsharp_code** → Diagnostics (checker)
-10. **cancel_eval** → SessionManager
-11. **get_completions** → AutoCompletion
-12. **explore_namespace** → BindingExplorer (reflection)
-13. **explore_type** → BindingExplorer (reflection)
-14. **visualize_domain_model** → **DomainModelViz** ✅
-15. **create_session** → SessionManager
-16. **list_sessions** → SessionManager
-17. **stop_session** → SessionManager
-18. **switch_session** → SessionManager
-19. **get_elm_state** → ElmDaemon
-20. **get_live_test_status** → **LiveTestingTypes** ✅
-21. **enable_live_testing** → LiveTestingCycle
-22. **disable_live_testing** → LiveTestingCycle
-23. **set_run_policy** → LiveTestingCycle
-24. **set_test_timeouts** → LiveTestingCycle
-25. **get_test_trace** → LiveTestingCycle
-26. **run_tests** → LiveTestingCycle
-27. **explain_test_run** → TestTreeSitter (dependency graph)
-28. **query_test_coverage** → LiveTestingCycle
-29. **get_file_coverage** → **CoverageInstrumenter** (via LiveTestingCycle)
-30. **explain_test_failure** → **TestNarration** ✅
-31. **decompose_pipeline** → **EvalLens** ✅
-32. **diagnose** → **Diagnostician** ✅
-33. **plan_ripple** → **EvalRipple** ✅
-34. **preview_what_if** → **WhatIf** ✅
-35. **suggest_next_cell** → **Ghostwriter** ✅
-36. **get_session_filmstrip** → **SessionFilmstrip** ✅
-37. **export_notebook** → **NotebookExport** ✅
-38. **export_session_transcript** → **SessionScribe** ✅
-39. **get_message_journal** → **MessageJournal** ✅
-40. **get_eval_timeline** → **EvalTimeline** ✅
-41. **manage_scratch_pad** → **ScratchPad** ✅
-42. **get_eval_diff** → **EvalDiff** ✅
-43. **list_tests** → **TestDiscovery** ✅
-44. **get_cell_dependencies** → **CellDependenciesReport** ✅
-45. **discover_features** → **FeatureDiscovery** ✅
+### MCP-Wired Features
+
+**This list is generated-checked, not hand-maintained.** `scripts/regenerate-feature-survey.fsx`
+scans the tool registration in `SageFs/McpTools.fs`, `SageFs/Mcp.fs` and `SageFs/McpResources.fs`
+and names any tool this page claims that no source registers. Run it after adding or renaming a
+tool:
+
+```
+dotnet fsi scripts/regenerate-feature-survey.fsx
+```
+
+It carries a **negative control**: it first proves it can find tools that are definitely registered
+(`send_fsharp_code`, `run_tests`, `list_tests`) and exits non-zero if it cannot. That control
+exists because the script's first version scanned for a registration shape this codebase does not
+use, found zero tools, and reported every tool on this page as unregistered — a probe that always
+answers "not found" looks like a working probe and answers nothing.
+
+The daemon registers **65** tools (measured live via `discover_features` on 2026-10-02). The tools
+named below that are NOT registered — a reader chasing any of these will find nothing:
+
+- `get_live_test_status` — retired; live-testing status is read via `get_session_status`
+- `get_fsi_status` — superseded by `get_session_status`
+- `create_session` — the `create_*_session` family takes its place
+- `load_fsharp_script`, `get_completions`, `explore_namespace`, `explore_type` — not exposed over MCP
+- `enable_live_testing`, `disable_live_testing`, `set_run_policy`, `set_test_timeouts`,
+  `get_test_trace`, `query_test_coverage`, `get_file_coverage` — live testing is driven through
+  `run_tests` / `list_tests` / `run_app` and the session's workflow
+- `visualize_domain_model` — not exposed over MCP
+
+Registered tools, by area:
+
+1. **Eval and diagnostics**: send_fsharp_code, check_fsharp_code, cancel_eval, decompose_pipeline,
+   get_recent_fsi_events, get_eval_diff, get_eval_timeline, get_message_journal,
+   get_session_filmstrip, export_notebook, export_session_transcript, manage_scratch_pad,
+   diagnose, targeted_verify, suggest_repair, preview_what_if, plan_ripple, impact_forecast,
+   suggest_next_action, suggest_next_cell, get_cell_dependencies
+2. **Sessions**: create_project_session, create_solution_session, create_bare_session,
+   list_sessions, switch_session, stop_session, get_session_status, get_daemon_status,
+   get_available_projects, reset_fsi_session, hard_reset_fsi_session, switch_workflow,
+   list_runnable_projects, run_app, stop_app
+3. **Testing**: list_tests, run_tests, explain_test_failure, coverage_intel, discover_features
+4. **Hot reload**: enable_hot_reload, disable_hot_reload, set_reflection_read_mode,
+   reset_hot_reload_state
+5. **Cohort and landings**: join_cohort, leave_cohort, get_cohort_status, acquire_claim,
+   release_claim, request_landing, reassign_claim, set_integration_ref, mint_member, revoke_member
+6. **Leases and workspace**: acquire_full_build_lease, acquire_test_suite_lease,
+   acquire_run_app_lease, release_work_lease, get_workspace_hygiene, tidy_workspace,
+   manage_local_data
+7. **Friction**: report_friction, get_friction_report, get_friction_summary
 
 ### SSE-Emitting Features:
 1. **BindingExplorer** → formatBindingScopeMapEvent
