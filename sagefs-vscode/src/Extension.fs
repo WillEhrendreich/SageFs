@@ -314,7 +314,17 @@ let applyFileAnnotationsToEditor (editor: TextEditor) =
     | Some old -> old.dispose ()
     | None -> ()
     // Apply inline failure decorations
-    match annotations.InlineFailures with
+    // A failure the daemon sent is drawn only while its test has not passed: the cached event outlives the
+    // result, and the old text sat beside a green check.
+    let liveState =
+      liveTestListener |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
+    let stillFailing =
+      annotations.InlineFailures
+      |> List.filter (fun f ->
+        match TestDecorationsPure.inlineFailureDecision liveState filePath f.TestName with
+        | TestDecorationsPure.InlineFailureDecision.Keep -> true
+        | TestDecorationsPure.InlineFailureDecision.Drop -> false)
+    match stillFailing with
     | [] ->
       inlineFailureDecoTypes <- Map.remove filePath inlineFailureDecoTypes
     | failures ->
@@ -333,7 +343,10 @@ let applyFileAnnotationsToEditor (editor: TextEditor) =
           match f.Presentation with
           | "" -> sprintf "⊘ %s" f.TestName
           | p -> sprintf "⊘ %s — %s" f.TestName p
-        let range = newRange line 0 line 0
+        // The END of the line. An `after` decoration on a zero-width range at column 0 is drawn at column 0,
+        // so the failure text used to be inserted in front of the code and shove it to the right.
+        let lineEnd = int (editor.document.lineAt(float line).text.Length)
+        let range = newRange line lineEnd line lineEnd
         ranges.Add (createObj [
           "range" ==> range
           "renderOptions" ==> createObj [
@@ -715,6 +728,8 @@ let updateTestStatusBar (summary: VscTestSummary) =
       | VscStatusTone.Warning -> Some (newThemeColor "statusBarItem.warningBackground")
       | VscStatusTone.Plain -> None
     sb.tooltip <- Some view.Tooltip
+    // The accessible name is the headline; without this the tooltip, a whole paragraph, is read out.
+    sb?accessibilityInformation <- createObj [ "label" ==> view.AccessibleLabel ]
     // The command was set ONCE at activation to `sagefs.enableLiveTesting` and
     // never touched again, so clicking the live-testing status bar WHILE LIVE
     // TESTING WAS ON re-issued enable. `AppRunPure.statusBarText`'s app bar is

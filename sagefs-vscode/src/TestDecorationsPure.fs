@@ -155,6 +155,42 @@ let decorationsForFile (state: VscLiveTestState) (filePath: string) : FileDecora
   |> List.fold (fun acc entry -> addToBucket entry acc) empty
   |> fun d -> { Passed = List.rev d.Passed; Failed = List.rev d.Failed; Running = List.rev d.Running }
 
+// ── Inline failure text ──────────────────────────────────────────
+
+/// Whether an inline failure the daemon sent for a test is still drawn.
+[<RequireQualifiedAccess>]
+type InlineFailureDecision =
+  | Keep
+  | Drop
+
+/// An inline failure ("⊘ name — Expected X, was Y") comes from the cached `file_annotations` event, and the
+/// test results beside it move on faster. Drawn after the fix was saved, it read "negative seeds are
+/// refused" next to a green check: a stale decoration is a lie. So it is dropped once every test of that
+/// name in the file has passed (or been skipped or disabled, which cannot fail), and kept while any is
+/// failing, running, stale or not run yet, and when the state does not know the test at all, because then
+/// the daemon's word is all there is.
+let inlineFailureDecision (state: VscLiveTestState) (filePath: string) (testName: string) : InlineFailureDecision =
+  let outcomes =
+    VscLiveTestState.testsForFile filePath state
+    |> List.filter (fun test -> test.DisplayName = testName)
+    |> List.choose (fun test -> VscLiveTestState.resultFor test.Id state |> Option.map (fun result -> result.Outcome))
+  let cannotBeFailing (outcome: VscTestOutcome) =
+    match outcome with
+    | VscTestOutcome.Passed
+    | VscTestOutcome.Skipped _
+    | VscTestOutcome.PolicyDisabled -> true
+    | VscTestOutcome.Failed _
+    | VscTestOutcome.Errored _
+    | VscTestOutcome.Running
+    | VscTestOutcome.Stale
+    | VscTestOutcome.NotYetRun -> false
+  match outcomes with
+  | [] -> InlineFailureDecision.Keep
+  | _ ->
+    match outcomes |> List.forall cannotBeFailing with
+    | true -> InlineFailureDecision.Drop
+    | false -> InlineFailureDecision.Keep
+
 // ── Coverage decorations ─────────────────────────────────────────
 
 /// The three `TextEditorDecorationType`s a per-line coverage status can

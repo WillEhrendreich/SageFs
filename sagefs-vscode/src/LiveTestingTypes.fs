@@ -205,18 +205,22 @@ type VscTestSummary = {
 }
 
 module VscLiveTestingDecision =
-  let formatHint (decision: VscLiveTestingDecision) =
+  /// What the last run was, in words, without a label: how the tests were chosen and how many.
+  let describeSelection (decision: VscLiveTestingDecision) =
     match decision.Precision with
     | VscSelectionPrecision.ExactDependencyMatch ->
-      sprintf "Why: exact dependency match (%d selected)" decision.SelectedTests.Length
+      sprintf "exact dependency match (%d selected)" decision.SelectedTests.Length
     | VscSelectionPrecision.CoverageApproximation ->
-      sprintf "Why: coverage widened the rerun (%d selected)" decision.SelectedTests.Length
+      sprintf "coverage widened the rerun (%d selected)" decision.SelectedTests.Length
     | VscSelectionPrecision.ConservativeFallback ->
-      sprintf "Why: conservative fallback rebuild (%d selected)" decision.SelectedTests.Length
+      sprintf "conservative fallback rebuild (%d selected)" decision.SelectedTests.Length
     | VscSelectionPrecision.NoImpactedTests ->
-      "Why: no impacted tests were identified"
+      "no impacted tests were identified"
     | VscSelectionPrecision.SuppressedByPolicy ->
-      sprintf "Why: run policy deferred %d test(s)" decision.DeferredTests.Length
+      sprintf "run policy deferred %d test(s)" decision.DeferredTests.Length
+
+  let formatHint (decision: VscLiveTestingDecision) =
+    sprintf "Why: %s" (describeSelection decision)
 
 /// UI change signals — what the TestController adapter needs to update
 [<RequireQualifiedAccess>]
@@ -282,7 +286,11 @@ type VscStatusTone =
 type VscStatusBarView = {
   Text: string
   Tone: VscStatusTone
+  /// Sectioned plain text: the headline, then what the last run was and why.
   Tooltip: string
+  /// The item's accessible name: the headline alone, one line. The tooltip is read as the accessible name
+  /// unless this is set, and it carried the whole paragraph.
+  AccessibleLabel: string
 }
 
 module VscTestSummary =
@@ -326,22 +334,32 @@ module VscTestSummary =
         let icon, settledTone = settledIcon s
         withIcon icon settledTone
       | _ -> legacyText s
+    // The daemon's own words, else its short words, else the item's text with its icon token taken off (a
+    // codicon token is printed literally in a tooltip and read out in an accessible name).
     let headline =
-      match s.ActivityText with
-      | "" -> text
-      | words -> words
-    let reasonLine =
+      match s.ActivityText, s.ActivityShort with
+      | "", "" ->
+        match text.StartsWith "$(" && text.Contains ") " with
+        | true -> text.Substring(text.IndexOf ") " + 2)
+        | false -> text
+      | "", short -> short
+      | words, _ -> words
+    // Sections, each on its own line: the headline, a blank line, what the last run was, and why. The
+    // reason is the daemon's whole sentence, which is long, so it has its own line and is only here.
+    let lastRunLine =
+      s.LastDecision |> Option.map (fun d -> sprintf "Last run: %s" (VscLiveTestingDecision.describeSelection d))
+    let whyLine =
       match s.LastDecision with
-      | Some d when d.Reason <> "" -> Some (sprintf "Reason: %s" d.Reason)
+      | Some d when d.Reason <> "" -> Some (sprintf "Why: %s" d.Reason)
       | _ -> None
+    let tooltip =
+      match lastRunLine with
+      | None -> headline
+      | Some last -> [ Some headline; Some ""; Some last; whyLine ] |> List.choose id |> String.concat "\n"
     { Text = text
       Tone = tone
-      Tooltip =
-        [ Some headline
-          s.LastDecision |> Option.map VscLiveTestingDecision.formatHint
-          reasonLine ]
-        |> List.choose id
-        |> String.concat "\n" }
+      Tooltip = tooltip
+      AccessibleLabel = headline }
 
 module VscLiveTestState =
   let empty : VscLiveTestState = {
