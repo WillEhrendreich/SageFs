@@ -27,6 +27,12 @@ module MemberTable =
     /// module existed, so unbound callers are unaffected by binding MCP/
     /// Browser identity to their connection.
     | Minted of id: string
+    /// A run the conductor minted a capability token for (Capability.fs). The
+    /// payload is the token's public fingerprint, a prefix of the SHA-256 of
+    /// the token, never the token. It outranks the connection the call arrived
+    /// on: sub-agents sharing one connection are one `Mcp` member but as many
+    /// `Capability` members as there are tokens.
+    | Capability of fingerprint: string
 
   module MemberId =
     /// A connection's public id is a one-way fingerprint of its bearer handle,
@@ -71,4 +77,5 @@ module MemberTable =
     let display = function
       | MemberId.Browser clientId -> sprintf "browser:%s" clientId
       | MemberId.Mcp connection -> sprintf "mcp:%s" (publicConnectionId connection)
+      | MemberId.Capability fingerprint -> sprintf "cap:%s" fingerprint
       | MemberId.Minted id -> id

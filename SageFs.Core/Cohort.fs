@@ -98,8 +98,25 @@ module Cohort =
     | File of repoRelativePath: string
     | Project of fsprojRelativePath: string
 
+  /// Why a claim path is not a repo-relative path.
+  [<RequireQualifiedAccess>]
+  type PathRefusal =
+    /// Rooted (`/etc/x`, `C:\x`, `\\host\share`): not relative to the repo.
+    | Absolute of path: string
+    /// `..` climbs out of the repo before it comes back (`../x`, `a/../../x`).
+    | EscapesRoot of path: string
+
+  /// RED STUB: canonical form of a repo-relative path.
+  module ClaimPath =
+    let tryCanonical (raw: string) : Result<string, PathRefusal> = Ok raw
+
+    let canonicalOrRaw (raw: string) : string = raw
+
   module ClaimScope =
     let private normalize (path: string) = path.Replace('\\', '/')
+
+    /// RED STUB: the scope with its path canonicalized, or why it cannot be.
+    let tryCanonical (scope: ClaimScope) : Result<ClaimScope, PathRefusal> = Ok scope
 
     /// `Project` claims a directory (the fsproj's own directory), not the fsproj
     /// file itself — a `File` overlaps a `Project` iff it is under that directory.

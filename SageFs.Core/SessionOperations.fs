@@ -92,6 +92,7 @@ module SessionOperations =
       match id with
       | SageFs.MemberTable.MemberId.Browser _ -> OccupantRole.Observer
       | SageFs.MemberTable.MemberId.Mcp _ -> OccupantRole.Worker
+      | SageFs.MemberTable.MemberId.Capability _ -> OccupantRole.Worker
       | SageFs.MemberTable.MemberId.Minted name -> classify name
 
     let label = function OccupantRole.Worker -> "worker" | OccupantRole.Observer -> "observer"

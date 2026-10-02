@@ -111,6 +111,8 @@ let private parseMemberId (raw: string) : MemberId =
     MemberId.Browser(raw.Substring 8)
   elif raw.StartsWith("mcp:", StringComparison.Ordinal) then
     MemberId.Mcp(raw.Substring 4)
+  elif raw.StartsWith("cap:", StringComparison.Ordinal) then
+    MemberId.Capability(raw.Substring 4)
   else
     MemberId.Minted raw
 
