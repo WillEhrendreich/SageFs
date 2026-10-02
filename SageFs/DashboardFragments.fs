@@ -285,6 +285,14 @@ let signalDetails (signalName: string) (attrs: XmlAttribute list) (children: Xml
 let private signalIdent (s: string) : string =
   s |> String.map (fun c -> match Char.IsAsciiLetterOrDigit c || c = '_' with | true -> c | false -> '_')
 
+/// The signal that says one held row's click is out: it disables that row's button and shows that row's evaluating mark.
+/// Each segment (the binding, then every label down to the getter) is written as lowercase hex and the segments are
+/// joined with an underscore, which hex never contains, so two different rows never share a signal. Joining readable
+/// names did: a/b_c, a_b/c and a-b/c all came out as the same name, and pressing one showed evaluating on the others.
+let private liveEvaluatingSignal (binding: string) (path: string list) : string =
+  let hexOf (text: string) = Convert.ToHexStringLower(Text.Encoding.UTF8.GetBytes text)
+  sprintf "liveEvaluating_%s_%s" (hexOf binding) (path |> List.map hexOf |> String.concat "_")
+
 let renderAlarmBanner (alarms: SystemAlarmEntry list) =
   match alarms with
   | [] ->
@@ -3604,7 +3612,7 @@ let renderLiveBindingsPanel (sessionId: string) (view: SageFs.Features.LiveBindi
       | SageFs.Features.LiveBindingsPane.ClickToRun -> "live-binding-node live-held-row"
       | SageFs.Features.LiveBindingsPane.NothingToClick -> "live-binding-node live-held-row"
       | SageFs.Features.LiveBindingsPane.ClickFailed -> "live-binding-node live-held-row live-held-unknown"
-    let indicator = sprintf "liveEvaluating_%s_%s" (signalIdent binding) (signalIdent (String.concat "_" path))
+    let indicator = liveEvaluatingSignal binding path
     Elem.div [ Attr.class' rowClass; Attr.style (sprintf "padding-left: %dem;" node.Depth) ] [
       Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [ textEnc node.Label ]
       Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem;" ] [ textEnc node.TypeName ]

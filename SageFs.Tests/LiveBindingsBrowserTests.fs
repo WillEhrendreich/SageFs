@@ -217,7 +217,12 @@ let tests =
     do! waitForPaneText page "the getter loops or calls itself"
     let row = page.Locator(sprintf "%s .live-held-row" pane).Filter(LocatorFilterOptions(HasTextString = "Self"))
     do! row.Locator(".live-held-btn").ClickAsync()
-    do! PlaywrightExpect.waitForCount BrowserWaits.pageRenders (page.Locator(sprintf "%s .live-held-evaluating" pane)) 1
+    // Every clickable row carries its own evaluating mark, hidden until its own click, and the pane still lists the earlier
+    // journeys' `probe` getter. So the question is which marks are SHOWN: exactly one, and it is the clicked row's. Counting
+    // the marks in the page would count the probe row's hidden one too, and would only come out as 1 after the getter's
+    // deadline, when the clicked row stops offering a click.
+    do! PlaywrightExpect.waitForCount BrowserWaits.pageRenders (page.Locator(sprintf "%s .live-held-evaluating:visible" pane)) 1
+    do! PlaywrightExpect.waitForCount BrowserWaits.pageRenders (row.Locator(".live-held-evaluating:visible")) 1
     do! shot page "6-loop-evaluating"
     // The host gives the getter its deadline, then gives up on the thread; the answer is a reason, not a blank.
     do! waitForPaneText page "unknown"
