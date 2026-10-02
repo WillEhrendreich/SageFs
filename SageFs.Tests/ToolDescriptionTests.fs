@@ -237,7 +237,8 @@ let descriptionPropertyTests =
       // under its data dir (friction.db, cohort.ledger.db).
       // + set_reflection_read_mode, the way an agent sees and answers rule 2's
       // reflection read question.
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 61
+      // + get_workspace_hygiene and tidy_workspace: what agents left behind, and the plan that tidies it.
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 63
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

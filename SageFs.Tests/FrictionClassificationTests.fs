@@ -42,7 +42,7 @@ let private mkSessionInfo (id: SessionId) (workingDir: string) (status: SessionL
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
+    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 /// Minimal McpContext — only GetAllSessions/GetProxy/GetSessionInfo/GetElmModel
 /// are exercised by the functions under test here.

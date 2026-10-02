@@ -21,6 +21,7 @@ let hostSourceNames =
     "Measures.fs"
     "Utils.fs"
     "FsiNaming.fs"
+    "MachineTier.fs"
     "Timeouts.fs"
     "Instrumentation.fs"
     "LiveValueTree.fs"
@@ -44,6 +45,7 @@ let hostSourceNames =
     "DevReload.fs"
     "EntryProbes.fs"
     "ValueReads.fs"
+    "GenericReload.fs"
     "ValueReadTracking.fs"
     "HotReloadCore.fs"
     "HostAgent.fs"
@@ -282,6 +284,16 @@ let private withBuildLock (lockPath: string) (timeoutMs: int) (work: unit -> Res
     use _ = handle
     work ()
 
+/// Record that a session is about to run this host, so the cache can tell one in use from one nobody has used
+/// for a month (workspace hygiene prunes by that age). Best effort: a host that cannot be marked is only judged
+/// by its directory's own time, which is the safe direction for a host that was just built.
+[<Literal>]
+let HostLastUsedMarker = ".last-used"
+
+let private markUsed (directory: string) : unit =
+  try File.WriteAllText(Path.Combine(directory, HostLastUsedMarker), DateTime.UtcNow.ToString "o")
+  with _ -> ()
+
 /// Ensure a host built by `selection`'s SDK exists under `cacheRoot`, building it if not.
 let ensureBuiltWith (dotnet: string) (selection: SdkSelection) (cacheRoot: string) : Result<HostBuild, HostBuildError> =
   let sdkVersion = selection.Version
@@ -296,13 +308,17 @@ let ensureBuiltWith (dotnet: string) (selection: SdkSelection) (cacheRoot: strin
     let stamp = Path.Combine(directory, ".built")
     let isBuilt () = File.Exists stamp && File.Exists dll
     match isBuilt () with
-    | true -> Ok(Reused dll)
+    | true ->
+      markUsed directory
+      Ok(Reused dll)
     | false ->
       Directory.CreateDirectory directory |> ignore
       withBuildLock (Path.Combine(directory, ".lock")) (int Timeouts.hostBuildLockWait.TotalMilliseconds) (fun () ->
         // Another session may have finished the build while we waited for the lock.
         match isBuilt () with
-        | true -> Ok(Reused dll)
+        | true ->
+          markUsed directory
+          Ok(Reused dll)
         | false ->
           let source = Path.Combine(directory, "src")
           Directory.CreateDirectory source |> ignore
@@ -330,6 +346,7 @@ let ensureBuiltWith (dotnet: string) (selection: SdkSelection) (cacheRoot: strin
             | false -> Error(BuildOutputMissing dll)
             | true ->
               File.WriteAllText(stamp, sdkVersion)
+              markUsed directory
               Ok(Built dll)))))
 
 /// The files of a built host that must be real copies in a variant. The runtime resolves the app's folder

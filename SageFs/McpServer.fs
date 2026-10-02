@@ -2004,7 +2004,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
                   rctx.SseContext.TestEventBroadcast.Trigger(hbStr)
             with :? System.OperationCanceledException -> ()
           } :> System.Threading.Tasks.Task))
-      let! result, outcome, _diags, _lastError = SageFs.McpTools.evalFSharpCodeWithOutcome rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine None
+      let! result, outcome, _diags, _lastError, _ = SageFs.McpTools.evalFSharpCodeWithOutcome rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine None
       sw.Stop()
       heartbeatCts.Cancel()
       let! _ = heartbeatTask
@@ -2780,6 +2780,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
              health = SageFs.SessionHealth.toJson health
              lastRestart = SageFs.SessionStatusPayload.lastRestartJson (SageFs.SessionStatusPayload.lastRestartOfRebuild DateTime.UtcNow None sess.Rebuild)
              lastReload = SageFs.SessionReload.toWire sess.Reload
+             replFreshness = SageFs.ReplFreshness.toWire sess.Freshness
              projects = sess.Projects
              // What the worker ACTUALLY resolved and loaded, which is not always what
              // was declared: a session created with `projects=[]` still loads whatever

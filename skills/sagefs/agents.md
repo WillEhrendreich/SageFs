@@ -27,5 +27,7 @@ loop explicitly:
 9. report REPL friction instead of silently falling back
 10. edit with exact editor calls, never `sed`/python/bulk regex; prove the
     change in the REPL before persisting it
+11. finish by removing nothing you do not own, and report your worktree path
+    and branch so the orchestrator can reap them (`tidy_workspace`)
 
 The easiest way is to tell it to load this skill.

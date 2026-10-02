@@ -1,0 +1,3 @@
+I have a small F# project in this folder: a library called DemoEnv and a test project next to it. VS Code is already open on it and SageFs is set up for you. You cannot see the screen, so you drive VS Code with the vsc-* commands described in VSCODE-TOOLS.md in this folder.
+
+One test is failing: "DemoEnv.parseSeed a negative integer yields None". Fix `SageFs.Samples.DemoEnv.parseSeed` in DemoEnv/DemoEnv.fs so a negative integer string returns `None`, while "0" and positive integer strings still return `Some`. Make the edit in VS Code, save the file, and use SageFs from inside VS Code to check the new behaviour before you finish. Tell me briefly what you changed and what you saw.

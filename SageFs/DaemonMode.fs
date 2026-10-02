@@ -2080,6 +2080,28 @@ let listenerBindFailureExitCode = 1
 /// idle — closing the "34 orphaned daemons" seam (S1) for daemons an
 /// agent, test, or demo runner spawns directly (not via a supervised
 /// worker, which already has `ParentMonitor`/`OwnerMonitor`).
+/// The machine tier was established in Program.fs before anything read `Timeouts`. Say what it is and how it
+/// was reached, and open the ledger that records how long a start takes on this machine, so the next
+/// daemon's first attempt already knows.
+let private reportMachineTierAndOpenLedger (log: Microsoft.Extensions.Logging.ILogger) : unit =
+  match MachineStartup.current () with
+  | MachineStartup.Established.Done resolution ->
+    log.LogInformation("{Tier}", TierResolutionDescription.describe resolution)
+    match Timeouts.machineTier = resolution.Tier with
+    | true -> ()
+    | false ->
+      log.LogWarning("Timeouts were read before the machine tier was established, so they are scaled for {Read} and not for {Tier}.", MachineTier.toString Timeouts.machineTier, MachineTier.toString resolution.Tier)
+    let profile = StartLedger.baseProfile DaemonState.SageFsDir resolution
+    match MachineProbeReader.readProfile DaemonState.SageFsDir with
+    | ProfileRead.Found _ -> ()
+    | ProfileRead.NoProfile | ProfileRead.Unreadable _ ->
+      match MachineProbeReader.writeProfile DaemonState.SageFsDir profile with
+      | Result.Ok () -> ()
+      | Result.Error (ProfileWriteError.CouldNotWrite (path, reason)) -> log.LogWarning("Could not write the machine profile {Path}: {Reason}", path, reason)
+    StartLedger.install (StartLedger.openAt DaemonState.SageFsDir profile)
+  | MachineStartup.Established.NotYet ->
+    log.LogWarning("The machine tier was not established at startup; waits are scaled for {Tier}.", MachineTier.toString Timeouts.machineTier)
+
 let run
   (bindHost: SageFs.SageFsConfig.LoopbackHost)
   (mcpPort: int)
@@ -2105,6 +2127,8 @@ let run
   let stateChangedEvent = infra.StateChangedEvent
 
   log.LogInformation("SageFs daemon v{Version} starting on port {Port}", version, mcpPort)
+
+  reportMachineTierAndOpenLedger log
 
   // Handle --prune: mark all alive sessions as stopped and exit
   // W36+W42(R14): handlePrune now returns Result<bool,string> and takes Task-returning checkFn.
@@ -2740,10 +2764,26 @@ let run
       | Result.Error why ->
         Log.warn "[WorkerReloadRelay] session %s sent a reload event this daemon cannot read: %s" (WorkerProtocol.SessionId.value sid) (ReloadPayloadError.describe why)
       stateChangedEvent.Trigger (HotReloadChanged sid)) cts.Token
+  // The host cache's own housekeeping: a built FSI host nobody has used for a month (and that is not the newest of an SDK
+  // a session resolves, and no process runs from) is pruned by the same plan, confirmation and second look as `tidy`.
+  // Event-driven, never on a timer: once now, and again whenever a session stops.
+  let hostCacheHousekeeping () =
+    HygieneService.pruneHostCacheInBackground
+      (HygieneService.locationsFor Environment.CurrentDirectory)
+      (fun () ->
+        let sessions = (sessionOps.GetAllSessions()).GetAwaiter().GetResult()
+        HygieneService.liveFactsWith (sessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id, s.WorkingDirectory)) None)
+      (fun report ->
+        match report.ReclaimedBytes with
+        | 0L -> ()
+        | bytes -> log.LogInformation("Pruned unused FSI hosts, reclaiming {Bytes} bytes", bytes))
+      (fun ex -> log.LogWarning("Host cache prune failed: {Error}", ex.Message))
+  hostCacheHousekeeping ()
   // Anything that can mean a session got a worker, lost one, or got a new one.
   // HotReloadChanged and ReloadReported are left out on purpose: the relay raises them.
   stateChangedEvent.Publish.Add(fun change ->
     match change with
+    | SessionStopped _ -> hostCacheHousekeeping ()
     | SessionReady sid
     | SessionSwitched sid
     | FileReloaded (sid, _)
@@ -2760,7 +2800,6 @@ let run
     | HotReloadFileToggled _
     | SessionActivated _
     | SessionCreated _
-    | SessionStopped _
     | WorkflowSwitching _
     | WorkflowSwitched _
     | SessionHealthChanged _ -> ())
@@ -2778,6 +2817,45 @@ let run
     match visible with
     | true -> stateChangedEvent.Trigger CohortChanged
     | false -> ())
+  // The trunk follows what lands: when the cohort records a landing as landed, the trunk checkout moves to its commit and the
+  // sessions that work in that checkout are told which files changed (Features/TrunkFollow.fs is the decision, TrunkFollowShell.fs
+  // does the work). Only `LandingLanded` is passed on, so a landing that was blocked or is still being verified never reaches it.
+  use trunkFollower =
+    Features.TrunkFollowOwner.start
+      (Log.asILogger ())
+      (TrunkFollowShell.performer
+        { TrunkPath = fun () -> SageFs.McpCohortIntegration.cohortIntegrationRef.Value |> Option.map (fun binding -> binding.TrunkPath)
+          Sessions = fun () -> SessionManager.QuerySnapshot.allSessions (readSnapshot ())
+          AwaitSettled = awaitModelCondition Timeouts.cohortIntegrationSettle
+          Ask = fun sid msg -> proxyToSession getProxyStr notifyWorkerDiedStr sid msg |> Async.AwaitTask
+          CurrentHead = Features.CohortGit.currentHead
+          Diff = Features.CohortGit.diffSavedFiles
+          MoveTo = Features.CohortGit.moveCheckoutTo
+          Build =
+            fun trunkPath ->
+              async {
+                let projects =
+                  SessionManager.QuerySnapshot.allSessions (readSnapshot ())
+                  |> Features.TrunkSessions.sessionsIn trunkPath
+                  |> List.collect (fun info -> info.Projects)
+                  |> List.distinct
+                let! built = SessionBuild.runBuildAsync projects trunkPath
+                return built |> Result.map ignore |> Result.mapError SageFsError.describeForAgent
+              }
+          NewReplyId = fun () -> System.Guid.NewGuid().ToString("N") })
+  SageFs.McpCohortIntegration.trunkFollowRef.Value <- Some trunkFollower
+  cohortOwner.Events.Add(fun events ->
+    for ev in events do
+      match Features.TrunkFollow.ofCohortEvent ev with
+      | Some trunkEvent -> trunkFollower.Post trunkEvent
+      | None -> ())
+  // A session's reload row finishing a save is the later word on a patch the trunk recorded as pending.
+  stateChangedEvent.Publish.Add(fun change ->
+    match change with
+    | ReloadReported (sid, SessionReload.Finished facts) ->
+      trunkFollower.Post (Features.TrunkFollow.TrunkEvent.ReloadReported (WorkerProtocol.SessionId.value sid, facts))
+    | _ -> ())
+  trunkFollower.Changes.Add(fun _ -> stateChangedEvent.Trigger CohortChanged)
   // Sessions that were ready before this line ran.
   SessionManager.QuerySnapshot.allSessions (readSnapshot ())
   |> List.iter (fun info -> ensureReloadRelay info.Id)
@@ -3900,6 +3978,7 @@ let run
     // directly — no mailbox round-trip, no IO.
     ReadCohortFrame = cohortOwner.ReadFrame
     ReadCohortLedger = cohortLedgerPort.ReadAll
+    ReadTrunk = trunkFollower.Read
     GetCompletions = fun (sessionId: WorkerProtocol.SessionId) (code: string) (cursorPos: int) -> task {
       try
         let! proxy = sessionOps.GetProxy sessionId

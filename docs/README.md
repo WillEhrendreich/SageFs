@@ -5,6 +5,7 @@ Everything else is reference material you can come back to when you need it.
 
 ## Start here
 - **[What SageFs has become](progress.md)**: what you had, what you have now, and why it matters, stretch by stretch since February, each change linked to its code. The newest window is 2026-10-01 and says which entries are in a release and which are only merged
+- **[Roadmap](roadmap.md)**: what I'm building now, what's next, and the ideas further out. An item moves to Built on its own when its code lands
 - **[Get Started](../Readme.md#get-started)**: install, check your environment, start the daemon, connect an editor
 - **[Using SageFs with AI agents](agents.md)**: install the SageFs skill, so your agent uses the REPL instead of rebuilding, and pull it back when it drifts
 - **[Workflow Modes](workflow-modes.md)**: REPL, Live Testing, and Hot Reload: when to use which, and how the Live Testing *workflow* differs from the live-testing *toggle*
@@ -25,7 +26,7 @@ Everything else is reference material you can come back to when you need it.
 ## Reference
 - **[Can I use SageFs with…?](ecosystem-compatibility.md)**: Falco, Giraffe, Saturn, Oxpecker, plain ASP.NET, Fable/SAFE, React/Vue/Angular, Native AOT, .NET Framework
 - **[Feature Matrix](FEATURE_MATRIX.md)**: capabilities across VS Code, Neovim, the web dashboard, and MCP
-- **[MCP Tools](mcp-tools.md)**: the 61 affordance-gated tools and per-client config
+- **[MCP Tools](mcp-tools.md)**: the 63 affordance-gated tools and per-client config
 - **[SSE Events](sse-events.md)**: wire format for the events editors consume
 - **[Binary Format Spec](binary-format-spec.md)**: the `.sagefs` and `.sagetc` persistence formats
 - **[Binary Format Benchmarks](binary-format-benchmarks.md)**: serialization performance data

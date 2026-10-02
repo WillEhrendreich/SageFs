@@ -235,7 +235,7 @@ let tests =
 
       testCase "WHY — the session status carries the new cases under their own tokens, so an agent reading lastReload can tell applied from seen running" <| fun _ ->
         for case, token in [ ReloadCase.PatchPending, "PatchPending"; ReloadCase.NeverEntered, "NeverEntered"; ReloadCase.Patched, "Patched" ] do
-          let facts : ReloadFacts = { Case = case; Patched = 0; Considered = 2; Message = "m"; SuggestedAction = "a" }
+          let facts : ReloadFacts = { Case = case; Patched = 0; Considered = 2; Message = "m"; SuggestedAction = "a"; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch; Declarations = [] }
           let wire = SessionReload.toWire (SessionReload.Finished facts)
           System.Text.Json.JsonSerializer.Serialize wire
           |> Expect.stringContains (sprintf "%A is reported as %s" case token) (sprintf "\"outcome\":\"%s\"" token)

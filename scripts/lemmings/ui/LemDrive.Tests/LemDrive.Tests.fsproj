@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Tests for the pure parts of LemDrive: key chords, the command set, the tour file
+       format, the daemon guard, the snapshot and sidecar text, the shim and the oracle
+       helpers. Run it with dotnet run and this project's directory as the project. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <LangVersion>preview</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+    <PackageReference Include="Expecto" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../LemDrive/LemDrive.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="ChordTests.fs" />
+    <Compile Include="CommandTests.fs" />
+    <Compile Include="TourTests.fs" />
+    <Compile Include="SnapshotTests.fs" />
+    <Compile Include="ShotTests.fs" />
+    <Compile Include="HarnessTests.fs" />
+    <Compile Include="RunnerTests.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+</Project>

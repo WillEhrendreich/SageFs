@@ -1,5 +1,7 @@
 # As-You-Type Live Testing — Visual Studio Extension
 
+> **The Visual Studio extension is deprecated and no longer built, tested or published** (see [its README](../README.md)). This page is kept as the record of what it did when it last shipped.
+
 This document describes the **current shipped Visual Studio behavior** for compiled-project
 "test as you type" buffer syncing.
 

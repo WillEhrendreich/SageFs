@@ -10,7 +10,7 @@ open SageFs
 /// real `~/.SageFs`. Not deleted afterward (matching the rest of this
 /// suite's temp-dir tests); OS temp cleanup handles it.
 let private freshDir () =
-  let dir = Path.Combine(Path.GetTempPath(), "sagefs-updatecheck-tests-" + Guid.NewGuid().ToString("N"))
+  let dir = SageFs.Tests.RunnerDirs.scratchPath "updatecheck-"
   Directory.CreateDirectory dir |> ignore
   dir
 
@@ -43,7 +43,7 @@ let tests =
         |> Expect.isTrue "still dismissed, no crash on the duplicate write"
 
       testCase "a missing cache directory is created rather than throwing" <| fun _ ->
-        let dir = Path.Combine(Path.GetTempPath(), "sagefs-updatecheck-tests-" + Guid.NewGuid().ToString("N"))
+        let dir = SageFs.Tests.RunnerDirs.scratchPath "updatecheck-"
         // deliberately NOT created — dismissVersion must create it itself
         UpdateCheckService.dismissVersion dir (System.Version "0.6.700")
         UpdateCheckService.isDismissed dir (System.Version "0.6.700")

@@ -7,9 +7,9 @@
 F# Interactive that already has your project loaded, re-runs your tests on unsaved edits, and patches your running app. VS Code, Neovim, a browser dashboard and your AI agent all share the one session. Free, MIT.
 
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
-[![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
+[![.NET 10 and 11](https://img.shields.io/badge/.NET-10%20%7C%2011-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-9900+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-11286+-22c55e?style=flat-square)]()
 [![Live testing](https://img.shields.io/badge/live%20testing-edit%20→%20affected%20tests%20rerun-f59e0b?style=flat-square)]()
 
 </div>
@@ -38,15 +38,15 @@ Start `sagefs` once. Then:
 | It starts empty | A session loads your real project, built by the SDK `dotnet` picks in that folder, in its own host process. Your package versions never fight mine. No config files, and it works on half-written code. |
 | One process, one terminal | One daemon, any number of isolated session workers. VS Code, Neovim, the dashboard and agents all talk to the same live session at the same time, and each keeps its own view. |
 | It knows nothing about your tests | Edit a function, saved or not, and the *affected* tests re-run against it. The failing one goes red in your gutter and green again when you fix it, without touching the file on disk. Each line lists the tests that run it, each result says whether it ran against evaluated code or a real build, you can pause it or scope it to some tests, and in VS Code you can debug the failing test. When it can't tell what an edit affects it runs everything, it never reads an empty selection as green. See [live testing](docs/live-testing-as-you-type.md). |
-| It can't touch a running app | Save a `.fs` file and SageFs re-points the changed methods in the process that's already running, including inline lambdas in a route list, instance members, and code you added, removed or gave a new signature. Your state stays where it was. Generic functions and a new member on an existing type restart the app, and so does anything else it can't patch, and it says why. See [hot reload](docs/hot-reload.md). |
+| It can't touch a running app | Save a `.fs` file and SageFs re-points the changed methods in the process that's already running, including inline lambdas in a route list, instance members, and code you added, removed or gave a new signature. Your state stays where it was. A new member on an existing type restarts the app, and so does anything else it can't patch, and it says why. See [hot reload](docs/hot-reload.md). |
 | Values scroll away | Every binding in your session is shown live in the dashboard, top-down, and updates after each eval. |
-| Only you can drive it | An MCP server with [61 tools](docs/mcp-tools.md). An agent evals, type-checks and runs your tests in the same session you're looking at, and `run_tests` hands back a receipt so a stale pass never counts as green. |
+| Only you can drive it | An MCP server with [63 tools](docs/mcp-tools.md). An agent evals, type-checks and runs your tests in the same session you're looking at, and `run_tests` hands back a receipt so a stale pass never counts as green. |
 
-Most of the live testing and hot reload rows above merged on 2026-10-01 and are in the next release. They are not in v0.6.870. [The progress page](docs/progress.md#the-day-the-comparison-tables-lost-their-restart-and-none-rows-2026-10-01-84-commits-v06869-to-v06872-on-master-v06870-released) says which entry is which.
+Most of the live testing and hot reload rows above merged on 2026-10-01 and are in v0.6.875. They are not in v0.6.870. Two things merged after v0.6.875 was tagged and are not in any release yet: generic functions patch in every instantiation (in v0.6.875 a save to one restarts the app), and a save to an app started with `run_app` is patched in place by a metadata delta (in v0.6.875 it restarts the app). Install from master or wait for the next release if you want them. [The progress page](docs/progress.md) says which entry is which: the [newest window](docs/progress.md#what-merged-after-v06875-the-same-day-2026-10-01-55-commits-none-of-them-in-a-release) is the merged-only one, and the [one below it](docs/progress.md#the-day-the-comparison-tables-lost-their-restart-and-none-rows-2026-10-01-84-commits-in-v06870-and-v06875) marks each entry as v0.6.870 or v0.6.875.
 
 For the curious, there are three short write-ups on how it's done, each with the tools I learned from, what F# and .NET don't hand you, how SageFs gets it done, and where Microsoft's version is ahead: [how hot reload works](docs/how-hot-reload-works.md), [how live testing works](docs/how-live-testing-works.md), and [how SageFs opens projects plain FSI can't](docs/how-isolation-works.md).
 
-If you want to see how it got here, [what SageFs has become, stretch by stretch](docs/progress.md) goes through each change as before, now, why it matters, and a link to the code.
+If you want to see how it got here, [what SageFs has become, stretch by stretch](docs/progress.md) goes through each change as before, now, why it matters, and a link to the code. If you want to see where it's going, [the roadmap](docs/roadmap.md) lists what I'm building now, what's next, and the ideas further out. It updates itself: an item moves to Built when its code lands.
 
 I'm not going to pretend all of that is finished. [Live testing](docs/live-testing-as-you-type.md) and hot reload each have documented limits, written down next to the tests that pin them. But all of it runs today, and none of it is a mockup.
 
@@ -54,7 +54,7 @@ It runs as a daemon with isolated session workers, so editors, dashboard tabs, a
 
 **How's it different from Ionide?** Ionide gives you the editor smarts (IntelliSense, diagnostics, project support) through the F# Compiler Service, and it's great. SageFs adds live *execution*: eval any expression and see the result inline, continuous test feedback on every save (or keystroke, if you want it), and hot reload that patches your running app. Use both together: Ionide for editing, SageFs for running. They get along fine.
 
-It runs on Windows, macOS, and Linux. SageFs itself installs with the .NET 10 SDK. Your *projects* aren't stuck on that version though. Each session's host gets built with whichever SDK `dotnet` picks in your project's folder, and runs on that SDK's runtime. So a `global.json` pin is honored, and without one you get the newest SDK you have installed. If you want a project on .NET 10 while an 11 preview is also installed, pin it with `global.json`.
+My CI runs on Linux only, so nothing automated covers Windows or macOS. The tool is a .NET global tool and the package is built to install on both, but treat them as untested here and tell me what breaks. SageFs itself installs with the .NET 10 SDK or the .NET 11 SDK. Your *projects* aren't stuck on that version though. Each session's host gets built with whichever SDK `dotnet` picks in your project's folder, and runs on that SDK's runtime. So a `global.json` pin is honored, and without one you get the newest SDK you have installed. If you want a project on .NET 10 while an 11 preview is also installed, pin it with `global.json`.
 
 This started as an experiment in how far agentic development could go, and it's grown into the tool I use every day. It's moving fast, it's got rough edges, and you WILL find things you wish worked differently. That's exactly the feedback I want. Feel free to submit issues or PRs, and if you really need to get ahold of me, Discord is the most reliable way, same name there too.
 
@@ -91,11 +91,11 @@ This started as an experiment in how far agentic development could go, and it's 
 
 Save a `.fs` file and SageFs figures out which functions changed and uses [Harmony](https://github.com/pardeike/Harmony) to re-point those methods in the process that's already running. No rebuild, no restart, and yes, that includes apps whose route table was only ever built once at startup. Connected browsers refresh automatically over SSE.
 
-Because it re-points **methods**, not everything is patchable: a handler that's *called* per request reloads, a handler whose output was *computed once* at startup can't. Prefer `let getHome (ctx: HttpContext) = ...` over `let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. Lambdas in your route list, instance members, added or removed functions and a changed signature all patch in place now. Reshaping a type, adding a member to an existing type, a generic function, and a `let mutable` whose type changed restart the app and say why instead of pretending to reload.
+Because it re-points **methods**, not everything is patchable: a handler that's *called* per request reloads, a handler whose output was *computed once* at startup can't. Prefer `let getHome (ctx: HttpContext) = ...` over `let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. Lambdas in your route list, instance members, added or removed functions and a changed signature all patch in place now. Reshaping a type, adding a member to an existing type, and a `let mutable` whose type changed restart the app and say why instead of pretending to reload. Generic functions patch in every instantiation on master, and restart in v0.6.875 (see the note under the table above).
 
 Apps started by a `.SageFs/init.fsx` that `#load`s your sources patch in place too, on .NET 10 and .NET 11. SageFs tracks which copy of a function the app is actually holding and patches that one.
 
-How you start the app matters, and I'd rather tell you than have you find out. An app started from FSI or an `init.fsx` lives in the same process as the reload agent, so a save patches it in place and its state stays put. An app started with `run_app` runs in the worker, out of the agent's reach, so a save **restarts it with your change** and says why (about six seconds for the ticker demo on my machine). Until 0.6.845 that second path reported `Patched` and changed nothing, which I caught by editing the demo and watching the output not move. It's fixed, and there's a test that starts an app with `run_app`, saves an edit and checks what the running app prints. The table and the source links are in [docs/hot-reload.md](docs/hot-reload.md#how-you-start-the-app-decides-which-of-two-things-happens).
+How you start the app matters, and I'd rather tell you than have you find out. An app started from FSI or an `init.fsx` lives in the same process as the reload agent, so a save patches it in place and its state stays put. An app started with `run_app` runs in the worker, out of the agent's reach. In v0.6.875 a save to one **restarts it with your change** and says why (about six seconds for the ticker demo on my machine). On master, merged after v0.6.875 and not in a release yet, that save is patched into the running process as a metadata delta instead: the app keeps its state, and a save is served in 1.8 to 2.6 s on my test fixture, against 6 to 8.5 s for the restart. A save a delta can't take (a field added, a new lambda that adds a closure class, a signature change) still restarts and names the declaration, and `SAGEFS_METADATA_DELTA=off` turns the route off. Until 0.6.845 the restart path reported `Patched` and changed nothing, which I caught by editing the demo and watching the output not move. That's fixed, and there's a test that starts an app with `run_app`, saves an edit and checks what the running app prints. The table and the source links are in [docs/hot-reload.md](docs/hot-reload.md#how-you-start-the-app-decides-which-of-two-things-happens).
 
 A detour landing isn't reported as live. A patched function stays `PatchPending` (the browser still refreshes, because the change may well be live) until its new body has been seen running, and then it becomes `Patched`. If ten seconds go by and it never ran, it's `NeverEntered`, and the message says to exercise it. An app nobody has clicked on yet looks exactly like that, so the wording stays at "unconfirmed". So does a function the JIT inlined into its caller, but only in a project built with optimizations. SageFs builds a session with `-p:Optimize=false`, where an F# `inline` call stays a call and the assembly is marked so the JIT does not inline either. If it finds an optimized build (a Release you built by hand), it marks the session Degraded and says so, because a patch can be bypassed there and nothing else would tell you. Nothing is claimed that wasn't observed.
 
@@ -103,7 +103,7 @@ Your app's live state survives a save. A `let mutable` you didn't touch keeps it
 
 > **Curious how this is possible on F#?** [How hot reload works](docs/how-hot-reload-works.md) covers the Erlang, Clojure and Smalltalk ideas it borrows, what .NET doesn't give F# by default, and how it compares with .NET's own hot reload.
 
-> **[docs/hot-reload.md](docs/hot-reload.md) is the authority.** It carries the full what-reloads / what-restarts table, each row pinned by an executable test. This README deliberately doesn't duplicate it, so the two can't drift apart. (No test measures reload latency, so no figure is quoted here.)
+> **[docs/hot-reload.md](docs/hot-reload.md) is the authority.** It carries the full what-reloads / what-restarts table, each row pinned by an executable test. This README deliberately doesn't duplicate it, so the two can't drift apart. (A test does measure it now, with the machine and run count stated on the page: a patched save is served in about a quarter of a second on my Ryzen 7 5800XT. The restart a `run_app` save used to cost took about seven seconds in that same measurement, taken before the metadata-delta route became the default on master, which serves that save in 1.8 to 2.6 s. [The numbers and where the time goes](docs/how-hot-reload-works.md#how-long-a-save-takes). Microsoft's pages give no figure to compare against, so I don't claim to beat one. None of the latency measurement is in a release yet.)
 
 ### 🤖 AI Agent Support
 
@@ -187,7 +187,7 @@ cp contrib/systemd/sagefs.service ~/.config/systemd/user/
 systemctl --user enable --now sagefs
 ```
 
-[`contrib/systemd/sagefs.service`](contrib/systemd/sagefs.service) is a user unit. It runs `~/.dotnet/tools/sagefs --supervised`, restarts it on failure, and starts it at login (`loginctl enable-linger $USER` if you want it at boot). `systemctl --user status sagefs` shows it, `journalctl --user -u sagefs` has its logs. When an agent then runs `sagefs mcp`, it finds your daemon already up and just bridges to it, so nothing it does can take the daemon down.
+[`contrib/systemd/sagefs.service`](contrib/systemd/sagefs.service) is a user unit. It runs `~/.dotnet/tools/sagefs --supervised`, restarts it on failure, and starts it at login (`loginctl enable-linger $USER` if you want it at boot). `systemctl --user status sagefs` shows it, `journalctl --user -u sagefs` has its logs. The unit runs the daemon from `~/.local/state/sagefs`, which systemd creates (`StateDirectory=`), and not from your home directory: a request that names no directory falls back to the daemon's cwd, and SageFs refuses to watch a home directory, so a daemon started in `$HOME` would give you sessions with no hot reload and no live testing ([`FileWatcher.fs`](SageFs.Core/FileWatcher.fs), `classifyWatchRoot`). When an agent then runs `sagefs mcp`, it finds your daemon already up and just bridges to it, so nothing it does can take the daemon down.
 
 ### 4. Connect your editor
 
@@ -272,7 +272,7 @@ Live testing is *also* a per-session toggle that works in any of the three workf
 
 Use your editor's command to switch workflows:
 
-- **Neovim**: `:SageFsWorkflow live` or `:SageFsWorkflow repl`. The plugin's command documents only those two, so reach for MCP if you want `livetesting`
+- **Neovim**: not from the editor yet. `:SageFsWorkflow` takes no argument and shows the current workflow only (I read the plugin's `commands.lua` on 2026-10-01). Use the dashboard or MCP
 - **VS Code**: Command Palette → `SageFs: Switch Workflow`. This hits `POST /api/sessions/{sid}/workflow` directly, which restarts the same session id in place
 - **MCP**: `switch_workflow` with `target` = `repl` | `livetesting` | `live` (⚠️ `live` means Hot Reload, not live testing; the alias predates the third workflow). This one creates a *new* session in the target workflow and stops the old one
 - **Web dashboard**: a real dropdown next to your session now, not a read-only badge. Pick a workflow and it switches, restarting the same session id in place, same as VS Code
@@ -357,7 +357,7 @@ Every frontend connects to the same daemon. Open several at once and they all se
 | History browser | ✅ | ✅ | ✅ | ✅ |
 | Test trace | ✅ | ✅ | ✅ | — |
 
-A ✅ in the MCP column means a tool in the [61-tool surface](docs/mcp-tools.md) does it. Five rows used to claim ✅ and didn't have one, so I fixed the row instead of the code, since the code was already the right call: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (the `get_completions` / `explore_type` members in `SageFs/McpTools.fs` carry a `[<Description>]` but no `[<McpServerTool>]`, so they aren't exposed at all); the call graph is `GET /api/dependency-graph` (the MCP `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells*, not source symbols); run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
+A ✅ in the MCP column means a tool in the [63-tool surface](docs/mcp-tools.md) does it. Five rows used to claim ✅ and didn't have one, so I fixed the row instead of the code, since the code was already the right call: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (the `get_completions` / `explore_type` members in `SageFs/McpTools.fs` carry a `[<Description>]` but no `[<McpServerTool>]`, so they aren't exposed at all); the call graph is `GET /api/dependency-graph` (the MCP `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells*, not source symbols); run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool. [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP say what's wired, not what's tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
 
 <details>
 <summary><strong>Editor setup guides</strong></summary>
@@ -370,7 +370,7 @@ Current wiring includes Alt+Enter eval, CodeLens, live test decorations, native 
 
 #### Neovim
 
-[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim): 62 Lua modules, 55 commands, 1400+ tests.
+[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) lives in its own repository, and its README has the current command and keymap lists. I took the module, command and test counts out of this page because nothing in this repo checks them.
 
 ```lua
 -- lazy.nvim
@@ -381,7 +381,7 @@ Features: Cell eval, inline results, gutter signs, SSE live updates, live test p
 
 #### AI Agent (MCP)
 
-SageFs exposes 61 MCP tools, from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time; calling one that doesn't apply to the current session state gets rejected with a structured error rather than being hidden. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
+SageFs exposes 63 MCP tools, from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time; calling one that doesn't apply to the current session state gets rejected with a structured error rather than being hidden. `get_daemon_status` reports daemon health, and `get_session_status` reports the selected session and its available tools. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
 
 **Streamable HTTP** (recommended: auto-reconnects, no session drops):
 ```json
@@ -474,7 +474,7 @@ SageFs delivers that loop with a REPL-centered architecture, and goes past it: a
 | **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
 | **Price** | ~$250/month | **Free, MIT licensed** |
 
-Where Visual Studio is still ahead: it debugs several tests at once, it runs every result against a real build (mine confirms after two quiet seconds, and never for an unsaved buffer), it pauses on battery and while you debug, it has a memory cap and a right-click playlist, and it has been shipping since 2017. The plan for each, or the reason I didn't copy it, is in [how live testing works](docs/how-live-testing-works.md#compared-with-visual-studio-live-unit-testing). The rows on tests per line, what a result ran against, debugging, and pause merged on 2026-10-01 and are in the next release, not in v0.6.870.
+Where Visual Studio is still ahead: it debugs several tests at once, it runs every result against a real build (mine confirms after two quiet seconds, and never for an unsaved buffer), it pauses on battery and while you debug, it has a memory cap and a right-click playlist, and it has been shipping since 2017. The plan for each, or the reason I didn't copy it, is in [how live testing works](docs/how-live-testing-works.md#compared-with-visual-studio-live-unit-testing). The rows on tests per line, what a result ran against, debugging, and pause merged on 2026-10-01 and are in v0.6.875, not in v0.6.870.
 
 <details>
 <summary><strong>Three-speed feedback pipeline: how the sub-second path works</strong></summary>
@@ -487,7 +487,7 @@ Where Visual Studio is still ahead: it debugs several tests at once, it runs eve
 
 Each stage is progressively slower and progressively more certain, so you get a marker before you get a verdict. I want to be straight about what's actually measured here: the per-stage millisecond figures that used to sit in this README were never measured, so I pulled them. What is measured now is the end to end path, not the stages: the `--integration-lt` tier starts a daemon, opens the FromCSharp sample, and times keystroke-to-verdict and save-to-green over 20 edits each after 2 warm-up edits (the figures are in the table above, with the machine they came from), and it fails if the 95th percentile passes 3 s. Those figures say nothing about a large solution. There is one real, currently-enforced millisecond budget on pure logic: `CoverageViewTests.fs`'s "hot path is tight" test asserts 100 coverage-view projections over 200 tests complete in under 100ms, and it runs in the default suite, not gated behind anything. `LiveTestingCycleTests.fs` has a second one (`cycleBenchmarkTests`, `[Benchmark]`-tagged) that the default suite filters out and no CI stage runs. Both measure pure decision functions (no FSI, no compiler, no real test execution in the loop), so treat them as a floor on the domain logic, not a promise about wall-clock save-to-green latency. Any *end-to-end* speed number you see about SageFs is an anecdote until something gates it.
 
-Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing: 707 property-based tests exercise the binary format, state machines, and event folds against generated inputs (`grep -rho -E "\b[pf]?testProperty(WithConfig)?\b" SageFs.Tests` across all `*.fs` files, the same regex `SageFs.Tests/TestCountBadge.fs` uses to restamp this line; restamp with `dotnet run --project SageFs.Tests -- --update-badge` rather than hand-editing it).
+Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing: 930 property-based tests exercise the binary format, state machines, and event folds against generated inputs (`grep -rho -E "\b[pf]?testProperty(WithConfig)?\b" SageFs.Tests` across all `*.fs` files, the same regex `SageFs.Tests/TestCountBadge.fs` uses to restamp this line; restamp with `dotnet run --project SageFs.Tests -- --update-badge` rather than hand-editing it).
 
 </details>
 
@@ -499,7 +499,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 
 **Multi-Session**: Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
-**MCP Tools**: 61 tools for session trust, code execution, running and listing tests, verification, failure explanation, analysis, and local friction reporting. They're affordance-gated at call time: the list is always complete, but a call to a tool that doesn't apply to the current session state is rejected with a structured error. [Full reference →](docs/mcp-tools.md)
+**MCP Tools**: 63 tools for session trust, code execution, running and listing tests, verification, failure explanation, analysis, local friction reporting, leases for expensive work, workspace hygiene, and coordinating several agents on one repo. They're affordance-gated at call time: the list is always complete, but a call to a tool that doesn't apply to the current session state is rejected with a structured error. [Full reference →](docs/mcp-tools.md)
 
 **SSE Events**: All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 
@@ -510,7 +510,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 - `SageFs.Core/`, the shared engine and runtime logic: session management, MCP/session operations, live testing, persistence, and shared rendering primitives
 - `SageFs/`, the CLI entrypoint, daemon host, MCP server, dashboard, and worker HTTP transport
 - `SageFs.Host/`, the worker process the daemon spawns per session: it loads your project with MSBuild, shadow-copies and instruments the outputs for coverage, and runs the worker HTTP transport the daemon talks to. It never runs your code
-- `SageFs.FsiHost/`, the isolated FSI host, built and launched per session by `SageFs.Core/IsolatedFsiSession.fs`. Sessions run in it by default. It holds the FSI session and your running code, the hot-reload detours and the live-testing agent. Its dependency closure is deliberately tiny (the SDK's own FSharp.Core and F# compiler, a renamed copy of Harmony, and about twenty of our own source files compiled in), and it references none of SageFs's assemblies, so a project's own dependency versions never collide with the daemon's. [How that works](docs/how-isolation-works.md)
+- `SageFs.FsiHost/`, the isolated FSI host, built and launched per session by `SageFs.Core/IsolatedFsiSession.fs`. Sessions run in it by default. It holds the FSI session and your running code, the hot-reload detours and the live-testing agent. Its dependency closure is deliberately tiny (the SDK's own FSharp.Core and F# compiler, a renamed copy of Harmony, and about thirty of our own source files compiled in, 33 compile items in `FsiHost.fsproj` on 2026-10-01), and it references none of SageFs's assemblies, so a project's own dependency versions never collide with the daemon's. [How that works](docs/how-isolation-works.md)
 - `SageFs.Simulation/`, deterministic simulation (DST) models that fold the real cores: file-reload routing, worker lifecycle, supervision, the manifest
 - `SageFs.Tests/`, the Expecto suite: unit tests, property tests, snapshot tests, the DST drivers, and every real-daemon integration and browser journey
 - `sagefs-vscode/`, VS Code extension (F# via Fable → JavaScript)
@@ -540,7 +540,7 @@ If you're tracing the live testing / "test as you type" stack, start here:
 sagefs --supervised
 ```
 
-Erlang-style supervisor with exponential backoff (1s → 2s → 4s → max 30s). After 5 consecutive crashes within 5 minutes, it reports the failure. Watchdog state exposed via `/api/system/status` and shown in the VS Code status bar. Use this when leaving SageFs running all day.
+Erlang-style supervisor with exponential backoff (1s → 2s → 4s → max 30s, each delay shortened by a random amount of up to half so several daemons don't retry in step). After 5 restarts inside 5 minutes it gives up and reports the failure. A crash within 10 seconds of the last restart is treated as a startup crash: it backs off four times as long and the ceiling drops to 3, because a daemon that can't come up is almost always a config problem. Watchdog state exposed via `/api/system/status` and shown in the VS Code status bar. Use this when leaving SageFs running all day.
 
 </details>
 
@@ -561,7 +561,7 @@ A hard reset spawns the replacement worker *first* and only retires the old one 
 SageFs persists the daemon's session registry and per-session test caches to compact binary files for near-instant cold starts. No JSON parsing, no database, just raw binary with CRC-32C integrity checking.
 
 - **Daemon manifest** (`.sagefm`, v1): the durable session registry (which sessions existed, their projects, and working directories, plus which was active), replayed on startup to rebuild your sessions.
-- **Test cache files** (`.sagetc`, v1): test discovery results, outcomes, durations, and coverage bitmaps of affected tests.
+- **Test cache files** (`.sagetc`, written as format version 3): test outcomes and durations, each test's coverage bitmap, and the flaky-detection history. [The format](docs/binary-format-spec.md#3-sagetc--test-cache-format) is written down next to the code that reads it.
 
 Design: length-prefixed strings, section headers with byte-count envelopes, version negotiation, and field-level bounds checking prevent OOM from crafted inputs. The formats are verified by property-based tests covering format corruption, round-trips, and write isolation.
 
@@ -576,10 +576,13 @@ Design: length-prefixed strings, section headers with byte-count envelopes, vers
 Usage: sagefs [options]                Start daemon (bare by default)
        sagefs --supervised [options]   Start with watchdog auto-restart
        sagefs --jupyter <conn.json>    Run as Jupyter kernel
+       sagefs mcp                      Speak MCP over stdio (spawns the daemon if needed)
        sagefs check                    Check environment before first run
        sagefs stop                     Stop running daemon
        sagefs status                   Show daemon info
        sagefs sweep [--kill]           Reap daemons whose owner process is gone
+       sagefs hygiene [--tidy]         Show what agents left behind (worktrees, gate checkouts, caches, temp dirs) as a dry-run plan; --tidy runs only the safe part
+                                       (--repo PATH names a repository you are not standing in)
        sagefs play <ledger.jsonl>      Replay a portable cohort ledger file offline
 
 Daemon options:
@@ -587,6 +590,9 @@ Daemon options:
   --prune                Mark all stale sessions as stopped, then exit
   --supervised           Auto-restart on crash (exponential backoff)
   --mcp-port PORT        Custom MCP port (default: 37749). The dashboard runs on this port + 1.
+                         A port other than the default needs --owner-pid or --ttl.
+  --owner-pid PID        Exit when the process at PID exits. For a daemon an agent,
+                         test or demo spawns. (--owner-start TICKS closes the pid-reuse race.)
   --ttl DURATION         Self-terminate after DURATION (e.g. 30m, 1h, 90s) with no
                          live sessions and no MCP/SSE clients.
 ```
@@ -610,11 +616,12 @@ Full options: `sagefs --help`
     AutoOpenNamespaces = false }
 ```
 
-The `DirectoryConfig` record also has `InitScript`, `DefaultArgs`, `IsRoot`, and `SessionName` fields ([`SageFs.Core/DirectoryConfigTypes.fs`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs.Core/DirectoryConfigTypes.fs)), but today only two of the six fields do anything. I'd rather tell you that plainly than let you write config that silently gets ignored:
+The `DirectoryConfig` record has seven fields ([`SageFs.Core/DirectoryConfigTypes.fs`](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Core/DirectoryConfigTypes.fs#L76-L87)): `Load`, `InitScript`, `DefaultArgs`, `AutoOpenNamespaces`, `IsRoot`, `SessionName` and `ValueWalk`. Today three of them do anything. I'd rather tell you that plainly than let you write config that silently gets ignored:
 
-- `AutoOpenNamespaces = false` skips warmup auto-opening of namespaces and modules. This is honored everywhere, because every client's session-creation path bottoms out in the one place that reads it ([`SageFs/DaemonMode.fs:297`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/DaemonMode.fs#L297)).
-- `Load` picks which projects or solution a session loads, but **only the web dashboard's own Create-session flow reads it** ([`SageFs/DashboardTypes.fs:1119`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/DashboardTypes.fs#L1119)). MCP and the editor HTTP API take an explicit project, solution, or bare target and never consult this file, so `Load` has no effect on sessions created from an editor or an agent.
-- `InitScript`, `DefaultArgs`, `IsRoot`, and `SessionName` are parsed and stored but **not wired to anything yet**. Setting them has no effect today.
+- `AutoOpenNamespaces = false` skips warmup auto-opening of namespaces and modules. Both places the daemon creates a session read it ([`SageFs/DaemonMode.fs`](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs/DaemonMode.fs#L574-L588)), so it holds whichever client made the session.
+- `Load` picks which projects or solution a session loads, but **only the web dashboard's own Create-session flow reads it** ([`SageFs/DashboardTypes.fs`](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs/DashboardTypes.fs#L1592-L1596)). MCP and the editor HTTP API take an explicit project, solution, or bare target and never consult this file, so `Load` has no effect on sessions created from an editor or an agent.
+- `ValueWalk = WalkSafe | WalkEverything | WalkOff` sets how much of a value the live-bindings pane may run to show it, for new sessions. It defaults to `WalkSafe`, and the daemon reads it when it starts a session's pane ([`SageFs/DaemonMode.fs`](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs/DaemonMode.fs#L2860-L2870)). [`docs/sse-events.md`](docs/sse-events.md) says what each mode does.
+- `InitScript`, `DefaultArgs`, `IsRoot`, and `SessionName` are parsed and stored but **not wired to anything yet**. Setting them has no effect today. I searched the daemon and core projects for a read of each on 2026-10-01 and found none besides the "is this still the default" comparison.
 
 Built-in ways to create or edit the auto-open setting:
 
@@ -646,7 +653,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 |:---|:---|
 | "SageFs daemon not found" | `dotnet tool install --global SageFs`, then `sagefs status` |
 | Results don't match the code you just wrote, or a "type not found, Version=…" / "Could not load file or assembly 'System.Runtime, Version=…'" error | Your daemon is older than your code and is still serving what it started with. `sagefs status` to see its version, then `dotnet tool update --global SageFs` and restart it. |
-| Port already in use | `sagefs stop` or `--mcp-port 8080` |
+| Port already in use | `sagefs stop`, or set `SAGEFS_MCP_PORT=8080` for the daemon you want to keep. `--mcp-port 8080` alone is refused: a daemon off the default port has to say who owns it with `--owner-pid` or when to give up with `--ttl` |
 | Wrong project selected | "SageFs: Switch Project" in command palette |
 | Stale REPL after code changes | Save the file first — source edits auto-reload. Use hard reset only for `.fsproj` / package changes. |
 | Session stuck warming up on a big repo | Name one project or solution, or choose a bare session explicitly. SageFs builds missing generated state itself. See [Large repos](docs/TROUBLESHOOTING.md#warmup-progress-phases) |
@@ -688,7 +695,7 @@ A full CRUD todo app in about 100 lines of F#. Edit a handler and save, and the 
 
 **→ [`samples/demos/webapp-datastar.fsx`](samples/demos/webapp-datastar.fsx)**
 
-> **The two Raylib demos below are unverified for hot reload.** Hot reload itself works (see [docs/hot-reload.md](docs/hot-reload.md)), but no automated test of any kind drives a Raylib window through a save, so the "updates live" claims here rest on nothing executable. I built them to show the shape of the thing, not as a proven guarantee. Treat them accordingly. Note also that the reload rules still apply: a frame loop reading a `let mutable` picks up nothing, because a mutable read compiles to a direct field load that no method detour can rewire. So `starMaxSpeed`-style tweaks need to be read through a function to reload.
+> **The two Raylib demos below are unverified for hot reload.** Hot reload itself works (see [docs/hot-reload.md](docs/hot-reload.md)), but no automated test of any kind drives a Raylib window through a save, so the "updates live" claims here rest on nothing executable. I built them to show the shape of the thing, not as a proven guarantee. Treat them accordingly. The reload rules still apply, and one of them matters here: `starMaxSpeed`, `playerWidth` and `starColors` are plain `let` values, and a redefined value only takes effect when nothing in the running app kept a copy of the old one. A function that hands the value on (a frame loop passing it to Raylib, say) makes that save a restart, and the save says who kept it. See [Values](docs/hot-reload.md#values). I haven't run these demos through a save, so I don't know which of those two things you'll see.
 
 #### 🎨 GPU Window — Raylib Hello World with hot reload
 

@@ -278,6 +278,32 @@ dotnet pack SageFs -o nupkg  # Package the CLI tool
 - **For a project the running daemon already serves, create a session in it.** Only spawn a second daemon when you are testing daemon code itself (changes to `SageFs.Core`/`SageFs`/`SageFs.Host`) that the running daemon cannot execute because it predates your change — and then give that daemon an explicit owner/TTL rather than leaving it to leak.
 - **Identity is bound to your MCP connection, not to the `agentName` you pass.** Two different connections that happen to declare the same `agentName` are tracked as two separate members — you cannot see or clear another connection's active session by reusing its name.
 
+## Orchestrator hygiene
+
+Agents leave things behind: worktrees, merged branches, the gate's checkouts and pass records, built FSI hosts,
+test temp dirs, orphaned processes. One machine ended up with a hundred worktrees (150 GB) and a 172 GB gate
+dir that nothing ever removed. SageFs sees the mess and tells you what it is and what is safe to remove. Keeping
+the workspace tidy is the orchestrator's job, and these are the calls that do it.
+
+- **Before you spawn,** look: call `get_workspace_hygiene`, or read the `workspace:` line that
+  `create_*_session`, `get_session_status` and `get_daemon_status` add once a repo has a pile (more than a
+  handful of leftover worktrees, or a gate dir past 40 GB). If there is already a pile, tidy it first.
+- **After an agent's work merges,** call `get_workspace_hygiene`, read the dry-run plan, then call
+  `tidy_workspace` with `confirm=true` and the plan id. That removes its merged worktree and branch. From a
+  shell it is `sagefs hygiene` for the plan and `sagefs hygiene --tidy` for the safe part.
+- **In every sub-agent brief,** say: finish by removing nothing you do not own, and report your worktree path
+  and branch so the orchestrator can reap them. Sub-agents do not tidy up after themselves, and they do not
+  tidy up after each other.
+- **What tidy will and will not do.** It removes what is merged (by ancestry, by rebase or squash, or by an
+  identical tree), what only differs by build output, what an owner that is gone left, and what has expired.
+  It never touches a worktree with uncommitted work, a branch with commits the base lacks, anything a session,
+  lease or process is using, anything it could not judge, or any path outside the directories SageFs manages.
+  Those are listed with the command that saves the work first (a patch, or a branch), and you run it
+  yourself. A plan that changed since you looked is refused, and every step looks at its target again right
+  before it acts.
+- **Who made it.** A session records which MCP connection created it and where, so a plan can say "made by
+  agent X, which is gone". The connection is the identity; the name an agent gives itself is only a label.
+
 ## Architecture Principles
 
 - **Current clients**: VS Code, Neovim, the web dashboard, and MCP use session-scoped daemon contracts

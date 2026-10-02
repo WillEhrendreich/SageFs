@@ -358,7 +358,7 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       Elem.style [] [ Text.raw fontFaceCss ]
     ]
     Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true" ] [
-      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, false); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "");
+      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, false); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.HygienePanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "");
                 // Chat-style output following (see `OutputFollow`). The browser's
                 // own state lives here, outside #main, so no morph resets it;
                 // the server's feed signals are seeded here too and then
@@ -1009,6 +1009,7 @@ let buildDashboardSnapshotWithSessions
       Elem.div [] [
         renderCohortPanel (infra.ReadCohortFrame ())
         renderCohortLanesPanel (infra.ReadCohortLedger ())
+        renderTrunkPanel (infra.ReadTrunk ())
       ]
     let snap : DashboardSnapshot = {
               Version = infra.Version
@@ -1037,6 +1038,7 @@ let buildDashboardSnapshotWithSessions
               BindingsPanel = bindingsPanel
               FrictionPanel = frictionPanel
               CohortPanel = cohortPanel
+              HygienePanel = renderHygienePanel (HygieneService.viewFor workingDir)
               ActiveProject = q.GetSessionActiveProject sessionId
               ProjectRoles = q.GetSessionProjectRoles sessionId
               App = q.GetSessionApp sessionId
@@ -1160,6 +1162,13 @@ let buildNoSessionSnapshotWithSessionsSorted
       // Cohort panel: only rendered when a session is selected (cohort data is
       // daemon-scoped and irrelevant without a session to scope it against).
       CohortPanel = Elem.div [] []
+      // No session in view: the repository of the first live session, so the panel is there from the landing too.
+      HygienePanel =
+        renderHygienePanel (
+          HygieneService.viewFor (
+            match firstLiveSession sessions with
+            | Some sid -> q.GetSessionWorkingDir sid
+            | None -> ""))
       ActiveProject = None
       ProjectRoles = []
       App = AppRun.AppRunState.NotRunning
@@ -2213,6 +2222,85 @@ let createSessionActionHandler
   }
 
 /// Create clear-output handler.
+// ─── Workspace hygiene ─────────────────────────────────────────────────────
+
+/// The working directory the hygiene panel is about: the one the browser is viewing, else the first live session's.
+let private hygieneDirectoryFor (q: DashboardQueries) (doc: System.Text.Json.JsonDocument) : System.Threading.Tasks.Task<string> =
+  task {
+    let viewing = getSignalString doc Signals.ViewingSessionId "viewing-session-id"
+    match WorkerProtocol.SessionId.validate viewing with
+    | Ok sid -> return q.GetSessionWorkingDir sid
+    | Error _ ->
+      let! sessions = q.GetAllSessions ()
+      match firstLiveSession sessions with
+      | Some sid -> return q.GetSessionWorkingDir sid
+      | None -> return ""
+  }
+
+/// What the daemon knows that a scan of the disk cannot: its sessions, who made them.
+let private hygieneLiveFacts (q: DashboardQueries) (infra: DashboardInfra) : System.Threading.Tasks.Task<HygieneGather.LiveFacts> =
+  task {
+    let! sessions = q.GetAllSessions ()
+    let pairs = sessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id, s.WorkingDirectory)
+    return HygieneService.liveFactsWith pairs infra.ActivityTracker
+  }
+
+/// `POST /dashboard/hygiene/scan`: say "scanning" at once, scan (nothing is changed), then replace the panel with
+/// the dry-run plan. The panel is one node, patched in place; the next whole-page morph carries the same markup.
+let createHygieneScanHandler (q: DashboardQueries) (infra: DashboardInfra) : HttpHandler =
+  fun ctx -> task {
+    try
+      use! doc = readSignalsJsonSized ctx
+      let! directory = hygieneDirectoryFor q doc
+      Response.sseStartResponse ctx |> ignore
+      match HygieneService.mainRepoOf directory with
+      | None -> do! ssePatchNode ctx (renderHygienePanel HygieneService.HygieneView.NoRepository)
+      | Some repo ->
+        HygieneService.Cache.clearTidied repo
+        let! live = hygieneLiveFacts q infra
+        let scan = HygieneService.Cache.refresh (HygieneService.locationsFor repo) (fun () -> live)
+        do! ssePatchNode ctx (renderHygienePanel (HygieneService.HygieneView.Scanning repo))
+        try
+          let! _ = scan
+          ()
+        with _ -> ()
+        do! ssePatchNode ctx (renderHygienePanel (HygieneService.viewFor directory))
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
+/// `POST /dashboard/hygiene/tidy/{plan}`: run the safe part of the plan the panel was showing. A plan that changed
+/// since is refused and the panel shows the new one. Each step looks at its target again before it acts.
+let createHygieneTidyHandler (q: DashboardQueries) (infra: DashboardInfra) (planId: string) : HttpHandler =
+  fun ctx -> task {
+    try
+      use! doc = readSignalsJsonSized ctx
+      let! directory = hygieneDirectoryFor q doc
+      Response.sseStartResponse ctx |> ignore
+      match HygieneService.mainRepoOf directory with
+      | None -> do! ssePatchNode ctx (renderHygienePanel HygieneService.HygieneView.NoRepository)
+      | Some repo ->
+        let! live = hygieneLiveFacts q infra
+        let loc = HygieneService.locationsFor repo
+        HygieneService.Cache.beginTidy repo
+        do! ssePatchNode ctx (renderHygienePanel (HygieneService.HygieneView.Tidying repo))
+        let! outcome = System.Threading.Tasks.Task.Run(fun () -> HygieneService.tidy loc (fun () -> live) (WorkspaceHygiene.PlanId planId))
+        HygieneService.Cache.endTidy repo
+        match outcome with
+        | HygieneService.TidyOutcome.Tidied _ -> ()
+        | HygieneService.TidyOutcome.NotConfirmed _ ->
+          // The plan the panel showed is not the plan that exists: show the one that does.
+          let! _ = HygieneService.Cache.refresh loc (fun () -> live)
+          ()
+        do! ssePatchNode ctx (renderHygienePanel (HygieneService.viewFor directory))
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
 let createClearOutputHandler : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
@@ -2988,6 +3076,8 @@ let createEndpoints
         (q.GetSessionWorkflow >> WorkflowTypes.SessionWorkflow.label)
         (switchWorkflowViaApi infra.McpPort))
     yield post "/dashboard/clear-output" createClearOutputHandler
+    yield post "/dashboard/hygiene/scan" (createHygieneScanHandler q infra)
+    yield mapPostRaw "/dashboard/hygiene/tidy/{plan}" (routeValue "plan") (createHygieneTidyHandler q infra)
     yield post "/dashboard/discover-projects" createDiscoverHandler
     yield post "/dashboard/toggle-project" createToggleProjectHandler
     yield post "/dashboard/dir-suggest" createDirSuggestHandler

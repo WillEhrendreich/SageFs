@@ -85,8 +85,8 @@ let getAllMethods (asm: Assembly) =
         | true -> currentPath
         | false -> t.Name :: currentPath
 
-      // Generic methods are registered too, though never detoured (`compatibleForDetour` refuses them): a
-      // save that edits one has to be able to name it, and it cannot be named if it was never seen.
+      // Generic methods are registered too. They are not paired like the rest (`compatibleForDetour` leaves
+      // them out): each is planned body by body, and one that cannot be is named by the save.
       let staticMethods =
         t.GetMethods()
         |> Array.filter (fun m -> m.IsStatic)
@@ -94,10 +94,11 @@ let getAllMethods (asm: Assembly) =
         |> Array.toList
 
       // The instance members a class declares itself. Not the ones it inherits (every type "has" ToString),
-      // not a struct's (`this` is a byref there), not a generic type's, and not the ones the compiler wrote
-      // for an F# record or union (Equals, GetHashCode, CompareTo): those are not code the user edits.
+      // not a struct's (`this` is a byref there), and not the ones the compiler wrote for an F# record or
+      // union (Equals, GetHashCode, CompareTo): those are not code the user edits. A generic type's are
+      // registered too, though never detoured, so a save that edits one can name it.
       let instanceMethods =
-        match t.IsClass && not t.IsGenericTypeDefinition with
+        match t.IsClass with
         | false -> []
         | true ->
           t.GetMethods(BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.DeclaredOnly)
@@ -573,8 +574,9 @@ type DetourRefusal =
   /// An instance member's type has different fields than the one the app built its
   /// objects from.
   | InstanceLayoutChanged of typeName: string * detail: string
-  /// A generic function: only the instantiations that already ran could be reached.
-  | GenericFunction of declaration: string
+  /// A generic function whose instantiations could not all be listed, so a patch could leave one on the old
+  /// body. The detail says what stops the list.
+  | GenericInstantiationsUnknown of declaration: string * detail: string
 
 /// Everything one eval did, in the vocabulary a user-facing outcome needs.
 type DetourReport = {
@@ -714,7 +716,131 @@ let private probeTarget (logger: ILogger) (newer: Method) : EntryProbe * MethodB
     logger.LogWarning(sprintf "Hot reload cannot watch %s run, so its patch cannot be confirmed: %s" newer.FullName (StubFailure.describe failure))
     probe, newer.MethodInfo :> MethodBase
 
-let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan: DetourPlan) : DetourReport =
+// ── generic functions ─────────────────────────────────────────────────────────
+//
+// See GenericReload.fs for the runtime facts. A generic function is re-pointed body by body: one detour for
+// each value-type instantiation the program can reach, and one for the body every reference-type
+// instantiation shares. Planned first and applied after, like everything else in a save, so a function that
+// cannot be covered stops the whole save instead of leaving some instantiations on the old body.
+
+/// The code level of the detour library: MonoMod's internal `PlatformTriple`, reached by reflection the way
+/// `detourMethod` reaches `PatchTools`. A shared generic body cannot go through `PatchTools.DetourMethod`,
+/// which wraps the replacement in a glue method that drops the hidden argument the stub needs.
+module private NativeDetours =
+  let private triple =
+    lazy (typeof<Harmony>.Assembly.GetTypes() |> Array.find (fun t -> t.Name = "PlatformTriple"))
+
+  let private current =
+    lazy (triple.Value.GetProperty("Current", BindingFlags.Public ||| BindingFlags.Static).GetValue null)
+
+  let private kept = Collections.Generic.List<obj>()
+
+  /// Where the compiled body of `m` starts (the code, not a stub that jumps to it).
+  let bodyOf (m: MethodBase) : nativeint =
+    triple.Value.GetMethod("GetNativeMethodBody").Invoke(current.Value, [| box m |]) :?> nativeint
+
+  /// Jump from the start of the code at `source` to the code at `target`.
+  let create (source: nativeint) (target: nativeint) : unit =
+    let detour = triple.Value.GetMethod("CreateNativeDetour").Invoke(current.Value, [| box source; box target; box -1; box 0n |])
+    // A detour is undone when it is disposed, and nothing here ever undoes one.
+    lock kept (fun () -> kept.Add detour)
+
+/// One body of a generic function a save re-points.
+[<RequireQualifiedAccess>]
+type GenericDetour =
+  /// A value-type instantiation, with code of its own.
+  | Own of older: MethodInfo * target: MethodBase * probe: EntryProbe
+  /// The body every reference-type instantiation of one shape shares.
+  | Shared of older: MethodInfo * stub: MethodInfo * probe: EntryProbe
+
+/// A generic function a save re-points: the copy the app calls, the new copy, and every body of it that has to move.
+type GenericUnit = {
+  Older: Method
+  Newer: Method
+  Detours: GenericDetour list
+}
+
+/// Everything a generic function's save needs, made and checked without touching the running process.
+///
+/// Every body of one function gets a probe under the function's own name: the planner matches a probe to the
+/// declaration the user edited by that name, and says the function ran when any of its probes has been entered.
+let prepareGenericUnit (logger: ILogger) (older: Method) (newer: Method) (instantiations: Type[] list) : Result<GenericUnit, GenericReload.Unreachable> =
+  let prepared =
+    GenericReload.bodiesOf instantiations
+    |> List.fold
+      (fun (acc: Result<GenericDetour list, GenericReload.Unreachable>) (body: GenericReload.Body) ->
+        match acc with
+        | Result.Error _ -> acc
+        | Result.Ok done' ->
+          try
+            match body with
+            | GenericReload.Body.Own args ->
+              let closedOlder = GenericReload.closeOver older.MethodInfo args
+              let closedNewer = GenericReload.closeOver newer.MethodInfo args
+              RuntimeHelpers.PrepareMethod closedOlder.MethodHandle
+              RuntimeHelpers.PrepareMethod closedNewer.MethodHandle
+              let probe = ProbeRegistry.Shared.Allocate newer.FullName
+              let target : MethodBase =
+                match stubFor probe closedNewer with
+                | Result.Ok stub -> stub :> MethodBase
+                | Result.Error failure ->
+                  logger.LogWarning(sprintf "Hot reload cannot watch %s run, so its patch cannot be confirmed: %s" newer.FullName (StubFailure.describe failure))
+                  closedNewer :> MethodBase
+              Result.Ok(done' @ [ GenericDetour.Own(closedOlder, target, probe) ])
+            | GenericReload.Body.Shared representative ->
+              let closedOlder = GenericReload.closeOver older.MethodInfo representative
+              let canonical = GenericReload.closeOver older.MethodInfo (GenericReload.canonicalInstance representative)
+              match NativeDetours.bodyOf closedOlder = NativeDetours.bodyOf canonical with
+              | false ->
+                // The runtime did not share this one after all: it has code of its own, like a value type's.
+                let closedNewer = GenericReload.closeOver newer.MethodInfo representative
+                RuntimeHelpers.PrepareMethod closedNewer.MethodHandle
+                let probe = ProbeRegistry.Shared.Allocate newer.FullName
+                let target : MethodBase =
+                  match stubFor probe closedNewer with
+                  | Result.Ok stub -> stub :> MethodBase
+                  | Result.Error _ -> closedNewer :> MethodBase
+                Result.Ok(done' @ [ GenericDetour.Own(closedOlder, target, probe) ])
+              | true ->
+                let probe = ProbeRegistry.Shared.Allocate newer.FullName
+                match GenericReload.sharedStub probe older.MethodInfo newer.MethodInfo representative with
+                | Result.Error why -> Result.Error why
+                | Result.Ok stub ->
+                  RuntimeHelpers.PrepareMethod closedOlder.MethodHandle
+                  Result.Ok(done' @ [ GenericDetour.Shared(closedOlder, stub, probe) ])
+          with
+          // A type argument of a stale FSI compilation unit cannot be loaded, so nothing can run it either.
+          | :? TypeLoadException as ex ->
+            logger.LogDebug(sprintf "Hot-reload generic body skipped (stale FSI type): %s: %s" older.FullName ex.Message)
+            acc
+          | ex ->
+            Result.Error(
+              GenericReload.Unreachable.UnsupportedShape(
+                sprintf "%s could not be prepared for the type arguments it is used with (%s: %s)" older.FullName (ex.GetType().Name) ex.Message
+              )
+            ))
+      (Result.Ok [])
+  prepared |> Result.map (fun detours -> { Older = older; Newer = newer; Detours = detours })
+
+/// Re-point one body. The probe stands in for the new body, so it is what says the patch took.
+let private applyGenericDetour (logger: ILogger) (detour: GenericDetour) : EntryProbe * DetourApplied =
+  match detour with
+  | GenericDetour.Own(older, target, probe) -> probe, detourMethod logger older target
+  | GenericDetour.Shared(older, stub, probe) ->
+    try
+      let source = NativeDetours.bodyOf older
+      let before = Array.zeroCreate<byte> canarySnapshotBytes
+      Runtime.InteropServices.Marshal.Copy(source, before, 0, canarySnapshotBytes)
+      NativeDetours.create source (NativeDetours.bodyOf stub)
+      match validateDetourCanary source before with
+      | DetourConfirmed -> probe, DetourApplied.Redirected
+      | BytesUnchanged -> probe, DetourApplied.Ineffective(sprintf "native code unchanged after the detour for %s" older.Name)
+      | CanaryError ex -> probe, DetourApplied.Failed(sprintf "%s: %s" older.Name ex.Message)
+    with ex ->
+      logger.LogWarning(sprintf "Hot-reload shared generic detour failed for %s: %s" older.Name ex.Message)
+      probe, DetourApplied.Failed(sprintf "%s: %s" older.Name ex.Message)
+
+let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan: DetourPlan) (generics: GenericUnit list) : DetourReport =
   // One stub per new body, shared by every older copy that is pointed at it.
   let targets = Collections.Generic.Dictionary<MethodInfo, EntryProbe * MethodBase>()
   let targetFor (newer: Method) : EntryProbe * MethodBase =
@@ -724,7 +850,7 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
       let made = probeTarget logger newer
       targets.[newer.MethodInfo] <- made
       made
-  let functionResults =
+  let plainResults =
     plan.Functions
     |> List.map (fun (older, newer) ->
       logger.LogDebug("Updating method " + older.FullName)
@@ -732,10 +858,31 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
       let applied = detourMethod logger older.MethodInfo target
       recordDetourBody older newer applied
       older, applied)
+  // A generic function is one result for the function, however many bodies it took: it landed only if
+  // every body did, because a function that is new in some instantiations and old in others is the one
+  // thing a patch must never be.
+  let genericBodies =
+    generics
+    |> List.map (fun unit ->
+      logger.LogDebug("Updating generic function " + unit.Older.FullName)
+      unit, unit.Detours |> List.map (applyGenericDetour logger))
+  let genericResults =
+    genericBodies
+    |> List.choose (fun (unit, bodies) ->
+      let applied = bodies |> List.map snd
+      let failure = applied |> List.tryPick (function | DetourApplied.Failed reason -> Some reason | _ -> None)
+      match failure, applied with
+      | _, [] -> None
+      | Some reason, _ -> Some(unit.Older, DetourApplied.Failed reason)
+      | None, _ ->
+        match applied |> List.tryPick (function | DetourApplied.Ineffective reason -> Some reason | _ -> None) with
+        | Some reason -> Some(unit.Older, DetourApplied.Ineffective reason)
+        | None -> Some(unit.Older, DetourApplied.Redirected))
+  let functionResults = plainResults @ genericResults
   // A probe counts once its body is what some old entry point now reaches. It
   // supersedes the earlier probe of the same function that never ran.
-  let landedProbes =
-    List.zip plan.Functions functionResults
+  let plainLanded =
+    List.zip plan.Functions plainResults
     |> List.choose (fun ((_, newer), (_, applied)) ->
       match applied with
       | DetourApplied.Redirected
@@ -743,8 +890,25 @@ let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan:
       | DetourApplied.Superseded _
       | DetourApplied.Failed _ -> None)
     |> List.distinctBy _.Id
-  for probe in landedProbes do
+  let genericLanded =
+    genericBodies
+    |> List.collect (fun (_, bodies) ->
+      bodies
+      |> List.choose (fun (probe, applied) ->
+        match applied with
+        | DetourApplied.Redirected
+        | DetourApplied.Ineffective _ -> Some probe
+        | DetourApplied.Superseded _
+        | DetourApplied.Failed _ -> None))
+    |> List.distinctBy _.Id
+  let landedProbes = plainLanded @ genericLanded
+  for probe in plainLanded do
     ProbeRegistry.Shared.Commit probe
+  // The bodies of one generic function share a declaration, and a commit supersedes every earlier probe of
+  // the declaration that never ran, so it is the OLDEST probe of the declaration that is committed: the
+  // bodies of this save must not supersede each other.
+  for _, probes in genericLanded |> List.groupBy _.Declaration do
+    probes |> List.minBy _.Id |> ProbeRegistry.Shared.Commit
   // `Ineffective` IS still counted as redirected, and the comment on
   // `DetourApplied.Ineffective` calling the canary "a warning signal, not a
   // verdict" is load-bearing — MEASURED, after trying the opposite.
@@ -1060,12 +1224,30 @@ type LayoutFit =
 /// Code compiled for one class reads an object of another by field offset, so the two have to be
 /// laid out the same: the same base, and the same fields, in the same order, of the same types.
 let layoutFit (older: Type) (newer: Type) : LayoutFit =
-  let shape (t: Type) = instanceFields t |> List.map (fun f -> f.Name, f.FieldType)
-  match older.IsGenericTypeDefinition || newer.IsGenericTypeDefinition, older.BaseType = newer.BaseType with
-  | true, _ -> LayoutFit.Differs "it is generic"
+  // The fields of a generic type are typed by its own type parameters, and the parameters of two copies of it
+  // are never equal, so two generic definitions are compared by shape (parameters named by position).
+  let shape (t: Type) =
+    instanceFields t
+    |> List.map (fun f ->
+      match t.IsGenericTypeDefinition with
+      | true -> f.Name, box (GenericReload.typeShape f.FieldType)
+      | false -> f.Name, box f.FieldType)
+  let baseShape (t: Type) =
+    match isNull t.BaseType with
+    | true -> ""
+    | false -> GenericReload.typeShape t.BaseType
+  let sameGenericity =
+    older.IsGenericTypeDefinition = newer.IsGenericTypeDefinition
+    && (not older.IsGenericTypeDefinition || older.GetGenericArguments().Length = newer.GetGenericArguments().Length)
+  let sameBase =
+    match older.IsGenericTypeDefinition with
+    | true -> baseShape older = baseShape newer
+    | false -> older.BaseType = newer.BaseType
+  match sameGenericity, sameBase with
+  | false, _ -> LayoutFit.Differs "it is generic in one version and not in the other, or has a different number of type parameters"
   | _, false -> LayoutFit.Differs(sprintf "its base type is %s, not %s" (string newer.BaseType) (string older.BaseType))
-  | false, true when shape older = shape newer -> LayoutFit.SameLayout
-  | false, true ->
+  | true, true when shape older = shape newer -> LayoutFit.SameLayout
+  | true, true ->
     let wasFields = instanceFields older |> List.map describeField
     let nowFields = instanceFields newer |> List.map describeField
     let added = nowFields |> List.filter (fun f -> not (List.contains f wasFields))
@@ -1267,11 +1449,13 @@ let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newM
       && not (name = "get_it" || name = "set_it" || name = "get_asm")
 
     isDetourable newMethod
-    // A generic method is compiled once per instantiation that runs. Detouring the ones that have run
-    // leaves every instantiation that runs LATER on the old body (measured: the open definition cannot be
-    // detoured at all, and a closed one covers only itself), so a generic function is never detoured.
+    // A generic method is not one body (see GenericReload.fs): the open definition has no code to detour, and
+    // each compiled instantiation needs a detour of its own. Those are planned separately, from the
+    // instantiations the program can reach (`planGenericUnits`).
     && not newMethod.MethodInfo.IsGenericMethod
     && not existingMethod.MethodInfo.IsGenericMethod
+    && not newMethod.MethodInfo.DeclaringType.IsGenericTypeDefinition
+    && not existingMethod.MethodInfo.DeclaringType.IsGenericTypeDefinition
     && existingMethod.MethodInfo.IsStatic = newMethod.MethodInfo.IsStatic
     && getParams existingMethod = getParams newMethod
     && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
@@ -1286,6 +1470,91 @@ let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newM
       sprintf "Hot-reload param comparison skipped (TypeLoadException): %s — %s"
         newMethod.FullName ex.Message)
     false
+
+/// What a save does about the generic functions in it: the bodies to re-point, and the functions that cannot
+/// be re-pointed in every instantiation, named.
+type GenericWork = {
+  Units: GenericUnit list
+  Refusals: DetourRefusal list
+}
+
+module GenericWork =
+  let empty : GenericWork = { Units = []; Refusals = [] }
+
+/// The assemblies whose code can name a generic function: the ones that declare a copy of it, the ones that
+/// refer to those, the project's own, and FSI's, which are dynamic.
+let private assembliesThatCanNameGenerics (projectAssemblies: Assembly list) (copies: MethodInfo list) : Assembly list =
+  let declaring = copies |> List.map (fun m -> m.DeclaringType.Assembly) |> List.distinct
+  let names = declaring |> List.map (fun a -> a.GetName().Name) |> Set.ofList
+  let refersToOne (a: Assembly) =
+    try
+      a.GetReferencedAssemblies() |> Array.exists (fun r -> Set.contains r.Name names)
+    with _ -> false
+  AppDomain.CurrentDomain.GetAssemblies()
+  |> Array.filter (fun a ->
+    List.contains a declaring || List.contains a projectAssemblies || a.IsDynamic || refersToOne a)
+  |> List.ofArray
+
+/// Plan the generic functions a save edited, reading the program and the types and writing nothing.
+///
+/// A generic function the app holds a copy of is either covered in every body that can run, or the save is
+/// refused with the reason it cannot be, and refused whole. A refusal only counts for a SAVE: an interactive
+/// eval that redefines a generic function is the user running code, not asking for a patch of the app.
+let planGenericWork (logger: ILogger) (isFileSave: bool) (st: State) (fresh: Method list) : GenericWork =
+  let heldCopy (m: Method) =
+    match Map.tryFind (holdKey m.MethodInfo) st.AppHolds with
+    | Some held when held <> m.MethodInfo -> Some held
+    | _ -> None
+  let refusal (m: Method) (why: GenericReload.Unreachable) : DetourRefusal list =
+    match isFileSave, heldCopy m with
+    | true, Some _ -> [ DetourRefusal.GenericInstantiationsUnknown(m.FullName, GenericReload.Unreachable.describe why) ]
+    | _ -> []
+  // A generic method, or a method of a generic type. A struct's members are handed the struct by address,
+  // which a stub cannot take, so a generic struct's members are named and left.
+  let inGenericStruct (m: Method) = m.MethodInfo.DeclaringType.IsGenericTypeDefinition && m.MethodInfo.DeclaringType.IsValueType
+  let typeMembers =
+    fresh
+    |> List.filter (fun m -> GenericReload.isGenericDefinition m.MethodInfo && inGenericStruct m)
+    |> List.collect (fun m ->
+      refusal m (GenericReload.Unreachable.UnsupportedShape(sprintf "%s is a generic struct, and a struct's members are passed the struct by address" m.MethodInfo.DeclaringType.Name)))
+  let candidates =
+    fresh |> List.filter (fun m -> GenericReload.isGenericDefinition m.MethodInfo && not m.MethodInfo.IsAbstract && not (inGenericStruct m))
+  let pairs =
+    candidates
+    |> List.collect (fun newest ->
+      let registered = Map.tryFind newest.MethodInfo.Name st.Methods |> Option.defaultValue []
+      let held =
+        match Map.tryFind (holdKey newest.MethodInfo) st.AppHolds with
+        | Some h -> [ { MethodInfo = h; FullName = newest.FullName } ]
+        | None -> []
+      registered @ held
+      |> List.filter (fun old ->
+        old.MethodInfo <> newest.MethodInfo
+        && GenericReload.sameShape old.MethodInfo newest.MethodInfo
+        && old.FullName.EndsWith(newest.FullName, StringComparison.Ordinal))
+      |> List.distinctBy _.MethodInfo
+      |> List.map (fun old -> old, newest))
+  match pairs with
+  | [] -> { GenericWork.empty with Refusals = typeMembers |> List.distinct }
+  | _ ->
+    let targets = pairs |> List.map (fun (older, _) -> older.MethodInfo) |> List.distinctBy GenericReload.keyOf
+    let scanned = assembliesThatCanNameGenerics st.ProjectAssemblies targets
+    match GenericReload.reach scanned targets with
+    | Result.Error why ->
+      { Units = []
+        Refusals = (typeMembers @ (candidates |> List.collect (fun m -> refusal m why))) |> List.distinct }
+    | Result.Ok reached ->
+      let units, refusals =
+        pairs
+        |> List.fold
+          (fun (units, refusals) (older, newer) ->
+            let index = targets |> List.findIndex (fun t -> GenericReload.keyOf t = GenericReload.keyOf older.MethodInfo)
+            let instantiations = reached.Instantiations |> Map.tryFind index |> Option.defaultValue []
+            match prepareGenericUnit logger older newer instantiations with
+            | Result.Ok unit -> units @ [ unit ], refusals
+            | Result.Error why -> units, refusals @ refusal newer why)
+          ([], [])
+      { Units = units; Refusals = (typeMembers @ refusals) |> List.distinct }
 
 /// Registers a new REPL-emitted assembly and, when hot reload is on, applies
 /// every detour it makes possible. Returns the FULL report — not just the
@@ -1382,35 +1651,40 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave:
     // app already built cannot run the new member, so the save is refused, and refused whole. One refusal
     // stops every detour of the save, so the running app is left exactly as it was.
     //
-    // A generic function the app holds a copy of is refused the same way: its saved body would be compiled and
-    // reach nothing, because only the instantiations that already ran could be detoured.
+    // A generic function the app holds a copy of is planned body by body (`planGenericWork`), and refused the
+    // same way when some instantiation cannot be reached: a save that moved some of them and not others is
+    // the patch this tool never claims.
     //
     // Only a SAVE is refused. An interactive eval that redefines a generic function or a class is the user
-    // running code, not asking for a patch of the running app, and it never was detoured.
+    // running code, not asking for a patch of the running app.
+    let genericWork =
+      match hotReloadEnabled with
+      | false -> GenericWork.empty
+      | true -> planGenericWork logger isFileSave st (newMethods |> List.filter (fun m -> not (known.Contains m.MethodInfo)))
     let refusals =
       match hotReloadEnabled && isFileSave with
       | false -> []
       | true ->
-        newMethods
-        |> List.filter (fun m -> not (known.Contains m.MethodInfo))
-        |> List.choose (fun newest ->
-          match Map.tryFind (holdKey newest.MethodInfo) st.AppHolds with
-          | Some held when held <> newest.MethodInfo ->
-            match newest.MethodInfo.IsGenericMethod, newest.MethodInfo.IsStatic with
-            | true, _ -> Some(DetourRefusal.GenericFunction newest.FullName)
-            | false, true -> None
-            | false, false ->
-              try
-                match layoutFit held.DeclaringType newest.MethodInfo.DeclaringType with
-                | LayoutFit.SameLayout -> None
-                | LayoutFit.Differs detail -> Some(DetourRefusal.InstanceLayoutChanged(held.DeclaringType.Name, detail))
-              with :? TypeLoadException -> None
-          | _ -> None)
+        (newMethods
+         |> List.filter (fun m -> not (known.Contains m.MethodInfo))
+         |> List.choose (fun newest ->
+           match Map.tryFind (holdKey newest.MethodInfo) st.AppHolds with
+           | Some held when held <> newest.MethodInfo ->
+             match newest.MethodInfo.IsStatic with
+             | true -> None
+             | false ->
+               try
+                 match layoutFit held.DeclaringType newest.MethodInfo.DeclaringType with
+                 | LayoutFit.SameLayout -> None
+                 | LayoutFit.Differs detail -> Some(DetourRefusal.InstanceLayoutChanged(held.DeclaringType.Name, detail))
+               with :? TypeLoadException -> None
+           | _ -> None))
+        @ genericWork.Refusals
         |> List.distinct
 
     let report =
       match refusals with
-      | [] -> applyDetourPlan logger st.AppHolds detourPlan
+      | [] -> applyDetourPlan logger st.AppHolds detourPlan genericWork.Units
       | _ -> DetourReport.empty
 
     // A file-save (`isFileSave`) is an ATTEMPT to reach whatever the app

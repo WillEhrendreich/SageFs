@@ -70,6 +70,12 @@ module HttpWorkerClient =
     | WorkerMessage.DebugTestContinue(ticket, park, rid) ->
       "POST", "/debug-test-continue",
       Some (Serialization.serialize {| ticket = ticket; park = park; replyId = rid |})
+    | WorkerMessage.SetSaveSource(source, rid) ->
+      "POST", "/save-source",
+      Some (Serialization.serialize {| source = source; replyId = rid |})
+    | WorkerMessage.ApplySaves(files, rid) ->
+      "POST", "/apply-saves",
+      Some (Serialization.serialize {| files = files; replyId = rid |})
     | WorkerMessage.Shutdown ->
       "POST", "/shutdown", None
 

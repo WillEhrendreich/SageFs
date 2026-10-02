@@ -335,6 +335,14 @@ let handleMessage
           HostAgent.TestDebug.DebugProgress.Ended(HostAgent.TestDebug.DebugEnd.HostLost reason)
       return WorkerResponse.DebugTestAnswer(replyId, WorkerProtocol.Serialization.serialize progress)
 
+    // The save pipeline lives with the file watcher in `run`, not with the actor, so `run`'s ready handler answers these
+    // before a message gets here. A host that has no pipeline says so rather than pretending it applied a save.
+    | WorkerMessage.SetSaveSource(source, replyId) ->
+      return WorkerResponse.SaveSourceSet(replyId, source)
+
+    | WorkerMessage.ApplySaves(_, replyId) ->
+      return WorkerResponse.SavesApplied(replyId, Features.TrunkFollow.SessionOutcome.NoPipeline "this host has no hot reload save pipeline")
+
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
   }
@@ -483,6 +491,12 @@ type SaveHandling =
   /// lifetime, so the whole file is re-evaluated — carrying the reasons the
   /// patch route refused, because they are still true afterwards.
   | FallBackWholeFile of reasons: Features.ReloadOutcome.RestartReason list
+
+/// The delta route of this worker's app: not started until `run_app` has loaded a module to take a baseline of.
+[<RequireQualifiedAccess>]
+type DeltaRoute =
+  | NotStarted
+  | Started of RunAppDelta.Session
 
 /// What one eval's mutable-binding detours mean for the save as a whole — not
 /// just for `confirmPatchAsOutcome`'s function-only accounting, which never
@@ -897,6 +911,11 @@ let run (sessionId: string) (port: int) = async {
   // The source each running app's DLL was built from, advanced after every
   // applied patch: what a save is compared with to decide patch vs restart.
   let reloadBaselines = System.Collections.Concurrent.ConcurrentDictionary<string, Features.ReloadPlanning.FileDecls>()
+  // Whether this worker was started to take run_app saves as metadata deltas, as its daemon decided (the daemon
+  // gave it the runtime variable that makes its assemblies editable, and said so in SAGEFS_METADATA_DELTA).
+  let deltaMode = Features.MetadataDelta.MetadataDeltaMode.fromEnvironment ()
+  // The route's baseline, taken when the app starts: the module this process loaded, before any delta.
+  let deltaRoute = ref DeltaRoute.NotStarted
 
   // The unit→type registry, derived from the baselines on demand rather than
   // cached: `reloadBaselines` is a live concurrent map that every save advances,
@@ -955,6 +974,12 @@ let run (sessionId: string) (port: int) = async {
             Log.info "Hot reload: reflection reads are %s now" (Middleware.ValueReads.ReflectionReadMode.name mode)
             Result.Ok report
           | HostAgent.AgentUnavailable reason -> Result.Error(Features.KeptState.ReflectionReadsError.NoAgent reason) }
+
+  // Where this worker's saves come from, and the save pipeline's entry once the watcher below has built it. A landing hands the
+  // pipeline its saves through this entry (`WorkerMessage.ApplySaves`), so the pipeline a trunk session runs a landing through
+  // is the one a person's save takes.
+  let saveSource = ref Features.TrunkFollow.SaveSource.WatchedFiles
+  let savePipeline : (FileWatcher.FileChange -> Async<unit>) option ref = ref None
 
   // Start file watcher unless no-watch was set
   let fileWatcher =
@@ -1096,8 +1121,8 @@ let run (sessionId: string) (port: int) = async {
             Features.ReloadPlanning.ReloadChange.ClosureShapeChanged (declaration, detail)
           | Middleware.HotReloadCore.DetourRefusal.InstanceLayoutChanged (typeName, detail) ->
             Features.ReloadPlanning.ReloadChange.InstanceLayoutChanged (typeName, detail)
-          | Middleware.HotReloadCore.DetourRefusal.GenericFunction declaration ->
-            Features.ReloadPlanning.ReloadChange.GenericFunction declaration)
+          | Middleware.HotReloadCore.DetourRefusal.GenericInstantiationsUnknown (declaration, detail) ->
+            Features.ReloadPlanning.ReloadChange.GenericInstantiationsUnknown (declaration, detail))
       /// The lambdas a save edited, as the host needs them to find the closures the app already holds.
       let closuresOf
         (filePath: string)
@@ -1510,6 +1535,69 @@ let run (sessionId: string) (port: int) = async {
                 | Features.ReloadPlanning.PatchOutcome.RestartNeeded (first, rest) ->
                   return! restartOrFallBack fileName first rest
             }
+      // A save the runtime took as a metadata delta, announced as pending and confirmed when the new bodies are
+      // seen running. The probes are in THIS process (the app runs here), so the wait is local, not the host agent's.
+      let announceDelta (watched: Features.PatchConfirmation.WatchedDecl list) (outcome: Features.ReloadOutcome.ReloadOutcome) =
+        let waiter : Features.PatchAnnouncer.EntryWaiter =
+          fun probes bound ->
+            async {
+              let! reading = Middleware.EntryProbes.ProbeRegistry.Shared.Await(probes, bound)
+              return Features.PatchAnnouncer.EntryAnswer.HostSaw reading
+            }
+        Features.PatchAnnouncer.announce waiter Timeouts.patchConfirmation (Features.PatchConfirmation.start watched outcome)
+        |> Async.Start
+      // Build the project and hand the runtime the difference between that build and the module this process
+      // loaded. Every way this cannot happen is a restart that names why (`RestartReason.RudeEdit` when the edit
+      // is one a delta cannot carry, `MetadataDeltaUnavailable` when the route cannot be used right now).
+      let patchByDelta
+        (fileName: string)
+        (filePath: string)
+        (current: Features.ReloadPlanning.FileDecls)
+        (functions: Features.ReloadPlanning.SourceDecl list)
+        : Async<SaveHandling> = async {
+        match deltaRoute.Value with
+        | DeltaRoute.NotStarted ->
+          return!
+            restartOrFallBack
+              fileName
+              (Features.ReloadPlanning.ReloadChange.DeltaUnavailable "no baseline was captured when the app started")
+              []
+        | DeltaRoute.Started session ->
+          DevReload.broadcastCompiling (Some fileName)
+          match! session.Save() with
+          | RunAppDelta.SaveResult.Unchanged ->
+            reloadBaselines.[IO.Path.GetFullPath filePath] <- current
+            Log.info "Hot reload: %s saved with no change to the compiled code — the running app is already current" fileName
+            Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.unchanged fileName)
+            return SaveHandling.Reported
+          | RunAppDelta.SaveResult.BuildFailed message ->
+            Log.warn "Hot reload: the build for %s failed: %s" fileName message
+            Features.ReloadBroadcast.broadcastOutcome
+              (Features.ReloadOutcome.ReloadOutcome.CompileFailed (sprintf "%s: %s" fileName message))
+            return SaveHandling.Reported
+          | RunAppDelta.SaveResult.Restart (first, rest) ->
+            let changeOf (refusal: Features.MetadataDelta.Refusal) =
+              match refusal with
+              | Features.MetadataDelta.Refusal.Rude cause -> Features.ReloadPlanning.ReloadChange.RefusedByDelta cause
+              | Features.MetadataDelta.Refusal.Unavailable why -> Features.ReloadPlanning.ReloadChange.DeltaUnavailable why
+            return! restartOrFallBack fileName (changeOf first) (rest |> List.map changeOf)
+          | RunAppDelta.SaveResult.Landed landed ->
+            reloadBaselines.[IO.Path.GetFullPath filePath] <- current
+            let considered = landed.Watched.Length
+            let outcome =
+              Features.ReloadOutcome.ReloadOutcome.ByMetadataDelta
+                (Features.ReloadOutcome.MetadataDeltaOutcome.Pending (considered, considered, landed.Watched |> List.map _.Declaration))
+            for failure in landed.HandlerFailures do
+              Log.warn "Hot reload: a metadata-update handler threw after the delta landed: %s" failure
+            announceDelta landed.Watched outcome
+            Log.info "Hot reload: %s — %s (%s; by metadata delta: build %.0f ms, diff and write %.0f ms, apply %.0f ms)"
+              fileName
+              (Features.ReloadOutcome.ReloadOutcome.describe outcome)
+              (functions |> List.map _.Name |> String.concat ", ")
+              landed.Timings.BuildMs
+              landed.Timings.PrepareMs
+              landed.Timings.ApplyMs
+            return SaveHandling.Reported }
       // Patch the process in place when only function bodies changed; anything
       // that takes effect at startup restarts the app (see ReloadPlanning).
       // Every exit reports exactly one terminal outcome, so a Compiling overlay
@@ -1531,8 +1619,9 @@ let run (sessionId: string) (port: int) = async {
             match AppRunner.state appRunner with
             | AppRun.AppRunState.Running _ -> Features.ReloadPlanning.AppPlacement.InWorkerProcess
             | _ -> Features.ReloadPlanning.AppPlacement.InAgentProcess
-          match Features.ReloadPlanning.AppPlacement.adjust placement (Features.ReloadPlanning.planReload baseline current) with
-          | Features.ReloadPlanning.ReloadPlan.PatchFunctions [] ->
+          match Features.PatchRoute.choose placement deltaMode (Features.ReloadPlanning.planReload baseline current) with
+          | Features.SaveRoute.ByMetadataDelta functions -> return! patchByDelta fileName filePath current functions
+          | Features.SaveRoute.PerPlan (Features.ReloadPlanning.ReloadPlan.PatchFunctions []) ->
             // The file's declarations are byte-identical to the running build.
             // Nothing to fetch and nothing to do, so this is reported as the
             // non-event it is — the old code broadcast a browser reload here,
@@ -1540,9 +1629,9 @@ let run (sessionId: string) (port: int) = async {
             Log.info "Hot reload: %s saved with no declaration change — the running app is already current" fileName
             Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.unchanged fileName)
             return SaveHandling.Reported
-          | Features.ReloadPlanning.ReloadPlan.PatchFunctions functions ->
+          | Features.SaveRoute.PerPlan (Features.ReloadPlanning.ReloadPlan.PatchFunctions functions) ->
             return! patchInPlace fileName filePath baseline current functions [] [] (fun () -> [])
-          | Features.ReloadPlanning.ReloadPlan.PatchKeepingState (functions, first, rest) ->
+          | Features.SaveRoute.PerPlan (Features.ReloadPlanning.ReloadPlan.PatchKeepingState (functions, first, rest)) ->
             let state = first :: rest
             let carried =
               state
@@ -1616,9 +1705,11 @@ let run (sessionId: string) (port: int) = async {
                 redefinitionRefusals current redefined
                 |> List.map (Features.RestartAttribution.restartReasonFor (knownUnits ()))
               return! patchInPlace fileName filePath baseline current emitted carried kept recheck
-          | Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest) ->
+          | Features.SaveRoute.PerPlan (Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest)) ->
             return! restartOrFallBack fileName first rest }
-      let onFileChanged (change: FileWatcher.FileChange) =
+      /// The save pipeline for one change. The part that has to happen the moment the change arrives (counting it, and
+      /// cancelling an older eval of the same file) happens when this is called; the returned async is the rest.
+      let beginChange (change: FileWatcher.FileChange) : Async<unit> =
         let ext = IO.Path.GetExtension(change.FilePath)
         let kind = match change.Kind with
                    | FileWatcher.FileChangeKind.Changed -> "Modified"
@@ -1648,7 +1739,7 @@ let run (sessionId: string) (port: int) = async {
             newCts)
         |> ignore
         let ct = newCts.Token
-        Async.Start(async {
+        async {
           // Chesterton's fence: the wait for the compiler is BOUNDED, and the
           // timeout is REPORTED. An unbounded wait here was the subsystem's
           // worst failure mode: `ct` is cancelled only by a newer change to
@@ -1733,7 +1824,7 @@ let run (sessionId: string) (port: int) = async {
                            // would re-declare every `let mutable` in the file on the way.
                            | Features.ReloadOutcome.RestartReason.ClosureShapeChanged _
                            | Features.ReloadOutcome.RestartReason.InstanceLayoutChanged _
-                           | Features.ReloadOutcome.RestartReason.GenericFunction _ -> true
+                           | Features.ReloadOutcome.RestartReason.GenericInstantiationsUnknown _ -> true
                            | _ -> false) ->
                   let outcome = Features.ReloadOutcome.ReloadOutcome.RestartRequired restartReasons
                   Features.ReloadBroadcast.broadcastOutcome outcome
@@ -1909,7 +2000,16 @@ let run (sessionId: string) (port: int) = async {
               Log.error "File watcher async failed: %s" (ex.ToString())
           finally
             compilationLock.Release() |> ignore
-        })
+        }
+      // A save is one pipeline whoever hands it in. The watcher hands it saves it saw, and a landing hands it the files it moved.
+      // A worker told to take its saves from landings only drops what the watcher saw: the daemon wrote those files itself and
+      // is about to hand them over, and the pipeline would otherwise run the same save twice.
+      let onFileChanged (change: FileWatcher.FileChange) =
+        match saveSource.Value with
+        | Features.TrunkFollow.SaveSource.WatchedFiles -> Async.Start (beginChange change)
+        | Features.TrunkFollow.SaveSource.LandedOnly ->
+          Log.debug "File change left to the landing that made it: %s" (IO.Path.GetFileName change.FilePath)
+      savePipeline.Value <- Some beginChange
       Some (FileWatcher.start config DevReload.DevReloadConfig.defaults onFileChanged)
 
   /// Record the source each loaded project's assembly was built from. That baseline
@@ -1967,6 +2067,26 @@ let run (sessionId: string) (port: int) = async {
       | _ -> ()
   | _ -> ()
 
+  // The baseline of the delta route is the module this process loaded for the app, taken once. A second run of the
+  // app in this process loads the same module (patched by whatever deltas landed), so its chain carries on.
+  let startDeltaRoute (asm: Reflection.Assembly) (project: string) =
+    match deltaMode, workerConfig.Workflow with
+    | Features.MetadataDelta.MetadataDeltaMode.On, WorkflowTypes.SessionWorkflow.HotReload _ ->
+      match deltaRoute.Value with
+      | DeltaRoute.Started session when obj.ReferenceEquals(session.Assembly, asm) -> ()
+      | DeltaRoute.Started _
+      | DeltaRoute.NotStarted ->
+        let session = RunAppDelta.Session.Start(asm, project, Environment.CurrentDirectory)
+        deltaRoute.Value <- DeltaRoute.Started session
+        match session.Standing with
+        | Features.MetadataDelta.Standing.Unusable why ->
+          Log.warn "Run App: saves cannot be patched by metadata delta in this process (%s), so an edit restarts the app" why
+        | Features.MetadataDelta.Standing.Tracking _
+        | Features.MetadataDelta.Standing.NoBaseline ->
+          Log.info "Run App: saves are patched by metadata delta against %s" asm.Location
+    | Features.MetadataDelta.MetadataDeltaMode.Off, _
+    | Features.MetadataDelta.MetadataDeltaMode.On, _ -> ()
+
   let appRuns : AppRunHandlers = {
     Run = fun project previous -> async {
       let prepared =
@@ -1978,7 +2098,9 @@ let run (sessionId: string) (port: int) = async {
       | Ok (asm, entry, config) ->
         let! state = AppRunner.start appRunner project entry (AppRun.planLaunch project config previous) |> Async.AwaitTask
         match state with
-        | AppRun.AppRunState.Running _ -> watchForHotReload project asm.Location
+        | AppRun.AppRunState.Running _ ->
+          watchForHotReload project asm.Location
+          startDeltaRoute asm project
         | _ -> ()
         return Ok state }
     Stop = fun scope -> async {
@@ -1997,6 +2119,53 @@ let run (sessionId: string) (port: int) = async {
     Continue = fun ticket park -> result.Agent.DebugContinue ticket park
   }
 
+  /// Run the save pipeline over the files a landing moved, one at a time and in the order given, and say what it said about each.
+  ///
+  /// The verdict is read from the same record a polling client reads (`DevReload.LastReload`), and only when the pipeline
+  /// recorded something for THIS file: the record's count is compared before and after, so a file the pipeline had nothing to say
+  /// about (it was superseded, or the compiler stayed busy) is `NoVerdict` and never an older save's verdict.
+  let applyLandedSaves (files: Features.TrunkFollow.SavedFile list) : Async<Features.TrunkFollow.SessionOutcome> =
+    async {
+      match savePipeline.Value with
+      | None ->
+        return
+          Features.TrunkFollow.SessionOutcome.NoPipeline
+            "the worker watches no project directory (watching is off, or no project was loaded), so it has no save pipeline"
+      | Some pipeline ->
+        let applyOne (file: Features.TrunkFollow.SavedFile) : Async<Features.TrunkFollow.FileVerdict> =
+          async {
+            let kind =
+              match file.Kind with
+              | Features.TrunkFollow.SaveKind.Changed -> FileWatcher.FileChangeKind.Changed
+              | Features.TrunkFollow.SaveKind.Created -> FileWatcher.FileChangeKind.Created
+              | Features.TrunkFollow.SaveKind.Deleted -> FileWatcher.FileChangeKind.Deleted
+            let change : FileWatcher.FileChange = { FilePath = file.Path; Kind = kind; Timestamp = DateTimeOffset.UtcNow }
+            let verdict (outcome: Features.TrunkFollow.FileOutcome) : Features.TrunkFollow.FileVerdict =
+              { File = file.Path; Outcome = outcome }
+            match FileWatcher.fileChangeAction change with
+            | FileWatcher.FileChangeAction.Reload path when HotReloadState.isWatched path !result.HotReloadStateRef ->
+              let before = DevReload.LastReload.sequence ()
+              do! pipeline change
+              // The first terminal event the save recorded is what the save said. Later ones (a restarted app coming back, a patch
+              // confirmed) are about the process, and reach the daemon on the reload stream.
+              match DevReload.LastReload.since before with
+              | [] ->
+                return verdict (Features.TrunkFollow.FileOutcome.NoVerdict "the save pipeline recorded no outcome for it (it was superseded, or the compiler stayed busy)")
+              | said :: _ -> return verdict (Features.TrunkFollow.outcomeOfPayload said)
+            | FileWatcher.FileChangeAction.Reload _ -> return verdict Features.TrunkFollow.FileOutcome.NotWatched
+            | FileWatcher.FileChangeAction.SoftReset ->
+              return
+                verdict (
+                  Features.TrunkFollow.FileOutcome.NeedsRebuild
+                    "a project file changed, so the project's references or its compile list changed, which a running process cannot take in place"
+                )
+            | FileWatcher.FileChangeAction.RecoverFromOverflow _
+            | FileWatcher.FileChangeAction.Ignore -> return verdict Features.TrunkFollow.FileOutcome.NotWatched
+          }
+        let! verdicts = files |> List.map applyOne |> Async.Sequential
+        return Features.TrunkFollow.SessionOutcome.Delivered (Array.toList verdicts)
+    }
+
   // Signal readiness over the pipe
   let handler =
     handleMessage actor result.GetSessionStatus result.GetEvalStats result.GetStatusMessage result.ProjectRoles
@@ -2006,6 +2175,13 @@ let run (sessionId: string) (port: int) = async {
     match msg with
     | WorkerMessage.GetInstrumentationMaps(replyId) ->
       return WorkerResponse.InstrumentationMapsResult(replyId, result.InstrumentationMaps)
+    | WorkerMessage.SetSaveSource(source, replyId) ->
+      saveSource.Value <- source
+      Log.info "Save pipeline: saves now come from %A" source
+      return WorkerResponse.SaveSourceSet(replyId, source)
+    | WorkerMessage.ApplySaves(files, replyId) ->
+      let! outcome = applyLandedSaves files
+      return WorkerResponse.SavesApplied(replyId, outcome)
     | _ -> return! handler msg
   }
 

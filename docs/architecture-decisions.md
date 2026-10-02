@@ -4,6 +4,13 @@ These are the key decisions that shape SageFs's architecture, written to explain
 
 > **Historical status:** ADR-2 and ADR-5, along with the frontend lists in other early ADRs, describe the former built-in SageTUI, legacy TUI, and `SageFs.Gui` Raylib product frontends. Those frontends are now deprecated, and for current product direction these decisions are superseded by the web dashboard, editor integrations, and MCP. The original records are unchanged and kept as architectural history. Raylib application and game demos are not deprecated.
 
+> **Checked against the tree on 2026-10-01.** The records below stay as I wrote them, and these are the places the code has moved on.
+>
+> - ADR-3 says session state and test results go in `.sagefm`. Today `.sagefm` is the daemon's session registry, and test outcomes, coverage and flaky history are in `.sagetc` ([format spec](binary-format-spec.md)). There is no `sagefs dump-manifest` command (the CLI has `check`, `stop`, `status`, `sweep`, `hygiene`, `play` and `mcp`). To look inside a manifest you use the reader in `SageFs.Core/Features/ManifestPersistence.fs`.
+> - ADR-4 says 30 cases. `SageFsError` has 42 now (counted from `type SageFsError` in `SageFs.Core/SageFsError.fs`).
+> - ADR-7 says zero interfaces. There are a few: `ILogger` in `SageFs.Core/Utils.fs` and `IFsiSession`, which `RemoteFsiSession.fs` implements. Everything else is still functions and modules.
+> - ADR-6's tool count is current (63), and its two source links are permalinks to the commit I wrote it against.
+
 ---
 
 ## ADR-1: SSE as the Only Read Channel (CQRS)
@@ -128,7 +135,7 @@ positioning. This limitation is accepted for the sake of parity, and Raylib-only
 
 ## ADR-6: MCP as the AI Interface
 
-**Decision**: SageFs exposes 61 tools via [Model Context Protocol](https://modelcontextprotocol.io/).
+**Decision**: SageFs exposes 63 tools via [Model Context Protocol](https://modelcontextprotocol.io/).
 A state machine decides which tools are valid to *call* in the current session state.
 
 **Why**: AI agents (Copilot, Claude, and others) need structured interfaces instead of
@@ -136,7 +143,7 @@ parsing CLI output. MCP provides tool discovery with typed schemas and no need f
 terminal emulation.
 
 **Current status — call-time gate, not a filtered list**: the `tools/list` response is
-static and unfiltered — an agent always sees the full 61-tool catalog, in every session
+static and unfiltered — an agent always sees the full 63-tool catalog, in every session
 state. What the state machine actually gates is *calling* a tool: `enforceToolCallGate`
 rejects a call to a tool that doesn't apply to the current state with a structured error
 ([`SageFs/Mcp.fs:614`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/Mcp.fs#L614),

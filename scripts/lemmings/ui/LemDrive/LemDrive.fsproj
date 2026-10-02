@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- LemDrive: the one typed command line a lemming (or the harness) uses to
+       drive an editor. `dotnet LemDrive.dll vsc <command>` drives VS Code over
+       CDP; the Neovim commands live in Nvim.fs beside it. Standalone, like
+       SageFs.Demos: it must not reference SageFs.Core, so a daemon rebuild
+       cannot change a running trial. Playwright comes through central package
+       management, the same package SageFs.Tests already uses. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <LangVersion>preview</LangVersion>
+    <AssemblyName>LemDrive</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+    <PackageReference Include="Microsoft.Playwright" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The extension's own manifest travels with the driver: the find-help oracle checks
+         an answer against the command titles the extension really declares. -->
+    <None Include="../../../../sagefs-vscode/package.json" Link="package.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Outcome.fs" />
+    <Compile Include="Timeline.fs" />
+    <Compile Include="Chord.fs" />
+    <Compile Include="Guard.fs" />
+    <Compile Include="VscCommand.fs" />
+    <Compile Include="Tour.fs" />
+    <Compile Include="Snapshot.fs" />
+    <Compile Include="Cdp.fs" />
+    <Compile Include="Shot.fs" />
+    <Compile Include="Daemon.fs" />
+    <Compile Include="Vsc.fs" />
+    <Compile Include="Shim.fs" />
+    <Compile Include="VscHost.fs" />
+    <Compile Include="FellOver.fs" />
+    <Compile Include="Oracle.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+</Project>

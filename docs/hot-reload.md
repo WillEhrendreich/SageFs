@@ -36,28 +36,59 @@ nothing you could see. I caught it by editing the ticker demo and watching the
 output not change, on a build SageFs had made itself with optimizations off, so
 the usual caveat below didn't explain it. A web route did the same thing.
 
-Now a save to an app that `run_app` is running restarts it with your change and
-says why: `renderLine changed, and this app runs in the worker, where an
-in-place patch cannot reach it; restarting the app`. On the ticker that took
+From 0.6.845 a save to an app that `run_app` is running restarted it with your
+change and said why: `renderLine changed, and this app runs in the worker, where
+an in-place patch cannot reach it; restarting the app`. On the ticker that took
 about six seconds on my machine. A restart resets the app's state. Carrying a
 live value across a restart is a narrower feature that applies to a type or
 value change on state the app registers with SageFs, and
 [granular-restart-scope.md](granular-restart-scope.md) is where it's tracked; I
 haven't tested it against a `run_app` save, so I'm not claiming it here.
-Patching a `run_app` app in place needs the new function body compiled in the
-worker, or the app run inside the agent's process, and neither is built.
+
+That restart is still what happens with the metadata-delta route off. With it
+on, a save to a `run_app` app is patched into the same process by a **metadata
+delta**: SageFs builds your project, takes the difference between that build
+and the assembly the worker loaded, and hands the runtime a delta
+(`MetadataUpdater.ApplyUpdate`, the call `dotnet watch` makes for C#). Your
+state stays where it is, and the save says `metadata-delta` as its
+`mechanism`. [How it works](how-hot-reload-works.md#a-run_app-app-the-same-save-as-a-metadata-delta)
+has the mechanism, the measurements and what it can't take.
 
 | You start the app | It runs in | A save to a function | Your app's state |
 |---|---|---|---|
-| from FSI, or an `.SageFs/init.fsx` that `#load`s your sources | the reload agent's process | patched in place, no restart | stays where it is |
-| `run_app` | the worker | SageFs restarts it with your change and says why | reset by the restart |
+| from FSI, or an `.SageFs/init.fsx` that `#load`s your sources | the reload agent's process | patched in place by a detour, no restart | stays where it is |
+| `run_app`, metadata-delta route on | the worker | patched in place by a metadata delta, same process id | stays where it is |
+| `run_app`, route off | the worker | SageFs restarts it with your change and says why | reset by the restart |
 
-The rule is [`AppPlacement.adjust`](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Core/Features/ReloadPlanning.fs#L1149-L1173),
-and the worker [applies it to every save](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Host/WorkerMain.fs#L1418-L1425).
-The test is [`RunAppSaveOutcomeTests.fs`](https://github.com/WillEhrendreich/SageFs/blob/71f21e2fead3fffd71d06f58c7ffe6d717ccf824/SageFs.Tests/RunAppSaveOutcomeTests.fs#L115):
-it starts the ticker with `run_app` on its own copy, saves an edit, and requires
-the running app to print the new message. The other "real app" tests here start
-their apps inside FSI, where the agent is, so that is what they prove.
+This route merged on 2026-10-01, after v0.6.875 was tagged, so it is on master and
+not in a release yet. In v0.6.875 a `run_app` save does what the bottom row says. The
+same goes for generics: patching a generic function in every instantiation is also
+merged and unreleased, and in v0.6.875 a save to one restarts the app and names
+`GenericFunction`.
+
+The route is on by default. Set `SAGEFS_METADATA_DELTA=off` in the daemon's
+environment and a `run_app` save restarts the app as it did before this route
+existed ([configuration](configuration.md)). Measured on my machine on the test fixture,
+a save is served in 1.8 to 2.6 s, against 6 to 8.5 s for the restart it replaces.
+
+What a delta takes and what it doesn't, from the emitter's own refusals
+(`RudeCause`): a new body for a method, a closure body, a task body, a method added to a
+type the app already runs, all in every instantiation of a generic function.
+Everything else restarts and names the declaration: a type or method removed, a
+field added, a signature changed, a changed startup value, a new lambda that adds a
+closure class, a lambda that starts capturing something. The planner turns away what
+it can see from source (a type's shape, startup code, mutable state) before anything is
+built, and the emitter turns away what only the compiled shapes show.
+
+The rule that picks the route is [`PatchRoute.choose`](../SageFs.Core/Features/PatchRoute.fs),
+the placement rule it falls back to is `AppPlacement.adjust`, and the worker applies
+both to every save. The rows that prove it are
+[`RunAppDeltaTests.fs`](../SageFs.Tests/RunAppDeltaTests.fs): one real app per row
+on a real host, on .NET 10 and .NET 11, each ending in the same process serving
+the new code and `Patched`, or in a restart that names what could not be patched.
+[`RunAppSaveOutcomeTests.fs`](../SageFs.Tests/RunAppSaveOutcomeTests.fs) pins the
+restart for the route off. The other "real app" tests here start their apps inside
+FSI, where the agent is, so that is what they prove.
 
 ## The pipeline
 
@@ -85,6 +116,45 @@ list holds function values created at startup, but each of those still
 dispatches to the handler's method entry point, so re-pointing the method
 changes what the captured route serves. Harmony doesn't care that the
 delegate was created six minutes ago. It cares where the call ends up.
+
+### How long a save takes
+
+Measured by the `--integration-hr` tier on a real running app: the clock starts
+just before the first byte of the save is written and stops on a response the
+app sent or a frame the daemon pushed (`HotReloadLatency.fs`,
+`HotReloadLatencyTests.fs`). 20 saves per path after 2 warm-up saves, and the
+tier fails if a path's p95 passes its bound in `TestTimeouts.fs`. The app is the
+small `WebAppFixture`. The machine was an AMD Ryzen 7 5800XT, 16 threads,
+Linux, .NET 11.0.0-rc.1, and the tier ran 8 times in a row on 2026-10-01 with
+other jobs running on it. Each cell is the range of the 8 runs.
+
+| What | p50 | p95 |
+|---|---|---|
+| A patched save, to the first response with the new body | 258 to 306 ms | 298 to 353 ms |
+| The same save, to the daemon saying `Patched` | 296 to 346 ms | 338 to 392 ms |
+| A save to an app `run_app` runs, to the restarted app's first response | 7.1 to 10.0 s | 7.7 to 16.2 s |
+| The same save with the metadata-delta route on (the default), to the running app's first response | 1.55 to 1.64 s (2 runs) | 2.23 to 2.25 s (2 runs) |
+
+The third row is a restart, and I took those 8 runs before the metadata-delta route
+existed (the route came in later the same day). The tier now has a row for each
+route and starts a daemon of its own for each: the restart row runs with
+`SAGEFS_METADATA_DELTA=off`, and the delta row clears the variable so it times the
+default. Each row checks that its saves took the route it is named for, and fails if
+they didn't. The fourth row is two runs on the same machine on 2026-10-01 (20 saves each,
+fastest 1.50 s, slowest 2.29 s), and the same runs' restart row gave p50 7.19 and
+7.01 s and p95 7.81 and 11.32 s. Its gate is 10 s.
+
+About 200 ms of a patched save is the watcher's debounce (the worker says it
+started compiling at 201 to 202 ms every run), so most of the time is a fixed
+timer and not the patch. A restart is a rebuild, a new worker, a new FSI session
+and a warm-up, and its spread follows how busy the machine is: one run on a quiet
+machine had a patch at p50 259 ms and p95 261 ms, and a restart at p50 6.8 s and
+p95 6.9 s. That is one
+machine and one small app. I have no figure for a large app, and Microsoft
+documents none for its hot reload (I re-read its Visual Studio, ASP.NET Core and
+`dotnet watch` pages on 2026-10-01), so there is nothing to compare these with.
+The stage-by-stage breakdown, the load runs and what I think is too slow are in
+[How SageFs hot reloads F#](how-hot-reload-works.md#how-long-a-save-takes).
 
 ## What reloads, and what needs a restart
 
@@ -129,6 +199,13 @@ on .NET 11).
 | a **new type**, or a **new value**, the saved code uses | reloads, the same way | parity `addedType`, `addedValue` |
 | a function **taken out**, with the code that used it | reloads. The old one stays in the process for whatever holds it | parity `removed` |
 | a function that **gains a parameter**, with its callers saved in the same save | reloads. It is a new method to the running app, and the callers move onto it | parity `signature` |
+| a **generic function**, used with value types, reference types, or both | reloads in every instantiation: the ones that ran, a float or a struct that is first used (and so first compiled) after the save, and a reference type nobody named. A body that reads `typeof<'T>` gets each instantiation's own `'T` | parity `generic`, `genericRef`, `genericKind`, `genericLate` |
+| a generic function **called from another generic function**, or used as a **first-class value** | reloads | parity `genericNested`, `genericClosure` |
+| a **generic method** of a class, instance or static | reloads | parity `genericInstanceMethod`, `genericStaticMethod` |
+| a member of a **generic type**: an instance member, a static one, or a generic method of it | reloads. Each object keeps its own type argument, and the objects built before the save run the new body | parity `genericTypeInstance`, `genericTypeStatic`, `genericMethodOnType` |
+
+The generic rows merged on 2026-10-01 after v0.6.875 was tagged. They are on master
+and not in a release yet. In v0.6.875 a save to a generic function restarts the app.
 
 The planner only takes an edit as "just the lambdas" when nothing outside a
 lambda changed (it cuts every lambda out of both versions and compares what is
@@ -174,6 +251,11 @@ An app with no traffic looks exactly like one that never calls the function, so
 `NeverEntered` does not say why. It says to exercise that code path, and that a
 restart picks the change up if the new code still does not run.
 
+The same two steps, with the same wire `type`s, are what a metadata delta
+reports. The `mechanism` field says which one it was: `detour` or
+`metadata-delta`. A client reads that field and not the words, and it is empty for
+a verdict that is not a patch.
+
 How it is seen: the detour points at a small stub with the new body's exact
 signature. The stub records an entry and then calls the new body
 (`EntryProbes.fs`). The host keeps one probe per patched function, and a newer
@@ -181,7 +263,13 @@ save of the same function supersedes the older probe, so the older save does not
 report a function it no longer owns. The decision itself is pure
 (`PatchConfirmation.fs`). A function whose stub could not be built, and a
 mutable binding's accessors, have no probe, so they are never reported as seen
-running.
+running. A metadata delta has no stub to point at, since the body is replaced in
+place, so the probe is the first thing written into the new body: a call that
+records its entry. A method the delta only adds has no probe, because nothing runs
+it until a caller does, and the caller's probe is what shows the patch live. A call
+that was already inside the old body when the delta landed, and finishes
+afterwards, proves nothing, and `DeltaRouteSimTests` has a twin that takes it as
+proof and is caught.
 
 `lastReload` in `get_session_status`, the `ReloadReported` event and the browser
 overlay all carry these outcomes. `SessionReloadTests` pins the wire shape, and
@@ -371,7 +459,8 @@ isn't the one running your app, tells you a restart is needed):
 | the **entry point**, a bare expression that runs at startup, a module alias, added or removed | it takes effect when the process starts | planner: `ReloadPlanningTests` |
 | a lambda that **starts capturing** something it did not, or gains or loses a lambda inside it | the closures the app already built have no room for the change. It says `ClosureShapeChanged` and names the field | parity `inlineNewCapture` |
 | an instance member that starts reading a **constructor argument** (the compiler adds a field) | the objects the app already built do not have it. It says `InstanceLayoutChanged` and names the field | parity `instanceNewField` |
-| a **generic function** the app already holds | a detour reaches the instantiations that have run, and one that runs later would get the old body. It says `GenericFunction` and names it. If the function only has to work for one type, annotate its arguments with it and it is re-pointed like any other | parity `generic` |
+| a **generic function** in a program that can make instantiations by **reflection** (`MakeGenericMethod` anywhere in your code, or `MakeGenericType` while a generic type or method reaches the function), including a delegate bound straight to a generic method | the runtime compiles a generic function once per value type and once for all reference types, and SageFs patches every body it can find in your code. Reflection can make one that no code names, so a patch could leave it on the old body. It says `GenericInstantiationsUnknown` and names what it saw. If the function only has to work for one type, annotate its arguments with it and it is re-pointed like any other | parity `genericReflection`, `genericDelegate` |
+| a generic function with a **byref parameter**, a **struct return**, a member of a **generic struct**, or a static generic method of a generic class used with a reference type | the stub that carries the exact instantiation cannot take an address or a return buffer, and nothing at that call names the class. It says `GenericInstantiationsUnknown` | `GenericReloadTests` (struct return) |
 
 Each of those leaves the running app exactly as it was, and the whole save with
 it: one refusal anywhere in a save stops every detour of it.
@@ -439,11 +528,18 @@ I'd rather you hear this from me than find it at 11pm.
 - **A caller in another file keeps the old method after a signature change.**
   The saved callers move onto the new method; one you haven't saved yet still
   calls the old one, until you save it.
-- **A generic function is a restart.** There is no way for a detour to reach
-  every instantiation, present and future, so it names the function and says so
-  rather than patching some calls.
-- **Adding a member to an existing type is a restart.** Microsoft's mechanism
-  supports it. Mine treats any change to a type's member list as a shape change.
+- **A generic function is patched in every body SageFs can find, and "found"
+  means read from your code.** One `MakeGenericMethod` call anywhere in the
+  assemblies that can name the function turns every generic edit in them into a
+  restart, because that call can make an instantiation no code names. That is
+  coarse on purpose. And `Patched` for a generic function means a new body was
+  seen running and every body was patched in the same save, not that every
+  instantiation has been called since.
+- **Adding a member to an existing type is a restart on the detour route.**
+  Microsoft's mechanism supports it. The detour route treats any change to a type's
+  member list as a shape change. The metadata-delta route for a `run_app` app takes
+  a method added to a type the app already runs, and restarts for an added field,
+  a virtual member or a constructor.
 
 - **A redefined value restarts once anything that hands it on has run.**
   Load the page that renders `greeting`, then edit `greeting`, and it's a
@@ -463,7 +559,31 @@ I'd rather you hear this from me than find it at 11pm.
   instead, and that re-declares every `let mutable` in it. Your live state in
   that file is reset. The outcome says restart-required, which is true, but it
   doesn't say your state went with it. Start the app with `run_app` and SageFs
-  restarts it properly instead.
+  patches it by metadata delta, or restarts it properly and says why.
+- **A metadata delta changes the app, and not the REPL, and the session says so.**
+  The delta goes into the process the app runs in, the worker. The FSI host, where
+  `send_fsharp_code`, `check_fsharp_code` and live tests run, keeps the code of the
+  last build, so a REPL call to a function you just saved runs the old body. I
+  measured it: the app served `closure:B` and the REPL answered `closure:A`. That is
+  not left as a note. The session carries it as `replFreshness` (`InSync` or
+  `BehindApp`, with the number of saves and what was patched), and it is a field in
+  `get_session_status` and `list_sessions`, a warning line after the result of every
+  `send_fsharp_code`, `check_fsharp_code` and `run_tests`, and a line on the
+  dashboard's session card. It clears when the worker is replaced. What brings it
+  level is `hard_reset_fsi_session` with `rebuild=true`, and the warning says what it
+  costs: it replaces the worker, so the running app stops with it and its in-memory
+  state is lost, and `run_app` starts it again. I did not make that automatic, and the
+  [decision](decisions.md#the-repl-is-behind-the-app-after-a-delta-and-the-session-says-so-instead-of-refreshing-it-behind-your-back)
+  says why.
+- **The build is the floor.** A save to a `run_app` app waits for `dotnet build`,
+  1.6 to 2.4 seconds on my fixture, and everything after it is milliseconds. A
+  detour has no build to wait for.
+- **A debugger on the app's process, or a Harmony patch on a method the save
+  rewrites, restarts.** The runtime refuses an update under a debugger, and a
+  Harmony patch wraps the body a delta would replace. Both are named in the restart
+  (`MetadataDeltaUnavailable`) before the runtime is asked.
+- **A project built Release by hand can't take a delta.** The runtime edits only an
+  assembly built without optimizations, which is what SageFs's own build makes.
 - **The reset button runs just the initializer.** If the initializer uses
   something private in its file, the save can't check it and you get a restart
   instead of a kept value.

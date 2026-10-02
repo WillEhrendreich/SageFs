@@ -1,5 +1,7 @@
 # Integration tier: two live-testing baseline tests fail only under the full tier
 
+> **Update, 2026-10-01: this page describes a state that has changed.** The `--integration-host` tier ran on 2026-10-01 with the metadata-delta route on and the commit that made it the default (`09947d2d`) records the result as 312 tests, 307 passed, 5 ignored by design, none failed or errored, `verdict=Trusted`. That is the same tier that errored two tests on 2026-09-25, below. I haven't re-run it for this page, and I don't know which change stopped the two from erroring, so I can't tell you the root cause below was found and fixed. Treat everything under "Current state" as the record of 2026-09-25, and run the tier before relying on any of it.
+
 ## Current state (2026-09-25)
 
 | Run | Result |

@@ -58,9 +58,14 @@ module DomIds =
   let [<Literal>] FailureNarratives = "failure-narratives"
   let [<Literal>] AlarmBanner = "alarm-banner"
   let [<Literal>] CohortPanel = "cohort-panel"
+  let [<Literal>] HygienePanel = "hygiene-panel"
+  let [<Literal>] HygieneScan = "hygiene-scan"
+  let [<Literal>] HygieneTidy = "hygiene-tidy"
   let [<Literal>] CohortMatrix = "cohort-matrix"
   let [<Literal>] CohortTerritory = "cohort-territory"
   let [<Literal>] CohortLanes = "cohort-lanes"
+  /// What the trunk did with each landing: the mechanism and outcome the trunk session's save pipeline reported.
+  let [<Literal>] CohortTrunk = "cohort-trunk"
   let [<Literal>] CohortScrubber = "cohort-scrubber"
   /// The workflow picker in the tabline — replaces the old read-only badge
   /// (roast §4.1/§4.2/§11 Island B item 4). One id, morphed in place both
@@ -150,6 +155,7 @@ module Signals =
   let [<Literal>] SessionContextFilesOpen = "sessionContextFilesOpen"
   let [<Literal>] ShadowedBindingsOpen = "shadowedBindingsOpen"
   let [<Literal>] CohortPanelOpen = "cohortPanelOpen"
+  let [<Literal>] HygienePanelOpen = "hygienePanelOpen"
   /// The cohort matrix's character-grid fallback (§6.5 "an image is not a
   /// document") — collapsed by default; the PNG picture is the primary view.
   let [<Literal>] CohortMatrixTextOpen = "cohortMatrixTextOpen"
@@ -158,6 +164,7 @@ module Signals =
   /// character grid applies to its PNG) — collapsed by default.
   let [<Literal>] CohortTerritoryTextOpen = "cohortTerritoryTextOpen"
   let [<Literal>] CohortLanesPanelOpen = "cohortLanesPanelOpen"
+  let [<Literal>] CohortTrunkOpen = "cohortTrunkOpen"
   /// The lane view's text-legend fallback (§6.5 "a picture is not a
   /// document"), same convention as `CohortTerritoryTextOpen` — collapsed by
   /// default.
@@ -848,6 +855,8 @@ type ParsedSession = {
   /// other cards classify with `warmup = None`, which `SessionHealth.classify`
   /// itself defines as "nothing to be suspicious about" (quiet, not a lie).
   Health: SessionHealth
+  /// Whether the REPL and live tests run the build the app runs. A card for a session whose app was patched in place says so.
+  Freshness: ReplFreshness
 }
 
 /// Best-effort live RSS of a worker process, by pid. Never throws: a pid
@@ -929,7 +938,8 @@ let sessionCardOf
     // Enriched (like TestSummary etc.) by buildSessionCardsFrom via a
     // DashboardQueries lookup; the base card carries no staleness.
     SelfHostStaleness = None
-    Health = health }
+    Health = health
+    Freshness = info.Freshness }
 
 /// Every session the sidebar lists — all but Stopped — in registry order (the
 /// same order the initial page and viewing reconciliation use).
@@ -1202,6 +1212,8 @@ type DashboardInfra = {
   /// full read per dashboard push is cheap the same way the friction
   /// panel's per-push SQLite read already is.
   ReadCohortLedger: unit -> Cohort.LedgerEntry<MemberTable.MemberId> list
+  /// What the trunk has done with each landing that landed (`TrunkFollowOwner.Handle.Read`): wait-free, like `ReadCohortFrame`.
+  ReadTrunk: unit -> Features.TrunkFollow.TrunkMachine
 }
 
 /// Complete snapshot of all dashboard state needed for a single full-page render.
@@ -1239,6 +1251,9 @@ type DashboardSnapshot = {
   /// (cohort-integration-plan.md Slice 4). Daemon-scoped: rendered
   /// identically regardless of which session (if any) is being viewed.
   CohortPanel: XmlNode
+  /// What agents left behind on the machine, and the plan to tidy it (workspace hygiene). Rendered from the
+  /// daemon's cached scan, so it costs nothing per push.
+  HygienePanel: XmlNode
   /// Active project selection for "Run App" feature.
   ActiveProject: string option
   /// Classification of all projects in the session.

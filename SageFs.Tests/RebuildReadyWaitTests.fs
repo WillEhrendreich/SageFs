@@ -109,7 +109,7 @@ let private sessionInfo status : SessionInfo = {
   ProjectRoles = []
   App = SageFs.AppRun.AppRunState.NotRunning
   Rebuild = LastRebuild.NeverRebuilt
-  Reload = SessionReload.NoReloadYet
+  Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 }
 
 let private aProxy =
@@ -338,7 +338,8 @@ let private withManager run =
   let runtime : SessionManagerRuntime = {
     StartWorkerProcess =
       fun _ _ _ _ _ _ -> Ok ({ Process = Process.GetCurrentProcess(); AdoptedCore = None } : SessionManager.SpawnedWorker)
-    AwaitWorkerPort = fun _ _ _ _ -> ()
+    AwaitWorkerPort = fun _ _ _ _ _ -> ()
+    Ledger = StartLedger.closed
     StopWorker = fun _ -> async { return () }
     RunBuildAsync = fun _ _ -> async { return Ok "build ok" }
   }

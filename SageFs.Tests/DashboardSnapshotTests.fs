@@ -104,7 +104,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         Status = SessionDisplayStatus.Stopped
         StatusMessage = None
@@ -116,7 +116,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
     ]
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions" html
@@ -235,6 +235,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       LiveBindingsAdaptive = None
       ReadCohortFrame = fun () -> SageFs.Cohort.project (SageFs.Cohort.replayHead []) [||]
       ReadCohortLedger = fun () -> []
+      ReadTrunk = fun () -> SageFs.Features.TrunkFollow.initial
     }
 
   let panelFor (activity: SageFs.Features.LiveTestActivity.LiveTestActivity) = task {
@@ -426,7 +427,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
     ]
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html
@@ -581,7 +582,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     OutputPanel = Elem.div [] []
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
     ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-    BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []
+    BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []; HygienePanel = Elem.div [] []
     ActiveProject = None
     ProjectRoles = []
     App = SageFs.AppRun.AppRunState.NotRunning
@@ -633,13 +634,13 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
         ProjectsText = "(B.fsproj)"; EvalCount = 1
         Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
     ]
     let snap =
       { mkSnap "0.0.0" with
@@ -669,7 +670,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         ActiveProject = None
         ProjectRoles = []
-        App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
+        App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
     let resolved = resolveViewingSession (Some "0a2b3c4e") [ info sessionA "A.fsproj"; info sessionB "B.fsproj" ]
     resolved |> Expect.equal "stream must retain the browser-requested session" (Some sessionB)
   }
@@ -1155,7 +1156,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []; HygienePanel = Elem.div [] []
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
@@ -1198,7 +1199,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []; HygienePanel = Elem.div [] []
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
@@ -1220,7 +1221,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []; HygienePanel = Elem.div [] []
       ActiveProject = None
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning
@@ -1256,7 +1257,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []
         App = AppRun.AppRunState.NotRunning
-        WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
+        WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
     let html = renderSessionsForSession "0a2b3c4e" [ s ] false |> renderNode
     html |> Expect.stringContains "working dir should appear on the card" @"C:\MyProject\Src"
   }

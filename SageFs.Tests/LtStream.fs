@@ -472,6 +472,87 @@ let awaitConfirmed (feed: SseFeed) (http: HttpClient) (budget: TimeSpan) : Task<
         ()
   }
 
+/// A moment of a confirmation that has a build in flight, the two a journey can aim an edit at.
+[<RequireQualifiedAccess>]
+type ConfirmationMoment =
+  /// The build is done and the worker is being replaced: the session says it is Restarting or Starting, so no
+  /// worker is Ready to answer a type-check or an eval.
+  | WorkerRestarting
+  /// The build is done and the same tests run against what it produced.
+  | RunningBuilt
+
+module ConfirmationMoment =
+  /// The word the live-testing status carries for the phase (`ConfirmationPhase.toWireValue`).
+  let toWire (moment: ConfirmationMoment) : string =
+    match moment with
+    | ConfirmationMoment.WorkerRestarting -> "building"
+    | ConfirmationMoment.RunningBuilt -> "running_built"
+
+  /// What the session's own status says while the worker is being replaced.
+  let isSessionRestarting (status: string) : bool =
+    match status with
+    | "Restarting" | "Starting" -> true
+    | _ -> false
+
+/// Wait until the session's confirmation stands at this moment, so an edit can be aimed at it. Asks the status first
+/// and again after every frame of any kind (a worker restart and the run against its build are both busy on the
+/// stream), never on a timer. A phase that came and went between two frames is a timeout, and the history says so.
+let awaitConfirmationMoment (feed: SseFeed) (http: HttpClient) (moment: ConfirmationMoment) (budget: TimeSpan) : Task<unit> =
+  task {
+    let clock = Stopwatch.StartNew()
+    let wanted = ConfirmationMoment.toWire moment
+    let mutable reached = false
+    // The history says each thing once: a stream busy with a restart is hundreds of frames, and one note per frame
+    // would bury the ones that matter.
+    let mutable lastNote = ""
+    while not reached do
+      let! status = http.GetStringAsync "/api/live-testing/status"
+      let struct (_, current) = confirmationStateOf status
+      let! sessionSays =
+        task {
+          match moment with
+          | ConfirmationMoment.RunningBuilt -> return ""
+          | ConfirmationMoment.WorkerRestarting ->
+            let! body = http.GetStringAsync "/api/sessions"
+            use doc = JsonDocument.Parse body
+            return doc.RootElement.GetProperty("sessions").EnumerateArray() |> Seq.head |> fun s -> s.GetProperty("status").GetString()
+        }
+      let sessionFits =
+        match moment with
+        | ConfirmationMoment.RunningBuilt -> true
+        | ConfirmationMoment.WorkerRestarting -> ConfirmationMoment.isSessionRestarting sessionSays
+      match current = wanted && sessionFits with
+      | true ->
+        note feed (sprintf "the confirmation is %s%s" wanted (match sessionSays with "" -> "" | says -> sprintf ", and the session says %s" says))
+        reached <- true
+      | false ->
+        let waiting = sprintf "waiting for the confirmation to be %s (it is %s, the session says %s)" wanted current sessionSays
+        match waiting = lastNote with
+        | true -> ()
+        | false ->
+          note feed waiting
+          lastNote <- waiting
+        let! _ =
+          expectFrame feed (sprintf "the confirmation reaching %s" wanted) (fun _ -> true) (max TimeSpan.Zero (budget - clock.Elapsed))
+        ()
+  }
+
+/// What every `test_summary` frame the feed saw said when it said the session was blocked by compile errors. The
+/// sample's edits are all valid F#, so any of these is the daemon calling code broken that is not.
+let blockedSummariesSeen (feed: SseFeed) : string list =
+  let entries = lock feed.History (fun () -> feed.History.ToArray())
+  entries
+  |> Array.choose (function
+    | Frame f when f.Event = "test_summary" ->
+      try
+        withJson f (fun root ->
+          match root.TryGetProperty "Activity" with
+          | true, activity when activity.GetString() = "blocked_by_compile_errors" -> Some (root.GetProperty("ActivityText").GetString())
+          | _ -> None)
+      with :? JsonException -> None
+    | _ -> None)
+  |> Array.toList
+
 /// The `LastDecision` a `test_summary` frame carries: its precision, reason and selected tests.
 let decisionIn (frame: SseFrame) : (string * string * string list) voption =
   match frame.Event with

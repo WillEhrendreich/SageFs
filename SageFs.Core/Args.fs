@@ -206,7 +206,8 @@ module ProjectLoadConfig =
 /// The FSI host takes POSITIONAL args: `<sessionId> <httpPort>` (see
 /// SageFs.Host/Program.fs). The port is OS-assigned (`0` = ephemeral); the
 /// host prints `WORKER_PORT=<url>` on stdout and the supervisor validates it.
-let buildWorkerSpawnConfig
+let buildWorkerSpawnConfigWith
+  (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode)
   (sessionId: string)
   (targets: SessionProjectTarget list)
   (noWatch: bool)
@@ -222,8 +223,19 @@ let buildWorkerSpawnConfig
     if noWatch then WorkerConfig.noWatchEnvVar, "1"
     if not autoOpenNamespaces then WorkerConfig.autoOpenNamespacesEnvVar, "0"
     if WorkflowTypes.SessionWorkflow.isHotReloadActive workflow then WorkerConfig.hotReloadEnvVar, "1"
+    yield! SageFs.Features.MetadataDelta.MetadataDeltaMode.workerEnvironment (WorkflowTypes.SessionWorkflow.isHotReloadActive workflow) deltaMode
   ]
   args, envVars
+
+/// `buildWorkerSpawnConfigWith`, for the mode the daemon's own environment names.
+let buildWorkerSpawnConfig
+  (sessionId: string)
+  (targets: SessionProjectTarget list)
+  (noWatch: bool)
+  (autoOpenNamespaces: bool)
+  (workflow: WorkflowTypes.SessionWorkflow)
+  : string * (string * string) list =
+  buildWorkerSpawnConfigWith (SageFs.Features.MetadataDelta.MetadataDeltaMode.fromEnvironment ()) sessionId targets noWatch autoOpenNamespaces workflow
 
 /// How the daemon starts the FSI host. The host runs from its OWN host/ subdir
 /// beside the daemon (isolated closure — its fail-closed manifest check refuses

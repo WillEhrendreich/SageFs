@@ -190,6 +190,31 @@ let diffNames (repoDir: string) (baseSha: string) (headSha: string) : Async<Resu
   runGit repoDir shortTimeout [ "diff"; "--name-only"; sprintf "%s..%s" baseSha headSha ]
   |> mapOk splitLines
 
+/// What each `git diff --name-status` line says happened to a file, as the trunk's save pipeline is told. A type change (`T`) is
+/// the file's content changing, and a copy or rename never appears because the diff is taken without rename detection, so a
+/// rename is a delete and a create.
+let private saveKindOfStatus (status: char) : SageFs.Features.TrunkFollow.SaveKind =
+  match status with
+  | 'A' -> SageFs.Features.TrunkFollow.SaveKind.Created
+  | 'D' -> SageFs.Features.TrunkFollow.SaveKind.Deleted
+  | _ -> SageFs.Features.TrunkFollow.SaveKind.Changed
+
+/// Parse `git diff --name-status --no-renames` output (`<status>\t<path>` per line) into the files a checkout rooted at `root`
+/// changed, as absolute paths.
+let savedFilesOfNameStatus (root: string) (text: string) : SageFs.Features.TrunkFollow.SavedFile list =
+  splitLines text
+  |> List.choose (fun line ->
+    match line.Split('\t', 2) with
+    | [| status; path |] when status.Length > 0 ->
+      Some { SageFs.Features.TrunkFollow.SavedFile.Path = Path.GetFullPath(Path.Combine(root, path))
+             Kind = saveKindOfStatus status.[0] }
+    | _ -> None)
+
+/// The files that differ between `baseSha` and `headSha`, with what happened to each, as absolute paths under `repoDir`.
+let diffSavedFiles (repoDir: string) (baseSha: string) (headSha: string) : Async<Result<SageFs.Features.TrunkFollow.SavedFile list, string>> =
+  runGit repoDir shortTimeout [ "diff"; "--name-status"; "--no-renames"; sprintf "%s..%s" baseSha headSha ]
+  |> mapOk (savedFilesOfNameStatus repoDir)
+
 /// Rebases the checked-out branch in `repoDir` onto `onto`.
 ///
 /// - On success: `Ok <new HEAD sha>`.
@@ -322,6 +347,18 @@ let fastForwardBranch (repoDir: string) (branch: string) (toSha: string) : Async
 /// <branch> <worktreePath> <baseRef>`.
 let addWorktree (repoDir: string) (worktreePath: string) (branch: string) (baseRef: string) : Async<Result<unit, string>> =
   runGit repoDir worktreeTimeout [ "worktree"; "add"; "-b"; branch; worktreePath; baseRef ]
+  |> mapOk ignore
+
+/// Creates a worktree with no branch of its own, at `sha`: `git worktree add --detach <worktreePath> <sha>`. The trunk checkout
+/// is one, so the integration branch stays free for the landing step to move.
+let addDetachedWorktree (repoDir: string) (worktreePath: string) (sha: string) : Async<Result<unit, string>> =
+  runGit repoDir worktreeTimeout [ "worktree"; "add"; "--detach"; worktreePath; sha ]
+  |> mapOk ignore
+
+/// Moves the checkout in `checkoutDir` to `sha`, detached, discarding whatever tracked files differ. The trunk checkout is
+/// daemon-owned and only ever holds what landed, so there is nothing of anyone's to keep.
+let moveCheckoutTo (checkoutDir: string) (sha: string) : Async<Result<unit, string>> =
+  runGit checkoutDir worktreeTimeout [ "checkout"; "--force"; "--detach"; sha ]
   |> mapOk ignore
 
 /// Removes a worktree created by `addWorktree`.

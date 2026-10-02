@@ -5,7 +5,7 @@ I kept describing SageFs as a list of features, and a list of features doesn't t
 If you only read one thing: F# Interactive is amazing. Type an expression, get the answer, no build. SageFs is FSI underneath, and I use FSI all day. But on a real project it has always made you do the work. You load the project yourself. You rebuild to find out if one function is right. You run `dotnet test` and wait. A web app means stop, build, start. SageFs is what happens when the REPL does that work for you, and over the last seven months it went from a daemon that held an FSI session to this:
 
 - **Your project is already loaded, and "Ready" means it.** A session that loaded nothing says so, with a reason, instead of showing green.
-- **You edit a function and the tests that reach it re-run**, saved or not. A body-only edit like `a + b` to `a - b` selects the tests that reach the file (released in v0.6.870), and an empty dependency graph can't leave it at zero tests either (merged on 2026-10-01, in the next release).
+- **You edit a function and the tests that reach it re-run**, saved or not. A body-only edit like `a + b` to `a - b` selects the tests that reach the file (released in v0.6.870), and an empty dependency graph can't leave it at zero tests either (merged on 2026-10-01, in v0.6.875).
 - **You save a file and the running app serves the new code**, with the state you didn't touch still there. A hot reload only says "live" after SageFs has watched the new code run, and if it never ran you get "never entered", with the names.
 - **Your pinned packages can't fight SageFs's.** Every session runs in its own host process, on the .NET your project needs.
 - **When something breaks it tells you what and why.** A failed rebuild keeps the old worker serving the last good build. A dead worker leaves a log. A daemon log can't eat your disk.
@@ -16,13 +16,67 @@ None of that is finished, and every entry below says where it stops. I'd rather 
 
 ## How to read this
 
-The windows run newest first. Every claim links to the code at [`bba42706`](https://github.com/WillEhrendreich/SageFs/commit/bba42706), the commit for release v0.6.868, so the link keeps pointing at what I looked at even after the file moves on. The newest window, 2026-10-01, links to [`e47b355b`](https://github.com/WillEhrendreich/SageFs/commit/e47b355b) instead, because most of that day is merged on master and not in a release yet, and each entry in it says which it is. Where a feature was later removed, I link the commit instead. Commit counts are by author date on `master`. A number that came from a commit message and that I didn't re-run says so. If you find something here that's wrong, open an issue, or tell me in Discord. I'd rather know.
+The windows run newest first. Every claim links to the code at [`bba42706`](https://github.com/WillEhrendreich/SageFs/commit/bba42706), the commit for release v0.6.868, so the link keeps pointing at what I looked at even after the file moves on. The two windows for 2026-10-01 link to the master I was looking at when I wrote each: [`a615b1a0`](https://github.com/WillEhrendreich/SageFs/commit/a615b1a0) for the newest, which is all merged and none of it in a release, and [`e47b355b`](https://github.com/WillEhrendreich/SageFs/commit/e47b355b) for the one below it, which is in v0.6.870 or v0.6.875. Each entry in them says which release it is in, or that it is only merged. Where a feature was later removed, I link the commit instead. Commit counts are by author date on `master`. A number that came from a commit message and that I didn't re-run says so. If you find something here that's wrong, open an issue, or tell me in Discord. I'd rather know.
 
 ---
 
-## The day the comparison tables lost their "restart" and "none" rows (2026-10-01, 84 commits, v0.6.869 to v0.6.872 on master, v0.6.870 released)
+## What merged after v0.6.875 the same day (2026-10-01, 55 commits, none of them in a release)
 
-One day, so a different shape from the others. Of the 84 commits dated 2026-10-01 on master, the first batch is in the last release, v0.6.870, and the rest merged on the same day and are in the next release. I tagged every entry below with which, because "it's on master" and "you can install it" are different claims. The release that carries the merged half will be v0.6.872 or later, and I haven't checked a number I can't see yet.
+I tagged v0.6.875 on 2026-10-01 and kept merging. There are 55 commits on master after that tag, all dated the same day, and I checked that no release tag contains any of the ones I describe below (`git tag --contains` on each comes back empty). So everything in this window is merged and not in a release, and you can't install it from NuGet yet. The links go to [`a615b1a0`](https://github.com/WillEhrendreich/SageFs/commit/a615b1a0), master when I wrote this. Where an entry changes something the window below it says, I say which.
+
+### A save to a run_app app is patched into the running process, and your state stays
+Status: merged on 2026-10-01 after v0.6.875, not in a release.
+Before: an app started with `run_app` runs in the worker, out of the reload agent's reach, so a save to it was a restart. About six seconds on the ticker demo, and everything the app held in memory was gone.
+Now: SageFs builds your project, takes the difference between that build and the assembly the worker loaded, and hands the runtime a metadata delta (`MetadataUpdater.ApplyUpdate`, the call `dotnet watch` makes for C#). It takes a new method body, a closure body, a task body, a method added to a type the app already runs, and a generic function in every instantiation. A save the delta can't take is still a restart and names the declaration: a type or method removed, a field added, a signature changed, a changed startup value, a new lambda that adds a closure class. A method another tool has patched with Harmony, and a debugger on the app's process, are named restarts too. The route is on by default and `SAGEFS_METADATA_DELTA=off` turns it off. On the test fixture a save is served in 1.8 to 2.6 s, against 6 to 8.5 s for the restart it replaces, and the app's counter carries on.
+Why it matters: the common loop for a console app or a service, edit and watch, stops costing you your state.
+Evidence: [which route a save takes](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Core/Features/PatchRoute.fs#L28-L31), [the default](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Core/Features/MetadataDelta/MetadataDeltaFlag.fs#L26-L31), [one real app per row, in the same process, asking for its old counter and its process id](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Tests/RunAppDeltaTests.fs#L62-L99), [the decision](decisions.md#a-run_app-save-is-patched-by-a-metadata-delta-in-the-worker-and-every-refusal-is-a-restart-that-names-why)
+Rough edges: it changes the app and not the REPL. The FSI host, where `send_fsharp_code` and the live tests run, keeps the last build's code until the session restarts or you `hard_reset_fsi_session` with `rebuild`, so a REPL call to a function you just saved runs the old body. A method a delta patches runs without its coverage probes until the next rebuild. The emitter is mine, written from two finished assemblies, and [dotnet/fsharp#19941](https://github.com/dotnet/fsharp/pull/19941) (Nat Elkins, a community contribution the F# team is reviewing, open and unmerged as I write this) is the prior art. I took no code from it. The timings are one fixture on one machine.
+
+### A generic function is patched in every instantiation
+Status: merged on 2026-10-01 after v0.6.875, not in a release. In v0.6.875 a save to a generic function restarts the app and names `GenericFunction`.
+Before: a detour of a generic function reaches only part of it. The runtime compiles one body per value-type instantiation that runs and one shared body for every reference type, and I measured that detouring the open definition throws and detouring a closed one moves only that one.
+Now: SageFs reads the IL of the assemblies that can name the function to list every body the runtime compiled for it, followed through generic callers and generic types, and re-points each one. The shared body, which also gets a hidden type argument, is detoured to a stub that keeps it and calls the new body for the exact instantiation. A float or a struct first used after the save gets the new body too, and so do the members of a generic type. If your code calls `MakeGenericMethod`, or `MakeGenericType` with a generic that reaches the function, it can make an instantiation no code names, so the save restarts with `GenericInstantiationsUnknown` and says what it saw.
+Why it matters: a generic helper is a normal thing to edit, and it was the one place a save said no for a reason you couldn't act on.
+Evidence: [the scan that lists the instantiations](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Core/Middleware/GenericReload.fs#L190-L193), [preparing one generic unit](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Core/Middleware/HotReloadCore.fs#L767-L767), [the generic rows, each a real app on .NET 10 and 11](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Tests/HotReloadParityTests.fs#L182-L270), [the decision](decisions.md#a-generic-function-is-re-pointed-in-every-body-the-runtime-compiled-for-it-and-restarts-naming-why-when-the-program-can-make-one-nobody-can-list)
+Rough edges: the scan is coarse on purpose, so one `MakeGenericMethod` call in a program refuses every generic edit in it. `Patched` for a generic function means a new body was seen running and every body was patched in the same save. It doesn't mean every instantiation has been called since. A byref parameter, a struct return, a member of a generic struct and a static generic method of a generic class used with a reference type still restart. This is the detour route. An app started with `run_app` takes a generic body edit by metadata delta, which needs no list.
+
+### Hot reload latency is measured
+Status: the measurement merged on 2026-10-01 after v0.6.875, not in a release.
+Before: I quoted no hot reload latency because nothing measured it.
+Now: the `--integration-hr` tier saves a file into a real running app and times it twice, to the first response that carries the new body and to the daemon saying `Patched`, 20 saves per path after 2 warm-up saves. Over 8 runs a patched save was served at p50 258 to 306 ms and p95 298 to 353 ms, and reached `Patched` at p50 296 to 346 ms. About 200 ms of that is the file watcher's debounce, a fixed timer. The machine was a 16-thread AMD Ryzen 7 5800XT on Linux with .NET 11.0.0-rc.1 and other jobs running, and the tier fails if a p95 passes its bound.
+Why it matters: a number with a machine and a sample count beats an adjective, and Microsoft's pages for its hot reload give no figure I could put beside it (I re-read them on 2026-10-01).
+Evidence: [the measurement](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Tests/HotReloadLatency.fs#L129-L135), [the cases](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Tests/HotReloadLatencyTests.fs#L197-L215), [the bounds, with the measured ranges beside them](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Tests/TestTimeouts.fs#L124-L141), [the numbers and where the time goes](how-hot-reload-works.md#how-long-a-save-takes)
+Rough edges: one machine and one small app, and no figure for a large app or a save that touches many functions. I measured the restart row before the metadata-delta route existed. The tier has since been split in two: the restart row runs on a daemon with `SAGEFS_METADATA_DELTA=off` and a delta row runs on the default (two runs so far: p50 1.55 to 1.64 s, p95 2.23 to 2.25 s over 20 saves each), and each fails if its saves took the other route.
+
+### An edit typed while the worker is being replaced is judged
+Status: merged on 2026-10-01 after v0.6.875, not in a release.
+Before: found through the real daemon. A confirming build replaces the worker, and an edit typed in that window could be lost. The old worker is parked, the replacement is spawned with no address yet, and a type-check or an eval that found no worker was answered with a failure and nothing else. The second save's verdict never arrived in three and a half minutes, and the daemon logged nothing. A worker that isn't active yet also answers a type-check with no diagnostics, and that read as a clean check.
+Now: a check or an eval asks a worker only when the session manager says one is Ready. If one is on its way, the request waits for it on the manager's own signal (no polling), up to the same 30 s a rebuild gets. An answer counts only if the worker that gave it is still the Ready one, so a reply from a retired worker is asked again. A newer check for a file replaces an older one, so only the newest text is judged, and every eval gets its run in order. Nothing unanswered is reported as a compile error.
+Why it matters: the pane going quiet on an edit you made is the kind of false calm live testing can't have.
+Evidence: [the decision as a pure step](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Core/Features/LiveCheckPump.fs#L141-L150), [the daemon side that waits for a Ready worker](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs/SageFsEffectHandler.fs#L158-L160), [the decision](decisions.md#a-check-or-an-eval-asks-a-worker-only-when-one-is-ready-and-waits-for-one-while-it-is-being-replaced)
+Rough edges: a check that waits out the 30 s is dropped and not retried when the worker finally comes. The confirming build still restarts the worker, and FSI state goes with it. Discovery and the affected-tests run still drop a request that finds no worker. Separately, line narrowing measures a save against the last build and not the last evaluated text, so a quick revert can outrun it. I haven't fixed that one.
+
+### SageFs shows what agents leave behind, and tidies the safe part when you confirm
+Status: merged on 2026-10-01 after v0.6.875, not in a release.
+Before: agents and orchestrators working in git worktrees leave worktrees, merged branches, the gate's checkouts, built FSI hosts, test temp dirs and orphaned processes. Nothing listed them or said which were safe to remove.
+Now: each leftover gets a standing that says why it is or isn't safe to reclaim (in use, merged, clean but unmerged, dirty with real work, orphaned, expired, still within retention, or unknown), and a plan is only a description with an id. `get_workspace_hygiene` and `sagefs hygiene` print it as a dry run. `tidy_workspace` and `sagefs hygiene --tidy` run only the safe part, only for the plan you were shown, and each step looks at its target again before it acts. It never removes unmerged commits, uncommitted work, anything in use, or anything it couldn't judge. The dashboard has a panel for it, and a session reply says so when there are more than five leftover worktrees or the gate directory is past 40 GB. I also stopped some of the mess at the source: my local gate reaps its stale checkouts and old pass records before it makes its own, the daemon prunes FSI host builds nobody has used for a month, and a test runner's temp dir records its owner so the next runner can sweep what a dead one left.
+Why it matters: a long run with several agents used to end with you hunting through directories to see what was still needed.
+Evidence: [the pure standing and plan](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Core/WorkspaceHygiene.fs#L1-L15), [the MCP side](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs/McpHygiene.fs#L1-L5), [the CLI command](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs/Program.fs#L298-L300), [the thresholds](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Core/WorkspaceHygiene.fs#L403-L411), [the tool reference](mcp-tools.md#workspace-hygiene)
+Rough edges: it can only judge what it can see. An owner whose liveness it can't decide, a path outside the roots it knows and a git that won't answer are all `Unknown`, and an `Unknown` is left alone, so some mess stays until you look at it yourself. CI is Linux only, so that is the platform it has run on.
+
+### A roadmap page that marks items built when their code lands
+Status: merged on 2026-10-01 after v0.6.875, not in a release.
+Before: what I was building next lived in my head and in private notes.
+Now: [the roadmap](roadmap.md) lists what I'm building now, what's next, and the ideas further out, in horizons. A script writes it from a typed list of items, and an item can name a file and a symbol. When that symbol is on a real code line in the tree, the item moves to Built on its own and links to the code. `scripts/ship` regenerates it after the version bump.
+Why it matters: you can see where it's going, and I can't mark something done by hand and be wrong.
+Evidence: [the generator](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/scripts/gen-roadmap.fsx), [the test that fails when the page and the tree disagree](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Tests/RoadmapDocTests.fs#L47-L52)
+Rough edges: the horizons are guesses about distance and carry no dates. A landmark only says a symbol exists, so Built means the code is there, and not that it's finished or released.
+
+---
+
+## The day the comparison tables lost their "restart" and "none" rows (2026-10-01, 84 commits, in v0.6.870 and v0.6.875)
+
+One day, so a different shape from the others. Of the 84 commits dated 2026-10-01 on master when I wrote this window, the first batch is in v0.6.870, and the rest merged on the same day and are in v0.6.875. I tagged every entry below with which, because "it's on master" and "you can install it" are different claims. More merged after v0.6.875 that same day, and that is the window above this one.
 
 The reason for the day: I sat down with what Microsoft's hot reload and Visual Studio's Live Unit Testing do, wrote down every row where they were ahead or where SageFs gave a false green, and closed what could be closed. Links in this window go to [`e47b355b`](https://github.com/WillEhrendreich/SageFs/commit/e47b355b), master at the end of the day, and where I link a decision I mean an entry in [decisions.md](decisions.md).
 
@@ -43,7 +97,7 @@ Evidence: [the contract test](https://github.com/WillEhrendreich/SageFs/blob/e47
 Rough edges: it checks that the two lists agree, not that every file the host needs is in either.
 
 ### A body-only edit while you type selects the tests that reach the file, and an empty graph can't read green
-Status: the first half (a keystroke edit selects the tests that reach the file) is in released v0.6.870. The rest (the floor and the whitespace gate) merged on 2026-10-01 and is in the next release.
+Status: the first half (a keystroke edit selects the tests that reach the file) is in released v0.6.870. The rest (the floor and the whitespace gate) merged on 2026-10-01 and is in v0.6.875.
 Before: `a + b` to `a - b` moves no symbol names, so the name delta was empty and nothing was selected. The widening that covers it ran only on a save or an explicit run, so while you typed the pane stayed green. A cold start with an empty dependency graph, or a graph that hadn't seen the test file that covers the code, selected nothing even then. And the keystroke gate that drops "no change" edits threw away all whitespace, but F# reads indentation, so moving a line in or out of an offside block, or `x -1` to `x - 1`, looked like no edit. A comment typed after a real edit also cancelled the check pending for the real one.
 Now: the file-scope widening runs on every trigger. If everything finds nothing for a compiled `.fs` file, the live loop selects every discovered test and says `ConservativeFallback` with the reason, the same floor the cohort landing gate has. The gate keeps each line's starting column and a single space between tokens, and a trivia keystroke leaves the pending check alone.
 Why it matters: a pane that says green because nothing ran is the one failure live testing can't have.
@@ -51,7 +105,7 @@ Evidence: [the file scope and the floor](https://github.com/WillEhrendreich/Sage
 Rough edges: the floor costs. A compiled file no test reaches re-runs the suite on each save, and on each keystroke for a category set to `OnEveryChange`. I took that over a pane that stays green on a regression.
 
 ### You can debug a failing test from VS Code
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: the model had a `DebugTest` code-lens command and no client used it. A red test in the editor was a dead end.
 Now: a failing test gets a Debug lens next to its result, a Debug link in its gutter hover and Debug Test in the Test Explorer. The daemon asks the host that runs your tests to hold one test and answers with its process id. The editor attaches a `coreclr` debugger, and the host releases the test only once a debugger is attached. On Linux the host opens the ptrace permission for the length of the hold and closes it after, and says which setting blocks it when it can't.
 Why it matters: the thing Visual Studio's glyph does, in VS Code, for F#.
@@ -59,7 +113,7 @@ Evidence: [the lens](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/sag
 Rough edges: one test at a time, VS Code only (Neovim is another repo and has none), and breakpoints don't bind in code the session evaluated, because it has no PDB. I have run the host side against a real isolated host, not a full attach with the C# extension's debugger from this repo's tests. A debug run isn't recorded in live-testing state.
 
 ### Each line lists the tests that run it, and an edit selects only those
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: coverage was one bitmap per run batch, stored against every test in it. A gutter could say "something covers this", and selection widened to every test that reaches the function.
 Now: the worker reads and clears the coverage probes after each test and sends the reading beside that test's result, so the daemon stores it against that test alone. A line's covering tests are exact. An edit that moves no symbol name and changes only lines coverage speaks for selects only the tests whose own coverage reaches them, labeled `line_coverage_narrowing`. Every rule runs toward more tests: an inserted or removed line, a changed line with no probe or one that runs at module start, a test with no usable coverage, an empty answer, each widens.
 Why it matters: a keystroke runs two tests and not twenty, and the gutter can name them.
@@ -67,7 +121,7 @@ Evidence: [the attributed stream](https://github.com/WillEhrendreich/SageFs/blob
 Rough edges: to attribute a reading to one test, a run against a project with instrumented assemblies runs its tests one at a time, so a suite of slow tests is now the sum and not the longest. Visual Studio runs the tests of an assembly one after another too, per its own docs. I measured one small sample and nothing larger.
 
 ### Every test row says what it ran against, and a real build confirms or contradicts it
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: a keystroke's tests run against code the session evaluated, not against a build, and a row looked the same either way. A file can reach a module that comes after it in compile order, which the session allows and the compiler refuses.
 Now: each row carries `Compiled`, `Evaluated`, `VerifiedByBuild` or `BuildDisagrees` with the reason. Once the editing has been quiet for 2 seconds, one build of the saved text runs the same tests again, and a disagreeing row takes the build's verdict because that is what ships. The decision is a pure state machine, folded under seeded scenarios with three twins that reproduce the bugs it exists to prevent.
 Why it matters: the gap between "passes in the session" and "passes in a build" is visible on the row instead of a surprise in `dotnet build`.
@@ -75,7 +129,7 @@ Evidence: [the provenance type](https://github.com/WillEhrendreich/SageFs/blob/e
 Rough edges: the confirming build is a rebuild of the session, so it restarts the worker, and FSI state and unsaved edits in other files don't survive it. A build can only confirm what is on disk, so an unsaved buffer stays `Evaluated`.
 
 ### You can pause live testing and scope it to some tests
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: live testing was on or off, with a run policy per test category.
 Now: pause holds the runs back while the session keeps type-checking and keeps its evaluated code current, and resuming evaluates the latest buffer and runs what went stale. A scope (every test, only those matching a pattern, or all but those) narrows what automatic runs touch, and an explicit run always runs what it names.
 Why it matters: refactoring mid-way with a red suite you already know about stops being noise.
@@ -83,15 +137,15 @@ Evidence: [pause and resume](https://github.com/WillEhrendreich/SageFs/blob/e47b
 Rough edges: Visual Studio also pauses on battery and while you debug, has a memory cap and lets you include a single test from a right-click. I have none of those.
 
 ### Save-to-green and keystroke-to-verdict are measured and gated
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: I quoted no latency because nothing measured it.
 Now: the `--integration-lt` tier starts a daemon, opens the FromCSharp sample (11 Expecto tests) and times two paths off the daemon's own event stream, 20 samples each after 2 warm-up edits. Edit leaving the client to the verdict on the edited test: p50 712 ms, p95 783 ms. Save to the suite back at all green: p50 542 ms, p95 631 ms. The machine was a 16-thread AMD Ryzen 7 5800XT on Linux with .NET 11.0.0-rc.1 and other jobs running, and the tier fails if either p95 passes 3 s.
 Why it matters: a number with a machine and a sample count beats an adjective.
 Evidence: [the measurement](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/SageFs.Tests/LiveTestingLatencyTests.fs#L1-L28), [the sample and warm-up counts](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/SageFs.Tests/LatencyStats.fs#L14-L19), [the bound, with the first measurement beside it](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/SageFs.Tests/TestTimeouts.fs#L107-L115)
-Rough edges: one machine, one small project. I have no figure for a large solution, for slow tests, for the first edit after a restart, or for the confirming build, and I didn't re-run the tier for this page. Hot reload has no latency measurement at all.
+Rough edges: one machine, one small project. I have no figure for a large solution, for slow tests, for the first edit after a restart, or for the confirming build, and I didn't re-run the tier for this page. Hot reload had no latency measurement when I wrote this entry. It has one now, in the window above.
 
 ### The live-bindings pane starts in Safe mode, and you click a getter to run it
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: after every eval the pane ran every public getter of every class value on a clock you didn't choose, so a getter that looped, blocked or did I/O made the pane the thing that hurt you.
 Now: three modes per session. Safe, the default, shows a class by its fields and runs a getter only when its compiled body provably does nothing (a field read, a constant, straight-line arithmetic). Everything is the old behavior under a one-second budget, and Off doesn't open a class at all. Every getter Safe skips is listed with why, and a click on its square button walks that one binding again with that one getter run, under a 5 second deadline and, on Linux x86-64, a syscall filter that stops the network, writes and new processes.
 Why it matters: looking at a value stops being the same act as running your code.
@@ -99,7 +153,7 @@ Evidence: [the modes](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/Sa
 Rough edges: the filter doesn't stop a spin, a stack overflow or an in-memory effect, and a getter that mutates state in memory runs once on your click and isn't undone. Off Linux x86-64 the getter runs under the deadline only, and the pane says so.
 
 ### A clicked getter gets stack and loop guards for the length of the click
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: the syscall filter doesn't stop a spin or a stack overflow, and an overflow ends the host process.
 Now: `GuardPatcher` walks what the getter can reach and patches an entry guard (a recursion throws a catchable `InsufficientExecutionStackException` with about 128 KB of stack left) and a check before every jump back (the watchdog's stop ends the loop within a few milliseconds) into each method it can patch. The guards come off when the click is over, and a method hot reload has re-pointed is refused and said on the row, because taking our patch off would put the old code back over the detour.
 Why it matters: a click on a getter that recurses or spins costs you a result row and not your session.
@@ -107,7 +161,7 @@ Evidence: [the entry guard](https://github.com/WillEhrendreich/SageFs/blob/e47b3
 Rough edges: it doesn't reach code SageFs doesn't own (framework and package methods), async state machines, native waits or regex backtracking, and it is cooperative, so a `finally` block runs with the stop still set. The decision lists the rest.
 
 ### Your project's pins are adapted to, or refused with the reason
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: the host and your project meet in one process, and what the host had loaded first answered for both. I ran the clearest case, a solution whose two projects pin different versions of one assembly. The session was Ready and Healthy, and project B's code ran against project A's version without a word. Three other cases (an unreadable `runtimeconfig.json`, a target framework nobody recognises, a failed FSharp.Core rewrite) failed open with a log line nobody reads.
 Now: a newer FSharp.Core (including one a NuGet package was compiled against) gets a host whose FSharp.Core is the project's. A newer shared-framework assembly goes in through an extra dependency manifest. Two projects that pin different versions of one assembly are refused, naming both. A project carrying its own newer FSharp.Compiler.Service is Degraded with the versions and the way out, because the host's own code is compiled against the SDK's. An unreadable `runtimeconfig.json`, a target framework nobody recognises and a failed FSharp.Core rewrite are Degraded with the reason, on the dashboard, the MCP status and `/api/sessions`. A .NET Framework project is refused before it is built.
 Why it matters: SageFs adapts to what your project pins where that's safe and says so where it isn't, and nothing is silently wrong.
@@ -115,7 +169,7 @@ Evidence: [the plan](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/Sag
 Rough edges: two projects pinning different package versions with the same assembly version aren't covered, because the runtime can't tell them apart either. The System.Text.Json fixture is a stamped copy standing in for a release that doesn't exist yet. I haven't run a project that pins an FSharp.Core far newer than the SDK's compiler service, or an unbuilt dotnet/fsharp checkout.
 
 ### A lambda in a route list and an instance member reload in place
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: `get "/" (fun ctx -> ...)` has no name to re-point, so editing one restarted the app. So did `member this.Render() = ...` on an object built at startup, and the reason it gave was wrong.
 Now: the compiler turns a lambda into a closure class, and the route list holds instances of it, so the planner reads a save that changed only lambdas and the host re-points the old class's `Invoke` at the new one's. The object keeps its fields (`A#1` before the save, `B#2` after it). Both hold only while the new code has the old code's fields. A lambda that starts capturing something, or a member that needs a new field, restarts and names `ClosureShapeChanged` or `InstanceLayoutChanged`, and one refusal anywhere in a save stops every detour of it, so a restart never leaves the app half updated. Hot reload sessions now compile their patches `--optimize-` to match how SageFs builds your project.
 Why it matters: handlers written inline, and objects with state, are how a lot of F# web code is shaped.
@@ -123,7 +177,7 @@ Evidence: [matching closures](https://github.com/WillEhrendreich/SageFs/blob/e47
 Rough edges: two lambdas on one line can't be told apart by the compiler's name, so that edit restarts, and a project you built Release by hand has closures of another shape. Adding a member to an existing type still restarts.
 
 ### A save that adds, removes or re-signs code lands without a restart
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: adding a function, type or value, removing anything that wasn't startup code, and changing a function's signature all restarted.
 Now: a declaration the running build never had needs no compiled original, so it's defined in FSI and the saved code that uses it is patched to call it. A function whose signature changed is a new method to the running app, and the callers saved with it move onto it. A removal leaves the old declaration in the process, since what stopped using it was saved with it. What still restarts is the entry point, startup code and a nested module added or removed. A new declaration has no probe, so the save is `Patched` only once a caller has run, and a save that adds something nothing calls says "not confirmed: the new code has not run".
 Why it matters: add a helper and call it, delete one, add a parameter. That's most of an afternoon.
@@ -131,12 +185,12 @@ Evidence: [what the planner does with each kind](https://github.com/WillEhrendre
 Rough edges: a caller in another file keeps calling the old method until you save that file as well. The build wouldn't pass until you did, so the window is short, but the old behavior runs in it. A removal on its own reports "no declaration change".
 
 ### A generic function restarts and names itself, and saves land under a debugger
-Status: merged on 2026-10-01, in the next release.
+Status: merged on 2026-10-01, in v0.6.875.
 Before: only static non-generic methods were registered, so a save had no way to name a generic function. And "does hot reload work with a debugger attached" had no test, while Microsoft's answer for F# is no.
 Now: a generic function is compiled once per instantiation that runs, and I measured that detouring the open definition throws and detouring a closed one changes only that one. A patch would be right for the calls that already happened and wrong for one that comes later, so a save that edits a generic function the app holds is refused with `GenericFunction`, naming it, and the whole save is refused with it. Separately, a real debugger (Samsung's netcoredbg, pinned by URL and SHA-256) is attached to the host process, the process itself says a debugger is attached, and four rows (an inline lambda, an instance member that keeps state, a named task, a signature change) are saved and end `Patched`.
 Why it matters: the generic gap is stated and says why, and the debugger claim is a test and not a guess.
 Evidence: [the refusal](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/SageFs.Core/Middleware/HotReloadCore.fs#L1380-L1409), [the `generic` row](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/SageFs.Tests/HotReloadParityTests.fs#L63-L182), [the debugger test and its no-debugger twin](https://github.com/WillEhrendreich/SageFs/blob/e47b355b/SageFs.Tests/HotReloadDebuggerTests.fs#L170-L220), [the generic decision](decisions.md#a-generic-function-restarts-and-says-so-because-a-detour-of-a-generic-function-reaches-only-part-of-it), [the debugger decision](decisions.md#the-debugger-row-downloads-a-pinned-debugger-and-checks-its-hash-because-the-row-has-to-be-real)
-Rough edges: generics stay a restart unless a way to detour every instantiation turns up. The debugger row needs Linux on x64, downloads netcoredbg once and fails, instead of skipping, if it can't. It proves a save lands under a debugger. Nothing sets a breakpoint, steps, or edits a method the debugger is stopped in.
+Rough edges: when I wrote this, generics stayed a restart unless a way to detour every instantiation turned up. One did, and the window above has it (merged, not in v0.6.875). The debugger row needs Linux on x64, downloads netcoredbg once and fails, instead of skipping, if it can't. It proves a save lands under a debugger. Nothing sets a breakpoint, steps, or edits a method the debugger is stopped in.
 
 ---
 

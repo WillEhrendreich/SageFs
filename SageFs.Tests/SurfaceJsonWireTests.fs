@@ -212,7 +212,9 @@ let private finishedReload : SessionReload =
       Patched = 2
       Considered = 3
       Message = "patched 2"
-      SuggestedAction = "" }
+      SuggestedAction = ""
+      Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.MetadataDelta
+      Declarations = [] }
 
 let private sseCases : (string * SseEvent * string) list =
   let s = sid "0a000001"
@@ -221,7 +223,7 @@ let private sseCases : (string * SseEvent * string) list =
     "SessionSwitched", SseEvent.SessionSwitched s, """{"sessionSwitched":"0a000001"}"""
     "HotReloadChanged", SseEvent.HotReloadChanged s, """{"hotReloadChanged":true,"sessionId":"0a000001"}"""
     "ReloadReported finished", SseEvent.ReloadReported (s, finishedReload),
-      """{"reloadReported":{"considered":3,"message":"patched 2","outcome":"Patched","patched":2,"state":"finished","suggestedAction":""},"sessionId":"0a000001"}"""
+      """{"reloadReported":{"considered":3,"mechanism":"metadata-delta","message":"patched 2","outcome":"Patched","patched":2,"state":"finished","suggestedAction":""},"sessionId":"0a000001"}"""
     "ReloadReported none", SseEvent.ReloadReported (s, SessionReload.NoReloadYet), """{"sessionId":"0a000001"}"""
     "FileReloaded", SseEvent.FileReloaded (s, "a.fs"), """{"fileReloaded":"a.fs","sessionId":"0a000001"}"""
     "SessionFaulted", SseEvent.SessionFaulted (s, "boom \"x\""), esc """{"error":"boom ~u0022x~u0022","sessionFaulted":"0a000001"}"""
@@ -252,7 +254,7 @@ let sseTests =
 // ── Update-check cache and theme file ──
 
 let private freshDir () =
-  let dir = Path.Combine(Path.GetTempPath(), "sagefs-surface-json-" + Guid.NewGuid().ToString("N"))
+  let dir = SageFs.Tests.RunnerDirs.scratchPath "surface-json-"
   Directory.CreateDirectory dir |> ignore
   dir
 

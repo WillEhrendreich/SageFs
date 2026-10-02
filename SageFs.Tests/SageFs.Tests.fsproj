@@ -12,6 +12,7 @@
         <Compile Include="TestTimeouts.fs" />
         <!-- Before TestInfrastructure: the trust ledger names a tier by its framework. -->
         <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
+        <Compile Include="RunnerDirs.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="RunnerLogging.fs" />
         <Compile Include="TestCountBadge.fs" />
@@ -28,6 +29,7 @@
         <Compile Include="McpServerOversizedRequestTests.fs" />
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpToolExecutionTests.fs" />
+        <Compile Include="ReplFreshnessSurfaceTests.fs" />
         <Compile Include="McpLlmInteropTests.fs" />
         <Compile Include="ManualProjectParseTests.fs" />
         <Compile Include="LoadedProjectReportingTests.fs" />
@@ -64,6 +66,16 @@
         <Compile Include="WorkerMainTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="CheckoutTests.fs" />
+        <Compile Include="HygieneFixtures.fs" />
+        <Compile Include="WorkspaceHygieneTests.fs" />
+        <Compile Include="HygieneSimDstTests.fs" />
+        <Compile Include="HygieneSandbox.fs" />
+        <Compile Include="HygieneGatherTests.fs" />
+        <Compile Include="HygieneExecuteTests.fs" />
+        <Compile Include="GateReaperTests.fs" />
+        <Compile Include="RunnerDirsTests.fs" />
+        <Compile Include="HygieneSurfaceTests.fs" />
+        <Compile Include="HygienePanelTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />
         <Compile Include="MemberTableTests.fs" />
         <Compile Include="CrossCheckoutOverlapTests.fs" />
@@ -93,6 +105,12 @@
         <Compile Include="RestartJitterTests.fs" />
         <Compile Include="WarmupSupervisionTests.fs" />
         <Compile Include="WarmupSimTests.fs" />
+        <Compile Include="MachineTierTests.fs" />
+        <Compile Include="StartEscalationTests.fs" />
+        <Compile Include="StartEscalationSimTests.fs" />
+        <Compile Include="StartLedgerTests.fs" />
+        <Compile Include="SessionManagerStartEscalationTests.fs" />
+        <Compile Include="TimeoutScalingTests.fs" />
         <Compile Include="SessionManagerAdmissionTests.fs" />
         <Compile Include="WarmupOutcomeIntegrationTests.fs" />
         <Compile Include="WorkerHealthProbeTests.fs" />
@@ -121,6 +139,7 @@
         <Compile Include="DashboardSnapshotTests.fs" />
         <Compile Include="DashboardDiscoverUxTests.fs" />
         <Compile Include="DashboardTestIdTests.fs" />
+        <Compile Include="ReplFreshnessDashboardTests.fs" />
         <Compile Include="OutputFollowTests.fs" />
         <Compile Include="PreviousSessionSortTests.fs" />
         <Compile Include="McpHardResetRebuildTests.fs" />
@@ -143,6 +162,7 @@
         <Compile Include="ThemePersistenceTests.fs" />
         <Compile Include="DashboardBrowserTests.fs" />
         <Compile Include="LiveBindingsBrowserTests.fs" />
+        <Compile Include="HygieneBrowserTests.fs" />
         <Compile Include="DashboardDisconnectIndicatorBrowserTests.fs" />
         <Compile Include="ElmDaemonTests.fs" />
         <Compile Include="SessionCreationTests.fs" />
@@ -176,15 +196,25 @@
         <Compile Include="FsiDiscoveryIdentitySimTests.fs" />
         <Compile Include="FsiEmitSimTests.fs" />
         <Compile Include="EntryProbeTests.fs" />
+        <Compile Include="GenericReloadTests.fs" />
         <Compile Include="PatchConfirmationTests.fs" />
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
+        <Compile Include="TrunkFollowSimTests.fs" />
+        <Compile Include="TrunkFollowTests.fs" />
+        <Compile Include="TrunkFollowShellTests.fs" />
+        <Compile Include="TrunkPanelTests.fs" />
+        <Compile Include="TrunkGitTests.fs" />
+        <Compile Include="LiveCheckPumpSimTests.fs" />
+        <Compile Include="LiveCheckRelayTests.fs" />
         <Compile Include="ValueReadSimTests.fs" />
         <Compile Include="ReflectionReadSimTests.fs" />
         <Compile Include="EvalStoreMutationTests.fs" />
         <Compile Include="SessionDisplayMutationTests.fs" />
         <Compile Include="ReloadPlanningDecisionMutationTests.fs" />
+        <Compile Include="CohortGitMutationTests.fs" />
+        <Compile Include="SseWriterCohortMutationTests.fs" />
         <Compile Include="ReloadPlanningOutcomeRegressionTests.fs" />
         <Compile Include="ReloadPlanningWholeFileReevalTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
@@ -297,6 +327,7 @@
          <Compile Include="SessionManagerEarnedReadyTests.fs" />
          <Compile Include="SessionManagerRebuildOutcomeTests.fs" />
          <Compile Include="SessionReloadTests.fs" />
+         <Compile Include="ReplFreshnessTests.fs" />
          <Compile Include="AvailableProjectsDirectoryTests.fs" />
          <Compile Include="ToolSessionHandleTests.fs" />
          <Compile Include="ErrorCategoryTests.fs" />
@@ -312,6 +343,9 @@
          <Compile Include="JsonCentralizationTests.fs" />
          <Compile Include="TimeoutLiteralsTests.fs" />
          <Compile Include="EnvVarDocTests.fs" />
+         <Compile Include="../scripts/roadmap/Roadmap.fs" Link="Roadmap/Roadmap.fs" />
+         <Compile Include="../scripts/roadmap/RoadmapItems.fs" Link="Roadmap/RoadmapItems.fs" />
+         <Compile Include="RoadmapDocTests.fs" />
          <Compile Include="StandaloneSourceTests.fs" />
          <Compile Include="SurfaceJsonWireTests.fs" />
          <Compile Include="JsonCoreFilesTests.fs" />
@@ -402,7 +436,13 @@
         <!-- The child half: Program.fs starts this assembly again as a guard child to click a getter that would end the process. -->
         <Compile Include="GuardChild.fs" />
         <Compile Include="GuardChildTests.fs" />
+        <Compile Include="DeltaProgram.fs" />
+        <Compile Include="DeltaInstrumentation.fs" />
+        <Compile Include="DeltaChild.fs" />
+        <Compile Include="MetadataDeltaTests.fs" />
+        <Compile Include="DeltaRouteTests.fs" />
         <Compile Include="GuardSimTests.fs" />
+        <Compile Include="DeltaRouteSimTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
         <Compile Include="StreamingProxyTests.fs" />
         <Compile Include="StreamingProxySimTests.fs" />
@@ -631,8 +671,13 @@
         <Compile Include="WebAppHotReloadVerificationTests.fs" />
         <Compile Include="HotReloadStateHarness.fs" />
         <Compile Include="HotReloadInlinedCalleeJourneyTests.fs" />
+        <Compile Include="HotReloadLatency.fs" />
+        <Compile Include="HotReloadLatencyTests.fs" />
         <Compile Include="HotReloadStateOutcomeTests.fs" />
         <Compile Include="HotReloadParityTests.fs" />
+        <Compile Include="RunAppDeltaHarness.fs" />
+        <Compile Include="RunAppDeltaTests.fs" />
+        <Compile Include="RealFSharpDeltaTests.fs" />
         <Compile Include="HotReloadDebuggerTests.fs" />
         <Compile Include="HotReloadClosureTests.fs" />
         <Compile Include="TieredCompilationCostBenchmark.fs" />
@@ -711,6 +756,7 @@
         <Compile Include="CohortIntegrationHeadTests.fs" />
         <Compile Include="CohortLandingGitAcceptanceTests.fs" />
         <Compile Include="CohortDogfoodIntegrationTests.fs" />
+        <Compile Include="TrunkLandingOutcomeTests.fs" />
         <Compile Include="CohortLedgerExportTests.fs" />
         <Compile Include="CohortPlayTests.fs" />
         <Compile Include="CohortPerfBudgetTests.fs" />

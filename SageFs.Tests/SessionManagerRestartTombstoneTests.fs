@@ -60,7 +60,8 @@ let private mkRuntime
           fun _ _ _ _ _ _ ->
             startCalls <- startCalls + 1
             startWorker startCalls |> Result.map (fun p -> ({ Process = p; AdoptedCore = None } : SessionManager.SpawnedWorker))
-        AwaitWorkerPort = fun _ _ _ _ -> ()
+        AwaitWorkerPort = fun _ _ _ _ _ -> ()
+        Ledger = StartLedger.closed
         StopWorker = fun _ -> async { return () }
         RunBuildAsync =
           fun _ _ -> async {

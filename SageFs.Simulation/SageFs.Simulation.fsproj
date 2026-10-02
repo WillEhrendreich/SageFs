@@ -98,13 +98,33 @@
         <Compile Include="GuardSim.fs" />
         <Compile Include="GuardSimInvariants.fs" />
         <Compile Include="GuardSimGenerators.fs" />
+        <Compile Include="DeltaRouteSim.fs" />
+        <Compile Include="DeltaRouteInvariants.fs" />
+        <Compile Include="DeltaRouteGenerators.fs" />
         <!-- Build confirmation DST: folds the real BuildConfirmation decision through evaluated
              runs, newer edits, quiet windows, builds that finish late or fail or hang, and
              deadlines firing in every order; twins apply stale answers, build without waiting
              and swallow failures. -->
+        <!-- Trunk follow DST: folds the real TrunkFollow decision through landings that land, are verified
+             and refused, checkout moves that end in any order, workers that patch, restart or go silent,
+             and patched bodies that run before the answer that carries them; twins act on a landing
+             before it lands, follow queued landings newest first, drop a landing that lands while another
+             is followed, record a restart as a patch, record a patch as settled before it ran and drop an
+             early report. -->
+        <Compile Include="TrunkFollowSim.fs" />
+        <Compile Include="TrunkFollowInvariants.fs" />
+        <Compile Include="TrunkFollowGenerators.fs" />
         <Compile Include="BuildConfirmationSim.fs" />
         <Compile Include="BuildConfirmationInvariants.fs" />
         <Compile Include="BuildConfirmationGenerators.fs" />
+        <!-- Live check pump DST: folds the real LiveCheckPump decision through edits that land while the
+             worker is absent, warming, ready or retired, answers that come back from a worker that is no
+             longer the one asked, and waits that end in any order; twins drop what they cannot ask, ask a
+             warming worker, believe an answer without looking again, apply an older request's answer and
+             ask while a request is in flight. -->
+        <Compile Include="LiveCheckPumpSim.fs" />
+        <Compile Include="LiveCheckPumpInvariants.fs" />
+        <Compile Include="LiveCheckPumpGenerators.fs" />
         <!-- Rule 2 read-provenance DST: folds the real ValueReads classifier,
              ledger and save check through every interleaving of reads, the
              startup window closing, probes coming off and saves; twins put
@@ -173,6 +193,12 @@
         <Compile Include="WarmupSim.fs" />
         <Compile Include="WarmupInvariants.fs" />
         <Compile Include="WarmupGenerators.fs" />
+        <Compile Include="StartEscalationSim.fs" />
+        <Compile Include="StartEscalationInvariants.fs" />
+        <Compile Include="StartEscalationGenerators.fs" />
+        <Compile Include="StartLearningSim.fs" />
+        <Compile Include="StartLearningInvariants.fs" />
+        <Compile Include="StartLearningGenerators.fs" />
         <Compile Include="SessionStatusReconciliationSim.fs" />
         <Compile Include="SessionStatusReconciliationInvariants.fs" />
         <Compile Include="SessionStatusReconciliationGenerators.fs" />
@@ -194,6 +220,12 @@
              a virtual clock; twins that never alarm / alarm on every tick. -->
         <Compile Include="SupervisorWatchdogSim.fs" />
         <Compile Include="SupervisorWatchdogInvariants.fs" />
+        <!-- Workspace hygiene DST: folds the real classify, planner, confirmation and executor through seeded
+             worlds of worktrees, branches and processes that get busy, collect work, get merged and lose their
+             owners while plans are made and run; twins skip the second look, force removals, kill by pid, plan
+             with side effects and count a removal twice. -->
+        <Compile Include="HygieneSim.fs" />
+        <Compile Include="HygieneSimInvariants.fs" />
     </ItemGroup>
 
     <ItemGroup>

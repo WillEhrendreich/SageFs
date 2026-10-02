@@ -82,6 +82,25 @@ let tests =
         sections.["Install"] |> List.contains ("WantedBy", "default.target") |> Expect.isTrue "user units hang off default.target"
       }
 
+      test "WorkingDirectory is a directory the unit itself creates, and one SageFs will watch from" {
+        // A daemon started in $HOME hands $HOME out as a session root (a request that names no directory falls
+        // back to the daemon's cwd), and SageFs refuses to watch a home directory, so a unit that put the
+        // daemon there gave every such session no hot reload and no live testing.
+        let service = (parseUnit (File.ReadAllText unitPath) |> Map.ofList).["Service"]
+        let values key = service |> List.filter (fun (k, _) -> k = key) |> List.map snd
+        let home = Path.Combine(Path.DirectorySeparatorChar.ToString(), "home", "someone")
+        let stateHome = Path.Combine(home, ".local", "state")
+        // The specifiers a user unit may use here: %h is the home directory, %S the state directory ($XDG_STATE_HOME).
+        let expand (text: string) = text.Replace("%h", home).Replace("%S", stateHome)
+        let workingDirectory = values "WorkingDirectory" |> List.exactlyOne |> expand
+        FileWatcher.classifyWatchRoot home workingDirectory
+        |> Expect.equal "the daemon's cwd is not the home directory or above it" FileWatcher.WatchRootVerdict.Watchable
+        // StateDirectory=<name> is created by systemd under %S before the daemon starts.
+        values "StateDirectory"
+        |> List.map (fun name -> Path.Combine(stateHome, name))
+        |> Expect.contains "the working directory is one the unit creates" workingDirectory
+      }
+
       test "ExecStart runs the installed tool with a flag the CLI help really lists" {
         let sections = parseUnit (File.ReadAllText unitPath) |> Map.ofList
         let execStart = sections.["Service"] |> List.find (fun (k, _) -> k = "ExecStart") |> snd

@@ -146,6 +146,69 @@ module SageFsEffectHandler =
           TuiEvent.EvalFailed ("", SageFsError.describe err)))
     }
 
+  // ── Asking a worker that may be on its way ───────────────────────────────────────────────────────────
+  // A type-check or an eval of an edited buffer goes through a `LiveCheckRelay`, which asks a worker only when the
+  // session manager says one is Ready, waits for one (event driven, on AwaitReady) when none is, and believes an
+  // answer only from the worker it asked. The relays belong to the `EffectDeps` they were made for.
+
+  let private callRelays =
+    System.Runtime.CompilerServices.ConditionalWeakTable<EffectDeps, LiveCheckRelay.Registry<LiveCheckRelay.CallKey, LiveCheckRelay.WorkerCall, WorkerResponse>>()
+
+  /// The relay for one session's calls of one kind about one file.
+  let private relayFor (deps: EffectDeps) (sid: SessionId) (kind: LiveCheckRelay.CallKind) (file: string) =
+    let key : LiveCheckRelay.CallKey = { Session = SessionId.value sid; Kind = kind; File = file }
+    let readView () =
+      async {
+        let! sessions = deps.ListSessions ()
+        let session = sessions |> List.tryFind (fun s -> s.Id = sid)
+        return LiveCheckRelay.viewOf session (Option.isSome (deps.GetProxy sid))
+      }
+    let ask (call: LiveCheckRelay.WorkerCall) (_workerPid: int) =
+      async {
+        match deps.GetProxy sid with
+        | None -> return WorkerReply.Silent "the session has no worker transport"
+        | Some proxy ->
+          // The call runs inside the async so even a synchronous transport throw is caught here.
+          let! outcome = async { return! proxy call.Message } |> Async.Catch
+          match outcome with
+          | Choice1Of2 response -> return WorkerReply.Replied response
+          | Choice2Of2 ex -> return WorkerReply.Silent ex.Message
+      }
+    // The bound is the one a rebuild gives the same wait (`ReadyDeadline`): a replacement that is not Ready by then is
+    // a failed rebuild, and a check that waited longer would be waiting for a worker the rebuild has given up on.
+    let awaitReady =
+      async {
+        match! RebuildReadyWait.await (deps.AwaitReady sid) deps.ReadyDeadline CancellationToken.None with
+        | RebuildReadyWait.Outcome.DeadlineReached -> return LiveCheckRelay.WaitEnded.DeadlineReached
+        | RebuildReadyWait.Outcome.Ready
+        | RebuildReadyWait.Outcome.Failed _
+        | RebuildReadyWait.Outcome.Cancelled -> return LiveCheckRelay.WaitEnded.SessionAnswered
+      }
+    let say (text: string) =
+      Utils.Log.info "[live] %s of %s in session %s: %s" (LiveCheckRelay.CallKind.describe kind) file (SessionId.value sid) text
+    let ports : LiveCheckRelay.Ports<LiveCheckRelay.WorkerCall, WorkerResponse> =
+      { ReadView = readView
+        Ask = ask
+        AwaitReady = awaitReady
+        Deliver = (fun call outcome -> call.Deliver outcome)
+        Superseded = (fun call -> call.Superseded ())
+        Say = say }
+    let registry = callRelays.GetValue(deps, fun _ -> LiveCheckRelay.Registry())
+    registry.For(key, fun () -> LiveCheckRelay.Relay(LiveCheckRelay.CallKind.supersedes kind, ports))
+
+  /// Resolve which session an effect is for, then act on its id. The call itself goes through a relay, which finds the
+  /// proxy when there is a worker to ask.
+  let private withResolvedSession
+    (deps: EffectDeps)
+    (dispatch: SageFsMsg -> unit)
+    (sessionId: SessionId option)
+    (action: SessionId -> Async<unit>) =
+    async {
+      match deps.ResolveSession sessionId with
+      | Ok resolution -> do! action (SessionOperations.sessionId resolution)
+      | Error err -> dispatch (SageFsMsg.Event (TuiEvent.EvalFailed ("", SageFsError.describe err)))
+    }
+
   let sessionInfoToSnapshot (info: SessionInfo) : SessionSnapshot =
     { Id = info.Id
       Name = info.Name
@@ -505,7 +568,7 @@ module SageFsEffectHandler =
             req.SessionId
             |> Option.bind (fun s ->
               match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
-          do! withSession deps dispatch targetSid (fun _sid proxy ->
+          do! withResolvedSession deps dispatch targetSid (fun sid ->
             async {
               let code =
                 match req.Content with
@@ -522,55 +585,66 @@ module SageFsEffectHandler =
                   |> Option.defaultWith (fun () ->
                     Features.LiveTesting.AnalysisIdentity.ofContent code)
                 let replyId = newReplyId ()
-                // The call runs inside the async so even a synchronous transport
-                // throw is caught here.
-                let! outcome =
-                  async { return! proxy (WorkerMessage.TypeCheckWithSymbols(code, req.FilePath, replyId)) }
-                  |> Async.Catch
-                fcsStopwatch.Stop()
-                Instrumentation.fcsTypecheckMs.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
-                Features.LiveTesting.LiveTestingInstrumentation.fcsHistogram.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
-                let result =
-                  match outcome with
-                  | Choice2Of2 ex ->
-                    // A worker mid-restart cannot answer: that is a cancelled
-                    // check, not a daemon fault for the Elm loop to alarm on.
-                    Utils.Log.warn "[SageFsApp] Type-check could not reach the worker for %s: %s" req.FilePath ex.Message
-                    Features.LiveTesting.FcsTypeCheckResult.Cancelled req.FilePath
-                  | Choice1Of2 resp ->
-                  match resp with
-                  | WorkerResponse.TypeCheckWithSymbolsResult(_rid, diags, symRefs) ->
-                    let hasErrors =
-                      diags |> List.exists (fun d -> d.Severity = DiagnosticSeverity.Blocking)
-                    match hasErrors with
-                    | true ->
-                      let errors =
-                        diags
-                        |> List.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Blocking)
-                        |> List.map (fun d -> d.Message)
-                      Features.LiveTesting.FcsTypeCheckResult.Failed(req.FilePath, errors)
-                    | false ->
-                      let refs = symRefs |> List.map WorkerProtocol.WorkerSymbolRef.toDomain
-                      Features.LiveTesting.FcsTypeCheckResult.Success(req.FilePath, refs)
-                  | _ ->
-                    Features.LiveTesting.FcsTypeCheckResult.Cancelled req.FilePath
-                // A check that blocks runs, or that never answered, is the whole reason a save can go unjudged, so
-                // each says so here with the compiler's own first words.
-                match result with
-                | Features.LiveTesting.FcsTypeCheckResult.Failed (file, errors) ->
-                  Utils.Log.info "[live] type-check of %s found %d blocking error(s): %s" file errors.Length (errors |> List.truncate 2 |> String.concat " | ")
-                | Features.LiveTesting.FcsTypeCheckResult.Cancelled file ->
-                  Utils.Log.info "[live] type-check of %s did not answer, so nothing was decided for this edit" file
-                | Features.LiveTesting.FcsTypeCheckResult.Success _ -> ()
-                dispatch (SageFsMsg.FcsTypeCheckCompleted (req.SessionId, Some effectiveAnalysisIdentity, result))
-                let timing : Features.LiveTesting.TestCycleTiming = {
-                  Depth = Features.LiveTesting.TestCycleDepth.ThroughFcs(req.TreeSitterElapsed, fcsStopwatch.Elapsed)
-                  TotalTests = 0; AffectedTests = 0
-                  Trigger = Features.LiveTesting.RunTrigger.Keystroke
-                  Timestamp = System.DateTimeOffset.UtcNow
-                }
-                dispatch (SageFsMsg.Event (TuiEvent.TestCycleTimingRecorded timing))
-                Instrumentation.succeedSpan span
+                // The effect ends when the request does: answered, unanswered or replaced by a newer text.
+                let ended = System.Threading.Tasks.TaskCompletionSource(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+                // How the check ended. A check that no worker answered is a cancelled check, never a failed one: a
+                // worker that was not there says nothing about the user's code, and only the worker that was asked
+                // and is still Ready can vouch for an answer (see LiveCheckPump).
+                let deliver (outcome: PumpOutcome<WorkerResponse>) =
+                  fcsStopwatch.Stop()
+                  let result =
+                    match outcome with
+                    | PumpOutcome.Unanswered why ->
+                      Utils.Log.warn "[SageFsApp] Type-check of %s was not answered: %s" req.FilePath (UnansweredWhy.describe why)
+                      Features.LiveTesting.FcsTypeCheckResult.Cancelled req.FilePath
+                    | PumpOutcome.Answered (WorkerResponse.TypeCheckWithSymbolsResult(_rid, diags, symRefs)) ->
+                      Instrumentation.fcsTypecheckMs.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
+                      Features.LiveTesting.LiveTestingInstrumentation.fcsHistogram.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
+                      let hasErrors =
+                        diags |> List.exists (fun d -> d.Severity = DiagnosticSeverity.Blocking)
+                      match hasErrors with
+                      | true ->
+                        let errors =
+                          diags
+                          |> List.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Blocking)
+                          |> List.map (fun d -> d.Message)
+                        Features.LiveTesting.FcsTypeCheckResult.Failed(req.FilePath, errors)
+                      | false ->
+                        let refs = symRefs |> List.map WorkerProtocol.WorkerSymbolRef.toDomain
+                        Features.LiveTesting.FcsTypeCheckResult.Success(req.FilePath, refs)
+                    | PumpOutcome.Answered _ ->
+                      Features.LiveTesting.FcsTypeCheckResult.Cancelled req.FilePath
+                  // A check that blocks runs, or that never answered, is the whole reason a save can go unjudged, so
+                  // each says so here with the compiler's own first words.
+                  match result with
+                  | Features.LiveTesting.FcsTypeCheckResult.Failed (file, errors) ->
+                    Utils.Log.info "[live] type-check of %s found %d blocking error(s): %s" file errors.Length (errors |> List.truncate 2 |> String.concat " | ")
+                  | Features.LiveTesting.FcsTypeCheckResult.Cancelled file ->
+                    Utils.Log.info "[live] type-check of %s did not answer, so nothing was decided for this edit" file
+                  | Features.LiveTesting.FcsTypeCheckResult.Success _ -> ()
+                  dispatch (SageFsMsg.FcsTypeCheckCompleted (req.SessionId, Some effectiveAnalysisIdentity, result))
+                  let timing : Features.LiveTesting.TestCycleTiming = {
+                    Depth = Features.LiveTesting.TestCycleDepth.ThroughFcs(req.TreeSitterElapsed, fcsStopwatch.Elapsed)
+                    TotalTests = 0; AffectedTests = 0
+                    Trigger = Features.LiveTesting.RunTrigger.Keystroke
+                    Timestamp = System.DateTimeOffset.UtcNow
+                  }
+                  dispatch (SageFsMsg.Event (TuiEvent.TestCycleTimingRecorded timing))
+                  Instrumentation.succeedSpan span
+                let delivered (outcome: PumpOutcome<WorkerResponse>) =
+                  try deliver outcome
+                  finally ended.TrySetResult() |> ignore
+                let relay = relayFor deps sid LiveCheckRelay.CallKind.Check req.FilePath
+                // A check of text that was typed over is never reported, so its span ends here.
+                let superseded () =
+                  Utils.Log.info "[live] type-check of %s was replaced by a newer text before it was answered" req.FilePath
+                  Instrumentation.succeedSpan span
+                  ended.TrySetResult() |> ignore
+                do! relay.Submit
+                      { Message = WorkerMessage.TypeCheckWithSymbols(code, req.FilePath, replyId)
+                        Deliver = delivered
+                        Superseded = superseded }
+                do! ended.Task |> Async.AwaitTask
               | false -> ()
             })
         | Features.LiveTesting.TestCycleEffect.EvalBufferThenRunAffected req ->
@@ -581,58 +655,69 @@ module SageFsEffectHandler =
           let targetSid =
             req.Run.SessionId
             |> Option.bind (fun s -> match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
-          do! withSession deps dispatch targetSid (fun sid proxy ->
+          do! withResolvedSession deps dispatch targetSid (fun sid ->
             async {
               let replyId = newReplyId ()
-              Utils.Log.info "[live] evaluating %s for %d test(s), asked by %A" req.FilePath req.Run.Tests.Length req.Run.Trigger
-              let! outcome =
-                async { return! proxy (WorkerMessage.EvalLiveTestFile(req.FilePath, req.Content, replyId)) }
-                |> Async.Catch
-              match outcome with
-              | Choice2Of2 ex ->
-                // Worker mid-restart etc.: surface it, but LiveTesting state
-                // (discovery + results) is untouched — fail-closed.
-                Utils.Log.warn "[SageFsApp] EvalLiveTestFile could not reach the worker for %s: %s" req.FilePath ex.Message
-                dispatch (SageFsMsg.Event (
-                  TuiEvent.EvalFailed (
-                    SessionId.value sid,
-                    sprintf "Live-test eval could not reach the worker: %s" ex.Message)))
-              | Choice1Of2 (WorkerResponse.EvalLiveTestFileResult (_, Error err)) ->
-                // Buffer doesn't compile / eval failed. Fail-closed (Invariant
-                // 4): do NOT dispatch a discovery merge or a run — the prior
-                // dynamic discovery + last-good results stay exactly as they
-                // were. Only the error is surfaced. (Brief 5 owns a dedicated
-                // stale/rollback DU; this is the honest interim signal.)
-                Utils.Log.warn "[SageFsApp] EvalLiveTestFile failed for %s: %s" req.FilePath (SageFsError.describe err)
-                dispatch (SageFsMsg.Event (
-                  TuiEvent.EvalFailed (SessionId.value sid, SageFsError.describe err)))
-              | Choice1Of2 (WorkerResponse.EvalLiveTestFileResult (_, Ok (tests, providers))) ->
-                match List.isEmpty providers with
-                | true -> ()
-                | false -> dispatch (SageFsMsg.Event (TuiEvent.ProvidersDetected providers))
-                // Merge the live (compiled ∪ dynamic) discovery WITHOUT
-                // auto-running every discovered test (see
-                // TuiEvent.LiveDiscoveryMerged), then run exactly the
-                // coverage/graph-selected tests `req.Run` already carries —
-                // re-resolved against the fresh merge so a re-run reflects
-                // the just-eval'd metadata rather than the pre-eval snapshot.
-                dispatch (SageFsMsg.Event (TuiEvent.LiveDiscoveryMerged (SessionId.value sid, tests)))
-                let runIds = req.Run.Tests |> Array.map (fun tc -> tc.Id) |> Set.ofArray
-                let freshTests = tests |> Array.filter (fun tc -> Set.contains tc.Id runIds)
-                let toRun = match Array.isEmpty freshTests with true -> req.Run.Tests | false -> freshTests
-                match Array.isEmpty toRun with
-                | true -> ()
-                | false ->
-                  // The run that follows ran against EVALUATED code: its results are marked so, and a real
-                  // build confirms them once the editing has gone quiet.
+              // The effect ends when the request does.
+              let ended = System.Threading.Tasks.TaskCompletionSource(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+              // How the eval ended. Every eval is owed its run, so a worker that was replaced under the call is asked
+              // again (see LiveCheckPump) and only a worker that never came ends one unanswered.
+              let deliver (outcome: PumpOutcome<WorkerResponse>) =
+                match outcome with
+                | PumpOutcome.Unanswered why ->
+                  // No worker answered: surface it, but LiveTesting state
+                  // (discovery + results) is untouched — fail-closed.
+                  Utils.Log.warn "[SageFsApp] EvalLiveTestFile was not answered for %s: %s" req.FilePath (UnansweredWhy.describe why)
                   dispatch (SageFsMsg.Event (
-                    TuiEvent.EvaluatedRunBegan (
+                    TuiEvent.EvalFailed (
                       SessionId.value sid,
-                      Features.LiveTesting.AnalysisIdentity.ofContent req.Content,
-                      toRun |> Array.map (fun tc -> tc.Id))))
+                      sprintf "Live-test eval could not reach the worker: %s" (UnansweredWhy.describe why))))
+                | PumpOutcome.Answered (WorkerResponse.EvalLiveTestFileResult (_, Error err)) ->
+                  // Buffer doesn't compile / eval failed. Fail-closed (Invariant
+                  // 4): do NOT dispatch a discovery merge or a run — the prior
+                  // dynamic discovery + last-good results stay exactly as they
+                  // were. Only the error is surfaced. (Brief 5 owns a dedicated
+                  // stale/rollback DU; this is the honest interim signal.)
+                  Utils.Log.warn "[SageFsApp] EvalLiveTestFile failed for %s: %s" req.FilePath (SageFsError.describe err)
                   dispatch (SageFsMsg.Event (
-                    TuiEvent.RunTestsRequested (Some (SessionId.value sid), toRun, None)))
-              | Choice1Of2 _ -> ()
+                    TuiEvent.EvalFailed (SessionId.value sid, SageFsError.describe err)))
+                | PumpOutcome.Answered (WorkerResponse.EvalLiveTestFileResult (_, Ok (tests, providers))) ->
+                  match List.isEmpty providers with
+                  | true -> ()
+                  | false -> dispatch (SageFsMsg.Event (TuiEvent.ProvidersDetected providers))
+                  // Merge the live (compiled ∪ dynamic) discovery WITHOUT
+                  // auto-running every discovered test (see
+                  // TuiEvent.LiveDiscoveryMerged), then run exactly the
+                  // coverage/graph-selected tests `req.Run` already carries —
+                  // re-resolved against the fresh merge so a re-run reflects
+                  // the just-eval'd metadata rather than the pre-eval snapshot.
+                  dispatch (SageFsMsg.Event (TuiEvent.LiveDiscoveryMerged (SessionId.value sid, tests)))
+                  let runIds = req.Run.Tests |> Array.map (fun tc -> tc.Id) |> Set.ofArray
+                  let freshTests = tests |> Array.filter (fun tc -> Set.contains tc.Id runIds)
+                  let toRun = match Array.isEmpty freshTests with true -> req.Run.Tests | false -> freshTests
+                  match Array.isEmpty toRun with
+                  | true -> ()
+                  | false ->
+                    // The run that follows ran against EVALUATED code: its results are marked so, and a real
+                    // build confirms them once the editing has gone quiet.
+                    dispatch (SageFsMsg.Event (
+                      TuiEvent.EvaluatedRunBegan (
+                        SessionId.value sid,
+                        Features.LiveTesting.AnalysisIdentity.ofContent req.Content,
+                        toRun |> Array.map (fun tc -> tc.Id))))
+                    dispatch (SageFsMsg.Event (
+                      TuiEvent.RunTestsRequested (Some (SessionId.value sid), toRun, None)))
+                | PumpOutcome.Answered _ -> ()
+              Utils.Log.info "[live] evaluating %s for %d test(s), asked by %A" req.FilePath req.Run.Tests.Length req.Run.Trigger
+              let relay = relayFor deps sid LiveCheckRelay.CallKind.Eval req.FilePath
+              let delivered (outcome: PumpOutcome<WorkerResponse>) =
+                try deliver outcome
+                finally ended.TrySetResult() |> ignore
+              do! relay.Submit
+                    { Message = WorkerMessage.EvalLiveTestFile(req.FilePath, req.Content, replyId)
+                      Deliver = delivered
+                      Superseded = (fun () -> ended.TrySetResult() |> ignore) }
+              do! ended.Task |> Async.AwaitTask
             })
         | Features.LiveTesting.TestCycleEffect.CancelRebuild (targetSession, generation) ->
           match deps.TestCycleCancellation.Rebuild.cancel(targetSession, generation) with

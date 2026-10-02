@@ -7,8 +7,9 @@ dashboard, and MCP clients all talk to the daemon through session-scoped HTTP an
 [architecture diagram](../Readme.md#-one-daemon-every-client) for how clients connect.
 
 The daemon listens on port 37749 for MCP (streamable HTTP at `/`, legacy SSE at `/sse`) and the editor state
-stream (`/events`). The web dashboard runs on port 37750 at `/dashboard`. Target framework is net10.0; the
-solution file is `SageFs.slnx`.
+stream (`/events`). The web dashboard runs on port 37750 at `/dashboard`. The repo builds for net11.0 by default
+(`Directory.Build.props`), and the shipped tool (`SageFs`, `SageFs.Core`, `SageFs.Host`) multi-targets net10.0 and
+net11.0, so one package installs on either SDK. The solution file is `SageFs.slnx`.
 
 The test suite uses Expecto unit tests, FsCheck property-based state-machine tests, Verify snapshots, and
 binary-persistence property tests. The README's test-count badge and property-test count are derived from
@@ -21,10 +22,16 @@ numbers can lag between restamps. If you spot a stale number, that's why.
 ```
 SageFs.Core/       — Shared engine, session, testing, persistence, and protocol logic
 SageFs/            — CLI tool, daemon, MCP server, and dashboard
+SageFs.Host/       — The worker process the daemon spawns per session
+SageFs.FsiHost/    — The isolated FSI host: the FSI session, your running code, the hot reload and live testing agent
+SageFs.Simulation/ — Deterministic simulation (DST) models of the real cores
 SageFs.Tests/      — Expecto test project
 sagefs-vscode/     — VS Code extension (Fable F#→JS)
-docs/              — GitHub Pages site
+docs/              — User docs, design decisions and references
 ```
+
+The deprecated frontends (`SageFs.Gui/`, the terminal UI source inside `SageFs/`, and `sagefs-vs/`) are still in the
+tree as legacy source and aren't product surfaces.
 
 The Neovim plugin lives in a separate repo: [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim).
 
@@ -60,5 +67,5 @@ session.
 Other FSI behaviors worth knowing: redefining a binding shadows it instead of erroring, each `;;` boundary is
 its own transaction, there's no `[<EntryPoint>]`, and assembly loading is scoped to the session.
 
-Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](../SageFs.Core/FsiRewrite.fs) (26 lines, genuinely small).
+Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](../SageFs.Core/FsiRewrite.fs) (26 lines, and it is small).
 PRs welcome.

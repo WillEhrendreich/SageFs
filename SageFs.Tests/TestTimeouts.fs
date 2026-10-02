@@ -28,6 +28,9 @@ module TestTimeouts =
   /// request through a started web host, a daemon failing a bad bind). A cold start on a loaded
   /// runner takes seconds, so this is generous.
   let patience = secs 20.
+  /// Ceiling on a child process that reads a 4 MB assembly twice, diffs and writes a delta for it five times, and
+  /// has the runtime apply it (DeltaChild `bench`). The first pass has the JIT in it and a loaded runner is slower.
+  let bigAssemblyDelta = secs 120.
   /// Ceiling on a wait that completes in the test's own process (a task settling, a file watcher
   /// reporting, a long poll answering) but goes through the thread pool and can be starved.
   let patienceInProcess = secs 10.
@@ -63,6 +66,8 @@ module TestTimeouts =
   let pollFlush = ms 20.
   /// A landing drives real `git` subprocesses, so each look costs real work.
   let pollLanding = ms 25.
+  /// A measurement of how long a save takes to be served: finer than the thing measured, so the poll is not the number.
+  let pollMeasure = ms 10.
   /// A local server that answers fast once it is up: a daemon's health during startup, or a
   /// route settling on a value.
   let pollQuick = ms 100.
@@ -116,6 +121,33 @@ module TestTimeouts =
   /// Regression bound on the 95th percentile of save-to-green. First measurement: p95 709ms over 20 saves
   /// on the same machine and in the same conditions. Four times that, for the same reason.
   let liveTestingSaveToGreenP95Bound = secs 3.
+  /// Regression bound on the 95th percentile of hot reload save-to-served (a patched save: the first byte
+  /// of the write to the first response carrying the new body, polled every `pollTight`). Measured: p95 298
+  /// to 353ms over eight runs of 20 saves each (372ms with eight busy loops beside it) on a 16-thread Ryzen
+  /// 7 5800XT, Linux, a daemon owned by the runner and other jobs on the same machine; 200ms of that is the
+  /// file watcher's debounce, a fixed timer. The bound is about four times the worst p95, because a cold or
+  /// shared CI runner is slower and a gate that flakes gets deleted; it still fails on what matters, a save
+  /// that takes whole seconds (a compile that fell back to the whole file, or a restart where a patch used to be).
+  let hotReloadPatchServedP95Bound = secs 1.5
+  /// Regression bound on the 95th percentile of hot reload save-to-confirmed (the daemon's verdict reaching
+  /// `Patched`, which needs the new code to have run). Measured: p95 338 to 392ms over the same eight runs
+  /// (418ms under load). Close to four times the worst, for the same reason.
+  let hotReloadPatchConfirmedP95Bound = secs 1.5
+  /// Regression bound on the 95th percentile of save-to-served for a save to an app `run_app` runs, which
+  /// SageFs rebuilds and relaunches (a build, a new worker, a new FSI session, a warm-up, then the app).
+  /// Measured: p95 7.7 to 16.2s over eight runs of 20 saves (p50 7.1 to 10.0s), and the spread follows the
+  /// machine's load: the two runs that ended with a load average of 14 or more were the 15 and 16s ones. About four times
+  /// the worst, because a build and a process start get slower on a cold runner by more than a request does.
+  let hotReloadRestartServedP95Bound = secs 60.
+  /// Regression bound on the 95th percentile of save-to-served for the same save on the default route, where
+  /// the running process takes it as a metadata delta (an edit, a delta build, `ApplyUpdate`, the app serving
+  /// the new body). Measured twice, on a 16-thread Ryzen 7 5800XT, Linux, a daemon of its own and other jobs
+  /// on the machine: p50 1.64s and 1.55s, p95 2.25s and 2.23s over 20 saves each (min 1.50s, max 2.29s), and
+  /// the earlier fixture runs the docs quote were 1.8 to 2.6s. The saves fall on two levels, about 1.55s and 2.2s. The bound is about
+  /// four times the worst p95 seen, because a build gets slower on a cold runner by more than a request does;
+  /// it still fails when the route falls back to a restart (6.9 to 8.1s here), which `Sample.checkRoute`
+  /// also catches by name.
+  let hotReloadDeltaServedP95Bound = secs 10.
   /// The daemon's own wall-clock save fires 60s after start and does not get faster on a faster
   /// runner, so both resume waits (the save becoming durable, the second daemon rebuilding the
   /// session) are a generous multiple of it.
@@ -1178,3 +1210,80 @@ module RebuildWaitTimeouts =
   /// How long a test lets a cancelled or superseded rebuild have to wrongly report. It has
   /// no signal to wait for, because the right outcome is that nothing happens.
   let nothingReportedWindow = System.TimeSpan.FromMilliseconds 200.
+
+// ---- workspace hygiene ----
+
+/// Ages the workspace hygiene tests choose on purpose. Each is a position on the retention ladder (what a cache
+/// keeps, and what a worktree is), not a wait: nothing sleeps for them, the tests say how old a thing is.
+module HygieneAges =
+  /// Last touched a week ago: old enough to look abandoned, newer than any cache retention the tests use.
+  let aWeek = System.TimeSpan.FromDays 7.
+
+  /// A retention longer than `aWeek`, so a thing last touched a week ago is still inside it.
+  let longerThanAWeek = System.TimeSpan.FromDays 30.
+
+  /// A retention shorter than `aWeek`, so a thing last touched a week ago is past it.
+  let shorterThanAWeek = System.TimeSpan.FromDays 3.
+
+  /// The gate's own retention (14 days), for a test of a gate checkout whose owner is gone.
+  let gateRetention = System.TimeSpan.FromDays 14.
+
+  /// A retention of one day, for a temp run.
+  let oneDay = System.TimeSpan.FromDays 1.
+
+  /// Far past every retention in the product.
+  let ancient = System.TimeSpan.FromDays 90.
+
+  /// How far ahead of the real clock a scan believes it is, so a thing made just now counts as past its retention.
+  let clockSkewPastRetention = System.TimeSpan.FromDays 30.
+
+  /// Written to a quarter of an hour ago: a run that just crashed, inside every retention.
+  let justNow = System.TimeSpan.FromMinutes 15.
+
+// ---- machine tier and start escalation ----
+
+/// Durations the machine tier and start escalation tests choose on purpose. They are the tests' own
+/// numbers: the production ones depend on the tier the test process happens to run on.
+module StartEscalationTimeouts =
+  let private secs (n: float) = System.TimeSpan.FromSeconds n
+  let private mins (n: float) = System.TimeSpan.FromMinutes n
+
+  /// How long a first attempt may be silent in the cases below. It matches what a `Fast` machine is
+  /// given, so the cases read like the field report.
+  let silenceAllowance = secs 30.
+
+  /// The longest a whole attempt may take in the cases below.
+  let absoluteBound = mins 10.
+
+  /// A healthy start that needs more than `silenceAllowance`: what the Phenom II X4 needed for a cold
+  /// FSI host build (about 40 s, measured on 2026-10-01).
+  let slowHealthyStart = secs 40.
+
+  /// The shortest start the teeth property uses: 1.3 times the 30 s a first attempt is allowed, so it always needs a
+  /// second attempt.
+  let slowStartFloor = secs 39.
+
+  /// A start that outlasts the first two attempts' allowances (30 s and 60 s) but not the third's.
+  let verySlowStart = secs 100.
+
+  /// A start on a quiet, fast machine.
+  let quickStart = secs 5.
+
+  /// How long a start has taken on this machine, as a history that has seen many.
+  let learnedStart = secs 90.
+
+  /// How much the learned starts vary.
+  let learnedDeviation = secs 10.
+
+  /// A made-up elapsed time for an estimate's first observation.
+  let firstObservation = secs 12.
+
+  /// A made-up later observation, longer than `firstObservation`.
+  let laterObservation = secs 20.
+
+  /// How long a real child process may stay silent in the tests that run the real `awaitWorkerPort`.
+  /// Short on purpose: for those tests the allowance has to EXPIRE, so a long one only slows them.
+  let shortSilence = System.TimeSpan.FromMilliseconds 400.
+
+  /// The absolute bound given to those tests: far past the silence allowance, never reached.
+  let shortAbsolute = System.TimeSpan.FromSeconds 30.

@@ -1,6 +1,6 @@
 # Contributing to SageFs
 
-Welcome! SageFs is an open-source project and we genuinely appreciate contributions — whether it's fixing a typo, improving docs, filing a bug, or building a whole new feature. If you're from the F# community and want to help, you're in the right place.
+Welcome. SageFs is open source and I'm glad of any help, whether that's a typo, a doc fix, a bug report or a whole feature. If you're from the F# community and want to pitch in, you're in the right place.
 
 ## Quick Links
 
@@ -15,7 +15,7 @@ Welcome! SageFs is an open-source project and we genuinely appreciate contributi
 
 ### Prerequisites
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (see `global.json` for exact version)
+- The .NET SDK that `global.json` pins, which is a .NET 11 release candidate (`11.0.100-rc.1.26425.128`, with `allowPrerelease` on) as I write this. The repo builds for `net11.0` by default, and the shipped tool (`SageFs`, `SageFs.Core`, `SageFs.Host`) multi-targets `net10.0;net11.0` so a .NET 10 user can install it. Get the SDK from [dotnet.microsoft.com/download/dotnet/11.0](https://dotnet.microsoft.com/download/dotnet/11.0)
 - Git
 - An editor — VS Code with Ionide, Neovim, Rider, or your preference
 
@@ -27,9 +27,9 @@ cd SageFs
 dotnet fsi build.fsx
 ```
 
-The build script (one step) clones the [forked MCP SDK](https://github.com/WillEhrendreich/ModelContextProtocolSdk), packs it into a local `mcp-sdk-nupkg/` directory, and builds the solution. This is necessary because `NuGet.Config` points at that local directory as a package source.
+The build script (one step) clones the [forked MCP SDK](https://github.com/WillEhrendreich/ModelContextProtocolSdk), packs it into a local `mcp-sdk-nupkg/` directory, and builds the solution. This is necessary because `nuget.config` points at that local directory as a package source. It also lists `harmony-nupkg/` as a source. That one holds the packed Harmony fork (`SageFs.Harmony`, built from [LibHarmony](https://github.com/WillEhrendreich/LibHarmony) with a patched MonoMod so detours work on .NET 11), and the package is checked in, so there is nothing to fetch for it.
 
-> **Why a forked MCP SDK?** SageFs depends on a fork of `ModelContextProtocol` with additional features not yet upstream. The fork is public. The build script clones and packs it automatically — no manual steps needed.
+> **Why a forked MCP SDK?** SageFs depends on a fork of `ModelContextProtocol` with additional features not yet upstream. The fork is public. The build script clones and packs it automatically, so there are no manual steps.
 
 After the first run, `dotnet build` works normally (the `mcp-sdk-nupkg/` directory persists). If you get `NU1301: The local source 'mcp-sdk-nupkg' doesn't exist`, re-run `dotnet fsi build.fsx` to regenerate it.
 
@@ -55,10 +55,10 @@ Now `sagefs` on your PATH is your locally-built version.
 ### Run It
 
 ```bash
-# Point SageFs at any F# project
+# Start the daemon. It starts bare and waits for a client to create a session
 sagefs
 
-# Use an editor integration, MCP client, or the dashboard
+# Create a session for any F# project from an editor integration, an MCP client or the dashboard
 # Dashboard: http://localhost:37750/dashboard
 ```
 
@@ -68,10 +68,13 @@ sagefs
 SageFs.Core/       — Shared engine, session, testing, persistence, and protocol logic (start here!)
 SageFs/            — CLI tool, daemon, MCP server, dashboard, plus retained deprecated TUI source
 SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy source
+SageFs.Host/       — The worker process the daemon spawns per session
+SageFs.FsiHost/    — The isolated FSI host: the FSI session, your running code, the hot reload and live testing agent
+SageFs.Simulation/ — Deterministic simulation (DST) models that fold the real cores
 SageFs.Tests/      — Expecto test project (thousands of tests; the README badge is auto-derived)
 sagefs-vscode/     — VS Code extension (F# via Fable → JavaScript)
 sagefs-vs/         — Deprecated Visual Studio extension (C# + F#), retained as legacy source; not built or published
-docs/              — GitHub Pages documentation site
+docs/              — User docs, design decisions, troubleshooting and feature references
 ```
 
 The Neovim plugin lives in a separate repo: [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim).
@@ -110,23 +113,19 @@ sagefs
 
 Then create a session for `SageFs.Tests/SageFs.Tests.fsproj` from your editor, MCP client, or the dashboard. That session loads the project into a live F# Interactive session with hot reload.
 
-**2. Connect your editor.** SageFs exposes an MCP server at `http://localhost:37749/sse`. If you're using VS Code with the SageFs extension, it auto-connects. For other editors, see the [README](Readme.md) for setup.
+**2. Connect your editor.** SageFs serves MCP at `http://localhost:37749/` (streamable HTTP) and `http://localhost:37749/sse` (legacy SSE). If you're using VS Code with the SageFs extension, it auto-connects. For other editors and for an agent (`claude mcp add sagefs -- sagefs mcp`), see the [README](Readme.md) and [docs/agents.md](docs/agents.md).
 
-**3. Edit a `.fs` file and save.** SageFs detects the change (~500ms debounce), reloads the file via `#load` (~100ms), and if you have live testing enabled, affected tests re-run automatically.
+**3. Edit a `.fs` file and save.** SageFs notices the change (the watcher waits 200 ms for a burst of write events to settle), brings the session up to date, and if you have live testing enabled, the affected tests re-run. In the Hot Reload workflow the changed functions are patched into the running process instead. [docs/hot-reload.md](docs/hot-reload.md) says what patches and what restarts.
 
-**4. Run tests from the SageFs REPL** (not `dotnet test`):
+**4. Run tests from the SageFs session** (not `dotnet test`). The `run_tests` MCP tool, the dashboard and your editor all ask the same live-testing engine. To run one module from the REPL:
 
 ```fsharp
-// Run a specific test module
 Expecto.Tests.runTestsWithCLIArgs [] [||] SageFs.Tests.SomeModule.tests;;
-
-// Run all tests
-Expecto.Tests.runTestsWithCLIArgs [] [||] SageFs.Tests.AllTests.tests;;
 ```
 
-> **Signature note:** `runTestsWithCLIArgs` takes `(cliArguments: string list, argv: string[], test: Test)` — the **third argument is a single `Test` value**, not an array. A `[<Tests>]` module binding like `SomeModule.tests` is already a single combined `Test`; do NOT wrap it in `[| ... |]`. Passing an array lands it in the `argv` slot and produces the confusing error `expected string but got Test`.
+> **Signature note:** `runTestsWithCLIArgs` takes `(cliArguments: string list, argv: string[], test: Test)`, and the **third argument is a single `Test` value**, not an array. A `[<Tests>]` module binding like `SomeModule.tests` is already a single combined `Test`; do NOT wrap it in `[| ... |]`. Passing an array lands it in the `argv` slot and produces the confusing error `expected string but got Test`.
 
-**5. Check test output** in the SageFs console window. Exit code 0 = all passed. Exit code 2 = passed but no TTY detected (cosmetic, ignore it). Exit code 1 = actual failures.
+**5. Check the verdict, not the colour.** The direct runner ends with a `TRUST` line: `Trusted` (unfiltered, everything registered ran, nothing failed), `NarrowedRun` (it passed, but a filter narrowed it), `TestsFailed`, `NothingRan`, or `CountMismatch`. The last two exit with 3, because a run that executed nothing is not a green run. A filtered run is never the acceptance check. The table and the filter traps are in [AGENTS.md](AGENTS.md#filters---filter-test-list-matches-lists---filter-test-case-matches-leaves).
 
 ### Debugging with Breakpoints
 
@@ -180,7 +179,7 @@ Then restart SageFs. If you only changed test code, a simpler rebuild is enough 
 - **Daemon console** — real-time output in the terminal where SageFs is running
 - **Dashboard** — `http://localhost:37750/dashboard` shows session state, events, test results
 - **Log files** — the daemon writes `mcp-server<yyyyMMdd>.log` and each session's worker writes `<data dir>/workers/<sessionId>.log`. `GET http://localhost:37750/api/daemon-info` returns the daemon log's path as `logPath`. See [Where the logs are](docs/TROUBLESHOOTING.md#where-the-logs-are).
-- **OpenTelemetry** — start with `start-sagefs-otel.bat` for structured traces
+- **OpenTelemetry** — start with `start-sagefs-otel.bat` (a Windows batch file) for structured traces, or set `OTEL_EXPORTER_OTLP_ENDPOINT` yourself on any platform
 
 ## Running Tests
 
@@ -193,11 +192,13 @@ dotnet fsi build.fsx -- test
 # Direct: run the test project
 dotnet run --project SageFs.Tests -- --summary
 
-# Filter: run specific tests
+# Filter: run specific tests (the inner loop only, see the TRUST note above)
 dotnet run --project SageFs.Tests -- --filter "CellGrid"
 ```
 
 For local development, prefer running tests inside SageFs's own REPL for instant feedback.
+
+`--summary` runs the default suite. The integration, browser and mutation tiers each have their own entry point (`--integration-host`, `--integration-browser` and so on), and `ci-pipeline.fsx` runs every one of them and prints a trust report. A pull request runs the whole pipeline on a Linux runner.
 
 ### Test Categories
 
@@ -266,7 +267,7 @@ list |> Expect.hasLength "should have 3 items" 3
 3. Ensure `dotnet build` succeeds with no warnings (warnings are errors)
 4. Run `dotnet fsi build.fsx -- test` to verify tests pass
 5. Commit with conventional commit messages
-6. Push and open a PR against `main`
+6. Push and open a PR against `master`
 
 ### What Makes a Great PR
 

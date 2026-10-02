@@ -107,6 +107,7 @@ let filmstripSnapshotTests =
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
         FrictionPanel = Elem.div [] []
         CohortPanel = Elem.div [] []
+        HygienePanel = Elem.div [] []
         ActiveProject = None
 
         ProjectRoles = []
@@ -135,6 +136,7 @@ let filmstripSnapshotTests =
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
         FrictionPanel = Elem.div [] []
         CohortPanel = Elem.div [] []
+        HygienePanel = Elem.div [] []
         ActiveProject = None
 
         ProjectRoles = []

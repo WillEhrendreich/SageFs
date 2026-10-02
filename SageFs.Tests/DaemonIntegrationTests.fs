@@ -84,7 +84,7 @@ let managerStateTests =
 
         App = SageFs.AppRun.AppRunState.NotRunning
         Rebuild = LastRebuild.NeverRebuilt
-        Reload = SessionReload.NoReloadYet
+        Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -128,7 +128,7 @@ let managerStateTests =
 
         App = SageFs.AppRun.AppRunState.NotRunning
         Rebuild = LastRebuild.NeverRebuilt
-        Reload = SessionReload.NoReloadYet
+        Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -173,7 +173,7 @@ let managerStateTests =
 
           App = SageFs.AppRun.AppRunState.NotRunning
           Rebuild = LastRebuild.NeverRebuilt
-          Reload = SessionReload.NoReloadYet
+          Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
         }
         { Info = info
@@ -342,6 +342,77 @@ let daemonStartupFailsClosedTests =
             daemonProc.WaitForExit(TestTimeouts.childExit) |> ignore
         with _ -> ()
         try Directory.Delete(dataDirForLogs, true) with _ -> ()
+  ]
+
+/// A machine that the profile on disk says is slow, to start a daemon on. The tier it implies is
+/// `Constrained` (a spinning disk), and the probe fields say nothing else is wrong with it.
+let private slowMachineProfile : MachineProfile =
+  MachineProfile.ofProbe
+    { LogicalCores = 8
+      CpuQuota = CpuQuota.Unlimited
+      TotalMemoryMb = 16384L
+      AvailableMemoryMb = 12288L
+      Storage = StorageKind.Rotational
+      Calibration = Calibration.NotMeasured "a profile written for this test" }
+
+[<Tests>]
+let daemonMachineTierTests =
+  Integration.hostList "Daemon machine tier" [
+
+    testCase "a daemon settles its machine tier before any wait is read, so the waits are the tier's" <| fun _ ->
+      let mcpPort, _dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
+      let dataDir = isolatedDataDir ()
+      Directory.CreateDirectory dataDir |> ignore
+      MachineProbeReader.writeProfile dataDir slowMachineProfile
+      |> function
+        | Result.Ok () -> ()
+        | Result.Error (ProfileWriteError.CouldNotWrite (path, reason)) -> failtestf "the test could not write %s: %s" path reason
+
+      let psi = ProcessStartInfo()
+      psi.FileName <- SageFsExe
+      psi.UseShellExecute <- false
+      psi.CreateNoWindow <- true
+      psi.WorkingDirectory <- testProjectDir
+      psi.ArgumentList.Add "--mcp-port"
+      psi.ArgumentList.Add(string mcpPort)
+      psi.ArgumentList.Add "--owner-pid"
+      psi.ArgumentList.Add(string (Process.GetCurrentProcess().Id))
+      psi.ArgumentList.Add "--no-resume"
+      psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+      psi.Environment.Remove MachineTier.envVar |> ignore
+      psi.RedirectStandardOutput <- true
+      psi.RedirectStandardError <- true
+
+      use daemonProc = new Process(StartInfo = psi)
+      let captured = System.Text.StringBuilder()
+      let logLock = obj ()
+      let writeLine (line: string) =
+        if not (isNull line) then lock logLock (fun () -> captured.AppendLine line |> ignore)
+      let readLog () = lock logLock (fun () -> captured.ToString())
+      daemonProc.OutputDataReceived.Add(fun e -> writeLine e.Data)
+      daemonProc.ErrorDataReceived.Add(fun e -> writeLine e.Data)
+      daemonProc.Start() |> ignore
+      daemonProc.BeginOutputReadLine()
+      daemonProc.BeginErrorReadLine()
+
+      try
+        let reported =
+          SageFs.Tests.TestInfrastructure.waitFor
+            (int TestTimeouts.patience.TotalMilliseconds)
+            (fun () -> (readLog ()).Contains "Machine tier")
+        reported |> Expect.isTrue "the daemon says which tier it settled on"
+        let logged = readLog ()
+        logged
+        |> Expect.stringContains "it took the tier from the profile on disk" "Machine tier Constrained"
+        logged.Contains "Timeouts were read before the machine tier was established"
+        |> Expect.isFalse "nothing may read a wait before the tier is settled, or the waits are the Fast ones on a slow machine"
+      finally
+        try
+          if not daemonProc.HasExited then
+            daemonProc.Kill()
+            daemonProc.WaitForExit(TestTimeouts.childExit) |> ignore
+        with _ -> ()
+        try Directory.Delete(dataDir, true) with _ -> ()
   ]
 
 // ─── Daemon lifecycle: start, status, stop ─────────────────────────

@@ -28,6 +28,15 @@ else
     -m "chore: release v$version" \
     -- Directory.Build.props sagefs-vscode/package.json
   echo "ship: bumped to $version"
+  # The roadmap page moves items to Built when their landmark is in the tree, so a ship refreshes it.
+  # RoadmapDocTests fails the gate on a stale page, which is why it is regenerated here and committed.
+  dotnet fsi "$REPO/scripts/gen-roadmap.fsx"
+  if [ -n "$(git -C "$REPO" status --porcelain -- docs/roadmap.md)" ]; then
+    git -C "$REPO" commit --quiet --no-verify \
+      -m "docs(roadmap): refresh the roadmap for v$version" \
+      -- docs/roadmap.md
+    echo "ship: roadmap refreshed"
+  fi
   sha=$(git -C "$REPO" rev-parse HEAD)
 fi
 

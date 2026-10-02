@@ -9,8 +9,8 @@ work on SageFs itself, so if it's clunky, I feel it first.
 SageFs gates tools when you call them. `tools/list` always advertises the
 full catalog below, and SageFs doesn't filter what an MCP client sees there.
 Calling one is different: a call that doesn't apply to the current session
-state gets rejected with a structured error (`SageFs/Mcp.fs:686`,
-`enforceToolCallGate`), instead of a raw failure. Call `get_daemon_status`
+state gets rejected with a structured error (`enforceToolCallGate` in
+`SageFs/Mcp.fs`), instead of a raw failure. Call `get_daemon_status`
 for daemon health, then `get_session_status` to see which tools currently
 apply. In a warming-up session, for example, it
 reports `send_fsharp_code` as not yet available, even though the tool is
@@ -18,7 +18,7 @@ still listed. I went back and forth on filtering the list itself. For now
 the call-time gate is what's actually wired up, so that's what this doc
 promises.
 
-The full advertised set is 61 tools, grouped below. This is separate
+The full advertised set is 63 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those
 HTTP endpoints are not MCP tools.
@@ -93,7 +93,7 @@ check `sagefs status` — if it says no daemon is running, start one with
 | `check_fsharp_code` | Type-check a snippet without running it, in the current FSI context. Earlier `send_fsharp_code` definitions are in scope, but namespaces still need an explicit `open`. A "not defined" error here almost always just means you forgot the `open`, nothing more sinister. |
 | `cancel_eval` | Cancel a running evaluation. |
 | `get_daemon_status` | Daemon version, health, memory, process telemetry, and session counts, including with no active session. |
-| `get_session_status` | The selected session's lifecycle, loaded projects, progress, and tools available in the current state. Pass `wait_seconds` (default 0, capped at 60) to wait for a warming session to become Ready instead of polling; the `wait` field in the reply says how it ended (`NotNeeded`, `BecameReady`, `Faulted`, `TimedOut`). `lastReload` says what the last save did: a patch reads `PatchPending` until the new code has been seen running, then `Patched`, or `NeverEntered` if the bound passed first. See [Hot Reload](hot-reload.md#what-patched-means). |
+| `get_session_status` | The selected session's lifecycle, loaded projects, progress, and tools available in the current state. Pass `wait_seconds` (default 0, capped at 60) to wait for a warming session to become Ready instead of polling; the `wait` field in the reply says how it ended (`NotNeeded`, `BecameReady`, `Faulted`, `TimedOut`). `lastReload` says what the last save did: a patch reads `PatchPending` until the new code has been seen running, then `Patched`, or `NeverEntered` if the bound passed first. See [Hot Reload](hot-reload.md#what-patched-means). `replFreshness` says whether the REPL and live tests run the build the app runs: `InSync`, or `BehindApp` with the number of saves and what was patched, after an app started with `run_app` was patched in place. `send_fsharp_code`, `check_fsharp_code`, `run_tests` and `list_sessions` say it too, after their results. |
 | `get_recent_fsi_events` | Recent evals, errors, and loads with timestamps. |
 
 ## Sessions and lifecycle
@@ -162,7 +162,6 @@ the final gate before you push.
 | `plan_ripple` | Plan cascade re-evaluation for changed cells using the live dependency graph. |
 | `preview_what_if` | Preview what would change if a binding had a different value, without executing. |
 | `decompose_pipeline` | Break an F# pipeline into stages, each classified pure / effectful / unknown. |
-| `visualize_domain_model` | Draw a union type as a state machine: an ASCII diagram plus JSON. Each state's `Fields` is a list of `[name, type]` pairs. |
 | `get_cell_dependencies` | The cell dependency graph with staleness annotations. |
 | `discover_features` | Context-aware feature discovery, ranked by relevance to the session state. |
 
@@ -191,6 +190,47 @@ sounds like a chore anyway.
 | `report_friction` | Record structured feedback about a confusing tool call. |
 | `manage_local_data` | See what SageFs stores under its data dir (rows, bytes, oldest row, retention rules), or clear it. |
 
+## Leases for expensive work
+
+A full build, a test suite and an app run each cost real memory. One night five
+agents did one each against a single daemon and nothing coordinated them, so
+the daemon's memory was already high by the time it could tell. An agent that
+starts one of these itself asks for a lease first and gets back Granted, Wait
+with a retry time, or Refused. SageFs's own session creation and
+`hard_reset_fsi_session rebuild=true` take their own leases, so an agent doesn't
+lease those. The full rules, for an agent, are in
+[`skills/sagefs/leases.md`](../skills/sagefs/leases.md).
+
+| Tool | What it does |
+|:---|:---|
+| `acquire_full_build_lease` | A lease for a full `dotnet build` you start yourself. |
+| `acquire_test_suite_lease` | A lease for a test-suite process you start yourself (`dotnet run --project <tests>` or `dotnet test`). SageFs has no tool that runs your suite for you. It runs its own tests through the live-testing engine, and you read them with `list_tests` or `run_tests`. |
+| `acquire_run_app_lease` | A lease for a run-app process you start yourself. SageFs's own `run_app` is a different thing and needs no lease from you. |
+| `release_work_lease` | Release a lease by the id a granted acquisition returned. A lease held by another connection is never released. |
+
+A lease that is never released is reclaimed when it expires, so an agent that
+crashes can't hold a slot forever.
+
+## Workspace hygiene
+
+Agents and orchestrators leave things behind: worktrees, merged branches, the
+gate's checkouts, built FSI hosts, test temp dirs, orphaned processes. These
+two tools show it and tidy the part that is safe. They are about the
+repository and the disk, not a session, so they work before one exists.
+`sagefs hygiene` prints the same plan from a shell, and `sagefs hygiene --tidy`
+runs the safe part of it. Both take `--repo PATH` for a repository you are not
+standing in.
+
+| Tool | What it does |
+|:---|:---|
+| `get_workspace_hygiene` | A dry run. Lists each leftover with its size, age, who made it and a standing that says why it is or is not safe to reclaim, then the plan: safe to reclaim, needs a look (with the command that saves the work first), and left alone with the reason. Ends with a plan id. |
+| `tidy_workspace` | Runs the safe part of that plan. Needs `confirm=true` and the plan id you were shown. Each step looks at its target again first and skips anything that became busy. Never touches unmerged commits, uncommitted work, anything in use, or anything it could not judge. |
+
+`create_*_session`, `get_session_status` and `get_daemon_status` add one line
+when a repo has more than a handful of leftover worktrees or the gate dir has
+grown past a threshold: `workspace: N leftover worktrees (X GB), M safe to
+reclaim: call get_workspace_hygiene`.
+
 ## Cohort and multi-agent coordination
 
 For running several agents against one repo at once. One implicit cohort per
@@ -202,12 +242,37 @@ Two connections that pass the same name are still two different members.
 |:---|:---|
 | `join_cohort` | Join the daemon's shared coordination session. The first joiner becomes conductor. |
 | `leave_cohort` | Leave. Any claims you still hold are orphaned (the conductor must reassign them). |
-| `get_cohort_status` | Members, claims and fences, the test matrix, and the landing queue. Wait-free: reads a published snapshot. Also available on the `cohort://status` MCP resource for subscription. |
+| `get_cohort_status` | Members, claims and fences, the test matrix, the landing queue, and what the trunk did with each landing (see below). Wait-free: reads a published snapshot. The `cohort://status` MCP resource is the frame as JSON for subscription, and doesn't carry the trunk lines. |
 | `acquire_claim` | Take an exclusive claim over a file or project (`file:<path>` or `project:<path>`) so others know it's yours to edit. |
 | `release_claim` | Release a claim you hold. The presented fence must match the current one. |
 | `reassign_claim` | Conductor-only: reassign an orphaned claim to a present member. |
 | `request_landing` | Queue a landing: your commits are rebased onto the integration head, verified against affected tests, and fast-forwarded in. Landings are strictly serial (one FIFO queue). |
-| `set_integration_ref` | Conductor-only: configure the git ref that landings rebase onto, in a dedicated integration worktree. |
+| `set_integration_ref` | Conductor-only: configure the git ref that landings rebase onto, in a dedicated integration worktree, and the trunk checkout the landings are carried to. The reply names both (`worktree=` and `trunk=`). |
+
+### The trunk
+
+A landing that lands is carried into the app the trunk runs. The **trunk checkout** is a daemon-owned git worktree
+(`cohort-trunk` under the data dir, detached) that `set_integration_ref` creates beside the integration worktree. After a
+landing has landed, and only then, the daemon moves the trunk checkout to the landing's commit. A **trunk session** is a
+session whose working directory is that checkout: start one with `create_project_session` (`workflow` `hotreload`) and
+`run_app`. When it runs an app, the daemon tells its worker which files the landing changed and the worker runs the same save
+pipeline a person's save takes. The app serves the landing without a restart and keeps its in-memory state, or restarts and
+says why.
+
+`get_cohort_status` ends with one line per landing:
+
+```
+Trunk: checkout=/data/cohort-trunk landings (2):
+  trunk l-4f2a...: session c5121ff3: no running app to update (the trunk checkout holds the landing; rebuild the session before run_app, so the app starts from it)
+  trunk l-9be1...: session c5121ff3: Alice.fs PatchPending by metadata-delta
+```
+
+The case (`PatchPending`, `Patched`, `Restarted`, `RestartRequired`, `NoEffect`, `CompileFailed`) and the mechanism (`detour`,
+`metadata-delta`) are the ones `get_session_status` reports in `lastReload`. A patch is `PatchPending` until its new body has
+run, and the line changes to `Patched` when the worker says it has seen that. A restart names its cause on the line. A
+landing that was blocked, withdrawn or is still being verified never reaches the trunk, and a trunk session that runs no app
+only records the landing. A worker in a trunk session takes its saves from landings only, so a save a person makes in the
+trunk checkout is not hot reloaded there.
 
 ## Per-client config
 

@@ -54,7 +54,7 @@ let private warmingInfo : SessionInfo =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
+    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 let private readyInfo : SessionInfo =
   let readyRole : ClassifiedProject =
@@ -74,7 +74,7 @@ let private readyInfo : SessionInfo =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = [ readyRole ]
-    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
+    App = SageFs.AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 let private ctxFor (info: SessionInfo) : McpContext =
   let diagEvent = Event<SageFs.Features.DiagnosticsStore.T>()

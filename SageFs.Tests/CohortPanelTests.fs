@@ -134,6 +134,7 @@ let cohortPanelTests =
           ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
           BindingsPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
           CohortPanel = cohortPanel
+          HygienePanel = Elem.div [] []
           ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning
           EvalToPixelP50Ms = None; EvalToPixelP99Ms = None }
       let html = renderMainContent snap |> render

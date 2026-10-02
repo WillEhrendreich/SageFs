@@ -2,7 +2,7 @@
 
 **Version**: 1.1
 **Date**: 2026-03-02
-**Formats**: `.sagefm` v1 (daemon session manifest — the durable session registry), `.sagetc` v1 (test cache). (`.sagefs` v3 below is the historical per-session format; it is retained in the codebase but is no longer written in production — the daemon manifest is the durable session state.)
+**Formats**: `.sagefm` v1 (daemon session manifest — the durable session registry), `.sagetc` (test cache; the writer in `SageFs.Core/Features/TestCachePersistence.fs` writes format version 3 with a minimum reader version of 1, and section 3 describes what it writes today). (`.sagefs` v3 below is the historical per-session format; it is retained in the codebase but is no longer written in production — the daemon manifest is the durable session state.)
 
 ---
 
@@ -349,7 +349,9 @@ binding_count          u32             Number of bound values
 
 ---
 
-## 3. `.sagetc` v1 — Test Cache Format
+## 3. `.sagetc` — Test Cache Format
+
+> **What changed since the first version of this section.** I wrote this section for format version 1, and the code moved on. The writer now writes **format version 3**: version 2 added outcome codes 5 to 7 (§3.6.1), and version 3 added a fourth section, FLKY (§3.7), with each test's flaky-detection history. Both left `min_reader_version` at 1. A test id is an `lp-string` and a coverage bitmap is made of 64-bit words, where the first draft here said `u32` ids and 32-bit words. This section was checked against `SageFs.Core/Features/TestCachePersistence.fs` on 2026-10-01, which is the authority if the two ever disagree.
 
 > **Rationale — Reuse SFS framing, different magic/tags:** The test cache format reuses the same 64-byte header layout, section directory, CRC scheme, and lp-string encoding as `.sagefs`. This avoids a second binary format implementation and its associated testing burden. The formats differ only in magic bytes (`STC1` vs `SFS3`), section tags, and payload schemas. A single `BinaryFormat` module handles low-level I/O for both.
 
@@ -359,15 +361,19 @@ binding_count          u32             Number of bound values
 ┌──────────────────────────────────────────────────────┐
 │  Header (64 bytes)                                   │
 ├──────────────────────────────────────────────────────┤
-│  Section Directory (3 × 16 bytes = 48 bytes)         │
+│  Section Directory (4 × 16 bytes = 64 bytes)         │
 ├──────────────────────────────────────────────────────┤
 │  Section: IMAP (instrumentation map identity)        │
 ├──────────────────────────────────────────────────────┤
-│  Section: TCOV (test coverage bitmaps)               │
+│  Section: TCOV (test coverage summary)               │
+├──────────────────────────────────────────────────────┤
+│  Section: FLKY (flaky-detection history)             │
 ├──────────────────────────────────────────────────────┤
 │  Section: TRES (test results)                        │
 └──────────────────────────────────────────────────────┘
 ```
+
+The directory lists IMAP, TCOV, TRES and FLKY in that order, but FLKY's bytes sit before TRES's, so the payloads run IMAP, TCOV, FLKY, TRES and TRES stays the last thing in the file.
 
 ### 3.2 Header (64 bytes)
 
@@ -375,13 +381,13 @@ binding_count          u32             Number of bound values
 Offset  Size  Type      Field                 Description
 ──────  ────  ────      ─────                 ───────────
 0x00    4     u8[4]     magic                 "STC1" (0x53, 0x54, 0x43, 0x31)
-0x04    2     u16       format_version        = 1
+0x04    2     u16       format_version        = 3 (the current writer; 1 and 2 are older)
 0x06    2     u16       min_reader_version    = 1
-0x08    4     u32       section_count         = 3
+0x08    4     u32       section_count         = 4
 0x0C    4     u32       flags                 Reserved, must be 0
 0x10    8     i64       created_at_ms         Unix epoch milliseconds
 0x18    8     u64       total_file_size       Total file size in bytes
-0x20    4     u32       test_count            Total test entries (coverage + results)
+0x20    4     u32       test_count            Number of result entries (TRES)
 0x24    4     u32       header_crc32          CRC-32 of entire file (§4)
 0x28    4     u32       imap_generation       Instrumentation map generation counter
 0x2C    20    u8[20]    reserved              Must be zero
@@ -389,7 +395,7 @@ Offset  Size  Type      Field                 Description
 
 ### 3.3 Section Directory Entry (16 bytes)
 
-Located at offset `0x40`. Fixed count of 3 entries = 48 bytes.
+Located at offset `0x40`. The writer writes 4 entries = 64 bytes. A reader takes the count from `section_count` and refuses a count that doesn't fit in the file.
 
 ```
 Offset  Size  Type      Field       Description
@@ -401,13 +407,14 @@ Offset  Size  Type      Field       Description
 
 > **Rationale — STC directory has no size field (known weakness):** STC v1 directory entries are 16 bytes (4 tag + 8 offset + 4 CRC) compared to SFS's 20 bytes (which add an explicit `size:u32`). In STC, section size is computed from the gap between consecutive offsets, with the last section's size computed as `total_file_size - last_offset`. If `total_file_size` in the header is corrupted, the last section's computed size is wrong and may cause out-of-bounds reads. The SFS format's explicit size field is strictly better — it allows validating `offset + size <= total_file_size` per section before any read. This is a known design weakness that is not fixable without a breaking change (STC v2). The CRC check on the full file mitigates the risk: a corrupted `total_file_size` will fail the header CRC, so the file is rejected before the size computation ever runs.
 
-**Section identifiers** (as u32 little-endian):
+**Section identifiers.** The writer stores each tag as a little-endian `u32` whose value, read most significant byte first, spells the four letters. So `IMAP` is the value `0x494D4150`, which is the bytes `50 41 4D 49` in the file. An earlier version of this table listed the byte-swapped values.
 
-| Tag | ASCII | Hex | Description |
-|-----|-------|-----|-------------|
-| IMAP | "IMAP" | 0x50414D49 | Instrumentation map identity |
-| TCOV | "TCOV" | 0x564F4354 | Test coverage bitmaps |
-| TRES | "TRES" | 0x53455254 | Test results |
+| Tag | ASCII | u32 value | Description |
+|-----|-------|-----------|-------------|
+| IMAP | "IMAP" | 0x494D4150 | Instrumentation map identity: each test's coverage bitmap |
+| TCOV | "TCOV" | 0x54434F56 | Coverage summary: probe bits per test |
+| TRES | "TRES" | 0x54524553 | Test results |
+| FLKY | "FLKY" | 0x464C4B59 | Flaky-detection history (format version 3 and later) |
 
 ### 3.4 IMAP Section — Instrumentation Map Identity
 
@@ -418,12 +425,12 @@ Field                  Type            Description
 ─────                  ────            ───────────
 entry_count            u32             Number of coverage entries
 [repeated entry_count times:]
-  test_id              u32             Test identifier
-  bitmap_word_count    u32             Number of u32 bitmap words
-  bitmap_words         u32[N]          Coverage bitmap (N = bitmap_word_count)
+  test_id              lp-string       Test identifier
+  bitmap_word_count    u32             Number of u64 bitmap words
+  bitmap_words         u64[N]          Coverage bitmap (N = bitmap_word_count)
 ```
 
-Each bit in a bitmap word represents one instrumentation probe. Bit 0 of word 0 is probe 0, bit 31 of word 0 is probe 31, bit 0 of word 1 is probe 32, etc.
+Each bit in a bitmap word represents one instrumentation probe. Bit 0 of word 0 is probe 0, bit 63 of word 0 is probe 63, bit 0 of word 1 is probe 64, etc.
 
 ### 3.5 TCOV Section — Coverage Summary
 
@@ -432,8 +439,8 @@ Field                  Type            Description
 ─────                  ────            ───────────
 entry_count            u32             Number of entries
 [repeated entry_count times:]
-  test_id              u32             Test identifier
-  total_probe_bits     u32             Total number of probes (= bitmap_word_count × 32)
+  test_id              lp-string       Test identifier
+  total_probe_bits     u32             Total number of probes (= bitmap_word_count × 64)
 ```
 
 ### 3.6 TRES Section — Test Results
@@ -445,7 +452,7 @@ Field                  Type            Description
 ─────                  ────            ───────────
 entry_count            u32             Number of result entries
 [repeated entry_count times:]
-  test_id              u32             Test identifier
+  test_id              lp-string       Test identifier
   outcome              u8              Test outcome (§3.6.1)
   duration_ms          u32             Test duration in milliseconds
   message              lp-string-option  Result message (§1.3)
@@ -475,6 +482,22 @@ writer stored). The v2 reader continues to decode legacy byte 1 as
 `AssertionFailed`, exactly matching what v1 writers produced. A `TimedOut`
 entry's timeout span is carried in the message string ("Timed out after
 `<N>s`") so the kind and duration both round-trip.
+
+### 3.7 FLKY Section — Flaky-Detection History
+
+Added in format version 3. Flaky detection keeps a small circular window of recent pass/fail samples for each test, and an earlier cache dropped those windows on every restart, which silently reset what the detector had learned. This section stores each window exactly, so the write index, the count and every slot come back as they were. The reader treats a missing FLKY section (a cache written before version 3) as an empty history and not an error. A FLKY section that is present has to pass its CRC like any other.
+
+```
+Field                  Type            Description
+─────                  ────            ───────────
+entry_count            u32             Number of entries (tests with a non-empty window)
+[repeated entry_count times:]
+  test_id              lp-string       Test identifier
+  window_size          u32             Number of slots in the circular window
+  write_index          u32             Next slot to write (never above window_size)
+  count                u32             Samples held (never above window_size)
+  outcomes             u8[window_size] Every slot: 0 = Pass, 1 = Fail
+```
 
 ---
 
@@ -561,14 +584,14 @@ A reader with version `R` can read a file if `R >= min_reader_version`.
 
 ### 5.3 Format Differences Summary
 
-| Aspect               | `.sagefs` v3                             | `.sagetc` v1                |
+| Aspect               | `.sagefs` v3                             | `.sagetc` (writer v3)       |
 | -------------------- | ---------------------------------------- | --------------------------- |
 | Magic                | `SFS3` (0x33534653)                      | `STC1` (0x31435453)         |
 | Header size          | 64 bytes                                 | 64 bytes                    |
 | Directory entry size | 20 bytes (tag, flags, offset, size, crc) | 16 bytes (tag, offset, crc) |
-| Section count        | Variable (3–5+)                          | Fixed: 3                    |
-| Required sections    | META, INPT, REFS                         | IMAP, TCOV, TRES            |
-| Optional sections    | PROF, BIND                               | None                        |
+| Section count        | Variable (3–5+)                          | 4 as written                |
+| Required sections    | META, INPT, REFS                         | IMAP, TRES                  |
+| Optional sections    | PROF, BIND                               | FLKY (and TCOV is written but not needed to read) |
 | Compression support  | Yes (per-section zstd)                   | No                          |
 | String deduplication | Optional (DDUP)                          | N/A                         |
 | Stride extensibility | Yes (toc_entry_stride)                   | N/A                         |

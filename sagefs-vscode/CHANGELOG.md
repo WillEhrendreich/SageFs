@@ -1,5 +1,7 @@
 # Changelog
 
+> **This file stopped at 0.6.43, and I don't keep it by hand anymore.** The extension is versioned with SageFs itself, and it is at 0.6.875 as I write this (2026-10-01). What changed in each release is in the notes on the [GitHub Releases](https://github.com/WillEhrendreich/SageFs/releases) page, which are generated from the commit history. For the story of the newer features, debugging a failing test from the editor among them, see [what SageFs has become](https://github.com/WillEhrendreich/SageFs/blob/master/docs/progress.md). The entries below are what I wrote at the time.
+
 ## 0.6.43
 
 ### New Features

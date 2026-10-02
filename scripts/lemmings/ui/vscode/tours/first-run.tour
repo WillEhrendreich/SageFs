@@ -1,0 +1,19 @@
+# First run: the extension has just activated and there is no session of mine yet.
+# What a new user sees in the first minute, at three sizes.
+resize 1280 800
+expect-text SageFs
+shot activated-1280x800
+
+# The SageFs views take about ten seconds to register after activation.
+wait 12
+click SageFs
+wait 2
+shot views-1280x800 --region sidebar --region statusbar --region activitybar
+
+resize 1024 700
+wait 1
+shot views-1024x700 --region sidebar
+
+resize 1920 1080
+wait 1
+shot views-1920x1080 --region sidebar --region editor

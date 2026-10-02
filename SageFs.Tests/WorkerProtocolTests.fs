@@ -401,7 +401,7 @@ let workerProtocolTests =
 
           App = SageFs.AppRun.AppRunState.NotRunning
           Rebuild = LastRebuild.NeverRebuilt
-          Reload = SessionReload.NoReloadYet
+          Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
         }
         SessionInfo.displayName info
@@ -425,7 +425,7 @@ let workerProtocolTests =
 
           App = SageFs.AppRun.AppRunState.NotRunning
           Rebuild = LastRebuild.NeverRebuilt
-          Reload = SessionReload.NoReloadYet
+          Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
         }
         SessionInfo.displayName info
@@ -484,7 +484,7 @@ let workerProtocolTests =
 
           App = SageFs.AppRun.AppRunState.NotRunning
           Rebuild = LastRebuild.NeverRebuilt
-          Reload = SessionReload.NoReloadYet
+          Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
         }
         let _, result = roundTrip<SessionInfo> info

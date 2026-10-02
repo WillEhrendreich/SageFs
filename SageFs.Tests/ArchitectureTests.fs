@@ -1267,7 +1267,10 @@ let fileSizeBudgets =
       // WorkerPostReady.fs. Still 68 under where the WorkerReady split started.
       // 1672 -> 1676: the health probe hands the worker's reported status to the registry sync
       // (WorkerHealthProbe.syncRegistry), and a HostCrashed arm in the ready-waiter settle.
-      "SageFs.Core/SessionManager.fs", 1676 ]
+      // 1676 -> 1599: awaitWorkerPort's reading and timing moved to WorkerStartup.fs (about 180 lines), net of
+      // the start-timeout handler, the ledger in the runtime and the first attempt's budget. The decision the
+      // handler carries out is StartTimeoutDecision.fs.
+      "SageFs.Core/SessionManager.fs", 1599 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->

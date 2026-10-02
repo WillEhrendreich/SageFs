@@ -44,7 +44,7 @@ let private session (workflow: WorkflowTypes.SessionWorkflow) (projects: Classif
     Workflow = workflow
     ActiveProject = None
     ProjectRoles = projects
-    App = app; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet }
+    App = app; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 let private webLive = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults
 let private interactive = WorkflowTypes.SessionWorkflow.Interactive
@@ -616,7 +616,8 @@ let ownerMailboxTests =
       let cancellation = new System.Threading.CancellationTokenSource()
       let runtime : SessionManager.SessionManagerRuntime =
         { StartWorkerProcess = fun _ _ _ _ _ _ -> Ok ({ Process = System.Diagnostics.Process.GetCurrentProcess(); AdoptedCore = None } : SessionManager.SpawnedWorker)
-          AwaitWorkerPort = fun _ _ _ _ -> ()
+          AwaitWorkerPort = fun _ _ _ _ _ -> ()
+          Ledger = StartLedger.closed
           StopWorker = fun _ -> async { return () }
           RunBuildAsync = fun _ _ -> async { return Ok "built" } }
       let mailbox, _ =

@@ -43,7 +43,7 @@ let private infoWith (sid: string) (status: SessionLifecycleStatus) (workflow: W
     ProjectRoles = []
     App = AppRun.AppRunState.NotRunning
     Rebuild = LastRebuild.NeverRebuilt
-    Reload = SessionReload.NoReloadYet }
+    Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 let private ctxFor (infos: SessionInfo list) (proxy: SessionProxy option) (switchResult: Result<string, SageFsError>) : McpContext =
   let ops : SessionManagementOps =
@@ -100,7 +100,7 @@ let tests =
       let! text = getSessionStatus ctx "agent" (Some "aa11bb22") None
       text
       |> Expect.equal "WarmingUp payload"
-           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"lastReload":null,"lastRestart":null,"lifecycle":"Starting","loadedProjects":[],"scope":"Session","sessionId":"aa11bb22","state":"WarmingUp","target":[{"kind":"Bare","path":null}],"workerPid":4242,"workerPort":45000,"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
+           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"lastReload":null,"lastRestart":null,"lifecycle":"Starting","loadedProjects":[],"replFreshness":{"state":"InSync"},"scope":"Session","sessionId":"aa11bb22","state":"WarmingUp","target":[{"kind":"Bare","path":null}],"workerPid":4242,"workerPort":45000,"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
     }
 
     testTask "WHY — a faulted session writes the Faulted shape with the reason" {
@@ -109,7 +109,7 @@ let tests =
       let! text = getSessionStatus ctx "agent" (Some "cc33dd44") None
       text
       |> Expect.equal "Faulted payload"
-           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","reset_fsi_session","hard_reset_fsi_session","decompose_pipeline"],"faultReason":"warmup failed","lastReload":null,"lastRestart":null,"loadedProjects":[],"scope":"Session","sessionId":"cc33dd44","state":"Faulted","target":[{"kind":"Bare","path":null}],"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
+           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","reset_fsi_session","hard_reset_fsi_session","decompose_pipeline"],"faultReason":"warmup failed","lastReload":null,"lastRestart":null,"loadedProjects":[],"replFreshness":{"state":"InSync"},"scope":"Session","sessionId":"cc33dd44","state":"Faulted","target":[{"kind":"Bare","path":null}],"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
     }
 
     testTask "WHY — a ready session with no worker proxy is reported as WarmingUp, lifecycle as it is" {
@@ -118,7 +118,7 @@ let tests =
       let! text = getSessionStatus ctx "agent" (Some "ee55ff66") None
       text
       |> Expect.equal "unroutable payload"
-           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"lastReload":null,"lastRestart":null,"lifecycle":"Ready","loadedProjects":[],"scope":"Session","sessionId":"ee55ff66","state":"WarmingUp","target":[{"kind":"Bare","path":null}],"workerPid":4242,"workerPort":45000,"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
+           """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"lastReload":null,"lastRestart":null,"lifecycle":"Ready","loadedProjects":[],"replFreshness":{"state":"InSync"},"scope":"Session","sessionId":"ee55ff66","state":"WarmingUp","target":[{"kind":"Bare","path":null}],"workerPid":4242,"workerPort":45000,"wait":{"outcome":"NotNeeded","waitedMs":0}}"""
     }
 
     testTask "WHY — renderWarmingOrFaulted writes each of its four shapes" {
@@ -133,8 +133,8 @@ let tests =
       [ warmingText |> without [ "elapsedSeconds" ]; faultedText; defensiveText; goneText ]
       |> String.concat "\n"
       |> equalJson "the four shapes"
-           ("""{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"boundSeconds":720,"inactivityBoundSeconds":30,"message":"Session \\u0027a0a0a0a0\\u0027 is still warming up (Starting). This typically takes 15-30s for test projects. Call get_session_status with wait_seconds=60 to wait for readiness; do not sleep or poll. Do NOT create a new session \\u2014 it will compete for resources and make warmup slower.","progress":null,"sessionId":"a0a0a0a0","state":"Rebuilding","status":"Starting"}""" + "\n"
-            + """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","reset_fsi_session","hard_reset_fsi_session","decompose_pipeline"],"faultReason":"warmup failed","message":"Session \\u0027a0a0a0a0\\u0027 is faulted. Why: warmup failed\nRun reset_fsi_session or hard_reset_fsi_session to recover.","sessionId":"a0a0a0a0","state":"Faulted"}""" + "\n"
+           ("""{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"boundSeconds":720,"inactivityBoundSeconds":30,"machineTier":"Fast","message":"Session \\u0027a0a0a0a0\\u0027 is still warming up (Starting). This typically takes 15-30s for test projects. Call get_session_status with wait_seconds=60 to wait for readiness; do not sleep or poll. Do NOT create a new session \\u2014 it will compete for resources and make warmup slower.","progress":null,"sessionId":"a0a0a0a0","state":"Rebuilding","status":"Starting"}""" + "\n"
+            + """{"available":["get_session_status","get_recent_fsi_events","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","reset_fsi_session","hard_reset_fsi_session","decompose_pipeline"],"faultReason":"warmup failed","machineTier":"Fast","message":"Session \\u0027a0a0a0a0\\u0027 is faulted. Why: warmup failed\nRun reset_fsi_session or hard_reset_fsi_session to recover.","sessionId":"a0a0a0a0","state":"Faulted"}""" + "\n"
             + """{"message":"","sessionId":"a0a0a0a0","state":"Rebuilding"}""" + "\n"
             + """{"message":"no such session","state":"NoSession"}""")
     }

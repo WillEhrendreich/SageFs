@@ -1,4 +1,4 @@
-﻿module SageFs.Tests.SessionOperationsTests
+module SageFs.Tests.SessionOperationsTests
 
 open System
 open Expecto
@@ -24,7 +24,7 @@ let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo =
 
   App = SageFs.AppRun.AppRunState.NotRunning
   Rebuild = LastRebuild.NeverRebuilt
-  Reload = SessionReload.NoReloadYet
+  Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
 }
 
@@ -175,7 +175,7 @@ let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) (pid: in
 
   App = SageFs.AppRun.AppRunState.NotRunning
   Rebuild = LastRebuild.NeverRebuilt
-  Reload = SessionReload.NoReloadYet
+  Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync
 
 }
 
@@ -213,6 +213,28 @@ let formatSessionInfoTests = testList "formatSessionInfo" [
     let s = mkSessionWithPid sid (now.AddDays(-2.0)) SessionStatus.Ready (Some 1)
     let output = formatSessionInfo now None s
     Expect.stringContains "says days ago" "2 days ago" output
+  }
+  test "WHY - a session whose REPL is behind its app says so on its own line in list_sessions, with what to do" {
+    let sid = testSessionId "ee000001"
+    let s = { mkSessionWithPid sid now SessionStatus.Ready (Some 1) with Freshness = ReplFreshness.BehindApp (2, [ "Handlers.describe" ]) }
+    let output = formatSessionInfo now None s
+    Expect.stringContains "says behind" "BEHIND" output
+    Expect.stringContains "says what to do" "hard_reset_fsi_session" output
+    Expect.stringContains "names what changed" "Handlers.describe" output
+  }
+  test "WHY - a level session has no such line, so the list stays as quiet as it was" {
+    let sid = testSessionId "ee000002"
+    let s = mkSessionWithPid sid now SessionStatus.Ready (Some 1)
+    let output = formatSessionInfo now None s
+    Expect.isFalse "no warning" (output.Contains "BEHIND")
+  }
+  test "WHY - the JSON read model of the session list carries the state for every session, level or not" {
+    let behind = { mkSessionWithPid (testSessionId "ee000003") now SessionStatus.Ready (Some 1) with Freshness = ReplFreshness.BehindApp (1, [ "A.f" ]) }
+    let level = mkSessionWithPid (testSessionId "ee000004") now SessionStatus.Ready (Some 1)
+    use doc = System.Text.Json.JsonDocument.Parse(SessionOperations.sessionsToJson (Json.optionsOf Json.camelCase) [ behind; level ])
+    let states =
+      [ for row in doc.RootElement.GetProperty("sessions").EnumerateArray() -> row.GetProperty("replFreshness").GetProperty("state").GetString() ]
+    Expect.equal "one behind, one in sync" [ "BehindApp"; "InSync" ] states
   }
 ]
 

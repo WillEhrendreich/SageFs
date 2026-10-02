@@ -66,6 +66,20 @@ let routeMappingTests =
       method |> Expect.equal "method" "POST"
       path |> Expect.equal "path" "/hard-reset"
 
+    testCase "SetSaveSource maps to POST /save-source" <| fun _ ->
+      let method, path, body =
+        WorkerHttpTransport.toRoute (WorkerMessage.SetSaveSource(SageFs.Features.TrunkFollow.SaveSource.LandedOnly, "ss1"))
+      method |> Expect.equal "method" "POST"
+      path |> Expect.equal "path" "/save-source"
+      body |> Expect.isSome "the source travels in the body"
+
+    testCase "ApplySaves maps to POST /apply-saves" <| fun _ ->
+      let method, path, body =
+        WorkerHttpTransport.toRoute (WorkerMessage.ApplySaves([], "as1"))
+      method |> Expect.equal "method" "POST"
+      path |> Expect.equal "path" "/apply-saves"
+      body |> Expect.isSome "the files travel in the body"
+
     testCase "Shutdown maps to POST /shutdown" <| fun _ ->
       let method, path, body =
         WorkerHttpTransport.toRoute WorkerMessage.Shutdown
@@ -126,6 +140,10 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.LiveValuesResult(rid, "{}")
   | WorkerMessage.EvaluateLiveMember(_, _, rid) ->
     return WorkerResponse.LiveMemberResult(rid, "{}")
+  | WorkerMessage.SetSaveSource(source, rid) ->
+    return WorkerResponse.SaveSourceSet(rid, source)
+  | WorkerMessage.ApplySaves(_, rid) ->
+    return WorkerResponse.SavesApplied(rid, SageFs.Features.TrunkFollow.SessionOutcome.Delivered [])
   | WorkerMessage.Shutdown ->
     return WorkerResponse.WorkerShuttingDown
 }

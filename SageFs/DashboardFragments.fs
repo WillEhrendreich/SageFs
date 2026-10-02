@@ -1636,6 +1636,16 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Attr.style (sprintf "font-size: 0.7rem; font-weight: bold; overflow-wrap: anywhere; margin-top: 2px; color: %s;" color) ]
                   [ textEnc line ]
               | None -> ()
+              // The REPL runs the build from before a patch the app took, so a call to what changed runs the OLD code. Its own
+              // line in the card's single column, always visible, never behind a hover: a REPL that lies silently is the failure.
+              match s.Freshness with
+              | ReplFreshness.InSync -> ()
+              | ReplFreshness.BehindApp _ ->
+                Elem.div
+                  [ Attr.class' "session-card-freshness"
+                    testid "session-card-freshness"
+                    Attr.create "role" "status" ]
+                  [ textEnc (ReplFreshness.banner s.Freshness) ]
               // Self-host staleness (F5b): this session adopted its own
               // SageFs.Core build and a newer one has since landed on disk —
               // its own line so it never cramps the badges, wrapping at any
@@ -2328,6 +2338,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             snap.SessionContextPanel
             snap.FrictionPanel
             snap.CohortPanel
+            snap.HygienePanel
           ]
           signalDetails
             Signals.NewSessionOpen
@@ -3146,6 +3157,41 @@ let renderCohortLanesPanel (ledgerEntries: SageFs.Cohort.LedgerEntry<MemberTable
       ]
     ]
 
+/// What the trunk did with each landing that landed: whether the trunk session's running app took it, by which mechanism, and what
+/// the save pipeline said (a patch pending until its new body has run, a restart and the cause it names). A landing the trunk is
+/// following or has queued is listed as such. Renders nothing before the first landing lands, like the lane view.
+let renderTrunkPanel (machine: Features.TrunkFollow.TrunkMachine) : XmlNode =
+  let landingText (SageFs.Cohort.LandingId id) = id
+  let landings = machine.Records |> List.rev
+  let inFlight =
+    match machine.Phase with
+    | Features.TrunkFollow.Phase.Idle -> []
+    | Features.TrunkFollow.Phase.Moving l -> [ landingText l.Landing, "following: moving the trunk checkout" ]
+    | Features.TrunkFollow.Phase.Delivering (l, _, waiting, _) ->
+      [ landingText l.Landing, sprintf "following: waiting on session %s" (String.concat ", " waiting) ]
+  let queued = machine.Queued |> List.map (fun l -> landingText l.Landing, "queued behind the landing in flight")
+  match landings, inFlight, queued with
+  | [], [], [] -> Elem.div [] []
+  | _ ->
+    let count = List.length landings
+    signalDetails Signals.CohortTrunkOpen [ Attr.id DomIds.CohortTrunk; Attr.class' "panel"; Attr.style "margin-top: 0.4rem;" ] [
+      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
+        textEnc (sprintf "Trunk: %d landing%s followed" count (if count = 1 then "" else "s"))
+      ]
+      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
+        for id, text in inFlight @ queued do
+          Elem.li [ Attr.style "overflow-wrap: anywhere;" ] [
+            Elem.div [] [ textEnc id ]
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [ textEnc text ]
+          ]
+        for record in landings do
+          Elem.li [ Attr.style "overflow-wrap: anywhere;" ] [
+            Elem.div [] [ textEnc (sprintf "%s at %s" (landingText record.Landing) (record.Commit.Substring(0, min 8 record.Commit.Length))) ]
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [ textEnc (Features.TrunkFollow.describeVerdict record.Verdict) ]
+          ]
+      ]
+    ]
+
 /// §6.5's time-scrubber (Phase 2 item 16): "the scrubber over a CohortFrame
 /// SnapshotRing with per-tab Viewing and `f` = `fork_cohort` at the viewed
 /// seq". See `CohortScrubber.fs`'s module doc for why no `SnapshotRing`/
@@ -3820,3 +3866,167 @@ let sessionCreateResultInfo (msg: string) =
   ]
 
 
+
+// ─── Workspace hygiene ────────────────────────────────────────────────────
+//
+// What agents and orchestrators left behind on the machine, and the plan that would tidy it. Rendered from the
+// daemon's cached scan, so it adds nothing to a push. The panel is one node with a stable id: a scan or a tidy
+// patches it in place for instant feedback, and the one whole-page morph carries the same markup, so the two can
+// never disagree.
+
+/// The risk classes in the order a reader wants them: what can go, then what needs a look, then what was left alone.
+let private hygieneRiskOrder : WorkspaceHygiene.Risk list =
+  [ WorkspaceHygiene.Risk.Safe
+    WorkspaceHygiene.Risk.UnmergedCommits
+    WorkspaceHygiene.Risk.UncommittedWork
+    WorkspaceHygiene.Risk.Unverifiable
+    WorkspaceHygiene.Risk.Busy ]
+
+let private hygieneRiskId (risk: WorkspaceHygiene.Risk) : string =
+  match risk with
+  | WorkspaceHygiene.Risk.Safe -> "safe"
+  | WorkspaceHygiene.Risk.UnmergedCommits -> "unmerged"
+  | WorkspaceHygiene.Risk.UncommittedWork -> "uncommitted"
+  | WorkspaceHygiene.Risk.Unverifiable -> "unverifiable"
+  | WorkspaceHygiene.Risk.Busy -> "busy"
+
+let private hygieneButton (id: string) (label: string) (action: string option) : XmlNode =
+  let common = [ Attr.id id; Attr.class' "eval-btn"; Attr.style "font-size: 0.8rem; flex: 0 1 auto;" ]
+  match action with
+  | Some post -> Elem.button (common @ [ Ds.onClick post ]) [ textEnc label ]
+  | None -> Elem.button (common @ [ Attr.create "disabled" "disabled" ]) [ textEnc label ]
+
+let private hygieneRow (step: WorkspaceHygiene.Step) : XmlNode =
+  let entry = WorkspaceHygiene.Leftover.entry step.Target
+  Elem.li [ Attr.style "display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.15rem 0.5rem; min-width: 0; overflow-wrap: anywhere;" ] [
+    Elem.span [ Attr.style "font-family: var(--font-mono, monospace); font-size: 0.72rem;" ] [
+      textEnc (WorkspaceHygieneRender.label step.Target)
+    ]
+    Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; white-space: nowrap;" ] [
+      textEnc (sprintf "%s · %s" (WorkspaceHygieneRender.formatBytes entry.SizeBytes) (WorkspaceHygieneRender.formatAge entry.Age))
+    ]
+    Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; flex: 1 1 14rem;" ] [ textEnc step.Reason ]
+    match step.Risk, step.Command with
+    | WorkspaceHygiene.Risk.Safe, _
+    | _, "" -> ()
+    | _, command ->
+      Elem.code [ Attr.style "flex: 1 1 100%; font-size: 0.68rem; color: var(--fg-dim); overflow-wrap: anywhere;" ] [ textEnc command ]
+  ]
+
+let private hygieneGroup (risk: WorkspaceHygiene.Risk) (steps: WorkspaceHygiene.Step list) : XmlNode =
+  Elem.details
+    [ Attr.id (sprintf "hygiene-group-%s" (hygieneRiskId risk)); Ds.preserveAttr "open"; Attr.style "min-width: 0;" ]
+    [ Elem.summary [ Attr.style "cursor: pointer; font-size: 0.78rem; user-select: none;" ] [
+        textEnc (sprintf "%s (%d)" (WorkspaceHygieneRender.Risk.describe risk |> fun d -> d.Substring(0, 1).ToUpperInvariant() + d.Substring 1) (List.length steps))
+      ]
+      Elem.div [ Attr.style "display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.3rem; min-width: 0;" ] [
+        for kind in WorkspaceHygiene.Kind.all do
+          let ofKind = steps |> List.filter (fun s -> WorkspaceHygiene.Leftover.kind s.Target = kind)
+          match ofKind with
+          | [] -> ()
+          | _ ->
+            let sorted = ofKind |> List.sortByDescending (fun s -> (WorkspaceHygiene.Leftover.entry s.Target).SizeBytes)
+            let shown = sorted |> List.truncate WorkspaceHygieneRender.Limits.itemsPerGroup
+            let total = ofKind |> List.sumBy (fun s -> (WorkspaceHygiene.Leftover.entry s.Target).SizeBytes)
+            Elem.div [ Attr.style "min-width: 0;" ] [
+              Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] [
+                textEnc (sprintf "%s × %d, %s" (WorkspaceHygiene.Kind.describe kind) (List.length ofKind) (WorkspaceHygieneRender.formatBytes total))
+              ]
+              Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; display: flex; flex-direction: column; gap: 0.25rem;" ] [
+                for step in shown -> hygieneRow step
+              ]
+              match List.length sorted - List.length shown with
+              | 0 -> ()
+              | more -> Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [ textEnc (sprintf "...and %d more" more) ]
+            ]
+      ]
+    ]
+
+let private hygieneTidiedBanner (summary: HygieneService.TidySummary) : XmlNode =
+  Elem.div [ Attr.id "hygiene-tidied"; Attr.class' "output-line output-info"; Attr.style "font-size: 0.78rem;" ] [
+    textEnc (
+      sprintf "Tidied: %d removed (%s reclaimed), %d already gone, %d skipped, %d failed."
+        summary.Removed (WorkspaceHygieneRender.formatBytes summary.ReclaimedBytes) summary.AlreadyGone summary.Skipped summary.Failed)
+  ]
+
+/// The hygiene panel for one view. The tidy control reflects the state: with something safe to reclaim it says how
+/// many and how much and carries the plan it will run; with nothing it says so and does nothing.
+let renderHygienePanel (view: HygieneService.HygieneView) : XmlNode =
+  let panel (title: string) (body: XmlNode list) : XmlNode =
+    signalDetails
+      Signals.HygienePanelOpen
+      [ Attr.id DomIds.HygienePanel; Attr.class' "panel hygiene-panel"; Attr.style "margin-top: 0.5rem;" ]
+      [ Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
+          Text.raw "🧹 "
+          textEnc title
+        ]
+        Elem.div [ Attr.style "margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; min-width: 0;" ] body ]
+  let meta (id: string) (text: string) : XmlNode =
+    Elem.div [ Attr.id id; Attr.class' "meta"; Attr.style "font-size: 0.78rem;" ] [ textEnc text ]
+  match view with
+  | HygieneService.HygieneView.NoRepository ->
+    panel "Workspace hygiene" [ meta "hygiene-state" "No git repository in play: open a session in one to see what agents left behind it." ]
+  | HygieneService.HygieneView.NotScanned _ ->
+    panel "Workspace hygiene" [
+      meta "hygiene-state" "Not scanned yet. A scan reads git and the process table and changes nothing."
+      Elem.div [ Attr.style "display: flex; flex-wrap: wrap; gap: 0.4rem;" ] [
+        hygieneButton DomIds.HygieneScan "Scan the workspace" (Some(Ds.post "/dashboard/hygiene/scan"))
+      ]
+    ]
+  | HygieneService.HygieneView.Scanning _ ->
+    panel "Workspace hygiene: scanning" [
+      meta "hygiene-state" "Scanning: reading git, the gate dir, the host cache and the process table. Nothing is changed."
+      Elem.div [ Attr.style "display: flex; flex-wrap: wrap; gap: 0.4rem;" ] [
+        hygieneButton DomIds.HygieneScan "Scanning..." None
+      ]
+    ]
+  | HygieneService.HygieneView.Tidying _ ->
+    panel "Workspace hygiene: tidying" [
+      meta "hygiene-state" "Tidying: removing the safe items. Each one is looked at again first, and anything that became busy is skipped."
+      Elem.div [ Attr.style "display: flex; flex-wrap: wrap; gap: 0.4rem;" ] [
+        hygieneButton DomIds.HygieneTidy "Tidying..." None
+      ]
+    ]
+  | HygieneService.HygieneView.ScanFailed(_, reason) ->
+    panel "Workspace hygiene: scan failed" [
+      Elem.div [ Attr.id "hygiene-state"; Attr.class' "output-line output-error"; Attr.style "font-size: 0.78rem;" ] [
+        textEnc (sprintf "The scan failed: %s" reason)
+      ]
+      Elem.div [ Attr.style "display: flex; flex-wrap: wrap; gap: 0.4rem;" ] [
+        hygieneButton DomIds.HygieneScan "Scan again" (Some(Ds.post "/dashboard/hygiene/scan"))
+      ]
+    ]
+  | HygieneService.HygieneView.Scanned(snapshot, tidied) ->
+    let summary = snapshot.Summary
+    let (WorkspaceHygiene.PlanId planId) = snapshot.Plan.Id
+    let title =
+      match List.length snapshot.Leftovers with
+      | 0 -> "Workspace hygiene: tidy"
+      | n -> sprintf "Workspace hygiene: %d leftover%s" n (match n with | 1 -> "" | _ -> "s")
+    let tidyControl =
+      match summary.SafeCount with
+      | 0 -> hygieneButton DomIds.HygieneTidy "Nothing to tidy" None
+      | n ->
+        hygieneButton
+          DomIds.HygieneTidy
+          (sprintf "Tidy %d safe item%s (%s)" n (match n with | 1 -> "" | _ -> "s") (WorkspaceHygieneRender.formatBytes summary.SafeBytes))
+          (Some(Ds.post (sprintf "/dashboard/hygiene/tidy/%s" planId)))
+    panel title [
+      meta
+        "hygiene-state"
+        (sprintf "Dry run: %d safe to reclaim (%s), %d need a look (%s). Scanned %s."
+          summary.SafeCount (WorkspaceHygieneRender.formatBytes summary.SafeBytes)
+          summary.ReviewCount (WorkspaceHygieneRender.formatBytes summary.ReviewBytes)
+          (snapshot.TakenAt.ToLocalTime().ToString "HH:mm:ss"))
+      match tidied with
+      | HygieneService.TidiedBefore.Tidied summary -> hygieneTidiedBanner summary
+      | HygieneService.TidiedBefore.NothingTidiedYet -> ()
+      Elem.div [ Attr.style "display: flex; flex-wrap: wrap; gap: 0.4rem;" ] [
+        tidyControl
+        hygieneButton DomIds.HygieneScan "Rescan" (Some(Ds.post "/dashboard/hygiene/scan"))
+      ]
+      for risk in hygieneRiskOrder do
+        match snapshot.Plan.Steps |> List.filter (fun s -> s.Risk = risk) with
+        | [] -> ()
+        | steps -> hygieneGroup risk steps
+    ]

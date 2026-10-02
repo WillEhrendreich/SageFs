@@ -40,7 +40,8 @@ let private runtimeStarting (start: int -> Result<Process, SageFsError>) (stopWo
   { StartWorkerProcess =
       fun _ _ _ _ _ _ ->
         start (Interlocked.Increment startCalls) |> Result.map (fun p -> ({ Process = p; AdoptedCore = None } : SessionManager.SpawnedWorker))
-    AwaitWorkerPort = fun _ _ _ _ -> ()
+    AwaitWorkerPort = fun _ _ _ _ _ -> ()
+    Ledger = StartLedger.closed
     StopWorker = fun _ -> stopWorker ()
     RunBuildAsync = fun _ _ -> async { return Ok "build ok" } }
 

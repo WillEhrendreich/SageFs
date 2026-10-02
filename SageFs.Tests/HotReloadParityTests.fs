@@ -173,12 +173,101 @@ let rows : Row list = [
     Before = "instanceNewField:A"
     After = "instanceNewField:A"
     Ending = Ending.Restarts "InstanceLayoutChanged" }
+]
+
+/// The rows for generic functions and members. Microsoft's mechanism changes the method definition in the
+/// runtime, so every instantiation, the ones that ran and the ones that have not, gets the new body. A
+/// detour has to reach each body the runtime compiled, and the ones it has not compiled yet.
+let genericRows : Row list = [
   { Name = "generic"
-    Why = "a generic function: a patch reaches the instantiations that have run, and one that runs later would still get the old body"
+    Why = "a generic function used with a string and an int"
     Edits = [ "let genericTag<'T> (x: 'T) : string = \"generic:A\" + string x", "let genericTag<'T> (x: 'T) : string = \"generic:B\" + string x" ]
     Before = "generic:As|generic:A7"
-    After = "generic:As|generic:A7"
-    Ending = Ending.Restarts "GenericFunction" }
+    After = "generic:Bs|generic:B7"
+    Ending = Ending.Patches }
+  { Name = "genericRef"
+    Why = "a generic function used with an int (own compiled body), a string and a record (one body shared by every reference type)"
+    Edits = [ "\"genericRef:A\"", "\"genericRef:B\"" ]
+    Before = "genericRef:A1|genericRef:As|genericRef:Ar2"
+    After = "genericRef:B1|genericRef:Bs|genericRef:Br2"
+    Ending = Ending.Patches }
+  { Name = "genericKind"
+    Why = "a generic function whose body reads its own type argument, so a body that ran with the type argument of another instantiation cannot hide"
+    Edits = [ "\"genericKind:A\"", "\"genericKind:B\"" ]
+    Before = "genericKind:AString|genericKind:AGenRec|genericKind:AInt32|genericKind:AGenPoint"
+    After = "genericKind:BString|genericKind:BGenRec|genericKind:BInt32|genericKind:BGenPoint"
+    Ending = Ending.Patches }
+  { Name = "genericLate"
+    Why = "a float and a struct instantiation that are first used, and so first compiled, AFTER the save"
+    Edits = [ "\"genericLate:A\"", "\"genericLate:B\"" ]
+    Before = "genericLate:A7"
+    After = "genericLate:B7|genericLate:B2.5|genericLate:Bp3"
+    Ending = Ending.Patches }
+  { Name = "genericNested"
+    Why = "a generic function called from another generic function, with a string, an int and a record"
+    Edits = [ "\"genericNested:A\"", "\"genericNested:B\"" ]
+    Before = "genericNested:As!|genericNested:A7!|genericNested:Ar2!"
+    After = "genericNested:Bs!|genericNested:B7!|genericNested:Br2!"
+    Ending = Ending.Patches }
+  { Name = "genericClosure"
+    Why = "a generic function used as a first-class value, wrapped by the compiler in a closure per instantiation"
+    Edits = [ "\"genericClosure:A\"", "\"genericClosure:B\"" ]
+    Before = "genericClosure:As|genericClosure:A7"
+    After = "genericClosure:Bs|genericClosure:B7"
+    Ending = Ending.Patches }
+  { Name = "genericInstanceMethod"
+    Why = "a generic method of an ordinary class, called on an object built at startup"
+    Edits = [ "\"genericInstanceMethod:A\"", "\"genericInstanceMethod:B\"" ]
+    Before = "genericInstanceMethod:As|genericInstanceMethod:A7|genericInstanceMethod:Ar2"
+    After = "genericInstanceMethod:Bs|genericInstanceMethod:B7|genericInstanceMethod:Br2"
+    Ending = Ending.Patches }
+  { Name = "genericStaticMethod"
+    Why = "a static generic method of an ordinary class"
+    Edits = [ "\"genericStaticMethod:A\"", "\"genericStaticMethod:B\"" ]
+    Before = "genericStaticMethod:As|genericStaticMethod:A7|genericStaticMethod:Ar2"
+    After = "genericStaticMethod:Bs|genericStaticMethod:B7|genericStaticMethod:Br2"
+    Ending = Ending.Patches }
+  { Name = "genericTypeInstance"
+    Why = "an instance member of a generic type, on objects of three instantiations built at startup"
+    Edits = [ "\"genericTypeInstance:A\"", "\"genericTypeInstance:B\"" ]
+    Before = "genericTypeInstance:As|genericTypeInstance:Ar2|genericTypeInstance:A7"
+    After = "genericTypeInstance:Bs|genericTypeInstance:Br2|genericTypeInstance:B7"
+    Ending = Ending.Patches }
+  { Name = "genericTypeStatic"
+    Why = "a static member of a generic type, called with three instantiations"
+    Edits = [ "\"genericTypeStatic:A\"", "\"genericTypeStatic:B\"" ]
+    Before = "genericTypeStatic:As|genericTypeStatic:Ar2|genericTypeStatic:A7"
+    After = "genericTypeStatic:Bs|genericTypeStatic:Br2|genericTypeStatic:B7"
+    Ending = Ending.Patches }
+  { Name = "genericMethodOnType"
+    Why = "a generic method of a generic type, on objects of three instantiations of the type"
+    Edits = [ "\"genericMethodOnType:A\"", "\"genericMethodOnType:B\"" ]
+    Before = "genericMethodOnType:As1|genericMethodOnType:Ar2u|genericMethodOnType:A7r3"
+    After = "genericMethodOnType:Bs1|genericMethodOnType:Br2u|genericMethodOnType:B7r3"
+    Ending = Ending.Patches }
+]
+
+/// A generic function that is also reached through `MakeGenericMethod`. A detour cannot list the
+/// instantiations a program makes by reflection, so the save has to say so and restart.
+let reflectionFixture =
+  { Folder = "HotReloadGenericReflectionFixture"
+    Sources = [ "Reflect.fs"; "App.fs" ]
+    Project = "ReflectFixture"
+    ReadyRoute = "ready" }
+
+let reflectionRows : Row list = [
+  { Name = "genericReflection"
+    Why = "a generic function the app only reaches through MakeGenericMethod, with an int and a string chosen at run time"
+    Edits = [ "\"genericReflection:A\"", "\"genericReflection:B\"" ]
+    Before = "genericReflection:A7|genericReflection:As"
+    After = "genericReflection:A7|genericReflection:As"
+    Ending = Ending.Restarts "GenericInstantiationsUnknown" }
+  { Name = "genericDelegate"
+    Why = "a delegate bound at startup to two instantiations of a generic function, which F# can only do with reflection"
+    Edits = [ "\"genericDelegate:A\"", "\"genericDelegate:B\"" ]
+    Before = "genericDelegate:As|genericDelegate:A7"
+    After = "genericDelegate:As|genericDelegate:A7"
+    Ending = Ending.Restarts "GenericInstantiationsUnknown" }
 ]
 
 let private json (payload: string) = System.Text.Json.JsonDocument.Parse(payload).RootElement
@@ -269,8 +358,8 @@ let exerciseRow (app: RunningApp) (row: Row) : Task<Observed> = task {
 /// One row on a host of its own, start to finish. A row gets its own host because a save the
 /// product cannot patch leaves its edit on disk and the baseline behind, so every later save in
 /// that host would carry it too: one red row would make every row after it red for the wrong reason.
-let private runRow (runtime: HostRuntime) (row: Row) : Task<Observed> = task {
-  let! app = startFixture parityFixture runtime ignore
+let private runRow (runtime: HostRuntime) (fixture: Fixture) (row: Row) : Task<Observed> = task {
+  let! app = startFixture fixture runtime ignore
   try
     return! exerciseRow app row
   finally
@@ -284,13 +373,13 @@ let private concurrentHosts = 3
 /// Every row of one kind on one runtime, each on its own host, and ONE verdict at the end: a table of
 /// the rows that held and the ones that did not, so a red run reads as a matrix and not as the first
 /// failure.
-let private runRows (runtime: HostRuntime) (selected: Row list) : Task<unit> = task {
+let private runRows (runtime: HostRuntime) (fixture: Fixture) (selected: Row list) : Task<unit> = task {
   use gate = new System.Threading.SemaphoreSlim(concurrentHosts)
   let one (row: Row) : Task<Observed> = task {
     do! gate.WaitAsync()
     try
       try
-        return! runRow runtime row
+        return! runRow runtime fixture row
       with ex ->
         return { Row = row; Said = "no verdict"; Served = ""; Problem = ex.Message.Split('\n').[0] }
     finally
@@ -319,9 +408,16 @@ let hotReloadParityTests =
   Integration.hostList "hot reload parity with .NET Hot Reload" [
     for runtime in HostRuntime.all do
       testTask (sprintf "[%s] every edit that has to land in the running app, lands, and is Patched only after its new body ran" (HostRuntime.moniker runtime)) {
-        do! runRows runtime patching
+        do! runRows runtime parityFixture patching
       }
       testTask (sprintf "[%s] every edit that has to restart says why, and leaves the running app alone" (HostRuntime.moniker runtime)) {
-        do! runRows runtime restarting
+        do! runRows runtime parityFixture restarting
+      }
+      testTask (sprintf "[%s] every generic function edit that has to land in the running app, lands in every instantiation, and is Patched only after its new body ran" (HostRuntime.moniker runtime)) {
+        do! runRows runtime parityFixture (genericRows |> List.filter (fun r -> r.Ending = Ending.Patches))
+      }
+      testTask (sprintf "[%s] every generic function edit that has to restart says why, and leaves the running app alone" (HostRuntime.moniker runtime)) {
+        do! runRows runtime parityFixture (genericRows |> List.filter (fun r -> r.Ending <> Ending.Patches))
+        do! runRows runtime reflectionFixture reflectionRows
       }
   ]

@@ -10,7 +10,7 @@
         <!-- NuGet config -->
         <PackageId>SageFs</PackageId>
         <Authors>Will Ehrendreich</Authors>
-        <Description>SageFs — a functional F# REPL, MCP server, and live web development environment.</Description>
+        <Description>F# Interactive that already has your project loaded, re-runs the affected tests on unsaved edits, and patches your running app on save. VS Code, Neovim, a web dashboard and an MCP server for agents share one session.</Description>
         <Copyright>Copyright © 2025-2026 Will Ehrendreich</Copyright>
         <PackageTags>fsharp;functional;repl;interactive;shell;asp.net core;mcp;dashboard;sagefs</PackageTags>
         <PackageProjectUrl>https://github.com/WillEhrendreich/SageFs</PackageProjectUrl>
@@ -78,6 +78,7 @@
         <Compile Include="TestsPane.fs" />
         <Compile Include="SessionTestAttribution.fs" />
         <Compile Include="SageFsApp.fs" />
+        <Compile Include="LiveCheckRelay.fs" />
         <Compile Include="SageFsEffectHandler.fs" />
         <Compile Include="SageFsSseDedup.fs" />
         <Compile Include="SageFsDispatchReduction.fs" />
@@ -94,6 +95,9 @@
         <Compile Include="CohortLedger.fs" />
         <Compile Include="LocalData.fs" />
         <Compile Include="CohortGit.fs" />
+        <Compile Include="HygieneGather.fs" />
+        <Compile Include="HygieneEdge.fs" />
+        <Compile Include="HygieneService.fs" />
         <Compile Include="FrictionReviewView.fs" />
         <Compile Include="McpFrictionRecorder.fs" />
         <Compile Include="PageChoices.fs" />
@@ -114,10 +118,12 @@
         <Compile Include="CohortErrorMapping.fs" />
         <Compile Include="LiveTestStatusView.fs" />
         <Compile Include="Mcp.fs" />
+        <Compile Include="McpHygiene.fs" />
         <Compile Include="McpRunTests.fs" />
         <Compile Include="McpDebugTest.fs" />
 
 
+        <Compile Include="TrunkFollowShell.fs" />
         <Compile Include="McpCohortIntegration.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />

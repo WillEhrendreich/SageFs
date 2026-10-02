@@ -37,7 +37,7 @@ let daemonStateChangeContractTests =
 
     testCase "ReloadReported serializes with the owning session ID and what the worker said the save did" <| fun _ ->
       let facts : ReloadFacts =
-        { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 2; Message = "restart the app to apply this"; SuggestedAction = "restart" }
+        { Case = ReloadCase.RestartRequired; Patched = 0; Considered = 2; Message = "restart the app to apply this"; SuggestedAction = "restart"; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.NoPatch; Declarations = [] }
       let json = SseEvent.toJson (SseEvent.ReloadReported (sid "cafe0001", SessionReload.Finished facts))
       json |> Expect.stringContains "the owning session" "\"sessionId\":\"cafe0001\""
       json |> Expect.stringContains "the outcome token" "\"outcome\":\"RestartRequired\""

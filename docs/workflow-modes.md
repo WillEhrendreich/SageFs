@@ -97,8 +97,10 @@ type SessionWorkflow =
 
 > **Not everything is patchable.** A change to a function *body* reaches the running
 > process; anything that takes effect at startup (a value binding the route captured, a
-> `let mutable` read compiled to a field load, a changed signature or type) needs a
-> restart, and SageFs restarts the app rather than pretending. [Hot Reload](hot-reload.md)
+> type whose fields, cases or members changed, a `let mutable` whose type changed)
+> needs a restart, and SageFs restarts the app rather than pretending. A changed
+> signature patches when its callers are saved with it, and a `let mutable` you didn't
+> touch keeps its live value. [Hot Reload](hot-reload.md)
 > is the authority. It carries the full shape matrix, each row pinned by an executable
 > test. This page deliberately does not restate it.
 
@@ -157,9 +159,9 @@ The CLR forces this; SageFs didn't choose it. If FSI changes how it emits assemb
 
 | Client | Command |
 |:---|:---|
-| **Neovim** | `:SageFsWorkflow live` or `:SageFsWorkflow repl` |
+| **Neovim** | Not from the editor yet. `:SageFsWorkflow` takes no argument and shows the current workflow only (read from [`commands.lua`](https://github.com/WillEhrendreich/sagefs.nvim/blob/master/lua/sagefs/commands.lua) on 2026-10-01). Use the dashboard dropdown or the MCP tool |
 | **VS Code** | Command Palette → `SageFs: Switch Workflow` (picker offers all three workflows and marks which one you're in) |
-| **Web dashboard** | **No control yet.** The daemon now has a route (`POST /api/sessions/{sid}/workflow`, the same one VS Code uses), but the dashboard UI still only renders the workflow as a read-only badge and has no button that calls it. Use an editor or MCP. |
+| **Web dashboard** | The workflow dropdown next to the session (`#workflow-switcher`). Picking one restarts the same session id into it, spawn-first. |
 | **MCP tool** | `switch_workflow(target='repl' \| 'livetesting' \| 'live')` |
 
 ### Target spellings
@@ -200,10 +202,10 @@ When SageFs detects web-oriented packages in your project, it suggests the Hot R
 
 | Package | Suggestion |
 |:---|:---|
-| Falco.Datastar, Starfederation.Datastar | "Datastar project detected — Hot Reload enables SSE-driven DOM morphing" |
-| Falco, Falco.Htmx, Giraffe, Saturn, Microsoft.AspNetCore | "Web project detected — Hot Reload enables browser hot reload" |
+| Falco.Datastar, StarFederation.Datastar | "Datastar project detected — Live mode enables SSE-driven DOM morphing" |
+| Falco, Giraffe, Saturn, Oxpecker, Microsoft.AspNetCore (also the `Microsoft.AspNetCore.App` framework reference), or the `Microsoft.NET.Sdk.Web` SDK | "Web project detected — Live mode enables browser hot reload" |
 
-The suggestion arrives as text in a tool response. SageFs never auto-switches. You always choose.
+Matching is by case-insensitive substring, so `Falco.Htmx` counts through `Falco`, and a package that is only for the browser (Fable) is left out. The lists are `WebMarkers` in `WorkflowTypes.fs`. The wording is quoted from `WorkflowDetection.suggest` in `WorkflowTypes.fs`, and "Live mode" there is the old name for Hot Reload (the suggested workflow is `HotReload`). The suggestion arrives as text in a tool response. SageFs never auto-switches. You always choose.
 
 ---
 
@@ -231,7 +233,7 @@ All three drive the daemon HTTP API (`POST /api/live-testing/enable`). There is 
 
 ### How to pick the workflow instead
 
-`switch_workflow(target='livetesting')`, `:SageFsWorkflow` in Neovim, or `SageFs: Switch Workflow` in VS Code. This restarts the session. See [What happens when you switch](#what-happens-when-you-switch).
+`switch_workflow(target='livetesting')`, the workflow dropdown in the web dashboard, or `SageFs: Switch Workflow` in VS Code. This restarts the session. See [What happens when you switch](#what-happens-when-you-switch).
 
 | Feature | REPL | Live Testing | Hot Reload |
 |:---|:---|:---|:---|
@@ -272,7 +274,7 @@ Save the file → Harmony re-points the method → SSE pushes to the browser →
 
 ### Scenario 3: "I started in REPL mode but now I want browser hot reload"
 
-Switch with `:SageFsWorkflow live` in Neovim, **SageFs: Switch Workflow** in VS Code, or `switch_workflow(target='live')` over MCP. The web dashboard cannot do this yet.
+Switch with **SageFs: Switch Workflow** in VS Code, the workflow dropdown in the web dashboard, or `switch_workflow(target='live')` over MCP. In Neovim use the dashboard or MCP, since `:SageFsWorkflow` only shows the current workflow.
 
 Your REPL definitions are gone, but your `.fs` files reload automatically. The new Hot Reload session picks up right where your persisted code left off.
 
@@ -280,17 +282,18 @@ Your REPL definitions are gone, but your `.fs` files reload automatically. The n
 
 You're in **Hot Reload mode** and tried to redefine a type in the REPL. You have two options:
 
-1. **Switch to REPL or Live Testing** if you need to reshape the type (for example, `:SageFsWorkflow repl` in Neovim). Both keep full type redefinition.
+1. **Switch to REPL or Live Testing** if you need to reshape the type (for example, the workflow dropdown in the web dashboard, or `switch_workflow(target='repl')`). Both keep full type redefinition.
 2. **Edit the `.fs` file instead**: file-level type changes trigger a full reload that handles the redefinition correctly. It's REPL-level redefinition that's blocked.
 
 SageFs appends its own explanation to the FS0037 message when the session's REPL is
 expression-only ([`SageFs.Core/WorkflowErrorContext.fs`](../SageFs.Core/WorkflowErrorContext.fs)):
 
 > 🔄 Type redefinition is not available in the Hot Reload workflow (single-assembly FSI).
->    Switch to the REPL workflow for full type redefinition: the switch_workflow MCP tool, or 'SageFs: Switch Workflow' in VS Code.
+>    Switch to the REPL workflow for full type redefinition: the switch_workflow MCP tool, the workflow dropdown in the web dashboard, or 'SageFs: Switch Workflow' in VS Code.
 
-Only the clients that can actually perform the switch are named. The dashboard shows the
-workflow but has no button wired to the switch route yet, so it does not appear in the hint.
+The hint is built from the closed set of clients that can switch (`SwitchSurface` in
+`WorkflowErrorContext.fs`): the MCP tool, the dashboard's workflow dropdown and VS Code.
+Neovim is left out on purpose, because `:SageFsWorkflow` only shows the current workflow.
 
 ---
 

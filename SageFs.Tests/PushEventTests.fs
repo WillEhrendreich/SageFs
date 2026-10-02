@@ -28,7 +28,7 @@ let private emptyActionQueue =
   SageFs.Features.ActionPrioritizer.ActionQueueReport.empty
 
 let private sampleReload : SageFs.ReloadFacts =
-  { Case = SageFs.ReloadCase.Patched; Patched = 3; Considered = 5; Message = "3 of 5 changed definitions are live"; SuggestedAction = "" }
+  { Case = SageFs.ReloadCase.Patched; Patched = 3; Considered = 5; Message = "3 of 5 changed definitions are live"; SuggestedAction = ""; Mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.Detour; Declarations = [] }
 
 let private allPushEvents = [
   PushEvent.DiagnosticsChanged []

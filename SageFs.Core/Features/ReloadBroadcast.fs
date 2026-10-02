@@ -44,6 +44,11 @@ let private caseName (outcome: ReloadOutcome) =
   | ReloadOutcome.KeptLiveState _ -> "KeptLiveState"
   | ReloadOutcome.PatchPending _ -> "PatchPending"
   | ReloadOutcome.NeverEntered _ -> "NeverEntered"
+  // A delta's stages are named as a detour's are, so a client that branches on the stage keeps working; what is new is
+  // the report's `mechanism`.
+  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending _) -> "PatchPending"
+  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched _) -> "Patched"
+  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered _) -> "NeverEntered"
 
 let private refusalCaseName (reason: RestartReason) =
   match reason with
@@ -60,8 +65,10 @@ let private refusalCaseName (reason: RestartReason) =
   | RestartReason.UnverifiedCopy _ -> "UnverifiedCopy"
   | RestartReason.ClosureShapeChanged _ -> "ClosureShapeChanged"
   | RestartReason.InstanceLayoutChanged _ -> "InstanceLayoutChanged"
-  | RestartReason.GenericFunction _ -> "GenericFunction"
-
+  | RestartReason.GenericInstantiationsUnknown _ -> "GenericInstantiationsUnknown"
+  // The emitter's own cause is the token: a client reads `VirtualSignatureChanged`, not a wrapper.
+  | RestartReason.RudeEdit cause -> SageFs.Features.MetadataDelta.RudeCause.caseName cause
+  | RestartReason.MetadataDeltaUnavailable _ -> "MetadataDeltaUnavailable"
 let private refusalOf (reason: RestartReason) : DevReload.ReloadRefusal =
   { Case = refusalCaseName reason
     Message = RestartReason.describe reason
@@ -76,6 +83,7 @@ let private reasonsIn (outcome: ReloadOutcome) =
   | ReloadOutcome.PatchPending _
   | ReloadOutcome.NeverEntered _
   | ReloadOutcome.KeptLiveState _
+  | ReloadOutcome.ByMetadataDelta _
   | ReloadOutcome.CompileFailed _ -> []
 
 let private keptReport (k: KeptValue) : DevReload.KeptStateReport =
@@ -87,6 +95,7 @@ let private keptIn (outcome: ReloadOutcome) : DevReload.KeptStateReport list =
   | ReloadOutcome.PatchPending(_, _, kept)
   | ReloadOutcome.NeverEntered(_, _, _, _, kept) -> kept |> List.map keptReport
   | ReloadOutcome.Patched _
+  | ReloadOutcome.ByMetadataDelta _
   | ReloadOutcome.NoEffect _
   | ReloadOutcome.Restarted _
   | ReloadOutcome.RestartRequired _
@@ -107,13 +116,21 @@ let reportOf (outcome: ReloadOutcome) : DevReload.ReloadReport =
     // Applied is not live: a pending patch has had nothing confirmed yet.
     | ReloadOutcome.PatchPending(_, considered, _) -> 0, considered
     | ReloadOutcome.NeverEntered(_, _, entered, considered, _) -> entered, considered
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(_, considered, _)) -> 0, considered
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched(patched, considered)) -> patched, considered
+    | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered(_, _, entered, considered)) -> entered, considered
   { Outcome = caseName outcome
+    Mechanism = PatchMechanism.wireName (Outcome.mechanismOf outcome)
     Patched = patched
     Considered = considered
     Message = Outcome.describeForUser outcome
     SuggestedAction = Outcome.remedy outcome |> Option.defaultValue ""
     Reasons = reasonsIn outcome |> List.map refusalOf
-    Kept = keptIn outcome }
+    Kept = keptIn outcome
+    Declarations =
+      match outcome with
+      | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending(_, _, declarations)) -> declarations
+      | _ -> [] }
 
 /// The single translation. `refreshes` on the result always equals
 /// `ReloadOutcome.shouldRefreshBrowser` on the input — that equality is pinned
@@ -121,9 +138,12 @@ let reportOf (outcome: ReloadOutcome) : DevReload.ReloadReport =
 let eventOf (outcome: ReloadOutcome) : DevReload.DevReloadEvent =
   let report = reportOf outcome
   match outcome with
-  | ReloadOutcome.PatchPending _ -> DevReload.Applied report
-  | ReloadOutcome.NeverEntered _ -> DevReload.NeverEntered report
-  | ReloadOutcome.Patched _ -> DevReload.Patched report
+  | ReloadOutcome.PatchPending _
+  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Pending _) -> DevReload.Applied report
+  | ReloadOutcome.NeverEntered _
+  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.NeverEntered _) -> DevReload.NeverEntered report
+  | ReloadOutcome.Patched _
+  | ReloadOutcome.ByMetadataDelta(MetadataDeltaOutcome.Patched _) -> DevReload.Patched report
   | ReloadOutcome.Restarted _ -> DevReload.Restarted report
   | ReloadOutcome.NoEffect _
   | ReloadOutcome.RestartRequired _ -> DevReload.NotApplied report
@@ -168,12 +188,14 @@ let broadcastCompileFailure (summary: string) (diagnostics: DevReload.DevReloadD
 let private notApplied (case: string) (message: string) (remedy: string) : DevReload.DevReloadEvent =
   DevReload.NotApplied
     { Outcome = case
+      Mechanism = ""
       Patched = 0
       Considered = 0
       Message = (match remedy with | "" -> message | r -> sprintf "%s\n→ %s" message r)
       SuggestedAction = remedy
       Reasons = []
-      Kept = [] }
+      Kept = []
+      Declarations = [] }
 
 /// A save whose declarations are byte-identical to what the running build
 /// already has. Not a reload and not a failure: there is nothing to fetch and
