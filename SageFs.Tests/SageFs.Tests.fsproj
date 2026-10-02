@@ -164,6 +164,7 @@
         <Compile Include="ThemePersistenceTests.fs" />
         <Compile Include="DashboardBrowserTests.fs" />
         <Compile Include="LiveBindingsBrowserTests.fs" />
+        <Compile Include="OutputPanelLayoutBrowserTests.fs" />
         <Compile Include="HygieneBrowserTests.fs" />
         <Compile Include="DashboardDisconnectIndicatorBrowserTests.fs" />
         <Compile Include="ElmDaemonTests.fs" />
