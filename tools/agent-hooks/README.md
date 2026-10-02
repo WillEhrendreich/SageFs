@@ -65,7 +65,14 @@ distinction is the whole point.
 
 ### Install
 
-Add this to `.claude/settings.json` (the project's) or `~/.claude/settings.json`
+Build the hook once per machine (and again after changing `ReplGuard.fs` or `Hook.fs`):
+
+```sh
+dotnet fsi tools/agent-hooks/publish.fsx
+```
+
+That writes `tools/agent-hooks/sagefs-repl-guard` (`.exe` on Windows), a self-contained single-file
+program, about 90 MB and not committed. Then add this to `.claude/settings.json` (the project's) or `~/.claude/settings.json`
 (yours), with the path pointing at your SageFs checkout:
 
 ```json
@@ -96,17 +103,21 @@ works.
   `Deny reason` out. It's pure, and SageFs.Tests compiles the same file and tests
   it (`ReplGuardTests.fs`). `sessionProbe`/`directoryContains` in there are the
   "is there a Ready REPL for this cwd" check, also unit-tested directly.
-- `sagefs-repl-guard.fsx` is the IO around it: reads the hook JSON from stdin,
-  walks up for a project file, probes `/health` once (for both daemon-liveness
-  and its `sessionStates`), and writes the deny JSON.
-- `sagefs-repl-guard` is a small POSIX sh wrapper. `dotnet fsi` takes about a
-  second and a half to start, and a hook runs before every Bash call, so the
-  wrapper exits straight away for commands that never mention dotnet. Only the
-  ones that do pay for the F# script.
+- `Hook.fs` is the IO around it: reads the hook JSON from stdin, walks up for a
+  project file, probes `/health` once (for both daemon-liveness and its
+  `sessionStates`), and writes the deny JSON.
+- `SageFs.AgentHooks.fsproj` compiles the two into the `sagefs-repl-guard`
+  program, and `publish.fsx` publishes it. It is a compiled program rather than
+  an `.fsx` because a hook runs before every Bash call and `dotnet fsi` costs
+  about 1.3 seconds of startup each time. Measured on the dev machine
+  (median of 15 runs): 14 ms for a command that never mentions dotnet (it
+  leaves right after reading stdin), 42 ms for a dotnet command with no daemon
+  answering. The old `.fsx` plus sh wrapper was 2 ms for the first and 1.3
+  seconds for the second.
 
-If the script itself fails (no dotnet on the PATH, say), it exits non-zero and
-Claude Code treats that as a non-blocking hook error, so the command still runs.
-A broken guard never blocks you.
+If the program itself fails, it exits non-zero and Claude Code treats that as a
+non-blocking hook error, so the command still runs. A broken guard never blocks
+you. A missing binary does the same, so run `publish.fsx` after a fresh clone.
 
 ### Try it by hand
 

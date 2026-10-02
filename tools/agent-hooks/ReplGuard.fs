@@ -2,8 +2,8 @@
 ///
 /// Pure: a Bash command string plus what the hook found out about the world
 /// goes in, Allow or Deny comes out. No IO in here, so SageFs.Tests compiles
-/// this same file and tests it, and sagefs-repl-guard.fsx #loads it and runs it.
-/// No dependencies past FSharp.Core, because the script has to load fast.
+/// this same file and tests it, and Hook.fs (the compiled sagefs-repl-guard program) runs it.
+/// No dependencies past FSharp.Core, because the hook has to start fast.
 module SageFs.AgentHooks.ReplGuard
 
 /// Whether the hook's working directory has an .fsproj, .slnx or .sln at or above it.

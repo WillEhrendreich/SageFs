@@ -120,3 +120,8 @@ commandcode_scratchpad/
 # version claim. The real manifest is the one in the build output, and the host
 # reads that one. Untracked in ce63f746; this rule stops it coming back.
 SageFs.Host/host-manifest.json
+
+# The compiled Claude Code hook, written here by `dotnet fsi tools/agent-hooks/publish.fsx`
+# (about 90 MB: self-contained, single file). Built per machine, never committed.
+tools/agent-hooks/sagefs-repl-guard
+tools/agent-hooks/sagefs-repl-guard.exe

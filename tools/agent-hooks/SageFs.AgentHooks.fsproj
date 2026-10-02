@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The Claude Code hook programs under tools/agent-hooks, compiled, because a PreToolUse hook runs before
+       every Bash call and `dotnet fsi` startup is over a second per call. Published single-file with
+       ReadyToRun by `dotnet fsi tools/agent-hooks/publish.fsx`, which writes the executable next to this file
+       as `sagefs-repl-guard` (the path the README tells you to put in settings.json). No dependency past
+       FSharp.Core and the BCL: it has to start fast. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>sagefs-repl-guard</AssemblyName>
+    <RootNamespace>SageFs.AgentHooks</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <TieredPGO>false</TieredPGO>
+    <TieredCompilation>true</TieredCompilation>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="ReplGuard.fs" />
+    <Compile Include="Hook.fs" />
+  </ItemGroup>
+
+</Project>

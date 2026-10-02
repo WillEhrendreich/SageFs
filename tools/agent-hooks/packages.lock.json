@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net11.0": {
+      "FSharp.Core": {
+        "type": "Direct",
+        "requested": "[11.0.101-preview7.26359.118, )",
+        "resolved": "11.0.101-preview7.26359.118",
+        "contentHash": "mWjUenBCyLI1qi8ulWFNiRwPDF5XHfL8ininijHysTZc9hiQ1/3byA2mZ2UKlp06h3kvXWdSc6MF7pkHz1OaQA=="
+      }
+    },
+    "net11.0/linux-x64": {}
+  }
+}
