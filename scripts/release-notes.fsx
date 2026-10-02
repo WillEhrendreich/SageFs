@@ -53,6 +53,14 @@ let previousTag =
     | tag :: _ -> Some tag
     | [] -> None
 
+/// Words in a commit subject that say the work was a step on the way and not a result: the first commit of a
+/// feature lands behind a flag or unwired, and a later commit in the same release finishes it. Listing the first
+/// one tells a reader the feature is unfinished when the release ships it finished.
+let inProgressMarkers = [ "not wired"; "WIP"; "work in progress" ]
+
+let isInProgress (subject: string) =
+  inProgressMarkers |> List.exists (fun marker -> subject.Contains(marker, StringComparison.OrdinalIgnoreCase))
+
 let subjects =
   let inRange =
     match previousTag with
@@ -61,6 +69,7 @@ let subjects =
   match inRange with
   | [] -> git [ "log"; "--pretty=format:%s"; "-20" ]
   | commits -> commits
+  |> List.filter (fun subject -> not (isInProgress subject))
 
 /// The conventional-commit groups a reader cares about, in the order they're
 /// shown. Anything that doesn't match a type is left out.
