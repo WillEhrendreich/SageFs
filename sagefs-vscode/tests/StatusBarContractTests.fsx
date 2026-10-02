@@ -17,6 +17,7 @@ open SageFs.Vscode.StatusBarPure
 
 let private input project workflow evals supervised restarts sessions : SessionStatusBarInput =
   { ProjectLabel = project
+    SessionId = "c090e3e7"
     WorkflowLabel = workflow
     EvalCount = evals
     Supervised = supervised
@@ -79,6 +80,22 @@ let tests =
       |> Expect.stringContains "error glyph" "$(error)"
       (sessionView { input "S" "REPL" 0 false 0 1 with Health = SessionHealth.Starting }).Text
       |> Expect.stringContains "spinner" "$(loading~spin)"
+
+    // The tooltip is also the item's accessible name, and the only status bar text a screen reader
+    // or a tour's text snapshot sees (the visible Text is read through it). The workflow used to be
+    // in Text alone, so a switch to Hot Reload was invisible to both, and with several sessions on
+    // one daemon nothing on the item said WHICH session it was talking about.
+    testCase "WHY - the tooltip names the workflow, because it is the accessible name and the text is not read" <| fun _ ->
+      (sessionView (input "SageTech" "Hot Reload" 0 false 0 1)).Tooltip
+      |> Expect.stringContains "workflow" "[Hot Reload]"
+
+    testCase "WHY - the tooltip names the session id, because several sessions share one daemon" <| fun _ ->
+      (sessionView (input "SageTech" "REPL" 0 false 0 5)).Tooltip
+      |> Expect.stringContains "session id" "session c090e3e7"
+
+    testCase "WHY - the tooltip still reads in order: project, workflow, session, count, menu hint" <| fun _ ->
+      (sessionView (input "SageTech" "Live Testing" 0 false 0 5)).Tooltip
+      |> Expect.equal "order" "SageFs: SageTech [Live Testing] — session c090e3e7 — 5 session(s) — click for session menu"
 
     testCase "WHY - no verdict on the wire renders the historical bolt, not an invented warning" <| fun _ ->
       (sessionView { input "SageTech" "REPL" 0 false 0 1 with Health = SessionHealth.Unknown }).Text
