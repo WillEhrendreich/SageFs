@@ -826,6 +826,7 @@ let refreshStatus () =
             let view =
               StatusBarPure.sessionView
                 { ProjectLabel = SessionsTreePure.label row
+                  SessionId = s.id
                   WorkflowLabel = currentWorkflowLabel
                   EvalCount = s.evalCount
                   Supervised = supervisedFlag
@@ -1743,6 +1744,12 @@ let switchWorkflowCmd () =
               currentWorkflowLabel <- targetLabel
               refreshStatus ()
               Sessions.refresh ()
+              // The restart takes a few seconds, so say what was asked for now: the
+              // status bar only changes label once the session is back.
+              Window.showInformationMessage
+                (sprintf "SageFs: Switched to %s (session %s)." targetLabel sess.id)
+                [||]
+              |> ignore
             | Some (Client.Failed msg) ->
               // The daemon's 400 carries its own alias "did you mean" text and
               // its 5xx carries a SageFsError body, so `msg` is already the
