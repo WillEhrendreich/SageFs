@@ -170,6 +170,27 @@ let phaseOfStatus (status: string) : SessionPhase =
   | "Faulted" | "Stopped" | "error" -> SessionPhase.Down
   | other -> SessionPhase.Unrecognised other
 
+// ── The status bar's session menu ────────────────────────────────────────
+
+/// One session row of the session menu. The id is in it: two sessions of one project are otherwise two
+/// identical rows, and picking the second used to switch to the first.
+let sessionMenuLabel (isActive: bool) (project: string) (status: string) (evalCount: int) (id: string) : string =
+  let icon = match isActive with | true -> "$(star-full)" | false -> "$(terminal)"
+  let evals = match evalCount with | 0 -> "" | n -> sprintf " [%d]" n
+  sprintf "%s %s  %s — %s%s" icon project id status evals
+
+[<RequireQualifiedAccess>]
+type PickedSession =
+  | Picked of sessionId: string
+  | NotASession
+
+/// Which session a picked menu row is: the one whose id is a whole word of the row.
+let sessionIdOfMenuItem (ids: string list) (item: string) : PickedSession =
+  let words = item.Split([| ' '; '\t' |], System.StringSplitOptions.RemoveEmptyEntries)
+  match ids |> List.tryFind (fun id -> words |> Array.contains id) with
+  | Some id -> PickedSession.Picked id
+  | None -> PickedSession.NotASession
+
 /// The session a Create Session call just made.
 [<RequireQualifiedAccess>]
 type CreatedSession =

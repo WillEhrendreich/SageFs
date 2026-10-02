@@ -2015,10 +2015,6 @@ let sessionMenu () =
               match activeSessionId with
               | Some id -> id = s.id
               | None -> false
-            let icon =
-              match isActive with
-              | true -> "$(star-full)"
-              | false -> "$(terminal)"
             let proj =
               match s.projects with
               | [||] -> "no project"
@@ -2031,12 +2027,8 @@ let sessionMenu () =
                   | n when n.EndsWith(".fsproj") -> n.[..n.Length - 8]
                   | n -> n)
                 |> String.concat ", "
-            let evals =
-              match s.evalCount with
-              | 0 -> ""
-              | n -> sprintf " [%d]" n
-            let label = sprintf "%s %s — %s%s" icon proj s.status evals
-            items.Add label
+            // The id is in the row, and the pick resolves by it (see SessionScopePure.sessionMenuLabel).
+            items.Add (SessionScopePure.sessionMenuLabel isActive proj s.status s.evalCount s.id)
           items.Add "──────────"
           items.Add "$(add) Create New Session"
         // Always-available actions
@@ -2072,18 +2064,12 @@ let sessionMenu () =
           | None -> ()
           | Some c2 ->
             let! sessions = Client.listSessions c2
-            // Match by project label in the picked string
+            // The row names its session by id. It used to match the first session whose project name was in the
+            // row, so the second of two sessions of one project switched to the first.
             let picked =
-              sessions
-              |> Array.tryFind (fun sess ->
-                sessionItem.Contains (
-                  match sess.projects with
-                  | [||] -> "no project"
-                  | ps ->
-                    let name = ps.[0].Split([|'/'; '\\'|]) |> Array.last
-                    match name with
-                    | n when n.EndsWith(".fsproj") -> n.[..n.Length - 8]
-                    | n -> n))
+              match SessionScopePure.sessionIdOfMenuItem (sessions |> Array.map (fun sess -> sess.id) |> Array.toList) sessionItem with
+              | SessionScopePure.PickedSession.Picked id -> sessions |> Array.tryFind (fun sess -> sess.id = id)
+              | SessionScopePure.PickedSession.NotASession -> None
             match picked with
             | Some sess ->
               let! _ = Client.switchSession sess.id c2
