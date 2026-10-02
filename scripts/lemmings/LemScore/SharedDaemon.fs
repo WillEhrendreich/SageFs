@@ -302,22 +302,27 @@ let watchPollInterval = TimeSpan.FromSeconds 2.0
 /// A session of this lemming's run as the dashboard API showed it while the lemming was running.
 type SeenSession =
   { Seen: SessionInfo
-    FirstSeenUtc: DateTime }
+    FirstSeenUtc: DateTime
+    /// Every status the session was seen in, oldest first, consecutive repeats dropped. The last
+    /// one is usually Disconnected (the status after the stop), so the earlier ones are the story.
+    Statuses: string list }
 
 /// Folds one reading of the sessions list into what has been seen so far (first sighting
-/// time kept, latest status kept).
+/// time kept, latest status kept, and every distinct status in order).
 let observe (now: DateTime) (runDir: string) (seen: SeenSession list) (reading: SessionInfo list) : SeenSession list =
   let mine = reading |> List.filter (belongsTo runDir)
   let known = seen |> List.map (fun s -> s.Seen.Id) |> Set.ofList
   let updated =
     seen |> List.map (fun s ->
       match mine |> List.tryFind (fun m -> m.Id = s.Seen.Id) with
-      | Some m -> { s with Seen = m }
+      | Some m ->
+        let last = List.tryLast s.Statuses
+        { s with Seen = m; Statuses = (if last = Some m.Status then s.Statuses else s.Statuses @ [ m.Status ]) }
       | None -> s)
   let fresh =
     mine
     |> List.filter (fun m -> not (known.Contains m.Id))
-    |> List.map (fun m -> { Seen = m; FirstSeenUtc = now })
+    |> List.map (fun m -> { Seen = m; FirstSeenUtc = now; Statuses = [ m.Status ] })
   updated @ fresh
 
 /// Polls the sessions list until `stopFile` exists, calling `onChange` whenever a new session

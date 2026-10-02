@@ -27,7 +27,23 @@
 # and optionally fellover.extra.json ([{"stage","symptom","evidence"}]) from an editor driver.
 #
 # Helpers beyond the contract: lem_run_id, lem_install_workspace, lem_run_oracle,
-# lem_sessions_under.
+# lem_sessions_under, lem_prepare_bridge.
+#
+# What this file does NOT wall off (the README's Isolation section says the same, and every
+# summary.json lists it under knownLimits):
+#   * Code the lemming sends to SageFs (send_fsharp_code, hot reload, the builds that
+#     create_project_session starts) runs in the SHARED DAEMON's processes, outside the sandbox,
+#     with the daemon owner's full file access. A lemming can read or write anything that user can
+#     through an eval, and can start a session anywhere. Cleanup only stops sessions under the run
+#     directory, so a session started elsewhere is reported (an Isolation finding) but not stopped.
+#   * The daemon is shared: the sessions list shows other agents' sessions and project paths, and
+#     stop_session, switch_session and release_work_lease can reach sessions that are not the lemming's.
+#   * cmdc's credential (~/.commandcode/auth.json) is readable by the model, the network is open and
+#     cmdc runs with --yolo.
+# The sandbox protects the host from the lemming's own processes. It is not a policy on the daemon.
+#
+# Environment: LEM_REQUIRE_SAME_VERSION=1 makes a bridge that is a different commit from the daemon
+# a refusal (exit 4) instead of a recorded finding.
 
 LEM_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 LEM_ROOT=${LEM_ROOT:-/tmp/lem}
@@ -92,6 +108,8 @@ lem_use_shared_daemon() {
   done <<< "$out"
   LEM_SAGEFS_VERSION="daemon $LEM_DAEMON_VERSION"
   LEM_BRIDGE_DESC=
+  LEM_BRIDGE_VERSION=unknown
+  LEM_VERSION_SKEW=unknown
 }
 
 lem_cleanup_sessions() {
@@ -124,11 +142,12 @@ lem_main_checkout() {
 # Sets LEM_BRIDGE_CMD (array) and LEM_BRIDGE_DESC, and puts the version into LEM_SAGEFS_VERSION.
 lem_prepare_bridge() {
   local run_dir=${1:?run-dir} bin=${SAGEFS_LEMMING_BIN:-} dll version
-  mkdir -p "$run_dir/bin"
+  [ "${LEM_BRIDGE_READY:-}" = "$run_dir" ] && return 0
   if [ "$bin" = published ]; then
     version=$(sagefs --version 2>/dev/null | head -n 1)
     LEM_BRIDGE_CMD=(sagefs mcp)
     LEM_BRIDGE_DESC="published tool: ${version:-unknown}"
+    LEM_BRIDGE_VERSION=${version:-unknown}
   else
     if [ -z "$bin" ]; then
       dll=$(lem_main_checkout)/SageFs/bin/Release/net11.0/SageFs.dll
@@ -138,14 +157,45 @@ lem_prepare_bridge() {
       dll=$bin
     fi
     [ -f "$dll" ] || { echo "lem: no SageFs.dll at $dll (build master, or set SAGEFS_LEMMING_BIN)" >&2; exit 4; }
-    if [ ! -d "$run_dir/bin/sagefs" ]; then
-      cp -r --reflink=auto "$(dirname "$dll")" "$run_dir/bin/sagefs"
-    fi
-    version=$(lem_tool dll-version "$run_dir/bin/sagefs/$(basename "$dll")")
+    # Read the version from the source and judge the skew BEFORE the 380 MB copy, so a refusal
+    # leaves nothing behind.
+    version=$(lem_tool dll-version "$dll")
     LEM_BRIDGE_CMD=(dotnet "$run_dir/bin/sagefs/$(basename "$dll")" mcp)
     LEM_BRIDGE_DESC="dev build: $version"
+    LEM_BRIDGE_VERSION=$version
   fi
   LEM_SAGEFS_VERSION="daemon ${LEM_DAEMON_VERSION:-unknown}; bridge $LEM_BRIDGE_DESC"
+  lem_check_version_skew
+  mkdir -p "$run_dir/bin"
+  if [ "$bin" != published ] && [ ! -d "$run_dir/bin/sagefs" ]; then
+    cp -r --reflink=auto "$(dirname "$dll")" "$run_dir/bin/sagefs"
+  fi
+  LEM_BRIDGE_READY=$run_dir
+}
+
+# Compares the bridge the lemming runs with the shared daemon it talks to. A different commit can
+# change the protocol or the tool surface, and that would be blamed on the model or on SageFs, so
+# it is said out loud here, recorded in summary.json (versionSkew, a Preflight finding), and
+# refused when LEM_REQUIRE_SAME_VERSION=1. The daemon's own dll cannot be used instead: the file it
+# started from may have been rebuilt since, so the only honest thing is to compare what is running.
+# Sets LEM_VERSION_SKEW (same|skewed|unknown).
+lem_check_version_skew() {
+  local out k v
+  LEM_VERSION_SKEW=unknown
+  out=$(lem_tool version-skew --daemon "${LEM_DAEMON_VERSION:-unknown}" --bridge "${LEM_BRIDGE_VERSION:-unknown}") || return 0
+  while IFS='=' read -r k v; do
+    case $k in
+      LEM_VERSION_SKEW) LEM_VERSION_SKEW=$v ;;
+      LEM_BRIDGE_VERSION) LEM_BRIDGE_VERSION=$v ;;
+    esac
+  done <<< "$out"
+  [ "$LEM_VERSION_SKEW" = skewed ] || return 0
+  echo "lem: VERSION SKEW: the lemming's bridge is $LEM_BRIDGE_VERSION but the shared daemon is $LEM_DAEMON_VERSION." >&2
+  echo "lem: a difference in protocol or tools may be the skew, not the model. Rebuild master and restart the daemon, or point SAGEFS_LEMMING_BIN at the build the daemon runs." >&2
+  if [ -n "${LEM_REQUIRE_SAME_VERSION:-}" ]; then
+    echo "lem: refusing (LEM_REQUIRE_SAME_VERSION is set)" >&2
+    exit 4
+  fi
 }
 
 # The skill where Command Code finds project skills, and the MCP registration written the way
@@ -174,10 +224,14 @@ JSON
 # HOME, its own pid/ipc/uts namespaces (so it cannot see or signal any host process, the shared
 # daemon included), a cleared environment, and only <workdir>, the bridge copy (read-only) and
 # a few scratch dirs writable. The network is NOT isolated: the model API and localhost are
-# reachable, because the lemming's MCP bridge talks to the daemon over localhost.
+# reachable, because the lemming's MCP bridge talks to the daemon over localhost. That also means
+# the shared daemon's HTTP API is reachable, and what the daemon does for the lemming is outside
+# this sandbox (see the header). The NuGet cache is the user's, read-only: restores resolve from it
+# through a fallback folder and write new packages to a per-run folder, so a lemming cannot
+# poison the shared cache.
 lem_bw_base() {
   local run_dir=${1:?run-dir} workdir=${2:?workdir} extra_path=${3:-}
-  mkdir -p "$run_dir/dotnethome" "$run_dir/out/sbx" "$run_dir/bin"
+  mkdir -p "$run_dir/dotnethome" "$run_dir/out/sbx" "$run_dir/bin" "$run_dir/nuget" "$HOME/.nuget/packages"
   LEM_BW=(
     --die-with-parent --unshare-pid --unshare-ipc --unshare-uts --clearenv
     --ro-bind /usr /usr --ro-bind /etc /etc
@@ -186,7 +240,8 @@ lem_bw_base() {
     --proc /proc --dev /dev --tmpfs /tmp --tmpfs "$HOME"
     --ro-bind "$HOME/.dotnet" "$HOME/.dotnet"
     --ro-bind "$HOME/.local/share/mise" "$HOME/.local/share/mise"
-    --bind "$HOME/.nuget" "$HOME/.nuget"
+    --ro-bind "$HOME/.nuget/packages" "$HOME/.nuget/packages"
+    --bind "$run_dir/nuget" "$run_dir/nuget"
     --bind "$workdir" "$workdir"
     --ro-bind "$run_dir/bin" "$run_dir/bin"
     --bind "$run_dir/dotnethome" "$run_dir/dotnethome"
@@ -195,6 +250,7 @@ lem_bw_base() {
     --setenv HOME "$HOME" --setenv TERM dumb --setenv LANG C.UTF-8
     --setenv PATH "$HOME/.dotnet:$HOME/.dotnet/tools:${extra_path:+$extra_path:}/usr/bin:/bin"
     --setenv DOTNET_ROOT "$HOME/.dotnet" --setenv DOTNET_CLI_HOME "$run_dir/dotnethome"
+    --setenv NUGET_PACKAGES "$run_dir/nuget" --setenv NUGET_FALLBACK_PACKAGES "$HOME/.nuget/packages"
     --setenv DOTNET_CLI_TELEMETRY_OPTOUT 1 --setenv DOTNET_NOLOGO 1 --setenv DOTNET_SKIP_FIRST_TIME_EXPERIENCE 1
   )
 }
@@ -292,7 +348,8 @@ lem_score() {
   local run_dir=${1:?run-dir} task=${2:?task} model=${3:?model} harness=${4:?harness} oracle=${5:?oracle-exit}
   lem_tool score --run-dir "$run_dir" --task "$task" --model "$model" --harness "$harness" \
     --oracle-exit "$oracle" --cmdc-exit "${LEM_EXIT:--1}" --seconds "${LEM_SECONDS:-0}" \
-    --sagefs-version "${LEM_SAGEFS_VERSION:-unknown}" --cleanup "${LEM_CLEANUP:-not-run}" \
+    --sagefs-version "${LEM_SAGEFS_VERSION:-unknown}" --daemon-version "${LEM_DAEMON_VERSION:-unknown}" \
+    --bridge-version "${LEM_BRIDGE_VERSION:-unknown}" --cleanup "${LEM_CLEANUP:-not-run}" \
     --mem-start "${LEM_MEM_PRESSURE_START:-unknown}" --avail-start "${LEM_MEM_AVAIL_START:-0}" \
     --leases-start "${LEM_LEASES_START:-0}" --port "${LEM_PORT:-37749}" > /dev/null
   cat "$run_dir/out/summary.json"

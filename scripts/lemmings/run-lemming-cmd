@@ -35,6 +35,10 @@ W=$RUN/w OUT=$RUN/out
 # The shared daemon must be up and have room. This refuses; it never starts one.
 lem_use_shared_daemon
 
+# The bridge the lemming will run, checked against the daemon before anything is copied. A skewed
+# bridge is reported now (and refused under LEM_REQUIRE_SAME_VERSION=1), not discovered in the summary.
+lem_prepare_bridge "$RUN"
+
 mkdir -p "$W" "$OUT"
 echo "run $ID: $MODEL on $FIXTURE/$TASK; dashboard http://localhost:${LEM_DASH_PORT}/dashboard (working directory $W)" >&2
 

@@ -8,6 +8,7 @@ open System.Text.Json
 open LemScore.Types
 open LemScore.CmdcStream
 open LemScore.Classify
+open LemScore.Provenance
 open LemScore.SharedDaemon
 
 /// A daemon reading taken by the harness (start of run, end of run).
@@ -21,6 +22,12 @@ type SummaryInput =
     Model: string
     Harness: Harness
     SagefsVersion: string
+    /// The shared daemon's version and the lemming's bridge version, as the harness read them.
+    /// A different commit on each side is reported as `versionSkew`.
+    DaemonVersion: string
+    BridgeVersion: string
+    /// The run directory, so a session or code that named a path outside it is noticed.
+    RunDir: string
     Task: string
     Seconds: int
     Facts: RunFacts
@@ -29,8 +36,8 @@ type SummaryInput =
     DaemonEnd: DaemonSnapshot option
     DashboardUrl: string
     /// Sessions under the run directory that the dashboard API showed while the lemming ran,
-    /// as (id, last status). Empty when the watcher did not run or nothing appeared.
-    SessionsSeen: (string * string) list
+    /// as (id, every status seen in order). Empty when the watcher did not run or nothing appeared.
+    SessionsSeen: (string * string list) list
     /// Processes still alive in the sandbox when cmdc exited (they die with the sandbox).
     SandboxProcessesLeft: string list
     ChangedFiles: string list
@@ -80,6 +87,12 @@ let render (input: SummaryInput) (assessment: Assessment) : string =
   w.WriteString("model", input.Model)
   w.WriteString("harness", Harness.toString input.Harness)
   w.WriteString("sagefsVersion", input.SagefsVersion)
+  w.WriteString("daemonVersion", input.DaemonVersion)
+  w.WriteString("bridgeVersion", input.BridgeVersion)
+  match compareBuilds input.DaemonVersion input.BridgeVersion with
+  | SkewedBuild -> w.WriteBoolean("versionSkew", true)
+  | SameBuild -> w.WriteBoolean("versionSkew", false)
+  | UnknownBuild -> w.WriteNull "versionSkew"
   w.WriteString("task", input.Task)
   w.WriteString("outcome", Outcome.toString assessment.Outcome)
   w.WriteString("outcomeReason", assessment.Reason)
@@ -131,7 +144,7 @@ let render (input: SummaryInput) (assessment: Assessment) : string =
   facts.ResidueSessions |> List.iter w.WriteStringValue
   w.WriteEndArray()
   w.WriteStartArray "sessionsSeenInDashboard"
-  input.SessionsSeen |> List.iter (fun (id, status) -> w.WriteStringValue(sprintf "%s (%s)" id status))
+  input.SessionsSeen |> List.iter (fun (id, statuses) -> w.WriteStringValue(sprintf "%s (%s)" id (String.concat " > " statuses)))
   w.WriteEndArray()
   w.WriteStartArray "sandboxProcessesLeft"
   input.SandboxProcessesLeft |> List.iter (fun p -> w.WriteStringValue(clip 160 p))
@@ -157,8 +170,11 @@ let render (input: SummaryInput) (assessment: Assessment) : string =
   w.WriteEndArray()
   w.WriteNumber("unreadableStreamLines", facts.Stream.Unreadable.Length)
   w.WriteEndObject()
+  w.WriteStartArray "knownLimits"
+  knownLimits input.Harness |> List.iter w.WriteStringValue
+  w.WriteEndArray()
   w.WriteStartArray "fellOver"
-  (assessment.FellOver @ input.Extra)
+  (skewFellOver input.DaemonVersion input.BridgeVersion @ assessment.FellOver @ outsideRunDir input.RunDir calls @ input.Extra)
   |> List.iter (fun f ->
     w.WriteStartObject()
     w.WriteString("stage", Stage.toString f.Stage)

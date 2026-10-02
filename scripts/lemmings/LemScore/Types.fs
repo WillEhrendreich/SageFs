@@ -36,6 +36,7 @@ module Outcome =
 /// Where in the lemming's journey a thing went wrong.
 type Stage =
   | Preflight
+  | Isolation
   | Registration
   | Adoption
   | SessionCreate
@@ -55,6 +56,7 @@ module Stage =
   let toString (stage: Stage) : string =
     match stage with
     | Preflight -> "Preflight"
+    | Isolation -> "Isolation"
     | Registration -> "Registration"
     | Adoption -> "Adoption"
     | SessionCreate -> "SessionCreate"
@@ -72,7 +74,7 @@ module Stage =
 
   let tryParse (text: string) : Result<Stage, string> =
     let all =
-      [ Preflight; Registration; Adoption; SessionCreate; SessionWarmup; Eval; Reload; Tests
+      [ Preflight; Isolation; Registration; Adoption; SessionCreate; SessionWarmup; Eval; Reload; Tests
         Lease; Cleanup; Budget; ToolSurface; Oracle; Editor; OtherTool ]
     match all |> List.tryFind (fun s -> toString s = text) with
     | Some s -> Ok s

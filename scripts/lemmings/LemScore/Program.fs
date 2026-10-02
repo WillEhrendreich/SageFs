@@ -11,6 +11,10 @@
 ///                                            replace exactly one match, or refuse and say why
 ///   LemScore expect --file F --pattern RE ...  every pattern must match the answer file
 ///   LemScore dll-version <path>              product version of a built SageFs.dll
+///   LemScore version-skew --daemon V --bridge V
+///                                            same|skewed|unknown: do the two come from the same commit
+///   LemScore prune [id ...] [--older-than-days N] [--root R] [--dry-run]
+///                                            delete finished runs under the run root
 ///   LemScore score --run-dir D ...           write D/out/summary.json
 ///
 /// Exit codes: 0 ok, 2 refused (with the reason on stderr), 3 the shared daemon will not do.
@@ -124,6 +128,10 @@ let private writeSeen (path: string) (seen: SeenSession list) : unit =
     w.WriteStartObject()
     w.WriteString("id", s.Seen.Id)
     w.WriteString("status", s.Seen.Status)
+    w.WriteString("firstStatus", List.tryHead s.Statuses |> Option.defaultValue s.Seen.Status)
+    w.WriteStartArray "statuses"
+    s.Statuses |> List.iter w.WriteStringValue
+    w.WriteEndArray()
     w.WriteString("workingDirectory", s.Seen.WorkingDirectory)
     w.WriteString("firstSeenUtc", s.FirstSeenUtc.ToString "o")
     w.WriteEndObject())
@@ -248,6 +256,58 @@ let private runIdCommand (args: string list) : int =
     eprintfn "usage: LemScore run-id <root> <model> <task>"
     ExitCode.usage
 
+/// Prints LEM_VERSION_SKEW=same|skewed|unknown for a daemon version and a bridge version
+/// (either may be free text that contains one, like the first line of `sagefs --version`).
+let private versionSkewCommand (args: string list) : int =
+  let m = flags args
+  match need m "daemon", need m "bridge" with
+  | Ok daemon, Ok bridge ->
+    printfn "LEM_VERSION_SKEW=%s" (Provenance.VersionMatch.toString (Provenance.compareBuilds daemon bridge))
+    printfn "LEM_BRIDGE_VERSION=%s" (Provenance.versionOf bridge |> Option.defaultValue "unknown")
+    ExitCode.ok
+  | Error e, _ | _, Error e ->
+    eprintfn "usage: LemScore version-skew --daemon V --bridge V (%s)" e
+    ExitCode.usage
+
+type private PruneOptions =
+  { Ids: string list
+    DryRun: bool
+    Root: string
+    OlderThanDays: float option }
+
+/// ids, --dry-run, --root DIR and --older-than-days N in any order; anything else is refused.
+let private parsePruneArgs (args: string list) : Result<PruneOptions, string> =
+  let rec go (o: PruneOptions) (rest: string list) =
+    match rest with
+    | [] -> Ok { o with Ids = List.rev o.Ids }
+    | "--dry-run" :: tail -> go { o with DryRun = true } tail
+    | "--root" :: dir :: tail -> go { o with Root = dir } tail
+    | "--older-than-days" :: n :: tail ->
+      match Double.TryParse n with
+      | true, d -> go { o with OlderThanDays = Some d } tail
+      | false, _ -> Error (sprintf "--older-than-days needs a number, not '%s'" n)
+    | flag :: _ when flag.StartsWith "--" -> Error (sprintf "unknown or incomplete option %s" flag)
+    | id :: tail -> go { o with Ids = id :: o.Ids } tail
+  go { Ids = []; DryRun = false; Root = "/tmp/lem"; OlderThanDays = None } args
+
+/// Deletes finished runs under the run root, or says what it would delete.
+let private pruneCommand (args: string list) : int =
+  match parsePruneArgs args |> Result.bind (fun o -> Prune.plan o.Root DateTime.UtcNow o.Ids o.OlderThanDays |> Result.map (fun plan -> o, plan)) with
+  | Error why ->
+    eprintfn "refused: %s" why
+    ExitCode.refused
+  | Ok (options, plan) ->
+    plan.Skipped |> List.iter (fun (id, why) -> eprintfn "kept %s: %s" id why)
+    plan.Delete
+    |> List.iter (fun r ->
+      match options.DryRun with
+      | true -> printfn "would delete %s (%s)" r.Path (Prune.humanBytes r.Bytes)
+      | false ->
+        Directory.Delete(r.Path, true)
+        printfn "deleted %s (%s)" r.Path (Prune.humanBytes r.Bytes))
+    printfn "%s %d run(s), %s" (if options.DryRun then "would free" else "freed") plan.Delete.Length (Prune.humanBytes (plan.Delete |> List.sumBy _.Bytes))
+    ExitCode.ok
+
 let private dllVersionCommand (args: string list) : int =
   match args with
   | [ path ] when File.Exists path ->
@@ -280,18 +340,21 @@ let parseResidueIds (json: string) : string list =
     | _ -> []
   with :? JsonException -> []
 
-/// (id, status) of each session the watcher saw, read back from sessions.seen.json.
-let parseSeen (json: string) : (string * string) list =
+/// (id, every status seen in order) of each session the watcher saw, read back from
+/// sessions.seen.json. An older file with only `status` reads as a one-status history.
+let parseSeen (json: string) : (string * string list) list =
+  let text (el: JsonElement) = el.GetString() |> Option.ofObj |> Option.defaultValue ""
   try
     use doc = JsonDocument.Parse json
     match doc.RootElement.ValueKind with
     | JsonValueKind.Array ->
       doc.RootElement.EnumerateArray()
       |> Seq.choose (fun s ->
-        match s.TryGetProperty "id", s.TryGetProperty "status" with
-        | (true, i), (true, st) when i.ValueKind = JsonValueKind.String && st.ValueKind = JsonValueKind.String -> Some (i.GetString(), st.GetString())
+        match s.TryGetProperty "id", s.TryGetProperty "statuses", s.TryGetProperty "status" with
+        | (true, i), (true, sts), _ when i.ValueKind = JsonValueKind.String && sts.ValueKind = JsonValueKind.Array ->
+          Some (text i, sts.EnumerateArray() |> Seq.filter (fun v -> v.ValueKind = JsonValueKind.String) |> Seq.map text |> List.ofSeq)
+        | (true, i), _, (true, st) when i.ValueKind = JsonValueKind.String && st.ValueKind = JsonValueKind.String -> Some (text i, [ text st ])
         | _ -> None)
-      |> Seq.map (fun (i, st) -> (i |> Option.ofObj |> Option.defaultValue "", st |> Option.ofObj |> Option.defaultValue ""))
       |> List.ofSeq
     | _ -> []
   with :? JsonException -> []
@@ -325,7 +388,7 @@ let private harnessErrorJson (id: string) (model: string) (task: string) (why: s
   let facts =
     { Stream = emptyStream; CmdcExit = -1; Oracle = OracleNotRun; OracleOutput = ""; Cleanup = CleanupNotRun; ResidueSessions = [] }
   let input =
-    { Id = id; Model = model; Harness = Cmdc; SagefsVersion = "unknown"; Task = task; Seconds = 0
+    { Id = id; Model = model; Harness = Cmdc; SagefsVersion = "unknown"; DaemonVersion = "unknown"; BridgeVersion = "unknown"; RunDir = ""; Task = task; Seconds = 0
       Facts = facts; Teardown = ExitedOnItsOwn; DaemonStart = None; DaemonEnd = None; DashboardUrl = ""
       SessionsSeen = []; SandboxProcessesLeft = []; ChangedFiles = []; Extra = [ { Stage = Preflight; Symptom = "the harness could not score this run"; Evidence = why } ] }
   render input { Outcome = HarnessError; Reason = why; Provider = None; FellOver = [] }
@@ -369,6 +432,9 @@ let private scoreCommand (args: string list) : int =
           let input =
             { Id = id; Model = model; Harness = harness
               SagefsVersion = Map.tryFind "sagefs-version" m |> Option.defaultValue "unknown"
+              DaemonVersion = Map.tryFind "daemon-version" m |> Option.defaultValue "unknown"
+              BridgeVersion = Map.tryFind "bridge-version" m |> Option.defaultValue "unknown"
+              RunDir = runDir
               Task = task
               Seconds = Map.tryFind "seconds" m |> Option.bind (fun s -> match Int32.TryParse s with | true, n -> Some n | _ -> None) |> Option.defaultValue 0
               Facts = facts; Teardown = teardown
@@ -389,7 +455,7 @@ let private scoreCommand (args: string list) : int =
     printfn "%s" json
     ExitCode.ok
   | _ ->
-    eprintfn "usage: LemScore score --run-dir D --task T --model M --harness H --oracle-exit N|skip [--cmdc-exit N --seconds N --sagefs-version V --cleanup C --mem-start P --avail-start B --leases-start N --port N]"
+    eprintfn "usage: LemScore score --run-dir D --task T --model M --harness H --oracle-exit N|skip [--cmdc-exit N --seconds N --sagefs-version V --daemon-version V --bridge-version V --cleanup C --mem-start P --avail-start B --leases-start N --port N]"
     ExitCode.usage
 
 [<EntryPoint>]
@@ -404,7 +470,9 @@ let main argv =
   | "replace-exact" :: rest -> replaceExactCommand rest
   | "expect" :: rest -> expectCommand rest
   | "dll-version" :: rest -> dllVersionCommand rest
+  | "version-skew" :: rest -> versionSkewCommand rest
+  | "prune" :: rest -> pruneCommand rest
   | "score" :: rest -> scoreCommand rest
   | _ ->
-    eprintfn "usage: LemScore free-model|run-id|daemon-check|cleanup|dll-version|score ..."
+    eprintfn "usage: LemScore free-model|run-id|daemon-check|cleanup|watch|sessions-under|replace-exact|expect|dll-version|version-skew|prune|score ..."
     ExitCode.usage

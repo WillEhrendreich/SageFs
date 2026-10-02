@@ -22,6 +22,8 @@
     <Compile Include="CmdcStream.fs" />
     <Compile Include="SharedDaemon.fs" />
     <Compile Include="Classify.fs" />
+    <Compile Include="Provenance.fs" />
+    <Compile Include="Prune.fs" />
     <Compile Include="Summary.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

@@ -17,11 +17,13 @@ let private factsFor (s: RunStream) (oracle: OracleVerdict) : RunFacts =
 
 let private inputFor (f: RunFacts) : SummaryInput =
   { Id = "space-bunny-parse-seed-01"; Model = "stealth/space-bunny-alpha"; Harness = Cmdc
-    SagefsVersion = "daemon 0.6.875+d7e11077; bridge dev build"; Task = "parse-seed"; Seconds = 61
+    SagefsVersion = "daemon 0.6.875+d7e11077; bridge dev build"
+    DaemonVersion = "0.6.875+d7e110776ff30c34db60a19949da26dadd940819"; BridgeVersion = "0.6.875+d7e110776ff30c34db60a19949da26dadd940819"
+    RunDir = "/tmp/lem/space-bunny-parse-seed-01"; Task = "parse-seed"; Seconds = 61
     Facts = f; Teardown = ExitedOnItsOwn
     DaemonStart = Some { Pressure = "normal"; AvailableBytes = 54000000000L; ActiveLeases = 0 }
     DaemonEnd = Some { Pressure = "normal"; AvailableBytes = 53000000000L; ActiveLeases = 0 }
-    DashboardUrl = "http://localhost:37750/dashboard"; SessionsSeen = [ "f50417a6", "Ready" ]; SandboxProcessesLeft = []; ChangedFiles = [ "DemoEnv/DemoEnv.fs" ]; Extra = [] }
+    DashboardUrl = "http://localhost:37750/dashboard"; SessionsSeen = [ "f50417a6", [ "Starting"; "Ready"; "Disconnected" ] ]; SandboxProcessesLeft = []; ChangedFiles = [ "DemoEnv/DemoEnv.fs" ]; Extra = [] }
 
 let private render' (f: RunFacts) : JsonElement =
   let json = render (inputFor f) (assess f)
@@ -29,7 +31,7 @@ let private render' (f: RunFacts) : JsonElement =
 
 let private requiredKeys =
   [ "id"; "model"; "harness"; "sagefsVersion"; "task"; "outcome"; "seconds"; "turns"; "toolCalls"; "sagefsMcp"
-    "oracle"; "residue"; "teardown"; "dashboardUrl"; "daemon"; "fellOver" ]
+    "oracle"; "residue"; "teardown"; "dashboardUrl"; "daemon"; "fellOver"; "daemonVersion"; "bridgeVersion"; "versionSkew"; "knownLimits" ]
 
 [<Tests>]
 let realRunTests =
@@ -92,6 +94,37 @@ let summaryTests =
       let root = render' (factsFor (realRun ()) OraclePassed)
       root.GetProperty("daemon").GetProperty("start").GetProperty("memoryPressure").GetString() |> Expect.equal "start" "normal"
       root.GetProperty("daemon").GetProperty("end").GetProperty("memoryPressure").GetString() |> Expect.equal "end" "normal"
+
+    testCase "matching bridge and daemon say versionSkew false and add no Preflight finding" <| fun _ ->
+      let root = render' (factsFor (realRun ()) OraclePassed)
+      root.GetProperty("versionSkew").GetBoolean() |> Expect.isFalse "same build"
+      root.GetProperty("fellOver").EnumerateArray()
+      |> Seq.exists (fun f -> f.GetProperty("stage").GetString() = "Preflight")
+      |> Expect.isFalse "no preflight finding"
+
+    testCase "a skewed bridge says versionSkew true and adds a Preflight finding naming both" <| fun _ ->
+      let f = factsFor (realRun ()) OraclePassed
+      let skewed = { inputFor f with BridgeVersion = "0.6.875+72b286a92e88b44d974844a060f6438be097a644" }
+      let root = JsonDocument.Parse(render skewed (assess f)).RootElement
+      root.GetProperty("versionSkew").GetBoolean() |> Expect.isTrue "skewed"
+      let pre = root.GetProperty("fellOver").EnumerateArray() |> Seq.find (fun x -> x.GetProperty("stage").GetString() = "Preflight")
+      pre.GetProperty("evidence").GetString() |> Expect.stringContains "both named" "72b286a9"
+
+    testCase "an unknown bridge version is null, never a guess" <| fun _ ->
+      let f = factsFor (realRun ()) OraclePassed
+      let root = JsonDocument.Parse(render { inputFor f with BridgeVersion = "unknown" } (assess f)).RootElement
+      root.GetProperty("versionSkew").ValueKind |> Expect.equal "null" JsonValueKind.Null
+
+    testCase "knownLimits is always there and says the daemon runs code outside the sandbox" <| fun _ ->
+      let root = render' (factsFor (realRun ()) OraclePassed)
+      let limits = root.GetProperty("knownLimits").EnumerateArray() |> Seq.map _.GetString() |> String.concat " "
+      limits |> Expect.stringContains "daemon" "NOT inside the sandbox"
+      limits |> Expect.stringContains "credential" "auth.json"
+
+    testCase "sessions seen in the dashboard show the whole status history" <| fun _ ->
+      let root = render' (factsFor (realRun ()) OraclePassed)
+      root.GetProperty("residue").GetProperty("sessionsSeenInDashboard").[0].GetString()
+      |> Expect.equal "history" "f50417a6 (Starting > Ready > Disconnected)"
 
     testCase "extra fellOver entries from an editor driver are parsed, and an unknown stage is refused" <| fun _ ->
       parseExtraFellOver """[{"stage":"Editor","symptom":"no gutter sign","evidence":"screenshot 3"}]"""
