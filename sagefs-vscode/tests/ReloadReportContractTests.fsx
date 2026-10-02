@@ -161,6 +161,16 @@ let tests =
       n.Text |> Expect.stringContains "cause" "A type's shape changed."
       n.Text |> Expect.stringContains "remedy" "Restart the app."
 
+    // Seen in the tour shot: "Hot reload: the app was restarted. Restarted the app: 'hello' is computed once ..."
+    // The daemon's own message already says it restarted, so saying it first as well read twice.
+    testCase "WHY - a restart message is the daemon's own words once, with the prefix and nothing repeated" <| fun _ ->
+      (noticeFor (finished "Restarted" 0 1 "Restarted the app: 'hello' is computed once when the module loads." "" "") Freshness.InSync |> notice).Text
+      |> Expect.equal "daemon's words" "Hot reload: Restarted the app: 'hello' is computed once when the module loads."
+
+    testCase "WHY - a restart with no words from the daemon still says it restarted" <| fun _ ->
+      (noticeFor (finished "Restarted" 0 1 "" "" "") Freshness.InSync |> notice).Text
+      |> Expect.equal "fallback" "Hot reload: the app was restarted."
+
     testCase "WHY - a compile failure is an error that keeps the last code serving, and offers the Output" <| fun _ ->
       let n = noticeFor (finished "CompileFailed" 0 0 "Program.fs(7,3): error FS0001" "" "") Freshness.InSync |> notice
       n.Severity |> Expect.equal "error" Severity.Error
