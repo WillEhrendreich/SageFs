@@ -30,7 +30,7 @@ let private mkSession (id: string) (app: SageFs.AppRun.AppRunState) (projectRole
     TestSummary = None
     CoverageSummary = None
     TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-    ActiveProject = None; ProjectRoles = projectRoles; App = app; WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+    ActiveProject = None; ProjectRoles = projectRoles; App = app; WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
 
 let private mkSnap () : DashboardSnapshot =
   { DashboardSnapshot.Version = "0.0.0"

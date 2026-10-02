@@ -112,7 +112,7 @@ let mcpResourcesTests = testList "MCP resources (item 12)" [
 
   testCase "sessionsToJson round-trips id/name/workingDirectory/status/workflow/projects" <| fun () ->
     let info = mkSessionInfo "my-session" "/repo/checkout"
-    let json = SageFs.SessionOperations.sessionsToJson jsonOpts [ info ]
+    let json = SageFs.SessionOperations.sessionsToJson jsonOpts Map.empty [ info ]
     use doc = JsonDocument.Parse(json)
     let sessions = doc.RootElement |> getProp "sessions" |> fun p -> p.EnumerateArray() |> Seq.toList
     sessions |> List.length |> Expect.equal "one session" 1
@@ -129,7 +129,7 @@ let mcpResourcesTests = testList "MCP resources (item 12)" [
     projects |> Expect.equal "projects should round-trip" [ "Foo.fsproj" ]
 
   testCase "sessionsToJson is stable/empty for no active sessions" <| fun () ->
-    let json = SageFs.SessionOperations.sessionsToJson jsonOpts []
+    let json = SageFs.SessionOperations.sessionsToJson jsonOpts Map.empty []
     use doc = JsonDocument.Parse(json)
     doc.RootElement.GetProperty("sessions").GetArrayLength() |> Expect.equal "no sessions" 0
 

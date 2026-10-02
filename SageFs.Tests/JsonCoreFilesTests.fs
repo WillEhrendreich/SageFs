@@ -247,10 +247,11 @@ let tests =
 
       testCase "WHY — the resource text is camelCase, an absent worktree branch is null, dates are ISO" <| fun _ ->
         let opts = Json.optionsOf Json.camelCase
-        SessionOperations.sessionsToJson opts [ sessionInfo "/repo/checkout" ]
+        let sources = Map.ofList [ "abcd1234", SourceState.InSync (System.DateTime(2026, 1, 1, 0, 0, 0, System.DateTimeKind.Utc), 3) ]
+        SessionOperations.sessionsToJson opts sources [ sessionInfo "/repo/checkout" ]
         |> Expect.equal
           "sessions text"
-          """{"sessions":[{"createdAt":"2026-01-01T00:00:00Z","id":"abcd1234","lastActivity":"2026-01-01T00:00:00Z","name":"checkout","projects":["Foo.fsproj"],"replFreshness":{"state":"InSync"},"status":"Ready","workflow":"REPL","workingDirectory":"/repo/checkout","worktreeBranch":null}]}"""
+          """{"sessions":[{"createdAt":"2026-01-01T00:00:00Z","id":"abcd1234","lastActivity":"2026-01-01T00:00:00Z","name":"checkout","projects":["Foo.fsproj"],"replFreshness":{"state":"InSync"},"sourceState":{"builtAt":"2026-01-01T00:00:00Z","filesChecked":3,"message":"Nothing the build was made from has changed since the build (2026-01-01 00:00:00Z); 3 file(s) compared.","state":"InSync"},"status":"Ready","workflow":"REPL","workingDirectory":"/repo/checkout","worktreeBranch":null}]}"""
     ]
 
     testList "DevReload compile-failure payload" [

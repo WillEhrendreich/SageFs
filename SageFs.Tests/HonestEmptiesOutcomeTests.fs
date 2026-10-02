@@ -250,6 +250,30 @@ let private editorEvalIsVisible (client: McpClient) (http: System.Net.Http.HttpC
     |> Expect.equal "the editor's cell is in the graph beside the two MCP cells" 3
   }
 
+/// Every session row on the daemon's two JSON session lists carries both facts about the build, each under its own name:
+/// whether the REPL is behind the app (`replFreshness`) and whether the files are ahead of the build (`sourceState`).
+let private sourceStates = [ "InSync"; "Stale"; "Rebuilding"; "Unknown" ]
+
+let private rowsCarryBothFacts (what: string) (rows: JsonElement list) =
+  rows |> Expect.isNonEmpty (sprintf "%s lists the sessions this gate made" what)
+  for row in rows do
+    row.GetProperty("replFreshness").GetProperty("state").GetString() |> Expect.isNotEmpty (sprintf "%s: the REPL freshness is there" what)
+    sourceStates |> Expect.contains (sprintf "%s: the source state is one of the closed states" what) (row.GetProperty("sourceState").GetProperty("state").GetString())
+
+let private sessionsSurfacesCarryBothFacts (client: McpClient) (http: System.Net.Http.HttpClient) : Task<unit> =
+  task {
+    let! status, body = Http.getJson http "/api/sessions"
+    status |> Expect.equal "the session list answers" 200
+    use apiDoc = JsonDocument.Parse(body: string)
+    rowsCarryBothFacts "/api/sessions" [ for row in apiDoc.RootElement.GetProperty("sessions").EnumerateArray() -> row ]
+
+    use cts = new CancellationTokenSource(TestTimeouts.toolCall)
+    let! resource = client.ReadResourceAsync("sessions://list", cancellationToken = cts.Token)
+    let text = resource.Contents |> Seq.choose (function :? TextResourceContents as t -> Some t.Text | _ -> None) |> Seq.head
+    use resourceDoc = JsonDocument.Parse text
+    rowsCarryBothFacts "sessions://list" [ for row in resourceDoc.RootElement.GetProperty("sessions").EnumerateArray() -> row ]
+  }
+
 /// The whole gate, in small tasks. Each is its own state machine on purpose: one large task over
 /// all of it made a Release build emit IL the runtime rejected (see McpToolOutcomeTests.fs).
 let private runGate (client: McpClient) (http: System.Net.Http.HttpClient) (bareDir: string) : Task<unit> =
@@ -263,6 +287,7 @@ let private runGate (client: McpClient) (http: System.Net.Http.HttpClient) (bare
       createReady client "create_project_session" [ "project", box fixtureProject; "working_directory", box fixtureDir ]
     do! failureBelongsToItsSession client bare fixtureSid
     do! editorEvalIsVisible client http bareDir bare
+    do! sessionsSurfacesCarryBothFacts client http
   }
 
 let private runHonestEmptiesGate () : Task<unit> =

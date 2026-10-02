@@ -363,7 +363,7 @@ let perSessionTestSummaryTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+          WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -389,7 +389,7 @@ let perSessionTestSummaryTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+          WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -423,7 +423,7 @@ let perSessionCoverageTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+          WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -449,7 +449,7 @@ let perSessionCoverageTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+          WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode

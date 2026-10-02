@@ -231,10 +231,28 @@ let formatSessionInfoTests = testList "formatSessionInfo" [
   test "WHY - the JSON read model of the session list carries the state for every session, level or not" {
     let behind = { mkSessionWithPid (testSessionId "ee000003") now SessionStatus.Ready (Some 1) with Freshness = ReplFreshness.BehindApp (1, [ "A.f" ]) }
     let level = mkSessionWithPid (testSessionId "ee000004") now SessionStatus.Ready (Some 1)
-    use doc = System.Text.Json.JsonDocument.Parse(SessionOperations.sessionsToJson (Json.optionsOf Json.camelCase) [ behind; level ])
+    use doc = System.Text.Json.JsonDocument.Parse(SessionOperations.sessionsToJson (Json.optionsOf Json.camelCase) Map.empty [ behind; level ])
     let states =
       [ for row in doc.RootElement.GetProperty("sessions").EnumerateArray() -> row.GetProperty("replFreshness").GetProperty("state").GetString() ]
     Expect.equal "one behind, one in sync" [ "BehindApp"; "InSync" ] states
+  }
+  test "WHY - the JSON read model carries sourceState beside replFreshness for every session, under its own name" {
+    let behind = { mkSessionWithPid (testSessionId "ee000005") now SessionStatus.Ready (Some 1) with Freshness = ReplFreshness.BehindApp (1, [ "A.f" ]) }
+    let editedAfterBuild =
+      SourceState.Stale [ { Path = "/repo/A.fs"; Because = StaleBecause.EditedAfterBuild (now, now.AddMinutes(-5.0)) } ]
+    let sources = Map.ofList [ SessionId.value behind.Id, editedAfterBuild ]
+    use doc = System.Text.Json.JsonDocument.Parse(SessionOperations.sessionsToJson (Json.optionsOf Json.camelCase) sources [ behind ])
+    let row = doc.RootElement.GetProperty("sessions").EnumerateArray() |> Seq.exactlyOne
+    Expect.equal "the REPL is behind the app" "BehindApp" (row.GetProperty("replFreshness").GetProperty("state").GetString())
+    Expect.equal "and the files are ahead of the build" "Stale" (row.GetProperty("sourceState").GetProperty("state").GetString())
+    Expect.equal "the stale file is named" "/repo/A.fs" (row.GetProperty("sourceState").GetProperty("changedFiles").EnumerateArray() |> Seq.exactlyOne |> fun f -> f.GetProperty("path").GetString())
+  }
+  test "WHY - a session nobody read the source of says so, and never that the build is current" {
+    let level = mkSessionWithPid (testSessionId "ee000006") now SessionStatus.Ready (Some 1)
+    use doc = System.Text.Json.JsonDocument.Parse(SessionOperations.sessionsToJson (Json.optionsOf Json.camelCase) Map.empty [ level ])
+    let row = doc.RootElement.GetProperty("sessions").EnumerateArray() |> Seq.exactlyOne
+    Expect.equal "unknown, not in sync" "Unknown" (row.GetProperty("sourceState").GetProperty("state").GetString())
+    Expect.equal "because nobody assessed it" "NotAssessed" (row.GetProperty("sourceState").GetProperty("reason").GetProperty("kind").GetString())
   }
 ]
 
