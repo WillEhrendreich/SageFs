@@ -142,14 +142,14 @@ A state machine decides which tools are valid to *call* in the current session s
 parsing CLI output. MCP provides tool discovery with typed schemas and no need for
 terminal emulation.
 
-**Current status — call-time gate, not a list filtered by session state**: for a caller with
-no member token, the `tools/list` response is unfiltered — an agent always sees the full
+**Current status: a call-time gate, not a list filtered by session state**. For a caller with
+no member token, the `tools/list` response is unfiltered: an agent always sees the full
 65-tool catalog, in every session state. What the state machine actually gates is *calling* a tool: `enforceToolCallGate`
 rejects a call to a tool that doesn't apply to the current state with a structured error
 ([`SageFs/Mcp.fs:614`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/Mcp.fs#L614),
 wired in [`SageFs/McpServer.fs:433`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/McpServer.fs#L433)).
 `get_session_status` reports which tools currently apply, but that's a self-service hint an
-agent has to read — not an enforced visibility filter. The one list filter there is keys on *who*
+agent has to read, not an enforced visibility filter. The one list filter there is keys on *who*
 is calling, not on session state: `createToolListFilter` in `SageFs/McpServer.fs` shows a caller
 with a member token only the tools its role allows, and shows a connection with no token only
 status when the daemon runs with `SAGEFS_IDENTITY_POLICY=TokenRequired`. See
