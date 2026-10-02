@@ -1337,9 +1337,26 @@ let sessionCommand
   (action: string -> Client.Client -> JS.Promise<Client.ApiOutcome>)
   =
   simpleCommand title defaultMsg (fun c ->
-    match activeSessionId with
-    | Some sessionId -> action sessionId c
-    | None -> promise { return Client.Failed noSessionForThisWindowMessage })
+    promise {
+      // A window binds on its first status refresh. A command that arrives before that is not "no session": ask the
+      // daemon now, and bind the way the refresh would (`SessionScopePure.commandTarget`).
+      let! target =
+        promise {
+          match activeSessionId with
+          | Some _ -> return SessionScopePure.commandTarget (workspaceFolderPaths () |> Array.toList) activeSessionId []
+          | None ->
+            let! sessions = Client.listSessions c
+            knownSessions <- sessions
+            let target = SessionScopePure.commandTarget (workspaceFolderPaths () |> Array.toList) None (sessionRefs sessions)
+            match target, windowSession sessions with
+            | SessionScopePure.CommandTarget.Session _, Some s -> adoptWindowSession c s
+            | _ -> ()
+            return target
+        }
+      match target with
+      | SessionScopePure.CommandTarget.Session sessionId -> return! action sessionId c
+      | SessionScopePure.CommandTarget.NoSessionForThisWindow -> return Client.Failed noSessionForThisWindowMessage
+    })
 
 type EvalResult =
   | EvalOk of output: string * elapsed: float

@@ -60,6 +60,24 @@ let bind (workspaceRoots: string list) (selection: Selection) (sessions: Session
     | Some s -> Binding.Bound s
     | None -> Binding.NoSessionForThisWorkspace
 
+/// What a command that acts on "the session" acts on.
+[<RequireQualifiedAccess>]
+type CommandTarget =
+  | Session of sessionId: string
+  /// Nothing bound, and none of the daemon's sessions is for this workspace.
+  | NoSessionForThisWindow
+
+/// The session a command acts on: the one the window is bound to, and a window that has not bound yet (a command that arrives before
+/// the first status refresh) the one it would bind to now. Never a stranger's session, and never `NoSessionForThisWindow` while the
+/// workspace's own session is on the daemon.
+let commandTarget (workspaceRoots: string list) (bound: string option) (sessions: SessionRef list) : CommandTarget =
+  match bound with
+  | Some sessionId -> CommandTarget.Session sessionId
+  | None ->
+    match bind workspaceRoots Selection.NotSelected sessions with
+    | Binding.Bound s -> CommandTarget.Session s.Id
+    | Binding.NoSessionForThisWorkspace -> CommandTarget.NoSessionForThisWindow
+
 // ── Which sessions' events a window shows ────────────────────────────────
 
 /// The daemon sends every session's events on one stream. By default a window shows the ones from its
