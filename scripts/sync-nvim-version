@@ -81,8 +81,22 @@ echo "sagefs.nvim version file now says $VERSION"
 # Same command the plugin's CI runs ('busted' reads .busted). A suite that runs and
 # fails stops the sync. A runner that is not installed here cannot say anything, so
 # the sync goes ahead and says so: the push triggers the plugin's CI, which runs it.
+# Neovim runs LuaJIT (Lua 5.1 semantics), and that is the only Lua the plugin supports, so the suite runs
+# under LuaJIT with the Lua 5.1 LuaRocks tree, never under a newer Lua.
+run_busted() {
+  local rocks="$HOME/.luarocks" runner
+  runner=$(ls -d "$rocks"/lib/luarocks/rocks-5.1/busted/*/bin/busted 2>/dev/null | head -1 || true)
+  if [ -n "$runner" ] && command -v luajit > /dev/null 2>&1; then
+    LUA_PATH="$rocks/share/lua/5.1/?.lua;$rocks/share/lua/5.1/?/init.lua;;" \
+      LUA_CPATH="$rocks/lib/lua/5.1/?.so;;" luajit "$runner"
+  else
+    echo "busted: command not found (needs luajit and busted installed for Lua 5.1 under $rocks)"
+    return 127
+  fi
+}
+
 out=$(mktemp)
-if (cd "$NVIM" && PATH="$HOME/.luarocks/bin:$PATH" busted > "$out" 2>&1); then
+if (cd "$NVIM" && run_busted > "$out" 2>&1); then
   echo "sagefs.nvim busted suite green"
 elif grep -q -E "module 'busted[^']*' not found|busted: (command )?not found|No such file or directory" "$out"; then
   warn "busted is not usable on this machine, so the plugin's tests were not run here; its CI will run them on the push."
