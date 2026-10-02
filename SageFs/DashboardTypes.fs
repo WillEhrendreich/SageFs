@@ -459,6 +459,17 @@ module OutputFollow =
       Signals.OutputFeedRev
       Signals.OutputPinned Signals.OutputSeenEvals Signals.OutputFeedEvals
 
+  /// Runs once on #output-panel, when the page first makes it. A panel that follows the output stays at the bottom when
+  /// its OWN box changes size too: the Evaluate box opening under it, an eval's answer appearing there, the window
+  /// being resized. The browser does not do this for you (the scroll position stays and the bottom moves away), and the
+  /// follow effect above only runs when the output or the pin changes, so without this the newest line stayed hidden
+  /// below the fold until the next output. Pinned only, so a reader who scrolled up is never moved. One observer per
+  /// element, however many times the page applies the attribute.
+  let resizeFollowExpr =
+    sprintf
+      "el.followResize || (el.followResize = new ResizeObserver(() => { $%s && el.scrollTo({ top: el.scrollHeight, behavior: 'instant' }) }), el.followResize.observe(el))"
+      Signals.OutputPinned
+
   /// A revision of the rendered output: changes when any line does. Following
   /// keys off it, so output that isn't an eval result still follows.
   /// Deterministic (FNV-1a) rather than `String.GetHashCode`, which is

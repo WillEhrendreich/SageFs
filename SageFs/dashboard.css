@@ -477,6 +477,14 @@ h2 {
   flex-shrink: 0;
   padding: 0;
   border-top: 1px solid var(--border-normal);
+  /* The most of the window an eval's answer may take under the Evaluate box. The area never shrinks, so an answer
+     of a few hundred lines would take the whole column and leave the output panel a few pixels; it scrolls instead. */
+  --eval-result-max-height: 30vh;
+
+  & #eval-result {
+    max-height: var(--eval-result-max-height);
+    overflow-y: auto;
+  }
 
   & summary {
     list-style: none;

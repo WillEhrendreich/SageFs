@@ -842,6 +842,7 @@ let renderOutputForSession (sessionId: string) (evalsFinished: int) (lines: Outp
       Ds.signal (Signals.OutputFeedEvals, evalsFinished)
       Ds.signal (Signals.OutputFeedRev, OutputFollow.contentRev lines)
       Ds.onEvent ("scroll", OutputFollow.scrollExpr)
+      Ds.onInit OutputFollow.resizeFollowExpr
       Ds.effect OutputFollow.followEffectExpr ] [
     Elem.div
       [ Attr.class' "eval-in-progress-banner meta"
