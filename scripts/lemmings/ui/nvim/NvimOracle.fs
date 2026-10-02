@@ -180,7 +180,7 @@ let pluginCommands (pluginDir: string) : Set<string> =
   else Set.empty
 
 let private git (workspace: string) (args: string list) : string list =
-  match Nvim.runProcess "git" ([ "-C"; workspace ] @ args) [] 30_000 with
+  match Nvim.runProcess "git" (Nvim.harnessGitPins @ [ "-C"; workspace ] @ args) [] 30_000 with
   | Result.Ok o when o.ExitCode = 0 -> o.Output.Split('\n') |> Array.toList |> List.filter (fun l -> l.Trim().Length > 0)
   | _ -> []
 

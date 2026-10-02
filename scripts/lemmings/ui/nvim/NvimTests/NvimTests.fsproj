@@ -28,6 +28,7 @@
     <Compile Include="AnsiTests.fs" />
     <Compile Include="OracleTests.fs" />
     <Compile Include="DriverTests.fs" />
+    <Compile Include="IsolationTests.fs" />
     <Compile Include="TourTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

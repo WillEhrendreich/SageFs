@@ -3,7 +3,10 @@
 A lemming is a cheap model that gets only what a new user has and does a small task, so I can
 see where SageFs falls over. The ones in `scripts/lemmings/run-lemming` call SageFs over MCP.
 These ones drive Neovim with the sagefs.nvim plugin, the way I would: they send keys and read
-the screen. They cannot call MCP, run Lua, or touch the plugin's internals.
+the screen. The driver they talk to has no command for MCP or Lua. The keys themselves are a different
+matter: Neovim will run `:!cmd`, `:terminal` or `:lua os.execute(...)` when they are typed, and no key
+parser can allow-list that away. So the editor runs in a sandbox that decides what such a shell can reach
+(see "Why it is built this way" for exactly what, and for what it does not cut).
 
 The lemming is Command Code (`cmdc`) on a model the live `cmdc --list-models` marks FREE. Anything
 else is refused before a single call is made. A provider quota error is recorded as its own
@@ -14,7 +17,27 @@ http://localhost:37750/dashboard. Nothing here starts, stops or restarts it. A r
 `<model-short>-<task>-<nn>` (for example `space-bunny-ui-eval-01`) and its `w` directory is the working
 directory, so each lemming shows up in the dashboard under that name.
 
+## Prerequisites
+
+The runners check all of this before they create a run directory, call the daemon or call a model, and
+print every missing item at once with how to get it (`lem_nvim_preflight` in `lib-nvim.sh`, exit 4). A
+tour needs the same list minus `cmdc`, its login and `~/.dotnet`.
+
+| Need | Why | If it is somewhere else |
+|---|---|---|
+| Linux with `bwrap` (bubblewrap), `tmux`, `git`, `jq`, `flock`, `curl` | Both sandboxes, the editor's terminal, the baseline commit, the summary | Install them with your package manager. |
+| .NET 11 SDK and the .NET 10 runtime | `LemScore` (scoring, daemon checks) targets net11.0, `LemDrive.dll` targets net10.0. Both are built on first use. | `dotnet --list-sdks`, `dotnet --list-runtimes` |
+| `~/.dotnet`, `~/.local/share/mise`, `/run/systemd/resolve` | The lemming sandbox binds the SDK and `cmdc`'s toolchain from the first two, DNS from the third. `bwrap` refuses to start when one is missing. | These paths are fixed. |
+| Neovim (0.10+; the runs were made with a 0.13 nightly) at `~/.local/share/bob/nvim-bin/nvim` | The editor | `SAGEFS_LEMMING_NVIM=/path/to/nvim` |
+| The F# tree-sitter parser at `~/.local/share/nvim/site/parser/fsharp.so`, with `queries/fsharp` beside it | Syntax highlighting, and the plugin finds cells with it | `LEM_TS_PARSER_DIR=<a site directory>` |
+| A `sagefs.nvim` checkout at `~/Work/sagefs.nvim` | The plugin, mounted read-only. I never modify it from here. | `SAGEFS_LEMMING_NVIM_PLUGIN=/path/to/checkout` |
+| `cmdc` (Command Code) installed with mise, so it lives under `~/.local/share/mise`, and logged in once (`~/.commandcode/auth.json`) | The lemming itself | The sandbox binds only that toolchain directory. |
+| A dev SageFs daemon already running on 37749 | Every run is a client of it. The harness never starts, stops or restarts it. | Start it yourself, in its own terminal, from a SageFs checkout: `dotnet build SageFs -c Release`, then `dotnet SageFs/bin/Release/net11.0/SageFs.dll --no-resume` (the dashboard is then at http://localhost:37750/dashboard). |
+
 ## Run one
+
+The scripts find each other from their own location, so they work from any directory. The paths below are
+relative to the repository root.
 
 ```
 scripts/lemmings/run-ui-lemming nvim ui-eval stealth/space-bunny-alpha 60
@@ -54,15 +77,31 @@ runner reads the live list, so a model that stops being free stops being accepte
 
 | Thing | How it is kept apart |
 |---|---|
-| tmux socket | Lives in `out/tmux`, which the lemming sandbox hides. A client that could reach it could open a window that runs commands, so the lemming only ever reaches a unix socket whose server speaks six commands. |
-| Files | The lemming's view of the workspace is read-only. The editor sandbox's is writable. |
+| tmux socket | Lives in `out/tmux`, which the lemming sandbox hides. A client that could reach it could open a window that runs commands, so the lemming only ever reaches a unix socket whose server speaks seven commands. |
+| Files, lemming | The lemming's view of the workspace is read-only. |
+| Files, editor | Only `<run>/w` is writable in the editor sandbox, and its `.git` is read-only on top of that. `<run>/bin` (the driver the harness runs later, outside every sandbox), `out/` (the evidence, covered by a tmpfs with `tmux/` and `ui/` put back) and the rest of the run directory are not mounted at all, and `HOME` is a tmpfs. So `:!touch ../bin/lemdrive/X` and `:!touch .git/hooks/X` write into nothing the harness reads. `IsolationTests.fs` starts the real sandbox arguments, runs those writes and reads back what reached the host. |
+| Harness git | The harness's own `git diff` and `ls-files` on the workspace run outside the sandboxes with `core.fsmonitor`, `core.hooksPath`, `core.pager` and `diff.external` pinned off on the command line (`lem_git`, `Nvim.harnessGitPins`), on top of the read-only `.git`. |
 | Credentials | `~/.commandcode/auth.json` is bound read-only into the lemming sandbox only. |
-| Harness files | `out/` is covered by a tmpfs in both sandboxes (`ipc/` and, for the editor, `tmux/` are put back). |
+| NuGet | The lemming sandbox sees `~/.nuget/packages` read-only with a per-run layer on top (`<run>/nuget`), so a restore finds what I already have and nothing a lemming adds lands in the cache my other projects use. NuGet's own config is not mounted. |
+| MCP bridge | None. `LEM_NO_BRIDGE=1` makes `lem_run_cmdc` skip the 380 MB bridge copy and write an empty `.mcp.json`, so `summary.json` carries one SageFs version, the daemon's. |
+| The suite the oracle runs | In the lemming sandbox with `--unshare-net` (the daemon already restored the project, so there is nothing to download). |
 | Daemon | Reachable over localhost (the model API needs the network, so it is not isolated). The prompt never mentions it. The summary lists any shell command that reached for a port or a tool it should not have. |
 | Processes | Both sandboxes have their own pid namespace. Teardown is graceful first (`tmux kill-server`), forced only if that fails, and both are recorded. |
 
-The limit: the lemming has a shell (cmdc's `shell_command`), so it could `curl` the daemon. The
-sandbox cannot stop that without cutting off the model API. The summary flags it instead.
+The limits, stated plainly:
+
+- A shell inside the editor (`:!`, `:terminal`, `:lua`) is not stopped, because a key list cannot be
+  allow-listed down to "edits only". It runs as me, inside the editor sandbox, with the workspace
+  writable and nothing else of mine in sight.
+- The editor sandbox has the network, because the plugin has to reach the daemon on localhost and a task
+  may curl the app the daemon runs on another localhost port. So a shell there can reach the daemon's
+  HTTP API with any verb, which bypasses the `nvim-shell` allow-list. That is no more than the plugin
+  itself can do: the daemon evaluates F# and builds projects for whoever asks it, outside every sandbox,
+  and an edited `.fsproj` is built by it. The shared dev daemon is the accepted trust boundary of this
+  harness, the same as for the MCP lemmings. The lemming's own `shell_command` can `curl` it too, and the
+  summary flags that.
+- The `nvim-shell` allow-list (curl on localhost, cat, ls) is a convenience for the tour and the task
+  prompts, not a security boundary.
 
 ## What the lemming can do
 
@@ -78,8 +117,15 @@ It reads `LEMDRIVE.md` (copied into its workspace) and runs `dotnet /lem/drive/L
 | `nvim-shell <cmd>` | One `curl` (localhost only), `cat` or `ls` in a second tmux window. No quotes, pipes, `;`, `&`, `$`, backticks or redirection. `cat` and `ls` stay inside the project. |
 | `nvim-shot <name>` | Saves a coloured PNG for the design review. The lemming gets the screen as text back, because free models cannot read the image. |
 
-There is no command that runs Lua, calls the plugin, or reaches MCP. `NvimTests` pins that a handful of
-obvious names (`lua`, `eval`, `exec`, `call`, `mcp`, `server`, `rpc`) are refused.
+The tool has no command that runs Lua, calls the plugin, or reaches MCP. `NvimTests` pins that a handful of
+obvious names (`lua`, `eval`, `exec`, `call`, `mcp`, `server`, `rpc`) are refused. That is a statement about
+the tool's command set only. Keys sent with `keys` and `nvim-type` go to a real Neovim, which can run a shell
+or Lua, and what that can reach is the editor sandbox's job (above).
+
+Typed text goes to tmux a piece at a time. tmux cuts a `send-keys` argument at a trailing `;` and drops it
+(`abc;;` arrived as `abc;`, which is how the first F# smoke run could never end a cell), so every `;` is
+sent as a raw byte (`send-keys -H 3b`). `NvimTests` types `...;;` through a real tmux into `cat` and reads
+the bytes back.
 
 ## The tasks
 
@@ -116,7 +162,7 @@ Everything is under `<run>/out`:
 ## Screenshots and tours (for the design review)
 
 `nvim-shot <name>` draws the pane exactly as it is: `tmux capture-pane -e` gives ANSI text, `Ansi.fs`
-turns it into HTML (a closed set of SGR cases, total, never changes the visible text), and `Shot.fs`
+turns it into HTML (a closed set of SGR cases, total, never changes the visible text), and `NvimShot.fs`
 draws that with headless Chromium through Playwright.NET, the package SageFs.Tests already uses. The
 font stack, the 14px/18px cell and the dark background are fixed and written beside each PNG. The browser
 is started with no `DISPLAY`, `WAYLAND_DISPLAY` or `XDG_RUNTIME_DIR`, so it cannot reach the desktop.
@@ -127,6 +173,7 @@ A tour puts the editor in the same states every time, with no lemming:
 scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/demoenv-first-run.tour
 scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/demoenv-live-tests.tour
 scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/falco-hot-reload.tour falco-hello Program.fs
+scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/fsharp-cell-terminator.tour   # types `...;;` into a real Neovim and expects both semicolons on screen
 dotnet LemDrive.dll nvim tour-check some.tour      # parse only, report every bad line
 dotnet LemDrive.dll nvim render shot.txt out.png   # draw a saved shot again
 ```
@@ -162,14 +209,14 @@ status line keeps `(Starting)`, the message line keeps `[SageFs] Warming up:`), 
 | File | What |
 |---|---|
 | `Nvim.fs` | The driver: key notation, shell allow-list, tmux, the server and client, shots, timeline. |
-| `Ansi.fs`, `Shot.fs` | ANSI to HTML, HTML to PNG. |
-| `Tour.fs` | The tour parser and runner, `tour`, `tour-check`, `render`. |
+| `Ansi.fs`, `NvimShot.fs` | ANSI to HTML, HTML to PNG. |
+| `NvimTour.fs` | The tour parser and runner, `tour`, `tour-check`, `render`. |
 | `NvimOracle.fs`, `NvimMain.fs` | The oracles and the summary, and the command dispatch. |
 | `LemDriveNvim.fsproj` | Builds `LemDrive.dll` for the Neovim half. The shared LemDrive project takes the same files. |
-| `lib-nvim.sh`, `run-nvim-lemming`, `run-nvim-tour`, `oracle.sh` | The process plumbing: bubblewrap, tmux, port and file setup. No logic. |
-| `init.lua` | The Neovim config the lemming starts with: the plugin on the runtimepath, the F# filetype and parser, a status line that includes the plugin's own component. Configuration, not logic. |
+| `lib-nvim.sh`, `run-nvim-lemming`, `run-nvim-tour`, `oracle.sh` | The process plumbing: the preflight, bubblewrap, tmux, port and file setup. No logic. |
+| `init.lua` | The Neovim config the lemming starts with: the plugin on the runtimepath, the F# filetype and parser, a status line that includes the plugin's own component, and Neovim's message UI (`ui2`) so another session's "[SageFs] Warming up:" lines never become a "Press ENTER" prompt that costs the lemming a turn. Configuration, not logic. |
 | `tasks/`, `tours/`, `LEMDRIVE.md` | What the lemming is asked, what a tour does, and the driver's README the lemming reads. |
-| `NvimTests/` | 53 tests: properties for ANSI to HTML, examples for the key notation, shell allow-list, command set, timeline line and tour parser, a round trip for tours, and the summary filter that drops MCP-only findings. |
+| `NvimTests/` | 59 tests: properties for ANSI to HTML, examples for the key notation, shell allow-list, command set, timeline line and tour parser, a round trip for tours, the summary filter that drops MCP-only findings, text ending in `;;` typed through a real tmux into `cat`, the editor sandbox's mounts (writes to the driver, `.git` and `out/` never reach the host), and the pinned git. The tmux and bubblewrap tests skip, saying so, where those are not installed. |
 
 `dotnet run --project scripts/lemmings/ui/nvim/NvimTests` runs the tests.
 

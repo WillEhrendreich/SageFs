@@ -2,12 +2,18 @@
 //
 // A lemming gets a terminal-ish driver and nothing else: it can send keys to a Neovim
 // that runs inside tmux, read the screen, wait, read :messages, and run three read-only
-// shell commands in a second tmux window. It cannot run Lua, call the plugin, or reach
-// the daemon through this tool. The enforcement is not a promise in a README. The
-// lemming-side client (`dotnet LemDrive.dll nvim <command>`) only talks to a unix socket,
-// and the server on the other end of that socket only knows the closed command set
-// below. The tmux socket itself never enters the lemming's sandbox, so a lemming cannot
-// ask tmux to open a window of its own.
+// shell commands in a second tmux window. This TOOL has no command that runs Lua, calls
+// the plugin, or reaches the daemon. The lemming-side client
+// (`dotnet LemDrive.dll nvim <command>`) only talks to a unix socket, and the server on the
+// other end of that socket only knows the closed command set below. The tmux socket itself
+// never enters the lemming's sandbox, so a lemming cannot ask tmux to open a window of its own.
+//
+// What this tool does NOT do is stop the KEYS from reaching a shell: Neovim is a real editor,
+// so `:!cmd`, `:terminal`, `:lua os.execute(...)` and `!!sh` all work when typed. A key list
+// cannot be allow-listed down to "edits only", so that is not attempted here. What a shell
+// inside the editor can reach is fixed by the editor sandbox's mounts (lib-nvim.sh,
+// lem_editor_bwrap_args: only the workspace is writable, and its .git is read-only), and
+// IsolationTests.fs pins it.
 //
 // Pure parts (key notation, shell allow-list, screen header) are plain functions so they
 // can be tried in the SageFs REPL. The process and socket parts sit below them.
@@ -549,6 +555,16 @@ let runProcess (exe: string) (args: string list) (env: (string * string) list) (
   with ex ->
     Result.Error(sprintf "could not run %s: %s" exe ex.Message)
 
+/// What the harness puts in front of every `git` it runs on a workspace the editor could write to.
+/// The editor's .git is mounted read-only, and a repository is also a list of programs to run
+/// (hooks, fsmonitor, a pager, an external diff), so those are pinned off with `-c`, which beats
+/// every config file. lib-nvim.sh's `lem_git` says the same thing for the shell side.
+let harnessGitPins: string list =
+  [ "-c"; "core.fsmonitor=false"
+    "-c"; "core.hooksPath=/dev/null"
+    "-c"; "core.pager=cat"
+    "-c"; "diff.external=" ]
+
 type TmuxTarget =
   { Dir: string
     Label: string
@@ -565,7 +581,21 @@ let tmux (t: TmuxTarget) (args: string list) : Result<string, string> =
 
 let private bindResult (f: 'a -> Result<'b, string>) (r: Result<'a, string>) = Result.bind f r
 
-let private sendTokens (t: TmuxTarget) (window: string) (tokens: KeyToken list) : Result<unit, string> =
+/// The arguments (after `send-keys -t <window>`) that type one line of text.
+///
+/// tmux reads its own command line before it reads ours: an argument that ENDS in `;` is cut there
+/// as a command separator and the `;` is dropped (so `abc;;` types `abc;`, the F# cell terminator
+/// loses half of itself), and a backslash before a `;` is eaten (`a\\;b` types `a\;b`). No quoting
+/// of the text survives that. So every `;` goes out as a raw byte with `send-keys -H 3b`, which
+/// tmux does not parse, and the text between the semicolons goes out with `-l --`.
+let tmuxTextCalls (line: string) : string list list =
+  [ for m in Regex.Matches(line, ";+|[^;]+") do
+      if m.Value.[0] = ';' then
+        yield "-H" :: List.replicate m.Value.Length "3b"
+      else
+        yield [ "-l"; "--"; m.Value ] ]
+
+let sendTokens (t: TmuxTarget) (window: string) (tokens: KeyToken list) : Result<unit, string> =
   let sendOne (token: KeyToken) : Result<unit, string> =
     match token with
     | Key chord ->
@@ -582,7 +612,11 @@ let private sendTokens (t: TmuxTarget) (window: string) (tokens: KeyToken list) 
       |> Array.mapi (fun i line ->
         let typed =
           if line.Length = 0 then Result.Ok()
-          else tmux t [ "send-keys"; "-t"; window; "-l"; "--"; line ] |> Result.map ignore
+          else
+            tmuxTextCalls line
+            |> List.fold
+              (fun acc args -> acc |> bindResult (fun () -> tmux t ([ "send-keys"; "-t"; window ] @ args) |> Result.map ignore))
+              (Result.Ok())
         let enter =
           if i < lines.Length - 1 then tmux t [ "send-keys"; "-t"; window; "Enter" ] |> Result.map ignore
           else Result.Ok()

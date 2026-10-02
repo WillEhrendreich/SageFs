@@ -4,6 +4,8 @@ module NvimTests.DriverTests
 /// its shell allow-list are what keep "only keys" true. Each refusal is an example.
 open Expecto
 open Expecto.Flip
+open System
+open System.IO
 open LemDrive
 
 let private keys (input: string) : Nvim.KeyToken list =
@@ -151,4 +153,74 @@ let screens =
       let snap : Nvim.ScreenSnapshot = { Rows = [ "a"; "bar"; "" ]; CursorRow = 3; CursorCol = 9; Mode = Nvim.Normal }
       Nvim.formatScreen snap
       |> Expect.stringStarts "first line" "[nvim] mode=NORMAL | cursor on screen row 3, column 9 | status line: bar"
+  ]
+
+/// WHY: the whole job of an F# REPL lemming is to end a cell with `;;`. tmux 3.7 cuts a send-keys
+/// argument at a trailing `;` and drops it, so `...;;` reached the editor as `...;` and the cell
+/// never ran. The first test pins the shape of the calls; the second types through a REAL tmux
+/// into `cat` and reads back the bytes.
+[<Tests>]
+let typedText =
+  let tmuxAvailable =
+    match Nvim.runProcess "tmux" [ "-V" ] [] 5000 with
+    | Result.Ok o -> o.ExitCode = 0
+    | Result.Error _ -> false
+
+  /// Types each line through the driver's own sendTokens into a `cat` in a private tmux server, and
+  /// returns what cat wrote.
+  let typedThroughTmux (tokens: Nvim.KeyToken list) : string =
+    let dir = Path.Combine(Path.GetTempPath(), "lem-typed-" + Guid.NewGuid().ToString("N").Substring(0, 8))
+    Directory.CreateDirectory dir |> ignore
+    let target: Nvim.TmuxTarget = { Dir = dir; Label = "typed"; Session = "lem" }
+    let sink = Path.Combine(dir, "sink.txt")
+    try
+      match Nvim.tmux target [ "-f"; "/dev/null"; "new-session"; "-d"; "-s"; "lem"; "-n"; "nvim"; "-x"; "200"; "-y"; "20"; sprintf "cat > %s" sink ] with
+      | Result.Error e -> failwithf "could not start tmux: %s" e
+      | Result.Ok _ -> ()
+      Threading.Thread.Sleep 300
+      match Nvim.sendTokens target "lem:nvim" tokens with
+      | Result.Error e -> failwithf "could not type: %s" e
+      | Result.Ok() -> ()
+      let deadline = DateTime.UtcNow.AddSeconds 5.0
+      let rec wait () =
+        let text = if File.Exists sink then File.ReadAllText sink else ""
+        if text.EndsWith "\n" || DateTime.UtcNow > deadline then text
+        else
+          Threading.Thread.Sleep 50
+          wait ()
+      wait ()
+    finally
+      Nvim.tmux target [ "kill-server" ] |> ignore
+      try Directory.Delete(dir, true) with _ -> ()
+
+  let lines = [ "abc;;"; "x;"; ";"; ";;;"; "a;b"; @"a\;"; @"a\;b"; "a ; b ;; c"; @"trailing\"; "é中;;" ]
+
+  testList "typed text" [
+    testCase "no argument handed to tmux ends in a semicolon, and joining the pieces gives the line back" <| fun _ ->
+      for line in lines do
+        let calls = Nvim.tmuxTextCalls line
+        for args in calls do
+          match List.last args with
+          | last when args.Head <> "-H" -> last.EndsWith ";" |> Expect.isFalse (sprintf "'%s' goes out with -l and no trailing ;" line)
+          | _ -> ()
+        let rebuilt =
+          calls
+          |> List.map (function
+            | "-l" :: "--" :: [ text ] -> text
+            | "-H" :: bytes -> bytes |> List.map (fun b -> string (char (Convert.ToInt32(b, 16)))) |> String.concat ""
+            | other -> failwithf "unexpected call %A" other)
+          |> String.concat ""
+        rebuilt |> Expect.equal (sprintf "'%s' is rebuilt from its calls" line) line
+
+    testCase "text that ends in ;; round-trips through a real tmux, byte for byte" <| fun _ ->
+      if not tmuxAvailable then skiptest "tmux is not installed"
+      let typed = lines |> List.map (fun l -> Nvim.Text l) |> List.collect (fun t -> [ t; Nvim.Key { Ctrl = false; Alt = false; Shift = false; Base = Nvim.Named Nvim.Enter } ])
+      typedThroughTmux typed
+      |> Expect.equal "what cat received" (String.concat "\n" lines + "\n")
+
+    testCase "the cell the F# lemming has to type keeps both semicolons" <| fun _ ->
+      if not tmuxAvailable then skiptest "tmux is not installed"
+      let cell = "parseWindow (Some \"10,20,800,600\");;"
+      typedThroughTmux [ Nvim.Text(cell + "\n") ]
+      |> Expect.equal "the cell as typed" (cell + "\n")
   ]

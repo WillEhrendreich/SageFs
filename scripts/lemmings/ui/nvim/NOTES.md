@@ -113,3 +113,10 @@ Copy A (the one that wrote the runner, oracle, lib-nvim and is running smoke lem
 3. Smoke: one real run on a free model; verify nothing left in the dashboard.
 4. nvim-shot / tours (screenshots) as main asked.
 5. `nvim` case in the shared LemDrive Program.fs (wf-3) at merge time.
+
+## Fix pass after the verifier (isolation, `;;`, prerequisites)
+
+- `;` is typed as a raw byte (`send-keys -H 3b`): tmux 3.7 dropped a trailing `;` from a `send-keys` argument, so `...;;` never ended an F# cell. `Nvim.tmuxTextCalls`, tested through a real tmux.
+- The editor sandbox binds only `<run>/w` (its `.git` read-only), not `<run>`: `lem_editor_bwrap_args`, `IsolationTests.fs`. The harness's git is pinned (`lem_git`, `Nvim.harnessGitPins`).
+- The oracle's suite has no network; the lemming sandbox sees `~/.nuget/packages` read-only under a per-run overlay; `LEM_NO_BRIDGE=1` skips the unused MCP bridge for editor lemmings.
+- `init.lua` enables ui2 so other sessions' messages do not become "Press ENTER" prompts. `lem_nvim_preflight` names every missing prerequisite before a run starts.

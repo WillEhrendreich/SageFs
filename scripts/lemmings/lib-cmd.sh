@@ -16,7 +16,11 @@
 #   lem_run_cmdc <workdir> <prompt-file> <model> <max-turns> <events-file> <stderr-file>
 #                                     cmdc -p under bubblewrap in <workdir>. Honours LEM_EXTRA_BWRAP
 #                                     (array of bwrap args) and LEM_EXTRA_ENV (array of NAME=VALUE).
-#                                     Sets LEM_EXIT and LEM_SECONDS
+#                                     Sets LEM_EXIT and LEM_SECONDS. LEM_NO_BRIDGE=1 skips the SageFs
+#                                     MCP bridge (no copy in the run, empty .mcp.json): an editor
+#                                     lemming has no MCP server
+#                                     The user's NuGet package cache is read-only inside, with a
+#                                     per-run layer (<run>/nuget) for packages the lemming adds
 #   lem_score <run-dir> <task> <model> <harness> <oracle-exit>
 #                                     writes <run-dir>/out/summary.json (harness: cmdc|cmdc-nvim|
 #                                     cmdc-vscode; oracle-exit: an exit code, or "skip")
@@ -150,13 +154,18 @@ lem_install_workspace() {
   local workdir=${1:?workdir} repo; repo=$(cd "$LEM_LIB_DIR/../.." && pwd)
   mkdir -p "$workdir/.commandcode/skills"
   [ -d "$workdir/.commandcode/skills/sagefs" ] || cp -r --reflink=auto "$repo/skills/sagefs" "$workdir/.commandcode/skills/sagefs"
-  local cmd=${LEM_BRIDGE_CMD[0]} args="" a
-  for a in "${LEM_BRIDGE_CMD[@]:1}"; do args="$args\"$a\", "; done
-  args=${args%, }
-  cat > "$workdir/.mcp.json" <<JSON
+  if [ "${#LEM_BRIDGE_CMD[@]}" -eq 0 ]; then
+    # No bridge (an editor lemming): the registration lists no server at all.
+    printf '{ "mcpServers": {} }\n' > "$workdir/.mcp.json"
+  else
+    local cmd=${LEM_BRIDGE_CMD[0]} args="" a
+    for a in "${LEM_BRIDGE_CMD[@]:1}"; do args="$args\"$a\", "; done
+    args=${args%, }
+    cat > "$workdir/.mcp.json" <<JSON
 { "mcpServers": { "sagefs": { "command": "$cmd", "args": [$args],
   "env": { "SAGEFS_MCP_PORT": "${LEM_PORT:-37749}" } } } }
 JSON
+  fi
   # Harness files stay out of `git status`, so the changed-files list is the lemming's work.
   if [ -d "$workdir/.git" ]; then
     printf '%s\n' '.commandcode/' '.mcp.json' >> "$workdir/.git/info/exclude"
@@ -173,6 +182,20 @@ JSON
 lem_bw_base() {
   local run_dir=${1:?run-dir} workdir=${2:?workdir} extra_path=${3:-}
   mkdir -p "$run_dir/dotnethome" "$run_dir/out/sbx" "$run_dir/bin"
+  # The user's NuGet package cache is READ-ONLY here, with a per-run layer on top (an overlay
+  # whose writes land in <run>/nuget/up): a restore finds every package I already have at the
+  # same path, so nothing re-downloads and project.assets.json stays valid, and a package the
+  # lemming adds goes into the run's layer, not into the cache every other project of mine uses.
+  # NuGet's own config stays out of reach (HOME is a tmpfs). Without a cache to layer on, the
+  # run just gets an empty one.
+  local nuget_cache=$HOME/.nuget/packages
+  local -a nuget_mounts=()
+  if [ -d "$nuget_cache" ]; then
+    mkdir -p "$run_dir/nuget/up" "$run_dir/nuget/work"
+    nuget_mounts=(--overlay-src "$nuget_cache" --overlay "$run_dir/nuget/up" "$run_dir/nuget/work" "$nuget_cache")
+  else
+    nuget_mounts=(--dir "$nuget_cache")
+  fi
   LEM_BW=(
     --die-with-parent --unshare-pid --unshare-ipc --unshare-uts --clearenv
     --ro-bind /usr /usr --ro-bind /etc /etc
@@ -181,7 +204,7 @@ lem_bw_base() {
     --proc /proc --dev /dev --tmpfs /tmp --tmpfs "$HOME"
     --ro-bind "$HOME/.dotnet" "$HOME/.dotnet"
     --ro-bind "$HOME/.local/share/mise" "$HOME/.local/share/mise"
-    --bind "$HOME/.nuget" "$HOME/.nuget"
+    "${nuget_mounts[@]}"
     --bind "$workdir" "$workdir"
     --ro-bind "$run_dir/bin" "$run_dir/bin"
     --bind "$run_dir/dotnethome" "$run_dir/dotnethome"
@@ -219,7 +242,15 @@ lem_run_cmdc() {
     *) echo "lem: cmdc is not under ~/.local/share/mise, which is the only toolchain the sandbox binds" >&2; exit 4 ;;
   esac
 
-  lem_prepare_bridge "$run_dir"
+  # An editor lemming (LEM_NO_BRIDGE=1) has no MCP server, so the 380 MB bridge copy would sit
+  # unused in the run and its version would be a second, misleading number in summary.json.
+  if [ -n "${LEM_NO_BRIDGE:-}" ]; then
+    LEM_BRIDGE_CMD=()
+    LEM_BRIDGE_DESC=
+    LEM_SAGEFS_VERSION="daemon ${LEM_DAEMON_VERSION:-unknown}"
+  else
+    lem_prepare_bridge "$run_dir"
+  fi
   lem_install_workspace "$workdir"
   mkdir -p "$run_dir/cmdchome" "$run_dir/dotnethome" "$run_dir/out/sbx"
   : > "$run_dir/cmdchome/auth.json"   # bwrap's mount point; the credential itself is bound over it
