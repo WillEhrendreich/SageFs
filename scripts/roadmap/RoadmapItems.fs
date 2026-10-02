@@ -124,9 +124,24 @@ let items : Item list =
       "A check that waits out the 30 second swap bound is dropped instead of retried, and running affected tests or discovery still drops a request that finds no worker. I want every one of those to wait for the replacement the way the type-check now does."
 
     item "each-agent-its-own-member" "Each agent counts as its own member" Agents Next
-      NoLandmarkYet
-      [ "docs/agents.md"; "docs/mcp-tools.md" ]
-      "Sub-agents of one Claude Code session share one MCP connection, so SageFs sees them as a single member and the build and test leases collide. Identity moves off the connection and onto a handle SageFs mints, so each agent gets its own seat and a dropped connection doesn't lose it."
+      (landmark "SageFs.Core/Capability.fs" "CapabilityState")
+      [ "docs/agents.md"; "docs/mcp-tools.md"; "docs/decisions.md" ]
+      "Sub-agents of one Claude Code session share one MCP connection, so SageFs saw them as a single member and the build and test leases collided. The conductor now mints a token per run with `mint_member`, each token is its own member with its own claims and leases, and a token outranks the connection it arrives on. A platform sets it in a header or in MCP `_meta`, never as a tool argument. Tokens live in memory, so a daemon restart means minting new ones."
+
+    item "member-roles-and-tool-lists" "A member's role says which tools it can call" Agents Now
+      (landmark "SageFs/McpCapability.fs" "visibleToolNames")
+      [ "docs/mcp-tools.md"; "docs/decisions.md" ]
+      "An Observer used to be able to call send_fsharp_code, because authority only gated the cohort's own tools. A member token now has one of four roles (Observer, Analysis, Verifier, Implementer), each a set of tool classes, and a call outside the role is refused with the role, the tool and what to do. `tools/list` shows a token only what it can call, and `SAGEFS_IDENTITY_POLICY=TokenRequired` makes a connection with no token read-only."
+
+    item "member-id-is-not-a-credential" "A member's id is no longer the bearer handle" Agents Now
+      (landmark "SageFs.Core/MemberTable.fs" "ofConnectionHandle")
+      [ "docs/mcp-tools.md"; "docs/decisions.md" ]
+      "A member's id in `get_cohort_status`, the cohort frame and the ledger was the MCP session id, which is the credential a request is bound to, so anyone who read the status could act as the conductor. The id is a fingerprint of it now, and a test fails if any cohort output carries a handle."
+
+    item "a-claim-path-means-one-thing" "A claim path means one thing" Agents Now
+      (landmark "SageFs.Core/Cohort.fs" "ClaimPath")
+      [ "docs/mcp-tools.md" ]
+      "`src/Foo/../Bar/x.fs` did not overlap `src/Bar/x.fs`, so two members could hold the same file and a prefix check could be walked around. Claim paths are canonical at the boundary now, and a path that leaves the repo is refused."
 
     item "cohort-veto-and-delegation" "Veto and delegate in a cohort" Agents Next
       NoLandmarkYet
@@ -167,6 +182,11 @@ let items : Item list =
       NoLandmarkYet
       [ "docs/hot-reload.md"; "docs/decisions.md" ]
       "When a save re-signs a function, a caller in another file keeps calling the old method until you save that file too. The build wouldn't pass until you did, so the window is short, but the old behavior runs in it. A cross-file check of who calls what would close it."
+
+    item "tokens-bound-to-a-session" "A member token bound to one session" Agents Next
+      NoLandmarkYet
+      [ "docs/mcp-tools.md" ]
+      "A token is confined to a scope of files, but an Analysis token can still read any session the daemon serves, because a tool that takes a session id or a working directory honors it. I want the grant to name the session or checkout it may route to."
 
     // ---- Later: months to a year ----
 
@@ -255,6 +275,11 @@ let items : Item list =
       []
       "A second listener on your Tailscale address would serve the dashboard read-only to a phone with a short-lived token. A conductor could then approve or veto a landing from a link, but only once the minted handles above exist."
 
+    item "tokens-survive-a-restart" "Member tokens survive a daemon restart" Agents Later
+      NoLandmarkYet
+      [ "docs/mcp-tools.md" ]
+      "Tokens live in the daemon's memory, so a restart drops every one and the orchestrator mints new ones. Keeping their hashes would let a run survive a restart, but only in a store that is not the cohort ledger, and I'd rather see someone need it first."
+
     // ---- Exploring: ideas, no promise ----
 
     item "use-the-fsharp-compilers-deltas" "Use the F# compiler's own deltas" HotReload Exploring
@@ -286,6 +311,11 @@ let items : Item list =
       NoLandmarkYet
       []
       "Small local models trained on your own run history could rank which tests to run first and flag the flaky ones. It's a parked design with no code, and selection by coverage works without it."
+
+    item "a-token-per-subagent-in-claude-code" "A token per sub-agent in Claude Code" Agents Exploring
+      NoLandmarkYet
+      []
+      "A header is per connection, so sub-agents that share one connection share a token. Only a per-call `_meta` tells them apart, and Claude Code gives the model no per-call header, so a harness hook that sets it would be the way in."
 
     item "claim-an-interface" "Claim an interface, not just a file" Agents Exploring
       NoLandmarkYet
