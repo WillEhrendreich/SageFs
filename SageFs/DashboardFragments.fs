@@ -1291,43 +1291,73 @@ let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) :
         yield activeBtn "⊘" "skipped" skippedCount "var(--fg-yellow,#f39c12)"
       | false -> () ]
 
-// ── Test Treemap (WizTree-style: area = duration) ─────────────────
+// ── Test Status Grid (one legible cell per test) ───────────────────
 
-/// Render a squarified treemap of test results where area = duration.
-/// Failed tests are red, passed are green — instantly see slow + broken.
+/// The panel's fixed width, in px. The grid never renders wider than this.
+let private testStatusGridWidthPx = 320.0
+/// Past this many cells the grid is too tall to read at a glance, so the panel
+/// scrolls instead of drawing an unbounded column.
+let private testStatusGridMaxHeightPx = 420.0
+
+/// Map TreemapStatus to the cell's fill colour.
+let private testStatusCellColor (status: Features.LiveTesting.TreemapStatus) =
+  match status with
+  | Features.LiveTesting.TreemapStatus.Passed -> "var(--fg-green,#27ae60)"
+  | Features.LiveTesting.TreemapStatus.Failed -> "var(--fg-red,#e74c3c)"
+  | Features.LiveTesting.TreemapStatus.Running -> "var(--fg-blue,#3498db)"
+  | Features.LiveTesting.TreemapStatus.Skipped -> "var(--fg-yellow,#f39c12)"
+  | Features.LiveTesting.TreemapStatus.Other -> "var(--bg-focus,#2a2a2a)"
+
+/// Human duration for a cell's tooltip. An untimed test (Running/Skipped, which
+/// `TestTreemap.fromStatusEntries` records as `Timeouts.notRun`) reads "not run"
+/// rather than a misleading "0.00ms".
+let private testStatusCellDuration (durationMs: float) =
+  match durationMs with
+  | ms when ms <= 0.0 -> "not run"
+  | ms when ms >= 1000.0 -> sprintf "%.1fs" (ms / 1000.0)
+  | ms when ms >= 1.0 -> sprintf "%.0fms" ms
+  | ms -> sprintf "%.2fms" ms
+
+/// Render one legible cell per test: a uniform grid of square chips coloured by
+/// status.
+///
+/// This replaces a duration-proportional squarified treemap that packed one
+/// rectangle per test into a fixed 320x180 box. Area-scaling collapses cell size
+/// as 1/sqrt(n), so a 14,360-test session rendered ~2x2px specks — and since
+/// untimed tests all carried duration 0, they all had identical area, so the
+/// overwhelming majority of the picture encoded nothing. Every cell here is the
+/// same size instead, floored so it can never collapse, and capped so a short
+/// run is a tidy cluster of chips rather than one huge block. Cells are ordered
+/// worst-first, so a failure is always the first cell and never buried.
 let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : XmlNode =
-  match entries.Length with
-  | 0 -> Elem.div [] []
-  | _ ->
-    let rects = Features.LiveTesting.TestTreemap.layout 320.0 180.0 entries
+  match Features.LiveTesting.TestStatusGrid.layout testStatusGridWidthPx entries with
+  | None -> Elem.div [] []
+  | Some grid ->
+    let cell = grid.CellPx
+    // A cell needs ~26x14px before its name is readable; below that only a
+    // generous threshold shows a label, so names never render as clipped noise.
+    let showLabel = cell >= 14.0
+    let showDuration = cell >= 24.0
+    let visibleHeight = min grid.Height testStatusGridMaxHeightPx
     Elem.div
-      [ Attr.style "position:relative;width:320px;height:180px;border-radius:0;overflow:hidden;background:var(--bg-focus,#1a1a1a);margin-top:4px;" ]
-      [ yield! rects |> Array.map (fun r ->
-          let bgColor =
-            match r.Entry.Status with
-            | Features.LiveTesting.TreemapStatus.Passed -> "var(--fg-green,#27ae60)"
-            | Features.LiveTesting.TreemapStatus.Failed -> "var(--fg-red,#e74c3c)"
-            | Features.LiveTesting.TreemapStatus.Running -> "var(--fg-blue,#3498db)"
-            | Features.LiveTesting.TreemapStatus.Skipped -> "var(--fg-yellow,#f39c12)"
-            | Features.LiveTesting.TreemapStatus.Other -> "var(--bg-focus,#2a2a2a)"
-          let durationLabel =
-            match r.Entry.DurationMs with
-            | ms when ms >= 1000.0 -> sprintf "%.1fs" (ms / 1000.0)
-            | ms when ms >= 1.0 -> sprintf "%.0fms" ms
-            | ms -> sprintf "%.2fms" ms
-          let title = sprintf "%s — %s" r.Entry.DisplayName durationLabel
-          let showLabel = r.W >= 28.0 && r.H >= 14.0
-          let showDuration = r.W >= 40.0 && r.H >= 22.0
-          let statusFilter = treemapStatusToFilterValue r.Entry.Status
+      [ Attr.style (sprintf "position:relative;width:%.0fpx;height:%.0fpx;border-radius:0;overflow:auto;background:var(--bg-focus,#1a1a1a);margin-top:4px;"
+                grid.Width visibleHeight) ]
+      [ yield! grid.Cells |> Array.map (fun c ->
+          let bgColor = testStatusCellColor c.Entry.Status
+          let durationLabel = testStatusCellDuration c.Entry.DurationMs
+          let title = sprintf "%s — %s" c.Entry.DisplayName durationLabel
+          let statusFilter = treemapStatusToFilterValue c.Entry.Status
+          let left = float c.Column * cell
+          let top = float c.Row * cell
           Elem.div
-            [ Attr.style (sprintf "position:absolute;left:%.1fpx;top:%.1fpx;width:%.1fpx;height:%.1fpx;background:%s;opacity:0.85;border:0.5px solid rgba(0,0,0,0.3);overflow:hidden;box-sizing:border-box;"
-                r.X r.Y r.W r.H bgColor)
+            [ Attr.style (sprintf "position:absolute;left:%.2fpx;top:%.2fpx;width:%.2fpx;height:%.2fpx;background:%s;border-radius:1px;overflow:hidden;box-sizing:border-box;"
+                left top cell cell bgColor)
               Attr.create "aria-label"(attrEnc title)
               Ds.show (sprintf "$testFilter === 'all' || $testFilter === '%s'" statusFilter) ]
             [ match showLabel with
               | true ->
                 Elem.div [ Attr.style "font-size:0.5rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ] [
-                  textEnc r.Entry.DisplayName
+                  textEnc c.Entry.DisplayName
                 ]
               | false -> ()
               match showDuration with
@@ -1951,15 +1981,20 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Ds.onEvent ("click", sprintf "if(confirm('Purge session %s? This deletes its saved binaries and manifest entry. This cannot be undone.')){%s}" sid (Ds.post (sprintf "/dashboard/session/purge/%s" sid))) ]
                 [ Text.raw "✖" ]
             ]
-            // Collapsible test treemap (WizTree-style: area = test duration)
+            // Collapsible test status grid (one legible cell per test)
             match s.TestTreemapEntries.Length with
             | 0 -> ()
             | _ ->
-              let totalMs = s.TestTreemapEntries |> Array.sumBy (fun e -> e.DurationMs)
+              let totalMs = Features.LiveTesting.TestStatusGrid.totalDurationMs s.TestTreemapEntries
+              let timedCount = s.TestTreemapEntries |> Array.filter (fun e -> e.DurationMs > 0.0) |> Array.length
               let durationLabel =
                 match totalMs with
                 | ms when ms >= 1000.0 -> sprintf "%.1fs" (ms / 1000.0)
-                | ms -> sprintf "%.0fms" ms
+                | ms when ms > 0.0 -> sprintf "%.0fms" ms
+                // Untimed tests are recorded as Timeouts.notRun, so summing
+                // durations says nothing about how long they take. Saying
+                // "0ms" for a 14,360-test run implied the suite was instant.
+                | _ -> sprintf "no timed tests (%d untimed)" (s.TestTreemapEntries.Length - timedCount)
               signalDetails
                 (sprintf "testTreemapOpen_%s" sid)
                 [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]

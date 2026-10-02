@@ -1103,6 +1103,24 @@ module TestMagnitudes =
   let seedBound = 1_000_000
   /// The count of probes a coverage bitmap case packs.
   let packedProbeCount = 10_000
+  /// The panel width the dashboard's test status grid is laid out inside.
+  let treemapPanelWidthPx = 320.0
+  /// The panel height the old duration treemap was fixed at.
+  let treemapPanelHeightPx = 180.0
+  /// The cell size the status grid never shrinks below, so no test renders as an
+  /// unreadable sub-pixel speck however many tests the session has.
+  let treemapMinCellPx = 3.0
+  /// The cell size the status grid never grows beyond, so a small run is not one
+  /// enormous block that swamps the panel.
+  let treemapMaxCellPx = 12.0
+  /// The minimum width the old treemap wanted before it would draw a test's name.
+  let treemapMinLabelWidthPx = 28.0
+  /// The minimum height the old treemap wanted before it would draw a test's name.
+  let treemapMinLabelHeightPx = 14.0
+  /// The real total duration a 14,360-test session reported across its timed tests.
+  let treemapPanelTotalMs = 238.0
+  /// How many of those tests carried that duration.
+  let treemapPanelPassedCount = 76
   /// How many reads a tracker case has been asked to see before it calls a loop hot.
   let readCountNeverReached = 1_000_000
   /// A pending backlog so deep that no honest bound lets it through.
