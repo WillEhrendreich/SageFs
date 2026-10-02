@@ -115,12 +115,19 @@ let cohortLeaseVisibilityTests =
     testCase "WHY — a present member reads as present WITH the clock the stamps were taken against, never as a bare 'present'" <| fun _ ->
       let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
       seatOf frame alice |> Expect.equal "the seat is Present" SeatState.Present
-      let text = Features.CohortStatusText.render frame
+      let t3 = Features.CohortStatusText.render frame
       // The one thing a `Present` seat CAN say without `LastRenewal`: the clock
       // its page was read at, so the (soon to arrive) lease stamps on the same
       // page have a stated reference point instead of an implied one.
-      (text.Contains "present (as of ") |> Expect.isTrue "the present seat names the clock it is read at"
-      (text.Contains " - alice [Implementer] present") |> Expect.isFalse "and it is not the bare word 'present'"
+      (t3.Contains "present (as of ") |> Expect.isTrue "the present seat names the clock it is read at"
+      // Anchored at the END of a line — `"... [Implementer] present"` is a
+      // PREFIX of `"... [Implementer] present (as of ...)`, so an unanchored
+      // `Contains` here would be true for the new rendering too and the
+      // assertion would never mean anything.
+      let endsBarePresent =
+        t3.Split('\n') |> Array.exists (fun l -> l.EndsWith "present")
+      endsBarePresent
+      |> Expect.isFalse "and it is never a line that ENDS at the bare word 'present'"
 
     testCase "WHY — a departed member keeps its `since`, and no reason is invented for it" <| fun _ ->
       let departed =
@@ -187,7 +194,7 @@ let cohortLeaseVisibilityTests =
         |> Array.map (fun l -> l.Substring(0, l.IndexOf "departed"))
         |> Array.distinct
       departedRow byDepart
-      |> Expect.equal "both departures render the same member row, apart from the instant" departedRow byLease
+      |> Expect.equal "both departures render the same member row, apart from the instant" (departedRow byLease)
       (departedRow byDepart).Length
       |> Expect.equal "and it is one distinct row each" 1
 

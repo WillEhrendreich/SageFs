@@ -88,7 +88,7 @@ let private reapedBy (isActive: MemberId -> bool) (clock: DateTime) (st: CohortS
 /// How long `decide` keeps a Present member, given a member that is renewed
 /// once every `renewEveryMinutes` — the ONLY input to the question.
 let private survivesMinutes (renewEveryMinutes: int option) : int =
-  let st = joinedWithClaim "orchestrator"
+  let mutable st = joinedWithClaim "orchestrator"
   // Ticks land on the minute; the member is renewed when the tracker says it
   // was seen inside the last `agentActivityFresh`.
   let mutable clock = t0
@@ -128,16 +128,13 @@ let cohortLeaseRenewalTests =
       // 2-minute freshness window on 4 of every 5 ticks, and the 30-minute lease
       // then never runs out. This is what recording activity at the admitted-call
       // chokepoint buys — the call rate decides the survival, not the eval count.
-      survivesMinutes (Some 5)
-      |> Expect.isGreaterThan "a member the tracker hears from every 5 minutes is never reaped" (int (Cohort.leaseWindow.TotalMinutes))
-
+      Expect.isGreaterThan "a member the tracker hears from every 5 minutes is never reaped" (survivesMinutes (Some 5), int (Cohort.leaseWindow.TotalMinutes))
       survivesMinutes None
       |> Expect.equal "a member the tracker NEVER hears from is reaped exactly at the window" (int (Cohort.leaseWindow.TotalMinutes))
 
       // The boundary is the freshness window, not the lease: heard from every
       // 2 minutes, still alive; heard from only on some ticks, not.
-      survivesMinutes (Some 2)
-      |> Expect.isGreaterThan "a member heard from every 2 minutes is never reaped" (int (Cohort.leaseWindow.TotalMinutes))
+      Expect.isGreaterThan "a member heard from every 2 minutes is never reaped" (survivesMinutes (Some 2), int (Cohort.leaseWindow.TotalMinutes))
 
     testCase "WHY — the property a lease must keep: a member that makes NO call at all still lapses" <| fun _ ->
       // If recording activity at the chokepoint ever grew to record it for a
