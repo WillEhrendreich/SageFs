@@ -502,6 +502,7 @@
         <Compile Include="ExpectoPendingOutcomeTests.fs" />
         <Compile Include="SourceStateOutcomeTests.fs" />
         <Compile Include="HonestEmptiesOutcomeTests.fs" />
+        <Compile Include="SelfHostCoreOutcomeTests.fs" />
         <Compile Include="McpAppRunOutcomeTests.fs" />
         <Compile Include="DstShrinkTests.fs" />
         <Compile Include="OriginGuardOutcomeTests.fs" />

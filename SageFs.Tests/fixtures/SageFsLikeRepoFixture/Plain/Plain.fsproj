@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A project with no SageFs.Core anywhere near it: the shape of an ordinary user's project.
+       SelfHostCoreOutcomeTests uses it to rebuild a session and to wait on that rebuild, which must
+       work whether or not the repo builds its own Core. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Api.fs" />
+  </ItemGroup>
+</Project>
