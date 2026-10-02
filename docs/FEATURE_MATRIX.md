@@ -59,9 +59,9 @@ Live testing is also a workflow, not only a toggle. See [Workflow Modes](workflo
 Completions and CodeLens are editor features backed by FSharp.Compiler.Service; they are not MCP tools. Neither
 is the type explorer, the call graph, the test-run policy control, or the test trace. Those are HTTP endpoints
 the editors and the dashboard call (`GET /api/dependency-graph`, `POST /api/live-testing/policy`,
-`GET /api/live-testing/test-trace`). The `get_completions`, `explore_type` and `visualize_domain_model`
-members in `SageFs/McpTools.fs` carry a `[<Description>]` but no `[<McpServerTool>]` attribute, so they aren't
-part of the advertised tool surface at all, and I found no HTTP route for `visualize_domain_model` either. In the
+`GET /api/live-testing/test-trace`). Completions and the type explorer have routes (`POST /api/completions`,
+`POST /api/explore`) and no MCP tool; I deleted the unregistered `get_completions` and `explore_type` members
+that used to suggest otherwise. There is neither a tool nor an HTTP route for a domain-model diagram. In the
 domain model and pipeline row, the MCP cell is `decompose_pipeline`. I checked, this table isn't guessing. [`LIVE_TESTING_GUIDE.md`](LIVE_TESTING_GUIDE.md) is the
 authoritative list of what is and isn't an MCP tool.
 

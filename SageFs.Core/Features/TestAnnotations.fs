@@ -717,7 +717,8 @@ module FileAnnotationsInternals =
           | None -> [||]
         CoverageView.project mode coveringIds depGraph state file ca.DefinitionLine ca.Symbol)
 
-// --- Test Run Explainer (MCP "explain_test_run" / "query_test_coverage") ---
+// --- Test Run Explainer (read by the `explain_test_run` formatter in McpTools.fs, which is not a registered
+// MCP tool; `explain_test_failure` is the registered one, and there is no `query_test_coverage` tool) ---
 
 [<RequireQualifiedAccess>]
 type TestTriggerReason =
