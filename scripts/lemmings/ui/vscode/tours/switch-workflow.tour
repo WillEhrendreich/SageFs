@@ -1,0 +1,33 @@
+# Switch Workflow from the picker: the choice has to reach the daemon and come back as a message and a
+# status bar label. It used to fail with "unknown workflow ''" because the extension posted the choice
+# chunked, with no Content-Length, and the daemon's workflow route only read a body that had one.
+# Two sizes.
+resize 1280 800
+expect-text SageFs
+wait 12
+click SageFs
+wait 2
+command SageFs: Create Session
+wait 2
+key enter
+expect-session --within 240
+wait 3
+command SageFs: Switch Session
+wait 2
+type {session}
+key enter
+wait 3
+
+command SageFs: Switch Workflow
+wait 2
+shot workflow-picker-1280x800
+key down
+key down
+key enter
+expect-text --within 60 Switched to Hot Reload
+shot workflow-switched-1280x800 --region statusbar --region sidebar
+expect-text --within 120 [Hot Reload]
+
+resize 1024 700
+wait 2
+shot workflow-switched-1024x700 --region statusbar
