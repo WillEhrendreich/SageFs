@@ -40,6 +40,10 @@ else
   sha=$(git -C "$REPO" rev-parse HEAD)
 fi
 
+# The plugin reaches users commit by commit, so a daemon change that moves the wire contract has to land
+# with its plugin change first. This refuses a release the current sagefs.nvim cannot talk to.
+"$REPO/scripts/sync-nvim-version" --compat
+
 "$REPO/scripts/local-gate" "$sha"
 git -C "$REPO" push origin "$sha:refs/heads/master"
 echo "ship: pushed ${sha:0:8}; the self-hosted runner promotes its bundle to publish"

@@ -18,8 +18,35 @@
 set -euo pipefail
 
 CHECK=no
+COMPAT=no
 if [ "${1:-}" = "--check" ]; then CHECK=yes; shift; fi
-VERSION=${1:?usage: scripts/sync-nvim-version [--check] <version>}
+if [ "${1:-}" = "--compat" ]; then COMPAT=yes; shift; fi
+if [ "$COMPAT" = yes ]; then
+  # sagefs.nvim reaches users commit by commit, so the version number is only a marker. What decides whether
+  # an installed plugin can talk to this daemon is the daemon's apiVersion against the range the plugin declares
+  # in lua/sagefs/compat.lua. A SageFs change that moves apiVersion must land with the plugin change, or every
+  # plugin user is broken the moment they update the daemon. scripts/ship runs this before it gates.
+  REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+  NVIM=${SAGEFS_NVIM_DIR:-$HOME/Work/sagefs.nvim}
+  api=$(grep -oP '(?<=let apiVersion = )[0-9]+' "$REPO/SageFs.Core/EndpointContracts.fs" | head -1 || true)
+  min=$(grep -oP '(?<=^  min = )[0-9]+' "$NVIM/lua/sagefs/compat.lua" 2>/dev/null | head -1 || true)
+  max=$(grep -oP '(?<=^  max = )[0-9]+' "$NVIM/lua/sagefs/compat.lua" 2>/dev/null | head -1 || true)
+  if [ -z "$api" ]; then
+    echo "sync-nvim-version: could not read apiVersion from SageFs.Core/EndpointContracts.fs" >&2; exit 1
+  fi
+  if [ -z "$min" ] || [ -z "$max" ]; then
+    echo "sync-nvim-version: could not read the api_range from $NVIM/lua/sagefs/compat.lua. The plugin was NOT checked against apiVersion $api." >&2
+    exit 0
+  fi
+  if [ "$api" -ge "$min" ] && [ "$api" -le "$max" ]; then
+    echo "sagefs.nvim understands apiVersion $api (declares $min to $max)"
+    exit 0
+  fi
+  echo "sync-nvim-version: SageFs speaks apiVersion $api but sagefs.nvim declares $min to $max." >&2
+  echo "  Update the plugin first: change what it calls and lua/sagefs/compat.lua api_range in $NVIM, test it, push it, then ship SageFs." >&2
+  exit 1
+fi
+VERSION=${1:?usage: scripts/sync-nvim-version [--check|--compat] <version>}
 case "$VERSION" in
   [0-9]*.[0-9]*.[0-9]*) ;;
   *) echo "sync-nvim-version: '$VERSION' is not a version like 0.6.880" >&2; exit 1 ;;
