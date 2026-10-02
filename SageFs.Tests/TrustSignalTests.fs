@@ -85,7 +85,7 @@ let ciWiringTests =
   let invokedTiers () =
     pipelineTierArgs pipeline.Value |> List.map tierOfArgs |> Set.ofList
 
-  let alwaysPresent = set [ "default"; "--integration-host"; "--mutation-score" ]
+  let alwaysPresent = set [ "default"; "--integration-host"; "--mutation-score"; Ratchet.entryPoint ]
 
   testList "TrustSignal CI wiring" [
     testCase "every tier the assembly registers is invoked by a CI stage" <| fun _ ->
