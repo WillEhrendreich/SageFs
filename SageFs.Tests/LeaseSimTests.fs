@@ -10,11 +10,23 @@ open SageFs.Simulation.LeaseSimInvariants
 
 /// DST over several agents requesting, holding, releasing and abandoning
 /// expensive-work leases while pressure rises and falls, folded through the
-/// REAL `ExpensiveWorkLease.request`. `queueDrainsOnCooldown` is the "no
-/// one starved forever" claim, and it must FAIL against
-/// `PoolBehavior.NeverExpiresTwin` — an abandoned lease that is never
-/// reclaimed permanently deadlocks the pool, which is exactly the failure
-/// mode `request`'s reaping step exists to prevent.
+/// REAL `ExpensiveWorkLease.request`. Two of the agents share one MCP
+/// connection and differ only by agent name, the shape that collapsed into a
+/// single holder and made three agents wait up to 35 minutes behind a lease
+/// that a sibling held.
+///
+/// Every invariant here is shown to have teeth: a twin that breaks exactly
+/// that guarantee must VIOLATE it, or the invariant would pass vacuously.
+///  - MUTUAL-EXCLUSION: no holder ever holds two leases at once, and a grant
+///    never pushes the pool over its cap.
+///  - EVERY-LEASE-EXPIRES: a lease lapses at its ttl whether or not anyone
+///    releases it, and nothing moves that moment, and a waiter that stops
+///    asking loses its place.
+///  - REFUSAL-NAMES-THE-REAL-HOLDER: a decision that names a lease as the
+///    caller's is the caller's, and a queued caller is shown the leases that
+///    really hold the pool.
+///  - SAME-HOLDER-IDEMPOTENT: asking again for what you hold gives you the
+///    same lease back, with nothing renewed and nothing added.
 
 let private simConfig = { FsCheckConfig.defaultConfig with maxTest = 300 }
 
@@ -23,23 +35,36 @@ let private assertHolds (states: State list) =
   | [] -> ()
   | vs -> failtestf "INVARIANT VIOLATION — steps=%d\n  Violations=%A" (List.last states).Step vs
 
+/// Seeds swept when asking "does some scenario break this twin".
+let private teethSeeds = [ 1 .. 200 ]
+
+let private violatedBy (behavior: PoolBehavior) (invariant: Invariant) (scenario: Scenario) =
+  match invariant.Check (trace behavior scenario) with
+  | Outcome.Violated _ -> true
+  | Outcome.Holds -> false
+
+let private holdsFor (behavior: PoolBehavior) (invariant: Invariant) (scenario: Scenario) =
+  match invariant.Check (trace behavior scenario) with
+  | Outcome.Holds -> ()
+  | Outcome.Violated msg -> failtestf "%s should hold for %A: %s" invariant.Id behavior msg
+
+let private someSeedBreaks (behavior: PoolBehavior) (invariant: Invariant) =
+  teethSeeds
+  |> List.exists (fun seed -> violatedBy behavior invariant (scenarioOf seed))
+  |> Expect.isTrue (sprintf "some seeded scenario must make the %A twin violate %s" behavior invariant.Id)
+
 [<Tests>]
 let tests =
   testList "DST expensive-work lease" [
 
     testList "the real pool holds every invariant" [
 
-      testPropertyWithConfig simConfig "seeded scenarios — a grant never pushes the pool over cap, every Wait has a positive retry-after" <|
+      testPropertyWithConfig simConfig "seeded scenarios hold every invariant" <|
         fun (seed: int) -> assertHolds (trace PoolBehavior.Real (scenarioOf seed))
 
-      // `LeaseId.create()` mints a fresh `Guid.NewGuid()` per grant — a
-      // deliberate, correct impurity (production wants unguessable,
-      // collision-free ids, not a seed-derived one) that this determinism
-      // check has to see PAST: two replays of the identical seed grant the
-      // SAME decisions in the SAME order for the SAME reasons, they just
-      // don't share the literal id string of any one grant. So the
-      // replayable claim is checked on a PROJECTION that drops the id
-      // (Granted -> just its expiry) rather than full structural equality.
+      // `LeaseId.create()` mints a fresh `Guid.NewGuid()` per grant, a
+      // deliberate, correct impurity (production wants unguessable ids), so
+      // determinism is checked on a projection that drops the id.
       let projectForDeterminism (states: State list) =
         states
         |> List.map (fun s ->
@@ -48,8 +73,9 @@ let tests =
             let decision =
               match r.Decision with
               | Decision.Granted(_, expiresAt) -> "granted", string expiresAt
-              | Decision.Wait(retryAfter, reason) -> "wait", sprintf "%A|%s" retryAfter reason
-              | Decision.Refused reason -> "refused", reason
+              | Decision.AlreadyHeld lease -> "already-held", string lease.ExpiresAt
+              | Decision.Queued waiting -> "queued", sprintf "%A|%d|%d" waiting.RetryAfter waiting.Position (List.length waiting.Holding)
+              | Decision.Refused refusal -> "refused", sprintf "%A" (match refusal with Refusal.HoldsOtherKind(_, asked) -> string asked | Refusal.OtherKindQueued(q, asked) -> sprintf "%A/%A" q asked)
             r.AtStep, r.Clock, r.Pressure, r.Holder, r.Kind, decision),
           s.Pool.Queue |> List.map (fun q -> q.Holder, q.Kind, q.Seq),
           List.length s.Pool.Active)
@@ -69,17 +95,17 @@ let tests =
         let scenario =
           { Seed = -501
             Events =
-              [ SimEvent.Request("agent-a", Kind.RunApp)
-                SimEvent.Request("agent-b", Kind.RunApp)
-                SimEvent.Request("agent-c", Kind.RunApp)
-                SimEvent.Request("agent-d", Kind.RunApp)
-                SimEvent.Abandon "agent-a"
-                SimEvent.Abandon "agent-b"
-                SimEvent.Abandon "agent-c"
-                SimEvent.Abandon "agent-d"
+              [ SimEvent.Request(agentA, Kind.RunApp)
+                SimEvent.Request(agentB, Kind.RunApp)
+                SimEvent.Request(agentC, Kind.RunApp)
+                SimEvent.Request(agentD, Kind.RunApp)
+                SimEvent.Abandon agentA
+                SimEvent.Abandon agentB
+                SimEvent.Abandon agentC
+                SimEvent.Abandon agentD
                 SimEvent.PressureChange MemoryPressure.Normal
                 SimEvent.PassSeconds FixtureDurations.passPastEveryLease
-                SimEvent.Request("agent-e", Kind.Rebuild) ] }
+                SimEvent.Request(agentE, Kind.Rebuild) ] }
         let real = trace PoolBehavior.Real scenario
         let twin = trace PoolBehavior.NeverExpiresTwin scenario
         (List.last real).Pool.Queue |> Expect.isEmpty "the real pool reclaims all four abandoned leases and admits agent-e"
@@ -87,16 +113,53 @@ let tests =
         match queueDrainsOnCooldown.Check twin with
         | Outcome.Violated _ -> ()
         | Outcome.Holds -> failtest "expected the never-expires twin to VIOLATE queue-drains-on-cooldown"
+        match everyLeaseExpires.Check twin with
+        | Outcome.Violated _ -> ()
+        | Outcome.Holds -> failtest "expected the never-expires twin to VIOLATE every-lease-expires"
+        holdsFor PoolBehavior.Real everyLeaseExpires scenario
 
-      testPropertyWithConfig simConfig "the invariant has teeth: some seeded scenario deadlocks the twin" <|
-        fun () ->
-          let deadlockedSomewhere =
-            [ 1 .. 80 ]
-            |> List.exists (fun seed ->
-              match queueDrainsOnCooldown.Check (trace PoolBehavior.NeverExpiresTwin (scenarioOf seed)) with
-              | Outcome.Violated _ -> true
-              | Outcome.Holds -> false)
-          deadlockedSomewhere |> Expect.isTrue "at least one seeded scenario must deadlock the never-expires twin"
+      testCase "the invariant has teeth: some seeded scenario deadlocks the twin" <| fun () ->
+        teethSeeds
+        |> List.exists (fun seed -> violatedBy PoolBehavior.NeverExpiresTwin queueDrainsOnCooldown (scenarioOf seed))
+        |> Expect.isTrue "at least one seeded scenario must deadlock the never-expires twin"
+
+      testCase "every-lease-expires has teeth against the never-expires twin" <| fun () ->
+        someSeedBreaks PoolBehavior.NeverExpiresTwin everyLeaseExpires
+    ]
+
+    testList "the collapsed-identity twin names the wrong holder" [
+
+      testCase "REPRODUCED — two sub-agents on one connection are told they hold each other's lease" <| fun _ ->
+        // agentA and agentB share a connection and differ only by agent name.
+        let scenario =
+          { Seed = -503
+            Events = [ SimEvent.Request(agentA, Kind.FullBuild); SimEvent.Request(agentB, Kind.FullBuild) ] }
+        holdsFor PoolBehavior.Real refusalNamesTheRealHolder scenario
+        violatedBy PoolBehavior.CollapsedIdentityTwin refusalNamesTheRealHolder scenario
+        |> Expect.isTrue "collapsing identity to the connection hands agent-b agent-a's lease as its own"
+
+      testCase "refusal-names-the-real-holder has teeth against the collapsed-identity twin" <| fun () ->
+        someSeedBreaks PoolBehavior.CollapsedIdentityTwin refusalNamesTheRealHolder
+    ]
+
+    testList "the duplicating twin lets one holder take the pool twice" [
+
+      testCase "REPRODUCED — asking again for the same kind takes a second lease" <| fun _ ->
+        let scenario =
+          { Seed = -504
+            Events = [ SimEvent.Request(agentA, Kind.TestSuiteRun); SimEvent.Request(agentA, Kind.TestSuiteRun) ] }
+        holdsFor PoolBehavior.Real mutualExclusion scenario
+        holdsFor PoolBehavior.Real sameHolderIdempotent scenario
+        violatedBy PoolBehavior.DuplicatesOnReAskTwin mutualExclusion scenario
+        |> Expect.isTrue "one holder now holds two leases"
+        violatedBy PoolBehavior.DuplicatesOnReAskTwin sameHolderIdempotent scenario
+        |> Expect.isTrue "the second ask did not return the same lease"
+
+      testCase "mutual-exclusion has teeth against the duplicating twin" <| fun () ->
+        someSeedBreaks PoolBehavior.DuplicatesOnReAskTwin mutualExclusion
+
+      testCase "same-holder-idempotent has teeth against the duplicating twin" <| fun () ->
+        someSeedBreaks PoolBehavior.DuplicatesOnReAskTwin sameHolderIdempotent
     ]
 
     testList "named worked scenario: no one starved forever" [
@@ -106,27 +169,25 @@ let tests =
           { Seed = -502
             Events =
               [ SimEvent.PressureChange MemoryPressure.Critical
-                SimEvent.Request("agent-a", Kind.Rebuild)
-                SimEvent.Request("agent-b", Kind.Rebuild)
-                SimEvent.Request("agent-c", Kind.Rebuild)
-                SimEvent.Request("agent-d", Kind.Rebuild)
+                SimEvent.Request(agentA, Kind.Rebuild)
+                SimEvent.Request(agentB, Kind.Rebuild)
+                SimEvent.Request(agentC, Kind.Rebuild)
+                SimEvent.Request(agentD, Kind.Rebuild)
                 SimEvent.PassSeconds 30
                 // retries while still Critical: nobody should be granted yet
-                SimEvent.Request("agent-a", Kind.Rebuild)
-                SimEvent.Request("agent-b", Kind.Rebuild)
+                SimEvent.Request(agentA, Kind.Rebuild)
+                SimEvent.Request(agentB, Kind.Rebuild)
                 SimEvent.PressureChange MemoryPressure.Normal
                 SimEvent.PassSeconds 5
-                SimEvent.Request("agent-a", Kind.Rebuild)
-                SimEvent.Request("agent-b", Kind.Rebuild)
-                SimEvent.Request("agent-c", Kind.Rebuild)
-                SimEvent.Request("agent-d", Kind.Rebuild) ] }
+                SimEvent.Request(agentA, Kind.Rebuild)
+                SimEvent.Request(agentB, Kind.Rebuild)
+                SimEvent.Request(agentC, Kind.Rebuild)
+                SimEvent.Request(agentD, Kind.Rebuild) ] }
         let states = trace PoolBehavior.Real scenario
         assertHolds states
         let final = List.last states
         final.Pool.Queue |> Expect.isEmpty "pressure eased and everyone eventually got admitted"
         final.Pool.Active |> Expect.hasLength "all four ended up holding a lease" 4
-        // Nothing was ever granted while pressure was Critical — Critical's
-        // cap is 0, so this also re-confirms grantNeverExceedsCap concretely.
         final.Decisions
         |> List.forall (fun r -> r.Pressure <> MemoryPressure.Critical || (match r.Decision with Decision.Granted _ -> false | _ -> true))
         |> Expect.isTrue "no lease was ever granted while pressure was Critical"
