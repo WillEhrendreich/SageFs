@@ -179,7 +179,9 @@ let install (repo: string) (shaArg: string option) (build: bool) (force: bool) =
         fail (NothingToInstall (sprintf "--build packs the checkout, which is not at %s" short))
       if (gitOut repo [ "status"; "--porcelain"; "--untracked-files=no" ]) <> "" then
         fail (NothingToInstall "tracked files have uncommitted changes; commit or stash them so the package matches the commit")
-      let v = sprintf "%s-%s.%s" version localVersionTag short
+      // The commit's own time goes in as a number, so a newer commit always sorts as a newer version.
+      let commitTime = gitOut repo [ "show"; "-s"; "--format=%ct"; sha ]
+      let v = sprintf "%s-%s.%s.%s" version localVersionTag commitTime short
       let dir = Path.Combine(markDir, "pack-" + short)
       if Directory.Exists dir then Directory.Delete(dir, true)
       Directory.CreateDirectory dir |> ignore
@@ -195,13 +197,12 @@ let install (repo: string) (shaArg: string option) (build: bool) (force: bool) =
 
   // 3. Install the package as the global tool, and prove the tool is the right version.
   say (sprintf "installing sagefs %s as the global tool" installVersion)
-  let toolArgs verb = [ "tool"; verb; "--global"; "sagefs"; "--add-source"; packageDir; "--version"; installVersion ]
-  match run "dotnet" (toolArgs "update") repo with
+  // Uninstall first: `dotnet tool update` refuses to go to a lower version, and installing an older gated
+  // build is a legitimate thing to do. Nothing to uninstall is fine.
+  run "dotnet" [ "tool"; "uninstall"; "--global"; "sagefs" ] repo |> ignore
+  match run "dotnet" [ "tool"; "install"; "--global"; "sagefs"; "--add-source"; packageDir; "--version"; installVersion ] repo with
   | 0, _ -> ()
-  | _ ->
-    match run "dotnet" (toolArgs "install") repo with
-    | 0, _ -> ()
-    | _, o -> fail (InstallFailed ("dotnet tool install failed:\n" + o))
+  | _, o -> fail (InstallFailed ("dotnet tool install failed:\n" + o))
   let toolVersion = versionIn (snd (run "sagefs" [ "--version" ] repo))
   if not (toolVersion.StartsWith version) then fail (WrongVersionRunning (version, toolVersion))
 
