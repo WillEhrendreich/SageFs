@@ -9,3 +9,9 @@ These are what the LemScore tests read. The ones that came off a real machine ar
 - `sandbox-ps.txt` (real): `ps` from inside the bubblewrap sandbox right after cmdc exited, from the same run. The only thing left over was an MSBuild node.
 
 I have not been able to capture a provider quota error on demand, so the quota tests build their event lines in `Samples.fs` from the shapes in the cmdc 1.73 bundle: the exit-code table (5 rate limited, 10 insufficient credits, 8 turn cap) and a result line with `"subtype":"error"` and an `error` string. The old report quotes the real text, "You've reached today's limit on Ling 3.0 Flash Sante.", and the test uses it.
+
+The Claude Code harness (`Legacy.fs` in LemRun, which replaced `run-lemming` and `score`) is checked against the jq script it replaced:
+
+- `claude-stream.ndjson` (modelled): a stream-json run in the shape Claude Code writes: an init event, tool calls (Bash, SageFs MCP, an edit), two tool errors and a result event.
+- `claude-files.diff` and `claude-residue.json` (modelled): the harness's own file diff and the dashboard sessions listing.
+- `claude-summary.expected.json` (real output of the original bash and jq `score`): what the old script printed for the three files above. The F# summary must equal it byte for byte.

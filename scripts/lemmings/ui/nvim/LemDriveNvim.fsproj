@@ -20,6 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="EditorSandbox.fs" />
     <Compile Include="Ansi.fs" />
     <Compile Include="NvimShot.fs" />
     <Compile Include="Nvim.fs" />

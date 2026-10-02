@@ -1,7 +1,7 @@
 # The first ten minutes with sagefs.nvim on the demoenv fixture: a file with no session, the
 # status float, the project picker, a session warming up, a value on screen, an error, and the
 # same editor in a narrow and a wide terminal. Run it with:
-#   scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/demoenv-first-run.tour
+#   dotnet fsi scripts/lemmings/ui/nvim/run-nvim-tour.fsx -- scripts/lemmings/ui/nvim/tours/demoenv-first-run.tour
 #
 # Shots are numbered in the order they are taken (OUT/shots/001-...png).
 

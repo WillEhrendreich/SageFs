@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- LemRun: the process plumbing of the lemming harness, in F#. It builds the bubblewrap
+       sandbox, starts and stops cmdc, Xvfb, tmux and the editors, keeps the one read-only copy
+       of each SageFs build the lemmings run, and prunes a run down to its evidence. The logic
+       it calls (the event parser, the classifier, the daemon gate, summary.json) is LemScore.
+       The documented entry points (run-lemming-cmd.fsx and friends) only build this project
+       when it is stale and hand over to it. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>LemRun</AssemblyName>
+    <RootNamespace>LemRun</RootNamespace>
+    <LangVersion>preview</LangVersion>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Proc.fs" />
+    <Compile Include="Env.fs" />
+    <Compile Include="Failure.fs" />
+    <Compile Include="Store.fs" />
+    <Compile Include="Sandbox.fs" />
+    <Compile Include="../ui/nvim/EditorSandbox.fs" Link="EditorSandbox.fs" />
+    <Compile Include="Bridge.fs" />
+    <Compile Include="Workspace.fs" />
+    <Compile Include="Oracles.fs" />
+    <Compile Include="CmdRun.fs" />
+    <Compile Include="NvimRun.fs" />
+    <Compile Include="VscRun.fs" />
+    <Compile Include="Legacy.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../LemScore/LemScore.fsproj" />
+  </ItemGroup>
+
+</Project>

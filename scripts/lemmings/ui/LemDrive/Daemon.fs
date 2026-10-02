@@ -1,7 +1,7 @@
 /// What the harness reads from the ONE shared SageFs daemon (Will's dev daemon on
 /// 37749). Read only: the sessions list, and a few MCP tools called the way any
 /// client calls them. It never starts, stops or reconfigures the daemon, and it
-/// never stops a session (that is `lem_cleanup_sessions`, in LemScore).
+/// never stops a session (that is `CmdRun.cleanupSessions`, in LemRun).
 module LemDrive.Daemon
 
 open System

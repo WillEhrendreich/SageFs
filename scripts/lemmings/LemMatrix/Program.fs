@@ -28,7 +28,7 @@ module ExitCode =
 /// oracle at 15) before it kills that run's process tree.
 let runDeadline = TimeSpan.FromMinutes 45.0
 
-/// run-lemming-cmd exit codes the matrix reacts to (see lib-cmd.sh: 3 shared daemon, 4 tool).
+/// run-lemming-cmd exit codes the matrix reacts to (see LemRun's Failure.fs: 3 shared daemon, 4 tool).
 let private runnerAbortsMatrix (exitCode: int) : bool =
   exitCode = 3 || exitCode = 4
 
@@ -38,6 +38,7 @@ type Options =
     MaxTurns: int
     QuotaLimit: int
     Root: string
+    /// A program to run instead of LemRun's run-cmd, given the same arguments (a fixture, a task, a model, an id, the turns).
     Runner: string option
     DryRun: bool }
 
@@ -65,25 +66,32 @@ let parseOptions (args: string list) : Result<Options, string> =
        Root = defaultRoot; Runner = None; DryRun = false } args
   |> Result.bind (fun o -> if o.PlanPath = "" then Error "no plan file given (use - for stdin)" else Ok o)
 
-/// run-lemming-cmd lives beside the LemMatrix project; walk up from the binary to find it.
-let findRunner () : Result<string, string> =
-  let rec up (dir: DirectoryInfo | null) =
-    match dir with
-    | null -> Error "could not find scripts/lemmings/run-lemming-cmd above the binary (pass --runner)"
-    | d ->
-      let candidate = Path.Combine(d.FullName, "run-lemming-cmd")
-      match File.Exists candidate with
-      | true -> Ok candidate
-      | false -> up d.Parent
-  up (DirectoryInfo AppContext.BaseDirectory)
+/// How one run is started: a program and the arguments that come before the run's own.
+type Runner =
+  { File: string
+    LeadingArgs: string list
+    /// Where the tasks are, for refusing a plan whose task has no file before anything runs.
+    TasksDir: string }
+
+/// The runner is LemRun's `run-cmd`, which sits beside this binary; --runner replaces it with a program
+/// of the caller's own (its tasks are expected beside it).
+let findRunner (given: string option) : Result<Runner, string> =
+  match given with
+  | Some path ->
+    Ok { File = path; LeadingArgs = []; TasksDir = Path.Combine(Path.GetDirectoryName path |> Option.ofObj |> Option.defaultValue ".", "tasks") }
+  | None ->
+    let dll = Path.Combine(AppContext.BaseDirectory, "LemRun.dll")
+    match File.Exists dll with
+    | true -> Ok { File = "dotnet"; LeadingArgs = [ dll; "run-cmd" ]; TasksDir = Path.Combine(LemRun.Env.lemDir, "tasks") }
+    | false -> Error "could not find LemRun.dll beside the binary (pass --runner)"
 
 /// Starts one run and returns its exit code. Output goes to a log under the root, not the terminal.
-let private runOne (runner: string) (opts: Options) (cell: Cell) : Task<int> =
+let private runOne (runner: Runner) (opts: Options) (cell: Cell) : Task<int> =
   task {
     let logDir = Path.Combine(opts.Root, ".matrix-logs")
     Directory.CreateDirectory logDir |> ignore
-    let psi = ProcessStartInfo(runner, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
-    [ cell.Fixture; cell.Task; cell.Model; cell.RunId; string opts.MaxTurns ] |> List.iter psi.ArgumentList.Add
+    let psi = ProcessStartInfo(runner.File, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
+    runner.LeadingArgs @ [ cell.Fixture; cell.Task; cell.Model; cell.RunId; string opts.MaxTurns ] |> List.iter psi.ArgumentList.Add
     psi.Environment["LEM_ROOT"] <- opts.Root
     use p = Process.Start psi
     use log = new StreamWriter(Path.Combine(logDir, cell.RunId + ".log"))
@@ -116,7 +124,7 @@ let private checkModels (lines: Line list) : Result<unit, string> =
     |> List.tryPick (function Error e -> Some e | Ok _ -> None)
     |> function Some e -> Error e | None -> Ok ()
 
-let private run (opts: Options) (runner: string) (cells: Cell list) : Row list =
+let private run (opts: Options) (runner: Runner) (cells: Cell list) : Row list =
   let rows = ResizeArray<Row>()
   let mutable state = start cells
   let running = ResizeArray<Task<Cell * int>>()
@@ -159,13 +167,12 @@ let main' (argv: string[]) : int =
     ExitCode.usage
   | Ok opts ->
     let planText = if opts.PlanPath = "-" then Console.In.ReadToEnd() else File.ReadAllText opts.PlanPath
-    let runnerResult = match opts.Runner with Some r -> Ok r | None -> findRunner ()
-    let tasksDir = runnerResult |> Result.map (fun r -> Path.Combine(Path.GetDirectoryName r |> Option.ofObj |> Option.defaultValue ".", "tasks"))
+    let runnerResult = findRunner opts.Runner
     let planned =
       Plan.parse planText
       |> Result.bind (fun lines ->
-        tasksDir
-        |> Result.bind (fun dir -> Plan.checkTasks dir lines)
+        runnerResult
+        |> Result.bind (fun runner -> Plan.checkTasks runner.TasksDir lines)
         |> Result.bind (fun () -> checkModels lines)
         |> Result.map (fun () -> lines))
     match planned, runnerResult with

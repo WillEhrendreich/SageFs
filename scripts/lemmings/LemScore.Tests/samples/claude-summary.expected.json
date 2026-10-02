@@ -1,0 +1,63 @@
+{
+  "id": "demo-id",
+  "model": "sonnet",
+  "outcome": "success",
+  "claudeExit": 0,
+  "seconds": 42,
+  "turns": 4,
+  "costUsd": 0.0123,
+  "isolation": {
+    "mcpServers": [
+      "sagefs:connected",
+      "other:failed"
+    ],
+    "toolCount": 7,
+    "nonSageFsMcpTools": [
+      "mcp__other__thing"
+    ],
+    "skills": [
+      "sagefs"
+    ],
+    "plugins": []
+  },
+  "tools": {
+    "Bash": 3,
+    "Edit": 1,
+    "mcp__sagefs__create_project_session": 1,
+    "mcp__sagefs__get_daemon_status": 1,
+    "mcp__sagefs__send_fsharp_code": 1
+  },
+  "sagefsCalls": [
+    "get_daemon_status",
+    "send_fsharp_code",
+    "create_project_session"
+  ],
+  "firstEvalAtCall": 4,
+  "bashDotnet": [
+    "dotnet build"
+  ],
+  "bashSleeps": [
+    "sleep 5",
+    "ls -la && sleep 1"
+  ],
+  "bashOther": 0,
+  "toolErrors": 2,
+  "firstErrors": [
+    "error FS0001: the type 'int' does not match 'string' — and so on, enough text that it can be clipped somewhere later in the sentence, which is long on purpose so the 220 code point limit is exercised by a real overrun of",
+    "session faulted ünïcödé"
+  ],
+  "finalText": "Done. I changed parseSeed and ran the tests, which passed.",
+  "verification": {
+    "changedFiles": [
+      "./DemoEnv/DemoEnv.fs",
+      "./new file.txt",
+      "./old.txt"
+    ],
+    "fixtureTests": "pass"
+  },
+  "residueSessionsBeforeTeardown": 2,
+  "teardown": {
+    "graceful": "stopped",
+    "forced": "no"
+  }
+}

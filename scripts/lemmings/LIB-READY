@@ -1,1 +1,0 @@
-lib-cmd.sh ready: lem_assert_free_model, lem_use_shared_daemon, lem_cleanup_sessions, lem_run_cmdc, lem_score (+ lem_run_id, lem_sessions_under, lem_sandbox_exec, lem_run_oracle); source it, read its header. Needs the shared daemon on 37749 up; builds scripts/lemmings/LemScore on first use. Editor drivers may drop out/fellover.extra.json for extra fellOver entries.

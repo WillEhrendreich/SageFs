@@ -11,8 +11,8 @@
 // What this tool does NOT do is stop the KEYS from reaching a shell: Neovim is a real editor,
 // so `:!cmd`, `:terminal`, `:lua os.execute(...)` and `!!sh` all work when typed. A key list
 // cannot be allow-listed down to "edits only", so that is not attempted here. What a shell
-// inside the editor can reach is fixed by the editor sandbox's mounts (lib-nvim.sh,
-// lem_editor_bwrap_args: only the workspace is writable, and its .git is read-only), and
+// inside the editor can reach is fixed by the editor sandbox's mounts (EditorSandbox.fs:
+// only the workspace is writable, and its .git is read-only), and
 // IsolationTests.fs pins it.
 //
 // Pure parts (key notation, shell allow-list, screen header) are plain functions so they
@@ -558,12 +558,8 @@ let runProcess (exe: string) (args: string list) (env: (string * string) list) (
 /// What the harness puts in front of every `git` it runs on a workspace the editor could write to.
 /// The editor's .git is mounted read-only, and a repository is also a list of programs to run
 /// (hooks, fsmonitor, a pager, an external diff), so those are pinned off with `-c`, which beats
-/// every config file. lib-nvim.sh's `lem_git` says the same thing for the shell side.
-let harnessGitPins: string list =
-  [ "-c"; "core.fsmonitor=false"
-    "-c"; "core.hooksPath=/dev/null"
-    "-c"; "core.pager=cat"
-    "-c"; "diff.external=" ]
+/// every config file. EditorSandbox.fs owns the list, because the plumbing (LemRun) runs git with it too.
+let harnessGitPins: string list = EditorSandbox.harnessGitPins
 
 type TmuxTarget =
   { Dir: string

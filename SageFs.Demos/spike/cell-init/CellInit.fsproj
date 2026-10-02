@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>cellinit</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Throwaway spike, deliberately isolated from the repo's solution/build (see
+         xtest-app/XTestApp.fsproj for why the central package management is opted out of and
+         FSharp.Core is pinned explicitly). Published self-contained and bound into the cell,
+         which has no dotnet SDK of its own: this is what runs inside the cell where the
+         stage scripts used to run an inline shell script. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" Version="10.1.401" />
+  </ItemGroup>
+</Project>

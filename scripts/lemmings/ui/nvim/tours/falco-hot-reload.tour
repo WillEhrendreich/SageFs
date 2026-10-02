@@ -1,6 +1,6 @@
 # Hot reload on the falco-hello fixture: run the app from the editor, change a route's text, save,
 # and see what the editor says and what the running app serves. Run it with:
-#   scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/falco-hot-reload.tour falco-hello Program.fs
+#   dotnet fsi scripts/lemmings/ui/nvim/run-nvim-tour.fsx -- scripts/lemmings/ui/nvim/tours/falco-hot-reload.tour falco-hello Program.fs
 
 keys <CR>
 expect "SageFs"

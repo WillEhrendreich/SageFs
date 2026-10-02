@@ -4,7 +4,9 @@ A lemming is a disposable trial. A cheap agent gets only what a new SageFs user 
 
 The lemmings here are Command Code (`cmdc`) on free models. They are clients of one shared SageFs daemon on port 37749, which the person running the harness starts and owns, so that person can watch every lemming in the dashboard at http://localhost:37750/dashboard. Nothing in this directory ever starts, stops, restarts or configures that daemon.
 
-`run-lemming` and `score` are the older harness for Claude Code. They are still here and untouched. Everything below is the cmdc harness.
+`run-lemming.fsx` and `score.fsx` are the older harness for Claude Code. They are still here, ported to F# with the same behavior (`LemRun/Legacy.fs`). Everything below is the cmdc harness.
+
+Every script here is F#: a typed `.fsx` entry point run with `dotnet fsi scripts/lemmings/<name>.fsx -- <args>`, which builds the tool behind it when its sources changed (`launch.fsx`) and hands over to it. The logic is three projects: `LemScore` (the event parser, the classifier, the daemon gate, `summary.json`), `LemMatrix` (the matrix bookkeeping) and `LemRun` (the process plumbing: the bubblewrap sandbox, cmdc, Xvfb and tmux, the stores, the oracles, the prune). Nothing under this directory is a shell script.
 
 ## Prerequisites
 
@@ -13,8 +15,8 @@ The harness is Linux only (it needs bubblewrap). Everything must be in place bef
 | Need | Why | Check |
 |---|---|---|
 | `bwrap` (bubblewrap) | every lemming, and every oracle that runs lemming-written code, runs inside it | `command -v bwrap` |
-| `flock`, `git`, `bash` | the F# tool build lock, the lemming's working repo, the scripts | `command -v flock git` |
-| the .NET SDK in `global.json` (11.0.100-rc.1 or later, prerelease allowed) | builds `LemScore` and `LemMatrix` on first use, and runs the oracles | `dotnet --version` |
+| `git`, `ss`, `ps`, `timeout` | the lemming's working repo, the port and process checks, the time limit the sandbox applies | `command -v git ss ps timeout` |
+| the .NET SDK in `global.json` (11.0.100-rc.1 or later, prerelease allowed) | runs the `.fsx` entry points, builds `LemRun`, `LemScore` and `LemMatrix` on first use, and runs the lemming's tests | `dotnet --version` |
 | `cmdc` (Command Code), installed **under `~/.local/share/mise`** and logged in | the lemming itself. The sandbox binds only that toolchain, so a `cmdc` installed anywhere else is refused (exit 4) | `readlink -f "$(command -v cmdc)"`, and `~/.commandcode/auth.json` must exist |
 | a built master dev dll at `<main checkout>/SageFs/bin/Release/net11.0/SageFs.dll` | the `sagefs mcp` bridge each lemming runs (or set `SAGEFS_LEMMING_BIN`, see below) | `dotnet build SageFs/SageFs.fsproj -c Release` in the main checkout |
 | a running shared SageFs daemon on port 37749 | see the next section | `curl -s localhost:37749/health` |
@@ -36,7 +38,7 @@ Before each run the harness reads `/health` and `get_daemon_status`. The daemon 
 
 ### Use the same build as the daemon
 
-The bridge in each lemming is a copy of the dev dll. If the daemon was started from an older build, the two differ, and a protocol or tool-surface difference would look like a model or SageFs failure. The harness compares the two commits at the start of every run:
+The bridge each lemming runs is the dev dll (a read-only copy kept once, see "Which SageFs the lemming gets"). If the daemon was started from an older build, the two differ, and a protocol or tool-surface difference would look like a model or SageFs failure. The harness compares the two commits at the start of every run:
 
 - it prints a `VERSION SKEW` warning on stderr,
 - `summary.json` gets `versionSkew: true`, both versions (`daemonVersion`, `bridgeVersion`) and a `Preflight` finding in `fellOver`,
@@ -49,16 +51,22 @@ It cannot just use "the dll the daemon runs": that file may have been rebuilt si
 Run from the root of a SageFs checkout, so the paths below resolve:
 
 ```
-scripts/lemmings/run-lemming-cmd <fixture> <task> <free-model> <run-id|auto> [max-turns]
+dotnet fsi scripts/lemmings/run-lemming-cmd.fsx -- <fixture> <task> <free-model> <run-id|auto> [max-turns]
 
-scripts/lemmings/run-lemming-cmd demoenv parse-seed stealth/space-bunny-alpha space-bunny-parse-seed-01
-scripts/lemmings/run-lemming-cmd demoenv parse-seed stealth/space-bunny-alpha auto 40
-scripts/lemmings/run-lemming-cmd "sagefs-copy:$PWD" sagefs-small-fix poolside/laguna-s-2.1-free auto
+dotnet fsi scripts/lemmings/run-lemming-cmd.fsx -- demoenv parse-seed stealth/space-bunny-alpha space-bunny-parse-seed-01
+dotnet fsi scripts/lemmings/run-lemming-cmd.fsx -- demoenv parse-seed stealth/space-bunny-alpha auto 40
+dotnet fsi scripts/lemmings/run-lemming-cmd.fsx -- "sagefs-copy:$PWD" sagefs-small-fix poolside/laguna-s-2.1-free auto
 ```
 
 `auto` picks the next free `<model-short>-<task>-<nn>`. The run directory is `/tmp/lem/<run-id>` (override the root with `LEM_ROOT`), and the lemming works in `/tmp/lem/<run-id>/w`. Its sessions are keyed by that directory, so in the dashboard a lemming's sessions show a path with the run id in it, like `.../space-bunny-parse-seed-01/w`.
 
-`/tmp` is often tmpfs, which has no reflink, so each run holds a real copy of the SageFs build (about 380 MB) and, for `sagefs-copy`, of the source tree. Point `LEM_ROOT` at a btrfs path if that matters, and clear old runs with `prune-runs` (below).
+`/tmp` is tmpfs on this machine, which is RAM, so a run keeps almost nothing there:
+
+- the SageFs build the bridge runs is **not** copied into the run. It is copied once per build into a store off tmpfs (`~/.local/share/sagefs-lemmings`, or `LEM_STORE`), keyed by its version and the hash of its dll, made read-only and mounted into each sandbox that uses it. The editor driver is stored the same way (`drive/`, keyed by a hash of its sources).
+- when a run ends, everything except `out/` (summary.json, timeline.ndjson, shots, logs) is removed: the working copy, the run's own NuGet folder, the sandbox scratch. Set `LEM_KEEP_RUN=1` to keep the whole directory, or clear kept and older runs with `prune-runs` (below).
+- while it runs, a `demoenv` run holds the fixture and a restored NuGet folder (a few MB). A `sagefs-copy` run holds a copy of the source tree and of `SageFs.Core`'s build output (`LEM_COPY_BUILD`) for as long as it runs, about 400 MB, because a session builds in place and loads that output.
+
+An old stored build is removed by `prune-runs --builds` when nothing has used it for a week (the newest three are always kept).
 
 ### Exit codes
 
@@ -75,11 +83,12 @@ scripts/lemmings/run-lemming-cmd "sagefs-copy:$PWD" sagefs-small-fix poolside/la
 ### Clear old runs
 
 ```
-scripts/lemmings/prune-runs --older-than-days 7 --dry-run
-scripts/lemmings/prune-runs space-bunny-parse-seed-03
+dotnet fsi scripts/lemmings/prune-runs.fsx -- --older-than-days 7 --dry-run
+dotnet fsi scripts/lemmings/prune-runs.fsx -- space-bunny-parse-seed-03
+dotnet fsi scripts/lemmings/prune-runs.fsx -- --builds
 ```
 
-Deletes finished runs (those with `out/summary.json`) from `LEM_ROOT`. Nothing is deleted unless runs are named or an age is given, a run without a summary is never touched because it may be running, and `--root` must be at least two segments deep. The run directory is the only copy of its artifacts, so read the summaries first.
+A finished run (one with `out/summary.json`, or `out/tour.json` for a tour) already pruned itself to `out/` when it ended, so this is for runs kept with `LEM_KEEP_RUN=1` and for runs from before that. It removes everything in a named or old-enough run except `out/`; `--whole` removes the run directory too, evidence included; `--builds` also removes stored SageFs and driver builds that nothing has used for a week (the newest three are always kept). Nothing is touched unless runs are named or an age is given, a run without a summary is never touched because it may be running, and `--root` must be at least two segments deep. `--whole` is the only form that loses the summary, so read it first.
 
 ## Models
 
@@ -96,7 +105,7 @@ Free models only. The runner reads the live `cmdc --list-models` and refuses (ex
 
 The daemon is the one the harness user started, normally the master dev build. What each lemming gets of its own is the `sagefs mcp` stdio bridge in its MCP registration, written the way the README says (`command` + `args: ["mcp"]`), with `SAGEFS_MCP_PORT=37749` so it attaches to the running daemon instead of starting one.
 
-- default: `<main checkout>/SageFs/bin/Release/net11.0/SageFs.dll`, copied into the run dir, so a rebuild cannot change a trial that is running
+- default: `<main checkout>/SageFs/bin/Release/net11.0/SageFs.dll`, copied once into the store (`~/.local/share/sagefs-lemmings/bridge/<version>-<dll hash>`, or under `LEM_STORE`), read-only, and mounted into each sandbox that uses it. A rebuild is a new key, so it cannot change a trial that is running, and a hundred runs of one build hold one copy
 - `SAGEFS_LEMMING_BIN=published`: the global tool `sagefs`, for a baseline
 - `SAGEFS_LEMMING_BIN=<path>`: a `SageFs.dll`, or a directory holding one
 
@@ -125,10 +134,11 @@ A failing eval of the lemming's own code is the red step of the loop the skill t
 
 ## Artifacts
 
+While it runs:
+
 ```
 /tmp/lem/<run-id>/
   w/                        the lemming's working directory (a git repo, tag lem-baseline, no remote)
-  bin/sagefs/               the copy of the SageFs build the bridge runs from
   nuget/                    the lemming's own NuGet packages folder (the user's cache is a read-only fallback)
   cmdchome/                 the lemming's private ~/.commandcode (credentials bound over it, read-only)
   out/
@@ -143,6 +153,8 @@ A failing eval of the lemming's own code is the red step of the loop the skill t
     sbx/ps.txt              processes still alive in the sandbox when cmdc exited
 ```
 
+When the run ends, everything except `out/` is removed (unless `LEM_KEEP_RUN=1`), so `out/` is what is left: summary.json, events, the oracle's output, and for editor runs `timeline.ndjson`, `shots/`, `screens/` and the driver's logs. The SageFs build the bridge ran from is in the store, not in the run.
+
 summary.json fields: `id`, `model`, `harness`, `sagefsVersion`, `daemonVersion`, `bridgeVersion`, `versionSkew`, `task`, `outcome`, `outcomeReason`, `providerError`, `seconds`, `turns`, `cmdcExit`, `toolCalls` (by name), `sagefsMcp` (calls, errorCount, evalFailures, inputRepairs, callSequence, and every error with its text), `oracle`, `residue` (sessions created, left behind, seen in the dashboard, processes left, lease calls), `teardown` (how cmdc ended, how the session cleanup went), `dashboardUrl`, `daemon` (memory pressure and available memory at start and end), `verification.changedFiles`, `knownLimits` (what the sandbox does not wall off, see Isolation), `fellOver`, `finalText`.
 
 `residue.sessionsSeenInDashboard` shows each session's whole status history (`id (Starting > Ready > Busy > Ready > Disconnected)`), because the last status is almost always `Disconnected`, the status after the cleanup stopped it.
@@ -153,7 +165,7 @@ summary.json fields: `id`, `model`, `harness`, `sagefsVersion`, `daemonVersion`,
 
 ### What the sandbox walls off
 
-Each lemming's own processes run under bubblewrap: the toolchain read-only, a tmpfs home, a cleared environment, its own pid, ipc and uts namespaces (so it cannot see or signal the daemon's process, or any other process on the machine), and only its own working directory, a scratch dir, the bridge copy and its own NuGet packages folder writable or mounted. Nothing from the real desktop is passed in: no `DISPLAY`, no `WAYLAND_DISPLAY`, no `XDG_*`. The oracle runs lemming-written code too, so oracles run it through `lem_sandbox_exec`: the same sandbox with no network and no credentials.
+Each lemming's own processes run under bubblewrap: the toolchain read-only, a tmpfs home, a cleared environment, its own pid, ipc and uts namespaces (so it cannot see or signal the daemon's process, or any other process on the machine), and only its own working directory, a scratch dir, the stored bridge build (read-only) and its own NuGet packages folder writable or mounted. Nothing from the real desktop is passed in: no `DISPLAY`, no `WAYLAND_DISPLAY`, no `XDG_*`. The oracle runs lemming-written code too, so the one thing an oracle runs in a sandbox, the lemming's own test suite, runs in the same sandbox with no network and no credentials (`CmdRun.sandboxExec`); every other check an oracle makes (the diff, the regexes, the stream) is the harness's own code, outside it.
 
 The user's NuGet cache (`~/.nuget/packages`) is mounted read-only. Restores resolve from it as a fallback folder and write anything new to the run's own `nuget/` folder, so a lemming cannot change the shared cache. Nothing else under `~/.nuget` (including any feed config with credentials) is visible.
 
@@ -189,26 +201,26 @@ Fixtures live in `fixtures/<name>`. `demoenv` is a small F# library with an Expe
 Tasks live in `tasks/<name>.md`, and the file is the prompt:
 
 - `parse-seed`: fix `DemoEnv.parseSeed` so a negative integer gives `None` (fixture `demoenv`). Oracle: the project's own Expecto suite passes in the sandbox and the tests were not edited.
-- `sagefs-small-fix`: some `RingBuffer` tests fail, fix `SageFs.Core/RingBuffer.fs` and only that file. A `tasks/sagefs-small-fix.setup.sh` seeds a one character off-by-one into the copy before the baseline commit (the shape of the real bug class, and the existing tests catch it). Oracle: the diff touches only that file, and `oracles/RingBufferOracle` compiles the lemming's `RingBuffer.fs` with the repo's own `RingBufferTests.fs` and runs it without network.
+- `sagefs-small-fix`: some `RingBuffer` tests fail, fix `SageFs.Core/RingBuffer.fs` and only that file. A setup step (`Workspace.setupFor`) seeds a one character off-by-one into the copy before the baseline commit (the shape of the real bug class, and the existing tests catch it). Oracle: the diff touches only that file, and `oracles/RingBufferOracle` compiles the lemming's `RingBuffer.fs` with the repo's own `RingBufferTests.fs` and runs it without network.
 - `sagefs-repl-eval`: use the REPL to answer a question about `RingBuffer` at runtime and write `ANSWER.md`. No edits. Oracle: the four values are right, checked with regexes, and no source file changed.
 - `smoke`: one `get_daemon_status` call. Oracle: the call completed in the stream.
 
 ### Add a task
 
 1. Write `tasks/<name>.md`, as a user would write it. Do not explain SageFs in it.
-2. Write `oracles/<name>.sh` from `oracles/_template.sh` and `chmod +x` it. No executable oracle means `HarnessError`, never a pass. Anything that runs the lemming's code goes through `lem_sandbox_exec`. Logic bigger than a few lines goes in F# next to it.
-3. If the task needs the fixture changed first, add `tasks/<name>.setup.sh <workdir>`. It runs before the baseline commit.
+2. Add an oracle: a case of `Oracle` in `LemRun/Oracles.fs`, mapped from the task name in `forTask`, with a function that checks what the lemming did. No oracle means `HarnessError`, never a pass. Anything that runs the lemming's code goes through the sandbox (`Context.Sandboxed`) and nothing else does. Logic bigger than a few lines goes in F# next to it (see `oracles/RingBufferOracle`). Add a test beside the others in `LemScore.Tests/OracleTests.fs`.
+3. If the task needs the fixture changed first, add its case to `Workspace.setupFor` in `LemRun/Workspace.fs`. It runs before the baseline commit, and refuses out loud when what it seeds does not match.
 
 ### Add a fixture
 
 Drop a directory in `fixtures/<name>` with the project as a new user would have it. It is copied into `w`, made a git repo, and the skill and `.mcp.json` are added.
 
-To check a fixture or a setup script without calling a model: `LEM_PREPARE_ONLY=1 scripts/lemmings/run-lemming-cmd <fixture> <task> <model> <id>`.
+To check a fixture or a setup step without calling a model: `LEM_PREPARE_ONLY=1 dotnet fsi scripts/lemmings/run-lemming-cmd.fsx -- <fixture> <task> <model> <id>`.
 
 ## Matrix
 
 ```
-scripts/lemmings/run-matrix <plan-file|-> [--concurrency 3] [--max-turns 60] [--quota-limit 2] [--root /tmp/lem] [--dry-run]
+dotnet fsi scripts/lemmings/run-matrix.fsx -- <plan-file|-> [--concurrency 3] [--max-turns 60] [--quota-limit 2] [--root /tmp/lem] [--dry-run]
 ```
 
 A plan is one run per line, `<fixture> <task> <model> [reps]`, with `#` comments:
@@ -229,10 +241,10 @@ It refuses the whole plan before running anything if a task file is missing or a
 dotnet run --project scripts/lemmings/LemScore.Tests -c Release
 ```
 
-Expecto, 125 tests: the event parser and classifier on real captured streams (`LemScore.Tests/samples`, see its README for which are real and which are modelled), the catalog and the free-model guard, the daemon gate and cleanup scoping, summary.json, the version-skew comparison, the daemon-side path tripwire, run pruning, and the matrix plan, scheduler and table. The F# is built on first use by `lib-cmd.sh`, and rebuilt whenever a source file is newer than the dll.
+Expecto, 214 tests: the event parser and classifier on real captured streams (`LemScore.Tests/samples`, see its README for which are real and which are modelled), the catalog and the free-model guard, the daemon gate and cleanup scoping, summary.json, the version-skew comparison, the daemon-side path tripwire, run pruning, the matrix plan, scheduler, runner and table, and the plumbing: the sandbox arguments as data and in a real bubblewrap, the store of builds, every oracle against a scratch run, the workspace and its git repository, the editor sandbox, the VS Code window and profile, and the Claude Code harness against the output of the jq script it replaced. The F# is built on first use by `launch.fsx`, and rebuilt whenever a source file is newer than the dll. The Neovim driver has its own tests (`ui/nvim/NvimTests`), the VS Code driver too (`ui/LemDrive.Tests`).
 
 ## For the editor harnesses
 
-`lib-cmd.sh` is the shared contract, and its header lists every function. `lem_run_cmdc` honours `LEM_EXTRA_BWRAP` and `LEM_EXTRA_ENV`, and an editor driver can write `out/fellover.extra.json` to add `Editor` findings to the summary.
+`LemRun/CmdRun.fs` is the shared contract: the daemon gate (`useSharedDaemon`), `assertFreeModel`, `runCmdc`, `cleanupSessions`, `runOracle`, `score` and `finishRun`. `runCmdc` takes `Extras` (bubblewrap arguments, environment, stored builds to mount, whether to hide the global tools) appended after the core sandbox's, and an editor driver can write `out/fellover.extra.json` to add `Editor` findings to the summary. `NvimRun.fs` and `VscRun.fs` are the two editor runners built on it.
 
-**The sandbox is the boundary, not the driver.** An editor driver (the `cmdc-nvim` and `cmdc-vscode` harnesses) typically offers the lemming a closed set of verbs, refuses absolute paths and `..` in `open`, and blocks commands such as stopping or restarting SageFs. That narrows what a lemming is steered towards. It does not bound what it can do: key presses, typed text and the command palette can still reach any other editor command, including an integrated terminal, and text and id matching is not an enforcement boundary. Whatever an editor process can do, it must only be able to do inside the same bubblewrap sandbox (`LEM_EXTRA_BWRAP` extends it, it does not replace it). An editor harness owner should confirm that the editor's own processes are launched with `--clearenv` and the same mounts as the cmdc process, and that its `ps` output shows it. The daemon-side holes above apply to editor lemmings unchanged.
+**The sandbox is the boundary, not the driver.** An editor driver (the `cmdc-nvim` and `cmdc-vscode` harnesses) typically offers the lemming a closed set of verbs, refuses absolute paths and `..` in `open`, and blocks commands such as stopping or restarting SageFs. That narrows what a lemming is steered towards. It does not bound what it can do: key presses, typed text and the command palette can still reach any other editor command, including an integrated terminal, and text and id matching is not an enforcement boundary. Whatever an editor process can do, it must only be able to do inside the same bubblewrap sandbox (`Extras.Bwrap` extends it, it does not replace it). An editor harness owner should confirm that the editor's own processes are launched with `--clearenv` and the same mounts as the cmdc process, and that its `ps` output shows it. The daemon-side holes above apply to editor lemmings unchanged.

@@ -112,7 +112,7 @@ let seenTests =
   ]
 
 let private runDir id finished bytes age : RunDir =
-  { Id = id; Path = "/tmp/lem/" + id; Bytes = bytes; Finished = finished; AgeDays = age }
+  { Id = id; Path = "/tmp/lem/" + id; Bytes = bytes; Finished = finished; AgeDays = age; EvidenceBytes = 1000L }
 
 [<Tests>]
 let pruneTests =

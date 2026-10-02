@@ -34,7 +34,7 @@ Copy A (the one that wrote the runner, oracle, lib-nvim and is running smoke lem
   curl/cat/ls allow-list for the shell window. Proven by hand against a real nvim + the shared daemon.
 - NvimOracle.fs / NvimMain.fs: oracles as pure checks over RunFacts, `oracle`, `summarize`, `annotate`,
   `daemon-state`. Their constants (Expect.*) are what the tasks must say.
-- lib-nvim.sh, run-nvim-lemming, oracle.sh, ../../oracles/ui-*.sh: plumbing on top of lib-cmd.sh.
+- (the shell plumbing that was here, lib-nvim.sh, run-nvim-lemming, oracle.sh and oracles/ui-*.sh, is now LemRun/NvimRun.fs and LemRun/Oracles.fs.)
 - tasks/*.md + *.env, LEMDRIVE.md, ../../fixtures/falco-hello: lemming-facing text and fixture (uncommitted at time of writing).
 
 ## Findings so far (for the report)

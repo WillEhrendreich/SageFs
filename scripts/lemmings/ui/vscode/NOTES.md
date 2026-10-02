@@ -1,5 +1,7 @@
 # Notes for whoever picks this up (builder's running log, not product docs)
 
+(This log predates the port of the shell plumbing to F#: `run-vscode-lemming`, `run-vscode-tour` and `lib-vscode.sh` named below are now the entry scripts `run-vscode-*.fsx` and `LemRun/VscRun.fs`.)
+
 Two copies of the builder were running in this worktree at once (a context compaction or a resumed
 agent). To stop clobbering each other, ownership was split by file. Read this before writing.
 
