@@ -100,7 +100,7 @@ let allTests = testList "Dashboard test status grid" [
     }
 
     test "every status is still conveyed per cell even when DurationMs is zero" {
-      // The untimed majority all carry DurationMs = 0.0; the grid must not use
+      // The untimed majority all carry the not-run duration marker; the grid must not use
       // duration as its layout basis, so they stay individually visible.
       let untimed = bigRunEntries |> Array.filter (fun e -> e.DurationMs = FixtureDurations.notRunMs)
       untimed.Length

@@ -185,7 +185,17 @@ let private genClaims =
     return entries |> List.distinctBy fst |> Map.ofList
   }
 
-let private genConductor = Gen.oneof [ Gen.constant None; Gen.choose (1, 12) |> Gen.map Some ]
+// The frame carries the SAME closed DU the state does, so the oracle has to
+// generate all three of its cases — `Vacant` included, since `authorityOfMember`
+// reads it. Generated with a fixed `DateTime`/reason per member so structurally
+// equal states stay equal (this file compares states structurally).
+let private genConductor =
+  Gen.oneof [
+    Gen.constant ConductorBinding.NeverBound
+    Gen.choose (1, 12) |> Gen.map (fun i -> ConductorBinding.Bound i)
+    Gen.choose (1, 12)
+    |> Gen.map (fun i -> ConductorBinding.Vacant(i, DateTime(2020, 1, 1), if i % 2 = 0 then VacancyReason.ConductorLeft else VacancyReason.LeaseLapsed))
+  ]
 
 let private genIntegrationHead = Gen.elements [ nullSha; "sha-onto"; "sha-rebased"; "sha-other" ]
 

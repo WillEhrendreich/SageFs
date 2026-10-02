@@ -86,6 +86,22 @@ module CohortErrorMapping =
         // No tool hands the conductor role to another member (DelegateConductor has no MCP verb), so
         // the old advice, "have the conductor delegate the role to you", sent an agent to nothing.
         "Ask the cohort conductor to perform it; get_cohort_status names the conductor."
+    // A VACANT seat is a different refusal from NotConductor and gets different
+    // advice: there is no conductor to ask. The honest next step is a human one —
+    // no MCP tool can fill a vacancy, and nothing is auto-promoted into one, so
+    // telling an agent to "ask the conductor" here would send it to nobody.
+    | Cohort.CohortError.ConductorVacant(former, since, why) ->
+      let seat =
+        match former with
+        | Some who -> sprintf "since %s (%A held it: %A)" (since.ToString "u") (mid who) why
+        | None -> "no conductor has ever been bound"
+      failed
+        (sprintf "This is a conductor-only action, and the conductor seat is VACANT %s." seat)
+        (match former with
+         | Some _ ->
+           "No MCP tool can fill a conductor seat and nothing is auto-promoted into one: a person must restore a conductor before this can run. Meanwhile do the work that needs no conductor — acquire_claim, release_claim, request_landing."
+         | None ->
+           "No member has ever been conductor in this cohort. The first member to join binds the seat, so join_cohort (if you have not) is what fills it.")
 
   // ── Member tokens (Capability.fs) ───────────────────────────────────────
 

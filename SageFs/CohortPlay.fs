@@ -38,7 +38,7 @@ let renderPlaySummary (entryCount: int) (head: LedgerHead<MemberId>) (frame: Coh
   Array.zip3 frame.MemberIds frame.MemberRole frame.MemberSeat
   |> Array.sortBy (fun (m, _, _) -> MemberId.display m)
   |> Array.iter (fun (m, role, seat) ->
-    let conductorTag = if frame.Conductor = Some m then " [Conductor]" else ""
+    let conductorTag = if frame.Conductor = ConductorBinding.Bound m then " [Conductor]" else ""
     let presence =
       match seat with
       | SeatState.Present -> "present"
@@ -47,8 +47,11 @@ let renderPlaySummary (entryCount: int) (head: LedgerHead<MemberId>) (frame: Coh
   line ""
 
   match frame.Conductor with
-  | Some c -> line (sprintf "Conductor: %s" (MemberId.display c))
-  | None -> line "Conductor: (none)"
+  | ConductorBinding.Bound c -> line (sprintf "Conductor: %s" (MemberId.display c))
+  | ConductorBinding.Vacant(former, since, why) ->
+    line (sprintf "Conductor: (VACANT since %s — %A held it and left; nobody holds conductor authority)"
+           (since.ToString "o") (MemberId.display former))
+  | ConductorBinding.NeverBound -> line "Conductor: (none yet — no member has ever joined this cohort)"
   line ""
 
   line (sprintf "Integration head: %s" state.IntegrationHead)

@@ -103,7 +103,15 @@ module private History =
           | 0 -> attempt (CohortCommand.RebaseCompleted(id, Error [ "f.fs" ]))
           | 1 -> attempt (CohortCommand.WithdrawLanding(l.Requester, id))
           | 2 -> attempt (CohortCommand.VetoLanding(l.Requester, id, "no"))
-          | _ -> attempt (CohortCommand.ResolveVeto(st.Conductor |> Option.defaultValue "a", id))
+          // CHANGED for the typed conductor seat: `st.Conductor` is no longer an
+          // option, and resolving the seat to an id means naming the member the
+          // seat is actually Bound to. Only a live holder can resolve a veto, so
+          // a NeverBound/Vacant seat has no id to offer and this step is skipped.
+          | _ ->
+            match st.Conductor with
+            | ConductorBinding.Bound who -> attempt (CohortCommand.ResolveVeto(who, id))
+            | ConductorBinding.NeverBound
+            | ConductorBinding.Vacant _ -> st, entries, clock, n
     let _, entries, clock, _ =
       raw |> List.map decode |> List.fold step (CohortState.empty (), [], t0, 0)
     List.rev entries, clock
@@ -141,7 +149,7 @@ let private boundedViolations (now: DateTime) (st: CohortState<string>) : string
       | _ -> ()
     for KeyValue(m, r) in st.Members do
       match r.Presence with
-      | MemberPresence.Departed since when aged since && st.Conductor <> Some m ->
+      | MemberPresence.Departed since when aged since && st.Conductor <> ConductorBinding.Bound m ->
         let referenced =
           (st.Claims |> Map.exists (fun _ c -> claimMentions m c))
           || (st.Landings |> Map.exists (fun _ l -> l.Requester = m))
@@ -218,9 +226,10 @@ let retentionTests =
       let drained, _ = ok (silent + retention) 903 s CohortCommand.Tick
       drained.Claims |> Map.count |> Expect.equal "no orphaned claim outlives the window" 0
       drained.Landings |> Map.count |> Expect.equal "no settled landing outlives the window" 0
-      // only the conductor's own seat may remain (Authority hangs off it)
+      // No seat survives: a departed conductor's seat is `Vacant`, and a vacant seat
+      // resolves no authority, so retention keeps nothing for its sake any more.
       drained.Members |> Map.toList |> List.map fst
-      |> Expect.equal "only the conductor's seat survives" [ "agent-1" ]
+      |> Expect.equal "every seat drains once the window has passed" []
     }
 
     test "a new Held claim on the same file supersedes the old orphan immediately, without waiting out the window" {
@@ -253,11 +262,20 @@ let retentionTests =
       |> Expect.equal "only the newest orphan on the file remains" [ second' ]
     }
 
-    test "the conductor's seat is never purged, however long it has been departed" {
+    test "a VACANT conductor's seat IS purged, however long ago it departed" {
+      // This asserted the opposite, and the opposite was the bug: `membersToPurge` exempted
+      // `state.Conductor` outright, so a conductor that departed pinned its seat in the ledger
+      // forever — which is how the live daemon ended up reporting a conductor that left on
+      // 2026-09-18 as still holding the seat 13 days later. Authority now hangs off the seat only
+      // while it is `Bound`, and a `Vacant` former conductor resolves no authority, so retaining it
+      // protects nothing.
       let s, silent = staleScene 3
       let drained, _ = ok (silent + retention + retention + retention) 904 s CohortCommand.Tick
       drained.Members |> Map.containsKey "agent-1"
-      |> Expect.isTrue "authority resolves through the conductor's seat; purging it would orphan the binding"
+      |> Expect.isFalse "a vacant conductor's seat is settled history and drains like any other seat"
+      drained.Conductor
+      |> Expect.equal "and the seat reads Vacant, still naming who it was for an operator to see"
+                   (ConductorBinding.Vacant("agent-1", silent, VacancyReason.LeaseLapsed))
     }
 
     test "a departed member still named by a landing awaiting the conductor is not purged" {

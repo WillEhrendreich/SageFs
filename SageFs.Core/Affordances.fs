@@ -489,25 +489,37 @@ let alwaysReachableCohortTools: Set<CohortTool> =
 /// Resolve a caller's `Authority` from a published `CohortFrame` — the
 /// frame-based mirror of `Cohort.Authority.present` (which reads
 /// `CohortState` directly; the MCP gate only ever holds the owner's
-/// published `CohortFrame`, D4, never the state itself). `Conductor` is read
-/// from the frame's own `Conductor` field first; otherwise the caller is
-/// looked up by identity in the frame's parallel `MemberIds`/`MemberRole`/
-/// `MemberSeat` arrays — a `Departed` seat resolves to `Anonymous`, the same
-/// as `Authority.present`'s `MemberPresence.Present` guard — and a caller
-/// found in neither is `Anonymous`, never an error (total, like
+/// published `CohortFrame`, D4, never the state itself).
+///
+/// PRESENCE FIRST, conductor second — the same ordering discipline as
+/// `Cohort.Authority.present`, and for the same reason. This used to read
+/// `frame.Conductor` before it ever looked at the seat, so a caller whose seat
+/// had gone `Departed` (they left, or their lease lapsed) still resolved to
+/// `Conductor` and every conductor-only tool stayed listed and allowed for them
+/// while their connection lived: the frame-side twin of the core's fail-open.
+/// Now the seat is consulted first, and only a `Bound` binding naming a
+/// `Present` seat grants `Conductor` — which the frame's own
+/// `ConductorBinding` invariant already guarantees, so the lookup stays total
+/// and needs no second source of truth. A `Vacant` seat (including to its
+/// FORMER holder, who may have rejoined) resolves to an ordinary `Member`, and a
+/// caller found in neither is `Anonymous`, never an error (total, like
 /// `Authority.present`).
 let authorityOfMember (who: 'm) (frame: Cohort.CohortFrame<'m>) : Cohort.Authority<'m> =
-  match frame.Conductor with
-  | Some c when c = who ->
-    Cohort.Authority.Conductor who
-  | _ ->
-    match frame.MemberIds |> Array.tryFindIndex ((=) who) with
-    | Some i ->
-      match frame.MemberSeat.[i] with
-      | Cohort.SeatState.Present -> Cohort.Authority.Member(who, frame.MemberRole.[i])
-      | Cohort.SeatState.Departed _ -> Cohort.Authority.Anonymous
-    | None ->
-      Cohort.Authority.Anonymous
+  match frame.MemberIds |> Array.tryFindIndex ((=) who) with
+  | Some i ->
+    match frame.MemberSeat.[i] with
+    | Cohort.SeatState.Present ->
+      match frame.Conductor with
+      | Cohort.ConductorBinding.Bound c when c = who -> Cohort.Authority.Conductor who
+      // default policy: a Present seat that is not (or no longer) the
+      // conductor's is an ordinary member — `NeverBound`, `Vacant`, or bound to
+      // somebody else. One arm, whatever `ConductorBinding` ever grows to.
+      | Cohort.ConductorBinding.NeverBound
+      | Cohort.ConductorBinding.Bound _
+      | Cohort.ConductorBinding.Vacant _ -> Cohort.Authority.Member(who, frame.MemberRole.[i])
+    | Cohort.SeatState.Departed _ -> Cohort.Authority.Anonymous
+  | None ->
+    Cohort.Authority.Anonymous
 
 /// Whether `tool` may be invoked by `authority`: `cohortTools authority`
 /// widened by the always-reachable set (join/status — see

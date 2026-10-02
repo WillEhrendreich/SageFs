@@ -609,23 +609,56 @@ let cohortPropertyTests =
 
     testList "authority (Phase 1 item 8, §4.2)" [
 
-      testPropertyWithConfig cohortConfig "18: present is Anonymous for a non-member, Conductor for the bound member, Member for every other Present member" <| fun (intents: Intent list) ->
+      testPropertyWithConfig cohortConfig "18: present is Anonymous for a non-member, Conductor only for a Present seat BOUND to the caller, Member for every other Present member" <| fun (intents: Intent list) ->
+        // CHANGED, deliberately. This used to read `Authority.present c h.State =
+        // Authority.Conductor c` for whatever `Conductor` held — a statement
+        // that the conductor binding confers authority unconditionally, which
+        // is the fail-open itself: it asserted that a DEPARTED conductor is
+        // still Conductor, because `present` checked the binding before
+        // presence. The membership loop below had the same shape
+        // (`Some m <> h.State.Conductor` skipped the conductor from the
+        // Present-member case).
+        //
+        // The invariant that replaces it is the one the typed `ConductorBinding`
+        // exists to make writable-once: Conductor iff the seat is Bound to a
+        // member who is still Present. Anything else is an ordinary Member or
+        // Anonymous — so a departed conductor who rejoins is a Member, and a
+        // departed conductor is Anonymous, and never a lingering Conductor.
         let h = run intents
         let outsider = { Id = 999; Display = "outsider" }
         let anonymousOk = Authority.present outsider h.State = Authority.Anonymous
         let conductorOk =
           match h.State.Conductor with
-          | Some c -> Authority.present c h.State = Authority.Conductor c
-          | None -> true
+          | ConductorBinding.Bound c ->
+            let isPresent =
+              match Map.tryFind c h.State.Members with
+              | Some { Presence = MemberPresence.Present } -> true
+              | _ -> false
+            isPresent && Authority.present c h.State = Authority.Conductor c
+          // default policy: nobody may present as Conductor over an empty seat
+          | ConductorBinding.NeverBound
+          | ConductorBinding.Vacant _ ->
+            h.State.Members
+            |> Map.toList
+            |> List.forall (fun (m, _) -> Authority.present m h.State <> Authority.Conductor m)
         let membersOk =
           h.State.Members
           |> Map.toList
           |> List.forall (fun (m, r) ->
             match r.Presence with
-            | MemberPresence.Present when Some m <> h.State.Conductor ->
+            | MemberPresence.Present when h.State.Conductor <> ConductorBinding.Bound m ->
               Authority.present m h.State = Authority.Member(m, r.Role)
             | _ -> true)
-        anonymousOk && conductorOk && membersOk
+        // and the invariant the DU promises, checked directly on the state
+        let bindingInvariantOk =
+          match h.State.Conductor with
+          | ConductorBinding.Bound c ->
+            match Map.tryFind c h.State.Members with
+            | Some { Presence = MemberPresence.Present } -> true
+            | _ -> false
+          | ConductorBinding.NeverBound
+          | ConductorBinding.Vacant _ -> true
+        anonymousOk && conductorOk && membersOk && bindingInvariantOk
 
       testPropertyWithConfig cohortConfig "19: ReassignClaim is refused for a non-conductor and succeeds for the conductor" <| fun (scopeIdx: int) ->
         let conductor = agentOf 0
@@ -673,7 +706,7 @@ let cohortPropertyTests =
         let delegationOk =
           match decide h2.Clock [| 3uy |] h2.State (CohortCommand.DelegateConductor(conductor, other)) with
           | Ok(newState, events, _) ->
-            let bindingMoved = newState.Conductor = Some other
+            let bindingMoved = newState.Conductor = ConductorBinding.Bound other
             let oldIsMember = Authority.present conductor newState = Authority.Member(conductor, JoinableRole.Implementer)
             let newIsConductor = Authority.present other newState = Authority.Conductor other
             let eventOk = events |> List.exists (function CohortEvent.ConductorDelegated(f, t) -> f = conductor && t = other | _ -> false)
@@ -687,15 +720,38 @@ let cohortPropertyTests =
       // no DelegateConductor case, so no generated sequence ever issues one — this
       // proves the Conductor binding is unforgeable by ordinary membership commands:
       // it is set exactly once (ConductorBound, on the first join) and never again.
-      testPropertyWithConfig cohortConfig "21: without DelegateConductor, ConductorBound fires at most once and Conductor always equals that first joiner" <| fun (intents: Intent list) ->
+      testPropertyWithConfig cohortConfig "21: without DelegateConductor, ConductorBound fires at most once and the seat is NEVER auto-refilled — it goes Vacant, not back to unbound" <| fun (intents: Intent list) ->
+        // CHANGED, deliberately. The original was "Conductor always equals that
+        // first joiner", i.e. `Conductor = Some only`. Two problems with it as
+        // an invariant: it was false the moment the conductor departed or its
+        // lease lapsed (the binding kept naming it, which is the defect), and
+        // as written it FORBADE the seat ever emptying — so keeping it green
+        // meant keeping the departed conductor bound forever.
+        //
+        // What is actually invariant is what "unforgeable" means once vacancy
+        // is a state: `ConductorBound` still fires AT MOST ONCE (nobody but a
+        // joiner can make it, and only on a seat that was never held), and
+        // after that first joiner the seat can only ever be whatever the
+        // conductor binding says — `Bound` to that same first joiner, or
+        // `Vacant` naming them. It must NEVER silently revert to `NeverBound`
+        // or quietly become someone else, and it must never be Bound to a
+        // member who has left.
         let h = run intents
         let conductorBoundEvents =
           h.Steps
           |> List.collect (fun s -> s.Events)
           |> List.choose (function CohortEvent.ConductorBound w -> Some w | _ -> None)
         match conductorBoundEvents with
-        | [] -> h.State.Conductor = None
-        | [ only ] -> h.State.Conductor = Some only
+        | [] ->
+          // nothing ever bound the seat
+          h.State.Conductor = ConductorBinding.NeverBound
+        | [ only ] ->
+          match h.State.Conductor with
+          | ConductorBinding.Bound c -> c = only
+          | ConductorBinding.Vacant(former, _, _) -> former = only
+          // default policy: the seat lost both its holder AND its record of
+          // one, which would mean something unbound it without ever saying so
+          | ConductorBinding.NeverBound -> false
         | _ -> false
     ]
 

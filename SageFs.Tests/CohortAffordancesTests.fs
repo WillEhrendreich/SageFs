@@ -22,7 +22,7 @@ let private carol = MemberId.Minted "carol"
 /// `authorityOfMember`/`cohortTools` never read claims or test data, so
 /// those arrays are irrelevant to every test in this file.
 let private frameOf
-    (conductor: MemberId option)
+    (conductor: ConductorBinding<MemberId>)
     (members: (MemberId * JoinableRole * SeatState) list)
     : CohortFrame<MemberId> =
   { Version = 0L<Measures.ledgerSeq>
@@ -56,14 +56,42 @@ let cohortAffordancesTests =
     testList "authorityOfMember" [
 
       test "resolves the frame's Conductor binding to Authority.Conductor" {
-        let frame = frameOf (Some alice) [ (alice, JoinableRole.Implementer, SeatState.Present) ]
+        let frame = frameOf (ConductorBinding.Bound alice) [ (alice, JoinableRole.Implementer, SeatState.Present) ]
         Affordances.authorityOfMember alice frame
         |> Expect.equal "conductor resolves to Authority.Conductor" (Authority.Conductor alice)
       }
 
+      // WHY (the frame-side twin of the core's fail-open): the lookup used to
+      // read `frame.Conductor` BEFORE the seat, so a caller whose seat had gone
+      // Departed still resolved to Conductor and every conductor-only tool
+      // stayed listed and allowed for them while their connection lived. The
+      // typed binding makes that case expressible — and now refused.
+      test "a DEPARTED conductor does NOT resolve to Authority.Conductor, even though the frame still names it" {
+        let frame =
+          frameOf (ConductorBinding.Bound alice)
+            [ (alice, JoinableRole.Implementer, SeatState.Departed System.DateTime.UtcNow) ]
+        Affordances.authorityOfMember alice frame
+        |> Expect.equal "a departed conductor is not Present, so it resolves to Anonymous" Authority.Anonymous
+        Affordances.checkCohortToolAllowed
+          (Affordances.authorityOfMember alice frame)
+          Affordances.CohortTool.SetIntegrationRef
+        |> Expect.isFalse "and the conductor-only tool is no longer allowed for them"
+      }
+
+      test "a VACANT seat resolves the FORMER holder to an ordinary Member, not Conductor" {
+        let frame =
+          frameOf (ConductorBinding.Vacant(alice, System.DateTime.UtcNow, VacancyReason.ConductorLeft))
+            [ (alice, JoinableRole.Implementer, SeatState.Present)
+              (bob, JoinableRole.Verifier, SeatState.Present) ]
+        Affordances.authorityOfMember alice frame
+        |> Expect.equal "a former conductor who rejoined holds no authority" (Authority.Member(alice, JoinableRole.Implementer))
+        Affordances.authorityOfMember bob frame
+        |> Expect.equal "and no one else is promoted into the vacancy" (Authority.Member(bob, JoinableRole.Verifier))
+      }
+
       test "resolves a Present non-conductor member to Authority.Member with its recorded role" {
         let frame =
-          frameOf (Some alice)
+          frameOf (ConductorBinding.Bound alice)
             [ (alice, JoinableRole.Implementer, SeatState.Present)
               (bob, JoinableRole.Verifier, SeatState.Present) ]
         Affordances.authorityOfMember bob frame
@@ -72,7 +100,7 @@ let cohortAffordancesTests =
 
       test "resolves a Departed member to Authority.Anonymous" {
         let frame =
-          frameOf (Some alice)
+          frameOf (ConductorBinding.Bound alice)
             [ (alice, JoinableRole.Implementer, SeatState.Present)
               (bob, JoinableRole.Verifier, SeatState.Departed System.DateTime.UtcNow) ]
         Affordances.authorityOfMember bob frame
@@ -80,13 +108,13 @@ let cohortAffordancesTests =
       }
 
       test "resolves a caller absent from the frame to Authority.Anonymous, never an error" {
-        let frame = frameOf (Some alice) [ (alice, JoinableRole.Implementer, SeatState.Present) ]
+        let frame = frameOf (ConductorBinding.Bound alice) [ (alice, JoinableRole.Implementer, SeatState.Present) ]
         Affordances.authorityOfMember carol frame
         |> Expect.equal "a caller who never joined resolves to Anonymous" Authority.Anonymous
       }
 
       test "an empty cohort (no conductor bound yet, no members) resolves everyone to Anonymous" {
-        let frame = frameOf None []
+        let frame = frameOf ConductorBinding.NeverBound []
         Affordances.authorityOfMember alice frame
         |> Expect.equal "no Conductor binding and no members — Anonymous" Authority.Anonymous
       }

@@ -56,6 +56,28 @@ let cohortIntegrationHeadTests =
       | other -> failwithf "expected NotConductor, got %A" other
     }
 
+    // A VACANT seat is a DIFFERENT refusal and gets different advice, because it
+    // implies a different user action: there is no conductor to ask. Before the
+    // typed binding this case was indistinguishable from the two above, and the
+    // agent-facing text said "ask the cohort conductor" — with no conductor
+    // existing. `CohortVacancyTests.fs` covers the refusal shape itself; this
+    // pins it on the tool this file is about.
+    test "a present member facing a VACANT conductor seat is refused with ConductorVacant, not NotConductor" {
+      let departed =
+        CohortState.empty ()
+        |> join alice   // conductor
+        |> join bob     // plain member, survives
+        |> fun s ->
+          match decide epoch [||] s (CohortCommand.Depart alice) with
+          | Ok(s, _, _) -> s
+          | Error e -> failwithf "unexpected departure failure: %A" e
+      match decide epoch [||] departed (CohortCommand.SetIntegrationHead(bob, "deadbeef")) with
+      | Error(CohortError.ConductorVacant(former, _, why)) ->
+        former |> Expect.equal "the refusal names who vacated the seat" (Some alice)
+        why |> Expect.equal "and why the seat emptied" VacancyReason.ConductorLeft
+      | other -> failwithf "expected ConductorVacant, got %A" other
+    }
+
     test "setting a new integration head does not disturb an unrelated queued landing" {
       let state = CohortState.empty () |> join alice
       let state1 =

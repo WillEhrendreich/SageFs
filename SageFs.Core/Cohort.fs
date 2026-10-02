@@ -261,6 +261,68 @@ module Cohort =
     Session: string option
   }
 
+  /// WHY the conductor seat is empty (§4.2's binding, made a real state).
+  /// A closed set, because the reason is exactly what tells the caller who to
+  /// go and do something about it: `ConductorLeft`/`Revoked` are a person
+  /// walking away (their claims were orphaned, a human may want to hand them
+  /// on), `LeaseLapsed` is silence (their work is still on disk, they may be
+  /// coming back), and `NeverBound` is a cohort nobody has joined yet — no
+  /// former conductor, nothing to escalate.
+  [<RequireQualifiedAccess>]
+  type VacancyReason =
+    | ConductorLeft
+    | LeaseLapsed
+    | Revoked
+    /// The seat was NEVER held — no conductor has ever been bound. Distinct
+    /// from a vacancy: there is nobody who left, so there is no one to
+    /// reinstate and nothing to reassign.
+    | NeverBound
+
+  /// WHY the conductor seat is empty carries no clock, and `CohortError.ConductorVacant`
+  /// still wants a `since` — so this named sentinel is that stamp. A `DateTime`
+  /// literal at the call site would be a magic number; this is the "never"
+  /// it means, said once.
+  let neverHeldSince = DateTime.MinValue
+
+  /// The conductor binding (§4.2) as a CLOSED SET rather than an `'m option`.
+  ///
+  /// The bare option could express "departed but still conductor" — and did.
+  /// `Authority.present` checked the binding before presence, so a conductor
+  /// who left (or whose lease lapsed) while their transport connection stayed
+  /// alive kept the highest authority; `departMember` never cleared the
+  /// binding and `Retention.membersToPurge` explicitly exempted the conductor,
+  /// so that seat could never age out. One option case had to mean two
+  /// different things depending on a field you had to go and look up.
+  ///
+  /// These three cases cannot:
+  ///
+  ///   * `Bound m` INVARIANT: `m` is Present. The only site that writes it is
+  ///     `decide`'s `Join` (from `NeverBound`) and `DelegateConductor` (which
+  ///     requires the target to be Present). The only site that could break
+  ///     it — `departMember` — moves `Bound m` to `Vacant` in the SAME step it
+  ///     marks `m` Departed, so the state "Bound to someone who is gone" is
+  ///     not writable at all.
+  ///   * `Vacant` is a state to be RESOLVED, not a missing value: it names
+  ///     who held the seat, since when, and why it emptied, and it is what a
+  ///     conductor-only command refuses with so the caller learns the seat is
+  ///     empty rather than merely that they are not in it.
+  ///   * `NeverBound` is not the same thing as `Vacant` and must not be
+  ///     conflated with `None`-by-default: nobody has ever been conductor, so
+  ///     there is no former holder and no one to reinstate.
+  ///
+  /// There is deliberately NO auto-promotion on vacancy: a seat emptied by a
+  /// lease timeout must be filled by a human, not by a machine silently
+  /// promoting the next worker on the strength of a timer.
+  [<RequireQualifiedAccess>]
+  type ConductorBinding<'m> =
+    /// Nobody has ever been conductor (an empty cohort, before the first join).
+    | NeverBound
+    /// INVARIANT: this member is `MemberPresence.Present`. See the type doc.
+    | Bound of 'm
+    /// The seat is EMPTY. Nobody holds conductor authority, not even the
+    /// former holder — a departed conductor is an ordinary (or absent) member.
+    | Vacant of former: 'm * since: DateTime * why: VacancyReason
+
   // ── Claims (§5.1, §4.3) ─────────────────────────────────────────────────
 
   /// The holder lives IN the state, not beside it — a record with a top-level
@@ -392,11 +454,15 @@ module Cohort =
     /// what makes v1 landing "strictly serial" (§5.4) structural rather than a
     /// convention `decide`'s callers have to honor.
     Queue: LandingId list
-    /// The conductor binding (§4.2). `None` until the first member joins an
-    /// empty-membership cohort — v1 has no separate `create_cohort` command, so
-    /// the first `Join` IS create_cohort's conductor binding. Moved only by
-    /// `DelegateConductor`; never a value a member can assert about itself.
-    Conductor: 'm option
+    /// The conductor binding (§4.2). `NeverBound` until the first member joins
+    /// an empty-membership cohort — v1 has no separate `create_cohort` command,
+    /// so the first `Join` IS create_cohort's conductor binding. A CLOSED SET,
+    /// not an `'m option`: `Bound` may only ever name a Present member, and a
+    /// seat that empties becomes a typed `Vacant` naming who left, since when
+    /// and why, rather than silently going back to "unbound" (see
+    /// `ConductorBinding`). Moved only by `Join`/`DelegateConductor`; never a
+    /// value a member can assert about itself.
+    Conductor: ConductorBinding<'m>
   }
 
   /// The well-known git "no parent" sha — a real, meaningful sentinel (`git
@@ -428,29 +494,45 @@ module Cohort =
       Claims = Map.empty
       Landings = Map.empty
       Queue = []
-      Conductor = None
+      Conductor = ConductorBinding.NeverBound
     }
 
   module Authority =
     /// The ONLY door (§4.2): a member's id becomes an `Authority` by looking it up
     /// in `CohortState`. Total — a non-member is `Anonymous`, never an error.
-    /// `Conductor` is read straight off the `Conductor` binding in state; it is
-    /// never a value a caller can assert about itself by naming a role in `Join`.
+    /// `Conductor` is read off the `ConductorBinding` in state; it is never a
+    /// value a caller can assert about itself by naming a role in `Join`.
+    ///
+    /// PRESENCE FIRST, conductor second. That order is the whole point of the
+    /// typed binding: this used to match the raw binding before ever consulting
+    /// `Members`, so a member who had departed — or whose lease the reaper had
+    /// lapsed — while their transport connection stayed alive still resolved to
+    /// `Conductor` and kept `set_integration_ref`/`reassign_claim`/every
+    /// conductor-only command, with every other caller refused around them. Now
+    /// only a seat that is `Bound` to a member who is still `Present` grants
+    /// `Conductor`, and the `ConductorBinding` invariant is what makes the
+    /// conjunction impossible to forget: `Bound m` already means "m is Present",
+    /// so this lookup is total and needs no second source of truth.
+    ///
     /// The vision's MCP-boundary `tryPresent : MemberId -> CohortState ->
     /// Result<Authority, SageFsError>` (token presentation at the transport edge)
     /// is a later item's concern — this lookup is pure state, so it stays total.
     let present (who: 'm) (state: CohortState<'m>) : Authority<'m> =
-      match state.Conductor with
-      | Some c when c = who -> Authority.Conductor who
-      // default policy: every other Conductor value (unbound, or bound to
-      // someone else) falls through to an ordinary membership lookup —
-      // `state.Conductor` is a single binding, not a case set that grows, so
-      // there is nothing here for a future case to silently absorb.
-      | _ ->
-        match Map.tryFind who state.Members with
-        | Some { Presence = MemberPresence.Present; Role = role } -> Authority.Member(who, role)
-        | Some { Presence = MemberPresence.Departed _ } -> Authority.Anonymous
-        | None -> Authority.Anonymous
+      match Map.tryFind who state.Members with
+      | Some { Presence = MemberPresence.Present; Role = role } ->
+        match state.Conductor with
+        | ConductorBinding.Bound c when c = who -> Authority.Conductor who
+        // default policy: a Present member who is not (or no longer) the
+        // conductor is an ordinary `Member`. This covers `NeverBound`, a
+        // `Vacant` seat (including to the FORMER holder, who is Present and
+        // rejoined, but holds no authority — a vacancy is filled by a person,
+        // not by a timer) and a binding held by someone else. One arm, whatever
+        // `ConductorBinding` ever grows to.
+        | ConductorBinding.NeverBound
+        | ConductorBinding.Bound _
+        | ConductorBinding.Vacant _ -> Authority.Member(who, role)
+      | Some { Presence = MemberPresence.Departed _ }
+      | None -> Authority.Anonymous
 
   // ── Commands, events, effects (§7.1: effects are data) ────────────────────
 
@@ -594,9 +676,21 @@ module Cohort =
     | NotLandingRequester of LandingId * 'm
     | LandingNotAtFrontOfQueue of LandingId
     | LandingNotInExpectedState of LandingId * expected: string
-    /// A conductor-only command (`ReassignClaim`, `DelegateConductor`) was issued
-    /// by a member whose `Authority.present` is not `Conductor _` (§4.2).
+    /// A conductor-only command (`ReassignClaim`, `DelegateConductor`,
+    /// `SetIntegrationHead`, `ResolveVeto`) was issued by a member whose
+    /// `Authority.present` is not `Conductor _` (§4.2) — because the seat IS
+    /// filled and the caller is simply not its holder.
     | NotConductor of 'm
+    /// ...and the other refusal, which is a different thing entirely: the seat
+    /// is EMPTY. `former` names the last holder (`None` when nobody ever held
+    /// it — `why = NeverBound`), `since` when it emptied (`neverHeldSince` for
+    /// a never-bound cohort), `why` why. Distinct from `NotConductor` because
+    /// it implies a different user action: `NotConductor` is "the conductor can
+    /// do it for you", `ConductorVacant` is "NOBODY can — a human has to
+    /// appoint a conductor first". There is deliberately no delegate tool to
+    /// suggest, and no auto-promotion to lean on: a vacancy is a typed state a
+    /// person fills.
+    | ConductorVacant of former: 'm option * since: DateTime * why: VacancyReason
 
   // ── Id minting from entropy (never Guid.NewGuid, §7.1) ────────────────────
 
@@ -636,11 +730,46 @@ module Cohort =
       | ClaimState.Released _ -> ()
     { state with Claims = claims; NextFence = fence }, List.ofSeq events
 
-  let private departMember (who: 'm) (now: DateTime) (state: CohortState<'m>) : CohortState<'m> * CohortEvent<'m> list =
+  let private departMember (why: VacancyReason) (who: 'm) (now: DateTime) (state: CohortState<'m>) : CohortState<'m> * CohortEvent<'m> list =
     let record = state.Members.[who]
     let state1 = { state with Members = Map.add who { record with Presence = MemberPresence.Departed now } state.Members }
-    let state2, orphanEvents = orphanClaimsOf who now state1
-    state2, CohortEvent.MemberDeparted(who, now) :: orphanEvents
+    // THE ONLY SITE that moves `Bound m` to `Vacant` — and it does so in the
+    // same step that marks `m` Departed, which is what makes the
+    // `ConductorBinding` invariant ("`Bound m` implies `m` is Present")
+    // structural rather than a convention every future departure site has to
+    // remember. `why` is how the caller classifies the departure: `Depart` is a
+    // person walking away, the silent-member reaper in `Tick` is `LeaseLapsed`,
+    // and an explicit revocation is `Revoked`.
+    //
+    // Everything else is untouched — in particular there is NO auto-promotion:
+    // the seat stays empty until somebody fills it. Silently promoting the next
+    // member on a lease timeout is a machine granting itself the highest
+    // authority in the cohort with nobody in the loop, which is exactly the
+    // fail-open this whole change exists to close.
+    let state2 =
+      match state1.Conductor with
+      | ConductorBinding.Bound c when c = who -> { state1 with Conductor = ConductorBinding.Vacant(who, now, why) }
+      | ConductorBinding.NeverBound
+      | ConductorBinding.Bound _
+      | ConductorBinding.Vacant _ -> state1
+    let state3, orphanEvents = orphanClaimsOf who now state2
+    state3, CohortEvent.MemberDeparted(who, now) :: orphanEvents
+
+  /// The conductor-only refusal, as a TYPED answer. A caller that is simply not
+  /// the conductor gets `NotConductor` ("someone else holds the seat"); a caller
+  /// facing a seat NOBODY holds gets `ConductorVacant` ("nobody holds it") —
+  /// because the two imply different user actions, and collapsing them is what
+  /// let a vacancy read as "ask the conductor" when there was no conductor to
+  /// ask. `clock` is the arrival time, used only as the `since` of a
+  /// `NeverBound` refusal (there is no former conductor, so nothing else to
+  /// stamp it with).
+  let private refuseConductorOnly (clock: Clock) (who: 'm) (state: CohortState<'m>) : CohortError<'m> =
+    match state.Conductor with
+    | ConductorBinding.NeverBound -> CohortError.ConductorVacant(None, clock, VacancyReason.NeverBound)
+    | ConductorBinding.Vacant(former, since, why) -> CohortError.ConductorVacant(Some former, since, why)
+    // default policy: the seat IS held (by this caller, or by someone else) —
+    // the caller simply is not that member, so this is the plain `NotConductor`.
+    | ConductorBinding.Bound _ -> CohortError.NotConductor who
 
   /// Every claim the requester is presenting must currently be `Held` by them at
   /// the presented fence — checked at request time (early warning) and again at
@@ -789,6 +918,15 @@ module Cohort =
     /// Departed members to purge, judged against the claims/landings that
     /// SURVIVED this sweep: a seat that a remaining claim or landing still
     /// names, or the conductor's seat (authority resolves through it), stays.
+    ///
+    /// The exemption is now `Bound` ONLY. A departed conductor is NOT exempt:
+    /// it held no authority the moment it departed (see `Authority.present`),
+    /// so the only thing the exemption used to protect — "authority must still
+    /// resolve through this seat" — is already false, and pinning it meant the
+    /// seat could never age out of the ledger at all. That is how a conductor
+    /// that left on 2026-09-18 was still reported as conductor 13 days later:
+    /// `Vacant` resolves no authority either, so a vacated seat is purged on
+    /// exactly the same terms as any other departed member.
     let membersToPurge (now: DateTime) (state: CohortState<'m>) : ('m * DateTime) list =
       let mentioned =
         Set.union
@@ -805,7 +943,16 @@ module Cohort =
           match r.Presence with
           | MemberPresence.Present -> ()
           | MemberPresence.Departed since ->
-            if aged now since && state.Conductor <> Some m && not (Set.contains m mentioned) then
+            let pinnedByAuthority =
+              match state.Conductor with
+              | ConductorBinding.Bound c when c = m -> true
+              // default policy: `NeverBound` pins nobody (no seat exists to
+              // resolve through) and `Vacant` pins nobody — the former holder
+              // is, by this DU's own invariant, already departed.
+              | ConductorBinding.NeverBound
+              | ConductorBinding.Vacant _
+              | ConductorBinding.Bound _ -> false
+            if aged now since && not pinnedByAuthority && not (Set.contains m mentioned) then
               yield m, since ]
 
     let sweep (now: DateTime) (state: CohortState<'m>) : CohortState<'m> * CohortEvent<'m> list =
@@ -864,19 +1011,26 @@ module Cohort =
         let record = { Role = role; Presence = MemberPresence.Present; LastRenewal = clock; Session = session }
         let newState = { state with Members = Map.add who record state.Members }
         match state.Conductor with
-        | None ->
-          // v1 create_cohort semantics (§4.2): the first member to join an
-          // empty-membership cohort becomes the conductor. There is no separate
-          // CreateCohort command in v1 — this IS that binding.
-          let bound = { newState with Conductor = Some who }
+        | ConductorBinding.NeverBound ->
+          // v1 create_cohort semantics (§4.2): the first member to join a
+          // cohort whose seat has NEVER been held becomes the conductor. There
+          // is no separate CreateCohort command in v1 — this IS that binding,
+          // and `who` is Present by the line above, which is the `Bound`
+          // invariant.
+          let bound = { newState with Conductor = ConductorBinding.Bound who }
           Ok(bound, [ CohortEvent.MemberJoined(who, role, session); CohortEvent.ConductorBound who ], [])
-        | Some _ ->
+        // default policy: the seat is already filled, or it is VACANT. A vacant
+        // seat is NOT refilled by the next joiner — a person appoints a
+        // conductor, not a queue of arrivals. (So the former conductor may
+        // rejoin freely; they come back as an ordinary Member.)
+        | ConductorBinding.Bound _
+        | ConductorBinding.Vacant _ ->
           Ok(newState, [ CohortEvent.MemberJoined(who, role, session) ], [])
 
     | CohortCommand.Depart who ->
       if not (isPresent state who) then Error(CohortError.MemberNotPresent who)
       else
-        let newState, events = departMember who clock state
+        let newState, events = departMember VacancyReason.ConductorLeft who clock state
         Ok(newState, events, [])
 
     | CohortCommand.RenewLease who ->
@@ -893,11 +1047,15 @@ module Cohort =
         |> Map.toList
         |> List.filter (fun (_, r) -> r.Presence = MemberPresence.Present && (clock - r.LastRenewal) >= leaseWindow)
         |> List.map fst
+      /// Silence, not a renewal: this reaper is the `LeaseLapsed` path, so when the
+      /// silent member happens to be the conductor its seat goes `Vacant` rather
+      /// than being carried by a connection that is, by definition, not talking
+      /// to us any more.
       let departedState, departEvents =
         expired
         |> List.fold
           (fun (st, evs) who ->
-            let st2, whoEvents = departMember who clock st
+            let st2, whoEvents = departMember VacancyReason.LeaseLapsed who clock st
             st2, evs @ whoEvents)
           (state, [])
       // Settled history is swept on the SAME tick (Retention): a departure
@@ -982,19 +1140,25 @@ module Cohort =
           | ClaimState.Held _
           | ClaimState.Released _ -> Error(CohortError.ClaimNotOrphaned claimId)
       // default policy: only a bound Conductor may reassign a claim — every
-      // other Authority (Member, Anonymous) is refused.
-      | _ -> Error(CohortError.NotConductor by)
+      // other Authority (Member, Anonymous) is refused, and a call facing an
+      // EMPTY seat is refused as `ConductorVacant` instead (`refuseConductorOnly`).
+      | _ -> Error(refuseConductorOnly clock by state)
 
     | CohortCommand.DelegateConductor(by, toMember) ->
       match Authority.present by state with
       | Authority.Conductor _ ->
         if not (isPresent state toMember) then Error(CohortError.MemberNotPresent toMember)
         else
-          let newState = { state with Conductor = Some toMember }
+          // `toMember` is Present by that guard, which is the `Bound` invariant.
+          // Note this also fills a VACANT seat — a conductor who comes back can
+          // hand the role on to whoever is left. Only a live conductor can do
+          // it; there is no way for the holder of a vacancy to delegate one.
+          let newState = { state with Conductor = ConductorBinding.Bound toMember }
           Ok(newState, [ CohortEvent.ConductorDelegated(by, toMember) ], [])
       // default policy: only a bound Conductor may delegate — every other
-      // Authority (Member, Anonymous) is refused.
-      | _ -> Error(CohortError.NotConductor by)
+      // Authority (Member, Anonymous) is refused; an empty seat is
+      // `ConductorVacant`.
+      | _ -> Error(refuseConductorOnly clock by state)
 
     | CohortCommand.ObserveSave(who, path) ->
       let violating =
@@ -1326,10 +1490,10 @@ module Cohort =
       | Authority.Conductor _ ->
         let newState = { state with IntegrationHead = head }
         Ok(newState, [ CohortEvent.IntegrationConfigured head ], [])
-      // default policy: only a bound Conductor may (re)configure the
-      // integration head — every other Authority (Member, Anonymous) is
-      // refused.
-      | _ -> Error(CohortError.NotConductor by)
+// default policy: only a bound Conductor may (re)configure the
+        // integration head — every other Authority (Member, Anonymous) is
+        // refused; an empty seat is `ConductorVacant`.
+        | _ -> Error(refuseConductorOnly clock by state)
 
     | CohortCommand.VetoLanding(by, id, reason) ->
       // roast-2day-cmd §RISK/§1: `VetoLanding` has NO authority gate on
@@ -1412,8 +1576,11 @@ module Cohort =
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Blocked(VetoedBy)"))
       // default policy: only a bound Conductor may resolve a veto — every
       // other Authority (Member, Anonymous) is refused, same as
-      // SetIntegrationHead/ReassignClaim/DelegateConductor above.
-      | _ -> Error(CohortError.NotConductor by)
+      // SetIntegrationHead/ReassignClaim/DelegateConductor above; an empty
+      // seat is `ConductorVacant` (nobody can clear the veto, so `AwaitConductor`
+      // needs a conductor appointed — that is the honest answer, not "ask the
+      // conductor" when there is none).
+      | _ -> Error(refuseConductorOnly clock by state)
 
   /// Every command's result passes through `stampSettlement`, so a landing's
   /// `Settlement` is derived from its `LandingState` in exactly one place and
@@ -1499,12 +1666,16 @@ module Cohort =
     Version: int64<ledgerSeq>
     SessionGens: int64[]
     Dirty: FrameRegions
-    /// The `Conductor` binding (§4.2), carried on the frame so a shell that
-    /// only holds `CohortFrame` (never `CohortState`) can still resolve an
-    /// `Authority` (Slice 3, cohort-integration-plan.md item 11) — see
-    /// `Affordances.authorityOfMember`. `None` until the first member joins
-    /// (mirrors `CohortState.Conductor`, §4.2).
-    Conductor: 'm option
+    /// The `Conductor` binding (§4.2), carried verbatim from
+    /// `CohortState.Conductor` so a shell that only holds `CohortFrame` (never
+    /// `CohortState`) can still resolve an `Authority` (Slice 3,
+    /// cohort-integration-plan.md item 11) — see `Affordances.authorityOfMember`.
+    /// `NeverBound` until the first member joins. It is the SAME closed DU, not
+    /// a flattened option: the frame is what `authorityOfMember` reads, so if
+    /// it lost the `Vacant` case the MCP gate would be back to granting a
+    /// departed conductor's authority — the defect this shape exists to make
+    /// unwritable.
+    Conductor: ConductorBinding<'m>
     MemberIds: 'm[]
     MemberRole: JoinableRole[]
     MemberSeat: SeatState[]

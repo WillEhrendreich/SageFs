@@ -120,7 +120,15 @@ module McpCohortTools =
         | None -> parseJoinableRole role
       let tokenHolderWithNoConductor =
         match currentCapability.Value, ctx.CohortOwner with
-        | Some _, Some owner -> (owner.ReadFrame()).Conductor.IsNone
+        // A minted token may only claim the seat when it is actually EMPTY. A
+        // VACANT seat counts as empty too — nobody holds conductor authority
+        // until a person appoints one — which is why this tests
+        // `NeverBound` specifically rather than "not Bound".
+        | Some _, Some owner ->
+          match (owner.ReadFrame()).Conductor with
+          | Cohort.ConductorBinding.NeverBound -> true
+          | Cohort.ConductorBinding.Bound _
+          | Cohort.ConductorBinding.Vacant _ -> false
         | Some _, None
         | None, _ -> false
       match roleResult with

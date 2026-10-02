@@ -325,7 +325,7 @@ let private expectedState : CohortState<MemberId> =
           FastForwardAttempts = 0; Settlement = LandingSettlement.Unsettled }
       ]
     Queue = [ expectedLandingId ]
-    Conductor = Some scenarioAlice }
+    Conductor = Cohort.ConductorBinding.Bound scenarioAlice }
 
 [<Tests>]
 let cohortLedgerExportTests =
@@ -393,7 +393,7 @@ let cohortLedgerExportTests =
           head.State |> Expect.equal "the fixture replays to the exact scenario state" expectedState
 
           // Concrete, individually eyeball-able facts about that state:
-          head.State.Conductor |> Expect.equal "alice joined first, so v1's implicit create_cohort bound her as conductor" (Some scenarioAlice)
+          head.State.Conductor |> Expect.equal "alice joined first, so v1's implicit create_cohort bound her as conductor" (Cohort.ConductorBinding.Bound scenarioAlice)
           head.State.Members |> Map.count |> Expect.equal "alice and bob are both members" 2
           (head.State.Claims |> Map.find expectedClaimId).State
           |> Expect.equal "alice still holds the Foo.fs claim (never released)" (ClaimState.Held scenarioAlice)

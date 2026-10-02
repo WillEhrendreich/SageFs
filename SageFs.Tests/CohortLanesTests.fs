@@ -133,34 +133,42 @@ let cohortLanesTests =
 
       testCase "reassigning an orphaned claim opens a fresh Open span for the new holder, on top of the old holder's Failed span" <| fun _ ->
         // `decide` only ever reassigns an ORPHANED claim (Cohort.fs:627,
-        // `ClaimNotOrphaned` otherwise) — alice must join as the cohort's
-        // first joiner (so she is Conductor, the only one who may issue
-        // ReassignClaim) and depart before bob can be reassigned her claim.
-        // The probe replays the SAME command list, at the SAME positional
-        // indices, as the full ledger below — `ledgerFrom` mints ids from
-        // the command's own index (`[| byte i |]`), so the claim id must be
-        // read off a ledger where `AcquireClaim` sits at the identical index
+        // `ClaimNotOrphaned` otherwise), so alice must depart before bob can be
+        // reassigned her claim.
+        //
+        // The reassigner must be a conductor whose seat is LIVE. This used to be alice herself —
+        // she joined first, so she was conductor, and the code honoured `ReassignClaim` from her
+        // AFTER she had departed. That is the fail-open the typed vacancy closes: `Authority.present`
+        // checked the conductor binding before presence, so a departed member on a live connection
+        // kept the highest authority. A third member (carol) stays present and issues it instead.
+        // The probe replays the SAME command list, at the SAME positional indices, as the full
+        // ledger below — `ledgerFrom` mints ids from the command's own index (`[| byte i |]`), so
+        // the claim id must be read off a ledger where `AcquireClaim` sits at the identical index
         // or the mint disagrees with what the full ledger actually produced.
+        // The conductor is the FIRST joiner, so carol joins first and stays present. Alice
+        // then joins as an ordinary member, takes the claim, and departs orphaning it.
+        let carol = "carol"
         let prefix =
-          [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.Join(bob, JoinableRole.Implementer, None)
-            atSec 2, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing") ]
+          [ atSec 0, CohortCommand.Join(carol, JoinableRole.Implementer, None)
+            atSec 1, CohortCommand.Join(alice, JoinableRole.Implementer, None)
+            atSec 2, CohortCommand.Join(bob, JoinableRole.Implementer, None)
+            atSec 3, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing") ]
         let claimId, _fence = mintedClaimId (ledgerFrom prefix)
         let ledger =
           ledgerFrom (
             prefix
-            @ [ atSec 3, CohortCommand.Depart alice
-                atSec 4, CohortCommand.ReassignClaim(alice, claimId, bob) ]
+            @ [ atSec 4, CohortCommand.Depart alice
+                atSec 5, CohortCommand.ReassignClaim(carol, claimId, bob) ]
           )
         let model = project ledger
         let aliceLane = model |> laneFor (Some alice)
         aliceLane.Spans |> List.length |> Expect.equal "alice's span was already closed by the orphan" 1
         aliceLane.Spans.[0].Outcome |> Expect.equal "orphaning closes it as Failed" SpanOutcome.Failed
-        aliceLane.Spans.[0].End |> Expect.equal "closes at the departure clock" (Some(atSec 3))
+        aliceLane.Spans.[0].End |> Expect.equal "closes at the departure clock" (Some(atSec 4))
         let bobLane = model |> laneFor (Some bob)
         bobLane.Spans |> List.length |> Expect.equal "bob gets a fresh span from the reassignment" 1
         let bobSpan = bobLane.Spans.[0]
-        bobSpan.Start |> Expect.equal "starts at the reassignment clock, not the original acquire" (atSec 4)
+        bobSpan.Start |> Expect.equal "starts at the reassignment clock, not the original acquire" (atSec 5)
         bobSpan.Outcome |> Expect.equal "still held — open" SpanOutcome.Open
         bobSpan.Kind |> Expect.equal "the same claimed scope, carried across the reassignment" (SpanKind.Claim(ClaimScope.File "src/Foo.fs"))
 

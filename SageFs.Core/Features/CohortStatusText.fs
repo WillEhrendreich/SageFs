@@ -14,10 +14,17 @@ module CohortStatusText =
       // `frame.Conductor` (Slice 3, item 11) — read straight off the
       // published frame, correct across daemon restarts (replaced the
       // process-lifetime `lastKnownConductor` cache the Slice 2 report
-      // flagged as a known limitation).
+      // flagged as a known limitation). A VACANT seat is shown as such,
+      // naming who held it and since when: this is the text agents read to
+      // work out why conductor-only tools are refused, so "conductor: alice"
+      // over a seat alice left 13 days ago — what `get_cohort_status`
+      // actually reported — is precisely the confusion this now removes.
       match frame.Conductor with
-      | Some who -> MemberTable.MemberId.display who
-      | None -> "(none yet — no member has joined this cohort)"
+      | Cohort.ConductorBinding.Bound who -> MemberTable.MemberId.display who
+      | Cohort.ConductorBinding.Vacant(former, since, _) ->
+        sprintf "(VACANT since %s — %s held it and left; nobody holds conductor authority)"
+          (since.ToString "u") (MemberTable.MemberId.display former)
+      | Cohort.ConductorBinding.NeverBound -> "(none yet — no member has ever joined this cohort)"
     sb.AppendLine(sprintf "Cohort ledger head: v%d" (int64 frame.Version)) |> ignore
     sb.AppendLine(sprintf "Conductor: %s" conductorText) |> ignore
     // Bounded lists (CohortBoundedView): totals stay in the headers, at most

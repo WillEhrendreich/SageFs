@@ -85,9 +85,50 @@ module CohortSpec =
   let fenceMonotone (s: CohortState<Member>) : bool =
     s.Claims |> Map.forall (fun _ c -> c.Fence <= s.NextFence)
 
-  /// Once any member exists, the conductor binding is set (v1 create-cohort).
+  /// THE INVARIANT, REWRITTEN. This used to read "once any member exists, the
+  /// conductor binding is set" (`Map.isEmpty s.Members || Option.isSome
+  /// s.Conductor`), which was a statement about an `'m option` and is FALSE in
+  /// the direction that matters: a departed member is still in `Members`, while
+  /// the seat it emptied is `Vacant`, not bound — so a cohort whose conductor
+  /// left violated the rule the moment the ledger was honest about the
+  /// departure. And the old rule could not see the defect at all, because it
+  /// never asked whether the named conductor was still PRESENT.
+  ///
+  /// What is actually invariant is stronger and is what the typed
+  /// `ConductorBinding` was built to make writable-once:
+  ///   * `Bound m` IMPLIES `m` is Present — the fail-open's root; and
+  ///   * a seat that is `NeverBound` or `Vacant` grants conductor authority to
+  ///     NOBODY, so `Authority.present` must never answer `Conductor _` there.
+  ///
+  /// `Vacant` is NOT a violation of the first clause and never will be: it is
+  /// the typed state that says "nobody holds this seat", which is the whole
+  /// point. There is deliberately no rule here demanding the seat be filled —
+  /// that would re-assert auto-promotion, which is exactly what must not happen.
   let conductorBound (s: CohortState<Member>) : bool =
-    Map.isEmpty s.Members || Option.isSome s.Conductor
+    let boundIsPresent =
+      match s.Conductor with
+      | ConductorBinding.Bound m ->
+        match Map.tryFind m s.Members with
+        | Some { Presence = MemberPresence.Present } -> true
+        | _ -> false
+      | ConductorBinding.NeverBound
+      | ConductorBinding.Vacant _ -> true
+    // Fail-closed, stated over the REAL door rather than over the binding: a
+    // seat that is `NeverBound` or `Vacant` grants conductor authority to NOBODY,
+    // so `Authority.present` must never answer `Conductor _` there. This is scoped
+    // to an unfilled seat deliberately: when the seat IS `Bound` to a present
+    // member, that member answering `Conductor` is the correct answer, and a rule
+    // that forbade it would flag every healthy cohort.
+    let nobodyConductsWhenUnfilled =
+      match s.Conductor with
+      | ConductorBinding.Bound _ -> true
+      | ConductorBinding.NeverBound
+      | ConductorBinding.Vacant _ ->
+        s.Members
+        |> Map.toList
+        |> List.forall (fun (m, _) -> Authority.present m s <> Authority.Conductor m)
+        && Authority.present "\u0000not-a-member" s <> Authority.Conductor "\u0000not-a-member"
+    boundIsPresent && nobodyConductsWhenUnfilled
 
   /// The queue never retains a terminal landing (Blocked/Landed/Withdrawn) — the
   /// no-deadlock property whose sampled form caught the RebaseConflict jam.
@@ -266,7 +307,7 @@ module CohortSpec =
         | None -> ()
       | None -> ()
       match s.Conductor with
-      | Some c ->
+      | ConductorBinding.Bound c ->
         let vetoed =
           s.Landings |> Map.toList
           |> List.choose (fun (lid, req) ->
@@ -280,7 +321,11 @@ module CohortSpec =
         // diagnosis at land time matters).
         if pend.IsSome then
           yield CohortCommand.SetIntegrationHead(c, altHead), [||]
-      | None -> ()
+      // default policy: a `NeverBound` or `Vacant` seat has no actor — there is
+      // no member to run a conductor-only command, which is exactly the refusal
+      // the typed `ConductorVacant` names.
+      | ConductorBinding.NeverBound
+      | ConductorBinding.Vacant _ -> ()
       match pend with
       | Some(CohortEffect.Rebase(id, _, _)) ->
         yield CohortCommand.RebaseCompleted(id, Result.Ok("R-" + (let (LandingId x) = id in x))), [||]

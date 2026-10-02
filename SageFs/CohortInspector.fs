@@ -192,7 +192,7 @@ let private memberFields (mid: MemberId) (state: CohortState<MemberId>) : Field 
       |> Map.toList
       |> List.choose (fun (LandingId lid, r) -> if r.Requester = mid then Some lid else None)
       |> List.sort
-    let isConductor = state.Conductor = Some mid
+    let isConductor = state.Conductor = Cohort.ConductorBinding.Bound mid
     Some [
       { Label = "Id"; Value = MemberId.display mid }
       { Label = "Role"; Value = roleLabel record.Role }

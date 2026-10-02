@@ -34,30 +34,45 @@ let private ok (clock: DateTime) (state: CohortState<string>) (cmd: CohortComman
   | Ok(s, events, effects) -> s, events, effects
   | Error e -> failwithf "expected %A to succeed, got %A" cmd e
 
+/// The same step, keeping only the state. `decide` answers with a
+/// (state, events, effects) triple, and threading that triple through a chain
+/// of steps is how the argument order got mangled in the first place — this is
+/// the form a chain should use.
+let private next (clock: DateTime) (state: CohortState<string>) (cmd: CohortCommand<string>) =
+  let s, _, _ = ok clock state cmd
+  s
+
 /// The joint the daemon's silent-member reaper produces: one `Tick` at a clock
-/// past `leaseWindow` departs everyone who has not renewed.
-let private lapsed t = ok (t.Add leaseWindow).AddSeconds 1.0 (ok t (ok t (CohortState.empty ()) (CohortCommand.Tick)) CohortCommand.Tick) CohortCommand.Tick
+/// just past `leaseWindow` departs everyone who has not renewed. Returns the
+/// reaped state together with the clock it ran at, so a caller can assert the
+/// exact `Departed` stamp rather than recomputing it.
+let private lapsed (s: CohortState<string>) (t: DateTime) =
+  let at = (t.Add leaseWindow).AddSeconds 1.0
+  next at s CohortCommand.Tick, at
 
 [<Tests>]
 let cohortVacancyTests =
   testList "Cohort conductor vacancy (typed, presence-first)" [
 
     test "a departed conductor is NOT Conductor — it cannot run conductor-only commands" {
-      let s1 = ok epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
-      let s2, _, _ = ok epoch s1 (CohortCommand.Depart alice)
+      let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let s2 = next epoch s1 (CohortCommand.Depart alice)
 
       Cohort.Authority.present alice s2
       |> Expect.equal "the departed conductor resolves to Anonymous, not Conductor" Authority.Anonymous
 
       Cohort.decide epoch [| 2uy |] s2 (CohortCommand.SetIntegrationHead(alice, "deadbeef"))
       |> Expect.equal "the departed conductor cannot re-seed the integration head"
-                    (Error(CohortError.NotConductor alice))
+                    // `ConductorVacant`, not `NotConductor`: the seat is EMPTY and
+                    // the refusal names who vacated it. That is a stronger claim
+                    // than "you are not the conductor" — it tells the caller the
+                    // problem is an empty seat rather than their own standing.
+                    (Error(CohortError.ConductorVacant(Some alice, epoch, VacancyReason.ConductorLeft)))
     }
 
     test "a conductor whose lease LAPSED is not Conductor either (the Tick path)" {
-      let s1 = ok epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
-      let late = epoch.Add leaseWindow
-      let s2, _, _ = ok late s1 CohortCommand.Tick
+      let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let (s2, late) = lapsed s1 epoch
 
       s2.Members.[alice].Presence
       |> Expect.equal "the reaper departed the silent conductor" (MemberPresence.Departed late)
@@ -67,7 +82,9 @@ let cohortVacancyTests =
 
       Cohort.decide late [| 2uy |] s2 (CohortCommand.ResolveVeto(alice, LandingId "nope"))
       |> Expect.equal "a reaped conductor cannot resolve a veto"
-                    (Error(CohortError.NotConductor alice))
+                    // `ConductorVacant` naming the silent holder and WHY the seat
+                    // emptied (the reaper, not a deliberate departure).
+                    (Error(CohortError.ConductorVacant(Some alice, late, VacancyReason.LeaseLapsed)))
     }
 
     test "a departed conductor does not get its powers back by rejoining — the seat is Vacant, not reset" {
@@ -75,21 +92,24 @@ let cohortVacancyTests =
       // `Join` on a departed member used to fall into the same "conductor
       // already bound" arm as any other joiner, so the rejoined member was
       // simultaneously Present AND still the conductor.
-      let s1 = ok epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
-      let s2, _, _ = ok epoch s1 (CohortCommand.Depart alice)
-      let s3, _, _ = ok epoch s2 (CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let s2 = next epoch s1 (CohortCommand.Depart alice)
+      let s3 = next epoch s2 (CohortCommand.Join(alice, JoinableRole.Implementer, None))
 
       Cohort.Authority.present alice s3
       |> Expect.equal "a rejoined former conductor is an ordinary Member, not Conductor" (Authority.Member(alice, JoinableRole.Implementer))
 
       Cohort.decide epoch [| 2uy |] s3 (CohortCommand.SetIntegrationHead(alice, "deadbeef"))
       |> Expect.equal "a rejoined former conductor still cannot re-seed the head"
-                    (Error(CohortError.NotConductor alice))
+                    // still `ConductorVacant`, not `NotConductor`: rejoining does
+                    // not refill the seat, so the caller is told the seat is
+                    // empty and must be filled by a person.
+                    (Error(CohortError.ConductorVacant(Some alice, epoch, VacancyReason.ConductorLeft)))
     }
 
     test "a departed conductor's claim-orphaning, seat departure and vacancy are ONE step, with the reason recorded" {
-      let s1 = ok epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
-      let s2, _, _ = ok epoch s1 (CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing"))
+      let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let s2 = next epoch s1 (CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing"))
       let s3, events, _ = ok epoch s2 (CohortCommand.Depart alice)
 
       events
@@ -104,15 +124,15 @@ let cohortVacancyTests =
       // not them" (`NotConductor`) and "the conductor seat is EMPTY, nobody can
       // do this" (`ConductorVacant`) imply different user actions — the second
       // needs a human to appoint a conductor, and no tool can.
-      let s1 = ok epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
-      let s2, _, _ = ok epoch s1 (CohortCommand.Depart alice)
-      let s3, _, _ = ok epoch s2 (CohortCommand.Join(bob, JoinableRole.Implementer, None))
+      let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let s2 = next epoch s1 (CohortCommand.Depart alice)
+      let s3 = next epoch s2 (CohortCommand.Join(bob, JoinableRole.Implementer, None))
 
       // bob is an ordinary present member, but the seat is empty — the refusal
       // must name the VACANCY, not merely say "you are not the conductor".
       Cohort.decide epoch [| 3uy |] s3 (CohortCommand.SetIntegrationHead(bob, "deadbeef"))
       |> Expect.equal "a present member facing a vacant seat gets ConductorVacant"
-                    (Error(CohortError.ConductorVacant(alice, epoch, VacancyReason.ConductorLeft)))
+                    (Error(CohortError.ConductorVacant(Some alice, epoch, VacancyReason.ConductorLeft)))
 
       // a NEVER-BOUND cohort (nobody has ever joined) is also vacant, with no
       // former conductor to name
@@ -124,9 +144,9 @@ let cohortVacancyTests =
     test "a VACANT former conductor is purged like any other departed seat" {
       // Before the fix `membersToPurge` skipped the conductor outright, so this
       // seat could never age out no matter how stale it got.
-      let s1 = ok epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
-      let s2, _, _ = ok epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None))
-      let s3, _, _ = ok epoch s2 (CohortCommand.Depart alice)
+      let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let s2 = next epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None))
+      let s3 = next epoch s2 (CohortCommand.Depart alice)
       let longAfter = epoch.Add(settledRetention).AddSeconds 1.0
 
       Cohort.Retention.membersToPurge longAfter s3
@@ -141,10 +161,10 @@ let cohortVacancyTests =
     }
 
     test "a LIVE (Bound) conductor is still exempt from purge — authority must still resolve" {
-      let s1 = ok epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
       // bob leaves; alice (still Bound and Present) must not be swept
-      let s2, _, _ = ok epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None))
-      let s3, _, _ = ok epoch s2 (CohortCommand.Depart bob)
+      let s2 = next epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None))
+      let s3 = next epoch s2 (CohortCommand.Depart bob)
       let longAfter = epoch.Add(settledRetention).AddSeconds 1.0
       Cohort.Retention.membersToPurge longAfter s3
       |> Expect.equal "only the departed NON-conductor is purgeable" [ (bob, epoch) ]
@@ -165,14 +185,19 @@ let cohortVacancyTests =
         | ConductorBinding.NeverBound
         | ConductorBinding.Vacant _ -> true
 
+      // The steps are threaded so that the invariant can be checked AFTER EVERY one,
+      // which is what makes this a lifecycle check rather than an end-state
+      // check. The delegation is to a STILL-PRESENT bob on purpose:
+      // `DelegateConductor` requires its target to be Present, so delegating to
+      // an already-departed bob would be refused rather than move the seat.
       let steps =
-        [ (CohortState.empty () |> ok epoch (CohortCommand.Join(alice, JoinableRole.Implementer, None)))
-          |> fst
-          ok epoch (CohortCommand.Join(bob, JoinableRole.Implementer, None)) |> fst
-          ok epoch (CohortCommand.AcquireClaim(bob, ClaimScope.File "src/Foo.fs", "editing")) |> fst
-          ok epoch (CohortCommand.Depart bob) |> fst
-          ok epoch (CohortCommand.DelegateConductor(alice, bob)) |> fst
-          ok epoch (CohortCommand.Depart alice) |> fst ]
+        let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
+        let s2 = next epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None))
+        let s3 = next epoch s2 (CohortCommand.AcquireClaim(bob, ClaimScope.File "src/Foo.fs", "editing"))
+        let s4 = next epoch s3 (CohortCommand.DelegateConductor(alice, bob))
+        let s5 = next epoch s4 (CohortCommand.Depart bob)
+        next epoch s5 (CohortCommand.Depart alice)
+        |> fun last -> [ s1; s2; s3; s4; s5; last ]
 
       steps
       |> List.forall invariantHolds
@@ -187,9 +212,9 @@ let cohortVacancyTests =
       // Automatic promotion of a worker on a lease timeout, with no human in the
       // loop, is the wrong direction for a system whose premise is that effects
       // need approval. A vacancy is a typed state that someone must fill.
-      let s1 = ok epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
-      let s2, _, _ = ok epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None))
-      let s3, _, _ = ok epoch s2 (CohortCommand.Depart alice)
+      let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let s2 = next epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None))
+      let s3 = next epoch s2 (CohortCommand.Depart alice)
 
       s3.Conductor
       |> Expect.equal "the seat stays Vacant — nobody is promoted into it" (ConductorBinding.Vacant(alice, epoch, VacancyReason.ConductorLeft))
@@ -198,8 +223,7 @@ let cohortVacancyTests =
       |> Expect.equal "the surviving member is an ordinary Member, not the new conductor" (Authority.Member(bob, JoinableRole.Implementer))
 
       // ...and a TICK that reaps everyone does not promote either.
-      let late = epoch.Add leaseWindow
-      let s4, _, _ = ok late s2 CohortCommand.Tick
+      let (s4, late) = lapsed s2 epoch
       s4.Conductor
       |> Expect.equal "after the reaper, the seat is Vacant(named, LeaseLapsed) — still no auto-promotion"
                     (ConductorBinding.Vacant(alice, late, VacancyReason.LeaseLapsed))

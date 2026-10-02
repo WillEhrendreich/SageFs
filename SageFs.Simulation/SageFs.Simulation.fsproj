@@ -61,6 +61,7 @@
              jam so NO-TERMINAL-IN-QUEUE is proven to have teeth. CsCheck's
              Exhaustive+Faults modes — see sagefs-learn-from-cscheck.md. -->
         <Compile Include="CohortSpec.fs" />
+    <Compile Include="CohortVacancySpec.fs" />
         <!-- Eval-actor DST: fold the REAL SageFs.AppState.EvalActorDecision.decide
              (the eval actor mailbox's pure routing core) through a pure,
              clock-free reducer, replacing four slow FSI-warmup Integration
