@@ -91,6 +91,16 @@ module ReadyWait =
         for waiter in waiters do answer waiter (Result.Error error)
         false)
 
+  /// Wakes every caller in `answers`, in order. A caller that cannot be woken is reported and never stops the rest.
+  let deliver
+    (answers: ('waiter * Result<unit, SageFsError>) seq)
+    (wake: 'waiter -> Result<unit, SageFsError> -> unit)
+    (onFailure: exn -> unit)
+    : unit =
+    for waiter, result in answers do
+      try wake waiter result
+      with ex -> onFailure ex
+
   /// Answers the callers parked on one session through a rebuild that has just ended, when it ended
   /// badly, with the build's own error. Returns the callers still parked.
   let settleAfterRebuild
