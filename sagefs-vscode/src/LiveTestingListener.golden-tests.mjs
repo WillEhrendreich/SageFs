@@ -213,22 +213,33 @@ run("parseSummary defaults the activity to empty from an older daemon", () => {
 //       4 SessionSwitched, 5 HotReloadChanged, 6 SystemAlarm, 7 ModelChanged,
 //       8 Heartbeat, 9 Unknown.
 
-run("classifyStateEvent routes a session fault to its error, not the sid", () => {
+// A fault and a file reload carry the session they are about, so a window can show only its own
+// (another agent's session fault used to pop up in every window on the daemon).
+run("classifyStateEvent routes a session fault to its session and its error", () => {
   const a = classifyStateEvent({ sessionFaulted: "abc12345", error: "boom in warmup" });
   assert(a.tag === 0, `expected StateSessionFaulted (0), got ${a.tag}`);
-  assert(a.fields[0] === "boom in warmup", `expected the error message, got ${a.fields[0]}`);
+  assert(a.fields[0] === "abc12345", `expected the session id first, got ${a.fields[0]}`);
+  assert(a.fields[1] === "boom in warmup", `expected the error message, got ${a.fields[1]}`);
 });
 
 run("classifyStateEvent defaults a fault with no error to a readable message", () => {
   const a = classifyStateEvent({ sessionFaulted: "abc12345" });
   assert(a.tag === 0, `expected StateSessionFaulted (0), got ${a.tag}`);
-  assert(a.fields[0] === "unknown error", `expected fallback message, got ${a.fields[0]}`);
+  assert(a.fields[0] === "abc12345", `expected the session id, got ${a.fields[0]}`);
+  assert(a.fields[1] === "unknown error", `expected fallback message, got ${a.fields[1]}`);
 });
 
-run("classifyStateEvent routes a file reload to its path", () => {
+run("classifyStateEvent routes a file reload to its path and its session", () => {
   const a = classifyStateEvent({ fileReloaded: "/repo/src/Foo.fs", sessionId: "abc12345" });
   assert(a.tag === 1, `expected StateFileReloaded (1), got ${a.tag}`);
   assert(a.fields[0] === "/repo/src/Foo.fs", `expected the reloaded path, got ${a.fields[0]}`);
+  assert(a.fields[1] === "abc12345", `expected the session id, got ${a.fields[1]}`);
+});
+
+run("classifyStateEvent reads a file reload that names no session as an empty session id", () => {
+  const a = classifyStateEvent({ fileReloaded: "/repo/src/Foo.fs" });
+  assert(a.tag === 1, `expected StateFileReloaded (1), got ${a.tag}`);
+  assert(a.fields[1] === "", `expected an empty session id, got ${a.fields[1]}`);
 });
 
 run("classifyStateEvent reads warmup progress step/total", () => {
