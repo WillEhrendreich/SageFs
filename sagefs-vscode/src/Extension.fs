@@ -1024,9 +1024,12 @@ let refreshStatus () =
               // to an output channel the user was not looking at. The remedy
               // text was present; the remedy was not. It now goes in the
               // message body, where it is read, and the buttons carry verbs.
+              // The toast carries the brief (what happened, and the remedy); the daemon's whole diagnosis
+              // goes to the Output channel, which "Show Output" opens.
+              (getOutput()).appendLine (sprintf "[SageFs] Session error: %s" (describeSessionError err))
               let! choice =
                 Window.showErrorMessage
-                  (describeSessionError err)
+                  (ErrorPresentationPure.describeBrief (structuredError err))
                   [| "Restart Session"; "Show Output" |]
               match choice with
               | Some "Restart Session" -> Commands.executeCommand "sagefs.hardReset" |> ignore
@@ -3330,9 +3333,11 @@ let activate (context: ExtensionContext) =
           c.log (sprintf "[debug] Session %s faulted, not this workspace's, so no message here (sagefs.%s shows these): %s" sessionId SessionScopePure.eventSourcesSettingKey reason)
         | true ->
           promise {
+            // The daemon's diagnosis can run to paragraphs: the toast says what happened, the channel has all of it.
+            (getOutput()).appendLine (sprintf "[SageFs] Session %s faulted: %s" sessionId reason)
             let! choice =
               Window.showWarningMessage
-                (sprintf "SageFs session %s faulted: %s. Use Restart Session to recover." sessionId reason)
+                (sprintf "SageFs session %s faulted: %s Use Restart Session to recover." sessionId (ErrorPresentationPure.briefText ErrorPresentationPure.briefHeadlineChars reason))
                 [| "Restart Session"; "Show Output" |]
             match choice with
             // Restart Session is the session's hard reset. This used to run `sagefs.restart`, which restarts the DAEMON.
