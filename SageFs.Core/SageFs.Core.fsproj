@@ -34,6 +34,7 @@
         <Compile Include="OwnerMonitor.fs" />
         <Compile Include="McpResourceGate.fs" />
         <Compile Include="Measures.fs" />
+        <Compile Include="CohortScope.fs" />
         <Compile Include="Cohort.fs" />
         <Compile Include="RingBuffer.fs" />
         <Compile Include="TailBuffer.fs" />
