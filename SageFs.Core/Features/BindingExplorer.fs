@@ -16,7 +16,7 @@ type BindingScopeSnapshot = {
 }
 
 let parseBinding (fsiLine: string) : (string * string * string option) option =
-  let trimmed = fsiLine.Trim()
+  let trimmed = CellDependencyGraph.fsiOutputLine fsiLine
   match trimmed.StartsWith("val ") with
   | false -> None
   | true ->

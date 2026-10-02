@@ -372,6 +372,16 @@ type RetiredTool =
   | GetFsiStatus
   | GetStartupInfo
   | LoadFsharpScript
+  // Code intelligence and coverage lookups that were never `[<McpServerTool>]`, or that left the
+  // MCP surface in the "reduce agent tool surface" change. The editors reach the same data over
+  // the daemon's HTTP API (completions, type explorer, coverage), so a client that wants them
+  // calls that, and an agent is not told to look for them in `tools/list`.
+  | ExploreNamespace
+  | ExploreType
+  | GetCompletions
+  | GetFileCoverage
+  | QueryTestCoverage
+  | VisualizeDomainModel
 
 module RetiredTool =
   /// The exact `tools/list` name each tool was registered under, before it
@@ -382,12 +392,24 @@ module RetiredTool =
     | RetiredTool.GetFsiStatus -> "get_fsi_status"
     | RetiredTool.GetStartupInfo -> "get_startup_info"
     | RetiredTool.LoadFsharpScript -> "load_fsharp_script"
+    | RetiredTool.ExploreNamespace -> "explore_namespace"
+    | RetiredTool.ExploreType -> "explore_type"
+    | RetiredTool.GetCompletions -> "get_completions"
+    | RetiredTool.GetFileCoverage -> "get_file_coverage"
+    | RetiredTool.QueryTestCoverage -> "query_test_coverage"
+    | RetiredTool.VisualizeDomainModel -> "visualize_domain_model"
 
   let all: RetiredTool list =
     [ RetiredTool.CreateSession
       RetiredTool.GetFsiStatus
       RetiredTool.GetStartupInfo
-      RetiredTool.LoadFsharpScript ]
+      RetiredTool.LoadFsharpScript
+      RetiredTool.ExploreNamespace
+      RetiredTool.ExploreType
+      RetiredTool.GetCompletions
+      RetiredTool.GetFileCoverage
+      RetiredTool.QueryTestCoverage
+      RetiredTool.VisualizeDomainModel ]
 
   let toolNames: string list = all |> List.map toToolName
 
@@ -400,6 +422,12 @@ module RetiredTool =
     | RetiredTool.GetStartupInfo -> Some "get_daemon_status"
     | RetiredTool.LoadFsharpScript -> None
     | RetiredTool.CreateSession -> None
+    | RetiredTool.ExploreNamespace -> None
+    | RetiredTool.ExploreType -> None
+    | RetiredTool.GetCompletions -> None
+    | RetiredTool.GetFileCoverage -> None
+    | RetiredTool.QueryTestCoverage -> None
+    | RetiredTool.VisualizeDomainModel -> None
 
 /// Total over `Cohort.Authority<'m>` (property 9, cohort-integration-plan.md
 /// Slice 3) — the compiler checks the `match` is exhaustive, so no

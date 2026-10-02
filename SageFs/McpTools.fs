@@ -605,6 +605,36 @@ let withEchoRunTests (ctx: McpContext) (freshness: SageFs.ReplFreshness) (t: Tas
     return result
   }
 
+/// The MCP result for a session-analysis tool: what it measured (or the one plain sentence that says what is missing
+/// and what to do) in the text block, and the typed answer in StructuredContent. An agent branches on the `answer`
+/// field, never on prose, so an empty answer cannot be read as a zero nobody counted.
+let withEchoAnswer
+  (ctx: McpContext)
+  (toolName: string)
+  (t: Task<SageFs.Features.ToolAnswers.ToolAnswer<SageFs.Features.ToolAnswers.Measurement>>)
+  : Task<ModelContextProtocol.Protocol.CallToolResult> =
+  task {
+    let! text = withEcho ctx toolName (task { let! answer = t in return SageFs.McpAnalysis.textOf answer })
+    let! answer = t
+    let result = ModelContextProtocol.Protocol.CallToolResult()
+    result.Content.Add(ModelContextProtocol.Protocol.TextContentBlock(Text = text))
+    use doc = System.Text.Json.JsonDocument.Parse(SageFs.McpAnalysis.structuredOf answer)
+    result.StructuredContent <- System.Nullable(doc.RootElement.Clone())
+    return result
+  }
+
+/// What every session-analysis tool tells an agent about its answer.
+[<Literal>]
+let private AnswerShapeNote = """
+
+ANSWER: structuredContent.answer is 'Measured' or 'NotAvailable'. Only 'Measured' carries data, and a Measured empty list is a real zero. 'NotAvailable' carries a closed `reason` token, a plain `message` and a `whatToDo`, and means the data was not there: it is never a zero. The text block is the measurement as before, or one sentence saying what is missing."""
+
+[<Literal>]
+let private WorkingDirectoryParam = "Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, call switch_session first or pass session_id explicitly. The daemon will not guess."
+
+[<Literal>]
+let private SessionIdParam = "Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory. Omit it to answer for the session this connection is working in."
+
 /// `withSessionWd` for a tool that answers with a `HotReloadReply`: a call that
 /// does not resolve to a routable session gets the same "Error: ..." text.
 let withSessionReply (ctx: McpContext) (workingDirectory: string option) (f: string -> Task<HotReloadReply>) : Task<HotReloadReply> =
@@ -621,6 +651,33 @@ let withSessionReply (ctx: McpContext) (workingDirectory: string option) (f: str
 let private keptStateClient =
   new System.Net.Http.HttpClient(
     Timeout = System.TimeSpan.FromMilliseconds(float SageFs.DevReload.DevReloadConfig.defaults.CompileBudgetMs))
+
+/// The tool set the daemon registers, read the way `.WithTools<SageFsTools>()` reads it: every public
+/// instance method carrying `[<McpServerTool>]`. This is the one source of truth for "which tools exist":
+/// `discover_features` is built from it, and the guard tests compare every other list of tool names to it.
+module RegisteredTools =
+  let private flags =
+    System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.Instance ||| System.Reflection.BindingFlags.DeclaredOnly
+
+  let private isTool (m: System.Reflection.MethodInfo) =
+    m.GetCustomAttributes(true) |> Array.exists (fun a -> a :? McpServerToolAttribute)
+
+  let private descriptionOf (m: System.Reflection.MethodInfo) =
+    match m.GetCustomAttributes(typeof<DescriptionAttribute>, false) |> Array.tryHead with
+    | Some (:? DescriptionAttribute as d) -> d.Description
+    | _ -> ""
+
+  /// Each registered tool: its name, the first paragraph of its description, and the parameters a call must pass.
+  let describe (toolsType: System.Type) : SageFs.Features.FeatureDiscovery.RegisteredTool list =
+    toolsType.GetMethods flags
+    |> Array.filter isTool
+    |> Array.map (fun m ->
+      let tool : SageFs.Features.FeatureDiscovery.RegisteredTool =
+        { Name = m.Name
+          Summary = SageFs.Features.FeatureDiscovery.FeatureDiscovery.summarize (descriptionOf m)
+          RequiredParameters = m.GetParameters() |> Array.filter (fun p -> not p.IsOptional) |> Array.map (fun p -> p.Name) |> Array.toList }
+      tool)
+    |> Array.toList
 
 type SageFsTools(ctx: McpContext, logger: ILogger<SageFsTools>) =
     [<McpServerTool>]
@@ -1352,100 +1409,6 @@ The mode new sessions start in is the `hotreload.reflectionReadMode` setting."""
         })
         |> withEcho ctx "set_reflection_read_mode"
 
-    [<Description("""Get code completions at a cursor position. Returns available completions (types, functions, members) for the code at the given position. Useful for discovering APIs before writing code.
-
-CURSOR POSITION:
-- cursor_position is a 0-based CHARACTER OFFSET from the start of the code string (not a line/column pair).
-- Place the cursor immediately after the partial identifier or the '.' you want completions for.
-- Example: for code "System.IO.Fi" with cursor at 12 (after 'Fi'), you get File, FileInfo, FileStream, etc.
-
-SCOPE:
-- Completions use the current FSI session context, including all previously sent definitions.
-- Project namespaces are available if they are open in the session. Send 'open MyModule;;' first if needed.
-
-WHEN TO USE:
-- Before writing a function call to discover what members a type has.
-- As an alternative to explore_type when you want contextual completions for a specific code position.
-- To check whether a function name exists before attempting to call it.""")>]
-    member _.get_completions(
-        [<Description("The F# code to get completions for")>] code: string,
-        [<Description("Cursor position (0-based character offset) where completions are requested")>] cursor_position: int,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
-        [<Optional; DefaultParameterValue("")>]
-        working_directory: string
-    ) : Task<string> =
-        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        logger.LogDebug("MCP-TOOL: get_completions called")
-        getCompletions ctx "mcp" code cursor_position wd |> withEcho ctx "get_completions"
-
-    // ── Package Explorer Tools ──────────────────────────────────────
-
-    [<Description("""Retrieve the types, functions, and sub-namespaces available in a given namespace.
-Use this to explore .NET and F# APIs without documentation. Provide the fully-qualified namespace name.
-Examples: 'System.Collections.Generic', 'Microsoft.FSharp.Collections', 'FSharp.Control'.
-
-WHEN TO USE vs explore_type:
-- Use explore_namespace to browse what's inside a namespace (get a list of types and sub-namespaces).
-- Use explore_type to drill into the members of a specific type you've already identified.
-
-TIPS:
-- If you're unsure of the full namespace, start broad ('System.IO') and drill down from the results.
-- Works on both .NET BCL types and types from NuGet packages loaded into the project.
-- Use get_completions for interactive code-position-aware completion instead.""")>]
-    member _.explore_namespace(
-        [<Description("Fully-qualified namespace to explore (e.g. 'System.IO', 'Microsoft.FSharp.Collections')")>] namespaceName: string,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
-        [<Optional; DefaultParameterValue("")>]
-        working_directory: string
-    ) : Task<string> =
-        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        logger.LogDebug("MCP-TOOL: explore_namespace called: {Namespace}", namespaceName)
-        exploreNamespace ctx "mcp" namespaceName wd |> withEcho ctx "explore_namespace"
-
-    [<Description("""Retrieve the members, constructors, and properties of a specific type.
-Use this to discover what methods and properties are available on a type. Provide the fully-qualified type name.
-Examples: 'System.String', 'System.Collections.Generic.List', 'Microsoft.FSharp.Collections.List'.
-
-WHEN TO USE vs explore_namespace:
-- Use explore_type when you know the type and want its members (constructors, methods, properties, static members).
-- Use explore_namespace when you don't know what types exist in a namespace yet.
-
-TIPS:
-- For generic types, provide the open form: 'System.Collections.Generic.Dictionary' (not Dictionary<K,V>).
-- Works on both .NET BCL types and types from the loaded project's assemblies.
-- Results include member signatures, so you can see parameter types and return types before writing code.""")>]
-    member _.explore_type(
-        [<Description("Fully-qualified type name to explore (e.g. 'System.String', 'System.IO.File')")>] typeName: string,
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
-        [<Optional; DefaultParameterValue("")>]
-        working_directory: string
-    ) : Task<string> =
-        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        logger.LogDebug("MCP-TOOL: explore_type called: {Type}", typeName)
-        exploreType ctx "mcp" typeName wd |> withEcho ctx "explore_type"
-
-    [<Description("""Visualize a discriminated union type as a state machine diagram. Returns JSON with case names, fields, entry/terminal state classification, and an ASCII art diagram. Useful for understanding DU-based domain models as state machines.
-
-WHEN TO USE:
-- When a domain model is expressed as a discriminated union and you want to reason about the valid state transitions.
-- To generate a diagram for documentation or for understanding a complex DU before writing pattern-match logic.
-- Works best with DUs where cases represent lifecycle stages (e.g., Order: Pending | Processing | Shipped | Delivered).
-
-REQUIREMENTS:
-- The type must be loaded in the current FSI session (send_fsharp_code its definition first, or it must be in a loaded project).
-- Provide the fully-qualified type name (e.g., 'MyApp.Domain.OrderState', not just 'OrderState').
-
-OUTPUT: JSON containing case names, fields per case, which cases are entry points, which are terminal, plus a text-based ASCII state machine diagram.""")>]
-    member _.visualize_domain_model(
-        [<Description("Fully-qualified DU type name to visualize (e.g. 'MyNamespace.OrderState')")>] typeName: string,
-        [<Description("Working directory of the MCP client.")>]
-        [<Optional; DefaultParameterValue("")>]
-        working_directory: string
-    ) : Task<string> =
-        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        logger.LogDebug("MCP-TOOL: visualize_domain_model called: {Type}", typeName)
-        visualizeDomainModel ctx "mcp" typeName wd |> withEcho ctx "visualize_domain_model"
-
     // ── Session Management Tools ──────────────
 
     [<McpServerTool>]
@@ -1541,7 +1504,7 @@ WHEN TO USE:
 ROUTING BEHAVIOR:
 - working_directory auto-routes only when exactly ONE session matches that directory.
 - When multiple sessions match the same directory, the daemon returns an error listing the matches. Call switch_session with the session_id you want, then retry.
-- On the tools that take a session_id parameter (send_fsharp_code, load_fsharp_script, check_fsharp_code, get_session_status, reset_fsi_session, hard_reset_fsi_session), session_id always wins over working_directory routing. The other tools route by working_directory or the active session.
+- On the tools that take a session_id parameter (send_fsharp_code, check_fsharp_code, get_session_status, reset_fsi_session, hard_reset_fsi_session, run_tests and the session-analysis tools), session_id always wins over working_directory routing. The other tools route by working_directory or the active session.
 - Use list_sessions to see available session IDs.""")>]
     member _.switch_session(
         [<Description("Session ID to switch to (from list_sessions)")>] session_id: string
@@ -1830,52 +1793,6 @@ USE CASE: When you see a test ran unexpectedly, call this to understand why. Whe
         logger.LogDebug("MCP-TOOL: explain_test_run called, test={Test}", test_name)
         explainTestRun ctx test_name |> withEcho ctx "explain_test_run"
 
-    [<Description("""Query which tests cover a given symbol. Returns all tests that transitively depend on the symbol via the dependency graph, along with their last result status.
-
-SYMBOL NAME FORMAT:
-- Use the fully-qualified FCS name: 'MyModule.myFunction', 'MyNamespace.MyType', 'MyNamespace.MyType.myMethod'.
-- For nested modules: 'Outer.Inner.functionName'.
-- Exact match required — partial names and wildcards are not supported.
-- To find the right fully-qualified name, check the source file's module/namespace declarations.
-
-RETURN VALUE:
-- List of test names + last status (Passed / Failed / NotRun) for each test that transitively covers the symbol.
-- 'Transitively covers' means the test's dependency graph includes the symbol, not just direct calls.
-- If no tests cover the symbol, returns an empty result — this is normal for new or unused functions.
-
-USE CASE: After extracting or renaming a function, call this to see which tests protect it. Before deleting a function, call this to confirm no tests depend on it.""")>]
-    member _.query_test_coverage(
-        [<Description("Fully-qualified symbol name (e.g. 'MyModule.myFunction', 'MyNamespace.MyType.myMethod'). Exact match required.")>]
-        symbol: string
-    ) : Task<string> =
-        logger.LogDebug("MCP-TOOL: query_test_coverage called, symbol={Symbol}", symbol)
-        queryTestCoverage ctx symbol |> withEcho ctx "query_test_coverage"
-
-    [<Description("""Get per-line coverage data for a specific file. Returns JSON with line-level coverage annotations including which tests cover each line, coverage health status, and branch coverage detail.
-
-FILE PATH:
-- Accepts a full absolute path OR a partial filename (e.g. 'MyModule.fs' or just 'MyModule').
-- Partial paths are matched against all files in the session's loaded projects.
-- If multiple files match a partial path, returns data for the first match.
-
-COVERAGE HEALTH VALUES (per line):
-- AllPassing: all tests that cover this line are currently passing — this line is fully protected.
-- SomeFailing: at least one test covering this line is currently failing — the line may be broken or the test is broken.
-- NoData: no tests found for this line yet (line not reachable, or test project not loaded).
-
-DATA SOURCE:
-- Uses instrumentation bitmaps when available (precise, from a recent full test run).
-- Falls back to dependency graph synthesis when bitmaps are stale or unavailable (approximate).
-- The JSON includes a 'source' field indicating which mode was used.
-
-USE CASE: Use to identify which lines of a file have no test coverage, or to see which tests protect a given line before editing it.""")>]
-    member _.get_file_coverage(
-        [<Description("File path to get coverage for. Accepts full absolute path or partial filename (e.g. 'MyModule.fs').")>]
-        file: string
-    ) : Task<string> =
-        logger.LogDebug("MCP-TOOL: get_file_coverage called, file={File}", file)
-        getFileCoverage ctx file |> withEcho ctx "get_file_coverage"
-
     [<McpServerTool>]
     [<Description("""Get enriched failure context for a test that recently transitioned Passed→Failed. Shows time since last pass, causal changes (which symbols or files changed), property violation details, and a human-readable summary narrative.
 
@@ -1921,30 +1838,39 @@ Use this to understand complex pipelines before modifying them, or to identify e
         decomposePipeline code |> withEcho ctx "decompose_pipeline"
 
     [<McpServerTool>]
-    [<Description("""Run a full diagnostic analysis of the current session.
+    [<Description("""Run a diagnostic analysis of ONE session: what it evaluated and what its tests did.
 
-Composes 6 feature modules into one coherent report: test failure narratives, cell dependency graph,
-eval provenance (staleness), ripple re-evaluation plan, Ghostwriter suggestions, and performance timeline.
+It reads that session's own eval history (what send_fsharp_code recorded for it) and the live-testing state that owns that session's tests, which is where run_tests records its results. It never reads another session's data. Name the session with session_id or working_directory, or omit both to answer for the session this connection is working in.
 
 OUTPUT: A diagnostic report with:
-- All currently failing tests with causal change analysis (which symbols/files caused the failure)
-- Which cells are affected and their staleness (Fresh vs StaleUpstream)
-- A topological ripple plan showing the re-evaluation order
-- Ranked code suggestions from Ghostwriter based on current scope
-- Performance context with sparkline and P50/P95 percentiles
-- Severity classification: Info (no issues), Warning (perf anomaly), Critical (test failures)
-- A ≤10 line human-readable summary
+- Every failing test with causal change analysis (which symbols or files caused the failure)
+- The cells affected by those failures and a topological ripple plan
+- Ranked code suggestions from Ghostwriter based on the session's scope
+- Eval timing with a sparkline and P50/P95
+- Severity: Info (nothing wrong in what was measured), Warning (perf anomaly), Critical (test failures)
+- A short human-readable summary, and `Unmeasured`: the sides it could not read ('Tests' when no test result is recorded for the session, 'Cells' when no eval is)
+
+WHAT IT WILL NOT SAY: with no recorded eval and no recorded test result it answers NotAvailable (NothingObservedYet), not 'no issues'. With only evals it says the tests were not measured. Call run_tests first if you want the test side measured.
 
 WORKFLOW: Call this after a test fails to get a complete picture of what happened, why, and what to do next.
-This replaces calling explain_test_failure + plan_ripple + get_eval_timeline + suggest_next_cell separately.""")>]
-    member _.diagnose() : Task<string> =
+This replaces calling explain_test_failure + plan_ripple + get_eval_timeline + suggest_next_cell separately.""" + AnswerShapeNote)>]
+    member _.diagnose(
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: diagnose called")
-        diagnose ctx |> withEcho ctx "diagnose"
+        SageFs.McpAnalysis.diagnose ctx sid wd |> withEchoAnswer ctx "diagnose"
 
     [<McpServerTool>]
-    [<Description("""Analyze test coverage quality — find blind spots, correlate failures, assess diagnostic power.
+    [<Description("""Analyze test coverage quality for ONE session: find blind spots, correlate failures, assess diagnostic power.
 
-Composes failure narratives + IL instrumentation bitmaps + test dependency graph into per-failure coverage intelligence.
+Composes the session's failure narratives + IL instrumentation bitmaps + test dependency graph into per-failure coverage intelligence. It reads only that session's own test results and coverage, never another session's.
 
 OUTPUT: Per-failing-test analysis with:
 - Coverage verdict: WellCovered (>80% branches hit), PartialBlindSpot (40-80%), or DiagnosticBlindSpot (<40%)
@@ -1953,37 +1879,51 @@ OUTPUT: Per-failing-test analysis with:
 - Correlated failures (other tests covering the same code paths)
 - Blind spot details: files, lines, and branch IDs with zero coverage
 
+WHAT IT NEEDS: coverage comes from live testing's instrumented runs, and from nothing else. When a test failed and no coverage was recorded the answer is NotAvailable with the reason: NeedsAWorkflow (the session is not in the LiveTesting workflow), NeedsLiveTesting (that workflow, but live testing is switched off) or NoCoverageRecorded (live testing is on, no instrumented run yet). With no test result recorded at all it is NotAvailable (NoTestRunYet). An empty list means tests ran and none failed.
+
 WORKFLOW: Call after test failures to understand whether your tests actually cover the code that broke.
-Complements 'diagnose' (which tells you what failed) by telling you how well your tests can detect the failure.""")>]
-    member _.coverage_intel() : Task<string> =
+Complements 'diagnose' (which tells you what failed) by telling you how well your tests can detect the failure.""" + AnswerShapeNote)>]
+    member _.coverage_intel(
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: coverage_intel called")
-        coverageIntel ctx |> withEcho ctx "coverage_intel"
+        SageFs.McpAnalysis.coverageIntel ctx sid wd |> withEchoAnswer ctx "coverage_intel"
 
     [<McpServerTool>]
-    [<Description("""Forecast performance impact for evaluated cells — detect regressions, measure downstream blast radius.
+    [<Description("""Forecast the cost of re-evaluating REPL cells in ONE session: how many cells sit downstream of a cell, and how long the session's evals take.
 
-Analyzes eval timeline statistics (P50/P95), cell dependency graph, and duration trends to predict whether
-a cell's performance trajectory is healthy, needs investigation, or requires refactoring.
+WHAT IT MEASURES: a cell here is one send_fsharp_code eval recorded in this session. 'Downstream' is the count of later cells that use a name this cell bound, read from the eval dependency graph. P50 and P95 are over the session's last 20 evals and are the same on every row; DurationTrend is the cell's own last (up to 10) durations in ms.
 
-INPUT (optional): cellId — analyze a specific cell. If omitted, analyzes all cells in the dependency graph.
+WHAT IT DOES NOT MEASURE: the blast radius of a change to your source code, or which tests a change affects. Nothing in this tool reads source files, the test dependency graph or test results, so do not gate a change on it. For tests, use run_tests.
 
-OUTPUT: Per-cell analysis with:
-- P50/P95 latency percentiles
-- Duration trend slope (positive = getting slower)
-- Downstream cell count (blast radius of a regression)
-- Recommendation: Acceptable, Investigate, or Refactor
-- Regression causes: DependencyGrowth (downstream >15 cells), LatencySpike (P95 >2000ms), Unknown
+INPUT: cellId is optional. Omit it (or pass -1) to cover every cell in the session's graph; cell ids are the ones get_cell_dependencies lists. A cell id that is not in the session's history is NotAvailable (CellsNotInHistory), not a row of zeros.
 
-WORKFLOW: Call periodically or after slow evaluations to catch regressions before they compound.
-Pairs with 'suggest_next_action' which folds impact data into a prioritized action queue.""")>]
+OUTPUT: One row per cell with P50Ms, P95Ms, DurationTrend, DownstreamCellCount, a Recommendation (Acceptable; Investigate when P95 is over 500 ms or more than 5 cells are downstream; Refactor when P95 is over 2000 ms or more than 15 are) and RegressionCauses (LatencySpike, DependencyGrowth).
+
+An empty session (no evals recorded) is NotAvailable (NoEvalsYet). A Measured row with 0 downstream cells is a real zero.""" + AnswerShapeNote)>]
     member _.impact_forecast(
-        [<Description("Optional cell ID to analyze. Omit to analyze all cells.")>]
-        [<Optional; DefaultParameterValue(0)>]
-        cellId: int
-    ) : Task<string> =
+        [<Description("Optional cell ID to analyze. Omit (or pass -1) to analyze all cells.")>]
+        [<Optional; DefaultParameterValue(-1)>]
+        cellId: int,
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: impact_forecast called for cell {cellId}", cellId)
-        let cellOpt = match cellId with | 0 -> None | n -> Some n
-        impactForecast ctx cellOpt |> withEcho ctx "impact_forecast"
+        let scope = match cellId with | n when n < 0 -> SageFs.McpAnalysis.CellScope.AllCells | n -> SageFs.McpAnalysis.CellScope.OneCell n
+        SageFs.McpAnalysis.impactForecast ctx scope sid wd |> withEchoAnswer ctx "impact_forecast"
 
     [<McpServerTool>]
     [<Description("""Get a prioritized action queue — the intelligent "what should I do next?" recommendation.
@@ -2007,54 +1947,83 @@ Replaces manual triage of test results, coverage, and performance data.""")>]
         suggestNextAction ctx |> withEcho ctx "suggest_next_action"
 
     [<McpServerTool>]
-    [<Description("""Plan a cascade re-evaluation (ripple) for changed cells.
+    [<Description("""Plan a cascade re-evaluation (ripple) for changed REPL cells in ONE session.
 
 Given a set of cell IDs that have changed, computes the topologically-ordered list of downstream cells
-that need to be re-evaluated. Uses the live dependency graph built from the current session's eval history.
+that need to be re-evaluated. Uses the dependency graph built from that session's own eval history (what send_fsharp_code recorded for it). It plans cells, not source files and not tests.
 
-INPUT: Comma-separated cell IDs (integers) that have changed.
-OUTPUT: Ordered list of cells to re-evaluate, with their code snippets and current status.
+INPUT: Comma-separated cell IDs (integers) that have changed. Read the ids from get_cell_dependencies. An id that is not in the session's history is NotAvailable (CellsNotInHistory), and ids that are not integers are NotAvailable (NoUsableCellIds).
+OUTPUT: Ordered list of cells to re-evaluate, with their code snippets and current status. A plan with 0 steps is a real zero: nothing downstream uses the changed cells.
 
-WORKFLOW: After editing a binding, use this tool to see which cells would be affected before re-evaluating them.""")>]
+An empty session (no evals recorded) is NotAvailable (NoEvalsYet).
+
+WORKFLOW: After editing a binding, use this tool to see which cells would be affected before re-evaluating them.""" + AnswerShapeNote)>]
     member _.plan_ripple(
         [<Description("Comma-separated cell IDs that changed (e.g., '0,2,5')")>]
-        changed_cells: string
-    ) : Task<string> =
+        changed_cells: string,
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: plan_ripple called, cells={Cells}", changed_cells)
-        planRipple ctx changed_cells |> withEcho ctx "plan_ripple"
+        SageFs.McpAnalysis.planRipple ctx changed_cells sid wd |> withEchoAnswer ctx "plan_ripple"
 
     [<McpServerTool>]
-    [<Description("""Preview a "what if" scenario: what would change if a binding had a different value?
+    [<Description("""Preview a "what if" scenario in ONE session: what would change if a binding had a different value?
 
 Identifies the cell that produces the named binding, then plans a ripple of all downstream cells
 that would need re-evaluation. Shows the override and affected cells without actually executing anything.
 
-INPUT: binding_name — the name of the binding to override; new_code — the replacement expression.
+INPUT: binding_name, the name of the binding to override; new_code, the replacement expression.
 OUTPUT: Override summary, count of affected cells, and the ripple plan.
 
-WORKFLOW: Use this to explore hypothetical changes safely before committing to them.""")>]
+A binding that is not bound in the session is NotAvailable (BindingNotInScope), and an empty session (no evals recorded) is NotAvailable (NoEvalsYet). It does not guess a type or a value for a name it cannot find.
+
+WORKFLOW: Use this to explore hypothetical changes safely before committing to them.""" + AnswerShapeNote)>]
     member _.preview_what_if(
         [<Description("Name of the binding to override (e.g., 'threshold')")>]
         binding_name: string,
         [<Description("New F# expression for the binding (e.g., '0.75')")>]
-        new_code: string
-    ) : Task<string> =
+        new_code: string,
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: preview_what_if called, binding={Name}", binding_name)
-        previewWhatIf ctx binding_name new_code |> withEcho ctx "preview_what_if"
+        SageFs.McpAnalysis.previewWhatIf ctx binding_name new_code sid wd |> withEchoAnswer ctx "preview_what_if"
 
     [<McpServerTool>]
-    [<Description("""Get type-directed suggestions for what to evaluate next.
+    [<Description("""Get type-directed suggestions for what to evaluate next in ONE session.
 
-Analyzes all bindings currently in scope and generates contextually-appropriate suggestions
+Analyzes the bindings that session's evals have bound and generates contextually-appropriate suggestions
 based on their types. For example, a list binding gets List.length, List.head, List.sort suggestions;
 an option binding gets Option.defaultValue, Option.map suggestions.
 
-OUTPUT: Ranked suggestions with confidence scores, code snippets, and explanations.
+OUTPUT: Ranked suggestions with confidence scores, code snippets, and explanations. When the session has evals but none bound a name, the answer says so (a real zero). A session with no recorded evals is NotAvailable (NoEvalsYet).
 
-WORKFLOW: When you're not sure what to try next in the REPL, call this for intelligent suggestions.""")>]
-    member _.suggest_next_cell() : Task<string> =
+WORKFLOW: When you're not sure what to try next in the REPL, call this for intelligent suggestions.""" + AnswerShapeNote)>]
+    member _.suggest_next_cell(
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: suggest_next_cell called")
-        suggestNextCell ctx |> withEcho ctx "suggest_next_cell"
+        SageFs.McpAnalysis.suggestNextCell ctx sid wd |> withEchoAnswer ctx "suggest_next_cell"
 
     [<McpServerTool>]
     [<Description("""Get the session filmstrip — a visual history of all evaluations in the current session.
@@ -2287,36 +2256,55 @@ WORKFLOW: Use this to discover what tests exist, or to build a pattern for send_
         listTests ctx patOpt fileOpt |> withEcho ctx "list_tests"
 
     [<McpServerTool>]
-    [<Description("""Get the cell dependency graph annotated with staleness information.
+    [<Description("""Get the cell dependency graph of ONE session: what each of its evals produced and consumed, and the wiring between them.
 
-Shows which cells are stale (their dependencies changed but they haven't re-evaluated), what each cell produces/consumes, and the full upstream/downstream wiring.
+A cell is one send_fsharp_code eval recorded in this session (what send_fsharp_code recorded for it, nothing from another session). The graph says which cells use a name another cell bound. It is about REPL cells, not source files or tests.
 
-OUTPUT: JSON with TotalCells, TotalStale, TotalEdges, StaleCellIds, Summary, and per-node details (Produces, Consumes, UpstreamIds, DownstreamIds, IsStale, StaleCauses).
+OUTPUT: JSON with TotalCells, TotalEdges, Summary, Staleness and per-node details (Id, Produces, Consumes, UpstreamIds, DownstreamIds). Staleness is always 'NotMeasured': this tool does not know which cells are out of date, so it reports no stale count at all instead of a zero. Ask plan_ripple what a change would invalidate. A session with no recorded evals is NotAvailable (NoEvalsYet).
 
-WORKFLOW: After editing code, use this to understand the ripple impact before deciding which cells to re-evaluate. Pair with plan_ripple for the full re-eval plan.""")>]
-    member _.get_cell_dependencies() : Task<string> =
+WORKFLOW: After editing code, use this to understand the ripple impact before deciding which cells to re-evaluate. Pair with plan_ripple for the full re-eval plan.""" + AnswerShapeNote)>]
+    member _.get_cell_dependencies(
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: get_cell_dependencies called")
-        getCellDependencies ctx |> withEcho ctx "get_cell_dependencies"
+        SageFs.McpAnalysis.cellDependencies ctx sid wd |> withEchoAnswer ctx "get_cell_dependencies"
 
     [<McpServerTool>]
-    [<Description("""Discover and rank all SageFs features by relevance to your current session state.
+    [<Description("""Discover and rank the tools this daemon registers by relevance to ONE session's state.
 
-Acts as a built-in "tour guide" — analyzes your session context (failing tests, stale cells, eval count, discovered tests) and surfaces the most useful features first.
+The list is read from the registered tool set itself, so every tool in it is one you can call and every tool you can call is in it. TotalKnownFeatures is that count. The name, summary and example call shape come from each tool's own registration.
+
+It ranks by that session's own evals and tests (failing tests, eval count, discovered tests) and surfaces the most useful tools first. When it cannot resolve a session it says so in ContextSummary instead of ranking as if the session were fresh.
 
 Parameters:
 - topic: optional focus keyword (e.g. "testing", "performance", "export") to narrow suggestions
 
-OUTPUT: JSON with ContextSummary, TotalKnownFeatures, Returned count, and Suggestions ranked Essential > Recommended > Optional. Each suggestion includes ToolName, ShortDescription, ExampleUsage, and WhyNow explanation.
+OUTPUT: JSON with ContextSummary, TotalKnownFeatures, Returned count, and Suggestions ranked Essential > High > Medium > Contextual. Each suggestion includes ToolName, ShortDescription, ExampleUsage, WhyNow and Relevance.
 
 WORKFLOW: Call this at the start of a session to see what to do next, or any time you feel lost.""")>]
     member _.discover_features(
         [<Description("Optional topic keyword to focus suggestions (e.g. 'testing', 'performance', 'export'). Empty for all features.")>]
         [<Optional; DefaultParameterValue("")>]
-        topic: string
+        topic: string,
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
     ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: discover_features called, topic={Topic}", topic)
         let topicOpt = match topic with | "" | null -> None | s -> Some s
-        discoverFeatures ctx topicOpt |> withEcho ctx "discover_features"
+        SageFs.McpAnalysis.discoverFeatures ctx (RegisteredTools.describe typeof<SageFsTools>) topicOpt sid wd |> withEcho ctx "discover_features"
 
     [<McpServerTool>]
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.

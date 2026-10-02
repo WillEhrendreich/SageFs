@@ -59,7 +59,12 @@ let private skillSurfaces : (string * string) list =
 let private liveSurfaces : (string * string) list =
   [ "SageFs/Mcp.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs", "Mcp.fs"))
     "SageFs/McpTools.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs", "McpTools.fs"))
-    "SageFs/AgentGuidance.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs", "AgentGuidance.fs")) ]
+    "SageFs/AgentGuidance.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs", "AgentGuidance.fs"))
+    // The feature tour and the typed answers are agent-facing text too: discover_features read its
+    // catalogue from the first and was never scanned (it advertised six tools tools/list did not have).
+    "SageFs/McpAnalysis.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs", "McpAnalysis.fs"))
+    "SageFs.Core/Features/FeatureDiscovery.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs.Core", "Features", "FeatureDiscovery.fs"))
+    "SageFs.Core/Features/ToolAnswer.fs", File.ReadAllText(Path.Combine(repoRoot, "SageFs.Core", "Features", "ToolAnswer.fs")) ]
   @ skillSurfaces
   @ [ "docs/agents.md", File.ReadAllText(Path.Combine(repoRoot, "docs", "agents.md"))
       "docs/mcp-tools.md", File.ReadAllText(Path.Combine(repoRoot, "docs", "mcp-tools.md")) ]

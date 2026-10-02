@@ -501,6 +501,7 @@
         <Compile Include="McpToolOutcomeTests.fs" />
         <Compile Include="ExpectoPendingOutcomeTests.fs" />
         <Compile Include="SourceStateOutcomeTests.fs" />
+        <Compile Include="HonestEmptiesOutcomeTests.fs" />
         <Compile Include="McpAppRunOutcomeTests.fs" />
         <Compile Include="DstShrinkTests.fs" />
         <Compile Include="OriginGuardOutcomeTests.fs" />
@@ -636,6 +637,9 @@
         <Compile Include="ActionPrioritizerTests.fs" />
         <Compile Include="TestDiscoveryTests.fs" />
         <Compile Include="CellDependenciesReportTests.fs" />
+        <Compile Include="EvalFeedHonestyTests.fs" />
+        <Compile Include="ToolAnswerTests.fs" />
+        <Compile Include="McpAnalysisTests.fs" />
         <Compile Include="FeatureDiscoveryTests.fs" />
         <Compile Include="DashboardSparklineTests.fs" />
         <Compile Include="DashboardHealthTests.fs" />
@@ -718,6 +722,7 @@
         <Compile Include="McpResourcesTests.fs" />
         <Compile Include="AgentGuidanceTests.fs" />
         <Compile Include="RetiredToolNameTests.fs" />
+        <Compile Include="ToolSurfaceHonestyTests.fs" />
         <Compile Include="SkillLayoutTests.fs" />
         <Compile Include="TestAccountingHonestyTests.fs" />
         <Compile Include="SessionStatusTruthTests.fs" />

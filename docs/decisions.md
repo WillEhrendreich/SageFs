@@ -1289,3 +1289,62 @@ real MCP client over a fixture project of its own: untouched is `AllPassed` and 
 then reads `InSync` again, and a directory made unreadable reads `Unknown` with the reason.
 Reopen it if: a client needs the field on `/api/sessions`, the project list can be read from the evaluated project instead of the
 project file, or a stamp that survives an edit inside a build's window becomes cheap (a recorded build start).
+
+## An analysis tool answers "measured" or "not available", and reads one session
+
+Nehemiah, a policy engine that gates agent work on SageFs's answers, found that it could not tell "zero" from "unmeasured". I
+read the code and the answer was three separate bugs and one missing type.
+
+**The three feeds.** `send_fsharp_code` records each eval into a per-session store (`recordEvalForSession`). `impact_forecast`,
+`get_cell_dependencies` and `diagnose` read the daemon-global store, which only the `/exec` path feeds, so they answered about
+somebody else's evals or about none. I measured it on the live daemon: `get_cell_dependencies` listed fourteen cells and none
+were mine, and `impact_forecast` stamped the same `LatencySpike` on every one. Second, the MCP text path stores
+`Result: val x: int = 1`, and the two binding readers only looked at lines that start with `val `, so the first `val` line of
+every statement was invisible and `plan_ripple`, `preview_what_if` and `suggest_next_cell` saw a session with no bindings. Third,
+`diagnose` and `coverage_intel` read the primary live-testing cycle, never the cycle `run_tests` writes through. On the live daemon
+`diagnose` reported a failing test that belongs to another agent's session and said nothing about the one in mine.
+
+**What I changed.** Each tool now resolves one session the way `run_tests` does (`session_id`, then `working_directory`, then the
+session the connection is on) and reads that session's own eval history and the cycle that owns that session's tests
+(`SageFsModel.cycleOwnedBySession`). Nothing falls back to the global store or to the primary cycle. The binding readers take the
+`Result: ` prefix off a line first, through one function, so the prefix has one reader and one name (`McpResultPrefix`).
+
+**The closed answer.** `ToolAnswer = Measured | NotAvailable of NotAvailableReason`, in `SageFs.Core/Features/ToolAnswer.fs`.
+The reason is a closed set with one exhaustive token, one plain sentence and one action each. I decided per tool what it needs.
+The cell-history tools need a recorded eval (`NoEvalsYet`). `plan_ripple` and `preview_what_if` also refuse a cell id or a binding
+the session does not have, where they used to answer with `?` and a zero. `diagnose` needs either an eval or a test result and names
+the side it could not read in `Unmeasured`, so "No issues detected" is no longer a thing it can say about a side it never saw.
+`coverage_intel` is the only one that fundamentally needs live testing, because coverage bitmaps come from its instrumented runs.
+With a failing test and no coverage it says which switch is missing: the session is not in the LiveTesting workflow, the workflow
+is on but live testing is off, or live testing is on and no run has recorded coverage yet. Tests ran and none failed is a
+`Measured` empty list. The wire carries a typed `answer` field in the structured content and one plain sentence in the text; a
+`Measured` text block is the measurement as it was, so nobody who parses it breaks.
+
+**What the numbers mean.** `impact_forecast` measures REPL cells. Its downstream count is later evals that use a name this one
+bound, and its P50 and P95 are the session's last twenty evals, the same on every row. It says nothing about the blast radius of a
+change to source files or which tests a change affects, and its description now says so in those words, so nobody gates on it as
+a blast-radius oracle. `get_cell_dependencies` used to print `TotalStale 0` and `all fresh` because it always asked for the
+staleness of an empty changed set. It now reports `Staleness: NotMeasured` and no count.
+
+**The tool list.** `discover_features` advertised six tools `tools/list` never had (`explore_namespace`, `explore_type`,
+`get_completions`, `get_file_coverage`, `query_test_coverage`, `visualize_domain_model`), and their instructions text still sat in
+`McpTools.fs`. I deleted the text. `discover_features` is now built from the registered set, read by reflection the way
+`.WithTools<SageFsTools>()` reads it (`RegisteredTools.describe`): the name, summary and example call of each suggestion come from
+the tool's own registration, discovery adds only a rank and a reason, and a registered tool with no rank is still listed, last.
+`ToolSurfaceHonestyTests` fails if a rank names an unregistered tool, if discovery lists anything other than the registered set,
+if an affordance state offers an unregistered tool, if `docs/mcp-tools.md` disagrees with the registered set, or if a description
+names a tool that is retired or not registered. The six names are in `RetiredTool`, so `RetiredToolNameTests` scans for them.
+
+**What I left.** `suggest_next_action` still reads the global store and the primary cycle, the same defect, and I did not touch it
+because it is outside the seven tools I was asked about. The `/exec` path still records only into the global store, so an eval
+sent from an editor is not visible to these tools and an MCP eval is not visible to the dashboard's pushes. Both writers should
+record into the one per-session store, and that change is in `Mcp.fs` and `McpServer.fs`, which I did not edit.
+`Mcp.discoverFeatures`, `Mcp.diagnose`, `Mcp.coverageIntel`, `Mcp.impactForecast`, `Mcp.planRipple`, `Mcp.previewWhatIf`,
+`Mcp.suggestNextCell` and `Mcp.getCellDependencies` are now unreferenced and can be deleted.
+
+Evidence: `SageFs.Core/Features/ToolAnswer.fs`, `SageFs/McpAnalysis.fs`, `SageFs.Core/Features/FeatureDiscovery.fs`,
+`SageFs.Tests/EvalFeedHonestyTests.fs` (the prefix), `SageFs.Tests/ToolAnswerTests.fs` and `SageFs.Tests/McpAnalysisTests.fs`
+(the decisions and the per-session routing), `SageFs.Tests/ToolSurfaceHonestyTests.fs` (the surface), and
+`SageFs.Tests/HonestEmptiesOutcomeTests.fs` (a real MCP client against a real daemon: two sessions, one with a failing test).
+Reopen it if: a tool that reads tests can say something useful with no recorded test result, the `/exec` and MCP writers share one
+per-session store, or discovery needs to rank by the session's workflow.
