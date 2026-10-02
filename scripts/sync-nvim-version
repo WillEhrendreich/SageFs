@@ -19,6 +19,36 @@ set -euo pipefail
 
 CHECK=no
 COMPAT=no
+if [ "${1:-}" = "--impact" ]; then
+  # sagefs.nvim is its own repo so it can be distributed, but it moves with SageFs: when the daemon's wire
+  # surface changes, the plugin has to take advantage of it. Every commit that touches that surface says what
+  # happened to the plugin in a `Plugin:` trailer: `Plugin: done <plugin commit or what changed>` or
+  # `Plugin: n/a <why it needs nothing>`. Commits at or before the sha in scripts/plugin-impact-baseline are
+  # exempt (the one-time audit covered them). scripts/ship runs this before it gates.
+  REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+  sha=${2:?usage: scripts/sync-nvim-version --impact <sha>}
+  base=$(tr -d '[:space:]' < "$REPO/scripts/plugin-impact-baseline" 2>/dev/null || true)
+  wire=(SageFs.Core/EndpointContracts.fs SageFs/McpTools.fs SageFs/McpServer.fs SageFs/McpLeaseWire.fs
+        SageFs/DashboardTypes.fs SageFs.Core/SessionOperations.fs SageFs.Core/SessionStatusPayload.fs docs/mcp-tools.md)
+
+  from=$(git -C "$REPO" merge-base origin/master "$sha")
+  if [ -n "$base" ] && git -C "$REPO" merge-base --is-ancestor "$base" "$sha" 2>/dev/null; then from=$base; fi
+  missing=()
+  while read -r c; do
+    [ -n "$c" ] || continue
+    if ! git -C "$REPO" show -s --format=%B "$c" | grep -q '^Plugin: \(done\|n/a\)'; then
+      missing+=("$(git -C "$REPO" log -1 --format='%h %s' "$c")")
+    fi
+  done < <(git -C "$REPO" log --no-merges --format=%H "$from..$sha" -- "${wire[@]}")
+  if [ ${#missing[@]} -eq 0 ]; then
+    echo "every commit that touches the wire surface says what happened to sagefs.nvim"
+    exit 0
+  fi
+  echo "sync-nvim-version: these commits change the wire surface without a Plugin: trailer:" >&2
+  printf '  %s\n' "${missing[@]}" >&2
+  echo "  Add 'Plugin: done <what>' (and make the sagefs.nvim change) or 'Plugin: n/a <why>' to each, then ship." >&2
+  exit 1
+fi
 if [ "${1:-}" = "--check" ]; then CHECK=yes; shift; fi
 if [ "${1:-}" = "--compat" ]; then COMPAT=yes; shift; fi
 if [ "$COMPAT" = yes ]; then
