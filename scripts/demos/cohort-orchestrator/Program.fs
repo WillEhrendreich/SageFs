@@ -1,6 +1,6 @@
 /// Orchestrator for the COHORT landing-gate demo recording.
 ///
-/// Two subcommands, run by `drive-cohort.sh`:
+/// Two subcommands, run by `drive-cohort.fsx`:
 ///
 ///   setup-fixture --dir DIR
 ///     Creates the throwaway temp git repo + real, tiny, PREBUILT Expecto

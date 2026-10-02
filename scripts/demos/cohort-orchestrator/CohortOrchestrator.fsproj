@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Standalone demo-recording driver, deliberately NOT added to SageFs.slnx
-       (see scripts/demos/README-shaped comment in drive-cohort.sh): it is
+       (see the header of drive-cohort.fsx): it is
        build-and-run tooling for producing a recording, not product or test
        code. It still inherits this repo's Directory.Build.props/
        Directory.Packages.props (MSBuild import walks up the directory tree
