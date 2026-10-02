@@ -6,6 +6,17 @@ open SageFs.Features.FeatureDiscovery
 
 // ── Test helpers ──────────────────────────────────────────────
 
+/// A registered set for the ranking tests: every tool discovery has a rule for, plus two it has none
+/// for. The real registered set is checked against discovery in ToolSurfaceHonestyTests.
+let private sampleRegistered : RegisteredTool list =
+  let named name = { Name = name; Summary = sprintf "%s does its job." name; RequiredParameters = [] }
+  (FeatureDiscovery.rankedToolNames |> List.map named) @ [ named "zeta_unranked"; named "alpha_unranked" ]
+
+/// Shadows the module under test so every case below ranks over `sampleRegistered`.
+module private FeatureDiscovery =
+  let emptyContext = SageFs.Features.FeatureDiscovery.FeatureDiscovery.emptyContext
+  let discover (ctx: DiscoveryContext) = SageFs.Features.FeatureDiscovery.FeatureDiscovery.discoverOver sampleRegistered ctx
+
 let private freshCtx = FeatureDiscovery.emptyContext
 
 let private withFailingTests n =
@@ -222,9 +233,47 @@ let contextSummaryTests =
       r.ContextSummary |> Expect.stringContains "test count" "15"
   ]
 
+// ── Derived from the registered set ───────────────────────────
+
+[<Tests>]
+let derivedFromRegistrationTests =
+  testList "FeatureDiscovery derives from the registered tools" [
+
+    testCase "WHY — a tool nobody registered is not advertised, even though a ranking rule could name it" <| fun _ ->
+      let onlyOne = [ { Name = "diagnose"; Summary = "Diagnose."; RequiredParameters = [] } ]
+      let r = SageFs.Features.FeatureDiscovery.FeatureDiscovery.discoverOver onlyOne freshCtx
+      r.Suggestions |> List.map (fun s -> s.ToolName) |> Expect.equal "only the registered one" [ "diagnose" ]
+      r.TotalKnownFeatures |> Expect.equal "the count is the registered count" 1
+
+    testCase "WHY — a registered tool with no ranking rule is advertised, as Contextual" <| fun _ ->
+      let r = FeatureDiscovery.discover freshCtx
+      match findTool "zeta_unranked" r with
+      | Some s -> s.Relevance |> Expect.equal "ranked last" FeatureRelevance.Contextual
+      | None -> failtest "a registered tool must be advertised"
+
+    testCase "WHY — with nothing registered, discovery advertises nothing instead of guessing" <| fun _ ->
+      (SageFs.Features.FeatureDiscovery.FeatureDiscovery.discover freshCtx).Suggestions
+      |> Expect.isEmpty "no registered set, no suggestions"
+
+    testCase "WHY — a description is cut to its first paragraph, on one line" <| fun _ ->
+      SageFs.Features.FeatureDiscovery.FeatureDiscovery.summarize "First line\nsecond line.\n\nSecond paragraph."
+      |> Expect.equal "first paragraph only" "First line second line."
+
+    testCase "WHY — a long description is cut at a word, with an ellipsis, inside the budget" <| fun _ ->
+      let long = String.replicate 60 "word "
+      let summary = SageFs.Features.FeatureDiscovery.FeatureDiscovery.summarize long
+      summary |> Expect.stringEnds "marked as cut" "..."
+      (summary.Length <= 203) |> Expect.isTrue "within the budget plus the ellipsis"
+
+    testCase "WHY — an example call lists required parameters only" <| fun _ ->
+      SageFs.Features.FeatureDiscovery.FeatureDiscovery.exampleOf { Name = "t"; Summary = ""; RequiredParameters = [ "a"; "b" ] }
+      |> Expect.equal "shape" "t(a=..., b=...)"
+  ]
+
 [<Tests>]
 let allTests =
   testList "FeatureDiscovery" [
+    derivedFromRegistrationTests
     freshSessionTests
     failingTestsContextTests
     staleCellsContextTests

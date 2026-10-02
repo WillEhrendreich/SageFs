@@ -511,6 +511,11 @@ module TestTimeouts =
   /// once a session is Ready, so reaching this means the call is stuck.
   let toolCall = System.TimeSpan.FromSeconds 30.
 
+  /// How long a `get_session_status` or `run_tests` call asks the daemon to hold it open for a
+  /// warming session or a running test run. It is the daemon's own cap on that wait, so asking for
+  /// more would only be clamped, and the daemon does the waiting so the test never polls.
+  let daemonHeldWait = System.TimeSpan.FromSeconds 60.
+
   /// Slack added to a product bound when a test waits on a call that product bound limits.
   /// It covers the thread-pool and scheduling noise between the product giving up and the
   /// test seeing the answer.

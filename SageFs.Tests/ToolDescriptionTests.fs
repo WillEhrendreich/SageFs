@@ -255,15 +255,9 @@ let descriptionPropertyTests =
         set [
           "load_fsharp_script"
           "get_startup_info"
-          "get_completions"
-          "explore_namespace"
-          "explore_type"
-          "visualize_domain_model"
           "switch_workflow"
           "get_elm_state"
           "explain_test_run"
-          "query_test_coverage"
-          "get_file_coverage"
         ]
       let registered =
         registeredToolMethods
