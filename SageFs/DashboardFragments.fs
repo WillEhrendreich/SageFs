@@ -3865,6 +3865,15 @@ let evalResultInfo (msg: string) =
     ]
   ]
 
+/// What an eval's answer looks like under the Evaluate box: the result text in the slot the page keeps for it. The
+/// eval POST sends exactly this, and the browser journeys render it too, so the layout they check is the one a user gets.
+let evalResultShown (cssClass: string) (text: string) =
+  Elem.div [ Attr.id DomIds.EvalResult ] [
+    Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+      textEnc text
+    ]
+  ]
+
 /// Feedback for the New Session form (Working directory required, directory
 /// not found, unsafe path, no projects found, create failed) — patched into
 /// the SAME slot Discover results use, directly under the Create button in

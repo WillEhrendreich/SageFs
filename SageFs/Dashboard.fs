@@ -1671,13 +1671,7 @@ let createEvalHandler
                 .Replace("FSharp.Compiler.Interactive.Shell+FsiCompilationException: ", "")
                 .Replace("Evaluation failed: ", "⚠ "),
               "output-line output-error"
-          let resultHtml =
-            Elem.div [ Attr.id DomIds.EvalResult ] [
-              Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-                textEnc displayResult
-              ]
-            ]
-          do! ssePatchNode ctx resultHtml
+          do! ssePatchNode ctx (evalResultShown cssClass displayResult)
     with
     | :? RequestTooLargeException -> ()  // 413 already written by readSignalsJsonSized
     | :? System.IO.IOException -> ()
