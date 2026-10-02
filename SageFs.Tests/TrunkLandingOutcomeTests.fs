@@ -311,11 +311,28 @@ let private awaitTrunkLine (w: World) (landingId: string) (accept: string -> boo
     return (trunkLine last.Value landingId).Value
   }
 
+/// A claim an agent took for a landing. A landing the gate blocks leaves its claim held, so a row that wants the file again has to
+/// let go of it first, as the agent would once it has seen the landing blocked.
+type private TakenClaim = { Holder: Agent; RelPath: string; ClaimId: string; Fence: int64 }
+
+let private claimsTaken : TakenClaim list ref = ref []
+
+/// Let go of every claim taken on `relPath` that is still held. A claim whose landing landed was released with it, and its fence
+/// has moved on, so the cohort refuses that release, which is the answer wanted.
+let private releaseClaimsOn (relPath: string) : Task<unit> =
+  task {
+    for taken in claimsTaken.Value |> List.filter (fun t -> t.RelPath = relPath) do
+      let! _ = callTool taken.Holder.Client "release_claim" [ "agentName", box taken.Holder.Name; "claimId", box taken.ClaimId; "fence", box taken.Fence ]
+      ()
+    claimsTaken.Value <- claimsTaken.Value |> List.filter (fun t -> t.RelPath <> relPath)
+  }
+
 /// Claim `relPath` for an agent, commit the edit on a branch of its own off `startPoint`, and queue the landing.
 let private land (w: World) (agent: Agent) (relPath: string) (startPoint: string) (edits: (string * string) list) (message: string) : Task<string> =
   task {
     let! claimReply = callTool agent.Client "acquire_claim" [ "agentName", box agent.Name; "scope", box (sprintf "file:%s" relPath); "purpose", box message ]
     let claimId, fence = claimIdAndFence claimReply
+    claimsTaken.Value <- { Holder = agent; RelPath = relPath; ClaimId = claimId; Fence = fence } :: claimsTaken.Value
     let branch = sprintf "%s-%s" agent.Name (Guid.NewGuid().ToString("N").Substring(0, 8))
     let! _ = git agent.Worktree [ "checkout"; "--quiet"; "-b"; branch; startPoint ]
     let! sha = editAndCommit agent.Worktree relPath edits message
@@ -326,6 +343,22 @@ let private land (w: World) (agent: Agent) (relPath: string) (startPoint: string
   }
 
 let private integrationTip (w: World) : Task<string> = git w.Repo [ "rev-parse"; sprintf "refs/heads/%s" w.IntegrationBranch ]
+
+/// What the verifying session itself answers for an expression: the way to see what it holds, rather than infer it from a verdict.
+let private integrationSays (w: World) (expression: string) : Task<string> =
+  callTool w.Alice.Client "send_fsharp_code"
+    [ "agentName", box w.Alice.Name; "code", box (expression + ";;"); "session_id", box w.IntegrationSession ]
+
+/// The whole line that binds `binding` in a file of the integration branch, as the tip holds it. Rows lean on one another, so a
+/// row that edits a binding another row may or may not have landed reads what is there rather than assuming it.
+let private bindingLineAt (w: World) (sha: string) (relPath: string) (binding: string) : Task<string> =
+  task {
+    let! text = git w.Repo [ "show"; sprintf "%s:%s" sha relPath ]
+    let m = Regex.Match(text, "^" + Regex.Escape binding + @".*$", RegexOptions.Multiline)
+    match m.Success with
+    | true -> return m.Value.TrimEnd('\r')
+    | false -> return failwithf "%s at %s holds no line binding '%s'" relPath sha binding
+  }
 
 let private appGet (w: World) (route: string) : Task<string> =
   w.App.GetStringAsync(sprintf "%s/%s" (w.App.BaseAddress.ToString().TrimEnd('/')) route)
@@ -608,6 +641,66 @@ let tests =
         count |> Expect.equal "its in-memory state started over, which is what a restart is" 1
         let! bob = appGet w "bob"
         splitCounted bob |> fst |> Expect.equal "and it still serves everything that landed before" "bob:v2"
+      }
+
+      // A landing the gate blocks can define things that a later landing's code reaches for. At the integration head they do not
+      // exist, so the later landing does not build there, and verifying it against what the blocked landing left behind would let it
+      // land on code that is not in the head.
+      testTask "WHY: a landing whose code needs what a blocked landing defined is blocked, because the head does not hold it" {
+        let! w = appWorld ()
+        let! tip = integrationTip w
+        // Carol still holds the claim her refused landing took, in the row that refused it.
+        do! releaseClaimsOn "Alice.fs"
+        let! aliceLine = bindingLineAt w tip "Alice.fs" "let aliceMessage () : string"
+        // Carol's landing stops alice speaking as alice, so a test goes red and it is blocked. It also defines a helper on the way.
+        let! blockedId =
+          land w w.Carol "Alice.fs" tip
+            [ aliceLine, "let aliceHelper () : string = \"alice:helper\"\n\nlet aliceMessage () : string = \"broken\"" ]
+            "carol: alice stops speaking as alice, and defines a helper"
+        let! blocked = awaitSettled w blockedId
+        blocked |> Expect.stringContains "carol's landing is blocked" "state=Blocked"
+        blocked |> Expect.stringContains "because a test failed" "FailingTests"
+        do! releaseClaimsOn "Alice.fs"
+        // Bob's landing is based on the head, where the helper does not exist, and its code calls it. The tests it would run are
+        // green if the helper is still there, so only a verifying session that starts from the head can refuse it.
+        let! landingId =
+          land w w.Bob "Alice.fs" tip [ aliceLine, "let aliceMessage () : string = CohortTrunkFixture.Alice.aliceHelper ()" ] "bob: alice speaks through a helper that never landed"
+        let! settled = awaitSettled w landingId
+        settled |> Expect.stringContains "bob's landing is blocked, it does not build at the head" "state=Blocked"
+        do! releaseClaimsOn "Alice.fs"
+        let! status = statusOf w
+        (trunkLine status blockedId) |> Expect.isNone "the trunk was told nothing about the first"
+        (trunkLine status landingId) |> Expect.isNone "or the second"
+        let! tipAfter = integrationTip w
+        tipAfter |> Expect.equal "the integration branch did not move" tip
+      }
+
+      // A landing is verified from the integration head, whatever happened to the landing before it. The blocked landing's change is
+      // in the verifying session until something takes it out, so the landing after it has to find it gone.
+      testTask "WHY: a landing after a blocked landing is verified from the integration head, so it lands" {
+        let! w = appWorld ()
+        let! tip = integrationTip w
+        let! bobLine = bindingLineAt w tip "Bob.fs" "let bobMessage () : string"
+        let! blockedId = land w w.Carol "Bob.fs" tip [ bobLine, "let bobMessage () : string = \"broken\"" ] "carol: bob stops speaking as bob"
+        let! blocked = awaitSettled w blockedId
+        blocked |> Expect.stringContains "carol's landing is blocked" "state=Blocked"
+        blocked |> Expect.stringContains "because a test failed" "FailingTests"
+        do! releaseClaimsOn "Bob.fs"
+        // A landing in another file, with nothing wrong with it. The test that went red for carol's landing is green at the head.
+        let! goodId = land w w.Bob "Rude.fs" tip [ "\"rude:v2\"", "\"rude:v3\"" ] "bob: the shape's message moves on"
+        let! settled = awaitSettled w goodId
+        settled |> Expect.stringContains "the landing lands, it was verified without carol's change" "state=Landed"
+        let isApplied (line: string) = line.Contains "Applied" || line.Contains "Patched" || line.Contains "PatchPending"
+        let! _ = awaitTrunkLine w goodId isApplied
+        let! tipAfter = integrationTip w
+        (tipAfter <> tip) |> Expect.isTrue "the integration branch moved"
+        let! said = integrationSays w "CohortTrunkFixture.Bob.bobMessage ()"
+        said |> Expect.stringContains "the verifying session holds bob's message as the head does" "bob:v2"
+        said.Contains "broken" |> Expect.isFalse "and none of the blocked landing"
+        File.ReadAllText(Path.Combine(w.TrunkPath, "Bob.fs"))
+        |> Expect.stringContains "the trunk checkout holds bob's landed file" "bob:v2"
+        let! served = appGet w "bob"
+        splitCounted served |> fst |> Expect.equal "the app serves what landed" "bob:v2"
       }
 
       // Last, because a landing the gate blocks leaves what the verifying session evaluated for it in that session, and the next
