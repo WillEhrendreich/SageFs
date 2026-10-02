@@ -19,7 +19,8 @@ wait 3
 command SageFs: Enable Live Testing
 expect-text --within 120 1 failed
 
-# Line 43 of DemoEnv.fs is "| true, value -> Some value". Replace it, then save.
+# Lines 43 and 44 of DemoEnv.fs are "| true, value -> Some value" and "| false, _ -> None".
+# A negative seed becomes None: guard the first, and let the second take everything else.
 open DemoEnv/DemoEnv.fs
 wait 3
 key ctrl+g
@@ -29,10 +30,13 @@ key enter
 key home
 key shift+end
 type | true, value when value >= 0 -> Some value
+key down
+key home
+key shift+end
+type | _ -> None
 shot fix-typed-1280x800 --region editor --region statusbar
 key ctrl+s
-# The rerun after a compiled-file change starts with a rebuild, and a rebuild waits behind other
-# agents' test-suite leases on the shared daemon, so give it time.
+# The rerun after a compiled-file change says "conservative fallback rebuild" first and can take a while.
 expect-text --within 300 9 passed
 open DemoEnv.Tests/DemoEnvTests.fs
 wait 5

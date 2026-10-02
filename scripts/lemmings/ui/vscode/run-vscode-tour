@@ -21,6 +21,20 @@ lem_use_shared_daemon
 vsc_ensure_driver
 STATUS=0
 
+# If this script is interrupted or terminated mid-tour, end only what this run started: its own
+# session(s) on the shared daemon, by id, and its own window and display, by exact pid. The happy
+# path does the same and clears these, so the trap then has nothing to do. (SIGKILL cannot be caught.)
+CUR_W= CUR_CODE= CUR_XVFB=
+interrupted() {
+  trap - EXIT INT TERM
+  echo "lem: interrupted: stopping this run's sessions and window" >&2
+  [ -n "$CUR_W" ] && lem_cleanup_sessions "$CUR_W" || true
+  [ -n "$CUR_CODE" ] && vsc_stop_pid "$CUR_CODE" "$LEM_CODE_STOP_SECONDS" > /dev/null || true
+  [ -n "$CUR_XVFB" ] && vsc_stop_pid "$CUR_XVFB" 5 > /dev/null || true
+  exit 130
+}
+trap interrupted INT TERM
+
 run_one() {
   local tour=$1 name id run w out cdp ready tour_exit leak=no left
   name=$(basename "$tour" .tour)
@@ -39,9 +53,9 @@ run_one() {
   vsc_desktop_windows "$out/windows.before"
   local xvfb_pid="" code_pid=""
   vsc_start_xvfb "$run" || { echo "lem: no display" >&2; return 4; }
-  xvfb_pid=$VSC_XVFB_PID
+  xvfb_pid=$VSC_XVFB_PID; CUR_XVFB=$xvfb_pid; CUR_W=$w
   cdp=$(vsc_free_port)
-  vsc_start_code "$run" "$cdp" "$run/.lem/ext/sagefs"; code_pid=$VSC_PID
+  vsc_start_code "$run" "$cdp" "$run/.lem/ext/sagefs"; code_pid=$VSC_PID; CUR_CODE=$code_pid
   printf '%s %s %s %s\n' "$VSC_DISPLAY" "$xvfb_pid" "$code_pid" "$cdp" > "$out/window.pids"
 
   if vsc_wait_cdp "$cdp" 60 && dotnet "$VSC_DRIVE_BIN/LemDrive.dll" host ready --cdp-port "$cdp" --wait 90 > "$out/ready.snapshot.txt" 2>&1; then
@@ -59,6 +73,7 @@ run_one() {
   left=$(lem_sessions_under "$w" 2>/dev/null | grep -c . || true)
   local stop_code stop_x
   stop_code=$(vsc_stop_pid "$code_pid" "$LEM_CODE_STOP_SECONDS"); stop_x=$(vsc_stop_pid "$xvfb_pid" 5)
+  CUR_W= CUR_CODE= CUR_XVFB=
   vsc_desktop_windows "$out/windows.after"
   vsc_check_no_leak "$out/windows.before" "$out/windows.after" || leak=yes
   printf 'tourExit=%s windowStop=%s displayStop=%s desktopLeak=%s cleanup=%s sessionsLeft=%s\n' \

@@ -28,7 +28,7 @@ shot hot-reload-session-1280x800 --region sidebar --region statusbar
 command SageFs: Watch All Files
 wait 5
 shot watching-1280x800 --region sidebar --region statusbar
-replace DemoEnv/DemoEnv.fs "| true, value -> Some value" "| true, value when value >= 0 -> Some value"
+replace DemoEnv/DemoEnv.fs "| true, value -> Some value\n    | false, _ -> None" "| true, value when value >= 0 -> Some value\n    | _ -> None"
 open DemoEnv/DemoEnv.fs
 wait 15
 shot after-save-1280x800 --region sidebar --region editor --region statusbar --region panel
