@@ -96,6 +96,8 @@ let private layoutProblems (page: IPage) =
         problems.push('the page scrolls sideways: ' + document.scrollingElement.scrollWidth + ' > ' + window.innerWidth);
       for (const el of pane.querySelectorAll('.live-pane-head, .live-held-row, .live-mode, .live-held-btn')) {
         const r = el.getBoundingClientRect();
+        // A row that has no box (inside a class nobody opened) is not on the page, so it cannot stick out of the pane.
+        if (r.width === 0 && r.height === 0) continue;
         if (r.right > pr.right + 1 || r.left < pr.left - 1)
           problems.push(el.className + ' sticks out of the pane: ' + Math.round(r.left) + '..' + Math.round(r.right) + ' vs ' + Math.round(pr.left) + '..' + Math.round(pr.right));
       }
