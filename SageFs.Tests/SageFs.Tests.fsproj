@@ -642,6 +642,7 @@
         <Compile Include="EvalFeedHonestyTests.fs" />
         <Compile Include="ToolAnswerTests.fs" />
         <Compile Include="McpAnalysisTests.fs" />
+        <Compile Include="EvalRecordingScopeTests.fs" />
         <Compile Include="FeatureDiscoveryTests.fs" />
         <Compile Include="DashboardSparklineTests.fs" />
         <Compile Include="DashboardHealthTests.fs" />

@@ -129,6 +129,8 @@ let private emptySessionSays (client: McpClient) (sid: string) : Task<unit> =
     expectNotAvailable "diagnose" "NothingObservedYet" diagnosis
     let! coverage = call client "coverage_intel" session
     expectNotAvailable "coverage_intel" "NoTestRunYet" coverage
+    let! action = call client "suggest_next_action" session
+    expectNotAvailable "suggest_next_action" "NothingObservedYet" action
   }
 
 /// After two MCP evals the same tools measure them.
@@ -179,6 +181,9 @@ let private untestedSessionIsNotClean (client: McpClient) (sid: string) : Task<u
     let summary = (payloadOf diagnosis).GetProperty("Summary").GetString()
     summary |> Expect.stringContains "says what it did not measure" "Not measured: tests"
     summary.Contains "No issues detected" |> Expect.isFalse "never the bare all-clear"
+    let! action = call client "suggest_next_action" [ "session_id", box sid ]
+    expectMeasured "suggest_next_action over evals" action
+    unmeasuredOf action |> Expect.equal "suggest_next_action names the unmeasured tests too" [ "Tests" ]
   }
 
 /// `discover_features` lists exactly the tools `tools/list` has.
@@ -219,15 +224,35 @@ let private failureBelongsToItsSession (client: McpClient) (bareSid: string) (fi
     (payloadOf other).GetProperty("FailureCount").GetInt32() |> Expect.equal "the other session's failure is not this one's" 0
     unmeasuredOf other |> Expect.equal "its tests are unmeasured, not clean" [ "Tests" ]
 
+    // suggest_next_action ranks over the same session's cycle: the fixture's failure is its own, and the bare session's queue has none.
+    let! ownActions = call client "suggest_next_action" [ "session_id", box fixtureSid ]
+    expectMeasured "suggest_next_action in the session that ran the test" ownActions
+    (payloadOf ownActions).GetProperty("TotalFailures").GetInt32() |> Expect.equal "its own failing test is ranked" 1
+    let! otherActions = call client "suggest_next_action" [ "session_id", box bareSid ]
+    expectMeasured "suggest_next_action in the session that ran no test" otherActions
+    (payloadOf otherActions).GetProperty("TotalFailures").GetInt32() |> Expect.equal "the other session's failure is not ranked here" 0
+
     let! coverage = call client "coverage_intel" [ "session_id", box fixtureSid ]
     answerKind coverage |> Expect.equal (sprintf "a failing test and no coverage is not an empty list. Text: %s" coverage.Text) NotAvailable
     [ "NeedsAWorkflow"; "NeedsLiveTesting"; "NoCoverageRecorded" ]
     |> Expect.contains (sprintf "the reason says which switch is missing. Text: %s" coverage.Text) (reasonOf coverage)
   }
 
+/// An eval sent the way an editor sends it (POST /exec, which VS Code and Neovim use) is in the session's
+/// own history, so the analysis tools see it beside the two MCP evals.
+let private editorEvalIsVisible (client: McpClient) (http: System.Net.Http.HttpClient) (bareDir: string) (sid: string) : Task<unit> =
+  task {
+    let! status, body = Http.postJson http "/exec" {| code = "let edQ = 9;;"; working_directory = bareDir |}
+    status |> Expect.equal (sprintf "the editor's eval was accepted. Body: %s" body) 200
+    let! deps = call client "get_cell_dependencies" [ "session_id", box sid ]
+    expectMeasured "get_cell_dependencies after an editor eval" deps
+    (payloadOf deps).GetProperty("TotalCells").GetInt32()
+    |> Expect.equal "the editor's cell is in the graph beside the two MCP cells" 3
+  }
+
 /// The whole gate, in small tasks. Each is its own state machine on purpose: one large task over
 /// all of it made a Release build emit IL the runtime rejected (see McpToolOutcomeTests.fs).
-let private runGate (client: McpClient) (bareDir: string) : Task<unit> =
+let private runGate (client: McpClient) (http: System.Net.Http.HttpClient) (bareDir: string) : Task<unit> =
   task {
     let! bare = createReady client "create_bare_session" [ "working_directory", box bareDir ]
     do! emptySessionSays client bare
@@ -237,6 +262,7 @@ let private runGate (client: McpClient) (bareDir: string) : Task<unit> =
     let! fixtureSid =
       createReady client "create_project_session" [ "project", box fixtureProject; "working_directory", box fixtureDir ]
     do! failureBelongsToItsSession client bare fixtureSid
+    do! editorEvalIsVisible client http bareDir bare
   }
 
 let private runHonestEmptiesGate () : Task<unit> =
@@ -249,7 +275,7 @@ let private runHonestEmptiesGate () : Task<unit> =
 
     // No try/finally around an await: observe the outcome through a continuation, clean up, then re-raise.
     let! outcome =
-      (runGate client bareDir)
+      (runGate client httpClient bareDir)
         .ContinueWith(fun (t: Task<unit>) ->
           match t.IsFaulted with
           | true -> Error(t.Exception :> exn)

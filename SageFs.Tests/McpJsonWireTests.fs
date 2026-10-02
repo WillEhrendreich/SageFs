@@ -252,7 +252,7 @@ let tests =
       let! text = getTestTrace ctx
       text
       |> Expect.equal "trace"
-           """{"DiscoveryHint":"Live testing is not active. Call enable_live_testing to start discovery.","DiscoveryRequiresEval":false,"DiscoveryState":"disabled","Enabled":false,"Hint":"Live testing is not active. Call enable_live_testing to start test discovery and automatic re-runs.","History":{"Case":"NeverRun"},"IsRunning":false,"LastDecision":null,"LastDiscoveryTime":null,"Policies":["Unit: OnEveryChange","Integration: OnDemand","Browser: OnDemand","Benchmark: OnDemand","Architecture: OnSaveOnly","Property: OnEveryChange"],"Providers":[],"Summary":{"Total":0,"Passed":0,"Failed":0,"Stale":0,"Running":0,"Disabled":0,"Enabled":false},"Timing":"no timing yet"}"""
+           """{"DiscoveryHint":"Live testing is not active. Switch the session to the livetesting workflow with switch_workflow to start discovery.","DiscoveryRequiresEval":false,"DiscoveryState":"disabled","Enabled":false,"Hint":"Live testing is not active. Switch the session to the livetesting workflow with switch_workflow to start test discovery and automatic re-runs.","History":{"Case":"NeverRun"},"IsRunning":false,"LastDecision":null,"LastDiscoveryTime":null,"Policies":["Unit: OnEveryChange","Integration: OnDemand","Browser: OnDemand","Benchmark: OnDemand","Architecture: OnSaveOnly","Property: OnEveryChange"],"Providers":[],"Summary":{"Total":0,"Passed":0,"Failed":0,"Stale":0,"Running":0,"Disabled":0,"Enabled":false},"Timing":"no timing yet"}"""
     }
 
     // ---- SageFs/McpAdapter.fs ----

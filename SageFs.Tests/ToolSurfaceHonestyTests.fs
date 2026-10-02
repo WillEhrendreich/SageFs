@@ -41,9 +41,19 @@ let private sessionStates : SessionState list =
 /// The tools that read one session's evals or tests, and so take the routing arguments.
 let private sessionAnalysisTools =
   [ "diagnose"; "coverage_intel"; "impact_forecast"; "plan_ripple"; "preview_what_if"
-    "suggest_next_cell"; "get_cell_dependencies"; "discover_features" ]
+    "suggest_next_cell"; "suggest_next_action"; "get_cell_dependencies"; "discover_features" ]
 
 let private discoverEverything = FeatureDiscovery.discoverOver registered FeatureDiscovery.emptyContext
+
+/// Names that look like tools (a verb prefix and an underscore) in some text an agent reads, that tools/list does
+/// not have: a typo, or a tool that left without the text being fixed.
+let private unregisteredToolNamesIn (text: string) : string list =
+  let verbs = [ "get"; "list"; "run"; "set"; "create"; "switch"; "stop"; "enable"; "disable"; "explain"; "suggest"; "plan"; "preview"; "check"; "send"; "reset"; "acquire"; "release"; "export"; "manage"; "report"; "tidy"; "discover"; "decompose"; "cancel"; "request"; "reassign"; "join"; "leave" ]
+  Regex(sprintf @"\b(?:%s)_[a-z_]+\b" (String.Join("|", verbs))).Matches(text)
+  |> Seq.map (fun m -> m.Value)
+  |> Seq.filter (fun name -> not (registeredNames.Contains name))
+  |> Seq.distinct
+  |> List.ofSeq
 
 [<Tests>]
 let discoveryTests =
@@ -142,19 +152,49 @@ let nameListsTests =
       |> Expect.isEmpty "a description mentions a retired tool"
 
     testCase "WHY — every tool-shaped name a registered description tells an agent to call is registered or retired on purpose" <| fun _ ->
-      // Names that look like tools (a verb prefix and an underscore) and appear in a description but are not
-      // registered: a typo or a tool that left without the description being fixed.
-      let verbs = [ "get"; "list"; "run"; "set"; "create"; "switch"; "stop"; "enable"; "disable"; "explain"; "suggest"; "plan"; "preview"; "check"; "send"; "reset"; "acquire"; "release"; "export"; "manage"; "report"; "tidy"; "discover"; "decompose"; "cancel"; "request"; "reassign"; "join"; "leave" ]
-      let pattern = Regex(sprintf @"\b(?:%s)_[a-z_]+\b" (String.Join("|", verbs)))
       registered
       |> List.collect (fun tool ->
-        pattern.Matches(descriptionOf tool.Name)
-        |> Seq.map (fun m -> m.Value)
-        |> Seq.filter (fun name -> not (registeredNames.Contains name))
-        |> Seq.distinct
-        |> Seq.map (fun name -> sprintf "%s names %s" tool.Name name)
-        |> List.ofSeq)
+        unregisteredToolNamesIn (descriptionOf tool.Name)
+        |> List.map (fun name -> sprintf "%s names %s" tool.Name name))
       |> Expect.isEmpty "a description names a tool that is not registered"
+
+    testCase "WHY — the live-testing discovery hint does not point an agent at a tool that does not exist" <| fun _ ->
+      [ Features.LiveTesting.LiveTestDiscoveryState.Disabled
+        Features.LiveTesting.LiveTestDiscoveryState.Discovering
+        Features.LiveTesting.LiveTestDiscoveryState.ReadyZeroTests
+        Features.LiveTesting.LiveTestDiscoveryState.ReadyWithTests 3 ]
+      |> List.collect (fun state ->
+        unregisteredToolNamesIn (Features.LiveTesting.LiveTestDiscoveryState.hint state)
+        |> List.map (fun name -> sprintf "%A hint names %s" state name))
+      |> Expect.isEmpty "a hint tells an agent to call a tool tools/list does not have (live testing is switched on with switch_workflow)"
+
+    testCase "WHY — the hint for live testing being off names the tool that does switch it on" <| fun _ ->
+      Features.LiveTesting.LiveTestDiscoveryState.hint Features.LiveTesting.LiveTestDiscoveryState.Disabled
+      |> Expect.stringContains "the real way in" "switch_workflow"
+  ]
+
+[<Tests>]
+let runTestsVerdictTests =
+  testList "run_tests lists every verdict a receipt can carry" [
+
+    testCase "WHY — the verdicts in the run_tests description are the verdict type's own cases, so adding one cannot go unlisted" <| fun _ ->
+      let verdicts =
+        FSharpType.GetUnionCases(typeof<Features.RunReceipts.RunVerdict>)
+        |> Array.map (fun case -> Features.RunReceipts.RunVerdict.token (FSharpValue.MakeUnion(case, [||]) :?> Features.RunReceipts.RunVerdict))
+        |> Set.ofArray
+      let listed =
+        Regex.Match(descriptionOf "run_tests", @"has a verdict \(([^)]*)\)").Groups.[1].Value.Split(',')
+        |> Array.map (fun token -> token.Trim())
+        |> Set.ofArray
+      listed |> Expect.equal "the description lists exactly the verdict tokens" verdicts
+
+    testCase "WHY — run_tests says that none of the Passed-on-something verdicts is green" <| fun _ ->
+      let d = descriptionOf "run_tests"
+      [ "PassedOnStaleSource"; "PassedWhileRebuilding"; "PassedOnUnknownSource" ]
+      |> List.iter (fun token ->
+        (Regex.Matches(d, Regex.Escape token).Count, 1)
+        |> Expect.isGreaterThan (sprintf "%s is explained in prose, not only listed" token))
+      d |> Expect.stringContains "says they are not green" "none of them is green"
   ]
 
 [<Tests>]
@@ -171,7 +211,7 @@ let analysisToolDescriptionTests =
       |> Expect.isEmpty "a session-analysis tool cannot be pointed at a session"
 
     testCase "WHY — each tool that answers Measured or NotAvailable says so in its description" <| fun _ ->
-      [ "diagnose"; "coverage_intel"; "impact_forecast"; "plan_ripple"; "preview_what_if"; "suggest_next_cell"; "get_cell_dependencies" ]
+      [ "diagnose"; "coverage_intel"; "impact_forecast"; "plan_ripple"; "preview_what_if"; "suggest_next_cell"; "suggest_next_action"; "get_cell_dependencies" ]
       |> List.filter (fun name ->
         let d = descriptionOf name
         not (d.Contains "NotAvailable" && d.Contains "Measured"))
