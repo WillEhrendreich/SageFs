@@ -600,25 +600,16 @@ let fileCacheTests =
 
 let perfMeasurementTests =
   testList "parseFileStructure perf" [
-    test "first parse vs cache hit latency" {
+    // This used to compare two wall-clock timings (cache hit faster than cold parse), which failed whenever
+    // the machine was loaded and the two were within a tenth of a millisecond. What a hit has to do is not
+    // parse, and a parse builds a new structure, so the proof is that the stored structure and the cache come
+    // back as the very same objects.
+    test "a cache hit hands back the stored structure itself, so nothing was parsed" {
       let code = Fixtures.namespaceMultiModule
-      let sw = System.Diagnostics.Stopwatch()
-
-      // Cold parse
-      sw.Start()
-      let _, cache = parseFsCached "Perf.fs" code Map.empty
-      sw.Stop()
-      let coldMs = sw.Elapsed.TotalMilliseconds
-
-      // Cache hit
-      sw.Restart()
-      let _, _ = parseFsCached "Perf.fs" code cache
-      sw.Stop()
-      let hotMs = sw.Elapsed.TotalMilliseconds
-
-      // Cache hit should be significantly faster
-      printfn "Cold parse: %.2fms, Cache hit: %.2fms, Speedup: %.1fx" coldMs hotMs (coldMs / hotMs)
-      (hotMs, coldMs) |> Expect.isLessThan "cache hit faster than cold parse"
+      let fs1, cache1 = parseFsCached "Perf.fs" code Map.empty
+      let fs2, cache2 = parseFsCached "Perf.fs" code cache1
+      obj.ReferenceEquals(fs1, fs2) |> Expect.isTrue "the structure is the one stored on the miss, not a fresh parse"
+      obj.ReferenceEquals(cache1, cache2) |> Expect.isTrue "the cache is returned untouched"
     }
 
     test "parse scales linearly with file size" {
