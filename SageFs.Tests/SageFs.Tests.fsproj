@@ -789,6 +789,7 @@
         <Compile Include="CohortFastForwardFailedTests.fs" />
         <Compile Include="CohortLandingCacheOwnerTests.fs" />
         <Compile Include="CohortIntegrationHeadTests.fs" />
+        <Compile Include="CohortVacancyTests.fs" />
         <Compile Include="CohortLandingGitAcceptanceTests.fs" />
         <Compile Include="CohortDogfoodIntegrationTests.fs" />
         <Compile Include="TrunkLandingOutcomeTests.fs" />
