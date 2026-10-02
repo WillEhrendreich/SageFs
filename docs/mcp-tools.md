@@ -153,17 +153,59 @@ the final gate before you push.
 
 | Tool | What it does |
 |:---|:---|
-| `diagnose` | Full diagnostic report: test failures, cell staleness, ripple plan, suggestions. |
-| `coverage_intel` | Coverage-quality analysis: blind spots, correlated failures. |
-| `impact_forecast` | Forecast the performance impact and downstream blast radius of cells. |
+| `diagnose` | Diagnostic report for one session: its test failures with causal changes, the cells they touch, a ripple plan, suggestions, eval timing. Says which side it could not read (`Unmeasured`). |
+| `coverage_intel` | Coverage-quality analysis for one session's failing tests: blind spots, correlated failures. Needs live testing's instrumented runs. |
+| `impact_forecast` | How many REPL cells sit downstream of a cell, and how long the session's evals take. About cells, not source code. |
 | `suggest_next_action` | Prioritized "what next" queue combining coverage, impact, and staleness. |
-| `suggest_next_cell` | Type-directed suggestions for what to evaluate next, from the bindings in scope. |
+| `suggest_next_cell` | Type-directed suggestions for what to evaluate next, from the bindings the session's evals made. |
 | `suggest_repair` | Given a failing test, trace causal changes and suggest the symbol to fix. |
-| `plan_ripple` | Plan cascade re-evaluation for changed cells using the live dependency graph. |
+| `plan_ripple` | Plan cascade re-evaluation for changed cells using the session's eval dependency graph. |
 | `preview_what_if` | Preview what would change if a binding had a different value, without executing. |
 | `decompose_pipeline` | Break an F# pipeline into stages, each classified pure / effectful / unknown. |
-| `get_cell_dependencies` | The cell dependency graph with staleness annotations. |
-| `discover_features` | Context-aware feature discovery, ranked by relevance to the session state. |
+| `get_cell_dependencies` | The cell dependency graph of one session: what each eval produced and consumed, and the edges between them. Reports staleness as `NotMeasured`. |
+| `discover_features` | Ranks the tools this daemon registers by the session's state. The list is read from the registered set, so it cannot name a tool that is not there. |
+
+### Measured, or not available
+
+Seven of these (`diagnose`, `coverage_intel`, `impact_forecast`, `plan_ripple`, `preview_what_if`, `suggest_next_cell`,
+`get_cell_dependencies`) used to answer an empty list, `0 downstream` or `No issues detected` when they had nothing to read. A
+policy that reads that as "measured, nothing wrong" is acting on a number nobody counted. So each of them answers one of two
+things, in `structuredContent.answer`:
+
+- `Measured`: it read the data. The text block is the measurement as before. A `Measured` empty list or a `0` is a real zero.
+  `unmeasured` lists any side it could not read (`diagnose` says `Tests` when the session has evals and no recorded test result).
+- `NotAvailable`: the data was not there. `reason` is a closed token, `message` says what is missing, `whatToDo` says what to do,
+  and the text block is that same sentence, starting `Not available (<reason>).`
+
+| Reason | Means | What to do |
+|:---|:---|:---|
+| `NoSessionResolved` | No session could be found for the call. | Pass `session_id` or `working_directory`. |
+| `SessionNotReady` | The session is warming up, faulted or not routable. | `get_session_status` with `wait_seconds=60`. |
+| `NoEvalsYet` | The session recorded no evals. | `send_fsharp_code` in that session. |
+| `NoTestRunYet` | The session has no recorded test result. | `run_tests` for that session. |
+| `NothingObservedYet` | `diagnose` has neither evals nor test results. | Either of the two above. |
+| `CellsNotInHistory` | The cell ids are not in that session's history. | Take ids from `get_cell_dependencies`. |
+| `NoUsableCellIds` | `changed_cells` was not comma-separated integers. | Pass `'0,2'`. |
+| `BindingNotInScope` | `preview_what_if` was given a name nothing bound. | Evaluate it in that session first. |
+| `NeedsAWorkflow` | Coverage comes from the LiveTesting workflow and the session is not in it. | `switch_workflow` with `target='livetesting'`, then `run_tests`. |
+| `NeedsLiveTesting` | LiveTesting workflow, but live testing is switched off. | Switch it on in the dashboard or an editor, then `run_tests`. |
+| `NoCoverageRecorded` | Live testing is on, but no instrumented run has recorded coverage yet. | `run_tests`. |
+
+Only `coverage_intel` fundamentally needs live testing: coverage bitmaps come from its instrumented runs and nowhere else. The
+others need the session's own evals or test results and nothing more.
+
+**One session per call.** These tools take the same `session_id` and `working_directory` routing as `run_tests`, and with neither
+they answer for the session the connection is working in. They read that session's own eval history (what `send_fsharp_code`
+recorded for it) and the live-testing state that owns that session's tests, which is where `run_tests` records its results. They
+never read another session's data, and they never fall back to the primary session's.
+
+**`impact_forecast` is about REPL cells.** A cell is one `send_fsharp_code` eval. Downstream means later evals that use a name this
+one bound. It does not measure the blast radius of a change to your source files and it does not say which tests a change
+affects, so do not gate a change on it. `run_tests` is the tool that answers about tests.
+
+Completions, the type explorer, per-file coverage, the symbol-to-tests lookup and the domain-model diagram are not MCP tools.
+The editors reach the first, second and third over the daemon's HTTP API (`/api/completions`, `/api/explore`,
+`/api/live-testing/file-annotations`), and `discover_features` does not list them.
 
 ## Export and history
 
