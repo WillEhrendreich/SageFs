@@ -75,6 +75,27 @@ let tests =
       bind roots Selection.NotSelected [ ref "a" "/home/me/app"; ref "b" "/home/me/app/sub" ]
       |> Expect.equal "first" (Binding.Bound (ref "a" "/home/me/app"))
 
+    // ── phaseOfStatus ──
+    // The status bar used to read the DAEMON-wide status, which is the status of whichever session
+    // the daemon had active, so a stranger's fault or warmup showed up in an unrelated window. It
+    // reads the bound session's own status through this.
+
+    testCase "WHY - a session that can evaluate is Usable" <| fun _ ->
+      for status in [ "Ready"; "Evaluating"; "Building" ] do
+        phaseOfStatus status |> Expect.equal status SessionPhase.Usable
+
+    testCase "WHY - a session still coming up is Warming" <| fun _ ->
+      for status in [ "Starting"; "Restarting"; "Warming Up" ] do
+        phaseOfStatus status |> Expect.equal status SessionPhase.Warming
+
+    testCase "WHY - a session that fell over or was stopped is Down" <| fun _ ->
+      for status in [ "Faulted"; "Stopped"; "error" ] do
+        phaseOfStatus status |> Expect.equal status SessionPhase.Down
+
+    testCase "WHY - a status this client has never heard of is named, not judged" <| fun _ ->
+      phaseOfStatus "Hibernating"
+      |> Expect.equal "unrecognised" (SessionPhase.Unrecognised "Hibernating")
+
     // ── identifyCreated ──
 
     testCase "WHY - the daemon's reply names the new session, so that session is the one" <| fun _ ->
