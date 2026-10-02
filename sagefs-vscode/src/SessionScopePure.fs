@@ -60,6 +60,97 @@ let bind (workspaceRoots: string list) (selection: Selection) (sessions: Session
     | Some s -> Binding.Bound s
     | None -> Binding.NoSessionForThisWorkspace
 
+// ── Which sessions' events a window shows ────────────────────────────────
+
+/// The daemon sends every session's events on one stream. By default a window shows the ones from its
+/// own session or the sessions of its own workspace: another agent's fault is not this window's news.
+[<RequireQualifiedAccess>]
+type EventSources =
+  | ThisWorkspaceOnly
+  | AllSessions
+
+/// The name of the setting under `sagefs.`. It is read as a boolean at the edge and becomes `EventSources`
+/// here, so nothing past the edge carries a bare flag.
+[<Literal>]
+let eventSourcesSettingKey = "showEventsFromAllSessions"
+
+module EventSources =
+  let ofSetting (showFromAllSessions: bool) : EventSources =
+    match showFromAllSessions with
+    | true -> EventSources.AllSessions
+    | false -> EventSources.ThisWorkspaceOnly
+
+/// What an event is about, for deciding whether this window shows it. A file event carries the file too:
+/// a save under the workspace is this window's news whichever session reports it.
+[<RequireQualifiedAccess>]
+type EventSubject =
+  | SessionEvent of sessionId: string
+  | FileEvent of path: string * sessionId: string
+
+[<RequireQualifiedAccess>]
+type Surfacing =
+  | Show
+  | Hide
+
+/// Whether a window shows an event. A session the daemon does not list cannot be shown to be this window's,
+/// so under `ThisWorkspaceOnly` it is hidden.
+let surfacing
+  (sources: EventSources)
+  (workspaceRoots: string list)
+  (selection: Selection)
+  (known: SessionRef list)
+  (subject: EventSubject)
+  : Surfacing =
+  let sessionIsOurs (sessionId: string) =
+    match selection with
+    | Selection.Selected id when id = sessionId -> true
+    | Selection.Selected _
+    | Selection.NotSelected ->
+      known
+      |> List.exists (fun s ->
+        s.Id = sessionId && relationOf workspaceRoots s.WorkingDirectory = WorkspaceRelation.InThisWorkspace)
+  match sources with
+  | EventSources.AllSessions -> Surfacing.Show
+  | EventSources.ThisWorkspaceOnly ->
+    let ours =
+      match subject with
+      | EventSubject.SessionEvent sessionId -> sessionIsOurs sessionId
+      | EventSubject.FileEvent (path, sessionId) ->
+        relationOf workspaceRoots path = WorkspaceRelation.InThisWorkspace || sessionIsOurs sessionId
+    match ours with
+    | true -> Surfacing.Show
+    | false -> Surfacing.Hide
+
+// ── The live event listener's session filter ─────────────────────────────
+
+/// Which session's tagged events the listener takes in. Before a session is bound it takes the daemon's
+/// replay on connect (which is about whichever session the daemon has active); once bound it takes that
+/// session's events only, and an untagged one is refused rather than guessed.
+[<RequireQualifiedAccess>]
+type EventFilter =
+  | AnySessionUntilBound
+  | OnlySession of sessionId: string
+  /// The window looked and none of the daemon's sessions is for its workspace.
+  | NoSession
+
+let admits (filter: EventFilter) (taggedSessionId: string) : bool =
+  match filter with
+  | EventFilter.AnySessionUntilBound -> true
+  | EventFilter.OnlySession id -> taggedSessionId = id
+  | EventFilter.NoSession -> false
+
+[<RequireQualifiedAccess>]
+type StateAfterBind =
+  | KeepState
+  | ClearState
+
+/// Binding a session keeps the state the listener already took only if every event in it came from that
+/// session; anything a stranger put there is dropped, so it cannot sit in the Test Explorer or the gutters.
+let stateAfterBind (observedSessions: string list) (boundSessionId: string) : StateAfterBind =
+  match observedSessions |> List.forall (fun id -> id = boundSessionId) with
+  | true -> StateAfterBind.KeepState
+  | false -> StateAfterBind.ClearState
+
 /// What a session's own lifecycle status means for a window showing it.
 [<RequireQualifiedAccess>]
 type SessionPhase =

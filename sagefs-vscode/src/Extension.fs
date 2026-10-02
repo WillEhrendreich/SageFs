@@ -769,11 +769,53 @@ let windowSession (sessions: Client.SessionInfo array) : Client.SessionInfo opti
   | SessionScopePure.Binding.Bound r -> sessions |> Array.tryFind (fun s -> s.id = r.Id)
   | SessionScopePure.Binding.NoSessionForThisWorkspace -> None
 
+/// The session the window last adopted, so adopting it again is a no-op.
+let mutable private lastAdopted = SessionScopePure.Selection.NotSelected
+
 /// Make a session the one commands, event filters and views follow.
-let adoptWindowSession (s: Client.SessionInfo) =
-  activeSessionId <- Some s.id
-  activeSessionWorkingDirectory <- Some s.workingDirectory
-  liveTestListener |> Option.iter (fun l -> l.SetSessionFilter (Some s.id))
+let adoptWindowSessionById (c: Client.Client) (sessionId: string) (workingDirectory: string) =
+  activeSessionId <- Some sessionId
+  activeSessionWorkingDirectory <- Some workingDirectory
+  liveTestListener |> Option.iter (fun l -> l.SetEventFilter (SessionScopePure.EventFilter.OnlySession sessionId))
+  match lastAdopted = SessionScopePure.Selection.Selected sessionId with
+  | true -> ()
+  | false ->
+    lastAdopted <- SessionScopePure.Selection.Selected sessionId
+    // `sagefs:liveTestingEnabled` follows the last test summary taken in, and before this session was
+    // bound that may have been another session's, which took Enable Live Testing off the palette.
+    // Read this session's own state once.
+    promise {
+      let! discoveryState = Client.getLiveTestingDiscoveryState sessionId c
+      match discoveryState with
+      | Some state -> setContext "sagefs:liveTestingEnabled" (ContextKeysPure.liveTestingEnabledFromDiscoveryState state)
+      | None -> ()
+    }
+    |> promiseIgnoreLog (fun m -> (getOutput()).appendLine m)
+
+let adoptWindowSession (c: Client.Client) (s: Client.SessionInfo) =
+  adoptWindowSessionById c s.id s.workingDirectory
+
+/// This window has no session of its own: nothing is followed and no session's events are taken.
+let releaseWindowSession () =
+  activeSessionId <- None
+  activeSessionWorkingDirectory <- None
+  lastAdopted <- SessionScopePure.Selection.NotSelected
+  liveTestListener |> Option.iter (fun l -> l.SetEventFilter SessionScopePure.EventFilter.NoSession)
+
+/// Whether this window shows an event about a session or a file. The daemon sends every session's events
+/// on one stream; by default a window shows its own session's and its workspace's (setting
+/// `sagefs.showEventsFromAllSessions` turns every session's on).
+let showsEventFor (subject: SessionScopePure.EventSubject) : bool =
+  let sources =
+    SessionScopePure.EventSources.ofSetting
+      ((Workspace.getConfiguration "sagefs").get(SessionScopePure.eventSourcesSettingKey, false))
+  let selection =
+    match activeSessionId with
+    | Some id -> SessionScopePure.Selection.Selected id
+    | None -> SessionScopePure.Selection.NotSelected
+  match SessionScopePure.surfacing sources (workspaceFolderPaths () |> Array.toList) selection (sessionRefs knownSessions) subject with
+  | SessionScopePure.Surfacing.Show -> true
+  | SessionScopePure.Surfacing.Hide -> false
 
 /// What the error dialog says about a Faulted or Stopped window session: that session's own verdict.
 /// The daemon's `/health` error is about ITS active session, which is somebody else's on a shared daemon.
@@ -812,10 +854,10 @@ let refreshStatus () =
         sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: offline" ]
         sb.backgroundColor <- None
         sb.show ()
-        activeSessionId <- None
-        activeSessionWorkingDirectory <- None
+        releaseWindowSession ()
         knownSessions <- [||]
-        liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
+        // Offline: the daemon replays its active session when the stream comes back, so take that in.
+        liveTestListener |> Option.iter (fun l -> l.SetEventFilter SessionScopePure.EventFilter.AnySessionUntilBound)
         HotReload.setSession c None
         SessionCtx.setSession c None
         Sessions.setSession c None
@@ -842,7 +884,7 @@ let refreshStatus () =
             | 0 -> status.status
             | _ -> Some noSessionForThisWorkspaceStatus
         // Whatever state it is in, this is the session commands, filters and views follow.
-        session |> Option.iter adoptWindowSession
+        session |> Option.iter (adoptWindowSession c)
         match windowStatus with
         | Some st when SessionScopePure.phaseOfStatus st = SessionScopePure.SessionPhase.Usable ->
           warmupPhase <- None
@@ -853,9 +895,6 @@ let refreshStatus () =
           setContext "sagefs:hasSession" (ContextKeysPure.hasSessionContext sessions.Length)
           match session with
           | Some s ->
-            activeSessionId <- Some s.id
-            activeSessionWorkingDirectory <- Some s.workingDirectory
-            liveTestListener |> Option.iter (fun l -> l.SetSessionFilter (Some s.id))
             let notNullPaths (arr: string array) =
               match jsIsNullOrUndefined (box arr) with
               | true -> [||]
@@ -888,9 +927,7 @@ let refreshStatus () =
             // reading the status bar as "zap SageFs: ...".
             sb?accessibilityInformation <- createObj [ "label" ==> view.Tooltip ]
           | None ->
-            activeSessionId <- None
-            activeSessionWorkingDirectory <- None
-            liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
+            releaseWindowSession ()
             let view = StatusBarPure.noSessionView supervisedFlag restartCount
             sb.text <- view.Text
             sb.tooltip <- Some view.Tooltip
@@ -959,9 +996,7 @@ let refreshStatus () =
           sb.backgroundColor <-
             Some (newThemeColor "statusBarItem.errorBackground")
         | Some st when st = noSessionForThisWorkspaceStatus ->
-          activeSessionId <- None
-          activeSessionWorkingDirectory <- None
-          liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
+          releaseWindowSession ()
           HotReload.setSession c None
           SessionCtx.setSession c None
           Sessions.setSession c None
@@ -1674,9 +1709,7 @@ let createAndSelectSession
       let! found = lookFor 1
       match found with
       | SessionScopePure.CreatedSession.CreatedAs created ->
-        activeSessionId <- Some created.Id
-        activeSessionWorkingDirectory <- Some created.WorkingDirectory
-        liveTestListener |> Option.iter (fun l -> l.SetSessionFilter (Some created.Id))
+        adoptWindowSessionById c created.Id created.WorkingDirectory
         let! switched = Client.switchSession created.Id c
         match switched with
         | Client.Failed err -> c.log (sprintf "[warn] could not make session %s the daemon's active one: %s" created.Id err)
@@ -2638,6 +2671,8 @@ let activate (context: ExtensionContext) =
       do! startDaemon ()
     } |> promiseIgnoreLog logToOutput)
   reg "sagefs.openDashboard" (fun _ -> openDashboard () |> promiseIgnoreLog logToOutput)
+  // Every "Show Output" button in a dialog opens this channel; the same thing is now one palette entry.
+  reg "sagefs.showOutput" (fun _ -> showOutputPanel ())
   // `[Reconnect]` was offered on the "daemon connection lost" dialog and
   // executed `sagefs.reconnect`, which existed nowhere. The rejected promise
   // went to the output channel, so pressing the button looked like it worked.
@@ -3232,22 +3267,37 @@ let activate (context: ExtensionContext) =
           (sprintf "SageFs: warmup complete for %s — session ready" projectName)
           [||]
         |> ignore
-      OnFileReloaded = fun filePath ->
+      OnFileReloaded = fun filePath sessionId ->
         let shortName =
           let parts = filePath.Split([| '/'; '\\' |])
           if parts.Length > 0 then parts.[parts.Length - 1] else filePath
-        (getOutput()).appendLine (sprintf "[SageFs] File reloaded: %s" shortName)
-      OnSessionFaulted = fun reason ->
-        promise {
-          let! choice =
-            Window.showWarningMessage
-              (sprintf "SageFs session faulted: %s. Use Restart Session to recover." reason)
-              [| "Restart Session"; "Show Output" |]
-          match choice with
-          | Some "Restart Session" -> Commands.executeCommand "sagefs.restart" |> ignore
-          | Some "Show Output" -> showOutputPanel ()
-          | _ -> ()
-        } |> promiseIgnore
+        match showsEventFor (SessionScopePure.EventSubject.FileEvent (filePath, sessionId)) with
+        | true -> (getOutput()).appendLine (sprintf "[SageFs] File reloaded: %s" shortName)
+        | false ->
+          // Only a `debug` log level writes this, so the channel carries this window's own sessions.
+          c.log (sprintf "[debug] File reloaded in another workspace's session %s: %s (sagefs.%s shows these)" sessionId shortName SessionScopePure.eventSourcesSettingKey)
+      OnSessionFaulted = fun sessionId reason ->
+        match showsEventFor (SessionScopePure.EventSubject.SessionEvent sessionId) with
+        | false ->
+          c.log (sprintf "[debug] Session %s faulted, not this workspace's, so no message here (sagefs.%s shows these): %s" sessionId SessionScopePure.eventSourcesSettingKey reason)
+        | true ->
+          promise {
+            let! choice =
+              Window.showWarningMessage
+                (sprintf "SageFs session %s faulted: %s. Use Restart Session to recover." sessionId reason)
+                [| "Restart Session"; "Show Output" |]
+            match choice with
+            // Restart Session is the session's hard reset. This used to run `sagefs.restart`, which restarts the DAEMON.
+            | Some "Restart Session" -> Commands.executeCommand "sagefs.hardReset" |> ignore
+            | Some "Show Output" -> showOutputPanel ()
+            | _ -> ()
+          } |> promiseIgnore
+      OnStateCleared = fun () ->
+        adapter.Reset ()
+        fileAnnotationsCache <- Map.empty
+        let state = refreshAllDecorations ()
+        TestDeco.updateDiagnostics state
+        TestLens.updateState state
       OnDomainModel = fun _data ->
         // Domain model visualization data — available via sagefs.visualize_domain_model MCP tool.
         // Future: render in a dedicated webview panel.

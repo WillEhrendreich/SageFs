@@ -724,6 +724,16 @@ let enableLiveTesting (sessionId: string) (c: Client) =
 let disableLiveTesting (sessionId: string) (c: Client) =
   postCommand c "/api/live-testing/disable" (jsonStringify {| sessionId = sessionId |}) 5000
 
+/// The session's own discovery state ("disabled" when live testing is off for it), read from the
+/// per-session status route. `None` when the daemon cannot say.
+let getLiveTestingDiscoveryState (sessionId: string) (c: Client) : JS.Promise<string option> =
+  getJson
+    "getLiveTestingDiscoveryState"
+    (sprintf "/api/live-testing/status?session=%s" (JS.encodeURIComponent sessionId))
+    5000
+    (fun parsed -> fieldString "DiscoveryState" parsed |> Option.defaultValue "")
+    c
+
 let setRunPolicy (sessionId: string) (category: string) (policy: string) (c: Client) =
   asActiveSession sessionId c (fun () ->
     postCommand c "/api/live-testing/policy" (jsonStringify {| category = category; policy = policy |}) 5000)

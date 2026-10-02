@@ -14,7 +14,7 @@ key enter
 wait 3
 shot just-created-1280x800 --region sidebar --region statusbar
 expect-session --within 240
-expect-text --within 60 session {session}
+expect-text --within 60 — session {session} —
 # The Sessions row says it is the one this window uses and the one for this workspace, and gives
 # its id, so it can be told from another agent's session without guessing from the label.
 expect-text --within 30 {session} · active · this workspace · Ready

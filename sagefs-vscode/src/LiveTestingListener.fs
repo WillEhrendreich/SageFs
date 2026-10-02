@@ -248,8 +248,8 @@ let parseFailureNarratives (data: obj) : VscFailureNarrative array =
 /// The concrete action a "state" envelope maps to, decided purely by the field
 /// the daemon populated. Field shapes are pinned in SageFs/SseEvent.fs.
 type StateEventAction =
-  | StateSessionFaulted of error: string
-  | StateFileReloaded of path: string
+  | StateSessionFaulted of sessionId: string * error: string
+  | StateFileReloaded of path: string * sessionId: string
   | StateWarmupProgress of step: int * total: int
   | StateSessionReady of sessionId: string
   | StateSessionSwitched of sessionId: string
@@ -264,12 +264,13 @@ type StateEventAction =
 /// (it does not today); the discriminants are mutually exclusive on the wire.
 let classifyStateEvent (data: obj) : StateEventAction =
   match fieldString "sessionFaulted" data with
-  | Some _ ->
-    // The "sessionFaulted" field is the sid; the human-readable cause is "error".
-    StateSessionFaulted (fieldString "error" data |> Option.defaultValue "unknown error")
+  | Some sid ->
+    // The "sessionFaulted" field is the sid; the human-readable cause is "error". The sid travels
+    // with it: a window shows only its own session's fault.
+    StateSessionFaulted (sid, fieldString "error" data |> Option.defaultValue "unknown error")
   | None ->
   match fieldString "fileReloaded" data with
-  | Some path -> StateFileReloaded path
+  | Some path -> StateFileReloaded (path, fieldString "sessionId" data |> Option.defaultValue "")
   | None ->
   match fieldBool "warmupProgress" data with
   | Some true ->
@@ -316,8 +317,13 @@ type LiveTestingCallbacks = {
   OnFailureNarratives: VscFailureNarrative array -> unit
   OnWarmupProgress: int -> int -> string -> float -> string -> unit
   OnWarmupCompleted: string -> unit
-  OnFileReloaded: string -> unit
-  OnSessionFaulted: string -> unit
+  /// A watched file was reloaded: its path, and the session that reloaded it ("" if the event names none).
+  OnFileReloaded: string -> string -> unit
+  /// A session faulted: its id, and why.
+  OnSessionFaulted: string -> string -> unit
+  /// The listener dropped the test state it had taken, because a stranger's events were in it when this
+  /// window bound its own session. Decorations, the Test Explorer and caches built from it are stale.
+  OnStateCleared: unit -> unit
   OnDomainModel: obj -> unit
   OnDiagnosisReady: obj -> unit
   OnBindingValuesUpdate: int -> ClientBindingValue list -> unit
@@ -337,9 +343,9 @@ type LiveTestingListener = {
   /// Coverage views per file (with the run generation that produced them).
   /// file path -> (generation, views). Read by the CodeLens provider.
   CoverageViews: unit -> Map<string, int * SageFs.Vscode.CoverageViewPure.CoverageView array>
-  /// Update the session filter — only events tagged with this session ID will be processed.
-  /// Pass None to disable filtering (accept all sessions, e.g. before first warmup).
-  SetSessionFilter: string option -> unit
+  /// Choose whose session-scoped events the listener takes. Binding a session drops the state already
+  /// taken if any of it came from another session.
+  SetEventFilter: SageFs.Vscode.SessionScopePure.EventFilter -> unit
   Dispose: unit -> unit
 }
 
@@ -362,9 +368,12 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
   // Track last known (filePath, blockStartLine) from eval_result so bindings_snapshot
   // can fall back to it when the server doesn't yet emit blockStartLine in the snapshot.
   let mutable lastKnownBsl: (string * int) option = None
-  // Session filter: only process events tagged with this session ID.
-  // None = no filter (pass all events — used before first warmup completes).
-  let mutable sessionFilter: string option = None
+  // Whose session-scoped events are taken (see SessionScopePure.EventFilter). The window owns the
+  // decision and sets it from the session it is bound to; the listener does not pick one up from the
+  // stream, because the stream carries every session on the daemon.
+  let mutable sessionFilter = SageFs.Vscode.SessionScopePure.EventFilter.AnySessionUntilBound
+  // The sessions whose tagged events are in `state` since it was last cleared.
+  let mutable observedSessions: string list = []
   let url = sprintf "http://localhost:%d/events" port
 
   let featureCallbacks =
@@ -374,18 +383,37 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       OnTimeline = fun t -> timeline <- Some t }
 
   /// Session-scoped events carry a SessionId field injected by the server.
-  /// When a filter is set, skip events whose SessionId doesn't match.
-  /// Strict isolation: when a filter IS set, an UNTAGGED session-scoped event
+  /// Strict isolation: once a session is bound, an UNTAGGED session-scoped event
   /// is rejected too — accepting it would leak another session's state into
-  /// the filtered view (the "untagged events are accepted" defect). Only
-  /// before the first warmup (filter = None) are untagged events passed.
+  /// the filtered view (the "untagged events are accepted" defect).
   let passesSessionFilter (data: obj) =
-    match sessionFilter with
-    | None -> true
-    | Some expected ->
-      match fieldString "SessionId" data with
-      | Some sid -> sid = expected
-      | None -> false
+    let tagged = fieldString "SessionId" data |> Option.defaultValue ""
+    SageFs.Vscode.SessionScopePure.admits sessionFilter tagged
+
+  /// Note whose events are in `state`, so binding can tell whether a stranger's are among them.
+  let noteSession (data: obj) =
+    match fieldString "SessionId" data with
+    | Some sid when not (List.contains sid observedSessions) -> observedSessions <- sid :: observedSessions
+    | _ -> ()
+
+  let clearState () =
+    state <- VscLiveTestState.empty
+    discoveryGen <- 0L
+    coverageViews <- Map.empty
+    observedSessions <- []
+    callbacks.OnStateCleared ()
+
+  let setEventFilter (filter: SageFs.Vscode.SessionScopePure.EventFilter) =
+    let alreadyThere = (filter = sessionFilter)
+    sessionFilter <- filter
+    match alreadyThere, filter with
+    | true, _ -> ()
+    | false, SageFs.Vscode.SessionScopePure.EventFilter.OnlySession id ->
+      match SageFs.Vscode.SessionScopePure.stateAfterBind observedSessions id with
+      | SageFs.Vscode.SessionScopePure.StateAfterBind.KeepState -> observedSessions <- [ id ]
+      | SageFs.Vscode.SessionScopePure.StateAfterBind.ClearState -> clearState ()
+    | false, SageFs.Vscode.SessionScopePure.EventFilter.NoSession -> clearState ()
+    | false, SageFs.Vscode.SessionScopePure.EventFilter.AnySessionUntilBound -> ()
 
   // Events that are NOT session-scoped — always process regardless of sessionFilter.
   let isSessionAgnosticEvent (eventType: string) =
@@ -397,6 +425,7 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     tryHandleEvent eventType (fun () ->
       // Skip session-scoped events that don't match the active session filter.
       if not (isSessionAgnosticEvent eventType) && not (passesSessionFilter data) then () else
+      if not (isSessionAgnosticEvent eventType) then noteSession data
 
       match eventType with
       | "test_summary" ->
@@ -417,8 +446,8 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         // signal is the field present, decoded by classifyStateEvent. Faults and
         // file-reloads used to arrive as their own frames and were being dropped.
         match classifyStateEvent data with
-        | StateSessionFaulted error -> callbacks.OnSessionFaulted error
-        | StateFileReloaded path -> callbacks.OnFileReloaded path
+        | StateSessionFaulted (sessionId, error) -> callbacks.OnSessionFaulted sessionId error
+        | StateFileReloaded (path, sessionId) -> callbacks.OnFileReloaded path sessionId
         // Progress/ready/switch/hotreload/alarm/model changes all just mean
         // "something moved — re-poll the daemon for fresh status". The detailed
         // warmup UI is driven by the still-distinct "warmup_progress" frame.
@@ -439,11 +468,10 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         // (see the sessions tree provider), not from these events.
         let subtype = fieldString "type" data |> Option.defaultValue ""
         match subtype with
-        | "warmup_context_snapshot" | "session_activated" ->
-          match fieldString "sessionId" data with
-          | Some sid when sid <> "" ->
-            sessionFilter <- Some sid
-          | _ -> ()
+        // These used to re-point the listener at whichever session they named. They name any session on
+        // the daemon, so another agent's warmup moved this window's filter onto their session. The window
+        // chooses its session (SetEventFilter); these just mean "re-poll".
+        | "warmup_context_snapshot" | "session_activated" -> ()
         | "hotreload_snapshot" | "hotreload_file_toggled" | "workflow_switching" ->
           // Hot-reload watch set changed, or a workflow switch began — re-poll so
           // the tree/status views reflect the new state.
@@ -530,10 +558,10 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         callbacks.OnWarmupCompleted projectName
       | "file_reloaded" ->
         let filePath = fieldString "FilePath" data |> Option.orElse (fieldString "filePath" data) |> Option.defaultValue ""
-        callbacks.OnFileReloaded filePath
+        callbacks.OnFileReloaded filePath (fieldString "SessionId" data |> Option.defaultValue "")
       | "session_faulted" ->
         let reason = fieldString "Reason" data |> Option.orElse (fieldString "reason" data) |> Option.defaultValue "unknown error"
-        callbacks.OnSessionFaulted reason
+        callbacks.OnSessionFaulted (fieldString "SessionId" data |> Option.defaultValue "") reason
       | "domain_model" ->
         callbacks.OnDomainModel data
       | "diagnosis_ready" ->
@@ -578,13 +606,13 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       subscribeTypedSseWithReconnect url processEvent (fun () ->
         state <- VscLiveTestState.empty
         discoveryGen <- 0L
-        sessionFilter <- None  // Re-open filter; will be re-set by next warmup_context_snapshot
+        observedSessions <- []  // the daemon replays its active session; the filter stays as the window set it
         reconnectFn ()
       ) disconnectFn logger
     | Some reconnectFn, None ->
       subscribeTypedSseWithReconnect url processEvent (fun () ->
         state <- VscLiveTestState.empty
-        sessionFilter <- None  // Re-open filter; will be re-set by next warmup_context_snapshot
+        observedSessions <- []
         reconnectFn ()
       ) disconnectFn (fun msg -> try printfn "[SageFs SSE] %s" msg with _ -> ())
     | _ -> subscribeTypedSse url processEvent
@@ -597,6 +625,6 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     CellGraph = fun () -> cellGraph
     BindingScope = fun () -> bindingScope
     Timeline = fun () -> timeline
-    SetSessionFilter = fun sid -> sessionFilter <- sid
+    SetEventFilter = setEventFilter
     CoverageViews = fun () -> coverageViews
     Dispose = fun () -> disposable.dispose () |> ignore }

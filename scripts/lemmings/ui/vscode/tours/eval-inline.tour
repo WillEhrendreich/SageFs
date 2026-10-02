@@ -8,7 +8,7 @@ command SageFs: Create Session
 wait 2
 key enter
 expect-session --within 240
-expect-text --within 60 session {session}
+expect-text --within 60 — session {session} —
 
 open DemoEnv/DemoEnv.fs
 wait 3
