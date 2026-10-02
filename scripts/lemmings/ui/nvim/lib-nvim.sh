@@ -6,9 +6,10 @@
 # touch the editor through the driver. Every piece of logic lives in the F# LemDrive tool.
 #
 # Two sandboxes, on purpose:
-#   editor sandbox   tmux server + Neovim + a plain shell. The workspace is writable. The tmux
-#                    socket lives under out/tmux and is never mounted into the lemming's
-#                    sandbox, so the lemming cannot ask tmux for a window of its own.
+#   editor sandbox   tmux server + Neovim + a plain shell. Only the workspace is writable (and not
+#                    its .git); see lem_editor_bwrap_args. The tmux socket lives under out/tmux
+#                    and is never mounted into the lemming's sandbox, so the lemming cannot ask
+#                    tmux for a window of its own.
 #   lemming sandbox  cmdc, built by lem_run_cmdc. Here the workspace is READ-ONLY and the only
 #                    way a file changes is through the editor. It sees the driver's unix socket
 #                    (out/ipc), the driver tool at /lem/drive and, when the task allows it, the
@@ -21,6 +22,52 @@ LEM_NVIM_DEFAULT_BIN=${LEM_NVIM_DEFAULT_BIN:-$HOME/.local/share/bob/nvim-bin/nvi
 LEM_PLUGIN_DEFAULT_DIR=${LEM_PLUGIN_DEFAULT_DIR:-$HOME/Work/sagefs.nvim}
 LEM_TS_PARSER_DIR=${LEM_TS_PARSER_DIR:-$HOME/.local/share/nvim/site}
 LEM_NVIM_HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+# Names everything this harness needs and cannot find, all at once, before a run directory, a
+# daemon call or a model call exists. `lem_nvim_preflight lemming|tour` exits 4 with one line per
+# missing thing and how to get it; the same list is the Prerequisites section of README.md.
+# Callers set NVIM_BIN and PLUGIN_DIR first.
+lem_nvim_preflight() {
+  local mode=${1:-lemming}
+  local -a missing=()
+  local tool
+  for tool in bwrap tmux git jq flock curl dotnet; do
+    command -v "$tool" > /dev/null 2>&1 || missing+=("$tool is not on PATH (install it with your package manager; bubblewrap is the package that provides bwrap)")
+  done
+  if command -v dotnet > /dev/null 2>&1; then
+    dotnet --list-sdks 2> /dev/null | grep -q '^11\.' || missing+=("no .NET 11 SDK (the LemScore tool targets net11.0): dotnet --list-sdks shows $(dotnet --list-sdks 2> /dev/null | cut -d' ' -f1 | paste -sd, - || true)")
+    dotnet --list-runtimes 2> /dev/null | grep -q '^Microsoft.NETCore.App 10\.' || missing+=("no .NET 10 runtime (the Neovim driver LemDrive.dll targets net10.0)")
+  fi
+  [ -x "$NVIM_BIN" ] || missing+=("no Neovim at $NVIM_BIN (install one with bob, or point SAGEFS_LEMMING_NVIM at a Neovim 0.10 or newer; the Neovim the runs were made with is a 0.13 nightly)")
+  [ -f "$LEM_TS_PARSER_DIR/parser/fsharp.so" ] || missing+=("no F# tree-sitter parser at $LEM_TS_PARSER_DIR/parser/fsharp.so (:TSInstall fsharp in a Neovim with nvim-treesitter, or set LEM_TS_PARSER_DIR to a site directory that has parser/fsharp.so and queries/fsharp)")
+  [ -d "$LEM_TS_PARSER_DIR/queries/fsharp" ] || missing+=("no F# tree-sitter queries at $LEM_TS_PARSER_DIR/queries/fsharp")
+  [ -f "$PLUGIN_DIR/lua/sagefs/init.lua" ] || missing+=("no sagefs.nvim checkout at $PLUGIN_DIR (git clone https://github.com/WillEhrendreich/sagefs.nvim there, or set SAGEFS_LEMMING_NVIM_PLUGIN)")
+  # Directories the sandbox binds: bwrap refuses to start when one is missing.
+  [ -d /run/systemd/resolve ] || missing+=("no /run/systemd/resolve (the sandbox binds it for DNS, so it needs systemd-resolved)")
+  if [ "$mode" = lemming ]; then
+    [ -d "$HOME/.dotnet" ] || missing+=("no $HOME/.dotnet (the lemming sandbox binds the SDK from there; install dotnet with dotnet-install into it)")
+    local cmdc_path
+    if cmdc_path=$(command -v cmdc 2> /dev/null); then
+      case $(readlink -f "$cmdc_path") in
+        "$HOME"/.local/share/mise/*) ;;
+        *) missing+=("cmdc is at $cmdc_path, outside ~/.local/share/mise, which is the only toolchain directory the lemming sandbox binds (install it with mise)") ;;
+      esac
+    else
+      missing+=("cmdc (Command Code) is not on PATH (install it with mise: it must live under ~/.local/share/mise)")
+    fi
+    [ -d "$HOME/.local/share/mise" ] || missing+=("no $HOME/.local/share/mise (the lemming sandbox binds cmdc's toolchain from there)")
+    [ -s "$HOME/.commandcode/auth.json" ] || missing+=("no $HOME/.commandcode/auth.json: log in with cmdc once, outside the harness")
+  fi
+  # Reachability only. The harness never starts a daemon: it is the one I have open in the dashboard.
+  local port=${LEM_PORT:-37749}
+  curl -s -o /dev/null -m 3 "http://localhost:$port/health" 2> /dev/null \
+    || missing+=("no SageFs daemon answers on localhost:$port. This harness never starts one. Start the dev daemon yourself from a SageFs checkout, in its own terminal: dotnet build SageFs -c Release, then dotnet SageFs/bin/Release/net11.0/SageFs.dll --no-resume")
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "lem-nvim: cannot start, ${#missing[@]} thing(s) missing:" >&2
+    local m; for m in "${missing[@]}"; do echo "  - $m" >&2; done
+    exit 4
+  fi
+}
 
 # Builds LemDrive once, under a lock, into $LEM_ROOT/.lemdrive, then copies it into the run
 # (reflink where there is one) so a rebuild cannot change a trial that is already running.
@@ -64,28 +111,65 @@ lem_nvim_base() {
   )
 }
 
+# The editor sandbox's bubblewrap arguments, in LEM_EDITOR_BW (a test runs another command in it).
+#
+# Neovim cannot be stopped from running a shell (`:!`, `:terminal`, `:lua os.execute`, a filter
+# like `!!sh`): it is an editor, and a key list cannot be allow-listed down to "edits only". So
+# the sandbox, not the key parser, is what decides what a shell inside Neovim can reach. It gets:
+#
+#   writable   the workspace $W, and the tmux socket directory
+#   read-only  $W/.git (a repository names programs to run: hooks, fsmonitor, textconv), the
+#              Neovim install, the plugin, init.lua and the F# parser, the system
+#   absent     everything else under $RUN: bin/ (the driver the harness later runs OUTSIDE every
+#              sandbox with `dotnet LemDrive.dll`), out/ (the evidence), dotnethome, cmdchome;
+#              and a tmpfs HOME, so no credential, cache or dotfile of mine is in reach
+#
+# What it does NOT cut: the network. The plugin must reach the shared daemon on localhost, and a
+# tour or task curls the app the daemon runs on another localhost port, so a shell here can reach
+# the daemon's HTTP API (which is what the plugin itself does) and the internet. The daemon is
+# the product and runs F# for whoever asks it; that is accepted for this harness and written down
+# in README.md. The point of the binds above is that nothing the editor writes is code the
+# harness or I run later.
+lem_editor_bwrap_args() {
+  lem_nvim_base
+  local bob_dir
+  bob_dir=$(dirname "$(dirname "$NVIM_BIN")")
+  LEM_EDITOR_BW=(
+    "${LEM_NVIM_BW[@]}"
+    --ro-bind "$bob_dir" "$bob_dir"
+    --ro-bind "$PLUGIN_DIR" "$PLUGIN_DIR"
+    --bind "$W" "$W"
+  )
+  # The editor never needs to write the repository, only the files in it. Later mount wins.
+  [ -e "$W/.git" ] && LEM_EDITOR_BW+=(--ro-bind "$W/.git" "$W/.git")
+  LEM_EDITOR_BW+=(
+    --tmpfs "$OUT"
+    --bind "$OUT/tmux" "$OUT/tmux"
+    --ro-bind "$OUT/ui" "$OUT/ui"
+    --chdir "$W"
+    --setenv HOME "$HOME"
+    --setenv PATH "$bob_dir/nightly/bin:$bob_dir/nvim-bin:/usr/bin:/bin"
+    --setenv LANG C.UTF-8 --setenv LC_ALL C.UTF-8 --setenv TERM tmux-256color
+    --setenv TMUX_TMPDIR "$OUT/tmux"
+    --setenv SAGEFS_NVIM_DIR "$PLUGIN_DIR"
+    --setenv LEM_TS_DIR "$OUT/ui/ts"
+    --setenv SAGEFS_MCP_PORT "${LEM_PORT:-37749}"
+  )
+}
+
+# git for the harness, run OUTSIDE the sandboxes on a workspace the editor could write to. The
+# editor's .git is read-only, but a repository is also a list of programs to run, so those are
+# pinned off on the command line as well (a -c beats every config file).
+lem_git() {
+  git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat -c diff.external= "$@"
+}
+
 # `tmux -D` is a foreground server with no session; the driver server then creates the nvim and
 # shell windows through its socket, so both run here, inside this sandbox, and it lives exactly
 # as long as the tmux server does.
 lem_start_editor_sandbox() {
-  lem_nvim_base
-  local bob_dir
-  bob_dir=$(dirname "$(dirname "$NVIM_BIN")")
-  bwrap "${LEM_NVIM_BW[@]}" \
-    --ro-bind "$bob_dir" "$bob_dir" \
-    --ro-bind "$PLUGIN_DIR" "$PLUGIN_DIR" \
-    --bind "$RUN" "$RUN" \
-    --tmpfs "$OUT" \
-    --bind "$OUT/tmux" "$OUT/tmux" \
-    --ro-bind "$OUT/ui" "$OUT/ui" \
-    --chdir "$W" \
-    --setenv HOME "$HOME" \
-    --setenv PATH "$bob_dir/nightly/bin:$bob_dir/nvim-bin:/usr/bin:/bin" \
-    --setenv LANG C.UTF-8 --setenv LC_ALL C.UTF-8 --setenv TERM tmux-256color \
-    --setenv TMUX_TMPDIR "$OUT/tmux" \
-    --setenv SAGEFS_NVIM_DIR "$PLUGIN_DIR" \
-    --setenv LEM_TS_DIR "$OUT/ui/ts" \
-    --setenv SAGEFS_MCP_PORT "${LEM_PORT:-37749}" \
+  lem_editor_bwrap_args
+  bwrap "${LEM_EDITOR_BW[@]}" \
     tmux -L "$LABEL" -f "$OUT/ui/tmux.conf" -D \
     > "$OUT/editor-sandbox.log" 2>&1 &
   LEM_EDITOR_PID=$!

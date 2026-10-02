@@ -25,9 +25,8 @@ NAME=$(basename "$TOUR" .tour)
 
 NVIM_BIN=${SAGEFS_LEMMING_NVIM:-$LEM_NVIM_DEFAULT_BIN}
 PLUGIN_DIR=${SAGEFS_LEMMING_NVIM_PLUGIN:-$LEM_PLUGIN_DEFAULT_DIR}
-[ -x "$NVIM_BIN" ] || { echo "no nvim at $NVIM_BIN" >&2; exit 4; }
-[ -f "$PLUGIN_DIR/lua/sagefs/init.lua" ] || { echo "no sagefs.nvim at $PLUGIN_DIR" >&2; exit 4; }
-command -v tmux > /dev/null || { echo "tmux is required" >&2; exit 4; }
+# Everything this needs, named at once, before anything is created (a tour needs no model or cmdc).
+lem_nvim_preflight tour
 
 if [ "$ID" = auto ]; then
   n=1

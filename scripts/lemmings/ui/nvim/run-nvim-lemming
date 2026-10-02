@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# scripts/lemmings/ui/nvim/run-nvim-lemming <task> <free-model> [max-turns]
 # scripts/lemmings/ui/nvim/run-nvim-lemming <task> <free-model> <run-id|auto> [max-turns]
 #
 # One disposable Neovim trial: Command Code (cmdc) on a FREE model, handed a Neovim it can only
@@ -20,25 +21,33 @@ LEMMINGS=$(cd "$HERE/../.." && pwd)
 source "$LEMMINGS/lib-cmd.sh"
 source "$HERE/lib-nvim.sh"
 
-TASK=${1:?task} MODEL=${2:?free-model} ID=${3:?run-id} TURNS=${4:-60}
+TASK=${1:?task} MODEL=${2:?free-model}
+# Either `<task> <model> [max-turns]` (what scripts/lemmings/run-ui-lemming passes, the run id is
+# chosen for you, or taken from LEM_RUN_ID) or `<task> <model> <run-id|auto> [max-turns]`.
+if [[ ${3:-} =~ ^[0-9]+$ ]]; then
+  ID=${LEM_RUN_ID:-auto} TURNS=$3
+else
+  ID=${3:-${LEM_RUN_ID:-auto}} TURNS=${4:-60}
+fi
 [ -f "$HERE/tasks/$TASK.md" ] || { echo "no task: $HERE/tasks/$TASK.md" >&2; exit 2; }
 [ -f "$HERE/tasks/$TASK.env" ] || { echo "no task settings: $HERE/tasks/$TASK.env" >&2; exit 2; }
 # shellcheck disable=SC1090
 source "$HERE/tasks/$TASK.env"   # LEM_FIXTURE LEM_OPEN LEM_README
 
+NVIM_BIN=${SAGEFS_LEMMING_NVIM:-$LEM_NVIM_DEFAULT_BIN}
+PLUGIN_DIR=${SAGEFS_LEMMING_NVIM_PLUGIN:-$LEM_PLUGIN_DEFAULT_DIR}
+# Everything this needs, named at once, before anything is created or any model is called.
+lem_nvim_preflight lemming
 # Nothing is touched, and no model is called, until the model is confirmed FREE.
 lem_assert_free_model "$MODEL"
 [ "$ID" = auto ] && ID=$(lem_run_id "$MODEL" "$TASK")
 RUN=$LEM_ROOT/$ID
 [ -e "$RUN" ] && { echo "run $ID already exists: pick a new id" >&2; exit 2; }
 W=$RUN/w OUT=$RUN/out
-NVIM_BIN=${SAGEFS_LEMMING_NVIM:-$LEM_NVIM_DEFAULT_BIN}
-PLUGIN_DIR=${SAGEFS_LEMMING_NVIM_PLUGIN:-$LEM_PLUGIN_DEFAULT_DIR}
-[ -x "$NVIM_BIN" ] || { echo "no nvim at $NVIM_BIN" >&2; exit 4; }
-[ -f "$PLUGIN_DIR/lua/sagefs/init.lua" ] || { echo "no sagefs.nvim at $PLUGIN_DIR" >&2; exit 4; }
-command -v tmux > /dev/null || { echo "tmux is required" >&2; exit 4; }
 LABEL=lem-$ID
 LEM_OPEN_FILE=$W/$LEM_OPEN
+# A UI lemming drives an editor; it has no MCP server, so lem_run_cmdc copies no bridge.
+export LEM_NO_BRIDGE=1
 
 # The shared daemon must be up and have room. This refuses; it never starts one.
 lem_use_shared_daemon
@@ -103,7 +112,7 @@ trap - EXIT
 # Residue first (read before anything is stopped), then exactly those sessions are stopped.
 lem_cleanup_sessions "$W"
 
-{ git -C "$W" diff --name-only lem-baseline; git -C "$W" ls-files --others --exclude-standard; } \
+{ lem_git -C "$W" diff --name-only lem-baseline; lem_git -C "$W" ls-files --others --exclude-standard; } \
   | sort -u > "$OUT/changed.txt"
 
 # The oracle decides. Never the model's claim.

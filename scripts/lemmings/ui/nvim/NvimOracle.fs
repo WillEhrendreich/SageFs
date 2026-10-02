@@ -180,7 +180,7 @@ let pluginCommands (pluginDir: string) : Set<string> =
   else Set.empty
 
 let private git (workspace: string) (args: string list) : string list =
-  match Nvim.runProcess "git" ([ "-C"; workspace ] @ args) [] 30_000 with
+  match Nvim.runProcess "git" (Nvim.harnessGitPins @ [ "-C"; workspace ] @ args) [] 30_000 with
   | Result.Ok o when o.ExitCode = 0 -> o.Output.Split('\n') |> Array.toList |> List.filter (fun l -> l.Trim().Length > 0)
   | _ -> []
 
@@ -525,6 +525,28 @@ let summarize (args: string list) : int =
     printfn "summarize: %d driver calls, %d finding(s)" facts.Calls.Length extra.Length
     0
 
+/// The generic scorer was written for lemmings that call SageFs over MCP. A Neovim lemming has no MCP
+/// server by design, so "never called a SageFs MCP tool" is not a finding about SageFs and would bury the
+/// real ones. It is removed, and the MCP-only clauses are cut from the budget finding.
+let private mcpOnlyRegistration = "never called a SageFs MCP tool"
+let private mcpOnlyBudgetClause = "; first SageFs call at turn never; first successful eval at turn never"
+
+let dropMcpOnlyFindings (summary: JsonObject) : unit =
+  match summary.["fellOver"] with
+  | :? JsonArray as findings ->
+    let kept = JsonArray()
+    for item in findings |> Seq.toList do
+      match item with
+      | :? JsonObject as f ->
+        let text (name: string) = match f.[name] with null -> "" | v -> v.GetValue<string>()
+        if text "stage" = "Registration" && text "symptom" = mcpOnlyRegistration then ()
+        else
+          if text "stage" = "Budget" then f.["evidence"] <- JsonValue.Create((text "evidence").Replace(mcpOnlyBudgetClause, ""))
+          kept.Add(f.DeepClone())
+      | _ -> ()
+    summary.["fellOver"] <- kept
+  | _ -> ()
+
 /// `nvim annotate --run <run-dir>`: folds out/ui-stats.json into summary.json under "ui".
 let annotate (args: string list) : int =
   match option args "--run" with
@@ -539,6 +561,7 @@ let annotate (args: string list) : int =
       match JsonNode.Parse summary with
       | :? JsonObject as obj ->
         obj.["ui"] <- JsonNode.Parse stats
+        dropMcpOnlyFindings obj
         File.WriteAllText(summaryPath, obj.ToJsonString jsonOut)
         0
       | _ ->

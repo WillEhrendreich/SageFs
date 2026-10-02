@@ -1,0 +1,11 @@
+# The F# cell terminator reaches the editor whole. tmux 3.7 used to cut a trailing ';' off a
+# send-keys argument, so a lemming's `...;;` arrived as `...;` and a cell could not be ended.
+# This types a cell into a scratch buffer and expects both semicolons on screen. Run it with:
+#   scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/fsharp-cell-terminator.tour
+# It creates no session and writes nothing to the daemon.
+
+keys :enew<CR>:set filetype=fsharp<CR>i
+type parseWindow (Some "10,20,800,600");;
+shot cell-typed
+expect "800,600\");;" within 5
+keys <Esc>:bdelete!<CR>

@@ -91,6 +91,21 @@ Copy A (the one that wrote the runner, oracle, lib-nvim and is running smoke lem
 - The lemming found its commands by `:Sage<Tab>`. The driver kept up. Nothing to change in Nvim.fs for that.
 - Tours are done: demoenv-first-run (13 shots), demoenv-live-tests (12 shots, failing then 9 passing), falco-hot-reload (running).
 
+## B, 18:45: closing out (the coordinator asked one copy to finish)
+
+- The smoke copy (A) committed its four files (a9ba1aab) and its tree was clean, but it never wrote its "stopped" line here. After the
+  15 minute wait B took over its files: run-nvim-lemming now takes `<task> <model> [max-turns]` (what run-ui-lemming passes) as well as
+  `<task> <model> <run-id|auto> [max-turns]`; summary.json drops the MCP-only "never called a SageFs MCP tool" finding
+  (NvimOracle.fs `dropMcpOnlyFindings`, tested). B copied scripts/lemmings/run-ui-lemming from wf_790b15e9-824-3 unchanged.
+- Smoke results (read from /tmp/lem/*/out/summary.json): see the report. Models never got further than MaxTurns on the edit tasks
+  with 40 to 60 turns; the one run that finished its work (ui-edit-reeval, space-bunny, 60 turns) edited the file through the editor,
+  the Expecto suite passed, the screens showed `Some -1` then `None`, and it ran out of turns before it said so.
+- Merge with wf_790b15e9-824-3 (VS Code): scripts/lemmings/run-ui-lemming is identical in both. Its LemDrive project
+  (scripts/lemmings/ui/LemDrive) has Shot.fs, Tour.fs and Timeline.fs; mine are NvimShot.fs and NvimTour.fs on purpose. To get one
+  `LemDrive.dll`, add `Ansi.fs, NvimShot.fs, Nvim.fs, NvimTour.fs, NvimOracle.fs, NvimMain.fs` (from ../nvim) to its fsproj before
+  Program.fs and add `| "nvim" :: rest -> NvimMain.dispatch rest` ahead of the Outcome-based dispatch in `main`. Until then
+  LemDriveNvim.fsproj is what run-nvim-lemming and run-nvim-tour build.
+
 ## Next (old list, superseded by the A and B notes above)
 
 1. Make tasks/fixture say what the oracle expects (EvalAnswer 480000, HelloBefore/After). Done when oracle constants and prompts agree.
@@ -98,3 +113,10 @@ Copy A (the one that wrote the runner, oracle, lib-nvim and is running smoke lem
 3. Smoke: one real run on a free model; verify nothing left in the dashboard.
 4. nvim-shot / tours (screenshots) as main asked.
 5. `nvim` case in the shared LemDrive Program.fs (wf-3) at merge time.
+
+## Fix pass after the verifier (isolation, `;;`, prerequisites)
+
+- `;` is typed as a raw byte (`send-keys -H 3b`): tmux 3.7 dropped a trailing `;` from a `send-keys` argument, so `...;;` never ended an F# cell. `Nvim.tmuxTextCalls`, tested through a real tmux.
+- The editor sandbox binds only `<run>/w` (its `.git` read-only), not `<run>`: `lem_editor_bwrap_args`, `IsolationTests.fs`. The harness's git is pinned (`lem_git`, `Nvim.harnessGitPins`).
+- The oracle's suite has no network; the lemming sandbox sees `~/.nuget/packages` read-only under a per-run overlay; `LEM_NO_BRIDGE=1` skips the unused MCP bridge for editor lemmings.
+- `init.lua` enables ui2 so other sessions' messages do not become "Press ENTER" prompts. `lem_nvim_preflight` names every missing prerequisite before a run starts.
