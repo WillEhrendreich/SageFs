@@ -55,5 +55,7 @@ type SageFsResources(ctx: McpContext) =
   member _.SessionsList() : Task<string> =
     task {
       let! sessions = ctx.SessionOps.GetAllSessions()
-      return SageFs.SessionOperations.sessionsToJson jsonOpts sessions
+      // Each session's source is read off the disk and the worker's own warmup report, the way list_sessions reads it.
+      let! sources = SageFs.SourceStateProbe.readAll (SageFs.McpTools.warmupOf ctx) sessions
+      return SageFs.SessionOperations.sessionsToJson jsonOpts sources sessions
     }

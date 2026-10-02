@@ -1646,6 +1646,18 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     testid "session-card-freshness"
                     Attr.create "role" "status" ]
                   [ textEnc (ReplFreshness.banner s.Freshness) ]
+              // The files on disk are ahead of the build this session runs, or a rebuild is picking them up, or nobody could tell:
+              // a different fact from the line above (that one is the REPL behind the APP), so it has its own line, its own test id
+              // and its own words. A current build, or a card whose source was not read, says nothing.
+              match s.Source with
+              | CardSource.NotReadOnThisCard
+              | CardSource.Read (SourceState.InSync _) -> ()
+              | CardSource.Read state ->
+                Elem.div
+                  [ Attr.class' "session-card-source"
+                    testid "session-card-source"
+                    Attr.create "role" "status" ]
+                  [ textEnc (SourceState.banner state) ]
               // Self-host staleness (F5b): this session adopted its own
               // SageFs.Core build and a newer one has since landed on disk —
               // its own line so it never cramps the badges, wrapping at any

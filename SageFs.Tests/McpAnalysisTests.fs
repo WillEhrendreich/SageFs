@@ -178,6 +178,33 @@ let diagnoseTests =
       (measuredJson answer).GetProperty("FailureCount").GetInt32() |> Expect.equal "no failures" 0
   ]
 
+// ── suggest_next_action ───────────────────────────────────────
+
+[<Tests>]
+let nextActionTests =
+  testList "suggest_next_action reads one session's cells and tests" [
+
+    testCase "WHY — with nothing recorded it is NotAvailable (NothingObservedYet), not a healthy empty queue" <| fun _ ->
+      reasonOf (Answer.suggestNextAction noEvals (TestSide.none WorkflowKind.Interactive) None)
+      |> Expect.equal "nothing to rank" NotAvailableReason.NothingObservedYet
+
+    testCase "WHY — with evals and no test result it ranks over the cells and names the tests as unmeasured" <| fun _ ->
+      let answer = Answer.suggestNextAction twoMcpEvals (TestSide.none WorkflowKind.Interactive) None
+      unmeasuredOf answer |> Expect.equal "tests unmeasured" [ UnmeasuredScope.Tests ]
+      (measuredJson answer).GetProperty("TotalFailures").GetInt32() |> Expect.equal "no failure was measured" 0
+
+    testCase "WHY — a failing test in the session's own cycle is counted, and the cells are then the unmeasured side" <| fun _ ->
+      let answer = Answer.suggestNextAction noEvals (sideOf failingCycle WorkflowKind.Interactive) None
+      unmeasuredOf answer |> Expect.equal "cells unmeasured" [ UnmeasuredScope.Cells ]
+      (measuredJson answer).GetProperty("TotalFailures").GetInt32() |> Expect.equal "the failure is ranked" 1
+
+    testCase "WHY — another session's failure is not this session's: its tests are unmeasured and no failure is counted" <| fun _ ->
+      let model = { SageFsModel.initial () with PerSessionLiveTesting = Map.ofList [ ("bb000002", failingCycle) ] }
+      let answer = Answer.suggestNextAction twoMcpEvals (TestSide.ofModel model "aa000001" WorkflowKind.Interactive) None
+      unmeasuredOf answer |> Expect.equal "A never ran a test" [ UnmeasuredScope.Tests ]
+      (measuredJson answer).GetProperty("TotalFailures").GetInt32() |> Expect.equal "B's failure is not A's" 0
+  ]
+
 // ── coverage_intel ────────────────────────────────────────────
 
 [<Tests>]

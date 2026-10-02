@@ -66,7 +66,7 @@ let private fixedTable : (string * FixedBecause) list =
   @ all FixedBecause.Presence
       [ "cohortLeaseWindow"; "cohortSettledRetention"; "agentPresenceEviction"; "agentActivityFresh"
         "memoryIdleShedAfter"; "leaseTtlRunApp"; "nestedCheckoutDaemonTtl"; "idleSessionThreshold"
-        "frictionResetThrashWindow"; "frictionHardResetAfterCreateWindow" ]
+        "frictionResetThrashWindow"; "frictionHardResetAfterCreateWindow"; "leaseAskStaleAfter" ]
   @ all FixedBecause.Backoff
       [ "restartBaseBackoff"; "retryBaseDelay"; "restartMaxBackoff"; "restartCountResetWindow"
         "leaseRetryAfterNormal"; "leaseRetryAfterTight"; "leaseRetryAfterCritical"; "leaseMinRetryAfter" ]
@@ -176,7 +176,7 @@ let tests =
 
     testCase "WHY — the number of waits for the machine only goes up when a table says so (a ratchet on the count, with the reason a wait is fixed in the table above)" <| fun _ ->
       machineScaled |> Set.count |> Expect.equal "waits for the machine" 60
-      fixedTable |> List.length |> Expect.equal "fixed durations" 94
+      fixedTable |> List.length |> Expect.equal "fixed durations" 95
 
     testCase "WHY — each machine constant in the running process equals its written value scaled for the process's tier, so the wiring is real and not only the text" <| fun _ ->
       let timeouts = typeof<ValidTimeout>.Assembly.GetType "SageFs.Timeouts"

@@ -1269,8 +1269,8 @@ changed; that errs toward a warning. A file edited inside the window of a build 
 and may not be in it; the output's write time is the end of the build, so the decision cannot tell, and the simulation keeps edits and
 builds from overlapping in its ground truth for the same reason. Edits to `Directory.Build.props`, a lock file or a referenced project's
 own sources outside the listed projects are not inputs it looks at. A project whose Compile items use a wildcard or an MSBuild property
-is `Unknown`, not guessed. `/api/sessions`, the `sessions://list` resource and the dashboard card do not carry the field yet; they read
-`SessionInfo` without the daemon's disk edge (see the hand-off note).
+is `Unknown`, not guessed. `/api/sessions`, the `sessions://list` resource and the dashboard card carry it too now (see the
+follow-ups entry at the end of this file).
 
 **What it costs.** One pass of file stats and one project-file parse per project, when a tool asks. I measured it on this repo's own
 three projects (SageFs.Core alone lists 295 Compile items): 9 ms the first time and about 2.5 ms after, in a warm REPL session.
@@ -1399,3 +1399,80 @@ time out and call a failed rebuild Ready), `SageFs.Tests/CoreInjectionTests.fs`,
 file, and a consumer that uses it).
 Reopen it if: the daemon and its host are always built together with the session's Core, so adoption can compare builds and not
 version numbers, or a project can add a SageFs.Core reference through a props file this does not read.
+
+## A lease belongs to who asked, and a refusal says who holds it
+
+Three agents were refused `acquire_full_build_lease` for 17 to 35 minutes with "you already hold 1/1 leases" while none of them
+held one. A sibling did. Claude sub-agents of one session share one MCP connection id, a lease was keyed by that id, and so every
+sibling was the same holder to the pool. The message blamed the caller, and `get_daemon_status` showed a connection id and an expiry
+and nothing else. The "running to 00:01" they saw was a sibling releasing and asking again, which gave the new lease a fresh ttl.
+I hit the same wall myself while doing this work: my build lease was refused for about fifteen minutes by a sibling on my own
+connection, and the only way to wait was to retry by hand.
+
+**A lease is attributable to a `Holder`**: the connection, the `agent_name` the caller passed, and its `working_directory`. Equality
+is the identity, so two sub-agents on one connection that name themselves differently are two holders, and so are two agents with
+the same name in two worktrees. The three acquire tools take `agent_name` and `working_directory`. I did not try to solve connection
+identity itself. That is the larger design in `cohort-member-identity-as-capability.md`. This only makes the answer truthful and the
+holder visible.
+
+**The decision is a closed type**: `Granted`, `AlreadyHeld`, `Queued` and `Refused`. `AlreadyHeld` is the same holder asking again for
+what it holds: it gets the lease back with the same id and the expiry is not renewed, so asking in a loop can never keep a lease
+alive. `Queued` carries the place in line, the asks ahead, the leases that really hold the pool (agent, connection, directory, kind,
+granted, expires), the cap and the pressure, and when to ask again. `Refused` is for a holder whose own other lease or own other
+queued ask is in the way, and it names that lease and its id so the way out is in the message. One function, `explain`, turns a
+decision into the words an agent reads. The wire keeps the three tokens the guard hook and `scripts/local-gate` already read
+(`granted`, `wait`, `refused`) and writes `grant: already_held` beside `granted`, so a caller that proceeds on `granted` still works.
+`get_daemon_status` shows one row per holder with the agent, directory, kind and seconds left. The lease id is not in the status,
+because the id is the capability to release it.
+
+**Leases always expire, and so do places in line.** The ttl of each kind was already finite and a lease that is never released was
+already reclaimed on the next contact. What was missing is the queue: an ask is only promoted when its own holder asks again, so a
+crashed agent at the front held up everyone behind it forever. An ask that is not repeated within `Timeouts.leaseAskStaleAfter` (five
+minutes; a refused caller is told to come back within 30 seconds plus a few per place) now lapses.
+
+**The proof is a simulation with a twin per invariant.** Four named invariants: mutual exclusion (no holder holds two, and a grant
+never goes past the cap), every lease expires (a lease lapses at grant plus ttl and is reclaimed on contact, nothing moves that
+moment, an unrepeated ask lapses), the refusal names the real holder (every lease a decision names is in the pool, the caller's own is
+the caller's, a queued caller is shown all of the pool when it is full), and same holder idempotent. Each has a twin that breaks
+exactly that: a pool that never reclaims, a pool that identifies callers by connection alone (the old behaviour), and a pool that
+takes a second lease on a repeat ask. Over 600 seeds the real pool holds all four, and the twins are caught in 199 of 200 seeds, 200 of
+200, 64 of 200 and 112 of 200. `LeaseHolderOutcomeTests` drives one real MCP connection against a real daemon as three siblings.
+
+**What it does not do.** Two siblings that pass no `agent_name` are still one holder, so they share one lease and a release by one
+frees it for both. The tool descriptions, the skill and the server instructions say to pass your own name. The dashboard has no lease
+panel at all, so there was nothing there to make attributable and I did not add one.
+
+Evidence: `SageFs.Core/ExpensiveWorkLease.fs`, `SageFs/McpLeaseWire.fs`, `SageFs.Simulation/LeaseSim.fs` and `LeaseSimInvariants.fs`,
+`SageFs.Tests/ExpensiveWorkLeaseTests.fs`, `LeaseSimTests.fs`, `LeaseWireTests.fs` and `LeaseHolderOutcomeTests.fs`.
+Reopen it if: connection identity stops collapsing sub-agents (then `agent_name` can go), or a lease ever needs to outlive its
+connection.
+
+## The analysis follow-ups: one session for all eight, both writers per session, and the same fact on three more surfaces
+
+Closes what the entry above left. `suggest_next_action` now resolves one session like the other seven and answers `Measured` or
+`NotAvailable`, with `Unmeasured` naming the side it did not read. `/exec` records an eval into its session's store as well as the
+global one the dashboard's push reads, so an editor's evals reach the analysis tools; an MCP eval still records only per session. The
+eight formatters nothing called any more (`diagnose`, `coverageIntel`, `impactForecast`, `planRipple`, `previewWhatIf`,
+`suggestNextCell`, `getCellDependencies`, `discoverFeatures`), the formatters of five retired tools (`getCompletions`, `exploreType`,
+`visualizeDomainModel`, `getFileCoverage`, `queryTestCoverage`) and the JSON builders behind them are deleted, and the `Mcp.fs` budget
+went from 3945 to 3340. I kept `exploreNamespace` and `getCompletionsItems`, which the HTTP routes call, and
+`formatFileCoverageResponse`, which two test files pin.
+
+Three more things told an agent something false. The live-testing hint said to call `enable_live_testing`, a tool that does not exist;
+live testing is switched on with `switch_workflow`. `run_tests` listed three of its six verdicts; a test now reads the verdict type's
+own cases and compares them to the description, so a seventh cannot go unlisted. `formatWorkerEvalResult` wrote the literal
+`Result: ` that the binding readers strip with `CellDependencyGraph.McpResultPrefix`, so the prefix has one name now.
+
+**`sourceState` is on `/api/sessions`, the `sessions://list` resource and the dashboard card**, under its own name beside
+`replFreshness`. `sessionsToJson` stays pure and takes the readings as a map, and a session with no reading says `Unknown
+NotAssessed`, never in sync. The card has a line of its own (`session-card-source`) for a stale, rebuilding or unknown source and none
+for a current one. The dashboard reads the source only for the session being viewed, whose warmup report the push loop already holds,
+and for a session mid-rebuild, which answers without the disk. Every other card says it was not read (`CardSource.NotReadOnThisCard`),
+because the alternative is a worker round trip per card per push. `send_fsharp_code` and `check_fsharp_code` results carry
+`replFreshness` and not `sourceState`, for the same reason: the reading needs the worker's warmup report and a disk scan per eval, and
+`get_session_status` is where to ask.
+
+Evidence: `SageFs.Tests/McpAnalysisTests.fs`, `EvalRecordingScopeTests.fs`, `ToolSurfaceHonestyTests.fs`,
+`ReplFreshnessDashboardTests.fs` (the card at five widths, both lines on one card), `SessionOperationsTests.fs`, and
+`HonestEmptiesOutcomeTests.fs` (a real daemon: an editor eval through `/exec`, `suggest_next_action` per session, both session lists).
+Reopen it if: the daemon caches each worker's warmup report (then every card can be read), or an eval result needs the source.

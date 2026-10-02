@@ -49,13 +49,14 @@ module LeaseSimInvariants =
                   r.AtStep preGrantCount cap (MemoryPressure.describe r.Pressure)
               )
             | false -> None
-          | Decision.Wait _
+          | Decision.AlreadyHeld _
+          | Decision.Queued _
           | Decision.Refused _ -> None)
         |> function
            | Some msg -> Outcome.Violated msg
            | None -> Outcome.Holds }
 
-  /// every-wait-carries-a-positive-retry-after: `Decision.Wait` must never
+  /// every-wait-carries-a-positive-retry-after: `Decision.Queued` must never
   /// tell a caller to retry in zero or negative time — that would just be a
   /// busy-loop wearing a Wait costume.
   let everyWaitHasPositiveRetryAfter : Invariant =
@@ -65,8 +66,8 @@ module LeaseSimInvariants =
         (List.last states).Decisions
         |> List.tryPick (fun r ->
           match r.Decision with
-          | Decision.Wait(retryAfter, _) when retryAfter <= System.TimeSpan.Zero ->
-            Some(sprintf "step %d: Wait carried a non-positive retryAfter %A" r.AtStep retryAfter)
+          | Decision.Queued waiting when waiting.RetryAfter <= System.TimeSpan.Zero ->
+            Some(sprintf "step %d: Queued carried a non-positive retryAfter %A" r.AtStep waiting.RetryAfter)
           | _ -> None)
         |> function
            | Some msg -> Outcome.Violated msg
@@ -99,7 +100,139 @@ module LeaseSimInvariants =
         | [] -> Outcome.Holds
         | pending -> Outcome.Violated(sprintf "queue still has %d pending request(s) after cooldown: %A" pending.Length pending) }
 
-  let all : Invariant list = [ grantNeverExceedsCap; everyWaitHasPositiveRetryAfter ]
+  /// The first message `check` finds over every recorded decision, or Holds.
+  let private firstViolation (states: State list) (check: DecisionRecord -> string option) : Outcome =
+    (List.last states).Decisions
+    |> List.tryPick check
+    |> function
+       | Some msg -> Outcome.Violated msg
+       | None -> Outcome.Holds
+
+  let private liveAt (clock: System.DateTimeOffset) (leases: ActiveLease list) : ActiveLease list =
+    leases |> List.filter (fun l -> l.ExpiresAt > clock)
+
+  /// MUTUAL-EXCLUSION: at every step no holder holds more than
+  /// `maxPerHolder` leases. Together with `grantNeverExceedsCap` (the pool
+  /// as a whole never admits past its cap) a lease is exclusive to its
+  /// holder, and a holder cannot hold-and-wait for a second.
+  let mutualExclusion : Invariant =
+    { Id = "mutual-exclusion"
+      Description = "No holder ever holds more than maxPerHolder leases at once."
+      Check = fun states ->
+        states
+        |> List.tryPick (fun s ->
+          s.Pool.Active
+          |> List.countBy (fun l -> l.Holder)
+          |> List.tryFind (fun (_, n) -> n > maxPerHolder)
+          |> Option.map (fun (holder, n) ->
+            sprintf "step %d: %s holds %d leases at once (max %d)" s.Step (Holder.describe holder) n maxPerHolder))
+        |> function
+           | Some msg -> Outcome.Violated msg
+           | None -> Outcome.Holds }
+
+  /// EVERY-LEASE-EXPIRES: a lease lapses at its ttl whether or not anyone
+  /// releases it. Three halves. A live lease always expires exactly its
+  /// kind's ttl after it was granted, so nothing renews it and none is
+  /// unbounded. A request never leaves a lapsed lease in the pool, so the
+  /// next caller reclaims it. And a queued ask that has not been repeated
+  /// within `Timeouts.leaseAskStaleAfter` is gone too, so a waiter that
+  /// crashed cannot hold up everyone behind it.
+  let everyLeaseExpires : Invariant =
+    { Id = "every-lease-expires"
+      Description = "A lease lapses at grant + ttl and is reclaimed on contact; an unrepeated ask lapses too."
+      Check = fun states ->
+        let moved =
+          states
+          |> List.tryPick (fun s ->
+            s.Pool.Active
+            |> List.tryFind (fun l -> l.ExpiresAt - l.GrantedAt <> Kind.defaultTtl l.Kind)
+            |> Option.map (fun l ->
+              sprintf "step %d: a %s lease granted %O expires %O, not at its ttl %O" s.Step (Kind.toToken l.Kind) l.GrantedAt l.ExpiresAt (Kind.defaultTtl l.Kind)))
+        match moved with
+        | Some msg -> Outcome.Violated msg
+        | None ->
+          firstViolation states (fun r ->
+            match r.ActiveAfter |> List.tryFind (fun l -> l.ExpiresAt <= r.Clock) with
+            | Some lapsed ->
+              Some(sprintf "step %d: a %s lease of %s lapsed at %O and was still in the pool at %O" r.AtStep (Kind.toToken lapsed.Kind) (Holder.describe lapsed.Holder) lapsed.ExpiresAt r.Clock)
+            | None ->
+              r.QueueAfter
+              |> List.tryFind (fun q -> q.LastAskedAt + Timeouts.leaseAskStaleAfter <= r.Clock)
+              |> Option.map (fun q ->
+                sprintf "step %d: the ask of %s was last repeated %O and was still queued at %O" r.AtStep (Holder.describe q.Holder) q.LastAskedAt r.Clock)) }
+
+  /// REFUSAL-NAMES-THE-REAL-HOLDER: whatever a decision says about who holds
+  /// what is true of the pool at that moment. A lease granted or handed back
+  /// as the caller's is recorded against the caller. A refusal that names
+  /// the caller's own lease names one the caller really holds. A queued
+  /// caller is shown the leases that really occupy the pool (all of them
+  /// when the pool is at its cap) and never itself.
+  let refusalNamesTheRealHolder : Invariant =
+    { Id = "refusal-names-the-real-holder"
+      Description = "Every lease a decision names is in the pool, and the caller's own is the caller's."
+      Check = fun states ->
+        firstViolation states (fun r ->
+          let inPool (lease: ActiveLease) =
+            r.ActiveAfter |> List.exists (fun l -> l.Id = lease.Id && l.Holder = lease.Holder)
+          let ownedByCaller (lease: ActiveLease) = inPool lease && lease.Holder = r.Holder
+          match r.Decision with
+          | Decision.Granted(id, _) ->
+            match r.ActiveAfter |> List.tryFind (fun l -> l.Id = id) with
+            | Some lease when lease.Holder = r.Holder -> None
+            | Some lease -> Some(sprintf "step %d: %s was granted a lease recorded against %s" r.AtStep (Holder.describe r.Holder) (Holder.describe lease.Holder))
+            | None -> Some(sprintf "step %d: a granted lease is not in the pool" r.AtStep)
+          | Decision.AlreadyHeld lease ->
+            match ownedByCaller lease with
+            | true -> None
+            | false -> Some(sprintf "step %d: %s was told it already holds a lease that belongs to %s" r.AtStep (Holder.describe r.Holder) (Holder.describe lease.Holder))
+          | Decision.Refused(Refusal.HoldsOtherKind(lease, _)) ->
+            match ownedByCaller lease with
+            | true -> None
+            | false -> Some(sprintf "step %d: %s was refused for a lease that belongs to %s" r.AtStep (Holder.describe r.Holder) (Holder.describe lease.Holder))
+          | Decision.Refused(Refusal.OtherKindQueued(queued, _)) ->
+            match r.QueueAfter |> List.exists (fun q -> q.Holder = r.Holder && q.Kind = queued) with
+            | true -> None
+            | false -> Some(sprintf "step %d: %s was refused for a queued ask it does not have" r.AtStep (Holder.describe r.Holder))
+          | Decision.Queued waiting ->
+            match waiting.Holding |> List.tryFind (fun l -> not (inPool l)) with
+            | Some phantom -> Some(sprintf "step %d: a queued caller was told %s holds the pool, but that lease is not in it" r.AtStep (Holder.describe phantom.Holder))
+            | None ->
+              match waiting.Holding |> List.tryFind (fun l -> l.Holder = r.Holder) with
+              | Some own -> Some(sprintf "step %d: a queued caller was shown its own lease %s as the blocker" r.AtStep (Holder.describe own.Holder))
+              | None ->
+                match waiting.Why with
+                | WaitReason.AtCapacity when List.length waiting.Holding <> List.length r.ActiveAfter ->
+                  Some(sprintf "step %d: the pool is at its cap with %d leases but the caller was shown %d" r.AtStep (List.length r.ActiveAfter) (List.length waiting.Holding))
+                | WaitReason.AtCapacity
+                | WaitReason.NotYourTurn -> None) }
+
+  /// SAME-HOLDER-IDEMPOTENT: a holder that asks again for a kind it already
+  /// holds gets that same lease back, with its expiry untouched and no
+  /// second lease taken.
+  let sameHolderIdempotent : Invariant =
+    { Id = "same-holder-idempotent"
+      Description = "Asking again for a lease you hold returns it unchanged and takes no second one."
+      Check = fun states ->
+        firstViolation states (fun r ->
+          let heldBefore = liveAt r.Clock r.ActiveBefore |> List.filter (fun l -> l.Holder = r.Holder)
+          match heldBefore |> List.tryFind (fun l -> l.Kind = r.Kind) with
+          | None -> None
+          | Some existing ->
+            match r.Decision with
+            | Decision.AlreadyHeld lease when lease.Id = existing.Id && lease.ExpiresAt = existing.ExpiresAt ->
+              let heldAfter = r.ActiveAfter |> List.filter (fun l -> l.Holder = r.Holder) |> List.length
+              match heldAfter = List.length heldBefore with
+              | true -> None
+              | false -> Some(sprintf "step %d: asking again changed %s's lease count from %d to %d" r.AtStep (Holder.describe r.Holder) (List.length heldBefore) heldAfter)
+            | other -> Some(sprintf "step %d: %s already held a %s lease and asking again answered %A instead of handing it back" r.AtStep (Holder.describe r.Holder) (Kind.toToken r.Kind) other)) }
+
+  let all : Invariant list =
+    [ grantNeverExceedsCap
+      everyWaitHasPositiveRetryAfter
+      mutualExclusion
+      everyLeaseExpires
+      refusalNamesTheRealHolder
+      sameHolderIdempotent ]
 
   let violations (states: State list) : (string * string) list =
     all

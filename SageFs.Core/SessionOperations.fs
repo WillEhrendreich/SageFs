@@ -380,10 +380,19 @@ module SessionOperations =
   /// `opts` is the caller's options object (SageFs/McpResources.fs passes the camelCase
   /// shape, `Json.camelCase`). This is one function from `Json.serialize`: it takes a
   /// `JsonProfile` once that caller does.
-  let sessionsToJson (opts: JsonSerializerOptions) (sessions: SessionInfo list) : string =
+  ///
+  /// `sources` is what the caller read of each session's source (`SourceState`): whether the files on disk are ahead of the
+  /// build the session runs. It is a different fact from `ReplFreshness` (the REPL is behind the app) and has its own field.
+  /// Reading it needs the disk and the worker's warmup report, so the caller does that and this stays pure; a session the map
+  /// has no reading for says it was not assessed, never that the build is current.
+  let sessionsToJson (opts: JsonSerializerOptions) (sources: Map<string, SourceState>) (sessions: SessionInfo list) : string =
     let rows =
       sessions
       |> List.map (fun info ->
+        let source =
+          sources
+          |> Map.tryFind (SessionId.value info.Id)
+          |> Option.defaultValue (SourceState.Unknown UnknownReason.NotAssessed)
         let worktreeBranch =
           match Checkout.classify info.WorkingDirectory with
           | Checkout.Checkout.Worktree(_, branch) -> Some branch
@@ -397,7 +406,8 @@ module SessionOperations =
            CreatedAt = info.CreatedAt
            LastActivity = info.LastActivity
            WorktreeBranch = worktreeBranch
-           ReplFreshness = ReplFreshness.toWire info.Freshness |})
+           ReplFreshness = ReplFreshness.toWire info.Freshness
+           SourceState = SourceState.toWire source |})
     JsonSerializer.Serialize({| Sessions = rows |}, opts)
 
   /// A cheap, deterministic "version" of the session list — the

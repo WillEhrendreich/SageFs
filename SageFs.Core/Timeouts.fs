@@ -412,6 +412,12 @@ module Timeouts =
   /// Floor on the jittered retry-after, so jitter near zero never reads as
   /// "retry immediately".
   let leaseMinRetryAfter = TimeSpan.FromMilliseconds(200.0)
+  /// How long a queued lease ask stays in line without being repeated. A
+  /// refused caller is told to ask again within 30 seconds at the longest
+  /// (`leaseRetryAfterCritical`) plus a few seconds per place in line, so an
+  /// ask that has not come back in 5 minutes belongs to an agent that is gone,
+  /// and keeping its place would hold up everyone queued behind it.
+  let leaseAskStaleAfter = TimeSpan.FromMinutes(5.0)
 
   // -- Friction detectors (ObservedFrictionTypes.DetectorConfig) --
   /// Window in which repeated session resets count as thrash. No recorded

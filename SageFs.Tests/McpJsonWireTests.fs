@@ -150,20 +150,23 @@ let tests =
            """{"aggregateCpuPercent":0,"aggregateResidentBytes":0,"anomalies":[],"available":["get_daemon_status","get_session_status","get_friction_report","get_available_projects","list_sessions","switch_session","create_project_session","create_solution_session","create_bare_session","hard_reset_fsi_session","acquire_full_build_lease","acquire_test_suite_lease","acquire_run_app_lease","release_work_lease","decompose_pipeline"],"daemonResidentBytes":0,"mcpPort":0,"memoryPressure":"normal","memoryPressureNote":"","overall":"Unknown","processes":[],"scope":"Daemon","sessions":{"evaluating":0,"faulted":0,"ready":0,"stopped":0,"total":0,"warmingUp":0},"state":"Ready","uptimeSeconds":0}"""
     }
 
-    testCase "WHY — a lease decision writes kind and decision, then its detail" <| fun _ ->
-      let holder = "mcp-json-wire-holder"
-      let granted = acquireWorkLease holder SageFs.ExpensiveWorkLease.Kind.TestSuiteRun
+    testCase "WHY — a lease decision writes kind and decision, then its detail, and names who holds it" <| fun _ ->
+      let agent = "mcp-json-wire-holder"
+      let directory = "/mcp-json-wire/holder"
+      let granted = acquireWorkLease agent directory SageFs.ExpensiveWorkLease.Kind.TestSuiteRun
       let grantedNode = JsonNode.Parse granted :?> JsonObject
       let leaseId = grantedNode["leaseId"].GetValue<string>()
       try
-        let second = acquireWorkLease holder SageFs.ExpensiveWorkLease.Kind.TestSuiteRun
-        [ granted |> without [ "leaseId"; "expiresAt" ]; second |> without [ "retryAfterSeconds" ] ]
+        let second = acquireWorkLease agent directory SageFs.ExpensiveWorkLease.Kind.TestSuiteRun
+        let secondNode = JsonNode.Parse second :?> JsonObject
+        secondNode["leaseId"].GetValue<string>() |> Expect.equal "the second ask is handed the same lease" leaseId
+        [ granted |> without [ "leaseId"; "expiresAt" ]; second |> without [ "leaseId"; "expiresAt"; "grantedAt"; "reason" ] ]
         |> String.concat "\n"
         |> equalJson "granted, then the second ask"
-             ("""{"decision":"granted","kind":"test_suite_run"}""" + "\n"
-              + """{"decision":"refused","kind":"test_suite_run","reason":"you already hold 1/1 leases \\u2014 release one before requesting another"}""")
+             ("""{"decision":"granted","grant":"new","heldBy":{"agentName":"mcp-json-wire-holder","connection":"mcp","workingDirectory":"/mcp-json-wire/holder"},"kind":"test_suite_run"}""" + "\n"
+              + """{"decision":"granted","grant":"already_held","heldBy":{"agentName":"mcp-json-wire-holder","connection":"mcp","workingDirectory":"/mcp-json-wire/holder"},"kind":"test_suite_run"}""")
       finally
-        releaseWorkLease holder leaseId |> ignore
+        releaseWorkLease leaseId |> ignore
 
     testTask "WHY — a dry-run workflow switch writes the indented outcome with a null NewSessionId" {
       let info = infoWith "11223344" (SessionLifecycleStatus.Ready readyHandle) WorkflowTypes.SessionWorkflow.Interactive
@@ -207,49 +210,12 @@ let tests =
             + "}")
     }
 
-    testTask "WHY — visualize_domain_model writes the indented state machine, field pairs included" {
-      let info = infoWith "99aabbcc" (SessionLifecycleStatus.Ready readyHandle) WorkflowTypes.SessionWorkflow.Interactive
-      let evalReply = WorkerResponse.EvalResult ("r", Ok "DUCASES:Idle|;Busy|count:Int32,label:String", [], Map.empty)
-      let ctx = ctxFor [ info ] (Some (proxyReturning evalReply)) (Ok "")
-      let! text = visualizeDomainModel ctx "agent" "Thing" (Some info.WorkingDirectory)
-      lf text
-      |> Expect.equal "state machine data"
-           ("{\n"
-            + "  \"AsciiDiagram\": \"                \\u250C\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2510    \\u250C\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2510\\n                \\u2502  Idle  \\u2502    \\u2502  Busy  \\u2502\\n                \\u2514\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2518    \\u2514\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2518\",\n"
-            + "  \"States\": [\n"
-            + "    {\n"
-            + "      \"Fields\": [],\n"
-            + "      \"IsEntry\": true,\n"
-            + "      \"IsTerminal\": true,\n"
-            + "      \"Name\": \"Idle\"\n"
-            + "    },\n"
-            + "    {\n"
-            + "      \"Fields\": [\n"
-            + "        [\n"
-            + "          \"count\",\n"
-            + "          \"Int32\"\n"
-            + "        ],\n"
-            + "        [\n"
-            + "          \"label\",\n"
-            + "          \"String\"\n"
-            + "        ]\n"
-            + "      ],\n"
-            + "      \"IsEntry\": true,\n"
-            + "      \"IsTerminal\": true,\n"
-            + "      \"Name\": \"Busy\"\n"
-            + "    }\n"
-            + "  ],\n"
-            + "  \"Transitions\": [],\n"
-            + "  \"TypeName\": \"Thing\"\n"
-            + "}")
-    }
-
     testTask "WHY — get_test_trace writes the live-testing trace for an empty model, keys as written" {
       let ctx = { ctxFor [] noProxy (Ok "") with GetElmModel = Some (fun () -> SageFsModel.initial ()) }
       let! text = getTestTrace ctx
       text
       |> Expect.equal "trace"
-           """{"DiscoveryHint":"Live testing is not active. Call enable_live_testing to start discovery.","DiscoveryRequiresEval":false,"DiscoveryState":"disabled","Enabled":false,"Hint":"Live testing is not active. Call enable_live_testing to start test discovery and automatic re-runs.","History":{"Case":"NeverRun"},"IsRunning":false,"LastDecision":null,"LastDiscoveryTime":null,"Policies":["Unit: OnEveryChange","Integration: OnDemand","Browser: OnDemand","Benchmark: OnDemand","Architecture: OnSaveOnly","Property: OnEveryChange"],"Providers":[],"Summary":{"Total":0,"Passed":0,"Failed":0,"Stale":0,"Running":0,"Disabled":0,"Enabled":false},"Timing":"no timing yet"}"""
+           """{"DiscoveryHint":"Live testing is not active. Switch the session to the livetesting workflow with switch_workflow to start discovery.","DiscoveryRequiresEval":false,"DiscoveryState":"disabled","Enabled":false,"Hint":"Live testing is not active. Switch the session to the livetesting workflow with switch_workflow to start test discovery and automatic re-runs.","History":{"Case":"NeverRun"},"IsRunning":false,"LastDecision":null,"LastDiscoveryTime":null,"Policies":["Unit: OnEveryChange","Integration: OnDemand","Browser: OnDemand","Benchmark: OnDemand","Architecture: OnSaveOnly","Property: OnEveryChange"],"Providers":[],"Summary":{"Total":0,"Passed":0,"Failed":0,"Stale":0,"Running":0,"Disabled":0,"Enabled":false},"Timing":"no timing yet"}"""
     }
 
     // ---- SageFs/McpAdapter.fs ----

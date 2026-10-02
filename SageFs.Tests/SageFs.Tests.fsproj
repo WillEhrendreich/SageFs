@@ -507,6 +507,7 @@
         <Compile Include="HonestEmptiesOutcomeTests.fs" />
         <Compile Include="SelfHostCoreOutcomeTests.fs" />
         <Compile Include="ReadyWaitManagerTests.fs" />
+        <Compile Include="LeaseHolderOutcomeTests.fs" />
         <Compile Include="McpAppRunOutcomeTests.fs" />
         <Compile Include="DstShrinkTests.fs" />
         <Compile Include="OriginGuardOutcomeTests.fs" />
@@ -626,6 +627,7 @@
         <Compile Include="MemoryShedSimTests.fs" />
         <Compile Include="ExpensiveWorkLeaseTests.fs" />
         <Compile Include="LeaseSimTests.fs" />
+        <Compile Include="LeaseWireTests.fs" />
         <Compile Include="TestDebugTests.fs" />
         <Compile Include="TestDebugSimTests.fs" />
         <Compile Include="DebugTestRequestTests.fs" />
@@ -645,6 +647,7 @@
         <Compile Include="EvalFeedHonestyTests.fs" />
         <Compile Include="ToolAnswerTests.fs" />
         <Compile Include="McpAnalysisTests.fs" />
+        <Compile Include="EvalRecordingScopeTests.fs" />
         <Compile Include="FeatureDiscoveryTests.fs" />
         <Compile Include="DashboardSparklineTests.fs" />
         <Compile Include="DashboardHealthTests.fs" />

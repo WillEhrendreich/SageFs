@@ -635,6 +635,28 @@ let private WorkingDirectoryParam = "Working directory of the MCP client. When p
 [<Literal>]
 let private SessionIdParam = "Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory. Omit it to answer for the session this connection is working in."
 
+/// What the lease tools tell an agent about who a lease belongs to. Claude sub-agents of one session
+/// share ONE MCP connection, so the connection alone cannot tell them apart: a lease belongs to the
+/// (connection, agent_name, working_directory) it was asked for under.
+module private LeaseHolderNote =
+  [<Literal>]
+  let Identity = " A lease belongs to the connection, agent_name and working_directory it was asked for under, so sub-agents that share one connection must each pass their own agent_name (and their own working_directory) to get their own lease. Asking again under the same three returns the lease you already hold (grant already_held, same leaseId, expiry not renewed). If the pool is full the answer is decision wait: it names who holds it (agent, connection, directory, kind, granted, expires), your position in line and when to ask again, and asking again keeps your place. A lease that is never released lapses at its expiry."
+
+  [<Literal>]
+  let AgentName = "Your own agent name, distinct from any sibling sub-agent's. Names your lease in get_daemon_status and in other agents' refusals. Omit it only if you are the one agent on this connection."
+
+  [<Literal>]
+  let WorkingDirectory = "The directory you are working in (your worktree). Part of the lease's identity and shown to anyone queued behind you."
+
+  [<Literal>]
+  let FullBuild = "Acquire a lease for a caller-owned full build. The lease kind is fixed by this tool; use it only when SageFs will not run the build itself." + Identity
+
+  [<Literal>]
+  let TestSuite = "Acquire a lease for a test-suite run you start yourself, such as `dotnet run --project <tests>` for an Expecto project (OutputType Exe) or `dotnet test`. SageFs has no tool that runs tests for you: it runs its own through the live-testing engine, and you read results with list_tests. Release the lease with release_work_lease when your run finishes." + Identity
+
+  [<Literal>]
+  let RunApp = "Acquire a lease for a caller-owned external run-app process. SageFs runs built-in applications through run_app instead." + Identity
+
 /// `withSessionWd` for a tool that answers with a `HotReloadReply`: a call that
 /// does not resolve to a routable session gets the same "Error: ..." text.
 let withSessionReply (ctx: McpContext) (workingDirectory: string option) (f: string -> Task<HotReloadReply>) : Task<HotReloadReply> =
@@ -885,27 +907,48 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
           return! SageFs.McpHygiene.withHygieneForSession ctx session_id working_directory json
         } |> withEcho ctx "get_session_status"
     [<McpServerTool>]
-    [<Description("Acquire a lease for a caller-owned full build. The lease kind is fixed by this tool; use it only when SageFs will not run the build itself.")>]
-    member _.acquire_full_build_lease() : Task<string> =
-        Task.FromResult(acquireWorkLease "mcp" SageFs.ExpensiveWorkLease.Kind.FullBuild) |> withEcho ctx "acquire_full_build_lease"
+    [<Description(LeaseHolderNote.FullBuild)>]
+    member _.acquire_full_build_lease(
+        [<Description(LeaseHolderNote.AgentName)>]
+        [<Optional; DefaultParameterValue("")>]
+        agent_name: string,
+        [<Description(LeaseHolderNote.WorkingDirectory)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        Task.FromResult(acquireWorkLease agent_name working_directory SageFs.ExpensiveWorkLease.Kind.FullBuild) |> withEcho ctx "acquire_full_build_lease"
 
     [<McpServerTool>]
-    [<Description("Acquire a lease for a test-suite run you start yourself, such as `dotnet run --project <tests>` for an Expecto project (OutputType Exe) or `dotnet test`. SageFs has no tool that runs tests for you: it runs its own through the live-testing engine, and you read results with list_tests. Release the lease with release_work_lease when your run finishes.")>]
-    member _.acquire_test_suite_lease() : Task<string> =
-        Task.FromResult(acquireWorkLease "mcp" SageFs.ExpensiveWorkLease.Kind.TestSuiteRun) |> withEcho ctx "acquire_test_suite_lease"
+    [<Description(LeaseHolderNote.TestSuite)>]
+    member _.acquire_test_suite_lease(
+        [<Description(LeaseHolderNote.AgentName)>]
+        [<Optional; DefaultParameterValue("")>]
+        agent_name: string,
+        [<Description(LeaseHolderNote.WorkingDirectory)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        Task.FromResult(acquireWorkLease agent_name working_directory SageFs.ExpensiveWorkLease.Kind.TestSuiteRun) |> withEcho ctx "acquire_test_suite_lease"
 
     [<McpServerTool>]
-    [<Description("Acquire a lease for a caller-owned external run-app process. SageFs runs built-in applications through run_app instead.")>]
-    member _.acquire_run_app_lease() : Task<string> =
-        Task.FromResult(acquireWorkLease "mcp" SageFs.ExpensiveWorkLease.Kind.RunApp) |> withEcho ctx "acquire_run_app_lease"
+    [<Description(LeaseHolderNote.RunApp)>]
+    member _.acquire_run_app_lease(
+        [<Description(LeaseHolderNote.AgentName)>]
+        [<Optional; DefaultParameterValue("")>]
+        agent_name: string,
+        [<Description(LeaseHolderNote.WorkingDirectory)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        Task.FromResult(acquireWorkLease agent_name working_directory SageFs.ExpensiveWorkLease.Kind.RunApp) |> withEcho ctx "acquire_run_app_lease"
 
     [<McpServerTool>]
-    [<Description("Release a caller-owned lease returned by one of the acquisition tools. A lease held by another connection is never released.")>]
+    [<Description("Release a caller-owned lease returned by one of the acquisition tools. A lease held by another connection is never released. Sub-agents that share your connection can release it by its id, so keep the id to yourself.")>]
     member _.release_work_lease(
         [<Description("Opaque lease id returned by a granted acquisition tool")>] lease_id: string
     ) : Task<string> =
         task {
-          let result = releaseWorkLease "mcp" lease_id
+          let result = releaseWorkLease lease_id
           return
             match result with
             | Ok text -> text, None
@@ -1926,10 +1969,14 @@ An empty session (no evals recorded) is NotAvailable (NoEvalsYet). A Measured ro
         SageFs.McpAnalysis.impactForecast ctx scope sid wd |> withEchoAnswer ctx "impact_forecast"
 
     [<McpServerTool>]
-    [<Description("""Get a prioritized action queue — the intelligent "what should I do next?" recommendation.
+    [<Description("""Get a prioritized action queue — the intelligent "what should I do next?" recommendation — for ONE session.
 
 Composes coverage intelligence + impact forecasts + stale cell detection into a ranked queue of actions,
 sorted by priority (lowest number = most urgent). Also computes a session health grade.
+
+It reads that session's own eval history (what send_fsharp_code recorded for it, or an editor evaluated through the daemon) and the live-testing state that owns that session's tests, which is where run_tests records its results. It never reads another session's data. Name the session with session_id or working_directory, or omit both to answer for the session this connection is working in.
+
+WHAT IT WILL NOT SAY: with no recorded eval and no recorded test result it answers NotAvailable (NothingObservedYet), not an empty queue. With only evals it says the tests were not measured (`Unmeasured`), so an empty queue is never a claim about a side nobody read.
 
 OUTPUT:
 - Session health grade: Healthy, NeedsAttention (with reason), or Critical (with reason)
@@ -1941,10 +1988,19 @@ OUTPUT:
 
 WORKFLOW: This is the top-level intelligence tool — call it when you want ONE answer about what to do next.
 It internally calls coverage_intel and impact_forecast, so you don't need to call those separately.
-Replaces manual triage of test results, coverage, and performance data.""")>]
-    member _.suggest_next_action() : Task<string> =
+Replaces manual triage of test results, coverage, and performance data.""" + AnswerShapeNote)>]
+    member _.suggest_next_action(
+        [<Description(WorkingDirectoryParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string,
+        [<Description(SessionIdParam)>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: suggest_next_action called")
-        suggestNextAction ctx |> withEcho ctx "suggest_next_action"
+        SageFs.McpAnalysis.suggestNextAction ctx sid wd |> withEchoAnswer ctx "suggest_next_action"
 
     [<McpServerTool>]
     [<Description("""Plan a cascade re-evaluation (ripple) for changed REPL cells in ONE session.
@@ -2172,9 +2228,9 @@ Parameters (all optional):
 - receipt_id: a receipt_id from an earlier run_tests call that was still running. Re-reads that run instead of starting a new one.
 - session_id / working_directory: which session (see list_sessions)
 
-OUTPUT: text plus structured JSON with status (Refused, Pending, Started, Ran, Unattributable). A finished run has a verdict (AllPassed, SomeFailed, Incomplete), counts, and one line per requested test saying what happened to it IN THIS RUN.
+OUTPUT: text plus structured JSON with status (Refused, Pending, Started, Ran, Unattributable). A finished run has a verdict (AllPassed, SomeFailed, Incomplete, PassedOnStaleSource, PassedWhileRebuilding, PassedOnUnknownSource), counts, and one line per requested test saying what happened to it IN THIS RUN.
 
-Incomplete is not green. It means nothing failed but not every test passed in this run: a test was skipped, was cut off, never reported, or only has a result from an earlier run. A pass from an earlier run is never counted. A refusal says why (session still warming up, nothing discovered, no test matched your filter) and what to do.
+Incomplete is not green. It means nothing failed but not every test passed in this run: a test was skipped, was cut off, never reported, or only has a result from an earlier run. A pass from an earlier run is never counted. PassedOnStaleSource, PassedWhileRebuilding and PassedOnUnknownSource mean every requested test passed but the run does not vouch for your current edits: the build the tests ran against is older than your files on disk, a rebuild was in progress, or SageFs could not tell whether the build is current; none of them is green, and the receipt's `source` field says which and why. A refusal says why (session still warming up, nothing discovered, no test matched your filter) and what to do.
 
 If the run is still going when wait_seconds ends, the result carries a receipt_id. Call run_tests again with it (and wait_seconds) instead of polling anything else.""")>]
     member _.run_tests(

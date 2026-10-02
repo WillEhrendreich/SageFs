@@ -43,7 +43,7 @@ let gotchas = [
   "If a bare Error or Ok in a Result match resolves to the wrong type, something in scope shadows it. Write Result.Error/Result.Ok."
   "Never #r a DLL the session already loaded from the project: two copies of every type, and the lock blocks rebuilds."
   "Never #load a file from a project the session already loaded: same two-copies trap, and it surfaces as a misleading type-incompatibility error. #load only a PURE file."
-  "Before an external full build, test suite, or run-app process, acquire acquire_full_build_lease, acquire_test_suite_lease, or acquire_run_app_lease, then release_work_lease when done."
+  "Before an external full build, test suite, or run-app process, acquire acquire_full_build_lease, acquire_test_suite_lease, or acquire_run_app_lease, then release_work_lease when done. Sub-agents on one connection each pass their own agent_name."
   "A filtered test run is never the acceptance check. Only an unfiltered run counts. A filter matching nothing still reports Failed: 0 and exits 0 — read the TRUST line's ran= count."
   "Run the slow gate in a BACKGROUND agent and keep working. Don't poll it, and don't re-roll a full run to escape a flake."
   "check_fsharp_code type-checks without running. cancel_eval stops a runaway eval, so don't reset for that either."

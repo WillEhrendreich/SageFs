@@ -101,6 +101,7 @@
         <Compile Include="FrictionReviewView.fs" />
         <Compile Include="McpFrictionRecorder.fs" />
         <Compile Include="PageChoices.fs" />
+        <Compile Include="SourceStateProbe.fs" />
         <Compile Include="DashboardTypes.fs" />
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="CohortInspector.fs" />
@@ -118,7 +119,7 @@
         <Compile Include="CohortErrorMapping.fs" />
         <Compile Include="LiveTestStatusView.fs" />
         <Compile Include="McpAnalysisViews.fs" />
-        <Compile Include="SourceStateProbe.fs" />
+        <Compile Include="McpLeaseWire.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpHygiene.fs" />
         <Compile Include="McpRunTests.fs" />

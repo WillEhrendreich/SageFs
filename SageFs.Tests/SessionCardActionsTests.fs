@@ -19,7 +19,7 @@ let private mkCardSession (id: string) (projects: (string * ProjectLoading.Proje
       projects
       |> List.map (fun (path, role) -> { ProjectLoading.ClassifiedProject.Path = path; Role = role; PackageRefs = []; LoadMode = ProjectLoading.LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized })
     App = AppRun.AppRunState.NotRunning
-    WorkerRssBytes = None; SelfHostStaleness = None; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
+    WorkerRssBytes = None; SelfHostStaleness = None; Source = SageFs.Server.DashboardTypes.CardSource.NotReadOnThisCard; Freshness = SageFs.ReplFreshness.InSync; Health = SessionHealth.Healthy }
 
 let private render viewing sessions =
   renderSessionsForSession viewing sessions false |> renderNode

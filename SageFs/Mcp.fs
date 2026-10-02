@@ -149,13 +149,16 @@ module McpTools =
     | true, sessionId -> featureStateForSession ctx sessionId
     | false, _ -> ctx.GetFeatureState |> Option.map (fun getState -> getState ())
 
+  /// Record an eval into the store of the session it ran in, whichever door it came through. The
+  /// analysis tools read that store, so an eval that only reached the global one (an editor's `/exec`,
+  /// which has no MCP connection bound) was invisible to them. A call with no connection bound is the
+  /// `/exec` door, and it also feeds the global store, which the dashboard's push reads.
   let recordEvalForSession (ctx: McpContext) sessionId code result durationMs =
+    let state = featureStates.GetOrAdd(sessionId, fun _ -> ref Features.FeatureHooks.FeaturePushState.empty)
+    state.Value <- Features.FeatureHooks.recordEval code result durationMs state.Value
     match currentTransportSessionId.Value with
-    | Some _ ->
-      let state = featureStates.GetOrAdd(sessionId, fun _ -> ref Features.FeatureHooks.FeaturePushState.empty)
-      state.Value <- Features.FeatureHooks.recordEval code result durationMs state.Value
-    | None ->
-      ctx.RecordEval |> Option.iter (fun record -> record code result durationMs)
+    | Some _ -> ()
+    | None -> ctx.RecordEval |> Option.iter (fun record -> record code result durationMs)
 
   /// Set the active session ID for a specific agent/client.
   /// An empty session id CLEARS the agent's mapping instead of storing an
@@ -905,7 +908,7 @@ module McpTools =
         // reading this and actively corrupt an agent trying to parse the
         // result — strip them at the one place every eval-returning tool's
         // text output already funnels through.
-        sprintf "Result: %s%s" (stripAnsi output) diagStr
+        sprintf "%s%s%s" Features.CellDependencyGraph.McpResultPrefix (stripAnsi output) diagStr
       | Error err ->
         let errText = SageFsError.describeForAgent err
         // A typed crash already says what to do; guessing at its text would add the wrong advice.
@@ -1351,39 +1354,20 @@ module McpTools =
       return Json.serialize Json.standard payload
     }
 
-  let private leaseDecisionJson kind decision : string =
-    let kindName = SageFs.ExpensiveWorkLease.Kind.toToken kind
-    match decision with
-    | SageFs.ExpensiveWorkLease.Decision.Granted(leaseId, expiresAt) ->
-      Json.serialize Json.standard
-        {| kind = kindName
-           decision = "granted"
-           leaseId = SageFs.ExpensiveWorkLease.LeaseId.value leaseId
-           expiresAt = expiresAt |}
-    | SageFs.ExpensiveWorkLease.Decision.Wait(retryAfter, reason) ->
-      Json.serialize Json.standard
-        {| kind = kindName
-           decision = "wait"
-           retryAfterSeconds = retryAfter.TotalSeconds
-           reason = reason |}
-    | SageFs.ExpensiveWorkLease.Decision.Refused reason ->
-      Json.serialize Json.standard
-        {| kind = kindName
-           decision = "refused"
-           reason = reason |}
-
-  let acquireWorkLease (agent: string) (kind: SageFs.ExpensiveWorkLease.Kind) : string =
-    let holder = resolvedKey agent
+  /// Take a lease for the bound MCP connection under the name and working directory the caller gave.
+  /// Two sub-agents on one connection that give different names are two holders.
+  let acquireWorkLease (agentName: string) (workingDirectory: string) (kind: SageFs.ExpensiveWorkLease.Kind) : string =
+    let holder = SageFs.ExpensiveWorkLease.Holder.make (resolvedKey "mcp") agentName workingDirectory
     let decision = SageFs.Features.LeaseWatch.request holder kind
-    leaseDecisionJson kind decision
+    SageFs.McpLeaseWire.decisionJson DateTimeOffset.UtcNow holder kind decision
 
-  let releaseWorkLease (agent: string) (leaseId: string) : Result<string, SageFsError> =
+  /// Release a lease by id. Only the connection that holds it can: the id is the capability.
+  let releaseWorkLease (leaseId: string) : Result<string, SageFsError> =
     match String.IsNullOrWhiteSpace leaseId with
     | true -> Error (SageFsError.JsonParseError("release_work_lease", "lease_id is required"))
     | false ->
       let id = SageFs.ExpensiveWorkLease.LeaseId.ofWire leaseId
-      let holder = resolvedKey agent
-      match SageFs.Features.LeaseWatch.releaseOwned holder id with
+      match SageFs.Features.LeaseWatch.releaseOwned (resolvedKey "mcp") id with
       | SageFs.ExpensiveWorkLease.ReleaseOutcome.Released -> Ok "released"
       | SageFs.ExpensiveWorkLease.ReleaseOutcome.AlreadyGone -> Ok "already_gone_or_not_owned"
 
@@ -1998,21 +1982,6 @@ module McpTools =
         | Error msg -> Error (SageFsError.CancelFailed (routeErrorMessage msg))
     })
 
-  let getCompletions (ctx: McpContext) (agent: string) (code: string) (cursorPosition: int) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
-      let! routeResult =
-        routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.GetCompletions(code, cursorPosition, WorkerProtocol.SessionId.value replyId))
-      return
-        match routeResult with
-        | Ok (WorkerProtocol.WorkerResponse.CompletionResult(_, completions)) ->
-          match List.isEmpty completions with
-          | true -> "No completions available."
-          | false -> String.concat "\n" completions
-        | Ok other -> sprintf "Unexpected response: %A" other
-        | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
-    })
-
   /// Infer a conservative editor completion kind from the labels returned by
   /// the worker transport. The worker currently sends display labels only, so
   /// preserve useful VS Code metadata without pretending this is FCS glyph data.
@@ -2084,63 +2053,6 @@ module McpTools =
 
   let exploreNamespace (ctx: McpContext) (agent: string) (namespaceName: string) (workingDirectory: string option) : Task<string> =
     exploreQualifiedName ctx agent namespaceName workingDirectory
-
-  let exploreType (ctx: McpContext) (agent: string) (typeName: string) (workingDirectory: string option) : Task<string> =
-    exploreQualifiedName ctx agent typeName workingDirectory
-
-  /// MCP tool: visualize a DU type as a state machine diagram.
-  /// Sends F# code to the worker that uses reflection to extract DU cases,
-  /// then renders an ASCII diagram plus JSON data.
-  let visualizeDomainModel (ctx: McpContext) (agent: string) (typeName: string) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
-      let code =
-        sprintf "let _vizType = typeof<%s>\nmatch Microsoft.FSharp.Reflection.FSharpType.IsUnion(_vizType) with\n| true ->\n  let cases =\n    Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(_vizType)\n    |> Array.map (fun uc ->\n      let fields = uc.GetFields() |> Array.map (fun f -> sprintf \"%%s:%%s\" f.Name f.PropertyType.Name)\n      sprintf \"%%s|%%s\" uc.Name (String.concat \",\" fields))\n  printfn \"DUCASES:%%s\" (String.concat \";\" cases)\n| false -> printfn \"DUCASES:NOT_A_DU\"" typeName
-      let! routeResult =
-        routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(code, WorkerProtocol.SessionId.value replyId))
-      return
-        match routeResult with
-        | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, result, _, _)) ->
-          let output =
-            match result with
-            | Ok s -> s
-            | Error e -> sprintf "%A" e
-          let lines = output.Split('\n') |> Array.map (fun s -> s.Trim())
-          let duLine = lines |> Array.tryFind (fun l -> l.StartsWith("DUCASES:"))
-          match duLine with
-          | Some line ->
-            let payload = line.Substring(8)
-            match payload with
-            | "NOT_A_DU" ->
-              sprintf "'%s' is not a discriminated union type." typeName
-            | casesStr ->
-              let cases =
-                casesStr.Split(';')
-                |> Array.toList
-                |> List.choose (fun caseStr ->
-                  match caseStr.Split('|') with
-                  | [| name; fieldsStr |] ->
-                    let fields =
-                      match fieldsStr with
-                      | "" -> []
-                      | fs ->
-                        fs.Split(',')
-                        |> Array.toList
-                        |> List.choose (fun f ->
-                          match f.Split(':') with
-                          | [| fn; ft |] -> Some (fn, ft)
-                          | _ -> None)
-                    Some { Features.DomainModelViz.DUCaseInfo.Name = name; Features.DomainModelViz.DUCaseInfo.Fields = fields }
-                  | _ -> None)
-              let model : Features.DomainModelViz.StateMachineModel =
-                { TypeName = typeName; Cases = cases; Transitions = [] }
-              let data = Features.DomainModelViz.StateMachineRenderer.renderAsData model
-              Json.serialize (Json.indented Json.standard) data
-          | None ->
-            sprintf "Could not extract DU cases from '%s'. Output: %s" typeName output
-        | Ok other -> sprintf "Unexpected response: %A" other
-        | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
-    })
 
   // ── Session Management Operations ──────────────────────────────
 
@@ -2253,16 +2165,8 @@ module McpTools =
           sid, occupantsForSession ctx sid)
         |> Map.ofList
       // Each session's source line is read off the disk and the worker's own warmup report, all sessions at once.
-      let! sources =
-        sessions
-        |> List.map (fun s ->
-          task {
-            let sid = WorkerProtocol.SessionId.value s.Id
-            let! warmup = warmupOf ctx sid
-            return sid, SourceStateProbe.ofSession s warmup
-          })
-        |> Task.WhenAll
-      return SourceStateProbe.formatSessionList System.DateTime.UtcNow (Some occupancyMap) (Map.ofArray sources) sessions
+      let! sources = SourceStateProbe.readAll (warmupOf ctx) sessions
+      return SourceStateProbe.formatSessionList System.DateTime.UtcNow (Some occupancyMap) sources sessions
     }
 
   /// Stop a session by ID.
@@ -2641,7 +2545,7 @@ module McpTools =
         Policies = state.RunPolicies |> Map.toList |> List.map (fun (c, p) -> sprintf "%A: %A" c p)
         Hint = match isActive with
                | true -> None
-               | false -> Some "Live testing is not active. Call enable_live_testing to start test discovery and automatic re-runs."
+               | false -> Some "Live testing is not active. Switch the session to the livetesting workflow with switch_workflow to start test discovery and automatic re-runs."
       |}
       Task.FromResult (Json.serialize Json.standard resp)
 
@@ -2699,37 +2603,6 @@ module McpTools =
           return Json.serialize Json.standard resp
     }
 
-  let queryTestCoverage (ctx: McpContext) (symbol: string) : Task<string> =
-    task {
-      match ctx.GetElmModel with
-      | None -> return "Coverage query not available — Elm loop not started."
-      | Some getModel ->
-        let model = getModel ()
-        let graph = model.LiveTesting.DepGraph
-        let testState = model.LiveTesting.TestState
-        let coveringTests =
-          Features.LiveTesting.TestRunExplainer.queryTestCoverage
-            graph testState.DiscoveredTests testState.LastResults symbol
-        let resp = {|
-          Symbol = symbol
-          CoveringTestCount = coveringTests.Length
-          Tests = coveringTests |> Array.map (fun ct ->
-            let resultStr =
-              match ct.Result with
-              | Some (Features.LiveTesting.TestResult.Passed d) -> sprintf "Passed (%.0fms)" d.TotalMilliseconds
-              | Some (Features.LiveTesting.TestResult.Failed (_, d)) -> sprintf "Failed (%.0fms)" d.TotalMilliseconds
-              | Some (Features.LiveTesting.TestResult.Skipped r) -> sprintf "Skipped: %s" r
-              | Some Features.LiveTesting.TestResult.NotRun -> "Not run"
-              | Some (Features.LiveTesting.TestResult.NoResult reason) ->
-                sprintf "Never reported: %s" (Features.LiveTesting.NoResultReason.describe reason)
-              | None -> "No result"
-            {| TestId = Features.LiveTesting.TestId.value ct.TestId
-               DisplayName = ct.DisplayName
-               LastResult = resultStr |})
-        |}
-        return Json.serialize Json.standard resp
-    }
-
   /// Format file-level coverage annotations as JSON for the get_file_coverage MCP tool.
   /// Pure function: takes FileAnnotations + LiveTestState, returns JSON string.
   let formatFileCoverageResponse (annotations: Features.LiveTesting.FileAnnotations) (testState: Features.LiveTesting.LiveTestState) : string =
@@ -2780,31 +2653,6 @@ module McpTools =
       |}
     |}
     Json.serialize Json.standard resp
-
-  /// MCP tool: get per-line coverage data for a specific file.
-  /// Resolves partial file paths, then computes line-level coverage from
-  /// instrumentation bitmaps + dep graph fallback.
-  let getFileCoverage (ctx: McpContext) (filePath: string) : Task<string> =
-    task {
-      match ctx.GetElmModel with
-      | None -> return "File coverage not available — Elm loop not started."
-      | Some getModel ->
-        let model = getModel ()
-        let cycleState = model.LiveTesting
-        let testState = cycleState.TestState
-        let entries =
-          Features.LiveTesting.LiveTestState.statusEntriesForSession "" testState
-        let resolvedPath =
-          Features.LiveTesting.FileAnnotations.resolveFilePath
-            filePath entries cycleState.InstrumentationMaps
-        match resolvedPath with
-        | None ->
-          let resp = {| FilePath = filePath; Error = "File not found in test sources or instrumentation maps" |}
-          return Json.serialize Json.standard resp
-        | Some fullPath ->
-          let annotations = Features.LiveTesting.FileAnnotations.projectWithCoverage fullPath cycleState
-          return formatFileCoverageResponse annotations testState
-    }
 
   let explainTestFailure (ctx: McpContext) (testName: string) : Task<string> =
     task {
@@ -2958,96 +2806,6 @@ module McpTools =
             sprintf "  %d. %s %s" stage.StageIndex icon (stage.Code.Trim()))
           |> fun lines ->
             sprintf "Pipeline decomposition (%d stages):\n%s" stages.Length (String.concat "\n" lines)
-    }
-
-  let planRipple (ctx: McpContext) (changedCellIds: string) : Task<string> =
-    task {
-      match featureStateForCaller ctx with
-      | None -> return "Feature state not available — no active session."
-      | Some state ->
-        match state.EvalHistory with
-        | [] -> return "No eval history — evaluate some cells first."
-        | _ ->
-          let graph = cellGraphOf state
-          let cellIds =
-            changedCellIds.Split([| ','; ' ' |], System.StringSplitOptions.RemoveEmptyEntries)
-            |> Array.choose (fun s -> match System.Int32.TryParse(s) with | true, v -> Some v | _ -> None)
-            |> Set.ofArray
-          match cellIds.IsEmpty with
-          | true -> return "No valid cell IDs provided. Use comma-separated integers (e.g., '0,2,5')."
-          | false ->
-            let plan = Features.EvalRipple.planRipple graph cellIds
-            return
-              plan.Steps
-              |> List.map (fun step ->
-                sprintf "  [%d] %s — %s"
-                  step.CellId
-                  (step.Code |> fun c -> match c.Length > 50 with | true -> c.[..47] + "..." | false -> c)
-                  (match step.Status with
-                   | Features.Pending -> "pending"
-                   | Features.Evaluating -> "evaluating"
-                   | Features.Succeeded o -> sprintf "ok: %s" o
-                   | Features.Failed e -> sprintf "FAILED: %s" e
-                   | Features.Skipped r -> sprintf "skipped: %s" r))
-              |> fun lines ->
-                sprintf "Ripple plan (%d steps, %d changed):\n%s"
-                  plan.Steps.Length cellIds.Count (String.concat "\n" lines)
-    }
-
-  let previewWhatIf (ctx: McpContext) (bindingName: string) (newCode: string) : Task<string> =
-    task {
-      match featureStateForCaller ctx with
-      | None -> return "Feature state not available — no active session."
-      | Some state ->
-        match state.EvalHistory with
-        | [] -> return "No eval history — evaluate some cells first."
-        | _ ->
-          let graph = cellGraphOf state
-          let scope =
-            Features.FeatureHooks.scope state
-          let existingBinding = scope.ActiveBindings |> Map.tryFind bindingName
-          let original =
-            existingBinding
-            |> Option.map (fun b -> b.Value |> Option.defaultValue "?")
-            |> Option.defaultValue "?"
-          let typeSig =
-            existingBinding
-            |> Option.map (fun b -> b.TypeSig)
-            |> Option.defaultValue "obj"
-          let override' = Features.WhatIf.createOverride bindingName original newCode typeSig
-          let plan = Features.WhatIf.planWhatIf graph override'
-          return
-            [ sprintf "What-If: %s" (Features.WhatIf.formatOverride override')
-              sprintf "Affected cells: %d" plan.AffectedCells.Length
-              yield!
-                plan.RippleSteps
-                |> List.map (fun step ->
-                  sprintf "  [%d] %s" step.CellId
-                    (step.Code |> fun c -> match c.Length > 50 with | true -> c.[..47] + "..." | false -> c)) ]
-            |> String.concat "\n"
-    }
-
-  let suggestNextCell (ctx: McpContext) : Task<string> =
-    task {
-      match featureStateForCaller ctx with
-      | None -> return "Feature state not available — no active session."
-      | Some state ->
-        let scope =
-          Features.FeatureHooks.scope state
-        let bindings = toScopeBindings scope
-        match bindings with
-        | [] -> return "No bindings in scope — evaluate some cells first."
-        | _ ->
-          let suggestions = Features.Ghostwriter.suggest bindings
-          match suggestions with
-          | [] -> return "No suggestions available for the current bindings."
-          | _ ->
-            return
-              suggestions
-              |> List.map (fun s ->
-                sprintf "  %.0f%% %s — %s" (s.Confidence * 100.0) s.Code s.Explanation)
-              |> fun lines ->
-                sprintf "Ghostwriter suggestions (%d):\n%s" suggestions.Length (String.concat "\n" lines)
     }
 
   let getSessionFilmstrip (ctx: McpContext) (filter: string option) : Task<string> =
@@ -3284,44 +3042,6 @@ module McpTools =
           return Features.EvalDiff.formatSummary summary
     }
 
-  /// Compose a full diagnostic report: joins test failures, cell graph,
-  /// provenance, ripple plan, suggestions, and performance context.
-  let diagnose (ctx: McpContext) : Task<string> =
-    task {
-      match ctx.GetElmModel, ctx.GetFeatureState with
-      | None, _ -> return "Diagnosis not available — Elm loop not started."
-      | _, None -> return "Diagnosis not available — no active session."
-      | Some getModel, Some getState -> return diagnoseJson (getModel ()) (getState ())
-    }
-
-  /// Coverage intelligence: joins failure narratives + coverage bitmaps + dep graph
-  /// into blind spot analysis and correlated failure discovery.
-  let coverageIntel (ctx: McpContext) : Task<string> =
-    task {
-      match ctx.GetElmModel with
-      | None -> return "Coverage intel not available — Elm loop not started."
-      | Some getModel -> return coverageIntelJson (getModel ())
-    }
-
-  /// Impact forecast: joins eval timeline + cell dependency graph + performance data
-  /// into regression detection and downstream impact analysis.
-  let impactForecast (ctx: McpContext) (cellIdOpt: int option) : Task<string> =
-    task {
-      match ctx.GetElmModel, ctx.GetFeatureState with
-      | None, _ -> return "Impact forecast not available — Elm loop not started."
-      | _, None -> return "Impact forecast not available — no active session."
-      | Some _, Some getState -> return impactForecastJson (getState ()) cellIdOpt
-    }
-
-  /// Action prioritizer: merges all intelligence into a ranked "what to do next" queue.
-  let suggestNextAction (ctx: McpContext) : Task<string> =
-    task {
-      match ctx.GetElmModel, ctx.GetFeatureState with
-      | None, _ -> return "Action suggestions not available — Elm loop not started."
-      | _, None -> return "Action suggestions not available — no active session."
-      | Some getModel, Some getState -> return nextActionJson (getModel ()) (getState ()) ctx.FrictionStore
-    }
-
   /// List all discovered tests, optionally filtered by pattern or file path.
   let listTests (ctx: McpContext) (patternOpt: string option) (fileOpt: string option) : Task<string> =
     task {
@@ -3348,53 +3068,6 @@ module McpTools =
         }
         let jsonData = Features.TestDiscovery.buildListing query locations unlocated
         return Json.serialize Json.standard jsonData
-    }
-
-  /// Expose the cell dependency graph with staleness annotations.
-  let getCellDependencies (ctx: McpContext) : Task<string> =
-    task {
-      match ctx.GetFeatureState with
-      | None -> return "Cell dependency graph not available — no active session."
-      | Some getState -> return cellDependenciesJson (getState ())
-    }
-
-  /// Discover and rank SageFs features relevant to the current session state.
-  let discoverFeatures (ctx: McpContext) (topicOpt: string option) : Task<string> =
-    task {
-      let discoveryCtx =
-        match ctx.GetElmModel, ctx.GetFeatureState with
-        | None, _ | _, None -> Features.FeatureDiscovery.FeatureDiscovery.emptyContext
-        | Some getModel, Some getState ->
-          let model = getModel ()
-          let state = getState ()
-          let testState = model.LiveTesting.TestState
-          let failingCount =
-            testState.LastResults
-            |> Map.values
-            |> Seq.filter (fun r ->
-              match r.Result with
-              | Features.LiveTesting.TestResult.Failed _ -> true
-              | _ -> false)
-            |> Seq.length
-          {
-            Features.FeatureDiscovery.DiscoveryContext.FailingTestCount = failingCount
-            StaleCellCount   = 0
-            TotalEvals       = state.EvalHistory.Length
-            TotalTests       = testState.DiscoveredTests.Length
-            RequestedTopic   = topicOpt |> Option.filter (fun s -> s.Length > 0)
-          }
-      let report = Features.FeatureDiscovery.FeatureDiscovery.discover discoveryCtx
-      let jsonData =
-        {| ContextSummary     = report.ContextSummary
-           TotalKnownFeatures = report.TotalKnownFeatures
-           Returned           = report.Suggestions.Length
-           Suggestions        = report.Suggestions |> List.map (fun s ->
-             {| ToolName          = s.ToolName
-                ShortDescription  = s.ShortDescription
-                ExampleUsage      = s.ExampleUsage
-                WhyNow            = s.WhyNow
-                Relevance         = s.Relevance.ToString() |}) |}
-      return Json.serialize Json.standard jsonData
     }
 
   /// suggest_repair: the repair view over the failing test's narrative (McpAnalysisViews.suggestRepairJson).

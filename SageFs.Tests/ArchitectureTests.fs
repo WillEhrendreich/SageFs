@@ -1131,7 +1131,12 @@ let fileSizeBudgets =
       // suggest_repair, explain_test_failure, get_cell_dependencies) became pure functions of the model and the
       // feature state in McpAnalysisViews.fs, and Mcp.fs keeps only their "not started" guards. The file is 3645
       // lines, so this leaves 300 lines of headroom for the work that has to land here before the next split.
-      "SageFs/Mcp.fs", 3945
+      // 3945 -> 3332: the eight analysis formatters the registered tools no longer call (diagnose, coverageIntel,
+      // impactForecast, planRipple, previewWhatIf, suggestNextCell, getCellDependencies, discoverFeatures) and the
+      // dead formatters of the retired tools (getCompletions, exploreType, visualizeDomainModel, getFileCoverage,
+      // queryTestCoverage) are deleted, and suggest_next_action reads its session through McpAnalysis like the
+      // other seven. The file is 3332 lines. Exact size.
+      "SageFs/Mcp.fs", 3332
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

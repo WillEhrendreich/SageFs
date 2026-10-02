@@ -467,7 +467,13 @@ let private productionBuildRecovery
   : Task<Result<unit, SageFsError>> =
   task {
     let projects = SessionProjectTarget.projects targets
-    let holder = "create:" + (System.IO.Path.GetFullPath workingDir).ToLowerInvariant() + ":" + String.concat "|" (projects |> List.map (fun p -> p.ToLowerInvariant()) |> List.sort)
+    // The daemon's own ask: no MCP connection, one holder per directory and project set, named so a refusal or
+    // get_daemon_status says what the daemon was building.
+    let holder =
+      ExpensiveWorkLease.Holder.make
+        "daemon"
+        ("build for create:" + String.concat "|" (projects |> List.map (fun p -> p.ToLowerInvariant()) |> List.sort))
+        ((System.IO.Path.GetFullPath workingDir).ToLowerInvariant())
     match Features.LeaseWatch.request holder ExpensiveWorkLease.Kind.Rebuild with
     | ExpensiveWorkLease.Decision.Granted(leaseId, _) ->
       try
@@ -489,8 +495,11 @@ let private productionBuildRecovery
             | missing -> Result.Error (SageFsError.NeedsRebuild missing)
       finally
         Features.LeaseWatch.release leaseId |> ignore
-    | ExpensiveWorkLease.Decision.Wait(_, reason)
-    | ExpensiveWorkLease.Decision.Refused reason -> return Result.Error (SageFsError.NeedsRebuild [ reason ])
+    | ExpensiveWorkLease.Decision.AlreadyHeld _ ->
+      return Result.Error (SageFsError.NeedsRebuild [ "a build for these projects is already running in this directory; try again when it finishes" ])
+    | ExpensiveWorkLease.Decision.Queued _
+    | ExpensiveWorkLease.Decision.Refused _ as decision ->
+      return Result.Error (SageFsError.NeedsRebuild [ ExpensiveWorkLease.explain System.DateTimeOffset.UtcNow decision ])
   }
 
 let private sessionManifestRecord (info: WorkerProtocol.SessionInfo) : Features.DaemonManifest.DaemonSessionRecord =

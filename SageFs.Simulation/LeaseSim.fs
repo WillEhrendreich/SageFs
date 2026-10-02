@@ -8,24 +8,37 @@ open SageFs.ExpensiveWorkLease
 /// requesting, holding, releasing and (sometimes) abandoning leases while
 /// pressure rises and falls, folded through the REAL `request`. Same rules
 /// as the other DST harnesses here: chaos is data (a seeded event list), the
-/// real decision function is the subject, and `requestNeverExpiresTwin`
-/// shows the "abandoned leases are eventually reclaimed" invariant has
-/// teeth — it FAILS (deadlocks) against a pool that never reclaims.
+/// real decision function is the subject, and each twin shows one
+/// invariant has teeth: `requestNeverExpiresTwin` deadlocks the pool,
+/// `requestCollapsedIdentityTwin` names the wrong holder, and
+/// `requestDuplicatesOnReAskTwin` lets one holder take the pool twice.
 module LeaseSim =
+
+  /// Two sub-agents of one Claude session: they share ONE MCP connection and
+  /// differ only by the name they gave and where they work. This is the shape
+  /// that used to collapse into one holder.
+  let agentA = Holder.make "conn-1" "sub-a" "/work/a"
+  let agentB = Holder.make "conn-1" "sub-b" "/work/b"
+  /// An agent that gave no name and no directory, on its own connection.
+  let agentC = Holder.make "conn-2" "" ""
+  /// The same name and directory as `agentA` on ANOTHER connection: a
+  /// different holder, though everything it said about itself matches.
+  let agentD = Holder.make "conn-2" "sub-a" "/work/a"
+  let agentE = Holder.make "conn-3" "sub-e" "/work/e"
 
   [<RequireQualifiedAccess>]
   type SimEvent =
     /// `agent` asks for a lease of `kind` — this IS the retry mechanism too:
-    /// an agent that got `Wait` last time and asks again for the same
+    /// an agent that was queued last time and asks again for the same
     /// (agent, kind) is just retrying.
-    | Request of agent: string * kind: Kind
+    | Request of agent: Holder * kind: Kind
     /// `agent` releases the OLDEST lease it currently believes it holds, if
     /// any — a no-op if it holds none.
-    | Release of agent: string
+    | Release of agent: Holder
     /// `agent` "crashes": forgets about whatever it holds WITHOUT
     /// releasing. The lease stays in the pool until expiry (real) or
     /// forever (the never-expires twin).
-    | Abandon of agent: string
+    | Abandon of agent: Holder
     | PressureChange of MemoryPressure
     | PassSeconds of int
 
@@ -34,23 +47,34 @@ module LeaseSim =
   type PoolBehavior =
     | Real
     | NeverExpiresTwin
+    | CollapsedIdentityTwin
+    | DuplicatesOnReAskTwin
 
   let private requestFnOf =
     function
     | PoolBehavior.Real -> request
     | PoolBehavior.NeverExpiresTwin -> requestNeverExpiresTwin
+    | PoolBehavior.CollapsedIdentityTwin -> requestCollapsedIdentityTwin
+    | PoolBehavior.DuplicatesOnReAskTwin -> requestDuplicatesOnReAskTwin
 
   /// One request's outcome, with enough context for invariants to check
-  /// capacity and fairness against the EXACT pressure/pool at that moment.
+  /// capacity, fairness, attribution and idempotence against the EXACT
+  /// pressure and pool at that moment.
   type DecisionRecord = {
     AtStep: int
     Clock: DateTimeOffset
     Pressure: MemoryPressure
-    Holder: string
+    /// The requester as it really identified itself, before any twin
+    /// rewrote it.
+    Holder: Holder
     Kind: Kind
     Decision: Decision
+    /// Pool.Active BEFORE this request, before anything lapsed.
+    ActiveBefore: ActiveLease list
     /// Pool.Active AFTER this decision was applied — what a capacity check compares against.
     ActiveAfter: ActiveLease list
+    /// Pool.Queue AFTER this decision was applied.
+    QueueAfter: QueuedRequest list
   }
 
   type State = {
@@ -61,7 +85,7 @@ module LeaseSim =
     /// Leases each agent currently believes it holds, oldest first —
     /// `Release` pops the front, `Abandon` forgets everything without
     /// releasing.
-    HeldByAgent: Map<string, LeaseId list>
+    HeldByAgent: Map<Holder, LeaseId list>
     Decisions: DecisionRecord list
   }
 
@@ -97,7 +121,12 @@ module LeaseSim =
         | Decision.Granted(leaseId, _) ->
           let existing = Map.tryFind agent s.HeldByAgent |> Option.defaultValue []
           Map.add agent (existing @ [ leaseId ]) s.HeldByAgent
-        | Decision.Wait _
+        | Decision.AlreadyHeld lease ->
+          let existing = Map.tryFind agent s.HeldByAgent |> Option.defaultValue []
+          match List.contains lease.Id existing with
+          | true -> s.HeldByAgent
+          | false -> Map.add agent (existing @ [ lease.Id ]) s.HeldByAgent
+        | Decision.Queued _
         | Decision.Refused _ -> s.HeldByAgent
       let record =
         { AtStep = s.Step
@@ -106,14 +135,16 @@ module LeaseSim =
           Holder = agent
           Kind = kind
           Decision = decision
-          ActiveAfter = pool'.Active }
+          ActiveBefore = s.Pool.Active
+          ActiveAfter = pool'.Active
+          QueueAfter = pool'.Queue }
       { s with Pool = pool'; HeldByAgent = held'; Decisions = s.Decisions @ [ record ] }
 
   type Scenario = { Seed: int; Events: SimEvent list }
 
   let trace (behavior: PoolBehavior) (scenario: Scenario) : State list = scenario.Events |> List.scan (step behavior) initial
 
-  let private agents = [| "agent-a"; "agent-b"; "agent-c"; "agent-d" |]
+  let private agents = [| agentA; agentB; agentC; agentD |]
   let private kinds = [| Kind.SessionCreateOrWarmup; Kind.Rebuild; Kind.FullBuild; Kind.TestSuiteRun; Kind.RunApp |]
 
   /// A pure function of `seed`. Sweeps requests, releases, abandons and
