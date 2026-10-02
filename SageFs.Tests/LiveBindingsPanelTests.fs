@@ -43,6 +43,35 @@ let private box (children: LiveValueNode list) : LiveBindingValue =
 
 let private panel (v: PaneView) = DashboardFragments.renderLiveBindingsPanel "abcd1234" (Some v) |> decoded
 
+/// A class binding with one held getter at the end of `path`: a bare label is a getter of the binding, more labels are
+/// nested records on the way down to it.
+let private heldAt (binding: string) (path: string list) : LiveBindingValue =
+  let rec nest (labels: string list) : LiveValueNode list =
+    match labels with
+    | [] -> []
+    | [ last ] -> [ held last NotEvaluatedReason.GetterRunsCode ]
+    | step :: rest -> [ node step NodeKind.Record (nest rest) ]
+  { Name = binding; TypeSignature = "T"; Root = node binding NodeKind.Class (nest path) }
+
+/// The signal each held row's button is disabled by while its click is out: the row's own "evaluating" state.
+let private evaluatingSignals (html: string) : string list =
+  Text.RegularExpressions.Regex.Matches(html, "live-held-btn\"[^>]*data-attr:disabled=\"\\$([^\"]+)\"")
+  |> Seq.map (fun found -> found.Groups[1].Value)
+  |> List.ofSeq
+
+/// Rows that name the same thing in different ways: separators inside a name, a name that is a prefix of another, a
+/// different case, a character that is not an identifier character.
+let private lookAlikeRows : (string * string list) list =
+  [ "a", [ "b_c" ]
+    "a_b", [ "c" ]
+    "a", [ "b"; "c" ]
+    "a_b_c", [ "d" ]
+    "A", [ "b_c" ]
+    "a", [ "B_c" ]
+    "a-b", [ "c" ]
+    "a.b", [ "c" ]
+    "a", [ "b.c" ] ]
+
 [<Tests>]
 let heldRowTests =
   testList "a row listed and not read" [
@@ -85,6 +114,25 @@ let heldRowTests =
       html |> Expect.stringContains "the throw's own message" "kaput"
       html |> Expect.stringContains "the containment reason" "no filter here"
       html |> Expect.stringContains "the timeout" "EvaluationTimedOut"
+
+    testCase "every clickable row has its own evaluating mark, so a pane with two of them shows two marks and a click can only turn on its own" <| fun _ ->
+      let html = panel (view WalkSafe NoClickYet [ heldAt "probe" [ "RunsCode" ]; heldAt "spinner" [ "Self" ] ])
+      let signals = evaluatingSignals html
+      signals |> List.length |> Expect.equal "one signal per clickable row" 2
+      signals |> List.distinct |> List.length |> Expect.equal "and no two rows share one" 2
+      (html.Split([| "live-held-evaluating" |], StringSplitOptions.None).Length - 1)
+      |> Expect.equal "one mark per clickable row, hidden until its own click" 2
+
+    testCase "rows whose names look alike never share an evaluating signal, so pressing one cannot show or disable another" <| fun _ ->
+      let signalOfRow (binding, path) =
+        match evaluatingSignals (panel (view WalkSafe NoClickYet [ heldAt binding path ])) with
+        | [ signal ] -> signal
+        | other -> failwithf "expected one evaluating signal for %s %A, got %A" binding path other
+      let signals = lookAlikeRows |> List.map signalOfRow
+      signals
+      |> List.distinct
+      |> List.length
+      |> Expect.equal (sprintf "every look-alike row has a signal of its own, got %A" (List.zip lookAlikeRows signals)) lookAlikeRows.Length
 
     testCase "a label that is markup is shown as text" <| fun _ ->
       let html = DashboardFragments.renderLiveBindingsPanel "abcd1234" (Some(view WalkSafe NoClickYet [ box [ held "<script>alert(1)</script>" NotEvaluatedReason.GetterRunsCode ] ]))

@@ -430,6 +430,15 @@ module OutputScroll =
 
   let pillVisible (page: IPage) = page.Locator(pillSelector).IsVisibleAsync()
 
+  /// Open or close the Evaluate area the way a user does (a click on its summary), and wait until the page says it is
+  /// in that state. The area sits under the output panel, so its height is what the panel gives up or gets back.
+  let setEvaluateOpen (page: IPage) (wanted: bool) = task {
+    let! isOpen = page.EvaluateAsync<bool>("() => document.querySelector('#evaluate-section').open")
+    if isOpen <> wanted then do! page.Locator("#evaluate-section summary").First.ClickAsync()
+    let! _ = page.WaitForFunctionAsync("wanted => document.querySelector('#evaluate-section').open === wanted", wanted)
+    ()
+  }
+
   /// Scroll to the bottom the way a reader does, and look at the pill; if it is
   /// still there, scroll again. One scroll and a fixed sleep is not what a
   /// person does, and it failed once in the gate: the scroll landed in the same

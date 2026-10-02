@@ -71,6 +71,13 @@ let tests = testList "Output panel chat-style following" [
       // from the same constants, so check they both show up.
       OutputFollow.pillLabelExpr |> Expect.stringContains "singular words" "' new eval'"
       OutputFollow.pillLabelExpr |> Expect.stringContains "plural words" "' new evals'"
+
+    testCase "the panel follows its own box: one observer per element, and it only moves a panel that is pinned" <| fun _ ->
+      // The behaviour is proved in a browser (OutputPanelLayoutBrowserTests). This holds the two things a reader of the
+      // expression must be able to rely on: it never moves an unpinned reader, and it never stacks observers.
+      OutputFollow.resizeFollowExpr |> Expect.stringContains "watches the panel's size" "new ResizeObserver("
+      OutputFollow.resizeFollowExpr |> Expect.stringContains "moves the panel only while it is pinned" (sprintf "$%s && el.scrollTo(" Signals.OutputPinned)
+      OutputFollow.resizeFollowExpr |> Expect.stringContains "creates the observer once per element" "el.followResize ||"
   ]
 
   testList "content revision" [
