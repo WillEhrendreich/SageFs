@@ -1348,3 +1348,54 @@ Evidence: `SageFs.Core/Features/ToolAnswer.fs`, `SageFs/McpAnalysis.fs`, `SageFs
 `SageFs.Tests/HonestEmptiesOutcomeTests.fs` (a real MCP client against a real daemon: two sessions, one with a failing test).
 Reopen it if: a tool that reads tests can say something useful with no recorded test result, the `/exec` and MCP writers share one
 per-session store, or discovery needs to rank by the session's workflow.
+
+## A build in a repo that builds its own SageFs.Core compiles against that Core, and a wait covers a rebuild
+
+Three agents developed SageFs with SageFs and hit the same two walls, one after another. I read the code for each before changing anything.
+
+**The skew.** `hard_reset_fsi_session rebuild=true` failed as soon as SageFs, SageFs.Host or SageFs.Tests used an API the worktree's
+SageFs.Core had added and the running daemon's Core did not. The cause is in `SessionBuild.coreReferenceTargetsContent`: every build a
+session runs gets the daemon's own `SageFs.Core.dll` injected as a `<Reference>`, so a user project can use the holder API without
+writing a HintPath. That is right for a project with no Core of its own. For a project in a repo that builds SageFs.Core, MSBuild
+hands the same injection to every project the build reaches through a ProjectReference, so each one compiled against the daemon's older
+Core metadata and the new names were "not defined". The injection is a build-time reference and nothing else: the isolated FSI host
+does not carry SageFs.Core, and a session already loads the project's own Core from its bin, so the host design does not make the
+injection unnecessary, it only means skipping it for these projects costs nothing at run time.
+
+**What it is now.** `CoreEvidence` (`SageFs.Core/CoreEvidence.fs`) reads the project files of what a session builds, and only the evidence
+that cannot vouch for itself: the project is SageFs.Core (by file name or `AssemblyName`), it or a project it references has a
+ProjectReference to SageFs.Core, or it wrote its own `<Reference Include="SageFs.Core">`. A `SageFs.Core.dll` in the project's bin is not
+evidence, because an earlier injected build puts the daemon's Core there. `SessionBuild.decideInjection` turns that into
+`InjectDaemonCore`, `UseProjectCore`, `NothingToInject` or `Refuse`. A project that cannot be read, or a referenced project that is
+missing, is refused with the path and the reason before a build slot is taken, because guessing "no Core of its own" is exactly the
+silent shadowing this fixes. A ProjectReference written with an MSBuild property other than `MSBuildThisFileDirectory` or
+`MSBuildProjectDirectory` is read for its name but not followed, and a reference added by an imported props file is not seen. Those two
+gaps leave the old behavior, not a new failure.
+
+**The hint.** The "move X above Y" advice came from matching a missing type's name against any later declaration of that spelling,
+including a union-case arm. `CompileOrderInsight` now matches by kind (a missing type is satisfied by a type, not by a `let` or a case),
+and a name defined by a referenced project gets its own hint: a stale reference, rebuild that project, the files are in order.
+
+**The wait.** `get_session_status wait_seconds` answered `NotNeeded` during a rebuild because a build-first rebuild keeps the old worker
+serving and the lifecycle reads Ready. `ReadyWait` (`SageFs.Core/ReadyWait.fs`) is now the one decision: the session manager settles
+its parked callers with it and the status tool decides whether to park with it, so they cannot disagree. A Ready session with a rebuild
+in progress keeps the caller parked until the new worker is Ready. A rebuild that fails answers the callers parked through it with the
+build's own error, so the outcome is `Faulted` and not a `BecameReady` from the worker that kept serving. The wait outcome set stays
+`NotNeeded | BecameReady | Faulted | TimedOut`, and `wait.lastRebuild` carries the rebuild's outcome. The manager records a rebuild a
+moment after the request is posted, so the tool layer remembers a rebuild it was asked for until the restart answers, and parks behind
+it. The park is queued after the request, so the rebuild is on the record when it is looked at, with no polling.
+
+**What I did not fix.** Adoption is a separate, run-time mechanism (`HostCoreAdoption`): the worker links the daemon's Core, and a
+session whose project ships its own `SageFs.Core.dll` gets that Core copied over the worker's, if the version numbers match. Version
+numbers only move when `scripts/ship` runs, so a worktree's Core and an older daemon's Host can match by number and still differ by
+build, which is the `TypeLoadException` seen on a Core session. That needs the daemon and its host to come from the build the session
+expects, and I left it. The outcome gate copies a real SageFs.Core for that reason: a stand-in Core has a different version and cannot be adopted.
+
+Evidence: `SageFs.Core/CoreEvidence.fs`, `SageFs.Core/SessionBuild.fs` (`decideInjection`), `SageFs.Core/ReadyWait.fs`,
+`SageFs.Core/SessionManager.fs` (`settleReadyWaiters`, `endRebuild`), `SageFs/SessionStatusPayload.fs`,
+`SageFs.Simulation/ReadyWaitSim.fs` (callers, rebuilds, deadlines and faults in every order, with twins that return early, poll, never
+time out and call a failed rebuild Ready), `SageFs.Tests/CoreInjectionTests.fs`, `SageFs.Tests/ReadyWaitManagerTests.fs`,
+`SageFs.Tests/StatusWaitTests.fs`, and `SageFs.Tests/SelfHostCoreOutcomeTests.fs` (a real daemon, a copy of SageFs.Core with one extra
+file, and a consumer that uses it).
+Reopen it if: the daemon and its host are always built together with the session's Core, so adoption can compare builds and not
+version numbers, or a project can add a SageFs.Core reference through a props file this does not read.
