@@ -346,9 +346,28 @@ module Timeouts =
   /// reason for 30s.
   let testRunAwaitSlack = forMachine (TimeSpan.FromSeconds(30.0))
   /// How long a cohort member may be silent before the reaper departs it and
-  /// orphans its claims. Silence, not busyness, costs a seat: any tool call and
-  /// any eval renews the lease, so this is generous. No recorded reason for 30
-  /// minutes.
+  /// orphans its claims. Silence, not busyness, costs a seat, so this is
+  /// generous. No recorded reason for 30 minutes.
+  ///
+  /// MEASURED, NOT ASSUMED — what counts as "not silent". The reaper
+  /// (`SageFs/DaemonMode.fs`'s `cohortReaperCallback`) renews a Present member
+  /// only when `AgentActivityTracker.getActivePresences` shows it inside
+  /// `agentActivityFresh`, and the only writer of that table on the MCP path is
+  /// `SageFs/Mcp.fs`'s `send_fsharp_code` body (plus the token-carrying branch
+  /// of `SageFs/McpServer.fs`'s call filter). So an EVAL renews a lease and a
+  /// tool call that is not an eval does not: a member that joins, claims,
+  /// requests landings, runs tests and reads status without ever evaluating is
+  /// departed `cohortLeaseWindow` after it joined. Recorded over 90 simulated
+  /// minutes of 60s reaper ticks, both members calling every minute: the
+  /// evaluating member held its claim for all 90; the calls-only member was
+  /// departed at minute 30 with its claim orphaned. This comment used to say
+  /// "any tool call and any eval renews the lease", which is false. The fix
+  /// belongs at `admitToolCallWithinStore` (`SageFs/Mcp.fs`), the one
+  /// chokepoint every admitted MCP call passes; see
+  /// `SageFs.Tests/CohortLeaseRenewalTests.fs`, which holds both halves of the
+  /// property a fix must keep (a busy member survives, a member that makes no
+  /// call at all still lapses). Nothing here changes: the window is right and
+  /// the rule it is paired with is the thing that is wrong.
   let cohortLeaseWindow = TimeSpan.FromMinutes(30.0)
   /// How long settled cohort history (orphaned and released claims, departed
   /// members, settled landings) stays before the sweep removes it. The same

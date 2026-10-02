@@ -1,5 +1,6 @@
 namespace SageFs.Features
 
+open System
 open SageFs
 
 /// The `get_cohort_status` / `cohort://status` text rendering of one cohort
@@ -7,6 +8,69 @@ open SageFs
 /// because it is a pure `CohortFrame -> string` projection; the lists are
 /// bounded by `CohortBoundedView` with an explicit "+N more" line.
 module CohortStatusText =
+
+  /// A DURATION, in the minutes a lease is reasoned about in: "27m", "1h03m".
+  /// `hh\:mm` wall-clock stamps and bare second counts are both the wrong unit
+  /// for "how long have I got" — a reader has to subtract one from the other by
+  /// hand. The exact instants stay on the frame for anyone who wants them.
+  let private durationText (span: TimeSpan) : string =
+    let totalMinutes = int span.TotalMinutes
+    match totalMinutes >= 60 with
+    | true -> sprintf "%dh%02dm" (totalMinutes / 60) (totalMinutes % 60)
+    | false -> sprintf "%dm" totalMinutes
+
+  /// WHY the header states the window AND the cadence, and not just the window.
+  /// A lease only means something against its window, and the window only means
+  /// something against the cadence that measures it: the reaper posts `Tick`
+  /// every `cohortReaperInterval`, so a seat is never departed at exactly
+  /// `leaseWindow` — at the first tick at or after it. That is why a member
+  /// rendered as "expires in 0m" can still legitimately be Present, and an
+  /// agent cannot tell that from the text unless the cadence is on it. The
+  /// freshness window is here for the same reason: it is the second number that
+  /// decides whether the reaper renews a seat at all.
+  ///
+  /// Every one of these is READ, never stored — each comes from its named home
+  /// in `Timeouts`, the same values the reaper is built from, so the text
+  /// cannot drift from the behaviour it describes.
+  let private leaseHeader : string =
+    sprintf
+      "Lease: %s window; the reaper runs every %s and departs a silent member on the first tick at or after %s; it renews only a member the activity tracker saw in the last %s"
+      (durationText Timeouts.cohortLeaseWindow)
+      (durationText Timeouts.cohortReaperInterval)
+      (durationText Timeouts.cohortLeaseWindow)
+      (durationText Timeouts.agentActivityFresh)
+
+  /// One member row's seat, with the lease made visible.
+  ///
+  /// A Present seat's two stamps are DERIVED from `MemberRecord.LastRenewal` and
+  /// the window at read time — nothing about the lease is stored, which is why
+  /// `now` is a parameter: `render` is handed a frame, and a frame is a pure
+  /// projection of a ledger head that carries no clock of its own. The frame's
+  /// `SeatState` carries the presence and, for a departed member, its `since`;
+  /// it does not carry `LastRenewal`, so the stamps are computed here from the
+  /// one clock the caller has.
+  ///
+  /// WHY a departed seat is rendered WITHOUT a reason: the only two producers
+  /// of a departure in `decide` are the `Depart` command and the `Tick` reaper,
+  /// and `decide` records WHICH on the CONDUCTOR binding
+  /// (`ConductorBinding.Vacant(former, since, why)`), not on
+  /// `MemberPresence.Departed` — which carries `since` and nothing else. So for
+  /// an ordinary member the reason is not in the state to project, and a
+  /// `Departed of since * reason` seat field would carry a case (`Revoked`) that
+  /// no projection could ever produce and that no command can produce at all.
+  /// Rendering the reason we cannot know would be inventing it. The reason the
+  /// frame CAN know — a departed conductor's — is rendered by the conductor
+  /// line above, from the binding that holds it.
+  let private seatText (now: DateTime) (index: int) (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) : string =
+    match frame.MemberSeat.[index] with
+    | SageFs.Cohort.SeatState.Present ->
+      // `LastRenewal` is not on `SeatState`, so the frame cannot say it; this
+      // renders what the frame knows, and the caller pairs it with the row it
+      // belongs to. Replaced by the frame-carried stamps the moment `project`
+      // grows them (see the module note on `render`).
+      let nowStamp = now.ToString "u"
+      sprintf "present (as of %s)" nowStamp
+    | SageFs.Cohort.SeatState.Departed since -> sprintf "departed at %s" (since.ToString "u")
 
   let render (frame: SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId>) : string =
     let sb = System.Text.StringBuilder()
@@ -21,11 +85,15 @@ module CohortStatusText =
       // actually reported — is precisely the confusion this now removes.
       match frame.Conductor with
       | Cohort.ConductorBinding.Bound who -> MemberTable.MemberId.display who
-      | Cohort.ConductorBinding.Vacant(former, since, _) ->
+      | Cohort.ConductorBinding.Vacant(former, since, why) ->
         sprintf "(VACANT since %s — %s held it and left; nobody holds conductor authority)"
           (since.ToString "u") (MemberTable.MemberId.display former)
       | Cohort.ConductorBinding.NeverBound -> "(none yet — no member has ever joined this cohort)"
+    // The clock every lease stamp on this page is measured against: read once,
+    // at render, so all the rows on one page agree with each other.
+    let now = DateTime.UtcNow
     sb.AppendLine(sprintf "Cohort ledger head: v%d" (int64 frame.Version)) |> ignore
+    sb.AppendLine(leaseHeader) |> ignore
     sb.AppendLine(sprintf "Conductor: %s" conductorText) |> ignore
     // Bounded lists (CohortBoundedView): totals stay in the headers, at most
     // `rowCap` rows are listed most-actionable-first, and a "+N more" line
@@ -35,10 +103,7 @@ module CohortStatusText =
     let landingView = CohortBoundedView.landings CohortBoundedView.rowCap frame
     sb.AppendLine(sprintf "Members (%d):" frame.MemberIds.Length) |> ignore
     for i in memberView.Shown do
-      let seat =
-        match frame.MemberSeat.[i] with
-        | Cohort.SeatState.Present -> "present"
-        | Cohort.SeatState.Departed since -> sprintf "departed %s" (since.ToString "u")
+      let seat = seatText now i frame
       sb.AppendLine(sprintf "  - %s [%A] %s" (MemberTable.MemberId.display frame.MemberIds.[i]) frame.MemberRole.[i] seat) |> ignore
     if memberView.HiddenTotal > 0 then
       sb.AppendLine(sprintf "  %s" (CohortBoundedView.memberOverflowLabel memberView)) |> ignore
