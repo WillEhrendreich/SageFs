@@ -46,6 +46,13 @@ fi
 "$REPO/scripts/sync-nvim-version" --impact "$sha"
 
 "$REPO/scripts/local-gate" "$sha"
+
+# The daemon this machine runs must be the build being shipped: install the nupkg the gate just built and
+# restart the daemon on it, and prove the daemon reports that version, before anything is pushed. Open
+# sessions on the daemon are dropped on purpose (Will: knocking other agents out so they get the upgraded
+# SageFs is always the right call). A version-skewed daemon costs signal, so this is not optional.
+"$REPO/scripts/install-local" "$sha" --force
+
 git -C "$REPO" push origin "$sha:refs/heads/master"
 echo "ship: pushed ${sha:0:8}; the self-hosted runner promotes its bundle to publish"
 
