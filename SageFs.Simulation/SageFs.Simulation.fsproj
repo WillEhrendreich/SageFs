@@ -224,6 +224,12 @@
         <Compile Include="MemoryShedInvariants.fs" />
         <Compile Include="LeaseSim.fs" />
         <Compile Include="LeaseSimInvariants.fs" />
+        <!-- Per-run member capability DST: mint, present, touch and revoke folded through the REAL
+             Capability.decide and resolve; eight twins (token minted from ledger entropy, mint that
+             ignores its minter, clamping mint, string-prefix claim check, reviving touch, mint over a
+             revoked hash, never-expiring token, bad token that falls back) prove the invariants' teeth. -->
+        <Compile Include="CapabilitySim.fs" />
+        <Compile Include="CapabilitySimInvariants.fs" />
         <!-- Debugging one test DST: holds, expiries, debugger attach, release, finish and a dying host, folded
              through the REAL TestDebug.step; two twins (never expires, runs unattached) prove the teeth. -->
         <Compile Include="TestDebugSim.fs" />
