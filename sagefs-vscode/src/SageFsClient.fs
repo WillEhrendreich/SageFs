@@ -83,7 +83,11 @@ type SessionInfo =
     /// The daemon's own usability verdict (`SageFs.Core/SessionHealth.fs`),
     /// as sent on `/api/sessions`. Every client-side health rendering reads
     /// THIS — no surface re-derives a verdict of its own.
-    health: SessionsTreePure.SessionHealth }
+    health: SessionsTreePure.SessionHealth
+    /// What the last save did to the running app (`lastReload`), and whether the REPL is behind the app
+    /// since (`replFreshness`). `NoReloadYet` and `NotReported` from a daemon too old to send them.
+    lastReload: ReloadReportPure.Report
+    replFreshness: ReloadReportPure.Freshness }
 
 type LoadedAssemblyInfo =
   { Name: string
@@ -364,7 +368,21 @@ let parseSessions (parsed: obj) =
         | Some h ->
           SessionsTreePure.SessionHealth.ofWire
             (fieldString "status" h |> Option.defaultValue "")
-            (fieldString "reason" h |> Option.defaultValue "") })
+            (fieldString "reason" h |> Option.defaultValue "")
+      // `lastReload` is null until a save resolves; a daemon older than it sends no field at all.
+      lastReload =
+        match fieldObj "lastReload" s with
+        | None -> ReloadReportPure.Report.NoReloadYet
+        | Some r -> LiveTestingListener.parseReportWire r |> ReloadReportPure.reportOfWire
+      replFreshness =
+        match fieldObj "replFreshness" s with
+        | None -> ReloadReportPure.Freshness.NotReported
+        | Some f ->
+          ReloadReportPure.Freshness.ofWire
+            (fieldString "state" f |> Option.defaultValue "")
+            (fieldInt "savesSince" f |> Option.defaultValue 0)
+            (fieldStringArray "declarations" f |> Option.defaultValue [||] |> Array.toList)
+            (fieldString "message" f |> Option.defaultValue "") })
 
 let listSessions (c: Client) =
   promise {

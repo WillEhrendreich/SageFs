@@ -61,6 +61,8 @@ let mutable outputChannel: OutputChannel option = None
 let mutable statusBarItem: StatusBarItem option = None
 let mutable testStatusBarItem: StatusBarItem option = None
 let mutable evalPerfStatusBar: StatusBarItem option = None
+/// The latest hot reload verdict for this window's session (see ReloadReportPure).
+let mutable reloadStatusBarItem: StatusBarItem option = None
 let mutable appStatusBarItem: StatusBarItem option = None
 let mutable diagnosticsDisposable: Disposable option = None
 let mutable sseDisposable: Disposable option = None
@@ -748,6 +750,30 @@ let updateEvalPerfBar (stats: VscTimelineStats) =
         |> String.concat "\n")
       sb.show ()
 
+/// Show what the last save did to the window session's running app, or nothing before the first save.
+/// The verdict, its mechanism (metadata delta or detour) and whether the REPL is now behind the app all
+/// come from the session's own record on the daemon.
+let renderReloadStatus (session: Client.SessionInfo option) =
+  match reloadStatusBarItem with
+  | None -> ()
+  | Some sb ->
+    let item =
+      match session with
+      | Some s -> ReloadReportPure.statusItem s.lastReload s.replFreshness
+      | None -> ReloadReportPure.StatusItem.Hidden
+    match item with
+    | ReloadReportPure.StatusItem.Hidden -> sb.hide ()
+    | ReloadReportPure.StatusItem.Shown view ->
+      sb.text <- view.Text
+      sb.tooltip <- Some view.Tooltip
+      sb?accessibilityInformation <- createObj [ "label" ==> view.Tooltip ]
+      sb.backgroundColor <-
+        match view.Tone with
+        | ReloadReportPure.StatusTone.Failing -> Some (newThemeColor "statusBarItem.errorBackground")
+        | ReloadReportPure.StatusTone.Warning -> Some (newThemeColor "statusBarItem.warningBackground")
+        | ReloadReportPure.StatusTone.Plain -> None
+      sb.show ()
+
 /// The status a window reports when sessions exist on the daemon but none is for this workspace.
 [<Literal>]
 let noSessionForThisWorkspaceStatus = "no session for this workspace"
@@ -855,6 +881,7 @@ let refreshStatus () =
         sb.backgroundColor <- None
         sb.show ()
         releaseWindowSession ()
+        renderReloadStatus None
         knownSessions <- [||]
         // Offline: the daemon replays its active session when the stream comes back, so take that in.
         liveTestListener |> Option.iter (fun l -> l.SetEventFilter SessionScopePure.EventFilter.AnySessionUntilBound)
@@ -885,6 +912,7 @@ let refreshStatus () =
             | _ -> Some noSessionForThisWorkspaceStatus
         // Whatever state it is in, this is the session commands, filters and views follow.
         session |> Option.iter (adoptWindowSession c)
+        renderReloadStatus session
         match windowStatus with
         | Some st when SessionScopePure.phaseOfStatus st = SessionScopePure.SessionPhase.Usable ->
           warmupPhase <- None
@@ -2565,6 +2593,11 @@ let activate (context: ExtensionContext) =
   evalPerfStatusBar <- Some esb
   context.subscriptions.Add (esb :> obj :?> Disposable)
 
+  let rsb = Window.createStatusBarItem StatusBarAlignment.Left 46.
+  rsb.command <- Some "sagefs.showOutput"
+  reloadStatusBarItem <- Some rsb
+  context.subscriptions.Add (rsb :> obj :?> Disposable)
+
   let asb = Window.createStatusBarItem StatusBarAlignment.Left 47.
   asb.command <- Some "sagefs.runApp"
   appStatusBarItem <- Some asb
@@ -3292,6 +3325,40 @@ let activate (context: ExtensionContext) =
             | Some "Show Output" -> showOutputPanel ()
             | _ -> ()
           } |> promiseIgnore
+      OnReloadReported = fun sessionId report ->
+        promise {
+          // The session's own record is the source for the status item and for whether the REPL is now
+          // behind the app, so read it before saying anything: the event carries the verdict, not that.
+          let! sessions = Client.listSessions c
+          knownSessions <- sessions
+          renderReloadStatus (windowSession sessions)
+          match showsEventFor (SessionScopePure.EventSubject.SessionEvent sessionId) with
+          | false ->
+            c.log (sprintf "[debug] Hot reload report for session %s, not this workspace's, so no message here (sagefs.%s shows these)" sessionId SessionScopePure.eventSourcesSettingKey)
+          | true ->
+            let freshness =
+              sessions
+              |> Array.tryFind (fun s -> s.id = sessionId)
+              |> Option.map (fun s -> s.replFreshness)
+              |> Option.defaultValue ReloadReportPure.Freshness.NotReported
+            // One message per save: the verdict that ends it. A pending patch and a save still
+            // compiling are in the status bar only.
+            match ReloadReportPure.noticeFor report freshness with
+            | ReloadReportPure.Notice.Quiet -> ()
+            | ReloadReportPure.Notice.Show body ->
+              (getOutput()).appendLine (sprintf "[SageFs] %s" body.Text)
+              let captions = body.Actions |> List.map ReloadReportPure.NoticeAction.caption |> List.toArray
+              let! choice =
+                match body.Severity with
+                | ReloadReportPure.Severity.Info -> Window.showInformationMessage body.Text captions
+                | ReloadReportPure.Severity.Warning -> Window.showWarningMessage body.Text captions
+                | ReloadReportPure.Severity.Error -> Window.showErrorMessage body.Text captions
+              match choice |> Option.bind (fun caption -> body.Actions |> List.tryFind (fun a -> ReloadReportPure.NoticeAction.caption a = caption)) with
+              | Some ReloadReportPure.NoticeAction.ShowOutput -> showOutputPanel ()
+              | Some ReloadReportPure.NoticeAction.HardResetRebuild -> Commands.executeCommand "sagefs.hardReset" |> ignore
+              | None -> ()
+        }
+        |> promiseIgnoreLog (fun m -> (getOutput()).appendLine m)
       OnStateCleared = fun () ->
         adapter.Reset ()
         fileAnnotationsCache <- Map.empty

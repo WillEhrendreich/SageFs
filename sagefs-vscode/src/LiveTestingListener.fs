@@ -258,6 +258,9 @@ type StateEventAction =
   | StateModelChanged of outputCount: int * diagCount: int
   | StateHeartbeat
   | StateUnknown
+  /// What a save did to the running app (compiling, or a verdict), for one session. The payload is the
+  /// `reloadReported` object, read by `parseReportWire`. Added after `StateUnknown` so the tags above held.
+  | StateReloadReported of sessionId: string * payload: obj
 
 /// Map a decoded "state" SSE payload to its action by inspecting which field is
 /// present. Order matters only where a payload could carry more than one marker
@@ -287,6 +290,11 @@ let classifyStateEvent (data: obj) : StateEventAction =
   match fieldBool "hotReloadChanged" data with
   | Some true -> StateHotReloadChanged (fieldString "sessionId" data |> Option.defaultValue "")
   | _ ->
+  match fieldObj "reloadReported" data with
+  // The payload is read straight off the frame: unwrapping the option here would put a compiler-numbered
+  // helper into this function, which the golden harness extracts and runs on its own.
+  | Some _ -> StateReloadReported (fieldString "sessionId" data |> Option.defaultValue "", data?reloadReported)
+  | None ->
   match fieldBool "systemAlarm" data with
   | Some true ->
     StateSystemAlarm (
@@ -299,6 +307,18 @@ let classifyStateEvent (data: obj) : StateEventAction =
   match fieldBool "sessionProgress" data with
   | Some true -> StateHeartbeat
   | _ -> StateUnknown
+
+/// Read a `reloadReported` payload (the `ReloadReported` state event, and `lastReload` on a session) into
+/// the fields ReloadReportPure works from. Missing fields are empty or zero, never invented.
+let parseReportWire (payload: obj) : SageFs.Vscode.ReloadReportPure.ReportWire =
+  { State = fieldString "state" payload |> Option.defaultValue ""
+    File = fieldString "file" payload |> Option.defaultValue ""
+    Outcome = fieldString "outcome" payload |> Option.defaultValue ""
+    Patched = fieldInt "patched" payload |> Option.defaultValue 0
+    Considered = fieldInt "considered" payload |> Option.defaultValue 0
+    Message = fieldString "message" payload |> Option.defaultValue ""
+    SuggestedAction = fieldString "suggestedAction" payload |> Option.defaultValue ""
+    Mechanism = fieldString "mechanism" payload |> Option.defaultValue "" }
 
 // ── Listener lifecycle ───────────────────────────────────────
 
@@ -324,6 +344,8 @@ type LiveTestingCallbacks = {
   /// The listener dropped the test state it had taken, because a stranger's events were in it when this
   /// window bound its own session. Decorations, the Test Explorer and caches built from it are stale.
   OnStateCleared: unit -> unit
+  /// What a save did to a session's running app: the session id, and the report.
+  OnReloadReported: string -> SageFs.Vscode.ReloadReportPure.Report -> unit
   OnDomainModel: obj -> unit
   OnDiagnosisReady: obj -> unit
   OnBindingValuesUpdate: int -> ClientBindingValue list -> unit
@@ -451,6 +473,8 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         // Progress/ready/switch/hotreload/alarm/model changes all just mean
         // "something moved — re-poll the daemon for fresh status". The detailed
         // warmup UI is driven by the still-distinct "warmup_progress" frame.
+        | StateReloadReported (sessionId, payload) ->
+          callbacks.OnReloadReported sessionId (SageFs.Vscode.ReloadReportPure.reportOfWire (parseReportWire payload))
         | StateWarmupProgress _
         | StateSessionReady _
         | StateSessionSwitched _
