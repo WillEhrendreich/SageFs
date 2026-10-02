@@ -467,19 +467,6 @@ let private scoreCommand (args: string list) : int =
     eprintfn "usage: LemScore score --run-dir D --task T --model M --harness H --oracle-exit N|skip [--cmdc-exit N --seconds N --sagefs-version V --daemon-version V --bridge-version V --cleanup C --mem-start P --avail-start B --leases-start N --port N]"
     ExitCode.usage
 
-/// `LemScore version-skew --daemon V --bridge V`: prints the warning and exits 0, or prints
-/// nothing when the two builds agree. A warning, never a refusal: a free model on a bridge one
-/// commit behind is still a valid trial, as long as the summary says which builds it was.
-let private versionSkewCommand (args: string list) : int =
-  let m = flags args
-  match need m "daemon", need m "bridge" with
-  | Ok daemon, Ok bridge ->
-    versionSkew daemon bridge |> Option.iter (printfn "%s")
-    ExitCode.ok
-  | Error e, _ | _, Error e ->
-    eprintfn "usage: LemScore version-skew --daemon V --bridge V (%s)" e
-    ExitCode.usage
-
 [<EntryPoint>]
 let main argv =
   match List.ofArray argv with
@@ -493,7 +480,6 @@ let main argv =
   | "replace-exact" :: rest -> replaceExactCommand rest
   | "expect" :: rest -> expectCommand rest
   | "dll-version" :: rest -> dllVersionCommand rest
-  | "version-skew" :: rest -> versionSkewCommand rest
   | "prune" :: rest -> pruneCommand rest
   | "score" :: rest -> scoreCommand rest
   | _ ->
