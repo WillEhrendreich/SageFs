@@ -92,7 +92,7 @@ let tests =
     testCase "WHY - the accessible name separates label from description, because they used to read as 'no projectReady'" <| fun _ ->
       let row = renderRow (session "a" "Ready" [| "/w/Foo.fsproj" |] [||] 3)
       row.AccessibleName |> Expect.stringContains "has a separator" " — "
-      row.AccessibleName |> Expect.equal "reads as two fields" "Foo — Ready · 3 evals · w · a"
+      row.AccessibleName |> Expect.equal "reads as two fields" "Foo — a · Ready · 3 evals · w"
       row.Description |> Expect.stringContains "carries the status" "Ready"
       row.Description |> Expect.stringContains "carries the eval count" "3 evals"
 
@@ -102,7 +102,7 @@ let tests =
 
     testCase "WHY - a session with no evals does not advertise a count at all" <| fun _ ->
       (renderRow (session "a" "Ready" [||] [| "/w/A.fsproj" |] 0)).Description
-      |> Expect.equal "just the status, then where and which" "Ready · w · a"
+      |> Expect.equal "id first, then the status, then where" "a · Ready · w"
 
     testCase "WHY - the active session is marked, because every other view acts on it implicitly" <| fun _ ->
       let row = renderRow { session "a" "Ready" [| "/w/A.fsproj" |] [||] 0 with IsActive = true }
@@ -126,23 +126,23 @@ let tests =
 
     testCase "WHY - a one-folder path shows that folder, and an empty one shows none" <| fun _ ->
       (renderRow { session "a" "Ready" [||] [||] 0 with WorkingDirectory = "/w" }).Description
-      |> Expect.equal "one folder" "Ready · w · a"
+      |> Expect.equal "one folder" "a · Ready · w"
       (renderRow { session "a" "Ready" [||] [||] 0 with WorkingDirectory = "" }).Description
-      |> Expect.equal "none" "Ready · a"
+      |> Expect.equal "none" "a · Ready"
 
     testCase "WHY - the short id is the first eight characters, which is how the daemon's own tools print it" <| fun _ ->
       (renderRow { session "048bb7fe9c21" "Ready" [||] [||] 0 with WorkingDirectory = "/w" }).Description
-      |> Expect.equal "short" "Ready · w · 048bb7fe"
+      |> Expect.equal "short" "048bb7fe · Ready · w"
 
-    testCase "WHY - the session this window talks to is marked first" <| fun _ ->
+    testCase "WHY - the session this window talks to is marked right after its id, which leads because the sidebar cuts a description from the right" <| fun _ ->
       (renderRow { session "a" "Ready" [||] [||] 2 with IsActive = true }).Description
-      |> Expect.equal "active leads" "active · Ready · 2 evals · w · a"
+      |> Expect.equal "active follows the id" "a · active · Ready · 2 evals · w"
 
     testCase "WHY - the session for this workspace says so, even when it is not the active one" <| fun _ ->
       (renderRow { session "a" "Ready" [||] [||] 0 with Relation = WorkspaceRelation.InThisWorkspace }).Description
-      |> Expect.equal "workspace mark" "this workspace · Ready · w · a"
+      |> Expect.equal "workspace mark" "a · this workspace · Ready · w"
       (renderRow { session "a" "Ready" [||] [||] 0 with IsActive = true; Relation = WorkspaceRelation.InThisWorkspace }).Description
-      |> Expect.equal "both marks" "active · this workspace · Ready · w · a"
+      |> Expect.equal "both marks" "a · active · this workspace · Ready · w"
 
     testCase "WHY - a session elsewhere carries no workspace mark" <| fun _ ->
       Expect.isFalse "no mark" ((renderRow (session "a" "Ready" [||] [||] 0)).Description.Contains "this workspace")
@@ -174,7 +174,7 @@ let tests =
       // in the product.
       let row = renderRow { session "a" "Ready" [||] [||] 0 with Health = SessionHealth.Healthy }
       row.Icon |> Expect.equal "green bolt for a healthy bare session" "zap"
-      row.Description |> Expect.equal "no health noise on the common case" "Ready · w · a"
+      row.Description |> Expect.equal "no health noise on the common case" "a · Ready · w"
 
     testCase "WHY - a Ready session the daemon calls Degraded wears the warning, whatever it loaded" <| fun _ ->
       // SessionHealth.fs:118-121 — Degraded requires projectRoles NON-empty,
@@ -206,7 +206,7 @@ let tests =
       // to stop inventing.
       let row = renderRow { session "a" "Ready" [||] [||] 0 with Health = SessionHealth.Unknown }
       row.Icon |> Expect.equal "falls back to the lifecycle status" "zap"
-      row.Description |> Expect.equal "silent about health it does not know" "Ready · w · a"
+      row.Description |> Expect.equal "silent about health it does not know" "a · Ready · w"
 
     testCase "WHY - ofWire is total, and an unrecognised status is Unknown rather than a verdict" <| fun _ ->
       SessionHealth.ofWire "Healthy" "" |> Expect.equal "healthy" SessionHealth.Healthy

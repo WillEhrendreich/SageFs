@@ -868,6 +868,7 @@ let refreshStatus () =
                 EvalCount = s.evalCount
                 WorkingDirectory = s.workingDirectory
                 IsActive = true
+                Relation = SessionScopePure.relationOf (workspaceFolderPaths () |> Array.toList) s.workingDirectory
                 Health = s.health }
             currentWorkflowLabel <- s.workflowLabel
             let view =

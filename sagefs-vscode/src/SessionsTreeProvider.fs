@@ -25,6 +25,10 @@ let private rowFor (s: Client.SessionInfo) (isActive: bool) : SessionsTreePure.S
     match jsIsNullOrUndefined (box arr) with
     | true -> [||]
     | false -> arr |> Array.filter (fun p -> not (jsIsNullOrUndefined (box p)))
+  let roots =
+    match Workspace.workspaceFolders () with
+    | Some folders -> folders |> Array.map (fun f -> f.uri.fsPath) |> Array.toList
+    | None -> []
   SessionsTreePure.renderRow
     { Id = s.id
       Status = s.status
@@ -33,6 +37,7 @@ let private rowFor (s: Client.SessionInfo) (isActive: bool) : SessionsTreePure.S
       EvalCount = s.evalCount
       WorkingDirectory = s.workingDirectory
       IsActive = isActive
+      Relation = SessionScopePure.relationOf roots s.workingDirectory
       Health = s.health }
 
 // ── TreeDataProvider ─────────────────────────────────────────────
