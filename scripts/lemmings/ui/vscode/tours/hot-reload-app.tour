@@ -1,7 +1,8 @@
 # fixture: falco-hello
 # Hot reload on a running app: the Falco hello fixture, started from the editor, then a route's text
-# changed and saved. This is the case the hot reload docs describe, so a "patched" line is expected.
-# Two sizes.
+# changed and saved. The window has to say what the save did: a status bar item with the verdict (the
+# mechanism, and whether the REPL is now behind the app) and one message when the save is settled.
+# Before, nothing in the window mentioned the patch. Two sizes.
 resize 1280 800
 expect-text SageFs
 wait 12
@@ -12,11 +13,17 @@ wait 3
 shot create-session-1280x800
 key enter
 expect-session --within 240
-expect-text --within 60 session {session}
+expect-text --within 60 — session {session} —
 
-set-workflow HotReload
-wait 30
+# The real Switch Workflow, not the harness's: the choice now reaches the daemon.
+command SageFs: Switch Workflow
+wait 2
+key down
+key down
+key enter
+expect-text --within 60 Switched to Hot Reload
 expect-session --within 240
+expect-text --within 120 [Hot Reload]
 wait 5
 open Program.fs
 wait 3
@@ -33,8 +40,8 @@ command SageFs: Watch All Files
 wait 8
 shot watching-1280x800 --region sidebar --region statusbar
 replace Program.fs "Hello from Falco" "Hello from VS Code"
-wait 30
-wait 10
+expect-text --within 120 Hot reload:
+wait 3
 shot after-save-1280x800 --region editor --region sidebar --region statusbar --region panel
 
 resize 1024 700
