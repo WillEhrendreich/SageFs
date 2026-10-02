@@ -82,15 +82,24 @@ let private serve (page: IPage) = task {
 /// A page on the in-memory dashboard, once the panel has followed the output to the bottom.
 let private openDashboard (body: IPage -> Task<unit>) = task {
   let! page = PlaywrightFixture.newPage ()
-  try
-    do! page.SetViewportSizeAsync(viewportWidth, viewportHeight)
-    do! serve page
-    let! _ = page.GotoAsync(sprintf "%s/dashboard" origin)
-    let! distance = OutputScroll.waitForAtBottom BrowserWaits.pageProbe page
-    Expect.isTrue (distance <= OutputScroll.atBottomTolerance) (sprintf "the first render follows to the bottom (%f px from bottom)" distance)
-    do! body page
-  finally
-    PlaywrightFixture.closePage(page).GetAwaiter().GetResult()
+  // The page is closed by awaiting, never by blocking a thread on it (the suite's blocking-call budget only goes
+  // down). A task block cannot await in a finally, so the failure is carried out of the block and rethrown after.
+  let! failure =
+    task {
+      try
+        do! page.SetViewportSizeAsync(viewportWidth, viewportHeight)
+        do! serve page
+        let! _ = page.GotoAsync(sprintf "%s/dashboard" origin)
+        let! distance = OutputScroll.waitForAtBottom BrowserWaits.pageProbe page
+        Expect.isTrue (distance <= OutputScroll.atBottomTolerance) (sprintf "the first render follows to the bottom (%f px from bottom)" distance)
+        do! body page
+        return None
+      with ex -> return Some ex
+    }
+  do! PlaywrightFixture.closePage page
+  match failure with
+  | Some ex -> System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex).Throw()
+  | None -> ()
 }
 
 /// Put an eval's answer where the daemon's eval POST puts it: replace the page's result slot with the fragment.
