@@ -943,6 +943,12 @@ module FixtureDurations =
 
   // Scenario inputs.
 
+  /// How far inside a boundary a lease case puts a caller who is still asking (inside the window a queued ask
+  /// stays in line for): any positive margin does, this one is far above the clock's resolution.
+  let insideTheBoundary = System.TimeSpan.FromSeconds 30.
+  /// How far past a boundary a lease case puts the clock, so a lease or an ask is certainly lapsed.
+  let pastTheBoundary = System.TimeSpan.FromSeconds 1.
+
   /// A pass of virtual time (in seconds) longer than any lease lives, so every abandoned lease is
   /// past its ttl. Chosen against `Timeouts.leaseTtlRunApp`, the longest.
   let passPastEveryLease : int = int (SageFs.Timeouts.leaseTtlRunApp.TotalSeconds * 1.5)

@@ -28,7 +28,7 @@ let tests =
       let held, _ = request epoch MemoryPressure.Tight empty siblingOne Kind.FullBuild
       let now = epoch.AddSeconds 30.0
       let _, decision = request now MemoryPressure.Tight held siblingTwo Kind.FullBuild
-      let json = parse (McpLeaseWire.decisionJson now Kind.FullBuild decision)
+      let json = parse (McpLeaseWire.decisionJson now siblingTwo Kind.FullBuild decision)
       json.GetProperty("decision").GetString() |> Expect.equal "the token the guard hook already reads" "wait"
       json.GetProperty("kind").GetString() |> Expect.equal "kind" "full_build"
       json.GetProperty("position").GetInt32() |> Expect.equal "place in line" 1
@@ -47,7 +47,7 @@ let tests =
       let held, first = request epoch MemoryPressure.Normal empty siblingOne Kind.FullBuild
       let id = match first with Decision.Granted(id, _) -> LeaseId.value id | other -> failtestf "expected Granted, got %A" other
       let _, decision = request epoch MemoryPressure.Normal held siblingOne Kind.TestSuiteRun
-      let json = parse (McpLeaseWire.decisionJson epoch Kind.TestSuiteRun decision)
+      let json = parse (McpLeaseWire.decisionJson epoch siblingOne Kind.TestSuiteRun decision)
       json.GetProperty("decision").GetString() |> Expect.equal "refused" "refused"
       json.GetProperty("heldLease").GetProperty("leaseId").GetString() |> Expect.equal "the lease it holds" id
       json.GetProperty("reason").GetString() |> Expect.stringContains "says to release it" "release_work_lease"
@@ -56,14 +56,14 @@ let tests =
       let held, first = request epoch MemoryPressure.Normal empty siblingOne Kind.FullBuild
       let id = match first with Decision.Granted(id, _) -> LeaseId.value id | other -> failtestf "expected Granted, got %A" other
       let _, again = request (epoch.AddMinutes 1.0) MemoryPressure.Normal held siblingOne Kind.FullBuild
-      let json = parse (McpLeaseWire.decisionJson (epoch.AddMinutes 1.0) Kind.FullBuild again)
+      let json = parse (McpLeaseWire.decisionJson (epoch.AddMinutes 1.0) siblingOne Kind.FullBuild again)
       json.GetProperty("decision").GetString() |> Expect.equal "still a grant, so callers that proceed on granted keep working" "granted"
       json.GetProperty("grant").GetString() |> Expect.equal "and it says it is the one it already had" "already_held"
       json.GetProperty("leaseId").GetString() |> Expect.equal "the same id" id
 
     testCase "a fresh grant says it is new" <| fun () ->
       let _, decision = request epoch MemoryPressure.Normal empty siblingOne Kind.RunApp
-      let json = parse (McpLeaseWire.decisionJson epoch Kind.RunApp decision)
+      let json = parse (McpLeaseWire.decisionJson epoch siblingOne Kind.RunApp decision)
       json.GetProperty("grant").GetString() |> Expect.equal "new" "new"
       json.GetProperty("heldBy").GetProperty("agentName").GetString() |> Expect.equal "attributed from the first moment" "sub-agent-one"
   ]

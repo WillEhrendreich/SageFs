@@ -246,9 +246,8 @@ module FeatureDiscovery =
       ContextSummary = contextSummary
       TotalKnownFeatures = registered.Length }
 
-  /// Discovery with no registered set to read, so nothing to advertise. It exists because
-  /// `Mcp.discoverFeatures` still calls it; the tool itself calls `discoverOver` with the
-  /// registered set, and `Mcp.discoverFeatures` can be deleted.
+  /// Discovery with no registered set to read, so nothing to advertise. Only the tests call it
+  /// now; the tool calls `discoverOver` with the registered set (`Mcp.discoverFeatures` is gone).
   let discover (ctx: DiscoveryContext) : DiscoveryReport =
     discoverOver [] ctx
 

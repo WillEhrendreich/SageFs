@@ -7,7 +7,7 @@ open SageFs.McpSessionRouting
 open SageFs.Features.ToolAnswers
 
 /// The session-analysis tools (`impact_forecast`, `get_cell_dependencies`, `plan_ripple`,
-/// `preview_what_if`, `suggest_next_cell`, `diagnose`, `coverage_intel`).
+/// `preview_what_if`, `suggest_next_cell`, `suggest_next_action`, `diagnose`, `coverage_intel`).
 ///
 /// Each one answers for ONE session, resolved the way `run_tests` resolves it, and reads that
 /// session's own eval history (the store `send_fsharp_code` records into) and that session's own
@@ -288,6 +288,55 @@ module McpAnalysis =
         |> json
         |> fun body -> ToolAnswer.Measured { Body = body; Unmeasured = unmeasured }
 
+    /// A ranked "what to do next" queue over the session's cells and tests. Like `diagnose` it
+    /// needs either an eval or a test result, and it names the side it could not read, so an empty
+    /// queue is never a claim about a side nobody measured.
+    let suggestNextAction
+      (state: Features.FeatureHooks.FeaturePushState)
+      (side: TestSide)
+      (frictionStore: Features.FrictionSqlite.FrictionStore option)
+      : ToolAnswer<Measurement> =
+      match Readiness.diagnosable (evalCount state) (resultCount side) with
+      | Error reason -> ToolAnswer.NotAvailable reason
+      | Ok unmeasured ->
+        let testState = side.Cycle.TestState
+        let coverageReports =
+          Features.CoverageIntel.CoverageIntel.compose
+            (failuresOf side.Cycle) (fun _ -> []) side.Maps testState.TestCoverageBitmaps side.Cycle.DepGraph
+        // Real per-cell durations from the session's own EvalTimeline.
+        let graph = Features.FeatureHooks.cellGraph state
+        let stats = Features.EvalTimeline.timelineStats 20 state.CachedTimeline
+        let p50, p95 = stats.P50Ms |> Option.defaultValue 0.0, stats.P95Ms |> Option.defaultValue 0.0
+        let impactReports =
+          graph.Cells
+          |> Map.toList
+          |> List.map (fun (cellId, _) ->
+            let durations =
+              state.CachedTimeline.Entries
+              |> List.filter (fun e -> e.CellId = cellId)
+              |> List.truncate 10
+              |> List.map (fun e -> float e.DurationMs)
+            Features.ImpactForecast.ImpactForecast.analyzeCell cellId p50 p95 durations
+              (Features.CellDependencyGraph.transitiveStale graph cellId))
+        // The changed cell is the most recently evaluated one.
+        let changedCellIds =
+          state.CachedTimeline.Entries |> List.tryHead |> Option.map (fun e -> e.CellId) |> Option.toList |> Set.ofList
+        let frictionSignalReports = Features.McpFrictionRecorder.Recorder.computeFrictionSignalReports frictionStore
+        let report =
+          Features.ActionPrioritizer.ActionPrioritizer.compose graph coverageReports impactReports changedCellIds frictionSignalReports
+        {| HealthGrade = report.HealthGrade.ToString()
+           TotalFailures = report.TotalFailures
+           TotalBlindSpots = report.TotalBlindSpots
+           TotalRegressions = report.TotalRegressions
+           Unmeasured = unmeasured |> List.map UnmeasuredScope.token
+           Actions =
+             report.Actions
+             |> List.truncate 10
+             |> List.map (fun a -> {| Kind = a.Kind.ToString(); Priority = a.Priority; Reason = a.Reason |})
+           Summary = Features.ActionPrioritizer.ActionPrioritizer.summarize report |}
+        |> json
+        |> fun body -> ToolAnswer.Measured { Body = body; Unmeasured = unmeasured }
+
     /// Per-failing-test coverage. Coverage only comes from live testing's instrumented runs, so
     /// without it a failing test is a question this tool cannot answer, and the reason says which
     /// switch is missing. No failing test is a measured, empty answer.
@@ -450,6 +499,14 @@ module McpAnalysis =
         match! testSideOf ctx sid with
         | Error reason -> return ToolAnswer.NotAvailable reason
         | Ok side -> return Answer.diagnose (historyOf ctx sid) side
+      })
+
+  let suggestNextAction (ctx: McpContext) sessionId workingDirectory =
+    answerFor ctx "suggest_next_action" sessionId workingDirectory (fun sid ->
+      task {
+        match! testSideOf ctx sid with
+        | Error reason -> return ToolAnswer.NotAvailable reason
+        | Ok side -> return Answer.suggestNextAction (historyOf ctx sid) side ctx.FrictionStore
       })
 
   let coverageIntel (ctx: McpContext) sessionId workingDirectory =

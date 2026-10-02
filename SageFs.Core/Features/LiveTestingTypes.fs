@@ -1850,7 +1850,7 @@ module LiveTestDiscoveryState =
 
   let hint = function
     | LiveTestDiscoveryState.Disabled ->
-      "Live testing is not active. Call enable_live_testing to start discovery."
+      "Live testing is not active. Switch the session to the livetesting workflow with switch_workflow to start discovery."
     | LiveTestDiscoveryState.Discovering ->
       "Live testing is active and discovery is still in progress."
     | LiveTestDiscoveryState.ReadyZeroTests ->

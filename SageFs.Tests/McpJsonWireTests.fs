@@ -210,43 +210,6 @@ let tests =
             + "}")
     }
 
-    testTask "WHY — visualize_domain_model writes the indented state machine, field pairs included" {
-      let info = infoWith "99aabbcc" (SessionLifecycleStatus.Ready readyHandle) WorkflowTypes.SessionWorkflow.Interactive
-      let evalReply = WorkerResponse.EvalResult ("r", Ok "DUCASES:Idle|;Busy|count:Int32,label:String", [], Map.empty)
-      let ctx = ctxFor [ info ] (Some (proxyReturning evalReply)) (Ok "")
-      let! text = visualizeDomainModel ctx "agent" "Thing" (Some info.WorkingDirectory)
-      lf text
-      |> Expect.equal "state machine data"
-           ("{\n"
-            + "  \"AsciiDiagram\": \"                \\u250C\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2510    \\u250C\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2510\\n                \\u2502  Idle  \\u2502    \\u2502  Busy  \\u2502\\n                \\u2514\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2518    \\u2514\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2518\",\n"
-            + "  \"States\": [\n"
-            + "    {\n"
-            + "      \"Fields\": [],\n"
-            + "      \"IsEntry\": true,\n"
-            + "      \"IsTerminal\": true,\n"
-            + "      \"Name\": \"Idle\"\n"
-            + "    },\n"
-            + "    {\n"
-            + "      \"Fields\": [\n"
-            + "        [\n"
-            + "          \"count\",\n"
-            + "          \"Int32\"\n"
-            + "        ],\n"
-            + "        [\n"
-            + "          \"label\",\n"
-            + "          \"String\"\n"
-            + "        ]\n"
-            + "      ],\n"
-            + "      \"IsEntry\": true,\n"
-            + "      \"IsTerminal\": true,\n"
-            + "      \"Name\": \"Busy\"\n"
-            + "    }\n"
-            + "  ],\n"
-            + "  \"Transitions\": [],\n"
-            + "  \"TypeName\": \"Thing\"\n"
-            + "}")
-    }
-
     testTask "WHY — get_test_trace writes the live-testing trace for an empty model, keys as written" {
       let ctx = { ctxFor [] noProxy (Ok "") with GetElmModel = Some (fun () -> SageFsModel.initial ()) }
       let! text = getTestTrace ctx

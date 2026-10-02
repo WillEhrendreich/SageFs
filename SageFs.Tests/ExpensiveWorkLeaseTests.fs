@@ -247,10 +247,10 @@ let fairnessTests =
       let s2, _ = request epoch MemoryPressure.Tight s1 hb Kind.Rebuild // queued first, then never asks again
       let s3, _ = request epoch MemoryPressure.Tight s2 hc Kind.Rebuild // queued second
       let leaseA = (List.head s3.Active).Id
-      let stillAsking = epoch + Timeouts.leaseAskStaleAfter - TimeSpan.FromSeconds 30.0
+      let stillAsking = epoch + Timeouts.leaseAskStaleAfter - FixtureDurations.insideTheBoundary
       let s3', _ = request stillAsking MemoryPressure.Tight s3 hc Kind.Rebuild // agent-c keeps asking
       let s4, _ = release leaseA s3'
-      let muchLater = epoch + Timeouts.leaseAskStaleAfter + TimeSpan.FromSeconds 1.0
+      let muchLater = epoch + Timeouts.leaseAskStaleAfter + FixtureDurations.pastTheBoundary
       let s5, decision = request muchLater MemoryPressure.Tight s4 hc Kind.Rebuild
       match decision with
       | Decision.Granted _ -> ()
@@ -301,7 +301,7 @@ let snapshotTests =
 
     testCase "a lease past its expiry is not shown" <| fun () ->
       let s1, _ = request epoch MemoryPressure.Normal empty ha Kind.SessionCreateOrWarmup
-      let view = snapshot (epoch + Kind.defaultTtl Kind.SessionCreateOrWarmup + TimeSpan.FromSeconds 1.0) s1
+      let view = snapshot (epoch + Kind.defaultTtl Kind.SessionCreateOrWarmup + FixtureDurations.pastTheBoundary) s1
       view.ActiveCount |> Expect.equal "lapsed" 0
   ]
 

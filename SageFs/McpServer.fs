@@ -2901,14 +2901,16 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
       | _, None ->
         let validKinds = SageFs.ExpensiveWorkLease.Kind.all |> List.map SageFs.ExpensiveWorkLease.Kind.toToken
         do! jsonResponse ctx 400 {| success = false; error = sprintf "missing or unrecognized 'kind' — must be one of: %s" (String.concat ", " validKinds) |}
-      | Some holder, Some kind ->
-        match SageFs.Features.LeaseWatch.request holder kind with
-        | SageFs.ExpensiveWorkLease.Decision.Granted(leaseId, expiresAt) ->
-          do! jsonResponse ctx 200 {| success = true; decision = "granted"; leaseId = SageFs.ExpensiveWorkLease.LeaseId.value leaseId; expiresAt = expiresAt |}
-        | SageFs.ExpensiveWorkLease.Decision.Wait(retryAfter, reason) ->
-          do! jsonResponse ctx 200 {| success = true; decision = "wait"; retryAfterSeconds = retryAfter.TotalSeconds; reason = reason |}
-        | SageFs.ExpensiveWorkLease.Decision.Refused reason ->
-          do! jsonResponse ctx 200 {| success = true; decision = "refused"; reason = reason |}
+      | Some connection, Some kind ->
+        // `holder` names the caller's connection; `agentName` and `workingDirectory` are optional and
+        // separate callers that share it, the same way the MCP lease tools do.
+        let holder =
+          SageFs.ExpensiveWorkLease.Holder.make
+            connection
+            (str "agentName" |> Option.defaultValue "")
+            (str "workingDirectory" |> Option.defaultValue "")
+        let decision = SageFs.Features.LeaseWatch.request holder kind
+        do! rawJsonResponse ctx (SageFs.McpLeaseWire.decisionJson System.DateTimeOffset.UtcNow holder kind decision)
     } :> Task
   ) |> ignore
   app.MapPost("/api/lease/release", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
