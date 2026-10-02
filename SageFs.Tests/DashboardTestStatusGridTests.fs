@@ -10,7 +10,9 @@
 module SageFs.Tests.DashboardTestStatusGridTests
 
 open Expecto
+open Expecto.Flip
 open SageFs.Features.LiveTesting
+open SageFs.Tests
 
 /// Mirrors the real screenshot: 76 passed, 14283 skipped, 1 failed, total 238ms
 /// of real duration carried entirely by the passed tests.
@@ -25,11 +27,13 @@ let private bigRunEntries =
       FullName = sprintf "Ns.test %d" i
       DurationMs =
         match st with
-        | TreemapStatus.Passed -> TestMagnitudes.treemapPanelTotalMs / TestMagnitudes.treemapPanelPassedCount
-        | _ -> TestMagnitudes.notRunMs
+        | TreemapStatus.Passed -> TestMagnitudes.treemapPanelTotalMs / float TestMagnitudes.treemapPanelPassedCount
+        // Timeouts.notRun.TotalMilliseconds — an untimed test is written as zero.
+        | _ -> FixtureDurations.notRunMs
       Status = st })
 
-let tests = testList "Dashboard test status grid" [
+[<Tests>]
+let allTests = testList "Dashboard test status grid" [
 
   test "the old layout packed 14360 tests into ~2px cells and could label none of them" {
     // RED: this is the defect, stated as an executable measurement of the old
@@ -98,10 +102,11 @@ let tests = testList "Dashboard test status grid" [
     test "every status is still conveyed per cell even when DurationMs is zero" {
       // The untimed majority all carry DurationMs = 0.0; the grid must not use
       // duration as its layout basis, so they stay individually visible.
-      let untimed = bigRunEntries |> Array.filter (fun e -> e.DurationMs = TestMagnitudes.notRunMs)
-      untimed.Length |> Expect.equal "most of the run is untimed" bigRunEntries.Length - TestMagnitudes.treemapPanelPassedCount
+      let untimed = bigRunEntries |> Array.filter (fun e -> e.DurationMs = FixtureDurations.notRunMs)
+      untimed.Length
+      |> Expect.equal "most of the run is untimed" (bigRunEntries.Length - TestMagnitudes.treemapPanelPassedCount)
       let layout = (TestStatusGrid.layout TestMagnitudes.treemapPanelWidthPx bigRunEntries).Value
-      let timed = layout.Cells |> Array.filter (fun c -> c.Entry.DurationMs = TestMagnitudes.notRunMs)
+      let timed = layout.Cells |> Array.filter (fun c -> c.Entry.DurationMs = FixtureDurations.notRunMs)
       timed.Length |> Expect.equal "every untimed test still gets its own cell" untimed.Length
     }
 
@@ -118,8 +123,12 @@ let tests = testList "Dashboard test status grid" [
         match TestStatusGrid.layout TestMagnitudes.treemapPanelWidthPx slice with
         | None -> n |> Expect.equal "only zero entries render no grid" 0
         | Some l ->
+          // The expectation is the LENGTH OF THE SLICE THAT WAS PASSED IN, not `n`: the slice is
+          // `[0 .. max 0 (n-1)]`, so at n=0 it is one entry, not zero. Deriving the expectation from
+          // `n` instead made this row assert 0 cells for a 1-entry input, which contradicted itself
+          // and failed for a reason that had nothing to do with the layout.
           l.Cells.Length
-          |> Expect.equal (sprintf "n=%d keeps one cell per test" n) (if n = 0 then 0 else min n bigRunEntries.Length)
+          |> Expect.equal (sprintf "n=%d keeps one cell per test" n) slice.Length
           l.CellPx
           |> Expect.equal (sprintf "n=%d keeps cells legible" n) (max TestMagnitudes.treemapMinCellPx (min TestMagnitudes.treemapMaxCellPx l.CellPx)))
     }
