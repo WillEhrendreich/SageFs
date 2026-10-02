@@ -110,8 +110,8 @@ works.
   program, and `publish.fsx` publishes it. It is a compiled program rather than
   an `.fsx` because a hook runs before every Bash call and `dotnet fsi` costs
   about 1.3 seconds of startup each time. Measured on the dev machine
-  (median of 15 runs): 14 ms for a command that never mentions dotnet (it
-  leaves right after reading stdin), 42 ms for a dotnet command with no daemon
+  (median of 30 runs): 15 ms for a command that never mentions dotnet (it
+  leaves right after reading stdin), 40 ms for a dotnet command with no daemon
   answering. The old `.fsx` plus sh wrapper was 2 ms for the first and 1.3
   seconds for the second.
 
