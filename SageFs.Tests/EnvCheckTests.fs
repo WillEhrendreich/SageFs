@@ -49,6 +49,14 @@ let private withBoundPort (action: int -> unit) =
   finally
     l.Stop()
 
+/// A loopback port nothing is listening on right now, for a CLI that must not depend on the machine's default ports.
+let private freeLoopbackPort () =
+  let l = new TcpListener(IPAddress.Loopback, 0)
+  l.Start()
+  let port = (l.LocalEndpoint :?> IPEndPoint).Port
+  l.Stop()
+  port
+
 let private runProcess (psi: ProcessStartInfo) : Task<int * string * string> =
   Async.StartAsTask(async {
     use proc = Process.Start psi
@@ -646,6 +654,12 @@ let realCliSdkCheckTests =
         psi.RedirectStandardError <- true
         psi.WorkingDirectory <- workDir
         psi.ArgumentList.Add "check"
+        // The dev machine keeps a SageFs daemon on the default ports, and under load its probe can time out,
+        // which makes `check` report both ports in use. This test is about the SDK, so it names its own.
+        psi.ArgumentList.Add "--mcp-port"
+        psi.ArgumentList.Add (string (freeLoopbackPort ()))
+        psi.ArgumentList.Add "--dash-port"
+        psi.ArgumentList.Add (string (freeLoopbackPort ()))
         let! checkExit, stdout, stderr = runProcess psi
         let output = stdout + Environment.NewLine + stderr + Environment.NewLine + sdkError + versionError
         checkExit |> Expect.equal (sprintf "`sagefs check` accepts %s under latestMinor; output:\n%s" expected output) 0
