@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# scripts/lemmings/prune-runs [run-id ...] [--older-than-days N] [--dry-run] [--root DIR]
+#
+# Deletes finished lemming runs from the run root (default $LEM_ROOT, else /tmp/lem). Each run keeps
+# its own copy of the SageFs build, about 380 MB, and nothing else clears it. Nothing is deleted
+# unless you name runs or give an age, and a run with no out/summary.json is never touched (it may
+# be running). The run directory is the only copy of its artifacts, so read what you want first.
+#
+#   scripts/lemmings/prune-runs --older-than-days 7 --dry-run
+#   scripts/lemmings/prune-runs space-bunny-parse-seed-03
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=lib-cmd.sh
+source "$HERE/lib-cmd.sh"
+# --root defaults to LEM_ROOT; a later --root on the command line wins.
+lem_tool prune --root "$LEM_ROOT" "$@"

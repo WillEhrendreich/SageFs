@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The oracle for the sagefs-small-fix task. It compiles the lemming's own
+       SageFs.Core/RingBuffer.fs together with the repo's own RingBufferTests.fs (read in place,
+       from the copy the lemming worked in) and runs exactly that one test list, in seconds,
+       without building the 3 GB test project. CopyRoot is passed by the oracle script. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <LangVersion>preview</LangVersion>
+    <NoWarn>$(NoWarn);FS3511;NU1608;NU1902</NoWarn>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+    <PackageReference Include="Expecto" />
+    <PackageReference Include="Expecto.FsCheck" />
+    <PackageReference Include="FsCheck" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(CopyRoot)/SageFs.Core/RingBuffer.fs" Link="RingBuffer.fs" />
+    <Compile Include="$(CopyRoot)/SageFs.Tests/RingBufferTests.fs" Link="RingBufferTests.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+</Project>

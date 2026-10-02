@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- run-matrix: the bookkeeping for a list of lemming runs. It plans, dispatches
+       run-lemming-cmd with a concurrency cap, watches for free-model quota errors, and prints
+       a table. bash (scripts/lemmings/run-matrix) only starts it. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>LemMatrix</AssemblyName>
+    <LangVersion>preview</LangVersion>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Plan.fs" />
+    <Compile Include="Scheduler.fs" />
+    <Compile Include="Report.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../LemScore/LemScore.fsproj" />
+  </ItemGroup>
+
+</Project>

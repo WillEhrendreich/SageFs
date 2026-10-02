@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The F# half of the lemming harness: reads Command Code's event stream, applies
+       the closed outcome set, talks to the shared SageFs daemon, writes summary.json.
+       bash (lib-cmd.sh, run-lemming-cmd) only does process plumbing around it. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>LemScore</AssemblyName>
+    <RootNamespace>LemScore</RootNamespace>
+    <LangVersion>preview</LangVersion>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Central package management switches off F#'s implicit FSharp.Core, so say it. -->
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Types.fs" />
+    <Compile Include="Catalog.fs" />
+    <Compile Include="CmdcStream.fs" />
+    <Compile Include="SharedDaemon.fs" />
+    <Compile Include="Classify.fs" />
+    <Compile Include="Provenance.fs" />
+    <Compile Include="Prune.fs" />
+    <Compile Include="Summary.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+</Project>

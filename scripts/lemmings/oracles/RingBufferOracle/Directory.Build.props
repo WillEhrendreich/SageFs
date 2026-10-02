@@ -1,0 +1,4 @@
+<Project>
+  <!-- Stops the repo's own Directory.Build.props from applying: this project is the harness's,
+       it is built beside the lemming's copy, and it must not pick up the copy's settings. -->
+</Project>

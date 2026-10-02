@@ -1,0 +1,12 @@
+{"type":"event","event":{"type":"run_start","sessionId":"c943f72c-ce08-4bb2-9f20-0fc8c7cb383a"}}
+{"type":"event","event":{"type":"turn_start","turnNumber":1}}
+{"type":"event","event":{"type":"message_start"}}
+{"type":"event","event":{"type":"model_request_start","model":"stealth/space-bunny-alpha"}}
+{"type":"event","event":{"type":"model_trace","traceId":"169fec9859b6e0d9bbbab6f17117c2de"}}
+{"type":"event","event":{"type":"text_delta","delta":"OK"}}
+{"type":"event","event":{"type":"message_update","content":[{"type":"text","text":"OK"}]}}
+{"type":"event","event":{"type":"model_request_end","model":"stealth/space-bunny-alpha","usage":{"inputTokens":17016,"outputTokens":3,"cacheReadTokens":5259,"cacheWriteTokens":0},"stopReason":"stop"}}
+{"type":"event","event":{"type":"message_end","content":[{"type":"text","text":"OK"}]}}
+{"type":"event","event":{"type":"turn_end","turnNumber":1,"hadToolCalls":false,"usage":{"inputTokens":17016,"outputTokens":3,"cacheReadTokens":5259,"cacheWriteTokens":0}}}
+{"type":"event","event":{"type":"run_end","result":{"finalText":"OK","stopReason":"end_turn","turnCount":1,"usage":{"inputTokens":17016,"outputTokens":3,"cacheReadTokens":5259,"cacheWriteTokens":0},"systemPromptTokens":null,"nextState":{"sessionId":"c943f72c-ce08-4bb2-9f20-0fc8c7cb383a","messages":[{"role":"user","content":[{"type":"text","text":"Reply with the single word OK and nothing else."}],"meta":{"source":"user","createdAt":1790892372551,"messageId":"7975cdc0-24fd-437e-853c-b5c9fecf0841"}},{"role":"assistant","content":[{"type":"text","text":"OK"}],"meta":{"source":"model","createdAt":1790892373980,"messageId":"836cf698-c85f-4c80-a9ec-fda74bc017e3"}}],"interrupted":false,"modState":{"workspace":{"cwd":"/tmp/lem/corebuilder-probe-01/w","platform":"linux","branch":null,"gitStatus":null,"recentCommits":[],"additionalDirectories":[]},"compaction":{"tokens":17023,"basis":{"role":"assistant","content":[{"type":"text","text":"OK"}],"meta":{"source":"model","createdAt":1790892373980,"messageId":"836cf698-c85f-4c80-a9ec-fda74bc017e3"}}}}}}}}
+{"type":"result","subtype":"success","sessionId":"c943f72c-ce08-4bb2-9f20-0fc8c7cb383a","stopReason":"end_turn","usage":{"inputTokens":17016,"outputTokens":3,"cacheReadTokens":5259,"cacheWriteTokens":0},"durationMs":1476,"finalText":"OK"}

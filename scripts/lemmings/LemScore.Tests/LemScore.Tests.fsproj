@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Expecto tests for LemScore. Run them with dotnet run on this project (see README.md)
+       The samples/ files are real captures from cmdc headless json runs and from the live
+       model catalog (see samples/README.md for which are real and which are modelled). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <LangVersion>preview</LangVersion>
+    <NoWarn>$(NoWarn);FS3511</NoWarn>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+    <PackageReference Include="Expecto" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Samples.fs" />
+    <Compile Include="CatalogTests.fs" />
+    <Compile Include="StreamTests.fs" />
+    <Compile Include="ClassifyTests.fs" />
+    <Compile Include="DaemonTests.fs" />
+    <Compile Include="SummaryTests.fs" />
+    <Compile Include="ProvenanceTests.fs" />
+    <Compile Include="MatrixTests.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../LemScore/LemScore.fsproj" />
+    <ProjectReference Include="../LemMatrix/LemMatrix.fsproj" />
+    <Content Include="samples/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
