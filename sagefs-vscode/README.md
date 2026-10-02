@@ -273,7 +273,7 @@ code --install-extension sagefs-*.vsix
 | SageFs: Stop Daemon | — | Stop the SageFs daemon |
 | SageFs: Restart Daemon | — | Restart the SageFs daemon |
 | SageFs: Open Dashboard | — | Open web dashboard in VS Code |
-| SageFs: Show Output | — | Open the SageFs Output channel |
+| SageFs: Show Output | none | Open the SageFs Output channel |
 | SageFs: Check Health | — | Run the extension's health check |
 | SageFs: Create Session | — | Create a new FSI session |
 | SageFs: Switch Session | — | Switch to a different session |

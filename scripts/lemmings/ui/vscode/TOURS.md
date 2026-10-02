@@ -59,10 +59,10 @@ One step per line. `#` starts a comment, blank lines are ignored.
 | `expect-absent [--for N] <text>` | Fail if the window shows the text at any moment during N seconds (default 15, at most 120). It is the way to check what a window does not say. |
 
 `{session}` in a `command`, `click`, `type` or `expect-text` text is this run's session id, read from
-the daemon. The status bar's tooltip names the window's session (`... - session <id> - ...`), so
-`expect-text --within 60 — session {session} —` waits until the window has taken it up and is ready for
-commands. Do not wait on `session {session}` alone: the "Session <id> created" message matches it too, a
-moment before the session is Ready.
+the daemon. The status bar's tooltip names the window's session, with an em dash on each side of
+`session <id>`, so `expect-text --within 60` on that text (dashes included, as the example tours write it)
+waits until the window has taken the session up and is ready for commands. Do not wait on `session {session}`
+alone: the "Session <id> created" message matches it too, a moment before the session is Ready.
 
 `LEM_VSC_EXTRA_SETTINGS` adds settings to the window's profile (one or more `"key": value` pairs). A positive
 control for `expect-absent` is the same tour with the setting that lets the text through: it has to fail.
