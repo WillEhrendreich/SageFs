@@ -6,9 +6,11 @@ text commands, tries to do a small task, and I score what happened. The point is
 the extension and the daemon behind it fall over for someone who is not me.
 
 ```
-scripts/lemmings/run-ui-lemming vscode <task> <model> [max-turns]
-scripts/lemmings/ui/vscode/run-vscode-lemming <task> <model> [max-turns]     # same thing
+dotnet fsi scripts/lemmings/run-ui-lemming.fsx -- vscode <task> <model> [max-turns]
+dotnet fsi scripts/lemmings/ui/vscode/run-vscode-lemming.fsx -- <task> <model> [max-turns]     # same thing
 ```
+
+When a run ends, everything except `out/` (summary.json, timeline.ndjson, shots, screens, logs) is removed from `/tmp`, because `/tmp` is RAM. `LEM_KEEP_RUN=1` keeps it whole. The driver is built once into a store (`~/.local/share/sagefs-lemmings/drive`) and mounted read-only, not copied into each run; the `vsc-*` tools and the `sagefs` shim in `bin/` are one-line launchers (`#!/usr/bin/env -S dotnet <driver> ...`), not shell scripts.
 
 `<model>` has to be marked FREE in the live `cmdc --list-models`, or nothing starts. The tasks
 are the files in `tasks/`: `ui-eval`, `ui-edit-reeval`, `ui-live-tests`, `ui-hot-reload`,
@@ -30,7 +32,7 @@ does not install any of this:
   the `code` wrapper: run by hand, even with `--version`, it starts VS Code on the real desktop. Only the
   harness runs it, inside the sandbox.
 - `hyprctl` and a Hyprland desktop. The check that no window leaked onto the real desktop compares
-  `hyprctl clients` before and after. On a machine without it `vsc_desktop_windows` writes an empty
+  `hyprctl clients` before and after. On a machine without it `VscRun.desktopWindows` returns an empty
   list both times, so the check passes without checking anything.
 - `cmdc` (Command Code) under `~/.local/share/mise`, which is the only toolchain directory the
   sandbox binds, and its login in `~/.commandcode/auth.json`.
@@ -88,12 +90,12 @@ Playwright.NET, the package `SageFs.Tests` already uses. It writes every call an
 5. **Attach the window to the run's own session and prove it** (`host bind`): if the Sessions view's
    active row is not the run's session, pick it with the extension's own `SageFs: Switch Session`,
    then read the view again. If it still is not the active row, the run is scored `HarnessError`.
-6. Run the lemming (`lem_run_cmdc`, in `../../lib-cmd.sh`).
+6. Run the lemming (`CmdRun.runCmdc`, in `LemRun/CmdRun.fs`).
 7. Read the window, run the oracle, write the fellOver list. All of that is outside the sandbox.
 8. Stop the run's sessions by id, end VS Code (TERM first, KILL only if it will not go) and Xvfb by
    exact pid, compare `hyprctl clients` before and after, list what of the run is still alive, and
    compare the daemon's pid with the one before.
-9. Write `out/summary.json` (`LemScore score`).
+9. Write `out/summary.json` (`LemScore.Program.scoreRun`), then prune the run to `out/`.
 
 A run takes from about four minutes (`ui-eval`: the first session create, about 150 seconds of
 lemming) to twenty and more (`ui-edit-reeval` restores and runs the fixture's tests, and a slow model

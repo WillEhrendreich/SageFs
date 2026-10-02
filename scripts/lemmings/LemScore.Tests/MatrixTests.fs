@@ -180,3 +180,24 @@ let reportTests =
       (Program.parseOptions [ "plan.txt" ] |> Result.map _.Concurrency) |> Expect.equal "default cap is three" (Ok 3)
       Program.parseOptions [ "plan.txt"; "--wat" ] |> Result.isError |> Expect.isTrue "unknown flag refused"
   ]
+
+[<Tests>]
+let runnerTests =
+  testList "Matrix runner" [
+    testCase "by default each run is LemRun's run-cmd, which sits beside the binary, and tasks come from the harness" <| fun _ ->
+      match Program.findRunner None with
+      | Ok runner ->
+        runner.File |> Expect.equal "dotnet" "dotnet"
+        runner.LeadingArgs |> List.last |> Expect.equal "the command" "run-cmd"
+        File.Exists(runner.LeadingArgs.Head) |> Expect.isTrue "LemRun.dll is there"
+        Directory.Exists runner.TasksDir |> Expect.isTrue "tasks directory"
+      | Error e -> failtest e
+
+    testCase "a runner given with --runner is run as it is, with its tasks beside it" <| fun _ ->
+      match Program.findRunner (Some "/opt/x/run") with
+      | Ok runner ->
+        runner.File |> Expect.equal "file" "/opt/x/run"
+        runner.LeadingArgs |> Expect.isEmpty "no leading arguments"
+        runner.TasksDir |> Expect.equal "tasks" "/opt/x/tasks"
+      | Error e -> failtest e
+  ]

@@ -5,15 +5,13 @@ module NvimTests.IsolationTests
 /// editor sandbox's mounts. A probe tour once ran `:!touch ../bin/lemdrive/X` and
 /// `:!touch .git/hooks/X` as the user: the sandbox bound the whole run directory read-write, and the
 /// harness later runs `dotnet <run>/bin/lemdrive/LemDrive.dll` and `git -C <w> diff` OUTSIDE every
-/// sandbox. These tests start the real sandbox arguments (lib-nvim.sh's lem_editor_bwrap_args), run
-/// the writes a hostile `:!` would, and read back what reached the host.
+/// sandbox. These tests start the real sandbox arguments (EditorSandbox.args, which LemRun starts the
+/// editor with), run the writes a hostile `:!` would, and read back what reached the host.
 open System
 open System.IO
 open Expecto
 open Expecto.Flip
 open LemDrive
-
-let private libNvim = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", "lib-nvim.sh"))
 
 let private bwrapUsable =
   let probe =
@@ -47,17 +45,18 @@ let private makeRunTree () : RunTree =
     NvimBin = Path.Combine(run, "bob/nvim-bin/nvim")
     Plugin = Path.Combine(run, "plugin") }
 
-/// Runs `probe` (a bash script) inside the editor sandbox and returns what it printed.
+/// Runs `probe` (a shell script: the hostile `:!` this sandbox exists to contain) inside the editor
+/// sandbox and returns what it printed.
 let private inEditorSandbox (tree: RunTree) (probe: string) : string =
-  let script =
-    String.concat
-      "\n"
-      [ "set -u"
-        sprintf "source '%s'" libNvim
-        sprintf "RUN='%s' W='%s' OUT='%s' NVIM_BIN='%s' PLUGIN_DIR='%s' LABEL=probe" tree.Run tree.Workspace tree.Out tree.NvimBin tree.Plugin
-        "lem_editor_bwrap_args"
-        "bwrap \"${LEM_EDITOR_BW[@]}\" bash -c \"$PROBE\"" ]
-  match Nvim.runProcess "bash" [ "-c"; script ] [ ("PROBE", probe) ] 60_000 with
+  let editor : EditorSandbox.Editor =
+    { Home = Environment.GetFolderPath Environment.SpecialFolder.UserProfile
+      Workspace = tree.Workspace
+      Out = tree.Out
+      NvimBin = tree.NvimBin
+      PluginDir = tree.Plugin
+      DaemonPort = 37749
+      HasGit = true }
+  match Nvim.runProcess "bwrap" (EditorSandbox.args editor @ [ "bash"; "-c"; probe ]) [] 60_000 with
   | Result.Ok o -> o.Output
   | Result.Error e -> failwithf "the sandbox probe did not run: %s" e
 

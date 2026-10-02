@@ -2,7 +2,7 @@
 
   <!-- The F# half of the lemming harness: reads Command Code's event stream, applies
        the closed outcome set, talks to the shared SageFs daemon, writes summary.json.
-       bash (lib-cmd.sh, run-lemming-cmd) only does process plumbing around it. -->
+       LemRun (the sandbox, the processes, the stores) is the plumbing around it, and the .fsx entry points start that. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AssemblyName>LemScore</AssemblyName>

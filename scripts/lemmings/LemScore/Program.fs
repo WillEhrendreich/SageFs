@@ -1,4 +1,4 @@
-/// LemScore: the F# command line behind scripts/lemmings/lib-cmd.sh.
+/// LemScore: the logic of the lemming harness, as a command line and as a library (LemRun calls it directly).
 ///
 ///   LemScore free-model <model>              refuse (exit 2) unless the live catalog marks it FREE
 ///   LemScore run-id <root> <model> <task>    the next <model-short>-<task>-<nn> under root
@@ -15,8 +15,9 @@
 ///   LemScore dll-version <path>              product version of a built SageFs.dll
 ///   LemScore version-skew --daemon V --bridge V
 ///                                            same|skewed|unknown: do the two come from the same commit
-///   LemScore prune [id ...] [--older-than-days N] [--root R] [--dry-run]
-///                                            delete finished runs under the run root
+///   LemScore prune [id ...] [--older-than-days N] [--root R] [--dry-run] [--whole]
+///                                            remove everything but out/ from finished runs under the
+///                                            run root (--whole: the evidence too)
 ///   LemScore score --run-dir D ...           write D/out/summary.json
 ///
 /// Exit codes: 0 ok, 2 refused (with the reason on stderr), 3 the shared daemon will not do.
@@ -87,7 +88,8 @@ let private daemonCheckCommand (args: string list) : int =
     printfn "LEM_LEASES_START=%d" ready.Status.ActiveLeases
     ExitCode.ok
 
-let private writeResidue (path: string) (report: CleanupReport) : unit =
+/// residue.json: what the cleanup found under the run directory, what it stopped, and what remained.
+let writeResidue (path: string) (report: CleanupReport) : unit =
   use stream = new MemoryStream()
   use w = new Utf8JsonWriter(stream, JsonWriterOptions(Indented = true))
   let session (s: SessionInfo) =
@@ -124,7 +126,8 @@ let private writeResidue (path: string) (report: CleanupReport) : unit =
   Directory.CreateDirectory(Path.GetDirectoryName path |> Option.ofObj |> Option.defaultValue ".") |> ignore
   File.WriteAllText(path, Encoding.UTF8.GetString(stream.ToArray()))
 
-let private writeSeen (path: string) (seen: SeenSession list) : unit =
+/// sessions.seen.json: every session of the run the dashboard API showed, with each status it passed through.
+let writeSeen (path: string) (seen: SeenSession list) : unit =
   use stream = new MemoryStream()
   use w = new Utf8JsonWriter(stream, JsonWriterOptions(Indented = true))
   w.WriteStartArray()
@@ -282,7 +285,9 @@ type private PruneOptions =
   { Ids: string list
     DryRun: bool
     Root: string
-    OlderThanDays: float option }
+    OlderThanDays: float option
+    /// Delete the whole run directory, evidence included. Without it a run keeps out/.
+    Whole: bool }
 
 /// ids, --dry-run, --root DIR and --older-than-days N in any order; anything else is refused.
 let private parsePruneArgs (args: string list) : Result<PruneOptions, string> =
@@ -290,6 +295,7 @@ let private parsePruneArgs (args: string list) : Result<PruneOptions, string> =
     match rest with
     | [] -> Ok { o with Ids = List.rev o.Ids }
     | "--dry-run" :: tail -> go { o with DryRun = true } tail
+    | "--whole" :: tail -> go { o with Whole = true } tail
     | "--root" :: dir :: tail -> go { o with Root = dir } tail
     | "--older-than-days" :: n :: tail ->
       match Double.TryParse n with
@@ -297,24 +303,32 @@ let private parsePruneArgs (args: string list) : Result<PruneOptions, string> =
       | false, _ -> Error (sprintf "--older-than-days needs a number, not '%s'" n)
     | flag :: _ when flag.StartsWith "--" -> Error (sprintf "unknown or incomplete option %s" flag)
     | id :: tail -> go { o with Ids = id :: o.Ids } tail
-  go { Ids = []; DryRun = false; Root = "/tmp/lem"; OlderThanDays = None } args
+  go { Ids = []; DryRun = false; Root = "/tmp/lem"; OlderThanDays = None; Whole = false } args
 
-/// Deletes finished runs under the run root, or says what it would delete.
-let private pruneCommand (args: string list) : int =
+/// Prunes finished runs under the run root, or says what it would prune. A pruned run keeps its
+/// evidence (out/); `--whole` removes the run directory too.
+let pruneCommand (args: string list) : int =
   match parsePruneArgs args |> Result.bind (fun o -> Prune.plan o.Root DateTime.UtcNow o.Ids o.OlderThanDays |> Result.map (fun plan -> o, plan)) with
   | Error why ->
     eprintfn "refused: %s" why
     ExitCode.refused
   | Ok (options, plan) ->
     plan.Skipped |> List.iter (fun (id, why) -> eprintfn "kept %s: %s" id why)
+    let reclaim = if options.Whole then Prune.DeleteWhole else Prune.KeepEvidence
+    let verb, past = (match reclaim with Prune.DeleteWhole -> "delete", "deleted" | Prune.KeepEvidence -> "slim", "slimmed")
     plan.Delete
     |> List.iter (fun r ->
-      match options.DryRun with
-      | true -> printfn "would delete %s (%s)" r.Path (Prune.humanBytes r.Bytes)
-      | false ->
+      let freed = Prune.freedBytes reclaim r
+      match options.DryRun, reclaim with
+      | true, _ -> printfn "would %s %s (%s)" verb r.Path (Prune.humanBytes freed)
+      | false, Prune.DeleteWhole ->
         Directory.Delete(r.Path, true)
-        printfn "deleted %s (%s)" r.Path (Prune.humanBytes r.Bytes))
-    printfn "%s %d run(s), %s" (if options.DryRun then "would free" else "freed") plan.Delete.Length (Prune.humanBytes (plan.Delete |> List.sumBy _.Bytes))
+        printfn "%s %s (%s)" past r.Path (Prune.humanBytes freed)
+      | false, Prune.KeepEvidence ->
+        match Prune.slim r.Path with
+        | Ok bytes -> printfn "%s %s (%s, kept out/)" past r.Path (Prune.humanBytes bytes)
+        | Error why -> eprintfn "kept %s: %s" r.Id why)
+    printfn "%s %d run(s), %s" (if options.DryRun then "would free" else "freed") plan.Delete.Length (Prune.humanBytes (plan.Delete |> List.sumBy (Prune.freedBytes reclaim)))
     ExitCode.ok
 
 let private dllVersionCommand (args: string list) : int =
@@ -402,65 +416,72 @@ let private harnessErrorJson (id: string) (model: string) (task: string) (why: s
       SessionsSeen = []; SandboxProcessesLeft = []; ChangedFiles = []; Extra = [ { Stage = Preflight; Symptom = "the harness could not score this run"; Evidence = why } ] }
   render input { Outcome = HarnessError; Reason = why; Provider = None; FellOver = [] }
 
+/// Scores a run: reads what the harness left under <runDir>/out, writes out/summary.json and returns its text.
+/// `m` carries the optional readings under the command line's own names (id, port, cmdc-exit, seconds,
+/// sagefs-version, daemon-version, bridge-version, cleanup, mem-start, avail-start, leases-start).
+let scoreRun (m: Map<string, string>) (runDir: string) (task: string) (model: string) (harnessText: string) (oracleText: string) : string =
+  let outDir = Path.Combine(runDir, "out")
+  let id = Map.tryFind "id" m |> Option.defaultValue (Path.GetFileName(runDir.TrimEnd('/')))
+  let port = Map.tryFind "port" m |> Option.map int |> Option.defaultValue defaultMcpPort
+  let events = Path.Combine(outDir, "events.ndjson")
+  let written =
+    match Harness.tryParse harnessText, oracleVerdictOf oracleText, Cleanup.tryParse (Map.tryFind "cleanup" m |> Option.defaultValue "not-run") with
+    | Error e, _, _ | _, Error e, _ | _, _, Error e -> Error e
+    | Ok harness, Ok oracle, Ok cleanupResult ->
+      let lines = if File.Exists events then File.ReadAllLines events |> Array.toSeq else Seq.empty
+      let stream = ofLines lines
+      let residueIds = readIfExists (Path.Combine(outDir, "residue.json")) |> Option.map parseResidueIds |> Option.defaultValue []
+      let cmdcExit = Map.tryFind "cmdc-exit" m |> Option.bind (fun s -> match Int32.TryParse s with | true, n -> Some n | _ -> None) |> Option.defaultValue -1
+      let facts =
+        { Stream = stream
+          CmdcExit = cmdcExit
+          Oracle = oracle
+          OracleOutput = readIfExists (Path.Combine(outDir, "oracle.out")) |> Option.defaultValue ""
+          Cleanup = cleanupResult
+          ResidueSessions = residueIds }
+      let extra =
+        match readIfExists (Path.Combine(outDir, "fellover.extra.json")) with
+        | None -> Ok []
+        | Some json -> parseExtraFellOver json
+      match extra with
+      | Error e -> Error e
+      | Ok extraFell ->
+        let changed =
+          readIfExists (Path.Combine(outDir, "changed.txt"))
+          |> Option.map (fun t -> t.Split('\n') |> Array.map _.Trim() |> Array.filter (fun l -> l <> "") |> List.ofArray)
+          |> Option.defaultValue []
+        let teardown = if CmdcExit.timeoutExits |> List.contains cmdcExit then KilledByTimeout else ExitedOnItsOwn
+        let input =
+          { Id = id; Model = model; Harness = harness
+            SagefsVersion = Map.tryFind "sagefs-version" m |> Option.defaultValue "unknown"
+            DaemonVersion = Map.tryFind "daemon-version" m |> Option.defaultValue "unknown"
+            BridgeVersion = Map.tryFind "bridge-version" m |> Option.defaultValue "unknown"
+            RunDir = runDir
+            Task = task
+            Seconds = Map.tryFind "seconds" m |> Option.bind (fun s -> match Int32.TryParse s with | true, n -> Some n | _ -> None) |> Option.defaultValue 0
+            Facts = facts; Teardown = teardown
+            DaemonStart = snapshotOf m "start"
+            DaemonEnd = endSnapshot port
+            DashboardUrl = sprintf "http://localhost:%d/dashboard" (dashboardPortFor port)
+            SessionsSeen = readIfExists (Path.Combine(outDir, "sessions.seen.json")) |> Option.map parseSeen |> Option.defaultValue []
+            SandboxProcessesLeft = readIfExists (Path.Combine(outDir, "sbx", "ps.txt")) |> Option.map leftoverProcesses |> Option.defaultValue []
+            ChangedFiles = changed
+            Extra = extraFell }
+        Ok (render input (assess facts |> forHarness harness))
+  let json =
+    match written with
+    | Ok j -> j
+    | Error why -> harnessErrorJson id model task why
+  Directory.CreateDirectory outDir |> ignore
+  File.WriteAllText(Path.Combine(outDir, "summary.json"), json + "\n")
+  json
+
 let private scoreCommand (args: string list) : int =
   let m = flags args
   let get key = need m key
   match get "run-dir", get "task", get "model", get "harness", get "oracle-exit" with
   | Ok runDir, Ok task, Ok model, Ok harnessText, Ok oracleText ->
-    let outDir = Path.Combine(runDir, "out")
-    let id = Map.tryFind "id" m |> Option.defaultValue (Path.GetFileName(runDir.TrimEnd('/')))
-    let port = Map.tryFind "port" m |> Option.map int |> Option.defaultValue defaultMcpPort
-    let events = Path.Combine(outDir, "events.ndjson")
-    let written =
-      match Harness.tryParse harnessText, oracleVerdictOf oracleText, Cleanup.tryParse (Map.tryFind "cleanup" m |> Option.defaultValue "not-run") with
-      | Error e, _, _ | _, Error e, _ | _, _, Error e -> Error e
-      | Ok harness, Ok oracle, Ok cleanupResult ->
-        let lines = if File.Exists events then File.ReadAllLines events |> Array.toSeq else Seq.empty
-        let stream = ofLines lines
-        let residueIds = readIfExists (Path.Combine(outDir, "residue.json")) |> Option.map parseResidueIds |> Option.defaultValue []
-        let cmdcExit = Map.tryFind "cmdc-exit" m |> Option.bind (fun s -> match Int32.TryParse s with | true, n -> Some n | _ -> None) |> Option.defaultValue -1
-        let facts =
-          { Stream = stream
-            CmdcExit = cmdcExit
-            Oracle = oracle
-            OracleOutput = readIfExists (Path.Combine(outDir, "oracle.out")) |> Option.defaultValue ""
-            Cleanup = cleanupResult
-            ResidueSessions = residueIds }
-        let extra =
-          match readIfExists (Path.Combine(outDir, "fellover.extra.json")) with
-          | None -> Ok []
-          | Some json -> parseExtraFellOver json
-        match extra with
-        | Error e -> Error e
-        | Ok extraFell ->
-          let changed =
-            readIfExists (Path.Combine(outDir, "changed.txt"))
-            |> Option.map (fun t -> t.Split('\n') |> Array.map _.Trim() |> Array.filter (fun l -> l <> "") |> List.ofArray)
-            |> Option.defaultValue []
-          let teardown = if CmdcExit.timeoutExits |> List.contains cmdcExit then KilledByTimeout else ExitedOnItsOwn
-          let input =
-            { Id = id; Model = model; Harness = harness
-              SagefsVersion = Map.tryFind "sagefs-version" m |> Option.defaultValue "unknown"
-              DaemonVersion = Map.tryFind "daemon-version" m |> Option.defaultValue "unknown"
-              BridgeVersion = Map.tryFind "bridge-version" m |> Option.defaultValue "unknown"
-              RunDir = runDir
-              Task = task
-              Seconds = Map.tryFind "seconds" m |> Option.bind (fun s -> match Int32.TryParse s with | true, n -> Some n | _ -> None) |> Option.defaultValue 0
-              Facts = facts; Teardown = teardown
-              DaemonStart = snapshotOf m "start"
-              DaemonEnd = endSnapshot port
-              DashboardUrl = sprintf "http://localhost:%d/dashboard" (dashboardPortFor port)
-              SessionsSeen = readIfExists (Path.Combine(outDir, "sessions.seen.json")) |> Option.map parseSeen |> Option.defaultValue []
-              SandboxProcessesLeft = readIfExists (Path.Combine(outDir, "sbx", "ps.txt")) |> Option.map leftoverProcesses |> Option.defaultValue []
-              ChangedFiles = changed
-              Extra = extraFell }
-          Ok (render input (assess facts |> forHarness harness))
-    let json =
-      match written with
-      | Ok j -> j
-      | Error why -> harnessErrorJson id model task why
-    Directory.CreateDirectory outDir |> ignore
-    File.WriteAllText(Path.Combine(outDir, "summary.json"), json + "\n")
+    let json = scoreRun m runDir task model harnessText oracleText
     printfn "%s" json
     ExitCode.ok
   | _ ->

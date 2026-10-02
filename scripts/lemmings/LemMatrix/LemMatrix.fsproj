@@ -2,7 +2,8 @@
 
   <!-- run-matrix: the bookkeeping for a list of lemming runs. It plans, dispatches
        run-lemming-cmd with a concurrency cap, watches for free-model quota errors, and prints
-       a table. bash (scripts/lemmings/run-matrix) only starts it. -->
+       a table. run-matrix.fsx only builds it when it is stale and starts it. Each run is LemRun's
+       run-cmd, which sits beside this binary. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AssemblyName>LemMatrix</AssemblyName>
@@ -23,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../LemScore/LemScore.fsproj" />
+    <ProjectReference Include="../LemRun/LemRun.fsproj" />
   </ItemGroup>
 
 </Project>

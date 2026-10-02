@@ -1,6 +1,8 @@
-/// Clearing finished runs out of the run root. Every run leaves its own copy of the SageFs build
-/// (about 380 MB) and nothing else ever removes it, so the root fills up. Only a run that has a
-/// summary.json is ever removed, because one without may still be running.
+/// Clearing finished runs out of the run root. The run root is tmpfs, so a run that keeps its working
+/// copy, its NuGet folder and its sandbox scratch there is RAM nobody gets back. A finished run keeps
+/// only its evidence (out/: summary.json, timeline.ndjson, shots, logs); everything else is removed,
+/// by the run itself when it ends and by `prune-runs` for older ones. Only a run that has a
+/// summary.json is ever touched, because one without may still be running.
 module LemScore.Prune
 
 open System
@@ -13,7 +15,40 @@ type RunDir =
     /// out/summary.json exists, so the run is over.
     Finished: bool
     /// Days since summary.json was written (0 when the run is not finished).
-    AgeDays: float }
+    AgeDays: float
+    /// What is under out/, the part a finished run keeps.
+    EvidenceBytes: int64 }
+
+/// What pruning a run takes away.
+type Reclaim =
+  /// Everything except out/. The default: the evidence stays.
+  | KeepEvidence
+  /// The whole run directory, evidence included.
+  | DeleteWhole
+
+/// How much a prune frees.
+let freedBytes (reclaim: Reclaim) (run: RunDir) : int64 =
+  match reclaim with
+  | KeepEvidence -> run.Bytes - run.EvidenceBytes
+  | DeleteWhole -> run.Bytes
+
+/// The directory a finished run keeps.
+let evidenceDirectory = "out"
+
+/// Files the harness staged INSIDE out/ to run the editor (not evidence of anything): the copy of the F#
+/// tree-sitter parser, about 12 MB. Removed with the rest, so a pruned run is a few MB at most.
+let stagingInsideEvidence = [ "ui/ts" ]
+
+/// What marks a run as over: a lemming run writes summary.json, a tour (which has no lemming and no
+/// score) writes tour.json. Without one a run may still be going and is never touched.
+let finishedMarkers = [ "summary.json"; "tour.json" ]
+
+let private newestMarker (runDir: string) : string option =
+  finishedMarkers
+  |> List.map (fun name -> Path.Combine(runDir, evidenceDirectory, name))
+  |> List.filter File.Exists
+  |> List.sortByDescending File.GetLastWriteTimeUtc
+  |> List.tryHead
 
 type Plan =
   { Delete: RunDir list
@@ -54,18 +89,56 @@ let select (runs: RunDir list) (ids: string list) (olderThanDays: float option) 
          Skipped = missing @ running }
 
 let private directoryBytes (path: string) : int64 =
-  let options = EnumerationOptions(RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint)
-  Directory.EnumerateFiles(path, "*", options)
-  |> Seq.sumBy (fun f -> try FileInfo(f).Length with _ -> 0L)
+  match Directory.Exists path with
+  | false -> 0L
+  | true ->
+    let options = EnumerationOptions(RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint)
+    Directory.EnumerateFiles(path, "*", options)
+    |> Seq.sumBy (fun f -> try FileInfo(f).Length with _ -> 0L)
+
+/// What a pruned run still holds: out/, without the editor staging inside it.
+let private keptBytes (runDir: string) : int64 =
+  directoryBytes (Path.Combine(runDir, evidenceDirectory))
+  - (stagingInsideEvidence |> List.sumBy (fun s -> directoryBytes (Path.Combine(runDir, evidenceDirectory, s))))
 
 let private describe (now: DateTime) (path: string) : RunDir =
-  let summary = Path.Combine(path, "out", "summary.json")
-  let finished = File.Exists summary
+  let marker = newestMarker path
+  let finished = marker.IsSome
   { Id = Path.GetFileName path
     Path = path
     Bytes = directoryBytes path
     Finished = finished
-    AgeDays = if finished then (now - File.GetLastWriteTimeUtc summary).TotalDays else 0.0 }
+    AgeDays = (match marker with Some m -> (now - File.GetLastWriteTimeUtc m).TotalDays | None -> 0.0)
+    EvidenceBytes = keptBytes path }
+
+/// Removes everything in a finished run's directory except out/, and returns the bytes it freed. A
+/// run with no out/summary.json is refused (it may still be running), and so is a path that is not
+/// absolute and at least three segments deep, so this can never be pointed at a root.
+let slim (runDir: string) : Result<int64, string> =
+  let segments = runDir.Split('/', StringSplitOptions.RemoveEmptyEntries)
+  match runDir.StartsWith "/", segments.Length >= 3, (newestMarker runDir).IsSome with
+  | false, _, _ | _, false, _ -> Error (sprintf "'%s' is not a run directory (absolute, at least 3 segments deep)" runDir)
+  | _, _, false -> Error (sprintf "%s has no out/summary.json (or out/tour.json), so it may still be running" runDir)
+  | true, true, true ->
+    let before = directoryBytes runDir
+    let remove (entry: string) =
+      match Directory.Exists entry with
+      | true ->
+        // A tree a lemming's build or a read-only mount left unwritable still has to go.
+        match Diagnostics.Process.Start(Diagnostics.ProcessStartInfo("chmod", [ "-R"; "u+w"; entry ], UseShellExecute = false)) with
+        | null -> ()
+        | chmod ->
+          chmod.WaitForExit()
+          chmod.Dispose()
+        Directory.Delete(entry, true)
+      | false -> File.Delete entry
+    try
+      Directory.EnumerateFileSystemEntries runDir
+      |> Seq.filter (fun e -> Path.GetFileName e <> evidenceDirectory)
+      |> Seq.iter remove
+      stagingInsideEvidence |> List.map (fun s -> Path.Combine(runDir, evidenceDirectory, s)) |> List.filter Directory.Exists |> List.iter remove
+      Ok (before - directoryBytes (Path.Combine(runDir, evidenceDirectory)))
+    with ex -> Error (sprintf "could not slim %s: %s" runDir ex.Message)
 
 /// Reads the run root and plans. The root must be absolute and at least two segments deep
 /// (/tmp/lem), so `--root /` or `--root /tmp` is refused.

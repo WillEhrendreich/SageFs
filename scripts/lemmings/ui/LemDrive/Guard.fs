@@ -69,7 +69,7 @@ let checkDaemon (text: string) : Result<unit, string> =
 // network and the run directory writable. A shell there reaches the shared daemon by plain
 // HTTP. This list is the editor-side half of keeping the lemming inside SageFs: the profile
 // also points every terminal profile at /usr/bin/false and the window's sandbox mounts the
-// run's evidence read-only (lib-vscode.sh), so this is one layer of three, and none of them is
+// run's evidence read-only (VscRun.windowArgs), so this is one layer of three, and none of them is
 // a boundary against a model that goes looking for the CDP port. It is a denylist of named
 // commands, not an allowlist, so a new VS Code command with a new name is not covered.
 

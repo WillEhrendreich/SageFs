@@ -1,0 +1,6 @@
+3,4c3,4
+< 1a2b3c  ./DemoEnv/DemoEnv.fs
+---
+> 9f8e7d  ./DemoEnv/DemoEnv.fs
+< aaaa  ./old.txt
+> bbbb  ./new file.txt

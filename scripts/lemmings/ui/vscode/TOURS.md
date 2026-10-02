@@ -5,14 +5,14 @@ every time and takes numbered screenshots on the way. No model is involved. They
 review: a reviewer looks at the images and cross-checks them against the text beside each one.
 
 ```
-scripts/lemmings/ui/vscode/run-vscode-tour tours/live-testing-failing.tour
+dotnet fsi scripts/lemmings/ui/vscode/run-vscode-tour.fsx -- scripts/lemmings/ui/vscode/tours/live-testing-failing.tour
 ```
 
 That starts a fresh Xvfb and a fresh VS Code in a bubblewrap sandbox (the same isolation as the
 lemming runner), copies the demoenv fixture to `/tmp/lem/tour-<name>-<nn>/w`, waits for the extension
 to activate, runs the tour, stops this run's sessions on the shared daemon by id, and ends the window.
 It then checks `hyprctl clients` for a leaked window and the dashboard for a leftover session. The
-sessions show up in the dashboard under the run directory's name while the tour runs.
+sessions show up in the dashboard under the run directory's name while the tour runs. When the tour ends the run is pruned to `out/` (the shots, the driver's call log, `tour.json`, `teardown.txt`), because `/tmp` is RAM; `LEM_KEEP_RUN=1` keeps the whole directory.
 
 You can also run a tour against a window you already have: `LemDrive vsc tour <file>` with
 `LEM_CDP_PORT`, `LEM_SCREENS_DIR`, `LEM_SHOTS_DIR` and `LEM_RUN_DIR` set.

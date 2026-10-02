@@ -104,6 +104,10 @@ let isSagefsError (call: ToolCall) : bool =
 /// still alive when cmdc exited was left by the lemming (a build server node, a stray app).
 let private scaffolding = [ "bwrap "; "bash -c"; "ps -eo"; "timeout "; "cmdc " ]
 
+/// The harness's own supervisor, which runs cmdc inside the sandbox and lists the survivors
+/// (`dotnet <dir>/LemRun.dll supervise ...`).
+let private supervisorMarker = "LemRun.dll supervise"
+
 let leftoverProcesses (psText: string) : string list =
   psText.Split('\n')
   |> Array.map _.Trim()
@@ -111,7 +115,7 @@ let leftoverProcesses (psText: string) : string list =
   |> Array.choose (fun line ->
     // pid ppid etimes args...
     match line.Split([| ' ' |], 4, StringSplitOptions.RemoveEmptyEntries) with
-    | [| _; _; _; args |] when not (scaffolding |> List.exists (fun s -> args.StartsWith(s, StringComparison.Ordinal))) -> Some args
+    | [| _; _; _; args |] when not (scaffolding |> List.exists (fun s -> args.StartsWith(s, StringComparison.Ordinal)) || args.Contains supervisorMarker) -> Some args
     | _ -> None)
   |> Array.toList
 

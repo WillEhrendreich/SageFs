@@ -1,6 +1,6 @@
 # Live testing on the demoenv fixture: switch it on, see a failing test marked in the gutter and
 # in the test panel, fix the code, save, and watch the same test go green. Run it with:
-#   scripts/lemmings/ui/nvim/run-nvim-tour scripts/lemmings/ui/nvim/tours/demoenv-live-tests.tour
+#   dotnet fsi scripts/lemmings/ui/nvim/run-nvim-tour.fsx -- scripts/lemmings/ui/nvim/tours/demoenv-live-tests.tour
 
 keys <CR>
 expect "SageFs"
