@@ -184,6 +184,7 @@ budget table has a budget of zero, and a budget above the real count is itself a
   actual |> Expect.isTrue "should be true"
   ```
 - Run tests via the SageFs REPL, not `dotnet test`
+- Run the ratchet lane after any edit and before committing: `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`. It runs only the ratchets (the budget, literal-count, stale-generated-page and CI-wiring tests, registered by reference with `Ratchet.register` in `TestInfrastructure.fs`) and takes seconds after the build. The release gate and `scripts/ship` run the same lane first and stop on red, so a red ratchet costs minutes, not twenty. A budget that went down is lowered by `--ratchets --tighten`, never by hand.
 - Property-based tests (FsCheck) are preferred over example-based tests
 
 #### Filters: `--filter-test-list` matches LISTS, `--filter-test-case` matches LEAVES
