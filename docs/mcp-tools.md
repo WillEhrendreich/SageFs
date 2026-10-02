@@ -6,19 +6,24 @@ can connect and drive an F# session: run code, type-check it, list and verify
 tests, and read live status. This is the surface I actually use every day to
 work on SageFs itself, so if it's clunky, I feel it first.
 
-SageFs gates tools when you call them. `tools/list` always advertises the
-full catalog below, and SageFs doesn't filter what an MCP client sees there.
-Calling one is different: a call that doesn't apply to the current session
+SageFs gates tools when you call them. A connection that presents no member
+token sees the full catalog below in `tools/list`, whatever state its session
+is in. Calling one is different: a call that doesn't apply to the current session
 state gets rejected with a structured error (`enforceToolCallGate` in
 `SageFs/Mcp.fs`), instead of a raw failure. Call `get_daemon_status`
 for daemon health, then `get_session_status` to see which tools currently
 apply. In a warming-up session, for example, it
 reports `send_fsharp_code` as not yet available, even though the tool is
-still listed. I went back and forth on filtering the list itself. For now
-the call-time gate is what's actually wired up, so that's what this doc
-promises.
+still listed. I went back and forth on filtering the list by session state.
+For now the call-time gate is what's wired up for that.
 
-The full advertised set is 63 tools, grouped below. This is separate
+There are two exceptions, and both are about who is calling, not about the
+session. A caller that presents a [member token](#member-tokens-one-identity-per-agent-run)
+sees only the tools its role allows. And a daemon started with
+`SAGEFS_IDENTITY_POLICY=TokenRequired` shows a connection with no token only
+the status tools, unless that connection is the conductor.
+
+The full advertised set is 65 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those
 HTTP endpoints are not MCP tools.
@@ -305,6 +310,13 @@ daemon; the first agent to join becomes its conductor. Every tool resolves
 the caller's identity from the MCP connection, not the `agentName` argument.
 Two connections that pass the same name are still two different members.
 
+A member's id in every cohort output (`get_cohort_status`, the `cohort://status`
+frame, the SSE rows, the ledger export, the lease listing) is `mcp:m-<16 hex>`,
+a one-way fingerprint of the connection's session id. It used to be the session
+id itself, which is the SDK's bearer handle: anyone who could read the status
+could present it as `Mcp-Session-Id` and act as that member, the conductor
+included. The id names a member now and cannot be used to be one.
+
 | Tool | What it does |
 |:---|:---|
 | `join_cohort` | Join the daemon's shared coordination session. The first joiner becomes conductor. |
@@ -315,6 +327,101 @@ Two connections that pass the same name are still two different members.
 | `reassign_claim` | Conductor-only: reassign an orphaned claim to a present member. |
 | `request_landing` | Queue a landing: your commits are rebased onto the integration head, verified against affected tests, and fast-forwarded in. Landings are strictly serial (one FIFO queue). |
 | `set_integration_ref` | Conductor-only: configure the git ref that landings rebase onto, in a dedicated integration worktree, and the trunk checkout the landings are carried to. The reply names both (`worktree=` and `trunk=`). |
+| `mint_member` | Conductor-only: mint a per-run member token bound to a role, a scope prefix and an expiry. The token comes back once. See [member tokens](#member-tokens-one-identity-per-agent-run). |
+| `revoke_member` | Conductor-only: cut a member token off. It is refused from the next call, its seat departs and its claims are orphaned. |
+
+Claim paths are canonical. `file:src/Foo/../Bar/x.fs` is `file:src/Bar/x.fs`, so
+the two overlap, and a path that climbs out of the repo (`file:../x.fs`) or is
+rooted (`file:/etc/x`) is refused.
+
+### Member tokens: one identity per agent run
+
+An orchestrator that runs N agents behind one connection used to get one member,
+because identity was the connection. `mint_member` fixes that: the conductor
+mints a token per run, each token is its own cohort member (`cap:<16 hex>`), and
+a token outranks the connection it arrives on.
+
+**Mint.** `mint_member role=Analysis scope=src/Foo/ ttl_minutes=60`. The reply
+has the member id, the grant and the token (`sfm_...`), once. SageFs keeps only
+the token's SHA-256, so it is in no ledger row, log line or status text, and it
+cannot be shown again. Tokens live in the daemon's memory and do not survive a
+restart: the orchestrator mints new ones. Only the conductor mints, and a token
+can only be narrower than whoever mints it: a wider role, a wider scope or a
+later expiry is refused with the widenings named, never clamped.
+
+**Present.** In the `X-SageFs-Member-Token` HTTP header (one value per
+connection), or in the request's `_meta["sagefs/memberToken"]` (per call, so one
+connection can speak for many members: the gateway sets it, the model never sees
+it). `sagefs mcp` reads `SAGEFS_MEMBER_TOKEN` from its environment and sends it as
+the header on every request. There is no tool argument for a token on purpose:
+an agent's transcript keeps every argument. A token that is presented and bad
+(unknown, expired, revoked, lapsed, unreadable) is refused. It is never quietly
+downgraded to the connection's own identity.
+
+**Roles.** A closed set. Each role is a set of tool classes, and a tool with no
+class is refused, so a new tool cannot be reachable by accident.
+
+| Role | Adds to the one above | Cohort role |
+|:---|:---|:---|
+| `Observer` | `get_cohort_status`, `join_cohort`, `leave_cohort`, `get_daemon_status`, `get_session_status`, `list_sessions`, `get_available_projects`, `list_runnable_projects`, `get_friction_report`, `get_friction_summary`, `discover_features`, `get_recent_fsi_events`, `switch_session`, `report_friction` | Observer |
+| `Analysis` | `check_fsharp_code`, `diagnose`, `coverage_intel`, `impact_forecast`, `suggest_next_action`, `plan_ripple`, `preview_what_if`, `suggest_next_cell`, `get_cell_dependencies`, `decompose_pipeline`, `explain_test_failure`, `list_tests`, `suggest_repair`, `get_session_filmstrip`, `get_eval_timeline`, `get_eval_diff`, `get_message_journal`, `export_notebook`, `export_session_transcript`. No eval, no tests. | Observer |
+| `Verifier` | `run_tests`, `targeted_verify`, `acquire_full_build_lease`, `acquire_test_suite_lease`, `acquire_run_app_lease`, `release_work_lease`. No eval. | Verifier |
+| `Implementer` | `send_fsharp_code`, `cancel_eval`, `manage_scratch_pad`, the session tools (`create_*_session`, `reset_fsi_session`, `hard_reset_fsi_session`, `switch_workflow`, `stop_session`, the hot reload tools), `run_app`, `stop_app`, `acquire_claim`, `release_claim`, `request_landing` | Implementer |
+
+No role can call `mint_member`, `revoke_member`, `reassign_claim`,
+`set_integration_ref`, `manage_local_data`, `get_workspace_hygiene` or
+`tidy_workspace`. A token call also passes the cohort's own role check, so an
+Observer, Analysis or Verifier token can read the cohort but not claim a scope or
+queue a landing. `tools/list` shows a token only the tools its role allows.
+
+**Scope.** A prefix such as `src/Foo/`. The token can claim only inside it, and
+the path is canonicalized first, so `src/Foo/../Bar` counts as `src/Bar`. This is
+policy, not a sandbox: it refuses claims, and it does not stop a process from
+writing a file. Containment is the sandbox's job. And `Implementer` includes
+`send_fsharp_code`, which runs arbitrary F# as the daemon's OS user, so against a
+hostile agent only the roles without eval mean something.
+
+**Expiry.** `ttl_minutes` from now (0 means 120, at most 480). A token also lapses
+after 30 minutes with no call, the way a silent member's seat does, and every
+call it makes keeps its seat renewed.
+
+**Revoke.** `revoke_member member_id=cap:<id>`. The token is refused from the
+next call, for ever: a revoked token stays revoked and its hash cannot be minted
+again. The seat departs and its claims are orphaned, so the conductor can
+`reassign_claim` them. A build or test lease the member already holds runs out on
+its own.
+
+**Identity policy.** `SAGEFS_IDENTITY_POLICY` on the daemon decides what a
+connection with no token is. `ConnectionsAllowed` (the default, and what happens
+when it is unset) leaves it a plain member, exactly as before tokens existed.
+`TokenRequired` lets it read `get_cohort_status` and `get_daemon_status`, and lets
+the conductor act (so it can mint); everything else is refused with a message that
+says how to get a token. The first member to `join_cohort` is still the conductor,
+and a connection with no token may call `join_cohort` until there is one, so the
+orchestrator starts the daemon, joins first, then mints. A value that is set but not one of the two fails closed,
+as `TokenRequired`. Without `TokenRequired` the narrow roles sit beside an
+unrestricted door, so the allow-list is advice.
+
+**What a refusal looks like.**
+
+```
+Error: This member token has the Analysis role, which cannot call send_fsharp_code:
+that is evaluating F#. → Next: send_fsharp_code needs the Implementer role. Ask the
+conductor to mint a token with it (mint_member), or use a tool your role allows
+(tools/list shows them).
+```
+
+```
+Error: This member token is confined to 'src/Foo' and cannot claim file:src/Bar/a.fs.
+→ Next: Claim a path inside 'src/Foo', or ask the conductor to mint a token for a
+wider scope.
+```
+
+**Limits.** A token is held by whatever sends it, so a leaked one is
+impersonation until it expires or is revoked. A connection-wide header cannot tell
+apart sub-agents that share a connection (Claude Code's `Agent` tool): only a
+per-call `_meta` can, and Claude Code gives the model no per-call header. The
+conductor on a `ConnectionsAllowed` daemon is still identified by its connection.
 
 ### The trunk
 

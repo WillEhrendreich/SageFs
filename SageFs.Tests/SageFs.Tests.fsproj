@@ -627,6 +627,7 @@
         <Compile Include="MemoryShedSimTests.fs" />
         <Compile Include="ExpensiveWorkLeaseTests.fs" />
         <Compile Include="LeaseSimTests.fs" />
+        <Compile Include="CapabilitySimTests.fs" />
         <Compile Include="LeaseWireTests.fs" />
         <Compile Include="TestDebugTests.fs" />
         <Compile Include="TestDebugSimTests.fs" />
@@ -758,6 +759,11 @@
         <Compile Include="ReplGuardTests.fs" />
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
+        <Compile Include="CapabilityHttpIntegrationTests.fs" />
+        <Compile Include="CohortIdentityLeakTests.fs" />
+        <Compile Include="ClaimPathTests.fs" />
+        <Compile Include="CapabilityTests.fs" />
+        <Compile Include="CapabilityWireTests.fs" />
         <Compile Include="AgentGuidanceIntegrationTests.fs" />
         <Compile Include="ProjectPinFixtures.fs" />
         <Compile Include="ProjectPinOutcomeTests.fs" />

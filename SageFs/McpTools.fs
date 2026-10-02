@@ -430,6 +430,22 @@ let withEchoOutcome (ctx: McpContext) (toolName: string) (t: Task<string * SageF
         return raise (SageFs.SageFsErrorException(err))
   }
 
+/// `withEchoOutcome` for a tool whose result carries a secret shown once (`mint_member`). The tool hands back
+/// the text to return, the text that is safe to log and record, and an optional blocker. Everything this
+/// module does with a result (the daemon's log at debug level, the friction record, the outbound cap) sees
+/// only the logged text; the caller alone gets the text with the secret in it.
+let withEchoSecret (ctx: McpContext) (toolName: string) (t: Task<string * string * SageFs.SageFsError option>) : Task<string> =
+  task {
+    let revealed = ref ""
+    let! _ =
+      withEchoOutcome ctx toolName (task {
+        let! shown, logged, blocker = t
+        revealed.Value <- shown
+        return logged, blocker
+      })
+    return revealed.Value
+  }
+
 /// `withEchoOutcome` sibling matching `withEchoNoAwaitRecord`'s statement
 /// order (succeedSpan before the friction record await) for the one caller
 /// (hard_reset_fsi_session, rebuild=true) that used that ordering.
@@ -2451,7 +2467,7 @@ OUTPUT: Confirmation text, noting whether you became the conductor and which ses
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: join_cohort called by {AgentName}, role={Role}, workingDir={Dir}", agentName, role, working_directory)
         task {
-          let! result = SageFs.McpTools.joinCohort ctx agentName role wd
+          let! result = SageFs.McpCohortTools.joinCohort ctx agentName role wd
           return
             match result with
             | Ok text -> text, None
@@ -2471,7 +2487,7 @@ OUTPUT: Confirmation text.""")>]
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: leave_cohort called by {AgentName}", agentName)
         task {
-          let! result = SageFs.McpTools.leaveCohort ctx agentName
+          let! result = SageFs.McpCohortTools.leaveCohort ctx agentName
           return
             match result with
             | Ok text -> text, None
@@ -2497,7 +2513,7 @@ OUTPUT: Confirmation text with the new claim id and fence, or a conflict error n
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: acquire_claim called by {AgentName}, scope={Scope}", agentName, scope)
         task {
-          let! result = SageFs.McpTools.acquireClaim ctx agentName scope purpose
+          let! result = SageFs.McpCohortTools.acquireClaim ctx agentName scope purpose
           return
             match result with
             | Ok text -> text, None
@@ -2521,7 +2537,7 @@ OUTPUT: Confirmation text, or an error naming why the release was refused.""")>]
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: release_claim called by {AgentName}, claim={ClaimId}", agentName, claimId)
         task {
-          let! result = SageFs.McpTools.releaseClaim ctx agentName claimId fence
+          let! result = SageFs.McpCohortTools.releaseClaim ctx agentName claimId fence
           return
             match result with
             | Ok text -> text, None
@@ -2545,7 +2561,7 @@ OUTPUT: Confirmation text, or an error (not conductor / claim not orphaned / tar
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: reassign_claim called by {AgentName}, claim={ClaimId}, to={ToMember}", agentName, claimId, toMember)
         task {
-          let! result = SageFs.McpTools.reassignClaim ctx agentName claimId toMember
+          let! result = SageFs.McpCohortTools.reassignClaim ctx agentName claimId toMember
           return
             match result with
             | Ok text -> text, None
@@ -2569,7 +2585,7 @@ OUTPUT: Confirmation text with the new landing id, or a validation error (invali
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: request_landing called by {AgentName}", agentName)
         task {
-          let! result = SageFs.McpTools.requestLanding ctx agentName claims commits statement
+          let! result = SageFs.McpCohortTools.requestLanding ctx agentName claims commits statement
           return
             match result with
             | Ok text -> text, None
@@ -2619,4 +2635,69 @@ OUTPUT: Confirmation text naming the resolved head sha, worktree path, branch, t
             | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
         }
         |> withEchoOutcome ctx "set_integration_ref"
+
+    [<McpServerTool>]
+    [<Description("""Mint a per-run member token: a distinct, scoped, expiring, revocable cohort member for one agent run. CONDUCTOR-ONLY, refused with a "not the cohort conductor" error for anyone else.
+
+The token is returned ONCE and never stored: SageFs keeps only its hash, so it cannot be shown again and is in no ledger row, log line or status text. Present it on every call of that run in the X-SageFs-Member-Token HTTP header (per connection), or in the request's _meta["sagefs/memberToken"] (per call, when one connection speaks for several members), or set SAGEFS_MEMBER_TOKEN for `sagefs mcp`. Never pass it as a tool argument: an agent's transcript keeps every argument. The platform that runs the agent sets the header or _meta; the model never sees the token.
+
+A token IS a cohort member (cap:<id> in get_cohort_status) and outranks the connection it arrives on, so sub-agents sharing one connection are as many members as they have tokens, each with real claim exclusivity. It is bound to:
+- a role, one of a closed set: Observer (read the cohort and status), Analysis (Observer plus read-only analysis of code and history; no eval, no tests), Verifier (Analysis plus run_tests and build/test leases; no eval), Implementer (everything a working member does: eval, sessions, apps, claims, landings). No role can mint, revoke, reassign claims, configure the integration, clear local data or tidy the workspace.
+- a scope: a repo-relative directory prefix. The token can claim only inside it; src/Foo/../Bar counts as src/Bar. A scope is policy, not a sandbox: it refuses claims, it does not stop a process from writing files.
+- an expiry: ttl_minutes from now (0 = 120, at most 480), and it also lapses after 30 minutes without a call, the way a silent member's seat does.
+
+A token can only be narrower than the one that mints it. A request that is wider is refused with the widenings named, never clamped. Tokens do not survive a daemon restart; mint new ones.
+
+WHEN TO USE: An orchestrator starting an agent run that should be a distinct member with limited tools and a limited scope. Cut a run off with revoke_member.
+
+OUTPUT: The member id (cap:<id>), the grant, the token (once), and how to present it. Set SAGEFS_IDENTITY_POLICY=TokenRequired on the daemon so a connection with no token can only read status.""")>]
+    member _.mint_member(
+        [<Description("Your agent or model name. You must be the cohort's conductor.")>]
+        agentName: string,
+        [<Description("The role: 'Observer', 'Analysis', 'Verifier' or 'Implementer'.")>]
+        role: string,
+        [<Description("Repo-relative directory prefix the token may claim inside, e.g. 'src/Foo/'. Empty or '.' = the whole repo.")>]
+        [<Optional; DefaultParameterValue("")>]
+        scope: string,
+        [<Description("Minutes the token lives. 0 = the default (120). At most 480.")>]
+        [<Optional; DefaultParameterValue(0)>]
+        ttl_minutes: int,
+        [<Description("Working directory of the checkout this run works in, resolved to a session id the way join_cohort resolves it. Optional.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        logger.LogDebug("MCP-TOOL: mint_member called by {AgentName}, role={Role}, scope={Scope}, ttl={Ttl}", agentName, role, scope, ttl_minutes)
+        task {
+          let! result = SageFs.McpCapability.mintMember ctx SageFs.McpTools.capabilityStore System.DateTime.UtcNow agentName role scope ttl_minutes wd
+          return
+            match result with
+            | Ok minted -> SageFs.McpCapability.describeMinted minted, SageFs.McpCapability.describeMintedForLog minted, None
+            | Error err -> "", "", Some err
+        }
+        |> withEchoSecret ctx "mint_member"
+
+    [<McpServerTool>]
+    [<Description("""Revoke a member token. CONDUCTOR-ONLY, refused with a "not the cohort conductor" error for anyone else.
+
+The token is refused from the next call, for ever (a revoked token stays revoked and its hash cannot be minted again), the member's seat departs, and every claim it held is orphaned so the conductor can reassign_claim it. Revoking does not stop a process that already holds a build or test lease; the lease runs out on its own.
+
+WHEN TO USE: An agent run is finished, leaked its token, or must be cut off without touching the other members.
+
+OUTPUT: Confirmation text, or an error saying why (not the conductor, no such member token, already revoked).""")>]
+    member _.revoke_member(
+        [<Description("Your agent or model name. You must be the cohort's conductor.")>]
+        agentName: string,
+        [<Description("The member id exactly as get_cohort_status or mint_member printed it: 'cap:<id>'.")>]
+        member_id: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: revoke_member called by {AgentName}, member={Member}", agentName, member_id)
+        task {
+          let! result = SageFs.McpCapability.revokeMember ctx SageFs.McpTools.capabilityStore System.DateTime.UtcNow agentName member_id
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "revoke_member"
 

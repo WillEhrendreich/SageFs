@@ -307,6 +307,31 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
       // through the await chain below exactly like Activity.Current already
       // does in this codebase. See SageFs.McpTools.memberIdFor.
       SageFs.McpTools.currentTransportSessionId.Value <- Some ctx.Server.SessionId
+      // Bind the member token this call presented, if any, the same way: a token outranks the connection,
+      // and one that is presented but bad is refused below, before any tool body or gate runs, never
+      // quietly downgraded to the connection's own identity.
+      let presented =
+        SageFs.McpCapability.presentToken
+          SageFs.McpTools.capabilityStore
+          DateTime.UtcNow
+          (SageFs.McpCapability.presentationFrom ctx.User (match box ctx.Params with | null -> null | _ -> ctx.Params.Meta))
+      SageFs.McpTools.currentCapability.Value <-
+        (match presented with
+         | Ok capability -> capability
+         | Error _ -> None)
+      match presented with
+      | Ok(Some capability) ->
+        // A token that only reads never evals, and the reaper renews a seat from recorded activity, so
+        // every call a token makes records it as active.
+        SageFs.AgentActivityTracker.recordMemberActivity
+          mcpCtx.ActivityTracker
+          (SageFs.Capability.memberIdOf capability.Id)
+          (activeSessionId mcpCtx "mcp")
+          None
+          None
+          DateTime.UtcNow
+      | Ok None
+      | Error _ -> ()
       match wasEmpty && System.Threading.Interlocked.CompareExchange(&logged, 1, 0) = 0 with
       | true ->
         let logger =
@@ -456,8 +481,10 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
           try
             // Affordance gate: reject tools that are not available in the
             // current session state BEFORE the tool body runs.
-            match String.IsNullOrWhiteSpace requestName with
-            | false ->
+            match presented, String.IsNullOrWhiteSpace requestName with
+            | Error badToken, _ ->
+              return buildGateErrorResult requestName (SageFs.SageFsError.describeForAgent badToken)
+            | Ok _, false ->
               let! gateResult = enforceToolGate requestName
               match gateResult with
               | Error gateError ->
@@ -467,12 +494,56 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
                 let! result =
                   SageFs.McpTools.runAdmitted admission (fun () -> next.Invoke(ctx, ct).AsTask())
                 return appendEvents result
-            | true ->
+            | Ok _, true ->
               let! result = next.Invoke(ctx, ct).AsTask()
               return appendEvents result
           with ex ->
             return buildErrorResult ex
         })))
+
+/// ListToolsFilter: `tools/list` shows each caller only what it can call. A caller that presented
+/// a member token sees its role's tools; a caller with no token sees everything under
+/// `ConnectionsAllowed`, and under `TokenRequired` only status unless it is the conductor; a caller
+/// whose token is bad sees nothing, because every call it made would be refused.
+let createToolListFilter (mcpCtx: McpContext) =
+  McpRequestFilter<ListToolsRequestParams, ListToolsResult>(fun next ->
+    McpRequestHandler<ListToolsRequestParams, ListToolsResult>(fun ctx ct ->
+      ValueTask<ListToolsResult>(
+        task {
+          let! result = next.Invoke(ctx, ct).AsTask()
+          let store = SageFs.McpTools.capabilityStore
+          let meta = match box ctx.Params with | null -> null | _ -> ctx.Params.Meta
+          let visible =
+            match SageFs.McpCapability.presentToken store DateTime.UtcNow (SageFs.McpCapability.presentationFrom ctx.User meta) with
+            | Error _ -> Set.empty
+            | Ok presented ->
+              let authority, seat =
+                match mcpCtx.CohortOwner with
+                | Some owner ->
+                  let frame = owner.ReadFrame()
+                  let seat = match frame.Conductor with | None -> SageFs.Capability.ConductorSeat.NotBoundYet | Some _ -> SageFs.Capability.ConductorSeat.Bound
+                  SageFs.Affordances.authorityOfMember (SageFs.MemberTable.MemberId.ofConnectionHandle ctx.Server.SessionId) frame, seat
+                | None -> SageFs.Cohort.Authority.Anonymous, SageFs.Capability.ConductorSeat.Bound
+              result.Tools
+              |> Seq.map (fun tool -> tool.Name)
+              |> List.ofSeq
+              |> SageFs.McpCapability.visibleToolNames store.Policy seat authority presented
+              |> Set.ofList
+          for i in result.Tools.Count - 1 .. -1 .. 0 do
+            if not (Set.contains result.Tools.[i].Name visible) then result.Tools.RemoveAt i
+          return result
+        })))
+
+/// The member-token header, read at the HTTP edge. The token is hashed here and only the hash goes
+/// on the request's principal, for the MCP request filters to read; the raw value goes no further.
+/// Installed ahead of `MapMcp`.
+let useMemberToken (app: WebApplication) : unit =
+  app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
+    match ctx.Request.Headers.TryGetValue SageFs.Capability.CapabilityTransport.headerName with
+    | true, values when values.Count > 0 ->
+      ctx.User <- SageFs.McpCapability.principalOfHeader values.[0]
+      next.Invoke()
+    | _ -> next.Invoke())) |> ignore
 
 /// Raised when a request body exceeds the 4 MB hard limit.
 /// errorHandlingMiddleware catches this and swallows it (413 already committed).
@@ -1927,6 +1998,7 @@ let configureMcpProtocol (builder: WebApplicationBuilder) (mcpContext: McpContex
       ValueTask<EmptyResult>(EmptyResult()))
     .WithRequestFilters(fun filters ->
       filters.AddCallToolFilter(createServerCaptureFilter mcpContext serverTracker) |> ignore
+      filters.AddListToolsFilter(createToolListFilter mcpContext) |> ignore
     )
   |> ignore
 
@@ -3647,6 +3719,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
         errorHandlingMiddleware ctx next :> Task)) |> ignore
       useOriginGuard cfg.OwnOrigins app
+      useMemberToken app
       app.MapMcp() |> ignore
 
       // Phase 3: Route context + routes

@@ -84,7 +84,11 @@ let requiredParamsByTool =
     "reassign_claim", set ["agentName"; "claimId"; "toMember"]
     "request_landing", set ["agentName"; "claims"; "commits"; "statement"]
     // Item 14c: both args required — v1 has no optional routing here either.
-    "set_integration_ref", set ["agentName"; "integrationRef"] ]
+    "set_integration_ref", set ["agentName"; "integrationRef"]
+    // Per-run member tokens (Capability.fs): who is minting and the role are required; scope, lifetime and
+    // checkout default to the whole repo, the default lifetime and no session. Revoking names the member.
+    "mint_member", set ["agentName"; "role"]
+    "revoke_member", set ["agentName"; "member_id"] ]
   |> Map.ofList
 
 [<Tests>]
@@ -238,7 +242,8 @@ let descriptionPropertyTests =
       // + set_reflection_read_mode, the way an agent sees and answers rule 2's
       // reflection read question.
       // + get_workspace_hygiene and tidy_workspace: what agents left behind, and the plan that tidies it.
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 63
+      // + mint_member and revoke_member: per-run member tokens (Capability.fs).
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 65
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

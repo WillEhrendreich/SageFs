@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 16, Later 17, Exploring 16. Already built: 12.
+On the page today: Now 0, Next 16, Later 18, Exploring 17. Already built: 16.
 
 ## Next
 
@@ -33,8 +33,8 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 ### Agents and cohorts
 
-- **Each agent counts as its own member.** Sub-agents of one Claude Code session share one MCP connection, so SageFs sees them as a single member and the build and test leases collide. Identity moves off the connection and onto a handle SageFs mints, so each agent gets its own seat and a dropped connection doesn't lose it. ([agents.md](agents.md), [mcp-tools.md](mcp-tools.md))
 - **Veto and delegate in a cohort.** The conductor can't hand off its role and nobody can veto or withdraw a landing, because four commands exist in the core with no tool or button that issues them. I'll wire them or delete them, and wiring starts with deciding who is allowed to veto. ([mcp-tools.md](mcp-tools.md))
+- **A member token bound to one session.** A token is confined to a scope of files, but an Analysis token can still read any session the daemon serves, because a tool that takes a session id or a working directory honors it. I want the grant to name the session or checkout it may route to. ([mcp-tools.md](mcp-tools.md))
 
 ### Editors
 
@@ -77,6 +77,7 @@ _I want it and I roughly know how. Months to a year, and the order will move._
 ### Agents and cohorts
 
 - **Watch your agents from your phone.** A second listener on your Tailscale address would serve the dashboard read-only to a phone with a short-lived token. A conductor could then approve or veto a landing from a link, but only once the minted handles above exist.
+- **Member tokens survive a daemon restart.** Tokens live in the daemon's memory, so a restart drops every one and the orchestrator mints new ones. Keeping their hashes would let a run survive a restart, but only in a store that is not the cohort ledger, and I'd rather see someone need it first. ([mcp-tools.md](mcp-tools.md))
 
 ### Dashboard
 
@@ -114,6 +115,7 @@ _An idea I'm turning over. No promise, and some of these will die._
 
 ### Agents and cohorts
 
+- **A token per sub-agent in Claude Code.** A header is per connection, so sub-agents that share one connection share a token. Only a per-call `_meta` tells them apart, and Claude Code gives the model no per-call header, so a harness hook that sets it would be the way in.
 - **Claim an interface, not just a file.** An agent would claim a .fsi signature file, every member's session would check its code against it, and a change to it would need a recorded decision. Claims cover only files and projects today.
 - **Plan a cohort as F# code.** A plan builder would fail at construction if two members claim the same file, and later could propose a claim split from coverage data for you to edit.
 - **Fork a cohort or a session at a point.** Replay a session's cells up to one point into a new worktree, or fork a whole cohort at a ledger sequence number, the way git branches a commit. A cell with side effects replays differently, and the result would say so.
@@ -157,6 +159,10 @@ _These were on this page and are in the code now. Whether a build has shipped is
 ### Agents and cohorts
 
 - **An agent's landed work reaches your running app.** When agents land work in the shared trunk, the app running in the trunk session picks it up live with its state kept. `get_cohort_status` and the dashboard show each landing's result per file, including the mechanism, and a landing that needs a restart says why. A landing that fails verification never reaches the app. Code: [`SageFs.Core/Features/TrunkFollow.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Features/TrunkFollow.fs)
+- **Each agent counts as its own member.** Sub-agents of one Claude Code session share one MCP connection, so SageFs saw them as a single member and the build and test leases collided. The conductor now mints a token per run with `mint_member`, each token is its own member with its own claims and leases, and a token outranks the connection it arrives on. A platform sets it in a header or in MCP `_meta`, never as a tool argument. Tokens live in memory, so a daemon restart means minting new ones. Code: [`SageFs.Core/Capability.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Capability.fs)
+- **A member's role says which tools it can call.** An Observer used to be able to call send_fsharp_code, because authority only gated the cohort's own tools. A member token now has one of four roles (Observer, Analysis, Verifier, Implementer), each a set of tool classes, and a call outside the role is refused with the role, the tool and what to do. `tools/list` shows a token only what it can call, and `SAGEFS_IDENTITY_POLICY=TokenRequired` makes a connection with no token read-only. Code: [`SageFs/McpCapability.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpCapability.fs)
+- **A member's id is no longer the bearer handle.** A member's id in `get_cohort_status`, the cohort frame and the ledger was the MCP session id, which is the credential a request is bound to, so anyone who read the status could act as the conductor. The id is a fingerprint of it now, and a test fails if any cohort output carries a handle. Code: [`SageFs.Core/MemberTable.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/MemberTable.fs)
+- **A claim path means one thing.** `src/Foo/../Bar/x.fs` did not overlap `src/Bar/x.fs`, so two members could hold the same file and a prefix check could be walked around. Claim paths are canonical at the boundary now, and a path that leaves the repo is refused. Code: [`SageFs.Core/Cohort.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Cohort.fs)
 
 ### Platform and install
 

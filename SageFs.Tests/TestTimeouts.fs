@@ -15,6 +15,16 @@ module TestTimeouts =
   /// Web-app tests must not use it, because a cold host build on a loaded runner outlasts it.
   let consoleAppGrace = System.TimeSpan.FromMilliseconds 500.
 
+  // --- member capability tokens (CapabilityTests) ---
+  /// A token's lifetime in the capability tests: one agent run.
+  let tokenRun = System.TimeSpan.FromHours 1.
+  /// Two runs: a lifetime that is wider than a minter holding one run's worth.
+  let tokenTwoRuns = System.TimeSpan.FromHours 2.
+  /// A short token: it expires inside the test's own clock, before its lease window does.
+  let tokenShort = System.TimeSpan.FromMinutes 20.
+  /// One minute past a limit, so a test crosses the limit and not merely touches it.
+  let pastALimit = System.TimeSpan.FromMinutes 1.
+
   // --- tests A to K ---
   // The helpers below build each value from a number once, here. Every call site names the value
   // by what it is for. A passing test never waits out a ceiling: reaching one means the test failed.

@@ -1476,3 +1476,54 @@ Evidence: `SageFs.Tests/McpAnalysisTests.fs`, `EvalRecordingScopeTests.fs`, `Too
 `ReplFreshnessDashboardTests.fs` (the card at five widths, both lines on one card), `SessionOperationsTests.fs`, and
 `HonestEmptiesOutcomeTests.fs` (a real daemon: an editor eval through `/exec`, `suggest_next_action` per session, both session lists).
 Reopen it if: the daemon caches each worker's warmup report (then every card can be read), or an eval result needs the source.
+
+## A member token is minted outside the ledger, shown once, and checked on every tool
+
+Nehemiah runs coding agents in sealed boxes and wanted each run to be its own member, with a narrow role, a scope and an expiry,
+and a way to cut one off without touching the rest. The Phase 2 sketch (`cohort-member-identity-as-capability.md`) minted the
+token inside `Cohort.decide` from the command's entropy. Every ledger row keeps the entropy its command used so replay is
+deterministic, so that design writes the token in plaintext to the ledger, its exports and the replay files. Turned down.
+
+What I built instead. `Capability.fs` is its own pure reducer outside the event ledger. The edge draws 32 random bytes, shows
+the token once, and hands the reducer only its SHA-256. A grant is a closed role preset (`Observer`, `Analysis`, `Verifier`,
+`Implementer`), a canonical scope prefix and an expiry. A grant can only be narrower than its minter's, and "narrower" is a
+partial order the property tests check: a role is narrower when its set of tool classes is a subset, a scope when it is the same
+directory or under it, an expiry when it is no later. A request that is wider is refused with the widenings named. It is never
+clamped. A revoked token stays revoked and its hash cannot be minted again. A token unused for a cohort lease window lapses, and
+none outlives its expiry. The cohort sees a token holder as an ordinary member whose id is `cap:<fingerprint>`.
+
+Three things in the same change, because the token is no use without them:
+
+- **A member's public id is not the connection's bearer handle.** It was `mcp:<Mcp-Session-Id>`, and `get_cohort_status` printed
+  it to anyone, so anyone could present it and act as the conductor (read from the SDK source, not run live). It is a fingerprint
+  now, and `MemberId.display` fingerprints a raw handle that was wrapped by hand, so a ledger row written by an older daemon cannot
+  print one either. A test drives two connections through status, frame, SSE rows, ledger export and the lease listing and
+  fails if any handle appears.
+- **Claim paths are canonical.** `src/Foo/../Bar/x.fs` did not overlap `src/Bar/x.fs`, which broke plain claim exclusivity and
+  would have let a naive prefix check pass `src/Foo/../Bar`. Both separators are one, `.` vanishes, `..` pops, and a path that
+  leaves the repo or is rooted is refused.
+- **The allow-list is classes, and a token-less connection is a named policy.** Authority used to gate only the eight cohort
+  tools. A tool now has a class, a role is a set of classes, a tool with no class is refused, and `tools/list` shows a token only
+  what it can call. `IdentityPolicy` (`ConnectionsAllowed`, the default, or `TokenRequired`, from `SAGEFS_IDENTITY_POLICY`) says
+  what a connection with no token is. Without `TokenRequired` the narrow roles sit beside an unrestricted door. The first joiner is
+  still the conductor under `TokenRequired` (a token-less `join_cohort` is admitted until a conductor exists), because nobody can mint
+  without one, so whoever joins first on a fresh daemon is the conductor: the orchestrator starts the daemon and joins before it
+  starts any agent.
+
+The token travels in the `X-SageFs-Member-Token` header or in MCP `_meta`, set by the platform, never in a tool argument:
+an agent's transcript keeps every argument, and the stdio bridge's warning log prints the raw message. `sagefs mcp` reads
+`SAGEFS_MEMBER_TOKEN` and sends the header, so the bridge is a supported path too. A connection-wide header cannot tell apart
+sub-agents sharing a connection (finding F8); only a per-call `_meta` can, and a token outranks the connection when both are there.
+
+What it does not do. A scope is policy, not containment: a process that can write the file can still write it. Any role with
+`Eval` runs arbitrary code as the daemon's OS user, so the roles without eval are the ones that mean something against a hostile
+agent. Tokens live in memory and do not survive a daemon restart. A token is not bound to a session or checkout, so an
+`Analysis` token can read any session the daemon serves. A conductor that has departed still holds conductor authority on a live
+connection (the presence check in `Authority.present` and `authorityOfMember` comes after the binding), which this does not fix.
+
+Evidence: `SageFs.Core/Capability.fs`, `SageFs/CapabilityStore.fs`, `SageFs/McpCapability.fs`, `SageFs.Core/Cohort.fs` (`ClaimPath`),
+`SageFs.Core/MemberTable.fs`; `SageFs.Tests/CapabilityTests.fs`, `CapabilityWireTests.fs`, `CapabilitySimTests.fs` (the DST,
+with eight twins that each break one invariant), `ClaimPathTests.fs` and `CohortIdentityLeakTests.fs`.
+Reopen it if: persisting tokens across a restart becomes necessary (then the hashes go in a store that is not the cohort ledger),
+a harness gives the model a per-call header (then the per-connection header can retire), or a role needs a tool list the classes
+cannot express.

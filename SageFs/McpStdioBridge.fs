@@ -459,6 +459,13 @@ let runMcpStdio (mcpPort: int) : Task<int> =
   task {
     let stdout = openStdout ()
     use client = new HttpClient(Timeout = Timeouts.workerHttpRequest)
+    // A member token for this run (`mint_member`), when the process that started `sagefs mcp` set one. It
+    // goes in the HTTP header of every request the bridge makes, so it never appears in a JSON-RPC
+    // message, in the bridge's rejection log, or in anything the model reads. One bridge is one run, so
+    // one connection-wide header is the right grain here.
+    match Capability.CapabilityTransport.headerFromEnvironment Environment.GetEnvironmentVariable with
+    | Some(name, value) -> client.DefaultRequestHeaders.Add(name, value)
+    | None -> ()
     let io: Io =
       { Probe = fun () -> task { let! info = DaemonState.probeDaemonHttpAsync mcpPort in return info.IsSome }
         StartDaemon = fun () -> startDaemonProcess mcpPort

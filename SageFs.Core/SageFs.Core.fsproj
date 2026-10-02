@@ -51,6 +51,7 @@
         <Compile Include="HygieneFs.fs" />
         <Compile Include="GateReaper.fs" />
         <Compile Include="MemberTable.fs" />
+        <Compile Include="Capability.fs" />
         <Compile Include="Tutorial.fs" />
         <Compile Include="SageFsConfig.fs" />
         <Compile Include="Json.fs" />

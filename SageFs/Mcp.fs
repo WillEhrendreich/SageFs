@@ -79,6 +79,17 @@ module McpTools =
   /// through the ASP.NET Core / MCP SDK pipeline) — see `memberIdFor`.
   let currentTransportSessionId = new System.Threading.AsyncLocal<string option>()
 
+  /// The member token this call presented and that resolved, bound by the request
+  /// filter exactly as `currentTransportSessionId` is. A token outranks the
+  /// connection: it is the member, and sub-agents sharing one connection are as
+  /// many members as they have tokens. None for a call that presented no token.
+  let currentCapability = new System.Threading.AsyncLocal<ResolvedCapability option>()
+
+  /// The daemon's one capability table and identity policy. The policy is `SAGEFS_IDENTITY_POLICY`:
+  /// unset is `ConnectionsAllowed` (nothing existing changes), and a value that is set but unreadable
+  /// is `TokenRequired`, so a typo cannot open the door the setting was meant to shut.
+  let capabilityStore = CapabilityStore(Capability.CapabilityTransport.policyFromEnvironment Environment.GetEnvironmentVariable)
+
   /// Resolve the BOUND identity for a self-declared agent name
   /// (sagefs-multiagent-vision.md §4.1: "identity is bound to the
   /// connection, not declared"). When a real MCP connection is bound, the
@@ -90,9 +101,17 @@ module McpTools =
   /// name (MemberTable.MemberId.display) — every existing name-keyed test
   /// and call site keeps working unchanged.
   let memberIdFor (agentName: string) : MemberTable.MemberId =
-    match currentTransportSessionId.Value with
-    | Some tsid when not (String.IsNullOrWhiteSpace tsid) -> MemberTable.MemberId.Mcp tsid
-    | _ -> MemberTable.MemberId.Minted agentName
+    match currentCapability.Value with
+    // A token outranks the connection: it IS the member. Sub-agents sharing one connection are as
+    // many members as they have tokens. A call that presented a bad token never gets here, because
+    // the request filter refuses it before any identity is bound.
+    | Some capability -> Capability.memberIdOf capability.Id
+    | None ->
+      match currentTransportSessionId.Value with
+      // The member id is a fingerprint of the handle, never the handle: the SDK's
+      // session id is a bearer credential, and every cohort output prints member ids.
+      | Some tsid when not (String.IsNullOrWhiteSpace tsid) -> MemberTable.MemberId.ofConnectionHandle tsid
+      | _ -> MemberTable.MemberId.Minted agentName
 
   /// The resolved routing/presence key for a self-declared agent name — see
   /// `memberIdFor`. This is what SessionMap and ActivityTracker are keyed by,
@@ -767,6 +786,32 @@ module McpTools =
           "Join as Implementer for claim/landing tools, or ask the cohort conductor to perform this action."
         Some (Error (SageFsError.describeForAgent (SageFsError.CohortActionFailed(reason, suggestion))))
 
+  /// The identity layer of the gate, ahead of the cohort's role check and the session-state
+  /// gate (a call must pass all three): who is calling, and may that caller call this tool at all.
+  ///   - A call that presented a member token is held to the token's role: a tool outside the
+  ///     role's tool classes is refused, naming the role, the tool and what to do about it.
+  ///   - A call with no token is a plain member under `ConnectionsAllowed`, as it always was.
+  ///     Under `TokenRequired` it may read status, and the conductor on its own connection may
+  ///     act (so it can mint); everyone else is refused and told how to get a token.
+  let private checkIdentityGate (store: CapabilityStore) (ctx: McpContext) (agent: string) (toolName: string) : Result<unit, string> =
+    match currentCapability.Value with
+    | Some capability ->
+      Capability.admitTool capability.Grant toolName
+      |> Result.mapError (CohortErrorMapping.toolRefusalToSageFsError >> SageFsError.describeForAgent)
+    | None ->
+      match store.Policy with
+      | Capability.IdentityPolicy.ConnectionsAllowed -> Ok ()
+      | Capability.IdentityPolicy.TokenRequired ->
+        let authority, seat =
+          match ctx.CohortOwner with
+          | Some owner ->
+            let frame = owner.ReadFrame()
+            let seat = match frame.Conductor with | None -> Capability.ConductorSeat.NotBoundYet | Some _ -> Capability.ConductorSeat.Bound
+            Affordances.authorityOfMember (memberIdFor agent) frame, seat
+          | None -> Cohort.Authority.Anonymous, Capability.ConductorSeat.Bound
+        Capability.admitTokenless Capability.IdentityPolicy.TokenRequired seat authority toolName
+        |> Result.mapError (CohortErrorMapping.policyRefusalToSageFsError >> SageFsError.describeForAgent)
+
   /// ── Affordance call gate ─────────────────────────────────────────────────
   ///
   /// Structural enforcement point for the affordance model. The MCP server's
@@ -787,7 +832,8 @@ module McpTools =
   /// (Slice 3, item 11) — a role-based dimension the session-state gate below
   /// has no concept of. `admitToolCallWithin` is the gate itself; it returns
   /// what it resolved, so the tool body need not resolve a second time.
-  let admitToolCallWithin
+  let admitToolCallWithinStore
+    (store: CapabilityStore)
     (probeBound: TimeSpan)
     (ctx: McpContext)
     (agent: string)
@@ -800,6 +846,9 @@ module McpTools =
     let allowedIn (state: SessionState) =
       Affordances.checkToolCallAllowed state toolName |> Result.mapError SageFsError.describeForAgent
     task {
+      match checkIdentityGate store ctx agent toolName with
+      | Error message -> return Error message
+      | Ok () ->
       match checkCohortAuthorityGate ctx agent toolName with
       | Some result -> return result |> Result.map (fun () -> admission GateResolution.NotResolved)
       | None ->
@@ -822,6 +871,10 @@ module McpTools =
       | None ->
         return allowedIn SessionState.Uninitialized |> Result.map (fun () -> admission GateResolution.NotResolved)
     }
+
+  /// The gate over the daemon's own capability table and identity policy.
+  let admitToolCallWithin (probeBound: TimeSpan) (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) (toolName: string) =
+    admitToolCallWithinStore capabilityStore probeBound ctx agent sessionId workingDirectory toolName
 
   /// The gate, answering only whether the call may run.
   let enforceToolCallGate
@@ -3162,186 +3215,6 @@ module McpTools =
         | Error err -> return Error (CohortErrorMapping.toSageFsError err)
     }
 
-  let private parseJoinableRole (raw: string) : Result<Cohort.JoinableRole, SageFsError> =
-    match (if isNull raw then "" else raw.Trim().ToLowerInvariant()) with
-    | "implementer" -> Ok Cohort.JoinableRole.Implementer
-    | "verifier" -> Ok Cohort.JoinableRole.Verifier
-    | "observer" -> Ok Cohort.JoinableRole.Observer
-    | other -> Error (SageFsError.SessionCreationFailed (sprintf "unknown cohort role '%s' — expected Implementer, Verifier, or Observer" other))
-
-  /// v1's scope wire format: "file:<repo-relative-path>" or
-  /// "project:<repo-relative-.fsproj-path>" — matches `Cohort.ClaimScope`'s
-  /// two v1 cases (Module/Symbol/Contract are Phase 3, not constructible yet).
-  let private parseClaimScope (raw: string) : Result<Cohort.ClaimScope, SageFsError> =
-    let raw = if isNull raw then "" else raw.Trim()
-    match raw.IndexOf ':' with
-    | -1 -> Error (SageFsError.SessionCreationFailed (sprintf "claim scope '%s' must be 'file:<path>' or 'project:<path>'" raw))
-    | i ->
-      let kind = raw.Substring(0, i).Trim().ToLowerInvariant()
-      let path = raw.Substring(i + 1).Trim()
-      if path = "" then Error (SageFsError.SessionCreationFailed "claim scope path is empty")
-      else
-        match kind with
-        | "file" -> Ok (Cohort.ClaimScope.File path)
-        | "project" -> Ok (Cohort.ClaimScope.Project path)
-        | other -> Error (SageFsError.SessionCreationFailed (sprintf "unknown claim scope kind '%s' — expected 'file' or 'project'" other))
-
-  /// Resolve a landing's presented "claimId:fence" pairs (comma-separated —
-  /// v1 has no structured multi-value MCP argument type worth adding for this
-  /// small surface, see the Slice 2 report's deviation note).
-  let private parseClaimFenceList (raw: string) : Result<(Cohort.ClaimId * int64<Measures.fence>) list, SageFsError> =
-    let raw = if isNull raw then "" else raw.Trim()
-    if raw = "" then Ok []
-    else
-      raw.Split(',')
-      |> Array.toList
-      |> List.map (fun pair ->
-        match pair.Trim().Split(':') with
-        | [| cid; fenceStr |] when cid.Trim() <> "" ->
-          match Int64.TryParse(fenceStr.Trim()) with
-          | true, f -> Ok (Cohort.ClaimId (cid.Trim()), LanguagePrimitives.Int64WithMeasure<Measures.fence> f)
-          | false, _ -> Error (SageFsError.SessionCreationFailed (sprintf "claim fence '%s' is not an integer in '%s'" fenceStr pair))
-        | _ -> Error (SageFsError.SessionCreationFailed (sprintf "expected 'claimId:fence', got '%s'" pair)))
-      |> List.fold (fun acc item ->
-        match acc, item with
-        | Error e, _ -> Error e
-        | Ok _, Error e -> Error e
-        | Ok xs, Ok x -> Ok (xs @ [ x ]))
-        (Ok [])
-
-  /// Resolve a target member named by its OWN display string (as
-  /// `get_cohort_status` prints it) back to a `MemberId` — used only for
-  /// naming the RECIPIENT of a conductor-only action (`reassign_claim`),
-  /// never for the acting caller's own identity (that is always
-  /// `memberIdFor agentName`, never a self-declared argument). Looked up
-  /// against the live frame first so a real bound connection (Mcp/Browser) is
-  /// named exactly as presented; falls back to `Minted` so direct/unbound
-  /// callers (most tests) can still name each other by plain agent name.
-  let private resolveMemberByDisplay (ctx: McpContext) (display: string) : MemberTable.MemberId =
-    match ctx.CohortOwner with
-    | None -> MemberTable.MemberId.Minted display
-    | Some owner ->
-      owner.ReadFrame().MemberIds
-      |> Array.tryFind (fun m -> MemberTable.MemberId.display m = display)
-      |> Option.defaultValue (MemberTable.MemberId.Minted display)
-
   let internal renderCohortFrame (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
     Features.CohortStatusText.render frame
 
-  /// Resolve the caller's SESSION (checkout) for `join_cohort` (item 13c of
-  /// sagefs-multiagent-vision.md), via the SAME routing every other tool
-  /// uses (`resolveSessionId`): an explicit `workingDirectory` wins, then the
-  /// agent's active-session mapping, then the daemon's own working directory
-  /// or its one-and-only session. Any resolution that names a real,
-  /// registered session (Routable/WarmingUp/Unroutable/FaultedSession) is
-  /// bound — the member doesn't need a currently-ROUTABLE worker, just an
-  /// existing session id to attribute test outcomes to later. Only `Gone`
-  /// (no matching/ambiguous/no session at all) resolves to `None`: the
-  /// member still joins, it just contributes no row to the cohort's test
-  /// matrix (`CohortOwner.frameOf`) until it joins again with a resolvable
-  /// session.
-  let private resolveJoinSession (ctx: McpContext) (agentName: string) (workingDirectory: string option) : Task<string option> =
-    task {
-      let! resolution = resolveSessionId ctx agentName None workingDirectory
-      return
-        match resolution with
-        | Routable sid
-        | WarmingUp(sid, _)
-        | Unroutable(sid, _)
-        | FaultedSession(sid, _) -> Some sid
-        | Gone _ -> None
-    }
-
-  /// Join the implicit per-daemon cohort as `role` (Implementer/Verifier/
-  /// Observer). v1 has no separate `create_cohort` command — the first
-  /// member to join an empty cohort becomes its conductor automatically
-  /// (`Cohort.decide`'s own semantics for `Join`), so this tool doubles as
-  /// create_cohort for the first caller. `workingDirectory` (item 13c) is
-  /// resolved to a session id via `resolveJoinSession` and stored on the
-  /// member (`MemberRecord.Session`) so the cohort frame can later attribute
-  /// this member's checkout's test outcomes to it (`CohortOwner.frameOf`).
-  let joinCohort (ctx: McpContext) (agentName: string) (role: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
-    task {
-      match parseJoinableRole role with
-      | Error e -> return Error e
-      | Ok r ->
-        let who = memberIdFor agentName
-        let! sessionOpt = resolveJoinSession ctx agentName workingDirectory
-        let! result = commitCohort ctx (Cohort.CohortCommand.Join(who, r, sessionOpt))
-        return
-          result
-          |> Result.map (fun (events, _) ->
-            let becameConductor = events |> List.exists (function Cohort.CohortEvent.ConductorBound _ -> true | _ -> false)
-            let sessionNote =
-              match sessionOpt with
-              | Some sid -> sprintf " Bound to session %s." sid
-              | None -> " No session was resolved — you won't appear in the per-session test matrix until you join again from a working directory that matches a session."
-            sprintf "Joined cohort as %s (%s).%s%s" (MemberTable.MemberId.display who) (string r) (if becameConductor then " You are the conductor (first to join)." else "") sessionNote)
-    }
-
-  let leaveCohort (ctx: McpContext) (agentName: string) : Task<Result<string, SageFsError>> =
-    task {
-      let who = memberIdFor agentName
-      let! result = commitCohort ctx (Cohort.CohortCommand.Depart who)
-      return result |> Result.map (fun _ -> sprintf "%s left the cohort." (MemberTable.MemberId.display who))
-    }
-
-  let acquireClaim (ctx: McpContext) (agentName: string) (scope: string) (purpose: string) : Task<Result<string, SageFsError>> =
-    task {
-      match parseClaimScope scope with
-      | Error e -> return Error e
-      | Ok claimScope ->
-        let who = memberIdFor agentName
-        let! result = commitCohort ctx (Cohort.CohortCommand.AcquireClaim(who, claimScope, purpose))
-        return
-          result
-          |> Result.bind (fun (events, _) ->
-            match events |> List.tryPick (function Cohort.CohortEvent.ClaimAcquired(cid, _, _, fence) -> Some(cid, fence) | _ -> None) with
-            | Some(Cohort.ClaimId cid, fence) -> Ok (sprintf "Acquired claim %s over %s (fence=%d)." cid scope (int64 fence))
-            | None -> Error (SageFsError.Unexpected (exn "acquire_claim committed with no ClaimAcquired event")))
-    }
-
-  let releaseClaim (ctx: McpContext) (agentName: string) (claimId: string) (fence: int64) : Task<Result<string, SageFsError>> =
-    task {
-      let who = memberIdFor agentName
-      let fenceMeasure = LanguagePrimitives.Int64WithMeasure<Measures.fence> fence
-      let! result = commitCohort ctx (Cohort.CohortCommand.ReleaseClaim(who, Cohort.ClaimId claimId, fenceMeasure))
-      return result |> Result.map (fun _ -> sprintf "Released claim %s." claimId)
-    }
-
-  /// Conductor-only (`Cohort.decide` gates `ReassignClaim` on
-  /// `Authority.present by state = Authority.Conductor _`, refusing
-  /// `NotConductor` otherwise — surfaced here via `CohortErrorMapping.toSageFsError`).
-  /// `toMember` names the recipient by ITS OWN display string, resolved via
-  /// `resolveMemberByDisplay` — never trusted as the caller's own identity.
-  let reassignClaim (ctx: McpContext) (agentName: string) (claimId: string) (toMember: string) : Task<Result<string, SageFsError>> =
-    task {
-      let by = memberIdFor agentName
-      let target = resolveMemberByDisplay ctx toMember
-      let! result = commitCohort ctx (Cohort.CohortCommand.ReassignClaim(by, Cohort.ClaimId claimId, target))
-      return result |> Result.map (fun _ -> sprintf "Reassigned claim %s to %s." claimId (MemberTable.MemberId.display target))
-    }
-
-  /// `claims` is "claimId:fence,claimId:fence,..." (empty string = no
-  /// backing claims); `commits` is a comma-separated list of shas. See
-  /// `parseClaimFenceList`'s doc for why v1 uses this flat wire format
-  /// instead of a structured argument type.
-  let requestLanding (ctx: McpContext) (agentName: string) (claims: string) (commits: string) (statement: string) : Task<Result<string, SageFsError>> =
-    task {
-      match parseClaimFenceList claims with
-      | Error e -> return Error e
-      | Ok claimList ->
-        let commitList =
-          (if isNull commits then "" else commits).Split(',')
-          |> Array.map (fun s -> s.Trim())
-          |> Array.filter (fun s -> s <> "")
-          |> Array.toList
-        let requester = memberIdFor agentName
-        let! result = commitCohort ctx (Cohort.CohortCommand.RequestLanding(requester, claimList, commitList, statement))
-        return
-          result
-          |> Result.bind (fun (events, _) ->
-            match events |> List.tryPick (function Cohort.CohortEvent.LandingQueued(lid, _) -> Some lid | _ -> None) with
-            | Some(Cohort.LandingId lid) -> Ok (sprintf "Landing %s queued." lid)
-            | None -> Error (SageFsError.Unexpected (exn "request_landing committed with no LandingQueued event")))
-    }

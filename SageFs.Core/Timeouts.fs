@@ -355,6 +355,15 @@ module Timeouts =
   /// window as `cohortLeaseWindow` on purpose: a member's seat and the claims
   /// that name it age out together.
   let cohortSettledRetention = cohortLeaseWindow
+  /// How long a minted member token lives when the conductor does not say: one
+  /// agent run. The token also lapses on its own after `cohortLeaseWindow` of not
+  /// being used, the way a silent member's seat does, so this is the ceiling of a
+  /// busy run and not how long an idle one is trusted.
+  let capabilityDefaultLifetime = TimeSpan.FromHours(2.0)
+  /// The longest a minted member token may live. A credential that outlives a
+  /// working day is one nobody remembers to revoke; the orchestrator mints a new
+  /// one for the next run instead. No recorded reason for 8 hours beyond that.
+  let capabilityMaxLifetime = TimeSpan.FromHours(8.0)
   let stdioFlush = TimeSpan.FromSeconds(5.0)
 
   // -- Agent presence --

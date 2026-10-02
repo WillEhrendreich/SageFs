@@ -98,8 +98,64 @@ module Cohort =
     | File of repoRelativePath: string
     | Project of fsprojRelativePath: string
 
+  /// Why a claim path is not a repo-relative path.
+  [<RequireQualifiedAccess>]
+  type PathRefusal =
+    /// Rooted (`/etc/x`, `C:\x`, `\\host\share`): not relative to the repo.
+    | Absolute of path: string
+    /// `..` climbs out of the repo before it comes back (`../x`, `a/../../x`).
+    | EscapesRoot of path: string
+
+  /// The one canonical spelling of a repo-relative path. A claim path was only
+  /// ever normalized by swapping `\` for `/`, so `src/Foo/../Bar/x.fs` did not
+  /// overlap `src/Bar/x.fs`: a claim could be held twice, and a prefix check
+  /// written as `StartsWith "src/Foo/"` let `src/Foo/../Bar/x.fs` through.
+  /// Both separators are the same, `.` and empty segments vanish, `..` removes
+  /// the segment before it, a path that climbs out of the repo is refused (never
+  /// clamped to the root), and a rooted path is not repo-relative at all. The
+  /// result has no leading or trailing slash; the repo root is the empty string.
+  module ClaimPath =
+    let private isDriveRooted (slashed: string) =
+      slashed.Length >= 2 && Char.IsLetter slashed.[0] && slashed.[1] = ':'
+
+    let tryCanonical (raw: string) : Result<string, PathRefusal> =
+      let slashed = raw.Replace('\\', '/')
+      match slashed.StartsWith("/", StringComparison.Ordinal) || isDriveRooted slashed with
+      | true -> Error(PathRefusal.Absolute raw)
+      | false ->
+        slashed.Split('/')
+        |> Array.fold
+          (fun acc segment ->
+            match acc, segment with
+            | Error _, _ -> acc
+            | Ok _, ""
+            | Ok _, "." -> acc
+            | Ok stack, ".." ->
+              match stack with
+              | [] -> Error(PathRefusal.EscapesRoot raw)
+              | _ :: rest -> Ok rest
+            | Ok stack, name -> Ok(name :: stack))
+          (Ok [])
+        |> Result.map (fun stack -> stack |> List.rev |> String.concat "/")
+
+    /// The canonical path where there is one, and the plain `/`-separated text
+    /// where there is not (an escaping or rooted path overlaps nothing in the
+    /// repo anyway). Total, for the comparisons below, which must not throw.
+    let canonicalOrRaw (raw: string) : string =
+      match tryCanonical raw with
+      | Ok canonical -> canonical
+      | Error _ -> raw.Replace('\\', '/')
+
   module ClaimScope =
-    let private normalize (path: string) = path.Replace('\\', '/')
+    let private normalize (path: string) = ClaimPath.canonicalOrRaw path
+
+    /// The scope with its path canonicalized, or why it cannot be. The MCP
+    /// boundary stores the canonical scope, so what the cohort holds is what
+    /// `overlaps` compares.
+    let tryCanonical (scope: ClaimScope) : Result<ClaimScope, PathRefusal> =
+      match scope with
+      | ClaimScope.File path -> ClaimPath.tryCanonical path |> Result.map ClaimScope.File
+      | ClaimScope.Project path -> ClaimPath.tryCanonical path |> Result.map ClaimScope.Project
 
     /// `Project` claims a directory (the fsproj's own directory), not the fsproj
     /// file itself — a `File` overlaps a `Project` iff it is under that directory.
