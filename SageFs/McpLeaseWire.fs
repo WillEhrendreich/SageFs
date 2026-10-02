@@ -1,6 +1,6 @@
 /// What a lease decision looks like on the wire, for the MCP lease tools and the HTTP lease endpoint.
 ///
-/// The decision tokens the guard hook and `scripts/local-gate` already read keep their meaning:
+/// The decision tokens the guard hook and `scripts/local-gate.fsx` already read keep their meaning:
 /// `granted`, `wait` and `refused`. A holder that asks again for the lease it holds is `granted`
 /// too (it does hold it), with `grant: already_held` and the same lease id, so a caller that
 /// proceeds on `granted` keeps working. Everything an agent needs to act on a wait or a refusal is
@@ -33,7 +33,7 @@ let private askJson (request: QueuedRequest) =
      kind = Kind.toToken request.Kind
      workingDirectory = Holder.directoryLabel request.Holder |}
 
-/// The three answers the guard hook and `scripts/local-gate` read.
+/// The three answers the guard hook and `scripts/local-gate.fsx` read.
 [<RequireQualifiedAccess>]
 type private Verdict =
   | Granted

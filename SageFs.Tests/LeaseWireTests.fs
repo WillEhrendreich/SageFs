@@ -2,7 +2,7 @@
 /// "you already hold 1/1 leases" to a caller whose sibling held the lease, so three agents spent
 /// up to 35 minutes looking for a lease they did not have. The refusal now carries the holder, the
 /// kind of work, when it was granted and when it lapses, the caller's place in line, and what to do.
-/// Decision tokens the guard hook and `scripts/local-gate` already read (`granted`, `wait`, `refused`)
+/// Decision tokens the guard hook and `scripts/local-gate.fsx` already read (`granted`, `wait`, `refused`)
 /// keep their meaning.
 module SageFs.Tests.LeaseWireTests
 

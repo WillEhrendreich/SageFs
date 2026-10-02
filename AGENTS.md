@@ -329,5 +329,5 @@ the workspace tidy is the orchestrator's job, and these are the calls that do it
 - Do not introduce new NuGet dependencies without discussion
 - Do not change the indentation style (2 spaces)
 - Do not use `dotnet test` for local development — use the SageFs REPL
-- Do not modify `Directory.Build.props` version numbers. Nothing bumps on commit: `scripts/ship.fsx` bumps once per push, and `scripts/pre-push` refuses a master push that doesn't raise the version
+- Do not modify `Directory.Build.props` version numbers. Nothing bumps on commit: `scripts/ship.fsx` bumps once per push, and the pre-push hook (`scripts/pre-push.fsx`) refuses a master push that doesn't raise the version
 - Do not add Version attributes to PackageReference elements

@@ -1,5 +1,5 @@
 // Reap the local gate's state dir: checkouts and tier clones whose repo is gone or that nobody has used for the
-// retention, pass records past the newest few, and old logs. Run by scripts/local-gate before it makes its own
+// retention, pass records past the newest few, and old logs. Run by scripts/local-gate.fsx before it makes its own
 // checkout.
 //
 //   dotnet fsi scripts/gate-reap.fsx <gate-state-dir> <invoking-repo> <invoking-pid>

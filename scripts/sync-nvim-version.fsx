@@ -2,7 +2,7 @@
 // Run with: dotnet fsi scripts/sync-nvim-version.fsx -- <mode> [args]
 //
 //   <version>        sync: the SageFs release just made gets a plugin commit with the same version,
-//                    tested and pushed. scripts/ship runs this after it pushes, so the plugin never lags.
+//                    tested and pushed. scripts/ship.fsx runs this after it pushes, so the plugin never lags.
 //   --check <ver>    report whether the plugin's version matches, change nothing (exit 1 on a mismatch)
 //   --compat         the daemon's apiVersion (SageFs.Core/EndpointContracts.fs) against the api_range the
 //                    plugin declares in lua/sagefs/compat.lua; exit 1 when the daemon is outside it.

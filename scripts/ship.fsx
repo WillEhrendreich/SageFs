@@ -10,7 +10,7 @@
 // touches Directory.Build.props and parallel worktrees never collide on it.
 // One push to master is one release, so one ship is one bump. Pass a commit to
 // gate and push something that already carries its bump (a re-run after a fix,
-// or a commit made elsewhere); the bump is skipped then, and pre-push still
+// or a commit made elsewhere); the bump is skipped then, and the pre-push hook still
 // refuses anything that doesn't raise the version.
 //
 // Before it bumps anything or calls the gate it builds SageFs.Tests in Release and runs the ratchet lane
@@ -119,11 +119,20 @@ let runRatchets (target: string) : unit =
 let private given =
   fsi.CommandLineArgs |> Array.skip 1 |> Array.filter (fun a -> a <> "--") |> Array.tryHead
 
-/// Bump the version (scripts/bump-version prints it and stages nothing), then commit exactly the two files.
+/// The arguments for `dotnet` to run one of the sibling scripts.
+let private fsiScript (name: string) (args: string list) = "fsi" :: Path.Combine(scriptsDir, name) :: args
+
+/// Bump the version (scripts/bump-version.fsx prints it and stages nothing), then commit exactly the two files.
+/// The version is the last line of what the script printed that reads as one: fsi may print its own notes
+/// around the script's output, and a note must never become a commit message.
 let private bumpAndCommit () : unit =
+  let isVersion (line: string) = Regex.IsMatch(line, @"^\d+\.\d+\.\d+$")
   let version =
-    match start repo (Path.Combine(scriptsDir, "bump-version")) [] true with
-    | { Code = 0; Output = text } -> text.Trim()
+    match start repo "dotnet" (fsiScript "bump-version.fsx" []) true with
+    | { Code = 0; Output = text } ->
+      match text.Replace("\r\n", "\n").Split('\n') |> Array.map (fun l -> l.Trim()) |> Array.filter isVersion |> Array.tryLast with
+      | Some v -> v
+      | None -> die [ sprintf "ship: bump-version printed no version: %s" (text.Trim()) ]
     | { Output = text } -> die [ sprintf "ship: bump-version failed: %s" (text.Trim()) ]
   git [ "commit"; "--quiet"; "--no-verify"; "-m"; sprintf "chore: release v%s" version; "--"; "Directory.Build.props"; "sagefs-vscode/package.json" ] |> ignore
   printfn "ship: bumped to %s" version
@@ -157,15 +166,13 @@ let private sha : string =
     bumpAndCommit ()
     git [ "rev-parse"; "HEAD" ]
 
-let private fsiScript (name: string) (args: string list) = "fsi" :: Path.Combine(scriptsDir, name) :: args
-
 // The plugin reaches users commit by commit, so a daemon change that moves the wire contract has to land
 // with its plugin change first. This refuses a release the current sagefs.nvim cannot talk to.
 mustRun "the plugin compatibility check" repo "dotnet" (fsiScript "sync-nvim-version.fsx" [ "--"; "--compat" ])
 mustRun "the plugin impact check" repo "dotnet" (fsiScript "sync-nvim-version.fsx" [ "--"; "--impact"; sha ])
 
 // STEP gate
-mustRun "the local gate" repo (Path.Combine(scriptsDir, "local-gate")) [ sha ]
+mustRun "the local gate" repo "dotnet" (fsiScript "local-gate.fsx" [ "--"; sha ])
 
 // The daemon this machine runs must be the build being shipped: install the nupkg the gate just built and
 // restart the daemon on it, and prove the daemon reports that version, before anything is pushed. Open

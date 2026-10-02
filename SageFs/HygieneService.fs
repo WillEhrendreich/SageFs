@@ -110,7 +110,7 @@ let mainRepoOf (dir: string) : string option =
     with _ -> Some root
   | Checkout.Checkout.NotAGitCheckout -> None
 
-/// The gate's state dir, as `scripts/local-gate` names it.
+/// The gate's state dir, as `scripts/local-gate.fsx` names it.
 let gateDir () : string =
   match Environment.GetEnvironmentVariable "SAGEFS_GATE_HOME" with
   | null

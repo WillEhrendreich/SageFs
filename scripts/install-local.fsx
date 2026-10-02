@@ -12,7 +12,7 @@
 //              (the exact bytes CI will publish). Without one, pass --build.
 //   --build    pack the checkout at <commit> under a unique local version suffix (NuGet serves a stale cached
 //              package for a reused version, so the version always changes) and install that.
-//   --force    restart even when sessions are open (they are dropped and not resumed). scripts/ship always
+//   --force    restart even when sessions are open (they are dropped and not resumed). scripts/ship.fsx always
 //              passes it: upgrading the daemon beats whatever another agent had open.
 //
 // Every step is fatal on failure, and success is only reported after the daemon that answers has been read
@@ -174,7 +174,7 @@ let install (repo: string) (shaArg: string option) (build: bool) (force: bool) =
       Path.GetDirectoryName gated, version
     else
       if not build then
-        fail (NothingToInstall (sprintf "no gate pass for %s, so no gated package. Run scripts/local-gate %s, or pass --build to pack this checkout." short short))
+        fail (NothingToInstall (sprintf "no gate pass for %s, so no gated package. Run dotnet fsi scripts/local-gate.fsx -- %s, or pass --build to pack this checkout." short short))
       if sha <> gitOut repo [ "rev-parse"; "HEAD" ] then
         fail (NothingToInstall (sprintf "--build packs the checkout, which is not at %s" short))
       if (gitOut repo [ "status"; "--porcelain"; "--untracked-files=no" ]) <> "" then

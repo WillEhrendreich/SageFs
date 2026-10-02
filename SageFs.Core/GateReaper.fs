@@ -1,4 +1,4 @@
-/// The local gate's leftovers and the one place that decides them. `scripts/local-gate` keeps one checkout per
+/// The local gate's leftovers and the one place that decides them. `scripts/local-gate.fsx` keeps one checkout per
 /// invoking repo path, per-tier clones beside it, a record for every commit that passed (a release bundle each),
 /// and logs, and for a long time nothing ever removed any of it: 172 GB on one machine. This module reads that
 /// directory into `Subject`s for the same pure `classify` and `Planner` everything else uses, and runs the gate's

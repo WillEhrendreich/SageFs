@@ -67,7 +67,7 @@ Rough edges: it can only judge what it can see. An owner whose liveness it can't
 ### A roadmap page that marks items built when their code lands
 Status: merged on 2026-10-01 after v0.6.875, not in a release.
 Before: what I was building next lived in my head and in private notes.
-Now: [the roadmap](roadmap.md) lists what I'm building now, what's next, and the ideas further out, in horizons. A script writes it from a typed list of items, and an item can name a file and a symbol. When that symbol is on a real code line in the tree, the item moves to Built on its own and links to the code. `scripts/ship` regenerates it after the version bump.
+Now: [the roadmap](roadmap.md) lists what I'm building now, what's next, and the ideas further out, in horizons. A script writes it from a typed list of items, and an item can name a file and a symbol. When that symbol is on a real code line in the tree, the item moves to Built on its own and links to the code. `scripts/ship.fsx` regenerates it after the version bump.
 Why it matters: you can see where it's going, and I can't mark something done by hand and be wrong.
 Evidence: [the generator](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/scripts/gen-roadmap.fsx), [the test that fails when the page and the tree disagree](https://github.com/WillEhrendreich/SageFs/blob/a615b1a0/SageFs.Tests/RoadmapDocTests.fs#L47-L52)
 Rough edges: the horizons are guesses about distance and carry no dates. A landmark only says a symbol exists, so Built means the code is there, and not that it's finished or released.

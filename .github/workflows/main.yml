@@ -33,7 +33,7 @@ jobs:
   # ── Pushes to master: THIS machine, via the self-hosted runner. ──────────
   #
   # Nothing is rebuilt or re-tested here when the commit already passed
-  # scripts/local-gate on this machine. The pre-push hook refuses to push master
+  # scripts/local-gate.fsx on this machine. The pre-push hook refuses to push master
   # otherwise, so normally the job only PROMOTES that gate's release bundle, in
   # seconds. If a commit arrives ungated (SAGEFS_SKIP_GATE, a push from
   # elsewhere), the job runs the same gate first. Either way there is one gate
@@ -185,11 +185,11 @@ jobs:
       env:
         SOURCE_RUN_ID: ${{ github.run_id }}
         SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
-      run: scripts/local-gate "$GITHUB_SHA"
+      run: dotnet fsi scripts/local-gate.fsx -- "$GITHUB_SHA"
 
     - name: Promote the gated release bundle
       shell: bash
-      run: scripts/local-gate --promote "$GITHUB_SHA" release
+      run: dotnet fsi scripts/local-gate.fsx -- --promote "$GITHUB_SHA" release
 
     # publish.yml (workflow_run on this build's success) downloads exactly this
     # `release-assets` bundle and ships it. It is the bundle the gate built and

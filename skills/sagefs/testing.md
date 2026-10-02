@@ -9,7 +9,7 @@ you need the details, use `explain_test_failure`.
 
 ### Don't await a slow gate
 
-A full test suite, a build, or `scripts/local-gate` takes minutes. Blocking on
+A full test suite, a build, or `scripts/local-gate.fsx` takes minutes. Blocking on
 one — or polling it in a loop — is the same waste as having run it inline, and
 it blocks the actual work.
 

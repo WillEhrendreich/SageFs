@@ -1387,7 +1387,7 @@ it. The park is queued after the request, so the rebuild is on the record when i
 
 **What I did not fix.** Adoption is a separate, run-time mechanism (`HostCoreAdoption`): the worker links the daemon's Core, and a
 session whose project ships its own `SageFs.Core.dll` gets that Core copied over the worker's, if the version numbers match. Version
-numbers only move when `scripts/ship` runs, so a worktree's Core and an older daemon's Host can match by number and still differ by
+numbers only move when `scripts/ship.fsx` runs, so a worktree's Core and an older daemon's Host can match by number and still differ by
 build, which is the `TypeLoadException` seen on a Core session. That needs the daemon and its host to come from the build the session
 expects, and I left it. The outcome gate copies a real SageFs.Core for that reason: a stand-in Core has a different version and cannot be adopted.
 
@@ -1420,7 +1420,7 @@ what it holds: it gets the lease back with the same id and the expiry is not ren
 alive. `Queued` carries the place in line, the asks ahead, the leases that really hold the pool (agent, connection, directory, kind,
 granted, expires), the cap and the pressure, and when to ask again. `Refused` is for a holder whose own other lease or own other
 queued ask is in the way, and it names that lease and its id so the way out is in the message. One function, `explain`, turns a
-decision into the words an agent reads. The wire keeps the three tokens the guard hook and `scripts/local-gate` already read
+decision into the words an agent reads. The wire keeps the three tokens the guard hook and `scripts/local-gate.fsx` already read
 (`granted`, `wait`, `refused`) and writes `grant: already_held` beside `granted`, so a caller that proceeds on `granted` still works.
 `get_daemon_status` shows one row per holder with the agent, directory, kind and seconds left. The lease id is not in the status,
 because the id is the capability to release it.

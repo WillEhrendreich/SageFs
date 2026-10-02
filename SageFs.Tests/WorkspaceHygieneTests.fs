@@ -114,7 +114,7 @@ let standingTests =
     testCase "build output is told from real work by path" <| fun _ ->
       for path in [ "packages.lock.json"; "SageFs.Core/obj/project.assets.json"; "bin/Debug/net11.0/x.dll"; "SageFs.Tests/Foo.received.txt" ] do
         Generated.ruleFor path |> Option.isSome |> Expect.isTrue (sprintf "%s is regenerated" path)
-      for path in [ "SageFs.Core/Checkout.fs"; "docs/mcp-tools.md"; "scripts/local-gate" ] do
+      for path in [ "SageFs.Core/Checkout.fs"; "docs/mcp-tools.md"; "scripts/local-gate.fsx" ] do
         Generated.ruleFor path |> Option.isNone |> Expect.isTrue (sprintf "%s is somebody's work" path)
 
     testCase "every kind describes itself in its own words" <| fun _ ->
