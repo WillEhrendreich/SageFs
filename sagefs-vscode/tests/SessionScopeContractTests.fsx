@@ -121,7 +121,7 @@ let tests =
       sessionIdOfMenuItem [] "$(terminal) X  zzz99999 — Ready" |> Expect.equal "unknown id" PickedSession.NotASession
 
     // ── commandTarget ──
-    // WHY — a command that acts on "the session" can arrive before the window has bound one: right after the
+    // WHY - a command that acts on "the session" can arrive before the window has bound one: right after the
     // extension activates, or from a script, as the extension-host command proof does. The window used to answer
     // "no session" while its own workspace's session sat on the daemon. The target is decided from what the
     // window knows at that moment, with the same rule `bind` already uses.
