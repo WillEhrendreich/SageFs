@@ -27,6 +27,9 @@ module MemberTable =
     | Minted of id: string
 
   module MemberId =
+    /// RED STUB: the member id of the connection that holds `handle`.
+    let ofConnectionHandle (handle: string) : MemberId = MemberId.Mcp handle
+
     /// Canonical string form used as the routing/presence key. `Minted`
     /// renders VERBATIM (no prefix) so an unbound caller's resolved key is
     /// byte-identical to its plain name — every existing name-keyed
