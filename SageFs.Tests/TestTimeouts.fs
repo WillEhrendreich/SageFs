@@ -285,6 +285,12 @@ module TestTimeouts =
   /// A moment for a server to start on a slow request before the test sends the next one.
   let workStartSettle = System.TimeSpan.FromMilliseconds 200.
 
+  /// How long a test watches for an answer that must NOT come yet (a caller parked on a session
+  /// that is still rebuilding). The session manager answers a parked caller in the same step that
+  /// makes the answer true, with no timer, so an answer that was going to arrive wrongly arrives
+  /// within a few scheduling turns. This is long enough for that and short enough not to be felt.
+  let absentAnswerWindow = System.TimeSpan.FromMilliseconds 300.
+
   /// A pause for a file watcher to re-arm after a failed eval's burst of events.
   let watcherRearmSettle = System.TimeSpan.FromSeconds 1.
 
