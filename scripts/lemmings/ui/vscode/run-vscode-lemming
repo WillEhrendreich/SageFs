@@ -76,6 +76,10 @@ on_exit() {
 }
 trap on_exit EXIT
 
+# VS Code's own IPC socket lives under the user data dir, and a path past about 107 characters
+# makes it fail with `listen EINVAL` and no window. Refuse early with the reason.
+[ "${#RUN}" -le "$LEM_MAX_RUN_PATH" ] || { echo "lem: HarnessError: $RUN is ${#RUN} characters; VS Code's IPC socket needs the run path under $LEM_MAX_RUN_PATH" >&2; exit 4; }
+
 vsc_start_xvfb "$RUN" || { echo "lem: HarnessError: no display" >&2; exit 4; }
 XVFB_PID=$VSC_XVFB_PID
 CDP=$(vsc_free_port)
@@ -135,7 +139,17 @@ CLEANED=yes
 teardown_window
 vsc_desktop_windows "$OUT/windows.after"
 vsc_check_no_leak "$OUT/windows.before" "$OUT/windows.after" || LEAK=yes
-printf 'windowStop=%s desktopLeak=%s cleanup=%s\n' "$STOP_CODE" "$LEAK" "$LEM_CLEANUP" > "$OUT/teardown.txt"
+# Nothing of this run may still be alive: the display server, the window, anything started in the run directory.
+# The workers of the sessions just stopped take a moment to exit, so the count is retaken for a few seconds.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  LEFT=0
+  for p in "${VSC_XVFB_PID:-}" "${VSC_PID:-}"; do [ -n "$p" ] && kill -0 "$p" 2>/dev/null && LEFT=$((LEFT + 1)); done
+  LEFT=$((LEFT + $(ps -eo args | grep -F -e "$RUN/" | grep -v -F -e grep -e run-vscode-lemming | wc -l)))
+  [ "$LEFT" -eq 0 ] && break
+  sleep 1
+done
+printf 'windowStop=%s desktopLeak=%s cleanup=%s processesLeft=%s\n' "$STOP_CODE" "$LEAK" "$LEM_CLEANUP" "$LEFT" > "$OUT/teardown.txt"
+[ "$LEFT" -eq 0 ] || echo "lem: $LEFT process(es) of this run are still alive; see ps for $RUN" >&2
 
 lem_score "$RUN" "$RUN_TASK" "$MODEL" cmdc-vscode "$ORACLE_EXIT"
 echo "lem: dashboard http://localhost:$LEM_DASH_PORT/dashboard  run $RUN" >&2

@@ -15,6 +15,20 @@ State at this commit: LemDrive builds; run-vscode-lemming exists and has not yet
 
 Cleanup done by copy B: the explore1 session was stopped by id and its VS Code ended gracefully.
 
+Runner copy committed and stopped (19:10). State, for whoever writes the one final report:
+- Runs done end to end with free models: space-bunny ui-eval x3 (one real success in the editor, scored
+  Fail because the evals went into another run's session), laguna ui-eval and ui-find-help, ling
+  ui-hot-reload. Every run: desktopLeak=no, graceful window stop, sessions cleaned by id. The ui-eval
+  oracle PASS path was proven on a live window (real extension, real daemon, real Alt+Enter).
+- Not yet proven with a model: a PASS for ui-edit-reeval, ui-live-tests, ui-hot-reload. The
+  ui-live-tests status-bar pattern (\d+/\d+) is a guess; tune it from a real run's final.snapshot.txt.
+- Open for the user: the real desktop's /tmp/.X11-unix/X0 was deleted once by an Xvfb that took :0
+  (my first launch, -displayfd). It needs `ln -s X0_ /tmp/.X11-unix/X0` (the sandbox refused me).
+- LemScore (core) reports "Registration: never called a SageFs MCP tool" for every editor lemming; it
+  does not know the harness is cmdc-vscode. lib-cmd.sh lem_sandbox_exec fails under set -u when
+  LEM_EXTRA_BWRAP is unset.
+- SageFs.Tests still has an Xvfb helper that uses -displayfd (startVirtualDisplay); check before running on this machine.
+
 Copy B, 18:02: Vsc.fs in the working tree carries two of B's edits (the click that tries the next
 match when the first is covered, and ClickCandidates/ClickTryMs). A: please include them in your next
 commit of Vsc.fs, B has not committed that file to avoid taking your half-finished edits with it.

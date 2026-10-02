@@ -24,6 +24,9 @@ LEM_VSCODE_BIN=${LEM_VSCODE_BIN:-/usr/share/code/code}
 LEM_SCREEN_GEOMETRY=${LEM_SCREEN_GEOMETRY:-1600x1000x24}
 LEM_X_START_SECONDS=${LEM_X_START_SECONDS:-15}
 LEM_CODE_STOP_SECONDS=${LEM_CODE_STOP_SECONDS:-20}
+# The run directory path, at most this long: VS Code's IPC socket is under <run>/.lem/vsc and a
+# socket path past about 107 characters fails with `listen EINVAL`.
+LEM_MAX_RUN_PATH=${LEM_MAX_RUN_PATH:-75}
 
 vsc_free_display() {
   local n
