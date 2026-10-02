@@ -326,6 +326,15 @@ let ExpectPollMs = 500
 [<Literal>]
 let WorkflowRequestSeconds = 120
 
+/// The folder under the run directory where `other-session` runs its second session: next to the
+/// workspace (`w`), not inside it, so no folder of this window's workspace contains it.
+[<Literal>]
+let OtherFolder = "other"
+
+/// How long the second session may take to be Ready.
+[<Literal>]
+let OtherSessionReadySeconds = 240
+
 /// The run directory the harness named, when it did. A shot's activation line and a tour's file
 /// changes need it; a plain call without it still works.
 let private runDirOf () : string option =
@@ -478,14 +487,15 @@ and private expectSessionReady (seconds: int) : Task<Result<string, string>> =
       return (match outcome with | Some o -> o | None -> Result.Error(sprintf "no Ready session within %d s (%s)" seconds last))
   }
 
-/// Changes a workspace file on disk, once, and only if the text to find occurs exactly once.
-and private replaceInFile (path: string) (find: string) (replacement: string) : Result<string, string> =
+/// Changes a file on disk under `<run>/<folder>` (the workspace `w`, or the other session's folder), once,
+/// and only if the text to find occurs exactly once.
+and private replaceInFolder (folder: string) (path: string) (find: string) (replacement: string) : Result<string, string> =
   match runDirOf () with
   | None -> Result.Error "replace needs LEM_RUN_DIR (the harness sets it)"
   | Some runDir ->
-    let full = IO.Path.Combine(runDir, "w", path)
+    let full = IO.Path.Combine(runDir, folder, path)
     match IO.File.Exists full with
-    | false -> Result.Error(sprintf "%s does not exist in the workspace" path)
+    | false -> Result.Error(sprintf "%s does not exist in %s" path folder)
     | true ->
       let text = IO.File.ReadAllText full
       let count = (text.Length - text.Replace(find, "").Length) / find.Length
@@ -495,6 +505,64 @@ and private replaceInFile (path: string) (find: string) (replacement: string) : 
         Ok(sprintf "changed %s" path)
       | 0 -> Result.Error(sprintf "no match for \"%s\" in %s" find path)
       | n -> Result.Error(sprintf "%d matches for \"%s\" in %s; refusing to guess which" n find path)
+
+/// Starts a second session in `<run>/other`, which is outside the workspace, and waits until it is Ready.
+/// It stands in for another agent on the shared daemon. The run script copies the DemoEnv fixture there
+/// when a tour has this step, and stops the session by id afterwards, like this run's own.
+and private startOtherSession () : Task<Result<string, string>> =
+  task {
+    match runDirOf () with
+    | None -> return Result.Error "other-session needs LEM_RUN_DIR (the harness sets it)"
+    | Some runDir ->
+      let folder = IO.Path.Combine(runDir, OtherFolder)
+      let project = IO.Path.Combine(folder, "DemoEnv.Tests", "DemoEnv.Tests.fsproj")
+      match IO.File.Exists project with
+      | false ->
+        return Result.Error(sprintf "%s does not exist: the run script copies the DemoEnv fixture there when a tour has other-session" project)
+      | true ->
+        try
+          use client = new Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(float WorkflowRequestSeconds))
+          let payload = Text.Json.JsonSerializer.Serialize({| projects = [| project |]; workingDirectory = folder |})
+          use body = new Net.Http.StringContent(payload, Text.Encoding.UTF8, "application/json")
+          let! resp = client.PostAsync(sprintf "http://localhost:%d/api/sessions/create" Daemon.DefaultMcpPort, body)
+          let! text = resp.Content.ReadAsStringAsync()
+          match resp.IsSuccessStatusCode with
+          | false -> return Result.Error(sprintf "the daemon refused the second session (HTTP %d): %s" (int resp.StatusCode) text)
+          | true ->
+            let started = Diagnostics.Stopwatch.StartNew()
+            let mutable ready : string option = None
+            while ready.IsNone && started.Elapsed.TotalSeconds < float OtherSessionReadySeconds do
+              match Daemon.sessions Daemon.DefaultMcpPort with
+              | Ok all ->
+                match all |> List.filter (Daemon.belongsTo folder) |> List.tryFind (fun s -> s.Status = "Ready") with
+                | Some s -> ready <- Some s.Id
+                | None -> ()
+              | Result.Error _ -> ()
+              match ready with
+              | Some _ -> ()
+              | None -> do! sleep ExpectPollMs
+            return
+              match ready with
+              | Some id -> Ok(sprintf "second session %s is Ready in %s" id folder)
+              | None -> Result.Error(sprintf "the second session was not Ready within %d s" OtherSessionReadySeconds)
+        with ex -> return Result.Error(sprintf "other-session failed: %s" ex.Message)
+  }
+
+/// Fails if the window shows `text` at any moment during `seconds`. Polls like expect-text does.
+and private expectAbsent (c: Cdp.Connection) (text: string) (seconds: int) : Task<Result<unit, string>> =
+  task {
+    let started = Diagnostics.Stopwatch.StartNew()
+    let mutable shown = false
+    while not shown && started.Elapsed.TotalSeconds < float seconds do
+      let! f = Cdp.facts c
+      match (render f).Contains(text, StringComparison.OrdinalIgnoreCase) with
+      | true -> shown <- true
+      | false -> do! sleep ExpectPollMs
+    return
+      match shown with
+      | true -> Result.Error(sprintf "the window showed \"%s\" within %d s, and it must not" text seconds)
+      | false -> Ok()
+  }
 
 /// Runs a tour file in order. A step that fails does not stop the tour (the later shots still
 /// matter to a reviewer), but the shots after it say so, and the whole call fails at the end.
@@ -529,7 +597,15 @@ and private runTour (c: Cdp.Connection) (screen: Screen) (file: string) : Task<O
                 let! r = expectText c text seconds
                 return (match r with | Ok() -> Output "found" | Result.Error e -> DriveFailed e)
               | Tour.Replace(path, find, replacement) ->
-                return (match replaceInFile path find replacement with | Ok m -> Output m | Result.Error e -> DriveFailed e)
+                return (match replaceInFolder "w" path find replacement with | Ok m -> Output m | Result.Error e -> DriveFailed e)
+              | Tour.ReplaceOther(path, find, replacement) ->
+                return (match replaceInFolder OtherFolder path find replacement with | Ok m -> Output m | Result.Error e -> DriveFailed e)
+              | Tour.OtherSession ->
+                let! r = startOtherSession ()
+                return (match r with | Ok m -> Output m | Result.Error e -> DriveFailed e)
+              | Tour.ExpectAbsent(text, seconds) ->
+                let! r = expectAbsent c text seconds
+                return (match r with | Ok() -> Output "never showed" | Result.Error e -> DriveFailed e)
             }
           match result with
           | Output text ->
