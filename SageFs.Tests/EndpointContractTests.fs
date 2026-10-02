@@ -189,3 +189,5 @@ let endpointContractTests = testList "EndpointContracts" [
       missingEndpoints contract |> List.isEmpty
   ]
 ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant endpointContractTests |> ignore

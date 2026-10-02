@@ -197,6 +197,7 @@ let errorAlgebraHardeningTests =
           (sprintf "Result<_,string> grew to %d — migrate new uses to Result<_,SageFsError>" count)
       }
     ]
+    |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.SizeProxy
 
     // ── Group 2: SageFsError exhaustiveness proof ──
     testList "SageFsError exhaustiveness" [

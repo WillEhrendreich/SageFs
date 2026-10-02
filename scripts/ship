@@ -15,28 +15,53 @@
 set -euo pipefail
 REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 
+# The ratchets (line and blocking-call budgets, literal counts, a stale generated page, CI wiring) are pure
+# reads of the tree, so they run here, seconds after one Release build, instead of twenty minutes into the
+# gate. They read the WORKING TREE, so it has to be exactly the commit being shipped: a green run on some
+# other tree proves nothing about it.
+run_ratchets() {
+  local target=$1
+  if [ "$(git -C "$REPO" rev-parse HEAD)" != "$target" ] || [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]; then
+    echo "ship: the ratchets read the working tree, which must be exactly ${target:0:8} (HEAD, no tracked changes)." >&2
+    echo "      commit or stash the rest, or ship from a clean worktree of that commit." >&2
+    exit 1
+  fi
+  echo "ship: building SageFs.Tests (Release), then the ratchets"
+  dotnet build "$REPO/SageFs.Tests" -c Release --nologo -v minimal || { echo "ship: SageFs.Tests did not build." >&2; exit 1; }
+  # From the repo root: three ratchets find the repo by walking up from the working directory.
+  (cd "$REPO" && dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets) || {
+    echo "ship: a ratchet is red (the failing names are above); nothing was bumped or gated." >&2
+    echo "      reproduce: dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets" >&2
+    echo "      a budget that only went DOWN is fixed by adding --tighten to that command." >&2
+    exit 1
+  }
+}
+
 if [ $# -gt 0 ]; then
   sha=$(git -C "$REPO" rev-parse "$1^{commit}")
+  run_ratchets "$sha"
 else
   if [ -n "$(git -C "$REPO" status --porcelain -- Directory.Build.props sagefs-vscode/package.json)" ]; then
     echo "ship: Directory.Build.props or sagefs-vscode/package.json has uncommitted changes." >&2
     echo "      commit or revert them first, so the bump lands on a clean version." >&2
     exit 1
   fi
+  # The roadmap page moves items to Built when their landmark is in the tree, so a ship refreshes it.
+  # RoadmapDocTests (a ratchet) fails on a stale page, which is why it is regenerated here and committed
+  # BEFORE the ratchets run: the page a ship refreshes is not a failure of the commit being shipped.
+  dotnet fsi "$REPO/scripts/gen-roadmap.fsx"
+  if [ -n "$(git -C "$REPO" status --porcelain -- docs/roadmap.md)" ]; then
+    git -C "$REPO" commit --quiet --no-verify \
+      -m "docs(roadmap): refresh the roadmap" \
+      -- docs/roadmap.md
+    echo "ship: roadmap refreshed"
+  fi
+  run_ratchets "$(git -C "$REPO" rev-parse HEAD)"
   version=$("$REPO/scripts/bump-version")
   git -C "$REPO" commit --quiet --no-verify \
     -m "chore: release v$version" \
     -- Directory.Build.props sagefs-vscode/package.json
   echo "ship: bumped to $version"
-  # The roadmap page moves items to Built when their landmark is in the tree, so a ship refreshes it.
-  # RoadmapDocTests fails the gate on a stale page, which is why it is regenerated here and committed.
-  dotnet fsi "$REPO/scripts/gen-roadmap.fsx"
-  if [ -n "$(git -C "$REPO" status --porcelain -- docs/roadmap.md)" ]; then
-    git -C "$REPO" commit --quiet --no-verify \
-      -m "docs(roadmap): refresh the roadmap for v$version" \
-      -- docs/roadmap.md
-    echo "ship: roadmap refreshed"
-  fi
   sha=$(git -C "$REPO" rev-parse HEAD)
 fi
 

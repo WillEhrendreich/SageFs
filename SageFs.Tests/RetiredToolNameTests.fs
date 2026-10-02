@@ -196,3 +196,5 @@ let retiredToolNameTests = testList "retired MCP tool names" [
     declared
     |> Expect.equal "the gate domain must cover every registered tool" registeredToolNames
 ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant retiredToolNameTests |> ignore

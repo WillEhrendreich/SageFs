@@ -46,3 +46,5 @@ let tests =
           | _ -> None)
       offenders |> Expect.isEmpty "no loaded file depends on a product-only module (name the constant in the file itself)"
   ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant tests |> ignore

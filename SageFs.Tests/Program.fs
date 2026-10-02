@@ -205,6 +205,45 @@ let main argv =
       1
   | false ->
 
+  // The ratchet lane: ONLY the registered ratchets (TestInfrastructure.Ratchet) —
+  // the budget, literal-count, stale-generated-page and CI-wiring tests, which are
+  // pure reads of the tree. CI runs this straight after the build and stops the
+  // pipeline on red; scripts/ship runs it before it bumps anything. The lane is
+  // selected by the identity of the registered test bodies, never by a name filter,
+  // and it runs through TrustSignal.run, so zero ratchets registered or ran is
+  // NothingRan (exit 3) and the run prints its own TRUST row.
+  // `--ratchets --tighten` lowers each budget table to its current count instead
+  // (never raising one) and prints what it changed.
+  match argv |> Array.contains SageFs.Tests.TestInfrastructure.Ratchet.entryPoint with
+  | true ->
+    let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+    match argv |> Array.contains "--tighten" with
+    | true ->
+      let outcome =
+        SageFs.Tests.TestInfrastructure.Ratchet.Tighten.run
+          (fun relative -> File.ReadAllText(Path.Combine(repoRoot, relative)))
+          (fun relative text -> File.WriteAllText(Path.Combine(repoRoot, relative), text))
+          (SageFs.Tests.TestInfrastructure.Ratchet.tables ())
+      match outcome with
+      | Result.Ok (changes, over) ->
+        changes |> List.iter (fun c -> printfn "tightened %s: %s %d -> %d" c.Table c.Key c.From c.To)
+        over |> List.iter (fun (table, key, count, budget) -> printfn "OVER BUDGET, left alone, %s: %s is %d, budget %d" table key count budget)
+        printfn "tighten: %d budget(s) lowered, %d over budget. Rebuild SageFs.Tests before the next --ratchets run." changes.Length over.Length
+        Environment.Exit 0
+        0
+      | Result.Error reason ->
+        eprintfn "tighten: nothing is trusted after this: %s" reason
+        Environment.Exit 1
+        1
+    | false ->
+      let laneArgv = argv |> Array.filter (fun a -> a <> SageFs.Tests.TestInfrastructure.Ratchet.entryPoint)
+      let result =
+        SageFs.Tests.TestInfrastructure.TrustSignal.run
+          SageFs.Tests.TestInfrastructure.Ratchet.entryPoint laneArgv (SageFs.Tests.TestInfrastructure.Ratchet.laneSuite ())
+      Environment.Exit result
+      result
+  | false ->
+
   // Run EVERY self-contained [Integration] suite — real FSI sessions, real
   // SageFs.Host spawns, Harmony detours, real daemons on reserved ports with
   // isolated SAGEFS_DATA_DIRs, the HTTP API against the samples. The set is

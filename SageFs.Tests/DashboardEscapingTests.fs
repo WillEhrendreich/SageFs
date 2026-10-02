@@ -239,3 +239,5 @@ let dashboardEscapingSourceTests =
           |> Array.length
           |> Expect.equal (sprintf "trusted sink count changed (%s) — review the new sink" t.Why) t.Count
   ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant dashboardEscapingSourceTests |> ignore

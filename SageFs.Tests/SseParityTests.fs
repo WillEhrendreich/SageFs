@@ -259,3 +259,5 @@ let sseParityTests = testList "SSE Parity" [
          24
   }
 ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant sseParityTests |> ignore

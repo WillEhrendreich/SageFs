@@ -248,3 +248,7 @@ let analysisToolDescriptionTests =
       d |> Expect.stringContains "names the unmeasured field" "Unmeasured"
       d |> Expect.stringContains "refuses to say 'no issues' when nothing was seen" "NothingObservedYet"
   ]
+
+do
+  TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant discoveryTests |> ignore
+  TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant nameListsTests |> ignore

@@ -336,4 +336,6 @@ let selfHostedSafetyTests =
   ]
 
 [<Tests>]
-let tests = testList "TrustSignal" [ verdictTests; ciWiringTests; frameworkTierTests; buildScriptTests; selfHostedSafetyTests ]
+let tests =
+  let ratchet (test: Test) = TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant test
+  testList "TrustSignal" [ verdictTests; ratchet ciWiringTests; ratchet frameworkTierTests; ratchet buildScriptTests; ratchet selfHostedSafetyTests ]

@@ -70,7 +70,7 @@ let tests =
           for name, content in found do
             Expect.isFalse (sprintf "%s is empty" name) (String.IsNullOrWhiteSpace content)
 
-      testCase "the host's source list is exactly the compile list of FsiHost.fsproj, in order" <| fun _ ->
+      TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "the host's source list is exactly the compile list of FsiHost.fsproj, in order" <| fun _ ->
         let project = System.Xml.Linq.XDocument.Load(Path.Combine(repoRoot, "SageFs.FsiHost", "FsiHost.fsproj"))
         let compiled =
           project.Descendants(System.Xml.Linq.XName.Get "Compile")
@@ -80,7 +80,7 @@ let tests =
         |> List.filter (fun name -> name <> "FsiHost.fsproj")
         |> Expect.equal "a file the project compiles but the build does not write is a host that cannot be built" compiled
 
-      testCase "the embedded protocol is the file the tests were built from" <| fun _ ->
+      TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "the embedded protocol is the file the tests were built from" <| fun _ ->
         let onDisk = File.ReadAllText(Path.Combine(repoRoot, "SageFs.FsiHost", "FsiProtocol.fs"))
         match embeddedSources () with
         | Result.Error reason -> failtest (describeBuildError reason)

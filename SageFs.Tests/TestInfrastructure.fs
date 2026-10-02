@@ -258,8 +258,12 @@ module Integration =
       Expecto.Impl.testFromAssembly (System.Reflection.Assembly.GetExecutingAssembly())
       |> ignore)
 
+  /// Every registry in this file fills during module initialization, so each one
+  /// forces this before it answers (the Ratchet registry below shares it).
+  let ensureDiscovered () = discovery.Force()
+
   let registered () =
-    discovery.Force()
+    ensureDiscovered ()
     lock registry (fun () -> List.ofSeq registry)
 
   /// Every suite registered as Host, in registration (compile) order.
@@ -277,25 +281,23 @@ module Integration =
     | Expecto.TestLabel (_, inner, _) -> leaves inner
     | Expecto.Sequenced (_, inner) -> leaves inner
 
-  /// Remove from `tree` every test whose BODY (its TestCode object) belongs to
-  /// one of the `excluded` suites; containers the pruning empties are dropped.
-  /// Matching is by reference on the test-body objects, never on names:
-  /// Expecto's assembly discovery rebuilds the root node of each [<Tests>]
-  /// value but keeps every leaf's TestCode object (measured: all 169
-  /// registered leaves found by reference in the discovered tree, while no
-  /// registered root node was). Pure — `excluded` is passed in — so it is
-  /// testable in isolation.
-  let exclude (excluded: Expecto.Test list) (tree: Expecto.Test) : Expecto.Test =
+  /// The identity set of every test body inside `suites`.
+  let bodiesOf (suites: Expecto.Test list) : System.Collections.Generic.HashSet<obj> =
     let bodies = System.Collections.Generic.HashSet<obj>(HashIdentity.Reference)
-    for suite in excluded do
+    for suite in suites do
       for code in leaves suite do
         bodies.Add(box code) |> ignore
+    bodies
+
+  /// Keep only the leaves of `tree` whose body satisfies `keep`; containers the
+  /// pruning empties are dropped. Shared by `exclude` and the ratchet lane.
+  let filterLeaves (keep: Expecto.TestCode -> bool) (tree: Expecto.Test) : Expecto.Test =
     let rec prune (t: Expecto.Test) : Expecto.Test option =
       match t with
       | Expecto.TestCase (code, _) ->
-        match bodies.Contains(box code) with
-        | true -> None
-        | false -> Some t
+        match keep code with
+        | true -> Some t
+        | false -> None
       | Expecto.TestList (tests, focus) ->
         match tests |> List.choose prune with
         | [] when not tests.IsEmpty -> None
@@ -306,6 +308,18 @@ module Integration =
         prune inner |> Option.map (fun i -> Expecto.Sequenced (how, i))
     prune tree
     |> Option.defaultValue (Expecto.TestList ([], Expecto.FocusState.Normal))
+
+  /// Remove from `tree` every test whose BODY (its TestCode object) belongs to
+  /// one of the `excluded` suites; containers the pruning empties are dropped.
+  /// Matching is by reference on the test-body objects, never on names:
+  /// Expecto's assembly discovery rebuilds the root node of each [<Tests>]
+  /// value but keeps every leaf's TestCode object (measured: all 169
+  /// registered leaves found by reference in the discovered tree, while no
+  /// registered root node was). Pure — `excluded` is passed in — so it is
+  /// testable in isolation.
+  let exclude (excluded: Expecto.Test list) (tree: Expecto.Test) : Expecto.Test =
+    let bodies = bodiesOf excluded
+    filterLeaves (fun code -> not (bodies.Contains(box code))) tree
 
   /// The default-suite tree: everything except the registered integration suites.
   let excludeRegistered (tree: Expecto.Test) =
@@ -411,6 +425,166 @@ module Integration =
     |> Option.defaultValue (Expecto.Tests.testList "empty" [])
     |> excludeRegistered
     |> excludeByName (fun full -> full.Contains "[Benchmark]")
+
+/// Structural registry of RATCHETS: the tests that count or scan the repo's own
+/// files to hold a number that only goes down or a rule that must hold (line and
+/// blocking-call budgets, literal counts, a generated page that must match its
+/// generator, the CI wiring). They are pure in-process reads, so they take
+/// seconds, and `--ratchets` runs them ALONE, right after the build, so a red one
+/// stops the release gate in minutes instead of twenty minutes in.
+///
+/// Same mechanism as `Integration`, for the same reason: a lane picked by a name
+/// filter drops a ratchet silently when its name is mistyped, and a filter that
+/// matches nothing exits 0. Here every ratchet is registered by the IDENTITY of
+/// its test body, the lane is "the default tree, kept to those bodies", and
+/// `--ratchets` runs through TrustSignal.run, so zero registered or zero ran is
+/// NothingRan (exit 3). A ratchet stays in the default suite too (the ledger needs
+/// registered = ran there); the lane is a second, faster way to run the same bodies.
+module Ratchet =
+  /// Why a ratchet exists, so a reader can judge whether it earns its place.
+  type Class =
+    /// Prevents a bug class (a blocking call, a port reservation, a duplicated
+    /// decision, a stale generated page, a dark CI gate).
+    | Invariant
+    /// Counts lines or members as a stand-in for design quality.
+    | SizeProxy
+
+  module Class =
+    let name (c: Class) =
+      match c with
+      | Invariant -> "Invariant"
+      | SizeProxy -> "SizeProxy"
+
+  /// The tier flag: `dotnet SageFs.Tests.dll --ratchets`.
+  let entryPoint = "--ratchets"
+
+  /// The one place that says which classes the lane runs. Delete a case here and
+  /// that class leaves the lane (it still runs in the default suite); delete a
+  /// `register` line and that ratchet leaves both.
+  let laneClasses = [ Invariant; SizeProxy ]
+
+  let private registry = System.Collections.Generic.List<Class * Expecto.Test>()
+
+  /// Register an existing test (list or case) as a ratchet of the given class.
+  let register (cls: Class) (test: Expecto.Test) : Expecto.Test =
+    lock registry (fun () -> registry.Add((cls, test)))
+    test
+
+  /// A ratchet that is one test case inside an otherwise-unit list.
+  let case (cls: Class) (name: string) (body: unit -> unit) : Expecto.Test =
+    Expecto.Tests.testCase name body |> register cls
+
+  /// Every registered ratchet with its class, in registration order.
+  let registered () : (Class * Expecto.Test) list =
+    Integration.ensureDiscovered ()
+    lock registry (fun () -> List.ofSeq registry)
+
+  /// The ratchets the lane runs (their class is in `laneClasses`).
+  let laneTests () : Expecto.Test list =
+    registered ()
+    |> List.filter (fun (cls, _) -> List.contains cls laneClasses)
+    |> List.map snd
+
+  /// Keep, in `tree`, only the tests whose bodies are in `selected`. Matching is
+  /// by reference on the test-body objects, never on names. Pure.
+  let select (selected: Expecto.Test list) (tree: Expecto.Test) : Expecto.Test =
+    let bodies = Integration.bodiesOf selected
+    Integration.filterLeaves (fun code -> bodies.Contains(box code)) tree
+
+  /// The tree `--ratchets` runs: every [<Tests>] value in this assembly, kept to
+  /// the lane's ratchets.
+  let laneSuite () : Expecto.Test =
+    let tests = laneTests ()
+    Expecto.Impl.testFromThisAssembly ()
+    |> Option.defaultValue (Expecto.Tests.testList "empty" [])
+    |> select tests
+
+  /// A budget table a ratchet enforces, kept as data so `--ratchets --tighten`
+  /// can lower it. `SourceFile` is repo-relative; the entries are the literals
+  /// `"<key>", <number>` in that file; `Actual` is the live count per key (a key
+  /// it does not list counts 0).
+  type Table =
+    { Name: string
+      SourceFile: string
+      Budgets: (string * int) list
+      Actual: unit -> (string * int) list }
+
+  let private tableRegistry = System.Collections.Generic.List<Table>()
+
+  /// Register a budget table (returns it, so a ratchet file keeps using it).
+  let table (t: Table) : Table =
+    lock tableRegistry (fun () -> tableRegistry.Add t)
+    t
+
+  let tables () : Table list =
+    Integration.ensureDiscovered ()
+    lock tableRegistry (fun () -> List.ofSeq tableRegistry)
+
+  /// One budget lowered to its current count.
+  type Change = { Table: string; Key: string; From: int; To: int }
+
+  module Tighten =
+    let private literal (key: string) =
+      System.Text.RegularExpressions.Regex("\"" + System.Text.RegularExpressions.Regex.Escape key + "\"(\\s*,\\s*)([0-9]+)")
+
+    /// The keys over their budget: a tighten never touches these.
+    let overBudget (table: Table) (actual: Map<string, int>) : (string * int * int) list =
+      table.Budgets
+      |> List.choose (fun (key, budget) ->
+        let count = actual |> Map.tryFind key |> Option.defaultValue 0
+        match count > budget with
+        | true -> Some (key, count, budget)
+        | false -> None)
+
+    /// Rewrite `text` so each budget that is above its current count equals it.
+    /// Never raises a budget. Every rewrite must match exactly one literal that
+    /// still holds the number the table loaded, otherwise the whole call is an
+    /// Error naming the key (a quiet no-op reads like success, so there is none).
+    let apply (table: Table) (actual: Map<string, int>) (text: string) : Result<string * Change list, string> =
+      table.Budgets
+      |> List.fold (fun state (key, budget) ->
+        match state with
+        | Result.Error _ -> state
+        | Result.Ok (current, changes) ->
+          let count = actual |> Map.tryFind key |> Option.defaultValue 0
+          match count < budget with
+          | false -> state
+          | true ->
+            let pattern = literal key
+            match pattern.Matches current |> Seq.toList with
+            | [ m ] when m.Groups[2].Value = string budget ->
+              let rewritten =
+                current.Substring(0, m.Groups[2].Index) + string count + current.Substring(m.Groups[2].Index + m.Groups[2].Length)
+              Result.Ok (rewritten, changes @ [ { Table = table.Name; Key = key; From = budget; To = count } ])
+            | [ m ] ->
+              Result.Error (sprintf "%s: the literal for \"%s\" in %s says %s but the loaded table says %d (rebuild, then tighten)" table.Name key table.SourceFile m.Groups[2].Value budget)
+            | found ->
+              Result.Error (sprintf "%s: expected exactly one \"%s\", <n> literal in %s, found %d" table.Name key table.SourceFile found.Length))
+        (Result.Ok (text, []) : Result<string * Change list, string>)
+
+    /// Tighten every table through `read` and `write` (repo-relative paths), so a
+    /// test can run it against a fake tree. Returns what changed and what was left alone.
+    let run
+      (read: string -> string)
+      (write: string -> string -> unit)
+      (tables: Table list)
+      : Result<Change list * (string * string * int * int) list, string> =
+      tables
+      |> List.fold (fun state (table: Table) ->
+        match state with
+        | Result.Error _ -> state
+        | Result.Ok (changes, over) ->
+          let actual = table.Actual () |> Map.ofList
+          let before = read table.SourceFile
+          match apply table actual before with
+          | Result.Error reason -> Result.Error reason
+          | Result.Ok (after, made) ->
+            match after = before with
+            | true -> ()
+            | false -> write table.SourceFile after
+            let leftOver = overBudget table actual |> List.map (fun (key, count, budget) -> table.Name, key, count, budget)
+            Result.Ok (changes @ made, over @ leftOver))
+        (Result.Ok ([], []) : Result<Change list * (string * string * int * int) list, string>)
 
 /// One trust signal for every test tier (default, host, each dedicated entry
 /// point, mutation).

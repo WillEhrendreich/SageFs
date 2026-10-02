@@ -196,6 +196,7 @@ let architectureTests =
           // at build time via project references instead
           ()
     ]
+    |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
 
     testList "Assembly identity" [
 
@@ -369,6 +370,7 @@ let architectureTests =
           (sprintf "should have ≤30 type-bag modules (found %d)" typeBagModules.Length)
 
     ]
+    |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.SizeProxy
 
     testList "Closure seams (daemon vs host)" [
 
@@ -493,6 +495,7 @@ let architectureTests =
           |> Expect.isTrue
             (sprintf "Core must still define %s (seam test must not pass vacuously)" expected)
     ]
+    |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
 
     testList "Documentation site" [
 
@@ -646,6 +649,7 @@ let architectureTests =
               "CohortEffect.%s now HAS a production construction site — remove it from the allow-list in ArchitectureTests.fs"
               caseName)
     ]
+    |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
   ]
 
 // ---------------------------------------------------------------------------
@@ -1028,6 +1032,7 @@ let waitForGraphTests =
             (WaitForGraph.describeCycle cycle)
         )
   ]
+  |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
 
 [<Tests>]
 let fileSizeBudgets =
@@ -1284,15 +1289,24 @@ let fileSizeBudgets =
       // the start-timeout handler, the ledger in the runtime and the first attempt's budget. The decision the
       // handler carries out is StartTimeoutDecision.fs.
       "SageFs.Core/SessionManager.fs", 1599 ]
+  let lineCount (rel: string) = System.IO.File.ReadAllLines(System.IO.Path.Combine(repoRoot, rel)).Length
+  // The table as data, so `--ratchets --tighten` can lower it to the current size.
+  let _table =
+    TestInfrastructure.Ratchet.table
+      { Name = "file-size budgets"
+        SourceFile = "SageFs.Tests/ArchitectureTests.fs"
+        Budgets = budgets
+        Actual = fun () -> budgets |> List.map (fun (rel, _) -> rel, lineCount rel) }
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->
-        let path = System.IO.Path.Combine(repoRoot, rel)
-        let lines = System.IO.File.ReadAllLines(path).Length
+        let lines = lineCount rel
         (lines <= budget)
         |> Expect.isTrue
           (sprintf "%s is %d lines, over its %d budget — split it (and ratchet the budget DOWN), never raise the budget" rel lines budget)
   ]
+  // Lines are a stand-in for design quality, not a bug class: its own class so it can leave the lane or the gate on its own.
+  |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.SizeProxy
 
 [<Tests>]
 let blockingCallBudgets =
@@ -1327,6 +1341,13 @@ let blockingCallBudgets =
       "Thread.Sleep", 42
       ".Wait(", 23
       "GetAwaiter().GetResult()", 24 ]
+  // The table as data, so `--ratchets --tighten` can lower it to the current count.
+  let _table =
+    TestInfrastructure.Ratchet.table
+      { Name = "blocking-call budgets"
+        SourceFile = "SageFs.Tests/ArchitectureTests.fs"
+        Budgets = budgets
+        Actual = fun () -> budgets |> List.map (fun (pattern, _) -> pattern, countPattern pattern) }
   testList "Architecture — blocking-call budgets (ratchet down, never raise)" [
     for (pattern, budget) in budgets ->
       testCase (sprintf "WHY — test bodies keep '%s' at or below %d, so the thread-pool-starving blocking-call debt can only shrink" pattern budget) <| fun _ ->
@@ -1335,6 +1356,7 @@ let blockingCallBudgets =
         |> Expect.isTrue
           (sprintf "'%s' now appears on %d test lines, over the %d budget — convert a test to testTask/testAsync + awaitable conditions (and ratchet the budget DOWN), never raise it" pattern actual budget)
   ]
+  |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
 
 [<Tests>]
 let integrationSampleBuildCoverage =
@@ -1394,6 +1416,7 @@ let integrationSampleBuildCoverage =
               "%s creates a host-integration session on %s, but ci-pipeline.fsx's \"build samples for integration suites\" stage never builds it. An unbuilt sample makes warmup fault with \"Not all DLLs are found\" and the suite reports that the session never reached Ready. Add: run \"dotnet build samples/**/%s -c Release --nologo\""
               testFile sample sample)
   ]
+  |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
 
 /// A test that spawns its own daemon must reserve the port pair through
 /// `TestInfrastructure.TestPorts`, not by binding port 0 and adding one.
@@ -1426,3 +1449,4 @@ let daemonPortReservation =
         |> Expect.isFalse
           "reserve the pair with TestInfrastructure.TestPorts.reservePair (). Binding port 0 yourself and adding one probes one address family and ignores the tier's assigned range, which is how a daemon lost the bind on the dashboard port under the gate."
   ]
+  |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant

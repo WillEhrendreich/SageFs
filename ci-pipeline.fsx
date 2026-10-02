@@ -465,6 +465,35 @@ let runTiers (tiers: TierPlan.Tier list) =
     with _ -> ()
   }
 
+/// How to run the ratchet lane by hand, printed with the stage and again on red.
+let ratchetReproduction =
+  $"dotnet build SageFs.Tests -c Release && dotnet {testDll} --ratchets"
+
+/// The ratchet lane: every registered ratchet (budgets, literal counts, generated
+/// pages, CI wiring) and nothing else, in this process's own tree, right after the
+/// build. It is pure file reads, so it takes seconds, and it runs through the same
+/// `testTier` step as every other tier, so its trust row (registered/ran/verdict)
+/// lands in the trust report. Not isolated in a clone: nothing in it spawns a process
+/// or binds a port, and a clone of the checkout would cost more than the lane.
+let runRatchetLane () =
+  async {
+    let lane = testTier "--ratchets"
+    printfn "ratchets: to reproduce, run: %s" ratchetReproduction
+    let! (_, seconds) = runTier TierPlan.Shared 1 0 lane
+    let ledger = Path.Combine(tierWork, TierPlan.fileNameOf lane.Name + ".jsonl")
+    if File.Exists ledger then File.AppendAllText(trustLedger, File.ReadAllText ledger)
+    let green = lock invokedTiers (fun () -> invokedTiers |> Seq.exists (fun (name, _, ok) -> name = lane.Name && ok))
+    printfn "ratchets: %s in %.0fs" (match green with true -> "green" | false -> "RED") seconds
+    match green with
+    | true -> return Ok()
+    | false ->
+      return
+        Error(
+          sprintf
+            "ratchets: a ratchet is red, so nothing slower ran. The failing test names are in the tail above. Reproduce: %s. A budget that only went DOWN is fixed by appending --tighten to that command."
+            ratchetReproduction)
+  }
+
 type TrustLine =
   { Tier: string
     Registered: string
@@ -607,6 +636,18 @@ pipeline "sagefs" {
         let others = TierPlan.Framework.all |> List.filter (fun f -> f <> TierPlan.Framework.primary)
         return! runSteps ctx.RunCommand (others |> List.collect TierPlan.testBuildCommands)
       })
+  }
+
+  stage "ratchets" {
+    // Every ratchet before anything slow. A line budget, a blocking-call budget, a
+    // literal count, a stale generated page or a CI-wiring check used to fail
+    // twenty minutes into the gate; they are pure reads of the tree, so they run
+    // here, straight after the one build, in seconds. A red ratchet fails this
+    // stage, and a failed stage stops the pipeline: format, the sample builds, the
+    // VS Code stages and every test tier never start. `--ratchets` runs through
+    // TrustSignal.run, so zero ratchets registered or ran is NothingRan (exit 3).
+    timeoutForStep 300
+    run (fun _ -> runRatchetLane ())
   }
 
   stage "format" {

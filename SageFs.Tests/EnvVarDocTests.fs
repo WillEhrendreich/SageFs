@@ -129,3 +129,5 @@ let tests =
       let checkedCount = defaultsInDoc |> Map.toList |> List.filter (fun (name, _) -> Map.containsKey name inCode) |> List.length
       checkedCount > 0 |> Expect.isTrue "at least one default on the page was compared with the code"
   ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant tests |> ignore

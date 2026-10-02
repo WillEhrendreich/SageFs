@@ -40,6 +40,14 @@ let private actual : (string * int) list =
             | 0 -> ()
             | n -> yield relative, n ]
 
+/// The budget table as data, so `--ratchets --tighten` can lower it.
+let private budgetTable =
+  TestInfrastructure.Ratchet.table
+    { Name = "JSON centralization"
+      SourceFile = "SageFs.Tests/JsonCentralizationTests.fs"
+      Budgets = budgets
+      Actual = fun () -> actual }
+
 [<Tests>]
 let tests =
   testList "JSON centralization" [
@@ -66,3 +74,4 @@ let tests =
           | false -> None)
       stale |> Expect.isEmpty "every budget equals the file's current count"
   ]
+  |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant

@@ -65,3 +65,5 @@ let skillLayoutTests = testList "skill layout" [
     core.Contains "Use at the start of every F# task"
     |> Expect.isTrue "the description must still trigger on F# work"
 ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.SizeProxy skillLayoutTests |> ignore

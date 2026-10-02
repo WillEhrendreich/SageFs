@@ -43,3 +43,5 @@ let sessionDisplayStatusUnificationTests =
       Set.difference required names
       |> Expect.isEmpty "missing cases"
   ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant sessionDisplayStatusUnificationTests |> ignore

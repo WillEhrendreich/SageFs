@@ -46,3 +46,5 @@ let noNullTombstoneTests =
         (sprintf "no isNull (box ...) guards in AppState.fs's code; found: %A" hits)
         0
   ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant noNullTombstoneTests |> ignore

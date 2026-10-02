@@ -217,3 +217,5 @@ let tests =
     testCase "WHY — the tier a process runs on is the one its environment names, so a worker told a tier by the daemon scales the same way" <| fun _ ->
       Timeouts.machineTier |> Expect.equal "the process's tier" (MachineTier.current ())
   ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant tests |> ignore

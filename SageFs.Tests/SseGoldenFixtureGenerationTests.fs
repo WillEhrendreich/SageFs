@@ -210,3 +210,5 @@ let sseGoldenFixtureGenerationTests =
             a hand-added fixture with no generator is exactly the drift this island closes"
            knownFixtures
   ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant sseGoldenFixtureGenerationTests |> ignore

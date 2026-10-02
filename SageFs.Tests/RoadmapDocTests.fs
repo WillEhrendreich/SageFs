@@ -46,7 +46,7 @@ let private sample (arrival: Arrival) : Item =
 let tests =
   testList "Roadmap page" [
 
-    testCase "WHY — docs/roadmap.md is exactly what the generator writes from the items and the tree, so the page cannot go stale in a commit" <| fun _ ->
+    TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — docs/roadmap.md is exactly what the generator writes from the items and the tree, so the page cannot go stale in a commit" <| fun _ ->
       let onDisk = File.ReadAllText(Path.Combine(repoRoot, "docs", "roadmap.md")) |> normalize
       onDisk |> Expect.equal "the page matches the render (run `dotnet fsi scripts/gen-roadmap.fsx`)" (render readFromRepo items |> normalize)
 
@@ -61,7 +61,7 @@ let tests =
         |> List.collect (fun item -> voiceProblems (itemText item) |> List.map (fun p -> sprintf "%s %s" item.Id p))
       problems |> Expect.isEmpty "no item has an em dash or a banned word"
 
-    testCase "WHY — the whole generated page is in the house voice too, intro included" <| fun _ ->
+    TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — the whole generated page is in the house voice too, intro included" <| fun _ ->
       voiceProblems (render readFromRepo items) |> Expect.isEmpty "the page has no em dash and no banned word"
 
     testCase "WHY — every item has a title and a summary that ends like a sentence, so the page has no stubs" <| fun _ ->
@@ -71,7 +71,7 @@ let tests =
         |> List.map (fun item -> item.Id)
       bad |> Expect.isEmpty "every item has a title and a one-sentence-or-two summary ending in a full stop"
 
-    testCase "WHY — a link goes to a public doc that exists, never to one of the private working notes at the repo root" <| fun _ ->
+    TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — a link goes to a public doc that exists, never to one of the private working notes at the repo root" <| fun _ ->
       let isPublic (path: string) =
         (path.StartsWith "docs/" && path.EndsWith ".md") || path = "Readme.md" || path = "CONTRIBUTING.md"
       let bad =
@@ -81,7 +81,7 @@ let tests =
         |> List.map (fun (id, link) -> sprintf "%s -> %s" id link)
       bad |> Expect.isEmpty "every link is an existing docs/*.md, Readme.md or CONTRIBUTING.md"
 
-    testCase "WHY — a landmark's folder exists, so a typo cannot leave an item open forever without anyone noticing" <| fun _ ->
+    TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — a landmark's folder exists, so a typo cannot leave an item open forever without anyone noticing" <| fun _ ->
       let bad =
         items
         |> List.choose (fun item ->

@@ -195,7 +195,7 @@ let registryTests =
       let expected = Integration.bodiesOf (Ratchet.laneTests ())
       let actual = Integration.bodiesOf [ lane ]
       actual.SetEquals expected |> Expect.isTrue "the lane tree holds those bodies and nothing else"
-      TrustSignal.registeredCount lane |> Expect.isGreaterThan "the lane is not empty" 0
+      (TrustSignal.registeredCount lane, 0) |> Expect.isGreaterThan "the lane is not empty"
 
     testCase "the file-size budgets are the SizeProxy class and the blocking-call budgets are Invariant" <| fun _ ->
       let inClass cls =
@@ -220,7 +220,7 @@ let registryTests =
       let missing =
         sourceFiles ()
         |> List.filter (fun (name, text) ->
-          name <> "RatchetRegistryTests.fs" && Regex.IsMatch(text, "let\\s+(private\\s+)?budgets\\b") && not (text.Contains "Ratchet.table"))
+          name <> "RatchetRegistryTests.fs" && Regex.IsMatch(text, "let\\s+(private\\s+)?budgets\\s*(:[^=\\n]*)?=\\s*\\n\\s*\\[") && not (text.Contains "Ratchet.table"))
         |> List.map fst
       missing |> Expect.isEmpty "a budget table that --tighten cannot see (register it with Ratchet.table)"
 
@@ -289,10 +289,14 @@ let wiringTests =
 
     testCase "scripts/ship runs the ratchets before it bumps the version or calls the gate" <| fun _ ->
       let ship = read "scripts/ship"
-      let ratchets = ship.IndexOf "--ratchets"
-      ratchets |> Expect.isGreaterThan "ship runs the lane" (-1)
-      ratchets |> Expect.isLessThan "before the bump" (ship.IndexOf "scripts/bump-version\")")
-      ratchets |> Expect.isLessThan "and before the gate" (ship.IndexOf "scripts/local-gate\" \"$sha\"")
+      ship |> Expect.stringContains "ship runs the lane binary" "SageFs.Tests.dll --ratchets"
+      // The two call sites: a given commit, and HEAD about to be bumped.
+      let givenCommit = ship.IndexOf "run_ratchets \"$sha\""
+      let beforeBump = ship.IndexOf "run_ratchets \"$(git"
+      (givenCommit, -1) |> Expect.isGreaterThan "a shipped commit is checked"
+      (beforeBump, -1) |> Expect.isGreaterThan "HEAD is checked before it is bumped"
+      (beforeBump, ship.IndexOf "scripts/bump-version\")") |> Expect.isLessThan "before the bump"
+      (givenCommit, ship.IndexOf "scripts/local-gate\" \"$sha\"") |> Expect.isLessThan "and before the gate"
   ]
 
 do

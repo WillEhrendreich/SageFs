@@ -419,12 +419,12 @@ let private errorsMentioning (fragment: string) (errors: string list) =
 let definitionOfDoneTests =
   testList "Definition of Done matrix" [
 
-    testCase "WHY — development matrix is structurally complete because every client and capability needs an owned obligation" <| fun () ->
+    TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — development matrix is structurally complete because every client and capability needs an owned obligation" <| fun () ->
       File.ReadAllText matrixPath
       |> validateMatrix false today
       |> Expect.isEmpty "development matrix should be structurally valid"
 
-    testCase "WHY — every verified row in the live matrix resolves against this checkout: the cited files exist and compile, the cited runner is dispatched AND invoked by ci-pipeline.fsx, and the cited stage exists" <| fun () ->
+    TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — every verified row in the live matrix resolves against this checkout: the cited files exist and compile, the cited runner is dispatched AND invoked by ci-pipeline.fsx, and the cited stage exists" <| fun () ->
       // This is the check that would have caught HR-DASH-E2E/LT-DASH-E2E citing
       // dashboard-browser-e2e for the seven days after d99c2fd4 deleted it.
       let resolutionFailures =
@@ -557,7 +557,7 @@ let definitionOfDoneTests =
       |> errorsMentioning "run id or commit SHA"
       |> Expect.isNonEmpty "a verified row must be resolvable by someone else"
 
-    testCase "WHY — the probe really reads this checkout, so a pipeline rename cannot quietly turn every resolution check into a no-op that passes everything" <| fun () ->
+    TestInfrastructure.Ratchet.case TestInfrastructure.Ratchet.Invariant "WHY — the probe really reads this checkout, so a pipeline rename cannot quietly turn every resolution check into a no-op that passes everything" <| fun () ->
       // Deliberately pins only facts that should hold for as long as CI exists,
       // plus one negative that must never come back. An earlier draft pinned
       // "--integration-hr is invoked by nothing", which was true that morning and

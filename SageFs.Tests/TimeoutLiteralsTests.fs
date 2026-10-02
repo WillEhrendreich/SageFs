@@ -44,6 +44,14 @@ let private actual : (string * int) list =
             | 0 -> ()
             | n -> yield relative, n ]
 
+/// The budget table as data, so `--ratchets --tighten` can lower it.
+let private budgetTable =
+  TestInfrastructure.Ratchet.table
+    { Name = "timeout literals"
+      SourceFile = "SageFs.Tests/TimeoutLiteralsTests.fs"
+      Budgets = budgets
+      Actual = fun () -> actual }
+
 [<Tests>]
 let tests =
   testList "Timeout literals" [
@@ -70,3 +78,4 @@ let tests =
           | false -> None)
       stale |> Expect.isEmpty "every budget equals the file's current count"
   ]
+  |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant

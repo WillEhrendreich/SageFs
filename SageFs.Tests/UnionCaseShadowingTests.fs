@@ -87,3 +87,5 @@ let unionCaseShadowingTests =
           offenders.Length
           (offenders |> List.map (sprintf "  - %s") |> String.concat "\n")
   ]
+
+do TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant unionCaseShadowingTests |> ignore
