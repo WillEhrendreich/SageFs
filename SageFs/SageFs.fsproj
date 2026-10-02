@@ -120,6 +120,7 @@
         <Compile Include="Mcp.fs" />
         <Compile Include="McpHygiene.fs" />
         <Compile Include="McpRunTests.fs" />
+        <Compile Include="McpAnalysis.fs" />
         <Compile Include="McpDebugTest.fs" />
 
 

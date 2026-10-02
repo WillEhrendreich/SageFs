@@ -51,126 +51,148 @@ type DiscoveryReport = {
   TotalKnownFeatures: int
 }
 
+/// A tool the daemon registers, as its registration reads: the name it is called by, the first
+/// paragraph of its description, and the parameters a call must pass.
+type RegisteredTool = {
+  Name: string
+  Summary: string
+  RequiredParameters: string list
+}
+
 module FeatureDiscovery =
 
-  // Full feature catalogue — every MCP-exposed capability with baseline relevance.
-  let private catalogue : FeatureSuggestion list = [
-    { ToolName = "diagnose"
-      ShortDescription = "Full diagnostic report: failures, cell graph, performance, and repair suggestions"
-      ExampleUsage = "diagnose()"
-      WhyNow = "When something feels wrong, start here for the complete picture"
-      Relevance = FeatureRelevance.Essential }
-    { ToolName = "run_tests"
-      ShortDescription = "Run tests through the live-testing engine and get a receipt: what passed in this run, and what did not and why"
-      ExampleUsage = """run_tests(pattern="", category="unit", wait_seconds=30)"""
-      WhyNow = "Re-validate your work after code changes"
-      Relevance = FeatureRelevance.High }
-    { ToolName = "explain_test_failure"
-      ShortDescription = "Explain why a test transitioned Passed→Failed with causal symbol changes"
-      ExampleUsage = """explain_test_failure(test_name="my failing test")"""
-      WhyNow = "Get root-cause analysis when a test breaks"
-      Relevance = FeatureRelevance.High }
-    { ToolName = "suggest_next_action"
-      ShortDescription = "Ranked queue of developer actions based on failures + performance + stale cells"
-      ExampleUsage = "suggest_next_action()"
-      WhyNow = "Not sure where to start? Let the intelligence layer prioritise"
-      Relevance = FeatureRelevance.High }
-    { ToolName = "coverage_intel"
-      ShortDescription = "Find coverage blind spots and test-failure correlations"
-      ExampleUsage = "coverage_intel()"
-      WhyNow = "Identify which code paths are unprotected by tests"
-      Relevance = FeatureRelevance.High }
-    { ToolName = "list_tests"
-      ShortDescription = "List all discovered tests, optionally filtered by name or file"
-      ExampleUsage = """list_tests(pattern="auth", file="")"""
-      WhyNow = "Discover what tests exist before running them"
-      Relevance = FeatureRelevance.High }
-    { ToolName = "get_cell_dependencies"
-      ShortDescription = "Visualise the cell dependency graph with staleness annotations"
-      ExampleUsage = "get_cell_dependencies()"
-      WhyNow = "See exactly how bindings flow between cells and which are stale"
-      Relevance = FeatureRelevance.High }
-    { ToolName = "plan_ripple"
-      ShortDescription = "Preview which downstream cells will need re-evaluation after a change"
-      ExampleUsage = """plan_ripple(changed_cells="0,2")"""
-      WhyNow = "Understand blast radius before editing a binding"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "preview_what_if"
-      ShortDescription = "Simulate changing a binding value without executing it"
-      ExampleUsage = """preview_what_if(binding_name="threshold", new_code="0.95")"""
-      WhyNow = "Explore hypothetical changes safely before committing"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "impact_forecast"
-      ShortDescription = "Detect performance regressions and downstream impact of cell changes"
-      ExampleUsage = "impact_forecast()"
-      WhyNow = "Check whether recent changes caused a performance regression"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "get_file_coverage"
-      ShortDescription = "Per-line coverage data for a specific source file"
-      ExampleUsage = """get_file_coverage(file="MyModule.fs")"""
-      WhyNow = "See exactly which lines are covered, partially covered, or untested"
-      Relevance = FeatureRelevance.High }
-    { ToolName = "query_test_coverage"
-      ShortDescription = "Find every test that transitively covers a given symbol"
-      ExampleUsage = """query_test_coverage(symbol="MyModule.myFunction")"""
-      WhyNow = "Before refactoring a function, find its test guard"
-      Relevance = FeatureRelevance.High }
-    { ToolName = "suggest_next_cell"
-      ShortDescription = "Type-directed suggestions for what to evaluate next"
-      ExampleUsage = "suggest_next_cell()"
-      WhyNow = "Blank page? Let the type system suggest the next useful operation"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "get_eval_timeline"
-      ShortDescription = "Sparkline + P50/P95/P99 stats for recent eval durations"
-      ExampleUsage = "get_eval_timeline(sparkline_width=20)"
-      WhyNow = "Track eval performance trends to catch regressions early"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "get_completions"
-      ShortDescription = "Code completions at a cursor position"
-      ExampleUsage = """get_completions(code="System.IO.Fi", cursor_position=12)"""
-      WhyNow = "Discover available APIs without leaving your workflow"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "explore_namespace"
-      ShortDescription = "Browse all types and sub-namespaces available in a namespace"
-      ExampleUsage = """explore_namespace(namespaceName="System.Collections.Generic")"""
-      WhyNow = "Explore APIs before using them"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "explore_type"
-      ShortDescription = "See all members, constructors, and properties of a specific type"
-      ExampleUsage = """explore_type(typeName="System.String")"""
-      WhyNow = "Drill into a type you've already identified"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "check_fsharp_code"
-      ShortDescription = "Check F# code for errors without executing it"
-      ExampleUsage = """check_fsharp_code(code="let x = 42")"""
-      WhyNow = "Validate syntax and types before submitting to FSI"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "visualize_domain_model"
-      ShortDescription = "Render a discriminated union as a state machine diagram"
-      ExampleUsage = """visualize_domain_model(typeName="MyApp.OrderState")"""
-      WhyNow = "Understand complex DU-based domain models visually"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "get_session_filmstrip"
-      ShortDescription = "Visual history of all evaluations in the current session"
-      ExampleUsage = """get_session_filmstrip(filter="")"""
-      WhyNow = "Review the chronological story of your session"
-      Relevance = FeatureRelevance.Medium }
-    { ToolName = "export_notebook"
-      ShortDescription = "Export the current session as a notebook-style .fsx file"
-      ExampleUsage = """export_notebook(project_name="MyExploration")"""
-      WhyNow = "Save your interactive work to share or revisit later"
-      Relevance = FeatureRelevance.Contextual }
-    { ToolName = "get_message_journal"
-      ShortDescription = "Structured audit log of eval events with severity filtering"
-      ExampleUsage = """get_message_journal(min_level="error", source="")"""
-      WhyNow = "Review what happened during a session for observability"
-      Relevance = FeatureRelevance.Contextual }
-    { ToolName = "manage_scratch_pad"
-      ShortDescription = "View, export, or promote ephemeral code snippets"
-      ExampleUsage = """manage_scratch_pad(action="list")"""
-      WhyNow = "Organise ad-hoc code you've been experimenting with"
-      Relevance = FeatureRelevance.Contextual }
+  /// Whether the session's state raises a tool's rank, and why.
+  [<RequireQualifiedAccess>]
+  type private Boost =
+    | NoBoost
+    | Boosted of relevance: FeatureRelevance * whyNow: string
+
+  /// What discovery adds to a registered tool: where it ranks with nothing to go on, and when
+  /// the session's state raises it. A tool with no entry here is still advertised (it is
+  /// registered), ranked last.
+  type private Ranking = {
+    Relevance: FeatureRelevance
+    WhyNow: string
+    Boost: DiscoveryContext -> Boost
+  }
+
+  let private rank relevance whyNow : Ranking =
+    { Relevance = relevance; WhyNow = whyNow; Boost = fun _ -> Boost.NoBoost }
+
+  /// The most characters of a tool's description discovery repeats.
+  [<Literal>]
+  let private MaxSummaryChars = 200
+
+  /// The tools discovery knows how to rank. Every name here must be a registered tool: a test
+  /// reads the registered set by reflection and fails when one is not, so discovery can never
+  /// advertise a tool the daemon does not have.
+  let private rankings : (string * Ranking) list = [
+    "diagnose",
+      rank FeatureRelevance.Essential "When something feels wrong, start here for the complete picture"
+    "run_tests",
+      { Relevance = FeatureRelevance.High
+        WhyNow = "Re-validate your work after code changes"
+        Boost = fun ctx ->
+          match DiscoveryContext.hasTests ctx with
+          | true -> Boost.Boosted (FeatureRelevance.Essential, $"🧪 {ctx.TotalTests} test(s) discovered — run them to verify your work")
+          | false -> Boost.NoBoost }
+    "explain_test_failure",
+      { Relevance = FeatureRelevance.High
+        WhyNow = "Get root-cause analysis when a test breaks"
+        Boost = fun ctx ->
+          match DiscoveryContext.hasFailingTests ctx with
+          | true -> Boost.Boosted (FeatureRelevance.Essential, $"⚠️ You have {ctx.FailingTestCount} failing test(s) — find out why")
+          | false -> Boost.NoBoost }
+    "suggest_next_action",
+      { Relevance = FeatureRelevance.High
+        WhyNow = "Not sure where to start? Let the intelligence layer prioritise"
+        Boost = fun ctx ->
+          match DiscoveryContext.hasFailingTests ctx with
+          | true -> Boost.Boosted (FeatureRelevance.Essential, "Failing tests detected — let the prioritiser guide your next move")
+          | false -> Boost.NoBoost }
+    "coverage_intel",
+      { Relevance = FeatureRelevance.High
+        WhyNow = "Identify which code paths are unprotected by tests"
+        Boost = fun ctx ->
+          match DiscoveryContext.hasFailingTests ctx with
+          | true -> Boost.Boosted (FeatureRelevance.High, "Find which code paths are unprotected while tests are failing")
+          | false -> Boost.NoBoost }
+    "list_tests",
+      { Relevance = FeatureRelevance.High
+        WhyNow = "Discover what tests exist before running them"
+        Boost = fun ctx ->
+          match DiscoveryContext.hasTests ctx with
+          | true -> Boost.Boosted (FeatureRelevance.High, "Discover what tests exist before running them")
+          | false -> Boost.NoBoost }
+    "get_cell_dependencies",
+      { Relevance = FeatureRelevance.High
+        WhyNow = "See exactly how bindings flow between cells"
+        Boost = fun ctx ->
+          match DiscoveryContext.hasStaleCells ctx with
+          | true -> Boost.Boosted (FeatureRelevance.Essential, "Stale cells detected — inspect the dependency graph")
+          | false -> Boost.NoBoost }
+    "plan_ripple",
+      { Relevance = FeatureRelevance.Medium
+        WhyNow = "Understand which cells a change reaches before editing a binding"
+        Boost = fun ctx ->
+          match DiscoveryContext.hasStaleCells ctx with
+          | true -> Boost.Boosted (FeatureRelevance.Essential, $"⚡ {ctx.StaleCellCount} stale cell(s) — see the re-evaluation plan")
+          | false -> Boost.NoBoost }
+    "preview_what_if",
+      rank FeatureRelevance.Medium "Explore hypothetical changes safely before committing"
+    "impact_forecast",
+      rank FeatureRelevance.Medium "Check how many cells sit downstream of a cell and how long evals take"
+    "suggest_next_cell",
+      { Relevance = FeatureRelevance.Medium
+        WhyNow = "Blank page? Let the type system suggest the next useful operation"
+        Boost = fun ctx ->
+          match ctx.TotalEvals = 0 with
+          | true -> Boost.Boosted (FeatureRelevance.Essential, "Nothing evaluated yet — start here for guided first steps")
+          | false -> Boost.NoBoost }
+    "get_eval_timeline",
+      rank FeatureRelevance.Medium "Track eval performance trends to catch regressions early"
+    "check_fsharp_code",
+      rank FeatureRelevance.Medium "Validate syntax and types before submitting to FSI"
+    "get_session_filmstrip",
+      rank FeatureRelevance.Medium "Review the chronological story of your session"
+    "export_notebook",
+      rank FeatureRelevance.Contextual "Save your interactive work to share or revisit later"
+    "get_message_journal",
+      rank FeatureRelevance.Contextual "Review what happened during a session for observability"
+    "manage_scratch_pad",
+      rank FeatureRelevance.Contextual "Organise ad-hoc code you've been experimenting with"
   ]
+
+  /// Why a registered tool that discovery has no rule for is still advertised, and last.
+  let private unrankedWhyNow =
+    "Part of the tool surface. Ranked last because nothing in the session's state points at it."
+
+  /// The names discovery has a ranking rule for.
+  let rankedToolNames : string list = rankings |> List.map fst
+
+  /// The first paragraph of a tool's description, on one line and no longer than the budget.
+  let summarize (description: string) : string =
+    let firstParagraph =
+      description.Replace("\r\n", "\n").Split([| "\n\n" |], System.StringSplitOptions.RemoveEmptyEntries)
+      |> Array.tryHead
+      |> Option.defaultValue ""
+    let oneLine = System.String.Join(" ", firstParagraph.Split([| '\n'; '\r'; ' '; '\t' |], System.StringSplitOptions.RemoveEmptyEntries))
+    match oneLine.Length > MaxSummaryChars with
+    | false -> oneLine
+    | true ->
+      let cut = oneLine.Substring(0, MaxSummaryChars)
+      let atWord = match cut.LastIndexOf ' ' with | i when i > 0 -> cut.Substring(0, i) | _ -> cut
+      atWord + "..."
+
+  /// A call shape for a tool, built from the parameters it requires: `plan_ripple(changed_cells=...)`.
+  let exampleOf (tool: RegisteredTool) : string =
+    tool.RequiredParameters
+    |> List.map (fun p -> p + "=...")
+    |> String.concat ", "
+    |> sprintf "%s(%s)" tool.Name
+
+  let private rankingOf (name: string) : Ranking option =
+    rankings |> List.tryFind (fun (n, _) -> n = name) |> Option.map snd
 
   let private relevanceScore = function
     | FeatureRelevance.Essential  -> 0
@@ -178,32 +200,20 @@ module FeatureDiscovery =
     | FeatureRelevance.Medium     -> 2
     | FeatureRelevance.Contextual -> 3
 
-  let private boostForContext (ctx: DiscoveryContext) (s: FeatureSuggestion) : FeatureSuggestion =
-    match s.ToolName with
-    | "explain_test_failure" when DiscoveryContext.hasFailingTests ctx ->
-      { s with Relevance = FeatureRelevance.Essential
-               WhyNow = $"⚠️ You have {ctx.FailingTestCount} failing test(s) — find out why" }
-    | "suggest_next_action" when DiscoveryContext.hasFailingTests ctx ->
-      { s with Relevance = FeatureRelevance.Essential
-               WhyNow = $"Failing tests detected — let the prioritiser guide your next move" }
-    | "plan_ripple" when DiscoveryContext.hasStaleCells ctx ->
-      { s with Relevance = FeatureRelevance.Essential
-               WhyNow = $"⚡ {ctx.StaleCellCount} stale cell(s) — see the re-evaluation plan" }
-    | "get_cell_dependencies" when DiscoveryContext.hasStaleCells ctx ->
-      { s with Relevance = FeatureRelevance.Essential
-               WhyNow = $"Stale cells detected — inspect the dependency graph" }
-    | "suggest_next_cell" when ctx.TotalEvals = 0 ->
-      { s with Relevance = FeatureRelevance.Essential
-               WhyNow = "Nothing evaluated yet — start here for guided first steps" }
-    | "run_tests" when DiscoveryContext.hasTests ctx ->
-      { s with Relevance = FeatureRelevance.Essential
-               WhyNow = $"🧪 {ctx.TotalTests} test(s) discovered — run them to verify your work" }
-    | "list_tests" when DiscoveryContext.hasTests ctx ->
-      { s with Relevance = FeatureRelevance.High }
-    | "coverage_intel" when DiscoveryContext.hasFailingTests ctx ->
-      { s with Relevance = FeatureRelevance.High
-               WhyNow = "Find which code paths are unprotected while tests are failing" }
-    | _ -> s
+  let private suggestionFor (ctx: DiscoveryContext) (tool: RegisteredTool) : FeatureSuggestion =
+    let baseline =
+      match rankingOf tool.Name with
+      | Some r -> r
+      | None -> rank FeatureRelevance.Contextual unrankedWhyNow
+    let relevance, whyNow =
+      match baseline.Boost ctx with
+      | Boost.Boosted (relevance, whyNow) -> relevance, whyNow
+      | Boost.NoBoost -> baseline.Relevance, baseline.WhyNow
+    { ToolName = tool.Name
+      ShortDescription = tool.Summary
+      ExampleUsage = exampleOf tool
+      WhyNow = whyNow
+      Relevance = relevance }
 
   let private caseInsensitiveContains (needle: string) (haystack: string) =
     haystack.Contains(needle, System.StringComparison.OrdinalIgnoreCase)
@@ -213,11 +223,13 @@ module FeatureDiscovery =
     || caseInsensitiveContains topic s.ShortDescription
     || caseInsensitiveContains topic s.WhyNow
 
-  /// Discover and rank features given the current session context.
-  let discover (ctx: DiscoveryContext) : DiscoveryReport =
-    let boosted = catalogue |> List.map (boostForContext ctx)
+  /// Discover and rank the REGISTERED tools given the current session context. The catalogue is
+  /// the registered set: a tool the daemon does not register cannot appear, and a registered
+  /// tool always does.
+  let discoverOver (registered: RegisteredTool list) (ctx: DiscoveryContext) : DiscoveryReport =
+    let suggestions = registered |> List.map (suggestionFor ctx)
     let ranked =
-      boosted
+      suggestions
       |> (match ctx.RequestedTopic with
           | Some topic -> List.filter (matchesTopic topic)
           | None -> id)
@@ -232,7 +244,13 @@ module FeatureDiscovery =
          | parts -> System.String.Join(" · ", parts)
     { Suggestions = ranked
       ContextSummary = contextSummary
-      TotalKnownFeatures = catalogue.Length }
+      TotalKnownFeatures = registered.Length }
+
+  /// Discovery with no registered set to read, so nothing to advertise. It exists because
+  /// `Mcp.discoverFeatures` still calls it; the tool itself calls `discoverOver` with the
+  /// registered set, and `Mcp.discoverFeatures` can be deleted.
+  let discover (ctx: DiscoveryContext) : DiscoveryReport =
+    discoverOver [] ctx
 
   /// An empty (fresh session) context for use in tests and defaults.
   let emptyContext = {
