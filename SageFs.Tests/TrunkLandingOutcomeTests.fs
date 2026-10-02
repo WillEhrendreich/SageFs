@@ -330,6 +330,26 @@ let private integrationTip (w: World) : Task<string> = git w.Repo [ "rev-parse";
 let private appGet (w: World) (route: string) : Task<string> =
   w.App.GetStringAsync(sprintf "%s/%s" (w.App.BaseAddress.ToString().TrimEnd('/')) route)
 
+/// Wait for the trunk's line about a landing while the app keeps being asked. A reload that no request enters is judged
+/// NeverEntered once its grace window passes, and that verdict is final, so a waiter that only reads status lets a loaded
+/// machine run the window out before the new body ever runs. Asking the app on every poll enters the body the moment the
+/// reload applies.
+let private awaitTrunkLineServing (w: World) (landingId: string) (routes: string list) (accept: string -> bool) : Task<string> =
+  task {
+    let last = ref ""
+    do!
+      waitFor TestTimeouts.saveVerdict (fun () -> sprintf "the trunk to report landing %s while the app served %A. Last status:\n%s" landingId routes last.Value) (fun () -> task {
+        for route in routes do
+          let! _ = appGet w route
+          ()
+        let! status = statusOf w
+        last.Value <- status
+        match trunkLine status landingId with
+        | Some line -> return accept line
+        | None -> return false })
+    return (trunkLine last.Value landingId).Value
+  }
+
 /// "alice:v3#5" -> ("alice:v3", 5): what a handler said and how many requests the process had served by then.
 let private splitCounted (served: string) : string * int =
   match served.LastIndexOf '#' with
@@ -513,9 +533,8 @@ let tests =
         aliceSettled |> Expect.stringContains "alice's landing landed" "state=Landed"
         bobSettled |> Expect.stringContains "bob's landing landed" "state=Landed"
 
-        let isApplied (line: string) = line.Contains "Applied" || line.Contains "Patched" || line.Contains "PatchPending"
-        let! aliceTrunk = awaitTrunkLine started aliceLanding isApplied
-        let! bobTrunk = awaitTrunkLine started bobLanding isApplied
+        let! aliceTrunk = awaitTrunkLineServing started aliceLanding [ "alice"; "bob" ] (fun l -> l.Contains "Patched")
+        let! bobTrunk = awaitTrunkLineServing started bobLanding [ "alice"; "bob" ] (fun l -> l.Contains "Patched")
         aliceTrunk |> Expect.stringContains "alice's landing names the mechanism that carried it" "metadata-delta"
         bobTrunk |> Expect.stringContains "bob's landing names the mechanism that carried it" "metadata-delta"
 
@@ -532,8 +551,7 @@ let tests =
         pidAfter |> Expect.equal "the same process served the whole time" pidBefore
 
         // The new bodies ran, so the reload row says Patched, by the mechanism that did it.
-        let! resolved = awaitTrunkLine started bobLanding (fun l -> l.Contains "Patched")
-        resolved |> Expect.stringContains "once the new body has run the trunk line says Patched" "Patched"
+        bobTrunk |> Expect.stringContains "once the new body has run the trunk line says Patched" "Patched"
         let! (reload: JsonElement) = trunkReload started
         reload.GetProperty("outcome").GetString() |> Expect.equal "the session's own reload row agrees" "Patched"
         reload.GetProperty("mechanism").GetString() |> Expect.equal "and names the mechanism" "metadata-delta"
