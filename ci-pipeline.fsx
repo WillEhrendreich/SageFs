@@ -211,8 +211,8 @@ open SageFs.Build
 
 // Every downstream check runs against the ONE Release build of the primary
 // framework (see "build" stage). The default suite also runs on the other
-// frameworks the tool ships for (see `testTierOn`); the "build" stage builds
-// the test assembly for each of those too, before any tier starts.
+// frameworks the tool ships for (see `testTierOn`); the "build other frameworks"
+// stage builds the test assembly for each of those too, before any tier starts.
 let testBinDir = TierPlan.testBinDirOf TierPlan.Framework.primary
 let testDll = TierPlan.dllOf TierPlan.Framework.primary
 
@@ -469,6 +469,23 @@ let runTiers (tiers: TierPlan.Tier list) =
 let ratchetReproduction =
   $"dotnet build SageFs.Tests -c Release && dotnet {testDll} --ratchets"
 
+/// The failures in an Expecto log, by name: each `[E]` line, then the message line under it. The
+/// tail a failed tier prints is its last 60 lines, and a lane's own noise can push the failing
+/// name out of them, so the ratchets stage names the failures itself.
+let failuresInLog (log: string) : string list =
+  match File.Exists log with
+  | false -> []
+  | true ->
+    let lines =
+      File.ReadAllLines log
+      |> Array.map (fun l -> Text.RegularExpressions.Regex.Replace(l, "\x1b\\[[0-9;?]*[A-Za-z]", ""))
+    [ for i in 0 .. lines.Length - 1 do
+        match lines[i].StartsWith "[E] " with
+        | false -> ()
+        | true ->
+          yield lines[i]
+          if i + 1 < lines.Length then yield "    " + lines[i + 1] ]
+
 /// The ratchet lane: every registered ratchet (budgets, literal counts, generated
 /// pages, CI wiring) and nothing else, in this process's own tree, right after the
 /// build. It is pure file reads, so it takes seconds, and it runs through the same
@@ -487,10 +504,13 @@ let runRatchetLane () =
     match green with
     | true -> return Ok()
     | false ->
+      printfn "ratchets: the failing ratchets:"
+      for line in failuresInLog (Path.Combine(tierWork, TierPlan.fileNameOf lane.Name + ".log")) do
+        printfn "%s" line
       return
         Error(
           sprintf
-            "ratchets: a ratchet is red, so nothing slower ran. The failing test names are in the tail above. Reproduce: %s. A budget that only went DOWN is fixed by appending --tighten to that command."
+            "ratchets: a ratchet is red, so nothing slower ran. The failing ratchets are listed above. Reproduce: %s. A budget that only went DOWN is fixed by appending --tighten to that command."
             ratchetReproduction)
   }
 
@@ -627,15 +647,6 @@ pipeline "sagefs" {
     // --no-build against this exact output — the single build that used to be
     // repeated in build/integration-host/extensions/release-artifacts.
     run "dotnet build -c Release"
-    // The test assembly for every other framework a tier runs on. Built here,
-    // once, so the tiers (which run concurrently, each in a clone of this tree)
-    // never build. TierPlan.testBuildCommands explains why these builds leave the
-    // tracked lock files and the primary build's obj/ alone.
-    run (fun ctx ->
-      async {
-        let others = TierPlan.Framework.all |> List.filter (fun f -> f <> TierPlan.Framework.primary)
-        return! runSteps ctx.RunCommand (others |> List.collect TierPlan.testBuildCommands)
-      })
   }
 
   stage "ratchets" {
@@ -648,6 +659,20 @@ pipeline "sagefs" {
     // TrustSignal.run, so zero ratchets registered or ran is NothingRan (exit 3).
     timeoutForStep 300
     run (fun _ -> runRatchetLane ())
+  }
+
+  stage "build other frameworks" {
+    // The test assembly for every other framework a tier runs on. Built here,
+    // once, so the tiers (which run concurrently, each in a clone of this tree)
+    // never build. TierPlan.testBuildCommands explains why these builds leave the
+    // tracked lock files and the primary build's obj/ alone. It sits AFTER the
+    // ratchets because it costs about a minute and a half (restore plus compile)
+    // and the ratchets need only the primary build: a red ratchet should not wait for it.
+    run (fun ctx ->
+      async {
+        let others = TierPlan.Framework.all |> List.filter (fun f -> f <> TierPlan.Framework.primary)
+        return! runSteps ctx.RunCommand (others |> List.collect TierPlan.testBuildCommands)
+      })
   }
 
   stage "format" {

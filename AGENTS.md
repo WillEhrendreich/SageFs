@@ -229,8 +229,9 @@ The default suite runs on every framework the tool ships for, because the net10
 tool asset is the one most users install and a bug that exists on .NET 10 only
 (a raw F# union reaching System.Text.Json, which .NET 11 writes and .NET 10
 throws on) is invisible to a net11 run. Each framework is its own tier and its
-own trust row: `default` on net11, `default-net10` on net10. The `build` stage
-builds the net10 test assembly with `TierPlan.testBuildCommands`, which leaves the
+own trust row: `default` on net11, `default-net10` on net10. The `build other
+frameworks` stage (after `ratchets`) builds the net10 test assembly with
+`TierPlan.testBuildCommands`, which leaves the
 tracked lock files and the net11 `obj/` alone. To run it by hand:
 
 ```

@@ -29,12 +29,20 @@ run_ratchets() {
   echo "ship: building SageFs.Tests (Release), then the ratchets"
   dotnet build "$REPO/SageFs.Tests" -c Release --nologo -v minimal || { echo "ship: SageFs.Tests did not build." >&2; exit 1; }
   # From the repo root: three ratchets find the repo by walking up from the working directory.
-  (cd "$REPO" && dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets) || {
-    echo "ship: a ratchet is red (the failing names are above); nothing was bumped or gated." >&2
+  # The output is kept so a red run can name the failing ratchets without the lane's other noise.
+  local out
+  out=$(mktemp)
+  if ! (cd "$REPO" && dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets) >"$out" 2>&1; then
+    echo "ship: a ratchet is red; nothing was bumped or gated. The failing ratchets:" >&2
+    grep -A1 '^\[E\] ' "$out" >&2 || tail -n 40 "$out" >&2
+    grep '^TRUST' "$out" >&2 || true
     echo "      reproduce: dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets" >&2
     echo "      a budget that only went DOWN is fixed by adding --tighten to that command." >&2
+    rm -f "$out"
     exit 1
-  }
+  fi
+  grep '^TRUST' "$out" || true
+  rm -f "$out"
 }
 
 if [ $# -gt 0 ]; then
