@@ -1,5 +1,7 @@
 # A session for the DemoEnv test project, from the picker to Ready and active, at two sizes.
 # The shared daemon shows other agents' sessions too; only the one under this run's directory is this tour's.
+# Create Session has to make the new session this window's own: the status bar item names it by id with
+# no Switch Session in between. It used to keep naming another session on a daemon that had one.
 resize 1280 800
 expect-text SageFs
 wait 12
@@ -12,16 +14,7 @@ key enter
 wait 3
 shot just-created-1280x800 --region sidebar --region statusbar
 expect-session --within 240
-wait 3
-shot ready-not-active-1280x800 --region sidebar --region statusbar
-
-# On a daemon that already has an active session, a new session is not the active one: the
-# status bar still names the other session until this one is switched to, by its id.
-command SageFs: Switch Session
-wait 2
-shot switch-picker-1280x800
-type {session}
-key enter
+expect-text --within 60 session {session}
 wait 3
 shot active-1280x800 --region sidebar --region statusbar
 

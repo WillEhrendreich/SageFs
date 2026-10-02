@@ -10,12 +10,8 @@ wait 2
 key enter
 expect-session --within 240
 wait 3
-command SageFs: Switch Session
-wait 2
-type {session}
-key enter
-wait 3
 
+# No Switch Session here: Enable Live Testing has to act on the session Create Session just made.
 command SageFs: Enable Live Testing
 expect-text --within 120 1 failed
 open DemoEnv.Tests/DemoEnvTests.fs
