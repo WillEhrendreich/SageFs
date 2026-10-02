@@ -51,25 +51,47 @@ vsc_free_port() {
 }
 
 # vsc_start_xvfb <run-dir>   sets VSC_DISPLAY (":NN") and VSC_XVFB_PID
+# Choosing a display number and starting Xvfb on it is one step under a lock: the number is
+# only taken once Xvfb has opened its socket, so two runs that start together cannot both
+# see the same number free. The lock is held on a file descriptor of this shell and released
+# on every way out.
 vsc_start_xvfb() {
-  local run=$1 n i
-  n=$(vsc_free_display) || return 1
-  [ "$n" -ge 1 ] || { echo "refusing display :$n" >&2; return 1; }
-  setsid Xvfb ":$n" -screen 0 "$LEM_SCREEN_GEOMETRY" -nolisten tcp > "$run/out/xvfb.log" 2>&1 &
+  local run=$1 n i fd rc=1
+  mkdir -p "$LEM_LOCK_DIR"
+  exec {fd}> "$LEM_LOCK_DIR/.display.lock"
+  flock "$fd" || { exec {fd}>&-; echo "could not take the display lock" >&2; return 1; }
+  n=$(vsc_free_display) || { exec {fd}>&-; return 1; }
+  [ "$n" -ge 1 ] || { echo "refusing display :$n" >&2; exec {fd}>&-; return 1; }
+  # The lock is not inherited by Xvfb: fd is closed for it, so a long-lived Xvfb never holds it.
+  setsid Xvfb ":$n" -screen 0 "$LEM_SCREEN_GEOMETRY" -nolisten tcp {fd}>&- > "$run/out/xvfb.log" 2>&1 &
   VSC_XVFB_PID=$!
   VSC_DISPLAY=":$n"
   for i in $(seq 1 $((LEM_X_START_SECONDS * 10))); do
-    [ -S "/tmp/.X11-unix/X$n" ] && return 0
-    kill -0 "$VSC_XVFB_PID" 2>/dev/null || { echo "Xvfb exited early; see $run/out/xvfb.log" >&2; return 1; }
+    [ -S "/tmp/.X11-unix/X$n" ] && { rc=0; break; }
+    kill -0 "$VSC_XVFB_PID" 2>/dev/null || { echo "Xvfb exited early; see $run/out/xvfb.log" >&2; break; }
     sleep 0.1
   done
-  echo "Xvfb :$n did not open its socket in ${LEM_X_START_SECONDS}s" >&2
-  return 1
+  [ "$rc" -eq 0 ] || echo "Xvfb :$n did not start (see $run/out/xvfb.log)" >&2
+  exec {fd}>&-
+  return "$rc"
 }
 
 # vsc_bwrap_args <run-dir>   the sandbox VS Code (and nothing else) runs in, one word per line
+#
+# The run directory is writable (the window edits the workspace and keeps its profile there),
+# but four places inside it are laid over read-only, because whatever runs in the window (a
+# terminal that got past the driver's guard, an extension) must not be able to rewrite the
+# harness's evidence or the tools the lemming runs:
+#   out/                       the oracle's inputs: daemon-evals.tsv, timeline.ndjson, screens
+#   bin/                       the driver the lemming runs, the sagefs shim, the bridge copy
+#   .lem/vsc/User/settings.json and keybindings.json   the guard's own settings
 vsc_bwrap_args() {
   local run=$1
+  mkdir -p "$run/out" "$run/bin" "$run/.lem/vsc/User"
+  local ro=() f
+  for f in "$run/out" "$run/bin" "$run/.lem/vsc/User/settings.json" "$run/.lem/vsc/User/keybindings.json"; do
+    [ -e "$f" ] && ro+=(--ro-bind "$f" "$f")
+  done
   printf '%s\n' \
     --die-with-parent --unshare-pid --unshare-ipc --unshare-uts \
     --ro-bind /usr /usr --ro-bind /etc /etc \
@@ -77,6 +99,7 @@ vsc_bwrap_args() {
     --proc /proc --dev /dev --tmpfs /tmp \
     --ro-bind "/tmp/.X11-unix/X${VSC_DISPLAY#:}" "/tmp/.X11-unix/X${VSC_DISPLAY#:}" \
     --bind "$run" "$run" \
+    "${ro[@]}" \
     --ro-bind "$HOME/.dotnet" "$HOME/.dotnet" \
     --clearenv \
     --setenv HOME "$run/.lem/home" \
@@ -191,8 +214,24 @@ vsc_write_profile() {
   "workbench.tips.enabled": false,
   "sagefs.mcpPort": ${LEM_PORT:-37749},
   "sagefs.dashboardPort": ${LEM_DASH_PORT:-37750},
-  "sagefs.autoStart": false
+  "sagefs.autoStart": false,
+  "terminal.integrated.profiles.linux": { "none": { "path": "/usr/bin/false" } },
+  "terminal.integrated.defaultProfile.linux": "none",
+  "terminal.integrated.automationProfile.linux": { "path": "/usr/bin/false" },
+  "terminal.integrated.enablePersistentSessions": false,
+  "task.allowAutomaticTasks": "off",
+  "debug.openDebug": "neverOpen"
 }
+JSON
+  # The keys that open a terminal or the developer tools are unbound, a second layer under the
+  # driver's guard (Guard.fs). Both files are laid over read-only in the window's sandbox.
+  cat > "$run/.lem/vsc/User/keybindings.json" <<'JSON'
+[
+  { "key": "ctrl+`", "command": "-workbench.action.terminal.toggleTerminal" },
+  { "key": "ctrl+shift+`", "command": "-workbench.action.terminal.new" },
+  { "key": "ctrl+shift+c", "command": "-workbench.action.terminal.openNativeConsole" },
+  { "key": "ctrl+shift+i", "command": "-workbench.action.toggleDevTools" }
+]
 JSON
 }
 
@@ -200,8 +239,10 @@ JSON
 # driver. Written into <run>/bin/tools, which the sandbox binds read-only.
 vsc_install_tools() {
   local run=$1 verb
-  mkdir -p "$run/bin/tools" "$run/bin/lemdrive"
-  cp -r --reflink=auto "$VSC_DRIVE_BIN/." "$run/bin/lemdrive/"
+  mkdir -p "$run/bin/tools" "$run/bin/lemdrive" "$LEM_LOCK_DIR"
+  # Copied under the build's own lock: another run's rebuild of the driver (it rebuilds when a
+  # source is newer) must not be half written while this copy reads it.
+  flock "$LEM_LOCK_DIR/.lemdrive-build.lock" cp -r --reflink=auto "$VSC_DRIVE_BIN/." "$run/bin/lemdrive/"
   for verb in snapshot click key type palette open wait shot; do
     printf '%s\n' '#!/bin/sh' "exec dotnet \"$run/bin/lemdrive/LemDrive.dll\" vsc $verb \"\$@\"" > "$run/bin/tools/vsc-$verb"
     chmod +x "$run/bin/tools/vsc-$verb"

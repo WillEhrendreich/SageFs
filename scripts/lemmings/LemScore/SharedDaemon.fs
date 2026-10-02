@@ -297,17 +297,35 @@ let stopSession (mcpPort: int) (id: string) : Result<unit, string> =
   tryPostJson (baseUrl mcpPort + "/api/sessions/stop") body |> Result.map ignore
 
 type CleanupReport =
-  { Found: SessionInfo list
+  { /// What the lemming left behind: the sessions under the run directory that the harness did
+    /// not make itself.
+    Found: SessionInfo list
+    /// Ids of sessions the harness made for the run (the VS Code runner gives each run its own).
+    /// They are stopped like the rest, but they are not residue.
+    Own: string list
     Stops: (string * Result<unit, string>) list
     Remaining: SessionInfo list
     Verdict: Cleanup
     Note: string }
 
+/// The verdict for a cleanup, and the residue it names. `found` is every session under the run
+/// directory before the stop, `owned` the ids the harness made itself, `left` what the list still
+/// showed afterwards. A run that only has its own session is Clean; what is still listed after
+/// the stop is a failed cleanup whoever made it.
+let cleanupVerdict (found: SessionInfo list) (owned: string list) (left: SessionInfo list) : Cleanup * SessionInfo list =
+  let residue = found |> List.filter (fun s -> not (List.contains s.Id owned))
+  match found, residue, left with
+  | _, _, _ :: _ -> CleanupFailed, residue
+  | [], _, [] -> Clean, residue
+  | _, [], [] -> Clean, residue
+  | _, _ :: _, [] -> ResidueStopped, residue
+
 /// Reads the residue FIRST, then stops exactly the sessions under `runDir`, then reads
-/// the list again to prove nothing was left behind in the dashboard.
-let cleanup (mcpPort: int) (runDir: string) : CleanupReport =
+/// the list again to prove nothing was left behind in the dashboard. `owned` are the ids of
+/// sessions the harness made for this run: stopped, but not counted as residue.
+let cleanup (mcpPort: int) (runDir: string) (owned: string list) : CleanupReport =
   let failed note =
-    { Found = []; Stops = []; Remaining = []; Verdict = CleanupFailed; Note = note }
+    { Found = []; Own = owned; Stops = []; Remaining = []; Verdict = CleanupFailed; Note = note }
   match validRunDir runDir, listSessions mcpPort with
   | Error why, _ -> failed why
   | Ok _, Error e -> failed (sprintf "could not read the sessions list before cleanup: %s" e)
@@ -325,8 +343,44 @@ let cleanup (mcpPort: int) (runDir: string) : CleanupReport =
         | _, false ->
           Threading.Thread.Sleep stopVerifyInterval
           verify (attempt + 1)
-    match found, verify 1 with
-    | _, Error e -> { failed (sprintf "could not read the sessions list after cleanup: %s" e) with Found = found; Stops = stops }
-    | [], Ok _ -> { Found = []; Stops = []; Remaining = []; Verdict = Clean; Note = "no sessions under the run directory" }
-    | _, Ok [] -> { Found = found; Stops = stops; Remaining = []; Verdict = ResidueStopped; Note = sprintf "stopped %d session(s) the lemming left" found.Length }
-    | _, Ok left -> { Found = found; Stops = stops; Remaining = left; Verdict = CleanupFailed; Note = sprintf "%d session(s) still listed after the stop" left.Length }
+    match verify 1 with
+    | Error e -> { failed (sprintf "could not read the sessions list after cleanup: %s" e) with Found = found; Stops = stops }
+    | Ok left ->
+      let verdict, residue = cleanupVerdict found owned left
+      let note =
+        match verdict, found with
+        | _, [] -> "no sessions under the run directory"
+        | Clean, _ -> sprintf "stopped the run's own session(s): %s" (String.Join(", ", found |> List.map (fun s -> s.Id)))
+        | ResidueStopped, _ -> sprintf "stopped %d session(s) the lemming left" residue.Length
+        | _ -> sprintf "%d session(s) still listed after the stop" left.Length
+      { Found = residue; Own = owned; Stops = stops; Remaining = left; Verdict = verdict; Note = note }
+
+// ---- the build the lemming's bridge is, against the build the daemon is -----------------------
+
+/// How many characters of a commit hash are shown.
+let private commitWidth = 8
+
+let private versionAndCommit (v: string) : string * string option =
+  match v.IndexOf '+' with
+  | -1 -> v.Trim(), None
+  | i -> v.Substring(0, i).Trim(), Some(v.Substring(i + 1).Trim())
+
+let private shortCommit (c: string option) : string =
+  match c with
+  | Some hash -> hash.Substring(0, min commitWidth hash.Length)
+  | None -> "no commit named"
+
+/// The lemming's bridge (the SageFs.dll copied into the run) and the daemon it talks to are
+/// two builds, and nothing made them the same one: the bridge is the main checkout's last
+/// build, the daemon is whatever was last started. When both name a commit and the commits
+/// differ, or the versions differ, say so, with both. None when they agree, or when there is
+/// nothing to compare.
+let versionSkew (daemonVersion: string) (bridgeVersion: string) : string option =
+  let daemonV, daemonC = versionAndCommit daemonVersion
+  let bridgeV, bridgeC = versionAndCommit bridgeVersion
+  match daemonV = bridgeV, daemonC, bridgeC with
+  | false, _, _ ->
+    Some(sprintf "the bridge is version %s and the daemon is %s (%s against %s)" bridgeV daemonV (shortCommit bridgeC) (shortCommit daemonC))
+  | true, Some d, Some b when d <> b ->
+    Some(sprintf "the bridge and the daemon are the same version (%s) but different commits: bridge %s, daemon %s" daemonV (shortCommit bridgeC) (shortCommit daemonC))
+  | _ -> None

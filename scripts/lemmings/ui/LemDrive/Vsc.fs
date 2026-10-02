@@ -101,9 +101,10 @@ let private guardAccept (c: Cdp.Connection) : Task<Result<unit, string>> =
 let private pressChord (c: Cdp.Connection) (chord: Chord) : Task<Result<unit, string>> =
   task {
     let! allowed =
-      match isAcceptKey chord with
-      | true -> guardAccept c
-      | false -> task { return Ok() }
+      match Guard.checkChord chord, isAcceptKey chord with
+      | Result.Error e, _ -> task { return Result.Error e }
+      | Ok(), true -> guardAccept c
+      | Ok(), false -> task { return Ok() }
     match allowed with
     | Result.Error e -> return Result.Error e
     | Ok() ->

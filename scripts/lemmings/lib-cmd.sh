@@ -12,7 +12,10 @@
 #                                     LEM_DASH_PORT, LEM_SAGEFS_VERSION (+ the start readings).
 #                                     exit 3 when it is unreachable, unhealthy or short of room
 #   lem_cleanup_sessions <workdir>    reads the sessions under <workdir> FIRST, stops exactly those
-#                                     by id, verifies. Sets LEM_CLEANUP=clean|residue-stopped|failed
+#                                     by id, verifies. Sets LEM_CLEANUP=clean|residue-stopped|failed.
+#                                     LEM_OWN_SESSIONS (comma separated ids) names sessions the harness
+#                                     made for the run: stopped with the rest, not counted as residue
+#   lem_daemon_pid                    the pid listening on the shared daemon's port (before/after a run)
 #   lem_run_cmdc <workdir> <prompt-file> <model> <max-turns> <events-file> <stderr-file>
 #                                     cmdc -p under bubblewrap in <workdir>. Honours LEM_EXTRA_BWRAP
 #                                     (array of bwrap args) and LEM_EXTRA_ENV (array of NAME=VALUE).
@@ -94,11 +97,20 @@ lem_cleanup_sessions() {
   local run_dir; run_dir=$(dirname "$workdir")
   mkdir -p "$run_dir/out"
   LEM_CLEANUP=failed
-  out=$(lem_tool cleanup --workdir "$workdir" --out "$run_dir/out/residue.json" --port "${LEM_PORT:-37749}") || return 0
+  # LEM_OWN_SESSIONS: ids (comma separated) of sessions the harness made for this run. They are
+  # stopped with the rest but are not residue.
+  out=$(lem_tool cleanup --workdir "$workdir" --out "$run_dir/out/residue.json" --port "${LEM_PORT:-37749}" ${LEM_OWN_SESSIONS:+--own "$LEM_OWN_SESSIONS"}) || return 0
   while IFS='=' read -r k v; do
     [ "$k" = LEM_CLEANUP ] && LEM_CLEANUP=$v
   done <<< "$out"
   return 0
+}
+
+# The pid of the process listening on the shared daemon's port, or nothing. Read before and
+# after a run: the harness never stops the daemon, so a different pid, or none, afterwards means
+# something in the run did, and that is reported instead of assumed away.
+lem_daemon_pid() {
+  ss -ltnpH "( sport = :${LEM_PORT:-37749} )" 2>/dev/null | grep -o 'pid=[0-9]*' | head -n 1 | cut -d= -f2
 }
 
 # ---- the SageFs the lemming gets -----------------------------------------------------------
@@ -140,7 +152,18 @@ lem_prepare_bridge() {
     LEM_BRIDGE_CMD=(dotnet "$run_dir/bin/sagefs/$(basename "$dll")" mcp)
     LEM_BRIDGE_DESC="dev build: $version"
   fi
+  LEM_BRIDGE_VERSION=${version:-unknown}
   LEM_SAGEFS_VERSION="daemon ${LEM_DAEMON_VERSION:-unknown}; bridge $LEM_BRIDGE_DESC"
+  # Two builds nothing made the same one: the bridge is the main checkout's last build and the
+  # daemon is whatever was last started. Both go in the summary's version string, and a
+  # difference is a warning, once per run.
+  local skew
+  skew=$(lem_tool version-skew --daemon "${LEM_DAEMON_VERSION:-unknown}" --bridge "$LEM_BRIDGE_VERSION") || skew=
+  if [ -n "$skew" ] && [ -z "${LEM_SKEW_WARNED:-}" ]; then
+    LEM_SKEW_WARNED=1
+    echo "lem: WARNING: $skew" >&2
+  fi
+  [ -z "$skew" ] || LEM_SAGEFS_VERSION="$LEM_SAGEFS_VERSION; VERSION SKEW: $skew"
 }
 
 # The skill where Command Code finds project skills, and the MCP registration written the way
@@ -181,7 +204,6 @@ lem_bw_base() {
     --proc /proc --dev /dev --tmpfs /tmp --tmpfs "$HOME"
     --ro-bind "$HOME/.dotnet" "$HOME/.dotnet"
     --ro-bind "$HOME/.local/share/mise" "$HOME/.local/share/mise"
-    --bind "$HOME/.nuget" "$HOME/.nuget"
     --bind "$workdir" "$workdir"
     --ro-bind "$run_dir/bin" "$run_dir/bin"
     --bind "$run_dir/dotnethome" "$run_dir/dotnethome"
@@ -191,7 +213,22 @@ lem_bw_base() {
     --setenv PATH "$HOME/.dotnet:$HOME/.dotnet/tools:${extra_path:+$extra_path:}/usr/bin:/bin"
     --setenv DOTNET_ROOT "$HOME/.dotnet" --setenv DOTNET_CLI_HOME "$run_dir/dotnethome"
     --setenv DOTNET_CLI_TELEMETRY_OPTOUT 1 --setenv DOTNET_NOLOGO 1 --setenv DOTNET_SKIP_FIRST_TIME_EXPERIENCE 1
+    --setenv NUGET_PACKAGES "$run_dir/dotnethome/nuget/packages"
+    --setenv NUGET_HTTP_CACHE_PATH "$run_dir/dotnethome/nuget/http"
+    --setenv NUGET_PLUGINS_CACHE_PATH "$run_dir/dotnethome/nuget/plugins"
   )
+  # NuGet: the packages the lemming restores go to a cache of this run's own, and the user's real
+  # package cache is only a read-only fallback, so a restore (or a package a lemming wrote over)
+  # cannot change what the next build on this machine sees.
+  mkdir -p "$run_dir/dotnethome/nuget"
+  if [ -d "$HOME/.nuget/packages" ]; then
+    LEM_BW+=(--ro-bind "$HOME/.nuget/packages" "$HOME/.nuget/packages" --setenv NUGET_FALLBACK_PACKAGES "$HOME/.nuget/packages")
+  fi
+  # The global tools (the published `sagefs`, which can stop the shared daemon) are not in the
+  # sandbox unless the run uses the published tool as its bridge.
+  if [ -n "${LEM_MASK_DOTNET_TOOLS:-}" ] && [ -d "$HOME/.dotnet/tools" ]; then
+    LEM_BW+=(--tmpfs "$HOME/.dotnet/tools")
+  fi
 }
 
 # Runs a command in the same sandbox, with NO network and no credentials, for oracles that must

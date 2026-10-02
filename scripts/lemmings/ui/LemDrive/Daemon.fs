@@ -92,6 +92,28 @@ let parseSessions (body: string) : Result<DaemonSession list, string> =
 let sessions (port: int) : Result<DaemonSession list, string> =
   getText (baseUrl port + "/api/sessions") |> Result.bind parseSessions
 
+/// The daemon builds a project that has never been built before it answers a create request
+/// (the fixture in a fresh run directory has not), which takes minutes the first time.
+let private createTimeout = TimeSpan.FromSeconds 300.0
+
+/// POST /api/sessions/create, the route the editors' own "Create Session" uses: the id of the
+/// session the daemon made, or why it would not. This is the one write the harness makes to
+/// the shared daemon besides stopping its own sessions by id.
+let createSession (port: int) (body: string) : Result<string, string> =
+  try
+    use http = new HttpClient(Timeout = createTimeout)
+    use content = new StringContent(body, Encoding.UTF8, "application/json")
+    use resp = http.PostAsync(baseUrl port + "/api/sessions/create", content).GetAwaiter().GetResult()
+    let text = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    match resp.IsSuccessStatusCode with
+    | false -> Result.Error(sprintf "the daemon refused to create the session (HTTP %d): %s" (int resp.StatusCode) text)
+    | true ->
+      use doc = JsonDocument.Parse text
+      match str "message" doc.RootElement with
+      | Some id -> Ok id
+      | None -> Result.Error(sprintf "the daemon created a session but named none: %s" text)
+  with ex -> Result.Error(sprintf "could not create a session on %d: %s" port ex.Message)
+
 let private under (dir: string) (path: string) : bool =
   let root = dir.TrimEnd('/')
   path = root || path.StartsWith(root + "/", StringComparison.Ordinal)

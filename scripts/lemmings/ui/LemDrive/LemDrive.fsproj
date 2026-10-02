@@ -32,8 +32,11 @@
     <Compile Include="Tour.fs" />
     <Compile Include="Snapshot.fs" />
     <Compile Include="Cdp.fs" />
+    <Compile Include="OutputChannel.fs" />
     <Compile Include="Shot.fs" />
     <Compile Include="Daemon.fs" />
+    <Compile Include="Binding.fs" />
+    <Compile Include="Leftovers.fs" />
     <Compile Include="Vsc.fs" />
     <Compile Include="Shim.fs" />
     <Compile Include="VscHost.fs" />

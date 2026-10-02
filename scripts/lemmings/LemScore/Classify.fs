@@ -321,3 +321,14 @@ let assess (facts: RunFacts) : Assessment =
     @ cleanupFellOvers facts
     @ oracleFellOvers facts
   { Outcome = outcome; Reason = reason; Provider = provider; FellOver = findings }
+
+/// What an assessment says for the harness that produced the run. An editor lemming (VS Code
+/// or Neovim) drives an editor, and the editor talks to SageFs; the lemming itself has no
+/// reason to call a SageFs MCP tool, so "never called a SageFs MCP tool" would be on every
+/// editor run and say nothing. Only the MCP lemming (`Cmdc`) keeps that finding.
+let forHarness (harness: Harness) (assessment: Assessment) : Assessment =
+  match harness with
+  | Cmdc -> assessment
+  | CmdcNvim
+  | CmdcVscode ->
+    { assessment with FellOver = assessment.FellOver |> List.filter (fun f -> f.Stage <> Registration) }

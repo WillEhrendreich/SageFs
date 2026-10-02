@@ -66,6 +66,15 @@ module Sel =
 
 let private notNull (s: string | null) : string = match s with | null -> "" | v -> v
 
+/// Pairs two lists read from the page in separate calls. The page can change between the two
+/// reads (a status item appears, a line scrolls into view), so they can differ in length by a
+/// few elements; List.zip then throws, and a harness call that has read the window a dozen
+/// times without trouble aborts the whole process. A snapshot is a moment, so the extra
+/// elements of the longer list are dropped.
+let private zipShort (a: 'a list) (b: 'b list) : ('a * 'b) list =
+  let n = min (List.length a) (List.length b)
+  List.zip (List.truncate n a) (List.truncate n b)
+
 let private cell (e: JsonElement) : string =
   match e.ValueKind with
   | JsonValueKind.String -> notNull (e.GetString())
@@ -184,11 +193,11 @@ let private readEditor (page: IPage) : Task<EditorFacts option> =
       let! marginTops = tops marginLoc
       let! marginTexts = texts marginLoc
       let numberAtTop (top: float) =
-        List.zip marginTops marginTexts
+        zipShort marginTops marginTexts
         |> List.tryFind (fun (t, _) -> abs (t - top) < SameLinePixels)
         |> Option.bind (fun (_, n) -> match Int32.TryParse(n.Trim()) with | true, v -> Some v | _ -> None)
       let lines =
-        List.zip lineTops lineTexts
+        zipShort lineTops lineTexts
         |> List.choose (fun (top, text) -> numberAtTop top |> Option.map (fun n -> top, { Number = n; Text = text }))
         |> List.sortBy fst
       let lineAt (top: float) =
@@ -200,7 +209,7 @@ let private readEditor (page: IPage) : Task<EditorFacts option> =
       let! lensTops = tops lensLoc
       let! lensTexts = texts lensLoc
       let lenses =
-        List.zip lensTops lensTexts
+        zipShort lensTops lensTexts
         // A lens VS Code has not rendered yet is an empty element; it says nothing.
         |> List.filter (fun (_, text) -> not (String.IsNullOrWhiteSpace text))
         |> List.choose (fun (top, text) ->
@@ -211,7 +220,7 @@ let private readEditor (page: IPage) : Task<EditorFacts option> =
       let! raw = decoLoc.EvaluateAllAsync<JsonElement>(ReadPseudoContent)
       let contents = [ for pair in raw.EnumerateArray() -> [ for c in pair.EnumerateArray() -> cell c ] ]
       let decos =
-        List.zip decoTops contents
+        zipShort decoTops contents
         |> List.collect (fun (top, pair) ->
           pair
           |> List.choose pseudoText
@@ -221,7 +230,7 @@ let private readEditor (page: IPage) : Task<EditorFacts option> =
       let! gutterTops = tops gutterLoc
       let! gutterAttrs = attrs gutterLoc [ "class"; "title"; "aria-label" ]
       let gutter =
-        List.zip gutterTops gutterAttrs
+        zipShort gutterTops gutterAttrs
         |> List.choose (fun (top, a) ->
           let described =
             match a[1], a[2] with
@@ -315,7 +324,7 @@ let private readStatus (page: IPage) : Task<string list> =
     let! rows = attrs (page.Locator Sel.StatusItems) [ "aria-label" ]
     let! plain = texts (page.Locator Sel.StatusItems)
     return
-      List.zip rows plain
+      zipShort rows plain
       |> List.map (fun (a, t) -> match a[0] with | "" -> t.Trim() | label -> label)
       |> List.filter (fun s -> s <> "")
   }

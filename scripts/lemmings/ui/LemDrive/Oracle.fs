@@ -191,17 +191,9 @@ let private sageFsViewsText () : Task<Result<string, string>> =
           c.Playwright.Dispose()
   }
 
-/// The Output channel the SageFs extension writes to, as the channel selector names it.
-[<Literal>]
-let SageFsOutputChannel = "SageFs"
-
-/// How long the harness lets the Output panel switch channel and render.
-[<Literal>]
-let OutputSettleMs = 1500
-
-/// The lines of the SageFs Output channel. The panel's channel selector is a native select, so
-/// the harness picks the channel in it, and opens the Output panel first if it is not on screen.
-let private sageFsOutputText () : Task<Result<string, string>> =
+/// The text of the extension's SageFs Output channel, read from its end until `pattern` shows
+/// (see OutputChannel). The harness opens the panel and picks the channel itself.
+let private sageFsOutputText (pattern: string) : Task<Result<string, string>> =
   task {
     match Environment.GetEnvironmentVariable(Calls.DriverEnv.name Calls.CdpPort) with
     | null
@@ -212,20 +204,7 @@ let private sageFsOutputText () : Task<Result<string, string>> =
       | Result.Error e -> return Result.Error e
       | Ok c ->
         try
-          try
-            let selector = c.Page.Locator(".part.panel select.monaco-select-box").First
-            let! showing = selector.IsVisibleAsync()
-            match showing with
-            | true -> ()
-            | false ->
-              do! c.Page.Keyboard.PressAsync "Control+Shift+U"
-              do! Task.Delay OutputSettleMs
-            let! _ = selector.SelectOptionAsync SageFsOutputChannel
-            do! Task.Delay OutputSettleMs
-            let! lines = c.Page.Locator(".part.panel .view-line").AllInnerTextsAsync()
-            return Ok(String.Join("\n", lines |> Seq.map (fun l -> l.Replace(' ', ' '))))
-          with ex ->
-            return Result.Error(sprintf "could not read the SageFs Output channel: %s" (ex.Message.Split('\n')[0]))
+          return! OutputChannel.read c.Page (fun text -> Regex.IsMatch(text, pattern))
         finally
           c.Playwright.Dispose()
   }
@@ -271,7 +250,7 @@ let private runCheck (runDir: string) (workspace: string) (port: int) (sessions:
       match fromStream with
       | Some evidence -> return Met evidence
       | None ->
-        let! output = sageFsOutputText ()
+        let! output = sageFsOutputText pattern
         return
           match output with
           | Result.Error e -> NotMet(sprintf "no recorded daemon eval output matched /%s/, and the Output channel could not be read: %s" pattern e)
