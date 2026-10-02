@@ -9,12 +9,7 @@ command SageFs: Create Session
 wait 2
 key enter
 expect-session --within 240
-wait 3
-command SageFs: Switch Session
-wait 2
-type {session}
-key enter
-wait 3
+expect-text --within 60 session {session}
 
 command SageFs: Enable Live Testing
 expect-text --within 120 1 failed

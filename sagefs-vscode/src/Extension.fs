@@ -748,6 +748,45 @@ let updateEvalPerfBar (stats: VscTimelineStats) =
         |> String.concat "\n")
       sb.show ()
 
+/// The status a window reports when sessions exist on the daemon but none is for this workspace.
+[<Literal>]
+let noSessionForThisWorkspaceStatus = "no session for this workspace"
+
+/// The daemon's sessions as the two facts the binding decision needs.
+let private sessionRefs (sessions: Client.SessionInfo array) : SessionScopePure.SessionRef list =
+  sessions
+  |> Array.map (fun s -> { SessionScopePure.SessionRef.Id = s.id; SessionScopePure.SessionRef.WorkingDirectory = s.workingDirectory })
+  |> Array.toList
+
+/// The one session this window talks to: the one picked (or just created), else the workspace's own,
+/// else none. Never the daemon's first session, and never the daemon's active one.
+let windowSession (sessions: Client.SessionInfo array) : Client.SessionInfo option =
+  let selection =
+    match activeSessionId with
+    | Some id -> SessionScopePure.Selection.Selected id
+    | None -> SessionScopePure.Selection.NotSelected
+  match SessionScopePure.bind (workspaceFolderPaths () |> Array.toList) selection (sessionRefs sessions) with
+  | SessionScopePure.Binding.Bound r -> sessions |> Array.tryFind (fun s -> s.id = r.Id)
+  | SessionScopePure.Binding.NoSessionForThisWorkspace -> None
+
+/// Make a session the one commands, event filters and views follow.
+let adoptWindowSession (s: Client.SessionInfo) =
+  activeSessionId <- Some s.id
+  activeSessionWorkingDirectory <- Some s.workingDirectory
+  liveTestListener |> Option.iter (fun l -> l.SetSessionFilter (Some s.id))
+
+/// What the error dialog says about a Faulted or Stopped window session: that session's own verdict.
+/// The daemon's `/health` error is about ITS active session, which is somebody else's on a shared daemon.
+let windowSessionFault (session: Client.SessionInfo option) (daemonError: Client.HealthError option) : Client.HealthError option =
+  match session with
+  | None -> daemonError
+  | Some s ->
+    let message =
+      match SessionsTreePure.SessionHealth.reason s.health with
+      | Some reason -> reason
+      | None -> sprintf "Session %s is %s." s.id s.status
+    Some { case = "SessionFaulted"; message = message; suggestedAction = "Use Restart Session to recover." }
+
 let refreshStatus () =
   promise {
     match client, statusBarItem with
@@ -790,20 +829,28 @@ let refreshStatus () =
         let! sys = Client.getSystemStatus c
         let supervisedFlag = match sys with Some s -> s.supervised | None -> false
         let restartCount = match sys with Some s -> s.restartCount | None -> 0
-        match status.status with
-        | Some "Ready" | Some "Evaluating" ->
+        // The window shows ITS session, never "whichever session the daemon has active": on a shared
+        // daemon that is someone else's, and their warmup, fault or health used to show up here.
+        let! sessions = Client.listSessions c
+        knownSessions <- sessions
+        let session = windowSession sessions
+        let windowStatus =
+          match session with
+          | Some s -> Some s.status
+          | None ->
+            match sessions.Length with
+            | 0 -> status.status
+            | _ -> Some noSessionForThisWorkspaceStatus
+        // Whatever state it is in, this is the session commands, filters and views follow.
+        session |> Option.iter adoptWindowSession
+        match windowStatus with
+        | Some st when SessionScopePure.phaseOfStatus st = SessionScopePure.SessionPhase.Usable ->
           warmupPhase <- None
           warmupDetail <- None
           // Re-arm the fault dialog: the session recovered, so the NEXT
           // genuine fault deserves to announce itself.
           sessionErrorPromptShown <- false
-          let! sessions = Client.listSessions c
-          knownSessions <- sessions
           setContext "sagefs:hasSession" (ContextKeysPure.hasSessionContext sessions.Length)
-          let session =
-            match activeSessionId with
-            | Some id -> sessions |> Array.tryFind (fun s -> s.id = id)
-            | None -> sessions |> Array.tryHead
           match session with
           | Some s ->
             activeSessionId <- Some s.id
@@ -853,7 +900,7 @@ let refreshStatus () =
           SessionCtx.setSession c activeId
           Sessions.setSession c activeId
           TypeExpl.setClient (Some c)
-        | Some "Starting" | Some "Restarting" | Some "Warming Up" ->
+        | Some st when SessionScopePure.phaseOfStatus st = SessionScopePure.SessionPhase.Warming ->
           setContext "sagefs:hasSession" false
           match warmupPhase with
           | Some phase ->
@@ -876,9 +923,11 @@ let refreshStatus () =
             sb.tooltip <- Some "SageFs: warming up..."
             sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: warming up" ]
           sb.backgroundColor <- None
-        | Some "Faulted" | Some "Stopped" | Some "error" ->
+        | Some st when SessionScopePure.phaseOfStatus st = SessionScopePure.SessionPhase.Down ->
           setContext "sagefs:hasSession" false
-          match status.error with
+          // The bound session's own verdict. `status.error` is the DAEMON's active session's, which on a
+          // shared daemon is somebody else's fault in this window's error dialog.
+          match windowSessionFault session status.error with
           | Some err ->
             sb.text <- "$(error) SageFs: session error"
             sb.tooltip <- Some (describeSessionError err)
@@ -908,6 +957,21 @@ let refreshStatus () =
             sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: session error" ]
           sb.backgroundColor <-
             Some (newThemeColor "statusBarItem.errorBackground")
+        | Some st when st = noSessionForThisWorkspaceStatus ->
+          activeSessionId <- None
+          activeSessionWorkingDirectory <- None
+          liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
+          HotReload.setSession c None
+          SessionCtx.setSession c None
+          Sessions.setSession c None
+          setContext "sagefs:hasSession" false
+          let view = StatusBarPure.noSessionView supervisedFlag restartCount
+          sb.text <- view.Text
+          let tooltip =
+            sprintf "SageFs — ready, but none of the daemon's %d session(s) is for this workspace — click for session menu" sessions.Length
+          sb.tooltip <- Some tooltip
+          sb?accessibilityInformation <- createObj [ "label" ==> tooltip ]
+          sb.backgroundColor <- None
         | Some "no session" ->
           setContext "sagefs:hasSession" false
           sb.text <- "$(circle-slash) SageFs: no session"
@@ -1146,6 +1210,10 @@ let withProgressResult (location: int) (title: string) (work: unit -> JS.Promise
     return captured
   }
 
+/// What every command that acts on "the session" says when this window has none of its own.
+let noSessionForThisWindowMessage =
+  "This window has no SageFs session. Run SageFs: Create Session, or SageFs: Switch Session."
+
 /// Fire a client action that returns ApiOutcome, show brief status bar flash, then refresh.
 /// Fire a client action that returns ApiOutcome, under a progress indicator,
 /// then report the outcome.
@@ -1177,6 +1245,19 @@ let simpleCommand (title: string) (defaultMsg: string) (action: Client.Client ->
           |> ignore
         refreshStatus ()
     })
+
+/// `simpleCommand` for an action on this window's own session. The id is the window's session, never
+/// the daemon's idea of an active one; with no session the command says so rather than acting on a
+/// stranger's.
+let sessionCommand
+  (title: string)
+  (defaultMsg: string)
+  (action: string -> Client.Client -> JS.Promise<Client.ApiOutcome>)
+  =
+  simpleCommand title defaultMsg (fun c ->
+    match activeSessionId with
+    | Some sessionId -> action sessionId c
+    | None -> promise { return Client.Failed noSessionForThisWindowMessage })
 
 type EvalResult =
   | EvalOk of output: string * elapsed: float
@@ -1411,7 +1492,7 @@ let evalRange (args: obj) =
   }
 
 let resetSessionCmd () =
-  simpleCommand "SageFs: resetting session…" "Reset complete" Client.resetSession
+  sessionCommand "SageFs: resetting session…" "Reset complete" Client.resetSession
 
 /// Evaluate all code blocks in the file sequentially (top to bottom).
 let evalAllBlocks () =
@@ -1476,7 +1557,7 @@ let evalAllBlocks () =
   }
 
 let hardResetCmd () =
-  simpleCommand "SageFs: hard reset (rebuilding)…" "Hard reset complete" (Client.hardReset true)
+  sessionCommand "SageFs: hard reset (rebuilding)…" "Hard reset complete" (fun sessionId -> Client.hardReset sessionId true)
 
 /// Reflects the session's app state on the status bar: the play glyph with
 /// the URL while running, a hidden item when nothing is running, and the
@@ -1555,6 +1636,62 @@ let stopAppCmd () =
         | Client.AppState _ -> ()
     })
 
+/// How long Create Session looks for the session it made. The daemon answers once the session is
+/// registered, which can be a moment before `/api/sessions` lists it.
+[<Literal>]
+let private createdSessionLookupAttempts = 10
+
+[<Literal>]
+let private createdSessionLookupPauseMs = 500
+
+/// Create a session and make it THIS window's own: the status bar, the views and every session-scoped
+/// command follow it from here on, and the daemon is told to make it its active one too. Without this,
+/// on a daemon that already had sessions the window kept naming another one and Enable Live Testing
+/// acted on that one, so live testing found no tests until the user picked the new session by id.
+let createAndSelectSession
+  (c: Client.Client)
+  (target: SessionsTreePure.SessionTarget)
+  (workDir: string)
+  : JS.Promise<Client.ApiOutcome * SessionScopePure.CreatedSession> =
+  promise {
+    let! before = Client.listSessions c
+    let beforeIds = before |> Array.map (fun s -> s.id) |> Array.toList
+    let! result = Client.createSession target workDir c
+    match result with
+    | Client.Failed _ -> return result, SessionScopePure.CreatedSession.NotIdentified
+    | Client.Succeeded reply ->
+      let replyText = reply |> Option.defaultValue ""
+      let rec lookFor (attempt: int) : JS.Promise<SessionScopePure.CreatedSession> =
+        promise {
+          let! after = Client.listSessions c
+          match SessionScopePure.identifyCreated beforeIds replyText workDir (sessionRefs after) with
+          | SessionScopePure.CreatedSession.NotIdentified when attempt < createdSessionLookupAttempts ->
+            do! sleep createdSessionLookupPauseMs
+            return! lookFor (attempt + 1)
+          | found -> return found
+        }
+      let! found = lookFor 1
+      match found with
+      | SessionScopePure.CreatedSession.CreatedAs created ->
+        activeSessionId <- Some created.Id
+        activeSessionWorkingDirectory <- Some created.WorkingDirectory
+        liveTestListener |> Option.iter (fun l -> l.SetSessionFilter (Some created.Id))
+        let! switched = Client.switchSession created.Id c
+        match switched with
+        | Client.Failed err -> c.log (sprintf "[warn] could not make session %s the daemon's active one: %s" created.Id err)
+        | Client.Succeeded _ -> ()
+        // The status bar and the command palette's when-clauses (`sagefs:hasSession`) follow the session's
+        // status, and the 15 second poll can land a moment before it reads Ready. Refresh when it does,
+        // so Enable Live Testing is on offer as soon as the session can take it.
+        promise {
+          let! _ = waitForSessionReady created.Id
+          refreshStatus ()
+        }
+        |> promiseIgnoreLog (fun m -> (getOutput()).appendLine m)
+      | SessionScopePure.CreatedSession.NotIdentified -> ()
+      return result, found
+  }
+
 let createSessionCmd () =
   withClient (fun c ->
     promise {
@@ -1570,10 +1707,21 @@ let createSessionCmd () =
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
         do! Window.withProgress ProgressLocation.Notification "SageFs: Creating session..." (fun _p _t ->
           promise {
-            let! result = Client.createSession (SessionsTreePure.SessionTarget.ofPath proj) workDir c
+            let! result, created = createAndSelectSession c (SessionsTreePure.SessionTarget.ofPath proj) workDir
             match result with
             | Client.Succeeded _ ->
-              Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore
+              match created with
+              | SessionScopePure.CreatedSession.CreatedAs session ->
+                Window.showInformationMessage
+                  (sprintf "SageFs: Session %s created for %s. This window is using it." session.Id proj)
+                  [||]
+                |> ignore
+              | SessionScopePure.CreatedSession.NotIdentified ->
+                // Not guessed: picking the wrong one would aim live testing at a stranger's session.
+                Window.showWarningMessage
+                  (sprintf "SageFs: Session created for %s, but this window could not tell which one it is. Run SageFs: Switch Session and pick it by id." proj)
+                  [||]
+                |> ignore
             | Client.Failed err ->
               let! choice = Window.showErrorMessage (sprintf "SageFs: %s" err) [| "Show Output"; "Retry" |]
               match choice with
@@ -2020,7 +2168,7 @@ let evalAdvance () =
   }
 
 let cancelEvalCmd () =
-  simpleCommand "SageFs: cancelling…" "Eval cancelled" Client.cancelEval
+  sessionCommand "SageFs: cancelling…" "Eval cancelled" Client.cancelEval
 
 /// Navigate to the next code block.
 let nextBlock () =
@@ -2067,7 +2215,10 @@ let loadScriptCmd () =
     promise {
       match Window.getActiveTextEditor () with
       | Some ed when ed.document.fileName.EndsWith(".fsx") ->
-        let! result = Client.loadScript ed.document.fileName c
+        let! result =
+          match activeSessionId with
+          | Some sessionId -> Client.loadScript sessionId ed.document.fileName c
+          | None -> promise { return Client.Failed noSessionForThisWindowMessage }
         match result with
         | Client.Succeeded _ ->
           let name = ed.document.fileName.Split([|'/'; '\\'|]) |> Array.last
@@ -2591,11 +2742,11 @@ let activate (context: ExtensionContext) =
   reg "sagefs.clearResults" (fun _ -> InlineDeco.clearAllDecorations ())
   reg "sagefs.cycleDensity" (fun _ -> cycleDensity ())
   reg "sagefs.enableLiveTesting" (fun _ ->
-    simpleCommand "SageFs: enabling live testing…" "Live testing enabled" Client.enableLiveTesting |> promiseIgnoreLog logToOutput)
+    sessionCommand "SageFs: enabling live testing…" "Live testing enabled" Client.enableLiveTesting |> promiseIgnoreLog logToOutput)
   reg "sagefs.disableLiveTesting" (fun _ ->
-    simpleCommand "SageFs: disabling live testing…" "Live testing disabled" Client.disableLiveTesting |> promiseIgnoreLog logToOutput)
+    sessionCommand "SageFs: disabling live testing…" "Live testing disabled" Client.disableLiveTesting |> promiseIgnoreLog logToOutput)
   reg "sagefs.runTests" (fun _ ->
-    simpleCommand "SageFs: running tests…" "Tests queued" (Client.runTests "") |> promiseIgnoreLog logToOutput)
+    sessionCommand "SageFs: running tests…" "Tests queued" (fun sessionId -> Client.runTests sessionId "") |> promiseIgnoreLog logToOutput)
   // Run ONE test. The extension had no such command, which is why the per-test
   // CodeLens — whose title is one test's outcome — was wired to
   // `sagefs.runTests`, i.e. the whole suite (roast §4.3). The daemon's
@@ -2607,7 +2758,7 @@ let activate (context: ExtensionContext) =
     | "" ->
       Window.showWarningMessage "No test selected. Use the CodeLens above a test, or Run All Tests." [||] |> ignore
     | name ->
-      simpleCommand (sprintf "SageFs: running %s…" name) "Test queued" (Client.runTests name)
+      sessionCommand (sprintf "SageFs: running %s…" name) "Test queued" (fun sessionId -> Client.runTests sessionId name)
       |> promiseIgnoreLog logToOutput)
   // Debug ONE test: hold it in the test host, attach a .NET debugger to the host, release it, detach when it finishes. The
   // Debug lens, the failing test's hover link and the Test Explorer's Debug profile all run this with the test's id.
@@ -2631,10 +2782,15 @@ let activate (context: ExtensionContext) =
                           (sprintf "Set policy for %s tests" cat)
           match polOpt with
           | Some pol ->
-            let! result = Client.setRunPolicy cat pol c
-            result
-            |> Client.ApiOutcome.message
-            |> Option.iter (fun msg -> Window.showInformationMessage msg [||] |> ignore)
+            let! result =
+              match activeSessionId with
+              | Some sessionId -> Client.setRunPolicy sessionId cat pol c
+              | None -> promise { return Client.Failed noSessionForThisWindowMessage }
+            match result with
+            | Client.Succeeded message ->
+              message |> Option.iter (fun msg -> Window.showInformationMessage msg [||] |> ignore)
+            | Client.Failed err ->
+              Window.showErrorMessage (sprintf "SageFs: %s" err) [||] |> ignore
           | None -> ()
         | None -> ()
       }) |> promiseIgnoreLog logToOutput)
@@ -2953,7 +3109,7 @@ let activate (context: ExtensionContext) =
     diagnosticsDisposable <- Some diagDisposable
     trackDaemonConnectionDisposable diagDisposable
     // TestController for VS Code Test Explorer
-    let adapter = TestCtrl.create (fun () -> client) (fun () ->
+    let adapter = TestCtrl.create (fun () -> client) (fun () -> activeSessionId) (fun () ->
       liveTestListener
       |> Option.map (fun l -> (l.State ()).FailureNarratives)
       |> Option.defaultValue Map.empty)
@@ -3210,7 +3366,7 @@ let activate (context: ExtensionContext) =
                 [| "Create Session"; "Not Now" |]
             match choice with
             | Some "Create Session" ->
-              let! result = Client.createSession (SessionsTreePure.SessionTarget.ofPath proj) workDir c
+              let! result, _created = createAndSelectSession c (SessionsTreePure.SessionTarget.ofPath proj) workDir
               match result with
               | Client.Succeeded _ ->
                 Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore

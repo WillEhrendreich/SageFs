@@ -25,6 +25,7 @@ type TestAdapter = {
 
 let create
   (getClient: unit -> Client.Client option)
+  (getSessionId: unit -> string option)
   (getNarratives: unit -> Map<string, VscFailureNarrative>)
   : TestAdapter =
 
@@ -116,9 +117,11 @@ let create
 
   let runHandler (request: TestRunRequest) (_token: CancellationToken) : JS.Promise<unit> =
     promise {
-      match getClient () with
-      | None -> ()
-      | Some c ->
+      // Run in the window's own session, never the daemon's active one; with none there is nothing to run.
+      match getClient (), getSessionId () with
+      | None, _
+      | _, None -> ()
+      | Some c, Some sessionId ->
         let pattern =
           match request.``include`` with
           | Some items when items.Length > 0 ->
@@ -126,7 +129,7 @@ let create
             | Some item -> item.id
             | None -> ""
           | _ -> ""
-        let! _result = Client.runTests pattern c
+        let! _result = Client.runTests sessionId pattern c
         ()
     }
 
