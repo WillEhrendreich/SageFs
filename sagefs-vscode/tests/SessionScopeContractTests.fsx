@@ -96,6 +96,30 @@ let tests =
       phaseOfStatus "Hibernating"
       |> Expect.equal "unrecognised" (SessionPhase.Unrecognised "Hibernating")
 
+    // ── the session menu's rows ──
+    // WHY: the status bar's session menu listed sessions by project name and, when one was picked, switched to
+    // the FIRST session whose project name appeared in the picked text. With three DemoEnv.Tests sessions on
+    // the daemon, the second and third rows both switched to the first. Rows carry the id now, and the pick
+    // is resolved by it.
+
+    testCase "WHY - a menu row names the session by its id, so two sessions of one project are two rows" <| fun _ ->
+      sessionMenuLabel true "DemoEnv.Tests, DemoEnv" "Ready" 3 "bbb22222"
+      |> Expect.equal "active row" "$(star-full) DemoEnv.Tests, DemoEnv  bbb22222 — Ready [3]"
+      sessionMenuLabel false "DemoEnv.Tests, DemoEnv" "Ready" 0 "aaa11111"
+      |> Expect.equal "other row" "$(terminal) DemoEnv.Tests, DemoEnv  aaa11111 — Ready"
+
+    testCase "WHY - picking a row resolves to ITS session, not the first one with the same project" <| fun _ ->
+      let ids = [ "aaa11111"; "bbb22222"; "ccc33333" ]
+      sessionIdOfMenuItem ids (sessionMenuLabel false "DemoEnv.Tests, DemoEnv" "Ready" 0 "bbb22222")
+      |> Expect.equal "second" (PickedSession.Picked "bbb22222")
+      sessionIdOfMenuItem ids (sessionMenuLabel true "DemoEnv.Tests, DemoEnv" "Ready" 0 "ccc33333")
+      |> Expect.equal "third" (PickedSession.Picked "ccc33333")
+
+    testCase "WHY - a row that is not a session resolves to none" <| fun _ ->
+      sessionIdOfMenuItem [ "aaa11111" ] "$(add) Create New Session" |> Expect.equal "create" PickedSession.NotASession
+      sessionIdOfMenuItem [ "aaa11111" ] "──────────" |> Expect.equal "separator" PickedSession.NotASession
+      sessionIdOfMenuItem [] "$(terminal) X  zzz99999 — Ready" |> Expect.equal "unknown id" PickedSession.NotASession
+
     // ── identifyCreated ──
 
     testCase "WHY - the daemon's reply names the new session, so that session is the one" <| fun _ ->
