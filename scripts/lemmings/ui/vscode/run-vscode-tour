@@ -28,6 +28,7 @@ CUR_W= CUR_CODE= CUR_XVFB=
 interrupted() {
   trap - EXIT INT TERM
   echo "lem: interrupted: stopping this run's sessions and window" >&2
+  [ -n "$CUR_W" ] && [ -d "$(dirname "$CUR_W")/other" ] && lem_cleanup_sessions "$(dirname "$CUR_W")/other" || true
   [ -n "$CUR_W" ] && lem_cleanup_sessions "$CUR_W" || true
   [ -n "$CUR_CODE" ] && vsc_stop_pid "$CUR_CODE" "$LEM_CODE_STOP_SECONDS" > /dev/null || true
   [ -n "$CUR_XVFB" ] && vsc_stop_pid "$CUR_XVFB" 5 > /dev/null || true
@@ -46,6 +47,14 @@ run_one() {
   fixture=${fixture:-demoenv}
   [ -d "$LEMDIR/fixtures/$fixture" ] || { echo "lem: no fixture '$fixture' under $LEMDIR/fixtures" >&2; return 2; }
   cp -r --reflink=auto "$LEMDIR/fixtures/$fixture/." "$w/"
+  # A tour with `other-session` runs a second session in <run>/other, outside the workspace, standing in
+  # for another agent on the daemon. It always uses the demoenv fixture.
+  local other=
+  if grep -q '^other-session' "$tour"; then
+    other=$run/other
+    mkdir -p "$other"
+    cp -r --reflink=auto "$LEMDIR/fixtures/demoenv/." "$other/"
+  fi
   cp "$tour" "$out/tour.txt"
   echo "lem: tour $name in $run  dashboard http://localhost:$LEM_DASH_PORT/dashboard" >&2
 
@@ -68,9 +77,18 @@ run_one() {
     echo "lem: the SageFs extension never activated in $name" >&2; tour_exit=4
   fi
 
-  # Whatever the tour made on the shared daemon is stopped by id, then checked gone.
+  # Whatever the tour made on the shared daemon is stopped by id, then checked gone. The second session
+  # of an `other-session` tour is under <run>/other and goes the same way, first so that the run's own
+  # residue file is the workspace's.
+  if [ -n "$other" ]; then
+    lem_cleanup_sessions "$other"
+    mv "$out/residue.json" "$out/residue.other.json" 2>/dev/null || true
+  fi
   lem_cleanup_sessions "$w"
   left=$(lem_sessions_under "$w" 2>/dev/null | grep -c . || true)
+  if [ -n "$other" ]; then
+    left=$((left + $(lem_sessions_under "$other" 2>/dev/null | grep -c . || true)))
+  fi
   local stop_code stop_x
   stop_code=$(vsc_stop_pid "$code_pid" "$LEM_CODE_STOP_SECONDS"); stop_x=$(vsc_stop_pid "$xvfb_pid" 5)
   CUR_W= CUR_CODE= CUR_XVFB=

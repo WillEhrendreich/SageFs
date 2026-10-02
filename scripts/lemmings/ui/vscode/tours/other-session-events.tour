@@ -1,0 +1,27 @@
+# Another agent's session on the same daemon must not speak in this window. A second session runs in a
+# folder outside the workspace (other-session). Saving a file in this window's own session is reported
+# in the Output channel; saving a file in the other session is not, and neither is its fault.
+# The sagefs.showEventsFromAllSessions setting is off, which is its default.
+resize 1280 800
+expect-text SageFs
+wait 12
+click SageFs
+wait 2
+command SageFs: Create Session
+wait 2
+key enter
+expect-session --within 240
+expect-text --within 60 — session {session} —
+other-session
+command SageFs: Show Output
+wait 2
+
+# This window's own session: the save is reported.
+replace DemoEnv/DemoEnv.fs "| true, value -> Some value\n    | false, _ -> None" "| true, value when value >= 0 -> Some value\n    | _ -> None"
+expect-text --within 60 File reloaded: DemoEnv.fs
+shot own-save-reported-1280x800 --region panel --region statusbar
+
+# The other session, outside this workspace: the same kind of save, and nothing here about it.
+replace-other DemoEnv.Tests/DemoEnvTests.fs "a zero width is malformed" "a zero width is malformed here"
+expect-absent --for 25 File reloaded: DemoEnvTests.fs
+shot other-save-silent-1280x800 --region panel --region sidebar --region statusbar

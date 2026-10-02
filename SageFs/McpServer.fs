@@ -851,15 +851,18 @@ let tryGetJsonStringAliases (root: System.Text.Json.JsonElement) (names: string 
 /// A missing, empty, or unparseable body reads as `None` — the caller
 /// decides what an absent workflow means; this only isolates the JSON read
 /// (same shape as `tryReadTargetSessionId` below).
+///
+/// It does NOT require a Content-Length. A body sent chunked (Node's
+/// `http.request` with no length header, which is how VS Code posted this) has
+/// no declared length, and gating on one read every such choice as "no
+/// workflow". The body is read to its end instead, and an empty one fails to
+/// parse, which is the `None` below.
 let tryReadWorkflowRequest (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
-  match ctx.Request.ContentLength with
-  | contentLength when not contentLength.HasValue || contentLength.Value <= 0L -> return None
-  | _ ->
-    try
-      use! doc = readJsonBody ctx
-      return tryGetJsonStringAliases doc.RootElement [ "workflow"; "targetWorkflow"; "target_workflow" ]
-    with _ ->
-      return None
+  try
+    use! doc = readJsonBody ctx
+    return tryGetJsonStringAliases doc.RootElement [ "workflow"; "targetWorkflow"; "target_workflow" ]
+  with _ ->
+    return None
 }
 
 let tryGetJsonIntAliases (root: System.Text.Json.JsonElement) (names: string list) =

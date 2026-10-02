@@ -29,6 +29,8 @@ open SageFs.Vscode.SessionsTreePure
 /// nothing is the lie the verdict exists to kill.
 type SessionStatusBarInput = {
   ProjectLabel: string
+  /// The daemon's id for the session this item describes, so a hover answers "which one?".
+  SessionId: string
   WorkflowLabel: string
   EvalCount: int
   Supervised: bool
@@ -82,8 +84,8 @@ let sessionView (input: SessionStatusBarInput) : StatusBarView =
         (healthIcon input.Health) input.ProjectLabel input.WorkflowLabel
         (evalSuffix input.EvalCount) (supervisedSuffix input.Supervised) (restartSuffix input.RestartCount)
     Tooltip =
-      sprintf "SageFs: %s — %d session(s) — click for session menu%s"
-        input.ProjectLabel input.SessionCount (healthTooltipSuffix input.Health) }
+      sprintf "SageFs: %s [%s] — session %s — %d session(s) — click for session menu%s"
+        input.ProjectLabel input.WorkflowLabel input.SessionId input.SessionCount (healthTooltipSuffix input.Health) }
 
 /// The status bar when the daemon is ready but no session is selected.
 let noSessionView (supervised: bool) (restartCount: int) : StatusBarView =

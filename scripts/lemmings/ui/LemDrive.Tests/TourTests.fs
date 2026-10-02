@@ -93,6 +93,31 @@ let tests =
       errors "replace a.fs \"only one\"" |> List.length |> Expect.equal "one text refused" 1
       errors "replace a.fs \"\" \"x\"" |> List.length |> Expect.equal "empty find refused" 1
 
+    // A second session outside the workspace stands in for another agent on the shared daemon, so a
+    // tour can check what a window does NOT show: its faults and file reloads must stay out of this window.
+    testCase "other-session starts a session in a folder outside the workspace, and replace-other changes a file there" <| fun _ ->
+      steps "other-session" |> Expect.equal "no arguments" [ OtherSession ]
+      errors "other-session now" |> List.length |> Expect.equal "takes no arguments" 1
+      steps "replace-other DemoEnv.Tests/DemoEnvTests.fs \"a\" \"b\""
+      |> Expect.equal "the path, the find and the replacement" [ ReplaceOther("DemoEnv.Tests/DemoEnvTests.fs", "a", "b") ]
+      errors "replace-other ../x.fs \"a\" \"b\"" |> List.length |> Expect.equal "stays inside the other folder" 1
+      errors "replace-other a.fs \"\" \"b\"" |> List.length |> Expect.equal "empty find refused" 1
+
+    testCase "expect-absent waits a bounded time and fails if the text shows" <| fun _ ->
+      steps "expect-absent File reloaded: DemoEnvTests.fs"
+      |> Expect.equal "default time" [ ExpectAbsent("File reloaded: DemoEnvTests.fs", DefaultAbsentSeconds) ]
+      steps "expect-absent --for 20 ShimSubject"
+      |> Expect.equal "given time" [ ExpectAbsent("ShimSubject", 20) ]
+      errors "expect-absent --for 0 x" |> List.length |> Expect.equal "too short" 1
+      errors "expect-absent --for 121 x" |> List.length |> Expect.equal "too long" 1
+      errors "expect-absent" |> List.length |> Expect.equal "no text" 1
+
+    testCase "the steps that name a session or a change describe themselves, and {session} reaches expect-absent" <| fun _ ->
+      for s in steps "other-session\nreplace-other a.fs \"a\" \"b\"\nexpect-absent x" do
+        Tour.describe s |> Expect.isNotEmpty "a description"
+      usesSession (ExpectAbsent("row {session}", 5)) |> Expect.isTrue "uses it"
+      withSession "x" (ExpectAbsent("row {session}", 5)) |> Expect.equal "filled" (ExpectAbsent("row x", 5))
+
     testCase "set-workflow takes only the three workflows the daemon knows" <| fun _ ->
       steps "set-workflow HotReload" |> Expect.equal "hot reload" [ SetWorkflow "HotReload" ]
       errors "set-workflow Turbo" |> List.length |> Expect.equal "unknown refused" 1

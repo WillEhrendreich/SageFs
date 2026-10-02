@@ -136,6 +136,29 @@ let private postRaw (url: string) (body: string option) : Task<int * string> = t
   return int resp.StatusCode, respBody
 }
 
+/// A request body whose length is unknown up front, so HttpClient sends it with
+/// `Transfer-Encoding: chunked` and no Content-Length. This is how Node's
+/// `http.request` sends `req.write(body)` when no length header is set, which is
+/// how the VS Code extension posted the workflow choice.
+type private UnknownLengthContent(body: string) =
+  inherit HttpContent()
+  let bytes = Encoding.UTF8.GetBytes body
+  override _.SerializeToStreamAsync(stream: IO.Stream, _context: Net.TransportContext | null) : Task =
+    stream.WriteAsync(bytes, 0, bytes.Length)
+  override _.TryComputeLength(length: byref<int64>) : bool =
+    length <- 0L
+    false
+
+let private postChunked (url: string) (body: string) : Task<int * string> = task {
+  use content = new UnknownLengthContent(body)
+  content.Headers.ContentType <- Headers.MediaTypeHeaderValue("application/json")
+  use request = new HttpRequestMessage(HttpMethod.Post, url, Content = content)
+  request.Headers.TransferEncodingChunked <- Nullable true
+  let! resp = httpClient.SendAsync request
+  let! respBody = resp.Content.ReadAsStringAsync()
+  return int resp.StatusCode, respBody
+}
+
 [<Tests>]
 let workflowRouteHttpTests =
   testList "Workflow switch HTTP route" [
@@ -198,6 +221,28 @@ let workflowRouteHttpTests =
         let doc = JsonDocument.Parse(body)
         doc.RootElement.GetProperty("case").GetString()
         |> Expect.equal "error body should carry the SageFsError case" "SessionNotFound"
+      finally (app :> IDisposable).Dispose()
+    }
+
+    testTask "POST /api/sessions/{sid}/workflow reads a chunked body that has no Content-Length (the VS Code extension's request)" {
+      let! (app: WebApplication), baseUrl = startTestServer fakeOps
+      try
+        let! (status: int), (body: string) =
+          postChunked (sprintf "%s/api/sessions/%s/workflow" baseUrl (SessionId.value sid)) """{"workflow":"hotreload"}"""
+        status |> Expect.equal "a chunked body is read like any other" 200
+        JsonDocument.Parse(body).RootElement.GetProperty("workflow").GetString()
+        |> Expect.equal "the chunked choice switches the session" "Hot Reload"
+      finally (app :> IDisposable).Dispose()
+    }
+
+    testTask "POST /api/sessions/{sid}/workflow names the bad value when a chunked body carries one, never an empty workflow" {
+      let! (app: WebApplication), baseUrl = startTestServer fakeOps
+      try
+        let! (status: int), (body: string) =
+          postChunked (sprintf "%s/api/sessions/%s/workflow" baseUrl (SessionId.value sid)) """{"workflow":"hotreoad"}"""
+        status |> Expect.equal "an unrecognized chunked workflow is a 400" 400
+        JsonDocument.Parse(body).RootElement.GetProperty("error").GetString()
+        |> Expect.stringContains "the error names what was sent, which proves the body was read" "hotreoad"
       finally (app :> IDisposable).Dispose()
     }
 

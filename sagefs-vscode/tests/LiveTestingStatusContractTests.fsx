@@ -59,6 +59,50 @@ let tests =
     testCase "WHY — statusBarView — off reads as off" <| fun _ ->
       (view (summary "off" "Live testing off" "Live testing is off")).Text |> Expect.equal "off" "$(beaker) Live testing off"
 
+    // WHY: the status item's tooltip is also its accessible name, and it carried the whole thing: the
+    // headline, "Why: conservative fallback rebuild (9 selected)" and a 200 character "Reason:" sentence,
+    // read out as one blob and cut off in a text snapshot. The accessible name is the headline alone.
+    // The tooltip is sectioned: headline, then what the last run was and why, each on its own line.
+    let decision (reason: string) : VscLiveTestingDecision =
+      { Cause = VscRerunCause.FileSaved
+        FilePath = "/w/DemoEnv.fs"
+        Precision = VscSelectionPrecision.ConservativeFallback
+        Trust = VscFreshnessTrust.FreshExact
+        ChangedSymbols = [||]
+        SelectedTests = Array.init 9 (sprintf "t%d")
+        DeferredTests = [||]
+        Reason = reason }
+
+    testCase "WHY — statusBarView — the accessible name is the daemon's headline, not the whole tooltip" <| fun _ ->
+      let reason = "No test the dependency graph knows reaches this compiled file, and it may not have seen the test that does, so every test is selected."
+      let v = view { summary "settled" "All 9 passed" "All 9 tests passed" with Passed = 9; LastDecision = Some (decision reason) }
+      v.AccessibleLabel |> Expect.equal "headline only" "All 9 tests passed"
+
+    testCase "WHY — statusBarView — without the daemon's words the accessible name is the item's own text" <| fun _ ->
+      (view { summary "settled" "All 9 passed" "" with Passed = 9 }).AccessibleLabel
+      |> Expect.equal "falls back to the short words" "All 9 passed"
+
+    testCase "WHY — statusBarView — the tooltip is sectioned: headline, a blank line, the last run, then the reason" <| fun _ ->
+      let reason = "No test the dependency graph knows reaches this compiled file."
+      let v = view { summary "settled" "All 9 passed" "All 9 tests passed" with Passed = 9; LastDecision = Some (decision reason) }
+      v.Tooltip.Split('\n')
+      |> Array.toList
+      |> Expect.equal
+        "sections"
+        [ "All 9 tests passed"
+          ""
+          "Last run: conservative fallback rebuild (9 selected)"
+          "Why: " + reason ]
+
+    testCase "WHY — statusBarView — a decision with no reason has no empty Why line" <| fun _ ->
+      let v = view { summary "settled" "All 9 passed" "All 9 tests passed" with Passed = 9; LastDecision = Some (decision "") }
+      v.Tooltip.Split('\n') |> Array.toList
+      |> Expect.equal "no why" [ "All 9 tests passed"; ""; "Last run: conservative fallback rebuild (9 selected)" ]
+
+    testCase "WHY — statusBarView — no decision means the tooltip is just the headline" <| fun _ ->
+      (view { summary "settled" "All 9 passed" "All 9 tests passed" with Passed = 9 }).Tooltip
+      |> Expect.equal "headline" "All 9 tests passed"
+
     testCase "WHY — statusBarView — an older daemon without an activity keeps the count-based wording" <| fun _ ->
       let v = view { summary "" "" "" with Total = 0; DiscoveryState = "discovering" }
       v.Text |> Expect.equal "legacy discovering" "$(sync~spin) Discovering tests..."

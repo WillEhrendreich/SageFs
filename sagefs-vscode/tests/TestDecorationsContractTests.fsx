@@ -231,11 +231,55 @@ let bucketRoutingProperties =
         (d.Passed.Length + d.Failed.Length + d.Running.Length) = 1)
   ]
 
+// ── Inline failure text: a stale decoration is a lie ──
+//
+// WHY — measured with the tour harness: after the fix was saved and live testing went green, the
+// gutter showed a green check and the line still said "⊘ a negative integer yields None — negative
+// seeds are refused. Expected None, was Some(-1)." The text comes from the daemon's `file_annotations`
+// event, which the extension cached and drew until the next such event; the test results it also holds
+// had already moved on. An inline failure is drawn only while its test has not passed.
+
+let inlineFailureCases =
+  testList "inline failure decisions" [
+
+    testCase "WHY - a failure whose test now passes is dropped, because the text would contradict the gutter" <| fun _ ->
+      let state = stateWith [ mkTest "t1" "f.fs" (Some 10) ] [ mkResult "t1" VscTestOutcome.Passed ]
+      inlineFailureDecision state "f.fs" "t1" |> Expect.equal "passed" InlineFailureDecision.Drop
+
+    testCase "WHY - a failure whose test still fails or errors is kept" <| fun _ ->
+      let failing = stateWith [ mkTest "t1" "f.fs" (Some 10) ] [ mkResult "t1" (VscTestOutcome.Failed "boom") ]
+      inlineFailureDecision failing "f.fs" "t1" |> Expect.equal "failed" InlineFailureDecision.Keep
+      let errored = stateWith [ mkTest "t1" "f.fs" (Some 10) ] [ mkResult "t1" (VscTestOutcome.Errored "kaboom") ]
+      inlineFailureDecision errored "f.fs" "t1" |> Expect.equal "errored" InlineFailureDecision.Keep
+
+    testCase "WHY - a test being re-run, stale or not run yet is not known to have passed, so its failure stays" <| fun _ ->
+      for outcome in [ VscTestOutcome.Running; VscTestOutcome.Stale; VscTestOutcome.NotYetRun ] do
+        let state = stateWith [ mkTest "t1" "f.fs" (Some 10) ] [ mkResult "t1" outcome ]
+        inlineFailureDecision state "f.fs" "t1" |> Expect.equal (sprintf "%A" outcome) InlineFailureDecision.Keep
+
+    testCase "WHY - a skipped or disabled test cannot be failing, so a failure for it is dropped" <| fun _ ->
+      for outcome in [ VscTestOutcome.Skipped "n/a"; VscTestOutcome.PolicyDisabled ] do
+        let state = stateWith [ mkTest "t1" "f.fs" (Some 10) ] [ mkResult "t1" outcome ]
+        inlineFailureDecision state "f.fs" "t1" |> Expect.equal (sprintf "%A" outcome) InlineFailureDecision.Drop
+
+    testCase "WHY - a test the state does not know is kept, because the daemon said it and nothing says otherwise" <| fun _ ->
+      inlineFailureDecision VscLiveTestState.empty "f.fs" "t1" |> Expect.equal "unknown" InlineFailureDecision.Keep
+
+    testCase "WHY - a test of the same name in another file does not decide this file's failure" <| fun _ ->
+      let state = stateWith [ mkTest "t1" "other.fs" (Some 10) ] [ mkResult "t1" VscTestOutcome.Passed ]
+      inlineFailureDecision state "f.fs" "t1" |> Expect.equal "other file" InlineFailureDecision.Keep
+
+    testCase "WHY - a test with no result yet is kept" <| fun _ ->
+      let state = stateWith [ mkTest "t1" "f.fs" (Some 10) ] []
+      inlineFailureDecision state "f.fs" "t1" |> Expect.equal "no result" InlineFailureDecision.Keep
+  ]
+
 let tests =
   testList "TestDecorationsPure contract" [
     outcomeCases
     lineRoundTrip
     bucketRoutingProperties
+    inlineFailureCases
   ]
 
 let argv = System.Environment.GetCommandLineArgs() |> Array.skipWhile (fun a -> not (a.EndsWith ".fsx")) |> Array.skip 1

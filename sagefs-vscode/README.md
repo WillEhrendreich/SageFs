@@ -101,8 +101,26 @@ The status bar (bottom of VS Code) shows three items:
 | | `🧪 ⚠ 10/42 stale` | Tests need re-run — code changed (yellow background) |
 | | `🧪 No tests` | No tests discovered yet |
 | **Eval performance** | `P50: 12ms P95: 45ms` | Eval latency percentiles with sparkline |
+| **Hot reload** | `Hot reload: patched 3/3` | What the last save did to the running app, see below. Hidden until the first save. |
 
-Click the daemon status item to open the dashboard.
+Click the daemon status item to open the session menu.
+
+The daemon item's tooltip is also its accessible name. It reads `SageFs: MyProject [Hot Reload] - session 7c8bec06 - 4 session(s)`, so it names the workflow and which session this window is talking to. The test summary item's accessible name is its headline only, and the tooltip adds what the last run was and why, each on its own line.
+
+#### The hot reload item
+
+After a save in a Hot Reload session, the item shows the daemon's verdict for that save, and I show one message when the save is settled:
+
+| Item says | Meaning |
+|-----------|---------|
+| `compiling Program.fs` | The save is being built. No message yet. |
+| `applied 2/2, not run yet` | The patch landed and nothing has been seen running the new body. No message yet, `patched` or `never ran` follows. |
+| `patched 2/2` | The new body ran. The message says how many definitions and whether it was a metadata delta or a detour. |
+| `patched 1/2, never ran` (yellow) | The patch is in place and nothing called it within the daemon's bound. Exercise that code path, or restart the app. |
+| `restarted`, `no effect`, `kept live state` | What it says. The message carries the daemon's cause and next step. |
+| `restart required`, `compile failed` (red) | The change cannot be applied, or did not build. A failed build leaves the app serving the last code that compiled. |
+
+The tooltip has the daemon's message, the mechanism, and, when a patch left the REPL behind the running app, that it is behind by N saves. Hard Reset (Rebuild) brings the REPL level, and it stops the running app, so the message offers it as a button and does not do it for you. Clicking the item opens the Output channel, where the same text is written.
 
 ---
 
@@ -140,6 +158,24 @@ Click the daemon status item to open the dashboard.
 - **Session Context sidebar** — Loaded assemblies, opened namespaces, failed opens, warmup details
 - **Sessions sidebar** — View all sessions with inline switch/stop/reset actions
 - **Multi-session** — Create, switch, and manage multiple sessions from the command palette
+
+#### Which session a window uses
+
+One daemon serves every window and every agent on the machine, so a window has to know which session is its own. I decide it like this:
+
+1. The session you picked with Switch Session, or that Create Session just made, for as long as it exists.
+2. Otherwise the first session whose working directory is inside one of the folders you have open.
+3. Otherwise none. The status bar says none of the daemon's sessions is for this workspace, and the views offer Create Session. I do not borrow a session because it happens to be first in the daemon's list.
+
+Create Session finds the session it made, selects it, and tells you. If it cannot tell which one is new, it says so and asks you to pick it, and does not guess. Every command that acts on the session carries its id: live testing on, off and run, run one test, load script, and the Test Explorer run button. Reset, hard reset, cancel and run policy have no session id on the daemon's routes, so for those I make the window's session the daemon's active one first, and the command does not run if that switch fails.
+
+Each row in the Sessions sidebar reads `<project names> <id> · active · this workspace · Ready · 3 evals · Work/molina`. The short id comes first because the sidebar cuts the text from the right. `active` is the session this window uses, `this workspace` is any session started in a folder you have open, and the last two folders of the working directory follow. More than two projects show as the first two and `+N more`. The tooltip has everything.
+
+#### Other agents' events
+
+The daemon sends every session's events to every window. By default I show only the ones about this window's session, a session started in this workspace, or a file under this workspace: a session fault, and the `File reloaded` lines in the Output channel. Another agent's fault does not pop up in your window. The Output channel notes the ones I left out at the `debug` log level. Turn on `sagefs.showEventsFromAllSessions` to see everything.
+
+A session fault message is one sentence and a remedy. The daemon's full diagnosis goes to the Output channel, and the message's Show Output button opens it.
 - **Export session** — Save current session state as a `.fsx` script
 - **Session menu** — Quick-access menu for all session operations
 
@@ -203,6 +239,7 @@ code --install-extension sagefs-*.vsix
 | `sagefs.autoStart` | `true` | Automatically start SageFs when opening F# projects |
 | `sagefs.projectPath` | `""` | Explicit `.fsproj` path (auto-detect if empty) |
 | `sagefs.logLevel` | `"info"` | Output channel verbosity (`debug`, `info`, `error` — no `warn` level) |
+| `sagefs.showEventsFromAllSessions` | `false` | Show session faults and file reloads from every session on the daemon. Off by default, so a window shows its own session's and its workspace's. |
 | `sagefs.inlineResultTimeout` | `30000` | How long (ms) inline eval results stay visible before auto-clearing. `0` keeps them forever. |
 | `sagefs.cellHighlight` | `true` | Highlight the current code cell (block) the cursor is in |
 | `sagefs.density` | `"full"` | Visual annotation level: `full` (all decorations), `normal` (inline results and test signs), `minimal` (inline results only) |
@@ -236,6 +273,7 @@ code --install-extension sagefs-*.vsix
 | SageFs: Stop Daemon | — | Stop the SageFs daemon |
 | SageFs: Restart Daemon | — | Restart the SageFs daemon |
 | SageFs: Open Dashboard | — | Open web dashboard in VS Code |
+| SageFs: Show Output | none | Open the SageFs Output channel |
 | SageFs: Check Health | — | Run the extension's health check |
 | SageFs: Create Session | — | Create a new FSI session |
 | SageFs: Switch Session | — | Switch to a different session |

@@ -54,10 +54,18 @@ One step per line. `#` starts a comment, blank lines are ignored.
 | `expect-session [--within N]` | Wait until this run's own session on the daemon is Ready. |
 | `set-workflow <name>` | The harness puts this run's session in `Interactive`, `LiveTesting` or `HotReload`. |
 | `replace <path> "<find>" "<replacement>"` | Change a workspace file on disk. The find text must occur exactly once. Escapes: `\"`, `\\`, `\n`, `\t`. |
+| `other-session` | Start a second session in `<run>/other`, a copy of the DemoEnv fixture next to the workspace and outside it. It stands in for another agent on the shared daemon. The run script stops it by id with the run's own session. |
+| `replace-other <path> "<find>" "<replacement>"` | `replace`, in that other folder. |
+| `expect-absent [--for N] <text>` | Fail if the window shows the text at any moment during N seconds (default 15, at most 120). It is the way to check what a window does not say. |
 
 `{session}` in a `command`, `click`, `type` or `expect-text` text is this run's session id, read from
-the daemon. The Switch Session picker lists sessions by id, so `type {session}` then `key enter`
-switches to this run's session.
+the daemon. The status bar's tooltip names the window's session, with an em dash on each side of
+`session <id>`, so `expect-text --within 60` on that text (dashes included, as the example tours write it)
+waits until the window has taken the session up and is ready for commands. Do not wait on `session {session}`
+alone: the "Session <id> created" message matches it too, a moment before the session is Ready.
+
+`LEM_VSC_EXTRA_SETTINGS` adds settings to the window's profile (one or more `"key": value` pairs). A positive
+control for `expect-absent` is the same tour with the setting that lets the text through: it has to fail.
 
 A step that fails does not stop the tour, because the later shots still matter. The log marks it, and
 the call exits 1 at the end. An unknown step or a bad line is refused before anything starts, with the
@@ -74,19 +82,20 @@ sizes (1024x700) are where a narrow side bar shows up.
 A tour can start from another fixture: a first comment line `# fixture: <name>` picks a directory
 under `scripts/lemmings/fixtures`. The default is demoenv.
 
-## Why these tours switch session
+## What the tours used to work around
 
-On a daemon that already has an active session, `SageFs: Create Session` makes a session but does not
-make it the active one. The status bar keeps naming the other session, and `Enable Live Testing` acts on
-that one. A tour that wants live testing on its own project has to switch first. `session-ready.tour`
-shows that gap on its own.
+Two defects once made the tours switch session by id, and set a workflow through the harness. Both are
+fixed in the extension, and the tours now do what a user does.
 
-## Why `set-workflow` exists
-
-`SageFs: Switch Workflow` fails in the extension today: the daemon answers `unknown workflow ''`. The
-extension sends the choice as a chunked POST, and `tryReadWorkflowRequest` in `SageFs/McpServer.fs`
-only reads a body that has a Content-Length. `error-switch-workflow.tour` keeps that on record. The
-hot reload tour uses `set-workflow` so the rest of the flow can be looked at.
+- On a daemon that already had an active session, `SageFs: Create Session` made a session but the window
+  kept naming another one, and `Enable Live Testing` acted on that one. Create Session now selects what it
+  made, and every session command carries the session id. `session-ready.tour` and the live testing tours
+  assert it with no Switch Session in between.
+- `SageFs: Switch Workflow` failed with `unknown workflow ''`: the extension posted the choice chunked,
+  with no Content-Length, and `tryReadWorkflowRequest` in `SageFs/McpServer.fs` only read a body that had
+  one. The extension sends Content-Length now, and the daemon reads a chunked body.
+  `switch-workflow.tour` (it was `error-switch-workflow.tour`) asserts the switch and the new label.
+  `set-workflow` stays for a tour that only needs a session in a workflow and not the picker.
 
 ## The tours
 
@@ -96,11 +105,12 @@ hot reload tour uses `set-workflow` so the rest of the flow can be looked at.
 | `session-ready.tour` | A session from the picker to Ready, then active. |
 | `eval-inline.tour` | Alt+Enter on a line, with the CodeLens above it. |
 | `live-testing-failing.tour` | Live testing on, the fixture's failing test: gutter, inline failure, Test Explorer, SageFs views. |
-| `live-testing-passing.tour` | The same, with the source fixed and everything passing. |
+| `live-testing-passing.tour` | The same, with the source fixed and everything passing. The failure text that was beside the green check must be gone. |
 | `hot-reload-patched.tour` | Hot Reload workflow, every file watched, then a save. DemoEnv has no running app, so there is no patched line to wait for. |
-| `hot-reload-app.tour` | The falco-hello fixture (`# fixture: falco-hello` on the first line picks it): Run App from the editor, watch the file, change a route's text and save. After the save the window shows nothing about the patch, which is what the shot records. |
+| `hot-reload-app.tour` | The falco-hello fixture (`# fixture: falco-hello` on the first line picks it): switch to Hot Reload with the real command, Run App from the editor, watch the file, change a route's text and save. It waits for the window to say `Hot reload:` (the status bar item and the message), which it did not before. |
 | `error-eval.tour` | Alt+Enter on a line that does not compile: the error and its diagnostics inline. |
-| `error-switch-workflow.tour` | The Switch Workflow defect above. |
+| `switch-workflow.tour` | Switch Workflow from the picker: the message and the `[Hot Reload]` label in the status bar tooltip. |
+| `other-session-events.tour` | A second session outside the workspace: this window's own save is reported in the Output channel, the other session's is not. |
 
 Every example tour has a test that it parses and that its shot names are unique
 (`dotnet run --project scripts/lemmings/ui/LemDrive.Tests`).

@@ -220,7 +220,8 @@ vsc_write_profile() {
   "terminal.integrated.automationProfile.linux": { "path": "/usr/bin/false" },
   "terminal.integrated.enablePersistentSessions": false,
   "task.allowAutomaticTasks": "off",
-  "debug.openDebug": "neverOpen"
+  "debug.openDebug": "neverOpen"${LEM_VSC_EXTRA_SETTINGS:+,
+  $LEM_VSC_EXTRA_SETTINGS}
 }
 JSON
   # The keys that open a terminal or the developer tools are unbound, a second layer under the

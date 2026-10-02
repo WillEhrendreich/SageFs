@@ -61,6 +61,8 @@ let mutable outputChannel: OutputChannel option = None
 let mutable statusBarItem: StatusBarItem option = None
 let mutable testStatusBarItem: StatusBarItem option = None
 let mutable evalPerfStatusBar: StatusBarItem option = None
+/// The latest hot reload verdict for this window's session (see ReloadReportPure).
+let mutable reloadStatusBarItem: StatusBarItem option = None
 let mutable appStatusBarItem: StatusBarItem option = None
 let mutable diagnosticsDisposable: Disposable option = None
 let mutable sseDisposable: Disposable option = None
@@ -312,7 +314,17 @@ let applyFileAnnotationsToEditor (editor: TextEditor) =
     | Some old -> old.dispose ()
     | None -> ()
     // Apply inline failure decorations
-    match annotations.InlineFailures with
+    // A failure the daemon sent is drawn only while its test has not passed: the cached event outlives the
+    // result, and the old text sat beside a green check.
+    let liveState =
+      liveTestListener |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
+    let stillFailing =
+      annotations.InlineFailures
+      |> List.filter (fun f ->
+        match TestDecorationsPure.inlineFailureDecision liveState filePath f.TestName with
+        | TestDecorationsPure.InlineFailureDecision.Keep -> true
+        | TestDecorationsPure.InlineFailureDecision.Drop -> false)
+    match stillFailing with
     | [] ->
       inlineFailureDecoTypes <- Map.remove filePath inlineFailureDecoTypes
     | failures ->
@@ -331,7 +343,10 @@ let applyFileAnnotationsToEditor (editor: TextEditor) =
           match f.Presentation with
           | "" -> sprintf "⊘ %s" f.TestName
           | p -> sprintf "⊘ %s — %s" f.TestName p
-        let range = newRange line 0 line 0
+        // The END of the line. An `after` decoration on a zero-width range at column 0 is drawn at column 0,
+        // so the failure text used to be inserted in front of the code and shove it to the right.
+        let lineEnd = int (editor.document.lineAt(float line).text.Length)
+        let range = newRange line lineEnd line lineEnd
         ranges.Add (createObj [
           "range" ==> range
           "renderOptions" ==> createObj [
@@ -713,6 +728,8 @@ let updateTestStatusBar (summary: VscTestSummary) =
       | VscStatusTone.Warning -> Some (newThemeColor "statusBarItem.warningBackground")
       | VscStatusTone.Plain -> None
     sb.tooltip <- Some view.Tooltip
+    // The accessible name is the headline; without this the tooltip, a whole paragraph, is read out.
+    sb?accessibilityInformation <- createObj [ "label" ==> view.AccessibleLabel ]
     // The command was set ONCE at activation to `sagefs.enableLiveTesting` and
     // never touched again, so clicking the live-testing status bar WHILE LIVE
     // TESTING WAS ON re-issued enable. `AppRunPure.statusBarText`'s app bar is
@@ -748,6 +765,111 @@ let updateEvalPerfBar (stats: VscTimelineStats) =
         |> String.concat "\n")
       sb.show ()
 
+/// Show what the last save did to the window session's running app, or nothing before the first save.
+/// The verdict, its mechanism (metadata delta or detour) and whether the REPL is now behind the app all
+/// come from the session's own record on the daemon.
+let renderReloadStatus (session: Client.SessionInfo option) =
+  match reloadStatusBarItem with
+  | None -> ()
+  | Some sb ->
+    let item =
+      match session with
+      | Some s -> ReloadReportPure.statusItem s.lastReload s.replFreshness
+      | None -> ReloadReportPure.StatusItem.Hidden
+    match item with
+    | ReloadReportPure.StatusItem.Hidden -> sb.hide ()
+    | ReloadReportPure.StatusItem.Shown view ->
+      sb.text <- view.Text
+      sb.tooltip <- Some view.Tooltip
+      sb?accessibilityInformation <- createObj [ "label" ==> view.Tooltip ]
+      sb.backgroundColor <-
+        match view.Tone with
+        | ReloadReportPure.StatusTone.Failing -> Some (newThemeColor "statusBarItem.errorBackground")
+        | ReloadReportPure.StatusTone.Warning -> Some (newThemeColor "statusBarItem.warningBackground")
+        | ReloadReportPure.StatusTone.Plain -> None
+      sb.show ()
+
+/// The status a window reports when sessions exist on the daemon but none is for this workspace.
+[<Literal>]
+let noSessionForThisWorkspaceStatus = "no session for this workspace"
+
+/// The daemon's sessions as the two facts the binding decision needs.
+let private sessionRefs (sessions: Client.SessionInfo array) : SessionScopePure.SessionRef list =
+  sessions
+  |> Array.map (fun s -> { SessionScopePure.SessionRef.Id = s.id; SessionScopePure.SessionRef.WorkingDirectory = s.workingDirectory })
+  |> Array.toList
+
+/// The one session this window talks to: the one picked (or just created), else the workspace's own,
+/// else none. Never the daemon's first session, and never the daemon's active one.
+let windowSession (sessions: Client.SessionInfo array) : Client.SessionInfo option =
+  let selection =
+    match activeSessionId with
+    | Some id -> SessionScopePure.Selection.Selected id
+    | None -> SessionScopePure.Selection.NotSelected
+  match SessionScopePure.bind (workspaceFolderPaths () |> Array.toList) selection (sessionRefs sessions) with
+  | SessionScopePure.Binding.Bound r -> sessions |> Array.tryFind (fun s -> s.id = r.Id)
+  | SessionScopePure.Binding.NoSessionForThisWorkspace -> None
+
+/// The session the window last adopted, so adopting it again is a no-op.
+let mutable private lastAdopted = SessionScopePure.Selection.NotSelected
+
+/// Make a session the one commands, event filters and views follow.
+let adoptWindowSessionById (c: Client.Client) (sessionId: string) (workingDirectory: string) =
+  activeSessionId <- Some sessionId
+  activeSessionWorkingDirectory <- Some workingDirectory
+  liveTestListener |> Option.iter (fun l -> l.SetEventFilter (SessionScopePure.EventFilter.OnlySession sessionId))
+  match lastAdopted = SessionScopePure.Selection.Selected sessionId with
+  | true -> ()
+  | false ->
+    lastAdopted <- SessionScopePure.Selection.Selected sessionId
+    // `sagefs:liveTestingEnabled` follows the last test summary taken in, and before this session was
+    // bound that may have been another session's, which took Enable Live Testing off the palette.
+    // Read this session's own state once.
+    promise {
+      let! discoveryState = Client.getLiveTestingDiscoveryState sessionId c
+      match discoveryState with
+      | Some state -> setContext "sagefs:liveTestingEnabled" (ContextKeysPure.liveTestingEnabledFromDiscoveryState state)
+      | None -> ()
+    }
+    |> promiseIgnoreLog (fun m -> (getOutput()).appendLine m)
+
+let adoptWindowSession (c: Client.Client) (s: Client.SessionInfo) =
+  adoptWindowSessionById c s.id s.workingDirectory
+
+/// This window has no session of its own: nothing is followed and no session's events are taken.
+let releaseWindowSession () =
+  activeSessionId <- None
+  activeSessionWorkingDirectory <- None
+  lastAdopted <- SessionScopePure.Selection.NotSelected
+  liveTestListener |> Option.iter (fun l -> l.SetEventFilter SessionScopePure.EventFilter.NoSession)
+
+/// Whether this window shows an event about a session or a file. The daemon sends every session's events
+/// on one stream; by default a window shows its own session's and its workspace's (setting
+/// `sagefs.showEventsFromAllSessions` turns every session's on).
+let showsEventFor (subject: SessionScopePure.EventSubject) : bool =
+  let sources =
+    SessionScopePure.EventSources.ofSetting
+      ((Workspace.getConfiguration "sagefs").get(SessionScopePure.eventSourcesSettingKey, false))
+  let selection =
+    match activeSessionId with
+    | Some id -> SessionScopePure.Selection.Selected id
+    | None -> SessionScopePure.Selection.NotSelected
+  match SessionScopePure.surfacing sources (workspaceFolderPaths () |> Array.toList) selection (sessionRefs knownSessions) subject with
+  | SessionScopePure.Surfacing.Show -> true
+  | SessionScopePure.Surfacing.Hide -> false
+
+/// What the error dialog says about a Faulted or Stopped window session: that session's own verdict.
+/// The daemon's `/health` error is about ITS active session, which is somebody else's on a shared daemon.
+let windowSessionFault (session: Client.SessionInfo option) (daemonError: Client.HealthError option) : Client.HealthError option =
+  match session with
+  | None -> daemonError
+  | Some s ->
+    let message =
+      match SessionsTreePure.SessionHealth.reason s.health with
+      | Some reason -> reason
+      | None -> sprintf "Session %s is %s." s.id s.status
+    Some { case = "SessionFaulted"; message = message; suggestedAction = "Use Restart Session to recover." }
+
 let refreshStatus () =
   promise {
     match client, statusBarItem with
@@ -773,10 +895,11 @@ let refreshStatus () =
         sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: offline" ]
         sb.backgroundColor <- None
         sb.show ()
-        activeSessionId <- None
-        activeSessionWorkingDirectory <- None
+        releaseWindowSession ()
+        renderReloadStatus None
         knownSessions <- [||]
-        liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
+        // Offline: the daemon replays its active session when the stream comes back, so take that in.
+        liveTestListener |> Option.iter (fun l -> l.SetEventFilter SessionScopePure.EventFilter.AnySessionUntilBound)
         HotReload.setSession c None
         SessionCtx.setSession c None
         Sessions.setSession c None
@@ -790,25 +913,31 @@ let refreshStatus () =
         let! sys = Client.getSystemStatus c
         let supervisedFlag = match sys with Some s -> s.supervised | None -> false
         let restartCount = match sys with Some s -> s.restartCount | None -> 0
-        match status.status with
-        | Some "Ready" | Some "Evaluating" ->
+        // The window shows ITS session, never "whichever session the daemon has active": on a shared
+        // daemon that is someone else's, and their warmup, fault or health used to show up here.
+        let! sessions = Client.listSessions c
+        knownSessions <- sessions
+        let session = windowSession sessions
+        let windowStatus =
+          match session with
+          | Some s -> Some s.status
+          | None ->
+            match sessions.Length with
+            | 0 -> status.status
+            | _ -> Some noSessionForThisWorkspaceStatus
+        // Whatever state it is in, this is the session commands, filters and views follow.
+        session |> Option.iter (adoptWindowSession c)
+        renderReloadStatus session
+        match windowStatus with
+        | Some st when SessionScopePure.phaseOfStatus st = SessionScopePure.SessionPhase.Usable ->
           warmupPhase <- None
           warmupDetail <- None
           // Re-arm the fault dialog: the session recovered, so the NEXT
           // genuine fault deserves to announce itself.
           sessionErrorPromptShown <- false
-          let! sessions = Client.listSessions c
-          knownSessions <- sessions
           setContext "sagefs:hasSession" (ContextKeysPure.hasSessionContext sessions.Length)
-          let session =
-            match activeSessionId with
-            | Some id -> sessions |> Array.tryFind (fun s -> s.id = id)
-            | None -> sessions |> Array.tryHead
           match session with
           | Some s ->
-            activeSessionId <- Some s.id
-            activeSessionWorkingDirectory <- Some s.workingDirectory
-            liveTestListener |> Option.iter (fun l -> l.SetSessionFilter (Some s.id))
             let notNullPaths (arr: string array) =
               match jsIsNullOrUndefined (box arr) with
               | true -> [||]
@@ -821,11 +950,13 @@ let refreshStatus () =
                 EvalCount = s.evalCount
                 WorkingDirectory = s.workingDirectory
                 IsActive = true
+                Relation = SessionScopePure.relationOf (workspaceFolderPaths () |> Array.toList) s.workingDirectory
                 Health = s.health }
             currentWorkflowLabel <- s.workflowLabel
             let view =
               StatusBarPure.sessionView
                 { ProjectLabel = SessionsTreePure.label row
+                  SessionId = s.id
                   WorkflowLabel = currentWorkflowLabel
                   EvalCount = s.evalCount
                   Supervised = supervisedFlag
@@ -839,9 +970,7 @@ let refreshStatus () =
             // reading the status bar as "zap SageFs: ...".
             sb?accessibilityInformation <- createObj [ "label" ==> view.Tooltip ]
           | None ->
-            activeSessionId <- None
-            activeSessionWorkingDirectory <- None
-            liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
+            releaseWindowSession ()
             let view = StatusBarPure.noSessionView supervisedFlag restartCount
             sb.text <- view.Text
             sb.tooltip <- Some view.Tooltip
@@ -852,7 +981,7 @@ let refreshStatus () =
           SessionCtx.setSession c activeId
           Sessions.setSession c activeId
           TypeExpl.setClient (Some c)
-        | Some "Starting" | Some "Restarting" | Some "Warming Up" ->
+        | Some st when SessionScopePure.phaseOfStatus st = SessionScopePure.SessionPhase.Warming ->
           setContext "sagefs:hasSession" false
           match warmupPhase with
           | Some phase ->
@@ -875,9 +1004,11 @@ let refreshStatus () =
             sb.tooltip <- Some "SageFs: warming up..."
             sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: warming up" ]
           sb.backgroundColor <- None
-        | Some "Faulted" | Some "Stopped" | Some "error" ->
+        | Some st when SessionScopePure.phaseOfStatus st = SessionScopePure.SessionPhase.Down ->
           setContext "sagefs:hasSession" false
-          match status.error with
+          // The bound session's own verdict. `status.error` is the DAEMON's active session's, which on a
+          // shared daemon is somebody else's fault in this window's error dialog.
+          match windowSessionFault session status.error with
           | Some err ->
             sb.text <- "$(error) SageFs: session error"
             sb.tooltip <- Some (describeSessionError err)
@@ -893,9 +1024,12 @@ let refreshStatus () =
               // to an output channel the user was not looking at. The remedy
               // text was present; the remedy was not. It now goes in the
               // message body, where it is read, and the buttons carry verbs.
+              // The toast carries the brief (what happened, and the remedy); the daemon's whole diagnosis
+              // goes to the Output channel, which "Show Output" opens.
+              (getOutput()).appendLine (sprintf "[SageFs] Session error: %s" (describeSessionError err))
               let! choice =
                 Window.showErrorMessage
-                  (describeSessionError err)
+                  (ErrorPresentationPure.describeBrief (structuredError err))
                   [| "Restart Session"; "Show Output" |]
               match choice with
               | Some "Restart Session" -> Commands.executeCommand "sagefs.hardReset" |> ignore
@@ -907,6 +1041,19 @@ let refreshStatus () =
             sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: session error" ]
           sb.backgroundColor <-
             Some (newThemeColor "statusBarItem.errorBackground")
+        | Some st when st = noSessionForThisWorkspaceStatus ->
+          releaseWindowSession ()
+          HotReload.setSession c None
+          SessionCtx.setSession c None
+          Sessions.setSession c None
+          setContext "sagefs:hasSession" false
+          let view = StatusBarPure.noSessionView supervisedFlag restartCount
+          sb.text <- view.Text
+          let tooltip =
+            sprintf "SageFs — ready, but none of the daemon's %d session(s) is for this workspace — click for session menu" sessions.Length
+          sb.tooltip <- Some tooltip
+          sb?accessibilityInformation <- createObj [ "label" ==> tooltip ]
+          sb.backgroundColor <- None
         | Some "no session" ->
           setContext "sagefs:hasSession" false
           sb.text <- "$(circle-slash) SageFs: no session"
@@ -1145,6 +1292,10 @@ let withProgressResult (location: int) (title: string) (work: unit -> JS.Promise
     return captured
   }
 
+/// What every command that acts on "the session" says when this window has none of its own.
+let noSessionForThisWindowMessage =
+  "This window has no SageFs session. Run SageFs: Create Session, or SageFs: Switch Session."
+
 /// Fire a client action that returns ApiOutcome, show brief status bar flash, then refresh.
 /// Fire a client action that returns ApiOutcome, under a progress indicator,
 /// then report the outcome.
@@ -1176,6 +1327,19 @@ let simpleCommand (title: string) (defaultMsg: string) (action: Client.Client ->
           |> ignore
         refreshStatus ()
     })
+
+/// `simpleCommand` for an action on this window's own session. The id is the window's session, never
+/// the daemon's idea of an active one; with no session the command says so rather than acting on a
+/// stranger's.
+let sessionCommand
+  (title: string)
+  (defaultMsg: string)
+  (action: string -> Client.Client -> JS.Promise<Client.ApiOutcome>)
+  =
+  simpleCommand title defaultMsg (fun c ->
+    match activeSessionId with
+    | Some sessionId -> action sessionId c
+    | None -> promise { return Client.Failed noSessionForThisWindowMessage })
 
 type EvalResult =
   | EvalOk of output: string * elapsed: float
@@ -1410,7 +1574,7 @@ let evalRange (args: obj) =
   }
 
 let resetSessionCmd () =
-  simpleCommand "SageFs: resetting session…" "Reset complete" Client.resetSession
+  sessionCommand "SageFs: resetting session…" "Reset complete" Client.resetSession
 
 /// Evaluate all code blocks in the file sequentially (top to bottom).
 let evalAllBlocks () =
@@ -1475,7 +1639,7 @@ let evalAllBlocks () =
   }
 
 let hardResetCmd () =
-  simpleCommand "SageFs: hard reset (rebuilding)…" "Hard reset complete" (Client.hardReset true)
+  sessionCommand "SageFs: hard reset (rebuilding)…" "Hard reset complete" (fun sessionId -> Client.hardReset sessionId true)
 
 /// Reflects the session's app state on the status bar: the play glyph with
 /// the URL while running, a hidden item when nothing is running, and the
@@ -1554,6 +1718,60 @@ let stopAppCmd () =
         | Client.AppState _ -> ()
     })
 
+/// How long Create Session looks for the session it made. The daemon answers once the session is
+/// registered, which can be a moment before `/api/sessions` lists it.
+[<Literal>]
+let private createdSessionLookupAttempts = 10
+
+[<Literal>]
+let private createdSessionLookupPauseMs = 500
+
+/// Create a session and make it THIS window's own: the status bar, the views and every session-scoped
+/// command follow it from here on, and the daemon is told to make it its active one too. Without this,
+/// on a daemon that already had sessions the window kept naming another one and Enable Live Testing
+/// acted on that one, so live testing found no tests until the user picked the new session by id.
+let createAndSelectSession
+  (c: Client.Client)
+  (target: SessionsTreePure.SessionTarget)
+  (workDir: string)
+  : JS.Promise<Client.ApiOutcome * SessionScopePure.CreatedSession> =
+  promise {
+    let! before = Client.listSessions c
+    let beforeIds = before |> Array.map (fun s -> s.id) |> Array.toList
+    let! result = Client.createSession target workDir c
+    match result with
+    | Client.Failed _ -> return result, SessionScopePure.CreatedSession.NotIdentified
+    | Client.Succeeded reply ->
+      let replyText = reply |> Option.defaultValue ""
+      let rec lookFor (attempt: int) : JS.Promise<SessionScopePure.CreatedSession> =
+        promise {
+          let! after = Client.listSessions c
+          match SessionScopePure.identifyCreated beforeIds replyText workDir (sessionRefs after) with
+          | SessionScopePure.CreatedSession.NotIdentified when attempt < createdSessionLookupAttempts ->
+            do! sleep createdSessionLookupPauseMs
+            return! lookFor (attempt + 1)
+          | found -> return found
+        }
+      let! found = lookFor 1
+      match found with
+      | SessionScopePure.CreatedSession.CreatedAs created ->
+        adoptWindowSessionById c created.Id created.WorkingDirectory
+        let! switched = Client.switchSession created.Id c
+        match switched with
+        | Client.Failed err -> c.log (sprintf "[warn] could not make session %s the daemon's active one: %s" created.Id err)
+        | Client.Succeeded _ -> ()
+        // The status bar and the command palette's when-clauses (`sagefs:hasSession`) follow the session's
+        // status, and the 15 second poll can land a moment before it reads Ready. Refresh when it does,
+        // so Enable Live Testing is on offer as soon as the session can take it.
+        promise {
+          let! _ = waitForSessionReady created.Id
+          refreshStatus ()
+        }
+        |> promiseIgnoreLog (fun m -> (getOutput()).appendLine m)
+      | SessionScopePure.CreatedSession.NotIdentified -> ()
+      return result, found
+  }
+
 let createSessionCmd () =
   withClient (fun c ->
     promise {
@@ -1569,10 +1787,21 @@ let createSessionCmd () =
         let workDir = getWorkingDirectory () |> Option.defaultValue "."
         do! Window.withProgress ProgressLocation.Notification "SageFs: Creating session..." (fun _p _t ->
           promise {
-            let! result = Client.createSession (SessionsTreePure.SessionTarget.ofPath proj) workDir c
+            let! result, created = createAndSelectSession c (SessionsTreePure.SessionTarget.ofPath proj) workDir
             match result with
             | Client.Succeeded _ ->
-              Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore
+              match created with
+              | SessionScopePure.CreatedSession.CreatedAs session ->
+                Window.showInformationMessage
+                  (sprintf "SageFs: Session %s created for %s. This window is using it." session.Id proj)
+                  [||]
+                |> ignore
+              | SessionScopePure.CreatedSession.NotIdentified ->
+                // Not guessed: picking the wrong one would aim live testing at a stranger's session.
+                Window.showWarningMessage
+                  (sprintf "SageFs: Session created for %s, but this window could not tell which one it is. Run SageFs: Switch Session and pick it by id." proj)
+                  [||]
+                |> ignore
             | Client.Failed err ->
               let! choice = Window.showErrorMessage (sprintf "SageFs: %s" err) [| "Show Output"; "Retry" |]
               match choice with
@@ -1743,6 +1972,12 @@ let switchWorkflowCmd () =
               currentWorkflowLabel <- targetLabel
               refreshStatus ()
               Sessions.refresh ()
+              // The restart takes a few seconds, so say what was asked for now: the
+              // status bar only changes label once the session is back.
+              Window.showInformationMessage
+                (sprintf "SageFs: Switched to %s (session %s)." targetLabel sess.id)
+                [||]
+              |> ignore
             | Some (Client.Failed msg) ->
               // The daemon's 400 carries its own alias "did you mean" text and
               // its 5xx carries a SageFsError body, so `msg` is already the
@@ -1780,10 +2015,6 @@ let sessionMenu () =
               match activeSessionId with
               | Some id -> id = s.id
               | None -> false
-            let icon =
-              match isActive with
-              | true -> "$(star-full)"
-              | false -> "$(terminal)"
             let proj =
               match s.projects with
               | [||] -> "no project"
@@ -1796,12 +2027,8 @@ let sessionMenu () =
                   | n when n.EndsWith(".fsproj") -> n.[..n.Length - 8]
                   | n -> n)
                 |> String.concat ", "
-            let evals =
-              match s.evalCount with
-              | 0 -> ""
-              | n -> sprintf " [%d]" n
-            let label = sprintf "%s %s — %s%s" icon proj s.status evals
-            items.Add label
+            // The id is in the row, and the pick resolves by it (see SessionScopePure.sessionMenuLabel).
+            items.Add (SessionScopePure.sessionMenuLabel isActive proj s.status s.evalCount s.id)
           items.Add "──────────"
           items.Add "$(add) Create New Session"
         // Always-available actions
@@ -1837,18 +2064,12 @@ let sessionMenu () =
           | None -> ()
           | Some c2 ->
             let! sessions = Client.listSessions c2
-            // Match by project label in the picked string
+            // The row names its session by id. It used to match the first session whose project name was in the
+            // row, so the second of two sessions of one project switched to the first.
             let picked =
-              sessions
-              |> Array.tryFind (fun sess ->
-                sessionItem.Contains (
-                  match sess.projects with
-                  | [||] -> "no project"
-                  | ps ->
-                    let name = ps.[0].Split([|'/'; '\\'|]) |> Array.last
-                    match name with
-                    | n when n.EndsWith(".fsproj") -> n.[..n.Length - 8]
-                    | n -> n))
+              match SessionScopePure.sessionIdOfMenuItem (sessions |> Array.map (fun sess -> sess.id) |> Array.toList) sessionItem with
+              | SessionScopePure.PickedSession.Picked id -> sessions |> Array.tryFind (fun sess -> sess.id = id)
+              | SessionScopePure.PickedSession.NotASession -> None
             match picked with
             | Some sess ->
               let! _ = Client.switchSession sess.id c2
@@ -2013,7 +2234,7 @@ let evalAdvance () =
   }
 
 let cancelEvalCmd () =
-  simpleCommand "SageFs: cancelling…" "Eval cancelled" Client.cancelEval
+  sessionCommand "SageFs: cancelling…" "Eval cancelled" Client.cancelEval
 
 /// Navigate to the next code block.
 let nextBlock () =
@@ -2060,7 +2281,10 @@ let loadScriptCmd () =
     promise {
       match Window.getActiveTextEditor () with
       | Some ed when ed.document.fileName.EndsWith(".fsx") ->
-        let! result = Client.loadScript ed.document.fileName c
+        let! result =
+          match activeSessionId with
+          | Some sessionId -> Client.loadScript sessionId ed.document.fileName c
+          | None -> promise { return Client.Failed noSessionForThisWindowMessage }
         match result with
         | Client.Succeeded _ ->
           let name = ed.document.fileName.Split([|'/'; '\\'|]) |> Array.last
@@ -2373,6 +2597,11 @@ let activate (context: ExtensionContext) =
   evalPerfStatusBar <- Some esb
   context.subscriptions.Add (esb :> obj :?> Disposable)
 
+  let rsb = Window.createStatusBarItem StatusBarAlignment.Left 46.
+  rsb.command <- Some "sagefs.showOutput"
+  reloadStatusBarItem <- Some rsb
+  context.subscriptions.Add (rsb :> obj :?> Disposable)
+
   let asb = Window.createStatusBarItem StatusBarAlignment.Left 47.
   asb.command <- Some "sagefs.runApp"
   appStatusBarItem <- Some asb
@@ -2479,6 +2708,8 @@ let activate (context: ExtensionContext) =
       do! startDaemon ()
     } |> promiseIgnoreLog logToOutput)
   reg "sagefs.openDashboard" (fun _ -> openDashboard () |> promiseIgnoreLog logToOutput)
+  // Every "Show Output" button in a dialog opens this channel; the same thing is now one palette entry.
+  reg "sagefs.showOutput" (fun _ -> showOutputPanel ())
   // `[Reconnect]` was offered on the "daemon connection lost" dialog and
   // executed `sagefs.reconnect`, which existed nowhere. The rejected promise
   // went to the output channel, so pressing the button looked like it worked.
@@ -2584,11 +2815,11 @@ let activate (context: ExtensionContext) =
   reg "sagefs.clearResults" (fun _ -> InlineDeco.clearAllDecorations ())
   reg "sagefs.cycleDensity" (fun _ -> cycleDensity ())
   reg "sagefs.enableLiveTesting" (fun _ ->
-    simpleCommand "SageFs: enabling live testing…" "Live testing enabled" Client.enableLiveTesting |> promiseIgnoreLog logToOutput)
+    sessionCommand "SageFs: enabling live testing…" "Live testing enabled" Client.enableLiveTesting |> promiseIgnoreLog logToOutput)
   reg "sagefs.disableLiveTesting" (fun _ ->
-    simpleCommand "SageFs: disabling live testing…" "Live testing disabled" Client.disableLiveTesting |> promiseIgnoreLog logToOutput)
+    sessionCommand "SageFs: disabling live testing…" "Live testing disabled" Client.disableLiveTesting |> promiseIgnoreLog logToOutput)
   reg "sagefs.runTests" (fun _ ->
-    simpleCommand "SageFs: running tests…" "Tests queued" (Client.runTests "") |> promiseIgnoreLog logToOutput)
+    sessionCommand "SageFs: running tests…" "Tests queued" (fun sessionId -> Client.runTests sessionId "") |> promiseIgnoreLog logToOutput)
   // Run ONE test. The extension had no such command, which is why the per-test
   // CodeLens — whose title is one test's outcome — was wired to
   // `sagefs.runTests`, i.e. the whole suite (roast §4.3). The daemon's
@@ -2600,7 +2831,7 @@ let activate (context: ExtensionContext) =
     | "" ->
       Window.showWarningMessage "No test selected. Use the CodeLens above a test, or Run All Tests." [||] |> ignore
     | name ->
-      simpleCommand (sprintf "SageFs: running %s…" name) "Test queued" (Client.runTests name)
+      sessionCommand (sprintf "SageFs: running %s…" name) "Test queued" (fun sessionId -> Client.runTests sessionId name)
       |> promiseIgnoreLog logToOutput)
   // Debug ONE test: hold it in the test host, attach a .NET debugger to the host, release it, detach when it finishes. The
   // Debug lens, the failing test's hover link and the Test Explorer's Debug profile all run this with the test's id.
@@ -2624,10 +2855,15 @@ let activate (context: ExtensionContext) =
                           (sprintf "Set policy for %s tests" cat)
           match polOpt with
           | Some pol ->
-            let! result = Client.setRunPolicy cat pol c
-            result
-            |> Client.ApiOutcome.message
-            |> Option.iter (fun msg -> Window.showInformationMessage msg [||] |> ignore)
+            let! result =
+              match activeSessionId with
+              | Some sessionId -> Client.setRunPolicy sessionId cat pol c
+              | None -> promise { return Client.Failed noSessionForThisWindowMessage }
+            match result with
+            | Client.Succeeded message ->
+              message |> Option.iter (fun msg -> Window.showInformationMessage msg [||] |> ignore)
+            | Client.Failed err ->
+              Window.showErrorMessage (sprintf "SageFs: %s" err) [||] |> ignore
           | None -> ()
         | None -> ()
       }) |> promiseIgnoreLog logToOutput)
@@ -2946,7 +3182,7 @@ let activate (context: ExtensionContext) =
     diagnosticsDisposable <- Some diagDisposable
     trackDaemonConnectionDisposable diagDisposable
     // TestController for VS Code Test Explorer
-    let adapter = TestCtrl.create (fun () -> client) (fun () ->
+    let adapter = TestCtrl.create (fun () -> client) (fun () -> activeSessionId) (fun () ->
       liveTestListener
       |> Option.map (fun l -> (l.State ()).FailureNarratives)
       |> Option.defaultValue Map.empty)
@@ -3068,22 +3304,73 @@ let activate (context: ExtensionContext) =
           (sprintf "SageFs: warmup complete for %s — session ready" projectName)
           [||]
         |> ignore
-      OnFileReloaded = fun filePath ->
+      OnFileReloaded = fun filePath sessionId ->
         let shortName =
           let parts = filePath.Split([| '/'; '\\' |])
           if parts.Length > 0 then parts.[parts.Length - 1] else filePath
-        (getOutput()).appendLine (sprintf "[SageFs] File reloaded: %s" shortName)
-      OnSessionFaulted = fun reason ->
+        match showsEventFor (SessionScopePure.EventSubject.FileEvent (filePath, sessionId)) with
+        | true -> (getOutput()).appendLine (sprintf "[SageFs] File reloaded: %s" shortName)
+        | false ->
+          // Only a `debug` log level writes this, so the channel carries this window's own sessions.
+          c.log (sprintf "[debug] File reloaded in another workspace's session %s: %s (sagefs.%s shows these)" sessionId shortName SessionScopePure.eventSourcesSettingKey)
+      OnSessionFaulted = fun sessionId reason ->
+        match showsEventFor (SessionScopePure.EventSubject.SessionEvent sessionId) with
+        | false ->
+          c.log (sprintf "[debug] Session %s faulted, not this workspace's, so no message here (sagefs.%s shows these): %s" sessionId SessionScopePure.eventSourcesSettingKey reason)
+        | true ->
+          promise {
+            // The daemon's diagnosis can run to paragraphs: the toast says what happened, the channel has all of it.
+            (getOutput()).appendLine (sprintf "[SageFs] Session %s faulted: %s" sessionId reason)
+            let! choice =
+              Window.showWarningMessage
+                (sprintf "SageFs session %s faulted: %s Use Restart Session to recover." sessionId (ErrorPresentationPure.briefText ErrorPresentationPure.briefHeadlineChars reason))
+                [| "Restart Session"; "Show Output" |]
+            match choice with
+            // Restart Session is the session's hard reset. This used to run `sagefs.restart`, which restarts the DAEMON.
+            | Some "Restart Session" -> Commands.executeCommand "sagefs.hardReset" |> ignore
+            | Some "Show Output" -> showOutputPanel ()
+            | _ -> ()
+          } |> promiseIgnore
+      OnReloadReported = fun sessionId report ->
         promise {
-          let! choice =
-            Window.showWarningMessage
-              (sprintf "SageFs session faulted: %s. Use Restart Session to recover." reason)
-              [| "Restart Session"; "Show Output" |]
-          match choice with
-          | Some "Restart Session" -> Commands.executeCommand "sagefs.restart" |> ignore
-          | Some "Show Output" -> showOutputPanel ()
-          | _ -> ()
-        } |> promiseIgnore
+          // The session's own record is the source for the status item and for whether the REPL is now
+          // behind the app, so read it before saying anything: the event carries the verdict, not that.
+          let! sessions = Client.listSessions c
+          knownSessions <- sessions
+          renderReloadStatus (windowSession sessions)
+          match showsEventFor (SessionScopePure.EventSubject.SessionEvent sessionId) with
+          | false ->
+            c.log (sprintf "[debug] Hot reload report for session %s, not this workspace's, so no message here (sagefs.%s shows these)" sessionId SessionScopePure.eventSourcesSettingKey)
+          | true ->
+            let freshness =
+              sessions
+              |> Array.tryFind (fun s -> s.id = sessionId)
+              |> Option.map (fun s -> s.replFreshness)
+              |> Option.defaultValue ReloadReportPure.Freshness.NotReported
+            // One message per save: the verdict that ends it. A pending patch and a save still
+            // compiling are in the status bar only.
+            match ReloadReportPure.noticeFor report freshness with
+            | ReloadReportPure.Notice.Quiet -> ()
+            | ReloadReportPure.Notice.Show body ->
+              (getOutput()).appendLine (sprintf "[SageFs] %s" body.Text)
+              let captions = body.Actions |> List.map ReloadReportPure.NoticeAction.caption |> List.toArray
+              let! choice =
+                match body.Severity with
+                | ReloadReportPure.Severity.Info -> Window.showInformationMessage body.Text captions
+                | ReloadReportPure.Severity.Warning -> Window.showWarningMessage body.Text captions
+                | ReloadReportPure.Severity.Error -> Window.showErrorMessage body.Text captions
+              match choice |> Option.bind (fun caption -> body.Actions |> List.tryFind (fun a -> ReloadReportPure.NoticeAction.caption a = caption)) with
+              | Some ReloadReportPure.NoticeAction.ShowOutput -> showOutputPanel ()
+              | Some ReloadReportPure.NoticeAction.HardResetRebuild -> Commands.executeCommand "sagefs.hardReset" |> ignore
+              | None -> ()
+        }
+        |> promiseIgnoreLog (fun m -> (getOutput()).appendLine m)
+      OnStateCleared = fun () ->
+        adapter.Reset ()
+        fileAnnotationsCache <- Map.empty
+        let state = refreshAllDecorations ()
+        TestDeco.updateDiagnostics state
+        TestLens.updateState state
       OnDomainModel = fun _data ->
         // Domain model visualization data — available via sagefs.visualize_domain_model MCP tool.
         // Future: render in a dedicated webview panel.
@@ -3203,7 +3490,7 @@ let activate (context: ExtensionContext) =
                 [| "Create Session"; "Not Now" |]
             match choice with
             | Some "Create Session" ->
-              let! result = Client.createSession (SessionsTreePure.SessionTarget.ofPath proj) workDir c
+              let! result, _created = createAndSelectSession c (SessionsTreePure.SessionTarget.ofPath proj) workDir
               match result with
               | Client.Succeeded _ ->
                 Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore

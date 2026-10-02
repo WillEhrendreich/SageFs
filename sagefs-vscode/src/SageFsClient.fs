@@ -83,7 +83,11 @@ type SessionInfo =
     /// The daemon's own usability verdict (`SageFs.Core/SessionHealth.fs`),
     /// as sent on `/api/sessions`. Every client-side health rendering reads
     /// THIS — no surface re-derives a verdict of its own.
-    health: SessionsTreePure.SessionHealth }
+    health: SessionsTreePure.SessionHealth
+    /// What the last save did to the running app (`lastReload`), and whether the REPL is behind the app
+    /// since (`replFreshness`). `NoReloadYet` and `NotReported` from a daemon too old to send them.
+    lastReload: ReloadReportPure.Report
+    replFreshness: ReloadReportPure.Freshness }
 
 type LoadedAssemblyInfo =
   { Name: string
@@ -319,11 +323,27 @@ let evalCode (sessionId: string) (code: string) (workingDirectory: string) (file
   let bsl = blockStartLine |> Option.defaultValue 0
   postCommand c "/exec" (jsonStringify {| code = code; sessionId = sessionId; working_directory = workingDirectory; file_path = fp; eval_mode = em; block_start_line = bsl |}) 30000
 
-let resetSession (c: Client) =
-  postCommand c "/reset" "{}" 15000
+/// Make a session the daemon's active one. Routes that cannot be told which session they mean act on this.
+let switchSession (sessionId: string) (c: Client) =
+  postCommand c "/api/sessions/switch" (jsonStringify {| sessionId = sessionId |}) 5000
 
-let hardReset (rebuild: bool) (c: Client) =
-  postCommand c "/hard-reset" (jsonStringify {| rebuild = rebuild |}) 60000
+/// Run a call whose daemon route takes no session id (reset, hard reset, cancel, run policy) as one
+/// session. The route acts on the daemon's active session, so that is made this one first. Without this,
+/// "Reset" in a window showing session A reset whatever session another client had last made active.
+/// The call is not made when the switch fails: it would land on the wrong session.
+let asActiveSession (sessionId: string) (c: Client) (call: unit -> JS.Promise<ApiOutcome>) : JS.Promise<ApiOutcome> =
+  promise {
+    let! switched = switchSession sessionId c
+    match switched with
+    | Succeeded _ -> return! call ()
+    | Failed err -> return Failed (sprintf "Could not make session %s the active one first: %s" sessionId err)
+  }
+
+let resetSession (sessionId: string) (c: Client) =
+  asActiveSession sessionId c (fun () -> postCommand c "/reset" "{}" 15000)
+
+let hardReset (sessionId: string) (rebuild: bool) (c: Client) =
+  asActiveSession sessionId c (fun () -> postCommand c "/hard-reset" (jsonStringify {| rebuild = rebuild |}) 60000)
 
 let parseSessions (parsed: obj) =
   fieldArray "sessions" parsed
@@ -348,7 +368,21 @@ let parseSessions (parsed: obj) =
         | Some h ->
           SessionsTreePure.SessionHealth.ofWire
             (fieldString "status" h |> Option.defaultValue "")
-            (fieldString "reason" h |> Option.defaultValue "") })
+            (fieldString "reason" h |> Option.defaultValue "")
+      // `lastReload` is null until a save resolves; a daemon older than it sends no field at all.
+      lastReload =
+        match fieldObj "lastReload" s with
+        | None -> ReloadReportPure.Report.NoReloadYet
+        | Some r -> LiveTestingListener.parseReportWire r |> ReloadReportPure.reportOfWire
+      replFreshness =
+        match fieldObj "replFreshness" s with
+        | None -> ReloadReportPure.Freshness.NotReported
+        | Some f ->
+          ReloadReportPure.Freshness.ofWire
+            (fieldString "state" f |> Option.defaultValue "")
+            (fieldInt "savesSince" f |> Option.defaultValue 0)
+            (fieldStringArray "declarations" f |> Option.defaultValue [||] |> Array.toList)
+            (fieldString "message" f |> Option.defaultValue "") })
 
 let listSessions (c: Client) =
   promise {
@@ -393,9 +427,6 @@ let createSessionWithWorkflow (target: SessionsTreePure.SessionTarget) (workingD
 /// Generous timeout: the target session is genuinely restarted and re-warmed.
 let switchSessionWorkflow (sessionId: string) (workflow: string) (c: Client) =
   postCommand c (sprintf "/api/sessions/%s/workflow" sessionId) (jsonStringify {| workflow = workflow |}) 120000
-
-let switchSession (sessionId: string) (c: Client) =
-  postCommand c "/api/sessions/switch" (jsonStringify {| sessionId = sessionId |}) 5000
 
 let stopSession (sessionId: string) (c: Client) =
   postCommand c "/api/sessions/stop" (jsonStringify {| sessionId = sessionId |}) 30000
@@ -660,8 +691,8 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
       return [||]
   }
 
-let runTests (pattern: string) (c: Client) =
-  postCommand c "/api/live-testing/run" (jsonStringify {| pattern = pattern; category = "" |}) 60000
+let runTests (sessionId: string) (pattern: string) (c: Client) =
+  postCommand c "/api/live-testing/run" (jsonStringify {| sessionId = sessionId; pattern = pattern; category = "" |}) 60000
 
 // ── Debugging one test ───────────────────────────────────────────────────
 // The daemon answers with the same JSON shape for every status (DebugTestRequest.DebugWire), and with a non-2xx code for
@@ -703,14 +734,27 @@ let debugTest (testId: string) (c: Client) =
 let debugContinue (ticket: string) (c: Client) =
   postDebug "/api/live-testing/debug/continue" (jsonStringify {| ticket = ticket |}) 60000 c
 
-let enableLiveTesting (c: Client) =
-  postCommand c "/api/live-testing/enable" "{}" 5000
+/// Live testing is a per-session toggle. The body names the session: with none, the daemon acts on its
+/// own active session, which on a shared daemon is rarely the one this window is showing.
+let enableLiveTesting (sessionId: string) (c: Client) =
+  postCommand c "/api/live-testing/enable" (jsonStringify {| sessionId = sessionId |}) 5000
 
-let disableLiveTesting (c: Client) =
-  postCommand c "/api/live-testing/disable" "{}" 5000
+let disableLiveTesting (sessionId: string) (c: Client) =
+  postCommand c "/api/live-testing/disable" (jsonStringify {| sessionId = sessionId |}) 5000
 
-let setRunPolicy (category: string) (policy: string) (c: Client) =
-  postCommand c "/api/live-testing/policy" (jsonStringify {| category = category; policy = policy |}) 5000
+/// The session's own discovery state ("disabled" when live testing is off for it), read from the
+/// per-session status route. `None` when the daemon cannot say.
+let getLiveTestingDiscoveryState (sessionId: string) (c: Client) : JS.Promise<string option> =
+  getJson
+    "getLiveTestingDiscoveryState"
+    (sprintf "/api/live-testing/status?session=%s" (JS.encodeURIComponent sessionId))
+    5000
+    (fun parsed -> fieldString "DiscoveryState" parsed |> Option.defaultValue "")
+    c
+
+let setRunPolicy (sessionId: string) (category: string) (policy: string) (c: Client) =
+  asActiveSession sessionId c (fun () ->
+    postCommand c "/api/live-testing/policy" (jsonStringify {| category = category; policy = policy |}) 5000)
 
 let explore (name: string) (c: Client) =
   promise {
@@ -754,12 +798,12 @@ let getDependencyGraph (symbol: string) (c: Client) =
     | s -> sprintf "/api/dependency-graph?symbol=%s" (JS.encodeURIComponent s)
   getRaw "getDependencyGraph" path 10000 c
 
-let cancelEval (c: Client) =
-  postCommand c "/api/cancel-eval" "{}" 5000
+let cancelEval (sessionId: string) (c: Client) =
+  asActiveSession sessionId c (fun () -> postCommand c "/api/cancel-eval" "{}" 5000)
 
-let loadScript (filePath: string) (c: Client) =
+let loadScript (sessionId: string) (filePath: string) (c: Client) =
   let code = sprintf "#load @\"%s\";;" filePath
-  postCommand c "/exec" (jsonStringify {| code = code; working_directory = "" |}) 30000
+  postCommand c "/exec" (jsonStringify {| code = code; sessionId = sessionId; working_directory = "" |}) 30000
 
 let getTestTrace (c: Client) =
   getRaw "getTestTrace" "/api/live-testing/test-trace" 5000 c

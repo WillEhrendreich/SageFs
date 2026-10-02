@@ -9,6 +9,8 @@
     <Compile Include="DaemonDiscovery.fs" />
     <Compile Include="JsHelpers.fs" />
     <Compile Include="BufferBridge.fs" />
+    <Compile Include="SessionScopePure.fs" />
+    <Compile Include="ReloadReportPure.fs" />
     <Compile Include="LiveTestingTypes.fs" />
     <Compile Include="ContextKeysPure.fs" />
     <Compile Include="DensityPure.fs" />

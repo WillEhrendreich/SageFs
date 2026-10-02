@@ -48,6 +48,49 @@ let describe (e: StructuredError) : string =
   | true -> headline
   | false -> sprintf "%s\n→ %s" headline (e.SuggestedAction.Trim())
 
+/// How much of the daemon's headline a toast shows. The rest goes to the Output channel.
+[<Literal>]
+let briefHeadlineChars = 160
+
+/// How much of the remedy a toast shows.
+[<Literal>]
+let briefRemedyChars = 120
+
+/// A toast's share of a long text: the first sentence or line when it fits in `limit` characters, else a cut
+/// at a word with an ellipsis, never longer than `limit`. The daemon's diagnoses run to paragraphs and a toast
+/// is not a log: a session fault toast covered a third of the editor.
+let briefText (limit: int) (text: string) : string =
+  let firstLine = (text |> Option.ofObj |> Option.defaultValue "").Trim().Split('\n').[0].Trim()
+  let sentenceEnd = firstLine.IndexOf ". "
+  let candidate =
+    match sentenceEnd with
+    | i when i >= 0 && i + 1 <= limit -> firstLine.Substring(0, i + 1)
+    | _ -> firstLine
+  match candidate.Length <= limit with
+  | true -> candidate
+  | false ->
+    // The ellipsis takes a character, so at most `limit - 1` of the text stays, and a word is never cut in half.
+    let head = candidate.Substring(0, limit - 1)
+    let kept =
+      match System.Char.IsWhiteSpace candidate.[limit - 1] with
+      | true -> head
+      | false ->
+        match head.LastIndexOf ' ' with
+        | -1 -> head
+        | space -> head.Substring(0, space)
+    kept.TrimEnd() + "…"
+
+/// `describe` for a toast: the brief headline, then the brief remedy. The full text is for the Output channel.
+let describeBrief (e: StructuredError) : string =
+  let headline =
+    match isBlank e.Message, isBlank e.Case with
+    | false, _ -> briefText briefHeadlineChars e.Message
+    | true, false -> sprintf "SageFs reported %s." (e.Case.Trim())
+    | true, true -> "SageFs reported an error with no detail."
+  match isBlank e.SuggestedAction with
+  | true -> headline
+  | false -> sprintf "%s\n→ %s" headline (briefText briefRemedyChars e.SuggestedAction)
+
 /// The accessible/status-bar one-liner. Same facts, no newline — a status bar
 /// collapses them anyway, and a screen reader reads the arrow as noise.
 let describeInline (e: StructuredError) : string =

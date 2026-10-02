@@ -22,6 +22,11 @@
 ///                                       (Interactive, LiveTesting or HotReload)
 ///   replace DemoEnv/DemoEnv.fs "Some value" "Some (value + 1)"
 ///                                       change a workspace file on disk, exactly one match
+///   other-session                       start a second session in a folder OUTSIDE the workspace
+///                                       (<run>/other, a copy of the DemoEnv fixture): another agent
+///   replace-other DemoEnv.Tests/DemoEnvTests.fs "a" "b"
+///                                       change a file in that folder, exactly one match
+///   expect-absent --for 20 ShimSubject  fail if the window shows that text during those seconds
 module LemDrive.Tour
 
 open System
@@ -35,12 +40,25 @@ let DefaultExpectSeconds = 20
 [<Literal>]
 let MostExpectSeconds = 300
 
+/// How long an expect-absent watches when the step gives no time.
+[<Literal>]
+let DefaultAbsentSeconds = 15
+
+/// The longest an expect-absent may watch.
+[<Literal>]
+let MostAbsentSeconds = 120
+
 type Step =
   | Run of VscCommand
   | ExpectText of text: string * withinSeconds: int
   | ExpectSession of withinSeconds: int
   | SetWorkflow of workflow: string
   | Replace of path: string * find: string * replacement: string
+  /// A second session in a folder outside the workspace, standing in for another agent on the daemon.
+  | OtherSession
+  | ReplaceOther of path: string * find: string * replacement: string
+  /// The window must NOT show this text for the whole time.
+  | ExpectAbsent of text: string * forSeconds: int
 
 /// A step and the line of the file it came from.
 type Placed = { Line: int; Step: Step }
@@ -50,7 +68,8 @@ type Tour = { Steps: Placed list }
 /// The verbs a tour file understands. `command` is the palette; the rest are the
 /// driver's own verbs, plus the two a tour adds.
 let tourVerbs : string list =
-  [ "command"; "key"; "click"; "type"; "open"; "wait"; "shot"; "resize"; "expect-text"; "expect-session"; "set-workflow"; "replace" ]
+  [ "command"; "key"; "click"; "type"; "open"; "wait"; "shot"; "resize"; "expect-text"; "expect-session"; "set-workflow"; "replace"
+    "other-session"; "replace-other"; "expect-absent" ]
 
 /// Splits `"a b" "c \"d\""` into its quoted pieces. Escapes: \" \\ \n \t.
 let quotedPieces (text: string) : Result<string list, string> =
@@ -128,6 +147,37 @@ let private parseExpectSession (rest: string) : Result<Step, string> =
     | false, _ -> Result.Error(sprintf "--within needs a whole number of seconds, not '%s'" n)
   | _ -> Result.Error "expect-session takes only --within <seconds>"
 
+/// `expect-absent [--for N] <text>`.
+let private parseExpectAbsent (rest: string) : Result<Step, string> =
+  let words = rest.Split([| ' ' |], StringSplitOptions.RemoveEmptyEntries) |> List.ofArray
+  let build (seconds: int) (text: string) =
+    match text.Trim() with
+    | "" -> Result.Error "expect-absent needs the text that must not show"
+    | t -> Ok(ExpectAbsent(t, seconds))
+  match words with
+  | "--for" :: n :: _ ->
+    match Int32.TryParse n with
+    | true, s when s >= 1 && s <= MostAbsentSeconds ->
+      let afterFlag = rest.Substring(rest.IndexOf "--for" + "--for".Length).TrimStart()
+      build s (afterFlag.Substring(n.Length))
+    | true, _ -> Result.Error(sprintf "--for is 1 to %d seconds" MostAbsentSeconds)
+    | false, _ -> Result.Error(sprintf "--for needs a whole number of seconds, not '%s'" n)
+  | _ -> build DefaultAbsentSeconds rest
+
+/// `<path> "<find>" "<replacement>"`, shared by replace and replace-other.
+let private parseReplacement (verb: string) (rest: string) (build: string -> string -> string -> Step) : Result<Step, string> =
+  let words = rest.Split([| ' ' |], StringSplitOptions.RemoveEmptyEntries) |> List.ofArray
+  match words with
+  | [] -> Result.Error(sprintf "%s needs a path, the text to find and the text to put there" verb)
+  | path :: _ ->
+    let afterPath = rest.Substring(path.Length)
+    match safeRelative path, quotedPieces afterPath with
+    | Result.Error e, _ -> Result.Error e
+    | _, Result.Error e -> Result.Error(sprintf "%s: %s (write the find and replace texts in double quotes)" verb e)
+    | Ok p, Ok [ find; replacement ] when find <> "" -> Ok(build p find replacement)
+    | Ok _, Ok [ ""; _ ] -> Result.Error(sprintf "%s: the text to find is empty" verb)
+    | Ok _, Ok pieces -> Result.Error(sprintf "%s needs exactly two quoted texts, found %d" verb (List.length pieces))
+
 /// The text after the verb, as the file wrote it.
 let private afterVerb (line: string) (verb: string) : string = line.Substring(verb.Length).Trim()
 
@@ -154,17 +204,13 @@ let parseLine (line: string) : Result<Step, string> =
     match words with
     | [ w ] when workflows |> List.contains w -> Ok(SetWorkflow w)
     | _ -> Result.Error(sprintf "set-workflow takes one of: %s" (String.Join(", ", workflows)))
-  | "replace" ->
+  | "replace" -> parseReplacement "replace" rest (fun p f r -> Replace(p, f, r))
+  | "replace-other" -> parseReplacement "replace-other" rest (fun p f r -> ReplaceOther(p, f, r))
+  | "other-session" ->
     match words with
-    | [] -> Result.Error "replace needs a path, the text to find and the text to put there"
-    | path :: _ ->
-      let afterPath = rest.Substring(path.Length)
-      match safeRelative path, quotedPieces afterPath with
-      | Result.Error e, _ -> Result.Error e
-      | _, Result.Error e -> Result.Error(sprintf "replace: %s (write the find and replace texts in double quotes)" e)
-      | Ok p, Ok [ find; replacement ] when find <> "" -> Ok(Replace(p, find, replacement))
-      | Ok _, Ok [ "" ; _ ] -> Result.Error "replace: the text to find is empty"
-      | Ok _, Ok pieces -> Result.Error(sprintf "replace needs exactly two quoted texts, found %d" (List.length pieces))
+    | [] -> Ok OtherSession
+    | _ -> Result.Error "other-session takes no arguments"
+  | "expect-absent" -> parseExpectAbsent rest
   | other -> Result.Error(sprintf "unknown step '%s' (known: %s)" other (String.Join(", ", tourVerbs)))
 
 /// Parses a whole tour. Every bad line is reported with its number, not just the first.
@@ -196,7 +242,8 @@ let usesSession (s: Step) : bool =
   match s with
   | Run(Palette t) | Run(PaletteExact t) | Run(Click t) | Run(Type t) -> mentionsSession t
   | ExpectText(t, _) -> mentionsSession t
-  | Run _ | ExpectSession _ | SetWorkflow _ | Replace _ -> false
+  | ExpectAbsent(t, _) -> mentionsSession t
+  | Run _ | ExpectSession _ | SetWorkflow _ | Replace _ | OtherSession | ReplaceOther _ -> false
 
 /// The step with the placeholder replaced by the session id.
 let withSession (id: string) (s: Step) : Step =
@@ -207,6 +254,7 @@ let withSession (id: string) (s: Step) : Step =
   | Run(Click t) -> Run(Click(fill t))
   | Run(Type t) -> Run(Type(fill t))
   | ExpectText(t, n) -> ExpectText(fill t, n)
+  | ExpectAbsent(t, n) -> ExpectAbsent(fill t, n)
   | other -> other
 
 /// One line saying what a step does, for the tour's log.
@@ -230,3 +278,6 @@ let describe (s: Step) : string =
   | ExpectSession s -> sprintf "expect-session (within %d s): this run's session is Ready" s
   | SetWorkflow w -> sprintf "set-workflow: %s (the harness asks the daemon; the extension's own Switch Workflow cannot, see TOURS.md)" w
   | Replace(p, f, r) -> sprintf "replace in %s: \"%s\" -> \"%s\"" p f r
+  | OtherSession -> "other-session: a second session in a folder outside the workspace (another agent)"
+  | ReplaceOther(p, f, r) -> sprintf "replace in the other session's %s: \"%s\" -> \"%s\"" p f r
+  | ExpectAbsent(t, s) -> sprintf "expect-absent (for %d s): %s" s t

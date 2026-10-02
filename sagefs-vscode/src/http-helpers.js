@@ -34,7 +34,10 @@ function httpPost(url, body, timeout) {
       port: parsed.port,
       path: parsed.pathname,
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // Content-Length is explicit, in BYTES. Without it Node sends the body chunked, and the
+      // daemon's workflow route and live-testing session targeting read only a body that
+      // declares a length: Switch Workflow answered "unknown workflow ''" for exactly this.
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
       timeout
     }, (res) => {
       let data = '';

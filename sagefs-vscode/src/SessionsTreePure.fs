@@ -107,7 +107,10 @@ type SessionRowInput = {
   LoadedProjects: string array
   EvalCount: int
   WorkingDirectory: string
+  /// The session this window talks to.
   IsActive: bool
+  /// Whether the session's working directory is inside one of this window's workspace folders.
+  Relation: SessionScopePure.WorkspaceRelation
   /// The daemon's verdict. The ONLY input to the row's health rendering.
   Health: SessionHealth
 }
@@ -152,17 +155,47 @@ let private isSettled (status: string) =
   | "Starting" | "Restarting" -> false
   | _ -> true
 
+/// A row has room for this many project names before the working directory and id, which are what
+/// tell two sessions apart, would be pushed off the end. The tooltip lists every project.
+[<Literal>]
+let private projectNamesInLabel = 2
+
+/// The id as the daemon's own tools print it.
+[<Literal>]
+let private shortIdLength = 8
+
+/// How many trailing folders of the working directory a row shows.
+[<Literal>]
+let private directoryFoldersShown = 2
+
 let private projectNames (projects: string array) =
-  projects
-  |> Array.filter (fun p -> not (System.String.IsNullOrWhiteSpace p))
-  |> Array.map (fileName >> stripExtension)
-  |> String.concat ", "
+  let names =
+    projects
+    |> Array.filter (fun p -> not (System.String.IsNullOrWhiteSpace p))
+    |> Array.map (fileName >> stripExtension)
+  match names.Length <= projectNamesInLabel with
+  | true -> names |> String.concat ", "
+  | false ->
+    sprintf "%s +%d more" (names |> Array.take projectNamesInLabel |> String.concat ", ") (names.Length - projectNamesInLabel)
 
 let label (input: SessionRowInput) : string =
   match effectiveProjects input with
   | [||] when not (isSettled input.Status) -> "(loading…)"
   | [||] -> "(no project loaded)"
   | projects -> projectNames projects
+
+/// The last two folders of a working directory, written with `/` whatever the platform spelled it with.
+let directoryTail (workingDirectory: string) : string =
+  workingDirectory.Split([| '/'; '\\' |], System.StringSplitOptions.RemoveEmptyEntries)
+  |> Array.rev
+  |> Array.truncate directoryFoldersShown
+  |> Array.rev
+  |> String.concat "/"
+
+let shortId (id: string) : string =
+  match id.Length > shortIdLength with
+  | true -> id.Substring(0, shortIdLength)
+  | false -> id
 
 /// Icon ids for the statuses that carry no health verdict of their own.
 /// Only reachable via `SessionHealth.Unknown`, i.e. an older daemon.
@@ -192,7 +225,13 @@ let icon (input: SessionRowInput) : string =
   | SessionHealth.Unknown -> statusIcon input.Status
 
 let description (input: SessionRowInput) : string =
-  [ if input.IsActive then "active"
+  // The id leads: the sidebar cuts a description from the right, and the id is the one part that
+  // tells two sessions with the same project apart.
+  [ shortId input.Id
+    if input.IsActive then "active"
+    match input.Relation with
+    | SessionScopePure.WorkspaceRelation.InThisWorkspace -> "this workspace"
+    | SessionScopePure.WorkspaceRelation.ElsewhereOnThisMachine -> ()
     input.Status
     // A noteworthy verdict is shown NEXT TO the lifecycle status, not instead
     // of it: "Ready · Degraded" is the whole point — the worker is alive and
@@ -203,7 +242,11 @@ let description (input: SessionRowInput) : string =
     match input.EvalCount with
     | 0 -> ()
     | 1 -> "1 eval"
-    | n -> sprintf "%d evals" n ]
+    | n -> sprintf "%d evals" n
+    // Where it lives: on a shared daemon the project label alone cannot say.
+    match directoryTail input.WorkingDirectory with
+    | "" -> ()
+    | tail -> tail ]
   |> String.concat " · "
 
 let tooltip (input: SessionRowInput) : string =
@@ -220,6 +263,9 @@ let tooltip (input: SessionRowInput) : string =
     | Some r -> sprintf "Health: %s — %s" (SessionHealth.label input.Health) r
     | None -> sprintf "Health: %s" (SessionHealth.label input.Health)
     sprintf "Directory: %s" input.WorkingDirectory
+    match input.Relation with
+    | SessionScopePure.WorkspaceRelation.InThisWorkspace -> "Workspace: this workspace"
+    | SessionScopePure.WorkspaceRelation.ElsewhereOnThisMachine -> "Workspace: elsewhere on this machine"
     "Projects:"
     projects ]
   |> String.concat "\n"

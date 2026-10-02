@@ -41,7 +41,8 @@ ${extractFunction("parseFreshness")}
 ${extractFunction("parseCompletion")}
 ${extractFunction("parseResultsBatch")}
 ${extractFunction("classifyStateEvent")}
-module.exports = { parseSummary, parseResultsBatch, classifyStateEvent };
+${extractFunction("parseReportWire")}
+module.exports = { parseSummary, parseResultsBatch, classifyStateEvent, parseReportWire };
 `;
 
 const context = {
@@ -108,11 +109,23 @@ const context = {
     this.tag = tag;
     this.fields = fields;
   },
+  // Mirrors the Fable record constructor: keep the field order in step with
+  // ReportWire in ReloadReportPure.fs.
+  ReportWire: function(State, File, Outcome, Patched, Considered, Message, SuggestedAction, Mechanism) {
+    this.State = State;
+    this.File = File;
+    this.Outcome = Outcome;
+    this.Patched = Patched;
+    this.Considered = Considered;
+    this.Message = Message;
+    this.SuggestedAction = SuggestedAction;
+    this.Mechanism = Mechanism;
+  },
 };
 
 vm.runInNewContext(harness, context);
 
-const { parseSummary, parseResultsBatch, classifyStateEvent } = context.module.exports;
+const { parseSummary, parseResultsBatch, classifyStateEvent, parseReportWire } = context.module.exports;
 
 function readFixture(name) {
   return JSON.parse(fs.readFileSync(path.join(fixturesDir, name), "utf8"));
@@ -213,22 +226,33 @@ run("parseSummary defaults the activity to empty from an older daemon", () => {
 //       4 SessionSwitched, 5 HotReloadChanged, 6 SystemAlarm, 7 ModelChanged,
 //       8 Heartbeat, 9 Unknown.
 
-run("classifyStateEvent routes a session fault to its error, not the sid", () => {
+// A fault and a file reload carry the session they are about, so a window can show only its own
+// (another agent's session fault used to pop up in every window on the daemon).
+run("classifyStateEvent routes a session fault to its session and its error", () => {
   const a = classifyStateEvent({ sessionFaulted: "abc12345", error: "boom in warmup" });
   assert(a.tag === 0, `expected StateSessionFaulted (0), got ${a.tag}`);
-  assert(a.fields[0] === "boom in warmup", `expected the error message, got ${a.fields[0]}`);
+  assert(a.fields[0] === "abc12345", `expected the session id first, got ${a.fields[0]}`);
+  assert(a.fields[1] === "boom in warmup", `expected the error message, got ${a.fields[1]}`);
 });
 
 run("classifyStateEvent defaults a fault with no error to a readable message", () => {
   const a = classifyStateEvent({ sessionFaulted: "abc12345" });
   assert(a.tag === 0, `expected StateSessionFaulted (0), got ${a.tag}`);
-  assert(a.fields[0] === "unknown error", `expected fallback message, got ${a.fields[0]}`);
+  assert(a.fields[0] === "abc12345", `expected the session id, got ${a.fields[0]}`);
+  assert(a.fields[1] === "unknown error", `expected fallback message, got ${a.fields[1]}`);
 });
 
-run("classifyStateEvent routes a file reload to its path", () => {
+run("classifyStateEvent routes a file reload to its path and its session", () => {
   const a = classifyStateEvent({ fileReloaded: "/repo/src/Foo.fs", sessionId: "abc12345" });
   assert(a.tag === 1, `expected StateFileReloaded (1), got ${a.tag}`);
   assert(a.fields[0] === "/repo/src/Foo.fs", `expected the reloaded path, got ${a.fields[0]}`);
+  assert(a.fields[1] === "abc12345", `expected the session id, got ${a.fields[1]}`);
+});
+
+run("classifyStateEvent reads a file reload that names no session as an empty session id", () => {
+  const a = classifyStateEvent({ fileReloaded: "/repo/src/Foo.fs" });
+  assert(a.tag === 1, `expected StateFileReloaded (1), got ${a.tag}`);
+  assert(a.fields[1] === "", `expected an empty session id, got ${a.fields[1]}`);
 });
 
 run("classifyStateEvent reads warmup progress step/total", () => {
@@ -275,6 +299,51 @@ run("classifyStateEvent treats a bare heartbeat as no-op", () => {
 run("classifyStateEvent falls back to Unknown for an unrecognized shape", () => {
   const a = classifyStateEvent({ somethingNew: 42 });
   assert(a.tag === 9, `expected StateUnknown (9), got ${a.tag}`);
+});
+
+// ── ReloadReported: what a save did to the running app (docs/sse-events.md) ──
+// Tag 10 is StateReloadReported, added after Unknown so the tags above stay as they were.
+
+const finishedPayload = {
+  state: "finished",
+  outcome: "Patched",
+  patched: 3,
+  considered: 4,
+  message: "Patched 3 of 4.",
+  suggestedAction: "Exercise the rest.",
+  mechanism: "metadata-delta",
+};
+
+run("classifyStateEvent routes a reload report to its session and its payload", () => {
+  const a = classifyStateEvent({ reloadReported: finishedPayload, sessionId: "abc12345" });
+  assert(a.tag === 10, `expected StateReloadReported (10), got ${a.tag}`);
+  assert(a.fields[0] === "abc12345", `expected the session id first, got ${a.fields[0]}`);
+  assert(a.fields[1] === finishedPayload, `expected the payload second`);
+});
+
+run("classifyStateEvent reads a reload report with no session as an empty session id", () => {
+  const a = classifyStateEvent({ reloadReported: finishedPayload });
+  assert(a.tag === 10, `expected StateReloadReported (10), got ${a.tag}`);
+  assert(a.fields[0] === "", `expected an empty session id, got ${a.fields[0]}`);
+});
+
+run("parseReportWire reads a finished verdict field by field", () => {
+  const w = parseReportWire(finishedPayload);
+  assert(w.State === "finished", `state: ${w.State}`);
+  assert(w.Outcome === "Patched", `outcome: ${w.Outcome}`);
+  assert(w.Patched === 3 && w.Considered === 4, `counts: ${w.Patched}/${w.Considered}`);
+  assert(w.Message === "Patched 3 of 4.", `message: ${w.Message}`);
+  assert(w.SuggestedAction === "Exercise the rest.", `action: ${w.SuggestedAction}`);
+  assert(w.Mechanism === "metadata-delta", `mechanism: ${w.Mechanism}`);
+  assert(w.File === "", `file: ${w.File}`);
+});
+
+run("parseReportWire reads a compiling save with its file and defaults the rest", () => {
+  const w = parseReportWire({ state: "compiling", file: "/w/Program.fs" });
+  assert(w.State === "compiling", `state: ${w.State}`);
+  assert(w.File === "/w/Program.fs", `file: ${w.File}`);
+  assert(w.Outcome === "" && w.Message === "" && w.Mechanism === "", `defaults: ${w.Outcome}|${w.Message}|${w.Mechanism}`);
+  assert(w.Patched === 0 && w.Considered === 0, `counts: ${w.Patched}/${w.Considered}`);
 });
 
 if (process.exitCode && process.exitCode !== 0) {

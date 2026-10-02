@@ -102,6 +102,41 @@ let tests =
       LogLevel.shouldLog LogLevel.Info "[debug] chatty" |> Expect.isFalse "debug hidden at info"
       LogLevel.shouldLog LogLevel.Debug "[debug] chatty" |> Expect.isTrue "debug shown at debug"
 
+    // ── a toast is not a log: the daemon's multi-paragraph diagnosis goes to the Output channel ──
+    //
+    // WHY: a session fault toast carried the daemon's whole "Not all DLLs are found ..." diagnosis, a
+    // dozen wrapped lines that covered a third of the editor. The sentence that says what happened and
+    // the remedy fit a toast. The rest is in the Output channel, which the toast's button opens.
+
+    let longMessage =
+      "Initial warm-up failed: Not all DLLs are found (1 missing). These are the exact paths SageFs checked: "
+      + "- ShimSubject.dll, the net10.0 output of ShimSubject.fsproj. Looked in: /home/will/Work/molina/gates/subject/bin/Debug/net10.0/ShimSubject.dll "
+      + "/home/will/Work/molina/gates/subject/bin/Release/net10.0/ShimSubject.dll If those files don't exist, the project isn't built for net10.0 yet."
+
+    testCase "WHY - text that fits is returned as it is" <| fun _ ->
+      briefText 80 "Session faulted." |> Expect.equal "short" "Session faulted."
+
+    testCase "WHY - a long text is cut at the end of its first sentence when that fits" <| fun _ ->
+      briefText 160 longMessage
+      |> Expect.equal "first sentence" "Initial warm-up failed: Not all DLLs are found (1 missing)."
+
+    testCase "WHY - with no sentence end in reach it is cut at a word and says it was cut" <| fun _ ->
+      let cut = briefText 36 "one two three four five six seven eight nine ten eleven twelve"
+      cut |> Expect.equal "word boundary" "one two three four five six seven…"
+      Expect.isLessThanOrEqual "within the limit" (cut.Length, 36)
+
+    testCase "WHY - a newline ends the brief too, because the next line is another thing" <| fun _ ->
+      briefText 160 "Line one says what happened\nLine two is the stack trace"
+      |> Expect.equal "first line" "Line one says what happened"
+
+    testCase "WHY - a structured error shown in a toast is its brief headline and its brief remedy" <| fun _ ->
+      describeBrief { Case = "SessionFaulted"; Message = longMessage; SuggestedAction = "Use Restart Session to recover." }
+      |> Expect.equal "headline then remedy" "Initial warm-up failed: Not all DLLs are found (1 missing).\n→ Use Restart Session to recover."
+
+    testCase "WHY - a short structured error reads the same briefly or in full" <| fun _ ->
+      let e = { Case = "X"; Message = "It broke."; SuggestedAction = "Try again." }
+      describeBrief e |> Expect.equal "same" (describe e)
+
     testCase "WHY - the regex above still finds button arrays, so the gate cannot pass vacuously" <| fun _ ->
       let sample = """Window.showErrorMessage msg [| err.suggestedAction; "Show Output" |]"""
       Regex.IsMatch(sample, @"\[\|[^\]]*suggestedAction[^\]]*\|\]")

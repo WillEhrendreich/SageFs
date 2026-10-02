@@ -72,6 +72,10 @@
         "title": "SageFs: Open Dashboard"
       },
       {
+        "command": "sagefs.showOutput",
+        "title": "SageFs: Show Output"
+      },
+      {
         "command": "sagefs.reconnect",
         "title": "SageFs: Reconnect to Daemon",
         "icon": "$(debug-disconnect)"
@@ -356,6 +360,11 @@
           "type": "string",
           "default": "",
           "description": "Path to .fsproj file. If empty, SageFs auto-detects."
+        },
+        "sagefs.showEventsFromAllSessions": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show session faults and file reloads from every session on the daemon. Off by default: a window shows its own session's and the sessions started in its workspace, so another agent's fault does not pop up here."
         },
         "sagefs.logLevel": {
           "type": "string",
@@ -937,7 +946,7 @@
     "compile": "dotnet fable src --outDir fable-out && node esbuild.mjs",
     "watch": "dotnet fable watch src --outDir fable-out",
     "compile:ts": "tsc -p ./",
-    "test:golden": "node src/LiveTestingListener.golden-tests.mjs",
+    "test:golden": "node src/LiveTestingListener.golden-tests.mjs && node src/http-helpers.golden-tests.mjs && node --no-warnings src/SageFsClient.golden-tests.mjs",
     "compile:test-electron": "dotnet fable test-electron --outDir test-electron-out && node test-electron/esbuild.mjs"
   },
   "devDependencies": {

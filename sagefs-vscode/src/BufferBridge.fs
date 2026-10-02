@@ -31,7 +31,11 @@ let private samePath (left: string) (right: string) =
 let private normalizePath (path: string) =
   path.Replace('/', '\\').TrimEnd([| '\\' |])
 
-let private isWithinDirectory (directoryPath: string) (filePath: string) =
+/// Whether `filePath` is the directory itself or somewhere under it. Separator and case
+/// insensitive, and a sibling that only shares a name prefix is not within it. Shared with
+/// SessionScopePure, so "this workspace" means the same thing to buffer routing and to the
+/// session binding.
+let isWithinDirectory (directoryPath: string) (filePath: string) =
   let normalizedDirectory = normalizePath directoryPath
   let normalizedFile = normalizePath filePath
   samePath normalizedDirectory normalizedFile
