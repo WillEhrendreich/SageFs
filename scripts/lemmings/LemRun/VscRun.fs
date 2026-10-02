@@ -537,6 +537,7 @@ let runLemming (argv: string list) : int =
         let cleanup = CmdRun.cleanupSessions run shared.Port own.Value
         cleaned.Value <- true
         (try scoreWith (Some { ExitCode = -1; Seconds = 0 }) "skip" cleanup |> ignore with _ -> ())
+        CmdRun.finishRun run (CmdRun.retentionFromEnv ())
         4
     finally
       // Whatever way this ends, the window goes and the lemming's own sessions are stopped by id.

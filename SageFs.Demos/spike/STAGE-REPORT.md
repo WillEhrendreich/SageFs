@@ -152,7 +152,7 @@ and an explicit `FSharp.Core` package reference were required). It:
 4. Reads `page.TitleAsync()` before and after; the fixture's `onclick` sets
    `document.title = 'clicked'`.
 
-**Script:** `spike/stage3-xtest-input.fsx` — publishes the app self-contained
+**Script:** `spike/stage3-xtest-input.fsx`, which publishes the app self-contained
 (`dotnet publish -r linux-x64 --self-contained true`, so the cell needs no
 dotnet SDK/runtime bound in at all) and runs it inside the same bwrap shape as
 Stage 2, plus a 4s `ffmpeg` recording for evidence.
