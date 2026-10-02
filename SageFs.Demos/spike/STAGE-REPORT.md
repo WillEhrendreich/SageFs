@@ -35,7 +35,7 @@ one bundling step from Phase 4, it does not change the architecture.
 **Claim:** a `bwrap` cell with a private Xvfb, captured by `ffmpeg x11grab`,
 with the output file landing on the host via an RW bind mount.
 
-**Script:** `spike/stage1-sandbox-capture.sh`
+**Script:** `spike/stage1-sandbox-capture.fsx` (was a shell script; the in-cell part is `spike/cell-init`, the sandbox recipe is `SageFs.Demos/Sandbox.fs`)
 
 **Command shape:**
 ```
@@ -95,7 +95,7 @@ wherever the real tool spawns Xvfb in a cell.
 cell, rendering a local `file://` page, captured, with proof the page
 actually painted.
 
-**Script:** `spike/stage2-gui-capture.sh`, page fixture:
+**Script:** `spike/stage2-gui-capture.fsx`, page fixture:
 `spike/fixtures/stage2.html` (a big green "Quick Start"-styled button at a
 known position, `data-testid="quick-start"` — same test id the real dashboard
 uses, so this fixture doubles as a rehearsal for Stage 4's target).
@@ -152,7 +152,7 @@ and an explicit `FSharp.Core` package reference were required). It:
 4. Reads `page.TitleAsync()` before and after; the fixture's `onclick` sets
    `document.title = 'clicked'`.
 
-**Script:** `spike/stage3-xtest-input.sh` — publishes the app self-contained
+**Script:** `spike/stage3-xtest-input.fsx` — publishes the app self-contained
 (`dotnet publish -r linux-x64 --self-contained true`, so the cell needs no
 dotnet SDK/runtime bound in at all) and runs it inside the same bwrap shape as
 Stage 2, plus a 4s `ffmpeg` recording for evidence.
@@ -236,7 +236,7 @@ screen-rect resolution, not a hardcoded coordinate, matching §4.3's
 `Targets`/`ResolvedTarget` design), and writes exactly one line of `StepLog`
 JSON to `Console.Out`.
 
-**Script:** `spike/stage4-real-thing.sh`. Key shape:
+**Script:** `spike/stage4-real-thing.fsx` (`SAGEFS_BIN_DIR` names the SageFs build; the daemon is started with `--ttl` and without `--no-watch`, which current SageFs requires and refuses). Key shape:
 ```bash
 # Runner side (outside every namespace):
 DOTNET_DIR="$(dirname "$(readlink -f "$(command -v dotnet)")")"
