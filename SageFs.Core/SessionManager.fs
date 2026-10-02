@@ -148,6 +148,10 @@ module SessionManager =
     PendingSwap: Map<SessionId, ManagedSession>
     /// Callers waiting for a session to become Ready, settled after every step.
     ReadyWaiters: Map<SessionId, AsyncReplyChannel<Result<unit, SageFsError>> list>
+    /// Parked callers the last step settled, and what each is told. Held back until the snapshot that says why has been published:
+    /// a caller woken first reads the session's record before it holds the outcome that woke it. The loop delivers them and clears
+    /// the list, so it is empty whenever the loop is waiting for a command.
+    ReadyAnswers: (AsyncReplyChannel<Result<unit, SageFsError>> * Result<unit, SageFsError>) list
   }
 
   module ManagerState =
@@ -158,6 +162,7 @@ module SessionManager =
       RebuildsInFlight = Map.empty
       PendingSwap = Map.empty
       ReadyWaiters = Map.empty
+      ReadyAnswers = []
     }
 
     let addSession id session state =
@@ -609,15 +614,21 @@ module SessionManager =
       // no longer become Ready — whichever step caused it.
       // ReadyWait is the one decision: a session that is Ready while a rebuild runs is not ready for
       // a caller waiting on that rebuild.
+      // `ReadyWait` answers through a callback; the manager collects the answers instead of sending them (`ReadyAnswers`).
+      let collectAnswers (state: ManagerState) (settle: (AsyncReplyChannel<Result<unit, SageFsError>> -> Result<unit, SageFsError> -> unit) -> Map<SessionId, AsyncReplyChannel<Result<unit, SageFsError>> list>) : ManagerState =
+        let answered = ResizeArray<AsyncReplyChannel<Result<unit, SageFsError>> * Result<unit, SageFsError>>()
+        let remaining = settle (fun waiter result -> answered.Add((waiter, result)))
+        { state with ReadyWaiters = remaining; ReadyAnswers = state.ReadyAnswers @ List.ofSeq answered }
+
       let settleReadyWaiters (state: ManagerState) : ManagerState =
         let find id = ManagerState.tryGetSession id state |> Option.map (fun s -> s.Info.Status, s.Info.Rebuild) |> ValueOption.ofOption
-        { state with ReadyWaiters = ReadyWait.settle (fun waiter result -> waiter.Reply result) find state.ReadyWaiters }
+        collectAnswers state (fun answer -> ReadyWait.settle answer find state.ReadyWaiters)
 
       // The rebuild's outcome on the session. One that ends badly answers the callers parked through
       // it with the build's own error: the old worker keeps serving, so the status alone would read Ready.
       let endRebuild (id: SessionId) (outcome: RebuildOutcome) (state: ManagerState) : ManagerState =
         let recorded = ManagerState.recordRebuild id outcome state
-        { recorded with ReadyWaiters = ReadyWait.settleAfterRebuild (fun waiter result -> waiter.Reply result) id outcome recorded.ReadyWaiters }
+        collectAnswers recorded (fun answer -> ReadyWait.settleAfterRebuild answer id outcome recorded.ReadyWaiters)
 
       let lastGoodState = ref ManagerState.empty
       // publishSnapshot is a fire-and-forget notification; a throwing snapshot
@@ -632,14 +643,24 @@ module SessionManager =
         with ex ->
           Log.warn "[SessionManager] settleReadyWaiters threw (keeping state'): %s" ex.Message
           state
+      // Wake the callers a step settled. A caller that fails to wake never takes the loop down with it.
+      let deliverReadyAnswers (answers: (AsyncReplyChannel<Result<unit, SageFsError>> * Result<unit, SageFsError>) list) : unit =
+        for waiter, result in answers do
+          try waiter.Reply result
+          with ex -> Log.warn "[SessionManager] a parked caller could not be answered (continuing): %s" ex.Message
       let rec loop (state: ManagerState) = async {
         lastGoodState.Value <- state
-        publishSnapshotSafe state
         let! cmd = inbox.Receive()
         beat.BeginCommand (cmd.GetType().Name)
         callbacks.OnCommandStart (cmd.GetType().Name)
         let! state' = superviseStep state cmd
-        return! loop (settleReadyWaitersSafe state')
+        let settled = settleReadyWaitersSafe state'
+        // The snapshot is what every status surface reads. It is published BEFORE any parked caller is woken, so a caller woken by a
+        // failed rebuild finds the failure on the record instead of the rebuild still in progress.
+        let next = { settled with ReadyAnswers = [] }
+        publishSnapshotSafe next
+        deliverReadyAnswers settled.ReadyAnswers
+        return! loop next
       }
       and step (state: ManagerState) (cmd: SessionCommand) : Async<ManagerState> = async {
         match cmd with
@@ -1534,6 +1555,7 @@ module SessionManager =
       // state (sessions preserved) rather than orphaning every session forever.
       let rec supervise () = async {
         try
+          publishSnapshotSafe lastGoodState.Value
           return! loop lastGoodState.Value
         with
         | :? OperationCanceledException -> ()  // cancellation stops the supervisor, as intended
