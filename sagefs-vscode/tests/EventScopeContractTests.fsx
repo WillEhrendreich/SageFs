@@ -93,6 +93,10 @@ let tests =
       admits (EventFilter.OnlySession "a") "b" |> Expect.isFalse "stranger"
       admits (EventFilter.OnlySession "a") "" |> Expect.isFalse "untagged"
 
+    testCase "WHY - a window that found no session for its workspace takes no session's events" <| fun _ ->
+      admits EventFilter.NoSession "a" |> Expect.isFalse "tagged"
+      admits EventFilter.NoSession "" |> Expect.isFalse "untagged"
+
     testCase "WHY - before any session is bound the listener still takes the daemon's replay" <| fun _ ->
       admits EventFilter.AnySessionUntilBound "b" |> Expect.isTrue "replay of the active session"
 
