@@ -252,21 +252,31 @@ sounds like a chore anyway.
 A full build, a test suite and an app run each cost real memory. One night five
 agents did one each against a single daemon and nothing coordinated them, so
 the daemon's memory was already high by the time it could tell. An agent that
-starts one of these itself asks for a lease first and gets back Granted, Wait
-with a retry time, or Refused. SageFs's own session creation and
+starts one of these itself asks for a lease first and gets back `granted`, `wait`
+with a retry time, or `refused`. SageFs's own session creation and
 `hard_reset_fsi_session rebuild=true` take their own leases, so an agent doesn't
 lease those. The full rules, for an agent, are in
 [`skills/sagefs/leases.md`](../skills/sagefs/leases.md).
 
+A lease belongs to the connection, the `agent_name` and the `working_directory` it
+was asked for under. Claude sub-agents of one session share one MCP connection, so
+each of them passes its own `agent_name` (and its own `working_directory`) to be a
+holder of its own. Asking again under the same three returns the lease you already
+hold (`grant: already_held`, same `leaseId`, expiry not renewed). A `wait` names who
+holds the pool (agent, connection, directory, kind of work, when it was granted and
+when it lapses), your place in line and when to ask again, and asking again keeps your
+place. `get_daemon_status` shows the same rows under `leases`, one per holder.
+
 | Tool | What it does |
 |:---|:---|
-| `acquire_full_build_lease` | A lease for a full `dotnet build` you start yourself. |
-| `acquire_test_suite_lease` | A lease for a test-suite process you start yourself (`dotnet run --project <tests>` or `dotnet test`). SageFs has no tool that runs your suite for you. It runs its own tests through the live-testing engine, and you read them with `list_tests` or `run_tests`. |
-| `acquire_run_app_lease` | A lease for a run-app process you start yourself. SageFs's own `run_app` is a different thing and needs no lease from you. |
-| `release_work_lease` | Release a lease by the id a granted acquisition returned. A lease held by another connection is never released. |
+| `acquire_full_build_lease` | A lease for a full `dotnet build` you start yourself. Takes `agent_name` and `working_directory`. |
+| `acquire_test_suite_lease` | A lease for a test-suite process you start yourself (`dotnet run --project <tests>` or `dotnet test`). SageFs has no tool that runs your suite for you. It runs its own tests through the live-testing engine, and you read them with `list_tests` or `run_tests`. Takes `agent_name` and `working_directory`. |
+| `acquire_run_app_lease` | A lease for a run-app process you start yourself. SageFs's own `run_app` is a different thing and needs no lease from you. Takes `agent_name` and `working_directory`. |
+| `release_work_lease` | Release a lease by the id a granted acquisition returned. A lease held by another connection is never released. Sub-agents that share your connection can release it by its id, so keep the id to yourself. |
 
-A lease that is never released is reclaimed when it expires, so an agent that
-crashes can't hold a slot forever.
+A lease that is never released is reclaimed when it expires, and a queued ask
+that is not repeated within five minutes loses its place, so an agent that
+crashes can't hold a slot, or a place in line, forever.
 
 ## Workspace hygiene
 
