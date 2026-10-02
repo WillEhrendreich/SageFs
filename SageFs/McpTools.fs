@@ -874,7 +874,7 @@ OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it su
         [<Description("Session ID (from list_sessions). When provided it always wins over working_directory routing, so use it when several sessions share a directory.")>]
         [<Optional; DefaultParameterValue("")>]
         session_id: string,
-        [<Description("Seconds to wait for a warming session (Starting, Building or Restarting) to become Ready before answering. Default 0 answers at once; values above 60 are clamped to 60. A Ready, Faulted or Stopped session never waits. The `wait` field in the reply says how it ended: NotNeeded, BecameReady, Faulted or TimedOut.")>]
+        [<Description("Seconds to wait for a warming session (Starting, Building or Restarting), or one whose rebuild is still running, to become Ready before answering. Default 0 answers at once; values above 60 are clamped to 60. A Ready session with no rebuild running, a Faulted one and a Stopped one never wait. The `wait` field in the reply says how it ended: NotNeeded, BecameReady, Faulted (including a rebuild that failed) or TimedOut, and `wait.lastRebuild` says what the last rebuild did.")>]
         [<Optional; DefaultParameterValue(0)>]
         wait_seconds: int
     ) : Task<string> =

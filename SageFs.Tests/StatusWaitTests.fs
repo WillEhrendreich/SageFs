@@ -21,6 +21,8 @@ type private Harness =
   { Ctx: McpContext
     Sid: string
     Status: SessionLifecycleStatus ref
+    /// What the session's rebuild record says; a test moves it the way the manager does.
+    Rebuild: LastRebuild ref
     AwaitReadyCalls: ConcurrentQueue<TimeSpan>
     AwaitReadyEntered: TaskCompletionSource<unit> }
 
@@ -35,12 +37,14 @@ let private isServing (status: SessionLifecycleStatus) : bool =
   | SessionLifecycleStatus.Restarting _
   | SessionLifecycleStatus.Stopped -> false
 
-let private mkHarness
+let private mkHarnessRebuilding
   (initial: SessionLifecycleStatus)
-  (awaitReady: SessionLifecycleStatus ref -> TimeSpan -> Task<Result<unit, SageFsError>>)
+  (initialRebuild: LastRebuild)
+  (awaitReady: SessionLifecycleStatus ref -> LastRebuild ref -> TimeSpan -> Task<Result<unit, SageFsError>>)
   : Harness =
   let sid = SessionId.newId ()
   let status = ref initial
+  let rebuild = ref initialRebuild
   let calls = ConcurrentQueue<TimeSpan>()
   let entered = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
   let info () : SessionInfo =
@@ -56,7 +60,7 @@ let private mkHarness
       ActiveProject = None
       ProjectRoles = []
       App = AppRun.AppRunState.NotRunning
-      Rebuild = LastRebuild.NeverRebuilt
+      Rebuild = rebuild.Value
       Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
   let proxy : SessionProxy =
     fun msg ->
@@ -87,7 +91,7 @@ let private mkHarness
         AwaitReady = fun _ timeout ->
           calls.Enqueue timeout
           entered.TrySetResult(()) |> ignore
-          awaitReady status timeout }
+          awaitReady status rebuild timeout }
   let ctx : McpContext =
     { FrictionStore = None
       DiagnosticsChanged = (Event<Features.DiagnosticsStore.T>()).Publish
@@ -109,8 +113,16 @@ let private mkHarness
   { Ctx = ctx
     Sid = SessionId.value sid
     Status = status
+    Rebuild = rebuild
     AwaitReadyCalls = calls
     AwaitReadyEntered = entered }
+
+/// A session nobody has rebuilt.
+let private mkHarness
+  (initial: SessionLifecycleStatus)
+  (awaitReady: SessionLifecycleStatus ref -> TimeSpan -> Task<Result<unit, SageFsError>>)
+  : Harness =
+  mkHarnessRebuilding initial LastRebuild.NeverRebuilt (fun status _ timeout -> awaitReady status timeout)
 
 let private starting = SessionLifecycleStatus.Starting { Pid = 7; Port = None }
 let private ready = SessionLifecycleStatus.Ready { Pid = 7; Port = Some 6000 }
@@ -125,6 +137,20 @@ let private read (json: string) : string * string * int64 =
   doc.RootElement.GetProperty("state").GetString(),
   wait.GetProperty("outcome").GetString(),
   wait.GetProperty("waitedMs").GetInt64()
+
+/// The state, how the wait ended, how long it parked, and what the last rebuild did. A field the daemon
+/// does not send reads as "absent", so a missing field is a failed expectation and not a crash.
+let private readWithRebuild (json: string) : string * string * int64 * string =
+  use doc = JsonDocument.Parse json
+  let wait = doc.RootElement.GetProperty("wait")
+  let lastRebuild =
+    match wait.TryGetProperty "lastRebuild" with
+    | true, value -> value.GetString()
+    | false, _ -> "absent"
+  doc.RootElement.GetProperty("state").GetString(),
+  wait.GetProperty("outcome").GetString(),
+  wait.GetProperty("waitedMs").GetInt64(),
+  lastRebuild
 
 [<Tests>]
 let tests =
@@ -225,6 +251,70 @@ let tests =
           Task.FromResult(Result.Error (SageFsError.WorkerTimeout ("s", "restart", timeout.TotalSeconds))))
       let! _ = getSessionStatusAwaiting h.Ctx "agent" (Some h.Sid) None 100000
       h.AwaitReadyCalls.ToArray() |> Expect.equal "it parked for the cap, not the request" [| Timeouts.statusWaitCap |]
+    }
+
+    testTask "a Ready session whose rebuild is still running parks, and answers with what the rebuild did" {
+      // The old worker keeps serving through a build-first rebuild, so the lifecycle says Ready the
+      // whole time. The caller asked about the NEW build.
+      let h =
+        mkHarnessRebuilding ready (LastRebuild.Latest (RebuildOutcome.InProgress DateTime.UtcNow)) (fun _ rebuild _ ->
+          rebuild.Value <- LastRebuild.Latest (RebuildOutcome.Succeeded DateTime.UtcNow)
+          Task.FromResult(Result.Ok ()))
+      let! json = getSessionStatusAwaiting h.Ctx "agent" (Some h.Sid) None 30
+      let _, outcome, _, lastRebuild = readWithRebuild json
+      outcome |> Expect.equal "a rebuild in progress is waited on, never NotNeeded" "BecameReady"
+      lastRebuild |> Expect.equal "and the answer says what the rebuild did" "Succeeded"
+      h.AwaitReadyCalls.Count |> Expect.equal "it parked on AwaitReady once" 1
+    }
+
+    testTask "a Ready session whose rebuild failed while we waited is Faulted, not BecameReady, with the failure named" {
+      let failure = SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "Hello.fs(3,5): error FS0001: expected int" ])
+      let h =
+        mkHarnessRebuilding ready (LastRebuild.Latest (RebuildOutcome.InProgress DateTime.UtcNow)) (fun _ rebuild _ ->
+          rebuild.Value <- LastRebuild.Latest (RebuildOutcome.FailedStillServing (failure, DateTime.UtcNow))
+          Task.FromResult(Result.Error failure))
+      let! json = getSessionStatusAwaiting h.Ctx "agent" (Some h.Sid) None 30
+      let _, outcome, _, lastRebuild = readWithRebuild json
+      outcome |> Expect.equal "the build the caller waited for does not exist, so the wait did not succeed" "Faulted"
+      lastRebuild |> Expect.equal "and the answer says the old build is still serving" "FailedStillServing"
+    }
+
+    testTask "a rebuild asked for through hard_reset_fsi_session is waited on even before the manager has put it on the record" {
+      // The manager records a rebuild as in progress a moment after the request is posted. A caller who asks
+      // to wait straight after asking for the rebuild must not read a session with no rebuild running.
+      let finish = TaskCompletionSource<Result<string, SageFsError>>(TaskCreationOptions.RunContinuationsAsynchronously)
+      let h = mkHarness ready (fun _ _ -> Task.FromResult(Result.Ok ()))
+      let ctx = { h.Ctx with SessionOps = { h.Ctx.SessionOps with RestartSession = fun _ _ -> finish.Task } }
+      let! initiated = hardResetSession ctx "agent" true (Some h.Sid) None
+      initiated |> Expect.stringContains "the rebuild was accepted" "Hard reset initiated"
+      initiated |> Expect.stringContains "and the reply points at the wait" "wait_seconds"
+      let! json = getSessionStatusAwaiting ctx "agent" (Some h.Sid) None 30
+      let _, outcome, _, _ = readWithRebuild json
+      outcome |> Expect.equal "the status shows no rebuild yet, and the wait still covers the one just asked for" "BecameReady"
+      h.AwaitReadyCalls.Count |> Expect.equal "it parked on AwaitReady once" 1
+      finish.SetResult (Result.Ok "done")
+    }
+
+    testTask "a rebuild that timed out while we waited is TimedOut and still says it is in progress" {
+      let h =
+        mkHarnessRebuilding ready (LastRebuild.Latest (RebuildOutcome.InProgress DateTime.UtcNow)) (fun _ _ timeout ->
+          Task.FromResult(Result.Error (SageFsError.WorkerTimeout ("s", "rebuild", timeout.TotalSeconds))))
+      let! json = getSessionStatusAwaiting h.Ctx "agent" (Some h.Sid) None 30
+      let _, outcome, _, lastRebuild = readWithRebuild json
+      outcome |> Expect.equal "the timeout is named" "TimedOut"
+      lastRebuild |> Expect.equal "and the rebuild is still reported as running" "InProgress"
+    }
+
+    testTask "a Ready session whose last rebuild is over never waits, whichever way it ended" {
+      let endings =
+        [ RebuildOutcome.Succeeded DateTime.UtcNow
+          RebuildOutcome.FailedStillServing (SageFsError.HardResetFailed "x", DateTime.UtcNow) ]
+      for ending in endings do
+        let h = mkHarnessRebuilding ready (LastRebuild.Latest ending) (fun status _ _ -> neverAwaited status TimeSpan.Zero)
+        let! json = getSessionStatusAwaiting h.Ctx "agent" (Some h.Sid) None 30
+        let _, outcome, _, _ = readWithRebuild json
+        outcome |> Expect.equal (sprintf "a finished rebuild (%A) is not waited on" ending) "NotNeeded"
+        h.AwaitReadyCalls.Count |> Expect.equal "AwaitReady was not called" 0
     }
 
     testProperty "clampSeconds always lands between zero and the cap" <| fun (seconds: int) ->

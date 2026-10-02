@@ -607,23 +607,17 @@ module SessionManager =
 
       // Answer callers parked by AwaitReady once their session is Ready or can
       // no longer become Ready — whichever step caused it.
+      // ReadyWait is the one decision: a session that is Ready while a rebuild runs is not ready for
+      // a caller waiting on that rebuild.
       let settleReadyWaiters (state: ManagerState) : ManagerState =
-        state.ReadyWaiters
-        |> Map.fold (fun (acc: ManagerState) id waiters ->
-          let answer (result: Result<unit, SageFsError>) =
-            for waiter in waiters do waiter.Reply result
-            { acc with ReadyWaiters = Map.remove id acc.ReadyWaiters }
-          match ManagerState.tryGetSession id acc with
-          | None -> answer (Error (SageFsError.SessionNotFound (SessionId.value id)))
-          | Some session ->
-            match session.Info.Status with
-            | SessionLifecycleStatus.Ready _ | SessionLifecycleStatus.Evaluating _ -> answer (Ok ())
-            | SessionLifecycleStatus.Faulted reason ->
-              answer (Error (SageFsError.WorkerSpawnFailed (FaultReason.describe reason)))
-            | SessionLifecycleStatus.HostCrashed(_, crash) -> answer (Error (SageFsError.FsiHostCrashed crash))
-            | SessionLifecycleStatus.Stopped ->
-              answer (Error (SageFsError.WorkerSpawnFailed "the session stopped before it became Ready"))
-            | SessionLifecycleStatus.Starting _ | SessionLifecycleStatus.Restarting _ | SessionLifecycleStatus.Building _ -> acc) state
+        let find id = ManagerState.tryGetSession id state |> Option.map (fun s -> s.Info.Status, s.Info.Rebuild) |> ValueOption.ofOption
+        { state with ReadyWaiters = ReadyWait.settle (fun waiter result -> waiter.Reply result) find state.ReadyWaiters }
+
+      // The rebuild's outcome on the session. One that ends badly answers the callers parked through
+      // it with the build's own error: the old worker keeps serving, so the status alone would read Ready.
+      let endRebuild (id: SessionId) (outcome: RebuildOutcome) (state: ManagerState) : ManagerState =
+        let recorded = ManagerState.recordRebuild id outcome state
+        { recorded with ReadyWaiters = ReadyWait.settleAfterRebuild (fun waiter result -> waiter.Reply result) id outcome recorded.ReadyWaiters }
 
       let lastGoodState = ref ManagerState.empty
       // publishSnapshot is a fire-and-forget notification; a throwing snapshot
@@ -858,19 +852,19 @@ module SessionManager =
               Log.warn "[SessionManager] rebuild for session %s failed; the previous build keeps serving: %s" (SessionId.value id) msg
               reply.Reply(Error err)
               Instrumentation.failSpan rebuildSpan msg
-              return ManagerState.recordRebuild id (RebuildOutcome.FailedStillServing (err, DateTime.UtcNow)) stateCleared
+              return endRebuild id (RebuildOutcome.FailedStillServing (err, DateTime.UtcNow)) stateCleared
             | Ok _buildMsg, Some _ ->
               // The build is good; whether the replacement starts decides the outcome.
               let swapped, spawn = spawnFirst stateCleared id session session.Workflow reply "Hard reset complete — worker respawning with fresh assemblies." rebuildSpan
               match spawn with
-              | Ok () -> return ManagerState.recordRebuild id (RebuildOutcome.Succeeded DateTime.UtcNow) swapped
-              | Error spawnErr -> return ManagerState.recordRebuild id (RebuildOutcome.FailedStillServing (spawnErr, DateTime.UtcNow)) swapped
+              | Ok () -> return endRebuild id (RebuildOutcome.Succeeded DateTime.UtcNow) swapped
+              | Error spawnErr -> return endRebuild id (RebuildOutcome.FailedStillServing (spawnErr, DateTime.UtcNow)) swapped
             | Error err, None ->
               // No worker to fall back to → faulted tombstone that says why.
               let msg = SageFsError.describe err
               Log.warn "[SessionManager] rebuild for session %s failed and no worker is serving it: %s" (SessionId.value id) msg
               let tombstone = faultedTombstone msg session
-              let newState = ManagerState.recordRebuild id (RebuildOutcome.FailedNotServing (err, DateTime.UtcNow)) (ManagerState.addSession id tombstone stateCleared)
+              let newState = endRebuild id (RebuildOutcome.FailedNotServing (err, DateTime.UtcNow)) (ManagerState.addSession id tombstone stateCleared)
               reply.Reply(Error err)
               onSessionReady id
               onSessionFaulted id msg
@@ -881,10 +875,10 @@ module SessionManager =
               match spawnResult with
               | Ok () ->
                 reply.Reply(Ok "Hard reset complete — worker respawning with fresh assemblies.")
-                return ManagerState.recordRebuild id (RebuildOutcome.Succeeded DateTime.UtcNow) newState
+                return endRebuild id (RebuildOutcome.Succeeded DateTime.UtcNow) newState
               | Error err ->
                 reply.Reply(Error err)
-                return ManagerState.recordRebuild id (RebuildOutcome.FailedNotServing (err, DateTime.UtcNow)) newState
+                return endRebuild id (RebuildOutcome.FailedNotServing (err, DateTime.UtcNow)) newState
           | None ->
             // Session was stopped while the build ran (StopSession/StopAll
             // removed it and cleared the in-flight flag). Answer the carried

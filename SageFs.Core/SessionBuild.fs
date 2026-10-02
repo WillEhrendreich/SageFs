@@ -151,6 +151,36 @@ module SessionBuild =
     | Some path -> Absent (sprintf "SageFs.Core.dll path was blank: '%s'" path)
     | None -> NotChecked
 
+  /// What a build does about SageFs.Core. The daemon's own copy is the right one for a project
+  /// that has none of its own, and the wrong one for a project in a repo that builds SageFs.Core:
+  /// that project, and everything it references, would compile against the daemon's older Core
+  /// metadata and every API the repo's Core added would be "not defined". Where a project brings
+  /// its own Core the daemon's is never injected, and where the project cannot be read the build
+  /// is refused with the reason, because guessing "none" would shadow a newer Core silently.
+  [<RequireQualifiedAccess>]
+  type InjectionDecision =
+    /// The project has no SageFs.Core of its own: inject the daemon's, from this path.
+    | InjectDaemonCore of assembly: string
+    /// The project, or something it references, builds SageFs.Core: inject nothing.
+    | UseProjectCore of evidence: CoreEvidence.OwnCore
+    /// No SageFs.Core of its own and none of the daemon's to give: build without.
+    | NothingToInject of because: string
+    /// Cannot tell whether the project brings its own Core. The build does not run.
+    | Refuse of because: string
+
+  /// Decides from what is known about the daemon's Core and about the project. Pure.
+  let decideInjection (daemon: CoreReference) (evidence: CoreEvidence.Evidence) : InjectionDecision =
+    match evidence with
+    | CoreEvidence.Evidence.BringsOwnCore own -> InjectionDecision.UseProjectCore own
+    | CoreEvidence.Evidence.Unreadable (project, reason) ->
+      InjectionDecision.Refuse
+        (sprintf "Could not tell whether '%s' builds its own SageFs.Core: %s. SageFs will not guess, because injecting the daemon's SageFs.Core over a newer one makes every new API \"not defined\"." project reason)
+    | CoreEvidence.Evidence.BringsNone _ ->
+      match daemon with
+      | CoreReference.Available assembly -> InjectionDecision.InjectDaemonCore assembly
+      | CoreReference.Absent because -> InjectionDecision.NothingToInject because
+      | CoreReference.NotChecked -> InjectionDecision.NothingToInject "the daemon's SageFs.Core was not looked for"
+
   /// The MSBuild property that injects the reference, when there is one to
   /// inject.
   ///
@@ -198,6 +228,9 @@ module SessionBuild =
   /// The XML value is escaped, not trusted: the path comes from the process's
   /// own assembly location, and a raw `&` or `<` in it would produce a .targets
   /// file MSBuild rejects with a parse error that names no recognisable cause.
+  ///
+  /// Whether a build gets this file at all is `decideInjection`'s call: a project that brings its own
+  /// SageFs.Core is never handed the daemon's.
   ///
   /// The reference is skipped for the project whose AssemblyName IS SageFs.Core.
   /// A session on SageFs.Core itself (working on SageFs with SageFs) rebuilds that
@@ -317,13 +350,13 @@ module SessionBuild =
   /// file would be picked up by the user's own git status, and would be a file
   /// SageFs created inside a directory it does not own.
   ///
-  /// Returns `Ok (property, cleanup)` when the reference will be injected, and
-  /// `Ok (None, id)` when it will not — with the reason already recorded on
-  /// `CoreReference` rather than swallowed here. A build that cannot inject
-  /// still builds; it simply does not offer the holder API.
-  let private prepareCoreReference () : string list * (unit -> unit) =
-    match decideCoreReference (runningCoreAssembly ()) with
-    | CoreReference.Available assembly ->
+  /// Returns the property and a cleanup when the reference will be injected, and
+  /// nothing to add when it will not, with the reason logged rather than swallowed.
+  /// A build that does not inject still builds; it simply does not offer the holder
+  /// API, and a project that brings its own SageFs.Core already has it.
+  let private prepareCoreReference (decision: InjectionDecision) : string list * (unit -> unit) =
+    match decision with
+    | InjectionDecision.InjectDaemonCore assembly ->
       let targetsFile =
         Path.Combine(Path.GetTempPath(), sprintf "sagefs-inject-%d.targets" (Environment.ProcessId))
       try
@@ -336,11 +369,27 @@ module SessionBuild =
         // has no need of it. Say why and carry on.
         Log.warn "[SessionBuild] could not prepare the Core reference injection: %s" ex.Message
         [], id
-    | CoreReference.Absent why ->
+    | InjectionDecision.UseProjectCore own ->
+      Log.debug "[SessionBuild] no Core reference injected: the project brings its own SageFs.Core (%s)" (CoreEvidence.describeOwnCore own)
+      [], id
+    | InjectionDecision.NothingToInject why ->
       Log.debug "[SessionBuild] no Core reference injected: %s" why
       [], id
-    | CoreReference.NotChecked ->
+    | InjectionDecision.Refuse _ ->
+      // Refused before a build is prepared (see `runBuildAsync`); nothing is injected either way.
       [], id
+
+  /// What this build does about SageFs.Core: the daemon's own copy, the project's, or a refusal.
+  let private decideForBuild (buildProject: string) : InjectionDecision =
+    decideInjection (decideCoreReference (runningCoreAssembly ())) (CoreEvidence.evidenceFor buildProject)
+
+  /// A refused injection, in the shape every build caller already handles.
+  let private refusedError (reason: string) : SageFsError =
+    let diagnostic =
+      { File = None; Line = None; Column = None; Code = None
+        Severity = BuildDiagnosticSeverity.Blocking
+        Message = reason }
+    SageFsError.BuildFailed(-1, [ diagnostic ])
 
   /// Free build slots right now — full capacity when no build is in flight.
   /// Lets a test observe the semaphore exists at the right capacity without
@@ -396,13 +445,17 @@ module SessionBuild =
       | None -> return Ok "No projects to build"
       | Some projFile ->
         let buildProject = resolveBuildProjectPath workingDir projFile
+        // Decided BEFORE a build slot is taken: a refusal must not hold one.
+        match decideForBuild buildProject with
+        | InjectionDecision.Refuse reason -> return Error (refusedError reason)
+        | decision ->
         let! ct = Async.CancellationToken
         do! buildSemaphore.WaitAsync(ct) |> Async.AwaitTask
         // Prepared INSIDE the try so the .targets file is removed on every
         // path, including a cancellation between here and the build. It is
         // keyed by process id, so a second build in the same process reuses
         // the same file and must not delete it out from under the first.
-        let injectionProperty, cleanupInjection = prepareCoreReference ()
+        let injectionProperty, cleanupInjection = prepareCoreReference decision
         let withInjection (args: string list) = args @ injectionProperty
         try
           // Run one `dotnet` invocation. Ok on success; Error says how it failed

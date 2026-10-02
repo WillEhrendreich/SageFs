@@ -241,6 +241,14 @@ module McpTools =
   let typeIdentityDiagnostics =
     Collections.Concurrent.ConcurrentDictionary<string, string>()
 
+  /// Sessions whose rebuild was requested through a tool and whose restart call has not answered yet,
+  /// with when it was asked for. The manager records a rebuild as in progress a moment AFTER the request
+  /// is posted, and a status call that lands in that moment would read a session with no rebuild running.
+  /// Whoever asks to wait on such a session is waiting on the rebuild they just asked for: the park is
+  /// queued behind the request, so by the time it is looked at the rebuild is on the record.
+  let rebuildsRequested =
+    Collections.Concurrent.ConcurrentDictionary<string, DateTime>()
+
 
   // Session working-directory routing/matching helpers moved to
   // SageFs/McpSessionRouting.fs (pure, testable; roast-8 §2 god-file split).
@@ -1515,7 +1523,12 @@ module McpTools =
         | None -> return SessionStatusPayload.StatusWait.notWaited
         | Some sid ->
           let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-          match info |> Option.map (fun i -> SessionStatusPayload.StatusWait.planFor i.Status) with
+          let plan =
+            match rebuildsRequested.ContainsKey sid with
+            // The restart is posted ahead of this park, so the rebuild is on the record when it is looked at.
+            | true -> Some SessionStatusPayload.WaitPlan.Park
+            | false -> info |> Option.map (fun i -> SessionStatusPayload.StatusWait.planFor i.Status i.Rebuild)
+          match plan with
           | Some SessionStatusPayload.WaitPlan.Park ->
             let clock = System.Diagnostics.Stopwatch.StartNew()
             let! answer = ctx.SessionOps.AwaitReady (toSessionId sid) requested
@@ -1844,7 +1857,7 @@ module McpTools =
   /// What a rebuild=true hard reset answers straight away; the outcome lands in
   /// get_session_status (`lastRestart`) when the build finishes.
   let private rebuildInitiatedMessage =
-    "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_session_status reports the rebuild's progress and outcome."
+    "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. Call get_session_status with wait_seconds=60 to wait for the rebuild's outcome (no polling); the reply says what the rebuild did."
 
   /// Starts a rebuild=true hard reset in the background. The text tool and the
   /// Result tool each carried their own copy of this, so a fix had to land twice.
@@ -1865,6 +1878,7 @@ module McpTools =
     typeIdentityDiagnostics.TryRemove(sid) |> ignore
     notifyElm ctx (
       TuiEvent.WarmupProgress (1, 4, "Building project..."))
+    rebuildsRequested[sid] <- DateTime.UtcNow
     task {
       let! threw =
         task {
@@ -1873,6 +1887,7 @@ module McpTools =
             return None
           with ex -> return Some ex
         }
+      rebuildsRequested.TryRemove sid |> ignore
       let! after = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       let display =
         match threw, after |> Option.map (fun info -> info, info.Rebuild) with
