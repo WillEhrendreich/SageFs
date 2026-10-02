@@ -179,14 +179,18 @@ module SessionStatusPayload =
   /// What a `wait_seconds` request did.
   [<RequireQualifiedAccess>]
   type StatusWait =
-    /// Nothing to wait for: the session was Ready, Faulted or Stopped, or no
-    /// wait was asked for.
+    /// Nothing to wait for: the session was Ready with no rebuild running, or
+    /// Faulted or Stopped, or no wait was asked for. A rebuild in progress is
+    /// never this: it is a state that is waited on.
     | NotNeeded
-    /// The session reached Ready while the caller was parked.
+    /// The session reached Ready (and, if a rebuild was running, the rebuild
+    /// finished and its new worker is serving) while the caller was parked.
     | BecameReady
-    /// The session faulted or stopped while the caller was parked.
+    /// The session faulted or stopped while the caller was parked, or the
+    /// rebuild being waited on failed. `wait.lastRebuild` says which.
     | Faulted
-    /// The session was still warming when the wait ran out.
+    /// The session was still warming, or the rebuild still running, when the
+    /// wait ran out.
     | TimedOut
 
   /// How a wait ended and how long the caller was parked.
@@ -215,17 +219,14 @@ module SessionStatusPayload =
       let cap = int Timeouts.statusWaitCap.TotalSeconds
       System.TimeSpan.FromSeconds(float (min cap (max 0 seconds)))
 
-    /// Only a session that is on its way to Ready is worth waiting for.
-    let planFor (status: WorkerProtocol.SessionLifecycleStatus) : WaitPlan =
-      match status with
-      | WorkerProtocol.SessionLifecycleStatus.Starting _
-      | WorkerProtocol.SessionLifecycleStatus.Restarting _
-      | WorkerProtocol.SessionLifecycleStatus.Building _ -> WaitPlan.Park
-      | WorkerProtocol.SessionLifecycleStatus.Ready _
-      | WorkerProtocol.SessionLifecycleStatus.Evaluating _
-      | WorkerProtocol.SessionLifecycleStatus.Faulted _
-      | WorkerProtocol.SessionLifecycleStatus.HostCrashed _
-      | WorkerProtocol.SessionLifecycleStatus.Stopped -> WaitPlan.DoNotPark
+    /// Only a session that is on its way to Ready is worth waiting for, and a
+    /// Ready session whose rebuild is still running is on its way to the new
+    /// build. `ReadyWait` is the one decision, the same one the session manager
+    /// settles the parked caller with, so the two cannot disagree.
+    let planFor (status: WorkerProtocol.SessionLifecycleStatus) (rebuild: LastRebuild) : WaitPlan =
+      match ReadyWait.plan status rebuild with
+      | ReadyWait.Plan.Park -> WaitPlan.Park
+      | ReadyWait.Plan.DoNotPark -> WaitPlan.DoNotPark
 
     /// How AwaitReady answered, in the payload's terms.
     let ofAwaitReady (answer: Result<unit, SageFsError>) : StatusWait =
@@ -233,6 +234,17 @@ module SessionStatusPayload =
       | Result.Ok () -> StatusWait.BecameReady
       | Result.Error (SageFsError.WorkerTimeout _) -> StatusWait.TimedOut
       | Result.Error _ -> StatusWait.Faulted
+
+    /// What the last rebuild did, as the payload already says it in `lastRestart`
+    /// (read after the wait, so it is the outcome the caller waited for).
+    /// `NoneRecorded` when the session was never rebuilt.
+    let private lastRebuildOf (body: System.Text.Json.Nodes.JsonObject) : string =
+      match body["lastRestart"] with
+      | :? System.Text.Json.Nodes.JsonObject as restart ->
+        match restart["outcome"] with
+        | null -> "NoneRecorded"
+        | outcome -> outcome.GetValue<string>()
+      | _ -> "NoneRecorded"
 
     /// Add the `wait` field to a status payload. Every status shape is a JSON
     /// object, so one place adds it to all of them.
@@ -242,6 +254,7 @@ module SessionStatusPayload =
         let wait = System.Text.Json.Nodes.JsonObject()
         wait["outcome"] <- System.Text.Json.Nodes.JsonValue.Create(label report.Outcome)
         wait["waitedMs"] <- System.Text.Json.Nodes.JsonValue.Create(report.WaitedMs)
+        wait["lastRebuild"] <- System.Text.Json.Nodes.JsonValue.Create(lastRebuildOf body)
         body["wait"] <- wait
         body.ToJsonString()
       | _ -> payload

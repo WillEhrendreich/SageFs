@@ -341,7 +341,9 @@
              types, so both come before it. -->
         <Compile Include="Features\TrunkFollow.fs" />
         <Compile Include="Features\TrunkFollowOwner.fs" />
-        <!-- After SageFsError: F#-aware compile-order insight over BuildDiagnostic (roast UX-4). -->
+        <!-- Does the project a session builds bring its own SageFs.Core? Read from the project files, no dependencies. -->
+        <Compile Include="CoreEvidence.fs" />
+        <!-- After SageFsError and CoreEvidence: F#-aware compile-order insight over BuildDiagnostic (roast UX-4). -->
         <Compile Include="CompileOrderInsight.fs" />
         <!-- After SageFsError: the railway effect type over the algebra. -->
         <Compile Include="SageFsIO.fs" />
@@ -393,6 +395,9 @@
         <Compile Include="Features\LeaseWatch.fs" />
         <Compile Include="ProcessEnvironment.fs" />
         <Compile Include="SessionBuild.fs" />
+        <!-- What a caller waiting on a session is told, and when. After WorkerProtocol and RebuildOutcome; the session
+             manager settles its parked callers with it and the status tool decides to park with it. -->
+        <Compile Include="ReadyWait.fs" />
         <Compile Include="ProjectResolution.fs" />
         <Compile Include="WorkerSpawn.fs" />
         <Compile Include="WorkerStartup.fs" />

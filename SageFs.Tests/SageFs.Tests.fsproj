@@ -203,6 +203,7 @@
         <Compile Include="PatchAnnouncerTests.fs" />
         <Compile Include="PatchConfirmationSimTests.fs" />
         <Compile Include="BuildConfirmationSimTests.fs" />
+        <Compile Include="ReadyWaitSimTests.fs" />
         <Compile Include="SourceStateProbeTests.fs" />
         <Compile Include="SourceStateSimTests.fs" />
         <Compile Include="TrunkFollowSimTests.fs" />
@@ -464,6 +465,8 @@
         <Compile Include="McpProjectLoadingUxTests.fs" />
         <Compile Include="SageFsErrorPropertyTests.fs" />
         <Compile Include="CompileOrderInsightTests.fs" />
+        <Compile Include="CoreInjectionTests.fs" />
+        <Compile Include="ReadyWaitTests.fs" />
         <Compile Include="ErrorAlgebraHardeningTests.fs" />
         <Compile Include="McpToolErrorBodyTests.fs" />
         <Compile Include="SessionIdTests.fs" />

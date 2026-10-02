@@ -10,11 +10,13 @@
 ///  2. `get_session_status wait_seconds` answered `NotNeeded` while a rebuild was running, because
 ///     the old worker kept serving. The caller had to poll to learn when the rebuild finished.
 ///
-/// The fixture is a tiny stand-in for the SageFs repo (`fixtures/SageFsLikeRepoFixture`): a project
-/// whose assembly is SageFs.Core with an API the daemon's Core does not have, a consumer project
-/// that references it and uses that API, and a plain project that references nothing. Each gate
-/// copies it to a temp directory and runs a REAL daemon this file spawns on its own port, so what
-/// is asserted is what a user reads from the tools.
+/// The fixture is a stand-in for the SageFs repo (`fixtures/SageFsLikeRepoFixture`): a consumer
+/// project that references SageFs.Core and uses an API only the repo's Core has, and a plain
+/// project that references nothing. The repo's Core is a REAL copy of SageFs.Core with one extra
+/// file, because the worker adopts the project's own SageFs.Core (HostCoreAdoption) and a stand-in
+/// Core cannot be adopted by a host that links the real one. Each gate copies what it needs and
+/// runs a REAL daemon this file spawns on its own port, so what is asserted is what a user reads
+/// from the tools.
 module SageFs.Tests.SelfHostCoreOutcomeTests
 
 open System
@@ -33,19 +35,54 @@ module Http = SageFs.Tests.HttpApiIntegrationTests
 let private fixtureSource =
   Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "SageFsLikeRepoFixture")
 
-/// Copies the fixture, without any build output, so a gate builds in its own directory.
-let private copyFixture () : string =
-  let target = Directory.CreateTempSubdirectory("sagefs-selfhost-").FullName
-  let rec copy (source: string) (destination: string) =
-    Directory.CreateDirectory destination |> ignore
-    for file in Directory.GetFiles source do
-      File.Copy(file, Path.Combine(destination, Path.GetFileName file))
-    for dir in Directory.GetDirectories source do
+let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+
+/// Where a gate's copy lives and whether it carries a repo of its own SageFs.Core.
+[<RequireQualifiedAccess>]
+type private Copy =
+  /// The projects alone, in a temp directory.
+  | ProjectsOnly
+  /// The projects next to a real copy of SageFs.Core with the fixture's extra file compiled in. It is made
+  /// under the fixture folder (ignored by git) so the repo's Directory.Build.props and package versions apply.
+  | WithRepoCore
+
+let private copyTree (source: string) (destination: string) : unit =
+  let rec copy (from: string) (into: string) =
+    Directory.CreateDirectory into |> ignore
+    for file in Directory.GetFiles from do
+      File.Copy(file, Path.Combine(into, Path.GetFileName file))
+    for dir in Directory.GetDirectories from do
       match Path.GetFileName dir with
-      | "bin" | "obj" -> ()
-      | name -> copy dir (Path.Combine(destination, name))
-  copy fixtureSource target
-  target
+      | "bin" | "obj" | ".runs" -> ()
+      | name -> copy dir (Path.Combine(into, name))
+  copy source destination
+
+/// The line after which the extra file is compiled: first in the list, because it depends on nothing.
+let private firstCompileItem = "<Compile Include=\"MachineTier.fs\" />"
+
+/// Copies the fixture, without any build output, so a gate builds in its own directory.
+let private copyFixture (copy: Copy) : string =
+  match copy with
+  | Copy.ProjectsOnly ->
+    let target = Directory.CreateTempSubdirectory("sagefs-selfhost-").FullName
+    copyTree (Path.Combine(fixtureSource, "Plain")) (Path.Combine(target, "Plain"))
+    target
+  | Copy.WithRepoCore ->
+    let target = Path.Combine(fixtureSource, ".runs", Guid.NewGuid().ToString "N")
+    copyTree (Path.Combine(fixtureSource, "Consumer")) (Path.Combine(target, "Consumer"))
+    let core = Path.Combine(target, "SageFs.Core")
+    copyTree (Path.Combine(repoRoot, "SageFs.Core")) core
+    // Core embeds the FSI host's sources by relative path, so they sit beside it as in the repo.
+    copyTree (Path.Combine(repoRoot, "SageFs.FsiHost")) (Path.Combine(target, "SageFs.FsiHost"))
+    // ...and so do the native parser libraries it copies to its output.
+    copyTree (Path.Combine(repoRoot, "runtimes")) (Path.Combine(target, "runtimes"))
+    File.Copy(Path.Combine(fixtureSource, "FixtureOnly.fs"), Path.Combine(core, "FixtureOnly.fs"))
+    let project = Path.Combine(core, "SageFs.Core.fsproj")
+    let text = File.ReadAllText project
+    match text.Split(firstCompileItem).Length - 1 with
+    | 1 -> File.WriteAllText(project, text.Replace(firstCompileItem, firstCompileItem + "\n        <Compile Include=\"FixtureOnly.fs\" />"))
+    | found -> failtestf "expected exactly one '%s' in the copied SageFs.Core.fsproj, found %d" firstCompileItem found
+    target
 
 let private connect (port: int) : Task<McpClient> =
   let opts = HttpClientTransportOptions(Endpoint = Uri(sprintf "http://localhost:%d/" port))
@@ -118,9 +155,9 @@ let private evalIn (client: McpClient) (sid: string) (code: string) : Task<strin
   callText client "send_fsharp_code" [ "agentName", box "selfhost-gate"; "code", box code; "session_id", box sid ]
 
 /// Runs a body against a fresh fixture copy and a real daemon, and cleans up whatever happens.
-let private withFixtureDaemon (body: McpClient -> string -> Task<unit>) : Task<unit> =
+let private withFixtureDaemon (copy: Copy) (body: McpClient -> string -> Task<unit>) : Task<unit> =
   task {
-    let root = copyFixture ()
+    let root = copyFixture copy
     let port = Http.reserveLoopbackPort ()
     let! proc, httpClient = Http.startDaemonWithArgs port root [ "--no-resume" ]
     let! client = connect port
@@ -190,7 +227,8 @@ let private rebuildIsWaitedOn (client: McpClient) (root: string) : Task<unit> =
     | Settled.Faulted reason -> failtestf "the plain project must reach Ready first. It faulted: %s" reason
     | Settled.Ready -> ()
     File.WriteAllText(plainSource root, versionSource "plain-v2")
-    let! _ = callText client "hard_reset_fsi_session" [ "rebuild", box true; "session_id", box sid ]
+    let! reset = callText client "hard_reset_fsi_session" [ "rebuild", box true; "session_id", box sid ]
+    reset |> Expect.stringContains "the rebuild was accepted" "Hard reset initiated"
     // The old worker keeps serving while the build runs. One call, no polling.
     let! text = callText client "get_session_status" [ "session_id", box sid; "wait_seconds", box waitSeconds ]
     let outcome, waitedMs, lastRebuild = waitedOn text
@@ -209,7 +247,8 @@ let private failedRebuildIsNotReady (client: McpClient) (root: string) : Task<un
     | Settled.Faulted reason -> failtestf "the plain project must reach Ready first. It faulted: %s" reason
     | Settled.Ready -> ()
     File.WriteAllText(plainSource root, "module SageFsLike.Plain.Api\n\nlet version () : string = this does not compile\n")
-    let! _ = callText client "hard_reset_fsi_session" [ "rebuild", box true; "session_id", box sid ]
+    let! reset = callText client "hard_reset_fsi_session" [ "rebuild", box true; "session_id", box sid ]
+    reset |> Expect.stringContains "the rebuild was accepted" "Hard reset initiated"
     let! text = callText client "get_session_status" [ "session_id", box sid; "wait_seconds", box waitSeconds ]
     let outcome, _, lastRebuild = waitedOn text
     outcome |> Expect.equal (sprintf "a rebuild that failed is not 'became ready'. Reply: %s" text) "Faulted"
@@ -220,14 +259,14 @@ let private failedRebuildIsNotReady (client: McpClient) (root: string) : Task<un
 let selfHostCoreOutcomeTests =
   Integration.hostList "Self-hosting outcome gate" [
     testTask "WHY — a session on a project in a repo that builds its own SageFs.Core compiles against and runs THAT Core, not the daemon's older one" {
-      do! withFixtureDaemon coreOfItsOwnRepo
+      do! withFixtureDaemon Copy.WithRepoCore coreOfItsOwnRepo
     }
 
     testTask "WHY — get_session_status wait_seconds waits for an in-flight rebuild and says what it did, instead of answering NotNeeded and making the caller poll" {
-      do! withFixtureDaemon rebuildIsWaitedOn
+      do! withFixtureDaemon Copy.ProjectsOnly rebuildIsWaitedOn
     }
 
     testTask "WHY — a rebuild that fails while the old worker still serves is not reported as 'became ready'" {
-      do! withFixtureDaemon failedRebuildIsNotReady
+      do! withFixtureDaemon Copy.ProjectsOnly failedRebuildIsNotReady
     }
   ]

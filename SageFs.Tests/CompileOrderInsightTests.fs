@@ -12,8 +12,8 @@ let private diag file code message : BuildDiagnostic =
     Code = code; Message = message }
 
 // A defines→file lookup for the canonical shop scenario.
-let private shopDefines =
-  function
+let private shopDefines (name: string) (_: CompileOrderInsight.UndefinedKind) : string option =
+  match name with
   | "Product" | "Sku" -> Some "Types.fs"
   | "helper" -> Some "Utils.fs"
   | _ -> None

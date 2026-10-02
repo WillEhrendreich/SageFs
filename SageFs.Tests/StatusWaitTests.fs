@@ -279,6 +279,22 @@ let tests =
       lastRebuild |> Expect.equal "and the answer says the old build is still serving" "FailedStillServing"
     }
 
+    testTask "a rebuild asked for through hard_reset_fsi_session is waited on even before the manager has put it on the record" {
+      // The manager records a rebuild as in progress a moment after the request is posted. A caller who asks
+      // to wait straight after asking for the rebuild must not read a session with no rebuild running.
+      let finish = TaskCompletionSource<Result<string, SageFsError>>(TaskCreationOptions.RunContinuationsAsynchronously)
+      let h = mkHarness ready (fun _ _ -> Task.FromResult(Result.Ok ()))
+      let ctx = { h.Ctx with SessionOps = { h.Ctx.SessionOps with RestartSession = fun _ _ -> finish.Task } }
+      let! initiated = hardResetSession ctx "agent" true (Some h.Sid) None
+      initiated |> Expect.stringContains "the rebuild was accepted" "Hard reset initiated"
+      initiated |> Expect.stringContains "and the reply points at the wait" "wait_seconds"
+      let! json = getSessionStatusAwaiting ctx "agent" (Some h.Sid) None 30
+      let _, outcome, _, _ = readWithRebuild json
+      outcome |> Expect.equal "the status shows no rebuild yet, and the wait still covers the one just asked for" "BecameReady"
+      h.AwaitReadyCalls.Count |> Expect.equal "it parked on AwaitReady once" 1
+      finish.SetResult (Result.Ok "done")
+    }
+
     testTask "a rebuild that timed out while we waited is TimedOut and still says it is in progress" {
       let h =
         mkHarnessRebuilding ready (LastRebuild.Latest (RebuildOutcome.InProgress DateTime.UtcNow)) (fun _ _ timeout ->
