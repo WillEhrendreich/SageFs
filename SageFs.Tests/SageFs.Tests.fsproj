@@ -761,6 +761,8 @@
         <Compile Include="ReplGuardTests.fs" />
         <Compile Include="../scripts/ReleaseRules.fs" Link="Scripts/ReleaseRules.fs" />
         <Compile Include="ReleaseRulesTests.fs" />
+        <Compile Include="../scripts/SmokeRules.fs" Link="Scripts/SmokeRules.fs" />
+        <Compile Include="SmokeRulesTests.fs" />
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="CapabilityHttpIntegrationTests.fs" />

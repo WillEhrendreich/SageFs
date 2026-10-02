@@ -532,7 +532,7 @@ the second start on the same machine does not pay it. If it fails, read the mess
   change.
 - To get your own numbers, run `dotnet fsi scripts/machine-bench.fsx --sagefs <dir that holds SageFs.dll>`. It runs
   a throwaway daemon in its own directory on its own ports, writes a small two project fixture, and prints the
-  machine profile and one row per stage. `scripts/machine-bench-tiers.sh` wraps it in systemd scopes to emulate
+  machine profile and one row per stage. `scripts/machine-bench-tiers.fsx` wraps it in systemd scopes to emulate
   smaller machines on one box. If you send me a table from a machine that is slower than anything in the tables
   above, I will fit the tiers to it.
 

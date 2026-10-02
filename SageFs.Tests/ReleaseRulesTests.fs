@@ -209,9 +209,12 @@ let wiringTests =
   testList "release scripts: wiring" [
 
     testCase "the release scripts are F# (.fsx), and the bash and PowerShell versions are gone" <| fun _ ->
-      for name in [ "local-gate"; "bump-version"; "pre-push"; "install-hooks" ] do
+      for name in [ "local-gate"; "bump-version"; "pre-push"; "install-hooks"; "smoke-test"; "record-demos"; "reinstall-vscode-ext"; "start-sagefs-otel"; "machine-bench-tiers" ] do
         File.Exists(Path.Combine(repoRoot, "scripts", name + ".fsx")) |> Expect.isTrue (sprintf "scripts/%s.fsx exists" name)
-      for gone in [ "scripts/local-gate"; "scripts/bump-version"; "scripts/launch_daemon_detached.py"; "hooks/pre-push"; "hooks/pre-push.ps1"; "hooks/install-hooks.ps1"; "fix-async.ps1" ] do
+      for gone in [ "scripts/local-gate"; "scripts/bump-version"; "scripts/launch_daemon_detached.py"; "hooks/pre-push"; "hooks/pre-push.ps1"; "hooks/install-hooks.ps1"; "fix-async.ps1"
+                    "scripts/smoke-test.ps1"; "scripts/record-demos.ps1"; "scripts/reinstall-vscode-ext.ps1"; "scripts/make-demo-gif.ps1"; "scripts/record-vscode-demo.ps1"
+                    "scripts/machine-bench-tiers.sh"; "start-sagefs-otel.bat"; "configure-vscode.sh"; "configure-vscode.ps1"
+                    "tools/agent-hooks/sagefs-repl-guard.fsx" ] do
         File.Exists(Path.Combine(repoRoot, gone)) |> Expect.isFalse (sprintf "%s is gone" gone)
 
     testCase "scripts/pre-push is only the shebang shim for pre-push.fsx, because git runs a hook by its extensionless name and dotnet fsi runs only .fsx files" <| fun _ ->

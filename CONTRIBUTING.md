@@ -179,7 +179,7 @@ Then restart SageFs. If you only changed test code, a simpler rebuild is enough 
 - **Daemon console** — real-time output in the terminal where SageFs is running
 - **Dashboard** — `http://localhost:37750/dashboard` shows session state, events, test results
 - **Log files** — the daemon writes `mcp-server<yyyyMMdd>.log` and each session's worker writes `<data dir>/workers/<sessionId>.log`. `GET http://localhost:37750/api/daemon-info` returns the daemon log's path as `logPath`. See [Where the logs are](docs/TROUBLESHOOTING.md#where-the-logs-are).
-- **OpenTelemetry** — start with `start-sagefs-otel.bat` (a Windows batch file) for structured traces, or set `OTEL_EXPORTER_OTLP_ENDPOINT` yourself on any platform
+- **OpenTelemetry** — start with `dotnet fsi scripts/start-sagefs-otel.fsx` (it sets the OTEL variables and runs `sagefs`) for structured traces, or set `OTEL_EXPORTER_OTLP_ENDPOINT` yourself on any platform
 
 ## Running Tests
 
