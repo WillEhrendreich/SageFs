@@ -32,7 +32,7 @@ type | _ -> None
 shot fix-typed-1280x800 --region editor --region statusbar
 key ctrl+s
 # The rerun after a compiled-file change says "conservative fallback rebuild" first and can take a while.
-expect-text --within 300 9 passed
+expect-text --within 300 All 9 tests passed
 open DemoEnv.Tests/DemoEnvTests.fs
 wait 5
 # The green gutter and the old failure text must not share a line: once the test passes, the inline

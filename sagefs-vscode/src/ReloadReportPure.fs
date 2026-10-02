@@ -273,7 +273,12 @@ let noticeFor (report: Report) (freshness: Freshness) : Notice =
     | Outcome.NeverEntered ->
       body Severity.Warning [ sprintf "Hot reload: %s" f.Message; remedy; behind ] ([ NoticeAction.ShowOutput ] @ actionsWhenBehind)
     | Outcome.Restarted ->
-      body Severity.Info [ sprintf "Hot reload: the app was restarted. %s" f.Message; remedy ] [ NoticeAction.ShowOutput ]
+      // The daemon's message already says it restarted ("Restarted the app: ..."), so it is not said twice.
+      let said =
+        match System.String.IsNullOrWhiteSpace f.Message with
+        | true -> "the app was restarted."
+        | false -> f.Message
+      body Severity.Info [ sprintf "Hot reload: %s" said; remedy ] [ NoticeAction.ShowOutput ]
     | Outcome.NoEffect -> body Severity.Info [ sprintf "Hot reload: %s" f.Message; remedy ] []
     | Outcome.RestartRequired ->
       body Severity.Warning [ sprintf "Hot reload: %s" f.Message; remedy ] [ NoticeAction.ShowOutput ]
