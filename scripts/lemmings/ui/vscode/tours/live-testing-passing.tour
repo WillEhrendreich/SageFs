@@ -9,7 +9,7 @@ command SageFs: Create Session
 wait 2
 key enter
 expect-session --within 240
-expect-text --within 60 session {session}
+expect-text --within 60 — session {session} —
 
 command SageFs: Enable Live Testing
 expect-text --within 120 1 failed
@@ -35,6 +35,9 @@ key ctrl+s
 expect-text --within 300 9 passed
 open DemoEnv.Tests/DemoEnvTests.fs
 wait 5
+# The green gutter and the old failure text must not share a line: once the test passes, the inline
+# "⊘ a negative integer yields None — ..." goes. It used to stay beside the green check.
+expect-absent --for 10 ⊘ a negative integer yields None
 shot editor-1280x800 --region editor --region statusbar
 
 click Testing
