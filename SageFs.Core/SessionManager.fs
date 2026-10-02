@@ -609,15 +609,18 @@ module SessionManager =
       // no longer become Ready — whichever step caused it.
       // ReadyWait is the one decision: a session that is Ready while a rebuild runs is not ready for
       // a caller waiting on that rebuild.
+      // Settled callers are answered through `readyAnswers`, not on the spot: they hear after the snapshot that says why is published.
+      let readyAnswers = ResizeArray<AsyncReplyChannel<Result<unit, SageFsError>> * Result<unit, SageFsError>>()
+      let holdAnswer waiter result = readyAnswers.Add((waiter, result))
       let settleReadyWaiters (state: ManagerState) : ManagerState =
         let find id = ManagerState.tryGetSession id state |> Option.map (fun s -> s.Info.Status, s.Info.Rebuild) |> ValueOption.ofOption
-        { state with ReadyWaiters = ReadyWait.settle (fun waiter result -> waiter.Reply result) find state.ReadyWaiters }
+        { state with ReadyWaiters = ReadyWait.settle holdAnswer find state.ReadyWaiters }
 
       // The rebuild's outcome on the session. One that ends badly answers the callers parked through
       // it with the build's own error: the old worker keeps serving, so the status alone would read Ready.
       let endRebuild (id: SessionId) (outcome: RebuildOutcome) (state: ManagerState) : ManagerState =
         let recorded = ManagerState.recordRebuild id outcome state
-        { recorded with ReadyWaiters = ReadyWait.settleAfterRebuild (fun waiter result -> waiter.Reply result) id outcome recorded.ReadyWaiters }
+        { recorded with ReadyWaiters = ReadyWait.settleAfterRebuild holdAnswer id outcome recorded.ReadyWaiters }
 
       let lastGoodState = ref ManagerState.empty
       // publishSnapshot is a fire-and-forget notification; a throwing snapshot
@@ -634,12 +637,15 @@ module SessionManager =
           state
       let rec loop (state: ManagerState) = async {
         lastGoodState.Value <- state
-        publishSnapshotSafe state
         let! cmd = inbox.Receive()
+        readyAnswers.Clear()
         beat.BeginCommand (cmd.GetType().Name)
         callbacks.OnCommandStart (cmd.GetType().Name)
         let! state' = superviseStep state cmd
-        return! loop (settleReadyWaitersSafe state')
+        let settled = settleReadyWaitersSafe state'
+        publishSnapshotSafe settled // BEFORE anyone is woken: a caller woken by a failed rebuild must find the failure on the record
+        ReadyWait.deliver readyAnswers (fun waiter result -> waiter.Reply result) (fun ex -> Log.warn "[SessionManager] a parked caller could not be answered (continuing): %s" ex.Message)
+        return! loop settled
       }
       and step (state: ManagerState) (cmd: SessionCommand) : Async<ManagerState> = async {
         match cmd with

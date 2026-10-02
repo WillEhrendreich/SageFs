@@ -120,6 +120,28 @@ let tests =
       sessionIdOfMenuItem [ "aaa11111" ] "──────────" |> Expect.equal "separator" PickedSession.NotASession
       sessionIdOfMenuItem [] "$(terminal) X  zzz99999 — Ready" |> Expect.equal "unknown id" PickedSession.NotASession
 
+    // ── commandTarget ──
+    // WHY - a command that acts on "the session" can arrive before the window has bound one: right after the
+    // extension activates, or from a script, as the extension-host command proof does. The window used to answer
+    // "no session" while its own workspace's session sat on the daemon. The target is decided from what the
+    // window knows at that moment, with the same rule `bind` already uses.
+
+    testCase "WHY - a bound window acts on the session it is bound to" <| fun _ ->
+      commandTarget roots (Some "b") [ ref "a" "/home/me/app"; ref "b" "/elsewhere" ]
+      |> Expect.equal "the bound one" (CommandTarget.Session "b")
+
+    testCase "WHY - a window that has not bound yet acts on its own workspace's session, not no session" <| fun _ ->
+      commandTarget roots None [ ref "x" "/elsewhere"; ref "a" "/home/me/app" ]
+      |> Expect.equal "the workspace's session" (CommandTarget.Session "a")
+
+    testCase "WHY - a window with no session of its own never acts on a stranger's" <| fun _ ->
+      commandTarget roots None [ ref "x" "/elsewhere" ]
+      |> Expect.equal "none" CommandTarget.NoSessionForThisWindow
+
+    testCase "WHY - a window on a daemon with no sessions has none to act on" <| fun _ ->
+      commandTarget roots None []
+      |> Expect.equal "none" CommandTarget.NoSessionForThisWindow
+
     // ── identifyCreated ──
 
     testCase "WHY - the daemon's reply names the new session, so that session is the one" <| fun _ ->

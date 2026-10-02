@@ -1,5 +1,21 @@
 namespace SageFs.Features.LiveTesting
 
+/// Why a test's coverage cannot be a cache key.
+[<RequireQualifiedAccess>]
+type UntrustedHash =
+  /// The build has no instrumentation, so there is nothing a bitmap could say.
+  | NoInstrumentation
+  /// The bitmap is of another size than the instrumentation (a stale bitmap against a rebuilt map): bitmap probes, map probes.
+  | BitmapDoesNotMatchMap of bitmapProbes: int * mapProbes: int
+  /// The bitmap hit nothing, so it names no file and its hash would be the toolchain's alone.
+  | CoversNothing
+
+/// A test's coverage as a cache key: the key, or why there is none.
+[<RequireQualifiedAccess>]
+type HashTrust =
+  | Trusted of hash: string
+  | Untrusted of UntrustedHash
+
 /// Coverage-aware wiring for `InputHash` (`TestRunKey.fs`) — the "later
 /// phase" that file's own doc comment defers: computing a test's
 /// `InputHash` from the real source content its `CoverageBitmap` says it
@@ -95,14 +111,9 @@ module InputHashCoverage =
   ///
   /// Pure: `readFile` is injected so the caller decides how (and whether)
   /// to touch disk — this function performs no IO itself.
-  let ofCoverage
-    (toolchain: string)
-    (readFile: string -> string option)
-    (map: InstrumentationMap)
-    (bitmap: CoverageBitmap)
-    : string =
+  let private ofFiles (toolchain: string) (readFile: string -> string option) (files: string list) : string =
     "toolchain" :: toolchain
-    :: (coveredFiles map bitmap
+    :: (files
         |> List.collect (fun file ->
           let content =
             match readFile file with
@@ -111,3 +122,62 @@ module InputHashCoverage =
 
           [ file; content ]))
     |> InputHash.compute
+
+  let ofCoverage
+    (toolchain: string)
+    (readFile: string -> string option)
+    (map: InstrumentationMap)
+    (bitmap: CoverageBitmap)
+    : string =
+    ofFiles toolchain readFile (coveredFiles map bitmap)
+
+  /// The files a test may depend on: the ones its coverage names, and `blind`, the files coverage cannot see (those evaluated
+  /// over the instrumented build, which run as uninstrumented evaluated code). Each once, sorted.
+  let seenFiles (blind: string list) (map: InstrumentationMap) (bitmap: CoverageBitmap) : string list =
+    coveredFiles map bitmap @ blind |> List.distinct |> List.sort
+
+  /// What the affected-test selection is told a test depends on: `seenFiles`, except that coverage which names no file stays
+  /// empty. `AffectedTests.affected` runs a test whose covered files are empty, and evaluated files must not turn that empty into
+  /// an answer that skips the test.
+  let selectionFiles (blind: string list) (map: InstrumentationMap) (bitmap: CoverageBitmap) : string list =
+    match coveredFiles map bitmap with
+    | [] -> []
+    | _ -> seenFiles blind map bitmap
+
+  /// Whether a test's coverage can be a cache key, and the key when it can. A key has to see the code: a hash that is the same
+  /// whatever the files say would hand one landing the verdict cached for another. So a test whose bitmap hit nothing, whose bitmap
+  /// is of another size than the instrumentation, or that has no instrumentation at all, has no key and is always run.
+  ///
+  /// `blind` is the files coverage cannot see, folded into the key as files the test may depend on (`seenFiles`): an edit to one
+  /// of them must be a different key.
+  let trustBeyond
+    (blind: string list)
+    (toolchain: string)
+    (readFile: string -> string option)
+    (map: InstrumentationMap)
+    (bitmap: CoverageBitmap)
+    : HashTrust =
+    match map.Slots.Length with
+    | 0 -> HashTrust.Untrusted UntrustedHash.NoInstrumentation
+    | _ ->
+      match bitmap.Count = map.TotalProbes && bitmap.Count > 0 with
+      | false -> HashTrust.Untrusted (UntrustedHash.BitmapDoesNotMatchMap (bitmap.Count, map.TotalProbes))
+      | true ->
+        match coveredFiles map bitmap with
+        | [] -> HashTrust.Untrusted UntrustedHash.CoversNothing
+        | _ -> HashTrust.Trusted (ofFiles toolchain readFile (seenFiles blind map bitmap))
+
+  /// `trustBeyond` with no file coverage cannot see.
+  let trust
+    (toolchain: string)
+    (readFile: string -> string option)
+    (map: InstrumentationMap)
+    (bitmap: CoverageBitmap)
+    : HashTrust =
+    trustBeyond [] toolchain readFile map bitmap
+
+  /// The key, for the one seam that still takes an option (`LandingCache.verify`: a test with no key is run and never cached).
+  let keyOf (trusted: HashTrust) : string option =
+    match trusted with
+    | HashTrust.Trusted hash -> Some hash
+    | HashTrust.Untrusted _ -> None

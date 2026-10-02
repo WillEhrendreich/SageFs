@@ -16,7 +16,10 @@ open SageFs
 open SageFs.SessionManager
 open SageFs.WorkerProtocol
 
-type private Harness = { Mailbox: MailboxProcessor<SessionCommand> }
+type private Harness =
+  { Mailbox: MailboxProcessor<SessionCommand>
+    /// The lock-free read side every status surface reads, not the mailbox.
+    ReadSnapshot: unit -> QuerySnapshot }
 
 let private mkRuntime (build: Async<Result<string, SageFsError>>) : SessionManagerRuntime =
   { StartWorkerProcess =
@@ -29,10 +32,10 @@ let private mkRuntime (build: Async<Result<string, SageFsError>>) : SessionManag
 let private withHarness (build: Async<Result<string, SageFsError>>) (run: Harness -> Task) : Task =
   task {
     use cancellation = new CancellationTokenSource()
-    let mailbox, _readSnapshot =
+    let mailbox, readSnapshot =
       createWith (mkRuntime build) cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
     try
-      do! run { Mailbox = mailbox }
+      do! run { Mailbox = mailbox; ReadSnapshot = readSnapshot }
     finally
       try mailbox.PostAndReply(fun reply -> SessionCommand.StopAll reply) with _ -> ()
       cancellation.Cancel()
@@ -121,6 +124,49 @@ let tests =
         match rebuildOf harness info.Id with
         | LastRebuild.Latest (RebuildOutcome.Succeeded _) -> ()
         | other -> failtestf "expected Succeeded after the build, got %A" other })
+    }
+
+    // The status tool answers a parked caller and then reads the session's record to say what the rebuild did. Both come from
+    // the one owner, so the record must already hold the outcome that woke the caller. The waiter here is a reply channel that runs
+    // its reader on the mailbox thread at the very moment the caller is woken, which is the worst moment a reader can pick: on a
+    // loaded machine the real caller lands there whenever the loop is descheduled between waking it and publishing.
+    testTask "WHY — a caller woken by a failed rebuild reads the failure from the record, not the rebuild still in progress" {
+      let release = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+      let build = async {
+        do! release.Task |> Async.AwaitTask
+        return Error buildFailed }
+      do! withHarness build (fun harness -> task {
+        let info = createSession harness
+        let restart = restartWithRebuild harness info.Id |> Async.StartAsTask
+        // A round trip through the mailbox: the restart is processed and the rebuild is on the record.
+        rebuildOf harness info.Id |> ignore
+        let readWhenWoken = TaskCompletionSource<Result<unit, SageFsError> * LastRebuild>(TaskCreationOptions.RunContinuationsAsynchronously)
+        let onReply (told: Result<unit, SageFsError>) : unit =
+          let seen =
+            match harness.ReadSnapshot().Sessions |> Map.tryFind info.Id with
+            | Some session -> session.Rebuild
+            | None -> LastRebuild.NeverRebuilt
+          readWhenWoken.SetResult((told, seen))
+        // FSharp.Core keeps AsyncReplyChannel's constructor internal. It is the one way to put a reader exactly where the manager wakes
+        // a caller, so the test reaches it by reflection.
+        let waiter =
+          Activator.CreateInstance(
+            typeof<AsyncReplyChannel<Result<unit, SageFsError>>>,
+            System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Instance,
+            null,
+            [| box (fun (told: Result<unit, SageFsError>) -> onReply told) |],
+            null)
+          :?> AsyncReplyChannel<Result<unit, SageFsError>>
+        harness.Mailbox.Post(SessionCommand.AwaitReady(info.Id, waiter))
+        rebuildOf harness info.Id |> ignore
+        release.SetResult()
+        let! told, seen = readWhenWoken.Task
+        told |> Expect.equal "the waiter is told the build's own error" (Error buildFailed)
+        match seen with
+        | LastRebuild.Latest (RebuildOutcome.FailedStillServing (error, _)) -> error |> Expect.equal "the record names the failure" buildFailed
+        | other -> failtestf "the woken caller read %A from the record, not the failure that woke it" other
+        let! _ = restart
+        () })
     }
 
     testTask "WHY — a rebuild that does not rebuild (a plain respawn) records nothing" {

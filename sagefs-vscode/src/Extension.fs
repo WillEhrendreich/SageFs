@@ -1328,6 +1328,24 @@ let simpleCommand (title: string) (defaultMsg: string) (action: Client.Client ->
         refreshStatus ()
     })
 
+/// The session a command acts on (`SessionScopePure.commandTarget`). A window binds on its first status refresh, so one that has
+/// not bound yet asks the daemon now and adopts the session it finds, as the refresh would: what follows (events, views, the next
+/// command) then agrees with this one.
+let private resolveCommandTarget (c: Client.Client) : JS.Promise<SessionScopePure.CommandTarget> =
+  let roots = workspaceFolderPaths () |> Array.toList
+  match activeSessionId with
+  | Some _ -> promise { return SessionScopePure.commandTarget roots activeSessionId [] }
+  | None ->
+    promise {
+      let! sessions = Client.listSessions c
+      knownSessions <- sessions
+      let target = SessionScopePure.commandTarget roots None (sessionRefs sessions)
+      match target with
+      | SessionScopePure.CommandTarget.Session sessionId -> sessions |> Array.tryFind (fun s -> s.id = sessionId) |> Option.iter (adoptWindowSession c)
+      | SessionScopePure.CommandTarget.NoSessionForThisWindow -> ()
+      return target
+    }
+
 /// `simpleCommand` for an action on this window's own session. The id is the window's session, never
 /// the daemon's idea of an active one; with no session the command says so rather than acting on a
 /// stranger's.
@@ -1337,9 +1355,11 @@ let sessionCommand
   (action: string -> Client.Client -> JS.Promise<Client.ApiOutcome>)
   =
   simpleCommand title defaultMsg (fun c ->
-    match activeSessionId with
-    | Some sessionId -> action sessionId c
-    | None -> promise { return Client.Failed noSessionForThisWindowMessage })
+    promise {
+      match! resolveCommandTarget c with
+      | SessionScopePure.CommandTarget.Session sessionId -> return! action sessionId c
+      | SessionScopePure.CommandTarget.NoSessionForThisWindow -> return Client.Failed noSessionForThisWindowMessage
+    })
 
 type EvalResult =
   | EvalOk of output: string * elapsed: float

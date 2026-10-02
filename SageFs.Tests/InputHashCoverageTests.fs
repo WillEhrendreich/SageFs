@@ -191,3 +191,113 @@ let toolchainFingerprintTests =
       |> Expect.notEqual "a SageFs semantics-version change must shift the toolchain fingerprint even when the user toolchain is byte-identical" (InputHashCoverage.toolchainFingerprint "sfs-v2" rd "/repo")
     }
   ]
+
+/// A cache key is only a key if it can see the code. A bitmap with nothing hit covers no file, so its hash is the toolchain
+/// fingerprint alone, the same for every edit, and a verdict cached under it answers for code it never looked at. That is how a
+/// landing whose test had gone red landed green: the key matched the pass recorded for an earlier landing.
+[<Tests>]
+let trustTests =
+  testList "InputHashCoverage.trust (a hash that cannot see the code is no key)" [
+
+    test "a bitmap with nothing hit is not a key, whatever the files say" {
+      let nothingHit = CoverageBitmap.ofBoolArray [| false; false; false; false |]
+      InputHashCoverage.trust "fixed-test-toolchain" (reader contents) threeFileMap nothingHit
+      |> Expect.equal "covering nothing is untrusted" (HashTrust.Untrusted UntrustedHash.CoversNothing)
+    }
+
+    test "a bitmap with a slot hit is a key, and it is the hash of the files it covers" {
+      InputHashCoverage.trust "fixed-test-toolchain" (reader contents) threeFileMap aAndBBitmap
+      |> Expect.equal "the trusted hash is ofCoverage's" (HashTrust.Trusted (ofCov (reader contents) threeFileMap aAndBBitmap))
+    }
+
+    test "a bitmap of another size than the map is not a key" {
+      let stale = CoverageBitmap.ofBoolArray [| true; true |]
+      InputHashCoverage.trust "fixed-test-toolchain" (reader contents) threeFileMap stale
+      |> Expect.equal "a stale bitmap is untrusted, with the sizes" (HashTrust.Untrusted (UntrustedHash.BitmapDoesNotMatchMap (2, 4)))
+    }
+
+    test "no instrumentation at all is not a key" {
+      let uninstrumented : InstrumentationMap = { threeFileMap with Slots = [||]; TotalProbes = 0 }
+      InputHashCoverage.trust "fixed-test-toolchain" (reader contents) uninstrumented emptyBitmap
+      |> Expect.equal "nothing to cover is untrusted" (HashTrust.Untrusted UntrustedHash.NoInstrumentation)
+    }
+
+    testProperty "a trusted hash always changes when a file it covers changes, and a bitmap that hits nothing is never trusted" <|
+      fun (hits: bool array) (edit: NonEmptyString) ->
+        let hits = Array.append hits (Array.create threeFileMap.Slots.Length false) |> Array.truncate threeFileMap.Slots.Length
+        let bitmap = CoverageBitmap.ofBoolArray hits
+        let before = InputHashCoverage.trust "fixed-test-toolchain" (reader contents) threeFileMap bitmap
+        let covered = InputHashCoverage.coveredFiles threeFileMap bitmap
+        match before, covered with
+        | HashTrust.Untrusted UntrustedHash.CoversNothing, [] -> true
+        | HashTrust.Trusted h, file :: _ ->
+          let edited = contents |> Map.add file (contents[file] + "\n" + edit.Get)
+          InputHashCoverage.trust "fixed-test-toolchain" (reader edited) threeFileMap bitmap <> HashTrust.Trusted h
+        | _ -> false
+  ]
+
+/// Coverage is of the instrumented build. A file evaluated over the build runs as evaluated code, which is not instrumented, so
+/// no test's coverage names it again. Every test may depend on it all the same, and a key or an affected-test selection made
+/// from coverage alone cannot see an edit to it: the pass cached for one landing answers for the next.
+[<Tests>]
+let blindFilesTests =
+  testList "InputHashCoverage files coverage cannot see" [
+
+    test "a file evaluated over the build is part of the key, though no bitmap names it" {
+      // Only B.fs is covered. C.fs was evaluated over the build, so the test's coverage no longer reaches it.
+      let onlyB = CoverageBitmap.ofBoolArray [| false; false; true; false |]
+      let key (c: string) = InputHashCoverage.trustBeyond [ "C.fs" ] "fixed-test-toolchain" (reader (contents |> Map.add "C.fs" c)) threeFileMap onlyB
+      key "let c = 3"
+      |> Expect.notEqual "an edit to an evaluated file is a different key" (key "let c = 4")
+    }
+
+    test "without evaluated files the key is the coverage key" {
+      InputHashCoverage.trustBeyond [] "fixed-test-toolchain" (reader contents) threeFileMap aAndBBitmap
+      |> Expect.equal "nothing beyond coverage, nothing added" (InputHashCoverage.trust "fixed-test-toolchain" (reader contents) threeFileMap aAndBBitmap)
+    }
+
+    test "a bitmap that hit nothing is still no key, however many files were evaluated" {
+      let nothingHit = CoverageBitmap.ofBoolArray [| false; false; false; false |]
+      InputHashCoverage.trustBeyond [ "A.fs"; "C.fs" ] "fixed-test-toolchain" (reader contents) threeFileMap nothingHit
+      |> Expect.equal "evaluated files do not make no coverage into a key" (HashTrust.Untrusted UntrustedHash.CoversNothing)
+    }
+
+    test "the files a test may depend on are what it covered and what was evaluated, each once, sorted" {
+      InputHashCoverage.seenFiles [ "C.fs"; "A.fs" ] threeFileMap aAndBBitmap
+      |> Expect.equal "A.fs is covered and evaluated, C.fs only evaluated, B.fs only covered" [ "A.fs"; "B.fs"; "C.fs" ]
+    }
+
+    test "a test that covers only B.fs is affected by an edit to an evaluated C.fs" {
+      let onlyB = CoverageBitmap.ofBoolArray [| false; false; true; false |]
+      let test = TestId.TestId "needs-c-without-saying-so"
+      let seen = InputHashCoverage.seenFiles [ "C.fs" ] threeFileMap onlyB
+      AffectedTests.affected [ "C.fs" ] (fun _ -> Some seen) [ test ]
+      |> Expect.equal "the evaluated file is one the test may depend on" [ test ]
+    }
+  ]
+
+/// What the affected-test selection is told about a test. `AffectedTests.affected` runs a test whose covered files are empty, because
+/// coverage that names no file is coverage nobody can trust. Evaluated files must not turn that empty into an answer.
+[<Tests>]
+let selectionFilesTests =
+  testList "InputHashCoverage files the selection is told about" [
+
+    test "a test that hit nothing is told as no files, however many were evaluated, so it is always run" {
+      let nothingHit = CoverageBitmap.ofBoolArray [| false; false; false; false |]
+      InputHashCoverage.selectionFiles [ "C.fs" ] threeFileMap nothingHit
+      |> Expect.isEmpty "coverage that names nothing stays empty, which `affected` treats as untrusted"
+    }
+
+    test "a test with coverage is told as what it covered and what was evaluated" {
+      let onlyB = CoverageBitmap.ofBoolArray [| false; false; true; false |]
+      InputHashCoverage.selectionFiles [ "C.fs" ] threeFileMap onlyB
+      |> Expect.equal "B.fs covered, C.fs evaluated" [ "B.fs"; "C.fs" ]
+    }
+
+    test "a test that hit nothing is affected by any edit, evaluated file or not" {
+      let nothingHit = CoverageBitmap.ofBoolArray [| false; false; false; false |]
+      let test = TestId.TestId "hit-nothing"
+      AffectedTests.affected [ "A.fs" ] (fun _ -> Some (InputHashCoverage.selectionFiles [ "C.fs" ] threeFileMap nothingHit)) [ test ]
+      |> Expect.equal "run it" [ test ]
+    }
+  ]
