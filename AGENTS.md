@@ -38,9 +38,9 @@ Working on SageFs itself has two extra catches:
   so a session on SageFs.Tests faulted even when everything was built.
 - **The daemon runs the build you are working against, always.** A lagging daemon costs signal: sessions
   refuse on a version mismatch, `hard_reset_fsi_session rebuild=true` fails on bugs already fixed, and a
-  merged fix that is not running looks broken. Run `scripts/install-local --status` at the start of work. If
-  it says master is ahead, run `scripts/install-local --build --force` (or `scripts/install-local <sha>
-  --force` to install the nupkg a gate built). It installs the package as the global tool, restarts the
+  merged fix that is not running looks broken. Run `dotnet fsi scripts/install-local.fsx -- --status` at the start of
+  work. If it says master is ahead, run `dotnet fsi scripts/install-local.fsx -- --build --force` (or pass a
+  `<sha>` with `--force` to install the nupkg a gate built). It installs the package as the global tool, restarts the
   daemon and reads the version back. Open sessions are dropped on purpose, and nobody asks first:
   upgrading the daemon always wins. `scripts/ship` does this itself after the gate and before the push.
 - **Self-hosting skew.** A worktree's `SageFs.Core` can be newer than the
