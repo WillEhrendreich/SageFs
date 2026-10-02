@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 16, Later 17, Exploring 16. Already built: 10.
+On the page today: Now 0, Next 16, Later 17, Exploring 16. Already built: 12.
 
 ## Next
 
@@ -145,6 +145,14 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - **Saves to run_app apps patch in place.** A save to an app you started with run_app is handed to the runtime as a metadata delta, so the process keeps its state. On the test fixture a save was served in 1.8 to 2.6 seconds against 6 to 8.5 for the restart it replaced, and `SAGEFS_METADATA_DELTA=off` puts the old behavior back. Code: [`SageFs.Host/RunAppDelta.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Host/RunAppDelta.fs)
 - **Generic functions patch in every instantiation.** A save to a generic function reaches every instantiation the runtime compiled, including a float or struct first used after the save. If your code calls MakeGenericMethod anywhere, a save to a generic function still restarts and names why. Code: [`SageFs.Core/Middleware/HotReloadCore.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/HotReloadCore.fs)
 - **Hot reload save times are measured.** A test tier times saves against a real running app and fails if the p95 drifts. It's one machine and one small app, and I have no Microsoft figure to set it against. Code: [`SageFs.Tests/HotReloadLatency.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Tests/HotReloadLatency.fs)
+
+### The REPL
+
+- **A rebuild is waited on, not skipped.** `get_session_status` with `wait_seconds` now waits for a rebuild in progress and answers when the new worker is ready, or Faulted with the build's own error. It used to answer "not needed" while the rebuild was still running, so a caller had to poll. Code: [`SageFs.Core/ReadyWait.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ReadyWait.fs)
+
+### Isolation
+
+- **A session builds against the Core its project brings.** A session on a project in a repo that builds its own SageFs.Core now compiles against that Core, not the daemon's older one. Before, building SageFs.Tests in a worktree failed against the old Core and printed a wrong compile-order hint. A project that can't be read is refused with the path and the reason. The daemon and its FSI host still match Cores by version number, so a worktree Core and an older daemon can disagree at load time until they're built together. Code: [`SageFs.Core/CoreEvidence.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/CoreEvidence.fs)
 
 ### Agents and cohorts
 

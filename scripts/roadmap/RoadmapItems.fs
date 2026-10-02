@@ -61,6 +61,16 @@ let items : Item list =
       [ "docs/how-hot-reload-works.md" ]
       "A test tier times saves against a real running app and fails if the p95 drifts. It's one machine and one small app, and I have no Microsoft figure to set it against."
 
+    item "self-hosting-builds-its-own-core" "A session builds against the Core its project brings" Isolation Now
+      (landmark "SageFs.Core/CoreEvidence.fs" "CoreEvidence")
+      [ "docs/decisions.md"; "docs/how-isolation-works.md" ]
+      "A session on a project in a repo that builds its own SageFs.Core now compiles against that Core, not the daemon's older one. Before, building SageFs.Tests in a worktree failed against the old Core and printed a wrong compile-order hint. A project that can't be read is refused with the path and the reason. The daemon and its FSI host still match Cores by version number, so a worktree Core and an older daemon can disagree at load time until they're built together."
+
+    item "waiting-on-a-rebuild" "A rebuild is waited on, not skipped" Repl Now
+      (landmark "SageFs.Core/ReadyWait.fs" "ReadyWait")
+      [ "docs/mcp-tools.md" ]
+      "`get_session_status` with `wait_seconds` now waits for a rebuild in progress and answers when the new worker is ready, or Faulted with the build's own error. It used to answer \"not needed\" while the rebuild was still running, so a caller had to poll."
+
     item "receipts-say-what-source-they-ran-on" "A test receipt says what source it ran on" LiveTesting Now
       (landmark "SageFs.Core/Features/SourceState.fs" "SourceState")
       [ "docs/mcp-tools.md"; "docs/how-live-testing-works.md" ]
