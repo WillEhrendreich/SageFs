@@ -275,3 +275,29 @@ let blindFilesTests =
       |> Expect.equal "the evaluated file is one the test may depend on" [ test ]
     }
   ]
+
+/// What the affected-test selection is told about a test. `AffectedTests.affected` runs a test whose covered files are empty, because
+/// coverage that names no file is coverage nobody can trust. Evaluated files must not turn that empty into an answer.
+[<Tests>]
+let selectionFilesTests =
+  testList "InputHashCoverage files the selection is told about" [
+
+    test "a test that hit nothing is told as no files, however many were evaluated, so it is always run" {
+      let nothingHit = CoverageBitmap.ofBoolArray [| false; false; false; false |]
+      InputHashCoverage.selectionFiles [ "C.fs" ] threeFileMap nothingHit
+      |> Expect.isEmpty "coverage that names nothing stays empty, which `affected` treats as untrusted"
+    }
+
+    test "a test with coverage is told as what it covered and what was evaluated" {
+      let onlyB = CoverageBitmap.ofBoolArray [| false; false; true; false |]
+      InputHashCoverage.selectionFiles [ "C.fs" ] threeFileMap onlyB
+      |> Expect.equal "B.fs covered, C.fs evaluated" [ "B.fs"; "C.fs" ]
+    }
+
+    test "a test that hit nothing is affected by any edit, evaluated file or not" {
+      let nothingHit = CoverageBitmap.ofBoolArray [| false; false; false; false |]
+      let test = TestId.TestId "hit-nothing"
+      AffectedTests.affected [ "A.fs" ] (fun _ -> Some (InputHashCoverage.selectionFiles [ "C.fs" ] threeFileMap nothingHit)) [ test ]
+      |> Expect.equal "run it" [ test ]
+    }
+  ]
