@@ -83,6 +83,25 @@ let ofSessionRecord (info: WorkerProtocol.SessionInfo option) (warmup: WarmupCon
   | Some session -> ofSession session warmup
   | None -> SourceState.Unknown (UnknownReason.LoadTimeNotReported "the registry has no record of the session")
 
+/// Every listed session's source state, each read off the disk and the worker's own warmup report, all sessions at once. The
+/// session list a client reads (`list_sessions`, `sessions://list`) takes this map, so each row says what was read for it.
+let readAll
+  (warmupOf: string -> System.Threading.Tasks.Task<WarmupContext option>)
+  (sessions: WorkerProtocol.SessionInfo list)
+  : System.Threading.Tasks.Task<Map<string, SourceState>> =
+  task {
+    let! readings =
+      sessions
+      |> List.map (fun session ->
+        task {
+          let sid = WorkerProtocol.SessionId.value session.Id
+          let! warmup = warmupOf sid
+          return sid, ofSession session warmup
+        })
+      |> System.Threading.Tasks.Task.WhenAll
+    return Map.ofArray readings
+  }
+
 /// What `targeted_verify` makes of a source state: current only when it is in sync, stale when files changed after the build,
 /// and unknown otherwise (a rebuild in progress included), which it refuses just as it refuses stale. `artifact` names what
 /// was loaded.

@@ -2150,16 +2150,8 @@ module McpTools =
           sid, occupantsForSession ctx sid)
         |> Map.ofList
       // Each session's source line is read off the disk and the worker's own warmup report, all sessions at once.
-      let! sources =
-        sessions
-        |> List.map (fun s ->
-          task {
-            let sid = WorkerProtocol.SessionId.value s.Id
-            let! warmup = warmupOf ctx sid
-            return sid, SourceStateProbe.ofSession s warmup
-          })
-        |> Task.WhenAll
-      return SourceStateProbe.formatSessionList System.DateTime.UtcNow (Some occupancyMap) (Map.ofArray sources) sessions
+      let! sources = SourceStateProbe.readAll (warmupOf ctx) sessions
+      return SourceStateProbe.formatSessionList System.DateTime.UtcNow (Some occupancyMap) sources sessions
     }
 
   /// Stop a session by ID.

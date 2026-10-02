@@ -535,7 +535,8 @@ module ExpensiveWorkLease =
         (Math.Ceiling waiting.RetryAfter.TotalSeconds)
     | Decision.Refused(Refusal.HoldsOtherKind(held, asked)) ->
       sprintf
-        "Refused: you already hold a %s, so you cannot also take a %s lease. One lease per holder at a time: release it with release_work_lease (lease_id=%s) first. If you never took it, another agent sharing your connection, agent_name and working_directory did: pass a distinct agent_name (and your working_directory) so each of you is its own holder."
+        "Refused: you are %s, and that holder already holds a %s, so you cannot also take a %s lease. One lease per holder at a time: release it with release_work_lease (lease_id=%s) first. If you never took it, another agent sharing your connection, agent_name and working_directory did: pass a distinct agent_name (and your working_directory) so each of you is its own holder."
+        (Holder.describe held.Holder)
         (describeOwn now held)
         (Kind.describe asked)
         (LeaseId.value held.Id)

@@ -118,10 +118,11 @@ let sourceRenderTests =
       html |> Expect.stringContains "the disk-ahead-of-the-build line" "data-testid=\"session-card-source\""
       let freshnessAt = html.IndexOf "session-card-freshness"
       let sourceAt = html.IndexOf "session-card-source"
-      (freshnessAt <> sourceAt) |> Expect.isTrue "two elements"
-      let freshnessLine = html.Substring(freshnessAt, 400)
+      (freshnessAt < sourceAt) |> Expect.isTrue "two elements, the REPL line first"
+      let freshnessLine = html.Substring(freshnessAt, sourceAt - freshnessAt)
       freshnessLine.Contains "STALE SOURCE" |> Expect.isFalse "the freshness line does not say the source is stale"
-      let sourceLine = html.Substring(sourceAt, 400)
+      let actionsAt = html.IndexOf "session-card-actions"
+      let sourceLine = html.Substring(sourceAt, actionsAt - sourceAt)
       sourceLine.Contains "BEHIND" |> Expect.isFalse "the source line does not say the REPL is behind the app"
 
     testCase "WHY - the source line sits inside the card's single column before the buttons, so horizontal resizing can only wrap it" <| fun _ ->

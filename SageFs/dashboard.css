@@ -943,6 +943,24 @@ h2 {
   white-space: normal;
 }
 
+/* The files on disk are ahead of the build the session runs (or a rebuild is picking them up, or nobody could tell): another
+   line of the card's own column, the same wrapping rules as the one above and a different colour, because it is a different fact.
+   File paths are long, so it wraps anywhere. It never widens the card and never overlaps the rows around it. */
+.session-row .session-card-source {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 2px 0 2px 6px;
+  border-left: 3px solid var(--fg-red);
+  color: var(--fg-red);
+  font-size: 0.7rem;
+  font-weight: bold;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
 .session-stopping {
   color: var(--fg-dim);
   font-style: italic;

@@ -2781,6 +2781,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
              lastRestart = SageFs.SessionStatusPayload.lastRestartJson (SageFs.SessionStatusPayload.lastRestartOfRebuild DateTime.UtcNow None sess.Rebuild)
              lastReload = SageFs.SessionReload.toWire sess.Reload
              replFreshness = SageFs.ReplFreshness.toWire sess.Freshness
+             sourceState = SageFs.SourceState.toWire (SageFs.SourceStateProbe.ofSession sess warmupOpt)
              projects = sess.Projects
              // What the worker ACTUALLY resolved and loaded, which is not always what
              // was declared: a session created with `projects=[]` still loads whatever

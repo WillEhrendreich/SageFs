@@ -427,9 +427,20 @@ let buildSessionCardsFrom
     match viewedContext with
     | Some (viewedId, ctx) when viewedId = sid -> ctx
     | _ -> None
+  // The source is read for the viewed session (its warmup report is in hand) and for a session mid-rebuild (which answers
+  // without reading the disk). Any other card says it was not read, rather than reading a worker per card per push.
+  let sourceFor (card: ParsedSession) : CardSource =
+    match sessions |> List.tryFind (fun s -> s.Id = card.Id) with
+    | None -> CardSource.NotReadOnThisCard
+    | Some info ->
+      match viewedContext, info.Rebuild with
+      | Some (viewedId, _), _ when viewedId = card.Id -> CardSource.Read (SourceStateProbe.ofSession info (warmupContextFor card.Id))
+      | _, LastRebuild.Latest (RebuildOutcome.InProgress _) -> CardSource.Read (SourceStateProbe.ofSession info None)
+      | _ -> CardSource.NotReadOnThisCard
   liveSessionCards DateTime.UtcNow q.GetStatusMsg (q.GetSessionEvalCounts ()) warmupContextFor sessions
   |> List.map (fun card ->
     { card with
+        Source = sourceFor card
         TestSummary = q.GetSessionTestSummary card.Id
         CoverageSummary = q.GetSessionCoverageSummary card.Id
         TestTreemapEntries = q.GetSessionTestTreemap card.Id

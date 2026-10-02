@@ -808,6 +808,14 @@ module DashboardConnectionState =
     | DashboardConnectionState.Connected -> "SageFs -- ready"
     | DashboardConnectionState.Disconnected -> "SageFs -- daemon not running"
 
+/// What a sidebar card knows about whether the files on disk are ahead of the build its session runs (`SourceState`).
+/// Reading it takes the worker's own warmup report (a worker round trip), which the push loop pays only for the session
+/// being viewed. A card for any other session says so rather than guessing: it is not a card whose build is current.
+[<RequireQualifiedAccess>]
+type CardSource =
+  | Read of SourceState
+  | NotReadOnThisCard
+
 /// One sidebar card. Which card is being viewed is NOT a property of the card:
 /// renderers are always told the viewing session explicitly (the page's
 /// viewingSessionId signal), so no card can claim to be viewed on its own.
@@ -857,6 +865,9 @@ type ParsedSession = {
   Health: SessionHealth
   /// Whether the REPL and live tests run the build the app runs. A card for a session whose app was patched in place says so.
   Freshness: ReplFreshness
+  /// Whether the files on disk are ahead of the build the session runs. A different fact from `Freshness` (that one is the
+  /// REPL being behind the APP), with a line and a word of its own.
+  Source: CardSource
 }
 
 /// Best-effort live RSS of a worker process, by pid. Never throws: a pid
@@ -939,6 +950,8 @@ let sessionCardOf
     // DashboardQueries lookup; the base card carries no staleness.
     SelfHostStaleness = None
     Health = health
+    // Read by buildSessionCardsFrom for the viewed session, whose warmup report is already in hand.
+    Source = CardSource.NotReadOnThisCard
     Freshness = info.Freshness }
 
 /// Every session the sidebar lists — all but Stopped — in registry order (the

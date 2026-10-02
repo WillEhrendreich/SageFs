@@ -74,13 +74,14 @@ let private siblingIsADifferentHolder (client: McpClient) : Task<string> =
     let leases = (json status).GetProperty("leases")
     leases.GetProperty("activeCount").GetInt32() |> Expect.equal "two leases are out" 2
     let rows = [ for row in leases.GetProperty("active").EnumerateArray() -> row ]
-    rows |> List.map (fun r -> r.GetProperty("agentName").GetString()) |> List.sort
+    // The status rows keep the key spelling they always had (as written, PascalCase), unlike the camelCase acquire reply.
+    rows |> List.map (fun r -> r.GetProperty("AgentName").GetString()) |> List.sort
     |> Expect.equal "each row names its agent" [ "sub-agent-one"; "sub-agent-two" ]
-    rows |> List.map (fun r -> r.GetProperty("workingDirectory").GetString()) |> List.sort
+    rows |> List.map (fun r -> r.GetProperty("WorkingDirectory").GetString()) |> List.sort
     |> Expect.equal "and its directory" [ "/work/one"; "/work/two" ]
-    rows |> List.map (fun r -> r.GetProperty("connection").GetString()) |> List.distinct |> List.length
+    rows |> List.map (fun r -> r.GetProperty("Connection").GetString()) |> List.distinct |> List.length
     |> Expect.equal "both are on ONE connection" 1
-    rows |> List.iter (fun r -> (r.GetProperty("expiresInSeconds").GetInt32() > 0) |> Expect.isTrue "every lease says how long it has left")
+    rows |> List.iter (fun r -> (r.GetProperty("ExpiresInSeconds").GetInt32() > 0) |> Expect.isTrue "every lease says how long it has left")
     return s.GetProperty("leaseId").GetString()
   }
 
