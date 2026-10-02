@@ -261,7 +261,7 @@ sagefs-vs/         — Deprecated Visual Studio extension (C# + F#), retained as
 docs/              — GitHub Pages site
 ```
 
-The Neovim plugin lives in a separate repo, `WillEhrendreich/sagefs.nvim` (checked out at `~/Work/sagefs.nvim`), only so Neovim distribution works. It is a first-class part of SageFs: when a need shows up there, fix and improve it like any other project (busted spec first, verified in real Neovim against the daemon), push it once it is verified, and keep it from falling behind. Its version always equals the SageFs release: `scripts/ship` runs `scripts/sync-nvim-version` after each release push, which bumps, tests and pushes the plugin.
+The Neovim plugin lives in a separate repo, `WillEhrendreich/sagefs.nvim` (checked out at `~/Work/sagefs.nvim`), only so Neovim distribution works. It is a first-class part of SageFs: when a need shows up there, fix and improve it like any other project (busted spec first, verified in real Neovim against the daemon), push it once it is verified, and keep it from falling behind. Its version always equals the SageFs release: `scripts/ship` runs `scripts/sync-nvim-version` after each release push, which bumps, tests and pushes the plugin. The version is only a marker, because the plugin reaches users commit by commit. What decides compatibility is the daemon's `apiVersion` against the `api_range` in the plugin's `lua/sagefs/compat.lua`, and `scripts/ship` refuses to release (`scripts/sync-nvim-version --compat`) when the daemon speaks a version the plugin does not declare. A wire change lands in the plugin first.
 
 ## Build & Test
 
