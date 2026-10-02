@@ -208,7 +208,7 @@ let main argv =
   // The ratchet lane: ONLY the registered ratchets (TestInfrastructure.Ratchet) —
   // the budget, literal-count, stale-generated-page and CI-wiring tests, which are
   // pure reads of the tree. CI runs this straight after the build and stops the
-  // pipeline on red; scripts/ship runs it before it bumps anything. The lane is
+  // pipeline on red; scripts/ship.fsx runs it before it bumps anything. The lane is
   // selected by the identity of the registered test bodies, never by a name filter,
   // and it runs through TrustSignal.run, so zero ratchets registered or ran is
   // NothingRan (exit 3) and the run prints its own TRUST row.

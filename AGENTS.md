@@ -42,7 +42,7 @@ Working on SageFs itself has two extra catches:
   work. If it says master is ahead, run `dotnet fsi scripts/install-local.fsx -- --build --force` (or pass a
   `<sha>` with `--force` to install the nupkg a gate built). It installs the package as the global tool, restarts the
   daemon and reads the version back. Open sessions are dropped on purpose, and nobody asks first:
-  upgrading the daemon always wins. `scripts/ship` does this itself after the gate and before the push.
+  upgrading the daemon always wins. `scripts/ship.fsx` does this itself after the gate and before the push.
 - **Self-hosting skew.** A worktree's `SageFs.Core` can be newer than the
   installed daemon (the daemon is whatever was last published). A
   session that loads Core can then refuse with a version mismatch, or a
@@ -184,7 +184,7 @@ budget table has a budget of zero, and a budget above the real count is itself a
   actual |> Expect.isTrue "should be true"
   ```
 - Run tests via the SageFs REPL, not `dotnet test`
-- Run the ratchet lane after any edit and before committing: `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`. It runs only the ratchets (the budget, literal-count, stale-generated-page and CI-wiring tests, registered by reference with `Ratchet.register` in `TestInfrastructure.fs`) and takes seconds after the build. The release gate and `scripts/ship` run the same lane first and stop on red, so a red ratchet costs minutes, not twenty. A budget that went down is lowered by `--ratchets --tighten`, never by hand.
+- Run the ratchet lane after any edit and before committing: `dotnet build SageFs.Tests -c Release`, then `dotnet SageFs.Tests/bin/Release/net11.0/SageFs.Tests.dll --ratchets`. It runs only the ratchets (the budget, literal-count, stale-generated-page and CI-wiring tests, registered by reference with `Ratchet.register` in `TestInfrastructure.fs`) and takes seconds after the build. The release gate and `scripts/ship.fsx` run the same lane first and stop on red, so a red ratchet costs minutes, not twenty. A budget that went down is lowered by `--ratchets --tighten`, never by hand.
 - Property-based tests (FsCheck) are preferred over example-based tests
 
 #### Filters: `--filter-test-list` matches LISTS, `--filter-test-case` matches LEAVES
@@ -270,9 +270,9 @@ sagefs-vs/         — Deprecated Visual Studio extension (C# + F#), retained as
 docs/              — GitHub Pages site
 ```
 
-The Neovim plugin lives in a separate repo, `WillEhrendreich/sagefs.nvim` (checked out at `~/Work/sagefs.nvim`), only so Neovim distribution works. It is a first-class part of SageFs: when a need shows up there, fix and improve it like any other project (busted spec first, verified in real Neovim against the daemon), push it once it is verified, and keep it from falling behind. Its version always equals the SageFs release: `scripts/ship` runs `scripts/sync-nvim-version.fsx` after each release push, which bumps, tests and pushes the plugin. The version is only a marker, because the plugin reaches users commit by commit. What decides compatibility is the daemon's `apiVersion` against the `api_range` in the plugin's `lua/sagefs/compat.lua`, and `scripts/ship` refuses to release (`scripts/sync-nvim-version.fsx -- --compat`) when the daemon speaks a version the plugin does not declare. A wire change lands in the plugin first.
+The Neovim plugin lives in a separate repo, `WillEhrendreich/sagefs.nvim` (checked out at `~/Work/sagefs.nvim`), only so Neovim distribution works. It is a first-class part of SageFs: when a need shows up there, fix and improve it like any other project (busted spec first, verified in real Neovim against the daemon), push it once it is verified, and keep it from falling behind. Its version always equals the SageFs release: `scripts/ship.fsx` runs `scripts/sync-nvim-version.fsx` after each release push, which bumps, tests and pushes the plugin. The version is only a marker, because the plugin reaches users commit by commit. What decides compatibility is the daemon's `apiVersion` against the `api_range` in the plugin's `lua/sagefs/compat.lua`, and `scripts/ship.fsx` refuses to release (`scripts/sync-nvim-version.fsx -- --compat`) when the daemon speaks a version the plugin does not declare. A wire change lands in the plugin first.
 
-The plugin stays its own repo (so it can be distributed to Neovim users), but it moves with SageFs: when the daemon gains something a Neovim user would want (a new tool, endpoint, resource, field, status or event), the plugin takes advantage of it in the same stretch of work, not later. Every commit that touches the wire surface (`SageFs.Core/EndpointContracts.fs`, `SageFs/McpTools.fs`, `McpServer.fs`, `McpLeaseWire.fs`, `DashboardTypes.fs`, `SageFs.Core/SessionOperations.fs`, `SessionStatusPayload.fs`, `docs/mcp-tools.md`) carries a trailer, `Plugin: done <what changed in sagefs.nvim>` or `Plugin: n/a <why it needs nothing>`, and `scripts/ship` refuses a release with one missing (`scripts/sync-nvim-version.fsx -- --impact`). Commits at or before `scripts/plugin-impact-baseline` are exempt. Sub-agent briefs that change the wire surface say so.
+The plugin stays its own repo (so it can be distributed to Neovim users), but it moves with SageFs: when the daemon gains something a Neovim user would want (a new tool, endpoint, resource, field, status or event), the plugin takes advantage of it in the same stretch of work, not later. Every commit that touches the wire surface (`SageFs.Core/EndpointContracts.fs`, `SageFs/McpTools.fs`, `McpServer.fs`, `McpLeaseWire.fs`, `DashboardTypes.fs`, `SageFs.Core/SessionOperations.fs`, `SessionStatusPayload.fs`, `docs/mcp-tools.md`) carries a trailer, `Plugin: done <what changed in sagefs.nvim>` or `Plugin: n/a <why it needs nothing>`, and `scripts/ship.fsx` refuses a release with one missing (`scripts/sync-nvim-version.fsx -- --impact`). Commits at or before `scripts/plugin-impact-baseline` are exempt. Sub-agent briefs that change the wire surface say so.
 
 ## Build & Test
 
@@ -329,5 +329,5 @@ the workspace tidy is the orchestrator's job, and these are the calls that do it
 - Do not introduce new NuGet dependencies without discussion
 - Do not change the indentation style (2 spaces)
 - Do not use `dotnet test` for local development — use the SageFs REPL
-- Do not modify `Directory.Build.props` version numbers. Nothing bumps on commit: `scripts/ship` bumps once per push, and `scripts/pre-push` refuses a master push that doesn't raise the version
+- Do not modify `Directory.Build.props` version numbers. Nothing bumps on commit: `scripts/ship.fsx` bumps once per push, and `scripts/pre-push` refuses a master push that doesn't raise the version
 - Do not add Version attributes to PackageReference elements

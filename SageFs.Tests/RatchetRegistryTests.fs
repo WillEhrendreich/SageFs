@@ -287,16 +287,22 @@ let wiringTests =
         ratchets |> Expect.equal "ratchets is the stage right after build" (build + 1)
       | _ -> failtest "ci-pipeline.fsx needs both a build and a ratchets stage"
 
-    testCase "scripts/ship runs the ratchets before it bumps the version or calls the gate" <| fun _ ->
-      let ship = read "scripts/ship"
-      ship |> Expect.stringContains "ship runs the lane binary" "SageFs.Tests.dll --ratchets"
-      // The two call sites: a given commit, and HEAD about to be bumped.
-      let givenCommit = ship.IndexOf "run_ratchets \"$sha\""
-      let beforeBump = ship.IndexOf "run_ratchets \"$(git"
-      (givenCommit, -1) |> Expect.isGreaterThan "a shipped commit is checked"
-      (beforeBump, -1) |> Expect.isGreaterThan "HEAD is checked before it is bumped"
-      (beforeBump, ship.IndexOf "scripts/bump-version\")") |> Expect.isLessThan "before the bump"
-      (givenCommit, ship.IndexOf "scripts/local-gate\" \"$sha\"") |> Expect.isLessThan "and before the gate"
+    testCase "scripts/ship is F# (an .fsx), and the bash version is gone" <| fun _ ->
+      File.Exists(Path.Combine(repoRoot, "scripts", "ship.fsx")) |> Expect.isTrue "scripts/ship.fsx exists"
+      File.Exists(Path.Combine(repoRoot, "scripts", "ship")) |> Expect.isFalse "no bash scripts/ship beside it"
+
+    testCase "scripts/ship.fsx runs the ratchets before it bumps the version or calls the gate" <| fun _ ->
+      let ship = read "scripts/ship.fsx"
+      ship |> Expect.stringContains "ship runs the lane binary" "SageFs.Tests.dll"
+      ship |> Expect.stringContains "ship runs the lane" "\"--ratchets\""
+      // The steps are marked in the script: the two ratchet runs (a given commit, and HEAD about to be
+      // bumped), then the bump, then the gate.
+      let at (marker: string) = ship.IndexOf("// STEP " + marker)
+      (at "ratchets given", -1) |> Expect.isGreaterThan "a shipped commit is checked"
+      (at "ratchets head", -1) |> Expect.isGreaterThan "HEAD is checked before it is bumped"
+      (at "ratchets head", at "bump") |> Expect.isLessThan "the lane runs before the bump"
+      (at "bump", at "gate") |> Expect.isLessThan "the bump comes before the gate"
+      (at "ratchets given", at "gate") |> Expect.isLessThan "a given commit is checked before the gate"
   ]
 
 do
