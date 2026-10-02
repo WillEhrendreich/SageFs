@@ -287,8 +287,8 @@ let memberActivityTests = testList "AgentActivityTracker — recordMemberActivit
 
   testCase "recordMemberActivity keys the presence table identically to MemberId.display" <| fun _ ->
     let tracker = AgentActivityTracker.create()
-    AgentActivityTracker.recordMemberActivity tracker (MemberTable.MemberId.Mcp "conn-A") "sess-1" (Some "Main.fs") None now
-    AgentActivityTracker.getPresence tracker "mcp:conn-A"
+    AgentActivityTracker.recordMemberActivity tracker (MemberTable.MemberId.ofConnectionHandle "conn-A") "sess-1" (Some "Main.fs") None now
+    AgentActivityTracker.getPresence tracker (MemberTable.MemberId.display (MemberTable.MemberId.ofConnectionHandle "conn-A"))
     |> Option.isSome
     |> Expect.isTrue "keyed by MemberId.display, same routing key space as recordToolCall/SessionMap"
 

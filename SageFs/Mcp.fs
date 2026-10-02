@@ -91,7 +91,9 @@ module McpTools =
   /// and call site keeps working unchanged.
   let memberIdFor (agentName: string) : MemberTable.MemberId =
     match currentTransportSessionId.Value with
-    | Some tsid when not (String.IsNullOrWhiteSpace tsid) -> MemberTable.MemberId.Mcp tsid
+    // The member id is a fingerprint of the handle, never the handle: the SDK's
+    // session id is a bearer credential, and every cohort output prints member ids.
+    | Some tsid when not (String.IsNullOrWhiteSpace tsid) -> MemberTable.MemberId.ofConnectionHandle tsid
     | _ -> MemberTable.MemberId.Minted agentName
 
   /// The resolved routing/presence key for a self-declared agent name — see

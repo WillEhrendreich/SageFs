@@ -16,8 +16,12 @@ let tests = testList "MemberTable.MemberId" [
     |> Expect.equal "Minted must not add a prefix — every existing name-keyed call site depends on this" "claude"
 
   testCase "WHY — Mcp and Browser get distinguishing prefixes so they can never collide with a Minted name" <| fun () ->
-    MemberId.display (MemberId.Mcp "conn-123")
-    |> Expect.equal "Mcp prefix" "mcp:conn-123"
+    // An Mcp member prints as a fingerprint of its connection handle, never the handle
+    // (CohortIdentityLeakTests); the prefix is what keeps it apart from a Minted name.
+    MemberId.display (MemberId.ofConnectionHandle "conn-123")
+    |> Expect.stringStarts "Mcp prefix" "mcp:"
+    MemberId.display (MemberId.ofConnectionHandle "conn-123")
+    |> fun shown -> shown.Contains "conn-123" |> Expect.isFalse "the handle never prints"
     MemberId.display (MemberId.Browser "tab-1")
     |> Expect.equal "Browser prefix" "browser:tab-1"
 
