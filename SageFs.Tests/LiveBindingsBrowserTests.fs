@@ -10,6 +10,7 @@ open System
 open System.IO
 open System.Threading.Tasks
 open Expecto
+open Falco.Markup
 open Microsoft.Playwright
 open SageFs.Tests.DashboardBrowserTests
 
@@ -110,10 +111,62 @@ let private layoutProblems (page: IPage) =
       return problems.join(' | ');
     }""")
 
+/// A getter the walk listed and did not read, at the depth below its class.
+let private heldGetter (label: string) (reason: SageFs.Features.LiveValueTree.NotEvaluatedReason) : SageFs.Features.LiveValueTree.LiveValueNode =
+  { Label = label
+    TypeName = "Int32"
+    Preview = "not evaluated"
+    Kind = SageFs.Features.LiveValueTree.NodeKind.NotEvaluated reason
+    Children = []
+    BestEffort = false
+    Depth = 1 }
+
+/// A class binding with the given getters under it.
+let private classBinding (name: string) (getters: SageFs.Features.LiveValueTree.LiveValueNode list) : SageFs.Features.LiveValueTree.LiveBindingValue =
+  { Name = name
+    TypeSignature = name
+    Root =
+      { Label = name
+        TypeName = name
+        Preview = "{ }"
+        Kind = SageFs.Features.LiveValueTree.NodeKind.Class
+        Children = getters
+        BestEffort = false
+        Depth = 0 } }
+
+/// The pane as the dashboard renders it for two class bindings that each hold a clickable getter, on a page that has only
+/// the real stylesheet. No daemon: what a case looks at is the layout, and the layout does not depend on one.
+let private paneHtml : string =
+  let view : SageFs.Features.LiveBindingsPane.PaneView =
+    { Snapshot =
+        { SessionId = "abcd1234"
+          Generation = 1L
+          Bindings =
+            [ classBinding "probe" [ heldGetter "RunsCode" SageFs.Features.LiveValueTree.NotEvaluatedReason.GetterRunsCode ]
+              classBinding "spinner" [ heldGetter "Self" SageFs.Features.LiveValueTree.NotEvaluatedReason.GetterLoops ] ]
+          Truncated = false
+          CapturedAt = DateTimeOffset.UnixEpoch }
+      Notes = { Mode = SageFs.ValueWalk.standard; Click = SageFs.Features.LiveBindingsPane.NoClickYet } }
+  let pane = SageFs.Server.DashboardFragments.renderLiveBindingsPanel "abcd1234" (Some view) |> renderNode
+  // The pane sits in the sidebar, well away from the page's left edge, as it does in the dashboard.
+  sprintf "<!doctype html><html><head><meta charset=\"utf-8\"><style>%s</style></head><body><div style=\"margin-left: 700px; width: 300px\">%s</div></body></html>" SageFs.Server.Dashboard.dashboardCss pane
+
 [<Tests>]
 let tests =
   testSequenced <|
   testList "Live bindings pane browser tests" [
+
+  playwrightTestRaw "live bindings: the layout check judges the rows that have a box, and a row with none cannot stick out of the pane" (fun page -> task {
+    do! page.SetViewportSizeAsync(1280, 900)
+    do! page.SetContentAsync paneHtml
+    // The gate's journey that clicks the spinner found the earlier journeys' probe row in the page with a 0..0 box, and the
+    // check called that a row sticking out of the pane. Give the probe's row no box the plain way and look at the spinner's.
+    let! _ = page.EvaluateAsync("() => { for (const d of document.querySelectorAll('#bindings-panel details')) d.open = true; document.querySelector(\"details[id^='open_probe_'] .live-held-row\").style.display = 'none'; }")
+    let! hidden = page.EvaluateAsync<bool>("() => document.querySelector(\"details[id^='open_probe_'] .live-held-row\").getBoundingClientRect().width === 0")
+    Expect.isTrue hidden "the probe's getter row has no box"
+    let! problems = layoutProblems page
+    Expect.equal problems "" (sprintf "a row that is not shown cannot stick out of the pane: %s" problems)
+  })
 
   playwrightTest "live bindings: Safe mode shows a harmless getter's value and lists the one that runs code, with a click, at every width" (fun page -> task {
     let errors = watchErrors page
