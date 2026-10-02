@@ -79,6 +79,15 @@ module McpTools =
   /// through the ASP.NET Core / MCP SDK pipeline) — see `memberIdFor`.
   let currentTransportSessionId = new System.Threading.AsyncLocal<string option>()
 
+  /// The member token this call presented and that resolved, bound by the request
+  /// filter exactly as `currentTransportSessionId` is. A token outranks the
+  /// connection: it is the member, and sub-agents sharing one connection are as
+  /// many members as they have tokens. None for a call that presented no token.
+  let currentCapability = new System.Threading.AsyncLocal<ResolvedCapability option>()
+
+  /// The daemon's one capability table and identity policy.
+  let capabilityStore = CapabilityStore(Capability.IdentityPolicy.defaultPolicy)
+
   /// Resolve the BOUND identity for a self-declared agent name
   /// (sagefs-multiagent-vision.md §4.1: "identity is bound to the
   /// connection, not declared"). When a real MCP connection is bound, the
@@ -789,7 +798,8 @@ module McpTools =
   /// (Slice 3, item 11) — a role-based dimension the session-state gate below
   /// has no concept of. `admitToolCallWithin` is the gate itself; it returns
   /// what it resolved, so the tool body need not resolve a second time.
-  let admitToolCallWithin
+  let admitToolCallWithinStore
+    (store: CapabilityStore)
     (probeBound: TimeSpan)
     (ctx: McpContext)
     (agent: string)
@@ -824,6 +834,10 @@ module McpTools =
       | None ->
         return allowedIn SessionState.Uninitialized |> Result.map (fun () -> admission GateResolution.NotResolved)
     }
+
+  /// The gate over the daemon's own capability table and identity policy.
+  let admitToolCallWithin (probeBound: TimeSpan) (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) (toolName: string) =
+    admitToolCallWithinStore capabilityStore probeBound ctx agent sessionId workingDirectory toolName
 
   /// The gate, answering only whether the call may run.
   let enforceToolCallGate

@@ -295,6 +295,16 @@ module Capability =
 
     let value (TokenHash hex) : string = hex
 
+    /// A hash read back from its hex form (the HTTP edge hands it over as a claim). Only a
+    /// well-formed SHA-256 hex string is a hash, so nothing else can reach the table.
+    let tryOfHex (hex: string) : TokenHash option =
+      match isNull hex || hex.Length <> 64 with
+      | true -> None
+      | false ->
+        match hex |> Seq.forall (fun c -> Uri.IsHexDigit c && not (Char.IsUpper c)) with
+        | true -> Some(TokenHash hex)
+        | false -> None
+
   module Token =
     /// How many random bytes a token is made of.
     let entropyBytes : int = 32
@@ -550,3 +560,39 @@ module Capability =
         match List.contains toolName IdentityPolicy.tokenlessReadable with
         | true -> Ok()
         | false -> Error(PolicyRefusal.TokenRequired toolName)
+
+  // ── Transport: how a token reaches the daemon ─────────────────────────────
+
+  /// A token travels in an HTTP header or in MCP `_meta`, set by whatever sits
+  /// between the model and the daemon, and never in a tool argument: an agent
+  /// transcript stores every argument, and so would the bridge's warning log.
+  /// The daemon hashes it at the edge, so the raw value goes no further than
+  /// the request that carried it.
+  module CapabilityTransport =
+    /// The HTTP request header. Per connection.
+    let headerName = "X-SageFs-Member-Token"
+    /// The key in a request's `_meta`. Per call, so one connection can carry many members.
+    let metaKey = "sagefs/memberToken"
+    /// The environment variable `sagefs mcp` (the stdio bridge) reads and sends as `headerName`.
+    let bridgeEnvVar = "SAGEFS_MEMBER_TOKEN"
+    /// The environment variable that sets the daemon's `IdentityPolicy`.
+    let policyEnvVar = "SAGEFS_IDENTITY_POLICY"
+    /// The claim the daemon's HTTP edge puts the token's HASH in, for the MCP request filter to read.
+    let hashClaimType = "urn:sagefs:member-token-hash"
+
+    /// How a call presented a token. There is no case that carries a raw token.
+    [<RequireQualifiedAccess>]
+    type Presentation =
+      | NoToken
+      | Presented of TokenHash
+      /// A token was presented but is not a token at all (blank, or absurdly long).
+      | Unreadable of reason: string
+
+    /// RED STUB: the header the bridge sends for `getEnv`, when the environment names a token.
+    let headerFromEnvironment (getEnv: string -> string) : (string * string) option = raise (NotImplementedException "RED")
+
+    /// RED STUB: which token a call presents. `_meta` is per call and wins over the per-connection header.
+    let presentationOf (headerHash: string option) (metaToken: string option) : Presentation = raise (NotImplementedException "RED")
+
+    /// RED STUB: the daemon's identity policy for `getEnv`. Unset is the default; set but unreadable fails closed.
+    let policyFromEnvironment (getEnv: string -> string) : IdentityPolicy = raise (NotImplementedException "RED")

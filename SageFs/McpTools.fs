@@ -430,6 +430,11 @@ let withEchoOutcome (ctx: McpContext) (toolName: string) (t: Task<string * SageF
         return raise (SageFs.SageFsErrorException(err))
   }
 
+/// RED STUB: `withEchoOutcome` for a tool whose result carries a secret shown once. The tool hands back
+/// the text to return, the text that is safe to log and record, and an optional blocker.
+let withEchoSecret (ctx: McpContext) (toolName: string) (t: Task<string * string * SageFs.SageFsError option>) : Task<string> =
+  raise (System.NotImplementedException "RED: withEchoSecret is not implemented yet")
+
 /// `withEchoOutcome` sibling matching `withEchoNoAwaitRecord`'s statement
 /// order (succeedSpan before the friction record await) for the one caller
 /// (hard_reset_fsi_session, rebuild=true) that used that ordering.

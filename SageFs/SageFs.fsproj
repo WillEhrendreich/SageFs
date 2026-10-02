@@ -117,6 +117,7 @@
         <Compile Include="CreateSessionUx.fs" />
         <Compile Include="SessionStatusPayload.fs" />
         <Compile Include="CohortErrorMapping.fs" />
+        <Compile Include="CapabilityStore.fs" />
         <Compile Include="LiveTestStatusView.fs" />
         <Compile Include="McpAnalysisViews.fs" />
         <Compile Include="McpLeaseWire.fs" />
@@ -129,6 +130,7 @@
 
         <Compile Include="TrunkFollowShell.fs" />
         <Compile Include="McpCohortIntegration.fs" />
+        <Compile Include="McpCapability.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />
         <Compile Include="AgentGuidance.fs" />
