@@ -130,6 +130,7 @@
 
         <Compile Include="TrunkFollowShell.fs" />
         <Compile Include="McpCohortIntegration.fs" />
+        <Compile Include="McpCohortTools.fs" />
         <Compile Include="McpCapability.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />

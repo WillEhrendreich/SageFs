@@ -217,7 +217,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 63 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 65 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -231,9 +231,10 @@ let toolRegistrationTests =
         // (hot-reload-state-spec.md rule 3) + manage_local_data +
         // set_reflection_read_mode (rule 2's reflection read mode and its
         // hot-loop questions) + get_workspace_hygiene and tidy_workspace (what
-        // agents left behind on the machine, and the plan that tidies it).
+        // agents left behind on the machine, and the plan that tidies it) +
+        // mint_member and revoke_member (per-run member tokens, Capability.fs).
         methods.Length
-          |> Expect.equal "MCP tool method count" 63
+          |> Expect.equal "MCP tool method count" 65
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -411,7 +412,7 @@ let stateTransitionSafetyTests =
         // set_reflection_read_mode = 53.
         tested
         |> Expect.equal
-          "should test 5 states × 63 tools = 315" 315
+          "should test 5 states × 65 tools = 325" 325
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

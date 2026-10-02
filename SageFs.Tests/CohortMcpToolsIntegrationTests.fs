@@ -53,7 +53,7 @@ let private sageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 /// /health to respond. Owned by this test process (--owner-pid/--owner-start,
 /// the same ownership fencing HttpApiIntegrationTests.fs uses) plus a --ttl
 /// belt-and-braces, so a killed/crashed test process can never orphan it.
-let private startIsolatedDaemon () : Task<Process * int> = task {
+let startIsolatedDaemonWith (extraEnv: (string * string) list) : Task<Process * int> = task {
   // TestPorts.reservePair scans only this tier's assigned
   // SAGEFS_TEST_PORT_RANGE when one is set, so a concurrently-running
   // tier's daemon can never win the reserve-then-bind race for this pair
@@ -77,6 +77,8 @@ let private startIsolatedDaemon () : Task<Process * int> = task {
   psi.ArgumentList.Add "10m"
   let dataDir = IO.Path.Combine(IO.Path.GetTempPath(), "sagefs-test-cohort", Guid.NewGuid().ToString "N")
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+  for name, value in extraEnv do
+    psi.Environment[name] <- value
 
   let proc = Process.Start psi
   use client = new Net.Http.HttpClient()
@@ -105,7 +107,9 @@ let private startIsolatedDaemon () : Task<Process * int> = task {
   return proc, port
 }
 
-let private killDaemon (proc: Process) =
+let private startIsolatedDaemon () : Task<Process * int> = startIsolatedDaemonWith []
+
+let killDaemon (proc: Process) =
   try
     if not proc.HasExited then
       proc.Kill(entireProcessTree = true)

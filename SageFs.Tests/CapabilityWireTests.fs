@@ -17,6 +17,7 @@ open SageFs.Capability
 open SageFs.Cohort
 open SageFs.MemberTable
 open SageFs.McpTools
+open SageFs.McpCohortTools
 open SageFs.McpCapability
 open SageFs.Tests.TestInfrastructure
 
@@ -107,8 +108,8 @@ let transportTests =
       let principal = principalOfHeader token
       let claims = principal.Claims |> Seq.map (fun c -> c.Type, c.Value) |> List.ofSeq
       claims |> Expect.equal "one claim: the hash" [ CapabilityTransport.hashClaimType, TokenHash.value (TokenHash.ofToken token) ]
-      principal.Identity.IsAuthenticated |> Expect.isFalse "not an authenticated user, so the SDK's session-to-user binding is neither engaged nor broken"
-      principal.FindFirst ClaimTypes.NameIdentifier |> isNull |> Expect.isTrue "and it names no user"
+      principal.Identity.IsAuthenticated |> Expect.isTrue "authenticated, because the SDK carries only an authenticated principal to the request filters"
+      principal.FindFirst ClaimTypes.NameIdentifier |> isNull |> Expect.isTrue "but it names no user, so the SDK's session-to-user binding is neither engaged nor broken"
 
     testCase "WHY - a call presents the token from _meta before the header, and nothing is a plain connection" <| fun () ->
       let header = principalOfHeader "sfm_header-token"
@@ -227,6 +228,17 @@ let gateTests =
       })
     }
 
+    testTask "WHY - a daemon that requires tokens still lets the first joiner become the conductor, and then closes the door" {
+      let store = CapabilityStore(IdentityPolicy.TokenRequired)
+      do! withCohort (fun ctx _ _ -> task {
+        let! before = asConnection handleConductor (fun () -> admitToolCallWithinStore store Timeouts.gateStatusProbe ctx "mcp" None None "join_cohort")
+        before |> Result.isOk |> Expect.isTrue "no conductor yet: joining is admitted"
+        do! joinedAsConductor ctx
+        let! after = asConnection handleWorker (fun () -> admitToolCallWithinStore store Timeouts.gateStatusProbe ctx "mcp" None None "join_cohort")
+        after |> Result.isError |> Expect.isTrue "there is a conductor now: a plain connection cannot join"
+      })
+    }
+
     testTask "WHY - with the default policy a plain connection is untouched" {
       let store = newStore ()
       do! withCohort (fun ctx _ _ -> task {
@@ -248,16 +260,20 @@ let gateTests =
         { Id = CapabilityId "0123456789abcdef"
           Hash = TokenHash.ofToken "sfm_x"
           Grant = { Preset = preset; Scope = ScopePrefix.repoRoot; NotAfter = now.AddHours 1.0 } }
-      let visibleFor preset = visibleToolNames IdentityPolicy.ConnectionsAllowed Authority.Anonymous (Some(grant preset)) registered
+      let visibleFor preset = visibleToolNames IdentityPolicy.ConnectionsAllowed ConductorSeat.Bound Authority.Anonymous (Some(grant preset)) registered
       visibleFor RolePreset.Analysis |> List.contains "diagnose" |> Expect.isTrue "analysis stays"
       visibleFor RolePreset.Analysis |> List.contains "send_fsharp_code" |> Expect.isFalse "eval goes"
       visibleFor RolePreset.Implementer |> List.contains "send_fsharp_code" |> Expect.isTrue "an Implementer keeps eval"
       visibleFor RolePreset.Implementer |> List.contains "mint_member" |> Expect.isFalse "but never minting"
-      visibleToolNames IdentityPolicy.ConnectionsAllowed Authority.Anonymous None registered
+      visibleToolNames IdentityPolicy.ConnectionsAllowed ConductorSeat.Bound Authority.Anonymous None registered
       |> Expect.equal "a plain connection under the default policy sees everything" registered
-      visibleToolNames IdentityPolicy.TokenRequired Authority.Anonymous None registered
-      |> Expect.equal "a plain connection when a token is required sees status only" (IdentityPolicy.tokenlessReadable |> List.filter (fun t -> List.contains t registered))
-      visibleToolNames IdentityPolicy.TokenRequired (Authority.Conductor(MemberId.Minted "gateway")) None registered
+      visibleToolNames IdentityPolicy.TokenRequired ConductorSeat.NotBoundYet Authority.Anonymous None registered
+      |> List.contains "join_cohort"
+      |> Expect.isTrue "while there is no conductor the first joiner must be able to join"
+      visibleToolNames IdentityPolicy.TokenRequired ConductorSeat.Bound Authority.Anonymous None registered
+      |> List.sort
+      |> Expect.equal "a plain connection when a token is required sees status only" (IdentityPolicy.tokenlessReadable |> List.filter (fun t -> List.contains t registered) |> List.sort)
+      visibleToolNames IdentityPolicy.TokenRequired ConductorSeat.Bound (Authority.Conductor(MemberId.Minted "gateway")) None registered
       |> Expect.equal "the conductor sees everything" registered
   ]
 

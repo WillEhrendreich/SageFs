@@ -32,7 +32,7 @@ let private prefix (raw: string) : ScopePrefix =
 let private grantOf (preset: RolePreset) (scope: string) (lifetime: TimeSpan) : Grant =
   { Preset = preset; Scope = prefix scope; NotAfter = epoch + lifetime }
 
-let private hourOf (preset: RolePreset) (scope: string) = grantOf preset scope (TimeSpan.FromHours 1.0)
+let private hourOf (preset: RolePreset) (scope: string) = grantOf preset scope TestTimeouts.tokenRun
 
 let private tokenOf (n: int) : string = Token.ofEntropy (Array.create Token.entropyBytes (byte n))
 let private hashOf (n: int) : TokenHash = TokenHash.ofToken (tokenOf n)
@@ -232,8 +232,8 @@ let grantOrderTests =
       Grant.isNarrowerOrEqual requested minter = List.isEmpty (Grant.wideningsOf requested minter)
 
     testCase "WHY - each way a request is wider is named" <| fun () ->
-      let minter = grantOf RolePreset.Analysis "src/Foo" (TimeSpan.FromHours 1.0)
-      let requested = grantOf RolePreset.Implementer "src" (TimeSpan.FromHours 2.0)
+      let minter = grantOf RolePreset.Analysis "src/Foo" TestTimeouts.tokenRun
+      let requested = grantOf RolePreset.Implementer "src" TestTimeouts.tokenTwoRuns
       Grant.wideningsOf requested minter
       |> Expect.equal
         "role, scope and expiry"
@@ -312,8 +312,8 @@ let reducerTests =
     testCase "WHY - a token cannot be minted that is already expired or lives past the maximum lifetime" <| fun () ->
       mint epoch CapabilityState.empty (grantOf RolePreset.Observer "" TimeSpan.Zero) 1
       |> Expect.equal "expired on arrival" (Error(CapabilityRefusal.Mint(MintRefusal.NotInTheFuture epoch)))
-      mint epoch CapabilityState.empty (grantOf RolePreset.Observer "" (Timeouts.capabilityMaxLifetime + TimeSpan.FromMinutes 1.0)) 1
-      |> Expect.equal "too long" (Error(CapabilityRefusal.Mint(MintRefusal.LifetimeTooLong(Timeouts.capabilityMaxLifetime + TimeSpan.FromMinutes 1.0, Timeouts.capabilityMaxLifetime))))
+      mint epoch CapabilityState.empty (grantOf RolePreset.Observer "" (Timeouts.capabilityMaxLifetime + TestTimeouts.pastALimit)) 1
+      |> Expect.equal "too long" (Error(CapabilityRefusal.Mint(MintRefusal.LifetimeTooLong(Timeouts.capabilityMaxLifetime + TestTimeouts.pastALimit, Timeouts.capabilityMaxLifetime))))
       mint epoch CapabilityState.empty (grantOf RolePreset.Observer "" Timeouts.capabilityMaxLifetime) 1
       |> Result.isOk |> Expect.isTrue "exactly the maximum is allowed"
       Timeouts.capabilityDefaultLifetime <= Timeouts.capabilityMaxLifetime |> Expect.isTrue "the default fits under the maximum"
@@ -330,7 +330,7 @@ let reducerTests =
       resolveAt epoch state 2 |> Expect.equal "another token" (Error PresentRefusal.Unknown)
 
     testCase "WHY - a token stops working at its expiry" <| fun () ->
-      let grant = grantOf RolePreset.Observer "" (TimeSpan.FromMinutes 20.0)
+      let grant = grantOf RolePreset.Observer "" TestTimeouts.tokenShort
       let state = mintOk epoch CapabilityState.empty grant 1
       resolveAt (epoch.AddMinutes 19.0) state 1 |> Result.isOk |> Expect.isTrue "just before"
       resolveAt grant.NotAfter state 1 |> Expect.equal "at the instant" (Error(PresentRefusal.Expired grant.NotAfter))
@@ -350,7 +350,7 @@ let reducerTests =
 
     testCase "WHY - Touch on a lapsed token does not bring it back" <| fun () ->
       let state = mintOk epoch CapabilityState.empty (hourOf RolePreset.Observer "") 1
-      let late = epoch + Cohort.leaseWindow + TimeSpan.FromMinutes 1.0
+      let late = epoch + Cohort.leaseWindow + TestTimeouts.pastALimit
       match decide late state (CapabilityCommand.Touch(hashOf 1)) with
       | Ok(next, events) ->
         events |> Expect.isEmpty "nothing was touched"
@@ -398,16 +398,24 @@ let identityPolicyTests =
       IdentityPolicy.defaultPolicy |> Expect.equal "default" IdentityPolicy.ConnectionsAllowed
       for tool in Affordances.declaredGateTools do
         for authority in [ Authority.Anonymous; asMember; asConductor ] do
-          admitTokenless IdentityPolicy.ConnectionsAllowed authority tool |> Expect.equal (sprintf "%s is allowed" tool) (Ok ())
+          for seat in [ ConductorSeat.NotBoundYet; ConductorSeat.Bound ] do
+            admitTokenless IdentityPolicy.ConnectionsAllowed seat authority tool |> Expect.equal (sprintf "%s is allowed" tool) (Ok ())
 
     testCase "WHY - when a token is required a token-less connection may only read status, unless it is the conductor" <| fun () ->
       let policy = IdentityPolicy.TokenRequired
-      admitTokenless policy Authority.Anonymous "get_cohort_status" |> Expect.equal "status" (Ok ())
-      admitTokenless policy Authority.Anonymous "get_daemon_status" |> Expect.equal "daemon status" (Ok ())
-      admitTokenless policy asMember "send_fsharp_code" |> Expect.equal "a plain member is refused" (Error(PolicyRefusal.TokenRequired "send_fsharp_code"))
-      admitTokenless policy Authority.Anonymous "join_cohort" |> Expect.equal "and cannot join" (Error(PolicyRefusal.TokenRequired "join_cohort"))
-      admitTokenless policy asConductor "mint_member" |> Expect.equal "the conductor may act, so it can mint" (Ok ())
-      admitTokenless policy asConductor "send_fsharp_code" |> Expect.equal "the conductor may act" (Ok ())
+      let seat = ConductorSeat.Bound
+      admitTokenless policy seat Authority.Anonymous "get_cohort_status" |> Expect.equal "status" (Ok ())
+      admitTokenless policy seat Authority.Anonymous "get_daemon_status" |> Expect.equal "daemon status" (Ok ())
+      admitTokenless policy seat asMember "send_fsharp_code" |> Expect.equal "a plain member is refused" (Error(PolicyRefusal.TokenRequired "send_fsharp_code"))
+      admitTokenless policy seat Authority.Anonymous "join_cohort" |> Expect.equal "and cannot join once there is a conductor" (Error(PolicyRefusal.TokenRequired "join_cohort"))
+      admitTokenless policy seat asConductor "mint_member" |> Expect.equal "the conductor may act, so it can mint" (Ok ())
+      admitTokenless policy seat asConductor "send_fsharp_code" |> Expect.equal "the conductor may act" (Ok ())
+
+    testCase "WHY - the first joiner still becomes the conductor when a token is required, or nobody could ever mint" <| fun () ->
+      let policy = IdentityPolicy.TokenRequired
+      admitTokenless policy ConductorSeat.NotBoundYet Authority.Anonymous "join_cohort" |> Expect.equal "joining is admitted while the seat is empty" (Ok ())
+      admitTokenless policy ConductorSeat.NotBoundYet Authority.Anonymous "send_fsharp_code" |> Expect.equal "but nothing else is" (Error(PolicyRefusal.TokenRequired "send_fsharp_code"))
+      admitTokenless policy ConductorSeat.NotBoundYet Authority.Anonymous "acquire_claim" |> Expect.equal "not even a claim" (Error(PolicyRefusal.TokenRequired "acquire_claim"))
 
     testCase "WHY - policies round-trip through one to-string function" <| fun () ->
       for policy in IdentityPolicy.all do

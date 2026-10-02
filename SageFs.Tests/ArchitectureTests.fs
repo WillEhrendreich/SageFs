@@ -1136,7 +1136,11 @@ let fileSizeBudgets =
       // dead formatters of the retired tools (getCompletions, exploreType, visualizeDomainModel, getFileCoverage,
       // queryTestCoverage) are deleted, and suggest_next_action reads its session through McpAnalysis like the
       // other seven. The file is 3332 lines. Exact size.
-      "SageFs/Mcp.fs", 3332
+      // 3332 -> 3217: the cohort tools' bodies (join, leave, acquire, release, reassign, request_landing and
+      // their parsers) moved to McpCohortTools.fs, which paid for the member-token identity gate and the claim
+      // path canonicalization that landed here and left it 112 lines under the 3332 it started at. The file
+      // is 3220 lines. Exact size.
+      "SageFs/Mcp.fs", 3220
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

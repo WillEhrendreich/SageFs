@@ -759,6 +759,7 @@
         <Compile Include="ReplGuardTests.fs" />
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
+        <Compile Include="CapabilityHttpIntegrationTests.fs" />
         <Compile Include="CohortIdentityLeakTests.fs" />
         <Compile Include="ClaimPathTests.fs" />
         <Compile Include="CapabilityTests.fs" />

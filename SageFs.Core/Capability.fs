@@ -73,6 +73,9 @@ module Capability =
       | Ok(ClaimScope.File path) -> pathWithin path prefix
       | Ok(ClaimScope.Project path) -> pathWithin (directoryOf path) prefix
 
+  /// A name that is not one of a closed set, with the names that are.
+  type UnknownName = { Given: string; Expected: string list }
+
   // ── Roles: closed presets over closed tool classes ────────────────────────
 
   /// What a tool does, coarsely. A role is a set of these, never a list of tool
@@ -200,12 +203,11 @@ module Capability =
       | RolePreset.Verifier -> "Verifier"
       | RolePreset.Implementer -> "Implementer"
 
-    let tryParse (raw: string) : Result<RolePreset, string> =
+    let tryParse (raw: string) : Result<RolePreset, UnknownName> =
       let wanted = if isNull raw then "" else raw.Trim()
       match all |> List.tryFind (fun p -> String.Equals(toToken p, wanted, StringComparison.OrdinalIgnoreCase)) with
       | Some preset -> Ok preset
-      | None ->
-        Error(sprintf "unknown role '%s': expected one of %s" wanted (all |> List.map toToken |> String.concat ", "))
+      | None -> Error { Given = wanted; Expected = all |> List.map toToken }
 
     /// The cohort role the seat is created with.
     let joinableRole =
@@ -336,6 +338,13 @@ module Capability =
       | MemberId.Browser _
       | MemberId.Mcp _
       | MemberId.Minted _ -> None
+
+  /// The member a capability is, and the text of its public id. Plain functions beside the module
+  /// because `CapabilityId` is also a union case, and a caller outside this file that writes
+  /// `Capability.CapabilityId.memberId` gets the case, not the module.
+  let memberIdOf (id: CapabilityId) : MemberId = CapabilityId.memberId id
+
+  let idText (id: CapabilityId) : string = CapabilityId.value id
 
   // ── State, commands, the pure reducer ─────────────────────────────────────
 
@@ -532,12 +541,11 @@ module Capability =
       | IdentityPolicy.ConnectionsAllowed -> "ConnectionsAllowed"
       | IdentityPolicy.TokenRequired -> "TokenRequired"
 
-    let tryParse (raw: string) : Result<IdentityPolicy, string> =
+    let tryParse (raw: string) : Result<IdentityPolicy, UnknownName> =
       let wanted = if isNull raw then "" else raw.Trim()
       match all |> List.tryFind (fun p -> String.Equals(toToken p, wanted, StringComparison.OrdinalIgnoreCase)) with
       | Some policy -> Ok policy
-      | None ->
-        Error(sprintf "unknown identity policy '%s': expected one of %s" wanted (all |> List.map toToken |> String.concat ", "))
+      | None -> Error { Given = wanted; Expected = all |> List.map toToken }
 
     /// Nothing existing breaks: a token-less connection stays a plain member.
     let defaultPolicy : IdentityPolicy = IdentityPolicy.ConnectionsAllowed
@@ -545,11 +553,22 @@ module Capability =
     /// The only tools a token-less caller may use under `TokenRequired` unless it is the conductor.
     let tokenlessReadable : string list = [ "get_cohort_status"; "get_daemon_status" ]
 
+    /// The one other tool a token-less caller may use, and only while the cohort has no conductor: the
+    /// first member to join is the conductor, and the conductor is who mints.
+    let bootstrapTool : string = "join_cohort" 
+
   [<RequireQualifiedAccess>]
   type PolicyRefusal = TokenRequired of tool: string
 
+  /// Whether the cohort has a conductor yet. Under `TokenRequired` the first joiner still becomes the
+  /// conductor, because without one nobody can mint a token, so joining is admitted until a seat is bound.
+  [<RequireQualifiedAccess>]
+  type ConductorSeat =
+    | NotBoundYet
+    | Bound
+
   /// May a call that presented no token run? `authority` is the connection's own.
-  let admitTokenless (policy: IdentityPolicy) (authority: Authority<MemberId>) (toolName: string) : Result<unit, PolicyRefusal> =
+  let admitTokenless (policy: IdentityPolicy) (seat: ConductorSeat) (authority: Authority<MemberId>) (toolName: string) : Result<unit, PolicyRefusal> =
     match policy with
     | IdentityPolicy.ConnectionsAllowed -> Ok()
     | IdentityPolicy.TokenRequired ->
@@ -557,9 +576,11 @@ module Capability =
       | Authority.Conductor _ -> Ok()
       | Authority.Member _
       | Authority.Anonymous ->
-        match List.contains toolName IdentityPolicy.tokenlessReadable with
-        | true -> Ok()
-        | false -> Error(PolicyRefusal.TokenRequired toolName)
+        match seat, List.contains toolName IdentityPolicy.tokenlessReadable with
+        | _, true -> Ok()
+        | ConductorSeat.NotBoundYet, false when toolName = IdentityPolicy.bootstrapTool -> Ok()
+        | ConductorSeat.NotBoundYet, false
+        | ConductorSeat.Bound, false -> Error(PolicyRefusal.TokenRequired toolName)
 
   // ── Transport: how a token reaches the daemon ─────────────────────────────
 
@@ -588,11 +609,40 @@ module Capability =
       /// A token was presented but is not a token at all (blank, or absurdly long).
       | Unreadable of reason: string
 
-    /// RED STUB: the header the bridge sends for `getEnv`, when the environment names a token.
-    let headerFromEnvironment (getEnv: string -> string) : (string * string) option = raise (NotImplementedException "RED")
+    /// The longest a token may be. A real one is `Token.prefix` plus 43 characters; anything far past
+    /// that is not a token, and is refused before it is hashed.
+    let maxTokenLength = 512
 
-    /// RED STUB: which token a call presents. `_meta` is per call and wins over the per-connection header.
-    let presentationOf (headerHash: string option) (metaToken: string option) : Presentation = raise (NotImplementedException "RED")
+    let private hasText (value: string) = not (String.IsNullOrWhiteSpace value)
 
-    /// RED STUB: the daemon's identity policy for `getEnv`. Unset is the default; set but unreadable fails closed.
-    let policyFromEnvironment (getEnv: string -> string) : IdentityPolicy = raise (NotImplementedException "RED")
+    /// The header the stdio bridge sends, when its environment names a token.
+    let headerFromEnvironment (getEnv: string -> string) : (string * string) option =
+      match getEnv bridgeEnvVar with
+      | value when hasText value -> Some(headerName, value.Trim())
+      | _ -> None
+
+    /// Which token a call presents. `_meta` is per call and wins over the per-connection header, so
+    /// a gateway holding one connection can speak for many members. A blank or absurd value is a
+    /// token that cannot be one, not the absence of a token: it must be refused, never ignored.
+    let presentationOf (headerHash: string option) (metaToken: string option) : Presentation =
+      match metaToken, headerHash with
+      | Some meta, _ ->
+        match hasText meta, meta.Length <= maxTokenLength with
+        | true, true -> Presentation.Presented(TokenHash.ofToken (meta.Trim()))
+        | false, _ -> Presentation.Unreadable "the token in _meta is blank"
+        | true, false -> Presentation.Unreadable "the token in _meta is far longer than any token"
+      | None, Some hex ->
+        match TokenHash.tryOfHex hex with
+        | Some hash -> Presentation.Presented hash
+        | None -> Presentation.Unreadable "the token header could not be read"
+      | None, None -> Presentation.NoToken
+
+    /// The daemon's identity policy for `getEnv`. Unset is the default, so nothing existing changes.
+    /// Set but unreadable fails closed: a typo must not open the door the setting was meant to shut.
+    let policyFromEnvironment (getEnv: string -> string) : IdentityPolicy =
+      match getEnv policyEnvVar with
+      | value when hasText value ->
+        match IdentityPolicy.tryParse value with
+        | Ok policy -> policy
+        | Error _ -> IdentityPolicy.TokenRequired
+      | _ -> IdentityPolicy.defaultPolicy

@@ -233,6 +233,11 @@ let private gatingDomain : Map<string, ToolGate> =
     // has no per-SESSION-state dependence — it is meaningful before any FSI
     // session exists.
     "set_integration_ref", ToolGate.AlwaysAvailable
+    // Per-run member tokens (Capability.fs): minting and revoking are conductor-only
+    // (`cohortTools` below) and, like every cohort tool, have no per-SESSION-state
+    // dependence.
+    "mint_member", ToolGate.AlwaysAvailable
+    "revoke_member", ToolGate.AlwaysAvailable
     // State-gated tools — availability derives from availableTools for the
     // session's current lifecycle state.
     "send_fsharp_code", ToolGate.StateGated
@@ -326,9 +331,13 @@ type CohortTool =
   /// Conductor-only (`cohortTools` below) — the same treatment as
   /// `ReassignClaim`.
   | SetIntegrationRef
+  /// Mint a per-run member token (Capability.fs). Conductor-only.
+  | MintMember
+  /// Revoke a member token. Conductor-only.
+  | RevokeMember
 
 module CohortTool =
-  /// The exact MCP tool names the 8 cohort tools are registered under
+  /// The exact MCP tool names the 10 cohort tools are registered under
   /// (`Affordances.fs`'s own `gatingDomain` "Cohort tools v1" entries above —
   /// all `AlwaysAvailable` there at the per-SESSION-state layer; this module
   /// is the authority-aware refinement layered on top for Slice 3/item 14c).
@@ -342,6 +351,8 @@ module CohortTool =
     | CohortTool.RequestLanding -> "request_landing"
     | CohortTool.GetStatus -> "get_cohort_status"
     | CohortTool.SetIntegrationRef -> "set_integration_ref"
+    | CohortTool.MintMember -> "mint_member"
+    | CohortTool.RevokeMember -> "revoke_member"
 
   let all: CohortTool list =
     [ CohortTool.Join
@@ -351,7 +362,9 @@ module CohortTool =
       CohortTool.ReassignClaim
       CohortTool.RequestLanding
       CohortTool.GetStatus
-      CohortTool.SetIntegrationRef ]
+      CohortTool.SetIntegrationRef
+      CohortTool.MintMember
+      CohortTool.RevokeMember ]
 
 /// MCP tool names SageFs has RETIRED. Nothing may call these, and — the reason
 /// this type exists at all — no LIVE agent-facing string may tell an agent to.

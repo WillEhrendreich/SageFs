@@ -16,6 +16,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.MemberTable
 open SageFs.McpTools
+open SageFs.McpCohortTools
 open SageFs.Tests.TestInfrastructure
 
 /// Handles in the shape the SDK mints (22 base64url characters, 128 bits).
