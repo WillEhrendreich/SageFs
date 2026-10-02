@@ -1337,9 +1337,9 @@ let blockingCallBudgets =
       |> Array.length)
   // pattern, current frozen count. Ratchet DOWN as tests are converted.
   let budgets =
-    [ "Async.RunSynchronously", 44
-      "Thread.Sleep", 42
-      ".Wait(", 23
+    [ "Async.RunSynchronously", 43
+      "Thread.Sleep", 37
+      ".Wait(", 17
       "GetAwaiter().GetResult()", 24 ]
   // The table as data, so `--ratchets --tighten` can lower it to the current count.
   let _table =
