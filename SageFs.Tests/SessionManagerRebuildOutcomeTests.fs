@@ -16,7 +16,10 @@ open SageFs
 open SageFs.SessionManager
 open SageFs.WorkerProtocol
 
-type private Harness = { Mailbox: MailboxProcessor<SessionCommand> }
+type private Harness =
+  { Mailbox: MailboxProcessor<SessionCommand>
+    /// The lock-free read side every status surface reads, not the mailbox.
+    ReadSnapshot: unit -> QuerySnapshot }
 
 let private mkRuntime (build: Async<Result<string, SageFsError>>) : SessionManagerRuntime =
   { StartWorkerProcess =
@@ -29,10 +32,10 @@ let private mkRuntime (build: Async<Result<string, SageFsError>>) : SessionManag
 let private withHarness (build: Async<Result<string, SageFsError>>) (run: Harness -> Task) : Task =
   task {
     use cancellation = new CancellationTokenSource()
-    let mailbox, _readSnapshot =
+    let mailbox, readSnapshot =
       createWith (mkRuntime build) cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
     try
-      do! run { Mailbox = mailbox }
+      do! run { Mailbox = mailbox; ReadSnapshot = readSnapshot }
     finally
       try mailbox.PostAndReply(fun reply -> SessionCommand.StopAll reply) with _ -> ()
       cancellation.Cancel()
@@ -121,6 +124,43 @@ let tests =
         match rebuildOf harness info.Id with
         | LastRebuild.Latest (RebuildOutcome.Succeeded _) -> ()
         | other -> failtestf "expected Succeeded after the build, got %A" other })
+    }
+
+    // The status tool answers a parked caller and then reads the session's record to say what the rebuild did. Both come from
+    // the one owner, so the record the caller reads must already hold the outcome that woke it. Repeated, because the window
+    // between the caller waking and the record being published is a few microseconds wide.
+    testTask "WHY — a caller woken by a failed rebuild reads the failure from the record, not the rebuild still in progress" {
+      let attempts = 300
+      let release = ref (TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously))
+      let build = async {
+        do! release.Value.Task |> Async.AwaitTask
+        return Error buildFailed }
+      do! withHarness build (fun harness -> task {
+        let info = createSession harness
+        let stale = ResizeArray<LastRebuild>()
+        for _ in 1 .. attempts do
+          release.Value <- TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+          let restart = restartWithRebuild harness info.Id |> Async.StartAsTask
+          // A round trip through the mailbox: the restart is processed and the rebuild is on the record.
+          rebuildOf harness info.Id |> ignore
+          let parked = harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.AwaitReady(info.Id, reply)) |> Async.StartAsTask
+          rebuildOf harness info.Id |> ignore
+          release.Value.SetResult()
+          let! woken = parked
+          match woken with
+          | Error err -> err |> Expect.equal "the waiter is told the build's own error" buildFailed
+          | Ok () -> failtest "a caller parked through a failed rebuild must not be told it became ready"
+          // The instant the caller is woken, the way the status tool reads next.
+          match harness.ReadSnapshot().Sessions |> Map.tryFind info.Id with
+          | Some session ->
+            match session.Rebuild with
+            | LastRebuild.Latest (RebuildOutcome.FailedStillServing _) -> ()
+            | other -> stale.Add other
+          | None -> failtest "the session is registered"
+          let! _ = restart
+          ()
+        stale.Count
+        |> Expect.equal (sprintf "every woken caller read the failure that woke it. Stale reads: %A" (stale |> Seq.truncate 3 |> Seq.toList)) 0 })
     }
 
     testTask "WHY — a rebuild that does not rebuild (a plain respawn) records nothing" {
