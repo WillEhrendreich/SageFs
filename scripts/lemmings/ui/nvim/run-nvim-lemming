@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# scripts/lemmings/ui/nvim/run-nvim-lemming <task> <free-model> <run-id|auto> [max-turns]
+#
+# One disposable Neovim trial: Command Code (cmdc) on a FREE model, handed a Neovim it can only
+# drive with keys, does a task with the sagefs.nvim plugin against the ONE shared SageFs daemon
+# (Will watches every lemming in its dashboard). The harness records every driver call as a
+# numbered screen, runs the task's oracle itself, and writes <run-dir>/out/summary.json.
+#
+#   task        a file scripts/lemmings/ui/nvim/tasks/<task>.md with a <task>.env beside it
+#               (ui-eval, ui-edit-reeval, ui-live-tests, ui-hot-reload, ui-find-help)
+#   free-model  a model the live `cmdc --list-models` marks FREE; anything else is refused
+#   run-id      <model-short>-<task>-<nn>, e.g. space-bunny-ui-eval-01, or "auto"
+#
+# The daemon is never started, stopped or reconfigured here. Residue is read from the daemon's
+# own API first and stopped by exact session id, only for sessions under this run directory.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+LEMMINGS=$(cd "$HERE/../.." && pwd)
+source "$LEMMINGS/lib-cmd.sh"
+source "$HERE/lib-nvim.sh"
+
+TASK=${1:?task} MODEL=${2:?free-model} ID=${3:?run-id} TURNS=${4:-60}
+[ -f "$HERE/tasks/$TASK.md" ] || { echo "no task: $HERE/tasks/$TASK.md" >&2; exit 2; }
+[ -f "$HERE/tasks/$TASK.env" ] || { echo "no task settings: $HERE/tasks/$TASK.env" >&2; exit 2; }
+# shellcheck disable=SC1090
+source "$HERE/tasks/$TASK.env"   # LEM_FIXTURE LEM_OPEN LEM_README
+
+# Nothing is touched, and no model is called, until the model is confirmed FREE.
+lem_assert_free_model "$MODEL"
+[ "$ID" = auto ] && ID=$(lem_run_id "$MODEL" "$TASK")
+RUN=$LEM_ROOT/$ID
+[ -e "$RUN" ] && { echo "run $ID already exists: pick a new id" >&2; exit 2; }
+W=$RUN/w OUT=$RUN/out
+NVIM_BIN=${SAGEFS_LEMMING_NVIM:-$LEM_NVIM_DEFAULT_BIN}
+PLUGIN_DIR=${SAGEFS_LEMMING_NVIM_PLUGIN:-$LEM_PLUGIN_DEFAULT_DIR}
+[ -x "$NVIM_BIN" ] || { echo "no nvim at $NVIM_BIN" >&2; exit 4; }
+[ -f "$PLUGIN_DIR/lua/sagefs/init.lua" ] || { echo "no sagefs.nvim at $PLUGIN_DIR" >&2; exit 4; }
+command -v tmux > /dev/null || { echo "tmux is required" >&2; exit 4; }
+LABEL=lem-$ID
+LEM_OPEN_FILE=$W/$LEM_OPEN
+
+# The shared daemon must be up and have room. This refuses; it never starts one.
+lem_use_shared_daemon
+mkdir -p "$W" "$OUT"
+echo "run $ID: $MODEL on $LEM_FIXTURE/$TASK; dashboard http://localhost:${LEM_DASH_PORT}/dashboard (working directory $W)" >&2
+
+# ---- the workspace: only what a new user has ---------------------------------------------
+
+cp -r --reflink=auto "$LEMMINGS/fixtures/$LEM_FIXTURE/." "$W/"
+[ -x "$LEMMINGS/tasks/$TASK.setup.sh" ] && "$LEMMINGS/tasks/$TASK.setup.sh" "$W"
+cp "$HERE/LEMDRIVE.md" "$W/LEMDRIVE.md"
+# The core sandbox installs the SageFs skill when this directory is absent. A UI lemming drives an
+# editor and has no MCP server, so the skill (all MCP tools) would only mislead it: an empty
+# directory makes the installer skip it.
+mkdir -p "$W/.commandcode/skills/sagefs"
+
+git -C "$W" init -q
+git -C "$W" config user.name lemming
+git -C "$W" config user.email lemming@lem.invalid
+git -C "$W" config commit.gpgsign false
+printf '%s\n' '.commandcode/' '.mcp.json' >> "$W/.git/info/exclude"
+# A session builds the project in place, and the daemon (not the lemming) writes bin/obj and
+# .SageFs. Without this the changed-files list would be mostly build output.
+[ -e "$W/.gitignore" ] || printf '%s\n' 'bin/' 'obj/' '.SageFs/' > "$W/.gitignore"
+git -C "$W" add -- .
+git -C "$W" commit -q -m "lemming baseline"
+git -C "$W" tag lem-baseline
+
+cp "$HERE/tasks/$TASK.md" "$OUT/prompt.md"
+
+# ---- the editor ---------------------------------------------------------------------------
+
+lem_nvim_ensure_drive
+lem_nvim_stage "${LEM_README:-no}"
+lem_start_editor_sandbox
+EDITOR_UP=no
+if lem_start_driver_server; then EDITOR_UP=yes; fi
+cleanup_editor() { lem_stop_driver_server; lem_stop_editor_sandbox; }
+trap 'cleanup_editor' EXIT
+
+if [ "$EDITOR_UP" = yes ]; then
+  echo "editor ready: $(cat "$OUT/ready")" >&2
+  lem_nvim_lemming_extras
+  # ---- the run ---------------------------------------------------------------------------
+  lem_run_cmdc "$W" "$OUT/prompt.md" "$MODEL" "$TURNS" "$OUT/events.ndjson" "$OUT/cmdc.stderr"
+  LEM_EXTRA_BWRAP=() LEM_EXTRA_ENV=()
+  # The last screen, then the daemon as the oracle needs to see it, before any cleanup.
+  LEM_DRIVE_SOCKET="$OUT/ipc/drive.sock" DOTNET_NOLOGO=1 dotnet "$DRIVE_DLL" nvim nvim-screen > "$OUT/final-screen.txt" 2>&1 || true
+  DOTNET_NOLOGO=1 dotnet "$DRIVE_DLL" nvim daemon-state --run "$RUN" > "$OUT/daemon-state.out" 2>&1 || true
+else
+  echo "editor did not come up: $(cat "$OUT/ready" 2>/dev/null || echo 'no ready file')" >&2
+  : > "$OUT/events.ndjson"
+  LEM_EXIT=-1 LEM_SECONDS=0
+  printf '[{"stage":"Editor","symptom":"the editor sandbox did not come up","evidence":%s}]\n' \
+    "$(jq -Rs . < "$OUT/ready" 2>/dev/null || echo '""')" > "$OUT/fellover.extra.json"
+fi
+
+# ---- afterwards, outside the sandbox ------------------------------------------------------
+
+cleanup_editor
+trap - EXIT
+# Residue first (read before anything is stopped), then exactly those sessions are stopped.
+lem_cleanup_sessions "$W"
+
+{ git -C "$W" diff --name-only lem-baseline; git -C "$W" ls-files --others --exclude-standard; } \
+  | sort -u > "$OUT/changed.txt"
+
+# The oracle decides. Never the model's claim.
+if [ "$EDITOR_UP" = yes ]; then
+  lem_run_oracle "$RUN" "$TASK"
+  DOTNET_NOLOGO=1 dotnet "$DRIVE_DLL" nvim summarize --run "$RUN" --task "$TASK" --plugin "$PLUGIN_DIR" >&2 || true
+else
+  LEM_ORACLE_EXIT=skip
+fi
+
+lem_score "$RUN" "$TASK" "$MODEL" cmdc-nvim "$LEM_ORACLE_EXIT"
+DOTNET_NOLOGO=1 dotnet "$DRIVE_DLL" nvim annotate --run "$RUN" >&2 || true
+cat "$OUT/summary.json"

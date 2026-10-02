@@ -1,0 +1,47 @@
+# fixture: falco-hello
+# Hot reload on a running app: the Falco hello fixture, started from the editor, then a route's text
+# changed and saved. This is the case the hot reload docs describe, so a "patched" line is expected.
+# Two sizes.
+resize 1280 800
+expect-text SageFs
+wait 12
+click SageFs
+wait 2
+command SageFs: Create Session
+wait 3
+shot create-session-1280x800
+key enter
+expect-session --within 240
+wait 3
+command SageFs: Switch Session
+wait 2
+type {session}
+key enter
+wait 3
+
+set-workflow HotReload
+wait 30
+expect-session --within 240
+wait 5
+open Program.fs
+wait 3
+shot app-source-1280x800 --region editor --region statusbar
+
+command SageFs: Run App
+wait 2
+shot run-app-prompt-1280x800
+key enter
+wait 30
+shot app-started-1280x800 --region sidebar --region statusbar --region panel
+
+command SageFs: Watch All Files
+wait 8
+shot watching-1280x800 --region sidebar --region statusbar
+replace Program.fs "Hello from Falco" "Hello from VS Code"
+wait 30
+wait 10
+shot after-save-1280x800 --region editor --region sidebar --region statusbar --region panel
+
+resize 1024 700
+wait 2
+shot after-save-1024x700 --region statusbar --region panel

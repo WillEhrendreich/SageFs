@@ -1,0 +1,34 @@
+# Live testing on, with the fixture's one failing test: "a negative integer yields None".
+# The gutter and inline failure, the CodeLens, the Test Explorer and the SageFs views, at two sizes.
+resize 1280 800
+expect-text SageFs
+wait 12
+click SageFs
+wait 2
+command SageFs: Create Session
+wait 2
+key enter
+expect-session --within 240
+wait 3
+command SageFs: Switch Session
+wait 2
+type {session}
+key enter
+wait 3
+
+command SageFs: Enable Live Testing
+expect-text --within 120 1 failed
+open DemoEnv.Tests/DemoEnvTests.fs
+wait 5
+shot editor-1280x800 --region editor --region statusbar
+
+click Testing
+wait 3
+shot test-explorer-1280x800 --region sidebar --region editor
+click SageFs
+wait 2
+shot sagefs-views-1280x800 --region sidebar
+
+resize 1024 700
+wait 2
+shot editor-1024x700 --region editor --region statusbar

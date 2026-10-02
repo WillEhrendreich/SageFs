@@ -4,6 +4,8 @@
 ///   LemScore run-id <root> <model> <task>    the next <model-short>-<task>-<nn> under root
 ///   LemScore daemon-check [--port N]         gate on the shared daemon; prints KEY=VALUE lines
 ///   LemScore cleanup --workdir D --out F     read residue, stop exactly those sessions, verify
+///                    [--own ID,ID]             ids the harness made for the run: stopped, not residue
+///   LemScore version-skew --daemon V --bridge V  warn when the bridge is not the daemon's build
 ///   LemScore sessions-under --workdir D     list the shared daemon's sessions under a directory
 ///   LemScore watch --workdir D --out F --stop-file S
 ///                                            record the sessions the dashboard API shows under D until S exists
@@ -101,6 +103,9 @@ let private writeResidue (path: string) (report: CleanupReport) : unit =
   w.WriteStartArray "found"
   report.Found |> List.iter session
   w.WriteEndArray()
+  w.WriteStartArray "own"
+  report.Own |> List.iter w.WriteStringValue
+  w.WriteEndArray()
   w.WriteStartArray "stops"
   report.Stops
   |> List.iter (fun (id, r) ->
@@ -165,13 +170,17 @@ let private cleanupCommand (args: string list) : int =
   match need m "workdir", need m "out" with
   | Ok workdir, Ok out ->
     let port = Map.tryFind "port" m |> Option.map int |> Option.defaultValue defaultMcpPort
-    let report = cleanup port workdir
+    let owned =
+      Map.tryFind "own" m
+      |> Option.map (fun v -> v.Split(',', StringSplitOptions.RemoveEmptyEntries) |> Array.map _.Trim() |> List.ofArray)
+      |> Option.defaultValue []
+    let report = cleanup port workdir owned
     writeResidue out report
     printfn "LEM_CLEANUP=%s" (Cleanup.toString report.Verdict)
     printfn "LEM_CLEANUP_NOTE=%s" report.Note
     ExitCode.ok
   | Error e, _ | _, Error e ->
-    eprintfn "usage: LemScore cleanup --workdir D --out FILE [--port N] (%s)" e
+    eprintfn "usage: LemScore cleanup --workdir D --out FILE [--port N] [--own ID,ID] (%s)" e
     ExitCode.usage
 
 let private sessionsUnderCommand (args: string list) : int =
@@ -445,7 +454,7 @@ let private scoreCommand (args: string list) : int =
               SandboxProcessesLeft = readIfExists (Path.Combine(outDir, "sbx", "ps.txt")) |> Option.map leftoverProcesses |> Option.defaultValue []
               ChangedFiles = changed
               Extra = extraFell }
-          Ok (render input (assess facts))
+          Ok (render input (assess facts |> forHarness harness))
     let json =
       match written with
       | Ok j -> j
@@ -458,9 +467,23 @@ let private scoreCommand (args: string list) : int =
     eprintfn "usage: LemScore score --run-dir D --task T --model M --harness H --oracle-exit N|skip [--cmdc-exit N --seconds N --sagefs-version V --daemon-version V --bridge-version V --cleanup C --mem-start P --avail-start B --leases-start N --port N]"
     ExitCode.usage
 
+/// `LemScore version-skew --daemon V --bridge V`: prints the warning and exits 0, or prints
+/// nothing when the two builds agree. A warning, never a refusal: a free model on a bridge one
+/// commit behind is still a valid trial, as long as the summary says which builds it was.
+let private versionSkewCommand (args: string list) : int =
+  let m = flags args
+  match need m "daemon", need m "bridge" with
+  | Ok daemon, Ok bridge ->
+    versionSkew daemon bridge |> Option.iter (printfn "%s")
+    ExitCode.ok
+  | Error e, _ | _, Error e ->
+    eprintfn "usage: LemScore version-skew --daemon V --bridge V (%s)" e
+    ExitCode.usage
+
 [<EntryPoint>]
 let main argv =
   match List.ofArray argv with
+  | "version-skew" :: rest -> versionSkewCommand rest
   | "free-model" :: rest -> freeModelCommand rest
   | "run-id" :: rest -> runIdCommand rest
   | "daemon-check" :: rest -> daemonCheckCommand rest

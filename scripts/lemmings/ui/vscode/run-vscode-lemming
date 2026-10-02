@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# scripts/lemmings/ui/vscode/run-vscode-lemming <task> <model> [max-turns]
+#
+# One disposable VS Code trial: a Command Code lemming on a FREE model drives the real VS Code
+# (with the SageFs extension from this repo) through the vsc-* tools, as a client of the ONE
+# shared SageFs daemon on 37749. The harness records the run and scores it; the oracle is run
+# by the harness outside the sandbox, never the model's claim.
+#
+#   task      a file under scripts/lemmings/ui/vscode/tasks (without .md)
+#   model     a model the live `cmdc --list-models` marks FREE (anything else is refused)
+#
+# This file is process plumbing only (Xvfb, bubblewrap, ports, teardown). The logic (the driver,
+# the oracle, the fellOver list, the summary) is F#: scripts/lemmings/ui/LemDrive and LemScore.
+#
+# What is protected, and how:
+#   - the dev daemon on 37749 is never started, stopped or restarted here, and the extension's
+#     autoStart is off. Only this run's own sessions are stopped, by id (lem_cleanup_sessions).
+#     The daemon's pid is read before and after, so a stop by anything in the run shows up in
+#     teardown.txt instead of being assumed away.
+#   - the lemming's own session: the harness creates a session for the run's `w` directory on
+#     the shared daemon, waits for it, makes the window use it and proves that from the Sessions
+#     view. If it cannot, the run does not start, so a lemming never evaluates in another
+#     agent's session.
+#   - the real desktop: Xvfb on :80 and up (never :0), Wayland and every XDG variable cleared,
+#     VS Code inside bubblewrap, and `hyprctl clients` compared before and after.
+#   - nothing is killed by name. Every pid below is one this script started.
+#
+# Residual risk, said plainly: the network is not isolated (the model API and the daemon are
+# reached over localhost). A lemming that goes looking can still reach the daemon's HTTP routes
+# (including its shutdown route) and VS Code's CDP port (LEM_CDP_PORT is in its environment, the
+# driver needs it). The guard, the shim, the unbound keys and the read-only mounts keep a
+# good-faith model from doing that by accident; they are not a boundary against a hostile one.
+# The command-code credential is readable inside the sandbox for the same reason: the model API
+# call is made from it.
+set -euo pipefail
+
+TASK=${1:?task} MODEL=${2:?model} TURNS=${3:-60}
+HERE=$(cd "$(dirname "$0")" && pwd)
+LEMDIR=$(cd "$HERE/../.." && pwd)
+. "$LEMDIR/lib-cmd.sh"
+. "$HERE/lib-vscode.sh"
+
+[ -f "$HERE/tasks/$TASK.md" ] || { echo "unknown task '$TASK': see $HERE/tasks" >&2; exit 2; }
+# Nothing is started, and no model is called, before these two pass.
+lem_assert_free_model "$MODEL"
+lem_use_shared_daemon
+LEM_DAEMON_PID=$(lem_daemon_pid)
+
+# The run is named for the editor as well as the task, so the dashboard and /tmp/lem tell a
+# VS Code lemming from a Neovim one that ran the same task: <model>-vsc-<task>-<nn>.
+RUN_TASK=vsc-${TASK#ui-}
+ID=$(lem_run_id "$MODEL" "$RUN_TASK")
+RUN=$LEM_ROOT/$ID
+W=$RUN/w OUT=$RUN/out
+mkdir -p "$W" "$OUT/screens" "$OUT/shots" "$OUT/final"
+: > "$OUT/timeline.ndjson"
+echo "lem: run $ID  daemon $LEM_SAGEFS_VERSION  dashboard http://localhost:$LEM_DASH_PORT/dashboard" >&2
+
+# The workspace: the project, and the editor's README. Nothing says how SageFs works.
+cp -r --reflink=auto "$LEMDIR/fixtures/demoenv/." "$W/"
+cp "$HERE/VSCODE-TOOLS.md" "$W/VSCODE-TOOLS.md"
+cp "$HERE/tasks/$TASK.md" "$OUT/prompt.md"
+
+vsc_ensure_driver
+vsc_prepare_extension "$RUN"
+vsc_write_profile "$RUN"
+lem_prepare_bridge "$RUN"
+vsc_install_tools "$RUN"
+vsc_install_shim "$RUN"
+# The harness's own driver calls use the copy in the run directory too, so another run's rebuild
+# of LemDrive cannot change what this run is running half way through.
+DRIVE=(dotnet "$RUN/bin/lemdrive/LemDrive.dll")
+
+vsc_desktop_windows "$OUT/windows.before"
+XVFB_PID= CODE_PID= STOP_CODE=none LEAK=no CLEANED=no
+teardown_window() {
+  # Graceful first (TERM), forced only if it will not go. Exact pids only.
+  [ -n "$CODE_PID" ] && STOP_CODE=$(vsc_stop_pid "$CODE_PID" "$LEM_CODE_STOP_SECONDS") && CODE_PID=
+  [ -n "$XVFB_PID" ] && vsc_stop_pid "$XVFB_PID" 5 > /dev/null && XVFB_PID=
+  return 0
+}
+# Whatever way this script ends, the window goes and the lemming's own sessions are stopped by id.
+on_exit() {
+  teardown_window
+  if [ "$CLEANED" = no ] && [ -n "${LEM_PORT:-}" ]; then lem_cleanup_sessions "$W" || true; fi
+}
+trap on_exit EXIT
+
+# A run the harness cannot set up is scored HarnessError with the reason, after its window and
+# its sessions are gone, instead of leaving without a summary. No model has been called yet.
+die_harness() {
+  echo "lem: HarnessError: $*" >&2
+  teardown_window
+  lem_cleanup_sessions "$W" || true
+  CLEANED=yes
+  LEM_EXIT=-1 LEM_SECONDS=0 lem_score "$RUN" "$RUN_TASK" "$MODEL" cmdc-vscode skip > /dev/null 2>&1 || true
+  exit 4
+}
+
+# The lemming's own session, made before the window opens: the extension binds a window to a
+# session on the shared daemon, and without this the one it picks is whichever other agent's
+# session heads the list. Stopped by id with the rest of this run's sessions (lem_cleanup_sessions
+# matches everything under $W), including when this script dies before the lemming starts.
+if "${DRIVE[@]}" host session --port "$LEM_PORT" --run-dir "$RUN" --out "$OUT/session.id" > "$OUT/session.out" 2>&1; then
+  echo "lem: $(cat "$OUT/session.out")" >&2
+  # Stopped with the run's other sessions at the end, but never counted as residue the lemming left.
+  LEM_OWN_SESSIONS=$(tr -d '[:space:]' < "$OUT/session.id")
+else
+  die_harness "could not give the run its own session: $(cat "$OUT/session.out")"
+fi
+
+# Where the shared daemon's sessions stood before the lemming, to tell its evaluations from anyone else's.
+"${DRIVE[@]}" host sessions --port "$LEM_PORT" --out "$OUT/sessions.before.tsv" > /dev/null || true
+
+
+# VS Code's own IPC socket lives under the user data dir, and a path past about 107 characters
+# makes it fail with `listen EINVAL` and no window. Refuse early with the reason.
+[ "${#RUN}" -le "$LEM_MAX_RUN_PATH" ] || die_harness "$RUN is ${#RUN} characters; VS Code's IPC socket needs the run path under $LEM_MAX_RUN_PATH"
+
+vsc_start_xvfb "$RUN" || die_harness "no display"
+XVFB_PID=$VSC_XVFB_PID
+CDP=$(vsc_free_port)
+vsc_start_code "$RUN" "$CDP" "$RUN/.lem/ext/sagefs"
+CODE_PID=$VSC_PID
+printf '%s %s %s %s\n' "$VSC_DISPLAY" "$XVFB_PID" "$CODE_PID" "$CDP" > "$OUT/window.pids"
+vsc_wait_cdp "$CDP" 60 || die_harness "VS Code did not open its debug port"
+
+# Wait for the extension to show itself, and for its tree views to register, so the lemming
+# starts from an activated window.
+if "${DRIVE[@]}" host ready --cdp-port "$CDP" --wait 90 > "$OUT/ready.snapshot.txt" 2>&1; then READY=yes; else READY=no; fi
+echo "lem: extension showed itself: $READY" >&2
+[ "$READY" = yes ] || die_harness "the SageFs extension never activated; see $OUT/ready.snapshot.txt"
+
+# Attach the window to the run's own session and prove it. No lemming starts on a window that is
+# attached to anyone else's session.
+if "${DRIVE[@]}" host bind --cdp-port "$CDP" --run-dir "$RUN" --port "$LEM_PORT" > "$OUT/bind.out" 2>&1; then
+  echo "lem: $(cat "$OUT/bind.out")" >&2
+else
+  die_harness "$(cat "$OUT/bind.out")"
+fi
+
+# Run the lemming. Its sandbox gets the tools, the transcript directories and the CDP port.
+CMDC_DIR=$(dirname "$(command -v cmdc)")
+LEM_EXTRA_BWRAP=(--bind "$OUT/screens" "$OUT/screens" --bind "$OUT/shots" "$OUT/shots" --bind "$OUT/timeline.ndjson" "$OUT/timeline.ndjson")
+# PATH: the tools, then the sagefs shim (the read-only verbs, refusing stop and the rest, the same
+# one the window has), then dotnet. The global tools directory, which holds the real `sagefs`, is
+# not on it and is masked out of the sandbox, unless the run uses the published tool as its bridge
+# (SAGEFS_LEMMING_BIN=published), which needs it.
+if [ "${LEM_BRIDGE_CMD[0]}" = sagefs ]; then
+  LEM_PATH="$RUN/bin/tools:$HOME/.dotnet:$HOME/.dotnet/tools:$CMDC_DIR:/usr/bin:/bin"
+  echo "lem: the published sagefs is this run's bridge, so the real sagefs (which can stop the daemon) is on the lemming's PATH" >&2
+else
+  LEM_PATH="$RUN/bin/tools:$RUN/bin/vsc-path:$HOME/.dotnet:$CMDC_DIR:/usr/bin:/bin"
+  export LEM_MASK_DOTNET_TOOLS=1
+fi
+LEM_EXTRA_ENV=("PATH=$LEM_PATH"
+  "LEM_CDP_PORT=$CDP" "LEM_SCREENS_DIR=$OUT/screens" "LEM_RUN_DIR=$RUN" "LEM_TIMELINE=$OUT/timeline.ndjson" "NODE_NO_WARNINGS=1")
+# The daemon keeps no eval history another client can read, so the harness listens to its
+# /events stream for the whole run (the same stream the dashboard uses). The oracle reads the
+# eval output of the lemming's own sessions from what it records, and the fellOver list lines
+# the records up against the actions clock. Stopped by exact pid.
+"${DRIVE[@]}" host events --port "$LEM_PORT" --out "$OUT/daemon-evals.tsv" --seconds "$LEM_TIMEOUT_SECONDS" > /dev/null 2>&1 &
+EVENTS_PID=$!
+lem_run_cmdc "$W" "$OUT/prompt.md" "$MODEL" "$TURNS" "$OUT/events.ndjson" "$OUT/cmdc.stderr"
+sleep 2
+kill "$EVENTS_PID" 2>/dev/null || true
+
+# What the editor shows when the lemming is done, then the harness's own checks, BEFORE cleanup.
+"${DRIVE[@]}" host snapshot --cdp-port "$CDP" --out "$OUT/final.snapshot.txt" > /dev/null 2>&1 || true
+LEM_CDP_PORT=$CDP LEM_SCREENS_DIR="$OUT/final" "${DRIVE[@]}" vsc shot final > /dev/null 2>&1 || true
+
+if [ "$TASK" = ui-edit-reeval ]; then
+  # The package restore needs the network; the code the lemming wrote then runs without it.
+  set +e
+  LEM_ORACLE_NET=1 lem_sandbox_exec "$RUN" 300 dotnet restore DemoEnv.Tests > "$OUT/tests.out" 2>&1
+  lem_sandbox_exec "$RUN" 300 dotnet run --no-restore --project DemoEnv.Tests >> "$OUT/tests.out" 2>&1
+  echo $? > "$OUT/tests.exit"
+  set -e
+fi
+
+lem_sessions_under "$W" > "$OUT/dashboard.sessions.txt" 2>&1 || true
+"${DRIVE[@]}" host sessions --port "$LEM_PORT" --out "$OUT/sessions.after.tsv" > /dev/null || true
+"${DRIVE[@]}" host foreign --run-dir "$RUN" --before "$OUT/sessions.before.tsv" --after "$OUT/sessions.after.tsv" --out "$OUT/foreign.tsv" > /dev/null || true
+set +e
+LEM_CDP_PORT=$CDP "${DRIVE[@]}" oracle "$TASK" --run-dir "$RUN" --port "$LEM_PORT" > "$OUT/oracle.out" 2>&1
+ORACLE_EXIT=$?
+set -e
+"${DRIVE[@]}" fellover --run-dir "$RUN" \
+  --expect-session "$([ "$TASK" = ui-find-help ] && echo false || echo true)" \
+  --sessions "$(grep -c . "$OUT/dashboard.sessions.txt" 2>/dev/null || echo 0)" > /dev/null
+
+# Cleanup: the lemming's own sessions, by id, then the window.
+lem_cleanup_sessions "$W"
+CLEANED=yes
+teardown_window
+vsc_desktop_windows "$OUT/windows.after"
+vsc_check_no_leak "$OUT/windows.before" "$OUT/windows.after" || LEAK=yes
+# Nothing of this run may still be alive. A process is the run's by evidence (a pid this script
+# started, the session it led, or a working directory inside the run: the workers of the run's
+# sessions), never by a command line that mentions the run path (see Leftovers.fs). The workers
+# of the sessions just stopped take a moment to exit, so the check waits up to ten seconds.
+LEFT=$("${DRIVE[@]}" host leftovers --run-dir "$RUN" --pids "${VSC_XVFB_PID:-},${VSC_PID:-},${EVENTS_PID:-}" --wait 10 --out "$OUT/leftovers.txt" 2>/dev/null || echo unknown)
+# The shared daemon is never stopped by this script. Its pid is compared with the one before the run.
+DAEMON_PID_END=$(lem_daemon_pid)
+if [ -n "$LEM_DAEMON_PID" ] && [ "$DAEMON_PID_END" = "$LEM_DAEMON_PID" ]; then DAEMON=same; else DAEMON=CHANGED; fi
+printf 'windowStop=%s desktopLeak=%s cleanup=%s processesLeft=%s daemonPid=%s->%s daemon=%s\n' \
+  "$STOP_CODE" "$LEAK" "$LEM_CLEANUP" "$LEFT" "${LEM_DAEMON_PID:-none}" "${DAEMON_PID_END:-none}" "$DAEMON" > "$OUT/teardown.txt"
+[ "$LEFT" = 0 ] || echo "lem: $LEFT process(es) of this run are still alive; see $OUT/leftovers.txt" >&2
+[ "$DAEMON" = same ] || echo "lem: THE SHARED DAEMON'S PID CHANGED DURING THE RUN (${LEM_DAEMON_PID:-none} -> ${DAEMON_PID_END:-none}); it was stopped or restarted by something in the run" >&2
+
+lem_score "$RUN" "$RUN_TASK" "$MODEL" cmdc-vscode "$ORACLE_EXIT"
+echo "lem: dashboard http://localhost:$LEM_DASH_PORT/dashboard  run $RUN" >&2
+[ "$LEAK" = no ] || exit 5
+[ "$DAEMON" = same ] || exit 6
