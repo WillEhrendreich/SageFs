@@ -136,6 +136,14 @@ module InputHashCoverage =
   let seenFiles (blind: string list) (map: InstrumentationMap) (bitmap: CoverageBitmap) : string list =
     coveredFiles map bitmap @ blind |> List.distinct |> List.sort
 
+  /// What the affected-test selection is told a test depends on: `seenFiles`, except that coverage which names no file stays
+  /// empty. `AffectedTests.affected` runs a test whose covered files are empty, and evaluated files must not turn that empty into
+  /// an answer that skips the test.
+  let selectionFiles (blind: string list) (map: InstrumentationMap) (bitmap: CoverageBitmap) : string list =
+    match coveredFiles map bitmap with
+    | [] -> []
+    | _ -> seenFiles blind map bitmap
+
   /// Whether a test's coverage can be a cache key, and the key when it can. A key has to see the code: a hash that is the same
   /// whatever the files say would hand one landing the verdict cached for another. So a test whose bitmap hit nothing, whose bitmap
   /// is of another size than the instrumentation, or that has no instrumentation at all, has no key and is always run.

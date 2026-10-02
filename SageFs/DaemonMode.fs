@@ -2454,6 +2454,8 @@ let run
               return Error (sprintf "re-eval of rebased file %s failed: %s" full (SageFsError.describe err))
             | Ok (WorkerProtocol.WorkerResponse.EvalLiveTestFileResult (_, Ok (tests, _providers))) ->
               elmRuntime.Dispatch(SageFsMsg.Event (TuiEvent.LiveDiscoveryMerged (sessionId, tests)))
+              // From here this file is evaluated code over the build, which coverage cannot see.
+              SageFs.McpCohortIntegration.noteEvaluatedOverBuild full
               return! evalRebasedFiles rest
             | Ok other ->
               return Error (sprintf "unexpected worker response re-evaling rebased file %s: %A" full other)
@@ -2495,13 +2497,14 @@ let run
           | Some m when m.Length > 0 -> m
           | _ -> cycle.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
         let merged = Features.LiveTesting.InstrumentationMap.merge maps
+        let blind = SageFs.McpCohortIntegration.filesEvaluatedOverBuild ()
         let coveredFilesOf (tid: Features.LiveTesting.TestId) : string list option =
           match merged.Slots.Length with
           | 0 -> None
           | _ ->
             match Map.tryFind tid state.TestCoverageBitmaps with
             | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
-              Some(Features.LiveTesting.InputHashCoverage.coveredFiles merged bm)
+              Some(Features.LiveTesting.InputHashCoverage.selectionFiles blind merged bm)
             | _ -> None
         let toVerify =
           Features.LiveTesting.AffectedTests.verificationTestSet changedFiles coveredFilesOf allTests
@@ -2600,13 +2603,14 @@ let run
                   | Some m when m.Length > 0 -> m
                   | _ -> cycle.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
                 let merged = Features.LiveTesting.InstrumentationMap.merge maps
+                let blind = SageFs.McpCohortIntegration.filesEvaluatedOverBuild ()
                 let coveredFilesOf (tid: Features.LiveTesting.TestId) : string list option =
                   match merged.Slots.Length with
                   | 0 -> None
                   | _ ->
                     match Map.tryFind tid state.TestCoverageBitmaps with
                     | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
-                      Some(Features.LiveTesting.InputHashCoverage.coveredFiles merged bm)
+                      Some(Features.LiveTesting.InputHashCoverage.selectionFiles blind merged bm)
                     | _ -> None
                 let affectedTests =
                   Features.LiveTesting.AffectedTests.affected changedFiles coveredFilesOf allTests
@@ -2681,9 +2685,12 @@ let run
                 binding.WorktreePath
             // A test with no coverage at all has no key either, and a key that cannot see the code (a bitmap that hit nothing) is
             // no key: `InputHashCoverage.trust` decides, and a test without one is always run and never cached.
+            // The files evaluated over the build are part of every key: coverage cannot see them, and a landing that edits one must
+            // not be answered by the pass cached for the landing before.
+            let blind = SageFs.McpCohortIntegration.filesEvaluatedOverBuild ()
             let inputHashOf (tid: Features.LiveTesting.TestId) : string option =
               match Map.tryFind tid lt.TestState.TestCoverageBitmaps with
-              | Some bm -> Features.LiveTesting.InputHashCoverage.trust toolchain fileReader merged bm |> Features.LiveTesting.InputHashCoverage.keyOf
+              | Some bm -> Features.LiveTesting.InputHashCoverage.trustBeyond blind toolchain fileReader merged bm |> Features.LiveTesting.InputHashCoverage.keyOf
               | None -> None
             let runMisses toRun =
               Features.CohortLandingVerify.runTestsInSession elmRuntime awaitModelCondition observation sessionId toRun

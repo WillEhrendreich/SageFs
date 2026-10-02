@@ -35,6 +35,23 @@ module McpCohortIntegration =
   /// performer and the MCP status/setup tools.
   let cohortIntegrationRef : CohortIntegrationBinding option ref = ref None
 
+  /// The files evaluated into the integration session over its build, one per rebased file of a landing. They run as evaluated code,
+  /// which is not instrumented, so no test's coverage names them again: a test's cache key and the affected-test selection must be
+  /// told about them or an edit to one is invisible (`InputHashCoverage.trustBeyond`). Process-local like the binding. The landing
+  /// queue is serial, but the cache key reads it from another thread, hence the lock.
+  let private evaluatedOverBuild : Set<string> ref = ref Set.empty
+  let private evaluatedOverBuildLock = obj ()
+
+  let noteEvaluatedOverBuild (path: string) : unit =
+    lock evaluatedOverBuildLock (fun () -> evaluatedOverBuild.Value <- Set.add path evaluatedOverBuild.Value)
+
+  /// The files evaluated over the integration session's build, sorted.
+  let filesEvaluatedOverBuild () : string list =
+    lock evaluatedOverBuildLock (fun () -> Set.toList evaluatedOverBuild.Value)
+
+  let private forgetFilesEvaluatedOverBuild () : unit =
+    lock evaluatedOverBuildLock (fun () -> evaluatedOverBuild.Value <- Set.empty)
+
   /// The one process-global trunk owner, which the daemon starts and the status tools read. Process-local like the binding.
   let trunkFollowRef : Features.TrunkFollowOwner.Handle option ref = ref None
 
@@ -108,6 +125,8 @@ module McpCohortIntegration =
           return Error (SageFsError.SessionCreationFailed (sprintf "could not create the trunk checkout at %s: %s" trunkPath reason))
         | Ok (), Ok () ->
           cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; TrunkPath = trunkPath; Session = IntegrationSession.Pending }
+          // A new integration tree is a new session to build: nothing is evaluated over it yet.
+          forgetFilesEvaluatedOverBuild ()
           let who = memberIdFor agentName
           let! commitResult = commitCohort ctx (Cohort.CohortCommand.SetIntegrationHead(who, sha))
           match commitResult with
