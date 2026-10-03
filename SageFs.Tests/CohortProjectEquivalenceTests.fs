@@ -116,6 +116,7 @@ module private Reference =
       LandingCommits = landings |> Array.map (fun (_, l) -> l.Commits |> List.toArray)
       LandingState = landings |> Array.map (fun (_, l) -> l.State)
       LandingQueuePosition = queuePosition
+      Scope = head.State.Scope
     }
 
 // ── Generators — `'m = int`, built directly (never via `decide`) ──────────
@@ -124,6 +125,17 @@ let private genRole =
   Gen.elements [ JoinableRole.Implementer; JoinableRole.Verifier; JoinableRole.Observer ]
 
 let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+
+/// The scope every generated state is opened at. `Machine` is the v1 scope these
+/// properties were written on, so the frozen oracle and the real `project`
+/// are fed states that differ in nothing but the thing under test. It matters
+/// here for a second reason too: `Scope` is a field on BOTH `CohortState` and
+/// `CohortFrame`, and the oracle projects it — so a generated state with a
+/// mixed scope would make the property compare `Scope` rather than the matrix.
+/// Note `genState` deliberately does NOT vary it, and `stripLandings` preserves
+/// it, so the "adding landings changes nothing" property still compares equal
+/// scopes on both sides.
+let private scope = CohortScope.Machine
 
 let private genPresence =
   Gen.oneof [ Gen.constant MemberPresence.Present; Gen.constant (MemberPresence.Departed epoch) ]
@@ -320,6 +332,7 @@ let private genState =
     let! queue = genQueueFor (landings |> Map.toArray |> Array.map fst)
     return
       { CohortState.empty () with
+          Scope = scope
           Members = members
           Claims = claims
           Conductor = conductor
@@ -386,7 +399,7 @@ let cohortProjectEquivalenceTests =
         Cohort.project head snapshots = Reference.project head snapshots
 
     testCase "WHY — a test appearing in more than one category for one session sets the bit in every matching bitplane, matching the oracle" <| fun _ ->
-      let state = { CohortState.empty () with Members = Map.ofList [ 1, { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None } ] }
+      let state = { CohortState.empty () with Scope = scope; Members = Map.ofList [ 1, { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None } ] }
       let head = { Seq = 3L<ledgerSeq>; State = state }
       let snapshots =
         [| { Member = Some 1; SessionId = "s1"; Generation = 0L
@@ -415,7 +428,7 @@ let cohortProjectEquivalenceTests =
         && withLandings.Stale = withoutLandings.Stale
 
     testCase "empty landings/queue project to empty landing columns, stably" <| fun _ ->
-      let state = { CohortState.empty () with Members = Map.ofList [ 1, { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None } ] }
+      let state = { CohortState.empty () with Scope = scope; Members = Map.ofList [ 1, { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None } ] }
       let head = { Seq = 0L<ledgerSeq>; State = state }
       let frame = Cohort.project head [||]
       frame.LandingIds |> Expect.isEmpty "no landings means an empty LandingIds column"

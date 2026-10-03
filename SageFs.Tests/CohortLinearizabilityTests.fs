@@ -61,12 +61,29 @@ let private bob = MemberId.Minted "bob"
 let private carol = MemberId.Minted "carol"
 let private dave = MemberId.Minted "dave"
 
+/// THE scope every cohort in this file is opened and driven at. A v1 cohort
+/// WAS machine-wide, so `Machine` is exactly the scope each of these tests was
+/// written against: the property under test is ORDERING of concurrent commands
+/// against ONE cohort, not scoping. Passing a repository scope here would turn
+/// every case into a test of scoping instead of linearizability — and
+/// `CohortOwner.start` also scopes the ledger, so the `ReadAll` in
+/// `entropyOfFromLedger` would read a different bucket than the commands wrote
+/// to. Bound ONCE here rather than repeated at every construction; the helper
+/// below is the single place a caller supplies it.
+let private scope = CohortScope.Machine
+
+/// A real `CohortOwner` over a fresh in-memory ledger at `scope`. Every case
+/// here builds its owner this way, so the scope is named in exactly one place
+/// instead of at each of the three call sites.
+let private startRealOwner (ledger: LedgerPort<MemberId>) : CohortOwner.Handle =
+  CohortOwner.start silentLogger scope ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+
 /// Every distinct member joins, sequentially (never concurrently — setup is
 /// not the subject), the first becoming conductor per v1 semantics.
 let private joinAll (owner: CohortOwner.Handle) (members: MemberId list) : Task<unit> =
   task {
     for who in members do
-      let! _ = owner.Commit(CohortCommand.Join(who, JoinableRole.Implementer, None, CohortScope.Machine))
+      let! _ = owner.Commit(CohortCommand.Join(who, JoinableRole.Implementer, None, scope))
       ()
   }
 
@@ -76,10 +93,11 @@ let private joinAll (owner: CohortOwner.Handle) (members: MemberId list) : Task<
 /// values (distinct requester and/or distinct purpose/statement text), which
 /// every scenario below ensures.
 let private entropyOfFromLedger
+  (scope: CohortScope)
   (ledger: LedgerPort<MemberId>)
   (ops: (OpId * CohortCommand<MemberId>) list)
   : OpId -> Entropy =
-  let entries = ledger.ReadAll()
+  let entries = ledger.ReadAll scope
   let map =
     ops
     |> List.map (fun (opId, cmd) ->
@@ -111,6 +129,7 @@ let private entropyOfFromLedger
 /// the final settled state — the "what the real run produced" the checker
 /// needs.
 let private fireBurstAgainstRealOwner
+  (scope: CohortScope)
   (owner: CohortOwner.Handle)
   (ledger: LedgerPort<MemberId>)
   (ops: (OpId * CohortCommand<MemberId>) list)
@@ -132,7 +151,7 @@ let private fireBurstAgainstRealOwner
       |> Task.WhenAll
     do! owner.Flush()
     let observed = { PerOp = Map.ofArray results; Final = owner.ReadCohortState() }
-    let entropyOf = entropyOfFromLedger ledger ops
+    let entropyOf = entropyOfFromLedger scope ledger ops
     return observed, entropyOf
   }
 
@@ -200,16 +219,16 @@ let cohortLinearizabilityTests =
 
     testTask "WHY — a burst of independent (non-overlapping) concurrent ops on the real CohortOwner is linearizable" {
       let ledger = InMemory.create<MemberId> ()
-      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      use owner = startRealOwner ledger
       do! joinAll owner [ alice; bob; carol ]
       let initial = owner.ReadCohortState()
 
       let ops : (OpId * CohortCommand<MemberId>) list =
-        [ 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "A.fs", "op-0 alice claims A.fs", CohortScope.Machine)
-          1, CohortCommand.AcquireClaim(bob, ClaimScope.File "B.fs", "op-1 bob claims B.fs", CohortScope.Machine)
-          2, CohortCommand.RenewLease carol ]
+        [ 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "A.fs", "op-0 alice claims A.fs", scope)
+          1, CohortCommand.AcquireClaim(bob, ClaimScope.File "B.fs", "op-1 bob claims B.fs", scope)
+          2, CohortCommand.RenewLease(carol, scope)]
 
-      let! observed, entropyOf = fireBurstAgainstRealOwner owner ledger ops
+      let! observed, entropyOf = fireBurstAgainstRealOwner scope owner ledger ops
 
       observed.PerOp
       |> Map.forall (fun _ r -> r |> Result.isOk)
@@ -226,15 +245,15 @@ let cohortLinearizabilityTests =
       let mutable heldCounts = []
       for iteration in 1 .. 200 do
         let ledger = InMemory.create<MemberId> ()
-        use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+        use owner = startRealOwner ledger
         do! joinAll owner [ alice; bob ]
         let initial = owner.ReadCohortState()
 
         let ops : (OpId * CohortCommand<MemberId>) list =
-          [ 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "Shared.fs", sprintf "op-0 alice race #%d" iteration, CohortScope.Machine)
-            1, CohortCommand.AcquireClaim(bob, ClaimScope.File "Shared.fs", sprintf "op-1 bob race #%d" iteration, CohortScope.Machine) ]
+          [ 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "Shared.fs", sprintf "op-0 alice race #%d" iteration, scope)
+            1, CohortCommand.AcquireClaim(bob, ClaimScope.File "Shared.fs", sprintf "op-1 bob race #%d" iteration, scope) ]
 
-        let! observed, entropyOf = fireBurstAgainstRealOwner owner ledger ops
+        let! observed, entropyOf = fireBurstAgainstRealOwner scope owner ledger ops
 
         // (a) exactly one op Held, the other refused with ClaimConflict —
         // never both Held, never both refused.
@@ -267,13 +286,13 @@ let cohortLinearizabilityTests =
 
     testTask "TEETH — a check-then-write shell racing outside the mailbox can grant BOTH overlapping claims, and the checker catches it as NOT linearizable" {
       let ledger = InMemory.create<MemberId> ()
-      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      use owner = startRealOwner ledger
       do! joinAll owner [ alice; bob ]
       let initial = owner.ReadCohortState()
 
       let opsWithEntropy : (OpId * Entropy * CohortCommand<MemberId>) list =
-        [ 0, BitConverter.GetBytes 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "Racy.fs", "op-0 alice racy claim", CohortScope.Machine)
-          1, BitConverter.GetBytes 1, CohortCommand.AcquireClaim(bob, ClaimScope.File "Racy.fs", "op-1 bob racy claim", CohortScope.Machine) ]
+        [ 0, BitConverter.GetBytes 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "Racy.fs", "op-0 alice racy claim", scope)
+          1, BitConverter.GetBytes 1, CohortCommand.AcquireClaim(bob, ClaimScope.File "Racy.fs", "op-1 bob racy claim", scope) ]
       let ops = opsWithEntropy |> List.map (fun (id, _, cmd) -> id, cmd)
       let entropyOf = opsWithEntropy |> List.map (fun (id, e, _) -> id, e) |> Map.ofList |> fun m -> fun id -> m.[id]
 

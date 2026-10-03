@@ -25,6 +25,14 @@ let private clock0 = System.DateTime(2026, 2, 1, 0, 0, 0, System.DateTimeKind.Ut
 let private alice = MemberId.Minted "alice"
 let private bob = MemberId.Minted "bob"
 
+/// The scope this local ledger is recorded under. Every command below is
+/// constructed at `Machine`, which is exactly the scope a v1 cohort was, so
+/// the replay below is the same one these assertions were written against.
+/// `CohortState.empty ()` is the one that hardcodes `Scope = Machine`, so the
+/// state's scope and this binding are provably one value — binding it once
+/// here is what keeps that true rather than two literals that happen to agree.
+let private scope = CohortScope.Machine
+
 let private buildLedger () : LedgerEntry<MemberId> list =
   let mutable seq = 0L
   let mutable state = CohortState.empty ()
@@ -43,10 +51,10 @@ let private buildLedger () : LedgerEntry<MemberId> list =
       seq <- seq + 1L
     | Error e -> failwithf "buildLedger: command was refused: %A" e
 
-  apply clock0 [||] (CohortCommand.Join(alice, JoinableRole.Implementer, Some "sess-alice", CohortScope.Machine))
-  apply (clock0.AddMinutes 1.0) [||] (CohortCommand.Join(bob, JoinableRole.Verifier, Some "sess-bob", CohortScope.Machine))
-  apply (clock0.AddMinutes 2.0) [| 9uy; 9uy |] (CohortCommand.AcquireClaim(alice, ClaimScope.File "Bar.fs", "implementing Bar", CohortScope.Machine))
-  apply (clock0.AddMinutes 3.0) [| 7uy; 7uy |] (CohortCommand.RequestLanding(alice, [], [ "shaX" ], "land Bar", CohortScope.Machine))
+  apply clock0 [||] (CohortCommand.Join(alice, JoinableRole.Implementer, Some "sess-alice", scope))
+  apply (clock0.AddMinutes 1.0) [||] (CohortCommand.Join(bob, JoinableRole.Verifier, Some "sess-bob", scope))
+  apply (clock0.AddMinutes 2.0) [| 9uy; 9uy |] (CohortCommand.AcquireClaim(alice, ClaimScope.File "Bar.fs", "implementing Bar", scope))
+  apply (clock0.AddMinutes 3.0) [| 7uy; 7uy |] (CohortCommand.RequestLanding(alice, [], [ "shaX" ], "land Bar", scope))
 
   List.ofSeq entries
 
@@ -56,7 +64,7 @@ let cohortPlayTests =
 
     testList "renderPlaySummary — pure, over a locally-built ledger" [
       let entries = buildLedger ()
-      let head = Cohort.replayHead entries
+      let head = Cohort.replayHeadIn scope entries
       let frame = Cohort.project head [||]
       let summary = renderPlaySummary entries.Length head frame
 

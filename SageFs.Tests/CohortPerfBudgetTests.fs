@@ -55,6 +55,15 @@ open SageFs.MemberTable
 
 let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
 
+/// The scope the fixture cohort is opened at. A v1 cohort WAS machine-wide and
+/// every command below is constructed at `Machine`, so `Machine` is exactly
+/// what this fixture was written on. `CohortState.empty ()` is the one that
+/// hardcodes `Scope = Machine`, so this binding is what proves the fold starts
+/// from a state at the SAME scope the commands address — not two literals that
+/// happen to agree. These are timing budgets, not scoping tests: the scope is a
+/// precondition of the fixture, not a variable.
+let private scope = CohortScope.Machine
+
 let private memberCount = 10
 let private testCount = 7000
 
@@ -68,14 +77,14 @@ let private members : MemberId list =
 /// owner/ledger/IO involved.
 let private buildHead () : LedgerHead<MemberId> =
   let joins =
-    members |> List.map (fun m -> CohortCommand.Join(m, JoinableRole.Implementer, Some(MemberId.display m), CohortScope.Machine))
+    members |> List.map (fun m -> CohortCommand.Join(m, JoinableRole.Implementer, Some(MemberId.display m), scope))
   let acquires =
     members
     |> List.map (fun m ->
       CohortCommand.AcquireClaim(
         m,
         ClaimScope.File(sprintf "SageFs.Core/Features/%s.fs" (MemberId.display m)),
-        sprintf "working on %s" (MemberId.display m), CohortScope.Machine))
+        sprintf "working on %s" (MemberId.display m), scope))
   let finalState, finalSeq =
     (joins @ acquires)
     |> List.fold
@@ -124,7 +133,7 @@ let private head = buildHead ()
 /// one member's own claim is the common case (no violation, but the scan
 /// still runs in full — `ObserveSave` has no early-exit on "it's mine").
 let private observeSaveCommand =
-  CohortCommand.ObserveSave(members.[0], "SageFs.Core/Features/member-01.fs", CohortScope.Machine)
+  CohortCommand.ObserveSave(members.[0], "SageFs.Core/Features/member-01.fs", scope)
 
 // ── Measurement plumbing ───────────────────────────────────────────────
 
