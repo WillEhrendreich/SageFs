@@ -130,12 +130,12 @@ let dashboardPanelVisibilityTests =
             FrictionPanelOptIn.NotOptedIn; FrictionPanelOptIn.NotOptedIn; FrictionPanelOptIn.NotOptedIn ]
 
       testCase "a cohort whose members all departed has no active members, whatever the ledger holds" <| fun _ ->
-        frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None); CohortCommand.Depart alice ]
+        frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine); CohortCommand.Depart(alice, CohortScope.Machine) ]
         |> PanelFacts.cohortPresence
         |> Expect.equal "stale rows are not a running cohort" CohortPresence.NoActiveMembers
 
       testCase "a cohort with a present member is running" <| fun _ ->
-        frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
+        frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine) ]
         |> PanelFacts.cohortPresence
         |> Expect.equal "one member present" (CohortPresence.ActiveMembers 1)
     ]
@@ -144,8 +144,8 @@ let dashboardPanelVisibilityTests =
       // A member holding a claim, so the lanes panel has a span to draw.
       let joined =
         ledgerAfter
-          [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing") ]
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
+            CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", CohortScope.Machine) ]
 
       testCase "a REPL session renders none of the optional panels" <| fun _ ->
         renderedIds replFacts (snapshotWith off joined)

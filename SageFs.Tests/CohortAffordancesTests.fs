@@ -26,6 +26,9 @@ let private frameOf
     (members: (MemberId * JoinableRole * SeatState) list)
     : CohortFrame<MemberId> =
   { Version = 0L<Measures.ledgerSeq>
+    // A v1 cohort was machine-wide, and that is what every assertion in this file means, so
+    // the frame says so explicitly rather than leaving the field to a default.
+    Scope = CohortScope.Machine
     SessionGens = [||]
     Dirty = FrameRegions.NoRegions
     Conductor = conductor

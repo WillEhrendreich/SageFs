@@ -93,6 +93,14 @@ module CohortStatusText =
     // at render, so all the rows on one page agree with each other.
     let now = DateTime.UtcNow
     sb.AppendLine(sprintf "Cohort ledger head: v%d" (int64 frame.Version)) |> ignore
+    // WHICH cohort this is, and why it is on the page at all.
+    //
+    // A cohort is about ONE scope, so a member working in another repository is reading a
+    // DIFFERENT cohort with its own conductor. An agent that hit a conductor-only refusal and
+    // could not tell a scope collision from a permissions problem had no way to recover: the
+    // status named members but never said which cohort they belonged to. One line answers it,
+    // and it answers it before the conductor line so a reader meets the scope first.
+    sb.AppendLine(sprintf "Cohort scope: %s" (Scope.label frame.Scope)) |> ignore
     sb.AppendLine(leaseHeader) |> ignore
     sb.AppendLine(sprintf "Conductor: %s" conductorText) |> ignore
     // Bounded lists (CohortBoundedView): totals stay in the headers, at most

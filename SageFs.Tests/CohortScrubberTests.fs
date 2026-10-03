@@ -41,9 +41,9 @@ let private ledgerFrom (commandsWithClocks: (DateTime * CohortCommand<MemberId>)
 
 let private threeEntryLedger : LedgerEntry<MemberId> list =
   ledgerFrom [
-    atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-    atSec 1, CohortCommand.Join(bob, JoinableRole.Implementer, None)
-    atSec 2, CohortCommand.AcquireClaim(alice, ClaimScope.File "Foo.fs", "working on foo")
+    atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
+    atSec 1, CohortCommand.Join(bob, JoinableRole.Implementer, None, CohortScope.Machine)
+    atSec 2, CohortCommand.AcquireClaim(alice, ClaimScope.File "Foo.fs", "working on foo", CohortScope.Machine)
   ]
 
 /// The direct, unabbreviated way to compute "the frame as of seq N" —

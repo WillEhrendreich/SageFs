@@ -30,6 +30,11 @@ let private noEntropy : byte[] = [||]
 let private alice = SageFs.MemberTable.MemberId.Minted "alice"
 let private bob = SageFs.MemberTable.MemberId.Minted "bob"
 
+/// Every cohort state here is opened by `SageFs.Cohort.CohortState.empty`, which is
+/// Machine-scoped — the v1 shape. These wire fixtures have no session and no
+/// working directory, so all their commands name that one machine-wide cohort.
+let private machine = SageFs.CohortScope.Machine
+
 let private applyOk state cmd =
   match SageFs.Cohort.decide clock noEntropy state cmd with
   | Ok(s, _, _) -> s
@@ -37,15 +42,15 @@ let private applyOk state cmd =
 
 let private joinAndClaim () =
   SageFs.Cohort.CohortState.empty ()
-  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1"))
-  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Foo.fs", "testing"))
+  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1", machine))
+  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Foo.fs", "testing", machine))
 
 /// `joinAndClaim` plus a second member (`bob`, bound to `"sess-2"`) who
 /// holds no claim of his own — the saver whose `ObserveSave` should land
 /// inside alice's claim.
 let private joinTwoAndClaim () =
   joinAndClaim ()
-  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(bob, SageFs.Cohort.JoinableRole.Implementer, Some "sess-2"))
+  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(bob, SageFs.Cohort.JoinableRole.Implementer, Some "sess-2", machine))
 
 let private getProp (name: string) (el: JsonElement) = el.GetProperty(name)
 
@@ -107,7 +112,7 @@ let cohortSseEventsTests = testList "Cohort SSE events (item 15a)" [
   testCase "claim_changed reports holder=null for a released claim" <| fun () ->
     let state0 = joinAndClaim ()
     let claimId, claim0 = state0.Claims |> Map.toList |> List.exactlyOne
-    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.ReleaseClaim(alice, claimId, claim0.Fence))
+    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.ReleaseClaim(alice, claimId, claim0.Fence, machine))
     let released = state1.Claims |> Map.find claimId
     let payload =
       SageFs.SseWriter.formatClaimChangedEvent jsonOpts "released" released
@@ -119,12 +124,12 @@ let cohortSseEventsTests = testList "Cohort SSE events (item 15a)" [
   testCase "landing_changed round-trips a Blocked landing's typed blocker + next action" <| fun () ->
     let state0 = joinAndClaim ()
     let claimId, claim = state0.Claims |> Map.toList |> List.exactlyOne
-    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.RequestLanding(alice, [ claimId, claim.Fence ], [ "abc123" ], "land it"))
+    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.RequestLanding(alice, [ claimId, claim.Fence ], [ "abc123" ], "land it", machine))
     let landingId = state1.Landings |> Map.toList |> List.exactlyOne |> fst
     let (SageFs.Cohort.LandingId expectedLandingId) = landingId
-    let state2 = applyOk state1 (SageFs.Cohort.CohortCommand.RebaseCompleted(landingId, Ok "def456"))
-    let state3 = applyOk state2 (SageFs.Cohort.CohortCommand.AffectedComputed(landingId, [ SageFs.Cohort.TestId "t1" ]))
-    let state4 = applyOk state3 (SageFs.Cohort.CohortCommand.TestsCompleted(landingId, [ SageFs.Cohort.TestId "t1" ]))
+    let state2 = applyOk state1 (SageFs.Cohort.CohortCommand.RebaseCompleted(landingId, Ok "def456", machine))
+    let state3 = applyOk state2 (SageFs.Cohort.CohortCommand.AffectedComputed(landingId, [ SageFs.Cohort.TestId "t1" ], machine))
+    let state4 = applyOk state3 (SageFs.Cohort.CohortCommand.TestsCompleted(landingId, [ SageFs.Cohort.TestId "t1" ], machine))
     let landing = state4.Landings |> Map.find landingId
     let payload =
       SageFs.SseWriter.formatLandingChangedEvent jsonOpts landing
@@ -146,7 +151,7 @@ let cohortSseEventsTests = testList "Cohort SSE events (item 15a)" [
   testCase "landing_changed carries no blocker/nextAction for a non-blocked state" <| fun () ->
     let state0 = joinAndClaim ()
     let claimId, claim = state0.Claims |> Map.toList |> List.exactlyOne
-    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.RequestLanding(alice, [ claimId, claim.Fence ], [ "abc123" ], "land it"))
+    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.RequestLanding(alice, [ claimId, claim.Fence ], [ "abc123" ], "land it", machine))
     let landingId = state1.Landings |> Map.toList |> List.exactlyOne |> fst
     let landing = state1.Landings |> Map.find landingId
     let payload =
@@ -217,7 +222,7 @@ let cohortSseEventsTests = testList "Cohort SSE events (item 15a)" [
     let claimId, claim = state0.Claims |> Map.toList |> List.exactlyOne
     let (SageFs.Cohort.ClaimId expectedClaimId) = claimId
     let events =
-      match SageFs.Cohort.decide clock noEntropy state0 (SageFs.Cohort.CohortCommand.ObserveSave(bob, "src/Foo.fs")) with
+      match SageFs.Cohort.decide clock noEntropy state0 (SageFs.Cohort.CohortCommand.ObserveSave(bob, "src/Foo.fs", SageFs.CohortScope.Machine)) with
       | Ok(_, evs, _) -> evs
       | Error e -> failwithf "unexpected cohort decide error: %A" e
     events
