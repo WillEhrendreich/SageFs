@@ -62,9 +62,9 @@ let private genShortList (g: Gen<'a>) : Gen<'a list> =
 let private genCommand : Gen<CohortCommand<MemberId>> =
   Gen.oneof [
     Gen.map3 (fun m r s -> CohortCommand.Join(m, r, s, CohortScope.Machine)) genMember genRole genSessionOpt
-    Gen.map CohortCommand.Depart genMember
-    Gen.map CohortCommand.RenewLease genMember
-    Gen.constant CohortCommand.Tick
+    Gen.map (fun m -> CohortCommand.Depart(m, CohortScope.Machine)) genMember
+    Gen.map (fun m -> CohortCommand.RenewLease(m, CohortScope.Machine)) genMember
+    Gen.constant (CohortCommand.Tick CohortScope.Machine)
     Gen.map3 (fun m s p -> CohortCommand.AcquireClaim(m, s, p, CohortScope.Machine)) genMember genScope (Gen.constant "purpose")
     Gen.map3 (fun m c f -> CohortCommand.ReleaseClaim(m, c, f, CohortScope.Machine)) genMember genClaimId genFence
     Gen.map3 (fun by c t -> CohortCommand.ReassignClaim(by, c, t, CohortScope.Machine)) genMember genClaimId genMember
@@ -89,7 +89,7 @@ let private genCommand : Gen<CohortCommand<MemberId>> =
     Gen.map2 (fun l ts -> CohortCommand.AffectedComputed(l, ts, CohortScope.Machine)) genLandingId (genShortList genTestId)
     Gen.map2 (fun l ts -> CohortCommand.TestsCompleted(l, ts, CohortScope.Machine)) genLandingId (genShortList genTestId)
     Gen.map2 (fun l sha -> CohortCommand.FastForwardCompleted(l, sha, CohortScope.Machine)) genLandingId (Gen.elements [ "final-a"; "final-b" ])
-    Gen.map2 (fun m l -> CohortCommand.WithdrawLanding(m, l)) genMember genLandingId
+    Gen.map2 (fun m l -> CohortCommand.WithdrawLanding(m, l, CohortScope.Machine)) genMember genLandingId
     Gen.map3 (fun by l reason -> CohortCommand.VetoLanding(by, l, reason, CohortScope.Machine)) genMember genLandingId (Gen.constant "reason")
     Gen.map2 (fun by head -> CohortCommand.SetIntegrationHead(by, head, CohortScope.Machine)) genMember (Gen.elements [ "head-a"; "head-b" ])
   ]
@@ -255,7 +255,7 @@ let private buildScenario () : Scenario =
     claimEvents
     |> List.pick (function CohortEvent.ClaimAcquired(cid, _, _, f) -> Some(cid, f) | _ -> None)
 
-  apply (scenarioClock0.AddMinutes 3.0) [||] (CohortCommand.RenewLease scenarioBob)
+  apply (scenarioClock0.AddMinutes 3.0) [||] (CohortCommand.RenewLease(scenarioBob, CohortScope.Machine))
   |> ignore
 
   let landingEvents =
@@ -325,7 +325,8 @@ let private expectedState : CohortState<MemberId> =
           FastForwardAttempts = 0; Settlement = LandingSettlement.Unsettled }
       ]
     Queue = [ expectedLandingId ]
-    Conductor = Cohort.ConductorBinding.Bound scenarioAlice }
+    Conductor = Cohort.ConductorBinding.Bound scenarioAlice
+    Scope = CohortScope.Machine }
 
 [<Tests>]
 let cohortLedgerExportTests =

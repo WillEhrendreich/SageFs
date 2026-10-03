@@ -81,6 +81,13 @@ let private counterEntropy () : unit -> byte[] =
 
 let private alice = MemberId.Minted "alice"
 
+/// The cohort this file drives is `Machine`. A v1 cohort WAS machine-wide —
+/// there was no scope anywhere in the ledger — so every assertion below means
+/// exactly what it was written to mean; none of this file's invariants (landing
+/// git mechanics, the rebase/fast-forward path) are about scoping. Bound once
+/// here rather than repeated at each `startWithPerformer` call.
+let private scope = CohortScope.Machine
+
 let private gitAvailable () : bool =
   try
     let psi =
@@ -200,7 +207,7 @@ let private landingIdFrom (events: CohortEvent<MemberId> list) : LandingId =
 
 let private requestLanding (owner: CohortOwner.Handle) (who: MemberId) (commits: string list) (statement: string) : Task<LandingId> =
   task {
-    let! result = owner.Commit(CohortCommand.RequestLanding(who, [], commits, statement))
+    let! result = owner.Commit(CohortCommand.RequestLanding(who, [], commits, statement, scope))
     match result with
     | Ok(events, _) -> return landingIdFrom events
     | Error err -> return failtestf "RequestLanding was refused: %A" err
@@ -243,9 +250,9 @@ let tests =
           // ── Drive the real cohort state machine + real performer ──
           let ledger = InMemory.create<MemberId> ()
           let performer = gitBackedPerformer integrationWorktree mainRepo branch
-          use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
-          let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None)) // alice: first joiner, becomes conductor
-          let! setHeadResult = owner.Commit(CohortCommand.SetIntegrationHead(alice, c0))
+          use owner = CohortOwner.startWithPerformer silentLogger scope ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
+          let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, scope)) // alice: first joiner, becomes conductor
+          let! setHeadResult = owner.Commit(CohortCommand.SetIntegrationHead(alice, c0, scope))
           setHeadResult |> Result.isOk |> Expect.isTrue "the conductor can configure the integration head"
 
           let! landingId = requestLanding owner alice [ memberSha ] "land the member's feature" |> Async.AwaitTask
@@ -312,9 +319,9 @@ let tests =
 
           let ledger = InMemory.create<MemberId> ()
           let performer = gitBackedPerformer integrationWorktree mainRepo branch
-          use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
-          let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
-          let! setHeadResult = owner.Commit(CohortCommand.SetIntegrationHead(alice, c1))
+          use owner = CohortOwner.startWithPerformer silentLogger scope ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
+          let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, scope))
+          let! setHeadResult = owner.Commit(CohortCommand.SetIntegrationHead(alice, c1, scope))
           setHeadResult |> Result.isOk |> Expect.isTrue "the conductor can configure the integration head"
 
           let! landingId = requestLanding owner alice [ memberSha ] "land the member's conflicting feature" |> Async.AwaitTask

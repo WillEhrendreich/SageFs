@@ -48,7 +48,7 @@ let private next (clock: DateTime) (state: CohortState<string>) (cmd: CohortComm
 /// exact `Departed` stamp rather than recomputing it.
 let private lapsed (s: CohortState<string>) (t: DateTime) =
   let at = (t.Add leaseWindow).AddSeconds 1.0
-  next at s CohortCommand.Tick, at
+  next at s (CohortCommand.Tick CohortScope.Machine), at
 
 [<Tests>]
 let cohortVacancyTests =
@@ -56,7 +56,7 @@ let cohortVacancyTests =
 
     test "a departed conductor is NOT Conductor — it cannot run conductor-only commands" {
       let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine))
-      let s2 = next epoch s1 (CohortCommand.Depart alice)
+      let s2 = next epoch s1 (CohortCommand.Depart(alice, CohortScope.Machine))
 
       Cohort.Authority.present alice s2
       |> Expect.equal "the departed conductor resolves to Anonymous, not Conductor" Authority.Anonymous
@@ -93,7 +93,7 @@ let cohortVacancyTests =
       // already bound" arm as any other joiner, so the rejoined member was
       // simultaneously Present AND still the conductor.
       let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine))
-      let s2 = next epoch s1 (CohortCommand.Depart alice)
+      let s2 = next epoch s1 (CohortCommand.Depart(alice, CohortScope.Machine))
       let s3 = next epoch s2 (CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine))
 
       Cohort.Authority.present alice s3
@@ -110,7 +110,7 @@ let cohortVacancyTests =
     test "a departed conductor's claim-orphaning, seat departure and vacancy are ONE step, with the reason recorded" {
       let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine))
       let s2 = next epoch s1 (CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", CohortScope.Machine))
-      let s3, events, _ = ok epoch s2 (CohortCommand.Depart alice)
+      let s3, events, _ = ok epoch s2 (CohortCommand.Depart(alice, CohortScope.Machine))
 
       events
       |> List.exists (function CohortEvent.MemberDeparted(m, _) -> m = alice | _ -> false)
@@ -125,7 +125,7 @@ let cohortVacancyTests =
       // do this" (`ConductorVacant`) imply different user actions — the second
       // needs a human to appoint a conductor, and no tool can.
       let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine))
-      let s2 = next epoch s1 (CohortCommand.Depart alice)
+      let s2 = next epoch s1 (CohortCommand.Depart(alice, CohortScope.Machine))
       let s3 = next epoch s2 (CohortCommand.Join(bob, JoinableRole.Implementer, None, CohortScope.Machine))
 
       // bob is an ordinary present member, but the seat is empty — the refusal
@@ -146,13 +146,13 @@ let cohortVacancyTests =
       // seat could never age out no matter how stale it got.
       let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine))
       let s2 = next epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None, CohortScope.Machine))
-      let s3 = next epoch s2 (CohortCommand.Depart alice)
+      let s3 = next epoch s2 (CohortCommand.Depart(alice, CohortScope.Machine))
       let longAfter = epoch.Add(settledRetention).AddSeconds 1.0
 
       Cohort.Retention.membersToPurge longAfter s3
       |> Expect.equal "the departed conductor ages out like any other seat" [ (alice, epoch) ]
 
-      let swept, sweepEvents, _ = ok longAfter s3 CohortCommand.Tick
+      let swept, sweepEvents, _ = ok longAfter s3 (CohortCommand.Tick CohortScope.Machine)
       swept.Members.ContainsKey alice
       |> Expect.isFalse "the vacant conductor's record is gone"
       sweepEvents
@@ -164,7 +164,7 @@ let cohortVacancyTests =
       let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine))
       // bob leaves; alice (still Bound and Present) must not be swept
       let s2 = next epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None, CohortScope.Machine))
-      let s3 = next epoch s2 (CohortCommand.Depart bob)
+      let s3 = next epoch s2 (CohortCommand.Depart(bob, CohortScope.Machine))
       let longAfter = epoch.Add(settledRetention).AddSeconds 1.0
       Cohort.Retention.membersToPurge longAfter s3
       |> Expect.equal "only the departed NON-conductor is purgeable" [ (bob, epoch) ]
@@ -195,8 +195,8 @@ let cohortVacancyTests =
         let s2 = next epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None, CohortScope.Machine))
         let s3 = next epoch s2 (CohortCommand.AcquireClaim(bob, ClaimScope.File "src/Foo.fs", "editing", CohortScope.Machine))
         let s4 = next epoch s3 (CohortCommand.DelegateConductor(alice, bob, CohortScope.Machine))
-        let s5 = next epoch s4 (CohortCommand.Depart bob)
-        next epoch s5 (CohortCommand.Depart alice)
+        let s5 = next epoch s4 (CohortCommand.Depart(bob, CohortScope.Machine))
+        next epoch s5 (CohortCommand.Depart(alice, CohortScope.Machine))
         |> fun last -> [ s1; s2; s3; s4; s5; last ]
 
       steps
@@ -214,7 +214,7 @@ let cohortVacancyTests =
       // need approval. A vacancy is a typed state that someone must fill.
       let s1 = next epoch (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine))
       let s2 = next epoch s1 (CohortCommand.Join(bob, JoinableRole.Implementer, None, CohortScope.Machine))
-      let s3 = next epoch s2 (CohortCommand.Depart alice)
+      let s3 = next epoch s2 (CohortCommand.Depart(alice, CohortScope.Machine))
 
       s3.Conductor
       |> Expect.equal "the seat stays Vacant — nobody is promoted into it" (ConductorBinding.Vacant(alice, epoch, VacancyReason.ConductorLeft))

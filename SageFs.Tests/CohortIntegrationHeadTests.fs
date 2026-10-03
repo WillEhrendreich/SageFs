@@ -68,7 +68,7 @@ let cohortIntegrationHeadTests =
         |> join alice   // conductor
         |> join bob     // plain member, survives
         |> fun s ->
-          match decide epoch [||] s (CohortCommand.Depart alice) with
+          match decide epoch [||] s (CohortCommand.Depart(alice, CohortScope.Machine)) with
           | Ok(s, _, _) -> s
           | Error e -> failwithf "unexpected departure failure: %A" e
       match decide epoch [||] departed (CohortCommand.SetIntegrationHead(bob, "deadbeef", CohortScope.Machine)) with
