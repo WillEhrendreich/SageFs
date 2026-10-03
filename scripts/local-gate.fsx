@@ -115,7 +115,34 @@ let run (file: string) (args: string list) (cwd: string) (timeout: TimeSpan) : i
       124, "timed out\n" + out.Result + err.Result
   with e -> 127, e.Message
 
-let scriptsDir = __SOURCE_DIRECTORY__
+// Locate the repo at RUNTIME, walking up from this script's own location until we
+// find the solution file. A build-time constant would bake in the directory the
+// script was COMPILED, which is not where it RUNS.
+let repoRoot =
+  let rec walk (dir: string) (depth: int) : string =
+    if depth > 24 then "" else
+    let full =
+      try
+        let f = Path.GetFullPath dir
+        let r = Path.GetPathRoot f
+        if f = r then f else Path.TrimEndingDirectorySeparator f
+      with _ -> dir
+    if File.Exists(Path.Combine(full, "SageFs.slnx")) then full
+    else
+      let parent = Path.GetDirectoryName full
+      if String.IsNullOrEmpty parent || parent = full then ""
+      else walk parent (depth + 1)
+  // Start from the directory this script lives in; the walk up finds the repo at run time rather
+  // than at compile time.
+  let start =
+    try Path.GetDirectoryName __SOURCE_DIRECTORY__ with _ -> "."
+  walk start 0
+if repoRoot = "" then
+  fail (GitFailed ("locating the repo", "no SageFs.slnx found walking up from this script"))
+
+/// The scripts directory, derived from the repo root so sibling scripts (gate-reap.fsx) are found by
+/// name at run time rather than at a directory baked in when this file was compiled.
+let scriptsDir = Path.Combine(repoRoot, "scripts")
 
 let repo : string =
   match run "git" [ "-C"; scriptsDir; "rev-parse"; "--show-toplevel" ] scriptsDir helperTimeout with

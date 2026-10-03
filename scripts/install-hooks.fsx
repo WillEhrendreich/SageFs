@@ -60,9 +60,36 @@ let parse (argv: string list) : Mode =
   | [ "--check" ] -> Check
   | other -> fail (Usage (sprintf "usage: install-hooks.fsx [--check | --force], not: %s" (String.Join(" ", other))))
 
+// Locate the repo at RUNTIME, walking up from this script's own location until we
+// find the solution file. A build-time constant would bake in the directory the
+// script was COMPILED, which is not where it RUNS.
+let repoRoot =
+  let rec walk (dir: string) (depth: int) : string =
+    if depth > 24 then "" else
+    let full =
+      try
+        let f = Path.GetFullPath dir
+        let r = Path.GetPathRoot f
+        if f = r then f else Path.TrimEndingDirectorySeparator f
+      with _ -> dir
+    if File.Exists(Path.Combine(full, "SageFs.slnx")) then full
+    else
+      let parent = Path.GetDirectoryName full
+      if String.IsNullOrEmpty parent || parent = full then ""
+      else walk parent (depth + 1)
+  // Start from the directory this script lives in, so the walk up finds the repo root at run time
+  // rather than a build-time constant naming where it was compiled.
+  let start =
+    try Path.GetDirectoryName __SOURCE_DIRECTORY__ with _ -> "."
+  walk start 0
+// git needs a directory inside the checkout to run in; the repo root found by the walk is it.
+let scriptsDir =
+  if repoRoot = "" then fail NotInGit
+  else Path.Combine(repoRoot, "scripts")
+
 let git (args: string list) : string =
   let psi = ProcessStartInfo("git")
-  psi.WorkingDirectory <- __SOURCE_DIRECTORY__
+  psi.WorkingDirectory <- scriptsDir
   args |> List.iter psi.ArgumentList.Add
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true
@@ -76,12 +103,12 @@ let git (args: string list) : string =
 
 /// Where the hooks of this clone live (honouring core.hooksPath), as a full path.
 let hooksDir () : string =
-  Path.GetFullPath(git [ "rev-parse"; "--git-path"; "hooks" ], __SOURCE_DIRECTORY__)
+  Path.GetFullPath(git [ "rev-parse"; "--git-path"; "hooks" ], scriptsDir)
 
 /// The tracked shim, taken from the main working tree when this is a linked worktree: the hooks directory is
 /// shared by all worktrees, so it must not point into one that may be removed later.
 let trackedShim () : string =
-  let common = Path.GetFullPath(git [ "rev-parse"; "--git-common-dir" ], __SOURCE_DIRECTORY__)
+  let common = Path.GetFullPath(git [ "rev-parse"; "--git-common-dir" ], scriptsDir)
   let root =
     match Path.GetFileName(common.TrimEnd Path.DirectorySeparatorChar) with
     | ".git" -> Path.GetDirectoryName(common.TrimEnd Path.DirectorySeparatorChar)

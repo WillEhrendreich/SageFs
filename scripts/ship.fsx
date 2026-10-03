@@ -49,12 +49,35 @@ let private die (lines: string list) : 'a =
   lines |> List.iter (eprintfn "%s")
   exit 1
 
-let scriptsDir = __SOURCE_DIRECTORY__
-
+// Locate the repo at RUNTIME, walking up from this script's own location until we
+// find the solution file. A build-time constant would bake in the directory the
+// script was COMPILED, which is not where it RUNS.
+let repoRoot =
+  let rec walk (dir: string) (depth: int) : string =
+    if depth > 24 then "" else
+    let full =
+      try
+        let f = Path.GetFullPath dir
+        let r = Path.GetPathRoot f
+        if f = r then f else Path.TrimEndingDirectorySeparator f
+      with _ -> dir
+    if File.Exists(Path.Combine(full, "SageFs.slnx")) then full
+    else
+      let parent = Path.GetDirectoryName full
+      if String.IsNullOrEmpty parent || parent = full then ""
+      else walk parent (depth + 1)
+  // Start from the directory this script lives in, so the walk up finds the repo root at run time
+  // rather than a build-time constant naming where it was compiled.
+  let start =
+    try Path.GetDirectoryName __SOURCE_DIRECTORY__ with _ -> "."
+  walk start 0
 let repo =
-  match start scriptsDir "git" [ "rev-parse"; "--show-toplevel" ] true with
-  | { Code = 0; Output = root } -> root.Trim()
-  | _ -> die [ "ship: this script is not inside a git checkout." ]
+  if repoRoot = "" then die [ "ship: could not locate the SageFs repository (no SageFs.slnx found walking up from this script)." ]
+  else repoRoot
+
+/// The scripts directory, from the repo root, so the sibling scripts ship drives are found by name at
+/// run time rather than at a directory baked in when this file was compiled.
+let scriptsDir = Path.Combine(repo, "scripts")
 
 /// A git command in the repo, output captured and trimmed. Fails the ship when git does.
 let private git (args: string list) : string =

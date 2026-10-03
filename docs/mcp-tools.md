@@ -90,6 +90,70 @@ your client ever sees an empty tool list. If you want to stay on HTTP,
 check `sagefs status` — if it says no daemon is running, start one with
 `sagefs` and restart your client.
 
+## "404 Session not found": the daemon was replaced under a live client
+
+The single most confusing failure here, and it is not what it looks like. Read
+this before you assume your client is broken.
+
+**What happened.** The MCP session lives in the DAEMON'S MEMORY. The SDK mints an
+`Mcp-Session-Id` when a client sends `initialize`, and the daemon holds that
+session in its process. So a client that connected over **Streamable HTTP**
+is holding an id the daemon only knows about. If the daemon is then
+**restarted** — which SageFs does on purpose whenever a new build is installed,
+so you get the new code — the new daemon has never heard of that id, and every
+request the client makes is refused.
+
+Measured, same id and same port either side of a restart:
+
+```
+held session id, before restart:  200
+held session id, after  restart:   404
+```
+
+Nothing was wrong with your client, your code, or your configuration. The
+connection was LIVE and pointed at a session that no longer existed.
+
+**Why HTTP makes this permanent.** An HTTP client sends `initialize` once, at
+connect, and keeps the id it got. When the daemon changes, nothing tells the
+client to run `initialize` again, so it keeps presenting a dead id forever, and
+the only fix is a manual client reload. The protocol has no way to recover an
+id in place; `initialize` is the only thing that mints one.
+
+**Why stdio does not have this problem.** With `sagefs mcp` the session id is
+captured by the BRIDGE (`SageFs/McpStdioBridge.fs`, `forward`), not by your
+client — the client never sees one. The bridge is a process that lives for the
+length of your session, so it is the thing that would have to recover, and
+that is what the bridge's own docs are about.
+
+**If you are on HTTP and you hit it, do this.** One command re-establishes and
+PROVES the session (it first checks a deliberately stale id is rejected, so a
+pass cannot mean "the endpoint merely answers"):
+
+```
+dotnet fsi scripts/reconnect-mcp.fsx
+```
+
+If it prints `OK`, the session is live again — no client reload needed. That
+repairs the connection; it cannot change what your client does on its own, which
+is why the durable fix is stdio.
+
+**Registering the bridge, for any client** (Claude Code, Open Code, Cursor,
+Windsurf, or anything that spawns a command):
+
+```
+claude mcp add sagefs -- sagefs mcp
+```
+
+or in raw JSON:
+
+```json
+{ "mcpServers": { "sagefs": { "command": "sagefs", "args": [ "mcp" ] } } }
+```
+
+The daemon must be reachable on 37749 (the bridge's default). Point it
+somewhere else with `SAGEFS_MCP_PORT`. If the daemon is not running, the
+bridge starts one.
+
 ## Execution and status
 
 | Tool | What it does |

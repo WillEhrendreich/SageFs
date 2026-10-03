@@ -2,6 +2,65 @@
 
 Read this when a SageFs tool errors, an eval gives a result that disagrees with the code in front of you, a lease or build is refused or delayed, or the REPL feels like it is fighting you.
 
+## "404 Session not found" — read this FIRST, it is not what it looks like
+
+**Your client is not broken. The connection is LIVE and pointing at a session that
+no longer exists.**
+
+The MCP session lives in the DAEMON'S MEMORY. The SDK mints an
+`Mcp-Session-Id` when a client sends `initialize`, and the daemon holds it in
+its process. When the daemon is RESTARTED — which SageFs does on purpose every
+time a new build is installed, so you get the new code — the new daemon has never
+heard of that id, and every request the client makes is refused. Measured, same id
+and same port either side of a restart:
+
+```
+held session id, before restart:  200
+held session id, after  restart:   404
+```
+
+This is not a stale daemon, not a broken config and not your fault, so do NOT
+spend this session rebuilding your MCP setup. Check the version first (the next
+section) and then do this:
+
+```
+dotnet fsi scripts/reconnect-mcp.fsx
+```
+
+It re-runs `initialize` and PROVES the result: it first sends a deliberately
+never-minted id and requires it to be REJECTED, so a later success cannot mean
+merely "the endpoint answers". Exit 0 with `OK` and the session is live. Run it
+from the SageFs repo (it takes an optional port, default 37749).
+
+**Why you will keep hitting this.** A client on Streamable HTTP sends
+`initialize` ONCE, at connect, and keeps the id. Nothing tells it to initialize
+again after the daemon changes, and the protocol cannot recover an id in place.
+So the same failure returns every time a build is installed, until someone
+reloads the client by hand.
+
+**The durable answer, and what to tell your user.** SageFs ships a stdio bridge,
+`sagefs mcp`, which owns the handshake itself: it captures `Mcp-Session-Id` from
+the response headers so YOUR CLIENT NEVER SEES ONE. Register the bridge instead of
+a URL:
+
+```
+claude mcp add sagefs -- sagefs mcp
+```
+
+or in raw JSON:
+
+```json
+{ "mcpServers": { "sagefs": { "command": "sagefs", "args": [ "mcp" ] } } }
+```
+
+That works for any client that spawns a command, not just Claude Code. See
+"Connect" in `docs/mcp-tools.md`, which covers this in full for a human.
+
+**Say which side the fix is on.** Reconnecting is something to RUN. Whether the
+client heals ITSELF is a change to that client's MCP transport, not to this
+repo — so if the user wants it automatic, tell them it is their side rather than
+implying the command closes it.
+
 ## Things that will bite you
 
 - **"Operation could not be completed due to earlier error"** means a previous

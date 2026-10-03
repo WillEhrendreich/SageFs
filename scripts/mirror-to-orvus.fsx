@@ -30,6 +30,32 @@ let sshConnectSeconds = 8
 let pushTimeout = TimeSpan.FromMinutes 15.
 let timerEverySeconds = 600
 let timerName = "sagefs-mirror"
+// Locate the repo at RUNTIME, walking up from this script's own location until we
+// find the solution file. A build-time constant would bake in the directory the
+// script was COMPILED, which is not where it RUNS. --install copies this script out of the checkout,
+// so it names itself under the located scripts/ directory at run time.
+let repoRoot =
+  let rec walk (dir: string) (depth: int) : string =
+    if depth > 24 then "" else
+    let full =
+      try
+        let f = Path.GetFullPath dir
+        let r = Path.GetPathRoot f
+        if f = r then f else Path.TrimEndingDirectorySeparator f
+      with _ -> dir
+    if File.Exists(Path.Combine(full, "SageFs.slnx")) then full
+    else
+      let parent = Path.GetDirectoryName full
+      if String.IsNullOrEmpty parent || parent = full then ""
+      else walk parent (depth + 1)
+  let start =
+    try Path.GetDirectoryName __SOURCE_DIRECTORY__ with _ -> "."
+  walk start 0
+let scriptsDir =
+  if repoRoot = "" then
+    failwith "Could not locate the SageFs repository (no SageFs.slnx found walking up from this script)."
+  else Path.Combine(repoRoot, "scripts")
+
 let installedScript = Path.Combine(home, ".local", "share", "sagefs-mirror", "mirror-to-orvus.fsx")
 let unitDir = Path.Combine(home, ".config", "systemd", "user")
 let dotnet = Path.Combine(home, ".dotnet", "dotnet")
@@ -126,7 +152,7 @@ let systemctl args = run "systemctl" ("--user" :: args) home shortTimeout
 
 let install () =
   Directory.CreateDirectory(Path.GetDirectoryName installedScript) |> ignore
-  File.Copy(Path.Combine(__SOURCE_DIRECTORY__, Path.GetFileName __SOURCE_FILE__), installedScript, true)
+  File.Copy(Path.Combine(scriptsDir, Path.GetFileName __SOURCE_FILE__), installedScript, true)
   Directory.CreateDirectory unitDir |> ignore
   let service =
     String.Join("\n",

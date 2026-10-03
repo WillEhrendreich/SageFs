@@ -12,6 +12,8 @@
 
 3. **NEVER treat `Start-Sleep` as "wait for the daemon to be ready" without a follow-up tool call in the same turn.** `Start-Sleep 3` followed by a chat message is the same hang, just shorter. `Start-Sleep 3` followed by a screenshot is fine. The sleep is not the problem. The text after the sleep is the problem.
 
+4. **NEVER re-derive an MCP connection from scratch. Run `dotnet fsi scripts/reconnect-mcp.fsx`.** If every MCP tool answers `404 Session not found`, the connection is LIVE and pointing at a session the daemon no longer has. The session lives in the daemon's MEMORY, and installing a build restarts the daemon on purpose, so the id a client holds dies. A client on Streamable HTTP sends `initialize` once and never again, so the failure repeats until someone reloads the client by hand. `reconnect-mcp.fsx` re-initializes and PROVES it (it first requires a never-minted id to be rejected, so a pass cannot mean "the endpoint merely answers"). If it prints `OK`, you are live; carry on. The durable fix is the stdio bridge — `claude mcp add sagefs -- sagefs mcp` — which owns the handshake itself, so the client never holds an id at all. Full explanation: "404 Session not found" in `docs/mcp-tools.md`, and the same diagnosis in `skills/sagefs/troubleshooting.md`, which also says to check the daemon's version before believing anything else.
+
 **Concrete patterns:**
 
 - Starting the daemon: one `Start-Process ... -WindowStyle Hidden` (no `-Wait`), one `Start-Sleep -Seconds 3` for warmup, then the next tool call is the screenshot. Nothing in between.

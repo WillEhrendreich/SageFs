@@ -165,7 +165,32 @@ let options =
 
 let baseUrl = sprintf "http://localhost:%d" options.Port
 let dashboardBaseUrl = sprintf "http://localhost:%d" (options.Port + 1)
-let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+// Locate the repo at RUNTIME, walking up from this script's own location until we
+// find the solution file. A build-time constant would bake in the directory the
+// script was COMPILED, which is not where it RUNS.
+let repoRoot =
+  let rec walk (dir: string) (depth: int) : string =
+    if depth > 24 then "" else
+    let full =
+      try
+        let f = Path.GetFullPath dir
+        let r = Path.GetPathRoot f
+        if f = r then f else Path.TrimEndingDirectorySeparator f
+      with _ -> dir
+    if File.Exists(Path.Combine(full, "SageFs.slnx")) then full
+    else
+      let parent = Path.GetDirectoryName full
+      if String.IsNullOrEmpty parent || parent = full then ""
+      else walk parent (depth + 1)
+  // Start from the directory this script lives in. A build-time constant only names where it was
+  // built, so the walk up to SageFs.slnx is what locates the repo where the code actually runs.
+  let start =
+    try Path.GetDirectoryName __SOURCE_DIRECTORY__ with _ -> "."
+  walk start 0
+let repo =
+  if repoRoot = "" then
+    failwith "Could not locate the SageFs repository (no SageFs.slnx found walking up from this script)."
+  else repoRoot
 let samplePath = Path.GetFullPath(Path.Combine(repoRoot, options.Sample))
 let sampleProjectDir = Path.GetDirectoryName samplePath
 let diagnosticsRoot =

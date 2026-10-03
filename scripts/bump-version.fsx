@@ -42,9 +42,36 @@ let describe = function
 exception Stop of Failure
 let fail f = raise (Stop f)
 
-let repoRoot () : string =
+// Locate the repo at RUNTIME, walking up from this script's own location until we
+// find the solution file. A build-time constant would bake in the directory the
+// script was COMPILED, which is not where it RUNS.
+let repoRoot =
+  let rec walk (dir: string) (depth: int) : string =
+    if depth > 24 then "" else
+    let full =
+      try
+        let f = Path.GetFullPath dir
+        let r = Path.GetPathRoot f
+        if f = r then f else Path.TrimEndingDirectorySeparator f
+      with _ -> dir
+    if File.Exists(Path.Combine(full, "SageFs.slnx")) then full
+    else
+      let parent = Path.GetDirectoryName full
+      if String.IsNullOrEmpty parent || parent = full then ""
+      else walk parent (depth + 1)
+  // Start from the directory this script lives in, so the walk up finds the repo root at run time
+  // rather than a build-time constant naming where it was compiled.
+  let start =
+    try Path.GetDirectoryName __SOURCE_DIRECTORY__ with _ -> "."
+  walk start 0
+let repo =
+  if repoRoot = "" then
+    failwith "Could not locate the SageFs repository (no SageFs.slnx found walking up from this script)."
+  else repoRoot
+
+let repoRootFromGit () : string =
   let psi = ProcessStartInfo("git")
-  [ "-C"; __SOURCE_DIRECTORY__; "rev-parse"; "--show-toplevel" ] |> List.iter psi.ArgumentList.Add
+  [ "-C"; repo; "rev-parse"; "--show-toplevel" ] |> List.iter psi.ArgumentList.Add
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
@@ -56,7 +83,7 @@ let repoRoot () : string =
   | false -> fail NotInGit
 
 let bump () : string =
-  let repo = repoRoot ()
+  let repo = repoRootFromGit ()
   let props = Path.Combine(repo, propsFileName)
   let propsText = if File.Exists props then File.ReadAllText props else ""
   let current = match ReleaseRules.versionIn propsText with | Some v -> v | None -> fail (NoVersion props)

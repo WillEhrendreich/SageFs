@@ -60,7 +60,32 @@ let sessionFileSeconds = 120
 let xdotoolStep = TimeSpan.FromMilliseconds 200.
 let xdotoolTypeDelayMs = "5"
 let settleAfterKill = TimeSpan.FromMilliseconds 500.
-let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", ".."))
+// Locate the repo at RUNTIME, walking up from this script's own location until we
+// find the solution file. A build-time constant would bake in the directory the
+// script was COMPILED, which is not where it RUNS.
+let repoRoot =
+  let rec walk (dir: string) (depth: int) : string =
+    if depth > 24 then "" else
+    let full =
+      try
+        let f = Path.GetFullPath dir
+        let r = Path.GetPathRoot f
+        if f = r then f else Path.TrimEndingDirectorySeparator f
+      with _ -> dir
+    if File.Exists(Path.Combine(full, "SageFs.slnx")) then full
+    else
+      let parent = Path.GetDirectoryName full
+      if String.IsNullOrEmpty parent || parent = full then ""
+      else walk parent (depth + 1)
+  // Start from the directory this script lives in (scripts/demos), so the walk up finds the repo
+  // root; a build-time constant only names where it was built, not where it runs.
+  let start =
+    try Path.GetDirectoryName __SOURCE_DIRECTORY__ with _ -> "."
+  walk start 0
+let repo =
+  if repoRoot = "" then
+    failwith "Could not locate the SageFs repository (no SageFs.slnx found walking up from this script)."
+  else repoRoot
 
 let spec : ArgSpec =
   { Valued =
@@ -115,7 +140,7 @@ let drive (p: Parsed) : int =
   let sagefs = value p "--sagefs-bin" (Path.Combine(repoRoot, "SageFs", "bin", "Release", "net10.0", "SageFs"))
   if not (File.Exists sagefs) then fail (WouldNotStart (sprintf "sagefs binary not found or not executable: %s (build it first: dotnet build SageFs/SageFs.fsproj -c Release)" sagefs))
   let orchestrator =
-    value p "--orchestrator-dll" (Path.Combine(__SOURCE_DIRECTORY__, "cohort-orchestrator", "bin", "Release", "net10.0", "CohortOrchestrator.dll"))
+    value p "--orchestrator-dll" (Path.Combine(repoRoot, "scripts", "demos", "cohort-orchestrator", "bin", "Release", "net10.0", "CohortOrchestrator.dll"))
   if not (File.Exists orchestrator) then
     fail (WouldNotStart (sprintf "orchestrator dll not found: %s (build it first: dotnet build scripts/demos/cohort-orchestrator/CohortOrchestrator.fsproj -c Release)" orchestrator))
   let chromium = findChromium (Map.tryFind "--chromium" p.Values)

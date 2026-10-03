@@ -231,9 +231,32 @@ let install (repo: string) (shaArg: string option) (build: bool) (force: bool) =
 let argv =
   fsi.CommandLineArgs |> Array.toList |> List.tail |> List.filter (fun a -> a <> "--")
 
+// Locate the repo at RUNTIME, walking up from this script's own location until we
+// find the solution file. A build-time constant would bake in the directory the
+// script was COMPILED, which is not where it RUNS.
+let repoRoot =
+  let rec walk (dir: string) (depth: int) : string =
+    if depth > 24 then "" else
+    let full =
+      try
+        let f = Path.GetFullPath dir
+        let r = Path.GetPathRoot f
+        if f = r then f else Path.TrimEndingDirectorySeparator f
+      with _ -> dir
+    if File.Exists(Path.Combine(full, "SageFs.slnx")) then full
+    else
+      let parent = Path.GetDirectoryName full
+      if String.IsNullOrEmpty parent || parent = full then ""
+      else walk parent (depth + 1)
+  // Start from the directory this script lives in, so the walk up finds the repo root at run time
+  // rather than a build-time constant naming where it was compiled.
+  let start =
+    try Path.GetDirectoryName __SOURCE_DIRECTORY__ with _ -> "."
+  walk start 0
+
 let code =
   try
-    let repo = gitOut __SOURCE_DIRECTORY__ [ "rev-parse"; "--show-toplevel" ]
+    let repo = gitOut repoRoot [ "rev-parse"; "--show-toplevel" ]
     match parse argv with
     | Status -> status repo
     | Install (sha, build, force) -> install repo sha build force

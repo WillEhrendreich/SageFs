@@ -19,6 +19,7 @@ Everything else is reference material you can come back to when you need it.
 - **[How SageFs opens projects plain FSI can't](how-isolation-works.md)**: why FSI fails on name-based assembly resolution, the process and closure design that avoids it, and how a project's pinned versions are adapted to or refused
 - **[Hot Reload](hot-reload.md)**: file watch → FSI eval → Harmony patch → browser refresh, and its current limits
 - **[Live Testing As You Type](live-testing-as-you-type.md)**: the three-speed feedback pipeline
+- **[Property, Mutation and Simulation Testing](property-and-mutation-testing.md)**: making your own test suite strong enough that a green run means something — property testing, mutation testing and deterministic simulation in whichever framework you already use (with Expecto/FsCheck recipes for F#), and why the SageFs REPL makes them affordable to write
 - **[Multi-Session](multi-session.md)**: one daemon, many isolated worker processes
 - **[Session Isolation](session-isolation.md)**: how sessions stay out of each other's way
 - **[Why F#?](why-fsharp.md)**: language rationale, from the person who had to live with the decision

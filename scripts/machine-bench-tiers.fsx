@@ -53,6 +53,32 @@ let readyCapSeconds = 300
 let defaultRuns = "5"
 let defaultColdRuns = "3"
 
+// Locate the repo at RUNTIME, walking up from this script's own location until we
+// find the solution file. A build-time constant would bake in the directory the
+// script was COMPILED, which is not where it RUNS. The sibling machine-bench.fsx this script drives
+// is then named under scripts/, so it is found where the code actually runs.
+let repoRoot =
+  let rec walk (dir: string) (depth: int) : string =
+    if depth > 24 then "" else
+    let full =
+      try
+        let f = Path.GetFullPath dir
+        let r = Path.GetPathRoot f
+        if f = r then f else Path.TrimEndingDirectorySeparator f
+      with _ -> dir
+    if File.Exists(Path.Combine(full, "SageFs.slnx")) then full
+    else
+      let parent = Path.GetDirectoryName full
+      if String.IsNullOrEmpty parent || parent = full then ""
+      else walk parent (depth + 1)
+  let start =
+    try Path.GetDirectoryName __SOURCE_DIRECTORY__ with _ -> "."
+  walk start 0
+let repo =
+  if repoRoot = "" then
+    failwith "Could not locate the SageFs repository (no SageFs.slnx found walking up from this script)."
+  else repoRoot
+
 type Mode =
   | Defaults
   | Generous
@@ -115,7 +141,7 @@ let commandFor (request: Request) (tier: Tier) : string * string list =
     | Generous -> generousEnvironment |> List.collect (fun (k, v) -> [ "--env"; sprintf "%s=%s" k v ])
   "systemd-run",
   [ "--user"; "--scope"; "-q" ] @ properties
-  @ [ "taskset"; "-c"; tier.Cpus; "dotnet"; "fsi"; Path.Combine(__SOURCE_DIRECTORY__, "machine-bench.fsx")
+  @ [ "taskset"; "-c"; tier.Cpus; "dotnet"; "fsi"; Path.Combine(repoRoot, "scripts", "machine-bench.fsx")
       "--sagefs"; request.SageFsDir; "--runs"; request.Runs; "--cold-runs"; request.ColdRuns
       "--ready-cap"; string readyCapSeconds; "--label"; label; "--out"; Path.Combine(request.OutDir, label + ".json") ]
   @ environment

@@ -1,6 +1,6 @@
 ---
 name: sagefs
-description: "How to work in any F# repo when SageFs is available: the SageFs REPL (MCP) is the inner loop, dotnet build/test is only the final gate, and every change is proven in the REPL before it is written to a file. Use at the start of every F# task, whenever you're about to run dotnet build, dotnet test, dotnet run or dotnet fsi, whenever you're about to edit a source file with sed/python/bulk-regex instead of an exact editor call, when a SageFs tool errors, and when writing a brief for a sub-agent that will touch F#."
+description: "How to work in any F# repo when SageFs is available: the SageFs REPL (MCP) is the inner loop, dotnet build/test is only the final gate, and every change is proven in the REPL before it is written to a file. Also the house code-design standards: exhaustive DUs over option/bool, Result with a named reason over string refusals, parse-don't-validate, pure functional core with effects at the edge, hexagonal architecture, vertical slices, immutability, small composable functions, TDD red-green-refactor, and no `private` anywhere except a smart constructor. Use at the start of every F# task, when designing a type or a signature, whenever you are about to run dotnet build, dotnet test, dotnet run or dotnet fsi, whenever you are about to edit a source file with sed/python/bulk-regex instead of an exact editor call, when a SageFs tool errors, and when writing a brief for a sub-agent that will touch F#."
 license: MIT
 ---
 
@@ -10,6 +10,20 @@ SageFs gives you a live F# REPL with the project already loaded. An eval takes
 milliseconds, a `dotnet build` minutes. So the REPL is the inner loop, and
 `dotnet build` / `test` / `run` is the final gate, run once when you are done,
 never to probe what an API looks like.
+
+## Before you design anything
+
+**Read `design.md`.** It carries the house standard for what the code should
+LOOK like, which is where a mechanically correct change can still be the wrong
+code. Exhaustive DUs instead of `option`/`bool`; `Result` with a named reason
+instead of a string refusal; parse-don't-validate; immutability; a pure
+functional core with effects at the edge; hexagonal architecture and vertical
+slices; small composable functions; TDD red-green-refactor; and **no `private`
+anywhere except the smart constructor of an opaque type**. Those are the
+owner's rules, and a reviewer who finds a violation is right to say so.
+
+Everything else in this skill is mechanics: how to DRIVE the tool. This is
+what the code is FOR.
 
 ## First minute
 
@@ -84,6 +98,9 @@ plan id) once their work merges. Brief them: remove nothing you do not own, repo
 
 | Read | When |
 |---|---|
+| design.md | **before you design a type, a signature or a module**; when a change is mechanically right but you are not sure it is right |
+| testing-standards.md | **before you write the tests for a change**; when deciding whether your suite is strong enough to call something done |
+| dst-capabilities.md | before writing a simulation or mutation test, so you extend what exists instead of reinventing it |
 | sessions.md | choosing or creating a session, checking the daemon version, a session stuck warming or Faulted |
 | loop.md | the loop is unclear, or you are tempted to run `dotnet build` mid-task |
 | editing.md | before your first edit, on a `#load` error, or on F# syntax that costs a build |
