@@ -14,7 +14,41 @@
 
 4. **NEVER re-derive an MCP connection from scratch. Run `dotnet fsi scripts/reconnect-mcp.fsx`.** If every MCP tool answers `404 Session not found`, the connection is LIVE and pointing at a session the daemon no longer has. The session lives in the daemon's MEMORY, and installing a build restarts the daemon on purpose, so the id a client holds dies. A client on Streamable HTTP sends `initialize` once and never again, so the failure repeats until someone reloads the client by hand. `reconnect-mcp.fsx` re-initializes and PROVES it (it first requires a never-minted id to be rejected, so a pass cannot mean "the endpoint merely answers"). If it prints `OK`, you are live; carry on. The durable fix is the stdio bridge — `claude mcp add sagefs -- sagefs mcp` — which owns the handshake itself, so the client never holds an id at all. Full explanation: "404 Session not found" in `docs/mcp-tools.md`, and the same diagnosis in `skills/sagefs/troubleshooting.md`, which also says to check the daemon's version before believing anything else.
 
-**Concrete patterns:**
+## Known red at 2026-10-03 (2 suites, NOT caused by the current work)
+
+The full unfiltered suite is **12101 ran, 12093 passed, 2 failed, 1 errored**. Both are
+outside the code this session touched — confirmed by running each in isolation:
+
+- **`a function inlined into its caller`** (1 errored of 2). Genuinely broken, not a flake.
+- **`real guards on a click whose thread is abandoned`** (2 passed in isolation, red in the
+  full run). Cross-test interference: it passes alone and fails in the suite, so treat it as
+  an ordering/isolation defect to chase, not a flake to re-roll.
+
+Do not "fix" either by touching the `source`/`test_run_completed` work. The first attempt to
+establish this by checking out the baseline commit FAILED, and the reason is worth knowing:
+the baseline worktree crashes during Expecto discovery because `SkillLayoutTests`,
+`RetiredToolNameTests` and `ToolSurfaceHonestyTests` located the repo by walking up from
+`Environment.CurrentDirectory` — the defect this session fixed. So a baseline worktree can
+only answer questions about suites whose discovery no longer depends on the CWD.
+
+## The `AGENTS.md` (Clef) fork: `FidelityFramework/Bozzett`
+
+`https://github.com/FidelityFramework/Bozzett` **404s** — it is private, or renamed, or does
+not exist yet. It is not cloned on this machine (checked `~/Work`, 44 checkouts, no match).
+So there is nothing to "keep an eye on" mechanically yet, and nothing in this repo references
+it by name.
+
+**What "Clef capability from day one" should mean here, given that.** The capability that is
+verifiable today is the one SageFs already has and Bozzett would be re-implementing: the REPL
+inner loop, live testing, hot reload, and now a self-healing MCP bridge. Anything else is a
+claim with no evidence behind it, which is the failure this repo keeps paying for.
+
+The honest move when the repo becomes reachable: record its actual shape (language, build,
+what it forks from) BEFORE designing a port, and mirror this repo's own rule — one home for
+each decision, exhaustive DUs, DST + mutation testing, no build-time path constants. A fork
+whose tests are weaker than its parent's is a regression the moment it lands here.
+
+## Concrete patterns:
 
 - Starting the daemon: one `Start-Process ... -WindowStyle Hidden` (no `-Wait`), one `Start-Sleep -Seconds 3` for warmup, then the next tool call is the screenshot. Nothing in between.
 - Verifying the daemon is up: `Invoke-WebRequest -TimeoutSec 3` with a hard timeout. If it returns, great. If it throws a timeout exception, kill the request and report the state. Do not retry indefinitely.
