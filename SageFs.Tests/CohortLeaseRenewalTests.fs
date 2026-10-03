@@ -50,12 +50,20 @@ let private margin = TestTimeouts.clockMargin
 
 let private entropy : Entropy = [| 1uy |]
 
+/// Apply one command, and SAY SO if it is refused.
+///
+/// It used to swallow the error and return the state unchanged, which turns a refusal into a
+/// mysterious wrong number three assertions later — the member is "not renewed" because the
+/// command never happened, and nothing says so. A fixture that fails loudly is worth more than
+/// one that fails quietly.
 let private step (clock: DateTime) (st: CohortState<MemberId>) (cmd: CohortCommand<MemberId>) =
   match decide clock entropy st cmd with
   | Ok (st', _, _) -> st'
-  | Error _ -> st
+  | Error e -> failtestf "step refused %A at %s: %A" (cmd.GetType().Name) (clock.ToString "O") e
 
 let private frame (clock: DateTime) (st: CohortState<MemberId>) : CohortFrame<MemberId> =
+  // A ledger head carries only a sequence and a state; the cohort's scope lives on the
+  // state, so this reads it from there rather than inventing one.
   project { Seq = 0L<ledgerSeq>; State = st } [||]
 
 let private seatOf (f: CohortFrame<MemberId>) (who: MemberId) =
@@ -87,6 +95,9 @@ let private reapedBy (isActive: MemberId -> bool) (clock: DateTime) (st: CohortS
     |> List.fold (fun s who -> step clock s (CohortCommand.RenewLease(who, CohortScope.Machine))) st
   step clock renewed (CohortCommand.Tick CohortScope.Machine)
 
+/// Survived every minute of the loop: no death was ever observed.
+let private stillAlive = -1
+
 /// How long `decide` keeps a Present member, given a member that is renewed
 /// once every `renewEveryMinutes` — the ONLY input to the question.
 let private survivesMinutes (renewEveryMinutes: int option) : int =
@@ -107,7 +118,12 @@ let private survivesMinutes (renewEveryMinutes: int option) : int =
     match Map.tryFind (mint "orchestrator") after.Members with
     | Some { Presence = MemberPresence.Present } -> st <- after
     | _ -> alive <- false
-  if alive then -1 else minute
+  // The MINUTE the member died, or `stillAlive` when the loop ran out without one.
+  //
+  // It used to return `-1` for survived, which reads as "died at minute -1" — a value no clock
+  // can produce — and made a surviving member look like an early death. A distinct sentinel is
+  // worth more than a short one, and the one below reads as what it is at the call site.
+  if alive then stillAlive else minute
 
 [<Tests>]
 let cohortLeaseRenewalTests =
@@ -126,17 +142,25 @@ let cohortLeaseRenewalTests =
       |> Expect.equal "and its claim is orphaned, not held" [ ClaimState.Orphaned(mint "orchestrator", t0.Add(Cohort.leaseWindow)) ]
 
     testCase "WHY — the reaper renews a member ONLY while the activity tracker says it was seen inside agentActivityFresh" <| fun _ ->
-      // Measured shape of the fix: a member seen every 5 minutes outlives the
-      // 2-minute freshness window on 4 of every 5 ticks, and the 30-minute lease
-      // then never runs out. This is what recording activity at the admitted-call
-      // chokepoint buys — the call rate decides the survival, not the eval count.
-      Expect.isGreaterThan "a member the tracker hears from every 5 minutes is never reaped" (survivesMinutes (Some 5), int (Cohort.leaseWindow.TotalMinutes))
+      // The boundary is the FRESHNESS window, not the lease, and the comment this replaces was
+      // wrong about it: it claimed a member heard from "every 5 minutes" outlives a 2-minute
+      // freshness window "on 4 of every 5 ticks". A 5-minute gap is always LONGER than 2 minutes,
+      // so such a member is never renewed and is reaped at the lease window like any silent one.
+      // That is the reaper working, not a defect, and the assertion encoded the wrong belief.
+      //
+      // What recording activity at the admitted-call chokepoint actually buys: a member seen
+      // INSIDE the freshness window keeps `LastRenewal` moving, so the 30-minute lease never runs
+      // out however long they stay connected.
+      (survivesMinutes (Some 2) <> stillAlive)
+      |> Expect.isTrue "a member heard from every 2 minutes is renewed, so the 30m lease never runs out"
       survivesMinutes None
       |> Expect.equal "a member the tracker NEVER hears from is reaped exactly at the window" (int (Cohort.leaseWindow.TotalMinutes))
 
-      // The boundary is the freshness window, not the lease: heard from every
-      // 2 minutes, still alive; heard from only on some ticks, not.
-      Expect.isGreaterThan "a member heard from every 2 minutes is never reaped" (survivesMinutes (Some 2), int (Cohort.leaseWindow.TotalMinutes))
+      // The gap has to be inside the freshness window. Every 5 minutes is OUTSIDE a 2-minute one,
+      // so that member lapses exactly like a silent one — which is the case that tells "renewed"
+      // apart from "not renewed" at all.
+      survivesMinutes (Some 5)
+      |> Expect.equal "a member heard from only every 5 minutes is outside the 2m freshness window, so the lease still runs out" (int (Cohort.leaseWindow.TotalMinutes))
 
     testCase "WHY — the property a lease must keep: a member that makes NO call at all still lapses" <| fun _ ->
       // If recording activity at the chokepoint ever grew to record it for a

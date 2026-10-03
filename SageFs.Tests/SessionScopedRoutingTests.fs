@@ -406,9 +406,20 @@ let private liveTestingRouteTargeting = pausedFlagTests
 
 // ── Properties: the ambient pointer can never leak into the decision ─────────
 
+/// Keep only strings that are actually well-formed session ids.
+///
+/// The LENGTH check alone is not enough: the generator produces arbitrary strings, so a
+/// eight-character string like `aaaaaaa"` passes a length test and then fails
+/// `SessionId.validate`, which fails the PROPERTY on its fixture rather than on the routing
+/// under test. Filter on what `SessionId.validate` will accept, so a rejected case is a real
+/// counterexample about routing and not a malformed id the test invented.
 let private distinctHexes (ids: string list) =
   ids
-  |> List.filter (fun h -> h.Length = 8)
+  |> List.filter (fun h ->
+    h.Length = 8
+    && (match SageFs.WorkerProtocol.SessionId.validate h with
+        | Ok _ -> true
+        | Error _ -> false))
   |> List.distinct
 
 let config = { FsCheckConfig.defaultConfig with maxTest = 200 }

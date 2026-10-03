@@ -62,11 +62,16 @@ let toolAuthorityGateTests =
       }
 
       test "and it is refused for an UNJOINED caller too (Anonymous is an Observer, not 'no authority')" {
+        // `Anonymous` maps to Observer, so the refusal is the SAME one an Observer gets:
+        // `RoleForbids(tool, Working)`, naming the role that WOULD be needed. It is NOT
+        // `NotInGrant(tool, Observer)` — that case is for a tool outside the caller's own
+        // grant entirely, and `send_fsharp_code` is simply "you are not a Working member",
+        // which is a different problem with a different fix (join as Implementer).
         for tool in theThree do
           Affordances.checkAuthorityAllowed Authority.Anonymous tool
           |> Expect.equal
-            (sprintf "an unjoined caller may not call %s" (Affordances.ToolName.toString tool))
-            (Error(Affordances.AuthorityRefusal.NotInGrant(tool, Affordances.ToolRole.Working)))
+            (sprintf "an unjoined caller is refused %s the way an Observer is" (Affordances.ToolName.toString tool))
+            (Error(Affordances.AuthorityRefusal.RoleForbids(tool, Affordances.ToolRole.Working)))
       }
 
       test "run_tests is refused for an Observer — discovering tests is reading, running them is not" {
@@ -204,16 +209,21 @@ let toolAuthorityGateTests =
       }
 
       test "the gate never refuses with an unnamed refusal — the type forbids it" {
-        // There is no `Result<_, string>` anywhere on this path: the gate's
-        // error type is the DU, so the ratchet that counts `Result<_, string>`
-        // refusals DOWN cannot find one here.
+        // There is no untyped-string result anywhere on this path: the gate's error type is
+        // a DU, so the ratchet that counts that shape DOWN cannot find one here.
+        //
+        // `IsUnion` is the check that matters. `IsClass` is NOT a discriminator and asserting
+        // it is a bug: at the IL level an F# union IS a class, so `IsClass` is true for
+        // `AuthorityRefusal` exactly as it is for a record or a DU. Asserting "a union is not
+        // a class" therefore fails against correct code and means nothing about case names.
         let errorType = typeof<Affordances.AuthorityRefusal>
-        errorType.IsClass
-        |> Expect.isFalse "a union is not a class"
         errorType.IsEnum
-        |> Expect.isFalse "and not an enum"
+        |> Expect.isFalse "and a DU is not an enum"
         FSharp.Reflection.FSharpType.IsUnion(errorType, System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.NonPublic)
         |> Expect.isTrue "AuthorityRefusal is a union, so every refusal has a case name"
+        FSharp.Reflection.FSharpType.GetUnionCases(errorType, System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.NonPublic)
+        |> Array.forall (fun c -> not (System.String.IsNullOrWhiteSpace c.Name))
+        |> Expect.isTrue "and no case is anonymous"
       }
     ]
 
