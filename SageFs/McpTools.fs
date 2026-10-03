@@ -1662,7 +1662,7 @@ Retention runs on its own: friction keeps only the running version's rows, insid
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: manage_local_data called, action={Action}, store={Store}", action, store)
         task {
-          let cohort = SageFs.LocalData.liveCohort ctx.CohortOwner
+          let cohort = SageFs.LocalData.liveCohort (cohortOwnerFor ctx None)
           let dataDir = SageFs.DaemonState.SageFsDir
           match SageFs.LocalData.LocalDataAction.parse action with
           | Ok SageFs.LocalData.LocalDataAction.Status ->

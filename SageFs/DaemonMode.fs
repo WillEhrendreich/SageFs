@@ -3097,15 +3097,29 @@ let run
       | None, None -> Environment.CurrentDirectory
     SageFs.Scope.ofWorkingDirectory SageFs.Scope.defaultStrategy subject
 
-  use cohortOwner =
-    Features.CohortOwner.startWithPerformer
-      (Log.asILogger ())
-      cohortScope
-      cohortLedgerPort
-      (fun () -> System.DateTime.UtcNow)
-      Features.CohortOwner.productionEntropy
-      getCohortSessionTestOutcomes
-      cohortLandingPerformer
+  // One cohort owner PER SCOPE, so this daemon serves many repositories.
+  //
+  // This used to be a single owner bound to `cohortScope` — the scope the daemon was
+  // launched from. `join_cohort` has always derived ITS scope from the caller's
+  // `working_directory`, so an agent in another repository computed a correct scope and
+  // had it refused as a scope collision, against a cohort it never asked for. The ledger
+  // was already scope-keyed; the owner was the one thing that could not represent more
+  // than one cohort. Each owner reads only its own scope's rows, so sharing the store
+  // keeps the cohorts apart.
+  let cohortOwners =
+    Features.CohortOwners.create (
+      Features.CohortOwners.factoryOf
+        { Ledger = cohortLedgerPort
+          Clock = (fun () -> System.DateTime.UtcNow)
+          Entropy = Features.CohortOwner.productionEntropy
+          GetSessionTestOutcomes = getCohortSessionTestOutcomes
+          Performer = cohortLandingPerformer
+          Logger = Log.asILogger () }
+    )
+
+  // The daemon's OWN scope, seeded eagerly so a caller in the launch directory is never
+  // refused for want of an owner. Every other scope gets its owner on first use.
+  let cohortOwner = cohortOwners.OwnerFor cohortScope
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
@@ -3161,7 +3175,7 @@ let run
     | ModelChanged _
     | WarmupProgress _
     | SystemAlarm _
-    | CohortChanged
+    | CohortChanged _
     | WarmupContextSnapshot _
     | HotReloadSnapshot _
     | HotReloadFileToggled _
@@ -3174,16 +3188,26 @@ let run
   // panel shows up when a member joins and goes when the last one leaves.
   // Lease renewals are left out: the reaper renews every present member once
   // a minute, and a redraw for that changes nothing anyone can see.
-  cohortOwner.Events.Add(fun events ->
-    let visible =
-      events
-      |> List.exists (fun ev ->
-        match ev with
-        | SageFs.Cohort.CohortEvent.LeaseRenewed _ -> false
-        | _ -> true)
-    match visible with
-    | true -> stateChangedEvent.Trigger CohortChanged
-    | false -> ())
+  // Subscribe to a cohort owner's events ONCE per owner, as it is created.
+  //
+  // WHY A HOOK AND NOT A LOOP OVER SCOPES: owners are created lazily, the first time a
+  // scope is asked for, so a loop here would only ever see the daemon's own cohort — the
+  // second repository's panel would stay stale forever. The hook fires as each owner
+  // appears, so one registration covers every cohort this daemon will ever serve.
+  cohortOwners.SetOnOwnerStarted (fun scope owner ->
+    owner.Events.Add(fun events ->
+      let visible =
+        events
+        |> List.exists (fun ev ->
+          match ev with
+          | SageFs.Cohort.CohortEvent.LeaseRenewed _ -> false
+          | _ -> true)
+      // The scope travels with the event, so a client redraws the cohort that actually
+      // changed rather than every cohort it happens to be showing — and a stale panel is
+      // then distinguishable from a live one instead of looking identical.
+      match visible with
+      | true -> stateChangedEvent.Trigger(CohortChanged scope)
+      | false -> ()))
   // No landing-outcome hook feeds the integration session's trustworthiness, and that is the better
   // shape. Whether the last verification ended in a landing used to be read off
   // `LandingStateChanged(_, Blocked | Landed)`, and it cannot be read off `RunTests` either — the
@@ -3232,7 +3256,9 @@ let run
     | ReloadReported (sid, SessionReload.Finished facts) ->
       trunkFollower.Post (Features.TrunkFollow.TrunkEvent.ReloadReported (WorkerProtocol.SessionId.value sid, facts))
     | _ -> ())
-  trunkFollower.Changes.Add(fun _ -> stateChangedEvent.Trigger CohortChanged)
+  // The trunk follower is about the DAEMON's own cohort, so this names that scope rather
+  // than leaving a client to guess which cohort went stale.
+  trunkFollower.Changes.Add(fun _ -> stateChangedEvent.Trigger(CohortChanged cohortScope))
   // Sessions that were ready before this line ran.
   SessionManager.QuerySnapshot.allSessions (readSnapshot ())
   |> List.iter (fun info -> ensureReloadRelay info.Id)
@@ -3458,7 +3484,7 @@ let run
       SharedFeatureState = Some sharedFeatureState
       ActivityTracker = activityTracker
       LiveBindings = Some liveBindingsHub
-      CohortOwner = Some cohortOwner
+      CohortSupport = Features.CohortOwners.Wiring.Wired(cohortOwners, cohortScope)
       GetDaemonHealth = getDaemonHealth
     } cts.Token
 
@@ -3616,18 +3642,24 @@ let run
   let cohortReaperCallback _ =
     try
       let now = DateTime.UtcNow
-      let state = cohortOwner.ReadCohortState()
-      match Map.isEmpty state.Members with
-      | true -> () // no members — nothing to renew or reap
-      | false ->
-        let freshKeys =
-          AgentActivityTracker.getActivePresences activityTracker None cohortReaperRenewWindow now
-          |> List.map (fun p -> p.AgentName)
-          |> Set.ofList
-        let isActive (m: MemberTable.MemberId) = Set.contains (MemberTable.MemberId.display m) freshKeys
-        for m in cohortMembersToRenew isActive state.Members do
-          cohortOwner.Post(SageFs.Cohort.CohortCommand.RenewLease(m, cohortOwner.Scope), ignore)
-        cohortOwner.Post(SageFs.Cohort.CohortCommand.Tick cohortOwner.Scope, ignore)
+      let freshKeys =
+        AgentActivityTracker.getActivePresences activityTracker None cohortReaperRenewWindow now
+        |> List.map (fun p -> p.AgentName)
+        |> Set.ofList
+      let isActive (m: MemberTable.MemberId) = Set.contains (MemberTable.MemberId.display m) freshKeys
+
+      // EVERY scope's cohort, not just the daemon's own. A reaper that ticked one owner
+      // would leave a second repository's departed member holding its claims forever — the
+      // exact failure this loop exists to prevent, now reachable for any repo.
+      for scope in cohortOwners.Scopes () do
+        let owner = cohortOwners.OwnerFor scope
+        let state = owner.ReadCohortState()
+        match Map.isEmpty state.Members with
+        | true -> () // no members in this cohort — nothing to renew or reap
+        | false ->
+          for m in cohortMembersToRenew isActive state.Members do
+            owner.Post(SageFs.Cohort.CohortCommand.RenewLease(m, scope), ignore)
+          owner.Post(SageFs.Cohort.CohortCommand.Tick scope, ignore)
     with ex ->
       log.LogWarning("Cohort reaper tick threw unexpectedly: {Error}", ex.Message)
     // reschedule after this run (one-shot pattern, guards the shutdown race)

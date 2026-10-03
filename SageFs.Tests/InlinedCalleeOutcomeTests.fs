@@ -14,6 +14,7 @@
 module SageFs.Tests.InlinedCalleeOutcomeTests
 
 open System
+open System.IO
 open System.Reflection
 open System.Reflection.Emit
 open System.Runtime.CompilerServices

@@ -143,7 +143,7 @@ let private startTestServer (ops: SessionManagementOps) = task {
       SharedFeatureState = None
       ActivityTracker = SageFs.AgentActivityTracker.create ()
       LiveBindings = None
-      CohortOwner = None
+      CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
       GetDaemonHealth = fun () -> None }
 
   let mcpContext : McpContext =
@@ -160,7 +160,7 @@ let private startTestServer (ops: SessionManagementOps) = task {
       GetFeatureState = None; RecordEval = None
       ActivityTracker = config.ActivityTracker
       LiveBindings = None
-      CohortOwner = None
+      CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }
 

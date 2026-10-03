@@ -583,7 +583,7 @@ let invalidatesWorkerData (change: SseEvent) =
   | SseEvent.SystemAlarm _
   // The cohort panel reads the owner's published frame on every push; no
   // worker data is involved.
-  | SseEvent.CohortChanged -> false
+  | SseEvent.CohortChanged _ -> false
   // The dashboard's own stateChangedEvent stream only ever carries "state"
   // channel cases (DaemonMode.fs triggers exactly the nine cases above) —
   // the "session" channel cases below are pushed on a separate broadcast

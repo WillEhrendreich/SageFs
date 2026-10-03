@@ -76,7 +76,7 @@ let private mkProbe (sessionId: string) (p: SourceStateFixtures.Project) (warmup
       GetElmModel = None; GetElmRegions = None
       GetWarmupContext = Some (fun _ -> Task.FromResult warmup)
       GetFeatureState = None; RecordEval = None
-      ActivityTracker = AgentActivityTracker.create (); LiveBindings = None; CohortOwner = None
+      ActivityTracker = AgentActivityTracker.create (); LiveBindings = None; CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }
   { Ctx = ctx; Restarts = restarts }

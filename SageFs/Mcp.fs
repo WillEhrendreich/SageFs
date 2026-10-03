@@ -58,14 +58,51 @@ module McpTools =
     /// The live-bindings store, the pane's notes and the config's walk mode. Each successful eval pulls the session's live
     /// values into it (the daemon wires it; None in tests).
     LiveBindings: Features.LiveBindingsPane.Hub option
-    /// The single per-daemon cohort owner (cohort-integration-plan.md Slice 2,
-    /// item 9). `None` when no cohort owner was wired (most existing unit
-    /// tests, which predate cohort support and never construct one) — cohort
-    /// tools report a structured error rather than throwing in that case.
-    CohortOwner: Features.CohortOwner.Handle option
+    /// The cohort owners, ONE PER SCOPE, and the daemon's OWN scope's owner beside them.
+    ///
+    /// WHY ONE FIELD AND NOT TWO: F# records have no defaults, so every added field forces
+    /// all ~37 sites that construct an `McpContext` to name it — and 30 of them are tool
+    /// tests that never mention cohorts. A single DU whose `None` case means "no cohort
+    /// support at all" adds exactly ONE field, and a site that wants cohorts says so by
+    /// passing `Wired`; a site that does not passes `Unwired`, or omits it in the one
+    /// helper that builds it.
+    CohortSupport: Features.CohortOwners.Wiring
     GetDaemonHealth: unit -> Features.HealthSnapshot option
     GetProcessTelemetry: unit -> SageFs.Server.DaemonTelemetry.Snapshot option
   }
+  /// The cohort owner for the cohort a CALLER is asking about.
+  ///
+  /// WHY EVERY READ GOES THROUGH THIS: with one daemon serving one cohort per repository,
+  /// "is this member the conductor" and "which cohort is this" are questions about the
+  /// CALLER's directory, not the daemon's. Reading the daemon's one owner directly
+  /// answered both about the cohort it happened to start in — so an agent in a second
+  /// repository could be refused by the first repository's conductor seat, and a status
+  /// read could describe a cohort the caller is not in. That is the UI lying, in the form
+  /// that matters.
+  ///
+  /// `workingDirectory` is the caller's own directory, exactly as `join_cohort` does;
+  /// `None` means the caller named none, so it is asking about the daemon's own cohort.
+  let cohortOwnerFor (ctx: McpContext) (workingDirectory: string option) =
+    let scopeOf dir = Scope.ofWorkingDirectory Scope.defaultStrategy dir
+    match ctx.CohortSupport with
+    | Features.CohortOwners.Wiring.Wired(owners, own) ->
+      // The caller's own directory when it named one, and the scope the DAEMON started in
+      // when it did not — which is what that caller is asking about.
+      let scope =
+        match workingDirectory with
+        | Some dir -> scopeOf dir
+        | None -> own
+      Some(owners.OwnerFor scope)
+    | Features.CohortOwners.Wiring.Single(owner, own) ->
+      // A single wired owner serves only the scope it was started for, so a caller in another
+      // repository is honestly refused rather than handed someone else's cohort. That is what
+      // this wiring is for: a test with one real owner, not a daemon serving many.
+      let scope =
+        match workingDirectory with
+        | Some dir -> scopeOf dir
+        | None -> own
+      if scope = own then Some owner else None
+    | Features.CohortOwners.Wiring.Unwired -> None
 
   /// The MCP transport's per-connection identity, bound by the request
   /// filter (McpServer.createServerCaptureFilter) before a tool body runs —
@@ -748,7 +785,7 @@ module McpTools =
   /// `ToolAuthorityGate.fs`. This is the call site; it belongs here because it needs `McpContext`.
   let private checkToolAuthorityGate (ctx: McpContext) (agent: string) (toolName: string) : Result<unit, string> =
     let who = memberIdFor agent
-    let authority = ToolAuthorityGate.authorityOf ctx.CohortOwner who
+    let authority = ToolAuthorityGate.authorityOf (cohortOwnerFor ctx None) who
     match ToolAuthorityGate.decide who authority toolName with
     | ToolAuthorityGate.Decision.Admitted -> Ok ()
     | ToolAuthorityGate.Decision.Refused(reason, _) -> Error reason
@@ -770,7 +807,7 @@ module McpTools =
       | Capability.IdentityPolicy.ConnectionsAllowed -> Ok ()
       | Capability.IdentityPolicy.TokenRequired ->
         let authority, seat =
-          match ctx.CohortOwner with
+          match cohortOwnerFor ctx None with
           | Some owner ->
             let frame = owner.ReadFrame()
             let seat = match frame.Conductor with | Cohort.ConductorBinding.NeverBound -> Capability.ConductorSeat.NotBoundYet | _ -> Capability.ConductorSeat.Bound
@@ -3256,18 +3293,31 @@ module McpTools =
   /// (tests that predate Slice 2) — every production McpContext (DaemonMode.fs)
   /// always supplies one.
   let internal requireCohortOwner (ctx: McpContext) : Result<Features.CohortOwner.Handle, SageFsError> =
-    match ctx.CohortOwner with
+    match cohortOwnerFor ctx None with
     | Some owner -> Ok owner
     | None -> Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
 
-  /// Dispatch one `CohortCommand` through the owner, mapping any refusal to
+  /// Dispatch one `CohortCommand` through the owner for ITS scope, mapping any refusal to
   /// `SageFsError` at this boundary (roast §10).
+  ///
+  /// A cohort is about one scope, so the owner that can accept the command is the one
+  /// owning that scope — which is how a caller in a second repository gets its own
+  /// conductor seat instead of a scope collision against a cohort it never asked for.
   let internal commitCohort (ctx: McpContext) (cmd: Cohort.CohortCommand<MemberTable.MemberId>)
       : Task<Result<Cohort.CohortEvent<MemberTable.MemberId> list * Cohort.CohortEffect<MemberTable.MemberId> list, SageFsError>> =
     task {
-      match requireCohortOwner ctx with
-      | Error e -> return Error e
-      | Ok owner ->
+      // The owner for THIS command's scope, not the daemon's one owner. A cohort is about
+      // one scope, so the owner that can accept the command is the one owning that scope —
+      // which is how a caller in a second repository gets its own conductor seat instead of
+      // a scope collision against a cohort it never asked for.
+      let ownerForScope =
+        match ctx.CohortSupport.Owners with
+        | Some owners -> Some(owners.OwnerFor(Cohort.scopeOf cmd))
+        | None -> None
+
+      match ownerForScope with
+      | None -> return Error(SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+      | Some owner ->
         let! result = owner.Commit cmd
         match result with
         | Ok(events, effects) -> return Ok(events, effects)

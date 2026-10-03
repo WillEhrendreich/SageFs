@@ -64,7 +64,7 @@ let private withCohort (body: McpContext -> Features.CohortOwner.Handle -> Featu
         (fun () -> now)
         (fun () -> seed <- seed + 1; BitConverter.GetBytes seed)
         (fun _ -> ([], [], [], 0L))
-    do! body { sharedCtx () with CohortOwner = Some owner } owner ledger
+    do! body { sharedCtx () with CohortSupport = SageFs.Features.CohortOwners.Wiring.Single(owner, owner.Scope) } owner ledger
   }
 
 let private mintAs (ctx: McpContext) (store: CapabilityStore) (handle: string) (role: string) (scope: string) (ttl: int) =

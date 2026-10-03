@@ -39,7 +39,12 @@ type SseEvent =
   /// cohort panel, which only shows while members are present; before this
   /// nothing pushed on a cohort change, so the panel went stale until some
   /// unrelated event happened to arrive.
-  | CohortChanged
+  ///
+  /// Carries the SCOPE that changed. One daemon now serves one cohort per
+  /// repository, so "a cohort changed" no longer identifies WHICH one — a bare
+  /// flag would have every client redraw everything it happens to be showing and
+  /// had no way to tell a stale panel from a live one.
+  | CohortChanged of scope: CohortScope
   // ── Session channel (was SessionEvents.SessionEvent) — rich, session-scoped snapshots ──
   | WarmupContextSnapshot of sessionId: string * context: WarmupContext
   | HotReloadSnapshot of sessionId: string * watchedFiles: string list
@@ -73,7 +78,7 @@ module SseEvent =
     | ModelChanged _
     | WarmupProgress _
     | SystemAlarm _
-    | CohortChanged -> SseChannel.State
+    | CohortChanged _ -> SseChannel.State
     | WarmupContextSnapshot _
     | HotReloadSnapshot _
     | HotReloadFileToggled _
@@ -181,8 +186,10 @@ module SseEvent =
       write({| warmupProgress = true; sessionId = sid s; step = step; total = total |})
     | SystemAlarm (phase, message) ->
       write({| systemAlarm = true; phase = phase; message = message |})
-    | CohortChanged ->
-      write({| cohortChanged = true |})
+    | CohortChanged scope ->
+      // The scope's own label, not a machine path: this is what a client filters and displays,
+      // and it is the same spelling a refusal quotes, so one cohort reads one way everywhere.
+      write({| cohortChanged = true; scope = SageFs.Scope.label scope |})
     // ── Session channel ──
     | WarmupContextSnapshot (s, ctx) ->
       write(

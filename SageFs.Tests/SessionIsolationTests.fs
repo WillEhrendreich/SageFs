@@ -66,7 +66,7 @@ module McpSessionIsolation =
         GetFeatureState = None; RecordEval = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
         LiveBindings = None
-        CohortOwner = None
+        CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
         GetDaemonHealth = fun () -> None
         GetProcessTelemetry = fun () -> None } : McpContext
     ctx, dispatched
@@ -176,7 +176,7 @@ module McpSessionIsolation =
           GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveBindings = None
-          CohortOwner = None
+          CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
           GetDaemonHealth = fun () -> None
           GetProcessTelemetry = fun () -> None } : McpContext
 
@@ -427,7 +427,7 @@ module WorkingDirRoutingPriority =
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
       GetFeatureState = None; RecordEval = None; ActivityTracker = SageFs.AgentActivityTracker.create()
-      LiveBindings = None; CohortOwner = None
+      LiveBindings = None; CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }
 
@@ -461,7 +461,7 @@ module WorkingDirRoutingPriority =
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
       GetFeatureState = None; RecordEval = None; ActivityTracker = SageFs.AgentActivityTracker.create()
-      LiveBindings = None; CohortOwner = None
+      LiveBindings = None; CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }
 
@@ -682,7 +682,7 @@ module ResetIsolation =
         GetFeatureState = None; RecordEval = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
         LiveBindings = None
-        CohortOwner = None
+        CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
         GetDaemonHealth = fun () -> None
         GetProcessTelemetry = fun () -> None } : McpContext
     ctx, restartLog, routedSessions
@@ -784,7 +784,7 @@ module ResetIsolation =
         GetFeatureState = None; RecordEval = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
         LiveBindings = None
-        CohortOwner = None
+        CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
         GetDaemonHealth = fun () -> None
         GetProcessTelemetry = fun () -> None } : McpContext
     ctx, sidStr, resetStarted, allowResetFinish
@@ -871,7 +871,7 @@ module ResetIsolation =
           GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveBindings = None
-          CohortOwner = None
+          CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
           GetDaemonHealth = fun () -> None
           GetProcessTelemetry = fun () -> None } : McpContext
 
@@ -1039,7 +1039,7 @@ module ResetIsolation =
           GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveBindings = None
-          CohortOwner = None
+          CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
           GetDaemonHealth = fun () -> None
           GetProcessTelemetry = fun () -> None } : McpContext
 
@@ -1128,7 +1128,7 @@ module ResetIsolation =
           GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveBindings = None
-          CohortOwner = None
+          CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
           GetDaemonHealth = fun () -> None
           GetProcessTelemetry = fun () -> None } : McpContext
 
@@ -1535,7 +1535,7 @@ module SessionMapEviction =
       GetFeatureState = None; RecordEval = None
       ActivityTracker = SageFs.AgentActivityTracker.create()
       LiveBindings = None
-      CohortOwner = None
+      CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None } : McpContext
 

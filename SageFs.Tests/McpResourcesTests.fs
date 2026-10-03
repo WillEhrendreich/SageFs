@@ -199,7 +199,7 @@ let mcpResourcesTests = testList "MCP resources (item 12)" [
     use cohortOwner =
       SageFs.Features.CohortOwner.start (SageFs.Utils.Log.asILogger ()) machine ledger (fun () -> clock) (fun () -> noEntropy) (fun _ -> ([], [], [], 0L))
     let! _ = cohortOwner.Commit(SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1", machine))
-    let ctxWithCohort = { ctx with CohortOwner = Some cohortOwner }
+    let ctxWithCohort = { ctx with CohortSupport = SageFs.Features.CohortOwners.Wiring.Single(cohortOwner, cohortOwner.Scope) }
     let resources = SageFs.Server.McpResources.SageFsResources(ctxWithCohort)
     let json = resources.CohortStatus()
     let doc = JsonDocument.Parse(json)

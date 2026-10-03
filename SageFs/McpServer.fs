@@ -518,7 +518,7 @@ let createToolListFilter (mcpCtx: McpContext) =
             | Error _ -> Set.empty
             | Ok presented ->
               let authority, seat =
-                match mcpCtx.CohortOwner with
+                match SageFs.McpTools.cohortOwnerFor mcpCtx None with
                 | Some owner ->
                   let frame = owner.ReadFrame()
                   let seat = match frame.Conductor with | SageFs.Cohort.ConductorBinding.NeverBound -> SageFs.Capability.ConductorSeat.NotBoundYet | _ -> SageFs.Capability.ConductorSeat.Bound
@@ -958,9 +958,11 @@ type McpServerConfig = {
   ActivityTracker: SageFs.AgentActivityTracker.Tracker
   /// Receives the live bound-value snapshot after each successful eval.
   LiveBindings: SageFs.Features.LiveBindingsPane.Hub option
-  /// The single per-daemon cohort owner (cohort-integration-plan.md Slice 2).
-  /// `None` when the caller wires no cohort support (most existing tests).
-  CohortOwner: SageFs.Features.CohortOwner.Handle option
+  /// The cohort owners, ONE PER SCOPE, plus the scope the daemon started in. One DU and
+  /// ONE field: F# records have no defaults, so a second field would force every one of
+  /// the ~37 `McpServerConfig`/`McpContext` construction sites to name it, and nearly all
+  /// are tool tests that never mention cohorts. `Unwired` is the whole story for them.
+  CohortSupport: SageFs.Features.CohortOwners.Wiring
   GetDaemonHealth: unit -> SageFs.Features.HealthSnapshot option
 }
 
@@ -969,7 +971,7 @@ let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> op
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; RecordEval = recordEval; ActivityTracker = cfg.ActivityTracker; LiveBindings = cfg.LiveBindings; CohortOwner = cfg.CohortOwner; GetDaemonHealth = cfg.GetDaemonHealth; GetProcessTelemetry = DaemonTelemetry.current }
+  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; RecordEval = recordEval; ActivityTracker = cfg.ActivityTracker; LiveBindings = cfg.LiveBindings; CohortSupport = cfg.CohortSupport; GetDaemonHealth = cfg.GetDaemonHealth; GetProcessTelemetry = DaemonTelemetry.current }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 
@@ -1122,6 +1124,8 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
 /// still a real, if empty, frame — replay it too, so a late client sees
 /// "no members yet" rather than nothing).
 let replayCohortMatrix (ctx: SseContext) (body: System.IO.Stream) =
+  // The SSE context is global and holds the daemon's own cohort, so it reads its own field
+  // rather than resolving a caller's scope that this stream has no notion of.
   match ctx.CohortOwner with
   | Some cohortOwner ->
     task {
@@ -1259,7 +1263,7 @@ let wireSessionEventSubscription
       | SseEvent.SessionProgress
       | SseEvent.SessionSwitched _
       // MCP clients get cohort changes from wireCohortEventSubscription.
-      | SseEvent.CohortChanged -> ()
+      | SseEvent.CohortChanged _ -> ()
       // Session-channel cases never arrive on this stream — DaemonMode.fs
       // only ever triggers the nine "state" channel cases above — but the
       // match stays exhaustive (no wildcard) so a future emitter of one of
@@ -1915,7 +1919,7 @@ let wireModelChangeHandlers
     | SseEvent.SessionProgress
     | SseEvent.SessionSwitched _
     // MCP clients get cohort changes from wireCohortEventSubscription.
-    | SseEvent.CohortChanged -> ()
+    | SseEvent.CohortChanged _ -> ()
     // Session-channel cases never arrive on this stream (see the matching
     // note in wireSessionEventSubscription) — kept exhaustive, not a
     // wildcard, so a future rewire is forced to decide here too.
@@ -2762,7 +2766,7 @@ let mapDiagnosticsRoutes (app: WebApplication) (rctx: RouteContext) =
   // What SageFs keeps under its data dir. Same view as manage_local_data.
   app.MapGet("/api/local-data", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      let cohort = SageFs.LocalData.liveCohort rctx.McpContext.CohortOwner
+      let cohort = SageFs.LocalData.liveCohort (SageFs.McpTools.cohortOwnerFor rctx.McpContext None)
       let report = SageFs.LocalData.report rctx.McpContext.FrictionStore cohort DaemonState.SageFsDir
       do! jsonResponse ctx 200 (SageFs.LocalData.toJson report)
     } :> Task
@@ -2773,7 +2777,7 @@ let mapDiagnosticsRoutes (app: WebApplication) (rctx: RouteContext) =
       match SageFs.LocalData.ClearTarget.parse (string ctx.Request.Query["store"]) with
       | Error message -> do! jsonResponse ctx 400 {| success = false; error = message |}
       | Ok target ->
-        let cohort = SageFs.LocalData.liveCohort rctx.McpContext.CohortOwner
+        let cohort = SageFs.LocalData.liveCohort (SageFs.McpTools.cohortOwnerFor rctx.McpContext None)
         let results = SageFs.LocalData.clear target rctx.McpContext.FrictionStore cohort DaemonState.SageFsDir
         do! jsonResponse ctx 200
               {| success = true
@@ -4035,7 +4039,11 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
         TestEventBroadcast = testEventBroadcast
         SessionEventBroadcast = sessionEventBroadcast
         ServerTracker = serverTracker
-        CohortOwner = cfg.CohortOwner
+        // The SSE context is about the DAEMON's own cohort — it replays the cohort matrix
+        // to a connecting client and pushes that cohort's events. A per-caller cohort is
+        // resolved at the tool boundary (`McpTools.cohortOwnerFor`), not here, because this
+        // stream is global rather than per-request.
+        CohortOwner = SageFs.McpTools.cohortOwnerFor mcpContext None
       }
       let rctx: RouteContext = {
         Config = cfg
@@ -4054,7 +4062,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       | None -> ()
 
       let _cohortEventSub =
-        cfg.CohortOwner |> Option.map (fun cohortOwner -> wireCohortEventSubscription cohortOwner sseCtx)
+        SageFs.McpTools.cohortOwnerFor mcpContext None |> Option.map (fun cohortOwner -> wireCohortEventSubscription cohortOwner sseCtx)
 
       let _sessionsResourceSub =
         cfg.StateChanged |> Option.map (fun evt -> wireSessionsResourceSubscription evt sseCtx cfg.SessionOps.GetAllSessions)

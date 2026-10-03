@@ -96,7 +96,7 @@ let private ctxFor (info: SessionInfo) : McpContext =
     RecordEval = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
     LiveBindings = None
-    CohortOwner = None
+    CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
     GetDaemonHealth = fun () -> None
     GetProcessTelemetry = fun () -> None }
 

@@ -110,7 +110,7 @@ module McpCohortTools =
   /// named exactly as presented; falls back to `Minted` so direct/unbound
   /// callers (most tests) can still name each other by plain agent name.
   let private resolveMemberByDisplay (ctx: McpContext) (display: string) : MemberTable.MemberId =
-    match ctx.CohortOwner with
+    match SageFs.McpTools.cohortOwnerFor ctx None with
     | None -> MemberTable.MemberId.Minted display
     | Some owner ->
       owner.ReadFrame().MemberIds
@@ -186,7 +186,7 @@ module McpCohortTools =
         | Some capability -> Ok (Capability.RolePreset.joinableRole capability.Grant.Preset)
         | None -> parseJoinableRole role
       let tokenHolderWithNoConductor =
-        match currentCapability.Value, ctx.CohortOwner with
+        match currentCapability.Value, SageFs.McpTools.cohortOwnerFor ctx None with
         // A minted token may only claim the seat when it is actually EMPTY. A
         // VACANT seat counts as empty too — nobody holds conductor authority
         // until a person appoints one — which is why this tests

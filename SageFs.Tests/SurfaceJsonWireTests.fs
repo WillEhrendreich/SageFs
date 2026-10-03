@@ -233,7 +233,7 @@ let private sseCases : (string * SseEvent * string) list =
     "ModelChanged", SseEvent.ModelChanged (3, 4), """{"diagCount":4,"outputCount":3}"""
     "WarmupProgress", SseEvent.WarmupProgress (s, 1, 4, "m"), """{"sessionId":"0a000001","step":1,"total":4,"warmupProgress":true}"""
     "SystemAlarm", SseEvent.SystemAlarm ("p", "m"), """{"message":"m","phase":"p","systemAlarm":true}"""
-    "CohortChanged", SseEvent.CohortChanged, """{"cohortChanged":true}"""
+    "CohortChanged", SseEvent.CohortChanged (SageFs.CohortScope.Machine), """{"cohortChanged":true,"scope":"machine"}"""
     "WarmupContextSnapshot", SseEvent.WarmupContextSnapshot ("s1", oneWarmup),
       """{"context":{"assembliesLoaded":[{"moduleCount":3,"name":"A","namespaceCount":10,"path":"/a.dll"}],"failedOpens":[{"diagnostics":[{"endColumn":4,"endLine":2,"errorNumber":39,"fileName":"f.fs","message":"m","severity":"error","startColumn":3,"startLine":1},{"endColumn":8,"endLine":6,"errorNumber":40,"message":"n","severity":"warning","startColumn":7,"startLine":5}],"error":"err","isModule":true,"name":"Bad","retryCount":1}],"namespacesOpened":[{"durationMs":1.5,"isModule":false,"name":"System","source":"auto"}],"phaseTiming":{"openNamespacesMs":3,"scanAssembliesMs":2,"scanSourceFilesMs":1,"totalMs":6},"sourceFilesScanned":5,"warmupDurationMs":6},"sessionId":"s1","type":"warmup_context_snapshot"}"""
     "HotReloadSnapshot", SseEvent.HotReloadSnapshot ("s1", [ "a.fs"; "b.fs" ]), """{"sessionId":"s1","type":"hotreload_snapshot","watchedFiles":["a.fs","b.fs"]}"""

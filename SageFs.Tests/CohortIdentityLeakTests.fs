@@ -95,7 +95,7 @@ let tests =
           (fun () -> epoch)
           (fun () -> seed <- seed + 1; BitConverter.GetBytes seed)
           (fun _ -> ([], [], [], 0L))
-      let ctx = { sharedCtx () with CohortOwner = Some owner }
+      let ctx = { sharedCtx () with CohortSupport = SageFs.Features.CohortOwners.Wiring.Single(owner, owner.Scope) }
       let transcript = ResizeArray<string>()
       let record (label: string) (result: Result<string, SageFsError>) =
         match result with

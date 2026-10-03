@@ -197,7 +197,7 @@ let tests =
           RecordEval = None
           ActivityTracker = AgentActivityTracker.create ()
           LiveBindings = None
-          CohortOwner = None
+          CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
           GetDaemonHealth = fun () -> None
           GetProcessTelemetry = fun () -> None }
 

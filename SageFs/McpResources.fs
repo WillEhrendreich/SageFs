@@ -46,7 +46,7 @@ type SageFsResources(ctx: McpContext) =
   [<McpServerResource(UriTemplate = CohortStatusUri, Name = "cohort_status", MimeType = "application/json")>]
   [<Description("The daemon's current cohort state (members, claims, test matrix) as JSON — the same read model get_cohort_status reports. Subscribe (resources/subscribe) to be pushed notifications/resources/updated whenever the cohort changes, instead of polling.")>]
   member _.CohortStatus() : string =
-    match ctx.CohortOwner with
+    match SageFs.McpTools.cohortOwnerFor ctx None with
     | Some cohortOwner -> SageFs.SseWriter.cohortFrameJson jsonOpts (cohortOwner.ReadFrame())
     | None -> SageFs.SseWriter.cohortFrameJson jsonOpts (emptyCohortFrame ())
 

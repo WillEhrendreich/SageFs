@@ -111,7 +111,7 @@ let private startServer (worker: Worker) (discovered: TestCase list) = task {
       SharedFeatureState = None
       ActivityTracker = SageFs.AgentActivityTracker.create ()
       LiveBindings = None
-      CohortOwner = None
+      CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
       GetDaemonHealth = fun () -> None }
 
   let mcpContext : McpContext =
@@ -129,7 +129,7 @@ let private startServer (worker: Worker) (discovered: TestCase list) = task {
       RecordEval = None
       ActivityTracker = config.ActivityTracker
       LiveBindings = None
-      CohortOwner = None
+      CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
       GetDaemonHealth = fun () -> None
       GetProcessTelemetry = fun () -> None }
 

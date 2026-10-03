@@ -684,7 +684,7 @@ let workerEvalJsonTests =
           GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
           GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
-          LiveBindings = None; CohortOwner = None
+          LiveBindings = None; CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
           GetDaemonHealth = fun () -> None
           GetProcessTelemetry = fun () -> None }
       let! result : Result<string, SageFsError> = McpTools.loadFSharpScriptResult ctx "test" "foo.fsx" (Some sid) None

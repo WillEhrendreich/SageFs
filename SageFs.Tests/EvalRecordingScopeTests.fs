@@ -31,7 +31,7 @@ let private ctxRecordingInto (globalWrites: int ref) : McpContext =
     RecordEval = Some (fun _ _ _ -> globalWrites.Value <- globalWrites.Value + 1)
     ActivityTracker = AgentActivityTracker.create ()
     LiveBindings = None
-    CohortOwner = None
+    CohortSupport = SageFs.Features.CohortOwners.Wiring.Unwired
     GetDaemonHealth = fun () -> None
     GetProcessTelemetry = fun () -> None }
 
