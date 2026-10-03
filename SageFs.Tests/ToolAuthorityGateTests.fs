@@ -50,7 +50,7 @@ let toolAuthorityGateTests =
         Affordances.checkAuthorityAllowed observer Affordances.ToolName.SendFsharpCode
         |> Expect.equal
           "an Observer may not evaluate arbitrary F#"
-          (Error(Affordances.AuthorityRefusal.NotInGrant(Affordances.ToolName.SendFsharpCode, Affordances.ToolRole.Working)))
+          (Error(Affordances.AuthorityRefusal.RoleForbids(Affordances.ToolName.SendFsharpCode, Affordances.ToolRole.Working)))
       }
 
       test "all three of the tools the defect named are refused for an Observer" {
@@ -58,20 +58,34 @@ let toolAuthorityGateTests =
           Affordances.checkAuthorityAllowed observer tool
           |> Expect.equal
             (sprintf "an Observer may not call %s" (Affordances.ToolName.toString tool))
-            (Error(Affordances.AuthorityRefusal.NotInGrant(tool, Affordances.ToolRole.Working)))
+            (Error(Affordances.AuthorityRefusal.RoleForbids(tool, Affordances.ToolRole.Working)))
       }
 
-      test "and it is refused for an UNJOINED caller too (Anonymous is an Observer, not 'no authority')" {
-        // `Anonymous` maps to Observer, so the refusal is the SAME one an Observer gets:
-        // `RoleForbids(tool, Working)`, naming the role that WOULD be needed. It is NOT
-        // `NotInGrant(tool, Observer)` — that case is for a tool outside the caller's own
-        // grant entirely, and `send_fsharp_code` is simply "you are not a Working member",
-        // which is a different problem with a different fix (join as Implementer).
+      test "but an UNJOINED caller is NOT locked out of its own sessions" {
+        // The regression this whole gate shipped with: `Anonymous` mapped to `Observer`, so on
+        // an empty frame `send_fsharp_code`, `run_app` and `hard_reset_fsi_session` were refused
+        // for a caller that had never joined anything. The moment ONE agent formed a cohort, every
+        // other MCP client — the user in their editor, a dashboard tab, a second agent — was locked
+        // out of every code tool, and the refusal's own next action ("mint you a token") is only
+        // reachable BY THE CONDUCTOR, so a solo user could never mint their way out.
+        //
+        // `Anonymous` is now `Working`: a caller with no seat has no role to narrow it, and the
+        // role gate governs a caller's OWN session. It is still refused every COHORT verb, which
+        // the next case pins — so this does not become a way around the cohort gate.
         for tool in theThree do
           Affordances.checkAuthorityAllowed Authority.Anonymous tool
           |> Expect.equal
-            (sprintf "an unjoined caller is refused %s the way an Observer is" (Affordances.ToolName.toString tool))
-            (Error(Affordances.AuthorityRefusal.RoleForbids(tool, Affordances.ToolRole.Working)))
+            (sprintf "an unjoined caller may still use %s on its own session" (Affordances.ToolName.toString tool))
+            (Ok ())
+      }
+
+      test "and an unjoined caller still gets NO cohort authority, which is what the seat is for" {
+        // The other half of the case above, and the reason `Anonymous = Working` is not a hole:
+        // the role gate and the cohort gate are different doors. Role governs what a caller may do
+        // to ITS OWN session; cohort governs what it may do to everyone else's, and an unjoined
+        // caller has no seat to do anything with.
+        Set.toList (Affordances.cohortTools Authority.Anonymous)
+        |> Expect.equal "an unjoined caller holds cohort status and nothing else" [ Affordances.CohortTool.GetStatus ]
       }
 
       test "run_tests is refused for an Observer — discovering tests is reading, running them is not" {
@@ -86,7 +100,7 @@ let toolAuthorityGateTests =
         Affordances.checkAuthorityAllowed observer Affordances.ToolName.RunTests
         |> Expect.equal
           "run_tests executes user code, so an Observer does not get it"
-          (Error(Affordances.AuthorityRefusal.NotInGrant(Affordances.ToolName.RunTests, Affordances.ToolRole.Working)))
+          (Error(Affordances.AuthorityRefusal.RoleForbids(Affordances.ToolName.RunTests, Affordances.ToolRole.Working)))
       }
 
       test "an Observer's grant is a POSITIVE list — it is never 'everything except eval'" {
@@ -149,7 +163,7 @@ let toolAuthorityGateTests =
           Affordances.checkAuthorityAllowed verifier tool
           |> Expect.equal
             (sprintf "a Verifier may not call %s" (Affordances.ToolName.toString tool))
-            (Error(Affordances.AuthorityRefusal.NotInGrant(tool, Affordances.ToolRole.Working)))
+            (Error(Affordances.AuthorityRefusal.RoleForbids(tool, Affordances.ToolRole.Working)))
       }
 
       test "an Implementer MAY evaluate, and MAY admin — so the gate is not simply 'refuse everything'" {
@@ -167,14 +181,21 @@ let toolAuthorityGateTests =
             (Ok ())
       }
 
-      test "an Implementer is refused the conductor-only families, naming Conductor" {
+      test "an Implementer is refused the conductor-only families" {
         // The reason `ToolRole.Conductor` is a separate case rather than the
         // conductor being folded into `Working`.
+        //
+        // The refusal is `NotInGrant(tool, Working)`, not `RoleForbids(tool, Conductor)`: these
+        // tools are outside even the CONDUCTOR role's own set — `checkAuthorityAllowed` admits a
+        // tool when the ROLE ITSELF holds it, and `Conductor` deliberately does not, so a caller
+        // reaches them only through the separate cohort gate that demands the conductor seat. So
+        // "your grant does not name this tool" is the accurate reason, and the case below shows
+        // what it means: even the conductor is refused here.
         for tool in Affordances.ToolRole.conductorOnlyTools do
           Affordances.checkAuthorityAllowed implementer tool
           |> Expect.equal
             (sprintf "an Implementer may not call conductor-only %s" (Affordances.ToolName.toString tool))
-            (Error(Affordances.AuthorityRefusal.RoleForbids(tool, Affordances.ToolRole.Conductor)))
+            (Error(Affordances.AuthorityRefusal.NotInGrant(tool, Affordances.ToolRole.Working)))
       }
     ]
 
@@ -361,8 +382,13 @@ let toolAuthorityGateTests =
       }
 
       test "every authority maps to a role, and the conductor is its own role" {
+        // `Anonymous` is `Working`, deliberately and against the old expectation. It used to be
+        // `Observer`, which locked every unjoined caller out of its own session the moment anyone
+        // formed a cohort. A caller with no seat has no ROLE to narrow it; what stops it reaching
+        // other members' work is that it is still `Anonymous` in `Cohort.Authority`, so every
+        // cohort verb refuses it. The case below and the one in "Observer cannot run..." pin both.
         Affordances.ToolRole.ofAuthority Authority.Anonymous
-        |> Expect.equal "an unjoined caller is an Observer" Affordances.ToolRole.Observer
+        |> Expect.equal "an unjoined caller has no role to narrow it, so it maps to Working" Affordances.ToolRole.Working
         Affordances.ToolRole.ofAuthority conductor
         |> Expect.equal "the conductor is the Conductor role, not Working" Affordances.ToolRole.Conductor
       }

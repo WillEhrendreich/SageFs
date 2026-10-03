@@ -1039,9 +1039,29 @@ module ToolRole =
   /// The role a cohort seat's joinable role grants, and what the conductor
   /// holds. `JoinableRole.Observer` and `.Verifier` keep their names; what
   /// they MEANT is what changed, and it is what the tables above say.
+  ///
+  /// WHY `Anonymous` IS `Working` AND NOT `Observer`. A caller that never joined the cohort has
+  /// no seat, so it has no ROLE to narrow it — and mapping it to Observer was measured to brick
+  /// the product: on an empty frame, `send_fsharp_code`, `run_app` and `hard_reset_fsi_session`
+  /// were all refused ("your role is Observer"), so the moment ANY agent formed a cohort every
+  /// other MCP client — the user in their editor, a dashboard tab, a second agent — was locked out
+  /// of every code tool. Worse, the refusal's own next action ("mint you a token whose role
+  /// includes it") is only reachable BY THE CONDUCTOR, so a solo user who was the conductor and
+  /// held no `cap:<id>` could never mint their way out. That is a dead end for the common case,
+  /// not a safety property.
+  ///
+  /// What this does NOT do is hand out authority over OTHER members' work. An unjoined caller is
+  /// still `Anonymous` in `Cohort.Authority`, so `Authority.present` refuses it every COHORT verb
+  /// that needs a seat — it cannot join someone else's claim, reassign a landing or mint a token.
+  /// The role gate governs what a caller may do to ITS OWN sessions, and the cohort gate governs
+  /// what it may do to everyone else's. Mapping `Anonymous` to `Working` keeps the second without
+  /// letting the first become a way to bypass the second.
+  ///
+  /// A caller who HAS joined is unaffected: `Member(_, role)` and `Conductor _` both still map to
+  /// their own role, so an Observer that joined deliberately is still read-only.
   let ofAuthority (authority: Cohort.Authority<'m>) : ToolRole =
     match authority with
-    | Cohort.Authority.Anonymous -> ToolRole.Observer
+    | Cohort.Authority.Anonymous -> ToolRole.Working
     | Cohort.Authority.Member(_, Cohort.JoinableRole.Observer) -> ToolRole.Observer
     | Cohort.Authority.Member(_, Cohort.JoinableRole.Verifier) -> ToolRole.Verifier
     | Cohort.Authority.Member(_, Cohort.JoinableRole.Implementer) -> ToolRole.Working
