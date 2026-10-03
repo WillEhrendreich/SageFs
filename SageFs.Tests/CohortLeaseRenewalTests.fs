@@ -71,10 +71,12 @@ let private mint = MemberId.Minted
 let private verifiers = JoinableRole.Verifier
 
 /// One member joined, holding one claim — the shape an orchestrator has.
+/// Machine-wide, because that is what a v1 cohort was and what every assertion here means.
 let private joinedWithClaim (who: string) =
   CohortState.empty ()
-  |> fun s -> step t0 s (CohortCommand.Join(mint who, verifiers, Some "sB"))
-  |> fun s -> step t0 s (CohortCommand.AcquireClaim(mint who, ClaimScope.File (sprintf "/repo/%s.fs" who), "editing"))
+  |> fun s -> step t0 s (CohortCommand.Join(mint who, verifiers, Some "sB", CohortScope.Machine))
+  |> fun s ->
+    step t0 s (CohortCommand.AcquireClaim(mint who, ClaimScope.File (sprintf "/repo/%s.fs" who), "editing", CohortScope.Machine))
 
 /// The reaper's SELECTION, against the real `DaemonMode.cohortMembersToRenew`.
 /// `isActive` stands in for the activity tracker's freshness test, which is what
@@ -82,8 +84,8 @@ let private joinedWithClaim (who: string) =
 let private reapedBy (isActive: MemberId -> bool) (clock: DateTime) (st: CohortState<MemberId>) =
   let renewed =
     DaemonMode.cohortMembersToRenew isActive st.Members
-    |> List.fold (fun s who -> step clock s (CohortCommand.RenewLease who)) st
-  step clock renewed CohortCommand.Tick
+    |> List.fold (fun s who -> step clock s (CohortCommand.RenewLease(who, CohortScope.Machine))) st
+  step clock renewed (CohortCommand.Tick CohortScope.Machine)
 
 /// How long `decide` keeps a Present member, given a member that is renewed
 /// once every `renewEveryMinutes` — the ONLY input to the question.

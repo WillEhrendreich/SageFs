@@ -89,7 +89,7 @@ let cohortLeaseVisibilityTests =
   testList "Cohort lease visibility (get_cohort_status)" [
 
     testCase "WHY — the status text states the lease window, the reaper cadence and the freshness window, so an agent knows the numbers it is reasoning about" <| fun _ ->
-      let text = Features.CohortStatusText.render (frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None) ])
+      let text = Features.CohortStatusText.render (frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine) ])
       text |> Expect.stringContains "the window is stated" "Lease: 30m window"
       text |> Expect.stringContains "the reaper cadence is stated" "the reaper runs every 1m"
       text |> Expect.stringContains "the renewal window is stated" "the activity tracker saw in the last 2m"
@@ -109,11 +109,11 @@ let cohortLeaseVisibilityTests =
       // the clock only moves when the reaper posts a Tick. An agent that does
       // not know the cadence reads "0m left" as "about to be reaped NOW", and
       // that is a wrong reading of a seat that is still perfectly held.
-      let text = Features.CohortStatusText.render (frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None) ])
+      let text = Features.CohortStatusText.render (frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine) ])
       text |> Expect.stringContains "the boundary is named as the first tick at or after the window" "first tick at or after 30m"
 
     testCase "WHY — a present member reads as present WITH the clock the stamps were taken against, never as a bare 'present'" <| fun _ ->
-      let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
+      let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine) ]
       seatOf frame alice |> Expect.equal "the seat is Present" SeatState.Present
       let t3 = Features.CohortStatusText.render frame
       // The one thing a `Present` seat CAN say without `LastRenewal`: the clock
@@ -132,9 +132,9 @@ let cohortLeaseVisibilityTests =
     testCase "WHY — a departed member keeps its `since`, and no reason is invented for it" <| fun _ ->
       let departed =
         frameAfter
-          [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            CohortCommand.Join(bob, JoinableRole.Verifier, None)
-            CohortCommand.Depart bob ]
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
+            CohortCommand.Join(bob, JoinableRole.Verifier, None, CohortScope.Machine)
+            CohortCommand.Depart(bob, CohortScope.Machine) ]
       seatOf departed bob
       |> Expect.equal "the frame's seat carries the departure and its since" (SeatState.Departed t0)
       let text = Features.CohortStatusText.render departed
@@ -153,9 +153,9 @@ let cohortLeaseVisibilityTests =
       // have two sources on one page.
       let vacated =
         frameAfter
-          [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            CohortCommand.Join(bob, JoinableRole.Verifier, None)
-            CohortCommand.Depart alice ]
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
+            CohortCommand.Join(bob, JoinableRole.Verifier, None, CohortScope.Machine)
+            CohortCommand.Depart(alice, CohortScope.Machine) ]
       vacated.Conductor
       |> Expect.equal "alice's departure moved the conductor seat to Vacant"
         (ConductorBinding.Vacant(alice, t0, VacancyReason.ConductorLeft))
@@ -171,16 +171,16 @@ let cohortLeaseVisibilityTests =
       // by the conductor binding, for a departed conductor.
       let byDepart =
         frameAfter
-          [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            CohortCommand.Join(bob, JoinableRole.Verifier, None)
-            CohortCommand.Depart bob ]
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
+            CohortCommand.Join(bob, JoinableRole.Verifier, None, CohortScope.Machine)
+            CohortCommand.Depart(bob, CohortScope.Machine) ]
       // bob joined at t0; one Tick at the window, with no renewal in between.
       let atWindow = t0.Add Cohort.leaseWindow
       let byLease =
         frameOver
-          [ t0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            t0, CohortCommand.Join(bob, JoinableRole.Verifier, None)
-            atWindow, CohortCommand.Tick ]
+          [ t0, CohortCommand.Join(alice, JoinableRole.Implementer, None, CohortScope.Machine)
+            t0, CohortCommand.Join(bob, JoinableRole.Verifier, None, CohortScope.Machine)
+            atWindow, CohortCommand.Tick CohortScope.Machine ]
       seatOf byDepart bob |> Expect.equal "leaving produces Departed" (SeatState.Departed t0)
       seatOf byLease bob
       |> Expect.equal "a lapsed lease produces the same state" (SeatState.Departed(t0.Add Cohort.leaseWindow))
