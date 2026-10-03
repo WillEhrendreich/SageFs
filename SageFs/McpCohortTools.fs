@@ -109,8 +109,13 @@ module McpCohortTools =
   /// against the live frame first so a real bound connection (Mcp/Browser) is
   /// named exactly as presented; falls back to `Minted` so direct/unbound
   /// callers (most tests) can still name each other by plain agent name.
-  let private resolveMemberByDisplay (ctx: McpContext) (display: string) : MemberTable.MemberId =
-    match SageFs.McpTools.cohortOwnerFor ctx None with
+  ///
+  /// `workingDirectory` is the CALLER's, so the frame read is about the cohort the
+  /// caller is actually in. Resolving against the daemon's own cohort here would
+  /// look the display up in the wrong frame and fall through to `Minted` for a
+  /// member that does have a real id in its own cohort.
+  let private resolveMemberByDisplay (ctx: McpContext) (display: string) (workingDirectory: string option) : MemberTable.MemberId =
+    match SageFs.McpTools.cohortOwnerFor ctx workingDirectory with
     | None -> MemberTable.MemberId.Minted display
     | Some owner ->
       owner.ReadFrame().MemberIds
@@ -186,7 +191,11 @@ module McpCohortTools =
         | Some capability -> Ok (Capability.RolePreset.joinableRole capability.Grant.Preset)
         | None -> parseJoinableRole role
       let tokenHolderWithNoConductor =
-        match currentCapability.Value, SageFs.McpTools.cohortOwnerFor ctx None with
+        // The CALLER's cohort, not the daemon's: whether the conductor seat is empty is
+        // a question about the cohort this joiner is joining. Reading the daemon's own
+        // cohort answered it about a cohort they are not joining, so a token holder
+        // joining their own repo could be told a seat elsewhere was taken.
+        match currentCapability.Value, SageFs.McpTools.cohortOwnerFor ctx workingDirectory with
         // A minted token may only claim the seat when it is actually EMPTY. A
         // VACANT seat counts as empty too — nobody holds conductor authority
         // until a person appoints one — which is why this tests
@@ -285,7 +294,7 @@ module McpCohortTools =
   let reassignClaim (ctx: McpContext) (agentName: string) (claimId: string) (toMember: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       let by = memberIdFor agentName
-      let target = resolveMemberByDisplay ctx toMember
+      let target = resolveMemberByDisplay ctx toMember workingDirectory
       let! result = commitCohort ctx (Cohort.CohortCommand.ReassignClaim(by, Cohort.ClaimId claimId, target, scopeOf workingDirectory))
       return result |> Result.map (fun _ -> sprintf "Reassigned claim %s to %s." claimId (MemberTable.MemberId.display target))
     }
