@@ -59,50 +59,14 @@ module McpTools =
     /// values into it (the daemon wires it; None in tests).
     LiveBindings: Features.LiveBindingsPane.Hub option
     /// The cohort owners, ONE PER SCOPE, and the daemon's OWN scope's owner beside them.
-    ///
-    /// WHY ONE FIELD AND NOT TWO: F# records have no defaults, so every added field forces
-    /// all ~37 sites that construct an `McpContext` to name it — and 30 of them are tool
-    /// tests that never mention cohorts. A single DU whose `None` case means "no cohort
-    /// support at all" adds exactly ONE field, and a site that wants cohorts says so by
-    /// passing `Wired`; a site that does not passes `Unwired`, or omits it in the one
-    /// helper that builds it.
+    /// Why one field rather than two, and who reads it: `CohortOwnerResolution.fs`.
     CohortSupport: Features.CohortOwners.Wiring
     GetDaemonHealth: unit -> Features.HealthSnapshot option
     GetProcessTelemetry: unit -> SageFs.Server.DaemonTelemetry.Snapshot option
   }
-  /// The cohort owner for the cohort a CALLER is asking about.
-  ///
-  /// WHY EVERY READ GOES THROUGH THIS: with one daemon serving one cohort per repository,
-  /// "is this member the conductor" and "which cohort is this" are questions about the
-  /// CALLER's directory, not the daemon's. Reading the daemon's one owner directly
-  /// answered both about the cohort it happened to start in — so an agent in a second
-  /// repository could be refused by the first repository's conductor seat, and a status
-  /// read could describe a cohort the caller is not in. That is the UI lying, in the form
-  /// that matters.
-  ///
-  /// `workingDirectory` is the caller's own directory, exactly as `join_cohort` does;
-  /// `None` means the caller named none, so it is asking about the daemon's own cohort.
-  let cohortOwnerFor (ctx: McpContext) (workingDirectory: string option) =
-    let scopeOf dir = Scope.ofWorkingDirectory Scope.defaultStrategy dir
-    match ctx.CohortSupport with
-    | Features.CohortOwners.Wiring.Wired(owners, own) ->
-      // The caller's own directory when it named one, and the scope the DAEMON started in
-      // when it did not — which is what that caller is asking about.
-      let scope =
-        match workingDirectory with
-        | Some dir -> scopeOf dir
-        | None -> own
-      Some(owners.OwnerFor scope)
-    | Features.CohortOwners.Wiring.Single(owner, own) ->
-      // A single wired owner serves only the scope it was started for, so a caller in another
-      // repository is honestly refused rather than handed someone else's cohort. That is what
-      // this wiring is for: a test with one real owner, not a daemon serving many.
-      let scope =
-        match workingDirectory with
-        | Some dir -> scopeOf dir
-        | None -> own
-      if scope = own then Some owner else None
-    | Features.CohortOwners.Wiring.Unwired -> None
+  /// Which cohort a caller is asking about — see `CohortOwnerResolution.fs` for why.
+  let cohortOwnerFor (ctx: McpContext) wd =
+    CohortOwnerResolution.ownerFor ctx.CohortSupport wd
 
   /// The MCP transport's per-connection identity, bound by the request
   /// filter (McpServer.createServerCaptureFilter) before a tool body runs —

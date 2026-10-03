@@ -121,6 +121,9 @@
         <Compile Include="LiveTestStatusView.fs" />
         <Compile Include="McpAnalysisViews.fs" />
         <Compile Include="McpLeaseWire.fs" />
+        <!-- CohortOwnerResolution before Mcp.fs: it holds the "which cohort is this caller
+             asking about" decision every cohort read in Mcp.fs shares. -->
+        <Compile Include="CohortOwnerResolution.fs" />
         <!-- ToolAuthorityGate before Mcp.fs: it holds the tool-admission decision Mcp.fs's gate calls. -->
         <Compile Include="ToolAuthorityGate.fs" />
         <Compile Include="Mcp.fs" />
