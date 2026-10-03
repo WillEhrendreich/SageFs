@@ -65,7 +65,7 @@ module McpTools =
     GetProcessTelemetry: unit -> SageFs.Server.DaemonTelemetry.Snapshot option
   }
   /// Which cohort a caller is asking about — see `CohortOwnerResolution.fs` for why.
-  let cohortOwnerFor (ctx: McpContext) wd =
+  let cohortOwnerFor (ctx: McpContext) (wd: string option) =
     CohortOwnerResolution.ownerFor ctx.CohortSupport wd
 
   /// The MCP transport's per-connection identity, bound by the request
