@@ -5,6 +5,7 @@ open SageFs
 open SageFs.Cohort
 open SageFs.MemberTable
 open SageFs.Features.CohortLedger
+open SageFs.Utils
 
 /// SQLite-backed `CohortLedger.LedgerPort<MemberId>` (Slice 1,
 /// cohort-integration-plan.md D1/D3; template: `FrictionSqlite.fs`). One row
@@ -69,19 +70,42 @@ VALUES ($seq, $clock_ticks, $entropy, $command_json, $events_json);"
       command.Parameters.AddWithValue("$events_json", WorkerProtocol.Serialization.serialize<CohortEvent<MemberId> list> entry.Events) |> ignore
       command.ExecuteNonQuery() |> ignore
 
+    /// Every row, oldest first, SKIPPING any row this build cannot read.
+///
+/// WHY IT MUST NOT THROW. This table is DURABLE and survives across versions, and a row written
+/// before a `CohortCommand` case gained a trailing scope no longer deserializes — the daemon threw
+/// `JsonException` out of `startCore` on startup and never bound its port, so a wire-format change
+/// bricked every existing install rather than just losing old history. A ledger that cannot be read
+/// is a reason to START ANYWAY and say so, not a reason to refuse to boot: the cohort it held was
+/// for one machine-wide cohort that the scoped model no longer uses, so the loss is a stale seat,
+/// never live work.
     let readAll () : LedgerEntry<MemberId> list =
       use connection = openConnection dbPath
       use command = connection.CreateCommand()
       command.CommandText <- "SELECT seq, clock_ticks, entropy, command_json, events_json FROM cohort_ledger ORDER BY seq;"
       use reader = command.ExecuteReader()
       let entries = ResizeArray()
+      let mutable skipped = 0
       while reader.Read() do
         let seq = LanguagePrimitives.Int64WithMeasure<Measures.ledgerSeq> (reader.GetInt64 0)
         let clock = System.DateTime(reader.GetInt64 1, System.DateTimeKind.Utc)
         let entropy = reader.GetFieldValue<byte[]>(2)
-        let cmd = WorkerProtocol.Serialization.deserialize<CohortCommand<MemberId>> (reader.GetString 3)
-        let events = WorkerProtocol.Serialization.deserialize<CohortEvent<MemberId> list> (reader.GetString 4)
-        entries.Add { Seq = seq; Clock = clock; Entropy = entropy; Command = cmd; Events = events }
+        let cmdJson = reader.GetString 3
+        let eventsJson = reader.GetString 4
+        // Two independent reads: a row written by an older build can fail on either. Both are
+        // "history this build cannot use", and neither is a reason to stop reading the rest.
+        match WorkerProtocol.Serialization.tryDeserialize<CohortCommand<MemberId>> cmdJson,
+              WorkerProtocol.Serialization.tryDeserialize<CohortEvent<MemberId> list> eventsJson with
+        | Ok cmd, Ok events ->
+          entries.Add { Seq = seq; Clock = clock; Entropy = entropy; Command = cmd; Events = events }
+        | Error commandErr, _ ->
+          skipped <- skipped + 1
+          Log.warn "[cohort-ledger] skipping ledger row v%d: this build cannot read its command (%s). The row is left in place — the daemon starts without that history rather than refusing to boot." (int64 seq) (SageFsError.describe commandErr)
+        | _, Error eventsErr ->
+          skipped <- skipped + 1
+          Log.warn "[cohort-ledger] skipping ledger row v%d: this build cannot read its events (%s). The row is left in place — the daemon starts without that history rather than refusing to boot." (int64 seq) (SageFsError.describe eventsErr)
+      if skipped > 0 then
+        Log.warn "[cohort-ledger] %d ledger row(s) could not be read by this build and were skipped. Everything the daemon does now starts from an empty cohort for its scope; no landing or claim was applied from them." skipped
       List.ofSeq entries
 
     /// The scopes this store actually holds rows for, sorted. A caller starting a cohort for a
