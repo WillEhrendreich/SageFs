@@ -454,7 +454,12 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         let summary = parseSummary data
         discoveryGen <- summary.DiscoveryGeneration
         callbacks.OnSummaryUpdate summary
-      | "test_results_batch" ->
+      | "test_results_batch"
+      | "test_run_completed" ->
+        // Same payload, and `test_run_completed` adds the `source` verdict saying which build
+        // the run was against. The state machine below reads only the test entries, so the
+        // extra field costs nothing here and no client can be left without a handler for an
+        // event the daemon really emits.
         let events = parseResultsBatch discoveryGen data
         let mutable allChanges = []
         for evt in events do

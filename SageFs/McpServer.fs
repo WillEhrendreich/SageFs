@@ -1527,6 +1527,12 @@ let wireModelChangeHandlers
   // unrelated tick too, so an unchanged report must never re-push.
   let lastActionQueue : SageFs.Features.ActionPrioritizer.ActionQueueReport option ref = ref None
 
+  // Has the run-completion event already been announced for the run now finishing? The
+  // summary push happens on every model change while a session is idle, so without this the
+  // same finished run would be re-announced on every heartbeat. Reset when a run starts, so
+  // the next completion is a completion again.
+  let runCompletionAnnounced = ref false
+
   let handleDiagnosticsChange diagCount =
     SseContext.withModel ctx (fun model ->
       let state', effects =
@@ -1646,15 +1652,32 @@ let wireModelChangeHandlers
               lt.LastGeneration freshness completion lt.Activation sessionEntries lt.LastDecision
           ctx.ServerTracker.AccumulateEvent(
             Some activeId, PushEvent.TestResultsBatch payload)
+          // One reading of "which build was this run against", shared by both events below,
+          // so the two can never report different verdicts for the same run.
+          let sourceWire =
+            match SourceStateProbe.runSourceOf (Some activeId) None with
+            | SourceStateProbe.SourceSourceRefusal.Assessed state -> Some(SourceState.toWire state)
+            | SourceStateProbe.SourceSourceRefusal.NoSessionToRead
+            | SourceStateProbe.SourceSourceRefusal.SessionNotKnown -> None
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatTestResultsBatchEvent
-              ctx.SseJsonOpts
-              (Some activeId)
-              payload
-              (match SourceStateProbe.runSourceOf (Some activeId) None with
-               | SourceStateProbe.SourceSourceRefusal.Assessed state -> Some(SourceState.toWire state)
-               | SourceStateProbe.SourceSourceRefusal.NoSessionToRead
-               | SourceStateProbe.SourceSourceRefusal.SessionNotKnown -> None))
+            SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire)
+          // A FINISHED run is a different fact from a batch of results arriving: this fires
+          // only when nothing is running, so a client that renders "run finished" acts once
+          // per run rather than on every incremental batch during one. Gated on a real
+          // transition rather than pushed every heartbeat — `isRunComplete` is already true
+          // for the common idle case, so without this the event would re-announce the same
+          // finished run on every model change.
+          if isRunComplete && not !runCompletionAnnounced then
+            runCompletionAnnounced.Value <- true
+            ctx.TestEventBroadcast.Trigger(
+              SageFs.SseWriter.formatTestRunCompletedEvent
+                ctx.SseJsonOpts
+                (Some activeId)
+                payload
+                sourceWire)
+          elif not isRunComplete then
+            // A new run started, so the next completion is a completion again.
+            runCompletionAnnounced.Value <- false
           // Per-file coverage projection (`projectWithCoverage` does a Map.ofSeq
           // tree-rebalance per annotated file) is the daemon's dominant model-
           // change cost. `shouldPushTestSummary` returns true on EVERY change

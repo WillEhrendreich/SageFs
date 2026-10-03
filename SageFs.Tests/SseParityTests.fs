@@ -232,14 +232,14 @@ let neovimKnownGaps : Set<string> =
 [<Tests>]
 let sseParityTests = testList "SSE Parity" [
 
-  test "allDaemonSseEvents contains 24 entries (22 SseWriter + session + state)" {
+  test "allDaemonSseEvents contains 25 entries (23 SseWriter + session + state)" {
     allDaemonSseEvents
-    |> Expect.hasLength "should have 24 daemon SSE event types" 24
+    |> Expect.hasLength "should have 25 daemon SSE event types" 25
   }
 
-  test "SseWriter.allSseEventTypes contains exactly 22 formatter event types" {
+  test "SseWriter.allSseEventTypes contains exactly 23 formatter event types" {
     SseWriter.allSseEventTypes
-    |> Expect.hasLength "SseWriter exposes 22 event type names" 22
+    |> Expect.hasLength "SseWriter exposes 23 event type names" 23
   }
 
   test "no duplicate entries in allDaemonSseEvents" {
@@ -310,10 +310,16 @@ let sseParityTests = testList "SSE Parity" [
     // were live coverage. The per-event test only ever walked
     // `allDaemonSseEvents` (daemon -> mirror), so every one of those phantoms
     // was invisible: the mirror could claim to handle events that do not
-    // exist and the gate stayed green. `test_run_completed` is the sharpest
-    // case — it is the plugin's per-run `source` event, which no emitter
-    // produces, so `grep -rn "test_run_completed" --include=*.fs` resolves to
-    // this file alone.
+    // exist and the gate stayed green.
+    //
+    // `test_run_completed` was the sharpest case, and this list is why: the
+    // formatter existed, the registry entry existed, and NO emitter produced the
+    // event — `grep -rn "test_run_completed" --include=*.fs` resolved to this
+    // file alone. Registering the name therefore demanded handler coverage for
+    // an event no client could ever receive. It is now genuinely emitted (the
+    // daemon publishes it once per finished run, gated on a real transition), so
+    // it has left this list for the same reason it was on it: an event the
+    // daemon does not emit must never be claimed as coverage.
     //
     // The rot is now impossible to reintroduce by hand (both halves are
     // derived), so this pins the DIRECTION that matters: an event the daemon
@@ -322,8 +328,7 @@ let sseParityTests = testList "SSE Parity" [
     // demand handler coverage nobody can provide.
     let emitted = allDaemonSseEvents |> Set.ofList
     let retired =
-      [ "test_run_completed"
-        "test_run_started"
+      [ "test_run_started"
         "test_passed"
         "test_failed"
         "test_state"
@@ -395,8 +400,8 @@ let sseParityTests = testList "SSE Parity" [
     allDaemonSseEvents.Length
     |> Expect.equal
          "if this fails, you added a daemon SSE event - the VS Code and Neovim coverage tests above \
-          will tell you whether either extension handles it"
-         24
+           will tell you whether either extension handles it"
+         25
   }
 ]
 
