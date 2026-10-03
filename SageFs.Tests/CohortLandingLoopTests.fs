@@ -42,6 +42,22 @@ let private counterEntropy () : unit -> byte[] =
 let private alice = MemberId.Minted "alice"
 let private bob = MemberId.Minted "bob"
 
+/// Every owner in this file is started `Machine`-scoped, which is exactly what
+/// a v1 test cohort WAS: one machine-wide cohort, one conductor seat, one
+/// landing queue. Passing `CohortScope.Machine` therefore leaves every
+/// assertion below meaning what it was written to mean — the tests still talk
+/// about the landing pipeline, not about scoping. The one test that IS about
+/// scoping (two cohorts, independent queues) names its own scopes explicitly
+/// instead of using this.
+let private machine = CohortScope.Machine
+
+/// Starts a landing-loop owner on `machine` with the given ledger and
+/// performer. The scope is fixed here rather than threaded through each test
+/// because no test in this file needs a second scope; the two-scope test
+/// constructs its owners directly.
+let private startOwner (ledger: LedgerPort<MemberId>) (performer: CohortOwner.LandingPerformer<MemberId>) : CohortOwner.Handle =
+  CohortOwner.startWithPerformer silentLogger machine ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
+
 /// An `Async<'a>` that never completes — used for effects a test deliberately
 /// never wants to resolve (e.g. to freeze a landing mid-`Rebasing` so a
 /// second, queued landing's state can be inspected without a timing race).
@@ -115,7 +131,7 @@ let private landingIdFrom (events: CohortEvent<MemberId> list) : LandingId =
 
 let private requestLanding (owner: CohortOwner.Handle) (who: MemberId) (statement: string) : Task<LandingId> =
   task {
-    let! result = owner.Commit(CohortCommand.RequestLanding(who, [], [ "c1" ], statement))
+    let! result = owner.Commit(CohortCommand.RequestLanding(who, [], [ "c1" ], statement, machine))
     match result with
     | Ok(events, _) -> return landingIdFrom events
     | Error err -> return failtestf "RequestLanding was refused: %A" err
@@ -128,8 +144,8 @@ let cohortLandingLoopTests =
     testTask "WHY — a landing with no conflicts and no failing tests reaches Landed and moves IntegrationHead (item 14b)" {
       let ledger = InMemory.create<MemberId> ()
       let performer = happyPathPerformer [ TestId "t1" ] [] (fun toSha -> toSha + "-committed")
-      use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      use owner = startOwner ledger performer
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
       let! landingId = requestLanding owner alice "land my change" |> Async.AwaitTask
 
       do!
@@ -155,8 +171,8 @@ let cohortLandingLoopTests =
         frozenAtRebasePerformer with
           Rebase = fun _ _ _ -> async { return Error [ "Conflicting.fs" ] }
       }
-      use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      use owner = startOwner ledger performer
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
       let! landingId = requestLanding owner alice "land my change" |> Async.AwaitTask
 
       do!
@@ -175,8 +191,8 @@ let cohortLandingLoopTests =
       let ledger = InMemory.create<MemberId> ()
       let failing = [ TestId "SomeTest.fails" ]
       let performer = happyPathPerformer [ TestId "SomeTest.fails" ] failing (fun toSha -> toSha + "-committed")
-      use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      use owner = startOwner ledger performer
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
       let! landingId = requestLanding owner alice "land my change" |> Async.AwaitTask
 
       do!
@@ -200,9 +216,9 @@ let cohortLandingLoopTests =
       let performer =
         { happyPathPerformer [ TestId "t1" ] [] (fun toSha -> toSha + "-committed") with
             RunTests = fun _ _ -> async { return Error "integration session still warming up" } }
-      use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
-      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None))
+      use owner = startOwner ledger performer
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
+      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None, machine))
       let! landingA = requestLanding owner alice "A" |> Async.AwaitTask
       let! landingB = requestLanding owner bob "B" |> Async.AwaitTask
 
@@ -233,10 +249,9 @@ let cohortLandingLoopTests =
       // forever — this removes any timing race from the assertion below:
       // `decide`'s own `advanceQueue` (Cohort.fs, untouched) is what keeps B
       // at `Queued`, not luck about how fast a fake async resolves.
-      use owner =
-        CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) frozenAtRebasePerformer
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
-      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None))
+      use owner = startOwner ledger frozenAtRebasePerformer
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
+      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None, machine))
       let! landingA = requestLanding owner alice "A" |> Async.AwaitTask
       let! landingB = requestLanding owner bob "B" |> Async.AwaitTask
 
@@ -258,9 +273,9 @@ let cohortLandingLoopTests =
       // test GENUINELY fails (Ok [failing], distinct from an Error/inconclusive).
       let failing = [ TestId "SomeTest.fails" ]
       let performer = happyPathPerformer failing failing (fun toSha -> toSha + "-committed")
-      use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
-      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None))
+      use owner = startOwner ledger performer
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
+      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None, machine))
       let! landingA = requestLanding owner alice "A" |> Async.AwaitTask
       let! landingB = requestLanding owner bob "B" |> Async.AwaitTask
 
@@ -285,5 +300,103 @@ let cohortLandingLoopTests =
 
       owner.ReadCohortState().Queue
       |> Expect.equal "a failing landing is popped (it never jams the serial queue); B advanced past it and was popped too" []
+    }
+
+    testTask "WHY — two cohorts with DIFFERENT scopes run their landing queues independently: one scope's queue, landings and conductor seat are invisible to the other, and a command addressed across scopes is refused by name" {
+      // The property the scope feature exists to provide. Before it, the
+      // daemon held exactly ONE cohort for its whole lifetime, so an agent
+      // working one repository was in the same landing queue as — and shared a
+      // conductor seat with — an agent working an unrelated one.
+      //
+      // ONE ledger, TWO owners over it: that is what makes this a test of
+      // scoping rather than of two separately-allocated ledgers. Each owner
+      // reads only its own scope's rows (`startCore`'s `ledger.ReadAll scope`)
+      // and appends into the scope its commands carry, so if the cohort were
+      // still machine-global both owners would replay both owners' rows.
+      let repo = CohortScope.Repository "/home/will/Work/SageFs"
+      let other = CohortScope.Repository "/home/will/Work/nehemiah"
+      let ledger = InMemory.create<MemberId> ()
+
+      // Both performers are FROZEN at `Rebase`: the landing reaches `Rebasing`
+      // and stays there. So "A's landing is progressing" is not something this
+      // test proves, and it never has to — the point is that each cohort sees
+      // exactly its own queue. No `waitUntil` anywhere below, so no timing.
+      use repoOwner =
+        CohortOwner.startWithPerformer silentLogger repo ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) frozenAtRebasePerformer
+      use otherOwner =
+        CohortOwner.startWithPerformer silentLogger other ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) frozenAtRebasePerformer
+
+      // Each cohort opens at ITS OWN scope — the same way a daemon derives one
+      // from a caller's working directory — and admits a DIFFERENT conductor.
+      // The seat is read through `Cohort.Authority.present`, the ONLY door onto
+      // it (§4.2), never off the binding's raw shape.
+      let! openedRepo = repoOwner.Commit(CohortCommand.OpenCohort repo)
+      let! openedOther = otherOwner.Commit(CohortCommand.OpenCohort other)
+      [ openedRepo; openedOther ]
+      |> List.forall (function Ok _ -> true | Error _ -> false)
+      |> Expect.isTrue "both cohorts opened at their own scope; neither OpenCohort was refused"
+
+      let! _ = repoOwner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None, repo))
+      let! _ = otherOwner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None, other))
+
+      // A landing in ONE cohort, and nothing at all in the other. The id comes
+      // off the `RequestLanding` commit's own `LandingQueued` event, so a
+      // refused request fails here by name rather than quietly comparing an
+      // empty queue against an empty id.
+      let! queued = repoOwner.Commit(CohortCommand.RequestLanding(alice, [], [ "c1" ], "land in the SageFs cohort", repo))
+      let repoLandingId =
+        match queued with
+        | Ok(events, _) -> landingIdFrom events
+        | Error err -> failtestf "RequestLanding in the SageFs cohort was refused: %A" err
+
+      (repoOwner.ReadCohortState().Queue)
+      |> Expect.equal "the cohort that queued the landing holds exactly that landing in its queue" [ repoLandingId ]
+
+      (otherOwner.ReadCohortState().Queue)
+      |> Expect.equal "the other cohort's queue is empty: a landing queued in one scope is invisible in the other" []
+
+      (otherOwner.ReadCohortState().Landings)
+      |> Expect.equal "the other cohort has no record of the landing at all — not a copy, not a peek" Map.empty
+
+      // The conductor seat is per-scope too. Alice is conductor HERE because
+      // she joined this cohort first; bob is conductor THERE for the same
+      // reason. Neither seat leaks across — and note alice is not even a MEMBER
+      // of the other cohort, so she resolves `Anonymous` there, not `Member`.
+      let repoState = repoOwner.ReadCohortState()
+      let otherState = otherOwner.ReadCohortState()
+      let seatOf who state =
+        match Cohort.Authority.present who state with
+        | Authority.Conductor _ -> "conductor"
+        | Authority.Member _ -> "member"
+        | Authority.Anonymous -> "anonymous"
+
+      (seatOf alice repoState, seatOf alice otherState)
+      |> Expect.equal "alice is conductor of the cohort she joined and of no other" ("conductor", "anonymous")
+
+      (seatOf bob otherState, seatOf bob repoState)
+      |> Expect.equal "bob is conductor of his own cohort and of no other" ("conductor", "anonymous")
+
+      // Nor is the progress made in one cohort visible in the other: the frozen
+      // performer drove `repo`'s landing out of `Queued`, and `other`'s
+      // IntegrationHead is untouched by it.
+      match (landingOf repoOwner repoLandingId).State with
+      | LandingState.Rebasing _ -> ()
+      | wrongState -> failtestf "expected the SageFs cohort's landing to be Rebasing, got %A" wrongState
+
+      otherState.IntegrationHead
+      |> Expect.equal "the other cohort's integration head is untouched by a landing in this one" nullSha
+
+      // A command addressed ACROSS scopes is refused BY NAME rather than
+      // applied to the wrong cohort — the check that makes two cohorts on one
+      // daemon safe rather than merely separate.
+      let! crossed = repoOwner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None, other))
+      match crossed with
+      | Error(CohortError.WrongCohortScope(requested, cohort)) ->
+        (requested, cohort) |> Expect.equal "the refusal names both the scope asked for and the scope actually addressed" (other, repo)
+      | Ok _ -> failtest "a Join carrying another cohort's scope was APPLIED instead of refused"
+      | Error wrongErr -> failtestf "expected WrongCohortScope, got %A" wrongErr
+
+      repoState.Scope |> Expect.equal "the cohort records the scope it was opened at" repo
+      otherState.Scope |> Expect.equal "the other cohort records its own scope, not this one's" other
     }
   ]
