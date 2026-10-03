@@ -229,7 +229,9 @@ let cohortLedgerSqliteTests =
         use cmd = connection.CreateCommand()
         cmd.CommandText <- "PRAGMA user_version;"
         let version = cmd.ExecuteScalar() :?> int64
-        version |> Expect.equal "the ledger's schema version is recorded" 1L
+        // 2 is the `(scope, seq)` key. It was 1 while `seq` alone was the PRIMARY KEY, which only
+        // held because there was one cohort; a second scope's own v0 collided on it.
+        version |> Expect.equal "the ledger's schema version is recorded" 2L
       finally
         cleanup path
     }
@@ -276,7 +278,7 @@ let cohortLedgerSqliteTests =
         connection.Open()
         use corrupt = connection.CreateCommand()
         corrupt.CommandText <-
-          "INSERT INTO cohort_ledger (seq, clock_ticks, entropy, command_json, events_json) VALUES (1, 0, X'01', '{ broken', '[]');"
+          "INSERT INTO cohort_ledger (scope, seq, clock_ticks, entropy, command_json, events_json) VALUES ('machine', 1, 0, X'01', '{ broken', '[]');"
         corrupt.ExecuteNonQuery() |> ignore
 
         let read =
@@ -291,6 +293,62 @@ let cohortLedgerSqliteTests =
         check.CommandText <- "SELECT COUNT(*) FROM cohort_ledger;"
         let rows = check.ExecuteScalar() :?> int64
         rows |> Expect.equal "both rows are still on disk — nothing was deleted" 2L
+      finally
+        cleanup path
+    }
+
+    test "TWO scopes each append their own v0: neither insert throws, and each readAll sees only its own row" {
+      // The regression this pins. `seq` is COHORT-LOCAL and dense — every scope's ledger starts at
+      // v0 — so with `seq` alone as the PRIMARY KEY the two appends below were the SAME key. The
+      // second raised `SQLite Error 19: UNIQUE constraint failed: cohort_ledger.seq`, and because the
+      // owner's mailbox handler swallows a handler exception and continues with the previous state,
+      // that was not a failed command: it was a cohort that had silently stopped accepting any.
+      let path = tempDbPath ()
+      try
+        let port = Sqlite.create path
+        let machine = CohortScope.Machine
+        // Two scopes, deliberately the shape a SECOND repository brings: not machine-wide, so the
+        // two really are two cohorts rather than one with two rows.
+        let repo = CohortScope.Repository @"/tmp/sagefs-two-scope-probe"
+        let atSeq0 scope =
+          { Seq = 0L<ledgerSeq>
+            Clock = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+            Entropy = [| 1uy |]
+            Command = CohortCommand.Tick scope
+            Events = [] }
+
+        // Both appends are guarded: the bug is that the second one THROWS, so a bare call would
+        // fail this test with a SQLite error instead of saying which half of the fix is missing.
+        let firstAppend =
+          try
+            port.Append (atSeq0 machine)
+            None
+          with ex -> Some ex
+        firstAppend |> Expect.equal "the first scope's v0 appends under the composite key" None
+
+        let secondAppend =
+          try
+            port.Append (atSeq0 repo)
+            None
+          with ex -> Some ex
+        match secondAppend with
+        | Some ex -> failtestf "the SECOND scope's v0 threw — the key is still not (scope, seq): %O" ex
+        | None -> ()
+
+        let machineRows = port.ReadAll machine
+        let repoRows = port.ReadAll repo
+        machineRows.Length |> Expect.equal "the machine scope reads back exactly its own v0" 1
+        repoRows.Length |> Expect.equal "the repository scope reads back exactly its own v0" 1
+        machineRows.Head.Seq |> Expect.equal "the machine row is the v0 it was appended as" 0L<ledgerSeq>
+        repoRows.Head.Seq |> Expect.equal "the repository row is the v0 it was appended as" 0L<ledgerSeq>
+        // The scopes are separate buckets, so a read must not answer with the other's history —
+        // the failure mode of filtering by COMMAND rather than by the stored scope column.
+        machineRows |> List.map (fun e -> Cohort.scopeOf e.Command) |> List.distinct |> Expect.equal "the machine row's command is machine-scoped" [ machine ]
+        repoRows |> List.map (fun e -> Cohort.scopeOf e.Command) |> List.distinct |> Expect.equal "the repository row's command is repository-scoped" [ repo ]
+        // And a third scope with no rows gets its own empty answer rather than the whole table.
+        port.ReadAll (CohortScope.Named "never-used")
+        |> Expect.equal "a scope with no rows reads back empty, not every scope's rows" []
+        port.Scopes () |> Expect.equal "both scopes are discoverable from the stored column" [ machine; repo ]
       finally
         cleanup path
     }
