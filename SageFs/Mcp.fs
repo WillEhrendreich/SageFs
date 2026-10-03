@@ -1865,23 +1865,11 @@ module McpTools =
   let private rebuildInitiatedMessage =
     "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. Call get_session_status with wait_seconds=60 to wait for the rebuild's outcome (no polling); the reply says what the rebuild did."
 
-  /// What a rebuild=false reset would actually leave the session serving.
-  ///
-  /// A respawn replaces the WORKER PROCESS and nothing else: the replacement
-  /// re-runs `ActorCreation`, whose first real step is
-  /// `ShadowCopy.shadowCopySolution` (SageFs/Core/ActorCreation.fs:123-124), and
-  /// that COPIES the project's existing build output into a fresh shadow dir
-  /// and loads those bytes. No `dotnet build` runs, so a source edited since
-  /// the last build is invisible to the respawn — the new worker serves the OLD
-  /// code. The build output is what a session serves; the process is only where
-  /// it is served from. So respawn-only CANNOT serve current code once the
-  /// sources have moved on, and no amount of process replacement changes that.
-  ///
-  /// This is read with `SourceState` — the same edge `get_session_status` and the
-  /// session list already use (`SourceStateProbe.ofSessionRecord`), so the tool
-  /// decides with the same evidence it already reports and cannot disagree with
-  /// the status it prints.
-  let private respawnWouldServeStaleSource
+  /// The source state a rebuild=false reset has to decide on — the same edge
+  /// `get_session_status` and the session list already use
+  /// (`SourceStateProbe.ofSessionRecord`), so the tool decides with the same
+  /// evidence it already reports and cannot disagree with the status it prints.
+  let private sourceStateOfSession
     (ctx: McpContext)
     (sid: string)
     : Task<SourceState> = task {
@@ -1890,46 +1878,58 @@ module McpTools =
       return SourceStateProbe.ofSessionRecord info warmup
     }
 
-  /// The notice a rebuild=false reply carries when it built instead of
-  /// respawning. It says plainly WHY, because the honest answer here is the
-  /// expensive one and a silent respawn reads as success.
-  let private staleSourceRestartMessage (state: SourceState) =
-    sprintf
-      "Rebuilt instead of respawning: the files on disk are ahead of the build this session runs, and a respawn replaces only the worker PROCESS — it re-copies the same stale build output (SageFs/Core/ActorCreation.fs, ShadowCopy.shadowCopySolution), so it would have served the OLD code while reporting success. %s"
-      (SourceState.describe state)
-
-  /// What rebuild=false must actually do, given what it would leave serving:
-  /// `InSync` is the only state where a respawn is honest, because there the
-  /// build already matches the sources. Stale, rebuilding and unknown all take
-  /// the rebuild path — the last two because "could not tell" is never read as
-  /// "in sync" (`SourceState.decide` says so itself).
-  let private respawnIsHonest (state: SourceState) =
+  /// What rebuild=false must actually do, given what it would leave serving, and
+  /// the notice the reply carries when that is a build.
+  ///
+  /// THE PREMISE: a respawn replaces only the worker PROCESS. It re-runs
+  /// `ActorCreation`, whose first real step is `ShadowCopy.shadowCopySolution`
+  /// (SageFs/Core/ActorCreation.fs:123-124), and that COPIES the project's
+  /// existing build output and loads those bytes. So the build output is what a
+  /// session serves, and a respawn serves current code only if that output is
+  /// already current. `Stale` is the POSITIVE finding that it is not, and the
+  /// only one available — nothing else may stand in for it, which is what the
+  /// old flat "is it InSync?" rule did by treating every non-InSync state alike.
+  ///
+  /// Hence the split. `Unknown NoProjectLoaded` and
+  /// `Unknown LoadTimeNotReported` RESPAWN: neither is a reading of a build at
+  /// all — one says the session loaded no project, so there are no build bytes
+  /// to re-copy out of date, and the other says no worker report exists to
+  /// compare. Charging a caller who explicitly said "do not rebuild" for a build,
+  /// on evidence that does not exist, is what this arms off.
+  /// `Unknown NotAssessed`, `Unreadable` and `NotInspectable` keep building:
+  /// those DO describe a session with a build whose currency nobody could
+  /// establish, which is silence about the BUILD rather than proof there is
+  /// none. `Rebuilding` keeps building because restarting the worker under a live
+  /// rebuild is the race, not because any source read found anything.
+  let private respawnPlanAndNotice (state: SourceState) : SageFs.RestartPlan * string =
+    let build notice = RestartPlan.Rebuild GranularRestart.RestartSubject.Worker, notice
+    let respawn = RestartPlan.RespawnOnly, ""
     match state with
-    | SourceState.InSync _ -> true
-    | SourceState.Stale _
-    | SourceState.Rebuilding _
-    | SourceState.Unknown _ -> false
+    | SourceState.Stale _ ->
+      build (sprintf
+        "Rebuilt instead of respawning: the files on disk are ahead of the build this session runs, and a respawn replaces only the worker PROCESS — it re-copies that same build output (SageFs/Core/ActorCreation.fs, ShadowCopy.shadowCopySolution), so it would have served the OLD code while reporting success. %s"
+        (SourceState.describe state))
+    | SourceState.Rebuilding _ ->
+      build (sprintf
+        "Rebuilt instead of respawning: a rebuild was ALREADY IN PROGRESS, and this reset would have restarted the worker under it. %s"
+        (SourceState.describe state))
+    | SourceState.Unknown UnknownReason.NoProjectLoaded
+    | SourceState.Unknown (UnknownReason.LoadTimeNotReported _) -> respawn
+    | SourceState.Unknown (UnknownReason.NotAssessed)
+    | SourceState.Unknown (UnknownReason.Unreadable _)
+    | SourceState.Unknown (UnknownReason.NotInspectable _) ->
+      build (sprintf
+        "Rebuilt instead of respawning: nothing could say whether this session's build is current — %s A respawn re-copies the existing build output (SageFs/Core/ActorCreation.fs, ShadowCopy.shadowCopySolution), so this builds because the source state is unknown, NOT because stale code was found."
+        (SourceState.describe state))
+    | SourceState.InSync _ -> respawn
 
   /// One decision, one code path, so the text tool and the Result tool cannot
-  /// drift: the plan a rebuild=false reset really asks for.
-  let private planForRespawn (ctx: McpContext) (sid: string) : Task<SageFs.RestartPlan> = task {
-    let! state = respawnWouldServeStaleSource ctx sid
-    return
-      match respawnIsHonest state with
-      | true -> RestartPlan.RespawnOnly
-      | false -> RestartPlan.Rebuild GranularRestart.RestartSubject.Worker
-  }
-
-  /// Why a rebuild=false reset ended up building, or "" when it really did
-  /// respawn, so the reply can say so instead of leaving the caller to guess
-  /// which path they paid for.
-  let private upgradeNotice (ctx: McpContext) (sid: string) (asked: SageFs.RestartPlan) : Task<string> = task {
-    match asked with
-    | SageFs.RestartPlan.RespawnOnly -> return ""
-    | SageFs.RestartPlan.Rebuild _
-    | SageFs.RestartPlan.Migrate _ ->
-      let! state = respawnWouldServeStaleSource ctx sid
-      return staleSourceRestartMessage state
+  /// drift: the plan a rebuild=false reset really asks for, and the notice that
+  /// plan earns — decided together, so the reply can never explain a plan other
+  /// than the one asked for.
+  let private planForRespawn (ctx: McpContext) (sid: string) : Task<SageFs.RestartPlan * string> = task {
+    let! state = sourceStateOfSession ctx sid
+    return respawnPlanAndNotice state
   }
 
   /// Starts a rebuild=true hard reset in the background. The text tool and the
@@ -1990,15 +1990,16 @@ module McpTools =
         //
         // But replacing the process is not the same as picking up the edit:
         // the replacement re-copies the build output (see
-        // `respawnWouldServeStaleSource`), so a respawn is only honest while
+        // `sourceStateOfSession`), so a respawn is only honest while
         // the build already matches the sources. `planForRespawn` decides that
-        // once, for both this tool and its Result sibling, and upgrades to the
-        // rebuild when a respawn would serve code older than the files — the
-        // caller is told which it paid for rather than being handed a success
-        // that hides the cost.
+        // once, for both this tool and its Result sibling, returning the plan
+        // and the reason together — and it upgrades to the rebuild only when a
+        // respawn really would serve code older than the files, or when one is
+        // already running. The caller is told which it paid for rather than
+        // being handed a success that hides the cost.
         compilationStates.TryRemove(sid) |> ignore
         typeIdentityDiagnostics.TryRemove(sid) |> ignore
-        let! asked = planForRespawn ctx sid
+        let! asked, notice = planForRespawn ctx sid
         let! result =
           task {
             try return! ctx.SessionOps.RestartSession (toSessionId sid) asked
@@ -2008,7 +2009,6 @@ module McpTools =
         | Ok msg ->
           notifyElm ctx (
             TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-          let! notice = upgradeNotice ctx sid asked
           let head =
             match notice with
             | "" -> "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. "
@@ -2036,7 +2036,7 @@ module McpTools =
         // whether it would have served stale code.
         compilationStates.TryRemove(sid) |> ignore
         typeIdentityDiagnostics.TryRemove(sid) |> ignore
-        let! asked = planForRespawn ctx sid
+        let! asked, notice = planForRespawn ctx sid
         let! result =
           task {
             try return! ctx.SessionOps.RestartSession (toSessionId sid) asked
@@ -2046,7 +2046,6 @@ module McpTools =
         | Ok msg ->
           notifyElm ctx (
             TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-          let! notice = upgradeNotice ctx sid asked
           let head =
             match notice with
             | "" -> "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. "

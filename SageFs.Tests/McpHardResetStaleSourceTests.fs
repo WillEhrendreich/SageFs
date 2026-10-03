@@ -157,15 +157,27 @@ let tests = testList "MCP hard reset vs stale source" [
         |> Expect.equal "no build is needed when the build already matches the sources" [ SageFs.RestartPlan.RespawnOnly ] })
   }
 
-  testTask "REGRESSION — a session whose staleness cannot be read must not be respawned as though it were known to be current, because 'could not tell' is not 'in sync'" {
+  testTask "REGRESSION — a session with no BUILD is respawned, because there are no build bytes to be behind" {
     do! SourceStateFixtures.using (fun p ->
       task {
-        // No warmup report at all: the probe answers Unknown, and "unknown" is
-        // never read as in sync.
+        // This used to demand `Rebuild Worker`, on the reasoning that "could not tell" is never
+        // "in sync". That conflated two different silences. `LoadTimeNotReported` says the worker
+        // never said WHEN it loaded its build — and `SourceState.Unknown`'s own doc says of this
+        // family that the session "loaded no project, so there is no build to be behind". Nothing
+        // was found out of date, so charging a caller who said "do not rebuild" for a build was
+        // being done on evidence that does not exist.
+        //
+        // The distinction the rule now draws: `Stale` is a POSITIVE finding that the build is out
+        // of date, and only it (plus `Rebuilding`, and the Unknown arms that describe a build
+        // nobody could check) buys a build. The arms that describe NO build respawn.
         let probe = mkProbe "aaa10005" p None
         let! _ = hardResetSession probe.Ctx "agent1" false (Some "aaa10005") None
         plansAsked probe
-        |> Expect.equal "an unassessable session takes the safe path, never a silent respawn" [ SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker ] })
+        |> Expect.equal "a session with no build to be behind is respawned, not charged for a build" [ SageFs.RestartPlan.RespawnOnly ]
+        let! reply = hardResetSession probe.Ctx "agent1" false (Some "aaa10005") None
+        reply
+        |> Expect.stringContains "and says nothing false about stale code" "hard reset restarts the session"
+      })
   }
 
   testTask "REGRESSION — rebuild=true is unchanged by any of this, because a rebuild already builds" {
