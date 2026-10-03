@@ -19,23 +19,34 @@ module SageFs.Tests.SseParityTests
 /// and a genuinely new unhandled event (not just these four) fails the
 /// per-event test below.
 ///
-/// The Neovim half is NOT derived: `sagefs.nvim` is a separate repository
-/// (`WillEhrendreich/sagefs.nvim`) this checkout does not contain, so there
-/// is no source here to parse. `neovimHandledEvents` stays a manually
-/// maintained mirror — keep it in sync with
-/// `sagefs.nvim/lua/sagefs/events.lua`'s `EVENT_MAP` keys by hand — and the
-/// test against it is named and commented to say plainly that it checks
-/// self-consistency of that mirror, not the plugin itself. (outcome-gate-
-/// sweep.md §5 item 7 / Gap C item 3: vendoring a generated manifest from
-/// that repo would let this become a real gate; until then, downgrading the
-/// claim is the honest option.)
+/// The Neovim half is NOW DERIVED, the same way the VS Code half is, and for
+/// the same reason. `sagefs.nvim` IS a sibling checkout on this machine
+/// (`../sagefs.nvim`, the one `scripts/sync-nvim-version.fsx` already reads),
+/// so the claim that "there is no source here to parse" was only true while
+/// nobody wrote the parser. A hand-kept mirror cannot catch its own rot, and
+/// this one had already rotted: it listed 23 event names NO F# source emits —
+/// most starkly `test_run_started` / `test_run_completed`, which
+/// `grep -rn "test_run_completed" --include=*.fs` resolves to this very file
+/// and nothing else. The per-event test below only walked
+/// `allDaemonSseEvents` (daemon -> mirror), so those 23 phantoms were
+/// invisible: the mirror could claim to handle events that do not exist and
+/// the gate stayed green. Reading the real `EVENT_CATALOG` table makes that
+/// impossible to assert — a phantom has to be deleted, not defended.
+///
+/// The derivation is deliberately narrower than the VS Code one. A name in
+/// `EVENT_CATALOG` only means the plugin can FIRE a User autocmd with that
+/// name; whether it also DISPATCHES the daemon's `event:` is a separate
+/// question (`sse.lua`'s `type_to_action`, wired in `init.lua`). So this
+/// checks the catalogue, and `neovimDispatchDerived` below checks the
+/// dispatch table, rather than pretending one number means both.
 ///
 /// Adding a new event to SseWriter.fs:
 ///   1. Add a match arm in sagefs-vscode/src/LiveTestingListener.fs processEvent
 ///      (or add it to `vscodeKnownGaps` below with a reason, if deliberately deferred)
-///   2. Add an entry in sagefs.nvim/lua/sagefs/events.lua EVENT_MAP, and mirror
-///      the name into `neovimHandledEvents` below
-///   3. Add the event name to `allDaemonSseEvents`'s expected count below
+///   2. Add an entry in sagefs.nvim/lua/sagefs/events.lua EVENT_CATALOG, and a
+///      dispatch entry in its sse.lua `type_to_action` if it is a daemon event
+///   3. Nothing here to update by hand — both halves are derived. The counts
+///      below are the only thing that must move, and they are self-describing.
 
 open System.IO
 open System.Text.RegularExpressions
@@ -108,68 +119,105 @@ let vscodeHandledEventsDerived : Set<string> =
 let vscodeKnownGaps : Set<string> =
   Set.ofList [ "cohort_matrix"; "claim_changed"; "landing_changed"; "save_observed" ]
 
-// ── Neovim EVENT_MAP key set — an UNVERIFIED, hand-maintained mirror ────────
-// sagefs.nvim is a separate repository; this checkout has no source to
-// derive this from. Keep in sync with
-// sagefs.nvim/lua/sagefs/events.lua EVENT_MAP table keys BY HAND — the test
-// below only checks this literal's internal shape, not the plugin.
+// ── Neovim half — DERIVED from the real sibling checkout, not hand-typed ─────
+// sagefs.nvim lives at ../sagefs.nvim relative to this checkout (the same path
+// scripts/sync-nvim-version.fsx resolves). Both sets below are parsed out of
+// that repo's Lua source, so a phantom cannot be asserted here: to claim the
+// plugin handles an event, this file has to point at a line of real Lua.
 
-let neovimHandledEvents : Set<string> =
-  Set.ofList [
-    // Phase 7C and earlier (original set)
-    "eval_completed"
-    "test_passed"
-    "test_failed"
-    "test_results_batch"
-    "test_run_started"
-    "test_run_completed"
-    "test_state"
-    "tests_discovered"
-    "connected"
-    "disconnected"
-    "coverage_updated"
-    "hot_reload_triggered"
-    "warmup_context"
-    "hotreload_snapshot"
-    "providers_detected"
-    "affected_tests_computed"
-    "test_cycle_timing_recorded"
-    "run_tests_requested"
-    "test_summary"
-    "file_annotations"
-    "bindings_snapshot"
-    "test_trace"
-    "reconnecting"
-    "test_recovery_needed"
-    "eval_diff"
-    "cell_dependencies"
-    "binding_scope_map"
-    "eval_timeline"
-    "eval_result"
-    "failure_narratives"
-    "warmup_progress"
-    "session_faulted"
-    "warmup_completed"
-    "file_reloaded"
-    "system_alarm"
-    // Phase 8: SSE parity completeness
-    "eval_started"
-    "eval_heartbeat"
-    "test_source_locations"
-    "state"
-    "session"
-    "diagnosis_ready"
-    "live_bindings"
-    "coverage_view"
-    // Item 15a: multi-agent cohort coordination rows (see the matching
-    // comment in vscodeHandledEvents above — handlers land in 15b/15c).
-    "cohort_matrix"
-    "claim_changed"
-    "landing_changed"
-    // Cohort claim early-warning (multi-agent vision §5.1) — see the
-    // matching comment in vscodeHandledEvents above.
-    "save_observed"
-  ]
+let private nvimEventsPath : string =
+  Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "sagefs.nvim", "lua", "sagefs", "events.lua")
+  |> Path.GetFullPath
+
+let private nvimSsePath : string =
+  Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "sagefs.nvim", "lua", "sagefs", "sse.lua")
+  |> Path.GetFullPath
+
+/// Every `{ "<event_name>", "SageFsUserEvent" }` row in events.lua's
+/// `EVENT_CATALOG` table. Both strings are captured; only the first is the
+/// daemon-facing `event:` name, which is what the parity check needs.
+let extractNvimEventCatalogNames (source: string) : Set<string> =
+  Regex.Matches(source, "\{\\s*\"([a-z][a-z0-9_]*)\"\\s*,\\s*\"SageFs[A-Za-z]+\"")
+  |> Seq.cast<Match>
+  |> Seq.map (fun m -> m.Groups.[1].Value)
+  |> Set.ofSeq
+
+/// Every `type_to_action` ENTRY as a (wire name -> action) pair. The KEYS are
+/// what the daemon may put in `event:` — that is the side the parity check
+/// needs. The values are the action names init.lua registers handlers under,
+/// so a wire name only counts as handled when its action is registered too.
+let extractNvimDispatchMap (source: string) : Map<string, string> =
+  let startMarker = "local type_to_action = {"
+  let startIdx = source.IndexOf(startMarker)
+  if startIdx < 0 then
+    failwithf
+      "Could not locate type_to_action in %s (expected to find %s). sse.lua's shape \
+       changed — update this extractor to match it."
+      nvimSsePath startMarker
+  let rest = source.Substring(startIdx + startMarker.Length)
+  let closeIdx = rest.IndexOf("\n  }", System.StringComparison.Ordinal)
+  let block = if closeIdx > 0 then rest.Substring(0, closeIdx) else rest
+  Regex.Matches(block, "(?m)^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*\"([a-z][a-z0-9_]*)\"")
+  |> Seq.cast<Match>
+  |> Seq.map (fun m -> (m.Groups.[1].Value, m.Groups.[2].Value))
+  |> Map.ofSeq
+
+/// Every `{ action = "<x>"` in init.lua's SSE_HANDLER_DEFS, plus every
+/// `handlers.<name> =` custom handler. Together: the actions the plugin
+/// actually has code for.
+let extractNvimHandledActions (source: string) : Set<string> =
+  let defs =
+    Regex.Matches(source, "\\{\\s*action\\s*=\\s*\"([a-z][a-z0-9_]*)\"")
+    |> Seq.cast<Match>
+    |> Seq.map (fun m -> m.Groups.[1].Value)
+  let custom =
+    Regex.Matches(source, "handlers\\.([a-z][a-z0-9_]*)\\s*=\\s*function")
+    |> Seq.cast<Match>
+    |> Seq.map (fun m -> m.Groups.[1].Value)
+  Seq.append defs custom |> Set.ofSeq
+
+/// What the plugin's EVENT_CATALOG really contains, read from its own source.
+let neovimCatalogDerived : Set<string> =
+  nvimEventsPath |> File.ReadAllText |> extractNvimEventCatalogNames
+
+let private neovimSseSource = File.ReadAllText nvimSsePath
+
+let private neovimInitSource : string =
+  Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "sagefs.nvim", "lua", "sagefs", "init.lua")
+  |> Path.GetFullPath
+  |> File.ReadAllText
+
+/// The daemon `event:` names the plugin actually ROUTES to a handler. The
+/// honest "handled" set: a wire name counts only when sse.lua maps it onto an
+/// action AND init.lua registers a handler under that action.
+let neovimDispatchDerived : Set<string> =
+  let registered = neovimInitSource |> extractNvimHandledActions
+  neovimSseSource
+  |> extractNvimDispatchMap
+  |> Map.toList
+  |> List.choose (fun (wire, action) ->
+    if registered.Contains action && Regex.IsMatch(wire, "^[a-z][a-z0-9_]*$") then
+      Some wire
+    else
+      None)
+  |> Set.ofList
+
+/// The daemon's SSE events that sagefs.nvim does NOT route to a handler — a
+/// real gap in the plugin, named with a reason each. Measured, not asserted:
+/// `neovimDispatchDerived` is read out of the plugin's own dispatch table, so
+/// an entry here is either true or the set does not match. The pin test
+/// below is what keeps it from growing by accident.
+let neovimKnownGaps : Set<string> =
+  // `eval_started` / `eval_heartbeat`: push-only eval decorations. The
+  // plugin drives its own eval lifecycle from the /exec response, so these
+  // cost nothing to ignore — but the daemon does send them, so they are
+  // declared rather than assumed away.
+  // `diagnosis_ready`: the diagnose() agent's report. The plugin surfaces
+  // diagnosis through the /diagnostics HTTP route, not the push row.
+  // `live_bindings`: the reflection-walked watch window. The plugin has no
+  // bindings-view UI bound to it yet; it reads bindings from the
+  // bindings_snapshot row instead.
+  Set.ofList [ "eval_started"; "eval_heartbeat"; "diagnosis_ready"; "live_bindings" ]
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -222,18 +270,97 @@ let sseParityTests = testList "SSE Parity" [
          (Set.ofList [ "cohort_matrix"; "claim_changed"; "landing_changed"; "save_observed" ])
   }
 
-  testList "Neovim EVENT_MAP claims coverage of every daemon SSE event (UNVERIFIED — sagefs.nvim is a separate repo)" [
+  test "the Neovim extractors actually parsed real rows out of the plugin (sanity: a broken extractor must not silently pass)" {
+    (neovimCatalogDerived.Count, 20)
+    |> Expect.isGreaterThan
+         "extractNvimEventCatalogNames found suspiciously few event names — either events.lua's \
+          EVENT_CATALOG shape changed (update the regex) or the sibling checkout moved; either way \
+          this must be investigated, not ignored."
+    (neovimDispatchDerived.Count, 10)
+    |> Expect.isGreaterThan
+         "extractNvimDispatchActions ∩ extractNvimHandledActions found suspiciously few names — \
+          sse.lua's type_to_action or init.lua's SSE_HANDLER_DEFS shape changed."
+  }
+
+  testList "Neovim handles every daemon SSE event (derived from the real sagefs.nvim source), or the gap is explicitly tracked" [
     for eventType in allDaemonSseEvents do
-      test (sprintf "neovimHandledEvents claims '%s' (self-consistency only, not verified against sagefs.nvim)" eventType) {
-        neovimHandledEvents.Contains(eventType)
+      test (sprintf "Neovim handles '%s', or it is a named gap in neovimKnownGaps" eventType) {
+        (neovimDispatchDerived.Contains(eventType) || neovimKnownGaps.Contains(eventType))
         |> Expect.isTrue
              (sprintf
-               "Event '%s' is emitted by the daemon but missing from this hand-maintained mirror of \
-                sagefs.nvim/lua/sagefs/events.lua EVENT_MAP. Add an entry here AND in that repo — this \
-                test cannot see whether the real plugin agrees, only whether this mirror is complete."
-               eventType)
+               "Event '%s' is emitted by the daemon but sagefs.nvim routes it nowhere: sse.lua's \
+                type_to_action maps no wire name onto it, or init.lua registers no handler for the \
+                action it maps to. Add the dispatch entry (and the handler) in that repo, or add \
+                '%s' to neovimKnownGaps with a reason."
+               eventType eventType)
       }
   ]
+
+  test "the hand-kept Neovim mirror's retired names are gone: nothing asserts daemon coverage for an event no emitter produces" {
+    // The old hand-kept `neovimHandledEvents` listed 23 event names that NO
+    // F# source emits — a graveyard of retired daemon events kept as if it
+    // were live coverage. The per-event test only ever walked
+    // `allDaemonSseEvents` (daemon -> mirror), so every one of those phantoms
+    // was invisible: the mirror could claim to handle events that do not
+    // exist and the gate stayed green. `test_run_completed` is the sharpest
+    // case — it is the plugin's per-run `source` event, which no emitter
+    // produces, so `grep -rn "test_run_completed" --include=*.fs` resolves to
+    // this file alone.
+    //
+    // The rot is now impossible to reintroduce by hand (both halves are
+    // derived), so this pins the DIRECTION that matters: an event the daemon
+    // does not emit must never enter `allDaemonSseEvents`, because every
+    // coverage test here is walked FROM that list. A phantom there would
+    // demand handler coverage nobody can provide.
+    let emitted = allDaemonSseEvents |> Set.ofList
+    let retired =
+      [ "test_run_completed"
+        "test_run_started"
+        "test_passed"
+        "test_failed"
+        "test_state"
+        "connected"
+        "disconnected"
+        "warmup_context"
+        "warmup_completed"
+        "hotreload_snapshot"
+        "hot_reload_triggered"
+        "providers_detected"
+        "test_recovery_needed"
+        "coverage_updated"
+        "reconnecting"
+        "run_tests_requested" ]
+    let leaked = retired |> List.filter (fun e -> Set.contains e emitted)
+    leaked
+    |> Expect.equal
+         (sprintf
+           "These retired daemon events must NOT be in allDaemonSseEvents — no emitter produces \
+            them, so they are not daemon coverage. Leaked: %s"
+           (String.concat ", " leaked))
+         ([]: string list)
+  }
+
+  test "every daemon event the plugin does not route is a NAMED gap, and the set is pinned" {
+    // `neovimKnownGaps` is the plugin's honest, hand-written list of daemon
+    // events it does not route. Each entry is a real gap, so the pin is
+    // "exactly these four": shrink it when a handler lands, and never grow it
+    // silently — a new unrouted daemon event must be a decision, not an
+    // accident.
+    neovimKnownGaps
+    |> Expect.equal
+         "a handler landed (delete it here) or a NEW daemon event went unrouted without anyone \
+          deciding that was OK (a real gap, not a test to relax)"
+         (Set.ofList [ "eval_started"; "eval_heartbeat"; "diagnosis_ready"; "live_bindings" ])
+  }
+
+  test "the derived Neovim dispatch set covers every daemon event except the four named gaps" {
+    allDaemonSseEvents
+    |> List.filter (neovimDispatchDerived.Contains >> not)
+    |> Set.ofList
+    |> Expect.equal
+         "these daemon events are emitted but the plugin routes none of them"
+         neovimKnownGaps
+  }
 
   test "vscodeHandledEventsDerived superset check — no typos in the derived set" {
     // Ensure every entry the extractor found is a valid lowercase_snake_case string —
@@ -244,18 +371,23 @@ let sseParityTests = testList "SSE Parity" [
       valid |> Expect.isTrue (sprintf "VS Code derived event '%s' should be lowercase_snake_case" e))
   }
 
-  test "neovimHandledEvents superset check — no typos in the set" {
-    neovimHandledEvents
-    |> Set.iter (fun e ->
-      let valid = Regex.IsMatch(e, "^[a-z][a-z0-9_]*$")
-      valid |> Expect.isTrue (sprintf "Neovim event '%s' should be lowercase_snake_case" e))
+  test "neovim derived sets superset check — no typos in the derived sets" {
+    Set.iter
+      (fun e ->
+        let valid = Regex.IsMatch(e, "^[a-z][a-z0-9_]*$")
+        valid |> Expect.isTrue (sprintf "Neovim event '%s' should be lowercase_snake_case" e))
+      (Set.union neovimCatalogDerived neovimDispatchDerived)
   }
 
   test "adding new daemon event requires updating this test (self-documenting)" {
-    // If this count changes, a developer added a new SSE event. Update both handler sets above.
+    // If this count changes, a developer added a new SSE event. The two
+    // handler sets are derived, so nothing hand-kept needs editing — but the
+    // vscode/neovim gap tests will fail if neither extension handles it, and
+    // that failure is the point.
     allDaemonSseEvents.Length
     |> Expect.equal
-         "if this fails, you added a daemon SSE event - update vscodeHandledEvents, neovimHandledEvents, and this test"
+         "if this fails, you added a daemon SSE event - the VS Code and Neovim coverage tests above \
+          will tell you whether either extension handles it"
          24
   }
 ]
