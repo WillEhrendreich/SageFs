@@ -10,7 +10,7 @@ open SageFs.Tests.TestInfrastructure
 
 let private sources = [ "FsiHost.fsproj", "<Project/>"; "Program.fs", "module P"; "FsiProtocol.fs", "module Q" ]
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 /// The dotnet the tests run with (honours DOTNET_HOST_PATH like the daemon does).
 let private dotnet =

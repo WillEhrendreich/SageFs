@@ -24,8 +24,10 @@ open Expecto.Flip
 open System.IO
 open SageFs.FsiNaming
 
+let private repoRoot = RepoPaths.repoPathFull [||]
+
 let private fixturePath =
-  Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "fsharp-compiler", "fsi-naming-rules.txt")
+  Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "fsharp-compiler", "fsi-naming-rules.txt")
 
 let private fixtureText = lazy (File.ReadAllText fixturePath)
 

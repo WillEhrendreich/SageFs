@@ -13,7 +13,7 @@ module Ratchet = SageFs.Tests.TestInfrastructure.Ratchet
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module TrustSignal = SageFs.Tests.TestInfrastructure.TrustSignal
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private read (relative: string) = File.ReadAllText(Path.Combine(repoRoot, relative))
 

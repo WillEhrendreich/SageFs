@@ -49,8 +49,10 @@ let private productionJsonOpts () =
   opts.Converters.Add(JsonFSharpConverter())
   opts
 
+let private repoRoot = RepoPaths.repoPathFull [||]
+
 let private fixturesDir =
-  Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "LiveTesting")
+  Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "LiveTesting")
 
 let private extractDataPayload (sse: string) : string =
   sse.Split('\n')

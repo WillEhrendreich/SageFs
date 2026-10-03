@@ -23,7 +23,8 @@
              into the FSI host, which compiles them without SageFs.Core, so they must stay free of other
              SageFs files. MachineTier is the closed set of tiers Timeouts scales its waits by. -->
         <Compile Include="MachineTier.fs" />
-        <Compile Include="Timeouts.fs" />
+        <Compile Include="RepoPaths.fs" />
+    <Compile Include="Timeouts.fs" />
         <Compile Include="Editing.fs" />
         <Compile Include="TestProviderTypes.fs" />
         <Compile Include="WorkflowTypes.fs" />

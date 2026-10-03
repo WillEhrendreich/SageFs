@@ -11,7 +11,7 @@ open System.Text.RegularExpressions
 open Expecto
 open Expecto.Flip
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private loadPattern = Regex(@"#load\s+""(?<path>[^""]*SageFs\.Core/[^""]+\.fs)""", RegexOptions.Compiled)
 

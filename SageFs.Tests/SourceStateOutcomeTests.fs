@@ -32,7 +32,9 @@ open ModelContextProtocol.Protocol
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
 
-let private fixtureDir = Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "SourceStateFixture")
+let private repoRoot = RepoPaths.repoPathFull [||]
+
+let private fixtureDir = Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "SourceStateFixture")
 let private fixtureProject = Path.Combine(fixtureDir, "SourceStateFixture.fsproj")
 let private domainPath = Path.Combine(fixtureDir, "Domain.fs")
 let private testsPath = Path.Combine(fixtureDir, "DomainTests.fs")

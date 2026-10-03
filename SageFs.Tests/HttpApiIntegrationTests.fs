@@ -19,8 +19,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 // ─── Shared Helpers ───────────────────────────────────────────────
 
 let repoRoot =
-  Path.GetFullPath(
-    Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  RepoPaths.repoPathFull [||]
 
 // The Falco + Datastar sample webapp. The HTTP API integration tests run
 // against this instead of SageFs.Tests.fsproj so the session loads a small,

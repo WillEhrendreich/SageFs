@@ -61,7 +61,7 @@ let targetFrameworkXmlTests =
       // (the shipped tool closure overrides it with TargetFrameworks instead —
       // see SageFsTargetFrameworks — which this raw-XML-major-scan intentionally
       // does not need to see here).
-      let path = IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "Directory.Build.props")
+      let path = IO.Path.Combine(RepoPaths.repoPathFull [||], "Directory.Build.props")
       let xml = IO.File.ReadAllText path
       EnvCheck.targetFrameworkMajorsFromXml xml
       |> Expect.equal "Directory.Build.props' default TargetFramework pins net11.0" [ 11 ]

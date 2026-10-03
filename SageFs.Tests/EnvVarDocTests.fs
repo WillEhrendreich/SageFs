@@ -15,7 +15,7 @@ open System.Text.RegularExpressions
 open Expecto
 open Expecto.Flip
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private timeoutsSource = File.ReadAllLines(Path.Combine(repoRoot, "SageFs.Core", "Timeouts.fs"))
 let private docText = File.ReadAllText(Path.Combine(repoRoot, "docs", "configuration.md"))

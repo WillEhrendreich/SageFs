@@ -23,8 +23,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 /// same-version build of SageFs.Core and therefore force a REAL adoption.
 /// The `AdoptedCore |> Expect.isSome` assertion below is not incidental:
 /// it is what stops this test from being the vacuous one it warns about.
-let private repoRoot =
-  Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private testsProject =
   Path.Combine(repoRoot, "SageFs.Tests", "SageFs.Tests.fsproj")

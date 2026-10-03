@@ -187,7 +187,7 @@ let main argv =
     | _ -> ()
     let cache = SageFs.IsolatedFsiSession.hostCacheRoot ()
     let dotnet = SageFs.IsolatedFsiSession.dotnetPath ()
-    let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+    let repoRoot = RepoPaths.repoPathFull [||]
     SageFs.FsiHostBuild.resolveSdkVersion dotnet repoRoot
     |> Result.bind (fun sdk -> SageFs.FsiHostBuild.ensureBuilt dotnet sdk cache)
     |> Result.mapError SageFs.FsiHostBuild.describeBuildError
@@ -216,7 +216,7 @@ let main argv =
   // (never raising one) and prints what it changed.
   match argv |> Array.contains SageFs.Tests.TestInfrastructure.Ratchet.entryPoint with
   | true ->
-    let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+    let repoRoot = RepoPaths.repoPathFull [||]
     match argv |> Array.contains "--tighten" with
     | true ->
       let outcome =
@@ -465,7 +465,7 @@ let main argv =
     try
       let stripped = System.Text.RegularExpressions.Regex.Replace(runCapture.ToString(), "\\[[0-9;?]*[a-zA-Z]", "")
       let bounded = if stripped.Length > SageFs.Tests.TestMagnitudes.runCaptureCap then stripped.Substring(stripped.Length - SageFs.Tests.TestMagnitudes.runCaptureCap) else stripped
-      let logPath = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "test-results", "last-run.log")
+      let logPath = RepoPaths.repoPath [| "SageFs.Tests"; "test-results"; "last-run.log" |]
       System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName logPath) |> ignore
       System.IO.File.WriteAllText(logPath, bounded)
     with _ -> ()

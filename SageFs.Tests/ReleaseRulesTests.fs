@@ -13,7 +13,7 @@ open FsCheck
 open FsCheck.FSharp
 open ReleaseRules
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 let private read (relative: string) = File.ReadAllText(Path.Combine(repoRoot, relative))
 
 let private versionGen =

@@ -20,8 +20,7 @@ open Expecto
 /// Ready, points SAGEFS_DASHBOARD_PORT at the dashboard, runs the Expecto
 /// list, then tears the daemon down.
 let runBrowserJourneys (cliArgs: string array) : int =
-  let repoRoot =
-    Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let repoRoot = RepoPaths.repoPathFull [||]
 
   let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
@@ -366,8 +365,7 @@ let prepareHotReloadFixture (repoRoot: string) (runtime: HotReloadStateHarness.H
 
 /// Run the HR-DASH browser journeys end to end, owning the daemon lifecycle.
 let runHotReloadBrowserJourneys (cliArgs: string array) : int =
-  let repoRoot =
-    Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let repoRoot = RepoPaths.repoPathFull [||]
 
   let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
@@ -597,8 +595,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
 
 /// Run the LT-DASH browser journeys end to end, owning the daemon lifecycle.
 let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
-  let repoRoot =
-    Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let repoRoot = RepoPaths.repoPathFull [||]
 
   let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 

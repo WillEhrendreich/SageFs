@@ -126,7 +126,8 @@ let parseSlnxProjectPathsTests =
     }
 
     test "parses this repo's real SageFs.slnx to a non-empty, curated project set" {
-      let path = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.slnx")
+      let repoRoot = RepoPaths.repoPathFull [||]
+      let path = System.IO.Path.Combine(repoRoot, "SageFs.slnx")
       let xml = System.IO.File.ReadAllText path
       let projects = parseSlnxProjectPaths xml
       projects |> Expect.isNonEmpty "the repo's own .slnx must parse to a real project set"

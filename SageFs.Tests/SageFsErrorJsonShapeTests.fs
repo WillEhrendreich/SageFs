@@ -96,8 +96,10 @@ let rec offenders (path: string) (value: obj) : Offender list =
 type private SampleRecord = { Name: string; Inner: SampleUnion }
 and private SampleUnion = | Leaf | Branch of int
 
+let private repoRoot = RepoPaths.repoPathFull [||]
+
 let private goldenPath =
-  Path.Combine(__SOURCE_DIRECTORY__, "SageFsError.toJson.golden.json")
+  Path.Combine(repoRoot, "SageFs.Tests", "SageFsError.toJson.golden.json")
 
 let private serializeIndented (errs: SageFsError list) : string =
   let options = JsonSerializerOptions(WriteIndented = true)

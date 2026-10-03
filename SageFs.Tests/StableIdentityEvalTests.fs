@@ -9,7 +9,10 @@ open SageFs.Features.ReloadPlanning
 open SageFs.Middleware.CompilationContext
 open SageFs.Tests.TestInfrastructure
 
-let private fixturePath = Path.Combine(__SOURCE_DIRECTORY__, "StableIdentityProbeFixture.fs")
+let private repoRoot = RepoPaths.repoPathFull [||]
+
+let private fixturePath =
+  Path.Combine(repoRoot, "SageFs.Tests", "StableIdentityProbeFixture.fs")
 
 /// The fixture in LF: a Windows checkout has CRLF, and the tests' "\n"-based
 /// edits would otherwise silently leave the source unchanged.

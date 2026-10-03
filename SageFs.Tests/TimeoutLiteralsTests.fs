@@ -14,7 +14,7 @@ open System.Text.RegularExpressions
 open Expecto
 open Expecto.Flip
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private literalPattern =
   Regex(@"TimeSpan\.From(Seconds|Milliseconds|Minutes|Hours|Days)\s*\(?\s*[0-9]|Task\.Delay\s*\(?\s*[0-9]|Thread\.Sleep\s*\(?\s*[0-9]|Async\.Sleep\s*\(?\s*[0-9]|\.Add(Milliseconds|Seconds|Minutes|Hours|Days)\s*\(\s*[0-9]|WaitForExit\s*\(\s*[0-9]|CancelAfter\s*\(\s*[0-9]|[A-Za-z](Ms|Millis|Seconds|Secs)\s*=\s*[0-9]|[Tt]imeout\s*=\s*[0-9]|\b[0-9]{1,3}(_000)+L?\b", RegexOptions.Compiled)

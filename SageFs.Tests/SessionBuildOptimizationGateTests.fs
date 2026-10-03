@@ -205,7 +205,7 @@ let structuralOverrideGuaranteeTests =
 let referenceSampleRebuildTests =
   Integration.hostList "SessionBuild rebuilds the reference sample (real build)" [
     testAsync "WHY — the ConsoleTicker sample builds through SageFs's own rebuild path, because a hard reset on the documented hot-reload demo used to fail silently and leave the old worker serving" {
-      let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+      let repoRoot = RepoPaths.repoPathFull [||]
       let sampleDir = Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.ConsoleTicker")
       let project = Path.Combine(sampleDir, "SageFs.Samples.ConsoleTicker.fsproj")
 

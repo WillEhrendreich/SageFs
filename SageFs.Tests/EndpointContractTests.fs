@@ -85,7 +85,7 @@ let endpointContractTests = testList "EndpointContracts" [
       // This prevents the exact mismatch bug reported as "apiVersion=2 is
       // incompatible with this extension (requires v1)".
       let clientFs =
-        System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "sagefs-vscode", "src", "SageFsClient.fs")
+        RepoPaths.repoPath [| "sagefs-vscode"; "src"; "SageFsClient.fs" |]
         |> System.IO.File.ReadAllText
       let m =
         System.Text.RegularExpressions.Regex.Match(
@@ -138,7 +138,7 @@ let endpointContractTests = testList "EndpointContracts" [
 
     test "live-testing run route is mapped in McpServer" {
       let serverFs =
-        System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs", "McpServer.fs")
+        RepoPaths.repoPath [| "SageFs"; "McpServer.fs" |]
       let source = System.IO.File.ReadAllText serverFs
 
       source.Contains("app.MapPost(\"/api/live-testing/run\"")

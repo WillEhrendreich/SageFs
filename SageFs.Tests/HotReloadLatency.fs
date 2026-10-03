@@ -683,7 +683,7 @@ type private SeriesDaemon =
 /// its logs drained to files, with the environment `Series.daemonEnvironment` names.
 let private startSeriesDaemon (series: Series) : Task<SeriesDaemon> =
   task {
-    let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+    let repoRoot = RepoPaths.repoPathFull [||]
     let mcpPort, _dashboardPort = TestInfrastructure.TestPorts.reservePair ()
     let dataDir = RunnerDirs.create RunnerDirs.Family.HotReloadRuns
     let self = Process.GetCurrentProcess()
@@ -742,7 +742,7 @@ let private measureRunAppSavesOn (seriesDaemon: SeriesDaemon) : Task<Sample list
   task {
     let mcpPort = seriesDaemon.McpPort
     let daemon = sprintf "http://localhost:%d" mcpPort
-    let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+    let repoRoot = RepoPaths.repoPathFull [||]
     let fixtureSource = Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "RunAppRestartFixture")
     let dir = Path.Combine(Path.GetTempPath(), "sagefs-hr-latency", Guid.NewGuid().ToString("N"))
     Directory.CreateDirectory dir |> ignore

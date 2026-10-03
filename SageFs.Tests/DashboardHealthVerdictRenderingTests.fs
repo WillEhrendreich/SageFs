@@ -18,6 +18,8 @@ open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 
 module private Fixtures =
+  let repoRoot = RepoPaths.repoPathFull [||]
+
   let now = System.DateTime(2026, 9, 20, 12, 0, 0, System.DateTimeKind.Utc)
 
   let project (name: string) : SageFs.ProjectLoading.ClassifiedProject =
@@ -240,7 +242,7 @@ let directoryNotFoundRemedyTests =
       // pins the literal string the roast asked to change, so a regression
       // back to the bare fact (no remedy) is visible in a text diff even
       // though the route itself needs an integration harness to execute.
-      let path = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs", "Dashboard.fs")
+      let path = System.IO.Path.Combine(Fixtures.repoRoot, "SageFs", "Dashboard.fs")
       let source = System.IO.File.ReadAllText(path)
       source |> Expect.stringContains "Directory not found now tells the user what to do about it" "Directory not found: %s — check the path for typos, or create the directory first.")
   ]

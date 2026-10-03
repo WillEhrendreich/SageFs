@@ -26,16 +26,11 @@ open Expecto.Flip
 open SageFs.Affordances
 
 let private repoRoot =
-  // Tests run from the test assembly's output directory; walk up to the
-  // checkout root that owns Directory.Build.props. Never a hardcoded path.
-  let rec up (dir: DirectoryInfo) =
-    if File.Exists(Path.Combine(dir.FullName, "Directory.Build.props")) then
-      dir.FullName
-    elif isNull dir.Parent then
-      failtest "could not locate the repository root from the test working directory"
-    else
-      up dir.Parent
-  up (DirectoryInfo(Directory.GetCurrentDirectory()))
+  // Resolved at RUNTIME from the assembly's own location. Walking up from the working
+  // directory makes this binding throw during static initialisation whenever the suite
+  // is launched from outside the checkout, and a type-initializer failure takes the whole
+  // discovery pass with it. Never a hardcoded path, never the CWD.
+  RepoPaths.requireRepoRoot ()
 
 /// The registered catalog, from the same reflection the 60-tool contract uses.
 let private registeredToolNames : Set<string> =

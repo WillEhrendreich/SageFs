@@ -39,14 +39,13 @@ let createTestActor () =
       |> System.IO.Path.GetFullPath
 
     let fallbackPath =
-      let rec findUp (dir: string) =
-        let candidate = System.IO.Path.Combine(dir, "SageFs.Tests", "SageFs.Tests.fsproj")
-        if System.IO.File.Exists candidate then Some candidate
-        else
-          let parent = System.IO.Path.GetDirectoryName dir
-          if parent = null || parent = dir then None
-          else findUp parent
-      findUp (System.IO.Directory.GetCurrentDirectory())
+      // The walk-up fallback starts from the ASSEMBLY's directory, not the working
+      // directory: the CWD is wherever the caller happened to launch the suite from, and
+      // a path resolved from it fails for every invocation that is not launched in the
+      // checkout root. RepoPaths already walks up looking for the repository, so use it.
+      let assemblyDir : string = System.IO.Path.GetDirectoryName typeof<System.Net.Http.HttpClient>.Assembly.Location
+      RepoPaths.findRepoRootUpward assemblyDir
+      |> Option.map (fun root -> System.IO.Path.Combine(root, "SageFs.Tests", "SageFs.Tests.fsproj"))
 
     let fullPath =
       if System.IO.File.Exists basePath then basePath

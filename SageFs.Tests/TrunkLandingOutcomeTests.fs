@@ -41,9 +41,9 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 let private sageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
-let private fixtureSourceDir = Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "CohortTrunkFixture")
+let private fixtureSourceDir = RepoPaths.repoPath [| "SageFs.Tests"; "fixtures"; "CohortTrunkFixture" |]
 
 /// The sources the fixture project compiles, in compile order.
 let private fixtureSources = [ "Counter.fs"; "Alice.fs"; "Bob.fs"; "Rude.fs"; "Tests.fs"; "Program.fs" ]

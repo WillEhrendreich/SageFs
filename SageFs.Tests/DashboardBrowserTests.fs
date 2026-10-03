@@ -484,7 +484,7 @@ module OutputScroll =
 /// condition — server `/api/sessions` state or a DOM attribute — never a
 /// fixed sleep-then-assume).
 module private NoSessionLanding =
-  let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let private repoRoot = RepoPaths.repoPathFull [||]
 
   /// Two small, DISTINCT-directory, already-built sample projects (never the
   /// WebappDatastar sample the shared runner owns — one-session-per-working-

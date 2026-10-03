@@ -15,7 +15,10 @@ open System.Threading
 module Snapshots =
   /// Committed snapshots live next to the test sources, in every configuration
   /// (Debug/Release, local/CI) — they are never copied or regenerated per build.
-  let directory = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
+  /// Located from the repository root at RUNTIME; only the `.verified.txt`
+  /// subset is copied to the output directory, so the source tree is the only
+  /// complete one.
+  let directory = RepoPaths.repoPath [| "SageFs.Tests"; "snapshots" |]
 
   let private configured =
     lazy (
@@ -50,7 +53,7 @@ module Snapshots =
 /// `sagefs`, so the fallback simply failed to start.
 module SageFsBinary =
   let private repoRoot =
-    System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, ".."))
+    RepoPaths.repoPathFull [||]
 
   let private fileName =
     match System.OperatingSystem.IsWindows() with

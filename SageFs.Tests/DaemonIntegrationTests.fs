@@ -18,8 +18,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 // ─── Helpers ───────────────────────────────────────────────────────
 
 let testProjectDir =
-  Path.GetFullPath(
-    Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Tests"))
+  RepoPaths.repoPathFull [| "SageFs.Tests" |]
 
 /// A small, standalone, CI-built sample — NOT this repo's own SageFs.Tests.fsproj
 /// (300+ files, the whole solution's package closure). `sessionManagerLifecycleTests`
@@ -37,8 +36,7 @@ let testProjectDir =
 /// share (see CohortLandingGate's former header). CI builds it in "build samples
 /// for integration suites" (ci-pipeline.fsx), same as the HttpApi suite's copy.
 let sampleProjectDir =
-  Path.GetFullPath(
-    Path.Combine(__SOURCE_DIRECTORY__, "..", "samples", "from-csharp", "SageFs.Samples.FromCSharp"))
+  RepoPaths.repoPathFull [| "samples"; "from-csharp"; "SageFs.Samples.FromCSharp" |]
 
 let SageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 

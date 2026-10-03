@@ -24,7 +24,7 @@ open SageFs.Tests.HttpApiIntegrationTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private sampleProjects =
   [ "from-csharp", "SageFs.Samples.FromCSharp"

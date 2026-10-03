@@ -225,7 +225,7 @@ module private IsolatedDaemon =
 /// separate JS harness) inside the Expecto suite, per the doctrine this repo
 /// enforces for all browser coverage.
 let private disconnectIndicatorJourney () = task {
-  let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let repoRoot = RepoPaths.repoPathFull [||]
   let mutable daemon = IsolatedDaemon.start repoRoot
   let mutable playwright: IPlaywright option = None
   let mutable browser: IBrowser option = None
@@ -343,7 +343,7 @@ let private addClockSkew (ctx: IBrowserContext) (offsetMs: int64) : Task<unit> =
 /// effect on the very first navigation. Positive = client ahead of real
 /// time; negative = client behind.
 let private clockSkewJourney (skewMs: int64) = task {
-  let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let repoRoot = RepoPaths.repoPathFull [||]
   let mutable daemon = IsolatedDaemon.start repoRoot
   let mutable playwright: IPlaywright option = None
 

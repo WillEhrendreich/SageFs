@@ -75,8 +75,7 @@ let private isDocAttribute (attr: Attribute) =
 // forgetting the allow-list entry fails the build instead of waiting for the
 // next roast to notice.
 
-let private repoRoot =
-  System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 /// Every `.fs` file under SageFs/ and SageFs.Core/ — the two production
 /// projects — excluding the test project, build output, and any worktree.
@@ -1047,7 +1046,7 @@ let fileSizeBudgets =
   // flagging must not keep growing. Budgets sit just above current size; when a
   // file is split, RATCHET THE BUDGET DOWN — never up. A failure here means
   // "split before you add," not "raise the number."
-  let repoRoot = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..")
+  let repoRoot = RepoPaths.repoPath [||]
   let budgets =
     [ // 4200 -> 4270: a one-time bump for the F16/F5/F6 cohort-integration
       // bootstrap fix (cohort-dogfood-findings.md) — main-repo-root
@@ -1332,7 +1331,7 @@ let blockingCallBudgets =
   // present level: any NEW blocking call fails the build. When a test is
   // converted to testTask/testAsync + awaitable conditions, RATCHET THE BUDGET
   // DOWN — never up. A failure here means "convert, don't add."
-  let testsRoot = __SOURCE_DIRECTORY__
+  let testsRoot = RepoPaths.repoPath [| "SageFs.Tests" |]
   // Every test source file EXCEPT this one (it names the patterns as string
   // literals below, which would otherwise count itself) and generated bin/obj.
   let sourceFiles =

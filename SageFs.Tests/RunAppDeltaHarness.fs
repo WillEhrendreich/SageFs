@@ -29,7 +29,7 @@ let runAppFixture : Fixture =
     ReadyRoute = "ready" }
 
 let private repoRoot () =
-  Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  RepoPaths.repoPathFull [||]
 
 let private fixtureSourceDir (fixture: Fixture) =
   Path.Combine(repoRoot (), "SageFs.Tests", "fixtures", fixture.Folder)

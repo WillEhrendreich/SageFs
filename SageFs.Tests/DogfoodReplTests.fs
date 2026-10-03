@@ -23,8 +23,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 /// The subject is SageFs developing SageFs, so the fixture is the real
 /// SageFs.Tests.fsproj: any other project would not collide with the host's
 /// own SageFs.Core the way this one does.
-let private repoRoot =
-  Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private testsProject =
   Path.Combine(repoRoot, "SageFs.Tests", "SageFs.Tests.fsproj")

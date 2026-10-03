@@ -18,11 +18,10 @@ open SageFs.Features.FeatureDiscovery
 open SageFs.Server.McpTools
 
 let private repoRoot =
-  let rec up (dir: DirectoryInfo) =
-    if File.Exists(Path.Combine(dir.FullName, "Directory.Build.props")) then dir.FullName
-    elif isNull dir.Parent then failtest "could not locate the repository root from the test working directory"
-    else up dir.Parent
-  up (DirectoryInfo(Directory.GetCurrentDirectory()))
+  // Runtime-resolved from the assembly's own location. A walk up from the working
+  // directory throws during static initialisation when the suite is launched from
+  // outside the checkout, taking the whole discovery pass down with it.
+  RepoPaths.requireRepoRoot ()
 
 let private registered : RegisteredTool list = RegisteredTools.describe typeof<SageFsTools>
 

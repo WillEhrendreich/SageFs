@@ -13,7 +13,7 @@ open SageFs.HostAgent
 open SageFs.RemoteFsiSession
 open SageFs.Tests.TestInfrastructure
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private dotnet =
   match Environment.GetEnvironmentVariable "DOTNET_HOST_PATH" with

@@ -65,7 +65,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
 
 let private fixtureDir =
-  Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "McpToolOutcomeFixture")
+  RepoPaths.repoPath [| "SageFs.Tests"; "fixtures"; "McpToolOutcomeFixture" |]
 
 let private fixtureProject =
   Path.Combine(fixtureDir, "McpToolOutcomeFixture.fsproj")

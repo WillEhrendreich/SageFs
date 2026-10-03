@@ -169,7 +169,7 @@ let dashboardEscapingHotReloadTests =
 // exceptions are trusted sinks pinned by exact count — adding another one
 // fails this test and forces a conscious decision.
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 /// A plain (non-triple-quoted) F# string literal immediately after Text.raw.
 let private literalArg = Regex("""^\s+"(?:[^"\\]|\\.)*"(?!")""", RegexOptions.Compiled)

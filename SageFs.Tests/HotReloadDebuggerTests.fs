@@ -50,7 +50,7 @@ let private netcoredbg =
 let private rowNames = [ "inlineLambda"; "instanceState"; "taskNamed"; "signature" ]
 
 let private toolDirectory (release: DebuggerRelease) =
-  Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "HotReloadParityFixture", ".runs", "tools", release.Version)
+  RepoPaths.repoPath [| "SageFs.Tests"; "fixtures"; "HotReloadParityFixture"; ".runs"; "tools"; release.Version |]
 
 /// The debugger's executable, fetched and verified on first use.
 let private ensureDebugger (release: DebuggerRelease) : Task<string> = task {

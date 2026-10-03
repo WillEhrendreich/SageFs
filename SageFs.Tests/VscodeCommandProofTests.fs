@@ -39,7 +39,7 @@ open Expecto.Flip
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 let private repoRoot =
-  Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  RepoPaths.repoPathFull [||]
 
 let private vscodeExtensionDir =
   Path.Combine(repoRoot, "sagefs-vscode")

@@ -9,7 +9,7 @@ open Expecto
 open Expecto.Flip
 open SageFs.Roadmap
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private readFromRepo (relative: string) : FileState =
   let path = Path.Combine(repoRoot, relative)

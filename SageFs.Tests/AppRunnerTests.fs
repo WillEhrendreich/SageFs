@@ -315,10 +315,10 @@ let managedDependencyResolutionTests =
       |> Expect.isTrue "every candidate must be rooted, like NativeResolution's candidates"
   ]
 
-/// Repo root, derived from this source file's own location — never a
-/// hardcoded path (AGENTS.md: no hardcoded Windows/absolute paths).
-let private repoRoot =
-  Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+/// Repo root, located at RUNTIME from this assembly's own location — never a
+/// build-time constant and never a hardcoded path (AGENTS.md: no hardcoded
+/// Windows/absolute paths).
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 /// The exact sample the reported bug used, and the one the website's own
 /// demo documents. Its build output holds the real Falco/Falco.Markup/

@@ -99,7 +99,7 @@ let loadSolutionProgressTests =
   testList "loadSolution reports real progress through onProgress" [
     testCase "loading the TestWorkspace fixture reports at least one valid, in-range step"
     <| fun _ ->
-      let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+      let repoRoot = RepoPaths.repoPathFull [||]
       // Under a .NET 10 runtime, this repo's global.json (pinned to an 11.x SDK)
       // makes loadSolution skip the in-process MSBuild load on purpose
       // (shouldSkipInProcessLoad: a newer SDK's MSBuild cannot be hosted by an older

@@ -33,9 +33,9 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
 
 let private fixtureSource =
-  Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "SageFsLikeRepoFixture")
+  RepoPaths.repoPath [| "SageFs.Tests"; "fixtures"; "SageFsLikeRepoFixture" |]
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 /// Where a gate's copy lives and whether it carries a repo of its own SageFs.Core.
 [<RequireQualifiedAccess>]

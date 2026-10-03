@@ -196,6 +196,46 @@ let private makeRequestFcsTypeCheckEffect
     TreeSitterElapsed = treeSitterElapsed
   }
 
+/// Run `git <args>` and return its trimmed stdout. An INDEPENDENT oracle: a separate,
+/// minimal spawn from the one under test, so a bug shared by both cannot hide.
+/// `System.Diagnostics` is qualified because `open SageFs.WarmUp` puts its own
+/// `Diagnostics` in scope. Arguments go on `ArgumentList`, never a joined string.
+let private git (args: string list) : string =
+  let psi = System.Diagnostics.ProcessStartInfo("git")
+  psi.RedirectStandardOutput <- true
+  psi.RedirectStandardError <- true
+  psi.UseShellExecute <- false
+  for arg in args do psi.ArgumentList.Add arg
+  use proc = System.Diagnostics.Process.Start psi
+  let output = proc.StandardOutput.ReadToEnd().Trim()
+  proc.WaitForExit TestTimeouts.childExit |> ignore
+  output
+
+/// `git hash-object` over a temp file holding `text`, so the production hash is
+/// checked against GIT's rather than against the author's understanding of git's
+/// header. A tree with no `git` has no oracle, and the case says so loudly rather
+/// than passing against the very formula it is checking.
+let private gitBlobOf (text: string) : string =
+  let path = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-blob-oracle-%s.fs" (Guid.NewGuid().ToString "N"))
+  IO.File.WriteAllText (path, text)
+  try git [ "hash-object"; path ]
+  finally
+    if IO.File.Exists path then IO.File.Delete path
+
+/// Is a real `git` on PATH?
+let private gitAvailable () =
+  try
+    use proc =
+      System.Diagnostics.Process.Start (
+        System.Diagnostics.ProcessStartInfo(
+          "git", "--version",
+          RedirectStandardOutput = true,
+          RedirectStandardError = true,
+          UseShellExecute = false))
+    proc.WaitForExit TestTimeouts.childExit |> ignore
+    proc.HasExited && proc.ExitCode = 0
+  with _ -> false
+
 [<Tests>]
 let effectHandlerTests = testList "SageFsEffectHandler" [
   testTask "RequestEval sends code to worker and dispatches result" {
@@ -499,6 +539,94 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
             (EditorEffect.RequestHistory HistoryDirection.Previous))
     dispatched |> Expect.isEmpty "no dispatch"
   }
+
+  // The blob record the landing gate reconciles against (`DaemonMode`'s
+  // `integrationSourceBlobs`) is a record of what a session HOLDS, so it must be
+  // written by EVERY path that binds real source text into that session — not
+  // only by the gate's own `evalIntegrationFiles`. `EvalBufferThenRunAffected` is
+  // that other path: the as-you-type pipeline submits real buffer text through
+  // the same `WorkerMessage.EvalLiveTestFile` primitive, and it targets whichever
+  // session owns the live-testing cycle — including the integration verification
+  // session, which the daemon's file watcher feeds (`FileContentChanged` for a
+  // path under a watched dir) and the MCP buffer endpoint can name outright.
+  //
+  // The note is asserted through `SourceBound`'s OBSERVABLE seam — the same
+  // single writer the daemon installs over the real record — rather than through
+  // `DaemonMode`'s private `ref`, which a unit test cannot see without starting a
+  // daemon. That is the honest seam: the effect handler's whole responsibility is
+  // to ANNOUNCE, and the announced (session, path, blob) triple is what the gate
+  // writes into the record. Before the fix this call did not exist and nothing
+  // was announced at all, so the assertion below fails.
+  testTask "WHY: the as-you-type eval announces the blob of the text it binds, so the landing gate's record cannot under-count what the session holds" {
+    let log = TestDeps.createLog ()
+    let mutable submitted : (string * string) list = []
+    let deps = TestDeps.singleSession log (fun msg ->
+      match msg with
+      | WorkerMessage.EvalLiveTestFile (filePath, content, rid) ->
+        submitted <- (filePath, content) :: submitted
+        WorkerResponse.EvalLiveTestFileResult (rid, Ok ([||], []))
+      | _ ->
+        WorkerResponse.WorkerError (SageFsError.Unexpected (exn "unexpected worker message")))
+    let filePath = "/src/Alice.fs"
+    let content = "module Alice\nlet aliceMessage () : string = \"alice:typed\""
+    let effect =
+      Features.LiveTesting.TestCycleEffect.EvalBufferThenRunAffected {
+        FilePath = filePath
+        Content = content
+        Run = {
+          Tests = [||]
+          Trigger = Features.LiveTesting.RunTrigger.Keystroke
+          TreeSitterElapsed = TimeSpan.Zero
+          FcsElapsed = TimeSpan.Zero
+          SessionId = Some "a1b2c3d4"
+          InstrumentationMaps = [||]
+        }
+      }
+    // The real text is submitted — the record's whole subject is what the session
+    // ends up holding, so this is the binding the note has to speak for.
+    let announced = ResizeArray ()
+    let previous =
+      SageFs.SourceBound.setHook (Some (fun sid path blob ->
+        announced.Add(sid, path, blob)))
+    try
+      do! SageFsEffectHandler.execute deps
+            (fun _ -> ())
+            (SageFsEffect.TestCycle effect)
+    finally
+      SageFs.SourceBound.setHook previous |> ignore
+    submitted
+    |> Expect.hasLength "the buffer is bound into the session" 1
+    snd submitted.Head
+    |> Expect.equal "bound as the exact buffer text submitted" content
+    List.ofSeq announced
+    |> Expect.equal
+      "the note names the session that took it, the path, and the blob of exactly that text"
+      [ "a1b2c3d4", filePath, SageFs.SourceBound.gitBlobIdOfText content ]
+  }
+
+  // The other half of the contract, and the reason the note is made against the
+  // TEXT rather than the file: an unsaved buffer's blob must not be the disk's.
+  // If the note were taken from the path instead, a record written for buffer
+  // content would name the file's text, and a session holding the buffer would be
+  // read as reconciled when the head never had it.
+  if not (gitAvailable ()) then
+    testCase "git must be available on PATH: the announced blob is of the TEXT, not of the file on disk" <| fun _ ->
+      failtest "git is not on PATH, so the announced blob cannot be compared against git's own answer"
+  else
+    testCase "WHY: the announced blob is git's blob id of the TEXT, so an unsaved buffer is never recorded as the file on disk" <| fun _ ->
+      let bufferText = "module Alice\nlet aliceMessage () : string = \"alice:typed-but-unsaved\""
+      SageFs.SourceBound.gitBlobIdOfText bufferText
+      |> Expect.equal "the blob is git's own blob id of the given text" (gitBlobOf bufferText)
+      SageFs.SourceBound.gitBlobIdOfText bufferText
+      |> Expect.notEqual
+        "and never the disk's, which is the whole reason the text is hashed rather than the file read"
+        (gitBlobOf (bufferText.Replace("typed-but-unsaved", "on-disk")))
+      // Non-ASCII, where a char count would disagree with git's byte count.
+      SageFs.SourceBound.gitBlobIdOfText "let café = 1"
+      |> Expect.equal "byte count, not char count, in the git header" (gitBlobOf "let café = 1")
+      // Empty text: the header is "blob 0\0", which a length-prefix bug turns into something else.
+      SageFs.SourceBound.gitBlobIdOfText ""
+      |> Expect.equal "empty text hashes as git hashes it" (gitBlobOf "")
 ]
 
 [<Tests>]

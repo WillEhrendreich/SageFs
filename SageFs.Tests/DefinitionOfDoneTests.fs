@@ -48,7 +48,10 @@ open System.Text.RegularExpressions
 open Expecto
 open Expecto.Flip
 
-let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+// Resolved at RUNTIME from the assembly's own location. A build-time constant here
+// would name the directory this file was COMPILED in, which is not necessarily the
+// checkout the test is running against.
+let repoRoot = RepoPaths.requireRepoRoot ()
 
 let matrixPath = Path.Combine(repoRoot, "quality", "definition-of-done.json")
 

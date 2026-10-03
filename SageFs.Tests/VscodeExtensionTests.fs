@@ -490,7 +490,7 @@ module VscodeHelpers =
 /// test source location (never a hardcoded path — the extension fixture must
 /// run from any checkout location).
 let repoRoot =
-  IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "..")
+  RepoPaths.repoPathFull [||]
 
 // The wrappers ALWAYS register real tests. There is no pending (ptestCase)
 // fallback when VS Code is absent: a pending placeholder turned a missing
@@ -639,7 +639,7 @@ let sageFsPaletteCommandContractTests =
   testList "SageFsPaletteCommand contract" [
     testCase "every command with a declared id matches its package.json title" <| fun _ ->
       let packageJsonPath =
-        IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "sagefs-vscode", "package.json")
+        RepoPaths.repoPath [| "sagefs-vscode"; "package.json" |]
       use doc = Text.Json.JsonDocument.Parse(IO.File.ReadAllText packageJsonPath)
       let titleById =
         doc.RootElement.GetProperty("contributes").GetProperty("commands").EnumerateArray()

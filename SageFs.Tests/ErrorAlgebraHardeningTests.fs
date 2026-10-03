@@ -163,7 +163,7 @@ let errorAlgebraHardeningTests =
     // ── Group 1: Result<_,string> regression guard ──
     testList "Result<_,string> regression guard" [
       test "source count of Result<_,string> does not grow beyond snapshot" {
-        let coreDir = Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Core")
+        let coreDir = RepoPaths.repoPathFull [| "SageFs.Core" |]
         let fsFiles = Directory.GetFiles(coreDir, "*.fs", SearchOption.AllDirectories)
         let regex = Regex @"Result<[^,]+,\s*string\s*>"
         let matches =

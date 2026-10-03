@@ -12,15 +12,13 @@ open System.IO
 open Expecto
 open Expecto.Flip
 
+// The skill directory is located from the ASSEMBLY's own location at run time, not by
+// walking up from the working directory. Walking up from the CWD means this binding
+// THROWS during static initialisation whenever the suite is launched from outside the
+// checkout — and a type-initializer failure takes the whole discovery pass down with it,
+// which reads as a corrupted test run rather than a path bug.
 let private skillDir =
-  let rec up (dir: DirectoryInfo) =
-    if File.Exists(Path.Combine(dir.FullName, "Directory.Build.props")) then
-      Path.Combine(dir.FullName, "skills", "sagefs")
-    elif isNull dir.Parent then
-      failtest "could not locate the repository root from the test working directory"
-    else
-      up dir.Parent
-  up (DirectoryInfo(Directory.GetCurrentDirectory()))
+  Path.Combine(RepoPaths.requireRepoRoot (), "skills", "sagefs")
 
 let private core = File.ReadAllText(Path.Combine(skillDir, "SKILL.md"))
 

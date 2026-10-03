@@ -6,9 +6,13 @@ open SageFs
 
 [<Tests>]
 let tutorialTests =
+  // The repository root, located at RUNTIME rather than through the
+  // `__SOURCE_DIRECTORY__` build-time constant, which records only where this
+  // assembly was COMPILED.
+  let repoRoot = RepoPaths.repoPathFull [||]
+
   let tutorialPath =
-    System.IO.Path.Combine(
-      __SOURCE_DIRECTORY__, "..", "samples", "getting-started.fsx")
+    System.IO.Path.Combine(repoRoot, "samples", "getting-started.fsx")
 
   testList "Tutorial" [
     testList "getting-started.fsx structure" [
@@ -120,9 +124,7 @@ let tutorialTests =
       }
 
       test "resolvePath finds file relative to samples dir" {
-        let samplesDir =
-          System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "samples")
-          |> System.IO.Path.GetFullPath
+        let samplesDir = System.IO.Path.GetFullPath(System.IO.Path.Combine(repoRoot, "samples"))
         match Tutorial.resolvePath samplesDir with
         | Some path ->
           System.IO.File.Exists path

@@ -43,7 +43,7 @@ type FixedBecause =
   /// A deadline a test harness picks, not a product wait.
   | TestHarness
 
-let private repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 let private lines = File.ReadAllLines(Path.Combine(repoRoot, "SageFs.Core", "Timeouts.fs"))
 
 let private fixedTable : (string * FixedBecause) list =

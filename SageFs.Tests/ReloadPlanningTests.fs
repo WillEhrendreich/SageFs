@@ -153,8 +153,8 @@ let planReloadTests =
 let realSourceTests =
   testList "ReloadPlanning real sources" [
     testCase "WHY — ReloadPlanning — every Core source file with one top-level module plans against itself as a no-op because an unchanged save must never restart a running app" <| fun _ ->
-      let coreDir =
-        System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Core"))
+      let repoRoot = RepoPaths.repoPathFull [||]
+      let coreDir = System.IO.Path.Combine(repoRoot, "SageFs.Core")
       let results =
         System.IO.Directory.GetFiles(coreDir, "*.fs", System.IO.SearchOption.AllDirectories)
         |> Array.filter (fun f -> not (f.Contains "/obj/" || f.Contains "\\obj\\"))

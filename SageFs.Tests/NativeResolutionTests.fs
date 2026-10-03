@@ -80,10 +80,9 @@ let tests = testList "NativeResolution" [
   // libraylib.so that the default probe missed. Skips cleanly if the sample
   // has not been built (e.g. a partial CI matrix), so the suite stays green.
   testCase "WHY — resolver finds the real libraylib.so in the built sample output" <| fun () ->
-    // Derive repo root from this source file's location (no hardcoded paths).
+    // Derive repo root from the runtime repo-root probe (no hardcoded paths).
     let repoRoot =
-      let here = __SOURCE_DIRECTORY__   // .../SageFs.Tests
-      Path.GetFullPath(Path.Combine(here, ".."))
+      RepoPaths.repoPathFull [||]
     let sampleBin =
       Path.Combine(repoRoot, "samples", "demos", "SageFs.Samples.RaylibHello", "bin")
     // Only meaningful when the sample was built WITH its native lib for this

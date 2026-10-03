@@ -5,8 +5,10 @@ open System.Text.Json
 open Expecto
 open Expecto.Flip
 
+let private repoRoot = RepoPaths.repoPathFull [||]
+
 let private fixturePath name =
-  Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "LiveTesting", name)
+  Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "LiveTesting", name)
 
 let private readFixture name = File.ReadAllText(fixturePath name)
 

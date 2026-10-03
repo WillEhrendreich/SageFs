@@ -36,11 +36,10 @@ module HostRuntime =
     | HostRuntime.Net10 -> "net10.0"
     | HostRuntime.Net11 -> "net11.0"
 
-/// From this file's own folder, not AppContext.BaseDirectory: in a SageFs
-/// session the base directory is the host's, so walking up from it finds the
-/// wrong repo, or none.
-let private repoRoot () =
-  Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+/// From this assembly's own runtime location, not AppContext.BaseDirectory: in
+/// a SageFs session the base directory is the host's, so walking up from it
+/// finds the wrong repo, or none.
+let private repoRoot () = RepoPaths.repoPathFull [||]
 
 let private buildConfiguration () =
   match AppContext.BaseDirectory.Contains("Release") with

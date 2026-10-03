@@ -28,7 +28,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 module Http = SageFs.Tests.HttpApiIntegrationTests
 
 let private fixtureDir =
-  Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "HonestEmptiesFixture")
+  RepoPaths.repoPath [| "SageFs.Tests"; "fixtures"; "HonestEmptiesFixture" |]
 
 let private fixtureProject = Path.Combine(fixtureDir, "HonestEmptiesFixture.fsproj")
 

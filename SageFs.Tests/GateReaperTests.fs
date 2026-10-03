@@ -223,7 +223,7 @@ let realTests =
         let dir = Path.Combine(gateDir, Names.checkoutPrefix + repoKey gone)
         write (Path.Combine(dir, "x")) "x"
         write (Path.Combine(gateDir, Names.ownersDir, Names.checkoutPrefix + repoKey gone)) gone
-        let script = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", "scripts", "gate-reap.fsx"))
+        let script = RepoPaths.repoPathFull [| "scripts"; "gate-reap.fsx" |]
         let psi = ProcessStartInfo("dotnet", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
         // The gate script has already written its own (live) pid into `current` when it reaps; that must not stop the reap.
         write (Path.Combine(gateDir, Names.currentFile)) (sprintf "%d abc" Environment.ProcessId)

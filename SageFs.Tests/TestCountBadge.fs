@@ -42,12 +42,17 @@ let rec countLeaves (t: Test) : int =
 let totalTestCount () : int =
   SageFs.Tests.TestInfrastructure.Integration.defaultSuite () |> countLeaves
 
-/// The test source directory (compile-time constant, same trick the snapshot
-/// tests use to find their fixtures at runtime).
-let testsDir = __SOURCE_DIRECTORY__
+/// The repository root, located at RUNTIME from the executing assembly rather
+/// than through the `__SOURCE_DIRECTORY__` build-time constant, which records
+/// only where this assembly was COMPILED.
+let repoRoot = RepoPaths.repoPathFull [||]
+
+/// The test source directory — the tree these sources actually live in, not
+/// the build output directory the assembly was loaded from.
+let testsDir = Path.Combine(repoRoot, "SageFs.Tests")
 
 /// The README at the repository root.
-let readmePath = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", "Readme.md"))
+let readmePath = Path.Combine(repoRoot, "Readme.md")
 
 let private sourceFiles () =
   Directory.EnumerateFiles(testsDir, "*.fs", SearchOption.AllDirectories)

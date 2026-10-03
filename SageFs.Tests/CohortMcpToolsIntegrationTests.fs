@@ -44,8 +44,7 @@ open SageFs
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
-let private repoRoot =
-  IO.Path.GetFullPath(IO.Path.Combine(__SOURCE_DIRECTORY__, ".."))
+let private repoRoot = RepoPaths.repoPathFull [||]
 
 let private sageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 

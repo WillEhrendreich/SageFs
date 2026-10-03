@@ -99,7 +99,7 @@ let cohortPlayTests =
     ]
 
     testList "runPlay — the checked-in cohorts/basic.ledger.jsonl fixture (item 18a)" [
-      let fixturePath = Path.Combine(__SOURCE_DIRECTORY__, "cohorts", "basic.ledger.jsonl")
+      let fixturePath = RepoPaths.repoPath [| "SageFs.Tests"; "cohorts"; "basic.ledger.jsonl" |]
 
       test "reconstructs the fixture's known facts: alice Conductor, bob Verifier, 1 claim held by alice, landing l-0405 Rebasing" {
         File.Exists fixturePath |> Expect.isTrue (sprintf "fixture must exist at %s" fixturePath)

@@ -77,7 +77,7 @@ let verdictTests =
 /// three separate facts; a suite could satisfy the first two and still run
 /// nowhere (the disconnect journeys did, for weeks).
 let ciWiringTests =
-  let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let repoRoot = RepoPaths.repoPathFull [||]
   let pipeline = lazy (File.ReadAllText(Path.Combine(repoRoot, "ci-pipeline.fsx")))
 
   /// Tier names CI invokes: the first token of each `testTier "<args>"`, with
@@ -126,7 +126,7 @@ let ciWiringTests =
 /// net10 tool asset without any gate seeing it. Each framework's default run is
 /// its own tier, so a net10-only failure is its own red row in the trust report.
 let frameworkTierTests =
-  let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let repoRoot = RepoPaths.repoPathFull [||]
   let pipeline = lazy (File.ReadAllText(Path.Combine(repoRoot, "ci-pipeline.fsx")))
 
   testList "TrustSignal framework tiers" [
@@ -166,7 +166,7 @@ let frameworkTierTests =
 /// through as "no TTY, cosmetic". The tiers exit 1 or 2 when a test failed or errored and 3 when nothing ran or the
 /// count did not match, so a script that swallowed 2 reported a suite with an errored test as passed.
 let buildScriptTests =
-  let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let repoRoot = RepoPaths.repoPathFull [||]
   let script = lazy (File.ReadAllText(Path.Combine(repoRoot, "build.fsx")))
 
   testList "TrustSignal build.fsx" [
@@ -262,7 +262,7 @@ module private SelfHostedSafety =
         |> List.map (fun (name, _, _) -> sprintf "%s/%s" file name))
 
 let selfHostedSafetyTests =
-  let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let repoRoot = RepoPaths.repoPathFull [||]
 
   let workflows =
     lazy

@@ -18,7 +18,8 @@ open Expecto.Flip
 
 [<Tests>]
 let noNullTombstoneTests =
-  let appStatePath = Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Core", "AppState.fs")
+  let repoRoot = RepoPaths.repoPathFull [||]
+  let appStatePath = Path.Combine(repoRoot, "SageFs.Core", "AppState.fs")
   // Code lines only — a doc comment is allowed to NAME the old pattern while
   // explaining the fix (AppState.fs does exactly this, at the Faulted-phase
   // publish site: "This replaces the old tombstone that held

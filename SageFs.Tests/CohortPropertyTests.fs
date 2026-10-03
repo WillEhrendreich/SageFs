@@ -42,6 +42,11 @@ type Agent =
       | :? Agent as a -> compare this.Id a.Id
       | _ -> invalidArg "o" "not an Agent"
 
+// The checked-in ledger corpus lives under SageFs.Tests/cohorts. Located at
+// RUNTIME (RepoPaths walks up from this assembly's own location), never through
+// a build-time constant that would measure where the assembly was compiled.
+let private repoRoot = RepoPaths.repoPathFull [||]
+
 let agentOf (i: int) : Agent =
   { Id = 1 + (abs i % 4); Display = sprintf "agent-%d" (1 + abs i % 4) }
 
@@ -793,7 +798,7 @@ let cohortPropertyTests =
         // events that were recorded alongside that command — proving a
         // checked-in ledger stays replayable across code changes, not merely
         // that its final state happens to match.
-        let corpusDir = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "cohorts")
+        let corpusDir = System.IO.Path.Combine(repoRoot, "SageFs.Tests", "cohorts")
         System.IO.Directory.CreateDirectory corpusDir |> ignore
         let files = System.IO.Directory.GetFiles(corpusDir, "*.ledger.jsonl")
 

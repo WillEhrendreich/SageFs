@@ -71,8 +71,10 @@ let allDaemonSseEvents : string list =
 
 // ── VS Code handled set — DERIVED from the real source, not hand-typed ──────
 
+let private repoRoot = RepoPaths.repoPathFull [||]
+
 let private vscodeListenerSourcePath : string =
-  Path.Combine(__SOURCE_DIRECTORY__, "..", "sagefs-vscode", "src", "LiveTestingListener.fs")
+  Path.Combine(repoRoot, "sagefs-vscode", "src", "LiveTestingListener.fs")
   |> Path.GetFullPath
 
 /// Parse the real `processEvent` function's match arms out of
@@ -120,18 +122,25 @@ let vscodeKnownGaps : Set<string> =
   Set.ofList [ "cohort_matrix"; "claim_changed"; "landing_changed"; "save_observed" ]
 
 // ── Neovim half — DERIVED from the real sibling checkout, not hand-typed ─────
-// sagefs.nvim lives at ../sagefs.nvim relative to this checkout (the same path
-// scripts/sync-nvim-version.fsx resolves). Both sets below are parsed out of
-// that repo's Lua source, so a phantom cannot be asserted here: to claim the
-// plugin handles an event, this file has to point at a line of real Lua.
+// sagefs.nvim is a SEPARATE repository that lives as a sibling of this one, so it
+// cannot be reached through RepoPaths (which only ever resolves INSIDE this repo).
+// It is located at RUNTIME instead: `SAGEFS_NVIM_DIR` if set, else the parent of
+// the repository root — never a build-time constant. Both sets below are parsed
+// out of that repo's Lua source, so a phantom cannot be asserted here: to claim
+// the plugin handles an event, this file has to point at a line of real Lua.
+let private nvimRepoDir : string =
+  match System.Environment.GetEnvironmentVariable "SAGEFS_NVIM_DIR" with
+  | null | "" ->
+    // The SageFs checkout's parent holds the sibling plugin checkout.
+    Path.Combine(Path.GetDirectoryName(repoRoot), "sagefs.nvim")
+    |> Path.GetFullPath
+  | dir -> Path.GetFullPath dir
 
 let private nvimEventsPath : string =
-  Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "sagefs.nvim", "lua", "sagefs", "events.lua")
-  |> Path.GetFullPath
+  Path.Combine(nvimRepoDir, "lua", "sagefs", "events.lua")
 
 let private nvimSsePath : string =
-  Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "sagefs.nvim", "lua", "sagefs", "sse.lua")
-  |> Path.GetFullPath
+  Path.Combine(nvimRepoDir, "lua", "sagefs", "sse.lua")
 
 /// Every `{ "<event_name>", "SageFsUserEvent" }` row in events.lua's
 /// `EVENT_CATALOG` table. Both strings are captured; only the first is the
@@ -183,8 +192,7 @@ let neovimCatalogDerived : Set<string> =
 let private neovimSseSource = File.ReadAllText nvimSsePath
 
 let private neovimInitSource : string =
-  Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "sagefs.nvim", "lua", "sagefs", "init.lua")
-  |> Path.GetFullPath
+  Path.Combine(nvimRepoDir, "lua", "sagefs", "init.lua")
   |> File.ReadAllText
 
 /// The daemon `event:` names the plugin actually ROUTES to a handler. The

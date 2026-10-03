@@ -271,7 +271,8 @@ let private buildScenario () : Scenario =
     ClaimId = claimId
     LandingId = landingId }
 
-let private fixturePath = Path.Combine(__SOURCE_DIRECTORY__, "cohorts", "basic.ledger.jsonl")
+let private repoRoot = RepoPaths.repoPathFull [||]
+let private fixturePath = Path.Combine(repoRoot, "SageFs.Tests", "cohorts", "basic.ledger.jsonl")
 
 // ── Fixed literal expectations for the checked-in fixture — deliberately NOT
 //    derived by calling `buildScenario ()` again at test time, and NOT via
