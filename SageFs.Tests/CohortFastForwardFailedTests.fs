@@ -26,6 +26,15 @@ open SageFs.Features.CohortLedger
 let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
 let private requester = MemberId.Minted "alice"
 
+/// Every command this file sends is `Machine`-scoped, which is exactly what a v1 cohort WAS: one
+/// machine-wide cohort with one serial landing queue. `Machine` therefore leaves every
+/// `FastForwardFailed` assertion meaning what it was written to mean — in particular the
+/// deadlock-avoidance property the bounded-retry test pins (alice's exhausted landing must pop so
+/// bob's is never stranded behind it), which is about the serial queue, not about scoping. A
+/// repository or named scope would make each of these a test of scoping instead. Bound once here
+/// rather than threaded through each test: no test in this file needs a second scope.
+let private machine = SageFs.CohortScope.Machine
+
 /// A `CohortState` with one landing already parked at the front of the
 /// queue, in `Verifying(base', rebasedHead, ...)` — exactly the state a
 /// `FastForward` effect is dispatched from. Mirrors
@@ -64,7 +73,7 @@ let decideTests =
 
     testCase "WHY — a FastForward infra failure with an unmoved head retries: the landing re-enters Rebasing against the same base, not stuck in Verifying (roast-6 #7b)" <| fun () ->
       let state, landingId = stateWithLandingVerifying "H0" "H0" "H0-rebased"
-      match decide epoch [||] state (CohortCommand.FastForwardFailed(landingId, "git: transient I/O error")) with
+      match decide epoch [||] state (CohortCommand.FastForwardFailed(landingId, "git: transient I/O error", machine)) with
       | Ok(newState, events, effects) ->
         (match newState.Landings.[landingId].State with
          | LandingState.Rebasing onto -> onto |> Expect.equal "retries against the SAME base it was verifying against" "H0"
@@ -77,7 +86,7 @@ let decideTests =
 
     testCase "WHY — a FastForward infra failure with a MOVED head reuses the real HeadMoved diagnosis, never mislabeled as a plain retry" <| fun () ->
       let state, landingId = stateWithLandingVerifying "H1" "H0" "H0-rebased"
-      match decide epoch [||] state (CohortCommand.FastForwardFailed(landingId, "git: ref moved")) with
+      match decide epoch [||] state (CohortCommand.FastForwardFailed(landingId, "git: ref moved", machine)) with
       | Ok(newState, events, effects) ->
         let blockedState =
           match newState.Landings.[landingId].State with
@@ -93,7 +102,7 @@ let decideTests =
 
     testCase "an unknown landing id is refused" <| fun () ->
       let state, _ = stateWithLandingVerifying "H0" "H0" "H0-rebased"
-      match decide epoch [||] state (CohortCommand.FastForwardFailed(LandingId "nope", "boom")) with
+      match decide epoch [||] state (CohortCommand.FastForwardFailed(LandingId "nope", "boom", machine)) with
       | Error(CohortError.UnknownLanding(LandingId "nope")) -> ()
       | other -> failtestf "expected UnknownLanding, got %A" other
 
@@ -150,13 +159,13 @@ let decideTests =
         let replayToVerifying (state: CohortState<MemberId>) : CohortState<MemberId> =
           match state.Landings.[landingId].State with
           | LandingState.Rebasing onto ->
-            match decide epoch [||] state (CohortCommand.RebaseCompleted(landingId, Ok(onto + "-rebased"))) with
+            match decide epoch [||] state (CohortCommand.RebaseCompleted(landingId, Ok(onto + "-rebased"), machine)) with
             | Error err -> failtestf "RebaseCompleted (replay) failed: %A" err
             | Ok(s1, _, _) ->
-              match decide epoch [||] s1 (CohortCommand.AffectedComputed(landingId, [ TestId "t1" ])) with
+              match decide epoch [||] s1 (CohortCommand.AffectedComputed(landingId, [ TestId "t1" ], machine)) with
               | Error err -> failtestf "AffectedComputed (replay) failed: %A" err
               | Ok(s2, _, _) ->
-                match decide epoch [||] s2 (CohortCommand.TestsCompleted(landingId, [])) with
+                match decide epoch [||] s2 (CohortCommand.TestsCompleted(landingId, [], machine)) with
                 | Error err -> failtestf "TestsCompleted (replay) failed: %A" err
                 | Ok(s3, _, _) -> s3
           | other -> failtestf "expected Rebasing before replaying to Verifying, got %A" other
@@ -164,7 +173,7 @@ let decideTests =
           if round > 10 then
             failtest "FastForwardFailed retried more than 10 times — the bound is not being enforced (armfix regression)"
           else
-            match decide epoch [||] state (CohortCommand.FastForwardFailed(landingId, "git: transient I/O error")) with
+            match decide epoch [||] state (CohortCommand.FastForwardFailed(landingId, "git: transient I/O error", machine)) with
             | Error err -> failtestf "unexpected error on round %d: %A" round err
             | Ok(newState, _, _) ->
               match newState.Landings.[landingId].State with
@@ -206,7 +215,7 @@ let decideTests =
             Landings = Map.ofList [ landingId, req ]
             Queue = [ landingId ]
         }
-        match decide epoch [||] state (CohortCommand.FastForwardFailed(landingId, "boom")) with
+        match decide epoch [||] state (CohortCommand.FastForwardFailed(landingId, "boom", machine)) with
         | Error(CohortError.LandingNotInExpectedState(id, "Verifying")) -> id |> Expect.equal "names the offending landing" landingId
         | other -> failtestf "expected LandingNotInExpectedState, got %A" other
       | _ -> failtest "fixture setup failed"
@@ -275,9 +284,9 @@ let cohortFastForwardFailedOwnerTests =
           }
         Notify = fun _ _ -> ()
       }
-      use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
-      let! _ = owner.Commit(CohortCommand.Join(requester, JoinableRole.Implementer, None))
-      let! requestResult = owner.Commit(CohortCommand.RequestLanding(requester, [], [ "c1" ], "land my change"))
+      use owner = CohortOwner.startWithPerformer silentLogger machine ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
+      let! _ = owner.Commit(CohortCommand.Join(requester, JoinableRole.Implementer, None, machine))
+      let! requestResult = owner.Commit(CohortCommand.RequestLanding(requester, [], [ "c1" ], "land my change", machine))
       let landingId =
         match requestResult with
         | Ok(events, _) -> landingIdFrom events

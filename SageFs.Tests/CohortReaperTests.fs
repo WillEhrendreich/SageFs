@@ -18,6 +18,14 @@ open SageFs.Server
 
 let private entropy : Cohort.Entropy = [| 1uy |]
 
+/// Every command in this file is `Machine`-scoped, which is exactly what a v1 cohort WAS: one
+/// machine-wide cohort, whose lease reaper reaps the silent members of it. Passing
+/// `CohortScope.Machine` therefore leaves every reaper assertion meaning what it was written to
+/// mean — a repository or named scope would make each of these a test of scoping instead, and
+/// none of them is about scoping. It is bound once here rather than threaded through each test:
+/// no test here needs a second scope.
+let private machine = SageFs.CohortScope.Machine
+
 /// How far either side of the lease window a tick lands, to put a member clearly inside or clearly
 /// past its lease.
 let private leaseMargin = TestTimeouts.clockMargin
@@ -36,8 +44,8 @@ let private reaperTick (isActive: string -> bool) (clock: DateTime) (st: CohortS
     st.Members
     |> Map.toList
     |> List.choose (fun (m, r) -> match r.Presence with | MemberPresence.Present when isActive m -> Some m | _ -> None)
-    |> List.fold (fun s who -> step clock s (CohortCommand.RenewLease who)) st
-  step clock renewed CohortCommand.Tick
+    |> List.fold (fun s who -> step clock s (CohortCommand.RenewLease(who, machine))) st
+  step clock renewed (CohortCommand.Tick machine)
 
 let private presenceOf who (st: CohortState<string>) =
   match Map.tryFind who st.Members with
@@ -58,17 +66,17 @@ let tests =
       let t0 = DateTime(2026, 1, 1, 12, 0, 0)
       let s =
         (CohortState.empty () : CohortState<MemberTable.MemberId>)
-        |> fun s -> step t0 s (CohortCommand.Join(MemberTable.MemberId.Minted "active", JoinableRole.Implementer, None))
-        |> fun s -> step t0 s (CohortCommand.Join(MemberTable.MemberId.Minted "idle", JoinableRole.Implementer, None))
-        |> fun s -> step t0 s (CohortCommand.Join(MemberTable.MemberId.Minted "left", JoinableRole.Implementer, None))
+        |> fun s -> step t0 s (CohortCommand.Join(MemberTable.MemberId.Minted "active", JoinableRole.Implementer, None, machine))
+        |> fun s -> step t0 s (CohortCommand.Join(MemberTable.MemberId.Minted "idle", JoinableRole.Implementer, None, machine))
+        |> fun s -> step t0 s (CohortCommand.Join(MemberTable.MemberId.Minted "left", JoinableRole.Implementer, None, machine))
         // "left" departs (its own tick past the lease, in isolation)
-        |> fun s -> step (t0 + Cohort.leaseWindow + leaseMargin) s CohortCommand.Tick
+        |> fun s -> step (t0 + Cohort.leaseWindow + leaseMargin) s (CohortCommand.Tick machine)
       // After that Tick everyone silent is Departed. Re-join active + idle fresh.
       let now = t0 + Cohort.leaseWindow + leaseMargin + leaseMargin
       let s2 =
         s
-        |> fun s -> step now s (CohortCommand.Join(MemberTable.MemberId.Minted "active", JoinableRole.Implementer, None))
-        |> fun s -> step now s (CohortCommand.Join(MemberTable.MemberId.Minted "idle", JoinableRole.Implementer, None))
+        |> fun s -> step now s (CohortCommand.Join(MemberTable.MemberId.Minted "active", JoinableRole.Implementer, None, machine))
+        |> fun s -> step now s (CohortCommand.Join(MemberTable.MemberId.Minted "idle", JoinableRole.Implementer, None, machine))
       let isActive (m: MemberTable.MemberId) = MemberTable.MemberId.display m = "active"
       DaemonMode.cohortMembersToRenew isActive s2.Members
       |> Expect.equal "only the Present, active member is renewed" [ MemberTable.MemberId.Minted "active" ]
@@ -78,10 +86,10 @@ let tests =
       let t0 = DateTime(2026, 1, 1, 12, 0, 0)
       let start =
         (CohortState.empty () : CohortState<string>)
-        |> fun s -> step t0 s (CohortCommand.Join("busy", JoinableRole.Implementer, Some "sA"))
-        |> fun s -> step t0 s (CohortCommand.Join("idle", JoinableRole.Implementer, Some "sB"))
-        |> fun s -> step t0 s (CohortCommand.AcquireClaim("busy", ClaimScope.File "/repo/a.fs", "editing"))
-        |> fun s -> step t0 s (CohortCommand.AcquireClaim("idle", ClaimScope.File "/repo/b.fs", "editing"))
+        |> fun s -> step t0 s (CohortCommand.Join("busy", JoinableRole.Implementer, Some "sA", machine))
+        |> fun s -> step t0 s (CohortCommand.Join("idle", JoinableRole.Implementer, Some "sB", machine))
+        |> fun s -> step t0 s (CohortCommand.AcquireClaim("busy", ClaimScope.File "/repo/a.fs", "editing", machine))
+        |> fun s -> step t0 s (CohortCommand.AcquireClaim("idle", ClaimScope.File "/repo/b.fs", "editing", machine))
       // 90 minutes of 60s ticks (3x the 30-min lease). "busy" active every tick.
       let final =
         [ 1 .. 90 ]
@@ -106,7 +114,7 @@ let tests =
     testCase "an idle member is reaped exactly at the lease window, not before"
     <| fun _ ->
       let t0 = DateTime(2026, 1, 1, 12, 0, 0)
-      let start = step t0 (CohortState.empty () : CohortState<string>) (CohortCommand.Join("idle", JoinableRole.Implementer, None))
+      let start = step t0 (CohortState.empty () : CohortState<string>) (CohortCommand.Join("idle", JoinableRole.Implementer, None, machine))
       // One minute BEFORE the lease elapses: still Present.
       let before = reaperTick (fun _ -> false) (t0 + Cohort.leaseWindow - leaseMargin) start
       presenceOf "idle" before |> Expect.equal "still Present just before the lease" (Some MemberPresence.Present)
