@@ -13,17 +13,10 @@ never to probe what an API looks like.
 
 ## Before you design anything
 
-**Read `design.md`.** It carries the house standard for what the code should
-LOOK like, which is where a mechanically correct change can still be the wrong
-code. Exhaustive DUs instead of `option`/`bool`; `Result` with a named reason
-instead of a string refusal; parse-don't-validate; immutability; a pure
-functional core with effects at the edge; hexagonal architecture and vertical
-slices; small composable functions; TDD red-green-refactor; and **no `private`
-anywhere except the smart constructor of an opaque type**. Those are the
-owner's rules, and a reviewer who finds a violation is right to say so.
-
-Everything else in this skill is mechanics: how to DRIVE the tool. This is
-what the code is FOR.
+**Read `design.md`** before designing a type, signature or module: the house
+standard for what the code should LOOK like, where a mechanically correct change
+can still be the wrong code. The rest of this skill is mechanics — how to DRIVE
+the tool.
 
 ## First minute
 
@@ -56,9 +49,8 @@ what the code is FOR.
 5. Re-verify in the session, then commit.
 6. Final gate, once, at the end, in the background: the full build and the
    unfiltered suite, `dotnet run --project <tests>` (Expecto `Exe`), never
-   `dotnet test`. To run tests from the session, call `run_tests`: it returns a
-   receipt, `Incomplete` is not green, and you call again with the `receipt_id`
-   while it runs.
+   `dotnet test`. From the session, `run_tests` returns a receipt; `Incomplete`
+   is not green.
 
 ## Rules that bite before your first edit
 
@@ -66,26 +58,17 @@ what the code is FOR.
   on real input and read the output first.
 - Edit with exact editor calls: read the region, replace that exact text. Never
   `sed -i`, `python3 -c` or bulk regex edits: a silent no-op looks like success.
-  Repeat a mechanical change as an `.fsx` run through SageFs that asserts every
-  replacement matched.
-- Never `#load` a file from a project the session already loaded. You get two
-  copies of every type and a misleading "type is not compatible" error. `#load`
-  only a pure file with no dependency on the loaded project.
-- Never `#r` a DLL the session already loaded from the project. Same trap; the
-  lock also blocks rebuilds.
+- Never `#load` or `#r` anything the session already loaded — two copies of
+  every type, and the lock blocks rebuilds. `#load` only a pure file.
 - To learn an API's or AST's shape, ask the session (reflect over the type, or
   parse a sample and print it). Never guess or start a `dotnet fsi` script.
 - "Operation could not be completed due to earlier error" means an earlier
-  statement failed. Fix that statement. Do not reset the session.
-- A bare `Error` or `Ok` resolving to the wrong type is shadowed by a union
-  case: write `Result.Error` / `Result.Ok`.
-- A filtered test run is never the acceptance check. A filter that matches
-  nothing still prints `0 failed` and exits 0. Only an unfiltered run counts,
-  and its `TRUST` line must say `ran=` the number you expect.
-- Before a full build, test suite or app run that you start yourself, acquire
-  the matching lease (see leases.md).
-- If the REPL fights you, do not fall back silently. Note the tool, input and
-  full error; see troubleshooting.md.
+  statement failed. Fix that one. Do not reset the session.
+- A bare `Error`/`Ok` resolving to the wrong type is a shadowing union case:
+  write `Result.Error` / `Result.Ok`.
+- A filtered test run is never the acceptance check. A filter matching nothing
+  still prints `0 failed` and exits 0; only `ran=` proves coverage.
+- Acquire the matching lease before a build/test/app run you start (leases.md).
 - Clean up: `stop_session` on every session you created; kill only processes
   you started, by exact PID.
 
@@ -98,14 +81,14 @@ plan id) once their work merges. Brief them: remove nothing you do not own, repo
 
 | Read | When |
 |---|---|
-| design.md | **before you design a type, a signature or a module**; when a change is mechanically right but you are not sure it is right |
-| testing-standards.md | **before you write the tests for a change**; when deciding whether your suite is strong enough to call something done |
-| dst-capabilities.md | before writing a simulation or mutation test, so you extend what exists instead of reinventing it |
-| sessions.md | choosing or creating a session, checking the daemon version, a session stuck warming or Faulted |
+| design.md | **before designing a type, signature or module** |
+| testing-standards.md | **before writing the tests for a change** |
+| dst-capabilities.md | before writing a simulation or mutation test |
+| sessions.md | choosing a session, a stale daemon, or one stuck warming |
 | loop.md | the loop is unclear, or you are tempted to run `dotnet build` mid-task |
-| editing.md | before your first edit, on a `#load` error, or on F# syntax that costs a build |
-| testing.md | running tests from the session, a slow gate, judging whether a green run covered anything |
-| leases.md | starting a full build, test suite or app run yourself, or a lease came back denied |
-| troubleshooting.md | a tool errors, an eval disagrees with your code, or SageFs seems broken (usually a stale daemon) |
+| editing.md | before your first edit, or on a `#load` error |
+| testing.md | running tests from the session, or judging a green run |
+| leases.md | starting a build/test/app run yourself, or a lease was denied |
+| troubleshooting.md | a tool errors, or SageFs seems broken |
 | claude-code.md | shell commands hit permission prompts |
-| agents.md | writing a brief for a sub-agent, or the user says you have drifted off the REPL |
+| agents.md | writing a brief for a sub-agent |
