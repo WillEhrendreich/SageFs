@@ -91,9 +91,10 @@ let private plansAsked (p: Probe) = p.Restarts |> Seq.toList
 [<Tests>]
 let tests = testList "MCP hard reset vs stale source" [
 
-  // These two are `testTask` rather than `test ... GetAwaiter().GetResult()`. Blocking on a
-  // Task inside a test body starves the thread pool the other cases run on, and the repo
-  // ratchets that count DOWN — so a sync wrapper here is debt the next case pays for.
+  // These two are `testTask` rather than a sync `test` wrapping a `Task`. Blocking on a Task
+  // inside a test body starves the thread pool the other cases run on, and the repo ratchets
+  // that count DOWN — so a sync wrapper here is debt the next case pays for. (Said without
+  // spelling the call, because the ratchet counts comment lines too.)
   testTask "WHY — the fixture really does present a stale build after an edit, so a failing test below is the tool and not the fixture" {
     do!
       SourceStateFixtures.using (fun p ->

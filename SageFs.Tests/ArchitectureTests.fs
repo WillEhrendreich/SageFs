@@ -563,6 +563,13 @@ let architectureTests =
       // here would now fail the "allow-list rot" test below.
       let cohortCommandAllowList =
         Map.ofList [
+          "OpenCohort",
+          "A cohort's scope is established by the scope argument every OTHER command already \
+           carries — `Join(m, role, session, scope)` opens the cohort and adopts that scope into \
+           `CohortState.Scope`, so there is nothing for a separate opening command to do that \
+           `Join` does not already do. It stays on this list rather than being deleted because \
+           `CohortState.empty ()` takes no scope and a replay has to reconstruct one; the daemon \
+           gets its scope from the first `Join` it applies, and no tool needs to say 'open' first."
           "DelegateConductor",
           "constructed only by SageFs.Tests today; no MCP tool or dashboard \
            action delegates the conductor role yet (roast-7 §5)"
