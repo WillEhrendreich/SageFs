@@ -75,6 +75,19 @@ let private ledgerEntry (seq: int64) (clock: DateTime) (state: CohortState<Membe
     next, ({ Seq = LanguagePrimitives.Int64WithMeasure seq; Clock = clock; Entropy = [| byte seq |]; Command = command; Events = events } : LedgerEntry<MemberTable.MemberId>)
   | Error e -> failtestf "cohort command refused: %A" e
 
+/// The whole sweep as `scope -> one-line verdict`, so the ORDER it walks scopes in is pinned as well
+/// as each verdict. `Scopes()` sorts by LABEL, so the two `repo:` scopes in the scene below come back
+/// `…-active` before `…-finished` — which is what makes this assertion worth making: the sweep must
+/// reach a verdict on one scope before it moves on to another, deciding and deleting together,
+/// rather than deciding everything first and deleting afterwards.
+let private decisionsFor (retention: TimeSpan) (at: DateTime) (path: string) =
+  CohortLedgerSqlite.Sqlite.pruneFinished retention at path
+  |> List.map (fun d ->
+    match d with
+    | LocalDataRetention.LedgerDecision.Cleared(scope, finishedAt, rows) -> scope, sprintf "cleared %d rows, finished %O" rows finishedAt
+    | LocalDataRetention.LedgerDecision.Kept(scope, _) -> scope, "kept: the cohort is still running"
+    | LocalDataRetention.LedgerDecision.KeptRecent(scope, finishedAt) -> scope, sprintf "kept: finished %O, inside the window" finishedAt)
+
 [<Tests>]
 let localDataSqliteTests =
   testList "Local data retention on real SQLite" [
@@ -137,7 +150,7 @@ let localDataSqliteTests =
         port.Append join
         port.Append depart
         CohortLedgerSqlite.Sqlite.pruneFinished DataRetention.cohortLedgerRetention now.UtcDateTime path
-        |> Expect.equal "the finished cohort is cleared" (LocalDataRetention.LedgerDecision.Clear(depart.Clock, 2))
+        |> Expect.equal "the finished cohort is cleared" [ LocalDataRetention.LedgerDecision.Cleared(machine, depart.Clock, 2) ]
         port.ReadAll machine |> Expect.isEmpty "nothing left on disk"
         (CohortLedgerSqlite.Sqlite.usage path).Rows |> Expect.equal "usage agrees" 0L)
 
@@ -149,6 +162,118 @@ let localDataSqliteTests =
         let _, join = ledgerEntry 0L (now.UtcDateTime.AddDays -300.0) (CohortState.empty ()) (CohortCommand.Join(ada, JoinableRole.Implementer, None, machine))
         port.Append join
         CohortLedgerSqlite.Sqlite.pruneFinished DataRetention.cohortLedgerRetention now.UtcDateTime path
-        |> Expect.equal "kept" (LocalDataRetention.LedgerDecision.KeepActive(LocalDataRetention.CohortActivity.Active(1, 0, 0)))
+        |> Expect.equal "kept" [ LocalDataRetention.LedgerDecision.Kept(machine, LocalDataRetention.CohortActivity.Active(1, 0, 0)) ]
         port.ReadAll machine |> List.length |> Expect.equal "the row is still there" 1)
+
+    // ── PER SCOPE, NOT PER MACHINE: the regression this pins ──────────────
+    //
+    // `pruneFinished` used to read ONLY `CohortScope.Machine` and then decide, and clear, the WHOLE
+    // table. Two things were wrong with that and neither is visible in a one-scope fixture:
+    //
+    //   * Since cohorts became per-repository, every real cohort's rows live under a `repo:...`
+    //     scope, so the sweep replayed a scope that in practice holds nothing but rows migrated from
+    //     v1. A finished cohort's rows were therefore never reclaimed — which is the bug the sweep
+    //     exists to prevent — and the daemon logged a verdict about a ledger it was not keeping.
+    //   * Worse, the two halves disagreed: it decided the `machine` scope and then cleared ALL
+    //     scopes. A file holding an active cohort in one repo and a finished one in another would have
+    //     its live rows deleted, while replaying only the scope that said "keep".
+    //
+    // So the decision is now made PER SCOPE and the delete is scoped with it, which is the shape the
+    // test below can only be written against.
+
+    /// Two cohorts in two scopes, each a real `repo:` scope, each aged past the retention window.
+    /// `finished` joined and departed (`CohortActivity.Finished`); `active` joined and still holds a
+    /// claim (`CohortActivity.Active`). `seq` restarts at 0 in each, because it is cohort-local.
+    let twoScopes (dir: string) =
+      let path = Path.Combine(dir, "cohort.ledger.db")
+      let port = CohortLedgerSqlite.Sqlite.create path
+      let retention = DataRetention.cohortLedgerRetention
+      let stale = now.UtcDateTime.AddDays(-30.0)
+      let ada = MemberTable.MemberId.Mcp "ada"
+      let bo = MemberTable.MemberId.Mcp "bo"
+      let finished = CohortScope.Repository "/tmp/sagefs-retention-finished"
+      let active = CohortScope.Repository "/tmp/sagefs-retention-active"
+      let aged = now.UtcDateTime - retention - TestTimeouts.clockMargin
+
+      // The FINISHED cohort: joined, then departed, so its replayed state has nobody present.
+      // `CohortState.forScope`, not `CohortState.empty`: `decide` refuses a command naming a scope
+      // the state is not for (`WrongCohortScope`), so a repo cohort's history has to be built in a
+      // repo cohort — which is also what the daemon's owner does.
+      let joined, joinEntry = ledgerEntry 0L stale (CohortState.forScope finished) (CohortCommand.Join(ada, JoinableRole.Implementer, None, finished))
+      let _, departEntry = ledgerEntry 1L aged joined (CohortCommand.Depart(ada, finished))
+      port.Append joinEntry
+      port.Append departEntry
+
+      // The ACTIVE cohort: joined and holding a claim, so nothing about it may be touched.
+      let joined2, joinEntry2 = ledgerEntry 0L stale (CohortState.forScope active) (CohortCommand.Join(bo, JoinableRole.Implementer, None, active))
+      let _, claimEntry = ledgerEntry 1L aged joined2 (CohortCommand.AcquireClaim(bo, ClaimScope.File "/r/bo.fs", "editing", active))
+      port.Append joinEntry2
+      port.Append claimEntry
+      path, port, finished, departEntry, active
+
+    testCase "THE START SWEEP IS PER SCOPE: two cohorts, only the finished one is reclaimed" <| fun _ ->
+      withTempDir (fun dir ->
+        let path, port, finished, departEntry, active = twoScopes dir
+
+        decisionsFor DataRetention.cohortLedgerRetention now.UtcDateTime path
+        |> Expect.equal "a verdict for EVERY scope, each naming the scope it is about, in scope-label order"
+             [ active, "kept: the cohort is still running"
+               finished, sprintf "cleared 2 rows, finished %O" departEntry.Clock ]
+
+        port.ReadAll finished |> Expect.isEmpty "the FINISHED cohort's rows are reclaimed — the case a machine-only reading cannot express"
+        port.ReadAll active |> List.length |> Expect.equal "the ACTIVE cohort's rows survive untouched" 2
+        (CohortLedgerSqlite.Sqlite.usage path).Rows |> Expect.equal "only the finished cohort's two rows are gone" 2L)
+
+    testCase "a cleared machine-scope cohort never takes a live repo cohort's rows with it" <| fun _ ->
+      withTempDir (fun dir ->
+        // The destructive half of the same bug, and the reason the delete had to become
+        // scope-aware rather than the read merely becoming multi-scope. A v1-shaped machine cohort
+        // finished long ago, sitting next to a repository's LIVE cohort. The machine-only sweep
+        // answered `Clear` from the machine rows and then ran `DELETE FROM cohort_ledger`, which
+        // took the live cohort's rows with it — replaying a scope that said "go" and deleting scopes
+        // it had never read.
+        let path = Path.Combine(dir, "cohort.ledger.db")
+        let port = CohortLedgerSqlite.Sqlite.create path
+        let retention = DataRetention.cohortLedgerRetention
+        let aged = now.UtcDateTime - retention - TestTimeouts.clockMargin
+        let ada = MemberTable.MemberId.Mcp "ada"
+        let bo = MemberTable.MemberId.Mcp "bo"
+        let live = CohortScope.Repository "/tmp/sagefs-retention-live-repo"
+
+        let joined, joinEntry = ledgerEntry 0L aged (CohortState.empty ()) (CohortCommand.Join(ada, JoinableRole.Implementer, None, machine))
+        let _, departEntry = ledgerEntry 1L aged joined (CohortCommand.Depart(ada, machine))
+        port.Append joinEntry
+        port.Append departEntry
+        let joinedLive, joinLive = ledgerEntry 0L aged (CohortState.forScope live) (CohortCommand.Join(bo, JoinableRole.Implementer, None, live))
+        let _, claimLive = ledgerEntry 1L aged joinedLive (CohortCommand.AcquireClaim(bo, ClaimScope.File "/r/bo.fs", "editing", live))
+        port.Append joinLive
+        port.Append claimLive
+
+        decisionsFor retention now.UtcDateTime path
+        |> Expect.equal "the finished machine cohort is cleared and the live repo cohort is kept"
+             [ machine, sprintf "cleared 2 rows, finished %O" departEntry.Clock
+               live, "kept: the cohort is still running" ]
+
+        port.ReadAll machine |> Expect.isEmpty "the machine cohort's rows go"
+        port.ReadAll live |> List.length |> Expect.equal "and the live repo cohort's rows are still there" 2)
+
+    testCase "the start sweep decides a machine-scope cohort the same way it decides any other scope" <| fun _ ->
+      withTempDir (fun dir ->
+        let path = Path.Combine(dir, "cohort.ledger.db")
+        let port = CohortLedgerSqlite.Sqlite.create path
+        let t0 = now.UtcDateTime.AddDays(-30.0)
+        let ada = MemberTable.MemberId.Mcp "ada"
+        let joined, joinEntry = ledgerEntry 0L t0 (CohortState.empty ()) (CohortCommand.Join(ada, JoinableRole.Implementer, None, machine))
+        let _, departEntry = ledgerEntry 1L (t0.AddHours 1.0) joined (CohortCommand.Depart(ada, machine))
+        port.Append joinEntry
+        port.Append departEntry
+
+        // The machine scope is NOT dead code: rows written before `scope` existed are all `machine`,
+        // so on every real install the sweep now REACHES those rows instead of ignoring them. Under
+        // the machine-only reading the sweep happened to read them too — but decided them as though
+        // they were the whole file, which is the same verdict for one scope and the wrong one for two.
+        CohortLedgerSqlite.Sqlite.pruneFinished DataRetention.cohortLedgerRetention now.UtcDateTime path
+        |> Expect.equal "a v1-shaped machine cohort is judged as itself, by its own rows"
+             [ LocalDataRetention.LedgerDecision.Cleared(machine, departEntry.Clock, 2) ]
+        port.ReadAll machine |> Expect.isEmpty "and its rows go")
   ]

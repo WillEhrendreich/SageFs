@@ -117,19 +117,49 @@ let localDataRetentionTests =
       let _, departEntry = mkEntry 1L (t0.AddHours 1.0) joined (CohortCommand.Depart("ada", machine))
 
       testCase "an empty ledger has nothing to do" <| fun _ ->
-        decideLedger retention (t0.AddDays 30.0) ([]: LedgerEntry<string> list)
-        |> Expect.equal "nothing stored" LedgerDecision.NothingStored
+        // The scope is named, not inferred: a store holding several cohorts has to be told which
+        // one it is being asked about, because the rows it deletes are that scope's and no other's.
+        decideLedger retention (t0.AddDays 30.0) machine ([]: LedgerEntry<string> list)
+        |> Expect.equal "nothing stored, and the scope it says so about is named" (LedgerDecision.Kept(machine, CohortActivity.Finished))
 
       testCase "a running cohort is never cleared, however old its rows are" <| fun _ ->
-        decideLedger retention (t0.AddDays 365.0) [ joinEntry ]
-        |> Expect.equal "kept" (LedgerDecision.KeepActive(CohortActivity.Active(1, 0, 0)))
+        decideLedger retention (t0.AddDays 365.0) machine [ joinEntry ]
+        |> Expect.equal "kept" (LedgerDecision.Kept(machine, CohortActivity.Active(1, 0, 0)))
 
       testCase "a finished cohort inside the window is kept" <| fun _ ->
-        decideLedger retention (t0.AddDays 2.0) [ joinEntry; departEntry ]
-        |> Expect.equal "kept" (LedgerDecision.KeepRecent departEntry.Clock)
+        decideLedger retention (t0.AddDays 2.0) machine [ joinEntry; departEntry ]
+        |> Expect.equal "kept" (LedgerDecision.KeptRecent(machine, departEntry.Clock))
 
       testCase "a finished cohort past the window is cleared" <| fun _ ->
-        decideLedger retention (t0.AddDays 30.0) [ joinEntry; departEntry ]
-        |> Expect.equal "cleared" (LedgerDecision.Clear(departEntry.Clock, 2))
+        decideLedger retention (t0.AddDays 30.0) machine [ joinEntry; departEntry ]
+        |> Expect.equal "cleared" (LedgerDecision.Cleared(machine, departEntry.Clock, 2))
+
+      testCase "the decision is about the scope it is asked about, not the scope some other ledger's rows carry" <| fun _ ->
+        // The pure counterpart of the SQLite sweep's regression. Retention is a property of ONE
+        // cohort finishing, so two cohorts in two scopes are two questions, and `decideLedger`
+        // answers each one from its own scope's rows alone. Both histories below are REAL histories
+        // of their own scope (`CohortState.forScope`), because a history is only replayable by the
+        // scope it belongs to: fold a machine-scoped history as a repo cohort and `decide` refuses
+        // every command as `WrongCohortScope`, which is a refusal to say anything at all rather than
+        // a verdict about that repo.
+        let repo = SageFs.CohortScope.Repository "/tmp/sagefs-decide-ledger-scope"
+        let other = SageFs.CohortScope.Repository "/tmp/sagefs-decide-ledger-other"
+        let repoJoin, repoJoinEntry = mkEntry 0L t0 (CohortState.forScope repo) (CohortCommand.Join("ada", JoinableRole.Implementer, None, repo))
+        let _, repoDepartEntry = mkEntry 1L (t0.AddHours 1.0) repoJoin (CohortCommand.Depart("ada", repo))
+        let otherJoin, otherJoinEntry = mkEntry 0L t0 (CohortState.forScope other) (CohortCommand.Join("bo", JoinableRole.Implementer, None, other))
+
+        decideLedger retention (t0.AddDays 30.0) repo [ repoJoinEntry; repoDepartEntry ]
+        |> Expect.equal "a finished cohort's own rows clear that scope"
+             (LedgerDecision.Cleared(repo, repoDepartEntry.Clock, 2))
+        decideLedger retention (t0.AddDays 365.0) other [ otherJoinEntry ]
+        |> Expect.equal "and the same function leaves another scope's live cohort alone"
+             (LedgerDecision.Kept(other, CohortActivity.Active(1, 0, 0)))
+        // And the two are judged independently of one another: the repo cohort's departure cannot
+        // make the other scope read as finished, and the other scope's presence cannot keep the repo
+        // scope's rows alive. Folding both scopes into one replay could only have produced one of
+        // these two answers.
+        decideLedger retention (t0.AddDays 30.0) repo [ repoJoinEntry; repoDepartEntry; otherJoinEntry ]
+        |> Expect.equal "another scope's rows cannot make a finished cohort look active"
+             (LedgerDecision.Cleared(repo, repoJoinEntry.Clock, 3))
     ]
   ]

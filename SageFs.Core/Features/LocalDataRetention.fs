@@ -1,6 +1,7 @@
 namespace SageFs.Features
 
 open System
+open SageFs
 open SageFs.Cohort
 
 /// What SageFs keeps on disk under its data dir, and for how long. Before
@@ -161,26 +162,30 @@ module LocalDataRetention =
 
   [<RequireQualifiedAccess>]
   type LedgerDecision =
-    | NothingStored
-    /// The cohort is still running. Its rows are never touched.
-    | KeepActive of CohortActivity
-    /// The cohort finished, but more recently than the retention window.
-    | KeepRecent of finishedAt: DateTime
-    /// The cohort finished longer ago than the retention window: clear it.
-    | Clear of finishedAt: DateTime * rows: int
+    /// This cohort is still running: somebody present, a claim held or a landing in flight.
+    | Kept of scope: CohortScope * activity: CohortActivity
+    /// This cohort finished, but more recently than the retention window.
+    | KeptRecent of scope: CohortScope * finishedAt: DateTime
+    /// This cohort finished longer ago than the retention window.
+    | Cleared of scope: CohortScope * finishedAt: DateTime * rows: int
 
-  /// Whether to clear the cohort ledger. The daemon keeps one cohort per
-  /// ledger, so a finished cohort means the whole ledger. It's cleared only
-  /// when replaying it shows nobody present, no claim held and no landing in
-  /// flight, AND its last entry is older than `retention`. An active cohort is
-  /// never touched, however old its rows are.
-  let decideLedger (retention: TimeSpan) (now: DateTime) (entries: LedgerEntry<'m> list) : LedgerDecision =
+  /// Whether to clear ONE scope's cohort rows. `entries` is the replay of exactly the scope named,
+  /// and nothing else: a cohort's activity is a fact about that cohort, so a replay with any other
+  /// scope's rows folded into it would be answering a question nobody asked. The `machine` scope is
+  /// not special here — it is one scope among many, and the one holding every row written before
+  /// cohorts were per-repository.
+  ///
+  /// Cleared exactly when replaying `scope` shows nobody present, no claim held and no landing in
+  /// flight, AND its last entry is older than `retention`. An active cohort is never touched, however
+  /// old its rows are.
+  let decideLedger (retention: TimeSpan) (now: DateTime) (scope: CohortScope) (entries: LedgerEntry<'m> list) : LedgerDecision =
     match List.tryLast entries with
-    | None -> LedgerDecision.NothingStored
+    | None -> LedgerDecision.Kept(scope, CohortActivity.Finished)
     | Some last ->
-      match cohortActivity (replay entries) with
-      | CohortActivity.Active _ as active -> LedgerDecision.KeepActive active
+      // `replayIn scope`, not `replay`: the seed state is the scope this decision is about.
+      match cohortActivity (replayIn scope entries) with
+      | CohortActivity.Active _ as active -> LedgerDecision.Kept(scope, active)
       | CohortActivity.Finished ->
         match now - last.Clock > retention with
-        | true -> LedgerDecision.Clear(last.Clock, entries.Length)
-        | false -> LedgerDecision.KeepRecent last.Clock
+        | true -> LedgerDecision.Cleared(scope, last.Clock, entries.Length)
+        | false -> LedgerDecision.KeptRecent(scope, last.Clock)

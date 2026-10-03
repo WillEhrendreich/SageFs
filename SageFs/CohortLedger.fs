@@ -197,6 +197,9 @@ VALUES ($scope, $seq, $clock_ticks, $entropy, $command_json, $events_json);"
 
   /// Delete every ledger row and give the space back. Callers decide whether
   /// that's allowed (`LocalDataRetention.decideLedger`); this just does it.
+  ///
+  /// This wipes EVERY scope, so it is the tool for "this file is finished" and
+  /// nothing finer. Retention cannot use it any more — see `clearScope`.
   let clear (dbPath: string) : int64 =
     use connection = openConnection dbPath
     ensureSchema connection
@@ -209,17 +212,63 @@ VALUES ($scope, $seq, $clock_ticks, $entropy, $command_json, $events_json);"
     vacuum.ExecuteNonQuery() |> ignore
     deleted
 
-  /// Run on daemon start, BEFORE the cohort owner replays the ledger: clear it
-  /// when the cohort it holds finished longer ago than `retention`. Doing it
-  /// before the replay means the owner's state and the ledger on disk never
-  /// disagree. An active cohort's rows are never touched.
-  let pruneFinished (retention: System.TimeSpan) (now: System.DateTime) (dbPath: string) : SageFs.Features.LocalDataRetention.LedgerDecision =
+  /// Delete ONE scope's rows, leaving every other cohort in the file alone, and
+  /// give the space back.
+  ///
+  /// WHY THIS EXISTS. `clear` answered a decision made from a SINGLE scope's rows by deleting every
+  /// row in the table. Those two halves are the same scope only while the file holds one cohort; the
+  /// moment it holds two, a `Clear` reached by replaying one scope destroyed the other scope's rows
+  /// too — so the sweep could reclaim nothing, or destroy live work, and neither showed up in the
+  /// verdict it returned. `DELETE ... WHERE scope = $scope` makes the delete as narrow as the
+  /// decision that authorises it.
+  ///
+  /// VACUUM only once more than this scope's own rows went: it rewrites the WHOLE file, so calling it
+  /// per scope would pay for a rewrite once per scope in the file. The freed pages are reclaimed by
+  /// SQLite's allocator regardless, and the next full `clear`/`pruneFinished` sweeps them.
+  let clearScope (dbPath: string) (scope: SageFs.CohortScope) : int64 =
+    use connection = openConnection dbPath
+    ensureSchema connection
+    let deleted =
+      use command = connection.CreateCommand()
+      command.CommandText <- "DELETE FROM cohort_ledger WHERE scope = $scope;"
+      command.Parameters.AddWithValue("$scope", SageFs.Scope.label scope) |> ignore
+      int64 (command.ExecuteNonQuery())
+    if deleted > 0L then
+      use vacuum = connection.CreateCommand()
+      vacuum.CommandText <- "VACUUM;"
+      vacuum.ExecuteNonQuery() |> ignore
+    deleted
+
+  /// Run on daemon start, BEFORE the cohort owner replays the ledger: clear the
+  /// rows of every scope whose cohort finished longer ago than `retention`.
+  /// Doing it before the replay means the owner's state and the ledger on disk
+  /// never disagree. An active cohort's rows are never touched.
+  ///
+  /// WHY PER SCOPE, AND WHY NOT "ONE VERDICT FOR THE WHOLE FILE". Retention is a property of ONE
+  /// cohort finishing, not of the machine: `CohortScope` exists precisely because two repositories'
+  /// agents share nothing, and a cohort in one of them going quiet says nothing about the other.
+  /// Deciding across scopes could only have been done by folding every scope's rows into one replay
+  /// — a cohort whose members happen to share an id with another's would read as active forever, and
+  /// one finished scope's age would be judged against another scope's clock. Neither is a fact about
+  /// either cohort. So each scope is replayed on its own, judged on its own rows, and cleared on its
+  /// own rows.
+  ///
+  /// WHY IT WAS NOT DOING THAT. This read only `CohortScope.Machine` and then deleted the whole
+  /// table. Since cohorts became per-repository, `machine` holds nothing but rows migrated from v1,
+  /// so no real cohort was ever reclaimed; and had a v1 cohort finished while another repository's
+  /// cohort was live, the same call would have deleted the live one.
+  ///
+  /// The verdict is a LIST, one entry per scope that holds rows, in `port.Scopes ()` order. It is not
+  /// "the" decision for the file: with several cohorts in one file there is no single answer, and a
+  /// caller that needs to know which one it is must be handed each of them. A scope with no rows is
+  /// absent, which is the honest answer — a `NothingStored` for a scope nobody has rows for would be
+  /// a claim about a cohort that does not exist.
+  let pruneFinished (retention: System.TimeSpan) (now: System.DateTime) (dbPath: string) : SageFs.Features.LocalDataRetention.LedgerDecision list =
     let port = create dbPath
-    let decision =
-      SageFs.Features.LocalDataRetention.decideLedger retention now (port.ReadAll SageFs.CohortScope.Machine)
-    match decision with
-    | SageFs.Features.LocalDataRetention.LedgerDecision.Clear _ -> clear dbPath |> ignore
-    | SageFs.Features.LocalDataRetention.LedgerDecision.NothingStored
-    | SageFs.Features.LocalDataRetention.LedgerDecision.KeepActive _
-    | SageFs.Features.LocalDataRetention.LedgerDecision.KeepRecent _ -> ()
-    decision
+    [ for scope in port.Scopes () do
+        let decision = SageFs.Features.LocalDataRetention.decideLedger retention now scope (port.ReadAll scope)
+        match decision with
+        | SageFs.Features.LocalDataRetention.LedgerDecision.Cleared _ -> clearScope dbPath scope |> ignore
+        | SageFs.Features.LocalDataRetention.LedgerDecision.Kept _
+        | SageFs.Features.LocalDataRetention.LedgerDecision.KeptRecent _ -> ()
+        decision ]

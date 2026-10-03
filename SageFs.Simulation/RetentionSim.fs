@@ -122,11 +122,13 @@ module RetentionSim =
   let private start (behavior: FrictionBehavior) (s: State) : State =
     let observed = PruneObservation.Pruned(s.Step, s.Rows, s.Ledger, s.Clock, versionOf s.VersionNumber)
     let ledgerAfter =
-      match decideLedger ledgerRetention s.Clock.UtcDateTime s.Ledger with
-      | LedgerDecision.Clear _ -> []
-      | LedgerDecision.NothingStored
-      | LedgerDecision.KeepActive _
-      | LedgerDecision.KeepRecent _ -> s.Ledger
+      // Per scope, and this simulation has exactly one scope (`SageFs.CohortScope.Machine` on every
+      // command below), so the sweep is a fold of one scope's verdict over that scope's rows — the
+      // shape `pruneFinished` uses with one entry in it.
+      match decideLedger ledgerRetention s.Clock.UtcDateTime SageFs.CohortScope.Machine s.Ledger with
+      | LedgerDecision.Cleared _ -> []
+      | LedgerDecision.Kept _
+      | LedgerDecision.KeptRecent _ -> s.Ledger
     // The owner replays whatever is left, exactly like CohortOwner.startCore.
     let s = { s with Ledger = ledgerAfter; CohortNow = replay ledgerAfter }
     { pruneFriction behavior s with LastPrune = observed }

@@ -2996,16 +2996,20 @@ let run
   // port directly instead.
   let cohortLedgerPort =
     let ledgerPath = LocalData.cohortLedgerPath DaemonState.SageFsDir
-    // Before the owner replays it: clear the ledger if the cohort it holds
-    // finished longer ago than the retention window. Done here, not on a
-    // timer, so the owner's state and the ledger on disk never disagree.
+    // Before the owner replays it: clear the rows of every scope whose cohort finished longer ago
+    // than the retention window. Done here, not on a timer, so the owner's state and the ledger on
+    // disk never disagree. The sweep returns one verdict per scope, so each line names the scope it
+    // is about — a count with no cohort attached is how the old one-scope sweep logged a verdict
+    // about a ledger it was not keeping.
     try
-      match Features.CohortLedgerSqlite.Sqlite.pruneFinished DataRetention.cohortLedgerRetention DateTime.UtcNow ledgerPath with
-      | Features.LocalDataRetention.LedgerDecision.Clear(finishedAt, rows) ->
-        Log.info "[cohort] cleared %d ledger rows from a cohort that finished %s" rows (finishedAt.ToString "O")
-      | Features.LocalDataRetention.LedgerDecision.NothingStored
-      | Features.LocalDataRetention.LedgerDecision.KeepActive _
-      | Features.LocalDataRetention.LedgerDecision.KeepRecent _ -> ()
+      for decision in Features.CohortLedgerSqlite.Sqlite.pruneFinished DataRetention.cohortLedgerRetention DateTime.UtcNow ledgerPath do
+        match decision with
+        | Features.LocalDataRetention.LedgerDecision.Cleared(scope, finishedAt, rows) ->
+          Log.info "[cohort] cleared %d ledger rows for scope %s: its cohort finished %s" rows (Scope.label scope) (finishedAt.ToString "O")
+        | Features.LocalDataRetention.LedgerDecision.Kept (scope, _) ->
+          Log.info "[cohort] kept the ledger for scope %s: its cohort is still running" (Scope.label scope)
+        | Features.LocalDataRetention.LedgerDecision.KeptRecent (scope, finishedAt) ->
+          Log.info "[cohort] kept the ledger for scope %s: its cohort finished %s, inside the retention window" (Scope.label scope) (finishedAt.ToString "O")
     with ex ->
       Log.warn "[cohort] ledger retention check failed, leaving it alone: %s" ex.Message
     Features.CohortLedgerSqlite.Sqlite.create ledgerPath
