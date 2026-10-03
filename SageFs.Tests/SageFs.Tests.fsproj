@@ -271,6 +271,7 @@
          <Compile Include="DaemonIdleRssTests.fs" />
          <Compile Include="McpStdioBridgeSimTests.fs" />
          <Compile Include="McpStdioBridgeE2ETests.fs" />
+         <Compile Include="McpStdioBridgeHealTests.fs" />
          <Compile Include="WarmupContextTests.fs" />
          <Compile Include="WarmupOpenReplayTests.fs" />
          <Compile Include="WarmupReplayCacheTests.fs" />
@@ -383,6 +384,7 @@
         <Compile Include="McpToolAuditTests.fs" />
         <Compile Include="FeatureParityTests.fs" />
         <Compile Include="SseParityTests.fs" />
+        <Compile Include="RunSourceWireTests.fs" />
         <Compile Include="LayoutAndInputTests.fs" />
         <Compile Include="PureModulesComprehensiveTests.fs" />
         <Compile Include="CoverageInstrumenterTests.fs" />

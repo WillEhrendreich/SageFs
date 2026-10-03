@@ -53,9 +53,34 @@ type ForwardError =
   /// The daemon answered with a client/protocol-level error (HTTP 4xx) for
   /// this one request. Stays connected; only this request gets an error.
   | Rejected of reason: string
+  /// The daemon answered "I have never heard of that `Mcp-Session-Id`" —
+  /// HTTP 404 carrying JSON-RPC error `-32001 "Session not found"`, which is
+  /// what the streamable-HTTP transport answers after a daemon restart has
+  /// destroyed the in-memory session (`install-local --force` restarts the
+  /// daemon on purpose; measured 200 before, 404 after). The held session id
+  /// is STALE, not the request: nothing about this request is wrong, so it is
+  /// the ONE rejection that is recoverable by re-running the handshake and
+  /// re-sending. Distinct from `Rejected`, which is the daemon's real answer
+  /// about THIS request and must reach the client untouched.
+  | SessionInvalid of reason: string
   /// No usable response — connection refused, timed out, the stream tore
   /// down mid-read. This is "the daemon is gone."
   | Unreachable of reason: string
+
+/// The exact daemon answer that means "the session id you are holding is one
+/// I have never minted", and therefore the only rejection this bridge heals.
+///
+/// Both halves must hold, and neither alone would do. The status is 404 with
+/// no `Mcp-Session-Id` on the response (nothing was minted), and the body is
+/// the JSON-RPC error `-32001 "Session not found"` that
+/// `StreamableHttpHandler.GetSessionAsync` writes on exactly that path
+/// (mcp-sdk/src/ModelContextProtocol.AspNetCore/StreamableHttpHandler.cs).
+/// Matching on the status alone would misread any other 404, and matching on
+/// the phrase alone would misread a tool error that merely mentions it — so
+/// this is deliberately narrow, and everything else stays a `Rejected` that
+/// reaches the client.
+let internal isSessionInvalid (statusCode: int) (body: string) : bool =
+  statusCode = 404 && body.Contains("-32001") && body.Contains("Session not found")
 
 /// The real-world effects the bridge performs, injected so the pure
 /// orchestration loop (`run`, below) can be driven by fakes in tests without
@@ -85,6 +110,15 @@ type Io =
     /// this bridge did) reopens exactly that race — see
     /// SageFs.Simulation/McpStdioBridgeSim.fs's capture-ordering-race
     /// section for the DST that proves it.
+    ///
+    /// A `SessionInvalid` answer is the ONE case this heals in place rather
+    /// than reporting: the held session id is stale, not the request, so the
+    /// implementation must re-run the handshake to mint a fresh id and then
+    /// RE-SEND this same message under it, and report `SessionInvalid` only
+    /// when that second attempt also fails. The client asked one question
+    /// and is owed one answer; clearing the id without re-sending would leave
+    /// that question unanswered until the client thought to ask again, which
+    /// is exactly the "a human has to reload" failure this replaces.
     Forward: (string -> unit) -> string option -> RpcMessage -> Task<Result<unit, ForwardError>>
     /// Open the server-push SSE stream (GET) once a session id exists, and
     /// write every message it carries to stdout until it closes or errors.
@@ -170,6 +204,7 @@ let run (policy: Policy) (io: Io) (stdout: StdoutWriter) : Task<int> =
           match! io.Forward onSessionId sessionId msg with
           | Ok() -> ()
           | Error(ForwardError.Rejected reason) -> post mailbox (Event.RequestRejected(msg, reason))
+          | Error(ForwardError.SessionInvalid reason) -> post mailbox (Event.RequestRejected(msg, reason))
           | Error(ForwardError.Unreachable reason) -> post mailbox (Event.HttpFailed reason)
         | Action.RejectMessage(msg, reason) -> writeRejection stdout msg reason
         | Action.ReportFatal reason -> eprintfn "sagefs mcp: %s" reason
@@ -339,9 +374,20 @@ let rec private drainSse (reader: StreamReader) (onMessage: string -> unit) : Ta
       | _ -> () // event:/id:/retry:/comment lines carry nothing this bridge needs
   }
 
+/// One POST's worth of work, without the healing policy: the raw text the
+/// daemon answered with, whether it was a success, and (on a success) whether
+/// it was already written to stdout. Kept separate from `forward` so the
+/// re-handshake retry below re-enters the IDENTICAL wire path rather than a
+/// hand-rolled second copy of it that could drift.
+type private PostOutcome =
+  /// The daemon answered 2xx; the response has already been written to stdout.
+  | Written
+  /// The daemon answered non-2xx with this status and body, nothing written.
+  | Answered of statusCode: int * body: string
+
 /// POST one JSON-RPC message to the daemon's streamable-HTTP endpoint and
 /// write whatever it answers with to stdout — a single JSON object, or an
-/// SSE stream carrying one or more messages before the daemon closes it.
+/// SSE stream carrying one message or several before the daemon closes it.
 ///
 /// `captureSessionId` is called the instant a new `Mcp-Session-Id` response
 /// header is read — BEFORE anything is written to stdout. That ordering is
@@ -351,6 +397,89 @@ let rec private drainSse (reader: StreamReader) (onMessage: string -> unit) : Ta
 /// the mailbox sees the session id ahead of the request it provokes. Capture
 /// after the write (a prior version of this function) makes that ordering a
 /// coin flip instead of a guarantee.
+let private postOnce
+  (client: HttpClient)
+  (port: int)
+  (stdout: StdoutWriter)
+  (captureSessionId: string -> unit)
+  (sessionId: string option)
+  (msg: RpcMessage)
+  : Task<PostOutcome> =
+  task {
+    use content = new StringContent(rawOf msg, Encoding.UTF8, "application/json")
+    use req = new HttpRequestMessage(HttpMethod.Post, sprintf "http://localhost:%d/" port, Content = content)
+    req.Headers.Accept.ParseAdd("application/json")
+    req.Headers.Accept.ParseAdd("text/event-stream")
+    match sessionId with
+    | Some sid -> req.Headers.Add(sessionIdHeader, sid)
+    | None -> ()
+    use! resp = client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
+    // Capture BEFORE any stdout write below — see this function's doc
+    // comment and `Io.Forward`'s.
+    match resp.Headers.TryGetValues(sessionIdHeader) with
+    | true, values ->
+      match Seq.tryHead values with
+      | Some sid when Some sid <> sessionId -> captureSessionId sid
+      | _ -> ()
+    | false, _ -> ()
+    match resp.IsSuccessStatusCode with
+    | false ->
+      let! body = resp.Content.ReadAsStringAsync()
+      return Answered(int resp.StatusCode, body)
+    | true ->
+      let mediaType = resp.Content.Headers.ContentType |> Option.ofObj |> Option.map (fun ct -> ct.MediaType) |> Option.defaultValue ""
+      match mediaType with
+      | "text/event-stream" ->
+        use! stream = resp.Content.ReadAsStreamAsync()
+        use reader = new StreamReader(stream)
+        do! drainSse reader stdout.WriteLine
+        return Written
+      | _ ->
+        let! body = resp.Content.ReadAsStringAsync()
+        match String.IsNullOrWhiteSpace body with
+        | true -> () // 202 Accepted for a notification/response the client sent — nothing to write
+        | false -> stdout.WriteLine(body.Trim())
+        return Written
+  }
+
+/// The `initialize` this bridge sends ITSELF to re-mint a session id it lost.
+/// It is never written to stdout: the client already completed a handshake and
+/// must not be handed a second `initialize` result it did not ask for (it
+/// would see an unexpected message in its stream). The id is taken from the
+/// RESPONSE HEADER, which is where the client got its own.
+let private reHandshakeBody =
+  """{"jsonrpc":"2.0","id":"sagefs-mcp-bridge-rehandshake","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sagefs-mcp-bridge","version":"1"}}}"""
+
+/// POST one JSON-RPC message to the daemon's streamable-HTTP endpoint and
+/// write whatever it answers with to stdout — a single JSON object, or an
+/// SSE stream carrying one message or several before the daemon closes it.
+///
+/// `captureSessionId` is called the instant a new `Mcp-Session-Id` response
+/// header is read — BEFORE anything is written to stdout. That ordering is
+/// load-bearing (issue #138): the caller posts it straight to the bridge's
+/// mailbox, and the client cannot possibly produce its next stdin line
+/// before it has read the write that follows, so capturing first guarantees
+/// the mailbox sees the session id ahead of the request it provokes. Capture
+/// after the write (a prior version of this function) makes that ordering a
+/// coin flip instead of a guarantee.
+///
+/// SELF-HEAL. The MCP session lives in the DAEMON'S MEMORY, so any daemon
+/// restart (`install-local --force` does it on purpose) destroys it and turns
+/// the id the client is still holding into a 404 "Session not found". Before
+/// this, that 404 became a `Rejected` and the held id was NEVER cleared, so
+/// every later request failed identically for the life of the client process
+/// and only a human reloading the MCP server could fix it. Here, exactly that
+/// one answer clears the id, re-mints it with a handshake the daemon accepts
+/// (never surfaced to the client — it has already handshook), and RE-SENDS
+/// this same message under the new id. The client asked one question and is
+/// owed one answer, so the re-send is what makes this "one call pays the
+/// cost" rather than "the next call, if the client is feeling lucky".
+///
+/// Nothing else retries. A 400 is the daemon's real answer about THIS request
+/// and reaches the client verbatim; a transport failure is not this
+/// function's business at all (it is `Unreachable`, which `decide` turns into
+/// a probe/`StartDaemon` cycle — see `Io.StartDaemon`). Only the narrow
+/// `isSessionInvalid` answer is healed, and only once.
 let forward
   (client: HttpClient)
   (port: int)
@@ -361,40 +490,37 @@ let forward
   : Task<Result<unit, ForwardError>> =
   task {
     try
-      use content = new StringContent(rawOf msg, Encoding.UTF8, "application/json")
-      use req = new HttpRequestMessage(HttpMethod.Post, sprintf "http://localhost:%d/" port, Content = content)
-      req.Headers.Accept.ParseAdd("application/json")
-      req.Headers.Accept.ParseAdd("text/event-stream")
-      match sessionId with
-      | Some sid -> req.Headers.Add(sessionIdHeader, sid)
-      | None -> ()
-      use! resp = client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
-      // Capture BEFORE any stdout write below — see this function's doc
-      // comment and `Io.Forward`'s.
-      match resp.Headers.TryGetValues(sessionIdHeader) with
-      | true, values ->
-        match Seq.tryHead values with
-        | Some sid when Some sid <> sessionId -> captureSessionId sid
-        | _ -> ()
-      | false, _ -> ()
-      match resp.IsSuccessStatusCode with
-      | false ->
-        let! body = resp.Content.ReadAsStringAsync()
-        return Error(ForwardError.Rejected(sprintf "daemon answered %d: %s" (int resp.StatusCode) body))
-      | true ->
-        let mediaType = resp.Content.Headers.ContentType |> Option.ofObj |> Option.map (fun ct -> ct.MediaType) |> Option.defaultValue ""
-        match mediaType with
-        | "text/event-stream" ->
-          use! stream = resp.Content.ReadAsStreamAsync()
-          use reader = new StreamReader(stream)
-          do! drainSse reader stdout.WriteLine
-          return Ok()
+      let! outcome = postOnce client port stdout captureSessionId sessionId msg
+      match outcome with
+      | Written -> return Ok()
+      | Answered(statusCode, body) ->
+        match sessionId, isSessionInvalid statusCode body with
+        | Some _, true ->
+          // The held id is stale. Clear it, mint a replacement, and re-send.
+          Log.warn "[mcp-stdio] daemon no longer knows session %A (it restarted); re-running the handshake and re-sending this request" sessionId
+          use content = new StringContent(reHandshakeBody, Encoding.UTF8, "application/json")
+          use req = new HttpRequestMessage(HttpMethod.Post, sprintf "http://localhost:%d/" port, Content = content)
+          req.Headers.Accept.ParseAdd("application/json")
+          req.Headers.Accept.ParseAdd("text/event-stream")
+          use! resp = client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
+          let freshSid =
+            match resp.IsSuccessStatusCode, resp.Headers.TryGetValues(sessionIdHeader) with
+            | true, (true, values) -> Seq.tryHead values
+            | _ -> None
+          match freshSid with
+          | Some fresh ->
+            // Captured before the re-send below, and before anything that
+            // could write to stdout — the same #138 ordering, unchanged.
+            captureSessionId fresh
+            let! retry = postOnce client port stdout captureSessionId (Some fresh) msg
+            match retry with
+            | Written -> return Ok()
+            | Answered(code, retryBody) ->
+              return Error(ForwardError.Rejected(sprintf "daemon answered %d after re-running the handshake: %s" code retryBody))
+          | None ->
+            return Error(ForwardError.SessionInvalid "the daemon did not answer the re-handshake with a fresh session id")
         | _ ->
-          let! body = resp.Content.ReadAsStringAsync()
-          match String.IsNullOrWhiteSpace body with
-          | true -> () // 202 Accepted for a notification/response the client sent — nothing to write
-          | false -> stdout.WriteLine(body.Trim())
-          return Ok()
+          return Error(ForwardError.Rejected(sprintf "daemon answered %d: %s" statusCode body))
     with ex ->
       return Error(ForwardError.Unreachable ex.Message)
   }
