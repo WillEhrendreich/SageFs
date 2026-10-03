@@ -56,9 +56,11 @@ module ToolAuthorityGate =
   ///
   /// `authority` is the caller's, resolved by the CALLER from the owner's published frame using the
   /// BOUND identity — never from a self-declared role argument, which a caller controls. Passing
-  /// `Anonymous` (no cohort owner wired, e.g. pre-Slice-2 unit tests) maps to `Observer`, which is
-  /// deliberately not "no authority at all": that would make `join_cohort` unreachable and leave
-  /// nobody able to form a cohort in the first place.
+  /// `Anonymous` (no cohort owner wired, e.g. pre-Slice-2 unit tests, or a caller that has not
+  /// joined) maps to `Working`: it has no seat, so there is no ROLE to narrow it, and the role gate
+  /// governs what a caller may do to its OWN session. That is NOT "no authority at all" — that
+  /// would make `join_cohort` unreachable — and it is also not a way around the cohort gate, which
+  /// still refuses an `Anonymous` caller every verb that needs a seat.
   let decide (who: MemberTable.MemberId) (authority: Cohort.Authority<MemberTable.MemberId>) (toolName: string) : Decision =
     match Affordances.ToolName.tryParse toolName with
     | None -> refuseUnknownTool toolName
@@ -78,7 +80,8 @@ module ToolAuthorityGate =
           Affordances.AuthorityRefusal.nextAction refusal))
 
   /// The caller's authority, read from the owner's published frame — wait-free, never a mailbox
-  /// round trip. `None` owner means `Anonymous`, which is `Observer`'s authority.
+  /// round trip. `None` owner means `Anonymous`, which `ofAuthority` maps to `Working` for the same
+  /// reason an unjoined caller with an owner is: no seat, no role to narrow it, own session only.
   let authorityOf
     (owner: Features.CohortOwner.Handle option)
     (who: MemberTable.MemberId)

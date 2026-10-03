@@ -1135,10 +1135,10 @@ module AuthorityRefusal =
 /// intersected with `checkCohortToolAllowed` too, so the old cohort gate
 /// remains exactly as strict and the two can only ever agree.
 ///
-/// ANONYMOUS is deliberately `ToolRole.Observer`, not "no role". Before
-/// tokens existed every connection was a plain member, and the alternative —
-/// treating an unjoined caller as having no authority at all — would make
-/// `join_cohort` unreachable, and a cohort nobody can join is not a cohort.
+/// ANONYMOUS is `ToolRole.Working`, not "no role". Before tokens existed
+/// every connection was a plain member, and the alternative — treating an
+/// unjoined caller as having no authority at all — would make `join_cohort`
+/// unreachable, and a cohort nobody can join is not a cohort.
 /// `join_cohort` and `get_cohort_status` stay in Observer's list for that
 /// reason (the same reason `alwaysReachableCohortTools` exists above).
 let checkAuthorityAllowed (authority: Cohort.Authority<'m>) (tool: ToolName) : Result<unit, AuthorityRefusal> =

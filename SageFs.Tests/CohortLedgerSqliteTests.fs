@@ -252,4 +252,46 @@ let cohortLedgerSqliteTests =
           port.ReadAll cohortScope = entries
         finally
           cleanup path)
+
+    test "a row this build CANNOT read is skipped, not thrown — the daemon must still start" {
+      // The regression this pins. The ledger is DURABLE and survives across versions, so a row
+      // written before a command gained a field no longer deserializes. `readAll` used to throw
+      // `JsonException` straight out of `startCore`, and the daemon died BEFORE BINDING ITS PORT —
+      // so a wire-format change bricked every existing install rather than losing old history.
+      //
+      // The loss is a stale seat and never live work: an unreadable row cannot have produced a
+      // landing or a claim this build could apply, and it belonged to one machine-wide cohort the
+      // scoped model no longer uses.
+      let path = tempDbPath ()
+      try
+        let port = Sqlite.create path
+        // One row this build CAN read, then one it cannot — the shape a version bump leaves behind.
+        port.Append
+          { Seq = 0L<ledgerSeq>
+            Clock = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+            Entropy = [| 1uy |]
+            Command = CohortCommand.Tick cohortScope
+            Events = [] }
+        use connection = new SqliteConnection(sprintf "Data Source=%s" path)
+        connection.Open()
+        use corrupt = connection.CreateCommand()
+        corrupt.CommandText <-
+          "INSERT INTO cohort_ledger (seq, clock_ticks, entropy, command_json, events_json) VALUES (1, 0, X'01', '{ broken', '[]');"
+        corrupt.ExecuteNonQuery() |> ignore
+
+        let read =
+          try Sqlite.create path |> fun p -> p.ReadAll cohortScope
+          with ex -> failtestf "readAll THREW instead of skipping an unreadable row: %O" ex
+
+        read.Length
+        |> Expect.equal "the row this build can read still comes back, and the unreadable one is dropped" 1
+
+        // And the row is LEFT IN PLACE, so a build that can read it is not destroyed by ours.
+        use check = connection.CreateCommand()
+        check.CommandText <- "SELECT COUNT(*) FROM cohort_ledger;"
+        let rows = check.ExecuteScalar() :?> int64
+        rows |> Expect.equal "both rows are still on disk — nothing was deleted" 2L
+      finally
+        cleanup path
+    }
   ]
