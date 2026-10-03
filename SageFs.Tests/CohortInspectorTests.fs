@@ -24,6 +24,17 @@ let private atSec (n: int) : DateTime = epoch.AddSeconds(float n)
 let private alice = MemberId.Minted "alice"
 let private bob = MemberId.Minted "bob"
 
+/// The cohort every case in this file is ABOUT. The inspector drives one
+/// machine-wide cohort, which is what a v1 test cohort was: `ledgerFrom` folds
+/// from `CohortState.empty ()` (itself Machine-scoped) and `emptyFrame` is
+/// `project (replayHead []) [||]`, so a `Repository`/`Named` scope here would
+/// not read differently in these assertions — it would be refused
+/// `WrongCohortScope` at the first command. Named once so the scope each
+/// command carries is visible at the call site instead of being scattered
+/// `CohortScope.Machine` literals. The scope travels INSIDE the command, so
+/// `scopeOf entry.Command` is how a recorded row's scope is read back.
+let private machine = CohortScope.Machine
+
 /// Folds `decide` over a fixed (clock, command) list from an empty state,
 /// recording one dense `LedgerEntry` per accepted command — mirrors
 /// `CohortLanesTests.fs`'s `ledgerFrom`, instantiated at `'m = MemberId`
@@ -105,7 +116,7 @@ let cohortInspectorTests =
     testList "inspect — member" [
 
       testCase "a joined member is found with role, presence, and conductor status" <| fun _ ->
-        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, Some "sess-1") ]
+        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, Some "sess-1", machine) ]
         match inspect EntityKind.Member "alice" emptyFrame ledger [] with
         | InspectorModel.Found(EntityKind.Member, "alice", _, fields) ->
           fields |> fieldValue "Role" |> Expect.equal "role" "Implementer"
@@ -124,9 +135,9 @@ let cohortInspectorTests =
       testCase "a member's held claims and requested landings are cross-referenced" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
-            atSec 2, CohortCommand.RequestLanding(alice, [], [ "deadbeef" ], "ship it")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
+            atSec 2, CohortCommand.RequestLanding(alice, [], [ "deadbeef" ], "ship it", machine)
           ]
         let claimId = mintedClaimId ledger
         let (ClaimId cidRaw) = claimId
@@ -144,8 +155,8 @@ let cohortInspectorTests =
       testCase "a held claim is found with scope, purpose, since, and holder" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing Foo")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing Foo", machine)
           ]
         let (ClaimId cidRaw) = mintedClaimId ledger
         match inspect EntityKind.Claim cidRaw emptyFrame ledger [] with
@@ -167,8 +178,8 @@ let cohortInspectorTests =
       testCase "a queued landing is found with requester, statement, and state" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.RequestLanding(alice, [], [ "deadbeef" ], "ship the fix")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.RequestLanding(alice, [], [ "deadbeef" ], "ship the fix", machine)
           ]
         let (LandingId lidRaw) = mintedLandingId ledger
         match inspect EntityKind.Landing lidRaw emptyFrame ledger [] with
@@ -234,7 +245,7 @@ let cohortInspectorTests =
         | other -> failwithf "expected NotFound(None, x), got %A" other
 
       testCase "a recognized kind segment delegates to inspect" <| fun _ ->
-        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
+        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine) ]
         match inspectRaw "member" "alice" emptyFrame ledger [] with
         | InspectorModel.Found(EntityKind.Member, "alice", _, _) -> ()
         | other -> failwithf "expected Found via inspectRaw, got %A" other
@@ -243,16 +254,16 @@ let cohortInspectorTests =
     testList "search" [
 
       testCase "an empty query returns no results, never the whole cohort" <| fun _ ->
-        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
+        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine) ]
         search "" emptyFrame ledger [] |> Expect.equal "blank query" []
         search "   " emptyFrame ledger [] |> Expect.equal "whitespace-only query" []
 
       testCase "a query matches members, claims, landings, tests, and sessions by substring" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/aliceFile.fs", "editing")
-            atSec 2, CohortCommand.RequestLanding(alice, [], [ "deadbeef" ], "alice's landing")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/aliceFile.fs", "editing", machine)
+            atSec 2, CohortCommand.RequestLanding(alice, [], [ "deadbeef" ], "alice's landing", machine)
           ]
         let snapshots = [| { Member = Some alice; SessionId = "s1"; Generation = 1L; PassingTests = [ TestId "alice-test" ]; FailingTests = []; StaleTests = [] } |]
         let frame = frameOf ledger snapshots
@@ -264,8 +275,8 @@ let cohortInspectorTests =
       testCase "results are deterministically ordered by (kind, id)" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.Join(bob, JoinableRole.Verifier, None)
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.Join(bob, JoinableRole.Verifier, None, machine)
           ]
         let frame = frameOf ledger [||]
         let first = search "b" frame ledger []
@@ -273,7 +284,7 @@ let cohortInspectorTests =
         first |> Expect.equal "same inputs, same order" second
 
       testCase "a non-matching query returns no results" <| fun _ ->
-        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
+        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine) ]
         search "zzz-nothing-matches-zzz" emptyFrame ledger [] |> Expect.equal "no matches" []
     ]
 
@@ -282,8 +293,8 @@ let cohortInspectorTests =
       testCase "renderInspector escapes an XSS payload in a claim's purpose, never emits it raw" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "<script>alert(1)</script>")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "<script>alert(1)</script>", machine)
           ]
         let (ClaimId cidRaw) = mintedClaimId ledger
         let model = inspect EntityKind.Claim cidRaw emptyFrame ledger []
@@ -292,7 +303,7 @@ let cohortInspectorTests =
         html |> Expect.stringContains "the payload is HTML-escaped" "&lt;script&gt;"
 
       testCase "renderInspector renders a found entity's fields as a definition list" <| fun _ ->
-        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
+        let ledger = ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine) ]
         let html = inspect EntityKind.Member "alice" emptyFrame ledger [] |> renderInspector |> render
         html |> Expect.stringContains "carries a <dl>" "<dl>"
         html |> Expect.stringContains "carries the member id" "alice"
@@ -319,5 +330,107 @@ let cohortInspectorTests =
       testCase "renderSearchPage embeds a GET form posting to the search route" <| fun _ ->
         let html = renderSearchPage "" [] |> render
         html |> Expect.stringContains "search form targets the inspect route" "/dashboard/inspect"
+    ]
+
+    testList "ledger scope" [
+
+      // The one cohort every case above drives is Machine-scoped, which is what
+      // a v1 cohort was — so nothing above would notice a ledger that served two
+      // unrelated cohorts as one. What the inspector's own inputs are built on is
+      // `replayHead` and `LedgerPort.ReadAll`, so this list pins the scope
+      // separation at that boundary: what `ReadAll` hands back per scope, and
+      // therefore what a replay seeded with a scope reconstructs.
+
+      /// A `LedgerPort` over a FRESH in-memory store. Built by hand rather than
+      /// taken from `CohortLedger.InMemory.create` so it binds this case's
+      /// `Store` directly — that is what lets `store.Scopes ()` be observed
+      /// before the first append, which is how the store is shown to be the
+      /// thing that decides the key. `create` would hand back a port whose
+      /// store nothing else can reach.
+      let portOver (store: SageFs.Features.CohortLedger.InMemory.Store<MemberId>) : SageFs.Features.CohortLedger.LedgerPort<MemberId> = {
+        Append = store.Append
+        ReadAll = store.ReadAll
+        Scopes = store.Scopes
+      }
+
+      /// A `LedgerEntry` to append, at a `Seq` of its own. `InMemory.Store` does not
+      /// renumber, and `replayIn` ignores `Seq` (only `replayHeadIn` reads it), so
+      /// the value here only has to be a legal `ledgerSeq`.
+      let entry (seq': int64<ledgerSeq>) (clock: DateTime) (entropy: byte) (cmd: CohortCommand<MemberId>) = {
+        Seq = seq'
+        Clock = clock
+        Entropy = [| entropy |]
+        Command = cmd
+        Events = []
+      }
+
+      testCase "one ledger serves two scopes as two cohorts: each ReadAll sees only its own rows" <| fun _ ->
+        // No `use` — `InMemory.Store` is not `IDisposable`. Its whole lifetime is
+        // this test's, and a FRESH one is what "an empty ledger" means here.
+        let store = new SageFs.Features.CohortLedger.InMemory.Store<MemberId>()
+        let port = portOver store
+        let other = CohortScope.Repository @"/tmp/other-repo"
+        store.Scopes () |> Expect.equal "a store with no rows holds no scope at all" []
+        // Appended one at a time so the store's own answer is observable between
+        // rows: a scope that is not yet held is a bucket that does not exist, and
+        // `Scopes` is what says so — the key comes from `scopeOf entry.Command`,
+        // never from whatever the caller later passes to `ReadAll`.
+        port.Append (entry (1L<ledgerSeq>) (atSec 0) 0uy (CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)))
+        store.Scopes () |> Expect.equal "the machine row created the machine bucket" [ machine ]
+        port.Append (entry (2L<ledgerSeq>) (atSec 0) 1uy (CohortCommand.Join(bob, JoinableRole.Verifier, None, other)))
+        store.Scopes () |> Expect.equal "the repository row created a second, separate bucket" [ machine; other ]
+        port.Append (entry (3L<ledgerSeq>) (atSec 1) 2uy (CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Machine.fs", "machine-side", machine)))
+        port.Append (entry (4L<ledgerSeq>) (atSec 1) 3uy (CohortCommand.AcquireClaim(bob, ClaimScope.File "src/Other.fs", "repo-side", other)))
+        store.Scopes () |> Expect.equal "later rows join their own cohort's bucket and add no third scope" [ machine; other ]
+        let machineRows = port.ReadAll machine
+        let otherRows = port.ReadAll other
+        machineRows |> List.length |> Expect.equal "the machine cohort has its own two rows" 2
+        otherRows |> List.length |> Expect.equal "the repository cohort has its own two rows" 2
+        machineRows |> List.map (fun e -> scopeOf e.Command) |> List.distinct |> Expect.equal "the machine rows are all machine-scoped" [ machine ]
+        otherRows |> List.map (fun e -> scopeOf e.Command) |> List.distinct |> Expect.equal "the repository rows are all repository-scoped" [ other ]
+        // A scope the store holds no rows for gets its OWN empty answer: the
+        // ledger never answers a question it was not asked, and never
+        // concatenates two cohorts into one history.
+        port.ReadAll (CohortScope.Named "never-used") |> Expect.equal "a scope with no rows reads back empty, not the whole ledger" []
+
+      testCase "replayIn reconstructs one scope from the machine cohort's rows and sees none of the other's" <| fun _ ->
+        let store = new SageFs.Features.CohortLedger.InMemory.Store<MemberId>()
+        let port = portOver store
+        let other = CohortScope.Repository @"/tmp/other-repo"
+        port.Append (entry (1L<ledgerSeq>) (atSec 0) 0uy (CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)))
+        port.Append (entry (2L<ledgerSeq>) (atSec 0) 1uy (CohortCommand.Join(bob, JoinableRole.Verifier, None, other)))
+        // alice binds the conductor seat in the machine cohort; bob binds it in
+        // the repository one, independently. So "which scope is this?" is
+        // visible in the seat, not only in the member list.
+        replayIn machine (port.ReadAll machine) |> fun st ->
+          st.Scope |> Expect.equal "the machine rows replay to a machine cohort" machine
+          st.Members |> Map.containsKey alice |> Expect.equal "the machine cohort holds its own member" true
+          st.Conductor |> Expect.equal "alice holds the machine conductor seat" (ConductorBinding.Bound alice)
+        replayIn other (port.ReadAll other) |> fun st ->
+          st.Scope |> Expect.equal "the repository rows replay to a repository cohort" other
+          st.Members |> Map.containsKey bob |> Expect.equal "the repository cohort holds only its own member" true
+          st.Members |> Map.containsKey alice |> Expect.equal "and none of the machine cohort's members" false
+          st.Conductor |> Expect.equal "the seat binds per cohort, so bob is this cohort's conductor" (ConductorBinding.Bound bob)
+
+      testCase "a command addressed to another scope is refused WrongCohortScope, not applied" <| fun _ ->
+        let other = CohortScope.Repository @"/tmp/other-repo"
+        let join = decide (atSec 0) ([| 0uy |]) (CohortState.empty ()) (CohortCommand.Join(alice, JoinableRole.Implementer, None, machine))
+        let state =
+          match join with
+          | Ok (st, _, _) -> st
+          | Error err -> failwithf "expected the join to be accepted, got %A" err
+        // alice IS a member of the machine cohort, and a claim command naming
+        // THAT scope is exactly what the rest of this file builds. So if the
+        // scope were only decoration this command would be accepted and mint a
+        // claim; it is refused instead, which is what makes the scope
+        // load-bearing rather than a label the caller forgot to agree on.
+        match decide (atSec 1) ([| 1uy |]) state (CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "cross-scope", other)) with
+        | Ok _ -> failwith "a cross-scope claim was applied to a cohort the command does not name"
+        | Error err ->
+          match err with
+          | CohortError.WrongCohortScope(requested, cohort) ->
+            requested |> Expect.equal "the refusal quotes the scope the command asked for" other
+            cohort |> Expect.equal "and the scope of the cohort it was refused against" machine
+          | unexpected -> failwithf "expected WrongCohortScope, got %A" unexpected
     ]
   ]
