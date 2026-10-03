@@ -384,13 +384,13 @@ let pureDecisionTests =
         | Ok(s, _, _) -> s
         | Error e -> failwithf "unexpected setup failure: %A" e
       let requester = "alice"
-      let s1 = step (CohortState.empty ()) (CohortCommand.Join(requester, JoinableRole.Implementer, None))
-      let s2 = step s1 (CohortCommand.AcquireClaim(requester, ClaimScope.File "X.fs", "purpose"))
+      let s1 = step (CohortState.empty ()) (CohortCommand.Join(requester, JoinableRole.Implementer, None, CohortScope.Machine))
+      let s2 = step s1 (CohortCommand.AcquireClaim(requester, ClaimScope.File "X.fs", "purpose", CohortScope.Machine))
       let claimId, claimFence =
         match s2.Claims |> Map.toList with
         | [ (cid, c) ] -> cid, c.Fence
         | other -> failwithf "expected exactly one claim after setup, got %A" other
-      let s3 = step s2 (CohortCommand.RequestLanding(requester, [ claimId, claimFence ], [ "commit-1" ], "land it"))
+      let s3 = step s2 (CohortCommand.RequestLanding(requester, [ claimId, claimFence ], [ "commit-1" ], "land it", CohortScope.Machine))
       let landingId =
         match s3.Landings |> Map.toList with
         | [ (lid, _) ] -> lid
@@ -404,7 +404,7 @@ let pureDecisionTests =
             State = LandingState.Verifying(s3.IntegrationHead, "rebased-head", 0, 0) }
       let s4 = { s3 with Landings = Map.add landingId verifying s3.Landings }
 
-      match decide clock [||] s4 (CohortCommand.FastForwardCompleted(landingId, "landed-sha")) with
+      match decide clock [||] s4 (CohortCommand.FastForwardCompleted(landingId, "landed-sha", CohortScope.Machine)) with
       | Ok(s5, events, _) ->
         match s5.Claims.[claimId].State with
         | ClaimState.Released(by, _) -> by |> Expect.equal "the released claim names the landing's own requester" requester

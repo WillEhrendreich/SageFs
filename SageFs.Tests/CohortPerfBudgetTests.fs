@@ -68,15 +68,14 @@ let private members : MemberId list =
 /// owner/ledger/IO involved.
 let private buildHead () : LedgerHead<MemberId> =
   let joins =
-    members |> List.map (fun m -> CohortCommand.Join(m, JoinableRole.Implementer, Some(MemberId.display m)))
+    members |> List.map (fun m -> CohortCommand.Join(m, JoinableRole.Implementer, Some(MemberId.display m), CohortScope.Machine))
   let acquires =
     members
     |> List.map (fun m ->
       CohortCommand.AcquireClaim(
         m,
         ClaimScope.File(sprintf "SageFs.Core/Features/%s.fs" (MemberId.display m)),
-        sprintf "working on %s" (MemberId.display m)
-      ))
+        sprintf "working on %s" (MemberId.display m), CohortScope.Machine))
   let finalState, finalSeq =
     (joins @ acquires)
     |> List.fold
@@ -125,7 +124,7 @@ let private head = buildHead ()
 /// one member's own claim is the common case (no violation, but the scan
 /// still runs in full — `ObserveSave` has no early-exit on "it's mine").
 let private observeSaveCommand =
-  CohortCommand.ObserveSave(members.[0], "SageFs.Core/Features/member-01.fs")
+  CohortCommand.ObserveSave(members.[0], "SageFs.Core/Features/member-01.fs", CohortScope.Machine)
 
 // ── Measurement plumbing ───────────────────────────────────────────────
 

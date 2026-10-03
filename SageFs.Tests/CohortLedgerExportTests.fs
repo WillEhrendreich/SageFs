@@ -61,37 +61,37 @@ let private genShortList (g: Gen<'a>) : Gen<'a list> =
 
 let private genCommand : Gen<CohortCommand<MemberId>> =
   Gen.oneof [
-    Gen.map3 (fun m r s -> CohortCommand.Join(m, r, s)) genMember genRole genSessionOpt
+    Gen.map3 (fun m r s -> CohortCommand.Join(m, r, s, CohortScope.Machine)) genMember genRole genSessionOpt
     Gen.map CohortCommand.Depart genMember
     Gen.map CohortCommand.RenewLease genMember
     Gen.constant CohortCommand.Tick
-    Gen.map3 (fun m s p -> CohortCommand.AcquireClaim(m, s, p)) genMember genScope (Gen.constant "purpose")
-    Gen.map3 (fun m c f -> CohortCommand.ReleaseClaim(m, c, f)) genMember genClaimId genFence
-    Gen.map3 (fun by c t -> CohortCommand.ReassignClaim(by, c, t)) genMember genClaimId genMember
-    Gen.map2 (fun by t -> CohortCommand.DelegateConductor(by, t)) genMember genMember
-    Gen.map2 (fun m p -> CohortCommand.ObserveSave(m, p)) genMember (Gen.elements [ "P.fs"; "Q.fs" ])
+    Gen.map3 (fun m s p -> CohortCommand.AcquireClaim(m, s, p, CohortScope.Machine)) genMember genScope (Gen.constant "purpose")
+    Gen.map3 (fun m c f -> CohortCommand.ReleaseClaim(m, c, f, CohortScope.Machine)) genMember genClaimId genFence
+    Gen.map3 (fun by c t -> CohortCommand.ReassignClaim(by, c, t, CohortScope.Machine)) genMember genClaimId genMember
+    Gen.map2 (fun by t -> CohortCommand.DelegateConductor(by, t, CohortScope.Machine)) genMember genMember
+    Gen.map2 (fun m p -> CohortCommand.ObserveSave(m, p, CohortScope.Machine)) genMember (Gen.elements [ "P.fs"; "Q.fs" ])
     (gen {
       let! r = genMember
       let! claims = genShortList (Gen.map2 (fun c f -> c, f) genClaimId genFence)
       let! commits = genShortList (Gen.elements [ "sha1"; "sha2" ])
-      return CohortCommand.RequestLanding(r, claims, commits, "statement")
+      return CohortCommand.RequestLanding(r, claims, commits, "statement", CohortScope.Machine)
     })
     (gen {
       let! l = genLandingId
       let! ok = Gen.elements [ true; false ]
       if ok then
         let! sha = Gen.elements [ "sha-a"; "sha-b" ]
-        return CohortCommand.RebaseCompleted(l, Ok sha)
+        return CohortCommand.RebaseCompleted(l, Ok sha, CohortScope.Machine)
       else
         let! files = genShortList (Gen.elements [ "conflict.fs"; "other.fs" ])
-        return CohortCommand.RebaseCompleted(l, Error files)
+        return CohortCommand.RebaseCompleted(l, Error files, CohortScope.Machine)
     })
-    Gen.map2 (fun l ts -> CohortCommand.AffectedComputed(l, ts)) genLandingId (genShortList genTestId)
-    Gen.map2 (fun l ts -> CohortCommand.TestsCompleted(l, ts)) genLandingId (genShortList genTestId)
-    Gen.map2 (fun l sha -> CohortCommand.FastForwardCompleted(l, sha)) genLandingId (Gen.elements [ "final-a"; "final-b" ])
+    Gen.map2 (fun l ts -> CohortCommand.AffectedComputed(l, ts, CohortScope.Machine)) genLandingId (genShortList genTestId)
+    Gen.map2 (fun l ts -> CohortCommand.TestsCompleted(l, ts, CohortScope.Machine)) genLandingId (genShortList genTestId)
+    Gen.map2 (fun l sha -> CohortCommand.FastForwardCompleted(l, sha, CohortScope.Machine)) genLandingId (Gen.elements [ "final-a"; "final-b" ])
     Gen.map2 (fun m l -> CohortCommand.WithdrawLanding(m, l)) genMember genLandingId
-    Gen.map3 (fun by l reason -> CohortCommand.VetoLanding(by, l, reason)) genMember genLandingId (Gen.constant "reason")
-    Gen.map2 (fun by head -> CohortCommand.SetIntegrationHead(by, head)) genMember (Gen.elements [ "head-a"; "head-b" ])
+    Gen.map3 (fun by l reason -> CohortCommand.VetoLanding(by, l, reason, CohortScope.Machine)) genMember genLandingId (Gen.constant "reason")
+    Gen.map2 (fun by head -> CohortCommand.SetIntegrationHead(by, head, CohortScope.Machine)) genMember (Gen.elements [ "head-a"; "head-b" ])
   ]
 
 let private genLandingState : Gen<LandingState<MemberId>> =
@@ -242,15 +242,15 @@ let private buildScenario () : Scenario =
       events
     | Error e -> failwithf "buildScenario: command was refused: %A" e
 
-  apply scenarioClock0 [||] (CohortCommand.Join(scenarioAlice, JoinableRole.Implementer, Some "sess-alice"))
+  apply scenarioClock0 [||] (CohortCommand.Join(scenarioAlice, JoinableRole.Implementer, Some "sess-alice", CohortScope.Machine))
   |> ignore
 
-  apply (scenarioClock0.AddMinutes 1.0) [||] (CohortCommand.Join(scenarioBob, JoinableRole.Verifier, Some "sess-bob"))
+  apply (scenarioClock0.AddMinutes 1.0) [||] (CohortCommand.Join(scenarioBob, JoinableRole.Verifier, Some "sess-bob", CohortScope.Machine))
   |> ignore
 
   let claimEvents =
     apply (scenarioClock0.AddMinutes 2.0) [| 1uy; 2uy; 3uy |]
-      (CohortCommand.AcquireClaim(scenarioAlice, ClaimScope.File "Foo.fs", "implementing Foo"))
+      (CohortCommand.AcquireClaim(scenarioAlice, ClaimScope.File "Foo.fs", "implementing Foo", CohortScope.Machine))
   let claimId, fence =
     claimEvents
     |> List.pick (function CohortEvent.ClaimAcquired(cid, _, _, f) -> Some(cid, f) | _ -> None)
@@ -260,7 +260,7 @@ let private buildScenario () : Scenario =
 
   let landingEvents =
     apply (scenarioClock0.AddMinutes 4.0) [| 4uy; 5uy |]
-      (CohortCommand.RequestLanding(scenarioAlice, [ claimId, fence ], [ "sha1" ], "land Foo"))
+      (CohortCommand.RequestLanding(scenarioAlice, [ claimId, fence ], [ "sha1" ], "land Foo", CohortScope.Machine))
   let landingId =
     landingEvents
     |> List.pick (function CohortEvent.LandingQueued(lid, _) -> Some lid | _ -> None)

@@ -43,10 +43,10 @@ let private buildLedger () : LedgerEntry<MemberId> list =
       seq <- seq + 1L
     | Error e -> failwithf "buildLedger: command was refused: %A" e
 
-  apply clock0 [||] (CohortCommand.Join(alice, JoinableRole.Implementer, Some "sess-alice"))
-  apply (clock0.AddMinutes 1.0) [||] (CohortCommand.Join(bob, JoinableRole.Verifier, Some "sess-bob"))
-  apply (clock0.AddMinutes 2.0) [| 9uy; 9uy |] (CohortCommand.AcquireClaim(alice, ClaimScope.File "Bar.fs", "implementing Bar"))
-  apply (clock0.AddMinutes 3.0) [| 7uy; 7uy |] (CohortCommand.RequestLanding(alice, [], [ "shaX" ], "land Bar"))
+  apply clock0 [||] (CohortCommand.Join(alice, JoinableRole.Implementer, Some "sess-alice", CohortScope.Machine))
+  apply (clock0.AddMinutes 1.0) [||] (CohortCommand.Join(bob, JoinableRole.Verifier, Some "sess-bob", CohortScope.Machine))
+  apply (clock0.AddMinutes 2.0) [| 9uy; 9uy |] (CohortCommand.AcquireClaim(alice, ClaimScope.File "Bar.fs", "implementing Bar", CohortScope.Machine))
+  apply (clock0.AddMinutes 3.0) [| 7uy; 7uy |] (CohortCommand.RequestLanding(alice, [], [ "shaX" ], "land Bar", CohortScope.Machine))
 
   List.ofSeq entries
 

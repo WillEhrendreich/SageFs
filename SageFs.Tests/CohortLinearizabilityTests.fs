@@ -66,7 +66,7 @@ let private dave = MemberId.Minted "dave"
 let private joinAll (owner: CohortOwner.Handle) (members: MemberId list) : Task<unit> =
   task {
     for who in members do
-      let! _ = owner.Commit(CohortCommand.Join(who, JoinableRole.Implementer, None))
+      let! _ = owner.Commit(CohortCommand.Join(who, JoinableRole.Implementer, None, CohortScope.Machine))
       ()
   }
 
@@ -205,8 +205,8 @@ let cohortLinearizabilityTests =
       let initial = owner.ReadCohortState()
 
       let ops : (OpId * CohortCommand<MemberId>) list =
-        [ 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "A.fs", "op-0 alice claims A.fs")
-          1, CohortCommand.AcquireClaim(bob, ClaimScope.File "B.fs", "op-1 bob claims B.fs")
+        [ 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "A.fs", "op-0 alice claims A.fs", CohortScope.Machine)
+          1, CohortCommand.AcquireClaim(bob, ClaimScope.File "B.fs", "op-1 bob claims B.fs", CohortScope.Machine)
           2, CohortCommand.RenewLease carol ]
 
       let! observed, entropyOf = fireBurstAgainstRealOwner owner ledger ops
@@ -231,8 +231,8 @@ let cohortLinearizabilityTests =
         let initial = owner.ReadCohortState()
 
         let ops : (OpId * CohortCommand<MemberId>) list =
-          [ 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "Shared.fs", sprintf "op-0 alice race #%d" iteration)
-            1, CohortCommand.AcquireClaim(bob, ClaimScope.File "Shared.fs", sprintf "op-1 bob race #%d" iteration) ]
+          [ 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "Shared.fs", sprintf "op-0 alice race #%d" iteration, CohortScope.Machine)
+            1, CohortCommand.AcquireClaim(bob, ClaimScope.File "Shared.fs", sprintf "op-1 bob race #%d" iteration, CohortScope.Machine) ]
 
         let! observed, entropyOf = fireBurstAgainstRealOwner owner ledger ops
 
@@ -272,8 +272,8 @@ let cohortLinearizabilityTests =
       let initial = owner.ReadCohortState()
 
       let opsWithEntropy : (OpId * Entropy * CohortCommand<MemberId>) list =
-        [ 0, BitConverter.GetBytes 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "Racy.fs", "op-0 alice racy claim")
-          1, BitConverter.GetBytes 1, CohortCommand.AcquireClaim(bob, ClaimScope.File "Racy.fs", "op-1 bob racy claim") ]
+        [ 0, BitConverter.GetBytes 0, CohortCommand.AcquireClaim(alice, ClaimScope.File "Racy.fs", "op-0 alice racy claim", CohortScope.Machine)
+          1, BitConverter.GetBytes 1, CohortCommand.AcquireClaim(bob, ClaimScope.File "Racy.fs", "op-1 bob racy claim", CohortScope.Machine) ]
       let ops = opsWithEntropy |> List.map (fun (id, _, cmd) -> id, cmd)
       let entropyOf = opsWithEntropy |> List.map (fun (id, e, _) -> id, e) |> Map.ofList |> fun m -> fun id -> m.[id]
 
