@@ -179,7 +179,7 @@ let sseGoldenFixtureGenerationTests =
     testCase "results-batch-with-coverage-decision.json is exactly what formatTestResultsBatchEvent emits today" <| fun () ->
       let opts = productionJsonOpts ()
       let payload =
-        formatTestResultsBatchEvent opts None (mkCoverageBatch ())
+        formatTestResultsBatchEvent opts None (mkCoverageBatch ()) None
         |> extractDataPayload
       assertMatchesFixture "results-batch-with-coverage-decision.json" payload
 

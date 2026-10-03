@@ -240,9 +240,11 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
   // ── Group 1: Registry exhaustiveness ──
 
   testList "registry exhaustiveness" [
-    testCase "allSseEventTypes has exactly 22 items" <| fun () ->
+    testCase "allSseEventTypes has exactly 23 items" <| fun () ->
       allSseEventTypes |> List.length
-      |> Expect.equal "should have exactly 22 event types (domain_model deleted, roast-8 §2: zero production callers of the emitter or its data source)" 22
+      |> Expect.equal
+           "should have exactly 23 event types (22, plus test_run_completed — a FINISHED run carrying the `source` verdict, which now has a formatter, a registry entry, and a producer)"
+           23
 
     testCase "allSseEventTypes has no duplicates" <| fun () ->
       let distinct = allSseEventTypes |> List.distinct
@@ -283,7 +285,7 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
         [ "total"; "passed"; "failed"; "stale"; "running"; "disabled"; "enabled"; "lastDecision" ]
 
     testCase "test_results_batch has expected properties" <| fun () ->
-      formatTestResultsBatchEvent jsonOpts None (mkTestResultsBatch 2)
+      formatTestResultsBatchEvent jsonOpts None (mkTestResultsBatch 2) None
       |> extractDataPayload
       |> assertJsonProperties "test_results_batch"
         [ "generation"; "freshness"; "completion"; "entries"; "summary"; "lastDecision" ]
@@ -358,7 +360,7 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
                   [| "Module.Tests.should_add" |]
                   [||]
                   "coverage widened") }
-        |> formatTestResultsBatchEvent jsonOpts None
+        |> fun payload -> formatTestResultsBatchEvent jsonOpts None payload None
         |> extractDataPayload
       use doc = JsonDocument.Parse(payload)
       let lastDecision = doc.RootElement.GetProperty("lastDecision")
@@ -489,7 +491,7 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
 
   testList "multiline safety" [
     testCase "large test_results_batch produces single data line" <| fun () ->
-      formatTestResultsBatchEvent jsonOpts None (mkTestResultsBatch 150)
+      formatTestResultsBatchEvent jsonOpts None (mkTestResultsBatch 150) None
       |> countDataLines
       |> Expect.equal "150-entry batch should have exactly 1 data line" 1
 

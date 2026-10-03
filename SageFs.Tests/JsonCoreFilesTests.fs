@@ -334,8 +334,8 @@ let tests =
             Entries = [| entry |]
             Summary = summary
             LastDecision = None }
-        [ SseWriter.formatTestResultsBatchEvent camel None payload
-          SseWriter.formatTestResultsBatchEvent asWritten None payload ]
+        [ SseWriter.formatTestResultsBatchEvent camel None payload None
+          SseWriter.formatTestResultsBatchEvent asWritten None payload None ]
         |> List.map lf
         |> Expect.equal
           "test_results_batch"

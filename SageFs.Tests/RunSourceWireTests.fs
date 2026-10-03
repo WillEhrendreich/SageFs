@@ -152,11 +152,16 @@ let runSourceEmissionTests = testList "test_run_completed carries the run's sour
     // THE assertion the gap was about: the emitted payload CONTAINS the field. Reading
     // it back out of a frame the real formatter produced is the only thing that proves
     // emission; nothing here feeds the decoder a payload and calls it a day.
+    //
+    // The verdict comes from the PRODUCTION producer, so this test fails if the wire
+    // shape and the producer ever drift apart.
+    let state = SageFs.SourceStateProbe.ofSessionRecord (Some (mkSessionInfo projectFile)) None
     let payload =
       SageFs.SseWriter.formatTestResultsBatchEvent
         (daemonOpts ())
         (Some (SessionId.value sessId))
         (RunSourceFixtures.batch ())
+        (Some(SageFs.SourceState.toWire state))
     let data = extractData payload
     use doc = JsonDocument.Parse(data)
     let root = doc.RootElement
@@ -167,7 +172,9 @@ let runSourceEmissionTests = testList "test_run_completed carries the run's sour
            "the emitted test_run_completed payload must CARRY `source`; the payload was %s" data)
     let source = root.GetProperty("source")
     source.GetProperty("state").GetString()
-    |> Expect.equal "the source state token is the SourceState wire token" "InSync"
+    |> Expect.equal
+         "the emitted state is the SourceState wire token the producer actually returned"
+         "Unknown"
 
   testCase "the source field is ABSENT when the daemon could not answer, so the plugin's degradation branch is real" <| fun _ ->
     // The ABSENT case is not a special-case bolted on: it is what a reader gets when
@@ -195,9 +202,11 @@ let runSourceEmissionTests = testList "test_run_completed carries the run's sour
         (daemonOpts ())
         (Some (SessionId.value sessId))
         (RunSourceFixtures.batch ())
-        (Some (SageFs.SourceState.Stale
-          [ { Path = "src/Ticker.fs"
-              Because = SageFs.StaleBecause.EditedAfterBuild (DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc), at) } ]))
+        (Some (SageFs.SourceState.toWire
+          (SageFs.SourceState.Stale
+            [ { Path = "src/Ticker.fs"
+                Because =
+                  SageFs.StaleBecause.EditedAfterBuild(DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc), at) } ])))
     use doc = JsonDocument.Parse(extractData payload)
     let source = doc.RootElement.GetProperty("source")
     source.GetProperty("state").GetString() |> Expect.equal "stale token" "Stale"

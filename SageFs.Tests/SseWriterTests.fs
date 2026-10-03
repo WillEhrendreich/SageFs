@@ -507,7 +507,7 @@ let sessionScopingTests = testList "SSE Session Scoping" [
         Summary = { Total = 5; Passed = 5; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
         LastDecision = None
       }
-      let result = formatTestResultsBatchEvent productionSseOpts (Some "sess-789") payload
+      let result = formatTestResultsBatchEvent productionSseOpts (Some "sess-789") payload None
       let data = extractSseData result |> Option.get
       let doc = JsonDocument.Parse(data)
       doc.RootElement.GetProperty("SessionId").GetString()
@@ -551,7 +551,7 @@ let sessionScopingTests = testList "SSE Session Scoping" [
         Summary = { Total = 1; Passed = 1; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
         LastDecision = Some decision
       }
-      let result = formatTestResultsBatchEvent productionSseOpts None payload
+      let result = formatTestResultsBatchEvent productionSseOpts None payload None
       let data = extractSseData result |> Option.get
       let doc = JsonDocument.Parse(data)
       let lastDecision = doc.RootElement.GetProperty("LastDecision")

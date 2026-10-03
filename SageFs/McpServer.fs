@@ -1073,7 +1073,17 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
               freshness lt.DiscoveredTests.Length sessionEntries.Length
           TestResultsBatchPayload.create
             lt.LastGeneration freshness completion lt.Activation sessionEntries lt.LastDecision
-        do! SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload
+        // Say which BUILD this batch ran against. The verdict is read off the disk and the
+        // session's own warmup report, exactly as `list_sessions` and `/api/sessions` read
+        // it, so there is one wire spelling of a source verdict. With no session to read
+        // there is no verdict, and the field is omitted rather than emitted as null — a
+        // client then knows it has no answer instead of reading an absence as "in sync".
+        let sourceWire =
+          match SourceStateProbe.runSourceOf (Some activeId) None with
+          | SourceStateProbe.SourceSourceRefusal.Assessed state -> Some(SourceState.toWire state)
+          | SourceStateProbe.SourceSourceRefusal.NoSessionToRead
+          | SourceStateProbe.SourceSourceRefusal.SessionNotKnown -> None
+        do! SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire
             |> writeSseFrame body
         let files =
           sessionEntries
@@ -1637,7 +1647,14 @@ let wireModelChangeHandlers
           ctx.ServerTracker.AccumulateEvent(
             Some activeId, PushEvent.TestResultsBatch payload)
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload)
+            SageFs.SseWriter.formatTestResultsBatchEvent
+              ctx.SseJsonOpts
+              (Some activeId)
+              payload
+              (match SourceStateProbe.runSourceOf (Some activeId) None with
+               | SourceStateProbe.SourceSourceRefusal.Assessed state -> Some(SourceState.toWire state)
+               | SourceStateProbe.SourceSourceRefusal.NoSessionToRead
+               | SourceStateProbe.SourceSourceRefusal.SessionNotKnown -> None))
           // Per-file coverage projection (`projectWithCoverage` does a Map.ofSeq
           // tree-rebalance per annotated file) is the daemon's dominant model-
           // change cost. `shouldPushTestSummary` returns true on EVERY change

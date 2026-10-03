@@ -152,17 +152,62 @@ let formatTestSummaryEventWithDiscovery
   let json = writeWith(payload, opts) |> injectSessionId sessionId
   formatSseEvent "test_summary" json
 
-/// Format a TestResultsBatchPayload as an SSE event string
-let formatTestResultsBatchEvent (opts: JsonSerializerOptions) (sessionId: string option) (payload: Features.LiveTesting.TestResultsBatchPayload) : string =
-  let wirePayload =
+/// Format a TestResultsBatchPayload as an SSE event string.
+///
+/// `source` is the DISK-AHEAD-OF-BUILD verdict for the build this batch ran against, or
+/// `None` when there is none. `None` omits the key entirely rather than emitting null, so
+/// a client that receives nothing knows it has no verdict instead of reading an absent
+/// value as "in sync" — the Neovim plugin's `run_source_is_authoritative` stays false and
+/// it keeps asking exactly as it did against a daemon with no such field.
+///
+/// WHY the envelope is projected by hand rather than merged: the surrounding payload is
+/// camelCase while the `source` value is the SourceState WIRE shape, whose keys are
+/// lowercase (`state`, `message`, `builtAt`). Merging the value into the record would
+/// rename every nested key along with the field, so it is spliced in under its literal
+/// lowercase key and the envelope's own text is left byte-for-byte as it was.
+let formatResultsBatchWithSource
+  (opts: JsonSerializerOptions)
+  (sessionId: string option)
+  (payload: Features.LiveTesting.TestResultsBatchPayload)
+  (source: obj option)
+  : string =
+  let envelope =
     {| Generation = payload.Generation
        Freshness = payload.Freshness
        Completion = payload.Completion
        Entries = payload.Entries
        Summary = payload.Summary
        LastDecision = payload.LastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}
-  let json = writeWith(wirePayload, opts) |> injectSessionId sessionId
-  formatSseEvent "test_results_batch" json
+
+  let envelopeJson = writeWith(envelope, opts)
+
+  let json =
+    match source with
+    | None -> envelopeJson
+    | Some s ->
+      let closing = envelopeJson.LastIndexOf '}'
+      if closing < 0 then
+        envelopeJson
+      else
+        envelopeJson.Substring(0, closing).TrimEnd()
+        + ","
+        + "\"source\":"
+        + (JsonSerializer.Serialize(s, opts))
+        + "}"
+
+  json |> injectSessionId sessionId
+
+/// The batch event every client already subscribes to. Takes the verdict so the
+/// capability reaches real clients on the event they already receive, rather than on a
+/// new event nothing publishes.
+let formatTestResultsBatchEvent
+  (opts: JsonSerializerOptions)
+  (sessionId: string option)
+  (payload: Features.LiveTesting.TestResultsBatchPayload)
+  (source: obj option)
+  : string =
+  formatResultsBatchWithSource opts sessionId payload source
+  |> formatSseEvent "test_results_batch"
 
 /// Format a finished test run as a `test_run_completed` event: THIS run's tally, plus what
 /// this run says about the build it ran against.
@@ -178,27 +223,16 @@ let formatTestResultsBatchEvent (opts: JsonSerializerOptions) (sessionId: string
 /// on this payload, which is the different question "was the code edited since this run was dispatched";
 /// the two are on one payload deliberately and must not be read as one verdict.
 ///
-/// `None` emits NO `source` field at all (never a null), so a client with no verdict cannot read an
-/// absence as "nothing was stale": the Neovim plugin's `run_source_is_authoritative` stays false and
-/// it keeps asking the session list exactly as it did against a daemon with no such field.
+/// The payload projection and the `source` splice live in `formatResultsBatchWithSource`, so the
+/// batch event and this one can never drift into two spellings of the same verdict.
 let formatTestRunCompletedEvent
   (opts: JsonSerializerOptions)
   (sessionId: string option)
   (payload: Features.LiveTesting.TestResultsBatchPayload)
   (source: obj option)
   : string =
-  let withoutSource =
-    {| Generation = payload.Generation
-       Freshness = payload.Freshness
-       Completion = payload.Completion
-       Entries = payload.Entries
-       Summary = payload.Summary
-       LastDecision = payload.LastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}
-  // RED STAGE: deliberately dropping the field to prove the emission test fails.
-  let json =
-    match None with
-    | _ -> writeWith(withoutSource, opts)
-  json |> injectSessionId sessionId |> formatSseEvent "test_run_completed"
+  formatResultsBatchWithSource opts sessionId payload source
+  |> formatSseEvent "test_run_completed"
 
 /// Format a FileAnnotations as an SSE event string
 let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (sessionId: string option) (annotations: Features.LiveTesting.FileAnnotations) : string =
@@ -707,6 +741,11 @@ let allSseEventTypes : string list = [
   "warmup_progress"
   "test_summary"
   "test_results_batch"
+  /// A FINISHED run, carrying the same payload as `test_results_batch` plus the
+  /// `source` verdict. Registered because `formatTestRunCompletedEvent` exists and the
+  /// exhaustiveness ratchet derives an entry from every `formatXxxEvent` — a formatter
+  /// outside this list is an event no client is told about.
+  "test_run_completed"
   "file_annotations"
   "failure_narratives"
   "test_source_locations"
