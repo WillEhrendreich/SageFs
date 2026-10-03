@@ -1157,16 +1157,16 @@ let fileSizeBudgets =
       // the five MCP cohort tools' new `workingDirectory` parameter (each of which needs its own
       // decision about which cohort it addresses) and for the whole-surface authority gate's call
       // site, which the new module now carries. The file is 3280 lines. Exact size.
-      // 3280 -> 3294: RAISED, which this table normally forbids, and the reason is that the
+      // 3280 -> 3293: RAISED, which this table normally forbids, and the reason is that the
       // line count is a proxy and the thing it stands for moved OUT. The multi-cohort work
       // put the "which cohort is this caller asking about" decision here (40 lines, the file's
       // accretion problem in miniature) plus the `CohortSupport` field that carries the wiring.
       // The decision is now `SageFs/CohortOwnerResolution.fs`, its own module with the reason
       // beside it, and what remains here is a one-line field and a three-line delegating call —
-      // so the file grew 14 lines to hold a field and a forwarding line, and the alternative was
+      // so the file grew 13 lines to hold a field and a forwarding line, and the alternative was
       // moving a RECORD FIELD out of the record that defines it, which is not possible.
       // Shrinkable by dropping the field, which would put the single-owner bug back.
-      "SageFs/Mcp.fs", 3294
+      "SageFs/Mcp.fs", 3293
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
