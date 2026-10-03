@@ -385,7 +385,7 @@ included. The id names a member now and cannot be used to be one.
 |:---|:---|
 | `join_cohort` | Join the daemon's shared coordination session. The first joiner becomes conductor. |
 | `leave_cohort` | Leave. Any claims you still hold are orphaned (the conductor must reassign them). |
-| `get_cohort_status` | Members, claims and fences, the test matrix, the landing queue, and what the trunk did with each landing (see below). Wait-free: reads a published snapshot. The `cohort://status` MCP resource is the frame as JSON for subscription, and doesn't carry the trunk lines. |
+| `get_cohort_status` | Members, claims and fences, the test matrix, the landing queue, and what the trunk did with each landing (see below). Wait-free: reads a published snapshot. The `cohort://status` MCP resource is the frame as JSON for subscription, and doesn't carry the trunk lines. Takes an optional `working_directory`: one daemon holds one cohort **per repository**, so pass the directory you are working in to read that repository's cohort. Omit it and you read the cohort of the directory the daemon itself started in. |
 | `acquire_claim` | Take an exclusive claim over a file or project (`file:<path>` or `project:<path>`) so others know it's yours to edit. |
 | `release_claim` | Release a claim you hold. The presented fence must match the current one. |
 | `reassign_claim` | Conductor-only: reassign an orphaned claim to a present member. |

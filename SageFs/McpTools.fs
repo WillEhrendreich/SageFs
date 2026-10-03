@@ -2621,10 +2621,16 @@ WHEN TO USE: Before acquiring a claim (check for conflicts), to see who else is 
 OUTPUT: Plain-text summary of members, claims, the test matrix, AND the landing queue — each landing's id, requester, state (Queued/Rebasing/Verifying/Blocked/Landed/Withdrawn), queue position, and the current integration head. The same landing state is on the cohort://status MCP resource, so you can subscribe instead of polling.
 
 Once an integration is configured it ends with the trunk: one `trunk <landing id>: ...` line per landing that landed, saying what the trunk session's running app did with it (the file, the outcome such as PatchPending, Patched or Restarted, the mechanism such as metadata-delta or detour, and the cause of a restart), or that there is no running app to update.""")>]
-    member _.get_cohort_status() : Task<string> =
+    member _.get_cohort_status([<System.Runtime.InteropServices.OptionalAttribute>] workingDirectory: string) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_cohort_status called")
         task {
-          let! result = SageFs.McpCohortIntegration.getCohortStatus ctx
+          // `workingDirectory` selects WHICH cohort is reported. It is optional because a
+          // caller naming none is asking about the daemon's own scope, which is the answer
+          // it gave before any repository could be asked about — but an agent working in a
+          // second repository MUST pass it, or it reads back the first one's members.
+          let dir =
+            if System.String.IsNullOrWhiteSpace workingDirectory then None else Some workingDirectory
+          let! result = SageFs.McpCohortIntegration.getCohortStatus ctx dir
           return
             match result with
             | Ok text -> text, None

@@ -168,11 +168,15 @@ module McpCohortIntegration =
                     sha worktreePath branch trunkPath reason)
     }
 
-  let getCohortStatus (ctx: McpContext) : Task<Result<string, SageFsError>> =
+  let getCohortStatus (ctx: McpContext) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
-      match requireCohortOwner ctx with
-      | Error e -> return Error e
-      | Ok owner ->
+      // The CALLER's cohort. `requireCohortOwner` with no directory answers about the
+      // daemon's own scope, so a caller that had just joined a second repository read back
+      // a frame from the first — "Members (0)" beside a join that plainly succeeded, which
+      // reads as a broken join rather than a status read about the wrong cohort.
+      match cohortOwnerFor ctx workingDirectory with
+      | None -> return Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+      | Some owner ->
         let integration =
           match cohortIntegrationRef.Value with
           | None -> "Integration session: (not configured — call set_integration_ref)"
