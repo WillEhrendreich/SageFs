@@ -63,7 +63,12 @@ module SourceBound =
   let gitBlobIdOfText (text: string) : string =
     let bytes = Text.Encoding.UTF8.GetBytes(text)
     use sha = SHA1.Create()
-    let header = Text.Encoding.ASCII.GetBytes(sprintf "blob %d\0" bytes.Length)
+    // git hashes "blob <byte-length>" then a NUL, then the bytes. The separator MUST be
+    // the NUL character 0uy — `\0` inside a printf format string is a literal backslash
+    // and zero, which is a header no git has ever emitted and therefore yields a blob id
+    // that matches nothing. Compared against `git hash-object` on this exact text:
+    //   git:  1b099ca4263240dd6249e074dcecccae1517d19d
+    let header = Text.Encoding.ASCII.GetBytes(sprintf "blob %d%c" bytes.Length (char 0))
     sha.ComputeHash(Array.append header bytes)
     |> Convert.ToHexString
     |> fun hex -> hex.ToLowerInvariant()
@@ -747,6 +752,7 @@ module SageFsEffectHandler =
                   // does not match. Announced on the SUCCESS arm only: a failed eval leaves the
                   // session holding what it held, and recording text it never took is how a
                   // record starts lying.
+                  SourceBound.announce (SessionId.value sid) req.FilePath (SourceBound.gitBlobIdOfText req.Content)
                   match List.isEmpty providers with
                   | true -> ()
                   | false -> dispatch (SageFsMsg.Event (TuiEvent.ProvidersDetected providers))
