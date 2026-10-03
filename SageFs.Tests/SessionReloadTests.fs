@@ -43,6 +43,14 @@ let tests =
           facts.Considered |> Expect.equal (sprintf "%A: considered" expectedCase) report.Considered
           facts.Message |> Expect.equal (sprintf "%A: the worker's own wording" expectedCase) report.Message
           facts.SuggestedAction |> Expect.equal (sprintf "%A: the remedy" expectedCase) report.SuggestedAction
+          // The round trip's real hole, and nothing here checked it. `toWire` never WROTE
+          // `declarations` while `ofPayloadJson` read it back, so a client asking "what did you
+          // patch" got an empty list for every reload — and the suite was green throughout, because
+          // the identity being asserted stopped short of the field that was being dropped.
+          // (`Kept` is NOT here: it lives on the OUTCOME, as `KeptLiveState`, not on `ReloadFacts`,
+          // so there was no such field to lose and the report claiming one was wrong on that half.)
+          facts.Declarations
+          |> Expect.equal (sprintf "%A: which declarations the reload patched" expectedCase) report.Declarations
         | other -> failtestf "%A did not read back as a finished reload: %A" expectedCase other
 
     testCase "WHY — the token the parser reads is the token the worker writes, for every case" <| fun _ ->

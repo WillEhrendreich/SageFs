@@ -188,7 +188,13 @@ module SessionReload =
            considered = facts.Considered
            message = facts.Message
            suggestedAction = facts.SuggestedAction
-           mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.wireName facts.Mechanism |}
+           mechanism = SageFs.Features.ReloadOutcome.PatchMechanism.wireName facts.Mechanism
+           // `ofPayloadJson` has always READ `declarations` back out of a payload; this never
+           // WROTE one, so every declaration a reload actually patched was lost on the way to a
+           // client — the sibling `ReplFreshness.toWire` below emits the same field, which is what
+           // made the omission visible. A client that asked "what changed" got an empty list, and
+           // the round trip was not an identity.
+           declarations = facts.Declarations |> List.toArray |}
 
   /// One line for a person or an agent: what the save did, or that it is still
   /// compiling, or that nothing has been saved yet.
