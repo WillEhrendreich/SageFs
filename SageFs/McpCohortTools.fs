@@ -24,6 +24,31 @@ module McpCohortTools =
   let cohortScopeOf (workingDirectory: string option) : SageFs.CohortScope =
     SageFs.Scope.ofWorkingDirectory SageFs.Scope.defaultStrategy (Option.defaultValue Environment.CurrentDirectory workingDirectory)
 
+  /// The SAME scope resolution the daemon binds its cohort owner to, resolved for a caller's
+  /// directory. The daemon owns ONE cohort, so a caller's command must name that cohort or it is
+  /// refused as a scope collision — which is correct, and useless if the two sides compute the
+  /// scope by different rules.
+  ///
+  /// A plain walk-up is not that rule. A worktree's own `.git` is a POINTER FILE, so stopping at the
+  /// first checkout marker resolves a worktree to ITSELF while the daemon, asking git for the shared
+  /// directory, resolves it to its repository. The integration tree, the trunk checkout and the main
+  /// checkout are then one repository under one rule and three under another, and every command the
+  /// trunk gate issues is refused. Asking git — `git rev-parse --git-common-dir`, which is what the
+  /// helper resolves — is the one answer that holds from every checkout of a repository.
+  let internal scopeForDirectory (workingDirectory: string) : SageFs.CohortScope =
+    match Features.CohortGit.commonRepositoryRoot workingDirectory with
+    | Some root -> SageFs.Scope.ofWorkingDirectory SageFs.Scope.defaultStrategy root
+    | None -> cohortScopeOf (Some workingDirectory)
+
+  /// The scope a command issued from `workingDirectory` belongs to: the same rule the daemon bound
+  /// its cohort owner to, so a caller's command names THAT cohort instead of colliding with it.
+  let internal scopeOf (workingDirectory: string option) : SageFs.CohortScope =
+    let dir =
+      match workingDirectory with
+      | Some wd -> wd
+      | None -> Environment.CurrentDirectory
+    scopeForDirectory dir
+
   let private parseJoinableRole (raw: string) : Result<Cohort.JoinableRole, SageFsError> =
     match (if isNull raw then "" else raw.Trim().ToLowerInvariant()) with
     | "implementer" -> Ok Cohort.JoinableRole.Implementer
@@ -187,7 +212,7 @@ module McpCohortTools =
         // two agents in two repositories get two cohorts with two conductor seats instead of
         // contending for one — which is what made an agent in an unrelated repo report a phantom
         // "already a conductor" conflict.
-        let cohortScope = cohortScopeOf workingDirectory
+        let cohortScope = scopeOf workingDirectory
         let! result = commitCohort ctx (Cohort.CohortCommand.Join(who, r, sessionOpt, cohortScope))
         return
           result
@@ -214,7 +239,7 @@ module McpCohortTools =
   let leaveCohort (ctx: McpContext) (agentName: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       let who = memberIdFor agentName
-      let! result = commitCohort ctx (Cohort.CohortCommand.Depart(who, cohortScopeOf workingDirectory))
+      let! result = commitCohort ctx (Cohort.CohortCommand.Depart(who, scopeOf workingDirectory))
       return result |> Result.map (fun _ -> sprintf "%s left the cohort." (MemberTable.MemberId.display who))
     }
 
@@ -233,7 +258,7 @@ module McpCohortTools =
         | Ok () ->
         let who = memberIdFor agentName
         let! result =
-          commitCohort ctx (Cohort.CohortCommand.AcquireClaim(who, claimScope, purpose, cohortScopeOf workingDirectory))
+          commitCohort ctx (Cohort.CohortCommand.AcquireClaim(who, claimScope, purpose, scopeOf workingDirectory))
         return
           result
           |> Result.bind (fun (events, _) ->
@@ -248,7 +273,7 @@ module McpCohortTools =
       let fenceMeasure = LanguagePrimitives.Int64WithMeasure<Measures.fence> fence
       let! result =
         commitCohort ctx (
-          Cohort.CohortCommand.ReleaseClaim(who, Cohort.ClaimId claimId, fenceMeasure, cohortScopeOf workingDirectory))
+          Cohort.CohortCommand.ReleaseClaim(who, Cohort.ClaimId claimId, fenceMeasure, scopeOf workingDirectory))
       return result |> Result.map (fun _ -> sprintf "Released claim %s." claimId)
     }
 
@@ -261,7 +286,7 @@ module McpCohortTools =
     task {
       let by = memberIdFor agentName
       let target = resolveMemberByDisplay ctx toMember
-      let! result = commitCohort ctx (Cohort.CohortCommand.ReassignClaim(by, Cohort.ClaimId claimId, target, cohortScopeOf workingDirectory))
+      let! result = commitCohort ctx (Cohort.CohortCommand.ReassignClaim(by, Cohort.ClaimId claimId, target, scopeOf workingDirectory))
       return result |> Result.map (fun _ -> sprintf "Reassigned claim %s to %s." claimId (MemberTable.MemberId.display target))
     }
 
@@ -280,7 +305,7 @@ module McpCohortTools =
           |> Array.filter (fun s -> s <> "")
           |> Array.toList
         let requester = memberIdFor agentName
-        let! result = commitCohort ctx (Cohort.CohortCommand.RequestLanding(requester, claimList, commitList, statement, cohortScopeOf workingDirectory))
+        let! result = commitCohort ctx (Cohort.CohortCommand.RequestLanding(requester, claimList, commitList, statement, scopeOf workingDirectory))
         return
           result
           |> Result.bind (fun (events, _) ->

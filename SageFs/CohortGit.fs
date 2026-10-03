@@ -199,6 +199,49 @@ let trackedFsFiles (repoDir: string) : Async<Result<string list, string>> =
   runGit repoDir shortTimeout [ "ls-files"; "--full-name"; "*.fs" ]
   |> mapOk splitLines
 
+/// The MAIN checkout of the repository that owns `repoDir`, which is the one place two checkouts of
+/// one repository can be recognised as the same repository (`git rev-parse --path-format=absolute
+/// --git-common-dir`).
+///
+/// A worktree's own `.git` is a POINTER FILE into the main checkout's `.git/worktrees/<name>`, so
+/// every walk-up that stops at the first checkout marker resolves a worktree to ITSELF and not to its
+/// repository — one repository would then read as several roots, and anything keyed by "the repository"
+/// (a cohort's scope, a gate's owner) would come out once per checkout. Git already knows the shared
+/// answer, so this asks it rather than re-deriving the layout.
+///
+/// `--path-format=absolute` matters for a linked worktree, where git prints the common dir RELATIVE
+/// to that worktree; this makes the answer the same absolute path from any checkout of the repository.
+/// A plain checkout answers with its own `.git`, so the question is stable in both shapes.
+///
+/// `None` when `repoDir` is not a checkout at all or git cannot answer — the caller then has no
+/// repository to name, and decides for itself rather than being handed a guess.
+///
+/// Synchronous because its one caller binds it ONCE, while constructing the cohort owner, and an
+/// owner cannot be constructed from a value that does not exist yet. It is a single short plumbing
+/// call at that point, not on any request path.
+let commonRepositoryRoot (repoDir: string) : string option =
+  match Directory.Exists repoDir with
+  | false -> None
+  | true ->
+    let gitCommonDir =
+      runGit repoDir shortTimeout [ "rev-parse"; "--path-format=absolute"; "--git-common-dir" ]
+      |> Async.RunSynchronously
+      |> Result.defaultValue ""
+    match gitCommonDir with
+    | "" -> None
+    | answer ->
+      try
+        let full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(trim answer))
+        // `<repo>/.git` -> `<repo>`. A BARE repository's common dir is the repository itself and is
+        // not named `.git`, so it is already its own root and is left alone.
+        match Path.GetFileName full with
+        | ".git" -> Path.GetDirectoryName full |> Option.ofObj
+        | _ -> Some full
+      with
+      | :? ArgumentException
+      | :? NotSupportedException
+      | :? PathTooLongException -> None
+
 /// The git blob id of a file's text as git would hash it (`git hash-object <path>`), which is the
 /// same id the object has if it is already stored — so it answers "is this file's text the same
 /// text git already has" for a path that was never committed, not only for one that was.

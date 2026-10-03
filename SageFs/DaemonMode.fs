@@ -2972,10 +2972,46 @@ let run
       Log.warn "[cohort] ledger retention check failed, leaving it alone: %s" ex.Message
     Features.CohortLedgerSqlite.Sqlite.create ledgerPath
 
+  // The scope the owner runs is the scope its CALLERS are scoped to. A cohort is about ONE scope
+  // (`CohortScope.fs`), and the tool side already derives it per repository from the directory a
+  // command acts in (`McpCohortTools.cohortScopeOf`): the caller's own `working_directory` if it named
+  // one, else the working directory of the session it is bound to, else the process's own. Binding
+  // the owner to anything else refuses that caller's very first command as a scope collision, which
+  // is what the hard-coded machine-wide scope did to every `join_cohort`.
+  //
+  // And that derivation gives the answer the OTHER commands come out with, because all of them are
+  // resolved the same way, from one directory: the trunk checkout. After `set_integration_ref` every
+  // unbound caller is bound to the session that works in it, so a claim, a release and a landing all
+  // resolve to the trunk checkout's repository — and the session this gate verifies in works in the
+  // integration worktree, which `set_integration_ref` creates as a worktree of the SAME repository.
+  //
+  // So the owner's scope is the scope of the repository that owns the integration tree, NOT the scope
+  // of the integration tree itself. The distinction is not cosmetic: `Scope.repositoryRootOf` stops at
+  // the first checkout marker it finds, and a worktree root's marker is a `.git` POINTER FILE, so the
+  // worktree resolves to itself rather than to its repository. Two checkouts of one repository would
+  // therefore come out as two cohorts — two conductor seats and no shared claims — unless the
+  // repository behind them is resolved first, which is what `git-common-dir` does and git exists to
+  // answer.
+  let cohortScope =
+    let worktree = SageFs.McpCohortIntegration.cohortIntegrationRef.Value |> Option.map (fun b -> b.WorktreePath)
+    let repository =
+      match worktree with
+      | Some dir -> Features.CohortGit.commonRepositoryRoot dir
+      | None -> None
+    // No integration tree yet means no cohort has been configured for this repository, so the
+    // process's own checkout is the best reading of where this daemon's cohort is about; a repository
+    // that cannot answer for itself falls back to the directory itself, as `Scope` does everywhere.
+    let subject =
+      match repository, worktree with
+      | Some root, _ -> root
+      | None, Some dir -> dir
+      | None, None -> Environment.CurrentDirectory
+    SageFs.Scope.ofWorkingDirectory SageFs.Scope.defaultStrategy subject
+
   use cohortOwner =
     Features.CohortOwner.startWithPerformer
       (Log.asILogger ())
-      SageFs.CohortScope.Machine
+      cohortScope
       cohortLedgerPort
       (fun () -> System.DateTime.UtcNow)
       Features.CohortOwner.productionEntropy
@@ -3501,8 +3537,8 @@ let run
           |> Set.ofList
         let isActive (m: MemberTable.MemberId) = Set.contains (MemberTable.MemberId.display m) freshKeys
         for m in cohortMembersToRenew isActive state.Members do
-          cohortOwner.Post(SageFs.Cohort.CohortCommand.RenewLease(m, SageFs.CohortScope.Machine), ignore)
-        cohortOwner.Post(SageFs.Cohort.CohortCommand.Tick SageFs.CohortScope.Machine, ignore)
+          cohortOwner.Post(SageFs.Cohort.CohortCommand.RenewLease(m, cohortOwner.Scope), ignore)
+        cohortOwner.Post(SageFs.Cohort.CohortCommand.Tick cohortOwner.Scope, ignore)
     with ex ->
       log.LogWarning("Cohort reaper tick threw unexpectedly: {Error}", ex.Message)
     // reschedule after this run (one-shot pattern, guards the shutdown race)
@@ -3561,7 +3597,7 @@ let run
             path
         with
         | Some(observer, relPath) ->
-          cohortOwner.Post(Cohort.CohortCommand.ObserveSave(observer, relPath, SageFs.CohortScope.Machine), ignore)
+          cohortOwner.Post(Cohort.CohortCommand.ObserveSave(observer, relPath, cohortOwner.Scope), ignore)
         | None -> ()),
       Some workingDir)
   watcherManagerRef := Some liveTestWatcherManager
@@ -4230,9 +4266,9 @@ let run
     // directly — no mailbox round-trip, no IO.
     ReadCohortFrame = cohortOwner.ReadFrame
     // The ledger is per-scope, and the dashboard inspector reads the cohort this daemon owns. The
-    // scope is bound HERE rather than pushed through `DashboardTypes`, because every dashboard
+    // scope is the OWNER's own rather than pushed through `DashboardTypes`, because every dashboard
     // reader wants "the cohort I am showing" and none of them has a second scope to ask about.
-    ReadCohortLedger = fun () -> cohortLedgerPort.ReadAll SageFs.CohortScope.Machine
+    ReadCohortLedger = fun () -> cohortLedgerPort.ReadAll cohortOwner.Scope
     ReadTrunk = trunkFollower.Read
     GetCompletions = fun (sessionId: WorkerProtocol.SessionId) (code: string) (cursorPos: int) -> task {
       try
