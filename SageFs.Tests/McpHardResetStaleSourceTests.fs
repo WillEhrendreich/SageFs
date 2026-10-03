@@ -91,21 +91,24 @@ let private plansAsked (p: Probe) = p.Restarts |> Seq.toList
 [<Tests>]
 let tests = testList "MCP hard reset vs stale source" [
 
-  test "WHY — the fixture really does present a stale build after an edit, so a failing test below is the tool and not the fixture" {
-    SourceStateFixtures.using (fun p ->
-      task {
-        SourceStateFixtures.editSource p
-        probeToken p (Some (SourceStateFixtures.warmup p))
-        |> Expect.equal "the source is now newer than the build the session loaded" "Stale" })
-      |> fun t -> t.GetAwaiter().GetResult()
+  // These two are `testTask` rather than `test ... GetAwaiter().GetResult()`. Blocking on a
+  // Task inside a test body starves the thread pool the other cases run on, and the repo
+  // ratchets that count DOWN — so a sync wrapper here is debt the next case pays for.
+  testTask "WHY — the fixture really does present a stale build after an edit, so a failing test below is the tool and not the fixture" {
+    do!
+      SourceStateFixtures.using (fun p ->
+        task {
+          SourceStateFixtures.editSource p
+          probeToken p (Some (SourceStateFixtures.warmup p))
+          |> Expect.equal "the source is now newer than the build the session loaded" "Stale" })
   }
 
-  test "WHY — an unedited fixture is in sync, so the cheap path has a real case to stay cheap for" {
-    SourceStateFixtures.using (fun p ->
-      task {
-        probeToken p (Some (SourceStateFixtures.warmup p))
-        |> Expect.equal "nothing was edited after the build" "InSync" })
-      |> fun t -> t.GetAwaiter().GetResult()
+  testTask "WHY — an unedited fixture is in sync, so the cheap path has a real case to stay cheap for" {
+    do!
+      SourceStateFixtures.using (fun p ->
+        task {
+          probeToken p (Some (SourceStateFixtures.warmup p))
+          |> Expect.equal "nothing was edited after the build" "InSync" })
   }
 
   testTask "REGRESSION — hard_reset rebuild=false on a STALE session must not report a plain success, because the respawned worker serves the build from before the edit" {

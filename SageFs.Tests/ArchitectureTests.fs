@@ -1145,7 +1145,13 @@ let fileSizeBudgets =
       // their parsers) moved to McpCohortTools.fs, which paid for the member-token identity gate and the claim
       // path canonicalization that landed here and left it 112 lines under the 3332 it started at. The file
       // is 3220 lines. Exact size.
-      "SageFs/Mcp.fs", 3220
+      // 3220 -> 3280: the tool-admission DECISION (the gate over the whole tool surface, and
+      // the reasoning behind it) moved out to ToolAuthorityGate.fs, which is where the "a role is
+      // not a sandbox" argument belongs rather than in the middle of an adapter file. That paid for
+      // the five MCP cohort tools' new `workingDirectory` parameter (each of which needs its own
+      // decision about which cohort it addresses) and for the whole-surface authority gate's call
+      // site, which the new module now carries. The file is 3280 lines. Exact size.
+      "SageFs/Mcp.fs", 3280
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

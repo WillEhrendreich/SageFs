@@ -741,50 +741,17 @@ module McpTools =
           Error (SageFsError.describeForAgent (SageFsError.WorkerTimeout (sessionId, "status check", waited.TotalSeconds)))
     }
 
-  /// Reverse lookup from MCP tool name to `Affordances.CohortTool` — built
-  /// once from the single `toToolName` source of truth (no second literal
-  /// name list to drift, per MEMORY.md "no magic strings anywhere").
-  let private cohortToolByName: Map<string, Affordances.CohortTool> =
-    Affordances.CohortTool.all
-    |> List.map (fun t -> Affordances.CohortTool.toToolName t, t)
-    |> Map.ofList
-
-  /// Authority-aware pre-check for cohort tools (cohort-integration-plan.md
-  /// Slice 3, item 11): an EARLIER, friendlier refusal than `Cohort.decide`'s
-  /// own `NotConductor`/`NotClaimHolder` — that core enforcement is untouched
-  /// and still runs regardless of this gate. `None` when `toolName` is not a
-  /// cohort tool at all, so the caller falls through to the existing
-  /// session-state gate below (cohort tools are `AlwaysAvailable` there —
-  /// this is a second, role-based dimension layered on top of it).
+  /// THE AUTHORITY GATE over the WHOLE tool surface, resolved against the caller's BOUND identity
+  /// (`memberIdFor agent`, never a self-declared role argument) and the owner's published frame.
   ///
-  /// Resolves the caller's `Authority` from the owner's published
-  /// `CohortFrame` (`Affordances.authorityOfMember`) using the BOUND
-  /// identity (`memberIdFor agent` — never a self-declared role argument).
-  /// No cohort owner wired (`ctx.CohortOwner = None`, pre-Slice-2 unit
-  /// tests) resolves to `Authority.Anonymous`, same as an unjoined caller.
-  let private checkCohortAuthorityGate (ctx: McpContext) (agent: string) (toolName: string) : Result<unit, string> option =
-    match Map.tryFind toolName cohortToolByName with
-    | None -> None
-    | Some tool ->
-      let who = memberIdFor agent
-      let authority =
-        match ctx.CohortOwner with
-        | Some owner -> Affordances.authorityOfMember who (owner.ReadFrame())
-        | None -> Cohort.Authority.Anonymous
-      if Affordances.checkCohortToolAllowed authority tool then
-        Some (Ok ())
-      else
-        let roleText =
-          match authority with
-          | Cohort.Authority.Anonymous -> "not (yet) a member of this cohort"
-          | Cohort.Authority.Member(_, role) -> sprintf "a %A" role
-          | Cohort.Authority.Conductor _ -> "the conductor" // unreachable: every tool is allowed for Conductor
-        let reason =
-          sprintf "%s cannot call %s: your role (%s) does not permit it."
-            (MemberTable.MemberId.display who) toolName roleText
-        let suggestion =
-          "Join as Implementer for claim/landing tools, or ask the cohort conductor to perform this action."
-        Some (Error (SageFsError.describeForAgent (SageFsError.CohortActionFailed(reason, suggestion))))
+  /// The gate itself, and the reasoning behind it — including WHY a role is not a sandbox — live in
+  /// `ToolAuthorityGate.fs`. This is the call site; it belongs here because it needs `McpContext`.
+  let private checkToolAuthorityGate (ctx: McpContext) (agent: string) (toolName: string) : Result<unit, string> =
+    let who = memberIdFor agent
+    let authority = ToolAuthorityGate.authorityOf ctx.CohortOwner who
+    match ToolAuthorityGate.decide who authority toolName with
+    | ToolAuthorityGate.Decision.Admitted -> Ok ()
+    | ToolAuthorityGate.Decision.Refused(reason, _) -> Error reason
 
   /// The identity layer of the gate, ahead of the cohort's role check and the session-state
   /// gate (a call must pass all three): who is calling, and may that caller call this tool at all.
@@ -806,7 +773,7 @@ module McpTools =
           match ctx.CohortOwner with
           | Some owner ->
             let frame = owner.ReadFrame()
-            let seat = match frame.Conductor with | None -> Capability.ConductorSeat.NotBoundYet | Some _ -> Capability.ConductorSeat.Bound
+            let seat = match frame.Conductor with | Cohort.ConductorBinding.NeverBound -> Capability.ConductorSeat.NotBoundYet | _ -> Capability.ConductorSeat.Bound
             Affordances.authorityOfMember (memberIdFor agent) frame, seat
           | None -> Cohort.Authority.Anonymous, Capability.ConductorSeat.Bound
         Capability.admitTokenless Capability.IdentityPolicy.TokenRequired seat authority toolName
@@ -828,9 +795,11 @@ module McpTools =
   ///     the gate evaluates the SAME session the tool would target.
   ///   - undeclared      — fails closed (ToolNotAvailable).
   ///
-  /// Cohort tools additionally pass through `checkCohortAuthorityGate` FIRST
-  /// (Slice 3, item 11) — a role-based dimension the session-state gate below
-  /// has no concept of. `admitToolCallWithin` is the gate itself; it returns
+  /// EVERY tool additionally passes through `checkToolAuthorityGate` FIRST —
+  /// a role-based dimension the session-state gate has no concept of, and the
+  /// one that used to apply only to the ten cohort verbs. The two are composed
+  /// by INTERSECTION, never union: the call must satisfy BOTH, and a failure in
+  /// either refuses it. `admitToolCallWithin` is the gate itself; it returns
   /// what it resolved, so the tool body need not resolve a second time.
   let admitToolCallWithinStore
     (store: CapabilityStore)
@@ -849,9 +818,9 @@ module McpTools =
       match checkIdentityGate store ctx agent toolName with
       | Error message -> return Error message
       | Ok () ->
-      match checkCohortAuthorityGate ctx agent toolName with
-      | Some result -> return result |> Result.map (fun () -> admission GateResolution.NotResolved)
-      | None ->
+      match checkToolAuthorityGate ctx agent toolName with
+      | Error message -> return Error message
+      | Ok () ->
       match Affordances.toolGate toolName with
       | Some Affordances.ToolGate.AlwaysAvailable ->
         return Ok (admission GateResolution.NotResolved)
@@ -1896,6 +1865,73 @@ module McpTools =
   let private rebuildInitiatedMessage =
     "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. Call get_session_status with wait_seconds=60 to wait for the rebuild's outcome (no polling); the reply says what the rebuild did."
 
+  /// What a rebuild=false reset would actually leave the session serving.
+  ///
+  /// A respawn replaces the WORKER PROCESS and nothing else: the replacement
+  /// re-runs `ActorCreation`, whose first real step is
+  /// `ShadowCopy.shadowCopySolution` (SageFs/Core/ActorCreation.fs:123-124), and
+  /// that COPIES the project's existing build output into a fresh shadow dir
+  /// and loads those bytes. No `dotnet build` runs, so a source edited since
+  /// the last build is invisible to the respawn — the new worker serves the OLD
+  /// code. The build output is what a session serves; the process is only where
+  /// it is served from. So respawn-only CANNOT serve current code once the
+  /// sources have moved on, and no amount of process replacement changes that.
+  ///
+  /// This is read with `SourceState` — the same edge `get_session_status` and the
+  /// session list already use (`SourceStateProbe.ofSessionRecord`), so the tool
+  /// decides with the same evidence it already reports and cannot disagree with
+  /// the status it prints.
+  let private respawnWouldServeStaleSource
+    (ctx: McpContext)
+    (sid: string)
+    : Task<SourceState> = task {
+      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+      let! warmup = warmupOf ctx sid
+      return SourceStateProbe.ofSessionRecord info warmup
+    }
+
+  /// The notice a rebuild=false reply carries when it built instead of
+  /// respawning. It says plainly WHY, because the honest answer here is the
+  /// expensive one and a silent respawn reads as success.
+  let private staleSourceRestartMessage (state: SourceState) =
+    sprintf
+      "Rebuilt instead of respawning: the files on disk are ahead of the build this session runs, and a respawn replaces only the worker PROCESS — it re-copies the same stale build output (SageFs/Core/ActorCreation.fs, ShadowCopy.shadowCopySolution), so it would have served the OLD code while reporting success. %s"
+      (SourceState.describe state)
+
+  /// What rebuild=false must actually do, given what it would leave serving:
+  /// `InSync` is the only state where a respawn is honest, because there the
+  /// build already matches the sources. Stale, rebuilding and unknown all take
+  /// the rebuild path — the last two because "could not tell" is never read as
+  /// "in sync" (`SourceState.decide` says so itself).
+  let private respawnIsHonest (state: SourceState) =
+    match state with
+    | SourceState.InSync _ -> true
+    | SourceState.Stale _
+    | SourceState.Rebuilding _
+    | SourceState.Unknown _ -> false
+
+  /// One decision, one code path, so the text tool and the Result tool cannot
+  /// drift: the plan a rebuild=false reset really asks for.
+  let private planForRespawn (ctx: McpContext) (sid: string) : Task<SageFs.RestartPlan> = task {
+    let! state = respawnWouldServeStaleSource ctx sid
+    return
+      match respawnIsHonest state with
+      | true -> RestartPlan.RespawnOnly
+      | false -> RestartPlan.Rebuild GranularRestart.RestartSubject.Worker
+  }
+
+  /// Why a rebuild=false reset ended up building, or "" when it really did
+  /// respawn, so the reply can say so instead of leaving the caller to guess
+  /// which path they paid for.
+  let private upgradeNotice (ctx: McpContext) (sid: string) (asked: SageFs.RestartPlan) : Task<string> = task {
+    match asked with
+    | SageFs.RestartPlan.RespawnOnly -> return ""
+    | SageFs.RestartPlan.Rebuild _
+    | SageFs.RestartPlan.Migrate _ ->
+      let! state = respawnWouldServeStaleSource ctx sid
+      return staleSourceRestartMessage state
+  }
+
   /// Starts a rebuild=true hard reset in the background. The text tool and the
   /// Result tool each carried their own copy of this, so a fix had to land twice.
   ///
@@ -1951,18 +1987,33 @@ module McpTools =
         // reusing the stale ones. spawnFirst is the only thing that replaces
         // them. The owner decides Ready/Faulted/pid the same way the
         // rebuild=true path does, so this call writes no session status.
+        //
+        // But replacing the process is not the same as picking up the edit:
+        // the replacement re-copies the build output (see
+        // `respawnWouldServeStaleSource`), so a respawn is only honest while
+        // the build already matches the sources. `planForRespawn` decides that
+        // once, for both this tool and its Result sibling, and upgrades to the
+        // rebuild when a respawn would serve code older than the files — the
+        // caller is told which it paid for rather than being handed a success
+        // that hides the cost.
         compilationStates.TryRemove(sid) |> ignore
         typeIdentityDiagnostics.TryRemove(sid) |> ignore
+        let! asked = planForRespawn ctx sid
         let! result =
           task {
-            try return! ctx.SessionOps.RestartSession (toSessionId sid) RestartPlan.RespawnOnly
+            try return! ctx.SessionOps.RestartSession (toSessionId sid) asked
             with ex -> return Error (SageFsError.Unexpected ex)
           }
         match result with
         | Ok msg ->
           notifyElm ctx (
             TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-          return "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. " + msg
+          let! notice = upgradeNotice ctx sid asked
+          let head =
+            match notice with
+            | "" -> "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. "
+            | _ -> sprintf "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. %s " notice
+          return head + msg
         | Error err ->
           notifyElm ctx (
             TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
@@ -1980,18 +2031,27 @@ module McpTools =
         startTrackedRebuild ctx sid
         return Ok rebuildInitiatedMessage
       | false ->
+        // The same `planForRespawn` decision the text tool uses, so the two
+        // surfaces cannot disagree about what a rebuild=false reset costs or
+        // whether it would have served stale code.
         compilationStates.TryRemove(sid) |> ignore
         typeIdentityDiagnostics.TryRemove(sid) |> ignore
+        let! asked = planForRespawn ctx sid
         let! result =
           task {
-            try return! ctx.SessionOps.RestartSession (toSessionId sid) RestartPlan.RespawnOnly
+            try return! ctx.SessionOps.RestartSession (toSessionId sid) asked
             with ex -> return Error (SageFsError.Unexpected ex)
           }
         match result with
         | Ok msg ->
           notifyElm ctx (
             TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-          return Ok ("⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. " + msg)
+          let! notice = upgradeNotice ctx sid asked
+          let head =
+            match notice with
+            | "" -> "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. "
+            | _ -> sprintf "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. %s " notice
+          return Ok (head + msg)
         | Error err ->
           notifyElm ctx (
             TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))

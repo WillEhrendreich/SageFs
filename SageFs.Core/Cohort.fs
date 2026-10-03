@@ -463,6 +463,26 @@ module Cohort =
     /// `ConductorBinding`). Moved only by `Join`/`DelegateConductor`; never a
     /// value a member can assert about itself.
     Conductor: ConductorBinding<'m>
+    /// WHAT this cohort is about — the repository (by default) whose members,
+    /// claims and conductor seat these are. Established once, by the FIRST
+    /// command (`OpenCohort`, carrying the caller's derived scope); every later
+    /// command must carry the SAME scope or be refused `WrongCohortScope`.
+    ///
+    /// WHY THE STATE CARRIES IT RATHER THAN THE CALLER LOOKING IT UP. Before
+    /// this field the daemon held exactly ONE cohort for its whole lifetime, so
+    /// an agent in `/home/will/Work/nehemiah` and one in `/home/will/Work/SageFs`
+    /// were the SAME cohort, sharing one conductor seat — and the first joiner
+    /// ever was the conductor of both. Putting the scope IN the state is what
+    /// makes a cross-scope command detectable at all: the reducer is the only
+    /// place that knows which cohort a command is being applied to, so it is the
+    /// only place that can refuse a command addressed to a different one. The
+    /// comparison is `Scope.equal`, i.e. by canonical label, so two spellings of
+    /// one path still match (see `CohortScope.fs`'s canonicalization).
+    ///
+    /// Set ONLY by `OpenCohort`, and `decide` refuses to overwrite it: two
+    /// agents that derive DIFFERENT scopes are not one cohort with a disputed
+    /// key, they are two cohorts and one of them is wrong about where it is.
+    Scope: CohortScope
   }
 
   /// The well-known git "no parent" sha — a real, meaningful sentinel (`git
@@ -487,6 +507,15 @@ module Cohort =
   let settledRetention = Timeouts.cohortSettledRetention
 
   module CohortState =
+    /// A cohort that has never been opened yet. Its scope is `Machine`, which is
+    /// v1's behaviour and the honest default: a ledger with no scope anywhere in
+    /// it WAS machine-wide, so this is what replaying those rows has to produce
+    /// for the migration to be behaviour-preserving.
+    ///
+    /// It is also why `OpenCohort` exists at all. An empty state cannot record
+    /// the scope a caller arrived with (nothing has been opened), so the first
+    /// command carries it and the state adopts it. Every other command after
+    /// that must agree — see `CohortError.WrongCohortScope`.
     let empty () : CohortState<'m> = {
       NextFence = 0L<fence>
       IntegrationHead = nullSha
@@ -495,7 +524,15 @@ module Cohort =
       Landings = Map.empty
       Queue = []
       Conductor = ConductorBinding.NeverBound
+      Scope = CohortScope.Machine
     }
+
+    /// The empty state AS a cohort about `scope` — the one construction a caller
+    /// should use when it already knows which cohort it is opening (a ledger
+    /// replay scoped to a repository, a test that wants two unrelated cohorts
+    /// side by side). Byte-for-byte what `decide` produces for an
+    /// `OpenCohort scope` on an `empty ()`, so the two paths cannot disagree.
+    let forScope (scope: CohortScope) : CohortState<'m> = { empty () with Scope = scope }
 
   module Authority =
     /// The ONLY door (§4.2): a member's id becomes an `Authority` by looking it up
@@ -538,35 +575,64 @@ module Cohort =
 
   [<RequireQualifiedAccess>]
   type CohortCommand<'m> =
+    /// Establish which cohort this is: the scope the caller derived from its own
+    /// working directory via `Scope.ofWorkingDirectory` (per-repository by
+    /// default — `join_cohort` sends the derived scope, the caller may override
+    /// the strategy). Adopts `scope` into `CohortState.Scope` on a cohort that has
+    /// never been opened.
+    ///
+    /// WHY IT IS A COMMAND AND NOT A `decide` PARAMETER. A parameter would be
+    /// re-derived on every call and then compared to the state on every call —
+    /// the comparison would have to live at each of the ~20 `decide` arms, and one
+    /// arm forgetting it is a silent cross-scope apply. Making it a command means
+    /// the scope travels the same path as everything else that mutates the cohort
+    /// (it is appended to the ledger, it replays, it is inspectable), and the
+    /// check is ONE guard in ONE place.
+    ///
+    /// Refused `WrongCohortScope` when the cohort already has a scope. Re-opening
+    /// an open cohort at a different scope is never a merge: the honest reading is
+    /// that the caller has addressed the wrong cohort, which is the collision this
+    /// whole type exists to end. Re-opening at the SAME scope is an idempotent
+    /// no-op (no events, no effects) so a caller that re-sends it on a reconnect
+    /// is not punished for it.
+    | OpenCohort of scope: CohortScope
     /// `session` (item 13c) is the caller's resolved SESSION (checkout) id, if
     /// any — the shell resolves this (Mcp.fs's `join_cohort`), `decide` only
-    /// stores it verbatim in the new `MemberRecord`.
-    | Join of who: 'm * role: JoinableRole * session: string option
-    | Depart of who: 'm
-    | RenewLease of who: 'm
+    /// stores it verbatim in the new `MemberRecord`. `scope` is the cohort the
+    /// caller believes it is joining; it must equal `CohortState.Scope` or the
+    /// command is refused (`WrongCohortScope`), which is what keeps a member from
+    /// acting on a cohort it is not in.
+    | Join of who: 'm * role: JoinableRole * session: string option * scope: CohortScope
+    | Depart of who: 'm * scope: CohortScope
+    | RenewLease of who: 'm * scope: CohortScope
     /// The shell posts this periodically; `decide` derives who has gone silent
     /// from `Clock - LastRenewal >= leaseWindow`. No timer lives in this module.
-    | Tick
-    | AcquireClaim of who: 'm * scope: ClaimScope * purpose: string
-    | ReleaseClaim of who: 'm * claimId: ClaimId * fence: int64<fence>
+    /// `scope` because a reaper tick belongs to ONE cohort: a machine-wide
+    /// reaper that swept every repository's cohort would depart members it is not
+    /// responsible for.
+    | Tick of scope: CohortScope
+    | AcquireClaim of who: 'm * scope: ClaimScope * purpose: string * cohort: CohortScope
+    | ReleaseClaim of who: 'm * claimId: ClaimId * fence: int64<fence> * scope: CohortScope
     /// Conductor action: reassign an `Orphaned` claim. Gated by `Authority.present
     /// by state = Authority.Conductor _` (Phase 1 item 8) — refused with
     /// `CohortError.NotConductor` otherwise.
-    | ReassignClaim of by: 'm * claimId: ClaimId * toMember: 'm
+    | ReassignClaim of by: 'm * claimId: ClaimId * toMember: 'm * scope: CohortScope
     /// Conductor action: rebind `Conductor` to another Present member (§4.2's
     /// "delegate conductor to member X rebinds it"). Gated the same way as
     /// `ReassignClaim`.
-    | DelegateConductor of by: 'm * toMember: 'm
+    | DelegateConductor of by: 'm * toMember: 'm * scope: CohortScope
     /// The member's own watcher observed a save; warn (never block — a claim
     /// cannot stop an edit, §5.1) if it landed inside someone else's claim.
-    | ObserveSave of who: 'm * path: string
-    | RequestLanding of requester: 'm * claims: (ClaimId * int64<fence>) list * commits: string list * statement: string
+    | ObserveSave of who: 'm * path: string * scope: CohortScope
+    | RequestLanding of requester: 'm * claims: (ClaimId * int64<fence>) list * commits: string list * statement: string * scope: CohortScope
     /// Effect completions are commands (§5.2) — this is `RebuildCompleted`'s
     /// pattern (`SessionManager.fs:79-82`) applied to landing.
-    /// `Ok newHead` or `Error conflictFiles`.
-    | RebaseCompleted of LandingId * Result<string, string list>
-    | AffectedComputed of LandingId * TestId list
-    | TestsCompleted of LandingId * failing: TestId list
+    /// `Ok newHead` or `Error conflictFiles`. The completing member is the
+    /// cohort's own, so the scope is the state's own; carried like every other
+    /// command so `replay` and the shell resolve the cohort the same way.
+    | RebaseCompleted of LandingId * Result<string, string list> * CohortScope
+    | AffectedComputed of LandingId * TestId list * CohortScope
+    | TestsCompleted of LandingId * failing: TestId list * CohortScope
     /// The verifier could not produce a verdict at all — distinct from
     /// `TestsCompleted` with a non-empty failing list. The performer emits this
     /// (instead of reporting every requested test as "failing") when it cannot
@@ -575,8 +641,8 @@ module Cohort =
     /// Fail-closed is preserved (the landing still does NOT fast-forward), but
     /// `decide` records it as `Blocked(Inconclusive ...)` and un-jams the queue
     /// rather than treating a transient as a permanent test failure.
-    | VerificationInconclusive of LandingId * reason: string
-    | FastForwardCompleted of LandingId * committedSha: string
+    | VerificationInconclusive of LandingId * reason: string * CohortScope
+    | FastForwardCompleted of LandingId * committedSha: string * CohortScope
     /// The FastForward EFFECT itself failed — an infra error (the branch
     /// moved concurrently under a raw git command, a transient I/O error,
     /// a bad ref), as opposed to `FastForwardCompleted`'s `HeadMoved` guard,
@@ -586,9 +652,9 @@ module Cohort =
     /// nothing ever re-entered `decide`, so the landing was permanently
     /// stranded in `Verifying` (roast-6 #7b). See the `decide` case below for
     /// the transition this now drives.
-    | FastForwardFailed of LandingId * reason: string
-    | WithdrawLanding of who: 'm * LandingId
-    | VetoLanding of by: 'm * LandingId * reason: string
+    | FastForwardFailed of LandingId * reason: string * CohortScope
+    | WithdrawLanding of who: 'm * LandingId * CohortScope
+    | VetoLanding of by: 'm * LandingId * reason: string * CohortScope
     /// Conductor action (item 14c): bind `IntegrationHead` to a git sha the
     /// shell has already resolved and checked out into the daemon's
     /// integration worktree (`SageFs/Mcp.fs`'s `set_integration_ref`, which
@@ -600,16 +666,20 @@ module Cohort =
     /// `onto`, `FastForwardCompleted`'s `HeadMoved` check compares against
     /// it) changes — both already treat `IntegrationHead` as ordinary
     /// mutable state, whatever last set it.
-    | SetIntegrationHead of by: 'm * head: string
+    | SetIntegrationHead of by: 'm * head: string * scope: CohortScope
     /// Conductor action (armfix, cmd-handoff.md item B2): clear a
     /// `Blocked(VetoedBy, AwaitConductor)` landing and re-Queue it (see the
     /// `decide` case's doc comment for the re-Queue-vs-Withdraw design
     /// rationale). Gated the same way as `SetIntegrationHead`/
     /// `ReassignClaim`/`DelegateConductor`.
-    | ResolveVeto of by: 'm * LandingId
+    | ResolveVeto of by: 'm * LandingId * CohortScope
 
   [<RequireQualifiedAccess>]
   type CohortEvent<'m> =
+    /// The cohort adopted a scope — recorded so `replay` reconstructs the right
+    /// `CohortState.Scope` from the ledger alone, exactly as `MemberJoined`
+    /// reconstructs `MemberRecord.Session`.
+    | CohortOpened of CohortScope
     /// Carries the same `session` `Join` was given (item 13c) so `replay`
     /// reconstructs an identical `MemberRecord.Session` from the ledger alone.
     | MemberJoined of 'm * JoinableRole * session: string option
@@ -691,9 +761,65 @@ module Cohort =
     /// suggest, and no auto-promotion to lean on: a vacancy is a typed state a
     /// person fills.
     | ConductorVacant of former: 'm option * since: DateTime * why: VacancyReason
+    /// The command names a cohort this one is NOT — `requested` is the scope the
+    /// caller arrived with, `cohort` is the scope this state was opened at. This
+    /// is the refusal that keeps a member from acting on a cohort it is not in:
+    /// without it, a cross-scope command that did not happen to hit a
+    /// `MemberNotPresent` would apply silently to the wrong cohort's claims.
+    ///
+    /// WHY IT IS NAMED, NOT AN UNTYPED STRING RESULT. This repo counts DOWN on
+    /// untyped-string refusals because a bare string says nothing about
+    /// which of the twenty-odd refusals it was; a typed DU case makes every
+    /// refusal a site the compiler forces you to handle, and carries both scopes
+    /// so the message can name WHICH scope the caller actually reached.
+    | WrongCohortScope of requested: CohortScope * cohort: CohortScope
+
+  /// WHICH cohort a command addresses — the one exhaustive place the scope field
+  /// is read off a command.
+  ///
+  /// It exists because the scope travels in EVERY command but only the store and
+  /// the shell ever need to know WHICH cohort a row belongs to before applying it
+  /// (the SQLite port's `scope` column, the daemon's per-cohort owner map). The
+  /// exhaustive match is the point: a new `CohortCommand` case with no scope, or
+  /// with a differently-named one, is a compile error HERE rather than a row that
+  /// silently lands in whichever bucket the old default happened to be. Every
+  /// case is enumerated; there is no wildcard default that could absorb a future
+  /// command.
+  let scopeOf<'m> (command: CohortCommand<'m>) : CohortScope =
+    match command with
+    | CohortCommand.OpenCohort scope
+    | CohortCommand.Join(_, _, _, scope)
+    | CohortCommand.Depart(_, scope)
+    | CohortCommand.RenewLease(_, scope)
+    | CohortCommand.Tick scope
+    | CohortCommand.AcquireClaim(_, _, _, scope)
+    | CohortCommand.ReleaseClaim(_, _, _, scope)
+    | CohortCommand.ReassignClaim(_, _, _, scope)
+    | CohortCommand.DelegateConductor(_, _, scope)
+    | CohortCommand.ObserveSave(_, _, scope)
+    | CohortCommand.RequestLanding(_, _, _, _, scope)
+    | CohortCommand.RebaseCompleted(_, _, scope)
+    | CohortCommand.AffectedComputed(_, _, scope)
+    | CohortCommand.TestsCompleted(_, _, scope)
+    | CohortCommand.VerificationInconclusive(_, _, scope)
+    | CohortCommand.FastForwardCompleted(_, _, scope)
+    | CohortCommand.FastForwardFailed(_, _, scope)
+    | CohortCommand.WithdrawLanding(_, _, scope)
+    | CohortCommand.VetoLanding(_, _, _, scope)
+    | CohortCommand.SetIntegrationHead(_, _, scope)
+    | CohortCommand.ResolveVeto(_, _, scope) -> scope
+
+  /// Rebuild a scope from its canonical `label`. Total, never throwing: an
+  /// unrecognised label becomes `Named label` rather than an exception, so a
+  /// corrupt row can be reported instead of crashing the daemon that read it.
+  let scopeOfLabel (label: string) : CohortScope =
+    if String.IsNullOrEmpty label then CohortScope.Machine
+    elif label = Scope.label CohortScope.Machine then CohortScope.Machine
+    elif label.StartsWith("repo:", StringComparison.Ordinal) then CohortScope.Repository(label.Substring 5)
+    elif label.StartsWith("named:", StringComparison.Ordinal) then CohortScope.Named(label.Substring 6)
+    else CohortScope.Named label
 
   // ── Id minting from entropy (never Guid.NewGuid, §7.1) ────────────────────
-
   module private Ids =
     let private hex (bytes: byte[]) =
       bytes |> Array.truncate 12 |> Array.map (fun b -> b.ToString "x2") |> String.concat ""
@@ -999,9 +1125,37 @@ module Cohort =
   /// directly.
   let private decideRaw (clock: Clock) (entropy: Entropy) (state: CohortState<'m>) (command: CohortCommand<'m>)
       : Result<CohortState<'m> * CohortEvent<'m> list * CohortEffect<'m> list, CohortError<'m>> =
+    // ── THE scope gate, ONCE, for every command ──────────────────────────
+    //
+    // Every arm below destructures its own scope field and every one of those
+    // arms is reached only through here, so this is the single place a command
+    // addressed to a different cohort can be refused. It is deliberately the
+    // FIRST thing `decideRaw` does: a cross-scope command must not get as far
+    // as binding a conductor seat or orphaning a claim before it is refused.
+    //
+    // `Scope.equal` compares canonical labels, not cases, so two spellings of
+    // one repository (`/repo`, `/repo/`, `/repo/sub/..`) are the same cohort.
+    let checkScope (requested: CohortScope) : Result<unit, CohortError<'m>> =
+      if Scope.equal requested state.Scope then Ok ()
+      else Error(CohortError.WrongCohortScope(requested, state.Scope))
+
     match command with
 
-    | CohortCommand.Join(who, role, session) ->
+    // The one command that is EXEMPT from the gate above: it is what ADOPTS the
+    // scope. Re-opening at the same scope is an idempotent no-op (no event, no
+    // state change) so a reconnecting caller may re-send it; at a different one
+    // it is refused, which is the whole point — the caller addressed a cohort
+    // that is not this one.
+    | CohortCommand.OpenCohort requested ->
+      if Scope.equal requested state.Scope then
+        Ok(state, [], [])
+      else
+        Error(CohortError.WrongCohortScope(requested, state.Scope))
+
+    | CohortCommand.Join(who, role, session, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind who state.Members with
       | Some { Presence = MemberPresence.Present } -> Error(CohortError.DuplicateJoin who)
       // a Departed member may rejoin exactly like a brand-new member — both
@@ -1017,6 +1171,11 @@ module Cohort =
           // is no separate CreateCohort command in v1 — this IS that binding,
           // and `who` is Present by the line above, which is the `Bound`
           // invariant.
+          //
+          // BEFORE SCOPE this was once per DAEMON, which is how one agent in
+          // Nehemiah and one in SageFs shared a conductor seat. It is now once
+          // per COHORT: each repository's cohort has its own `NeverBound`, so
+          // each repository elects its own conductor on its own first join.
           let bound = { newState with Conductor = ConductorBinding.Bound who }
           Ok(bound, [ CohortEvent.MemberJoined(who, role, session); CohortEvent.ConductorBound who ], [])
         // default policy: the seat is already filled, or it is VACANT. A vacant
@@ -1027,13 +1186,19 @@ module Cohort =
         | ConductorBinding.Vacant _ ->
           Ok(newState, [ CohortEvent.MemberJoined(who, role, session) ], [])
 
-    | CohortCommand.Depart who ->
+    | CohortCommand.Depart(who, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       if not (isPresent state who) then Error(CohortError.MemberNotPresent who)
       else
         let newState, events = departMember VacancyReason.ConductorLeft who clock state
         Ok(newState, events, [])
 
-    | CohortCommand.RenewLease who ->
+    | CohortCommand.RenewLease(who, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind who state.Members with
       | Some ({ Presence = MemberPresence.Present } as record) ->
         let newState = { state with Members = Map.add who { record with LastRenewal = clock } state.Members }
@@ -1041,7 +1206,10 @@ module Cohort =
       | Some { Presence = MemberPresence.Departed _ }
       | None -> Error(CohortError.MemberNotPresent who)
 
-    | CohortCommand.Tick ->
+    | CohortCommand.Tick scope ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       let expired =
         state.Members
         |> Map.toList
@@ -1063,7 +1231,10 @@ module Cohort =
       let sweptState, pruneEvents = Retention.sweep clock departedState
       Ok(sweptState, departEvents @ pruneEvents, [])
 
-    | CohortCommand.AcquireClaim(who, scope, purposeRaw) ->
+    | CohortCommand.AcquireClaim(who, scope, purposeRaw, cohort) ->
+      match checkScope cohort with
+      | Error e -> Error e
+      | Ok () ->
       if not (isPresent state who) then Error(CohortError.MemberNotPresent who)
       else
         match Purpose.tryCreate purposeRaw with
@@ -1090,7 +1261,10 @@ module Cohort =
               let newState = { state with NextFence = fence; Claims = Map.add claimId claim state.Claims }
               Ok(newState, [ CohortEvent.ClaimAcquired(claimId, scope, who, fence) ], [])
 
-    | CohortCommand.ReleaseClaim(who, claimId, presentedFence) ->
+    | CohortCommand.ReleaseClaim(who, claimId, presentedFence, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind claimId state.Claims with
       | None -> Error(CohortError.UnknownClaim claimId)
       | Some claim when presentedFence <> claim.Fence ->
@@ -1108,7 +1282,10 @@ module Cohort =
         | ClaimState.Orphaned _
         | ClaimState.Released _ -> Error(CohortError.NotClaimHolder(claimId, who))
 
-    | CohortCommand.ReassignClaim(by, claimId, toMember) ->
+    | CohortCommand.ReassignClaim(by, claimId, toMember, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Authority.present by state with
       | Authority.Conductor _ ->
         match Map.tryFind claimId state.Claims with
@@ -1144,7 +1321,10 @@ module Cohort =
       // EMPTY seat is refused as `ConductorVacant` instead (`refuseConductorOnly`).
       | _ -> Error(refuseConductorOnly clock by state)
 
-    | CohortCommand.DelegateConductor(by, toMember) ->
+    | CohortCommand.DelegateConductor(by, toMember, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Authority.present by state with
       | Authority.Conductor _ ->
         if not (isPresent state toMember) then Error(CohortError.MemberNotPresent toMember)
@@ -1160,7 +1340,10 @@ module Cohort =
       // `ConductorVacant`.
       | _ -> Error(refuseConductorOnly clock by state)
 
-    | CohortCommand.ObserveSave(who, path) ->
+    | CohortCommand.ObserveSave(who, path, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       let violating =
         state.Claims
         |> Map.toList
@@ -1174,7 +1357,10 @@ module Cohort =
       | Some(cid, holder) -> Ok(state, [ CohortEvent.ClaimViolationObserved(cid, who, holder, path) ], [])
       | None -> Ok(state, [], [])
 
-    | CohortCommand.RequestLanding(requester, claims, commits, statementRaw) ->
+    | CohortCommand.RequestLanding(requester, claims, commits, statementRaw, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       if not (isPresent state requester) then Error(CohortError.MemberNotPresent requester)
       else
         match Statement.tryCreate statementRaw with
@@ -1202,7 +1388,10 @@ module Cohort =
               let advanced, advEvents, advEffects = advanceQueue queued
               Ok(advanced, CohortEvent.LandingQueued(landingId, requester) :: advEvents, advEffects)
 
-    | CohortCommand.RebaseCompleted(id, result) ->
+    | CohortCommand.RebaseCompleted(id, result, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req ->
@@ -1237,7 +1426,10 @@ module Cohort =
           // out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Rebasing"))
 
-    | CohortCommand.AffectedComputed(id, tests) ->
+    | CohortCommand.AffectedComputed(id, tests, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req ->
@@ -1255,7 +1447,10 @@ module Cohort =
           // out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
-    | CohortCommand.TestsCompleted(id, failing) ->
+    | CohortCommand.TestsCompleted(id, failing, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req ->
@@ -1289,7 +1484,10 @@ module Cohort =
           // out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
-    | CohortCommand.VerificationInconclusive(id, reason) ->
+    | CohortCommand.VerificationInconclusive(id, reason, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req ->
@@ -1313,7 +1511,10 @@ module Cohort =
           // as out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
-    | CohortCommand.FastForwardCompleted(id, committedSha) ->
+    | CohortCommand.FastForwardCompleted(id, committedSha, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req ->
@@ -1404,7 +1605,10 @@ module Cohort =
           // as out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
-    | CohortCommand.FastForwardFailed(id, reason) ->
+    | CohortCommand.FastForwardFailed(id, reason, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req ->
@@ -1463,7 +1667,10 @@ module Cohort =
           // any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
-    | CohortCommand.WithdrawLanding(who, id) ->
+    | CohortCommand.WithdrawLanding(who, id, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req when req.Requester <> who -> Error(CohortError.NotLandingRequester(id, who))
@@ -1485,7 +1692,10 @@ module Cohort =
              CohortEvent.LandingStateChanged(id, withdrawn.State) :: CohortEvent.LandingWithdrawn id :: advEvents,
              advEffects)
 
-    | CohortCommand.SetIntegrationHead(by, head) ->
+    | CohortCommand.SetIntegrationHead(by, head, scope) ->
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Authority.present by state with
       | Authority.Conductor _ ->
         let newState = { state with IntegrationHead = head }
@@ -1495,7 +1705,7 @@ module Cohort =
         // refused; an empty seat is `ConductorVacant`.
         | _ -> Error(refuseConductorOnly clock by state)
 
-    | CohortCommand.VetoLanding(by, id, reason) ->
+    | CohortCommand.VetoLanding(by, id, reason, scope) ->
       // roast-2day-cmd §RISK/§1: `VetoLanding` has NO authority gate on
       // purpose (v1's design, unchanged here — see the command's doc
       // comment) — "any present member may object" is the intended right,
@@ -1508,6 +1718,9 @@ module Cohort =
       // together: (1) `blockAndPop`, so a veto never jams anyone else's
       // landing; (2) `ResolveVeto` (below), a genuine conductor verb that
       // makes `AwaitConductor` true rather than aspirational.
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req ->
@@ -1529,7 +1742,7 @@ module Cohort =
           | stateChanged :: rest -> Ok(advanced, stateChanged :: CohortEvent.LandingVetoed(id, by, reason) :: rest, advEffects)
           | [] -> Ok(advanced, [ CohortEvent.LandingVetoed(id, by, reason) ], advEffects)
 
-    | CohortCommand.ResolveVeto(by, id) ->
+    | CohortCommand.ResolveVeto(by, id, scope) ->
       // roast-2day-cmd §1/§RISK's missing conductor verb. Design choice
       // (armfix, cmd-handoff.md item B2 — documented here because the code
       // is the only place this decision will be read years from now):
@@ -1555,6 +1768,9 @@ module Cohort =
       //     `DelegateConductor` (`Authority.present by state =
       //     Authority.Conductor _`, else `NotConductor`) — only the
       //     conductor may clear a veto, matching `NextAction.AwaitConductor`.
+      match checkScope scope with
+      | Error e -> Error e
+      | Ok () ->
       match Authority.present by state with
       | Authority.Conductor _ ->
         match Map.tryFind id state.Landings with
@@ -1613,19 +1829,35 @@ module Cohort =
   /// no longer applies cleanly (it should not happen against a ledger this
   /// module itself produced) leaves the fold's state unchanged rather than
   /// throwing, so a corrupt tail cannot make replay itself unusable.
-  let replay (entries: LedgerEntry<'m> list) : CohortState<'m> =
+  ///
+  /// `scope` is the cohort the caller is reconstructing. It seeds the fold, so a
+  /// ledger whose first entry is `OpenCohort scope` is idempotent against it and
+  /// a ledger with NO `OpenCohort` (every v1 row — see `CohortLedgerExport` and
+  /// `CohortLedgerSqlite`'s migration) replays to exactly that scope. `Machine` is
+  /// the right seed for those rows and is why `CohortState.empty` is machine-wide.
+  let replayIn (scope: CohortScope) (entries: LedgerEntry<'m> list) : CohortState<'m> =
     entries
     |> List.fold
       (fun state entry ->
         match decide entry.Clock entry.Entropy state entry.Command with
         | Ok(newState, _, _) -> newState
         | Error _ -> state)
-      (CohortState.empty ())
+      (CohortState.forScope scope)
 
-  /// `replay` plus the `Seq` it landed on — `project`'s other input.
-  let replayHead (entries: LedgerEntry<'m> list) : LedgerHead<'m> =
+  /// The v1-shaped replay: reconstructs the machine-wide cohort. Exactly
+  /// `replayIn CohortScope.Machine` — kept as its own name because every
+  /// pre-scope caller (the simulation specs, the inspector, the scrubber) means
+  /// "the cohort this ledger describes" and was written before there was a second
+  /// one.
+  let replay (entries: LedgerEntry<'m> list) : CohortState<'m> = replayIn CohortScope.Machine entries
+
+  /// `replay` plus the `Seq` it landed on — `project`'s other input. The scope is
+  /// passed through to `replayIn` for the same reason `replay` seeds it.
+  let replayHeadIn (scope: CohortScope) (entries: LedgerEntry<'m> list) : LedgerHead<'m> =
     let seq = entries |> List.tryLast |> Option.map (fun e -> e.Seq) |> Option.defaultValue 0L<ledgerSeq>
-    { Seq = seq; State = replay entries }
+    { Seq = seq; State = replayIn scope entries }
+
+  let replayHead (entries: LedgerEntry<'m> list) : LedgerHead<'m> = replayHeadIn CohortScope.Machine entries
 
   // ── The read model (§5.7) ──────────────────────────────────────────────
 
@@ -1666,6 +1898,12 @@ module Cohort =
     Version: int64<ledgerSeq>
     SessionGens: int64[]
     Dirty: FrameRegions
+    /// Which cohort this frame is about, carried verbatim from
+    /// `CohortState.Scope`. A caller holding ONLY a frame — the dashboard, the
+    /// status text, a renderer that never sees `CohortState` — still knows which
+    /// repository's claims and members it is looking at, which is the whole point
+    /// now that one daemon serves several unrelated cohorts.
+    Scope: CohortScope
     /// The `Conductor` binding (§4.2), carried verbatim from
     /// `CohortState.Conductor` so a shell that only holds `CohortFrame` (never
     /// `CohortState`) can still resolve an `Authority` (Slice 3,
@@ -1840,6 +2078,7 @@ module Cohort =
       Version = head.Seq
       SessionGens = snapshots |> Array.map (fun s -> s.Generation)
       Dirty = FrameRegions.Members ||| FrameRegions.Claims ||| FrameRegions.Matrix ||| FrameRegions.Landings
+      Scope = head.State.Scope
       Conductor = head.State.Conductor
       MemberIds = memberIds
       MemberRole = members |> Array.map (fun (_, r) -> r.Role)

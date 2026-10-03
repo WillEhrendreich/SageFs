@@ -529,3 +529,615 @@ let authorityOfMember (who: 'm) (frame: Cohort.CohortFrame<'m>) : Cohort.Authori
 let checkCohortToolAllowed (authority: Cohort.Authority<'m>) (tool: CohortTool) : bool =
   Set.contains tool alwaysReachableCohortTools
   || Set.contains tool (cohortTools authority)
+
+// ── Authority over the WHOLE tool surface, not the cohort verbs ───────────
+//
+// WHY THIS SECTION EXISTS. `cohortTools` above is keyed on the ten COHORT
+// verbs. Every other tool name fell through it (`checkCohortAuthorityGate`
+// returned `None`) and landed on the session-state gate, which knows nothing
+// about roles. So a member whose role is `Observer` — a name that reads like
+// a boundary — could call `send_fsharp_code`, `hard_reset_fsi_session` and
+// `run_app` in perfect good health. A role name that does not mean anything is
+// worse than no role at all, because it is read as a guarantee.
+//
+// A second layer already existed and was too narrow to help: `Capability`'s
+// TOOL-CLASS gate runs only for a call that PRESENTED A TOKEN, and a token is
+// optional under the default `IdentityPolicy.ConnectionsAllowed`. The cohort
+// `Authority` of a connection is always resolvable — from the published
+// `CohortFrame`, with no token — so THAT is the dimension to gate the whole
+// surface on. This section does exactly that; `Mcp.fs` composes the two by
+// INTERSECTION (a call needs the session-state gate AND this one), never union.
+//
+// ── WHAT A ROLE IS NOT. Read this before trusting the table below ─────────
+//
+// `send_fsharp_code` runs ARBITRARY F# IN THE FSI SESSION, as the same OS user
+// as the daemon. Code run that way can read the daemon's data directory, call
+// the daemon's own loopback with any session id, and read `/proc`. `run_tests`
+// is the same hole by a different door: it RUNS USER CODE (the project's test
+// binary). So:
+//
+//   ANY allow-list that includes `send_fsharp_code` or `run_tests` is ADVISORY
+//   AGAINST A HOSTILE AGENT, NOT A BOUNDARY.
+//
+// A role is a well-mannered-agent convention plus a refusal a careless agent
+// will hit. It is not a sandbox. Containment is a process/credential boundary
+// — a different OS user, a container, a VM. `Capability.fs`'s own module doc
+// already says this ("Nehemiah's sandbox is the containment"); this is the
+// same sentence at the cohort layer.
+//
+// THE DIRECTION OF THE LIST, therefore, is the whole safety property: a
+// narrow grant is a POSITIVE list of tools that were individually classified
+// as read-only. It is NEVER "everything except eval". A deny-list is one
+// forgotten tool away from being a union, and `run_app`/`hard_reset_fsi_session`
+// were exactly the kind of tool that gets forgotten.
+
+// ── ToolName: the closed set of registered MCP tool names ────────────────
+//
+// Repo doctrine: a closed string set is a DU with ONE exhaustive to-string, so
+// a new tool forces a decision at compile time instead of drifting. Two string
+// tables already existed and neither was the answer:
+//
+//   * `gatingDomain` above — the per-SESSION-STATE classification, string-keyed,
+//     kept honest against `[<McpServerTool>]` reflection by McpToolGateTests;
+//   * `Capability.ToolClass.toolsOf` — the per-TOKEN-CLASS classification,
+//     held to `gatingDomain` by CapabilityWireTests.
+//
+// `ToolName` is the KEY both of those are looked up by, so they are now one
+// table plus its classification rather than two parallel name lists. It is the
+// parameter of the authority gate, so a grant can only ever be written as
+// `Set<ToolName>` — there is no way to spell an allow-list in strings.
+//
+// The three cannot disagree: `McpToolGateTests` already proves
+// `ToolName.all` ≡ `[<McpServerTool>]` ≡ `gatingDomain` ≡ `ToolClass.toolsOf`,
+// and F# proves `toToolName` total over the DU.
+[<RequireQualifiedAccess>]
+type ToolName =
+  // Monitoring and machine facts — no session involved.
+  | GetDaemonStatus
+  | GetSessionStatus
+  | ListSessions
+  | SwitchSession
+  | GetAvailableProjects
+  | ListRunnableProjects
+  | GetFrictionReport
+  | GetFrictionSummary
+  | GetRecentFsiEvents
+  // Telling SageFs what was confusing. Writes only the local friction store.
+  | ReportFriction
+  // Session lifecycle: create, reset, switch workflow, stop.
+  | CreateProjectSession
+  | CreateSolutionSession
+  | CreateBareSession
+  | ResetFsiSession
+  | HardResetFsiSession
+  | SwitchWorkflow
+  | StopSession
+  | CancelEval
+  // Evaluation. `send_fsharp_code` is arbitrary code as the daemon's OS user.
+  | SendFsharpCode
+  | ManageScratchPad
+  // Static analysis — the code is read, never run.
+  | CheckFsharpCode
+  | DecomposePipeline
+  | Diagnose
+  | CoverageIntel
+  | ImpactForecast
+  | SuggestNextAction
+  | PlanRipple
+  | PreviewWhatIf
+  | SuggestNextCell
+  | GetCellDependencies
+  | DiscoverFeatures
+  | GetSessionFilmstrip
+  | GetEvalTimeline
+  | GetEvalDiff
+  | GetMessageJournal
+  | ExportNotebook
+  | ExportSessionTranscript
+  | ExplainTestFailure
+  | SuggestRepair
+  // Tests. `run_tests` RUNS USER CODE, so it is its own hazard, not a read.
+  | ListTests
+  | RunTests
+  | TargetedVerify
+  // Running and stopping the session's application.
+  | RunApp
+  | StopApp
+  // Hot reload's own switches.
+  | EnableHotReload
+  | DisableHotReload
+  | ResetHotReloadState
+  | SetReflectionReadMode
+  // Leases.
+  | AcquireFullBuildLease
+  | AcquireTestSuiteLease
+  | AcquireRunAppLease
+  | ReleaseWorkLease
+  // Cohort verbs — the ten `CohortTool`s, spelled the same way here so the two
+  // sets are comparable (`cohortToolByName` below holds them together).
+  | JoinCohort
+  | LeaveCohort
+  | AcquireClaim
+  | ReleaseClaim
+  | ReassignClaim
+  | RequestLanding
+  | GetCohortStatus
+  | SetIntegrationRef
+  | MintMember
+  | RevokeMember
+  // SageFs's own files and the machine's leftover worktrees.
+  | ManageLocalData
+  | GetWorkspaceHygiene
+  | TidyWorkspace
+
+module ToolName =
+  /// The one exhaustive to-string. Adding a case without adding an arm here is
+  /// a compile error, which is the point of the DU.
+  let toToolName =
+    function
+    | ToolName.GetDaemonStatus -> "get_daemon_status"
+    | ToolName.GetSessionStatus -> "get_session_status"
+    | ToolName.ListSessions -> "list_sessions"
+    | ToolName.SwitchSession -> "switch_session"
+    | ToolName.GetAvailableProjects -> "get_available_projects"
+    | ToolName.ListRunnableProjects -> "list_runnable_projects"
+    | ToolName.GetFrictionReport -> "get_friction_report"
+    | ToolName.GetFrictionSummary -> "get_friction_summary"
+    | ToolName.GetRecentFsiEvents -> "get_recent_fsi_events"
+    | ToolName.ReportFriction -> "report_friction"
+    | ToolName.CreateProjectSession -> "create_project_session"
+    | ToolName.CreateSolutionSession -> "create_solution_session"
+    | ToolName.CreateBareSession -> "create_bare_session"
+    | ToolName.ResetFsiSession -> "reset_fsi_session"
+    | ToolName.HardResetFsiSession -> "hard_reset_fsi_session"
+    | ToolName.SwitchWorkflow -> "switch_workflow"
+    | ToolName.StopSession -> "stop_session"
+    | ToolName.CancelEval -> "cancel_eval"
+    | ToolName.SendFsharpCode -> "send_fsharp_code"
+    | ToolName.ManageScratchPad -> "manage_scratch_pad"
+    | ToolName.CheckFsharpCode -> "check_fsharp_code"
+    | ToolName.DecomposePipeline -> "decompose_pipeline"
+    | ToolName.Diagnose -> "diagnose"
+    | ToolName.CoverageIntel -> "coverage_intel"
+    | ToolName.ImpactForecast -> "impact_forecast"
+    | ToolName.SuggestNextAction -> "suggest_next_action"
+    | ToolName.PlanRipple -> "plan_ripple"
+    | ToolName.PreviewWhatIf -> "preview_what_if"
+    | ToolName.SuggestNextCell -> "suggest_next_cell"
+    | ToolName.GetCellDependencies -> "get_cell_dependencies"
+    | ToolName.DiscoverFeatures -> "discover_features"
+    | ToolName.GetSessionFilmstrip -> "get_session_filmstrip"
+    | ToolName.GetEvalTimeline -> "get_eval_timeline"
+    | ToolName.GetEvalDiff -> "get_eval_diff"
+    | ToolName.GetMessageJournal -> "get_message_journal"
+    | ToolName.ExportNotebook -> "export_notebook"
+    | ToolName.ExportSessionTranscript -> "export_session_transcript"
+    | ToolName.ExplainTestFailure -> "explain_test_failure"
+    | ToolName.SuggestRepair -> "suggest_repair"
+    | ToolName.ListTests -> "list_tests"
+    | ToolName.RunTests -> "run_tests"
+    | ToolName.TargetedVerify -> "targeted_verify"
+    | ToolName.RunApp -> "run_app"
+    | ToolName.StopApp -> "stop_app"
+    | ToolName.EnableHotReload -> "enable_hot_reload"
+    | ToolName.DisableHotReload -> "disable_hot_reload"
+    | ToolName.ResetHotReloadState -> "reset_hot_reload_state"
+    | ToolName.SetReflectionReadMode -> "set_reflection_read_mode"
+    | ToolName.AcquireFullBuildLease -> "acquire_full_build_lease"
+    | ToolName.AcquireTestSuiteLease -> "acquire_test_suite_lease"
+    | ToolName.AcquireRunAppLease -> "acquire_run_app_lease"
+    | ToolName.ReleaseWorkLease -> "release_work_lease"
+    | ToolName.JoinCohort -> "join_cohort"
+    | ToolName.LeaveCohort -> "leave_cohort"
+    | ToolName.AcquireClaim -> "acquire_claim"
+    | ToolName.ReleaseClaim -> "release_claim"
+    | ToolName.ReassignClaim -> "reassign_claim"
+    | ToolName.RequestLanding -> "request_landing"
+    | ToolName.GetCohortStatus -> "get_cohort_status"
+    | ToolName.SetIntegrationRef -> "set_integration_ref"
+    | ToolName.MintMember -> "mint_member"
+    | ToolName.RevokeMember -> "revoke_member"
+    | ToolName.ManageLocalData -> "manage_local_data"
+    | ToolName.GetWorkspaceHygiene -> "get_workspace_hygiene"
+    | ToolName.TidyWorkspace -> "tidy_workspace"
+
+  let all : ToolName list =
+    [ ToolName.GetDaemonStatus
+      ToolName.GetSessionStatus
+      ToolName.ListSessions
+      ToolName.SwitchSession
+      ToolName.GetAvailableProjects
+      ToolName.ListRunnableProjects
+      ToolName.GetFrictionReport
+      ToolName.GetFrictionSummary
+      ToolName.GetRecentFsiEvents
+      ToolName.ReportFriction
+      ToolName.CreateProjectSession
+      ToolName.CreateSolutionSession
+      ToolName.CreateBareSession
+      ToolName.ResetFsiSession
+      ToolName.HardResetFsiSession
+      ToolName.SwitchWorkflow
+      ToolName.StopSession
+      ToolName.CancelEval
+      ToolName.SendFsharpCode
+      ToolName.ManageScratchPad
+      ToolName.CheckFsharpCode
+      ToolName.DecomposePipeline
+      ToolName.Diagnose
+      ToolName.CoverageIntel
+      ToolName.ImpactForecast
+      ToolName.SuggestNextAction
+      ToolName.PlanRipple
+      ToolName.PreviewWhatIf
+      ToolName.SuggestNextCell
+      ToolName.GetCellDependencies
+      ToolName.DiscoverFeatures
+      ToolName.GetSessionFilmstrip
+      ToolName.GetEvalTimeline
+      ToolName.GetEvalDiff
+      ToolName.GetMessageJournal
+      ToolName.ExportNotebook
+      ToolName.ExportSessionTranscript
+      ToolName.ExplainTestFailure
+      ToolName.SuggestRepair
+      ToolName.ListTests
+      ToolName.RunTests
+      ToolName.TargetedVerify
+      ToolName.RunApp
+      ToolName.StopApp
+      ToolName.EnableHotReload
+      ToolName.DisableHotReload
+      ToolName.ResetHotReloadState
+      ToolName.SetReflectionReadMode
+      ToolName.AcquireFullBuildLease
+      ToolName.AcquireTestSuiteLease
+      ToolName.AcquireRunAppLease
+      ToolName.ReleaseWorkLease
+      ToolName.JoinCohort
+      ToolName.LeaveCohort
+      ToolName.AcquireClaim
+      ToolName.ReleaseClaim
+      ToolName.ReassignClaim
+      ToolName.RequestLanding
+      ToolName.GetCohortStatus
+      ToolName.SetIntegrationRef
+      ToolName.MintMember
+      ToolName.RevokeMember
+      ToolName.ManageLocalData
+      ToolName.GetWorkspaceHygiene
+      ToolName.TidyWorkspace ]
+
+  let private byName : Map<string, ToolName> = all |> List.map (fun t -> toToolName t, t) |> Map.ofList
+
+  /// The DU case for a registered MCP tool name. `None` for a name nobody
+  /// registered — and that is what `checkToolCallAllowed` refuses closed on,
+  /// so an undeclared tool can never reach the authority gate as `Some`.
+  let tryParse (toolName: string) : ToolName option = Map.tryFind toolName byName
+
+  /// The registered tool name for a case. Total, by the compiler.
+  let toString (tool: ToolName) : string = toToolName tool
+
+  let allToolNames : string list = all |> List.map toToolName
+
+  /// The ten cohort verbs as `ToolName`s, so `cohortTools` and `authorityTools`
+  /// are comparable and the old cohort gate is provably a SUBSET of the new
+  /// one (there is a test for exactly that, and the compiler keeps
+  /// `toCohortTool` total — a new cohort verb forces a case here).
+  let cohortTools : ToolName list =
+    [ ToolName.JoinCohort
+      ToolName.LeaveCohort
+      ToolName.AcquireClaim
+      ToolName.ReleaseClaim
+      ToolName.ReassignClaim
+      ToolName.RequestLanding
+      ToolName.GetCohortStatus
+      ToolName.SetIntegrationRef
+      ToolName.MintMember
+      ToolName.RevokeMember ]
+
+  /// The cohort verb `tool` names, or `None` for the other tools — which is
+  /// how a caller knows a non-cohort tool must not be looked up in
+  /// `CohortTool`. There is a wildcard arm because `ToolName` covers all 65
+  /// registered tools and only 10 of them ARE cohort verbs, but the ten
+  /// mapping arms above are explicit, so a RENAMED cohort verb cannot quietly
+  /// fall through the wildcard into `GetStatus`.
+  let tryCohortTool (tool: ToolName) : CohortTool option =
+    match tool with
+    | ToolName.JoinCohort -> Some CohortTool.Join
+    | ToolName.LeaveCohort -> Some CohortTool.Leave
+    | ToolName.AcquireClaim -> Some CohortTool.AcquireClaim
+    | ToolName.ReleaseClaim -> Some CohortTool.ReleaseClaim
+    | ToolName.ReassignClaim -> Some CohortTool.ReassignClaim
+    | ToolName.RequestLanding -> Some CohortTool.RequestLanding
+    | ToolName.GetCohortStatus -> Some CohortTool.GetStatus
+    | ToolName.SetIntegrationRef -> Some CohortTool.SetIntegrationRef
+    | ToolName.MintMember -> Some CohortTool.MintMember
+    | ToolName.RevokeMember -> Some CohortTool.RevokeMember
+    | _ -> None
+
+  /// Whether `tool` is one of the ten cohort verbs. Derived from the mapping
+  /// above rather than from the name list, so the two cannot disagree.
+  let isCohortTool (tool: ToolName) : bool = Option.isSome (tryCohortTool tool)
+
+// ── ToolRole: what this project means by `Observer` ──────────────────────
+//
+// THE SEMANTIC DECISION, stated once so every test can quote it.
+//
+//   Observer  = MAY NOT EVALUATE, and may not do anything that runs, builds,
+//               writes or resets. Its whole surface is a positive list of
+//               tools that READ: cohort status, daemon/session/session-list
+//               status, code and history ANALYSIS, and the friction
+//               report/summary. `list_tests` — which READS the discovered
+//               test list — is in it. `report_friction` is in it, because it
+//               writes only the local telemetry store and refusing it would
+//               make an Observer unable to tell SageFs what confused it,
+//               which is the one thing a read-only witness is for.
+//
+//   Verifier  = Observer, PLUS reading, building and RUNNING TESTS, and taking
+//               a build/test/run-app lease. It still does not evaluate: a
+//               Verifier reads the code and runs the project's own tests, and
+//               never injects its own F#. `run_tests` is the deliberate sharp
+//               edge here and it is documented on the case below.
+//
+//   Implementer / the conductor = the working member. Everything a member may
+//               do, including `send_fsharp_code`.
+//
+// WHY OBSERVER IS NOT "EVERYTHING EXCEPT EVAL": because the tools that are
+// not "eval" are exactly where the rest of the danger lives. `run_tests` runs
+// user code. `run_app` starts the project's executable. `hard_reset_fsi_session`
+// respawns a worker process. `tidy_workspace` DELETES worktrees from disk. An
+// Observer refused `send_fsharp_code` but granted all of those would be more
+// dangerous than one granted nothing. So the list is spelled out positively,
+// tool by tool, and the comment on every block says why each entry earned it.
+//
+// WHY VERIFIER ≠ OBSERVER ANYMORE (it used to): they were the same table
+// (`[GetStatus]`) differing only in name, which is precisely the defect this
+// change exists to remove — a role that distinguishes nothing. `Capability.fs`
+// already had the honest ladder (Observer < Analysis < Verifier < Implementer)
+// over tool classes; this brings the cohort's own `JoinableRole` in line with
+// it instead of leaving a second, emptier notion of the same word.
+//
+// WHAT THIS IS NOT: see the section header. A role is not a sandbox. An
+// Observer cannot eval through `send_fsharp_code`, but a Verifier can still
+// execute the project's own test binary, and nothing here stops a process that
+// already has the daemon's OS credentials.
+[<RequireQualifiedAccess>]
+type ToolRole =
+  | Observer
+  | Verifier
+  | Working
+  /// The conductor. It is NOT `Working`: `Working` deliberately excludes the
+  /// two conductor-only families (`CohortAdmin`, `Maintenance`), because an
+  /// ordinary Implementer must not be able to reassign a claim, configure the
+  /// integration, mint a token, or delete worktrees off the disk. Folding the
+  /// conductor into `Working` would hand those to every implementer, which is
+  /// the exact authority hole this table exists to close — so it is a separate
+  /// case, and it is what makes the ladder monotone.
+  | Conductor
+
+module ToolRole =
+  let all : ToolRole list = [ ToolRole.Observer; ToolRole.Verifier; ToolRole.Working; ToolRole.Conductor ]
+
+  let toToken =
+    function
+    | ToolRole.Observer -> "Observer"
+    | ToolRole.Verifier -> "Verifier"
+    | ToolRole.Working -> "Working"
+    | ToolRole.Conductor -> "Conductor"
+
+  // ── the positive lists ──────────────────────────────────────────────────
+
+  /// Reads the cohort, reads machine and session status, reads the friction
+  /// store, and says what was confusing. Every one of these is a read or a
+  /// write to the local telemetry store — none of them runs, builds, resets
+  /// or deletes.
+  let observerTools : Set<ToolName> =
+    set
+      [ // cohort: status only, plus join so a fresh caller is never stuck
+        ToolName.GetCohortStatus
+        ToolName.JoinCohort
+        // machine and session status
+        ToolName.GetDaemonStatus
+        ToolName.GetSessionStatus
+        ToolName.ListSessions
+        ToolName.SwitchSession
+        ToolName.GetAvailableProjects
+        ToolName.ListRunnableProjects
+        ToolName.GetFrictionReport
+        ToolName.GetFrictionSummary
+        ToolName.GetRecentFsiEvents
+        ToolName.DiscoverFeatures
+        ToolName.ReportFriction
+        // code and history ANALYSIS — the code is read, never run
+        ToolName.CheckFsharpCode
+        ToolName.DecomposePipeline
+        ToolName.Diagnose
+        ToolName.CoverageIntel
+        ToolName.ImpactForecast
+        ToolName.SuggestNextAction
+        ToolName.PlanRipple
+        ToolName.PreviewWhatIf
+        ToolName.SuggestNextCell
+        ToolName.GetCellDependencies
+        ToolName.GetSessionFilmstrip
+        ToolName.GetEvalTimeline
+        ToolName.GetEvalDiff
+        ToolName.GetMessageJournal
+        ToolName.ExportNotebook
+        ToolName.ExportSessionTranscript
+        ToolName.ExplainTestFailure
+        ToolName.SuggestRepair
+        // DISCOVERING tests is a read. See `verifierOnlyTools` for the sharp
+        // edge this draws against: `list_tests` lists, `run_tests` executes.
+        ToolName.ListTests ]
+
+  /// What a Verifier adds. Only three entries, and each one is here on
+  /// purpose:
+  ///
+  ///  * `run_tests` / `targeted_verify` — a Verifier's entire reason to exist.
+  ///    This EXECUTES the project's test binary, which is user code running as
+  ///    the daemon's OS user — the same hazard as `send_fsharp_code`, reached
+  ///    by a different door. `Capability.RolePreset` says exactly this
+  ///    ("`TestRun`: Run the project's tests. That runs user code.") and
+  ///    `verifierOnlyTools` is pinned by a test so this cannot widen quietly.
+  ///    A grant containing it is advisory, never a boundary.
+  ///  * the build/test/run-app leases — taking one only RESERVES capacity;
+  ///    it runs nothing. Without them a Verifier would starve a session of
+  ///    the build budget its own tests need.
+  let verifierOnlyTools : Set<ToolName> =
+    set [ ToolName.RunTests
+          ToolName.TargetedVerify
+          ToolName.AcquireFullBuildLease
+          ToolName.AcquireTestSuiteLease
+          ToolName.AcquireRunAppLease
+          ToolName.ReleaseWorkLease ]
+
+  let verifierTools : Set<ToolName> = Set.union observerTools verifierOnlyTools
+
+  /// The tools no grant but the conductor's own may call, across all roles.
+  let conductorOnlyTools : Set<ToolName> =
+    set [ ToolName.ReassignClaim
+          ToolName.SetIntegrationRef
+          ToolName.MintMember
+          ToolName.RevokeMember
+          ToolName.ManageLocalData
+          ToolName.GetWorkspaceHygiene
+          ToolName.TidyWorkspace ]
+
+  /// The working member's surface. Everything `ToolName.all` holds, except the
+  /// two conductor-only families (`CohortAdmin`, `Maintenance`) — which is
+  /// exactly `Capability.RolePreset.Implementer`'s rule ("`CohortAdmin` and
+  /// `Maintenance` are in none"), restated against the DU rather than against
+  /// strings. Total over `ToolName`, so a new tool is in a working member's
+  /// surface from the moment it is declared.
+  let workingTools : Set<ToolName> =
+    ToolName.all
+    |> List.filter (fun tool ->
+      Set.contains tool verifierTools || not (Set.contains tool conductorOnlyTools))
+    |> Set.ofList
+
+  /// The conductor's surface: everything, including the two conductor-only
+  /// families. Derived from `ToolName.all` so a tool registered tomorrow is in
+  /// the conductor's surface without anyone remembering to add it.
+  let conductorTools : Set<ToolName> = Set.ofList ToolName.all
+
+  /// A role's whole surface. Positive and total over the DU: there is no
+  /// default arm, so a new `ToolRole` case is a compile error rather than an
+  /// accidental union of everything.
+  let toolsOf =
+    function
+    | ToolRole.Observer -> observerTools
+    | ToolRole.Verifier -> verifierTools
+    | ToolRole.Working -> workingTools
+    | ToolRole.Conductor -> conductorTools
+
+  /// The order on roles is inclusion, so a role that calls more tools can
+  /// never be called narrower than one that calls fewer.
+  let isNarrowerOrEqual (a: ToolRole) (b: ToolRole) : bool = Set.isSubset (toolsOf a) (toolsOf b)
+
+  /// The role a cohort seat's joinable role grants, and what the conductor
+  /// holds. `JoinableRole.Observer` and `.Verifier` keep their names; what
+  /// they MEANT is what changed, and it is what the tables above say.
+  let ofAuthority (authority: Cohort.Authority<'m>) : ToolRole =
+    match authority with
+    | Cohort.Authority.Anonymous -> ToolRole.Observer
+    | Cohort.Authority.Member(_, Cohort.JoinableRole.Observer) -> ToolRole.Observer
+    | Cohort.Authority.Member(_, Cohort.JoinableRole.Verifier) -> ToolRole.Verifier
+    | Cohort.Authority.Member(_, Cohort.JoinableRole.Implementer) -> ToolRole.Working
+    | Cohort.Authority.Conductor _ -> ToolRole.Conductor
+
+  /// What `role` may call. This is the authority gate's whole decision: a tool
+  /// in the set, or `RoleForbids`.
+  let admits (role: ToolRole) (tool: ToolName) : bool = Set.contains tool (toolsOf role)
+
+// ── AuthorityRefusal: why the gate said no ───────────────────────────────
+//
+// A named DU, not an untyped string result. The repo counts that shape
+// refusals DOWN with a ratchet (and a refusal that can only be a string cannot
+// be matched on, logged by category, or turned into a status code). Every case
+// carries the TOOL and the NEXT ACTION, so the agent that hit the wall is told
+// what to do instead of only what happened.
+[<RequireQualifiedAccess>]
+type AuthorityRefusal =
+  /// The caller's role may not call this tool. Carries the tool, the role it
+  /// would have needed, and that role's own name.
+  | RoleForbids of tool: ToolName * required: ToolRole
+  /// The caller's grant does not name this tool. Distinct from `RoleForbids`
+  /// so a caller can tell "the wrong role" from "this grant was never meant to
+  /// include that tool".
+  | NotInGrant of tool: ToolName * granted: ToolRole
+  /// The tool is one this gate knows nothing about. Unreachable in practice —
+  /// `Affordances.checkToolCallAllowed` refuses an undeclared tool first — and
+  /// present so the gate still fails CLOSED rather than admitting a name
+  /// nobody classified.
+  | CapabilityRequired of tool: string
+
+module AuthorityRefusal =
+  /// One sentence: what was refused and by what rule.
+  let describe (refusal: AuthorityRefusal) : string =
+    match refusal with
+    | AuthorityRefusal.RoleForbids(tool, required) ->
+      sprintf "your role may not call %s: that needs the %s role." (ToolName.toString tool) (ToolRole.toToken required)
+    | AuthorityRefusal.NotInGrant(tool, granted) ->
+      sprintf "%s is not in your grant, which is the %s role." (ToolName.toString tool) (ToolRole.toToken granted)
+    | AuthorityRefusal.CapabilityRequired tool ->
+      sprintf "%s is not a tool this gate knows; it cannot be admitted on anyone's authority." tool
+
+  /// The next action, so a refusal tells the caller how to proceed. The `Conductor`
+  /// arms are unreachable in practice — the conductor holds every tool — and are
+  /// written anyway so a new `ToolRole` case cannot fall through this match as a
+  /// runtime `MatchFailureException`.
+  let nextAction (refusal: AuthorityRefusal) : string =
+    match refusal with
+    | AuthorityRefusal.RoleForbids(_, ToolRole.Working) ->
+      "Ask the cohort conductor to run it, or to mint you a token whose role includes it."
+    | AuthorityRefusal.RoleForbids(_, (ToolRole.Observer | ToolRole.Verifier)) ->
+      "Ask the cohort conductor to run it, or to mint you a token whose role includes it. Read-only tools are the ones this role may call."
+    | AuthorityRefusal.RoleForbids(_, ToolRole.Conductor) ->
+      "Only the cohort conductor may call this, and the conductor already holds it."
+    | AuthorityRefusal.NotInGrant(_, ToolRole.Working) ->
+      "Ask the cohort conductor to run it, or to mint you a token whose role includes it."
+    | AuthorityRefusal.NotInGrant(_, (ToolRole.Observer | ToolRole.Verifier)) ->
+      "Ask the cohort conductor to run it, or to mint you a token whose role includes it. This role's tools are the read-only ones."
+    | AuthorityRefusal.NotInGrant(_, ToolRole.Conductor) ->
+      "Only the cohort conductor holds this, and the conductor already holds it."
+    | AuthorityRefusal.CapabilityRequired _ ->
+      "This tool name is not one SageFs registers, so no role can call it. Check the tools/list response for a name that exists."
+
+/// THE AUTHORITY GATE over the whole tool surface: `Authority -> ToolName ->
+/// Result<unit, AuthorityRefusal>`. Pure; `Mcp.fs` resolves the caller's
+/// `Authority` from the published `CohortFrame` and composes this with the
+/// session-state gate by INTERSECTION — a call must pass both, and this gate
+/// runs FIRST so a refused call never reaches session resolution.
+///
+/// It does not widen anything `cohortTools` decided: the ten cohort verbs are
+/// intersected with `checkCohortToolAllowed` too, so the old cohort gate
+/// remains exactly as strict and the two can only ever agree.
+///
+/// ANONYMOUS is deliberately `ToolRole.Observer`, not "no role". Before
+/// tokens existed every connection was a plain member, and the alternative —
+/// treating an unjoined caller as having no authority at all — would make
+/// `join_cohort` unreachable, and a cohort nobody can join is not a cohort.
+/// `join_cohort` and `get_cohort_status` stay in Observer's list for that
+/// reason (the same reason `alwaysReachableCohortTools` exists above).
+let checkAuthorityAllowed (authority: Cohort.Authority<'m>) (tool: ToolName) : Result<unit, AuthorityRefusal> =
+  let role = ToolRole.ofAuthority authority
+  let required = ToolRole.toolsOf role
+  let verdict =
+    if ToolRole.admits role tool then Ok ()
+    elif ToolRole.admits ToolRole.Working tool then Error(AuthorityRefusal.RoleForbids(tool, ToolRole.Working))
+    else Error(AuthorityRefusal.NotInGrant(tool, role))
+  match verdict, ToolName.tryCohortTool tool with
+  | Ok (), Some cohortTool ->
+    // Never a widening: a cohort verb the OLD gate refused stays refused,
+    // whatever the role tables say.
+    if checkCohortToolAllowed authority cohortTool then Ok ()
+    else Error(AuthorityRefusal.RoleForbids(tool, ToolRole.Working))
+  | Ok (), None -> Ok ()
+  | Error refusal, _ -> Error refusal
+
+/// The role a caller with `authority` holds, for display. The gate's own
+/// output; a UI that wants the caller's role reads this rather than
+/// re-deriving it from `Authority`.
+let authorityRoleOf (authority: Cohort.Authority<'m>) : ToolRole = ToolRole.ofAuthority authority

@@ -121,6 +121,8 @@
         <Compile Include="LiveTestStatusView.fs" />
         <Compile Include="McpAnalysisViews.fs" />
         <Compile Include="McpLeaseWire.fs" />
+        <!-- ToolAuthorityGate before Mcp.fs: it holds the tool-admission decision Mcp.fs's gate calls. -->
+        <Compile Include="ToolAuthorityGate.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpHygiene.fs" />
         <Compile Include="McpRunTests.fs" />
@@ -129,8 +131,11 @@
 
 
         <Compile Include="TrunkFollowShell.fs" />
-        <Compile Include="McpCohortIntegration.fs" />
+        <!-- McpCohortTools before McpCohortIntegration: the integration setup names
+             `McpCohortTools.cohortScopeOf` to scope `SetIntegrationHead`, so it must
+             already be bound. -->
         <Compile Include="McpCohortTools.fs" />
+        <Compile Include="McpCohortIntegration.fs" />
         <Compile Include="McpCapability.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />

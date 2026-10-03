@@ -15,6 +15,134 @@ open Falco.Markup
 open Falco.Datastar
 open StarFederation.Datastar.FSharp
 
+// ---------------------------------------------------------------------------
+// Session-scoped HTTP routing
+//
+// Several daemon routes mutate a session. They used to act on "whatever session
+// happens to be the daemon's currently-active one", which is only correct while
+// exactly one client is talking to the daemon. A second client (Neovim, a
+// dashboard tab, another agent) moving the active pointer in between makes the
+// action land on the wrong session.
+//
+// The rule this module exists to enforce: a MUTATING, session-scoped route takes
+// an EXPLICIT session id. Resolution is delegated to the pure
+// `SessionOperations.resolveSession` (explicit id > single-session default >
+// most-recently-active) rather than reimplemented here, so HTTP, MCP and the
+// Neovim/CLI surfaces all resolve identically.
+//
+// The one place this deliberately DIVERGES from `resolveSession` is the
+// ambiguous case: `resolveSession` would fall back to most-recently-active,
+// which is exactly the ambient guess that caused the bug. A MUTATING route with
+// several sessions and no id refuses instead. One session and no id still
+// succeeds — that is the single-client case, and it must not regress.
+// ---------------------------------------------------------------------------
+
+/// Which session a session-scoped mutating route should act on, or why it
+/// cannot decide. A named DU, never a bare string result.
+[<RequireQualifiedAccess>]
+type SessionRouteTarget =
+  /// Act on this session. `explicit` is false when it was inferred as the only
+  /// session rather than named by the caller.
+  | Target of sessionId: string * explicit: bool
+  /// The caller named no session and the daemon has more than one, so choosing
+  /// would mean guessing at ambient state. Carries the candidates.
+  | Ambiguous of candidates: string list
+  /// No session exists to act on.
+  | NoSessions
+  /// The caller named a session id that is not a well-formed session id.
+  | MalformedId of requested: string
+
+module SessionRouting =
+
+  /// Describe a session for the refusal message, so the caller can choose.
+  let private describe (sessions: SageFs.WorkerProtocol.SessionInfo list) =
+    sessions
+    |> List.map (fun s ->
+      let id = SageFs.WorkerProtocol.SessionId.value s.Id
+      let wd =
+        match System.String.IsNullOrWhiteSpace s.WorkingDirectory with
+        | true -> ""
+        | false -> sprintf " (%s)" s.WorkingDirectory
+      sprintf "%s%s" id wd)
+
+  /// Decide the target session for a session-scoped MUTATING route.
+  ///
+  /// Pure: `requestedSessionId` is what the caller sent (or None), `sessions`
+  /// is the registry snapshot. Returns the same `SageFsError` the MCP surface
+  /// raises for the same condition, so the HTTP status and recovery hint match
+  /// what an agent already knows.
+  let resolveForMutatingRoute
+    (requestedSessionId: string option)
+    (sessions: SageFs.WorkerProtocol.SessionInfo list)
+    : Result<string, SageFsError> =
+    match requestedSessionId with
+    | Some raw ->
+      match System.String.IsNullOrWhiteSpace raw with
+      | true -> Error (SageFsError.NoActiveSessions)
+      | false ->
+        match SageFs.WorkerProtocol.SessionId.validate raw with
+        | Ok id ->
+          match sessions |> List.exists (fun s -> s.Id = id) with
+          | true -> Ok raw
+          | false -> Error (SageFsError.SessionNotFound raw)
+        | Error _ -> Error (SageFsError.SessionNotFound raw)
+    | None ->
+      match sessions with
+      // Single client, single session: unambiguous, so this must keep working.
+      | [ single ] -> Ok(SageFs.WorkerProtocol.SessionId.value single.Id)
+      // Several sessions: refuse rather than read the ambient pointer.
+      | _ when List.isEmpty sessions -> Error SageFsError.NoActiveSessions
+      | many -> Error (SageFsError.AmbiguousSessions (describe many))
+
+  /// The `sessionId` property names accepted on the wire, in priority order.
+  let sessionIdAliases = [ "sessionId"; "session_id"; "session" ]
+
+  /// Read the optional `sessionId` from an already-read request body.
+  ///
+  /// `declaredLength` says whether the request carried a Content-Length. It is
+  /// deliberately NOT used to skip the read: a body sent chunked has no
+  /// declared length, and gating on one made every such request look as if the
+  /// caller had sent no session id at all — which pushed the route into
+  /// guessing at ambient state. Reading is harmless for an empty body (it just
+  /// fails to parse) and identical for both transports.
+  let tryReadSessionIdFromBody (declaredLength: bool) (body: string) : string option =
+    if System.String.IsNullOrWhiteSpace body then
+      None
+    else
+      try
+        use doc = System.Text.Json.JsonDocument.Parse(body)
+        sessionIdAliases
+        |> List.tryPick (fun alias ->
+          match doc.RootElement.TryGetProperty(alias) with
+          | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String ->
+            match prop.GetString() with
+            | null -> None
+            | s when System.String.IsNullOrWhiteSpace s -> None
+            | s -> Some s
+          | _ -> None)
+      with
+      | :? System.Text.Json.JsonException -> None
+      | :? ArgumentException -> None
+
+  /// Read the optional `project` from an already-read request body.
+  /// Same chunked-body reasoning as `tryReadSessionIdFromBody`.
+  let tryReadProjectFromBody (declaredLength: bool) (body: string) : string option =
+    if System.String.IsNullOrWhiteSpace body then
+      None
+    else
+      try
+        use doc = System.Text.Json.JsonDocument.Parse(body)
+        match doc.RootElement.TryGetProperty("project") with
+        | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String ->
+          match prop.GetString() with
+          | "" -> None
+          | null -> None
+          | s -> Some s
+        | _ -> None
+      with
+      | :? System.Text.Json.JsonException -> None
+      | :? ArgumentException -> None
+
 /// Shared DOM element IDs — single source of truth for strings that cross
 /// the F#/JS boundary (used in both Attr.id and getElementById calls).
 [<RequireQualifiedAccess>]
