@@ -76,6 +76,17 @@ module Linearizability =
     | LandingNotAtFrontOfQueue
     | LandingNotInExpectedState
     | NotConductor
+    /// Its OWN kind, not a re-use of `NotConductor`: the seat is empty rather
+    /// than held by somebody else, and an order permutation can turn one into
+    /// the other (a member that departed becomes vacant only when their
+    /// departure lands), so treating them as equal would make the linearizability
+    /// check blind to exactly the transition this change is about.
+    | ConductorVacant
+    /// Its OWN kind again: a command naming a scope the cohort does not hold is
+    /// refused, and which of the two scopes was requested or held is allowed to
+    /// differ between permutations of the same order, so only the refusal
+    /// matters — the same reasoning as `DuplicateJoin`/`UnknownClaim` above.
+    | WrongCohortScope
 
   let private kindOf (err: CohortError<'m>) : ErrorKind =
     match err with
@@ -95,6 +106,8 @@ module Linearizability =
     | CohortError.LandingNotAtFrontOfQueue _ -> ErrorKind.LandingNotAtFrontOfQueue
     | CohortError.LandingNotInExpectedState _ -> ErrorKind.LandingNotInExpectedState
     | CohortError.NotConductor _ -> ErrorKind.NotConductor
+    | CohortError.ConductorVacant _ -> ErrorKind.ConductorVacant
+    | CohortError.WrongCohortScope _ -> ErrorKind.WrongCohortScope
 
   /// `Ok () ↔ Ok ()`; `Error e1 ↔ Error e2` iff same `ErrorKind` (payload —
   /// e.g. WHICH member holds a conflicting claim — is allowed to differ

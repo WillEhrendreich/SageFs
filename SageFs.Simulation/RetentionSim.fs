@@ -163,9 +163,11 @@ module RetentionSim =
     | SimEvent.PeriodicPrune ->
       { pruneFriction behavior s with
           LastPrune = PruneObservation.Pruned(s.Step, s.Rows, s.Ledger, s.Clock, versionOf s.VersionNumber) }
-    | SimEvent.CohortJoin who -> cohortCommand s (CohortCommand.Join(who, JoinableRole.Implementer, None))
-    | SimEvent.CohortDepart who -> cohortCommand s (CohortCommand.Depart who)
-    | SimEvent.CohortTick -> cohortCommand s CohortCommand.Tick
+    // `CohortState.empty` opens a Machine-scoped cohort (the v1 shape this sim models — no
+    // session, no working directory, one ledger), so every command here names that same scope.
+    | SimEvent.CohortJoin who -> cohortCommand s (CohortCommand.Join(who, JoinableRole.Implementer, None, SageFs.CohortScope.Machine))
+    | SimEvent.CohortDepart who -> cohortCommand s (CohortCommand.Depart(who, SageFs.CohortScope.Machine))
+    | SimEvent.CohortTick -> cohortCommand s (CohortCommand.Tick SageFs.CohortScope.Machine)
 
   /// Every state, oldest first, including the initial one.
   let trace (behavior: FrictionBehavior) (scenario: Scenario) : State list =

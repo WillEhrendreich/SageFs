@@ -1,6 +1,13 @@
 # SageFs Feature Modules Survey
 
-> **Stale — historical snapshot.** `SageFs.Core/Features/` has grown to 118 `.fs` files as of 2026-10-01 (`ls SageFs.Core/Features/*.fs | wc -l`, plus two subfolders, `MetadataDelta/` and `Tweak/`), not the 33 below, and the MCP tool inventory in the Wiring Summary references tools (`load_fsharp_script`, `get_startup_info`, `visualize_domain_model`) that are no longer registered `[<McpServerTool>]` methods. Entry 9 below still says `visualize_domain_model` is an MCP tool. It isn't, and I found no HTTP route for it either. For the current MCP tool list, see [MCP Tools](mcp-tools.md); for the current module count, check the directory directly. This document is kept for historical context, not as a live reference.
+> **Stale — historical snapshot.** The module count below (33) was right when this survey was
+> written and is wrong now: `SageFs.Core/Features/` has grown well past a hundred `.fs` files,
+> and the directory listing (`ls SageFs.Core/Features/*.fs | wc -l`, which also misses the
+> `MetadataDelta/` and `Tweak/` subfolders) is the only way to get the current number. The
+> per-module wiring claims below are a snapshot of one day and several have since rotted, most
+> visibly the `visualize_domain_model` entry, which is not an MCP tool and has no SSE emitter
+> left. For the current MCP tool list, see [MCP Tools](mcp-tools.md). This document is kept for
+> historical context, not as a live reference.
 
 ## Summary
 
@@ -15,7 +22,9 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Module**: SageFs.Features.AutoCompletion
 - **Types**: CompletionKind (enum), completion ranking
 - **Functions**: label, rankByType, etc.
-- **MCP Tool**: ❌ No direct tool (via explore_type/explore_namespace)
+- **MCP Tool**: ❌ No direct tool. AutoCompletion has never been exposed over MCP (the survey
+  once said it was reached "via explore_type/explore_namespace"; neither of those is a registered
+  tool and neither has one).
 - **SSE Emission**: ❌ No
 - **Tests**: ❌ No dedicated test (covered in AutoCompletionAndEventsTests.fs)
 - **Status**: DARK (pure logic, exposed through other tools)
@@ -24,7 +33,8 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Module**: SageFs.Features.BindingExplorer
 - **Types**: BindingInfo, BindingScopeSnapshot, CellInput
 - **Functions**: parseBinding, buildScopeSnapshot, etc.
-- **MCP Tool**: ❌ No (data pushed via SSE in explore_namespace)
+- **MCP Tool**: ❌ No. The scope map is pushed over SSE. (This entry used to say the data went
+  "via SSE in explore_namespace"; `explore_namespace` is not a registered tool.)
 - **SSE Emission**: ✅ YES - formatBindingScopeMapEvent
 - **Tests**: ✅ BindingExplorerTests.fs
 - **Status**: LIT (SSE emission in FeatureHooks)
@@ -87,10 +97,13 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Module**: SageFs.Features.DomainModelViz
 - **Types**: DUCaseInfo, StateTransition, StateMachineModel
 - **Functions**: DUExtractor.fromType, renderStateDiagram, etc.
-- **MCP Tool**: ✅ YES - visualize_domain_model
-- **SSE Emission**: ✅ YES - formatDomainModelEvent
-- **Tests**: ✅ DomainModelVizTests.fs, DomainModelSseTests.fs
-- **Status**: LIT (MCP tool + SSE emission)
+- **MCP Tool**: ❌ No. The survey once recorded `visualize_domain_model` here. It was never a
+  registered `[<McpServerTool>]` and there is no HTTP route for it either; it is a retired name
+  (`SageFs.Core/Affordances.fs`, `RetiredTool.VisualizeDomainModel`).
+- **SSE Emission**: ❌ No. The `domain_model` event was deleted; `SseWriter.allSseEventTypes`
+  does not carry it and `SageFs.Tests/LiveBindingsSseWiringTests.fs` says so in a test name.
+- **Tests**: ✅ DomainModelVizTests.fs
+- **Status**: DARK (the module survives; nothing calls it over the wire)
 
 ### 10. **EvalDedup** — REMOVED.
 - It returned the previous result for identical code sent within 2 seconds, without
@@ -355,20 +368,23 @@ Registered tools, by area:
 ### SSE-Emitting Features:
 1. **BindingExplorer** → formatBindingScopeMapEvent
 2. **CellDependencyGraph** → formatCellDependenciesEvent
-3. **DomainModelViz** → formatDomainModelEvent
-4. **EvalDiff** → formatEvalDiffEvent
-5. **EvalTimeline** → formatEvalTimelineEvent
-6. **LiveTestingTypes** → formatTestSummaryEvent, formatTestResultsBatchEvent, formatFailureNarrativesEvent, formatFileAnnotationsEvent
-7. **TestNarration** → (embedded in formatFailureNarrativesEvent)
-8. **Diagnostician** → formatDiagnosisReadyEvent
-9. **SessionEvents** → formatSessionSseEvent
-10. **TestDiscovery** → formatTestSourceLocationsEvent
-11. **FeatureHooks** → (orchestrates above emissions)
+3. **EvalDiff** → formatEvalDiffEvent
+4. **EvalTimeline** → formatEvalTimelineEvent
+5. **LiveTestingTypes** → formatTestSummaryEvent, formatTestResultsBatchEvent, formatFailureNarrativesEvent, formatFileAnnotationsEvent
+6. **TestNarration** → (embedded in formatFailureNarrativesEvent)
+7. **Diagnostician** → formatDiagnosisReadyEvent
+8. **SessionEvents** → formatSessionSseEvent
+9. **TestDiscovery** → formatTestSourceLocationsEvent
+10. **FeatureHooks** → (orchestrates above emissions)
+
+Entry 3 of the original list was DomainModelViz. Its `domain_model` event was deleted, and the
+authoritative registry is `SseWriter.allSseEventTypes` (`SageFs.Core/SseWriter.fs`), which lists
+22 event types and does not include `domain_model`.
 
 ### Dark/Pure-Logic-Only (Unexposed):
-1. **AutoCompletion** (exposed via explore_type/explore_namespace)
-2. **CoverageInstrumenter** (exposed via get_file_coverage)
-3. **DaemonHealth** (exposed via get_fsi_status)
+1. **AutoCompletion** (not exposed; the survey once pointed at explore_type/explore_namespace, which are not tools)
+2. **CoverageInstrumenter** (per-file coverage is read over HTTP: `GET /api/live-testing/file-annotations`)
+3. **DaemonHealth** (health is read via `get_daemon_status` and `get_session_status`)
 4. **DaemonPersistence** (internal I/O)
 5. **Diagnostics** (exposed via check_fsharp_code)
 6. ~~EvalDedup~~ (removed)
@@ -385,17 +401,21 @@ Registered tools, by area:
 
 ## METRIC SUMMARY
 
-| Category | Count |
-|----------|-------|
-| Total Feature Modules | 35 |
-| MCP-Wired (direct or indirect) | 19 |
-| SSE-Emitting | 10 |
-| LIT (MCP + SSE) | 9 |
-| LIT (MCP only) | 10 |
-| LIT (SSE only) | 1 |
-| DARK (pure/unexposed) | 14 |
-| With Tests | 24 |
-| Without Tests | 8 |
+This table used to carry counts of MCP-wired, SSE-emitting, LIT and DARK modules, plus a
+with-tests / without-tests split. They are gone, and deliberately so. Every one was arithmetic
+over the module list in this document, which is a snapshot of a day and no longer describes
+`SageFs.Core/Features/`. They cannot be recomputed from anything, and a figure that reads as
+measured but was counted against a list that no longer exists is worse than no figure.
+
+Two counts below are the exception, because they can be measured from the tree right now:
+
+| Category | Count | How to measure it |
+|----------|-------|-------------------|
+| Registered MCP tools | 65 | `RegisteredTools.describe typeof<SageFsTools>`, the same reflection `discover_features` is built from |
+| SSE event types | 22 | `SseWriter.allSseEventTypes` in `SageFs.Core/SseWriter.fs` |
+
+Counts of feature modules, MCP-wired modules, LIT/DARK modules, or tests per module are not
+given here. Count them from the directory and the test project.
 
 ---
 
@@ -410,8 +430,24 @@ Registered tools, by area:
    - **Tier 2 (MCP)**: Exposed as tools (decompose_pipeline, plan_ripple, etc.)
    - **Tier 3 (SSE)**: Pushed server-side (test results, eval diffs, bindings)
 
-4. **Test Coverage**: 24/32 modules have tests. Notable gaps: AutoCompletion (covered in integration test), DaemonPersistence, Diagnostics, LiveTestingExecutors, LiveTestingInstrumentation, SessionPersistence, TestCachePersistence (likely I/O testing happens elsewhere).
+4. **Test Coverage**: not counted here. The old "24/32 modules have tests" line contradicted the
+   metric table's own "Total Feature Modules | 35" and was counted against the same stale list,
+   so both are gone. Count tests from `SageFs.Tests/`.
 
 5. **Wiring Entry Points**:
-   - MCP: **McpTools.fs** (45 methods)
+   - MCP: **McpTools.fs** (69 declared members, 65 of them registered; see below)
    - SSE: **McpServer.fs** (orchestrates pushes) + **FeatureHooks.fs** (coordinates emissions)
+
+`McpTools.fs` declares more members than it registers. Four are declared, have working bodies,
+and carry no `[<McpServerTool>]`, so `tools/list` does not have them:
+
+| Member | Registered? | What to use instead |
+|--------|-------------|---------------------|
+| `load_fsharp_script` | No | Retired. Read and `send_fsharp_code` the blocks yourself; `#load` still works from inside a submitted script. |
+| `get_startup_info` | No | `get_daemon_status` for daemon-wide facts, `get_session_status` for live session facts. |
+| `get_elm_state` | No | Retired. Read the editor or dashboard state directly. |
+| `explain_test_run` | No | Retired. `explain_test_failure` covers a test that went from passing to failing; for a run-level story read the `run_tests` receipt. |
+
+All four are in `SageFs.Core/Affordances.fs` (`RetiredTool.toolNames`) except `get_elm_state`
+and `explain_test_run`, which have no replacement mapping because the product never defined
+one. Do not invent one.

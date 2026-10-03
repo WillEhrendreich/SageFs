@@ -91,7 +91,11 @@ module McpCapability =
               match workingDirectory with
               | Some _ -> McpCohortTools.resolveJoinSession ctx agentName workingDirectory
               | None -> Task.FromResult None
-            let! seated = commitCohort ctx (Cohort.CohortCommand.Join(who, RolePreset.joinableRole preset, sessionOpt))
+                        // The scope the minted member joins. Taken from the working directory it is joining
+            // FROM, not from the process: two agents in two repositories are two cohorts, so the
+            // conductor seat they contend for is the one in their own repository.
+            let scope = McpCohortTools.cohortScopeOf workingDirectory
+            let! seated = commitCohort ctx (Cohort.CohortCommand.Join(who, RolePreset.joinableRole preset, sessionOpt, scope))
             match seated with
             | Error e ->
               // The seat could not be made, so the token must not work: revoke it rather than leave a token with no member.
@@ -124,8 +128,12 @@ module McpCapability =
         match store.Revoke(now, by, target) with
         | Error refusal -> return Error(CohortErrorMapping.revokeRefusalToSageFsError refusal)
         | Ok () ->
-          // The token is already dead. Departing the seat is housekeeping; a seat that is already gone is not a failure.
-          let! _ = commitCohort ctx (Cohort.CohortCommand.Depart(CapabilityId.memberId target))
+          // The token is already dead. Departing the seat is housekeeping; a seat that is already
+          // gone is not a failure. The seat belongs to the caller's OWN scope, read from where they
+          // are rather than passed in: a token minted in one repository is revoked in that
+          // repository's cohort.
+          let! wd = McpCohortTools.callerWorkingDirectory ctx agentName None
+          let! _ = commitCohort ctx (Cohort.CohortCommand.Depart(CapabilityId.memberId target, McpCohortTools.cohortScopeOf wd))
           return
             Ok(
               sprintf

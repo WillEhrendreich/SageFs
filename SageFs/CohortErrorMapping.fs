@@ -20,6 +20,13 @@ module CohortErrorMapping =
       | Cohort.ClaimScope.Project p -> sprintf "project:%s" p
     let failed reason suggestion = SageFsError.CohortActionFailed(reason, suggestion)
     match err with
+    | Cohort.CohortError.WrongCohortScope(requested, cohort) ->
+      failed
+        (sprintf
+          "That command was issued against scope %s, but this cohort is scope %s. A cohort is about ONE scope, so this is a scope collision, not a permissions problem."
+          (SageFs.Scope.label requested)
+          (SageFs.Scope.label cohort))
+        "This is not a permission problem and no amount of retrying will clear it. Run get_cohort_status: if it names a different scope than the one you are working in, you are addressing a different cohort and need to join THAT one. A conductor seat belongs to the scope it was taken in."
     | Cohort.CohortError.DuplicateJoin who ->
       failed
         (sprintf "%s is already a member of this cohort." (mid who))

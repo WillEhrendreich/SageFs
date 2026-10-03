@@ -163,8 +163,21 @@ module DaemonClient =
       Utils.Log.warn "[DaemonClient] parseStateEvent failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       None
 
-  /// Map an EditorAction to a (name, value) pair for the dispatch API.
-  let actionToApi (action: EditorAction) : (string * string option) option =
+  /// Map an EditorAction to a (name, value) pair, attaching the session the
+  /// CALLER believes it is talking to.
+  ///
+  /// This is what lets a client name its session for an action that mutates
+  /// one, instead of first moving the daemon's shared active-session pointer and
+  /// then hoping nothing else moves it before the action is handled — which is
+  /// exactly the race that let two clients act on each other's session.
+  /// Actions that are not session-scoped are mapped exactly as before.
+  let actionToApiWithSession (sessionId: string option) (action: EditorAction) : (string * string option) option =
+    let withSession (name: string) (value: string option) =
+      match sessionId with
+      | None -> Some (name, value)
+      // Session-scoped mutation: name the session so the daemon can target it
+      // explicitly rather than inferring it from ambient state.
+      | Some sid -> Some (name, Some sid)
     match action with
     | EditorAction.InsertChar c -> Some ("insertChar", Some (c.ToString()))
     | EditorAction.NewLine -> Some ("newLine", None)
@@ -202,9 +215,9 @@ module DaemonClient =
     | EditorAction.ConfigureWarmupAutoOpen -> Some ("configureWarmupAutoOpen", None)
     | EditorAction.StopSession id -> Some ("stopSession", Some id)
     | EditorAction.HistorySearch s -> Some ("historySearch", Some s)
-    | EditorAction.ResetSession -> Some ("resetSession", None)
-    | EditorAction.HardResetSession -> Some ("hardResetSession", None)
-    | EditorAction.SmartReset -> Some ("smartReset", None)
+    | EditorAction.ResetSession -> withSession "resetSession" None
+    | EditorAction.HardResetSession -> withSession "hardResetSession" None
+    | EditorAction.SmartReset -> withSession "smartReset" None
     | EditorAction.SessionNavUp -> Some ("sessionNavUp", None)
     | EditorAction.SessionNavDown -> Some ("sessionNavDown", None)
     | EditorAction.SessionSelect -> Some ("sessionSelect", None)
@@ -219,6 +232,14 @@ module DaemonClient =
     | EditorAction.PromptConfirm -> Some ("promptConfirm", None)
     | EditorAction.PromptCancel -> Some ("promptCancel", None)
     | EditorAction.SwitchMode _ -> None
+
+  /// Map an EditorAction to a (name, value) pair for the dispatch API.
+  /// The session-agnostic form: no session id is attached, which is what a
+  /// caller with no session context has. Session-scoped mutations over HTTP
+  /// should use `actionToApiWithSession` so the daemon never has to infer the
+  /// target from ambient state.
+  let actionToApi (action: EditorAction) : (string * string option) option =
+    actionToApiWithSession None action
 
   /// Send an EditorAction to the daemon via POST /api/dispatch.
   let dispatchAction (client: HttpClient) (baseUrl: string) (actionName: string) (value: string option) = task {
@@ -237,11 +258,18 @@ module DaemonClient =
       ()
   }
 
-  /// Dispatch an EditorAction to the daemon (convenience wrapper).
-  let dispatch (client: HttpClient) (baseUrl: string) (action: EditorAction) = task {
-    match actionToApi action with
+  /// Dispatch an EditorAction to the daemon, naming the session it means.
+  /// Session-scoped mutations are then targeted explicitly instead of via the
+  /// daemon's shared active-session pointer.
+  let dispatchForSession (client: HttpClient) (baseUrl: string) (sessionId: string option) (action: EditorAction) = task {
+    match actionToApiWithSession sessionId action with
     | Some (name, value) -> do! dispatchAction client baseUrl name value
     | None -> ()
+  }
+
+  /// Dispatch an EditorAction to the daemon (convenience wrapper).
+  let dispatch (client: HttpClient) (baseUrl: string) (action: EditorAction) = task {
+    return! dispatchForSession client baseUrl None action
   }
 
   /// Verify daemon is reachable. Returns Ok baseUrl or Error message.

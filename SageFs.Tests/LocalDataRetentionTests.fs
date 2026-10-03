@@ -110,8 +110,11 @@ let localDataRetentionTests =
     testList "the cohort ledger" [
       let t0 = DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc)
       let retention = SageFs.DataRetention.cohortLedgerRetention
-      let joined, joinEntry = mkEntry 0L t0 (CohortState.empty ()) (CohortCommand.Join("ada", JoinableRole.Implementer, None))
-      let _, departEntry = mkEntry 1L (t0.AddHours 1.0) joined (CohortCommand.Depart "ada")
+      // The cohort is opened by `CohortState.empty`, which is Machine-scoped — the
+      // v1 shape. Both ledger rows below are written into that one cohort.
+      let machine = SageFs.CohortScope.Machine
+      let joined, joinEntry = mkEntry 0L t0 (CohortState.empty ()) (CohortCommand.Join("ada", JoinableRole.Implementer, None, machine))
+      let _, departEntry = mkEntry 1L (t0.AddHours 1.0) joined (CohortCommand.Depart("ada", machine))
 
       testCase "an empty ledger has nothing to do" <| fun _ ->
         decideLedger retention (t0.AddDays 30.0) ([]: LedgerEntry<string> list)

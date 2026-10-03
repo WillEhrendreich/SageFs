@@ -181,7 +181,7 @@ module CohortOwner =
   /// old worker of a superseded landing) is rejected as a normal `Error`
   /// here, not a crash: log it and move on, per item 14b's guidance that no
   /// extra fencing is needed beyond what `decide` already enforces.
-  let private postCompletion (logger: Utils.ILogger) (post: Command -> unit) (cmd: CohortCommand<MemberId>) : unit =
+  let private postCompletion (logger: Utils.ILogger) (scope: CohortScope) (post: Command -> unit) (cmd: CohortCommand<MemberId>) : unit =
     post (
       Command.Apply(
         cmd,
@@ -203,11 +203,12 @@ module CohortOwner =
   /// arrival order by the mailbox itself.
   let private dispatchLandingEffects
     (logger: Utils.ILogger)
+    (scope: CohortScope)
     (performer: LandingPerformer<MemberId>)
     (post: Command -> unit)
     (effects: CohortEffect<MemberId> list)
     : unit =
-    let complete = postCompletion logger post
+    let complete = postCompletion logger scope post
     for effect in effects do
       // Landing-effect tracing: each effect dispatched + (below) its result is
       // logged, so a landing's actual progress is visible in the daemon log —
@@ -220,7 +221,7 @@ module CohortOwner =
           async {
             let! result = performer.Rebase id onto commits
             logger.LogInfo(sprintf "[cohort-owner] Rebase(%s onto %s commits=%A) -> %A" id onto commits result)
-            complete (CohortCommand.RebaseCompleted(LandingId id, result))
+            complete (CohortCommand.RebaseCompleted(LandingId id, result, scope))
           }
         )
       | CohortEffect.ComputeAffected(LandingId id, baseSha, headSha) ->
@@ -229,7 +230,7 @@ module CohortOwner =
             match! performer.ComputeAffected id baseSha headSha with
             | Ok tests ->
               logger.LogInfo(sprintf "[cohort-owner] ComputeAffected(%s) -> %d tests" id (List.length tests))
-              complete (CohortCommand.AffectedComputed(LandingId id, tests))
+              complete (CohortCommand.AffectedComputed(LandingId id, tests, scope))
             | Error reason ->
               // The affected set could not be computed against a trustworthy
               // session. Never fall through to `AffectedComputed []` (which would
@@ -238,7 +239,7 @@ module CohortOwner =
               logger.LogWarning(
                 sprintf "[cohort-owner] ComputeAffected for landing %s could not read a trustworthy session: %s — re-entering Cohort.decide via VerificationInconclusive" id reason
               )
-              complete (CohortCommand.VerificationInconclusive(LandingId id, reason))
+              complete (CohortCommand.VerificationInconclusive(LandingId id, reason, scope))
           }
         )
       | CohortEffect.RunTests(LandingId id, tests) ->
@@ -247,7 +248,7 @@ module CohortOwner =
             match! performer.RunTests id tests with
             | Ok failing ->
               logger.LogInfo(sprintf "[cohort-owner] RunTests(%s) -> %d failing" id (List.length failing))
-              complete (CohortCommand.TestsCompleted(LandingId id, failing))
+              complete (CohortCommand.TestsCompleted(LandingId id, failing, scope))
             | Error reason ->
               // The verifier could not reach a verdict (e.g. the integration
               // session was still warming up after the rebase rebuild). Report
@@ -257,8 +258,8 @@ module CohortOwner =
               logger.LogWarning(
                 sprintf "[cohort-owner] RunTests for landing %s could not verify: %s — re-entering Cohort.decide via VerificationInconclusive" id reason
               )
-              complete (CohortCommand.VerificationInconclusive(LandingId id, reason))
-          }
+              complete (CohortCommand.VerificationInconclusive(LandingId id, reason, scope))
+            }
         )
       | CohortEffect.FastForward(LandingId id, toSha) ->
         Async.Start(
@@ -266,7 +267,7 @@ module CohortOwner =
             let! result = performer.FastForward id toSha
             logger.LogInfo(sprintf "[cohort-owner] FastForward(%s -> %s) -> %A" id toSha result)
             match result with
-            | Ok committedSha -> complete (CohortCommand.FastForwardCompleted(LandingId id, committedSha))
+            | Ok committedSha -> complete (CohortCommand.FastForwardCompleted(LandingId id, committedSha, scope))
             | Error reason ->
               // Roast-6 #7b closed the gap this comment used to describe:
               // `Cohort.decide` now has a real completion command for a
@@ -279,7 +280,7 @@ module CohortOwner =
               logger.LogWarning(
                 sprintf "[cohort-owner] FastForward for landing %s failed: %s — re-entering Cohort.decide via FastForwardFailed" id reason
               )
-              complete (CohortCommand.FastForwardFailed(LandingId id, reason))
+              complete (CohortCommand.FastForwardFailed(LandingId id, reason, scope))
           }
         )
       | CohortEffect.Notify(who, event) ->
@@ -288,6 +289,7 @@ module CohortOwner =
 
   let internal handle
     (logger: Utils.ILogger)
+    (scope: CohortScope)
     (ledger: LedgerPort<MemberId>)
     (clock: unit -> DateTime)
     (entropy: unit -> byte[])
@@ -328,7 +330,7 @@ module CohortOwner =
           | [] -> ()
           | _ -> publishEvents events
           notify logger reply (Ok(events, effects))
-          dispatchLandingEffects logger performer post effects
+          dispatchLandingEffects logger scope performer post effects
           return { Cohort = newState; NextSeq = seq + 1L<ledgerSeq> }
         | Error err ->
           notify logger reply (Error err)
@@ -342,11 +344,18 @@ module CohortOwner =
   type Handle
     internal
     (
+      cohortScope: CohortScope,
       mailbox: MailboxProcessor<Command>,
       readFrame: unit -> CohortFrame<MemberId>,
       readCohortState: unit -> CohortState<MemberId>,
       events: IEvent<CohortEvent<MemberId> list>
     ) =
+    /// WHICH cohort this owner is. Every command it commits is gated against it
+    /// by `decide` (`WrongCohortScope`), and it is the key the shell uses to find
+    /// the owner for a caller's derived scope — so a member's command reaches
+    /// the cohort it named and refuses, by name, if that is not this one.
+    member _.Scope : CohortScope = cohortScope
+
     /// Apply a command; completes once it is on the ledger (or refused).
     member _.Commit(cmd: CohortCommand<MemberId>) : Task<Result<CohortEvent<MemberId> list * CohortEffect<MemberId> list, CohortError<MemberId>>> =
       mailbox.PostAndAsyncReply(fun ch -> Command.Apply(cmd, ch.Reply)) |> Async.StartAsTask
@@ -415,14 +424,15 @@ module CohortOwner =
   /// the mailbox's own body is running.
   let private startCore
     (logger: Utils.ILogger)
+    (scope: CohortScope)
     (ledger: LedgerPort<MemberId>)
     (clock: unit -> DateTime)
     (entropy: unit -> byte[])
     (getSessionTestOutcomes: string -> SessionTestOutcomes)
     (performer: LandingPerformer<MemberId>)
     : Handle =
-    let entries = ledger.ReadAll ()
-    let head = replayHead entries
+    let entries = ledger.ReadAll scope
+    let head = replayHeadIn scope entries
     let initialNextSeq =
       match entries with
       | [] -> 0L<ledgerSeq>
@@ -443,14 +453,14 @@ module CohortOwner =
       MailboxProcessor.Start(fun inbox ->
         let step =
           ResilientActor.wrapLoop logger "cohort-owner"
-            (handle logger ledger clock entropy getSessionTestOutcomes publish publishState cohortEvents.Trigger performer inbox.Post)
+            (handle logger scope ledger clock entropy getSessionTestOutcomes publish publishState cohortEvents.Trigger performer inbox.Post)
         let rec loop owner = async {
           let! command = inbox.Receive()
           let! next = step owner command
           return! loop next
         }
         loop { Cohort = head.State; NextSeq = initialNextSeq })
-    new Handle(mailbox, (fun () -> frameRef.Value), (fun () -> stateRef.Value), cohortEvents.Publish)
+    new Handle(scope, mailbox, (fun () -> frameRef.Value), (fun () -> stateRef.Value), cohortEvents.Publish)
 
   /// Start the owner for one cohort's ledger. `clock`/`entropy` are injected
   /// (production defaults: `DateTime.UtcNow` and `productionEntropy`) so
@@ -472,12 +482,13 @@ module CohortOwner =
   /// effects (the real `CohortGit`-backed one is a later slice's wiring).
   let start
     (logger: Utils.ILogger)
+    (scope: CohortScope)
     (ledger: LedgerPort<MemberId>)
     (clock: unit -> DateTime)
     (entropy: unit -> byte[])
     (getSessionTestOutcomes: string -> SessionTestOutcomes)
     : Handle =
-    startCore logger ledger clock entropy getSessionTestOutcomes LandingPerformer.stub
+    startCore logger scope ledger clock entropy getSessionTestOutcomes LandingPerformer.stub
 
   /// Same as `start`, plus an injected `LandingPerformer` that actually runs
   /// landing effects — this is the keystone item 14b adds: without a real
@@ -487,13 +498,14 @@ module CohortOwner =
   /// a later slice passes the real `CohortGit`-backed one from `DaemonMode.fs`.
   let startWithPerformer
     (logger: Utils.ILogger)
+    (scope: CohortScope)
     (ledger: LedgerPort<MemberId>)
     (clock: unit -> DateTime)
     (entropy: unit -> byte[])
     (getSessionTestOutcomes: string -> SessionTestOutcomes)
     (performer: LandingPerformer<MemberId>)
     : Handle =
-    startCore logger ledger clock entropy getSessionTestOutcomes performer
+    startCore logger scope ledger clock entropy getSessionTestOutcomes performer
 
   /// Roast-6 #7a: the daemon-held content-addressed test-result cache for
   /// landing verification (§5.4) used to be a bare `ref`, read-modify-written

@@ -21,6 +21,12 @@ let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
 let private alice = "alice"
 let private bob = "bob"
 
+/// These tests drive the pure core with no session and no working directory, so
+/// the cohort is the v1 machine-wide one — the same scope `CohortState.empty`
+/// opens. It is threaded through `frameAfter` rather than hard-coded at each
+/// command so a test CAN talk about two scopes if the projection ever needs it.
+let private machine = CohortScope.Machine
+
 /// Folds `decide` over a fixed command list from an empty state, then
 /// projects the resulting ledger head into a `CohortFrame` exactly as
 /// `CohortOwner.frameOf` does — mirrors `CohortPanelTests.fs`'s `frameAfter`.
@@ -32,7 +38,7 @@ let private frameAfter (commands: CohortCommand<string> list) : CohortFrame<stri
         match decide epoch [| byte seq |] state cmd with
         | Ok(newState, _, _) -> newState, seq + 1L<ledgerSeq>
         | Error err -> failwithf "unexpected refusal building test frame: %A" err)
-      (CohortState.empty (), 0L<ledgerSeq>)
+      (CohortState.forScope machine, 0L<ledgerSeq>)
   project { Seq = (if seq = 0L<ledgerSeq> then 0L<ledgerSeq> else seq - 1L<ledgerSeq>); State = finalState } [||]
 
 let private emptyFrame : CohortFrame<string> = project (replayHead []) [||]
@@ -50,8 +56,8 @@ let cohortTerritoryTests =
       testCase "a Held claim projects one tile carrying its holder's member index" <| fun _ ->
         let frame =
           frameAfter
-            [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing") ]
+            [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine) ]
         let tiles = ofFrame frame
         tiles |> List.length |> Expect.equal "one held claim, one tile" 1
         let tile = tiles.[0]
@@ -62,9 +68,9 @@ let cohortTerritoryTests =
       testCase "an Orphaned claim projects with HolderIndex = -1 (neutral, not dropped)" <| fun _ ->
         let frame =
           frameAfter
-            [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
-              CohortCommand.Depart alice ]
+            [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
+              CohortCommand.Depart(alice, machine) ]
         let tiles = ofFrame frame
         tiles |> List.length |> Expect.equal "the orphaned claim is still territory" 1
         tiles.[0].HolderIndex |> Expect.equal "no live holder -> neutral index" -1
@@ -72,25 +78,25 @@ let cohortTerritoryTests =
       testCase "a Released claim is dropped — it is no longer anyone's territory" <| fun _ ->
         let frame =
           frameAfter
-            [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing") ]
+            [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine) ]
         // Release it using the fence AcquireClaim actually produced.
         let claimId = frame.ClaimIds.[0]
         let fence = frame.ClaimFence.[0]
         let released =
           frameAfter
-            [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
-              CohortCommand.ReleaseClaim(alice, claimId, fence) ]
+            [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
+              CohortCommand.ReleaseClaim(alice, claimId, fence, machine) ]
         ofFrame released |> Expect.equal "released claims are not territory" []
 
       testCase "multiple members' held claims each keep their own holder index" <| fun _ ->
         let frame =
           frameAfter
-            [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-              CohortCommand.Join(bob, JoinableRole.Verifier, None)
-              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/A.fs", "a")
-              CohortCommand.AcquireClaim(bob, ClaimScope.File "src/B.fs", "b") ]
+            [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+              CohortCommand.Join(bob, JoinableRole.Verifier, None, machine)
+              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/A.fs", "a", machine)
+              CohortCommand.AcquireClaim(bob, ClaimScope.File "src/B.fs", "b", machine) ]
         let tiles = ofFrame frame |> List.sortBy (fun t -> t.Label)
         let aliceIdx = Array.findIndex ((=) alice) frame.MemberIds
         let bobIdx = Array.findIndex ((=) bob) frame.MemberIds
@@ -169,10 +175,10 @@ let cohortTerritoryTests =
       testCase "WHY — a frame's tiles render end to end through ofFrame -> toSvg without throwing" <| fun _ ->
         let frame =
           frameAfter
-            [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-              CohortCommand.Join(bob, JoinableRole.Verifier, None)
-              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/A.fs", "a")
-              CohortCommand.AcquireClaim(bob, ClaimScope.Project "SageFs.Tests/SageFs.Tests.fsproj", "b") ]
+            [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+              CohortCommand.Join(bob, JoinableRole.Verifier, None, machine)
+              CohortCommand.AcquireClaim(alice, ClaimScope.File "src/A.fs", "a", machine)
+              CohortCommand.AcquireClaim(bob, ClaimScope.Project "SageFs.Tests/SageFs.Tests.fsproj", "b", machine) ]
         let svg = ofFrame frame |> toSvg 400.0 240.0
         svg |> Expect.stringContains "carries alice's claimed file" "src/A.fs"
         svg |> Expect.stringContains "carries bob's claimed project" "SageFs.Tests/SageFs.Tests.fsproj"

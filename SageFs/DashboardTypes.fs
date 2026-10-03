@@ -37,8 +37,13 @@ open StarFederation.Datastar.FSharp
 // succeeds — that is the single-client case, and it must not regress.
 // ---------------------------------------------------------------------------
 
-/// Which session a session-scoped mutating route should act on, or why it
-/// cannot decide. A named DU, never a bare string result.
+/// Which session a session-scoped route should act on, or why it cannot
+/// decide. A named DU, never a `Result<_, string>`.
+///
+/// Each refusal case maps onto exactly one `SageFsError` (`toRefusal`), so an
+/// HTTP refusal and an MCP refusal of the same condition are indistinguishable
+/// to a caller — same HTTP status, same recovery hint — and neither is a string
+/// a caller has to pattern-match on prose.
 [<RequireQualifiedAccess>]
 type SessionRouteTarget =
   /// Act on this session. `explicit` is false when it was inferred as the only
@@ -51,6 +56,8 @@ type SessionRouteTarget =
   | NoSessions
   /// The caller named a session id that is not a well-formed session id.
   | MalformedId of requested: string
+  /// The caller named a well-formed id that no live session carries.
+  | NotFound of requested: string
 
 module SessionRouting =
 
@@ -65,7 +72,7 @@ module SessionRouting =
         | false -> sprintf " (%s)" s.WorkingDirectory
       sprintf "%s%s" id wd)
 
-  /// Decide the target session for a session-scoped MUTATING route.
+  /// Decide the target session for a session-scoped route.
   ///
   /// Pure: `requestedSessionId` is what the caller sent (or None), `sessions`
   /// is the registry snapshot. Returns the same `SageFsError` the MCP surface
@@ -93,6 +100,49 @@ module SessionRouting =
       // Several sessions: refuse rather than read the ambient pointer.
       | _ when List.isEmpty sessions -> Error SageFsError.NoActiveSessions
       | many -> Error (SageFsError.AmbiguousSessions (describe many))
+
+  /// The same decision as `resolveForMutatingRoute`, carried as the DU a route
+  /// handler matches on. It PROJECTS the one rule rather than restating it: the
+  /// resolution itself is delegated, so HTTP cannot drift from MCP.
+  ///
+  /// `Target.explicit` records whether the id was named or inferred as the only
+  /// session — the distinction a caller needs to know its request was answered
+  /// by inference rather than by what it asked for.
+  let targetForRoute
+    (requestedSessionId: string option)
+    (sessions: SageFs.WorkerProtocol.SessionInfo list)
+    : SessionRouteTarget =
+    // A blank id and a malformed id are told apart here, because they are
+    // different caller mistakes and the DU says so; the error both raise
+    // downstream is the same, so nothing downstream can tell them apart wrongly.
+    let malformed =
+      match requestedSessionId with
+      | Some raw when System.String.IsNullOrWhiteSpace raw || SageFs.WorkerProtocol.SessionId.validate raw |> Result.isError -> true
+      | _ -> false
+    match malformed, resolveForMutatingRoute requestedSessionId sessions with
+    | true, _ -> SessionRouteTarget.MalformedId (Option.defaultValue "" requestedSessionId)
+    | false, Ok sid ->
+      // Named, or inferred as the only session.
+      SessionRouteTarget.Target (sid, requestedSessionId.IsSome)
+    | false, Error (SageFsError.AmbiguousSessions candidates) -> SessionRouteTarget.Ambiguous candidates
+    | false, Error (SageFsError.SessionNotFound requested) -> SessionRouteTarget.NotFound requested
+    | false, Error SageFsError.NoActiveSessions -> SessionRouteTarget.NoSessions
+    | false, Error err ->
+      // Every remaining `SageFsError` is a condition the resolver does not raise
+      // for targeting. Fail loudly rather than answering "act on a session":
+      // a silent default here IS the bug this module exists to remove.
+      invalidArg "requestedSessionId" (sprintf "not a session-targeting outcome: %A" err)
+
+  /// The `SageFsError` a refusal case stands for — the one mapping from the DU
+  /// back onto the shared error algebra, so a route handler never has to word a
+  /// refusal itself.
+  let toRefusal (target: SessionRouteTarget) : Result<string, SageFsError> =
+    match target with
+    | SessionRouteTarget.Target (sessionId, _) -> Ok sessionId
+    | SessionRouteTarget.Ambiguous candidates -> Error (SageFsError.AmbiguousSessions candidates)
+    | SessionRouteTarget.NoSessions -> Error SageFsError.NoActiveSessions
+    | SessionRouteTarget.MalformedId requested -> Error (SageFsError.SessionNotFound requested)
+    | SessionRouteTarget.NotFound requested -> Error (SageFsError.SessionNotFound requested)
 
   /// The `sessionId` property names accepted on the wire, in priority order.
   let sessionIdAliases = [ "sessionId"; "session_id"; "session" ]

@@ -533,7 +533,7 @@ let cohortFrameJson (opts: JsonSerializerOptions) (frame: Cohort.CohortFrame<Mem
            match frame.MemberSeat.[i] with
            | Cohort.SeatState.Present -> "present"
            | Cohort.SeatState.Departed _ -> "departed"
-         Conductor = frame.Conductor = Some frame.MemberIds.[i] |})
+         Conductor = frame.Conductor = Cohort.ConductorBinding.Bound frame.MemberIds.[i] |})
   let claims =
     Array.init frame.ClaimIds.Length (fun i ->
       let (Cohort.ClaimId cid) = frame.ClaimIds.[i]

@@ -109,7 +109,13 @@ module CohortVacancySpec =
   // ── The bounded alphabet ──────────────────────────────────────────────────
 
   let private members : Member list = [ "a"; "b" ]
+  /// The CLAIM scope the single modelled claim is taken on — NOT the cohort scope.
   let private scope = ClaimScope.File "f1"
+  /// The cohort scope every command names, matching the `CohortState.empty` the
+  /// exploration starts from: one machine-wide cohort, as in v1. The spec drives
+  /// the reducer with no session and no working directory, so what it proves is
+  /// membership and the conductor seat, not scope isolation.
+  let private cohortScope = CohortScope.Machine
   let private baseClock : Clock = System.DateTime(2020, 1, 1)
 
   /// `now`, one window, two windows. Far enough for `Retention.sweep` to have
@@ -161,17 +167,17 @@ module CohortVacancySpec =
     let acc = ResizeArray<CohortCommand<Member> * Entropy>()
     for m in members do
       if not (isPresent s m) then
-        acc.Add(CohortCommand.Join(m, JoinableRole.Implementer, None), [||])
+        acc.Add(CohortCommand.Join(m, JoinableRole.Implementer, None, cohortScope), [||])
     for m in members do
       if isPresent s m then
-        acc.Add(CohortCommand.Depart m, [||])
-        acc.Add(CohortCommand.RenewLease m, [||])
-        acc.Add(CohortCommand.AcquireClaim(m, scope, "p"), claimEntropy)
+        acc.Add(CohortCommand.Depart(m, cohortScope), [||])
+        acc.Add(CohortCommand.RenewLease(m, cohortScope), [||])
+        acc.Add(CohortCommand.AcquireClaim(m, scope, "p", cohortScope), claimEntropy)
         for (cid, fence) in heldBy s m do
-          acc.Add(CohortCommand.ReleaseClaim(m, cid, fence), [||])
+          acc.Add(CohortCommand.ReleaseClaim(m, cid, fence, cohortScope), [||])
         match s.Conductor with
         | ConductorBinding.Bound c when c <> m ->
-          acc.Add(CohortCommand.DelegateConductor(c, m), [||])
+          acc.Add(CohortCommand.DelegateConductor(c, m, cohortScope), [||])
         // default policy: `NeverBound` has no holder to delegate from and
         // `Vacant` has nobody to delegate — the vacancy is filled by a person,
         // never by the holder of a vacancy delegating one.
@@ -179,7 +185,7 @@ module CohortVacancySpec =
         | ConductorBinding.Bound _
         | ConductorBinding.Vacant _ -> ()
     // "everything silent lapses", in one edge
-    acc.Add(CohortCommand.Tick, [||])
+    acc.Add(CohortCommand.Tick cohortScope, [||])
     List.ofSeq acc
 
   // ── The exploration ───────────────────────────────────────────────────────

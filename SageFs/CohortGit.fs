@@ -190,6 +190,25 @@ let diffNames (repoDir: string) (baseSha: string) (headSha: string) : Async<Resu
   runGit repoDir shortTimeout [ "diff"; "--name-only"; sprintf "%s..%s" baseSha headSha ]
   |> mapOk splitLines
 
+/// The `.fs` files git tracks in `repoDir`, as paths relative to it (`git ls-files "*.fs"`).
+///
+/// A CHECKOUT, not a commit, so the answer is the worktree's own inputs as they are right now —
+/// which is what a worker has to be given, and the same answer whether git resolves the pathspec
+/// against the index or the working tree, since it reads the working tree for files it lists.
+let trackedFsFiles (repoDir: string) : Async<Result<string list, string>> =
+  runGit repoDir shortTimeout [ "ls-files"; "--full-name"; "*.fs" ]
+  |> mapOk splitLines
+
+/// The git blob id of a file's text as git would hash it (`git hash-object <path>`), which is the
+/// same id the object has if it is already stored — so it answers "is this file's text the same
+/// text git already has" for a path that was never committed, not only for one that was.
+///
+/// `repoDir` is the directory git runs in and `filePath` is passed to git as given, so a caller
+/// with an absolute path passes that and a caller in the checkout passes the relative one.
+let hashObject (repoDir: string) (filePath: string) : Async<Result<string, string>> =
+  runGit repoDir shortTimeout [ "hash-object"; filePath ]
+  |> mapOk (fun text -> text.Split('\n', StringSplitOptions.RemoveEmptyEntries) |> Array.tryFind (fun l -> l.Trim().Length = 40) |> Option.map (fun l -> l.Trim()) |> Option.defaultValue "")
+
 /// What each `git diff --name-status` line says happened to a file, as the trunk's save pipeline is told. A type change (`T`) is
 /// the file's content changing, and a copy or rename never appears because the diff is taken without rename detection, so a
 /// rename is a delete and a create.

@@ -2334,6 +2334,142 @@ let run
   // Runs on the effect worker (Async.Start'd off the CohortOwner mailbox), so a
   // long wait here never blocks the single writer.
   let integrationSettleTimeout = Timeouts.cohortIntegrationSettle
+
+  /// Does the integration session still hold only what a completed verification left it holding?
+  ///
+  /// The session is REUSED across landings, and reuse is what makes the gate cheap: the common
+  /// case is landing after landing, each force-evaluating its own diff, and the session ends up
+  /// holding the head. That breaks in exactly one direction. A verification that did NOT end in a
+  /// landing — failing tests, or a run that could not be trusted — leaves the blocked change bound
+  /// in the session, and a re-eval CANNOT repair it: re-binding rebinds the names the head's text
+  /// has, and cannot UNBIND a name it dropped. Measured on the trunk landing gate: a blocked
+  /// landing defined `aliceHelper`; the next landing re-evalled the file with the HEAD's text,
+  /// which does not define it, and the eval COMPILED — the stale helper answered, so a landing
+  /// whose code does not build at the head verified clean and LANDED.
+  ///
+  /// So the session is brought back to the head exactly when it does not already hold the head —
+  /// normally after a verification that did not land — and is left alone otherwise. A respawn alone
+  /// is not the head, and that is the other half of the tension: the fresh worker loads the
+  /// integration worktree's last BUILD, so a file the head has moved on from would read its compiled
+  /// value rather than the head's source, and a build's value is exactly as stale as a blocked
+  /// landing's binding. The head's own text is what settles it, and it is reachable: the worktree
+  /// holds it, and it is also exactly what this verifier force-evaluates on every landing, so the
+  /// same primitive that binds a diff binds the reconciliation. Process-local like the integration
+  /// binding, and re-seeded when a new integration tree is configured (nothing about a deleted
+  /// worktree's paths means anything for the next one).
+  let integrationSourceBlobs = System.Collections.Generic.Dictionary<string, string> ()
+  let integrationSourceBlobsLock = obj ()
+
+  /// Is any source bound for `worktree` at all? Nothing bound means a brand new integration tree —
+  /// nothing about a previous one's bindings says anything about this one, so the first landing on it
+  /// seeds the record rather than reconciling against a tree that no longer exists.
+  let integrationTreeIsBound (worktree: string) : bool =
+    lock integrationSourceBlobsLock (fun () -> integrationSourceBlobs.ContainsKey worktree)
+
+  let integrationSourceBlobOf (full: string) : string option =
+    lock integrationSourceBlobsLock (fun () ->
+      match integrationSourceBlobs.TryGetValue full with
+      | true, blob -> Some blob
+      | false, _ -> None)
+
+  let noteIntegrationSourceBound (full: string) (blob: string) : unit =
+    lock integrationSourceBlobsLock (fun () -> integrationSourceBlobs.[full] <- blob)
+
+  /// The `.fs` files the integration worktree holds, by path: git's own list where git answers, a
+  /// directory walk as the backstop, sorted and deduplicated so the answer never depends on which
+  /// source answered.
+  let integrationFsFiles (worktree: string) : Async<string list> =
+    let byPath (files: string list) =
+      files
+      |> List.filter (fun f -> f.EndsWith(".fs", StringComparison.OrdinalIgnoreCase))
+      |> List.filter System.IO.File.Exists
+      |> List.distinct
+    async {
+      let! tracked = Features.CohortGit.trackedFsFiles worktree
+      let fromGit =
+        match tracked with
+        | Ok rels -> byPath (rels |> List.map (fun rel -> System.IO.Path.Combine(worktree, rel.Trim())))
+        | Error _ -> []
+      let fromDisk =
+        try
+          Seq.toList (System.IO.Directory.EnumerateFiles(worktree, "*.fs", System.IO.SearchOption.AllDirectories))
+          |> byPath
+        with _ ->
+          []
+      return (fromGit @ fromDisk) |> List.sort |> List.distinct
+    }
+
+  /// What the integration worktree holds, as this verifier's own bookkeeping: every source it may
+  /// bind, with the git blob id of the text the worktree has for it right now.
+  ///
+  /// The marker is the BLOB, not the landing. A file's text at the head is the same fact whether
+  /// the landing that installed it was the last one or the one before, so a session that is
+  /// reconciled for blob `B` stays reconciled for every later landing that starts from `B`, and one
+  /// that is not stays unreconciled until something binds `B` again. That is what makes the respawn
+  /// cost once per change that has to be undone, not once per landing.
+  ///
+  /// A file git will not answer for — an untracked source, or one under a directory git does not
+  /// list — is simply absent from the snapshot rather than guessed at, so it is never treated as
+  /// either stale or reconciled. It cannot make a landing fail; it means this scheme's cover does
+  /// not include it, which is reported rather than papered over.
+  let integrationSourceSnapshot (worktree: string) : Async<(string * string) list> =
+    let listed = integrationFsFiles worktree
+    let rec hash (remaining: string list) (acc: (string * string) list) : Async<(string * string) list> =
+      async {
+        match remaining with
+        | [] -> return acc
+        | full :: rest ->
+          let! blob = Features.CohortGit.hashObject worktree full
+          match blob with
+          | Ok id when id.Length = 40 -> return! hash rest ((full, id) :: acc)
+          | _ -> return! hash rest acc
+      }
+    async {
+      let! files = listed
+      return! hash files []
+    }
+
+  /// Did the respawned worker load the worktree's build, with its files bound as compiled values?
+  ///
+  /// This is what a respawn buys and what it cannot buy. The fresh worker loads `bin/` and its own
+  /// `#r`/`#load` of the build's inputs, so every name the build defines is bound — to the value the
+  /// BUILD holds. That is right for a file the head has not moved on from and wrong for one it has,
+  /// which is exactly why a respawn is not "the head" by itself and why the head's text has to be
+  /// bound over the top. Asking the worker what it holds is the only way to tell, and it is one
+  /// round trip: an empty eval compiles over the build and fails on anything the build does not
+  /// define.
+  let freshWorkerBindsBuild (sessionId: string) : Async<bool> =
+    async {
+      let replyId = sprintf "cohort-build-binding-%s" (System.Guid.NewGuid().ToString("N"))
+      try
+        let! outcome =
+          proxyToSession getProxyStr notifyWorkerDiedStr sessionId
+            (WorkerProtocol.WorkerMessage.EvalLiveTestFile(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sagefs-cohort-build-probe.fs"), "", replyId))
+          |> Async.AwaitTask
+        match outcome with
+        | Ok (WorkerProtocol.WorkerResponse.EvalLiveTestFileResult (_, Ok _)) -> return true
+        | Ok _ -> return false
+        | Error _ -> return false
+      with _ ->
+        return false
+    }
+
+  let reconcilingIntegrationSessionLock = obj ()
+
+  /// Respawn the integration session so it holds the worktree — which the rebase has already put
+  /// at the head — instead of whatever the last blocked landing left bound. Fails CLOSED: a
+  /// session that cannot be reset must not be verified against, because verifying it is the bug.
+  let resetIntegrationSessionToHead (sessionId: string) : Async<Result<unit, string>> =
+    async {
+      try
+        let! result = sessionOps.RestartSession (toSessionId sessionId) RestartPlan.RespawnOnly |> Async.AwaitTask
+        match result with
+        | Ok _ -> return Ok ()
+        | Error err -> return Error (sprintf "could not reset the integration session: %s" (SageFsError.describeForAgent err))
+      with ex ->
+        return Error (sprintf "could not reset the integration session: %s" ex.Message)
+    }
+
   let awaitIntegrationSessionTrusted (sessionId: string) : Async<Result<Features.Verification.SessionTrust.SessionObservation, string>> =
     async {
       let observe () =
@@ -2362,6 +2498,111 @@ let run
         | Features.Verification.SessionTrust.SettleDecision.Retry ->
           return Error (sprintf "integration session '%s' registered Ready but is not yet trustworthy" sessionId)
     }
+
+  /// Bring the integration session to the head, respawning it only when it holds a source the head
+  /// has moved on from, and report whether this landing may be verified against it.
+  ///
+  /// Cheap path: nothing bound has been moved on from, which is the case after every landing that
+  /// landed and after a blocked one whose next landing re-binds the same file. Expensive path: a
+  /// source is bound at a blob the head no longer has, so the session is respawned — which loads the
+  /// build — and every such source is then bound again with the HEAD's own text, in build-input
+  /// order. Fails CLOSED throughout: a session that cannot be brought to the head must not be
+  /// verified against, because verifying a stale one is the bug this exists to close.
+  let evalIntegrationFiles (sessionId: string) (files: string list) : Async<Result<unit, string>> =
+    // The ONE primitive this verifier uses to make the session hold a file's text, shared by two
+    // callers that need it for different reasons: `rediscoverRebasedFiles` binds a landing's own
+    // diff, and `ensureIntegrationSessionIsClean` binds the head's text back over a respawned
+    // worker's build. One implementation, so the second can never drift into a weaker version of
+    // the first.
+    //
+    // Eval one file at a time (path order — git's list is sorted, matching the fixture's compile
+    // order Alice < Bob < Tests, so a file's dependencies are bound before the file that references
+    // them), merging each success's discovery. Fails CLOSED on the first eval that cannot be
+    // reached or does not compile — a partially re-evaluated session is not trustworthy enough to
+    // verify against.
+    let rec evalFiles (remaining: string list) : Async<Result<unit, string>> =
+      async {
+        match remaining with
+        | [] -> return Ok ()
+        | full :: rest ->
+          match (try Some(System.IO.File.ReadAllText full) with _ -> None) with
+          | None | Some "" -> return! evalFiles rest
+          | Some content ->
+            let replyId = sprintf "cohort-rediscover-%s" (System.Guid.NewGuid().ToString("N"))
+            let! outcome =
+              proxyToSession getProxyStr notifyWorkerDiedStr sessionId
+                (WorkerProtocol.WorkerMessage.EvalLiveTestFile(full, content, replyId))
+              |> Async.AwaitTask
+            match outcome with
+            | Error err ->
+              return Error (sprintf "could not re-eval rebased file %s: %s" full (SageFsError.describe err))
+            | Ok (WorkerProtocol.WorkerResponse.EvalLiveTestFileResult (_, Error err)) ->
+              return Error (sprintf "re-eval of rebased file %s failed: %s" full (SageFsError.describe err))
+            | Ok (WorkerProtocol.WorkerResponse.EvalLiveTestFileResult (_, Ok (tests, _providers))) ->
+              elmRuntime.Dispatch(SageFsMsg.Event (TuiEvent.LiveDiscoveryMerged (sessionId, tests)))
+              // From here this file is evaluated code over the build, which coverage cannot see.
+              SageFs.McpCohortIntegration.noteEvaluatedOverBuild full
+              return! evalFiles rest
+            | Ok other ->
+              return Error (sprintf "unexpected worker response re-evaling rebased file %s: %A" full other)
+      }
+    evalFiles files
+
+  let ensureIntegrationSessionIsClean (sessionId: string) (worktree: string) : Async<Result<unit, string>> =
+    let one () =
+      async {
+        let! snapshot = integrationSourceSnapshot worktree
+        match integrationTreeIsBound worktree with
+        | false ->
+          // Nothing of the head is bound yet: the first landing, or a session created for a new
+          // integration tree. It holds the build, whose inputs ARE the head's text, so nothing is
+          // stale and a respawn would only throw away a session that is already trustworthy. Record
+          // what it holds, so the next landing is measured against this rather than against nothing.
+          for (full, blob) in snapshot do noteIntegrationSourceBound full blob
+          return Ok ()
+        | true ->
+          let stale =
+            snapshot
+            |> List.filter (fun (full, blob) -> match integrationSourceBlobOf full with Some held -> held <> blob | None -> false)
+          match stale with
+          | [] ->
+            // Nothing is stale. Record what the head holds NOW, which is what the verification below
+            // is about to bind: if that is this landing's own change and the landing does not land,
+            // the next landing finds it stale and pays the respawn — and if it does land, the next
+            // landing's base has moved on and finds nothing stale. Either way the two never collide,
+            // which is why there is no landing-outcome event to keep in step here.
+            return Ok ()
+          | staleFiles ->
+            Log.info
+              "[cohort-landing] the integration session holds %d source file(s) the head has moved on from (the last verification did not land) — respawning it and binding the head's own text"
+              (List.length staleFiles)
+            match! resetIntegrationSessionToHead sessionId with
+            | Error reason -> return Error reason
+            | Ok () ->
+            match! awaitIntegrationSessionTrusted sessionId with
+            | Error reason -> return Error reason
+            | Ok _ ->
+            match! freshWorkerBindsBuild sessionId with
+            | false ->
+              // Without the build's compiled values behind them, a binding of the head's text cannot
+              // be typed against what the code it replaces is typed against, so the session would hold
+              // neither the head nor anything to check the head against.
+              Log.warn "[cohort-landing] the respawned integration session reported no build to bind the head over — failing closed"
+              return Error "the integration session could not be brought to the head — resubmit"
+            | true ->
+              let! outcome = evalIntegrationFiles sessionId (staleFiles |> List.map fst)
+              match outcome with
+              | Error reason -> return Error reason
+              | Ok () ->
+                // The stale sources are now the head's text, and everything else is what the build
+                // holds — which, having been built from this snapshot, is the head's text too.
+                for (full, blob) in snapshot do noteIntegrationSourceBound full blob
+                return Ok ()
+      }
+    // The landing queue is serial, so this runs for one landing at a time. The lock is for the
+    // FILE-WATCHER rebuild a respawn triggers, which arrives on another thread and would otherwise
+    // contend with the binding below it.
+    lock reconcilingIntegrationSessionLock (fun () -> one () |> Async.StartAsTask) |> Async.AwaitTask
 
   /// Wait until a PURE condition over the current model holds, driven by the
   /// daemon's model-changed notification — completes the instant the condition
@@ -2427,39 +2668,10 @@ let run
   ///     trusts) and wait for ITS OWN real completion — attributable because
   ///     it is keyed to the specific generation THIS call's run started, not
   ///     to any run that happens to complete in a window.
+    /// Rebind a landing's own rebased `.fs` files, re-discover their tests, and run the conservative
+  /// verification set over them. Fails CLOSED on anything that would leave the session holding
+  /// something other than the head.
   let rediscoverRebasedFiles (sessionId: string) (worktreePath: string) (baseSha: string) (headSha: string) : Async<Result<unit, string>> =
-    // Eval one rebased file at a time (path order — git diff is sorted,
-    // matching the fixture's compile order Alice < Bob < Tests, so a file's
-    // dependencies are hot-loaded before the file that references them),
-    // merging each success's discovery. Fails CLOSED on the first eval that
-    // cannot be reached or does not compile — a partially re-evaluated
-    // session is not trustworthy enough to verify against.
-    let rec evalRebasedFiles (files: string list) : Async<Result<unit, string>> =
-      async {
-        match files with
-        | [] -> return Ok ()
-        | full :: rest ->
-          match (try Some(System.IO.File.ReadAllText full) with _ -> None) with
-          | None | Some "" -> return! evalRebasedFiles rest
-          | Some content ->
-            let replyId = sprintf "cohort-rediscover-%s" (System.Guid.NewGuid().ToString("N"))
-            let! outcome =
-              proxyToSession getProxyStr notifyWorkerDiedStr sessionId
-                (WorkerProtocol.WorkerMessage.EvalLiveTestFile(full, content, replyId))
-              |> Async.AwaitTask
-            match outcome with
-            | Error err ->
-              return Error (sprintf "could not re-eval rebased file %s: %s" full (SageFsError.describe err))
-            | Ok (WorkerProtocol.WorkerResponse.EvalLiveTestFileResult (_, Error err)) ->
-              return Error (sprintf "re-eval of rebased file %s failed: %s" full (SageFsError.describe err))
-            | Ok (WorkerProtocol.WorkerResponse.EvalLiveTestFileResult (_, Ok (tests, _providers))) ->
-              elmRuntime.Dispatch(SageFsMsg.Event (TuiEvent.LiveDiscoveryMerged (sessionId, tests)))
-              // From here this file is evaluated code over the build, which coverage cannot see.
-              SageFs.McpCohortIntegration.noteEvaluatedOverBuild full
-              return! evalRebasedFiles rest
-            | Ok other ->
-              return Error (sprintf "unexpected worker response re-evaling rebased file %s: %A" full other)
-      }
     async {
       // FileContentChanged/RunTestsRequested are honored only for an Active
       // live-testing cycle; an Interactive session isn't Active until this
@@ -2480,7 +2692,7 @@ let run
         match changedFsFiles with
         | [] -> return Ok () // nothing to rediscover; the existing discovery is valid
         | _ ->
-        match! evalRebasedFiles changedFsFiles with
+        match! evalIntegrationFiles sessionId changedFsFiles with
         | Error reason ->
           Log.warn "[cohort-landing] rediscovery of session %s could not re-eval the rebase's own files — %s — failing closed" sessionId reason
           return Error (sprintf "post-rebase re-eval did not complete: %s — resubmit once the integration session settles" reason)
@@ -2572,6 +2784,19 @@ let run
             match! awaitIntegrationSessionTrusted sessionId with
             | Error reason -> return Error reason
             | Ok _settledObservation ->
+            // The session is REUSED across landings, so reuse is the cheap common path. It goes wrong
+            // in one direction only: a verification that did NOT land left its change bound, and a
+            // re-eval cannot unbind a name. Bring the session to the head before reading it, which
+            // costs a respawn only when something bound has actually been moved on from — see
+            // ensureIntegrationSessionIsClean.
+            match! ensureIntegrationSessionIsClean sessionId binding.WorktreePath with
+            | Error reason ->
+              Log.warn "[cohort-landing] could not bring the integration session to the head for verification — %s — failing closed" reason
+              return Error (sprintf "%s — resubmit" reason)
+            | Ok () ->
+            match! awaitIntegrationSessionTrusted sessionId with
+            | Error reason -> return Error reason
+            | Ok _afterResetObservation ->
             // The rebase rewrote the worktree source; recompile + rediscover it
             // (fast FSI hot-eval, not a full rebuild) and wait for discovery to
             // advance BEFORE reading tests, so the affected set + the run below
@@ -2750,6 +2975,7 @@ let run
   use cohortOwner =
     Features.CohortOwner.startWithPerformer
       (Log.asILogger ())
+      SageFs.CohortScope.Machine
       cohortLedgerPort
       (fun () -> System.DateTime.UtcNow)
       Features.CohortOwner.productionEntropy
@@ -2833,6 +3059,16 @@ let run
     match visible with
     | true -> stateChangedEvent.Trigger CohortChanged
     | false -> ())
+  // No landing-outcome hook feeds the integration session's trustworthiness, and that is the better
+  // shape. Whether the last verification ended in a landing used to be read off
+  // `LandingStateChanged(_, Blocked | Landed)`, and it cannot be read off `RunTests` either — the
+  // content-addressed cache synthesizes a PASS for a test it did not run, so a cached green looks
+  // identical to a green that really ran. But the outcome is not the question that matters. The
+  // question is whether a file the session holds is text the HEAD still has, and that is a
+  // comparison between the binding and the worktree — both of which exist at the moment the next
+  // landing is verified, whatever the landing before it did. `ensureIntegrationSessionIsClean` reads
+  // it directly, so no event can be missed, and a landing popped out of the queue before it ever
+  // reached a terminal state is covered by the same comparison rather than needing a third case.
   // The trunk follows what lands: when the cohort records a landing as landed, the trunk checkout moves to its commit and the
   // sessions that work in that checkout are told which files changed (Features/TrunkFollow.fs is the decision, TrunkFollowShell.fs
   // does the work). Only `LandingLanded` is passed on, so a landing that was blocked or is still being verified never reaches it.
@@ -3265,8 +3501,8 @@ let run
           |> Set.ofList
         let isActive (m: MemberTable.MemberId) = Set.contains (MemberTable.MemberId.display m) freshKeys
         for m in cohortMembersToRenew isActive state.Members do
-          cohortOwner.Post(SageFs.Cohort.CohortCommand.RenewLease m, ignore)
-        cohortOwner.Post(SageFs.Cohort.CohortCommand.Tick, ignore)
+          cohortOwner.Post(SageFs.Cohort.CohortCommand.RenewLease(m, SageFs.CohortScope.Machine), ignore)
+        cohortOwner.Post(SageFs.Cohort.CohortCommand.Tick SageFs.CohortScope.Machine, ignore)
     with ex ->
       log.LogWarning("Cohort reaper tick threw unexpectedly: {Error}", ex.Message)
     // reschedule after this run (one-shot pattern, guards the shutdown race)
@@ -3325,7 +3561,7 @@ let run
             path
         with
         | Some(observer, relPath) ->
-          cohortOwner.Post(Cohort.CohortCommand.ObserveSave(observer, relPath), ignore)
+          cohortOwner.Post(Cohort.CohortCommand.ObserveSave(observer, relPath, SageFs.CohortScope.Machine), ignore)
         | None -> ()),
       Some workingDir)
   watcherManagerRef := Some liveTestWatcherManager
@@ -3993,7 +4229,10 @@ let run
     // Wait-free (D4): dereferences CohortOwner's published frame pointer
     // directly — no mailbox round-trip, no IO.
     ReadCohortFrame = cohortOwner.ReadFrame
-    ReadCohortLedger = cohortLedgerPort.ReadAll
+    // The ledger is per-scope, and the dashboard inspector reads the cohort this daemon owns. The
+    // scope is bound HERE rather than pushed through `DashboardTypes`, because every dashboard
+    // reader wants "the cohort I am showing" and none of them has a second scope to ask about.
+    ReadCohortLedger = fun () -> cohortLedgerPort.ReadAll SageFs.CohortScope.Machine
     ReadTrunk = trunkFollower.Read
     GetCompletions = fun (sessionId: WorkerProtocol.SessionId) (code: string) (cursorPos: int) -> task {
       try

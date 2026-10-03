@@ -34,6 +34,11 @@ let private noEntropy : byte[] = [||]
 let private alice = SageFs.MemberTable.MemberId.Minted "alice"
 let private bob = SageFs.MemberTable.MemberId.Minted "bob"
 
+/// The states driven through `decide` below are opened by
+/// `SageFs.Cohort.CohortState.empty`, which is Machine-scoped — the v1 shape.
+/// These fixtures have no session and no working directory.
+let private machine = SageFs.CohortScope.Machine
+
 let private dataOf (sse: string) : string =
   sse.Split('\n')
   |> Array.choose (fun l -> if l.StartsWith("data: ") then Some (l.Substring 6) else None)
@@ -150,9 +155,9 @@ let sseWriterCohortMutationTests = testList "SseWriter cohort-events mutations" 
         | Error e -> failwithf "unexpected cohort decide error: %A" e
       let state =
         SageFs.Cohort.CohortState.empty ()
-        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, None))
-        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Orphan.fs", "testing"))
-        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Depart alice)
+        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, None, machine))
+        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Orphan.fs", "testing", machine))
+        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Depart(alice, machine))
       let head : SageFs.Cohort.LedgerHead<SageFs.MemberTable.MemberId> = { Seq = 3L<SageFs.Measures.ledgerSeq>; State = state }
       let frame = SageFs.Cohort.project head [||]
       let doc = SageFs.SseWriter.formatCohortMatrixEvent jsonOpts frame |> dataOf |> JsonDocument.Parse
@@ -169,10 +174,10 @@ let sseWriterCohortMutationTests = testList "SseWriter cohort-events mutations" 
         | Error e -> failwithf "unexpected cohort decide error: %A" e
       let state0 =
         SageFs.Cohort.CohortState.empty ()
-        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, None))
-        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Rel.fs", "testing"))
+        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, None, machine))
+        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Rel.fs", "testing", machine))
       let claimId, claim = state0.Claims |> Map.toList |> List.exactlyOne
-      let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.ReleaseClaim(alice, claimId, claim.Fence))
+      let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.ReleaseClaim(alice, claimId, claim.Fence, machine))
       let head : SageFs.Cohort.LedgerHead<SageFs.MemberTable.MemberId> = { Seq = 4L<SageFs.Measures.ledgerSeq>; State = state1 }
       let frame = SageFs.Cohort.project head [||]
       let doc = SageFs.SseWriter.formatCohortMatrixEvent jsonOpts frame |> dataOf |> JsonDocument.Parse
@@ -191,8 +196,8 @@ let sseWriterCohortMutationTests = testList "SseWriter cohort-events mutations" 
         | Error e -> failwithf "unexpected cohort decide error: %A" e
       let state =
         SageFs.Cohort.CohortState.empty ()
-        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, None))
-        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.Project "SageFs.Core/SageFs.Core.fsproj", "testing"))
+        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, None, machine))
+        |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.Project "SageFs.Core/SageFs.Core.fsproj", "testing", machine))
       let _, claim = state.Claims |> Map.toList |> List.exactlyOne
       let doc = SageFs.SseWriter.formatClaimChangedEvent jsonOpts "acquired" claim |> dataOf |> JsonDocument.Parse
       let scope = doc.RootElement.GetProperty("scope")

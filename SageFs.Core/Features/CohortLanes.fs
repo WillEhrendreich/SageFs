@@ -127,6 +127,9 @@ module CohortLanes =
 
   let private applyEvent (clock: DateTime) (ev: CohortEvent<'m>) (acc: Acc<'m>) : Acc<'m> =
     match ev with
+    // A cohort opening is the scope being established. It changes no lane: there is no
+    // member, claim or landing yet, and a lane is a record of work over time.
+    | CohortEvent.CohortOpened _ -> acc
     | CohortEvent.ClaimAcquired(claimId, scope, holder, _fence) ->
       { acc with
           OpenClaims = Map.add claimId (clock, holder, scope) acc.OpenClaims

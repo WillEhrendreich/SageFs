@@ -43,6 +43,14 @@ let private asConnection (handle: string) (body: unit -> Task<'a>) = asCaller ha
 
 let private newStore () = CapabilityStore(IdentityPolicy.ConnectionsAllowed)
 
+/// The cohort these tests drive. Every command in this file goes through a cohort tool body
+/// (`join_cohort`, `acquire_claim`, `mint_member`, ...) rather than a hand-built `CohortCommand`,
+/// and each of those derives its scope the way the daemon does — `cohortScopeOf` on the caller's
+/// `working_directory`, which is `None` throughout this file. So the scope is asked of the very
+/// same function rather than hardcoded, which is what keeps the owner and the tool bodies talking
+/// about one cohort instead of refusing each other with `WrongCohortScope`.
+let private cohortScope = McpCohortTools.cohortScopeOf None
+
 /// A daemon's cohort in memory: an owner, its ledger, and a context wired to it.
 let private withCohort (body: McpContext -> Features.CohortOwner.Handle -> Features.CohortLedger.LedgerPort<MemberId> -> Task<unit>) : Task<unit> =
   task {
@@ -51,6 +59,7 @@ let private withCohort (body: McpContext -> Features.CohortOwner.Handle -> Featu
     use owner =
       Features.CohortOwner.start
         (Utils.Log.asILogger ())
+        cohortScope
         ledger
         (fun () -> now)
         (fun () -> seed <- seed + 1; BitConverter.GetBytes seed)
@@ -296,7 +305,7 @@ let mintTests =
         let index = memberIndex frame who
         frame.MemberRole.[index] |> Expect.equal "seated as an Observer" JoinableRole.Observer
         frame.MemberSeat.[index] |> Expect.equal "present" SeatState.Present
-        let ledgerText = Features.CohortLedgerExport.toJsonl (ledger.ReadAll())
+        let ledgerText = Features.CohortLedgerExport.toJsonl (ledger.ReadAll cohortScope)
         ledgerText.Contains minted.Token |> Expect.isFalse "the token is in no ledger row"
         ledgerText.Contains(minted.Token.Substring Token.prefix.Length) |> Expect.isFalse "nor the body of it"
         ledgerText |> Expect.stringContains "but the member is there, by its public id" (CapabilityId.value minted.Record.Id)
@@ -352,7 +361,7 @@ let mintTests =
         let! minted = mintAs ctx store handleConductor "Implementer" "src/Foo" 60
         let m = okOrFail minted
         let cap = resolvedOf store m
-        let! claimed = asCaller handleWorker (Some cap) (fun () -> acquireClaim ctx "agent" "file:src/Foo/a.fs" "editing")
+        let! claimed = asCaller handleWorker (Some cap) (fun () -> acquireClaim ctx "agent" "file:src/Foo/a.fs" "editing" None)
         claimed |> okOrFail |> ignore
         let who = CapabilityId.memberId m.Record.Id
         let! revoked = asConnection handleConductor (fun () -> revokeMember ctx store now "gateway" (MemberId.display who))
@@ -403,7 +412,7 @@ let mintTests =
         let! minted = mintAs ctx store handleConductor "Analysis" "" 60
         let m = okOrFail minted
         let cap = resolvedOf store m
-        let! left = asCaller handleWorker (Some cap) (fun () -> leaveCohort ctx "agent")
+        let! left = asCaller handleWorker (Some cap) (fun () -> leaveCohort ctx "agent" None)
         // An Observer-role seat may not leave; if it could, the rejoin below is the check. Either way the seat's role is the token's.
         ignore left
         let! rejoined = asCaller handleWorker (Some cap) (fun () -> joinCohort ctx "agent" "Implementer" None)
@@ -424,7 +433,7 @@ let claimTests =
         do! joinedAsConductor ctx
         let! minted = mintAs ctx store handleConductor "Implementer" "src/Foo/" 60
         let cap = resolvedOf store (okOrFail minted)
-        let claim (scope: string) = asCaller handleWorker (Some cap) (fun () -> acquireClaim ctx "agent" scope "editing")
+        let claim (scope: string) = asCaller handleWorker (Some cap) (fun () -> acquireClaim ctx "agent" scope "editing" None)
         let! inside = claim "file:src/Foo/a.fs"
         okOrFail inside |> Expect.stringContains "inside" "Acquired claim"
         let! outside = claim "file:src/Bar/a.fs"
@@ -445,11 +454,11 @@ let claimTests =
         do! joinedAsConductor ctx
         let! joined = asConnection handleWorker (fun () -> joinCohort ctx "worker" "Implementer" None)
         joined |> okOrFail |> ignore
-        let! first = asConnection handleConductor (fun () -> acquireClaim ctx "gateway" "file:src/Foo/../Bar/x.fs" "editing")
+        let! first = asConnection handleConductor (fun () -> acquireClaim ctx "gateway" "file:src/Foo/../Bar/x.fs" "editing" None)
         first |> okOrFail |> ignore
-        let! second = asConnection handleWorker (fun () -> acquireClaim ctx "worker" "file:src/Bar/x.fs" "editing")
+        let! second = asConnection handleWorker (fun () -> acquireClaim ctx "worker" "file:src/Bar/x.fs" "editing" None)
         errorText second |> Expect.stringContains "a conflict, naming the scope" "already claimed"
-        let! escape = asConnection handleWorker (fun () -> acquireClaim ctx "worker" "file:../x.fs" "editing")
+        let! escape = asConnection handleWorker (fun () -> acquireClaim ctx "worker" "file:../x.fs" "editing" None)
         errorText escape |> Expect.stringContains "refused for everyone" "repo"
         ignore store
       })

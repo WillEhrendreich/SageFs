@@ -54,6 +54,14 @@ let private genScope =
     Gen.elements [ "X.fsproj"; "Y.fsproj" ] |> Gen.map ClaimScope.Project
   ]
 
+/// The COHORT scope carried by every generated command. This suite is about the
+/// ledger CODEC round-tripping a command faithfully, not about cohort scoping: the
+/// commands never reach `decide`, they are only serialized and compared back. So
+/// the scope is a single fixed value, and a mixed-scope generator would test the
+/// codec twice over without adding a single extra round-trip case. Every
+/// `CohortCommand` case now carries one, so this is what makes the DU total.
+let private cohortScope = CohortScope.Machine
+
 let private genClaimId = Gen.elements [ "c-1"; "c-2"; "c-3" ] |> Gen.map ClaimId
 let private genLandingId = Gen.elements [ "l-1"; "l-2" ] |> Gen.map LandingId
 let private genTestId = Gen.elements [ "t-a"; "t-b" ] |> Gen.map TestId
@@ -70,36 +78,36 @@ let private genShortList (g: Gen<'a>) : Gen<'a list> =
 
 let private genCommand : Gen<CohortCommand<MemberId>> =
   Gen.oneof [
-    Gen.map3 (fun m r s -> CohortCommand.Join(m, r, s)) genMember genRole genSessionOpt
-    Gen.map CohortCommand.Depart genMember
-    Gen.map CohortCommand.RenewLease genMember
-    Gen.constant CohortCommand.Tick
-    Gen.map3 (fun m s p -> CohortCommand.AcquireClaim(m, s, p)) genMember genScope (Gen.constant "purpose")
-    Gen.map3 (fun m c f -> CohortCommand.ReleaseClaim(m, c, f)) genMember genClaimId genFence
-    Gen.map3 (fun by c t -> CohortCommand.ReassignClaim(by, c, t)) genMember genClaimId genMember
-    Gen.map2 (fun by t -> CohortCommand.DelegateConductor(by, t)) genMember genMember
-    Gen.map2 (fun m p -> CohortCommand.ObserveSave(m, p)) genMember (Gen.elements [ "P.fs"; "Q.fs" ])
+    Gen.map3 (fun m r s -> CohortCommand.Join(m, r, s, cohortScope)) genMember genRole genSessionOpt
+    Gen.map (fun m -> CohortCommand.Depart(m, cohortScope)) genMember
+    Gen.map (fun m -> CohortCommand.RenewLease(m, cohortScope)) genMember
+    Gen.constant (CohortCommand.Tick cohortScope)
+    Gen.map3 (fun m s p -> CohortCommand.AcquireClaim(m, s, p, cohortScope)) genMember genScope (Gen.constant "purpose")
+    Gen.map3 (fun m c f -> CohortCommand.ReleaseClaim(m, c, f, cohortScope)) genMember genClaimId genFence
+    Gen.map3 (fun by c t -> CohortCommand.ReassignClaim(by, c, t, cohortScope)) genMember genClaimId genMember
+    Gen.map2 (fun by t -> CohortCommand.DelegateConductor(by, t, cohortScope)) genMember genMember
+    Gen.map2 (fun m p -> CohortCommand.ObserveSave(m, p, cohortScope)) genMember (Gen.elements [ "P.fs"; "Q.fs" ])
     (gen {
       let! r = genMember
       let! claims = genShortList (Gen.map2 (fun c f -> c, f) genClaimId genFence)
       let! commits = genShortList (Gen.elements [ "sha1"; "sha2" ])
-      return CohortCommand.RequestLanding(r, claims, commits, "statement")
+      return CohortCommand.RequestLanding(r, claims, commits, "statement", cohortScope)
     })
     (gen {
       let! l = genLandingId
       let! ok = Gen.elements [ true; false ]
       if ok then
         let! sha = Gen.elements [ "sha-a"; "sha-b" ]
-        return CohortCommand.RebaseCompleted(l, Ok sha)
+        return CohortCommand.RebaseCompleted(l, Ok sha, cohortScope)
       else
         let! files = genShortList (Gen.elements [ "conflict.fs"; "other.fs" ])
-        return CohortCommand.RebaseCompleted(l, Error files)
+        return CohortCommand.RebaseCompleted(l, Error files, cohortScope)
     })
-    Gen.map2 (fun l ts -> CohortCommand.AffectedComputed(l, ts)) genLandingId (genShortList genTestId)
-    Gen.map2 (fun l ts -> CohortCommand.TestsCompleted(l, ts)) genLandingId (genShortList genTestId)
-    Gen.map2 (fun l sha -> CohortCommand.FastForwardCompleted(l, sha)) genLandingId (Gen.elements [ "final-a"; "final-b" ])
-    Gen.map2 (fun m l -> CohortCommand.WithdrawLanding(m, l)) genMember genLandingId
-    Gen.map3 (fun by l reason -> CohortCommand.VetoLanding(by, l, reason)) genMember genLandingId (Gen.constant "reason")
+    Gen.map2 (fun l ts -> CohortCommand.AffectedComputed(l, ts, cohortScope)) genLandingId (genShortList genTestId)
+    Gen.map2 (fun l ts -> CohortCommand.TestsCompleted(l, ts, cohortScope)) genLandingId (genShortList genTestId)
+    Gen.map2 (fun l sha -> CohortCommand.FastForwardCompleted(l, sha, cohortScope)) genLandingId (Gen.elements [ "final-a"; "final-b" ])
+    Gen.map2 (fun m l -> CohortCommand.WithdrawLanding(m, l, cohortScope)) genMember genLandingId
+    Gen.map3 (fun by l reason -> CohortCommand.VetoLanding(by, l, reason, cohortScope)) genMember genLandingId (Gen.constant "reason")
   ]
 
 let private genLandingState : Gen<LandingState<MemberId>> =
@@ -230,7 +238,7 @@ let cohortLedgerSqliteTests =
       let path = tempDbPath ()
       try
         let port = Sqlite.create path
-        port.ReadAll () |> Expect.isEmpty "nothing has been appended yet"
+        port.ReadAll cohortScope |> Expect.isEmpty "nothing has been appended yet"
       finally
         cleanup path
     }
@@ -241,7 +249,7 @@ let cohortLedgerSqliteTests =
         try
           let port = Sqlite.create path
           entries |> List.iter port.Append
-          port.ReadAll () = entries
+          port.ReadAll cohortScope = entries
         finally
           cleanup path)
   ]

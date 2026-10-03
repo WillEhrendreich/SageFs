@@ -235,14 +235,20 @@ module CohortSpec =
   /// `FastForwardFailed` branch alongside `FastForwardCompleted` at every
   /// pending `FastForward` node (this one was already in `isCompletionCmd`
   /// but `enabled` never yielded it — roast-2day §1's exact finding).
+  /// Every command in this alphabet names ONE scope, the same one the exploration
+  /// starts from (`CohortState.empty`, which is `Machine`). The spec drives the
+  /// reducer with no session and no working directory, so it explores the v1
+  /// machine-wide cohort: scope mismatches are not what these rules are about.
+  let private cohortScope = CohortScope.Machine
+
   let private enabled (s: CohortState<Member>, pend: CohortEffect<Member> option) : (CohortCommand<Member> * Entropy) list =
     [ for m in members do
         if not (isPresent s m) then
-          yield CohortCommand.Join(m, JoinableRole.Implementer, None), [||]
+          yield CohortCommand.Join(m, JoinableRole.Implementer, None, cohortScope), [||]
       for m in members do
         if isPresent s m then
           for sc in scopes do
-            yield CohortCommand.AcquireClaim(m, sc, "p"), scopeEntropy sc
+            yield CohortCommand.AcquireClaim(m, sc, "p", cohortScope), scopeEntropy sc
       for m in members do
         if isPresent s m then
           let mine =
@@ -251,7 +257,7 @@ module CohortSpec =
               match c.State with
               | ClaimState.Held h when h = m -> Some(c.Id, c.Fence)
               | _ -> None)
-          yield CohortCommand.RequestLanding(m, mine, [ "commit-" + m ], "land"), memberEntropy m
+          yield CohortCommand.RequestLanding(m, mine, [ "commit-" + m ], "land", cohortScope), memberEntropy m
       // The five additions below are each individually cheap (measured
       // 6,427 -> 18k-53k nodes alone against a REPL probe of the real
       // alphabet), but combined naively at FULL generality (every present
@@ -297,13 +303,13 @@ module CohortSpec =
         | None -> []
       for (cid, fence) in frontLandingClaims do
         match Map.tryFind cid s.Claims with
-        | Some c when c.State = ClaimState.Held "b" -> yield CohortCommand.ReleaseClaim("b", cid, fence), [||]
+        | Some c when c.State = ClaimState.Held "b" -> yield CohortCommand.ReleaseClaim("b", cid, fence, cohortScope), [||]
         | _ -> ()
       match s.Queue |> List.tryHead with
       | Some lid ->
         match Map.tryFind lid s.Landings with
         | Some { State = LandingState.Landed _ | LandingState.Withdrawn } -> ()
-        | Some _ -> yield CohortCommand.VetoLanding("b", lid, "veto"), [||]
+        | Some _ -> yield CohortCommand.VetoLanding("b", lid, "veto", cohortScope), [||]
         | None -> ()
       | None -> ()
       match s.Conductor with
@@ -315,12 +321,12 @@ module CohortSpec =
             | LandingState.Blocked(LandingBlocker.VetoedBy _, _) -> Some lid
             | _ -> None)
         for lid in vetoed do
-          yield CohortCommand.ResolveVeto(c, lid), [||]
+          yield CohortCommand.ResolveVeto(c, lid, cohortScope), [||]
         // The concurrent-head-move race — only while a landing effect is
         // pending (Rebasing/Verifying is exactly when a head-move's
         // diagnosis at land time matters).
         if pend.IsSome then
-          yield CohortCommand.SetIntegrationHead(c, altHead), [||]
+          yield CohortCommand.SetIntegrationHead(c, altHead, cohortScope), [||]
       // default policy: a `NeverBound` or `Vacant` seat has no actor — there is
       // no member to run a conductor-only command, which is exactly the refusal
       // the typed `ConductorVacant` names.
@@ -328,18 +334,18 @@ module CohortSpec =
       | ConductorBinding.Vacant _ -> ()
       match pend with
       | Some(CohortEffect.Rebase(id, _, _)) ->
-        yield CohortCommand.RebaseCompleted(id, Result.Ok("R-" + (let (LandingId x) = id in x))), [||]
-        yield CohortCommand.RebaseCompleted(id, Result.Error [ "cf" ]), [||]
-      | Some(CohortEffect.ComputeAffected(id, _, _)) -> yield CohortCommand.AffectedComputed(id, [ TestId "t" ]), [||]
+        yield CohortCommand.RebaseCompleted(id, Result.Ok("R-" + (let (LandingId x) = id in x)), cohortScope), [||]
+        yield CohortCommand.RebaseCompleted(id, Result.Error [ "cf" ], cohortScope), [||]
+      | Some(CohortEffect.ComputeAffected(id, _, _)) -> yield CohortCommand.AffectedComputed(id, [ TestId "t" ], cohortScope), [||]
       | Some(CohortEffect.RunTests(id, _)) ->
-        yield CohortCommand.TestsCompleted(id, []), [||]
-        yield CohortCommand.TestsCompleted(id, [ TestId "t" ]), [||]
-        yield CohortCommand.VerificationInconclusive(id, "x"), [||]
+        yield CohortCommand.TestsCompleted(id, [], cohortScope), [||]
+        yield CohortCommand.TestsCompleted(id, [ TestId "t" ], cohortScope), [||]
+        yield CohortCommand.VerificationInconclusive(id, "x", cohortScope), [||]
       | Some(CohortEffect.FastForward(id, sha)) ->
-        yield CohortCommand.FastForwardCompleted(id, sha), [||]
+        yield CohortCommand.FastForwardCompleted(id, sha, cohortScope), [||]
         // One retry cycle only — see the block comment above.
         match Map.tryFind id s.Landings with
-        | Some req when req.FastForwardAttempts = 0 -> yield CohortCommand.FastForwardFailed(id, "infra-fail"), [||]
+        | Some req when req.FastForwardAttempts = 0 -> yield CohortCommand.FastForwardFailed(id, "infra-fail", cohortScope), [||]
         | _ -> ()
       | _ -> () ]
 
@@ -400,7 +406,7 @@ module CohortSpec =
   let faultRebaseConflictJam : Decide =
     fun clk ent state command ->
       match command with
-      | CohortCommand.RebaseCompleted(id, Result.Error conflictFiles) when (state.Queue |> List.tryHead = Some id) ->
+      | CohortCommand.RebaseCompleted(id, Result.Error conflictFiles, _) when (state.Queue |> List.tryHead = Some id) ->
         match Map.tryFind id state.Landings with
         | Some req ->
           match req.State with

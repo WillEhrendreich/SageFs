@@ -128,7 +128,9 @@ module McpCohortIntegration =
           // A new integration tree is a new session to build: nothing is evaluated over it yet.
           forgetFilesEvaluatedOverBuild ()
           let who = memberIdFor agentName
-          let! commitResult = commitCohort ctx (Cohort.CohortCommand.SetIntegrationHead(who, sha))
+          let! commitResult =
+            commitCohort ctx (
+              Cohort.CohortCommand.SetIntegrationHead(who, sha, McpCohortTools.cohortScopeOf callerSessionWorkingDirectory))
           match commitResult with
           | Error e -> return Error e
           | Ok _ ->

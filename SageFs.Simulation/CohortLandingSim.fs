@@ -94,6 +94,11 @@ module CohortLandingSim =
   /// enough to drive the `RunTests` -> `TestsCompleted` leg.
   let private affectedOf (LandingId id) = [ TestId ("t-" + id) ]
 
+  /// Every command this sim builds names the same scope the cohort was opened with
+  /// (`CohortState.empty` below, which is `Machine`) — the sim has no session and no
+  /// working directory, so it models the v1 machine-wide cohort and nothing else.
+  let private scope = CohortScope.Machine
+
   /// The PURE performer stand-in: resolve one effect to the completion command the
   /// real shell (`CohortOwner`) would post back, driven only by the landing's
   /// scripted verdict. This is where "chaos" enters — never inside `decide`.
@@ -101,21 +106,21 @@ module CohortLandingSim =
     match eff with
     | CohortEffect.Rebase(id, _onto, _commits) ->
       match verdictOf id with
-      | Verdict.Conflict -> Some(CohortCommand.RebaseCompleted(id, Result.Error [ "conflict.fs" ]))
+      | Verdict.Conflict -> Some(CohortCommand.RebaseCompleted(id, Result.Error [ "conflict.fs" ], scope))
       | Verdict.Passes
       | Verdict.FailsTests
-      | Verdict.Inconclusive -> Some(CohortCommand.RebaseCompleted(id, Result.Ok(rebasedShaOf id)))
+      | Verdict.Inconclusive -> Some(CohortCommand.RebaseCompleted(id, Result.Ok(rebasedShaOf id), scope))
     | CohortEffect.ComputeAffected(id, _baseSha, _headSha) ->
-      Some(CohortCommand.AffectedComputed(id, affectedOf id))
+      Some(CohortCommand.AffectedComputed(id, affectedOf id, scope))
     | CohortEffect.RunTests(id, tests) ->
       match verdictOf id with
-      | Verdict.Passes -> Some(CohortCommand.TestsCompleted(id, []))
-      | Verdict.FailsTests -> Some(CohortCommand.TestsCompleted(id, tests))
-      | Verdict.Inconclusive -> Some(CohortCommand.VerificationInconclusive(id, "scripted-inconclusive"))
+      | Verdict.Passes -> Some(CohortCommand.TestsCompleted(id, [], scope))
+      | Verdict.FailsTests -> Some(CohortCommand.TestsCompleted(id, tests, scope))
+      | Verdict.Inconclusive -> Some(CohortCommand.VerificationInconclusive(id, "scripted-inconclusive", scope))
       // Conflict stops the pipeline at Rebase, so RunTests is never reached for it;
       // treat it as a pass to keep the performer total.
-      | Verdict.Conflict -> Some(CohortCommand.TestsCompleted(id, []))
-    | CohortEffect.FastForward(id, toSha) -> Some(CohortCommand.FastForwardCompleted(id, toSha))
+      | Verdict.Conflict -> Some(CohortCommand.TestsCompleted(id, [], scope))
+    | CohortEffect.FastForward(id, toSha) -> Some(CohortCommand.FastForwardCompleted(id, toSha, scope))
     // A notification drives no state transition in the pure core.
     | CohortEffect.Notify _ -> None
 
@@ -172,7 +177,7 @@ module CohortLandingSim =
     let joined =
       members
       |> List.fold
-        (fun state who -> realStep state (CohortCommand.Join(who, JoinableRole.Implementer, Some(who + "-session"))))
+        (fun state who -> realStep state (CohortCommand.Join(who, JoinableRole.Implementer, Some(who + "-session"), scope)))
         (CohortState.empty ())
 
     // 2. request every landing through the reducer under test, recording the id
@@ -187,7 +192,8 @@ module CohortLandingSim =
               script.Requester,
               [],
               [ sprintf "commit-%s-%d" script.Requester i ],
-              sprintf "landing %s #%d" script.Requester i)
+              sprintf "landing %s #%d" script.Requester i,
+              scope)
           match decide clock (entropyFor scenario.Seed i) state command with
           | Result.Ok(state', events, newEffects) ->
             match landingIdOf events with
@@ -213,7 +219,7 @@ module CohortLandingSim =
   let private decideJammed : Decide =
     fun clk entropy state command ->
       match command with
-      | CohortCommand.TestsCompleted(id, (_ :: _ as fails)) when (state.Queue |> List.tryHead = Some id) ->
+      | CohortCommand.TestsCompleted(id, (_ :: _ as fails), _) when (state.Queue |> List.tryHead = Some id) ->
         match Map.tryFind id state.Landings with
         | Some req ->
           match req.State with

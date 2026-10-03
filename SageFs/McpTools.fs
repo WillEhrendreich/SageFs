@@ -2483,11 +2483,15 @@ WHEN TO USE: When you are done working in this daemon for this session.
 OUTPUT: Confirmation text.""")>]
     member _.leave_cohort(
         [<Description("Your agent or model name — must match the name you joined with.")>]
-        agentName: string
+        agentName: string,
+        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Optional; DefaultParameterValue("")>]
+        workingDirectory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: leave_cohort called by {AgentName}", agentName)
         task {
-          let! result = SageFs.McpCohortTools.leaveCohort ctx agentName
+          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName workingDirectory
+          let! result = SageFs.McpCohortTools.leaveCohort ctx agentName wd
           return
             match result with
             | Ok text -> text, None
@@ -2509,11 +2513,15 @@ OUTPUT: Confirmation text with the new claim id and fence, or a conflict error n
         [<Description("The scope to claim: 'file:<repo-relative-path>' or 'project:<repo-relative-.fsproj-path>'.")>]
         scope: string,
         [<Description("One-line reason for the claim (max 200 chars, no newlines) — shown to other cohort members.")>]
-        purpose: string
+        purpose: string,
+        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Optional; DefaultParameterValue("")>]
+        workingDirectory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: acquire_claim called by {AgentName}, scope={Scope}", agentName, scope)
         task {
-          let! result = SageFs.McpCohortTools.acquireClaim ctx agentName scope purpose
+          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName workingDirectory
+          let! result = SageFs.McpCohortTools.acquireClaim ctx agentName scope purpose wd
           return
             match result with
             | Ok text -> text, None
@@ -2533,11 +2541,15 @@ OUTPUT: Confirmation text, or an error naming why the release was refused.""")>]
         [<Description("The claim id to release (from acquire_claim's output or get_cohort_status).")>]
         claimId: string,
         [<Description("The claim's current fence (from acquire_claim's output or get_cohort_status) — a stale value is refused.")>]
-        fence: int64
+        fence: int64,
+        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Optional; DefaultParameterValue("")>]
+        workingDirectory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: release_claim called by {AgentName}, claim={ClaimId}", agentName, claimId)
         task {
-          let! result = SageFs.McpCohortTools.releaseClaim ctx agentName claimId fence
+          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName workingDirectory
+          let! result = SageFs.McpCohortTools.releaseClaim ctx agentName claimId fence wd
           return
             match result with
             | Ok text -> text, None
@@ -2557,11 +2569,15 @@ OUTPUT: Confirmation text, or an error (not conductor / claim not orphaned / tar
         [<Description("The orphaned claim's id (from get_cohort_status).")>]
         claimId: string,
         [<Description("The recipient's display name exactly as get_cohort_status prints it (e.g. 'mcp:...' or a plain agent name).")>]
-        toMember: string
+        toMember: string,
+        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Optional; DefaultParameterValue("")>]
+        workingDirectory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: reassign_claim called by {AgentName}, claim={ClaimId}, to={ToMember}", agentName, claimId, toMember)
         task {
-          let! result = SageFs.McpCohortTools.reassignClaim ctx agentName claimId toMember
+          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName workingDirectory
+          let! result = SageFs.McpCohortTools.reassignClaim ctx agentName claimId toMember wd
           return
             match result with
             | Ok text -> text, None
@@ -2581,11 +2597,15 @@ OUTPUT: Confirmation text with the new landing id, or a validation error (invali
         [<Description("Comma-separated commit SHAs this landing would bring in.")>]
         commits: string,
         [<Description("Why this landing should happen (max 1000 chars) — becomes the merge/squash message body.")>]
-        statement: string
+        statement: string,
+        [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
+        [<Optional; DefaultParameterValue("")>]
+        workingDirectory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: request_landing called by {AgentName}", agentName)
         task {
-          let! result = SageFs.McpCohortTools.requestLanding ctx agentName claims commits statement
+          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName workingDirectory
+          let! result = SageFs.McpCohortTools.requestLanding ctx agentName claims commits statement wd
           return
             match result with
             | Ok text -> text, None

@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS cohort_ledger (
   /// Open (creating if needed) the cohort ledger at `dbPath` and return the
   /// `LedgerPort` implementation over it. Each `Append`/`ReadAll` opens and
   /// closes its own connection, matching `FrictionSqlite.fs`'s discipline.
+  ///
+  /// SCOPES COME FROM THE COMMAND, not from a new column. Every `CohortCommand`
+  /// carries the scope it was issued against (`Join`, `Depart`, `AffectedComputed`,
+  /// `TestsCompleted` and the rest all do), and that command is already serialized
+  /// whole into `command_json`. So one cohort per scope is a FILTER on the stored
+  /// rows rather than a schema migration, which matters because this table is
+  /// durable and already holds rows written before scope existed.
   let create (dbPath: string) : LedgerPort<MemberId> =
     use init = openConnection dbPath
     ensureSchema init
@@ -77,7 +84,21 @@ VALUES ($seq, $clock_ticks, $entropy, $command_json, $events_json);"
         entries.Add { Seq = seq; Clock = clock; Entropy = entropy; Command = cmd; Events = events }
       List.ofSeq entries
 
-    { Append = append; ReadAll = readAll }
+    /// The scopes this store actually holds rows for, sorted. A caller starting a cohort for a
+    /// scope with no rows gets `[]`, which is what makes a replay a real reconstruction rather
+    /// than a guess. Rows written before scope existed carry a v1 command whose scope was
+    /// machine-wide by construction, so they read as `Machine` rather than becoming invisible.
+    let scopes () =
+      readAll ()
+      |> List.map (fun entry -> Cohort.scopeOf entry.Command)
+      |> List.distinct
+      |> List.sortBy SageFs.Scope.label
+
+    let readAllIn (scope: SageFs.CohortScope) : LedgerEntry<MemberId> list =
+      readAll ()
+      |> List.filter (fun entry -> SageFs.Scope.equal (Cohort.scopeOf entry.Command) scope)
+
+    { Append = append; ReadAll = readAllIn; Scopes = scopes }
 
   /// The ledger's footprint for the "what's stored" view.
   type LedgerUsage = {
@@ -123,7 +144,8 @@ VALUES ($seq, $clock_ticks, $entropy, $command_json, $events_json);"
   /// disagree. An active cohort's rows are never touched.
   let pruneFinished (retention: System.TimeSpan) (now: System.DateTime) (dbPath: string) : SageFs.Features.LocalDataRetention.LedgerDecision =
     let port = create dbPath
-    let decision = SageFs.Features.LocalDataRetention.decideLedger retention now (port.ReadAll ())
+    let decision =
+      SageFs.Features.LocalDataRetention.decideLedger retention now (port.ReadAll SageFs.CohortScope.Machine)
     match decision with
     | SageFs.Features.LocalDataRetention.LedgerDecision.Clear _ -> clear dbPath |> ignore
     | SageFs.Features.LocalDataRetention.LedgerDecision.NothingStored

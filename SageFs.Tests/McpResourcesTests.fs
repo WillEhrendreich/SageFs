@@ -37,10 +37,12 @@ let private applyOk state cmd =
   | Ok(s, _, _) -> s
   | Error e -> failwithf "unexpected cohort decide error: %A" e
 
+let private machine = SageFs.CohortScope.Machine
+
 let private joinAndClaim () =
   SageFs.Cohort.CohortState.empty ()
-  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1"))
-  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Foo.fs", "testing"))
+  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1", machine))
+  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Foo.fs", "testing", machine))
 
 let private getProp (name: string) (el: JsonElement) = el.GetProperty(name)
 
@@ -195,8 +197,8 @@ let mcpResourcesTests = testList "MCP resources (item 12)" [
     let ctx = sharedCtxWith sessionId
     let ledger = SageFs.Features.CohortLedger.InMemory.create<SageFs.MemberTable.MemberId> ()
     use cohortOwner =
-      SageFs.Features.CohortOwner.start (SageFs.Utils.Log.asILogger ()) ledger (fun () -> clock) (fun () -> noEntropy) (fun _ -> ([], [], [], 0L))
-    let! _ = cohortOwner.Commit(SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1"))
+      SageFs.Features.CohortOwner.start (SageFs.Utils.Log.asILogger ()) machine ledger (fun () -> clock) (fun () -> noEntropy) (fun _ -> ([], [], [], 0L))
+    let! _ = cohortOwner.Commit(SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1", machine))
     let ctxWithCohort = { ctx with CohortOwner = Some cohortOwner }
     let resources = SageFs.Server.McpResources.SageFsResources(ctxWithCohort)
     let json = resources.CohortStatus()

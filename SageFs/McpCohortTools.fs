@@ -10,6 +10,20 @@ open SageFs.McpSessionRouting
 /// plumbing they share (`commitCohort`, `requireCohortOwner`, `memberIdFor`) stays there.
 module McpCohortTools =
 
+  /// The cohort a caller working in `workingDirectory` belongs to.
+  ///
+  /// Per repository by default, which is the unit two agents actually contend over: two agents in
+  /// one repo must see each other's claims and share a conductor, and two agents in unrelated
+  /// repos must not. The strategy is `Scope.defaultStrategy` and is a VALUE rather than a
+  /// hardcoded rule, so per-solution, per-worktree or machine-wide are selectable by whoever
+  /// configures the daemon — adding one is a new case, not a new mechanism.
+  ///
+  /// A caller that names no directory falls back to the process's own, so an unbound caller is
+  /// scoped to wherever the daemon was started rather than being given the machine-wide cohort
+  /// unconditionally.
+  let cohortScopeOf (workingDirectory: string option) : SageFs.CohortScope =
+    SageFs.Scope.ofWorkingDirectory SageFs.Scope.defaultStrategy (Option.defaultValue Environment.CurrentDirectory workingDirectory)
+
   let private parseJoinableRole (raw: string) : Result<Cohort.JoinableRole, SageFsError> =
     match (if isNull raw then "" else raw.Trim().ToLowerInvariant()) with
     | "implementer" -> Ok Cohort.JoinableRole.Implementer
@@ -102,6 +116,34 @@ module McpCohortTools =
         | Gone _ -> None
     }
 
+  /// The working directory a cohort command should be scoped by: the caller's own if it named
+  /// one, else the directory of the session it is bound to, else nothing (and then the process's).
+  ///
+  /// A claim, a release and a landing all act on FILES, so "which cohort" has to be answered from
+  /// where the caller is working, not from an ambient default. Resolving through the session is
+  /// what makes an agent that never passes `working_directory` still land in its own
+  /// repository's cohort rather than the one the daemon happened to start in — which is the whole
+  /// reason a cohort has a scope at all.
+  let internal callerWorkingDirectory (ctx: McpContext) (agentName: string) (workingDirectory: string option) : Task<string option> =
+    task {
+      match workingDirectory with
+      | Some wd -> return Some wd
+      | None ->
+        let! sid = resolveJoinSession ctx agentName None
+        match sid with
+        | None -> return None
+        | Some sid ->
+          let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+          return info |> Option.map (fun i -> i.WorkingDirectory)
+    }
+
+  /// The same, from a wire string where "" means "I did not name one". The MCP tools take
+  /// `workingDirectory` as an optional STRING because an SDK tool parameter cannot be an F#
+  /// option, so this is where that encoding is undone — in one place, rather than at each of the
+  /// five call sites that would otherwise each have to remember it.
+  let internal callerWorkingDirectoryOf (ctx: McpContext) (agentName: string) (workingDirectory: string) : Task<string option> =
+    callerWorkingDirectory ctx agentName (if String.IsNullOrWhiteSpace workingDirectory then None else Some workingDirectory)
+
   /// Join the implicit per-daemon cohort as `role` (Implementer/Verifier/
   /// Observer). v1 has no separate `create_cohort` command — the first
   /// member to join an empty cohort becomes its conductor automatically
@@ -141,7 +183,12 @@ module McpCohortTools =
       | Ok r ->
         let who = memberIdFor agentName
         let! sessionOpt = resolveJoinSession ctx agentName workingDirectory
-        let! result = commitCohort ctx (Cohort.CohortCommand.Join(who, r, sessionOpt))
+        // The cohort this join lands in. Derived from the caller's own working directory, so
+        // two agents in two repositories get two cohorts with two conductor seats instead of
+        // contending for one — which is what made an agent in an unrelated repo report a phantom
+        // "already a conductor" conflict.
+        let cohortScope = cohortScopeOf workingDirectory
+        let! result = commitCohort ctx (Cohort.CohortCommand.Join(who, r, sessionOpt, cohortScope))
         return
           result
           |> Result.map (fun (events, _) ->
@@ -154,17 +201,24 @@ module McpCohortTools =
               match currentCapability.Value with
               | Some _ -> " Your role is the one your member token was minted with; the role argument is ignored."
               | None -> ""
-            sprintf "Joined cohort as %s (%s).%s%s%s" (MemberTable.MemberId.display who) (string r) (if becameConductor then " You are the conductor (first to join)." else "") tokenNote sessionNote)
+            sprintf
+              "Joined cohort %s as %s (%s).%s%s%s"
+              (SageFs.Scope.label cohortScope)
+              (MemberTable.MemberId.display who)
+              (string r)
+              (if becameConductor then " You are the conductor (first to join in this scope)." else "")
+              tokenNote
+              sessionNote)
     }
 
-  let leaveCohort (ctx: McpContext) (agentName: string) : Task<Result<string, SageFsError>> =
+  let leaveCohort (ctx: McpContext) (agentName: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       let who = memberIdFor agentName
-      let! result = commitCohort ctx (Cohort.CohortCommand.Depart who)
+      let! result = commitCohort ctx (Cohort.CohortCommand.Depart(who, cohortScopeOf workingDirectory))
       return result |> Result.map (fun _ -> sprintf "%s left the cohort." (MemberTable.MemberId.display who))
     }
 
-  let acquireClaim (ctx: McpContext) (agentName: string) (scope: string) (purpose: string) : Task<Result<string, SageFsError>> =
+  let acquireClaim (ctx: McpContext) (agentName: string) (scope: string) (purpose: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       match parseClaimScope scope with
       | Error e -> return Error e
@@ -178,7 +232,8 @@ module McpCohortTools =
         | Error e -> return Error e
         | Ok () ->
         let who = memberIdFor agentName
-        let! result = commitCohort ctx (Cohort.CohortCommand.AcquireClaim(who, claimScope, purpose))
+        let! result =
+          commitCohort ctx (Cohort.CohortCommand.AcquireClaim(who, claimScope, purpose, cohortScopeOf workingDirectory))
         return
           result
           |> Result.bind (fun (events, _) ->
@@ -187,11 +242,13 @@ module McpCohortTools =
             | None -> Error (SageFsError.Unexpected (exn "acquire_claim committed with no ClaimAcquired event")))
     }
 
-  let releaseClaim (ctx: McpContext) (agentName: string) (claimId: string) (fence: int64) : Task<Result<string, SageFsError>> =
+  let releaseClaim (ctx: McpContext) (agentName: string) (claimId: string) (fence: int64) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       let who = memberIdFor agentName
       let fenceMeasure = LanguagePrimitives.Int64WithMeasure<Measures.fence> fence
-      let! result = commitCohort ctx (Cohort.CohortCommand.ReleaseClaim(who, Cohort.ClaimId claimId, fenceMeasure))
+      let! result =
+        commitCohort ctx (
+          Cohort.CohortCommand.ReleaseClaim(who, Cohort.ClaimId claimId, fenceMeasure, cohortScopeOf workingDirectory))
       return result |> Result.map (fun _ -> sprintf "Released claim %s." claimId)
     }
 
@@ -200,11 +257,11 @@ module McpCohortTools =
   /// `NotConductor` otherwise — surfaced here via `CohortErrorMapping.toSageFsError`).
   /// `toMember` names the recipient by ITS OWN display string, resolved via
   /// `resolveMemberByDisplay` — never trusted as the caller's own identity.
-  let reassignClaim (ctx: McpContext) (agentName: string) (claimId: string) (toMember: string) : Task<Result<string, SageFsError>> =
+  let reassignClaim (ctx: McpContext) (agentName: string) (claimId: string) (toMember: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       let by = memberIdFor agentName
       let target = resolveMemberByDisplay ctx toMember
-      let! result = commitCohort ctx (Cohort.CohortCommand.ReassignClaim(by, Cohort.ClaimId claimId, target))
+      let! result = commitCohort ctx (Cohort.CohortCommand.ReassignClaim(by, Cohort.ClaimId claimId, target, cohortScopeOf workingDirectory))
       return result |> Result.map (fun _ -> sprintf "Reassigned claim %s to %s." claimId (MemberTable.MemberId.display target))
     }
 
@@ -212,7 +269,7 @@ module McpCohortTools =
   /// backing claims); `commits` is a comma-separated list of shas. See
   /// `parseClaimFenceList`'s doc for why v1 uses this flat wire format
   /// instead of a structured argument type.
-  let requestLanding (ctx: McpContext) (agentName: string) (claims: string) (commits: string) (statement: string) : Task<Result<string, SageFsError>> =
+  let requestLanding (ctx: McpContext) (agentName: string) (claims: string) (commits: string) (statement: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       match parseClaimFenceList claims with
       | Error e -> return Error e
@@ -223,7 +280,7 @@ module McpCohortTools =
           |> Array.filter (fun s -> s <> "")
           |> Array.toList
         let requester = memberIdFor agentName
-        let! result = commitCohort ctx (Cohort.CohortCommand.RequestLanding(requester, claimList, commitList, statement))
+        let! result = commitCohort ctx (Cohort.CohortCommand.RequestLanding(requester, claimList, commitList, statement, cohortScopeOf workingDirectory))
         return
           result
           |> Result.bind (fun (events, _) ->

@@ -173,10 +173,15 @@ module private CohortTestData =
     | Ok(s, _, _) -> s
     | Result.Error e -> failwithf "unexpected cohort decide error: %A" e
 
+  /// Every cohort state here is opened by `SageFs.Cohort.CohortState.empty`, which is
+  /// Machine-scoped — the v1 shape. These wire-shape fixtures have no session and no
+  /// working directory, so they talk about exactly one machine-wide cohort.
+  let private machine = SageFs.CohortScope.Machine
+
   let private joinAndClaim () =
     SageFs.Cohort.CohortState.empty ()
-    |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1"))
-    |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Foo.fs", "testing"))
+    |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1", machine))
+    |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Foo.fs", "testing", machine))
 
   /// One `Held` claim by `alice` over `src/Foo.fs`.
   let mkClaim () : SageFs.Cohort.Claim<SageFs.MemberTable.MemberId> =
@@ -190,11 +195,11 @@ module private CohortTestData =
   let private stateWithBlockedLanding () : SageFs.Cohort.CohortState<SageFs.MemberTable.MemberId> * SageFs.Cohort.LandingId =
     let state0 = joinAndClaim ()
     let claimId, claim = state0.Claims |> Map.toList |> List.exactlyOne
-    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.RequestLanding(alice, [ claimId, claim.Fence ], [ "abc123" ], "land it"))
+    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.RequestLanding(alice, [ claimId, claim.Fence ], [ "abc123" ], "land it", machine))
     let landingId = state1.Landings |> Map.toList |> List.exactlyOne |> fst
-    let state2 = applyOk state1 (SageFs.Cohort.CohortCommand.RebaseCompleted(landingId, Ok "def456"))
-    let state3 = applyOk state2 (SageFs.Cohort.CohortCommand.AffectedComputed(landingId, [ SageFs.Cohort.TestId "t1" ]))
-    let state4 = applyOk state3 (SageFs.Cohort.CohortCommand.TestsCompleted(landingId, [ SageFs.Cohort.TestId "t1" ]))
+    let state2 = applyOk state1 (SageFs.Cohort.CohortCommand.RebaseCompleted(landingId, Ok "def456", machine))
+    let state3 = applyOk state2 (SageFs.Cohort.CohortCommand.AffectedComputed(landingId, [ SageFs.Cohort.TestId "t1" ], machine))
+    let state4 = applyOk state3 (SageFs.Cohort.CohortCommand.TestsCompleted(landingId, [ SageFs.Cohort.TestId "t1" ], machine))
     state4, landingId
 
   /// One landing, driven to `Blocked(FailingTests, FixTests)` so the
@@ -223,7 +228,7 @@ module private CohortTestData =
   let mkSaveObservation () : SageFs.Cohort.Claim<SageFs.MemberTable.MemberId> * SageFs.MemberTable.MemberId * SageFs.MemberTable.MemberId * string =
     let bob = SageFs.MemberTable.MemberId.Minted "bob"
     let state0 = joinAndClaim ()
-    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.Join(bob, SageFs.Cohort.JoinableRole.Implementer, Some "sess-2"))
+    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.Join(bob, SageFs.Cohort.JoinableRole.Implementer, Some "sess-2", machine))
     let claim = state1.Claims |> Map.toList |> List.exactlyOne |> snd
     claim, bob, alice, "src/Foo.fs"
 

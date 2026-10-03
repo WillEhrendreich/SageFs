@@ -24,6 +24,11 @@ let private atSec (n: int) : DateTime = epoch.AddSeconds(float n)
 let private alice = "alice"
 let private bob = "bob"
 
+/// Every ledger below is built by `ledgerFrom`, which starts from `CohortState.empty`
+/// — a Machine-scoped cohort, the v1 shape. These tests drive the pure core with no
+/// session and no working directory, so all their commands name that one scope.
+let private machine = CohortScope.Machine
+
 /// Folds `decide` over a fixed (clock, command) list from an empty state,
 /// recording one dense `LedgerEntry` per accepted command — exactly what
 /// `CohortOwner`/`CohortLedgerSqlite` do in production, just without the
@@ -42,7 +47,7 @@ let private ledgerFrom (commandsWithClocks: (DateTime * CohortCommand<string>) l
           let seq' = seq + 1L<ledgerSeq>
           newState, seq', { Seq = seq'; Clock = clock; Entropy = [| byte i |]; Command = cmd; Events = events } :: entriesRev
         | Error err -> failwithf "unexpected refusal building test ledger: %A" err)
-      (CohortState.empty (), 0L<ledgerSeq>, [])
+      (CohortState.forScope machine, 0L<ledgerSeq>, [])
   entriesRev |> List.rev
 
 let private mintedClaimId (ledger: LedgerEntry<string> list) : ClaimId * int64<fence> =
@@ -83,15 +88,15 @@ let cohortLanesTests =
       testCase "a held-then-released claim is one Succeeded span on the holder's lane" <| fun _ ->
         let probe =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
           ]
         let claimId, fence = mintedClaimId probe
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
-            atSec 5, CohortCommand.ReleaseClaim(alice, claimId, fence)
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
+            atSec 5, CohortCommand.ReleaseClaim(alice, claimId, fence, machine)
           ]
         let model = project ledger
         model.Lanes |> List.length |> Expect.equal "the integration lane plus alice's lane" 2
@@ -108,8 +113,8 @@ let cohortLanesTests =
       testCase "a claim never released stays Open with no End" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
           ]
         let model = project ledger
         let aliceLane = model |> laneFor (Some alice)
@@ -121,9 +126,9 @@ let cohortLanesTests =
       testCase "an orphaned claim closes as a Failed span" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
-            atSec 9, CohortCommand.Depart alice
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
+            atSec 9, CohortCommand.Depart(alice, machine)
           ]
         let model = project ledger
         let aliceLane = model |> laneFor (Some alice)
@@ -149,16 +154,16 @@ let cohortLanesTests =
         // then joins as an ordinary member, takes the claim, and departs orphaning it.
         let carol = "carol"
         let prefix =
-          [ atSec 0, CohortCommand.Join(carol, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 2, CohortCommand.Join(bob, JoinableRole.Implementer, None)
-            atSec 3, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing") ]
+          [ atSec 0, CohortCommand.Join(carol, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 2, CohortCommand.Join(bob, JoinableRole.Implementer, None, machine)
+            atSec 3, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine) ]
         let claimId, _fence = mintedClaimId (ledgerFrom prefix)
         let ledger =
           ledgerFrom (
             prefix
-            @ [ atSec 4, CohortCommand.Depart alice
-                atSec 5, CohortCommand.ReassignClaim(carol, claimId, bob) ]
+            @ [ atSec 4, CohortCommand.Depart(alice, machine)
+                atSec 5, CohortCommand.ReassignClaim(carol, claimId, bob, machine) ]
           )
         let model = project ledger
         let aliceLane = model |> laneFor (Some alice)
@@ -175,9 +180,9 @@ let cohortLanesTests =
       testCase "two concurrently held claims by the same member stack onto different tracks" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
-            atSec 2, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Bar.fs", "editing")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
+            atSec 2, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Bar.fs", "editing", machine)
           ]
         let model = project ledger
         let aliceLane = model |> laneFor (Some alice)
@@ -191,16 +196,16 @@ let cohortLanesTests =
       testCase "spans on the same track never overlap in time (non-overlapping-in-time claims reuse a track)" <| fun _ ->
         let probe =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
           ]
         let claimId, fence = mintedClaimId probe
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
-            atSec 5, CohortCommand.ReleaseClaim(alice, claimId, fence)
-            atSec 6, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Bar.fs", "editing")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
+            atSec 5, CohortCommand.ReleaseClaim(alice, claimId, fence, machine)
+            atSec 6, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Bar.fs", "editing", machine)
           ]
         let model = project ledger
         let aliceLane = model |> laneFor (Some alice)
@@ -212,18 +217,18 @@ let cohortLanesTests =
       testCase "a landing spans the integration lane from queued to landed" <| fun _ ->
         let probe =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.RequestLanding(alice, [], [ "sha1" ], "land it")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.RequestLanding(alice, [], [ "sha1" ], "land it", machine)
           ]
         let landingId = mintedLandingId probe
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.RequestLanding(alice, [], [ "sha1" ], "land it")
-            atSec 2, CohortCommand.RebaseCompleted(landingId, Ok "rebased-sha")
-            atSec 3, CohortCommand.AffectedComputed(landingId, [])
-            atSec 4, CohortCommand.TestsCompleted(landingId, [])
-            atSec 8, CohortCommand.FastForwardCompleted(landingId, "committed-sha")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.RequestLanding(alice, [], [ "sha1" ], "land it", machine)
+            atSec 2, CohortCommand.RebaseCompleted(landingId, Ok "rebased-sha", machine)
+            atSec 3, CohortCommand.AffectedComputed(landingId, [], machine)
+            atSec 4, CohortCommand.TestsCompleted(landingId, [], machine)
+            atSec 8, CohortCommand.FastForwardCompleted(landingId, "committed-sha", machine)
           ]
         let model = project ledger
         model.Lanes |> List.length |> Expect.equal "integration lane + alice's lane (she never held a claim, but she joined)" 2
@@ -238,15 +243,15 @@ let cohortLanesTests =
       testCase "a withdrawn landing closes as a Failed integration-lane span" <| fun _ ->
         let probe =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.RequestLanding(alice, [], [ "sha1" ], "land it")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.RequestLanding(alice, [], [ "sha1" ], "land it", machine)
           ]
         let landingId = mintedLandingId probe
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.RequestLanding(alice, [], [ "sha1" ], "land it")
-            atSec 3, CohortCommand.WithdrawLanding(alice, landingId)
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.RequestLanding(alice, [], [ "sha1" ], "land it", machine)
+            atSec 3, CohortCommand.WithdrawLanding(alice, landingId, machine)
           ]
         let model = project ledger
         let integrationLane = model |> laneFor None
@@ -255,8 +260,8 @@ let cohortLanesTests =
       testCase "member lanes appear in first-join order, integration lane always first" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(bob, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.Join(alice, JoinableRole.Implementer, None)
+            atSec 0, CohortCommand.Join(bob, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
           ]
         let model = project ledger
         model.Lanes |> List.map (fun l -> l.Member)
@@ -265,9 +270,9 @@ let cohortLanesTests =
       testCase "projecting the same ledger twice is structurally identical (determinism)" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
-            atSec 2, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Bar.fs", "editing")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
+            atSec 2, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Bar.fs", "editing", machine)
           ]
         project ledger |> Expect.equal "same ledger, same model, every time" (project ledger)
     ]
@@ -283,8 +288,8 @@ let cohortLanesTests =
         let dangerous = "src/<script>alert('x')&\".fs"
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File dangerous, "editing")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File dangerous, "editing", machine)
           ]
         let svg = toSvg labelMember 320.0 16.0 (project ledger)
         (svg.Contains "<script>") |> Expect.isFalse "the raw tag never appears unescaped"
@@ -295,7 +300,7 @@ let cohortLanesTests =
 
       testCase "a member label containing XSS-shaped text is escaped too" <| fun _ ->
         let ledger =
-          ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
+          ledgerFrom [ atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine) ]
         let dangerousLabel (m: string option) =
           match m with
           | Some _ -> "<img src=x onerror=alert(1)>"
@@ -307,8 +312,8 @@ let cohortLanesTests =
       testCase "rendering the same model twice produces byte-identical markup" <| fun _ ->
         let ledger =
           ledgerFrom [
-            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
+            atSec 0, CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            atSec 1, CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
           ]
         let model = project ledger
         toSvg labelMember 320.0 16.0 model

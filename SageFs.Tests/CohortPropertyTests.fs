@@ -139,6 +139,15 @@ type Harness = {
 
 let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
 
+/// Every cohort state in this file is opened by `CohortState.empty`, which is
+/// Machine-scoped — the v1 shape these properties were written against. These
+/// tests drive the pure core with no session and no working directory, so they
+/// talk about exactly one machine-wide cohort: a `Repository` or `Named` scope
+/// would turn each of them into a test of scoping instead of a test of the
+/// behaviour it was written for. Note the contrast with `scopeOf` above, which
+/// is a CLAIM scope and pools several on purpose — two axes, not one.
+let private machine = CohortScope.Machine
+
 let private initHarness () : Harness = {
   Clock = epoch
   NextEntropy = 0
@@ -172,23 +181,23 @@ let private testIdsOf (n: int) (prefix: string) = [ for i in 1 .. (abs n % 5) ->
 
 let private applyIntent (h: Harness) (intent: Intent) : Harness =
   match intent with
-  | IJoin(a, role) -> applyCommand h (CohortCommand.Join(agentOf a, role, None))
-  | IDepart a -> applyCommand h (CohortCommand.Depart(agentOf a))
-  | IRenewLease a -> applyCommand h (CohortCommand.RenewLease(agentOf a))
-  | ITick minutes -> applyCommand { h with Clock = h.Clock.AddMinutes(float (abs minutes % 90)) } CohortCommand.Tick
-  | IAcquire(a, s) -> applyCommand h (CohortCommand.AcquireClaim(agentOf a, scopeOf s, "purpose"))
+  | IJoin(a, role) -> applyCommand h (CohortCommand.Join(agentOf a, role, None, machine))
+  | IDepart a -> applyCommand h (CohortCommand.Depart(agentOf a, machine))
+  | IRenewLease a -> applyCommand h (CohortCommand.RenewLease(agentOf a, machine))
+  | ITick minutes -> applyCommand { h with Clock = h.Clock.AddMinutes(float (abs minutes % 90)) } (CohortCommand.Tick machine)
+  | IAcquire(a, s) -> applyCommand h (CohortCommand.AcquireClaim(agentOf a, scopeOf s, "purpose", machine))
   | IReleaseOwn(a, c) ->
     match resolveClaim h c with
     | None -> h
     | Some cid ->
       match Map.tryFind cid h.State.Claims with
       | None -> h
-      | Some claim -> applyCommand h (CohortCommand.ReleaseClaim(agentOf a, cid, claim.Fence))
+      | Some claim -> applyCommand h (CohortCommand.ReleaseClaim(agentOf a, cid, claim.Fence, machine))
   | IReassign(by, c, toA) ->
     match resolveClaim h c with
     | None -> h
-    | Some cid -> applyCommand h (CohortCommand.ReassignClaim(agentOf by, cid, agentOf toA))
-  | IObserveSave(a, p) -> applyCommand h (CohortCommand.ObserveSave(agentOf a, pathOf p))
+    | Some cid -> applyCommand h (CohortCommand.ReassignClaim(agentOf by, cid, agentOf toA, machine))
+  | IObserveSave(a, p) -> applyCommand h (CohortCommand.ObserveSave(agentOf a, pathOf p, machine))
   | IRequestLanding(a, commit) ->
     let agent = agentOf a
     let backing =
@@ -198,39 +207,39 @@ let private applyIntent (h: Harness) (intent: Intent) : Harness =
         match c.State with
         | ClaimState.Held holder when holder = agent -> Some(cid, c.Fence)
         | _ -> None)
-    applyCommand h (CohortCommand.RequestLanding(agent, backing, [ sprintf "commit-%d" commit ], "landing statement"))
+    applyCommand h (CohortCommand.RequestLanding(agent, backing, [ sprintf "commit-%d" commit ], "landing statement", machine))
   | IRebaseOk l ->
     match resolveLanding h l with
     | None -> h
-    | Some lid -> applyCommand h (CohortCommand.RebaseCompleted(lid, Ok(sprintf "sha-%d" h.NextEntropy)))
+    | Some lid -> applyCommand h (CohortCommand.RebaseCompleted(lid, Ok(sprintf "sha-%d" h.NextEntropy), machine))
   | IRebaseConflict(l, f) ->
     match resolveLanding h l with
     | None -> h
-    | Some lid -> applyCommand h (CohortCommand.RebaseCompleted(lid, Error [ sprintf "conflict-%d.fs" (abs f) ]))
+    | Some lid -> applyCommand h (CohortCommand.RebaseCompleted(lid, Error [ sprintf "conflict-%d.fs" (abs f) ], machine))
   | IAffected(l, t) ->
     match resolveLanding h l with
     | None -> h
-    | Some lid -> applyCommand h (CohortCommand.AffectedComputed(lid, testIdsOf t "t"))
+    | Some lid -> applyCommand h (CohortCommand.AffectedComputed(lid, testIdsOf t "t", machine))
   | ITestsPass l ->
     match resolveLanding h l with
     | None -> h
-    | Some lid -> applyCommand h (CohortCommand.TestsCompleted(lid, []))
+    | Some lid -> applyCommand h (CohortCommand.TestsCompleted(lid, [], machine))
   | ITestsFail(l, f) ->
     match resolveLanding h l with
     | None -> h
-    | Some lid -> applyCommand h (CohortCommand.TestsCompleted(lid, testIdsOf (1 + abs f) "f"))
+    | Some lid -> applyCommand h (CohortCommand.TestsCompleted(lid, testIdsOf (1 + abs f) "f", machine))
   | IFastForward l ->
     match resolveLanding h l with
     | None -> h
-    | Some lid -> applyCommand h (CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" h.NextEntropy))
+    | Some lid -> applyCommand h (CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" h.NextEntropy, machine))
   | IWithdraw(a, l) ->
     match resolveLanding h l with
     | None -> h
-    | Some lid -> applyCommand h (CohortCommand.WithdrawLanding(agentOf a, lid))
+    | Some lid -> applyCommand h (CohortCommand.WithdrawLanding(agentOf a, lid, machine))
   | IVeto(by, l) ->
     match resolveLanding h l with
     | None -> h
-    | Some lid -> applyCommand h (CohortCommand.VetoLanding(agentOf by, lid, "veto reason"))
+    | Some lid -> applyCommand h (CohortCommand.VetoLanding(agentOf by, lid, "veto reason", machine))
 
 let private run (intents: Intent list) : Harness = intents |> List.fold applyIntent (initHarness ())
 
@@ -251,24 +260,24 @@ let private toLedger (intents: Intent list) : LedgerEntry<Agent> list =
   for intent in intents do
     let cmdOpt =
       match intent with
-      | IJoin(a, role) -> Some(CohortCommand.Join(agentOf a, role, None))
-      | IDepart a -> Some(CohortCommand.Depart(agentOf a))
-      | IRenewLease a -> Some(CohortCommand.RenewLease(agentOf a))
+      | IJoin(a, role) -> Some(CohortCommand.Join(agentOf a, role, None, machine))
+      | IDepart a -> Some(CohortCommand.Depart(agentOf a, machine))
+      | IRenewLease a -> Some(CohortCommand.RenewLease(agentOf a, machine))
       | ITick minutes ->
         clock <- clock.AddMinutes(float (abs minutes % 90))
-        Some CohortCommand.Tick
-      | IAcquire(a, s) -> Some(CohortCommand.AcquireClaim(agentOf a, scopeOf s, "purpose"))
+        Some(CohortCommand.Tick machine)
+      | IAcquire(a, s) -> Some(CohortCommand.AcquireClaim(agentOf a, scopeOf s, "purpose", machine))
       | IReleaseOwn(a, c) ->
         if state.Claims.IsEmpty then None
         else
           let cid = state.Claims |> Map.toList |> List.map fst |> fun ids -> ids.[abs c % ids.Length]
-          Some(CohortCommand.ReleaseClaim(agentOf a, cid, state.Claims.[cid].Fence))
+          Some(CohortCommand.ReleaseClaim(agentOf a, cid, state.Claims.[cid].Fence, machine))
       | IReassign(by, c, toA) ->
         if state.Claims.IsEmpty then None
         else
           let cid = state.Claims |> Map.toList |> List.map fst |> fun ids -> ids.[abs c % ids.Length]
-          Some(CohortCommand.ReassignClaim(agentOf by, cid, agentOf toA))
-      | IObserveSave(a, p) -> Some(CohortCommand.ObserveSave(agentOf a, pathOf p))
+          Some(CohortCommand.ReassignClaim(agentOf by, cid, agentOf toA, machine))
+      | IObserveSave(a, p) -> Some(CohortCommand.ObserveSave(agentOf a, pathOf p, machine))
       | IRequestLanding(a, commit) ->
         let agent = agentOf a
         let backing =
@@ -278,47 +287,47 @@ let private toLedger (intents: Intent list) : LedgerEntry<Agent> list =
             match c.State with
             | ClaimState.Held holder when holder = agent -> Some(cid, c.Fence)
             | _ -> None)
-        Some(CohortCommand.RequestLanding(agent, backing, [ sprintf "commit-%d" commit ], "landing statement"))
+        Some(CohortCommand.RequestLanding(agent, backing, [ sprintf "commit-%d" commit ], "landing statement", machine))
       | IRebaseOk l ->
         if state.Landings.IsEmpty then None
         else
           let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.RebaseCompleted(lid, Ok(sprintf "sha-%d" nextEntropy)))
+          Some(CohortCommand.RebaseCompleted(lid, Ok(sprintf "sha-%d" nextEntropy), machine))
       | IRebaseConflict(l, f) ->
         if state.Landings.IsEmpty then None
         else
           let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.RebaseCompleted(lid, Error [ sprintf "conflict-%d.fs" (abs f) ]))
+          Some(CohortCommand.RebaseCompleted(lid, Error [ sprintf "conflict-%d.fs" (abs f) ], machine))
       | IAffected(l, t) ->
         if state.Landings.IsEmpty then None
         else
           let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.AffectedComputed(lid, testIdsOf t "t"))
+          Some(CohortCommand.AffectedComputed(lid, testIdsOf t "t", machine))
       | ITestsPass l ->
         if state.Landings.IsEmpty then None
         else
           let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.TestsCompleted(lid, []))
+          Some(CohortCommand.TestsCompleted(lid, [], machine))
       | ITestsFail(l, f) ->
         if state.Landings.IsEmpty then None
         else
           let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.TestsCompleted(lid, testIdsOf (1 + abs f) "f"))
+          Some(CohortCommand.TestsCompleted(lid, testIdsOf (1 + abs f) "f", machine))
       | IFastForward l ->
         if state.Landings.IsEmpty then None
         else
           let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" nextEntropy))
+          Some(CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" nextEntropy, machine))
       | IWithdraw(a, l) ->
         if state.Landings.IsEmpty then None
         else
           let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.WithdrawLanding(agentOf a, lid))
+          Some(CohortCommand.WithdrawLanding(agentOf a, lid, machine))
       | IVeto(by, l) ->
         if state.Landings.IsEmpty then None
         else
           let lid = state.Landings |> Map.toList |> List.map fst |> fun ids -> ids.[abs l % ids.Length]
-          Some(CohortCommand.VetoLanding(agentOf by, lid, "veto reason"))
+          Some(CohortCommand.VetoLanding(agentOf by, lid, "veto reason", machine))
     match cmdOpt with
     | None -> ()
     | Some cmd ->
@@ -498,12 +507,12 @@ let cohortPropertyTests =
       testPropertyWithConfig cohortConfig "4: a stale fence is refused whatever else the command carries" <| fun (scopeIdx: int) ->
         let a = agentOf 1
         let h0 = initHarness ()
-        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None))
-        let h2 = applyCommand h1 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose"))
+        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
+        let h2 = applyCommand h1 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose", machine))
         match h2.State.Claims |> Map.toList with
         | [ (cid, claim) ] ->
           let staleFence = claim.Fence - 1L<Measures.fence>
-          match decide h2.Clock [| 99uy |] h2.State (CohortCommand.ReleaseClaim(a, cid, staleFence)) with
+          match decide h2.Clock [| 99uy |] h2.State (CohortCommand.ReleaseClaim(a, cid, staleFence, machine)) with
           | Error(CohortError.StaleClaimFence(errCid, presented, current)) ->
             errCid = cid && presented = staleFence && current = claim.Fence
           | _ -> false
@@ -527,7 +536,7 @@ let cohortPropertyTests =
                 Claims = Map.ofList [ claim.Id, claim ]
                 Landings = Map.ofList [ req.Id, req ]
                 Queue = [ req.Id ] }
-          match decide epoch [||] state (CohortCommand.FastForwardCompleted(req.Id, "landed-sha")) with
+          match decide epoch [||] state (CohortCommand.FastForwardCompleted(req.Id, "landed-sha", machine)) with
           | Ok(newState, events, _) when h1' = h2' ->
             (match newState.Landings.[req.Id].State with LandingState.Landed sha -> sha = "landed-sha" | _ -> false)
             && events |> List.exists (function CohortEvent.LandingLanded _ -> true | _ -> false)
@@ -541,13 +550,13 @@ let cohortPropertyTests =
       testPropertyWithConfig cohortConfig "12: a departed member's stale-fence command never changes the claim it no longer holds" <| fun (scopeIdx: int) ->
         let a = agentOf 1
         let h0 = initHarness ()
-        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None))
-        let h2 = applyCommand h1 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose"))
+        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
+        let h2 = applyCommand h1 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose", machine))
         match h2.State.Claims |> Map.toList with
         | [ (cid, claimBeforeDepart) ] ->
-          let h3 = applyCommand h2 (CohortCommand.Depart a)
+          let h3 = applyCommand h2 (CohortCommand.Depart(a, machine))
           // The member's late command, presenting the fence from BEFORE departure.
-          match decide h3.Clock [| 7uy |] h3.State (CohortCommand.ReleaseClaim(a, cid, claimBeforeDepart.Fence)) with
+          match decide h3.Clock [| 7uy |] h3.State (CohortCommand.ReleaseClaim(a, cid, claimBeforeDepart.Fence, machine)) with
           | Error _ ->
             match h3.State.Claims.[cid].State with
             | ClaimState.Orphaned(prev, _) -> prev = a
@@ -559,12 +568,12 @@ let cohortPropertyTests =
         let a = { Id = 1; Display = "shared-name" }
         let hostile = { Id = 2; Display = "shared-name" }
         let h0 = initHarness ()
-        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None))
-        let h2 = applyCommand h1 (CohortCommand.Join(hostile, JoinableRole.Implementer, None))
-        let h3 = applyCommand h2 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose"))
+        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
+        let h2 = applyCommand h1 (CohortCommand.Join(hostile, JoinableRole.Implementer, None, machine))
+        let h3 = applyCommand h2 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose", machine))
         match h3.State.Claims |> Map.toList with
         | [ (cid, claim) ] ->
-          match decide h3.Clock [| 3uy |] h3.State (CohortCommand.ReleaseClaim(hostile, cid, claim.Fence)) with
+          match decide h3.Clock [| 3uy |] h3.State (CohortCommand.ReleaseClaim(hostile, cid, claim.Fence, machine)) with
           | Error(CohortError.NotClaimHolder(errCid, requester)) ->
             errCid = cid
             && requester = hostile
@@ -581,22 +590,22 @@ let cohortPropertyTests =
 
         let runPlan (flaky: bool) =
           let h0 = initHarness ()
-          let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None))
+          let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
           let landed = ResizeArray<string>()
           let mutable h = h1
           for i in 1 .. planLength do
             if flaky then
-              h <- applyCommand h (CohortCommand.Depart a)
-              h <- applyCommand h (CohortCommand.Join(a, JoinableRole.Implementer, None))
-            h <- applyCommand h (CohortCommand.AcquireClaim(a, scopeOf i, "purpose"))
+              h <- applyCommand h (CohortCommand.Depart(a, machine))
+              h <- applyCommand h (CohortCommand.Join(a, JoinableRole.Implementer, None, machine))
+            h <- applyCommand h (CohortCommand.AcquireClaim(a, scopeOf i, "purpose", machine))
             let cid = h.State.Claims |> Map.toList |> List.map fst |> List.last
             let fence = h.State.Claims.[cid].Fence
-            h <- applyCommand h (CohortCommand.RequestLanding(a, [ (cid, fence) ], [ sprintf "commit-%d" i ], "statement"))
+            h <- applyCommand h (CohortCommand.RequestLanding(a, [ (cid, fence) ], [ sprintf "commit-%d" i ], "statement", machine))
             let lid = h.State.Landings |> Map.toList |> List.map fst |> List.last
-            h <- applyCommand h (CohortCommand.RebaseCompleted(lid, Ok "head"))
-            h <- applyCommand h (CohortCommand.AffectedComputed(lid, []))
-            h <- applyCommand h (CohortCommand.TestsCompleted(lid, []))
-            h <- applyCommand h (CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" i))
+            h <- applyCommand h (CohortCommand.RebaseCompleted(lid, Ok "head", machine))
+            h <- applyCommand h (CohortCommand.AffectedComputed(lid, [], machine))
+            h <- applyCommand h (CohortCommand.TestsCompleted(lid, [], machine))
+            h <- applyCommand h (CohortCommand.FastForwardCompleted(lid, sprintf "landed-%d" i, machine))
             match h.State.Landings.[lid].State with
             | LandingState.Landed sha -> landed.Add sha
             | _ -> ()
@@ -665,21 +674,21 @@ let cohortPropertyTests =
         let other = agentOf 1
         let target = agentOf 2
         let h0 = initHarness ()
-        let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer, None)) // first joiner: becomes conductor
-        let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer, None))
-        let h3 = applyCommand h2 (CohortCommand.Join(target, JoinableRole.Implementer, None))
-        let h4 = applyCommand h3 (CohortCommand.AcquireClaim(other, scopeOf scopeIdx, "purpose"))
+        let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer, None, machine)) // first joiner: becomes conductor
+        let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer, None, machine))
+        let h3 = applyCommand h2 (CohortCommand.Join(target, JoinableRole.Implementer, None, machine))
+        let h4 = applyCommand h3 (CohortCommand.AcquireClaim(other, scopeOf scopeIdx, "purpose", machine))
         match h4.State.Claims |> Map.toList with
         | [ (cid, _) ] ->
-          let h5 = applyCommand h4 (CohortCommand.Depart other) // orphans the claim
+          let h5 = applyCommand h4 (CohortCommand.Depart(other, machine)) // orphans the claim
           match h5.State.Claims.[cid].State with
           | ClaimState.Orphaned _ ->
             let refusedForNonConductor =
-              match decide h5.Clock [| 1uy |] h5.State (CohortCommand.ReassignClaim(target, cid, target)) with
+              match decide h5.Clock [| 1uy |] h5.State (CohortCommand.ReassignClaim(target, cid, target, machine)) with
               | Error(CohortError.NotConductor by) -> by = target
               | _ -> false
             let succeedsForConductor =
-              match decide h5.Clock [| 2uy |] h5.State (CohortCommand.ReassignClaim(conductor, cid, target)) with
+              match decide h5.Clock [| 2uy |] h5.State (CohortCommand.ReassignClaim(conductor, cid, target, machine)) with
               | Ok(newState, events, _) ->
                 (match newState.Claims.[cid].State with ClaimState.Held holder -> holder = target | _ -> false)
                 && events |> List.exists (function CohortEvent.ClaimReassigned(c, _, _) -> c = cid | _ -> false)
@@ -693,18 +702,18 @@ let cohortPropertyTests =
         let other = agentOf 1
         let stranger = agentOf 2 // never joins
         let h0 = initHarness ()
-        let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer, None))
-        let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer, None))
+        let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer, None, machine))
+        let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer, None, machine))
         let refusedByNonConductor =
-          match decide h2.Clock [| 1uy |] h2.State (CohortCommand.DelegateConductor(other, other)) with
+          match decide h2.Clock [| 1uy |] h2.State (CohortCommand.DelegateConductor(other, other, machine)) with
           | Error(CohortError.NotConductor by) -> by = other
           | _ -> false
         let refusedToNonMember =
-          match decide h2.Clock [| 2uy |] h2.State (CohortCommand.DelegateConductor(conductor, stranger)) with
+          match decide h2.Clock [| 2uy |] h2.State (CohortCommand.DelegateConductor(conductor, stranger, machine)) with
           | Error(CohortError.MemberNotPresent m) -> m = stranger
           | _ -> false
         let delegationOk =
-          match decide h2.Clock [| 3uy |] h2.State (CohortCommand.DelegateConductor(conductor, other)) with
+          match decide h2.Clock [| 3uy |] h2.State (CohortCommand.DelegateConductor(conductor, other, machine)) with
           | Ok(newState, events, _) ->
             let bindingMoved = newState.Conductor = ConductorBinding.Bound other
             let oldIsMember = Authority.present conductor newState = Authority.Member(conductor, JoinableRole.Implementer)

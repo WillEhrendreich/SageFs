@@ -158,6 +158,9 @@ module TrunkFollow =
   let ofCohortEvent (event: CohortEvent<'m>) : TrunkEvent option =
     match event with
     | CohortEvent.LandingLanded (landing, commit) -> Some (TrunkEvent.Landed { Landing = landing; Commit = commit })
+    // A cohort opening says which scope exists. The trunk follows one cohort's landings and
+    // nothing else, so this is not its business.
+    | CohortEvent.CohortOpened _
     | CohortEvent.MemberJoined _
     | CohortEvent.MemberDeparted _
     | CohortEvent.LeaseRenewed _

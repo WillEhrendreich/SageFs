@@ -21,6 +21,10 @@ let private ok = function
 
 let private now = DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero)
 
+/// Every cohort row below is written into the cohort `CohortState.empty` opens,
+/// which is Machine-scoped — the v1 shape. No session, no working directory.
+let private machine = CohortScope.Machine
+
 let private event (version: string) (daysAgo: float) (toolName: string) : FrictionEvent =
   { OccurredAtUtc = now.AddDays(-daysAgo)
     Session = SessionRef.create "session-1" |> ok
@@ -128,13 +132,13 @@ let localDataSqliteTests =
         let port = CohortLedgerSqlite.Sqlite.create path
         let t0 = now.UtcDateTime.AddDays -30.0
         let ada = MemberTable.MemberId.Mcp "ada"
-        let joined, join = ledgerEntry 0L t0 (CohortState.empty ()) (CohortCommand.Join(ada, JoinableRole.Implementer, None))
-        let _, depart = ledgerEntry 1L (t0.AddHours 1.0) joined (CohortCommand.Depart ada)
+        let joined, join = ledgerEntry 0L t0 (CohortState.empty ()) (CohortCommand.Join(ada, JoinableRole.Implementer, None, machine))
+        let _, depart = ledgerEntry 1L (t0.AddHours 1.0) joined (CohortCommand.Depart(ada, machine))
         port.Append join
         port.Append depart
         CohortLedgerSqlite.Sqlite.pruneFinished DataRetention.cohortLedgerRetention now.UtcDateTime path
         |> Expect.equal "the finished cohort is cleared" (LocalDataRetention.LedgerDecision.Clear(depart.Clock, 2))
-        port.ReadAll() |> Expect.isEmpty "nothing left on disk"
+        port.ReadAll machine |> Expect.isEmpty "nothing left on disk"
         (CohortLedgerSqlite.Sqlite.usage path).Rows |> Expect.equal "usage agrees" 0L)
 
     testCase "a running cohort's ledger survives the start prune, however old" <| fun _ ->
@@ -142,9 +146,9 @@ let localDataSqliteTests =
         let path = Path.Combine(dir, "cohort.ledger.db")
         let port = CohortLedgerSqlite.Sqlite.create path
         let ada = MemberTable.MemberId.Mcp "ada"
-        let _, join = ledgerEntry 0L (now.UtcDateTime.AddDays -300.0) (CohortState.empty ()) (CohortCommand.Join(ada, JoinableRole.Implementer, None))
+        let _, join = ledgerEntry 0L (now.UtcDateTime.AddDays -300.0) (CohortState.empty ()) (CohortCommand.Join(ada, JoinableRole.Implementer, None, machine))
         port.Append join
         CohortLedgerSqlite.Sqlite.pruneFinished DataRetention.cohortLedgerRetention now.UtcDateTime path
         |> Expect.equal "kept" (LocalDataRetention.LedgerDecision.KeepActive(LocalDataRetention.CohortActivity.Active(1, 0, 0)))
-        port.ReadAll() |> List.length |> Expect.equal "the row is still there" 1)
+        port.ReadAll machine |> List.length |> Expect.equal "the row is still there" 1)
   ]

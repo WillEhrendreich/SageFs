@@ -97,17 +97,20 @@ let membershipTests =
       // A rule can hold over a space that never contains the state it is about.
       // Drive the real core to both vacancies and check the DU says what it says.
       let t0 = System.DateTime(2020, 1, 1)
+      // Pure-core driving, no session and no working directory: the cohort is the
+      // v1 machine-wide one, which is the `CohortState.empty` opened below.
+      let machine = SageFs.CohortScope.Machine
       let run (s: Cohort.CohortState<string>) (c: Cohort.CohortCommand<string>) (t: System.DateTime) =
         match Cohort.decide t [||] s c with
         | Ok(s', _, _) -> s'
         | Error e -> failwithf "expected %A to succeed: %A" c e
       let empty = Cohort.CohortState.empty ()
-      let joined = run empty (Cohort.CohortCommand.Join("a", Cohort.JoinableRole.Implementer, None)) t0
-      let left = run joined (Cohort.CohortCommand.Depart "a") t0
+      let joined = run empty (Cohort.CohortCommand.Join("a", Cohort.JoinableRole.Implementer, None, machine)) t0
+      let left = run joined (Cohort.CohortCommand.Depart("a", machine)) t0
       left.Conductor
       |> Expect.equal "an explicit departure vacates the seat, naming who and why"
                     (Cohort.ConductorBinding.Vacant("a", t0, Cohort.VacancyReason.ConductorLeft))
-      let lapsed = run joined Cohort.CohortCommand.Tick (t0.Add Cohort.leaseWindow)
+      let lapsed = run joined (Cohort.CohortCommand.Tick machine) (t0.Add Cohort.leaseWindow)
       lapsed.Conductor
       |> Expect.equal "a lapsed lease vacates the seat too, and records the different reason"
                     (Cohort.ConductorBinding.Vacant("a", t0.Add Cohort.leaseWindow, Cohort.VacancyReason.LeaseLapsed))
@@ -120,14 +123,15 @@ let membershipTests =
       // keep the highest authority. Exists only so this test can demonstrate
       // the difference rather than assert it.
       let t0 = System.DateTime(2020, 1, 1)
+      let machine = SageFs.CohortScope.Machine
       let run (s: Cohort.CohortState<string>) (c: Cohort.CohortCommand<string>) =
         match Cohort.decide t0 [||] s c with
         | Ok(s', _, _) -> s'
         | Error e -> failwithf "expected %A to succeed: %A" c e
       let departed =
         (Cohort.CohortState.empty ()
-         |> fun s -> run s (Cohort.CohortCommand.Join("a", Cohort.JoinableRole.Implementer, None))
-         |> fun s -> run s (Cohort.CohortCommand.Depart "a"))
+         |> fun s -> run s (Cohort.CohortCommand.Join("a", Cohort.JoinableRole.Implementer, None, machine))
+         |> fun s -> run s (Cohort.CohortCommand.Depart("a", machine)))
       // CHANGED, deliberately. The witness below only demonstrates anything on
       // a state the OLD code could actually reach — and the old code's defect
       // was that `departMember` left the binding naming the departed member.
