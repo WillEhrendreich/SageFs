@@ -521,7 +521,7 @@ let createToolListFilter (mcpCtx: McpContext) =
                 match mcpCtx.CohortOwner with
                 | Some owner ->
                   let frame = owner.ReadFrame()
-                  let seat = match frame.Conductor with | None -> SageFs.Capability.ConductorSeat.NotBoundYet | Some _ -> SageFs.Capability.ConductorSeat.Bound
+                  let seat = match frame.Conductor with | SageFs.Cohort.ConductorBinding.NeverBound -> SageFs.Capability.ConductorSeat.NotBoundYet | _ -> SageFs.Capability.ConductorSeat.Bound
                   SageFs.Affordances.authorityOfMember (SageFs.MemberTable.MemberId.ofConnectionHandle ctx.Server.SessionId) frame, seat
                 | None -> SageFs.Cohort.Authority.Anonymous, SageFs.Capability.ConductorSeat.Bound
               result.Tools
@@ -801,6 +801,11 @@ let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
 /// A missing, empty, or property-less body all mean "no project requested"
 /// (the caller falls back to the default target) — unlike readJsonProp,
 /// this never falls back to treating the whole raw body as the value.
+///
+/// The body is read to its end and never gated on Content-Length: a chunked
+/// request declares no length, and gating on one made every such request read
+/// as "no project", so the caller silently fell back to a default instead of
+/// the project it had asked for.
 let readOptionalProjectName (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
   match ctx.Request.ContentLength with
   | contentLength when contentLength.HasValue && contentLength.Value > maxRequestBodyBytes ->
@@ -816,16 +821,10 @@ let readOptionalProjectName (ctx: Microsoft.AspNetCore.Http.HttpContext) = task 
     raise RequestTooLarge
     return None  // unreachable
   | false ->
-  match System.String.IsNullOrWhiteSpace body with
-  | true -> return None
-  | false ->
-    try
-      use doc = System.Text.Json.JsonDocument.Parse(body)
-      match doc.RootElement.TryGetProperty("project") with
-      | true, v when v.ValueKind = System.Text.Json.JsonValueKind.String ->
-        return (match v.GetString() with "" -> None | s -> Some s)
-      | _ -> return None
-    with :? System.Text.Json.JsonException -> return None
+  return
+    SageFs.Server.DashboardTypes.SessionRouting.tryReadProjectFromBody
+      (ctx.Request.ContentLength.HasValue)
+      body
 }
 
 let tryGetJsonStringAliases (root: System.Text.Json.JsonElement) (names: string list) =
@@ -2029,6 +2028,100 @@ let logStartup (app: WebApplication) (port: int) (logPath: string) (otelConfigur
   | false ->
     logger.LogInformation("OpenTelemetry not configured (set OTEL_EXPORTER_OTLP_ENDPOINT)")
 
+/// The `sessionId` a mutating route was called with, read from an already-parsed
+/// body. Returns None for an absent, blank, or non-string value so the caller's
+/// refusal path decides what a missing id means — it never guesses here.
+let sessionIdFromJson (root: System.Text.Json.JsonElement) =
+  SageFs.Server.DashboardTypes.SessionRouting.tryReadSessionIdFromBody true (root.GetRawText())
+
+/// Cancel an evaluation in a session the caller NAMED.
+///
+/// `McpTools.cancelEvalResult` resolves its target through the shared
+/// `agent = "http"` session map, which is exactly the daemon-global pointer this
+/// change removes. The worker message and its result interpretation are the
+/// same; only the target is now pinned by an id the route already resolved.
+let cancelEvalForSession (rctx: RouteContext) (sessionId: string) = task {
+  let! routeResult =
+    SageFs.McpTools.routeToSession rctx.McpContext sessionId (fun _ -> SageFs.WorkerProtocol.WorkerMessage.CancelEval)
+  return
+    match routeResult with
+    | Ok (SageFs.WorkerProtocol.WorkerResponse.EvalCancelled true) ->
+      SageFs.McpTools.notifyElm rctx.McpContext (SageFs.TuiEvent.EvalCancelled sessionId)
+      Ok "Evaluation cancelled."
+    | Ok (SageFs.WorkerProtocol.WorkerResponse.EvalCancelled false) ->
+      Ok "No evaluation in progress."
+    | Ok other -> Ok (sprintf "Unexpected response: %A" other)
+    | Error msg -> Error (SageFsError.CancelFailed (SageFs.McpRouteError.routeErrorMessage msg))
+}
+
+/// Resolve the session a session-scoped MUTATING route should act on.
+///
+/// WHY this exists: `/reset`, `/hard-reset`, `/api/cancel-eval` and
+/// `/api/live-testing/policy` used to pass `agent = "http"` with no sessionId.
+/// That agent key is a SINGLE, DAEMON-GLOBAL slot, so every such request acted
+/// on whatever session happened to be active when the request was handled.
+/// A client that first calls `/api/sessions/switch` and then `/reset` is
+/// correct while it is the only client talking — and wrong the moment another
+/// client (Neovim, a dashboard tab, another agent) moves that shared pointer
+/// in between.
+///
+/// The rule: a mutating, session-scoped route must be told WHICH session it
+/// means. An explicit `sessionId` is honored unconditionally. A missing one is
+/// a typed refusal when several sessions exist (HTTP 400, listing the
+/// candidates) rather than a best-effort guess at ambient state. Exactly one
+/// session and no id still works — that is the single-client case and it must
+/// not regress into an error.
+///
+/// The decision is delegated to the pure
+/// `SageFs.Server.DashboardTypes.SessionRouting.resolveForMutatingRoute`, which
+/// validates the id and produces the same `SageFsError` cases (and therefore
+/// the same HTTP status and recovery hint) the MCP surface already raises.
+let resolveMutatingRouteSession
+  (rctx: RouteContext)
+  (requestedSessionId: string option)
+  = task {
+  let! sessions = rctx.Config.SessionOps.GetAllSessions()
+  return
+    SageFs.Server.DashboardTypes.SessionRouting.resolveForMutatingRoute
+      requestedSessionId
+      sessions
+}
+
+/// Resolve the session a LIVE-TESTING route acts on, as the typed
+/// `SessionRouteTarget` a handler matches on.
+///
+/// The same decision `resolveMutatingRouteSession` makes, carried as a DU so a
+/// live-testing handler can say WHAT it did — act on a session the caller named,
+/// or act on the only session there was (`Target.explicit = false`) — instead of
+/// receiving a bare string and being unable to tell the two apart.
+///
+/// WHY live testing needs this more than most: every session-scoped live-testing
+/// mutation lands on the Elm loop's `LiveTestCycleState` for ONE session, and
+/// the route used to dispatch that message with `None`, which the runtime reads
+/// as "the Primary cycle" — the session the daemon currently considers active.
+/// So `POST /api/live-testing/pause` with no id paused whichever session another
+/// client had last switched to. Refusing to guess is the fix; inferring the only
+/// session when there is exactly one is what keeps single-client working.
+let resolveLiveTestingRouteTarget
+  (rctx: RouteContext)
+  (requestedSessionId: string option)
+  = task {
+  let! sessions = rctx.Config.SessionOps.GetAllSessions()
+  return
+    SageFs.Server.DashboardTypes.SessionRouting.targetForRoute
+      requestedSessionId
+      sessions
+}
+
+/// Write a `Result<'_, SageFsError>` to the client using the error's own HTTP
+/// status and structured body — the same mapping the other typed routes use, so
+/// a refusal here is indistinguishable from a refusal anywhere else.
+let respondWithResult (ctx: Microsoft.AspNetCore.Http.HttpContext) (result: Result<string, SageFsError>) = task {
+  match result with
+  | Ok message -> do! jsonResponse ctx 200 {| success = true; message = message |}
+  | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+}
+
 let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/exec", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
@@ -2130,12 +2223,20 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
         do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
     } :> Task
   ) |> ignore
+  // Session-scoped MUTATING routes. Each takes an explicit sessionId and
+  // refuses (typed, 400) when several sessions exist and none is named, instead
+  // of acting on the daemon-global active session. See
+  // `resolveMutatingRouteSession` for the full rationale.
   app.MapPost("/reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      let! result = SageFs.McpTools.resetSessionResult rctx.McpContext "http" None None
-      match result with
-      | Ok message -> do! jsonResponse ctx 200 {| success = true; message = message |}
-      | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+      use! json = readJsonBody ctx
+      let requested = sessionIdFromJson json.RootElement
+      let! resolved = resolveMutatingRouteSession rctx requested
+      let! result =
+        match resolved with
+        | Error err -> Task.FromResult (Error err)
+        | Ok sid -> SageFs.McpTools.resetSessionResult rctx.McpContext "http" (Some sid) None
+      do! respondWithResult ctx result
     } :> Task
   ) |> ignore
   app.MapPost("/hard-reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -2147,15 +2248,24 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
           | true, prop -> prop.GetBoolean()
           | false, _ -> false
         with :? System.Text.Json.JsonException -> false
-      let! result = SageFs.McpTools.hardResetSessionResult rctx.McpContext "http" rebuild None None
-      match result with
-      | Ok message -> do! jsonResponse ctx 200 {| success = true; message = message |}
-      | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+      let requested = sessionIdFromJson json.RootElement
+      let! resolved = resolveMutatingRouteSession rctx requested
+      let! result =
+        match resolved with
+        | Error err -> Task.FromResult (Error err)
+        | Ok sid -> SageFs.McpTools.hardResetSessionResult rctx.McpContext "http" rebuild (Some sid) None
+      do! respondWithResult ctx result
     } :> Task
   ) |> ignore
   app.MapPost("/cancel", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      let! result = SageFs.McpTools.cancelEvalResult rctx.McpContext "http" None
+      use! json = readJsonBody ctx
+      let requested = sessionIdFromJson json.RootElement
+      let! resolved = resolveMutatingRouteSession rctx requested
+      let! result =
+        match resolved with
+        | Error err -> Task.FromResult (Error err)
+        | Ok sid -> cancelEvalForSession rctx sid
       match result with
       | Ok message -> do! jsonResponse ctx 200 {| received = true; message = message |}
       | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
@@ -2163,7 +2273,13 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
   ) |> ignore
   app.MapPost("/api/cancel-eval", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      let! result = SageFs.McpTools.cancelEvalResult rctx.McpContext "http" None
+      use! json = readJsonBody ctx
+      let requested = sessionIdFromJson json.RootElement
+      let! resolved = resolveMutatingRouteSession rctx requested
+      let! result =
+        match resolved with
+        | Error err -> Task.FromResult (Error err)
+        | Ok sid -> cancelEvalForSession rctx sid
       match result with
       | Ok message -> do! jsonResponse ctx 200 {| received = true; message = message |}
       | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
@@ -3343,44 +3459,70 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
   // knows which session it means (dashboard/editor clients driving a
   // specific background session's live-testing loop) can POST
   // {"sessionId": "..."} to target exactly that session's own cycle instead
-  // of always the daemon-global active session. No body, or a body without
-  // sessionId, preserves the original Primary-only behavior exactly — this
-  // is purely additive.
+  // of always the daemon-global active session.
+  //
+  // The body is read to its end and NEVER gated on Content-Length. A body sent
+  // chunked (Node's `http.request` with no length header, which is how VS Code
+  // posted this) has no declared length, and the old ContentLength gate
+  // returned None for every such request WITHOUT reading the stream — so a
+  // chunked caller that DID name a session was silently treated as one that
+  // did not, and the route fell through to the ambient active session. Same
+  // defect as the ambiguity below, one layer down. See
+  // `tryReadWorkflowRequest`, which already reads unconditionally.
   let tryReadTargetSessionId (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
-    match ctx.Request.ContentLength with
-    | contentLength when not contentLength.HasValue || contentLength.Value <= 0L -> return None
-    | _ ->
-      try
-        use! doc = readJsonBody ctx
-        return tryGetJsonStringAliases doc.RootElement [ "sessionId"; "session_id"; "session" ]
-      with _ ->
-        return None
+    try
+      use! doc = readJsonBody ctx
+      return
+        SageFs.Server.DashboardTypes.SessionRouting.tryReadSessionIdFromBody
+          (ctx.Request.ContentLength.HasValue)
+          (doc.RootElement.GetRawText())
+    with _ ->
+      return None
   }
+  // Enable/disable act on ONE session's live-testing cycle, so they are
+  // session-scoped: the id the caller sent is resolved (or refused) before the
+  // dispatch, never left to the daemon-global active session. See
+  // `resolveLiveTestingRouteTarget`.
+  let setLiveTestingOnSession (ctx: Microsoft.AspNetCore.Http.HttpContext) (enabled: bool) (activation: string) =
+    task {
+      let! targetSession = tryReadTargetSessionId ctx
+      let! resolved = resolveLiveTestingRouteTarget rctx targetSession
+      match resolved with
+      // A refusal dispatches NOTHING: `setLiveTestingForSession` with no id
+      // would enable the session another client left active.
+      | SageFs.Server.DashboardTypes.SessionRouteTarget.Target (sid, _) ->
+        let! message = SageFs.McpTools.setLiveTestingForSession rctx.McpContext enabled (Some sid)
+        do! respond ctx message (Some activation)
+      | refusal ->
+        match SageFs.Server.DashboardTypes.SessionRouting.toRefusal refusal with
+        | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+        | Ok _ -> failwith "a refusal case cannot resolve to a session"
+    } :> Task
   app.MapPost("/api/live-testing/enable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    task {
-      let! targetSession = tryReadTargetSessionId ctx
-      let! result = SageFs.McpTools.setLiveTestingForSession rctx.McpContext true targetSession
-      do! respond ctx result (Some "active")
-    } :> Task
-  ) |> ignore
+    setLiveTestingOnSession ctx true "active") |> ignore
   app.MapPost("/api/live-testing/disable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    task {
-      let! targetSession = tryReadTargetSessionId ctx
-      let! result = SageFs.McpTools.setLiveTestingForSession rctx.McpContext false targetSession
-      do! respond ctx result (Some "inactive")
-    } :> Task
-  ) |> ignore
+    setLiveTestingOnSession ctx false "inactive") |> ignore
   // Scale controls (against Visual Studio's pause and its playlist/exclude set). Pause holds automatic runs
   // back and keeps the session's evaluated code current; resume runs what went stale. The scope narrows
   // what AUTOMATIC runs touch: an explicit run always runs what it asks for.
   let dispatchLivePause (ctx: Microsoft.AspNetCore.Http.HttpContext) (pause: SageFs.Features.LiveTesting.LivePause) =
     task {
       let! targetSession = tryReadTargetSessionId ctx
-      match rctx.Dispatch with
-      | None -> do! jsonResponse ctx 503 {| success = false; error = "Elm loop not started" |}
-      | Some dispatch ->
-        dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.LivePauseChanged (targetSession, pause)))
-        do! jsonResponse ctx 200 {| success = true; pause = SageFs.Features.LiveTesting.LivePause.toWireValue pause |}
+      let! resolved = resolveLiveTestingRouteTarget rctx targetSession
+      match resolved with
+      // The resolved id — never the caller's raw string and never the ambient
+      // pointer. `LivePauseChanged (None, _)` is the daemon-global write this
+      // route must no longer be able to make.
+      | SageFs.Server.DashboardTypes.SessionRouteTarget.Target (sid, _) ->
+        match rctx.Dispatch with
+        | None -> do! jsonResponse ctx 503 {| success = false; error = "Elm loop not started" |}
+        | Some dispatch ->
+          dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.LivePauseChanged (Some sid, pause)))
+          do! jsonResponse ctx 200 {| success = true; sessionId = sid; pause = SageFs.Features.LiveTesting.LivePause.toWireValue pause |}
+      | refusal ->
+        match SageFs.Server.DashboardTypes.SessionRouting.toRefusal refusal with
+        | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+        | Ok _ -> failwith "a refusal case cannot resolve to a session"
     } :> Task
   app.MapPost("/api/live-testing/pause", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     dispatchLivePause ctx SageFs.Features.LiveTesting.LivePause.Paused) |> ignore
@@ -3396,23 +3538,47 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
         | true, items when items.ValueKind = System.Text.Json.JsonValueKind.Array ->
           [ for item in items.EnumerateArray() -> item.GetString() ]
         | _ -> []
-      let targetSession = tryGetJsonStringAliases root [ "sessionId"; "session_id"; "session" ]
-      match SageFs.Features.LiveTesting.TestScope.tryParse mode patterns, rctx.Dispatch with
-      | Error refusal, _ ->
+      let requested = sessionIdFromJson root
+      match SageFs.Features.LiveTesting.TestScope.tryParse mode patterns with
+      | Error refusal ->
         do! jsonResponse ctx 400 {| success = false; error = SageFs.Features.LiveTesting.TestScope.describeRefusal refusal |}
-      | Ok _, None -> do! jsonResponse ctx 503 {| success = false; error = "Elm loop not started" |}
-      | Ok scope, Some dispatch ->
-        dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.LiveScopeChanged (targetSession, scope)))
-        do! jsonResponse ctx 200 {| success = true; scope = SageFs.Features.LiveTesting.TestScope.toWire scope |}
+      | Ok scope ->
+        // Scope narrows what AUTOMATIC runs may touch, which is per session. The
+        // route used to pass the caller's raw id through and `None` otherwise,
+        // and a `None` is the ambient session's slot.
+        let! resolved = resolveLiveTestingRouteTarget rctx requested
+        match resolved with
+        | SageFs.Server.DashboardTypes.SessionRouteTarget.Target (sid, _) ->
+          match rctx.Dispatch with
+          | None -> do! jsonResponse ctx 503 {| success = false; error = "Elm loop not started" |}
+          | Some dispatch ->
+            dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.LiveScopeChanged (Some sid, scope)))
+            do! jsonResponse ctx 200 {| success = true; sessionId = sid; scope = SageFs.Features.LiveTesting.TestScope.toWire scope |}
+        | refused ->
+          match SageFs.Server.DashboardTypes.SessionRouting.toRefusal refused with
+          | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+          | Ok _ -> failwith "a refusal case cannot resolve to a session"
     } :> Task
   ) |> ignore
+  // Session-scoped: a run policy applies to ONE session's live-testing cycle.
+  // With several sessions and no explicit sessionId this REFUSES (400) rather
+  // than setting the policy on whichever session happens to be active.
   app.MapPost("/api/live-testing/policy", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       use! json = readJsonBody ctx
-      let category = json.RootElement.GetProperty("category").GetString()
-      let policy = json.RootElement.GetProperty("policy").GetString()
-      let! result = SageFs.McpTools.setRunPolicy rctx.McpContext category policy
-      do! respond ctx result None
+      let requested = sessionIdFromJson json.RootElement
+      let! resolved = resolveMutatingRouteSession rctx requested
+      match resolved with
+      | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+      | Ok _sid ->
+        // `setRunPolicy` dispatches to the Elm runtime, which applies a run
+        // policy to the model as a whole. The session id is resolved and
+        // validated above so a caller is never silently served another
+        // session's policy; the dispatch itself is unchanged.
+        let category = json.RootElement.GetProperty("category").GetString()
+        let policy = json.RootElement.GetProperty("policy").GetString()
+        let! result = SageFs.McpTools.setRunPolicy rctx.McpContext category policy
+        do! respond ctx result None
     } :> Task
   ) |> ignore
   app.MapPost("/api/live-testing/run", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -3421,28 +3587,37 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       let root = json.RootElement
       let patternFilter = tryGetJsonStringAliases root [ "pattern" ]
       let fileFilter = tryGetJsonStringAliases root [ "file"; "filePath"; "file_path" ]
-      // Optional per-session targeting (completes the per-session live-testing
-      // API triad alongside enable/disable/status — see `tryReadTargetSessionId`
-      // above): a caller that knows which session it means can pass
-      // `sessionId` to run and read discovered tests from exactly that
-      // session's own cycle instead of always the daemon-global active
-      // session. No `sessionId` preserves the original Primary-only behavior.
-      let targetSession = tryGetJsonStringAliases root [ "sessionId"; "session_id"; "session" ]
+      // An explicit run acts on ONE session's discovered tests and queues into
+      // that session's own cycle, so it is session-scoped like the rest of the
+      // family. With no id it used to read Primary and queue into Primary, which
+      // is the daemon-global active session — see `tryReadTargetSessionId` for
+      // why the body is read unconditionally.
+      let requested = sessionIdFromJson root
       let categoryFilter =
         tryGetJsonStringAliases root [ "category" ]
         |> Option.bind McpRunTests.parseCategory
 
-      match rctx.Dispatch, rctx.SseContext.GetElmModel with
-      | None, _ ->
+      // Resolved BEFORE anything is read or queued, so a refusal queues nothing.
+      let! resolved = resolveLiveTestingRouteTarget rctx requested
+      let runFor =
+        match resolved with
+        | SageFs.Server.DashboardTypes.SessionRouteTarget.Target (sid, _) -> Ok sid
+        | refused ->
+          match SageFs.Server.DashboardTypes.SessionRouting.toRefusal refused with
+          | Error err -> Error err
+          | Ok _ -> failwith "a refusal case cannot resolve to a session"
+
+      match runFor, rctx.Dispatch, rctx.SseContext.GetElmModel with
+      | Error err, _, _ ->
+          do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+      | Ok _, None, _ ->
           do! jsonResponse ctx 503 {| success = false; error = "Cannot run tests — Elm loop not started." |}
-      | _, None ->
+      | Ok _, _, None ->
           do! jsonResponse ctx 503 {| success = false; error = "Cannot run tests — Elm model unavailable." |}
-      | Some dispatch, Some getModel ->
+      | Ok sid, Some dispatch, Some getModel ->
           let model = getModel()
-          let discoveredTests =
-            match targetSession with
-            | Some sid -> (SageFsModel.cycleForSession sid model).TestState.DiscoveredTests
-            | None -> model.LiveTesting.TestState.DiscoveredTests
+          // The resolved session's own cycle, never Primary-by-default.
+          let discoveredTests = (SageFsModel.cycleForSession sid model).TestState.DiscoveredTests
 
           match Array.isEmpty discoveredTests with
           | true ->
@@ -3479,9 +3654,10 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
                     error = sprintf "No discovered tests matched the explicit run filters (%s)." filterSummary
                   |}
               | false ->
-                  dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.RunTestsRequested (targetSession, tests, None)))
+                  dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.RunTestsRequested (Some sid, tests, None)))
                   do! jsonResponse ctx 200 {|
                     success = true
+                    sessionId = sid
                     queued = tests.Length
                     message = sprintf "Queued %d test(s) for explicit run." tests.Length
                   |}
@@ -3533,9 +3709,23 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/api/live-testing/file-annotations", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let fileParam = ctx.Request.Query.["file"].ToString()
-      match rctx.SseContext.GetElmModel with
-      | None -> do! jsonResponse ctx 503 {| error = "Elm loop not started" |}
-      | Some getModel -> do! writeFileAnnotations ctx (getModel()).LiveTesting fileParam
+      // Annotations belong to ONE session's cycle. The route used to answer from
+      // Primary — the daemon-global active session — so a second client asking
+      // about its own file was served another session's gutter marks.
+      let requested =
+        let sp = ctx.Request.Query.["session"].ToString()
+        match System.String.IsNullOrWhiteSpace sp with
+        | true -> None
+        | false -> Some sp
+      let! resolved = resolveLiveTestingRouteTarget rctx requested
+      match rctx.SseContext.GetElmModel, resolved with
+      | None, _ -> do! jsonResponse ctx 503 {| error = "Elm loop not started" |}
+      | Some getModel, SageFs.Server.DashboardTypes.SessionRouteTarget.Target (sid, _) ->
+        do! writeFileAnnotations ctx (SageFsModel.cycleForSession sid (getModel())) fileParam
+      | Some _, refused ->
+        match SageFs.Server.DashboardTypes.SessionRouting.toRefusal refused with
+        | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+        | Ok _ -> failwith "a refusal case cannot resolve to a session"
     } :> Task
   ) |> ignore
   app.MapGet("/api/live-testing/status", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -3545,31 +3735,99 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
         match System.String.IsNullOrWhiteSpace fp with
         | true -> None
         | false -> Some fp
-      // Optional per-session read (roast UX-6 keystone): ?session=<id> reads
-      // THAT session's own cycle instead of the daemon-global active
-      // session — lets a caller observe a background session's
-      // warmup-discovered tests directly. Omitted, this is unchanged.
-      let sessionParam =
+      // ?session=<id> reads THAT session's own cycle. With no id the old route
+      // resolved through `agent = "http"` and then the daemon-global active
+      // session — one shared pointer two clients could not both hold. Resolved
+      // here instead, so it is this caller's session or a typed refusal.
+      let requested =
         let sp = ctx.Request.Query.["session"].ToString()
         match System.String.IsNullOrWhiteSpace sp with
         | true -> None
         | false -> Some sp
-      let! result = SageFs.McpTools.getLiveTestStatusForSession rctx.McpContext "http" fileParam sessionParam
-      do! rawJsonResponse ctx result
+      let! resolved = resolveLiveTestingRouteTarget rctx requested
+      match resolved with
+      | SageFs.Server.DashboardTypes.SessionRouteTarget.Target (sid, _) ->
+        let! result = SageFs.McpTools.getLiveTestStatusForSession rctx.McpContext "http" fileParam (Some sid)
+        do! rawJsonResponse ctx result
+      | refused ->
+        match SageFs.Server.DashboardTypes.SessionRouting.toRefusal refused with
+        | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+        | Ok _ -> failwith "a refusal case cannot resolve to a session"
     } :> Task
   ) |> ignore
+  // `test-trace` and `mark-all-stale` are the two routes whose Elm read/write is
+  // Primary-ONLY (`getTestTrace` reads `model.LiveTesting`; `MarkAllTestsStale`
+  // updates `model.LiveTesting`), and Primary's state belongs to ONE session
+  // (`LiveTestState.ownerSessionId`). So they are session-scoped, but scoped
+  // honestly: resolve the caller's session, then act only when Primary IS that
+  // session's cycle. Acting on another session's Primary is exactly the guess
+  // this change removes, so it is a refusal — typed, and named for what it is.
+  //
+  // Making them per-session instead would mean teaching `Mcp.fs`'s `getTestTrace`
+  // and `SageFsApp.fs`'s `MarkAllTestsStale` a target session, which is outside
+  // this change's ownership. Until then: correct when it can be, refused when
+  // it cannot.
+  let refuseUnlessPrimaryOwns
+    (ctx: Microsoft.AspNetCore.Http.HttpContext)
+    (route: string)
+    (act: string -> Task) : Task =
+    task {
+      let requested =
+        let sp = ctx.Request.Query.["session"].ToString()
+        match System.String.IsNullOrWhiteSpace sp with
+        | true -> None
+        | false -> Some sp
+      let! resolved = resolveLiveTestingRouteTarget rctx requested
+      match rctx.SseContext.GetElmModel, resolved with
+      | None, _ -> do! jsonResponse ctx 503 {| success = false; error = "Elm loop not started" |}
+      | Some getModel, SageFs.Server.DashboardTypes.SessionRouteTarget.Target (sid, _) ->
+        let owner = SageFs.Features.LiveTesting.LiveTestState.ownerSessionId (getModel()).LiveTesting.TestState
+        match owner with
+        | Some o when o = sid -> do! act sid
+        | Some o ->
+          do!
+            jsonResponse ctx 409 {|
+              success = false
+              error =
+                sprintf
+                  "%s operates on the live-testing cycle the daemon currently holds, which belongs to session %s. It cannot act on session %s without taking that session's cycle; read %s for per-session state."
+                  route o sid route
+              sessionId = sid
+              cycleOwner = o
+            |}
+        | None ->
+          do!
+            jsonResponse ctx 409 {|
+              success = false
+              error =
+                sprintf
+                  "%s acts on the session that currently owns the live-testing cycle, and no session does. Enable live testing for the session you mean and pass sessionId."
+                  route
+              sessionId = sid
+            |}
+      | Some _, refused ->
+        match SageFs.Server.DashboardTypes.SessionRouting.toRefusal refused with
+        | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+        | Ok _ -> failwith "a refusal case cannot resolve to a session"
+    }
   app.MapGet("/api/live-testing/test-trace", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    task {
-      let! result = SageFs.McpTools.getTestTrace rctx.McpContext
-      do! rawJsonResponse ctx result
-    } :> Task
-  ) |> ignore
+    refuseUnlessPrimaryOwns
+      ctx
+      "GET /api/live-testing/test-trace"
+      (fun _sid ->
+        task {
+          let! result = SageFs.McpTools.getTestTrace rctx.McpContext
+          do! rawJsonResponse ctx result
+        })) |> ignore
   app.MapPost("/api/live-testing/mark-all-stale", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    task {
-      let! result = SageFs.McpTools.markAllTestsStale rctx.McpContext
-      do! jsonResponse ctx 202 {| message = result |}
-    } :> Task
-  ) |> ignore
+    refuseUnlessPrimaryOwns
+      ctx
+      "POST /api/live-testing/mark-all-stale"
+      (fun _sid ->
+        task {
+          let! result = SageFs.McpTools.markAllTestsStale rctx.McpContext
+          do! jsonResponse ctx 202 {| message = result |}
+        })) |> ignore
 
 let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/api/explore", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
