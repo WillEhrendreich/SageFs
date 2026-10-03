@@ -309,7 +309,8 @@ let mintTests =
         ledgerText.Contains minted.Token |> Expect.isFalse "the token is in no ledger row"
         ledgerText.Contains(minted.Token.Substring Token.prefix.Length) |> Expect.isFalse "nor the body of it"
         ledgerText |> Expect.stringContains "but the member is there, by its public id" (CapabilityId.value minted.Record.Id)
-        let status = SageFs.McpCohortIntegration.getCohortStatus ctx |> fun t -> t.Result |> okOrFail
+        let status =
+          SageFs.McpCohortIntegration.getCohortStatus ctx None |> fun t -> t.Result |> okOrFail
         status.Contains minted.Token |> Expect.isFalse "status never shows it"
         (describeMinted minted).Contains minted.Token |> Expect.isTrue "the conductor's own reply does"
         (describeMintedForLog minted).Contains minted.Token |> Expect.isFalse "the log's copy does not"

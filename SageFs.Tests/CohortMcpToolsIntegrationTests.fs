@@ -153,6 +153,11 @@ let private createProjectSession (client: McpClient) (project: string) (workingD
 let private getCohortStatus (client: McpClient) =
   callTool client "get_cohort_status" []
 
+/// `get_cohort_status` with the directory whose cohort is being asked about. One daemon
+/// holds one cohort PER REPOSITORY, so a caller that names none reads the daemon's own.
+let private getCohortStatusIn (client: McpClient) (workingDirectory: string) =
+  callTool client "get_cohort_status" [ "working_directory", box workingDirectory ]
+
 let private acquireClaim (client: McpClient) (agentName: string) (scope: string) (purpose: string) =
   callTool client "acquire_claim" [ "agentName", box agentName; "scope", box scope; "purpose", box purpose ]
 
@@ -186,6 +191,57 @@ let withDaemon (body: int -> Task<unit>) : Task<unit> = task {
 [<Tests>]
 let cohortMcpToolsTests =
   Integration.hostList "Cohort MCP tools" [
+
+    /// THE ORIGINAL BUG, end to end, over a real MCP connection to a real daemon.
+    ///
+    /// The daemon started ONE `CohortOwner`, bound to the scope it was launched from, and
+    /// dispatched every command through it. `join_cohort` derived its scope from the
+    /// caller's directory, so an agent in a second repository computed a correct scope and
+    /// had it REFUSED as a scope collision — against a cohort it never asked for. This is
+    /// the report that started it, driven through the tools rather than the core.
+    testTask "WHY — one daemon serves TWO repositories, each with its own conductor seat" {
+      do! withDaemon (fun port -> task {
+        use! sageFsAgent = connect port
+        use! nehemiahAgent = connect port
+
+        // Two real directories under the temp root, so the scopes are genuinely different
+        // and neither is the daemon's own working directory.
+        let repoA = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cohort-multirepo-a")
+        let repoB = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cohort-multirepo-b")
+        System.IO.Directory.CreateDirectory repoA |> ignore
+        System.IO.Directory.CreateDirectory repoB |> ignore
+
+        // Repo A: the first joiner becomes ITS conductor.
+        let! joinA = joinCohortWithDir sageFsAgent "agent-a" "Implementer" repoA
+        joinA |> Expect.stringContains "repo-a" "the join names the repository it joined"
+        joinA |> Expect.stringContains "You are the conductor" "and A's first joiner is A's conductor"
+
+        // Repo B: a different connection, a different repository, its OWN conductor seat.
+        // Before the fix this was refused as a scope collision against A's cohort.
+        let! joinB = joinCohortWithDir nehemiahAgent "agent-b" "Implementer" repoB
+        joinB |> Expect.stringContains "repo-b" "B joined B's cohort"
+        joinB |> Expect.stringContains "You are the conductor" "and B's first joiner is B's OWN conductor"
+
+        // And each repository reports ITSELF: the frame a caller reads back is the one for
+        // the directory it named, not the daemon's and not its neighbour's.
+        let! statusA = getCohortStatusIn sageFsAgent repoA
+        statusA |> Expect.stringContains "repo-a" "A reads A's cohort"
+        statusA |> Expect.stringContains "agent-a" "which holds A's member"
+
+        let! statusB = getCohortStatusIn nehemiahAgent repoB
+        statusB |> Expect.stringContains "repo-b" "B reads B's cohort"
+        statusB |> Expect.stringContains "agent-b" "which holds B's member"
+
+        // THE NEGATIVE, without which the positives above mean nothing: the two cohorts do
+        // not see each other. A's member is absent from B's frame and vice versa, which is
+        // what "two repositories, two cohorts" actually claims.
+        (statusA.Contains "agent-b")
+        |> Expect.isFalse "A's frame does not list B's member"
+        (statusB.Contains "agent-a")
+        |> Expect.isFalse "B's frame does not list A's member"
+
+        do! Task.CompletedTask })
+    }
 
     testTask "join from one identity shows that member as conductor in get_cohort_status" {
       do! withDaemon (fun port -> task {

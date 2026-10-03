@@ -110,7 +110,7 @@ let tests =
       record "claim B" claim
       let! leaseA = asConnection handleA (fun () -> Threading.Tasks.Task.FromResult(Ok (acquireWorkLease "conductor" "/work/a" SageFs.ExpensiveWorkLease.Kind.FullBuild)))
       record "lease A" leaseA
-      let! status = SageFs.McpCohortIntegration.getCohortStatus ctx
+      let! status = SageFs.McpCohortIntegration.getCohortStatus ctx None
       record "status" status
 
       let frame = owner.ReadFrame()
