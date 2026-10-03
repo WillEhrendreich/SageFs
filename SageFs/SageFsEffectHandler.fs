@@ -1,6 +1,8 @@
 namespace SageFs
 
 open System
+open System.IO
+open System.Security.Cryptography
 open System.Threading
 open SageFs.WorkerProtocol
 open SageFs.WarmUp
@@ -9,6 +11,62 @@ open SageFs.Features.LiveTesting
 
 // The effect handler: the impure edge of the Elm loop. It interprets each `SageFsEffect` against the
 // dependencies it is given (`EffectDeps`), and dispatches what comes back as messages.
+
+/// "This session now HOLDS this text at this path" — the one announcement every
+/// source-binding path makes, so the landing gate's record of what its reused
+/// verification session holds is written by ALL of them.
+///
+/// The gate reconciles that session by what it holds, so a path that binds real
+/// source text into it has to write to the record — not only the gate's own
+/// `evalIntegrationFiles`. The as-you-type pipeline is such a path: it submits
+/// real buffer text through the same `WorkerMessage.EvalLiveTestFile` primitive,
+/// and it targets whichever session owns the live-testing cycle. That can be the
+/// integration verification session: the daemon's file watcher fires
+/// `FileContentChanged` for any path under a watched directory (the integration
+/// worktree is one), and the MCP buffer endpoint names a session outright.
+///
+/// It lives here, in the file compiled BEFORE `DaemonMode`, because the record
+/// itself cannot move out of `run` without becoming a global: a hook declared here
+/// is installed from `run`, and not the other way round. Process-local, installed
+/// once, and a host that never installs one announces nothing and pays nothing.
+module SourceBound =
+
+  /// Someone a source-bound note can be handed to: the session, the path, the blob.
+  type Writer = string -> string -> string -> unit
+
+  /// The one writer, installed by whoever owns the record it feeds.
+  let private hook : Writer option ref = ref None
+
+  /// Install the writer. The previous one is returned so a caller can restore it,
+  /// and so a second install cannot silently displace a live one.
+  let setHook (writer: Writer option) : Writer option =
+    let previous = !hook
+    hook.Value <- writer
+    previous
+
+  /// Announce that `sessionId` was bound the text of `fullPath`, whose git blob id
+  /// is `blob`. Announces nothing until a writer is installed.
+  let announce (sessionId: string) (fullPath: string) (blob: string) : unit =
+    match !hook with
+    | Some writer -> writer sessionId fullPath blob
+    | None -> ()
+
+  /// The git blob id of TEXT, computed the way `git hash-object` computes it: SHA-1
+  /// over `"blob <byte-count>\0"` followed by the bytes themselves.
+  ///
+  /// `CohortGit.hashObject` reads a FILE, which is the wrong tool here — the text
+  /// being BOUND into a session is an editor buffer, usually not yet saved, so
+  /// hashing the disk would record a fact the session never took. Hashing the text
+  /// is what makes the record say what the session holds.
+  ///
+  /// Bytes, not chars: git hashes bytes, and the two differ for anything non-ASCII.
+  let gitBlobIdOfText (text: string) : string =
+    let bytes = Text.Encoding.UTF8.GetBytes(text)
+    use sha = SHA1.Create()
+    let header = Text.Encoding.ASCII.GetBytes(sprintf "blob %d\0" bytes.Length)
+    sha.ComputeHash(Array.append header bytes)
+    |> Convert.ToHexString
+    |> fun hex -> hex.ToLowerInvariant()
 
 /// Dependencies the effect handler needs — injected, not hard-coded.
 /// This is the seam between pure Elm and impure infrastructure.
@@ -49,6 +107,7 @@ type EffectDeps = {
 
 /// Routes SageFsEffect to real infrastructure via injected deps.
 /// Converts WorkerResponses back into SageFsMsg for the Elm loop.
+
 /// Who reports a live-test run's completion once its stream has ended.
 [<RequireQualifiedAccess>]
 type RunHandoff =
@@ -682,6 +741,12 @@ module SageFsEffectHandler =
                   dispatch (SageFsMsg.Event (
                     TuiEvent.EvalFailed (SessionId.value sid, SageFsError.describe err)))
                 | PumpOutcome.Answered (WorkerResponse.EvalLiveTestFileResult (_, Ok (tests, providers))) ->
+                  // This file is now BOUND in this session, so the record of what the session
+                  // holds has to name exactly that text. The blob is of `req.Content` — the text
+                  // that was just submitted — not of the file on disk, which an unsaved buffer
+                  // does not match. Announced on the SUCCESS arm only: a failed eval leaves the
+                  // session holding what it held, and recording text it never took is how a
+                  // record starts lying.
                   match List.isEmpty providers with
                   | true -> ()
                   | false -> dispatch (SageFsMsg.Event (TuiEvent.ProvidersDetected providers))

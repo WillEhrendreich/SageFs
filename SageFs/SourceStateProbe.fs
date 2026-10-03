@@ -83,6 +83,56 @@ let ofSessionRecord (info: WorkerProtocol.SessionInfo option) (warmup: WarmupCon
   | Some session -> ofSession session warmup
   | None -> SourceState.Unknown (UnknownReason.LoadTimeNotReported "the registry has no record of the session")
 
+/// What a run's `source` field on the wire could be, decided from what the daemon has to read it.
+///
+/// THE FACT IS `SourceState`, NOT THIS. A reader who wants "which build did that run use?" is
+/// holding `Assessed` — the same closed DU `/api/sessions` and `list_sessions` carry, spelled by
+/// `SourceState.toWire`. The cases here are only the ABSENT side: "this run has no verdict",
+/// which reaches the wire as NO `source` field at all, never a null a reader could mistake for
+/// "nothing was stale". `SourceSourceRefusal` (the name is `Source` + `Source`, the first for
+/// the field and the second for `SourceState` — there is no second state type here).
+///
+/// NOT TO BE CONFLATED WITH `LiveTestDecision`'s `Trust`/`Freshness` on the same payload. That
+/// is a DIFFERENT question — "was the code EDITED SINCE THIS RUN WAS DISPATCHED" — against
+/// `Assessed`'s "is the DISK AHEAD OF THE BUILD". They are true together, apart, or not at all,
+/// and neither implies the other. A reader must not read a `Fresh` freshness as an in-sync
+/// build, or an `InSync` source as code that was not edited mid-run.
+[<RequireQualifiedAccess>]
+type SourceSourceRefusal =
+  /// The run carries no session id, so there is no session whose build could be named.
+  | NoSessionToRead
+  /// The session id is well-formed but the registry has no record of that session.
+  | SessionNotKnown
+  /// A reading the daemon can put on the wire.
+  | Assessed of SourceState
+
+/// What one run says about the build it ran against, decided from what is available for it.
+///
+/// A named session plus a registry that knows it plus a reading, if the caller has one, is
+/// `Assessed` — the verdict, spelled on the wire by `SourceState.toWire`. Anything less is one of
+/// the refusal cases, and a refusal produces NO `source` field: the plugin's `run_source_is_authoritative`
+/// stays false, so it keeps asking the session list exactly as it did against a daemon with no such
+/// field at all. Absence is never read as "in sync".
+///
+/// `readings` is `None` when the caller holds no way to get one (a publish site with no session
+/// ops wired), which is `Assessed (Unknown LoadTimeNotReported ...)` rather than a refusal: the
+/// session IS known and the honest answer to "which build?" is then "could not be told", which the
+/// plugin already understands as a non-authoritative verdict.
+let runSourceOf
+  (sessionId: string option)
+  (readings: (unit -> WorkerProtocol.SessionInfo option * WarmupContext option) option)
+  : SourceSourceRefusal =
+  match sessionId with
+  | None -> SourceSourceRefusal.NoSessionToRead
+  | Some sid ->
+    match readings with
+    | None -> SourceSourceRefusal.Assessed (SourceState.Unknown (UnknownReason.LoadTimeNotReported "no way to read the session registry was wired"))
+    | Some read ->
+      let (info, warmup) = read ()
+      match info with
+      | None -> SourceSourceRefusal.SessionNotKnown
+      | Some _ -> SourceSourceRefusal.Assessed (ofSessionRecord info warmup)
+
 /// Every listed session's source state, each read off the disk and the worker's own warmup report, all sessions at once. The
 /// session list a client reads (`list_sessions`, `sessions://list`) takes this map, so each row says what was read for it.
 let readAll

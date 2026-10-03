@@ -996,13 +996,25 @@ module ToolRole =
   let verifierTools : Set<ToolName> = Set.union observerTools verifierOnlyTools
 
   /// The tools no grant but the conductor's own may call, across all roles.
+  ///
+  /// `GetWorkspaceHygiene` is deliberately NOT here even though it used to be. It REPORTS — it
+  /// lists leftover worktrees and a dry-run plan and changes nothing — so requiring the conductor
+  /// merely to LOOK at what agents left behind is a visibility rule dressed as a power rule, and it
+  /// produced two dead ends: the refusal's own next action is "mint you a token", which only the
+  /// CONDUCTOR can do, so a solo user who was the conductor and held no `cap:<id>` could never get
+  /// an answer; and the daemon itself appends "call get_workspace_hygiene" to replies that hit a
+  /// pile of leftovers — so the product told agents to call a tool the gate then refused them.
+  /// Measured against the live daemon before this change:
+  ///
+  ///     cannot call get_workspace_hygiene (your role is Working): ... is not in your grant
+  ///
+  /// `TidyWorkspace` STAYS, because it deletes, and that is exactly the power worth gating.
   let conductorOnlyTools : Set<ToolName> =
     set [ ToolName.ReassignClaim
           ToolName.SetIntegrationRef
           ToolName.MintMember
           ToolName.RevokeMember
           ToolName.ManageLocalData
-          ToolName.GetWorkspaceHygiene
           ToolName.TidyWorkspace ]
 
   /// The working member's surface. Everything `ToolName.all` holds, except the

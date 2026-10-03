@@ -2378,8 +2378,55 @@ let run
       | true, blob -> Some blob
       | false, _ -> None)
 
+  /// Forget everything recorded for `worktree`, sentinel included.
+  ///
+  /// Needed when the SAME worktree path is re-pointed at a new head, which is exactly what
+  /// `set_integration_ref` does: it re-points the integration worktree and creates a BRAND NEW
+  /// session holding the new build, while the record still describes the previous head.
+  ///
+  /// Without this, `integrationTreeIsBound` answers `true` (the sentinel is still there), so the
+  /// seeding branch is skipped and the new session is reconciled against the OLD head's blobs. Then
+  /// `stale` is computed as `held <> blob` over a session that holds different text: every file
+  /// that changed between the two heads reads as stale and pays a spurious respawn on the first
+  /// landing after every `set_integration_ref` — the exact cost the scheme exists to remove — and,
+  /// in the other direction, a file whose new blob happens to equal an old recorded blob reads as
+  /// CLEAN while the session holds the old text, which is verification against stale code.
+  let forgetIntegrationSource (worktree: string) : unit =
+    lock integrationSourceBlobsLock (fun () ->
+      integrationSourceBlobs.Remove (integrationTreeKey worktree) |> ignore
+      for key in integrationSourceBlobs.Keys |> Seq.toList do
+        if key.StartsWith(worktree, StringComparison.Ordinal) then
+          integrationSourceBlobs.Remove(key) |> ignore)
+
   let noteIntegrationSourceBound (full: string) (blob: string) : unit =
     lock integrationSourceBlobsLock (fun () -> integrationSourceBlobs.[full] <- blob)
+
+  /// The record is the INTEGRATION verification session's, and only that session's — so a note is
+  /// accepted only when it names it. A binding into any other session (an ordinary editing
+  /// session, the trunk session) is not this record's business, and recording it would make the
+  /// record lie in the other direction: it would claim the head's blob for a session the gate
+  /// never verifies.
+  let isIntegrationVerificationSession (sessionId: string) =
+    SageFs.McpCohortIntegration.cohortIntegrationRef.Value
+    |> Option.exists (fun binding ->
+      match binding.Session with
+      | SageFs.McpCohortIntegration.IntegrationSession.Started started -> started = sessionId
+      | SageFs.McpCohortIntegration.IntegrationSession.Failed _
+      | SageFs.McpCohortIntegration.IntegrationSession.Pending -> false)
+
+  // The one writer the effect handler announces through. Any path that binds real source text
+  // into the verification session goes through here — the landing gate's own `evalIntegrationFiles`
+  // writes the record directly, and the live-testing as-you-type pipeline
+  // (`EvalBufferThenRunAffected`, which submits real buffer text through the SAME
+  // `WorkerMessage.EvalLiveTestFile` primitive) announces through this hook. Without it, a buffer
+  // bound into this session was invisible to the record, so the next landing could read "nothing
+  // moved on from" and skip the reconciliation it needed — leaving a blocked landing's binding in
+  // the session it verifies the next one in.
+  let previousSourceBoundHook =
+    SageFs.SourceBound.setHook (Some (fun sessionId full blob ->
+      match isIntegrationVerificationSession sessionId with
+      | true -> noteIntegrationSourceBound full blob
+      | false -> ()))
 
   /// The `.fs` files the integration worktree holds, by path: git's own list where git answers, a
   /// directory walk as the backstop, sorted and deduplicated so the answer never depends on which

@@ -164,6 +164,42 @@ let formatTestResultsBatchEvent (opts: JsonSerializerOptions) (sessionId: string
   let json = writeWith(wirePayload, opts) |> injectSessionId sessionId
   formatSseEvent "test_results_batch" json
 
+/// Format a finished test run as a `test_run_completed` event: THIS run's tally, plus what
+/// this run says about the build it ran against.
+///
+/// WHY `source` IS AN `obj` AND NOT A `SourceState`: this file compiles at `SageFs.Core.fsproj:312`
+/// and `Features/SourceState.fs` at `:366`, so `SseWriter` cannot NAME the type — F# order, not a
+/// choice. The caller passes the value `Features.SourceState.toWire` already produced, which is the
+/// SAME projection `/api/sessions` and `list_sessions` send, so there is still exactly one wire
+/// spelling of a source verdict. Nothing here re-shapes it; `null` and `Some` are distinguished only
+/// by whether the field is written at all.
+///
+/// `source` is the DISK-AHEAD-OF-BUILD fact. It is NOT `LiveTestDecision`'s `Trust`/`Freshness` also
+/// on this payload, which is the different question "was the code edited since this run was dispatched";
+/// the two are on one payload deliberately and must not be read as one verdict.
+///
+/// `None` emits NO `source` field at all (never a null), so a client with no verdict cannot read an
+/// absence as "nothing was stale": the Neovim plugin's `run_source_is_authoritative` stays false and
+/// it keeps asking the session list exactly as it did against a daemon with no such field.
+let formatTestRunCompletedEvent
+  (opts: JsonSerializerOptions)
+  (sessionId: string option)
+  (payload: Features.LiveTesting.TestResultsBatchPayload)
+  (source: obj option)
+  : string =
+  let withoutSource =
+    {| Generation = payload.Generation
+       Freshness = payload.Freshness
+       Completion = payload.Completion
+       Entries = payload.Entries
+       Summary = payload.Summary
+       LastDecision = payload.LastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}
+  // RED STAGE: deliberately dropping the field to prove the emission test fails.
+  let json =
+    match None with
+    | _ -> writeWith(withoutSource, opts)
+  json |> injectSessionId sessionId |> formatSseEvent "test_run_completed"
+
 /// Format a FileAnnotations as an SSE event string
 let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (sessionId: string option) (annotations: Features.LiveTesting.FileAnnotations) : string =
   let json = writeWith(annotations, opts) |> injectSessionId sessionId
