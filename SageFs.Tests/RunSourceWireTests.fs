@@ -264,7 +264,7 @@ let runSourceProbeTests = testList "the reading the run's source comes from" [
         (daemonOpts ())
         (Some (SessionId.value sessId))
         (RunSourceFixtures.batch ())
-        (Some state)
+        (Some (SageFs.SourceState.toWire state))
     use doc = JsonDocument.Parse(extractData frame)
     doc.RootElement.GetProperty("source").GetProperty("state").GetString()
     |> Expect.equal "the payload carries the state the probe actually read" (SageFs.SourceState.token state)
@@ -288,7 +288,10 @@ let runSourceProbeTests = testList "the reading the run's source comes from" [
          SageFs.SourceStateProbe.SourceSourceRefusal.NoSessionToRead
 
   testCase "a named session that is not in the registry is refused by name too" <| fun _ ->
-    SageFs.SourceStateProbe.runSourceOf (Some (SessionId.value sessId)) None
+    // A WIRED reader that knows nothing — `Some (fun () -> (None, None))`. Passing `None`
+    // for the reader is a different question ("no way to read the registry was wired"),
+    // which is an honest `Unknown`, not a claim that the session is unknown.
+    SageFs.SourceStateProbe.runSourceOf (Some (SessionId.value sessId)) (Some (fun () -> (None, None)))
     |> Expect.equal
          "the registry has no record, so the probe is never attempted"
          SageFs.SourceStateProbe.SourceSourceRefusal.SessionNotKnown
@@ -319,7 +322,7 @@ let runSourceShapeTests = testList "the run's source is the disk/build fact, not
         (daemonOpts ())
         (Some (SessionId.value sessId))
         { RunSourceFixtures.batch () with Freshness = SageFs.Features.LiveTesting.ResultFreshness.Fresh }
-        (Some (SageFs.SourceState.InSync (at, TestMagnitudes.packedProbeCount)))
+        (Some (SageFs.SourceState.toWire (SageFs.SourceState.InSync(at, TestMagnitudes.packedProbeCount))))
     use doc = JsonDocument.Parse(extractData payload)
     let root = doc.RootElement
     let mutable foundFresh = Unchecked.defaultof<JsonElement>
@@ -337,7 +340,7 @@ let runSourceShapeTests = testList "the run's source is the disk/build fact, not
         (daemonOpts ())
         (Some (SessionId.value sessId))
         (RunSourceFixtures.batch ())
-        (Some (SageFs.SourceState.InSync (at, TestMagnitudes.packedProbeCount)))
+        (Some (SageFs.SourceState.toWire (SageFs.SourceState.InSync(at, TestMagnitudes.packedProbeCount))))
     use doc = JsonDocument.Parse(extractData payload)
     let source = doc.RootElement.GetProperty("source")
     source.GetProperty("filesChecked").GetInt32()
