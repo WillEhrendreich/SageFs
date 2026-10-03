@@ -27,15 +27,64 @@ open SageFs.HostAgent
 
 type private Outcome = SageFs.Features.ReloadOutcome.ReloadOutcome
 
-/// The compiled "app". `inlinedCalleeProbe` is `inline`, so the F# compiler
-/// copies its body into `renderWithInlinedCallee` at compile time: the caller
-/// never calls the method the detour re-points. That is deterministic, unlike
-/// `AggressiveInlining`, which a tier-0 JIT ignores.
-module InlinedCalleeFixture =
-  let inline inlinedCalleeProbe (n: int) : int = n + 1
+/// The compiled "app" for the inlined case, EMITTED AS IL rather than written in F#.
+///
+/// WHY IL and not F#: the case needs a callee that EXISTS as a patchable method while the
+/// caller has INLINED its body. F# cannot express that — an F# `inline` function, and an
+/// F# member marked `AggressiveInlining`, BOTH emit no method at all (measured by reflecting
+/// over this very assembly: `let inline` left the module declaring only its renderer). So an
+/// F# fixture cannot present a method to re-point, and the detour correctly finds nothing.
+///
+/// Emitting it makes the shape exact and language-neutral:
+///   * `inlinedCalleeProbe` — a real public static method, so a detour CAN re-point it,
+///     marked `AggressiveInlining`.
+///   * `renderWithInlinedCallee` — contains that body COPIED IN, not a call to it.
+/// That is precisely the situation the product must report honestly: the patch lands, the
+/// app holds the old copy, and the caller never enters what was patched.
+///
+/// `1 -> 2 -> 20` before a save; `10010` is what the CONTROL (a real call) returns once the
+/// callee is patched, which is the contrast this case exists to pin.
+let private inlinedFixtureAssembly : Assembly =
+  let asm =
+    AssemblyBuilder.DefineDynamicAssembly(
+      AssemblyName("sagefs-inlined-callee-fixture"),
+      AssemblyBuilderAccess.Run)
+  let md = asm.DefineDynamicModule "MainModule"
+  let t =
+    md.DefineType(
+      "InlinedCalleeFixture",
+      TypeAttributes.Public ||| TypeAttributes.Class ||| TypeAttributes.Abstract ||| TypeAttributes.Sealed)
 
-  [<MethodImpl(MethodImplOptions.NoInlining)>]
-  let renderWithInlinedCallee (n: int) : int = inlinedCalleeProbe n * 10
+  // The callee: a real, patchable method. `AggressiveInlining` says a JIT MAY inline it.
+  let callee =
+    t.DefineMethod("inlinedCalleeProbe", MethodAttributes.Public ||| MethodAttributes.Static, typeof<int>, [| typeof<int> |])
+  callee.SetImplementationFlags(MethodImplAttributes.AggressiveInlining)
+  let ci = callee.GetILGenerator()
+  ci.Emit(OpCodes.Ldarg_0)
+  ci.Emit(OpCodes.Ldc_I4_1)
+  ci.Emit(OpCodes.Add)
+  ci.Emit(OpCodes.Ret)
+
+  // The caller: `NoInlining` so the two shapes differ for a REASON, and the callee's body
+  // COPIED IN rather than called — so patching the callee can never be observed here.
+  let caller =
+    t.DefineMethod(
+      "renderWithInlinedCallee",
+      MethodAttributes.Public ||| MethodAttributes.Static,
+      typeof<int>,
+      [| typeof<int> |])
+  caller.SetImplementationFlags(MethodImplAttributes.NoInlining)
+  let gi = caller.GetILGenerator()
+  gi.Emit(OpCodes.Ldarg_0)
+  gi.Emit(OpCodes.Ldc_I4_1)
+  gi.Emit(OpCodes.Add)   // the inlined copy of the callee's body
+  // `Ldc_I4` with an operand, not a dedicated opcode: IL only has `Ldc_I4_0`..`Ldc_I4_8`.
+  gi.Emit(OpCodes.Ldc_I4, 10)
+  gi.Emit(OpCodes.Mul)
+  gi.Emit(OpCodes.Ret)
+
+  t.CreateType() |> ignore
+  asm
 
 /// The control: the callee is a real call, so the patched body is entered.
 module CalledCalleeFixture =
@@ -81,11 +130,16 @@ type private Applied =
     Landed: SourceDecl list
     Planned: Outcome }
 
-let private applySave (modulePath: string list) (typeName: string) (methodName: string) : Applied =
+let private applySave
+  (fixtureAssembly: string)
+  (modulePath: string list)
+  (typeName: string)
+  (methodName: string)
+  : Applied =
   let mutable dynamic: Assembly[] = [||]
   let sources: AssemblySources = { Dynamic = (fun () -> dynamic); Loaded = (fun () -> [||]) }
   let init: AgentInit =
-    { Projects = [ fixtureAssemblyPath ]
+    { Projects = [ fixtureAssembly ]
       ResolveFrom = []
       ValueReads = SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads }
   let agent = Agent(init, sources)
@@ -120,12 +174,23 @@ let private settled (applied: Applied) : Async<WatchStep> =
 let tests =
   testList "a function inlined into its caller" [
     testTask "WHY — a patch whose new body is never entered is never reported as Patched, because the page keeps serving the old result" {
-      InlinedCalleeFixture.renderWithInlinedCallee 1
+      let fixtureType = inlinedFixtureAssembly.GetType("InlinedCalleeFixture")
+      let render = fixtureType.GetMethod("renderWithInlinedCallee", BindingFlags.Public ||| BindingFlags.Static)
+      render.Invoke(null, [| box 1 |])
       |> Expect.equal "before the save the caller returns the old result" 20
 
-      let applied = applySave [ "SageFs"; "Tests"; "InlinedCalleeOutcomeTests"; "InlinedCalleeFixture" ] "InlinedCalleeFixture" "inlinedCalleeProbe"
+      // The dynamic assembly has no `Location` — a `Run` dynamic assembly reports an empty
+      // string, so `registerSearchPath` would derive a null directory. The host only needs a
+      // directory to resolve against, and the fixtures here depend on nothing, so the test
+      // assembly's own directory is the honest thing to hand it.
+      let applied =
+        applySave
+          (Path.GetDirectoryName fixtureAssemblyPath)
+          [ "InlinedCalleeFixture" ]
+          "InlinedCalleeFixture"
+          "inlinedCalleeProbe"
 
-      InlinedCalleeFixture.renderWithInlinedCallee 1
+      render.Invoke(null, [| box 1 |])
       |> Expect.equal "the caller inlined the old body, so it still returns the old result after the detour" 20
 
       match applied.Planned with
@@ -141,7 +206,12 @@ let tests =
     testTask "WHY — a patch whose new body runs is confirmed, by the same machinery, because the evidence is the new body running" {
       CalledCalleeFixture.renderWithCalledCallee 1 |> Expect.equal "before the save" 20
 
-      let applied = applySave [ "SageFs"; "Tests"; "InlinedCalleeOutcomeTests"; "CalledCalleeFixture" ] "CalledCalleeFixture" "calledCalleeProbe"
+      let applied =
+        applySave
+          fixtureAssemblyPath
+          [ "SageFs"; "Tests"; "InlinedCalleeOutcomeTests"; "CalledCalleeFixture" ]
+          "CalledCalleeFixture"
+          "calledCalleeProbe"
 
       match applied.Planned with
       | Outcome.PatchPending(1, 1, []) -> ()

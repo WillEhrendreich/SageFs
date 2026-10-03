@@ -12,7 +12,11 @@
 
 3. **NEVER treat `Start-Sleep` as "wait for the daemon to be ready" without a follow-up tool call in the same turn.** `Start-Sleep 3` followed by a chat message is the same hang, just shorter. `Start-Sleep 3` followed by a screenshot is fine. The sleep is not the problem. The text after the sleep is the problem.
 
-4. **NEVER re-derive an MCP connection from scratch. Run `dotnet fsi scripts/reconnect-mcp.fsx`.** If every MCP tool answers `404 Session not found`, the connection is LIVE and pointing at a session the daemon no longer has. The session lives in the daemon's MEMORY, and installing a build restarts the daemon on purpose, so the id a client holds dies. A client on Streamable HTTP sends `initialize` once and never again, so the failure repeats until someone reloads the client by hand. `reconnect-mcp.fsx` re-initializes and PROVES it (it first requires a never-minted id to be rejected, so a pass cannot mean "the endpoint merely answers"). If it prints `OK`, you are live; carry on. The durable fix is the stdio bridge — `claude mcp add sagefs -- sagefs mcp` — which owns the handshake itself, so the client never holds an id at all. Full explanation: "404 Session not found" in `docs/mcp-tools.md`, and the same diagnosis in `skills/sagefs/troubleshooting.md`, which also says to check the daemon's version before believing anything else.
+4. **NEVER re-derive an MCP connection from scratch. Run `dotnet fsi scripts/reconnect-mcp.fsx`.** If every MCP tool answers `404 Session not found`, the connection is LIVE and pointing at a session the daemon no longer has. The session lives in the daemon's MEMORY, and installing a build restarts the daemon on purpose, so the id a client holds dies. A client on Streamable HTTP sends `initialize` once and never again, so the failure repeats until someone reloads the client by hand. `reconnect-mcp.fsx` re-initializes and PROVES it (it first requires a never-minted id to be rejected, so a pass cannot mean "the endpoint merely answers"). If it prints `OK`, you are live; carry on. The durable fix is the stdio bridge — `claude mcp add sagefs -- sagefs mcp` — which owns the handshake itself, so the client never holds an id at all. `scripts/probe-bridge-stdio.fsx` drives that bridge from a script, which is how to dogfood it without a client. Full explanation: "404 Session not found" in `docs/mcp-tools.md`, and the same diagnosis in `skills/sagefs/troubleshooting.md`, which also says to check the daemon's version before believing anything else.
+
+5. **NEVER hand-roll an MCP client over HTTP, and never script an edit with `python3 -c`.** Both were mistakes that cost real time today. The HTTP client looks like it works — `initialize` succeeds — then hangs on `tools/call`, because the bridge writes diagnostics to stderr and an unread pipe fills and BLOCKS it. Drain stderr on its own thread, and read until the response ID you asked for instead of a fixed line count (responses are SSE-framed, so a fixed count deadlocks). For edits, use the exact editor tool; `skills/sagefs/design.md` says so and this file's own rule above says so, and breaking it repeatedly is not a learning curve, it is a choice.
+
+6. **A tool that never answers is a BUG in the product, not a timeout to work around.** A scope-colliding `join_cohort` leaves the bridge alive and streaming notifications while producing NO response at all, so the caller's only signal is a hang. An agent that reads that concludes "hard limit, no workaround" — which is a wrong conclusion produced by a missing answer. If a tool call you made produced no response, say so and treat it as a defect; do not re-derive the answer from the absence.
 
 ## Known red at 2026-10-03 (2 suites, NOT caused by the current work)
 
@@ -31,22 +35,50 @@ the baseline worktree crashes during Expecto discovery because `SkillLayoutTests
 `Environment.CurrentDirectory` — the defect this session fixed. So a baseline worktree can
 only answer questions about suites whose discovery no longer depends on the CWD.
 
-## The `AGENTS.md` (Clef) fork: `FidelityFramework/Bozzett`
+## The Bozzetto fork (Clef): `FidelityFramework/Bozzetto`
 
-`https://github.com/FidelityFramework/Bozzett` **404s** — it is private, or renamed, or does
-not exist yet. It is not cloned on this machine (checked `~/Work`, 44 checkouts, no match).
-So there is nothing to "keep an eye on" mechanically yet, and nothing in this repo references
-it by name.
+It is **public and reachable** — https://github.com/FidelityFramework/Bozzetto. (An earlier
+note here said it 404s; that was my own misspelling, "Bozzett". Corrected.) Not cloned on this
+machine (44 checkouts in `~/Work`, no match), so everything below is from the published repo,
+not from a local build.
 
-**What "Clef capability from day one" should mean here, given that.** The capability that is
-verifiable today is the one SageFs already has and Bozzett would be re-implementing: the REPL
-inner loop, live testing, hot reload, and now a self-healing MCP bridge. Anything else is a
-claim with no evidence behind it, which is the failure this repo keeps paying for.
+**What it is.** A hard fork of this repo, by the Fidelity Framework. Fork point
+`5b685fb5` (2026-02-23), last synced to upstream `v0.6.834` at `c86c3402` on 2026-09-27 —
+54 commits, so it has moved a long way past the sync point. Renamed throughout: package
+`Bozzetto`, command `boz`, MCP port **47749**, control listener **47750**, state `~/.bozzetto`.
+SageFs's own 37749/37750 do not collide.
 
-The honest move when the repo becomes reachable: record its actual shape (language, build,
-what it forks from) BEFORE designing a port, and mirror this repo's own rule — one home for
-each decision, exhaustive DUs, DST + mutation testing, no build-time path constants. A fork
-whose tests are weaker than its parent's is a regression the moment it lands here.
+**Where it deliberately diverged from this repo** — the reason it forked, so not a gap to chase:
+
+- **No F# REPL.** Embedded production FSI hosting is retired. Interactive Clef execution is a
+  Composer backend on LLVM ORC; changes to Bozzetto's own F# are validated with `dotnet build`
+  and the unfiltered suite.
+- **The REPL inner loop is gone**, which is the one capability here with no equivalent there.
+  Everything else SageFs does — incremental builds, hot reload, live testing, a dashboard, an
+  MCP surface — has a counterpart, built on Composer's contracts instead of FSI's.
+- **Fable and Falco were dropped**, and PostgreSQL → binary manifests + SQLite (a direction
+  this repo had already moved in).
+
+**"Clef capability from day one" therefore does not mean "port the REPL."** Bozzetto's stated
+horizon is H1: one local compiler workspace, CPU ORC execution, a native host. If you want the
+REPL loop there, that is a design conversation with them, not a doc change here.
+
+**The one concrete defect worth reporting, found 2026-10-03 while inspecting it:**
+
+```
+$ git ls-files '$COMMANDCODE_SCRATCHPAD' | wc -l
+6
+```
+
+Six scratch files are **tracked in Bozzetto**, committed in `d2dc5c8`, and its `.gitignore` has
+no rule for them. This repo hit the identical mistake twice and fixed it here — see the comment
+in `.gitignore` at line 100, including the trap that caused it: the harness path is literally
+`$COMMANDCODE_SCRATCHPAD`, a **shell variable**, so a pattern reading
+`commandcode_scratchpad` looks right and matches nothing. SageFs's working rules are
+`.roastscratch/`, `**/commandcode_scratchpad/` and `**/\$COMMANDCODE_SCRATCHPAD/`.
+
+Worth telling them: scratch is evidence *for* a decision, not a deliverable, and the fix is to
+untrack with `git rm --cached` rather than delete.
 
 ## Concrete patterns:
 
