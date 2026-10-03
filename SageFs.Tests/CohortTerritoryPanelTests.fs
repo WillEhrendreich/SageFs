@@ -21,6 +21,13 @@ let private epoch = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
 let private alice = MemberId.Minted "alice"
 let private bob = MemberId.Minted "bob"
 
+/// `CohortState.empty ()` is Machine-scoped and every command below names that
+/// same scope, so each of these frames is exactly the cohort a v1 test cohort
+/// was — one machine-wide cohort — and every assertion still means what it was
+/// written to mean. A `Repository` or `Named` scope here would make this a test
+/// of scoping instead of a test of the territory render.
+let private machine = CohortScope.Machine
+
 let private frameAfter (commands: CohortCommand<MemberId> list) : CohortFrame<MemberId> =
   let finalState, seq =
     commands
@@ -46,8 +53,8 @@ let cohortTerritoryPanelTests =
     testCase "WHY — a held claim renders the territory section carrying the claimed path" <| fun _ ->
       let frame =
         frameAfter
-          [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing") ]
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine) ]
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "carries the territory dom id" "cohort-territory"
       html |> Expect.stringContains "carries the section heading" "Territory map (1 claimed path)"
@@ -57,10 +64,10 @@ let cohortTerritoryPanelTests =
     testCase "WHY — two members' held claims each render as distinctly colored territory" <| fun _ ->
       let frame =
         frameAfter
-          [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            CohortCommand.Join(bob, JoinableRole.Verifier, None)
-            CohortCommand.AcquireClaim(alice, ClaimScope.File "src/A.fs", "a")
-            CohortCommand.AcquireClaim(bob, ClaimScope.File "src/B.fs", "b") ]
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            CohortCommand.Join(bob, JoinableRole.Verifier, None, machine)
+            CohortCommand.AcquireClaim(alice, ClaimScope.File "src/A.fs", "a", machine)
+            CohortCommand.AcquireClaim(bob, ClaimScope.File "src/B.fs", "b", machine) ]
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "carries the section heading, pluralized" "Territory map (2 claimed paths)"
       html |> Expect.stringContains "carries alice's claimed path" "src/A.fs"
@@ -69,9 +76,9 @@ let cohortTerritoryPanelTests =
     testCase "WHY — an orphaned claim still renders as neutral territory, not dropped" <| fun _ ->
       let frame =
         frameAfter
-          [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing")
-            CohortCommand.Depart alice ]
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing", machine)
+            CohortCommand.Depart(alice, machine) ]
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "the orphaned claim is still shown as territory" "src/Foo.fs"
       html |> Expect.stringContains "the text-fallback legend marks it unclaimed" "unclaimed"
@@ -79,8 +86,8 @@ let cohortTerritoryPanelTests =
     testCase "WHY — the text fallback legend names the holder by display id, not the raw MemberId case" <| fun _ ->
       let frame =
         frameAfter
-          [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
-            CohortCommand.AcquireClaim(alice, ClaimScope.Project "SageFs.Tests/SageFs.Tests.fsproj", "working") ]
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None, machine)
+            CohortCommand.AcquireClaim(alice, ClaimScope.Project "SageFs.Tests/SageFs.Tests.fsproj", "working", machine) ]
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "labels the text fallback" "Text fallback"
       html |> Expect.stringContains "legend names the holder's display id" (MemberId.display alice)
@@ -88,7 +95,7 @@ let cohortTerritoryPanelTests =
     testCase "WHY — renderCohortPanel with claims but no territory-eligible state stays within the panel's own dom id" <| fun _ ->
       // A member joins but claims nothing: the panel renders (members section),
       // the territory section must not appear.
-      let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Observer, None) ]
+      let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Observer, None, machine) ]
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "the panel itself still renders" "cohort-panel"
       (html.Contains "cohort-territory") |> Expect.isFalse "no claims, no territory section"

@@ -23,6 +23,17 @@ open SageFs.Tests.TestInfrastructure
 let private handleA = "tJj5NFu4OCqmI2WIWkiBFA"
 let private handleB = "Y5FMEWuygbQVjRTam-Cmkg"
 
+/// The cohort these tests run in. Every cohort tool derives its scope from the
+/// caller's working directory (`McpCohortTools.cohortScopeOf`), and the two
+/// connections here pass NONE, so they land in whatever `Environment.CurrentDirectory`
+/// resolves to under `Scope.defaultStrategy` — for a daemon started in a git
+/// checkout that is that checkout's `Repository` root. Naming it once, from the
+/// same policy the tools use, is what keeps the owner below and the commands the
+/// tools commit about ONE cohort: a mismatch would be refused `WrongCohortScope`
+/// and the transcript would silently lose both members and the claim, which the
+/// "the outputs must show members at all" precondition below is there to catch.
+let private cohortScope = SageFs.McpCohortTools.cohortScopeOf None
+
 let private jsonOpts = SageFs.Json.optionsOf SageFs.Json.camelCase
 
 /// Run `body` as the connection that holds `handle`, the way the call filter
@@ -79,6 +90,7 @@ let tests =
       use owner =
         SageFs.Features.CohortOwner.start
           (SageFs.Utils.Log.asILogger ())
+          cohortScope
           ledger
           (fun () -> epoch)
           (fun () -> seed <- seed + 1; BitConverter.GetBytes seed)
@@ -94,7 +106,7 @@ let tests =
       record "join A" joinA
       let! joinB = asConnection handleB (fun () -> joinCohort ctx "worker" "Implementer" None)
       record "join B" joinB
-      let! claim = asConnection handleB (fun () -> acquireClaim ctx "worker" "file:src/Foo.fs" "editing")
+      let! claim = asConnection handleB (fun () -> acquireClaim ctx "worker" "file:src/Foo.fs" "editing" None)
       record "claim B" claim
       let! leaseA = asConnection handleA (fun () -> Threading.Tasks.Task.FromResult(Ok (acquireWorkLease "conductor" "/work/a" SageFs.ExpensiveWorkLease.Kind.FullBuild)))
       record "lease A" leaseA
@@ -105,9 +117,9 @@ let tests =
       transcript.Add(SageFs.SseWriter.cohortFrameJson jsonOpts frame)
       transcript.Add(SageFs.SseWriter.formatCohortMatrixEvent jsonOpts frame)
       transcript.Add(SageFs.Server.McpResources.SageFsResources(ctx).CohortStatus())
-      transcript.Add(SageFs.Features.CohortLedgerExport.toJsonl (ledger.ReadAll()))
+      transcript.Add(SageFs.Features.CohortLedgerExport.toJsonl (ledger.ReadAll cohortScope))
       // The events every committed command recorded, the way the owner publishes them.
-      transcript.Add(SageFs.WorkerProtocol.Serialization.serialize (ledger.ReadAll() |> List.collect (fun entry -> entry.Events)))
+      transcript.Add(SageFs.WorkerProtocol.Serialization.serialize (ledger.ReadAll cohortScope |> List.collect (fun entry -> entry.Events)))
 
       let everything = String.concat "\n" transcript
       everything.Contains "mcp:" |> Expect.isTrue "the outputs must show members at all, or this test proves nothing"
