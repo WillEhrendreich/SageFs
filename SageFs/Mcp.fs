@@ -749,6 +749,10 @@ module McpTools =
   /// `ToolAuthorityGate.fs`. This is the call site; it belongs here because it needs `McpContext`.
   let private checkToolAuthorityGate (ctx: McpContext) (agent: string) (toolName: string) : Result<unit, string> =
     let who = memberIdFor agent
+    // The DAEMON's own cohort, deliberately: this gate runs before any tool body, so it has no
+    // per-request `working_directory`. Correct for what it decides — WHETHER THIS IDENTITY MAY
+    // CALL THIS TOOL, a question about the identity, not a cohort. The per-caller question is
+    // the COHORT's own role check, which runs after this and does have the directory.
     let authority = ToolAuthorityGate.authorityOf (cohortOwnerFor ctx None) who
     match ToolAuthorityGate.decide who authority toolName with
     | ToolAuthorityGate.Decision.Admitted -> Ok ()

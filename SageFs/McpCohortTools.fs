@@ -236,10 +236,10 @@ module McpCohortTools =
               | Some _ -> " Your role is the one your member token was minted with; the role argument is ignored."
               | None -> ""
             sprintf
-              "Joined cohort %s as %s (%s).%s%s%s"
-              (SageFs.Scope.label cohortScope)
+              "Joined cohort as %s (%s) in %s.%s%s%s"
               (MemberTable.MemberId.display who)
               (string r)
+              (SageFs.Scope.label cohortScope)
               (if becameConductor then " You are the conductor (first to join in this scope)." else "")
               tokenNote
               sessionNote)

@@ -46,10 +46,9 @@ type SageFsResources(ctx: McpContext) =
   [<McpServerResource(UriTemplate = CohortStatusUri, Name = "cohort_status", MimeType = "application/json")>]
   [<Description("The daemon's current cohort state (members, claims, test matrix) as JSON — the same read model get_cohort_status reports. Subscribe (resources/subscribe) to be pushed notifications/resources/updated whenever the cohort changes, instead of polling.")>]
   member _.CohortStatus() : string =
-    // `None` is the DAEMON's own scope, and deliberately so: this is a machine-wide
-    // resource with no per-request directory, so it reports the cohort this daemon
-    // serves at its own root. A caller asking about ANOTHER repository's cohort uses
-    // `get_cohort_status`, which does have the caller's directory.
+    // `None` is the DAEMON's own scope, and deliberately: this is a machine-wide resource with
+    // no per-request directory. A caller asking about ANOTHER repository uses `get_cohort_status`,
+    // which does have the caller's directory.
     match SageFs.McpTools.cohortOwnerFor ctx None with
     | Some cohortOwner -> SageFs.SseWriter.cohortFrameJson jsonOpts (cohortOwner.ReadFrame())
     | None -> SageFs.SseWriter.cohortFrameJson jsonOpts (emptyCohortFrame ())

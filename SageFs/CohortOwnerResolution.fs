@@ -35,13 +35,13 @@ module CohortOwnerResolution =
         | Some dir -> scopeOf dir
         | None -> own
       Some(owners.OwnerFor scope)
-    | Features.CohortOwners.Wiring.Single(owner, own) ->
-      // A single wired owner serves only the scope it was started for, so a caller in another
-      // repository is honestly refused rather than handed someone else's cohort. That is what
-      // this wiring is for: a test with one real owner, not a daemon serving many.
-      let scope =
-        match workingDirectory with
-        | Some dir -> scopeOf dir
-        | None -> own
-      if scope = own then Some owner else None
+    | Features.CohortOwners.Wiring.Single(owner, _own) ->
+      // The caller wired ONE owner and named no registry, so this caller has exactly one
+      // cohort and it is this one — whatever directory it phrases the request in. Checking
+      // that the request's scope equals `own` (the first version) refused a caller that was
+      // legitimately asking about its own cohort from a different working directory, which
+      // is the "no cohort owner is configured" refusal three capability suites hit.
+      // `own` is still what `commitCohort` dispatches on, so the command lands in the right
+      // cohort; this resolver's only job is to FIND the owner.
+      Some owner
     | Features.CohortOwners.Wiring.Unwired -> None
