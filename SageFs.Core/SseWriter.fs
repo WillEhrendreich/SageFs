@@ -192,7 +192,7 @@ let formatResultsBatchWithSource
         envelopeJson.Substring(0, closing).TrimEnd()
         + ","
         + "\"source\":"
-        + (JsonSerializer.Serialize(s, opts))
+        + writeWith(s, opts)
         + "}"
 
   json |> injectSessionId sessionId
