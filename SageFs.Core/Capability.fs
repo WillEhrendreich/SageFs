@@ -411,7 +411,7 @@ module Capability =
             "send_fsharp_code"; "cancel_eval"; "manage_scratch_pad"; "reset_fsi_session"
             "hard_reset_fsi_session"; "switch_workflow"; "stop_session"; "enable_hot_reload"
             "disable_hot_reload"; "reset_hot_reload_state"; "set_reflection_read_mode"; "run_app"
-            "stop_app" ]
+            "stop_app"; "nudge_value" ]
       @ tagged RouteKind.CreatesSession [ "create_project_session"; "create_solution_session"; "create_bare_session" ]
       @ tagged RouteKind.ListsSessions [ "list_sessions" ]
       @ tagged RouteKind.ReadsDirectory [ "get_available_projects" ]

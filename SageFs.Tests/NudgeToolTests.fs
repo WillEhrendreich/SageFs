@@ -331,6 +331,7 @@ let asImplementer = Authority.Member(alice, JoinableRole.Implementer)
 let grant (preset: Capability.RolePreset) : Capability.Grant =
   { Preset = preset
     Scope = (match Capability.ScopePrefix.tryParse "" with Ok p -> p | Error r -> failwithf "%A" r)
+    Route = Capability.RouteBinding.BoundToSession "nudge-test-session"
     NotAfter = DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
 
 [<Tests>]
