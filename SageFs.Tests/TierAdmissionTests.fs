@@ -137,6 +137,24 @@ let tests =
       |> List.map (fun r -> r.Unit.Label)
       |> Expect.equal "b still runs" [ "b" ]
 
+    // ── which policy a run gets ──
+    testProperty "WHY — without isolation tiers run one at a time, whatever was requested" <|
+      fun (PositiveInt cores) (requested: int option) -> policyFor Shared cores requested = Fixed 1
+
+    testProperty "WHY — an explicit request is a fixed count: the pipeline does not second-guess an operator" <|
+      fun (PositiveInt cores) (PositiveInt n) -> policyFor CopyOnWrite cores (Some n) = Fixed n
+
+    testProperty "WHY — with isolation and no request the machine decides, and the static rule is only the fallback" <|
+      fun (PositiveInt cores) ->
+        match policyFor CopyOnWrite cores None with
+        | ByPressure l -> l.FallbackConcurrency = parallelism CopyOnWrite cores None && l.MaxTierProcesses = Admission.maxTierProcesses
+        | Fixed _ -> false
+
+    testProperty "WHY — a policy's slot count is what the port pool is cut by, so a started unit always has a slice" <|
+      fun (PositiveInt cores) (requested: int option) ->
+        let policy = policyFor CopyOnWrite cores requested
+        slotsOf policy >= 1 && (match policy with ByPressure l -> slotsOf policy = l.MaxTierProcesses | Fixed n -> slotsOf policy = n)
+
     // ── reading the machine, against the real files' shapes ──
     testCase "WHY — the pressure reading is the `some` line's avg10, not the `full` line's" <| fun _ ->
       "some avg10=0.50 avg60=13.60 avg300=12.01 total=403518219\nfull avg10=9.00 avg60=0.00 avg300=0.00 total=0\n"
