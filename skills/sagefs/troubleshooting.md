@@ -63,6 +63,15 @@ implying the command closes it.
 
 ## Things that will bite you
 
+- **A cohort tool (`acquire_claim`, `release_claim`, `request_landing`) says you have not
+  joined, or refuses you after a successful `join_cohort`.** Cohorts are per repository.
+  Pass the SAME `working_directory` (the repository you are working in) to `join_cohort`
+  and to every later cohort tool. A call that names no directory acts in the cohort of the
+  repository the daemon was started in, and there you are a stranger. Check with
+  `get_cohort_status` and that directory: you should be listed as present. If a daemon up
+  to 0.6.891 told you "your role is Working: that needs the Working role" after you joined
+  as Implementer in a repository that is not the daemon's own, that was a daemon bug, fixed
+  after 0.6.891 (docs/mcp-tools.md, "If a cohort tool says you have not joined").
 - **"Operation could not be completed due to earlier error"** means a previous
   statement failed. Read the diagnostics and fix that statement. The session is
   fine, so don't reset it.

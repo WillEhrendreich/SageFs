@@ -747,13 +747,19 @@ module McpTools =
   ///
   /// The gate itself, and the reasoning behind it — including WHY a role is not a sandbox — live in
   /// `ToolAuthorityGate.fs`. This is the call site; it belongs here because it needs `McpContext`.
-  let private checkToolAuthorityGate (ctx: McpContext) (agent: string) (toolName: string) : Result<unit, string> =
+  let private checkToolAuthorityGate (ctx: McpContext) (agent: string) (workingDirectory: string option) (toolName: string) : Result<unit, string> =
     let who = memberIdFor agent
-    // The DAEMON's own cohort, deliberately: this gate runs before any tool body, so it has no
-    // per-request `working_directory`. Correct for what it decides — WHETHER THIS IDENTITY MAY
-    // CALL THIS TOOL, a question about the identity, not a cohort. The per-caller question is
-    // the COHORT's own role check, which runs after this and does have the directory.
-    let authority = ToolAuthorityGate.authorityOf (cohortOwnerFor ctx None) who
+    // The cohort the CALL ACTS IN: the tool's own `working_directory`, resolved exactly as the
+    // tool body resolves it, and the daemon's own cohort only when the call names none.
+    //
+    // This used to read the daemon's own cohort always, on the reasoning that the gate decides
+    // "may this identity call this tool", a question about the identity and not a cohort. That
+    // is false for the cohort verbs: the gate intersects the role table with the cohort's own
+    // membership table, and membership is per cohort. So an agent that joined ANOTHER
+    // repository's cohort was `Anonymous` in the daemon's, and acquire_claim was refused with
+    // "your role is Working: that needs the Working role" for an agent that was that
+    // repository's conductor.
+    let authority = ToolAuthorityGate.authorityOf (cohortOwnerFor ctx workingDirectory) who
     match ToolAuthorityGate.decide who authority toolName with
     | ToolAuthorityGate.Decision.Admitted -> Ok ()
     | ToolAuthorityGate.Decision.Refused(reason, _) -> Error reason
@@ -765,7 +771,7 @@ module McpTools =
   ///   - A call with no token is a plain member under `ConnectionsAllowed`, as it always was.
   ///     Under `TokenRequired` it may read status, and the conductor on its own connection may
   ///     act (so it can mint); everyone else is refused and told how to get a token.
-  let private checkIdentityGate (store: CapabilityStore) (ctx: McpContext) (agent: string) (toolName: string) : Result<unit, string> =
+  let private checkIdentityGate (store: CapabilityStore) (ctx: McpContext) (agent: string) (workingDirectory: string option) (toolName: string) : Result<unit, string> =
     match currentCapability.Value with
     | Some capability ->
       Capability.admitTool capability.Grant toolName
@@ -775,7 +781,8 @@ module McpTools =
       | Capability.IdentityPolicy.ConnectionsAllowed -> Ok ()
       | Capability.IdentityPolicy.TokenRequired ->
         let authority, seat =
-          match cohortOwnerFor ctx None with
+          // The cohort the call acts in, for the same reason as `checkToolAuthorityGate`.
+          match cohortOwnerFor ctx workingDirectory with
           | Some owner ->
             let frame = owner.ReadFrame()
             let seat = match frame.Conductor with | Cohort.ConductorBinding.NeverBound -> Capability.ConductorSeat.NotBoundYet | _ -> Capability.ConductorSeat.Bound
@@ -820,10 +827,10 @@ module McpTools =
     let allowedIn (state: SessionState) =
       Affordances.checkToolCallAllowed state toolName |> Result.mapError SageFsError.describeForAgent
     task {
-      match checkIdentityGate store ctx agent toolName with
+      match checkIdentityGate store ctx agent workingDirectory toolName with
       | Error message -> return Error message
       | Ok () ->
-      match checkToolAuthorityGate ctx agent toolName with
+      match checkToolAuthorityGate ctx agent workingDirectory toolName with
       | Error message -> return Error message
       | Ok () ->
       match Affordances.toolGate toolName with

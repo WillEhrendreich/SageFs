@@ -1104,6 +1104,12 @@ type AuthorityRefusal =
   /// present so the gate still fails CLOSED rather than admitting a name
   /// nobody classified.
   | CapabilityRequired of tool: string
+  /// A cohort verb, and the caller holds no seat in the cohort the call acts in.
+  /// Distinct from `RoleForbids` because the role is not the problem: an unjoined caller's
+  /// role is `Working`, which admits the tool, so reporting "needs the Working role" told an
+  /// agent that had done nothing wrong that it lacked something it had. The fix is to join
+  /// THAT repository's cohort, which is what `nextAction` says.
+  | NotSeated of tool: ToolName
 
 module AuthorityRefusal =
   /// One sentence: what was refused and by what rule.
@@ -1115,6 +1121,8 @@ module AuthorityRefusal =
       sprintf "%s is not in your grant, which is the %s role." (ToolName.toString tool) (ToolRole.toToken granted)
     | AuthorityRefusal.CapabilityRequired tool ->
       sprintf "%s is not a tool this gate knows; it cannot be admitted on anyone's authority." tool
+    | AuthorityRefusal.NotSeated tool ->
+      sprintf "%s needs a seat in the cohort this call acts in, and you have not joined it." (ToolName.toString tool)
 
   /// The next action, so a refusal tells the caller how to proceed. The `Conductor`
   /// arms are unreachable in practice — the conductor holds every tool — and are
@@ -1136,6 +1144,8 @@ module AuthorityRefusal =
       "Only the cohort conductor holds this, and the conductor already holds it."
     | AuthorityRefusal.CapabilityRequired _ ->
       "This tool name is not one SageFs registers, so no role can call it. Check the tools/list response for a name that exists."
+    | AuthorityRefusal.NotSeated _ ->
+      "Call join_cohort first, with the SAME working_directory you pass to this tool: cohorts are per repository, so joining one repository's cohort gives you no seat in another's. Then retry."
 
 /// THE AUTHORITY GATE over the whole tool surface: `Authority -> ToolName ->
 /// Result<unit, AuthorityRefusal>`. Pure; `Mcp.fs` resolves the caller's
@@ -1165,7 +1175,14 @@ let checkAuthorityAllowed (authority: Cohort.Authority<'m>) (tool: ToolName) : R
     // Never a widening: a cohort verb the OLD gate refused stays refused,
     // whatever the role tables say.
     if checkCohortToolAllowed authority cohortTool then Ok ()
-    else Error(AuthorityRefusal.RoleForbids(tool, ToolRole.Working))
+    else
+      match authority with
+      // No seat: the role was never the problem (an unjoined caller's role is Working, which
+      // admits this tool), so say that, and say how to get one.
+      | Cohort.Authority.Anonymous -> Error(AuthorityRefusal.NotSeated tool)
+      // A seat whose role does not carry the verb (an Observer or a Verifier asking for a claim).
+      | Cohort.Authority.Member _
+      | Cohort.Authority.Conductor _ -> Error(AuthorityRefusal.RoleForbids(tool, ToolRole.Working))
   | Ok (), None -> Ok ()
   | Error refusal, _ -> Error refusal
 

@@ -2448,19 +2448,21 @@ WORKFLOW: Call before run_app to see what can run.""")>]
     // affordance gating yet (that is Slice 3): these tools are always listed.
 
     [<McpServerTool>]
-    [<Description("""Join this daemon's cohort — the shared multi-agent coordination session that tracks who else is working here, file/project claims, and landing requests.
+    [<Description("""Join a repository's cohort — the shared multi-agent coordination session that tracks who else is working in THAT repository, file/project claims, and landing requests.
 
-v1 has no separate "create cohort" step: the FIRST agent to join an empty cohort automatically becomes its conductor (the only member who can reassign an orphaned claim). No tool hands the conductor role to someone else yet.
+COHORTS ARE PER REPOSITORY. Pass working_directory (the repository you are working in) on this call and on every later cohort tool: acquire_claim, release_claim, request_landing, leave_cohort and get_cohort_status. A call that names no directory acts in the cohort of the repository the DAEMON was started in, which is usually not yours, and there you are a stranger. If a cohort tool answers "you have not joined it", you joined a different repository's cohort: call join_cohort again with the same working_directory you pass to that tool.
 
-WHEN TO USE: Once per agent, before acquiring claims or requesting a landing, when multiple agents/sub-agents may be touching this repo concurrently.
+ROLES. 'Implementer' evaluates, builds, runs, claims files and requests landings (every tool except the conductor-only ones). 'Verifier' reads and runs tests, and cannot evaluate code or claim files. 'Observer' only reads. The first agent to join a repository's cohort becomes its conductor, the only member who can reassign a claim, set the integration ref or mint member tokens; there is no tool to hand that seat to someone else yet.
 
-OUTPUT: Confirmation text, noting whether you became the conductor and which session (if any) you were bound to for the per-session test matrix.""")>]
+WHEN TO USE: Once per agent per repository, before acquiring claims or requesting a landing, when more than one agent or sub-agent may be touching that repository.
+
+OUTPUT: Confirmation text, naming the cohort you joined, whether you became its conductor, and which session (if any) you were bound to for the per-session test matrix.""")>]
     member _.join_cohort(
         [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Identifies you in cohort membership and claim ownership.")>]
         agentName: string,
         [<Description("Your role: 'Implementer', 'Verifier', or 'Observer'.")>]
         role: string,
-        [<Description("Working directory of the MCP client — resolved to a session id (the same routing send_fsharp_code uses) and recorded so the cohort's per-session test matrix can attribute that checkout's test outcomes to you. Optional: omit to fall back to your active session or the daemon's own working directory.")>]
+        [<Description("The repository you are working in. It decides WHICH cohort you join (two agents in two repositories have two conductor seats and never contend), so pass the same directory to every later cohort tool. It is also resolved to a session id (the routing send_fsharp_code uses) so the cohort's per-session test matrix can attribute that checkout's test outcomes to you. Omit it and you join the cohort of the repository the daemon was started in.")>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =

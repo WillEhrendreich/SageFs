@@ -389,6 +389,19 @@ exact MCP wire name `working_directory` — the registered tool surface enforces
 on every directory parameter, so one name works everywhere a client needs it. The rows
 mention it only where the behaviour is worth calling out; assume the rest take it too.
 
+**If a cohort tool says you have not joined.** The refusal reads `<tool> needs a seat in the cohort this
+call acts in, and you have not joined it`. Either you never called `join_cohort`, or you joined a
+different repository's cohort than the one this call names. Call `join_cohort` with the same
+`working_directory` you pass to the failing tool, then retry. A call that names no directory acts in the
+cohort of the repository the daemon was started in, so an agent in any other repository has to pass its
+directory on every cohort call, not just the first. `get_cohort_status` with that directory shows whether
+you are seated there.
+
+Daemons up to 0.6.891 got this wrong in the other direction: an Implementer who had joined a repository
+other than the daemon's own (and was its conductor) was refused `acquire_claim`, `release_claim` and
+`request_landing` with `your role is Working: that needs the Working role`. The gate was reading the
+daemon's own cohort instead of the one the call acts in. If you see that text, the daemon predates the fix.
+
 | Tool | What it does |
 |:---|:---|
 | `join_cohort` | Join your repository's coordination session. The first joiner **of that repository** becomes its conductor. Takes `working_directory`: cohorts are per repository, so an agent in a second repository joins a second cohort with its own conductor seat instead of colliding with a cohort it never asked for. |

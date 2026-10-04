@@ -69,12 +69,19 @@ module ToolAuthorityGate =
       |> Result.map (fun () -> Admitted)
       |> Result.defaultWith (fun refusal ->
         let reason =
-          sprintf
-            "%s cannot call %s (your role is %s): %s"
-            (MemberTable.MemberId.display who)
-            toolName
-            (Affordances.ToolRole.toToken (Affordances.authorityRoleOf authority))
-            (Affordances.AuthorityRefusal.describe refusal)
+          match refusal with
+          // No seat: naming a role would blame the one thing that is not wrong.
+          | Affordances.AuthorityRefusal.NotSeated _ ->
+            sprintf "%s cannot call %s: %s" (MemberTable.MemberId.display who) toolName (Affordances.AuthorityRefusal.describe refusal)
+          | Affordances.AuthorityRefusal.RoleForbids _
+          | Affordances.AuthorityRefusal.NotInGrant _
+          | Affordances.AuthorityRefusal.CapabilityRequired _ ->
+            sprintf
+              "%s cannot call %s (your role is %s): %s"
+              (MemberTable.MemberId.display who)
+              toolName
+              (Affordances.ToolRole.toToken (Affordances.authorityRoleOf authority))
+              (Affordances.AuthorityRefusal.describe refusal)
         Refused(
           SageFsError.describeForAgent (SageFsError.CohortActionFailed(reason, Affordances.AuthorityRefusal.nextAction refusal)),
           Affordances.AuthorityRefusal.nextAction refusal))

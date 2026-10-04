@@ -16,11 +16,16 @@
 /// wiring through `admitToolCallWithin` lives in the MCP integration tests.
 module SageFs.Tests.ToolAuthorityGateTests
 
+open System
+open System.Collections.Concurrent
+open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.Cohort
+open SageFs.McpTools
 open SageFs.MemberTable
+open SageFs.Features
 
 let private alice = MemberId.Minted "alice"
 let private bob = MemberId.Minted "bob"
@@ -29,6 +34,68 @@ let private observer = Authority.Member(alice, JoinableRole.Observer)
 let private verifier = Authority.Member(alice, JoinableRole.Verifier)
 let private implementer = Authority.Member(alice, JoinableRole.Implementer)
 let private conductor = Authority.Conductor alice
+
+// ── A daemon serving more than one repository ───────────────────────────
+//
+// The daemon starts in ONE repository, and a cohort is per repository. The whole-surface gate
+// resolved the caller's authority against the daemon's OWN cohort, so an agent that joined a
+// DIFFERENT repository's cohort looked like it had never joined anything, and every cohort verb
+// but join and status was refused with "your role is Working: that needs the Working role".
+// The pure cases above cannot see that: they hand the gate an `Authority` already resolved. These
+// stand up the real registry and go through `admitToolCallWithin`.
+
+let scopeOfPath (path: string) = Scope.ofWorkingDirectory Scope.defaultStrategy path
+
+let daemonRepo = "/tmp/gate-scope/SageFs"
+let molinaRepo = "/tmp/gate-scope/molina"
+
+let silentLogger =
+  { new Utils.ILogger with
+      member _.LogInfo _ = ()
+      member _.LogDebug _ = ()
+      member _.LogWarning _ = ()
+      member _.LogError _ = () }
+
+/// A daemon that started in `daemonRepo`, with a registry that serves a cohort per repository.
+let mkContext () : McpContext =
+  let deps : CohortOwners.Deps =
+    { Ledger = CohortLedger.InMemory.create ()
+      Clock = fun () -> DateTime(2026, 10, 4, 0, 0, 0, DateTimeKind.Utc)
+      Entropy = CohortOwner.productionEntropy
+      GetSessionTestOutcomes = fun _ -> ([], [], [], 0L)
+      Performer = CohortOwner.LandingPerformer.stub
+      Logger = silentLogger }
+  let owners = CohortOwners.create (CohortOwners.factoryOf deps)
+  { FrictionStore = None
+    DiagnosticsChanged = (Event<DiagnosticsStore.T>()).Publish
+    StateChanged = None
+    SessionOps = SessionManagementOps.stub
+    SessionMap = ConcurrentDictionary<string, string>()
+    McpPort = 0
+    Dispatch = None
+    GetElmModel = None
+    GetElmRegions = None
+    GetWarmupContext = None
+    GetFeatureState = None
+    RecordEval = None
+    ActivityTracker = AgentActivityTracker.create ()
+    LiveBindings = None
+    CohortSupport = CohortOwners.Wiring.Wired(owners, scopeOfPath daemonRepo)
+    GetDaemonHealth = fun () -> None
+    GetProcessTelemetry = fun () -> None }
+
+/// One call through the real gate, as the MCP filter makes it: the tool's own `working_directory`.
+let gate (ctx: McpContext) (agent: string) (workingDirectory: string option) (tool: string) =
+  admitToolCallWithin Timeouts.gateStatusProbe ctx agent None workingDirectory tool
+
+let join (ctx: McpContext) (agent: string) (role: string) (repo: string) = task {
+  match! McpCohortTools.joinCohort ctx agent role (Some repo) with
+  | Result.Ok _ -> ()
+  | Result.Error err -> failtestf "%s could not join %s as %s: %s" agent repo role (SageFsError.describeForAgent err)
+}
+
+/// The tools the cohort-aware gate has to get right in a second repository.
+let claimTools = [ "acquire_claim"; "release_claim"; "request_landing" ]
 
 /// The three tools the defect was about, named once.
 let private theThree: Affordances.ToolName list =
@@ -391,6 +458,64 @@ let toolAuthorityGateTests =
         |> Expect.equal "an unjoined caller has no role to narrow it, so it maps to Working" Affordances.ToolRole.Working
         Affordances.ToolRole.ofAuthority conductor
         |> Expect.equal "the conductor is the Conductor role, not Working" Affordances.ToolRole.Conductor
+      }
+    ]
+
+    // ── Which cohort the gate reads ──────────────────────────────────────
+
+    testList "a daemon that serves more than one repository" [
+      testTask "an Implementer who joined ANOTHER repository's cohort may use the claim tools there" {
+        // THE report: an agent working on molina joined as Implementer (the join worked, and
+        // get_cohort_status showed it present), then acquire_claim was refused with "your role is
+        // Working: that needs the Working role". The daemon had started in SageFs, whose cohort the
+        // gate read, and in which that agent is nobody.
+        let ctx = mkContext ()
+        do! join ctx "molina-agent" "Implementer" molinaRepo
+        for tool in claimTools do
+          match! gate ctx "molina-agent" (Some molinaRepo) tool with
+          | Result.Ok _ -> ()
+          | Result.Error refusal ->
+            failtestf "%s was refused for an Implementer that joined %s: %s" tool molinaRepo refusal
+      }
+
+      testTask "NEGATIVE CONTROL: a caller that never joined that cohort is still refused, and told to join" {
+        // The gate did not become "admit everything". Cohort verbs need a seat in the cohort the
+        // call acts in, and this caller has none in molina's.
+        let ctx = mkContext ()
+        match! gate ctx "stranger" (Some molinaRepo) "acquire_claim" with
+        | Result.Ok _ -> failtest "a caller with no seat in this cohort was admitted to acquire_claim"
+        | Result.Error refusal ->
+          refusal |> Expect.stringContains "says how to get a seat" "join_cohort"
+          Expect.isFalse
+            "does not claim a role is missing when the caller's role was never the problem"
+            (refusal.Contains "that needs the Working role")
+      }
+
+      testTask "NEGATIVE CONTROL: a member of molina's cohort is refused if the call names no directory (the daemon's own repository)" {
+        // A call with no working_directory acts in the daemon's own cohort, where this member has
+        // no seat. The gate must agree with the tool body about which cohort that is.
+        let ctx = mkContext ()
+        do! join ctx "molina-agent" "Implementer" molinaRepo
+        match! gate ctx "molina-agent" None "acquire_claim" with
+        | Result.Ok _ -> failtest "the gate read molina's seat for a call that acts in the daemon's cohort"
+        | Result.Error refusal -> refusal |> Expect.stringContains "says how to get a seat" "join_cohort"
+      }
+
+      testTask "NEGATIVE CONTROL: a role is still honoured in the right cohort — an Observer in molina cannot claim" {
+        let ctx = mkContext ()
+        do! join ctx "molina-conductor" "Implementer" molinaRepo
+        do! join ctx "molina-watcher" "Observer" molinaRepo
+        match! gate ctx "molina-watcher" (Some molinaRepo) "acquire_claim" with
+        | Result.Ok _ -> failtest "an Observer was admitted to acquire_claim"
+        | Result.Error refusal -> refusal |> Expect.stringContains "names the role it needs" "Working"
+      }
+
+      testTask "the daemon's own repository still works exactly as it did" {
+        let ctx = mkContext ()
+        do! join ctx "sagefs-agent" "Implementer" daemonRepo
+        match! gate ctx "sagefs-agent" (Some daemonRepo) "acquire_claim" with
+        | Result.Ok _ -> ()
+        | Result.Error refusal -> failtestf "regressed the daemon's own repository: %s" refusal
       }
     ]
   ]
