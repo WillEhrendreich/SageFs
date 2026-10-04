@@ -3535,12 +3535,24 @@ let mapLiveBindingsRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/api/sessions/{sid}/live-values/mode", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) -> liveBindingsSetMode askFor hub ctx) |> ignore
   app.MapGet("/api/sessions/{sid}/live-values/mode", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) -> liveBindingsReadMode askFor hub ctx) |> ignore
 
+/// The query parameter the live-testing routes read the caller's session from. The routes read it through this and
+/// the refusals below name it through this, so the sentence cannot point at a parameter the route ignores.
+[<Literal>]
+let LiveTestingSessionQueryParam = "session"
+
 /// What a live-testing route that works on the daemon's one cycle says when the caller asked about a session that does
 /// not own it. Built from the route, the owning session and the one asked about, so the remedy names real things.
 let cycleOwnerRefusal (route: string) (owner: string) (requested: string) : string =
   sprintf
-    "%s operates on the live-testing cycle the daemon currently holds, which belongs to session %s. It cannot act on session %s without taking that session's cycle. Ask for session %s, which owns it (add ?session=%s), or enable live testing for session %s to move the cycle to it."
-    route owner requested owner owner requested
+    "%s operates on the live-testing cycle the daemon currently holds, which belongs to session %s. It cannot act on session %s without taking that session's cycle. Ask for session %s, which owns it (add ?%s=%s), or enable live testing for session %s to move the cycle to it."
+    route owner requested owner LiveTestingSessionQueryParam owner requested
+
+/// What the same routes say when no session owns the cycle at all. Names the query parameter the routes read
+/// (`LiveTestingSessionQueryParam`), the same one the refusal above names, so neither can drift from the read.
+let noCycleOwnerRefusal (route: string) (requested: string) : string =
+  sprintf
+    "%s acts on the live-testing cycle the daemon currently holds, and no session owns it. Enable live testing for session %s (POST /api/live-testing/enable with its session id in the body), then ask again with ?%s=%s."
+    route requested LiveTestingSessionQueryParam requested
 
 let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
   // Truthful command failure: enable/disable/policy used to report HTTP 200
@@ -3817,7 +3829,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       // Primary — the daemon-global active session — so a second client asking
       // about its own file was served another session's gutter marks.
       let requested =
-        let sp = ctx.Request.Query.["session"].ToString()
+        let sp = ctx.Request.Query.[LiveTestingSessionQueryParam].ToString()
         match System.String.IsNullOrWhiteSpace sp with
         | true -> None
         | false -> Some sp
@@ -3844,7 +3856,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       // session — one shared pointer two clients could not both hold. Resolved
       // here instead, so it is this caller's session or a typed refusal.
       let requested =
-        let sp = ctx.Request.Query.["session"].ToString()
+        let sp = ctx.Request.Query.[LiveTestingSessionQueryParam].ToString()
         match System.String.IsNullOrWhiteSpace sp with
         | true -> None
         | false -> Some sp
@@ -3877,7 +3889,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
     (act: string -> Task) : Task =
     task {
       let requested =
-        let sp = ctx.Request.Query.["session"].ToString()
+        let sp = ctx.Request.Query.[LiveTestingSessionQueryParam].ToString()
         match System.String.IsNullOrWhiteSpace sp with
         | true -> None
         | false -> Some sp
@@ -3900,10 +3912,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
           do!
             jsonResponse ctx 409 {|
               success = false
-              error =
-                sprintf
-                  "%s acts on the session that currently owns the live-testing cycle, and no session does. Enable live testing for the session you mean and pass sessionId."
-                  route
+              error = noCycleOwnerRefusal route sid
               sessionId = sid
             |}
       | Some _, refused ->
