@@ -1763,18 +1763,31 @@ let tests =
         Endpoint = Uri(sprintf "http://localhost:%d/" PlaywrightFixture.mcpPort))
     let transport = new ModelContextProtocol.Client.HttpClientTransport(opts, (null: Microsoft.Extensions.Logging.ILoggerFactory))
     let! client = ModelContextProtocol.Client.McpClient.CreateAsync(transport, null, null, Threading.CancellationToken.None)
+    // The RESULT is checked, not discarded. It used to `return ()`, so a join or a claim
+    // refused by the cohort was invisible and the next assertion failed on the PANEL being
+    // absent — which reads as a dashboard bug and is actually the tool saying no. The panel
+    // assertion can only be believed if the calls it depends on are known to have landed.
     let call (name: string) (args: (string * obj) list) = task {
-      let! _ = client.CallToolAsync(name, readOnlyDict args, null, null, Threading.CancellationToken.None)
-      return ()
+      let! result = client.CallToolAsync(name, readOnlyDict args, null, null, Threading.CancellationToken.None)
+      let text =
+        result.Content
+        |> Seq.choose (function
+             | :? ModelContextProtocol.Protocol.TextContentBlock as t -> Some t.Text
+             | _ -> None)
+        |> String.concat ""
+      if (result.IsError |> Option.ofNullable |> Option.defaultValue false) then
+        return failtestf "%s was refused: %s" name text
+      else
+        return text
     }
     try
-      do! call "join_cohort" [ "agentName", box "panel-journey"; "role", box "Implementer" ]
-      do! call "acquire_claim" [ "agentName", box "panel-journey"; "scope", box "file:src/Panels.fs"; "purpose", box "panel journey" ]
+      let! _ = call "join_cohort" [ "agentName", box "panel-journey"; "role", box "Implementer" ]
+      let! _ = call "acquire_claim" [ "agentName", box "panel-journey"; "scope", box "file:src/Panels.fs"; "purpose", box "panel journey" ]
       do! count "#cohort-panel" 1 BrowserWaits.daemonWork
       do! count "#cohort-lanes" 1 BrowserWaits.daemonWork
       do! shot "2-cohort"
       // The member leaves: nobody is present, so both go, whatever the ledger still holds.
-      do! call "leave_cohort" [ "agentName", box "panel-journey" ]
+      let! _ = call "leave_cohort" [ "agentName", box "panel-journey" ]
       do! count "#cohort-panel" 0 BrowserWaits.daemonWork
       do! count "#cohort-lanes" 0 BrowserWaits.daemonWork
     finally
