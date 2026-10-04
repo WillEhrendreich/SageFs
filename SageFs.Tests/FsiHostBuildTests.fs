@@ -231,6 +231,16 @@ let tests =
             |> Array.filter (fun name -> name <> HostHarmonyName + ".dll")
           Expect.isEmpty "no other SageFs assembly can reach the user's process" foreign)
 
+      testCase "the built host's runtimeconfig turns tiered PGO off, so its start does not pay for profile instrumentation" <| fun _ ->
+        withTempCache (fun cache ->
+          let config = Path.Combine(Path.GetDirectoryName(builtDll cache) |> string, "FsiHost.runtimeconfig.json")
+          use doc = JsonDocument.Parse(File.ReadAllText config)
+          let mutable value = Unchecked.defaultof<JsonElement>
+          let found =
+            doc.RootElement.GetProperty("runtimeOptions").GetProperty("configProperties").TryGetProperty("System.Runtime.TieredPGO", &value)
+          Expect.isTrue "the runtimeconfig names System.Runtime.TieredPGO (<TieredPGO> in SageFs.FsiHost/FsiHost.fsproj)" found
+          Expect.equal "and it is false" JsonValueKind.False value.ValueKind)
+
       testCase "builds the host once, then reuses it from the cache" <| fun _ ->
         withTempCache (fun cache ->
           let sdk =

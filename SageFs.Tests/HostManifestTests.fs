@@ -199,3 +199,61 @@ module HostReadyToRun =
             |> Array.map (fun f -> f.Name)
           compiled |> Expect.isEmpty (sprintf "%s: the package carries SageFs.Host/bin to every OS, so no assembly there may be ReadyToRun" tfm)
     ]
+
+/// Runtime knobs of the two processes every session starts, set in their runtimeconfig so they ship with the host and the FSI host alike.
+///
+/// Tiered PGO makes the JIT instrument its first-tier code and recompile hot methods from the profile. Both processes live for minutes, the work
+/// is the F# compiler's, and the instrumentation costs more than the profile earns inside that window: measured on a hot reload fixture start,
+/// alternating runs, paired by round, cgroup CPU, it is about half a CPU second of a five second start, and over 300 small evals through the
+/// worker the CPU fell from a median of 11.4 s to 9.2 s with no change in wall time.
+module HostRuntimeConfig =
+  open System.Text.Json
+
+  /// The runtimeconfig property the SDK writes for `<TieredPGO>`.
+  [<Literal>]
+  let TieredPgoProperty = "System.Runtime.TieredPGO"
+
+  /// What a runtimeconfig.json says about tiered PGO: `Some false` when it is off, `None` when it does not say (the runtime default is on).
+  let tieredPgo (runtimeConfigJson: string) : bool option =
+    use doc = JsonDocument.Parse runtimeConfigJson
+    let mutable options = Unchecked.defaultof<JsonElement>
+    let mutable properties = Unchecked.defaultof<JsonElement>
+    let mutable value = Unchecked.defaultof<JsonElement>
+    match doc.RootElement.TryGetProperty("runtimeOptions", &options) && options.TryGetProperty("configProperties", &properties) with
+    | false -> None
+    | true ->
+      match properties.TryGetProperty(TieredPgoProperty, &value) with
+      | true when value.ValueKind = JsonValueKind.False -> Some false
+      | true when value.ValueKind = JsonValueKind.True -> Some true
+      | _ -> None
+
+  /// The `<TieredPGO>` value an msbuild project file sets, `None` when it sets none.
+  let projectTieredPgo (projectXml: string) : string option =
+    System.Xml.Linq.XDocument.Parse(projectXml).Descendants(System.Xml.Linq.XName.Get "TieredPGO")
+    |> Seq.tryHead
+    |> Option.map (fun e -> e.Value.Trim())
+
+  [<Tests>]
+  let tests =
+    testList "Host runtime config" [
+
+      testCase "the reader tells off, on and unset apart" <| fun _ ->
+        tieredPgo """{"runtimeOptions":{"configProperties":{"System.Runtime.TieredPGO":false}}}""" |> Expect.equal "false is off" (Some false)
+        tieredPgo """{"runtimeOptions":{"configProperties":{"System.Runtime.TieredPGO":true}}}""" |> Expect.equal "true is on" (Some true)
+        tieredPgo """{"runtimeOptions":{"configProperties":{}}}""" |> Expect.isNone "an absent property is the runtime default, not off"
+
+      testCase "the worker host runs with tiered PGO off" <| fun _ ->
+        let frameworks = HostReadyToRun.builtFrameworks HostReadyToRun.packagedHostDir
+        frameworks |> Expect.isNonEmpty "the tests run against a built host"
+        for tfm in frameworks do
+          let config = Path.Combine(HostReadyToRun.packagedHostDir tfm, "SageFs.Host.runtimeconfig.json")
+          tieredPgo (File.ReadLines config |> String.concat "\n")
+          |> Expect.equal (sprintf "%s: SageFs.Host.runtimeconfig.json must turn tiered PGO off (<TieredPGO> in SageFs.Host.fsproj)" tfm) (Some false)
+
+      testCase "the FSI host project turns tiered PGO off" <| fun _ ->
+        match FsiHostBuild.embeddedSources () with
+        | Result.Error reason -> failtest (FsiHostBuild.describeBuildError reason)
+        | Result.Ok sources ->
+          let project = sources |> List.find (fun (name, _) -> name = "FsiHost.fsproj") |> snd
+          projectTieredPgo project |> Expect.equal "FsiHost.fsproj sets <TieredPGO>false</TieredPGO>" (Some "false")
+    ]
