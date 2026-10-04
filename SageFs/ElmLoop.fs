@@ -291,6 +291,7 @@ module ElmLoop =
     let drainThread = Thread(fun () ->
       try
         while not ct.IsCancellationRequested do
+          // Parks the dedicated drain thread (see above), never a pool thread: that is what the thread is for.
           signal.Wait(ct)
           signal.Reset()
           // Drain until pending work is truly empty (messages may arrive during processing)

@@ -129,6 +129,7 @@ module WorkerReadyCommit =
   let retireOnDedicatedThread (stop: 'S -> Async<unit>) (id: SessionId) (oldSession: 'S) : unit =
     let retireAsync = stop oldSession
     let retire () =
+      // Runs on the dedicated thread started below, so waiting for the retirement parks that thread and no pool thread.
       try Async.RunSynchronously retireAsync
       with ex ->
         Log.warn "[SessionManager] Old-worker retirement failed for %s: %s" (SessionId.value id) ex.Message

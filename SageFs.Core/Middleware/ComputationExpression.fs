@@ -262,6 +262,8 @@ let compExprMiddleware next (request, st: AppState) =
 
   match request with
   | { Args = m } when shouldRunCompExpr m ->
+    // The middleware chain is synchronous (`AppState.Middleware`) and runs inside the eval actor, which does one eval
+    // at a time; the rewrite is a CPU-only Fantomas parse of the submitted text, so there is no external wait to starve.
     let rewritten = rewriteCompExpr st.Logger request.Code |> Async.RunSynchronously
     next ({ request with Code = rewritten }, st)
   | _ -> next (request, st)

@@ -54,6 +54,11 @@ let private kindOfGlyph (name: string) : AutoCompletion.CompletionKind =
   | Some case -> AutoCompletion.CompletionKind.ofGlyph (FSharpValue.MakeUnion(case, [||]) :?> FSharpGlyph)
   | None -> AutoCompletion.CompletionKind.Type
 
+/// The one sync-over-async seam of this file. `IFsiSession` is a synchronous port (an in-process FSI is), and its
+/// callers run on the session's dedicated eval/actor threads, so a remote call blocks one of those and never a
+/// request handler's pool thread.
+let private blockOnHost (call: Async<'a>) : 'a = Async.RunSynchronously call
+
 let private toCompletionItem (host: FsiHostSession) (completionsId: int64) (index: int) (item: WireCompletion) : AutoCompletion.CompletionItem =
   { DisplayText = item.DisplayText
     ReplacementText = item.ReplacementText
@@ -61,7 +66,7 @@ let private toCompletionItem (host: FsiHostSession) (completionsId: int64) (inde
     // Fetched on demand, like the in-process closure over FCS's tooltip.
     GetDescription =
       Some(fun () ->
-        match Async.RunSynchronously(host.Describe(completionsId, index)) with
+        match blockOnHost (host.Describe(completionsId, index)) with
         | Answered text when text.Length > 0 -> [| TaggedText.tagText text |]
         | Answered _
         | HostGone _ -> [||]) }
@@ -69,9 +74,7 @@ let private toCompletionItem (host: FsiHostSession) (completionsId: int64) (inde
 /// A session whose FSI lives in an isolated host process.
 [<Sealed; AllowNullLiteral>]
 type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
-  // The port is synchronous (in-process evals are), and its callers run on dedicated eval/actor threads, so the
-  // remote calls block those threads rather than the thread pool at large. This is the one sync-over-async seam.
-  let wait (call: Async<'a>) : 'a = Async.RunSynchronously call
+  let wait (call: Async<'a>) : 'a = blockOnHost call
 
   member _.Host = host
 

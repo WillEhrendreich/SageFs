@@ -162,6 +162,8 @@ module JupyterTransport =
         match parseFrames key incoming with
         | Error _ -> ()
         | Ok (identities, jupyterMsg) ->
+          // Blocking is the design: each socket loop owns a thread of its own (the shell thread, and the CLI's main
+          // thread for control), never a pool thread, and a ZeroMQ socket may only be used from the thread that made it.
           let events, newState =
             KernelLifecycle.processMessage exec complete isComplete state.Value jupyterMsg
             |> Async.RunSynchronously

@@ -60,6 +60,8 @@ module WorkerHttpTransport =
       member _.DisposeAsync() = app.StopAsync() |> ValueTask
     interface IDisposable with
       member _.Dispose() =
+        // `IDisposable.Dispose` cannot await, and `IAsyncDisposable` above is what an awaiting caller uses; this
+        // fallback is bounded by `workerHttpServerStop`, so a stop that hangs gives up and no wait outlives it.
         use cts = new System.Threading.CancellationTokenSource(Timeouts.workerHttpServerStop)
         try app.StopAsync(cts.Token).GetAwaiter().GetResult()
         with _ -> ()

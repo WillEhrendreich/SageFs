@@ -33,6 +33,8 @@ let private formatSnippet (snippet: string) : string =
   let trimmed = snippet.Trim()
   try
     let wrapped = sprintf "let __tweak__ =\n    %s\n" trimmed
+    // Fantomas only offers this as an Async, and `setExpression` is the pure, synchronous planner step `Nudge.planSet`
+    // is built on (no disk, no clock); formatting one snippet is CPU-only work with no external wait to starve.
     let result =
       Fantomas.Core.CodeFormatter.FormatDocumentAsync(false, wrapped, Fantomas.Core.FormatConfig.Default)
       |> Async.RunSynchronously

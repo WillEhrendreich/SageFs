@@ -30,6 +30,7 @@ module OpenDirective =
       let fileToOpen = Path.GetFullPath fileToOpen
       let file = File.ReadAllText fileToOpen
 
+      // Synchronous chain, one eval at a time in the eval actor; the parse is CPU-only Fantomas work on a file's text.
       let results = CodeFormatter.ParseAsync(false, file) |> Async.RunSynchronously
       let res, _ = results.[0]
 

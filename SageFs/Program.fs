@@ -234,6 +234,7 @@ let runDaemon (args: string array) =
     Console.CancelKeyPress.Add(fun e ->
       e.Cancel <- true
       cts.Cancel())
+    // `main` is the process entry point: it has to wait for the daemon to end, and nothing else is waiting on the pool.
     WatchdogRunner.run
       SageFs.Watchdog.defaultConfig
       daemonArgs
@@ -242,6 +243,7 @@ let runDaemon (args: string array) =
     |> _.GetAwaiter() |> _.GetResult()
     0
   | false ->
+    // The same entry-point wait, for the daemon itself.
     DaemonMode.run bindHost mcpPort flags ownership
     |> _.GetAwaiter() |> _.GetResult()
     0
@@ -654,6 +656,7 @@ let main args =
 
   | Mcp mcpArgs ->
     let mcpPort = parseMcpPort mcpArgs
+    // The process entry point waiting for the bridge to end; the bridge is the whole process.
     SageFs.Server.McpStdioBridge.runMcpStdio mcpPort
     |> _.GetAwaiter() |> _.GetResult()
 

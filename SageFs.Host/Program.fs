@@ -50,6 +50,7 @@ let main args =
       eprintfn "SageFs.Host: worker log file unavailable, Log goes to stderr only: %A" err
       { new System.IDisposable with member _.Dispose() = () }
 
+  // The process entry point: `main` has to wait for the worker to finish, and nothing else is waiting on the pool.
   SageFs.Server.WorkerMain.run sessionId httpPort
   |> Async.RunSynchronously
   0

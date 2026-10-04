@@ -293,7 +293,8 @@ module DaemonState =
             return None
   }
 
-  /// Synchronous wrapper for callers that can't be async yet.
+  /// Synchronous wrapper for the CLI commands, whose `main` has nothing else running on the pool to starve; the daemon
+  /// and every other async caller use `probeDaemonHttpAsync`.
   let probeDaemonHttp (mcpPort: int) : DaemonInfo option =
     probeDaemonHttpAsync mcpPort |> Async.RunSynchronously
 
@@ -320,5 +321,6 @@ module DaemonState =
       return false
   }
 
+  /// Synchronous for `sagefs stop`, a CLI `main` with nothing else on the pool to starve.
   let requestShutdown (mcpPort: int) =
     requestShutdownAsync mcpPort |> Async.RunSynchronously

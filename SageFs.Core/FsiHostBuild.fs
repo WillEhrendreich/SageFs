@@ -276,6 +276,8 @@ let private withBuildLock (lockPath: string) (timeoutMs: int) (work: unit -> Res
       Ok(new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
     with
     | :? IOException when DateTime.UtcNow < deadline ->
+      // `ensureBuiltWith` is a whole synchronous build that its async callers hand to `Task.Run`, so this poll parks the
+      // thread that is already doing the build, and it gives up at `hostBuildLockWait`.
       Thread.Sleep Timeouts.hostBuildLockPoll
       acquire ()
     | ex -> Error(BuildLockUnavailable(lockPath, ex.Message))

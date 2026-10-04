@@ -45,6 +45,8 @@ let runGit : Git =
         (try proc.Kill(true) with _ -> ())
         GitResult.Unavailable(sprintf "git %s timed out" (String.Join(" ", args)))
       | true ->
+        // The process has exited, so both reads are at their end and this returns at once. (The `Git` port it
+        // implements is synchronous, so a scan runs its git calls in turn on whichever thread runs the scan.)
         Task.WaitAll(out, err)
         match proc.ExitCode with
         | 0 -> GitResult.Output out.Result
