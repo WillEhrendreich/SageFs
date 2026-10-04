@@ -133,9 +133,71 @@ let private budgetTable =
       Budgets = budgets
       Actual = fun () -> sitesOf () |> List.map (fun (pattern, sites) -> pattern, List.length sites) }
 
+/// What `git rev-parse --path-format=absolute --git-common-dir` says about `dir`, reduced the way `commonRepositoryRoot` reduces it.
+/// This is the answer the disk reading replaced, so it is the oracle.
+let private commonRootAccordingToGit (dir: string) : string option =
+  let psi = System.Diagnostics.ProcessStartInfo("git", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = dir)
+  for a in [ "rev-parse"; "--path-format=absolute"; "--git-common-dir" ] do
+    psi.ArgumentList.Add a
+  use proc = System.Diagnostics.Process.Start psi
+  let out = proc.StandardOutput.ReadToEnd()
+  proc.WaitForExit()
+  match out.Trim() with
+  | "" -> None
+  | answer ->
+    let full = Path.TrimEndingDirectorySeparator(Path.GetFullPath answer)
+    match Path.GetFileName full with
+    | ".git" -> Path.GetDirectoryName full |> Option.ofObj
+    | _ -> Some full
+
+let private runGit (dir: string) (args: string list) : unit =
+  let psi = System.Diagnostics.ProcessStartInfo("git", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = dir)
+  for a in args do
+    psi.ArgumentList.Add a
+  use proc = System.Diagnostics.Process.Start psi
+  proc.StandardOutput.ReadToEnd() |> ignore
+  proc.StandardError.ReadToEnd() |> ignore
+  proc.WaitForExit()
+
 [<Tests>]
 let tests =
   testList "Product blocking calls" [
+
+    testCase "WHY — the common repository root is read off the disk and still answers exactly what git rev-parse does, so no cohort call needs a git process" <| fun _ ->
+      let tmp = Path.Combine(Path.GetTempPath(), "common-root-" + System.Guid.NewGuid().ToString("N").Substring(0, 8))
+      Directory.CreateDirectory tmp |> ignore
+      try
+        let repo = Path.Combine(tmp, "repo")
+        Directory.CreateDirectory(Path.Combine(repo, "sub", "deep")) |> ignore
+        runGit repo [ "init"; "-q"; "-b"; "main" ]
+        runGit repo [ "-c"; "user.name=t"; "-c"; "user.email=t@t"; "commit"; "-q"; "--allow-empty"; "-m"; "x" ]
+        let worktree = Path.Combine(tmp, "wt")
+        runGit repo [ "worktree"; "add"; "-q"; worktree; "-b"; "feat" ]
+        Directory.CreateDirectory(Path.Combine(worktree, "sub")) |> ignore
+        let link = Path.Combine(tmp, "link")
+        Directory.CreateSymbolicLink(link, repo) |> ignore
+        let bare = Path.Combine(tmp, "bare.git")
+        runGit tmp [ "clone"; "-q"; "--bare"; repo; bare ]
+        let notARepository = Path.Combine(tmp, "plain")
+        Directory.CreateDirectory notARepository |> ignore
+        let cases =
+          [ "the checkout", repo
+            "a subdirectory of it", Path.Combine(repo, "sub", "deep")
+            "a linked worktree", worktree
+            "a subdirectory of the worktree", Path.Combine(worktree, "sub")
+            "a symlink to the checkout", link
+            "a subdirectory through the symlink", Path.Combine(link, "sub")
+            "a bare repository", bare
+            "a directory that is not a repository", notARepository ]
+        for (name, dir) in cases do
+          SageFs.Features.CohortGit.commonRepositoryRoot dir
+          |> Expect.equal (sprintf "%s: the same answer git gives" name) (commonRootAccordingToGit dir)
+        SageFs.Features.CohortGit.commonRepositoryRoot (Path.Combine(tmp, "missing"))
+        |> Expect.isNone "a directory that does not exist has no repository"
+      finally
+        (try Directory.Delete(Path.Combine(tmp, "link")) with _ -> ())
+        (try Directory.Delete(tmp, true) with _ -> ())
+
 
     testCase "WHY — the scan blanks comments and string literals, so a file that only NAMES a blocking call is not counted" <| fun _ ->
       let source =

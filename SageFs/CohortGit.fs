@@ -199,48 +199,86 @@ let trackedFsFiles (repoDir: string) : Async<Result<string list, string>> =
   runGit repoDir shortTimeout [ "ls-files"; "--full-name"; "*.fs" ]
   |> mapOk splitLines
 
+/// `path` with every symlink in it resolved: git answers with the physical path, so the disk reading below does too.
+let physicalPath (path: string) : string =
+  let full = Path.GetFullPath path
+  let root = Path.GetPathRoot full
+  full.Substring(root.Length).Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+  |> Array.fold (fun parent segment ->
+    let next = Path.Combine(parent, segment)
+    match DirectoryInfo(next).ResolveLinkTarget true with
+    | null -> next
+    | target -> target.FullName) root
+
+/// Where a `.git` FILE points, when it is a `gitdir:` pointer.
+let gitFilePointer (gitFile: string) : string option =
+  let text = (File.ReadAllText gitFile).Trim()
+  match text.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase) with
+  | false -> None
+  | true -> Some(Path.GetFullPath(Path.Combine(Path.GetDirectoryName gitFile, text.Substring("gitdir:".Length).Trim())))
+
+/// The git directory that governs `dir`: the nearest `.git` directory, `.git` pointer file, or bare repository
+/// at or above it.
+let rec gitDirGoverning (dir: string) : string option =
+  let marker = Path.Combine(dir, ".git")
+  let above () =
+    match Path.GetDirectoryName dir with
+    | null -> None
+    | parent when parent = dir -> None
+    | parent -> gitDirGoverning parent
+  match Directory.Exists marker, File.Exists marker with
+  | true, _ -> Some marker
+  | false, true -> gitFilePointer marker |> Option.orElseWith above
+  | false, false ->
+    let isBare =
+      File.Exists(Path.Combine(dir, "HEAD")) && Directory.Exists(Path.Combine(dir, "objects")) && Directory.Exists(Path.Combine(dir, "refs"))
+    match isBare with
+    | true -> Some dir
+    | false -> above ()
+
 /// The MAIN checkout of the repository that owns `repoDir`, which is the one place two checkouts of
-/// one repository can be recognised as the same repository (`git rev-parse --path-format=absolute
-/// --git-common-dir`).
+/// one repository can be recognised as the same repository (what `git rev-parse --path-format=absolute
+/// --git-common-dir` answers).
 ///
 /// A worktree's own `.git` is a POINTER FILE into the main checkout's `.git/worktrees/<name>`, so
 /// every walk-up that stops at the first checkout marker resolves a worktree to ITSELF and not to its
 /// repository — one repository would then read as several roots, and anything keyed by "the repository"
-/// (a cohort's scope, a gate's owner) would come out once per checkout. Git already knows the shared
-/// answer, so this asks it rather than re-deriving the layout.
+/// (a cohort's scope, a gate's owner) would come out once per checkout. The pointer's admin directory
+/// names the shared one in its `commondir` file, so the answer is the same absolute path from any
+/// checkout of the repository; a plain checkout answers with its own `.git`.
 ///
-/// `--path-format=absolute` matters for a linked worktree, where git prints the common dir RELATIVE
-/// to that worktree; this makes the answer the same absolute path from any checkout of the repository.
-/// A plain checkout answers with its own `.git`, so the question is stable in both shapes.
+/// Read off the disk, not by running git. Every cohort tool call resolves its caller's directory to a
+/// scope through this (`ScopeOf.ofWorkingDirectory`), so it is on the request path of every one of
+/// them, and a `git` process the caller then has to block on was a pool thread parked per call.
+/// `ProductBlockingCallsTests` checks it against `git rev-parse` for a checkout, a subdirectory, a
+/// worktree, a symlinked path, a bare repository and a directory that is not a repository.
 ///
-/// `None` when `repoDir` is not a checkout at all or git cannot answer — the caller then has no
-/// repository to name, and decides for itself rather than being handed a guess.
-///
-/// Synchronous because its one caller binds it ONCE, while constructing the cohort owner, and an
-/// owner cannot be constructed from a value that does not exist yet. It is a single short plumbing
-/// call at that point, not on any request path.
+/// `None` when `repoDir` is not a checkout at all — the caller then has no repository to name, and
+/// decides for itself rather than being handed a guess.
 let commonRepositoryRoot (repoDir: string) : string option =
   match Directory.Exists repoDir with
   | false -> None
   | true ->
-    let gitCommonDir =
-      runGit repoDir shortTimeout [ "rev-parse"; "--path-format=absolute"; "--git-common-dir" ]
-      |> Async.RunSynchronously
-      |> Result.defaultValue ""
-    match gitCommonDir with
-    | "" -> None
-    | answer ->
-      try
-        let full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(trim answer))
+    try
+      gitDirGoverning (physicalPath repoDir)
+      |> Option.bind (fun gitDir ->
+        let commonFile = Path.Combine(gitDir, "commondir")
+        let common =
+          match File.Exists commonFile with
+          | true -> Path.GetFullPath(Path.Combine(gitDir, (File.ReadAllText commonFile).Trim()))
+          | false -> gitDir
+        let full = physicalPath (Path.TrimEndingDirectorySeparator common)
         // `<repo>/.git` -> `<repo>`. A BARE repository's common dir is the repository itself and is
         // not named `.git`, so it is already its own root and is left alone.
         match Path.GetFileName full with
         | ".git" -> Path.GetDirectoryName full |> Option.ofObj
-        | _ -> Some full
-      with
-      | :? ArgumentException
-      | :? NotSupportedException
-      | :? PathTooLongException -> None
+        | _ -> Some full)
+    with
+    | :? ArgumentException
+    | :? NotSupportedException
+    | :? PathTooLongException
+    | :? IOException
+    | :? UnauthorizedAccessException -> None
 
 /// The git blob id of a file's text as git would hash it (`git hash-object <path>`), which is the
 /// same id the object has if it is already stored — so it answers "is this file's text the same
