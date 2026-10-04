@@ -393,10 +393,13 @@ let formatLiveBindingsEvent
   (sessionId: string option)
   (snapshot: Features.LiveValueTree.LiveValueSnapshot)
   : string =
-  let json =
-    writeWith(snapshot, opts)
-    |> injectSessionId sessionId
-  formatSseEvent "live_bindings" json
+  // The snapshot already carries a SessionId, so the frame's scope is stamped onto it rather than
+  // injected beside it: injecting wrote the key twice, and readers disagree on which of two wins.
+  let stamped =
+    match sessionId with
+    | Some sid -> { snapshot with SessionId = sid }
+    | None -> snapshot
+  formatSseEvent "live_bindings" (writeWith(stamped, opts))
 
 /// Format a test trace as an SSE event string
 let formatTestTraceEvent (sessionId: string option) (traceJson: string) : string =
