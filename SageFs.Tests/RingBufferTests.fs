@@ -14,7 +14,7 @@ let pushMany (items: 'T list) (buf: RingBuffer<'T>) =
 module PushAllShape =
   /// Capacity cap for the generated buffers; large enough to wrap and overflow.
   let MaxCapacity = 40
-  let SmallBatch = 2_000
+  let SmallBatch = 2000
   /// How many times larger the large batch is than the small one.
   let BatchFactor = 4
   let LargeBatch = SmallBatch * BatchFactor

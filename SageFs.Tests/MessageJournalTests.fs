@@ -146,7 +146,7 @@ let journalStatsTests =
 /// The shape of the recordAll checks, named so no number hides at a call site.
 module RecordAllShape =
   let MaxCapacity = 40
-  let SmallBatch = 2_000
+  let SmallBatch = 2000
   /// How many times larger the large batch is than the small one.
   let BatchFactor = 4
   let LargeBatch = SmallBatch * BatchFactor
