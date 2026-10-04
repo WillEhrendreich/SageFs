@@ -286,8 +286,25 @@ module LeaseSimInvariants =
           | Decision.AlreadyHeld _
           | Decision.Refused _ -> None) }
 
+  /// WITHDRAWN-ASK-LEAVES-THE-LINE: a caller that gives up its queued ask and says so leaves no entry of its own for
+  /// that kind in the line. Otherwise the ask sits at the head, a ghost, until it ages out.
+  let withdrawnAskLeavesTheLine : Invariant =
+    { Id = "withdrawn-ask-leaves-the-line"
+      Description = "After a Withdraw, the line holds no ask of that holder for that kind."
+      Check = fun states ->
+        (List.last states).Withdrawals
+        |> List.tryPick (fun w ->
+          w.LineAfter
+          |> List.tryFind (fun q -> q.Holder = w.Withdrawer && q.Kind = w.WithdrawnKind)
+          |> Option.map (fun q ->
+            sprintf "step %d: %s withdrew its ask for %s and it is still in the line at seq %d" w.WithdrawnAtStep (Holder.describe w.Withdrawer) (Kind.toToken w.WithdrawnKind) q.Seq))
+        |> function
+           | Some msg -> Outcome.Violated msg
+           | None -> Outcome.Holds }
+
   let all : Invariant list =
-    [ grantNeverExceedsCap
+    [ withdrawnAskLeavesTheLine
+      grantNeverExceedsCap
       grantNeverJumpsALiveWaiter
       noRoomWithheld
       everyWaitHasPositiveRetryAfter

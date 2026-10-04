@@ -521,6 +521,12 @@ module ExpensiveWorkLease =
     | Some lease when lease.Holder.Connection = connection -> release leaseId state
     | _ -> state, ReleaseOutcome.AlreadyGone
 
+  /// Take a holder's own queued ask for `kind` out of the line: the caller asked, was told to wait, and is not
+  /// going to ask again (the daemon's create-time build gives up on a Queued answer and returns an error). Left in
+  /// the line it would sit at the head, a ghost, until it aged out. It never touches a lease, another kind's ask, or
+  /// anyone else's ask, and withdrawing an ask that is not queued changes nothing.
+  let withdraw (holder: Holder) (kind: Kind) (state: PoolState) : PoolState = state
+
   // ---------------------------------------------------------------------
   // Words. One place turns a decision into what an agent reads.
   // ---------------------------------------------------------------------

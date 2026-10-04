@@ -39,6 +39,9 @@ module LeaseSim =
     /// releasing. The lease stays in the pool until expiry (real) or
     /// forever (the never-expires twin).
     | Abandon of agent: Holder
+    /// `agent` gives up its queued ask for `kind` and will not ask again (the daemon's own create-time build does
+    /// this on a Queued answer): it tells the pool, so the ask leaves the line.
+    | Withdraw of agent: Holder * kind: Kind
     | PressureChange of MemoryPressure
     | PassSeconds of int
 
@@ -51,6 +54,18 @@ module LeaseSim =
     | DuplicatesOnReAskTwin
     | FrontOnlyTwin
     | JumpsTheQueueTwin
+    /// A caller that gives up its ask never tells the pool, so the ask stays in the line.
+    | KeepsWithdrawnAskTwin
+
+  let private withdrawFnOf =
+    function
+    | PoolBehavior.KeepsWithdrawnAskTwin -> fun _ _ (pool: PoolState) -> pool
+    | PoolBehavior.Real
+    | PoolBehavior.NeverExpiresTwin
+    | PoolBehavior.CollapsedIdentityTwin
+    | PoolBehavior.DuplicatesOnReAskTwin
+    | PoolBehavior.FrontOnlyTwin
+    | PoolBehavior.JumpsTheQueueTwin -> withdraw
 
   let private requestFnOf =
     function
@@ -60,6 +75,7 @@ module LeaseSim =
     | PoolBehavior.DuplicatesOnReAskTwin -> requestDuplicatesOnReAskTwin
     | PoolBehavior.FrontOnlyTwin -> requestFrontOnlyTwin
     | PoolBehavior.JumpsTheQueueTwin -> requestJumpsTheQueueTwin
+    | PoolBehavior.KeepsWithdrawnAskTwin -> request
 
   /// One request's outcome, with enough context for invariants to check
   /// capacity, fairness, attribution and idempotence against the EXACT
@@ -83,6 +99,14 @@ module LeaseSim =
     QueueAfter: QueuedRequest list
   }
 
+  /// One caller giving up a queued ask, with the line as it stood right after.
+  type WithdrawalRecord = {
+    WithdrawnAtStep: int
+    Withdrawer: Holder
+    WithdrawnKind: Kind
+    LineAfter: QueuedRequest list
+  }
+
   type State = {
     Step: int
     Clock: DateTimeOffset
@@ -93,6 +117,7 @@ module LeaseSim =
     /// releasing.
     HeldByAgent: Map<Holder, LeaseId list>
     Decisions: DecisionRecord list
+    Withdrawals: WithdrawalRecord list
   }
 
   let private epoch = DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
@@ -104,6 +129,7 @@ module LeaseSim =
     Pressure = MemoryPressure.Normal
     HeldByAgent = Map.empty
     Decisions = []
+    Withdrawals = []
   }
 
   let step (behavior: PoolBehavior) (s: State) (ev: SimEvent) : State =
@@ -120,6 +146,10 @@ module LeaseSim =
         let pool', _ = release leaseId s.Pool
         { s with Pool = pool'; HeldByAgent = Map.add agent rest s.HeldByAgent }
     | SimEvent.Abandon agent -> { s with HeldByAgent = Map.remove agent s.HeldByAgent }
+    | SimEvent.Withdraw(agent, kind) ->
+      let pool' = withdrawFnOf behavior agent kind s.Pool
+      let record = { WithdrawnAtStep = s.Step; Withdrawer = agent; WithdrawnKind = kind; LineAfter = pool'.Queue }
+      { s with Pool = pool'; Withdrawals = s.Withdrawals @ [ record ] }
     | SimEvent.Request(agent, kind) ->
       let pool', decision = requestFn s.Clock s.Pressure s.Pool agent kind
       let held' =

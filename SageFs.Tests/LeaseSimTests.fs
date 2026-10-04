@@ -230,6 +230,34 @@ let tests =
         |> List.iter (fun seed -> holdsFor PoolBehavior.Real grantNeverJumpsALiveWaiter (scenarioOf seed))
     ]
 
+    testList "a caller that gives up its ask leaves no ghost in the line" [
+
+      // The daemon's create-time build asks for a Rebuild, is told to wait, returns an error and never asks again.
+      let giveUp =
+        { Seed = -603
+          Events =
+            [ SimEvent.PressureChange MemoryPressure.Tight
+              SimEvent.Request(agentA, Kind.Rebuild)
+              SimEvent.Request(agentB, Kind.Rebuild)
+              SimEvent.Withdraw(agentB, Kind.Rebuild)
+              SimEvent.Request(agentC, Kind.Rebuild)
+              SimEvent.Release agentA
+              SimEvent.PassSeconds 1
+              SimEvent.Request(agentC, Kind.Rebuild) ] }
+
+      testCase "REPRODUCED — the withdrawn ask is out of the line and c is granted the moment a lets go" <| fun _ ->
+        let states = trace PoolBehavior.Real giveUp
+        assertHolds states
+        match (List.last (List.last states).Decisions).Decision with
+        | Decision.Granted _ -> ()
+        | other -> failtestf "b withdrew, so nobody is ahead of c, expected Granted, got %A" other
+
+      testCase "withdrawn-ask-leaves-the-line has teeth: the twin that never tells the pool leaves the ask in line" <| fun _ ->
+        holdsFor PoolBehavior.Real withdrawnAskLeavesTheLine giveUp
+        violatedBy PoolBehavior.KeepsWithdrawnAskTwin withdrawnAskLeavesTheLine giveUp
+        |> Expect.isTrue "the ask is still queued after the caller gave it up"
+    ]
+
     testList "named worked scenario: no one starved forever" [
 
       testCase "four agents pile onto Rebuild at Critical pressure — all four eventually run" <| fun _ ->

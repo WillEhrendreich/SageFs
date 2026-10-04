@@ -368,6 +368,45 @@ let headOfLineTests =
   ]
 
 [<Tests>]
+let withdrawTests =
+  // The daemon's own create-time build: a holder named for what it builds, on no MCP connection.
+  let daemon = Holder.make "daemon" "build for create:a.fsproj" "/work/a"
+  testList "ExpensiveWorkLease.withdraw — a caller that gives up its ask leaves no ghost in the line" [
+
+    testCase "WHY — a withdrawn ask is out of the line at once, and the asker behind it is served the moment the slot frees" <| fun () ->
+      let s1, first = request epoch MemoryPressure.Tight empty ha Kind.Rebuild
+      let s2, queued = request epoch MemoryPressure.Tight s1 daemon Kind.Rebuild
+      (match queued with
+       | Decision.Queued _ -> ()
+       | other -> failtestf "expected the daemon's ask to queue behind a, got %A" other)
+      let s3, _ = request epoch MemoryPressure.Tight s2 hb Kind.Rebuild
+      let s4 = withdraw daemon Kind.Rebuild s3
+      s4.Queue |> List.map (fun q -> q.Holder) |> Expect.equal "only b is left in line" [ hb ]
+      let s5, _ = release (grantedId first) s4
+      // One second later: the daemon's ask would still be live had it stayed in the line, and would hold b back.
+      let _, decision = request (epoch.AddSeconds 1.0) MemoryPressure.Tight s5 hb Kind.Rebuild
+      match decision with
+      | Decision.Granted _ -> ()
+      | other -> failtestf "nobody is ahead of b any more, expected Granted, got %A" other
+
+    testCase "withdrawing never touches a lease, another kind's ask, or another holder's ask" <| fun () ->
+      let s1, _ = request epoch MemoryPressure.Tight empty ha Kind.Rebuild
+      let s2, _ = request epoch MemoryPressure.Tight s1 hb Kind.Rebuild
+      withdraw ha Kind.Rebuild s2 |> Expect.equal "a holds a lease, not an ask, so nothing changes" s2
+      withdraw hb Kind.FullBuild s2 |> Expect.equal "b has no ask for that kind, so nothing changes" s2
+      withdraw hc Kind.Rebuild s2 |> Expect.equal "c has no ask at all, so nothing changes" s2
+
+    testCase "after withdrawing, the same holder may ask for another kind" <| fun () ->
+      let s1, _ = request epoch MemoryPressure.Tight empty ha Kind.Rebuild
+      let s2, _ = request epoch MemoryPressure.Tight s1 hb Kind.Rebuild
+      let s3 = withdraw hb Kind.Rebuild s2
+      let _, decision = request (epoch.AddSeconds 1.0) MemoryPressure.Tight s3 hb Kind.FullBuild
+      match decision with
+      | Decision.Queued _ -> ()
+      | other -> failtestf "b has no outstanding ask any more, expected its new ask to queue, not %A" other
+  ]
+
+[<Tests>]
 let snapshotTests =
   testList "ExpensiveWorkLease.snapshot — what get_daemon_status shows" [
     testCase "WHY — two sub-agents on one connection are two rows, each attributable" <| fun () ->
