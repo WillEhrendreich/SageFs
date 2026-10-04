@@ -7,8 +7,8 @@ simulation or mutation coverage, so a change to one of them without new evidence
 is a regression in the evidence, not just in the code.
 
 Everything here is in `SageFs.Simulation/` and `SageFs.Tests/`. The counts are
-from 2026-10-03: **42 simulations, 39 invariant modules, 21 generator modules,
-18 mutation suites.**
+from 2026-10-04: **44 simulations, 41 invariant modules, 21 generator modules,
+20 mutation suites.**
 
 ## The shape every simulation shares
 
@@ -65,6 +65,13 @@ evidence is what you are changing.
 `BuildConfirmationSim`, `PatchConfirmationSim`, `WarmupSim`, `SourceStateSim`,
 `SessionStatusReconciliationSim`
 
+**The release gate itself**
+`PassRecordSim` — same-commit tier reuse (`build/PassRecord.fs`): seeded histories of
+commits, byte-different rebuilds, a dirty tree, flaky tiers and a damaged record
+store, with twins that ignore the product binaries, ignore a dirty tree, or never
+reuse. The gate's other rules are plain unit tests, because nothing in them is a
+schedule.
+
 **Testing, coverage and results**
 `Coverage` (its own project-level sim), `ManifestSim`, `RetentionSim`,
 `TestDebugSim`, `TypeShapeMigrationSim`
@@ -95,11 +102,12 @@ the startup race it models is a real class of bug.
 transformation that breaks exactly one thing, applied to real code, where the
 requirement is that an existing assertion then FAILS.
 
-There are **18 mutation suites**, for: `Affordances`, `BinaryPrimitives`,
+There are **20 mutation suites**, for: `Affordances`, `BinaryPrimitives`,
 `CohortGit`, `CoverageView`, `CoverageViewProject`, `EvalStore`,
-`HotReloadState`, `ReloadPlanningDecision`, `RestartPolicyBoundary`, `ResultEx`,
-`SageFsError`, `SessionDisplay`, `SessionLifecycle`, `SessionOperations`,
-`SseWriterCohort`, `TestCachePersistence`, `Watchdog`, `WorkflowTypes`.
+`EventsStreamScope`, `HotReloadState`, `Nudge`, `ReloadPlanningDecision`,
+`RestartPolicyBoundary`, `ResultEx`, `SageFsError`, `SessionDisplay`,
+`SessionLifecycle`, `SessionOperations`, `SseWriterCohort`,
+`TestCachePersistence`, `Watchdog`, `WorkflowTypes`.
 
 **The three layers the framework's own header names**, which is a useful way to
 think about where a gap actually is:

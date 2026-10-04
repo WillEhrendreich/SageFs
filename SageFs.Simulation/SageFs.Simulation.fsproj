@@ -260,6 +260,13 @@
              with side effects and count a removal twice. -->
         <Compile Include="HygieneSim.fs" />
         <Compile Include="HygieneSimInvariants.fs" />
+        <!-- Same-commit tier reuse DST: folds the real PassRecord.decide, serialize and parse (build/PassRecord.fs,
+             the gate's own rules, linked here so the simulation and the pipeline read the same file) through seeded
+             histories of commits, byte-different rebuilds, a dirty tree, flaky tiers and a damaged store; twins ignore
+             the product binaries, ignore a dirty tree, or never reuse. -->
+        <Compile Include="../build/PassRecord.fs" Link="Build/PassRecord.fs" />
+        <Compile Include="PassRecordSim.fs" />
+        <Compile Include="PassRecordSimInvariants.fs" />
     </ItemGroup>
 
     <ItemGroup>
