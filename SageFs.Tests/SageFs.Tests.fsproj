@@ -792,6 +792,7 @@
         <Compile Include="CohortAffordancesTests.fs" />
         <Compile Include="ToolAuthorityGateTests.fs" />
         <Compile Include="CohortJoinSeatTests.fs" />
+        <Compile Include="MemberRouteGateTests.fs" />
         <Compile Include="CohortPanelTests.fs" />
         <Compile Include="DashboardPanelVisibilityTests.fs" />
         <Compile Include="CohortTerritoryPanelTests.fs" />
