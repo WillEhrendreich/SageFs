@@ -392,6 +392,7 @@
         <Compile Include="McpToolAuditTests.fs" />
         <Compile Include="FeatureParityTests.fs" />
         <Compile Include="SseParityTests.fs" />
+        <Compile Include="RepoPathsSiblingTests.fs" />
         <Compile Include="RunSourceWireTests.fs" />
         <Compile Include="LayoutAndInputTests.fs" />
         <Compile Include="PureModulesComprehensiveTests.fs" />
