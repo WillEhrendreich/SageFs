@@ -170,7 +170,7 @@ module Capability =
       | ToolClass.SessionLifecycle ->
         [ "create_project_session"; "create_solution_session"; "create_bare_session"; "reset_fsi_session"
           "hard_reset_fsi_session"; "switch_workflow"; "stop_session"; "enable_hot_reload"; "disable_hot_reload"
-          "reset_hot_reload_state"; "set_reflection_read_mode" ]
+          "reset_hot_reload_state"; "set_reflection_read_mode"; "nudge_value" ]
       | ToolClass.AppControl -> [ "run_app"; "stop_app" ]
       | ToolClass.Maintenance -> [ "manage_local_data"; "get_workspace_hygiene"; "tidy_workspace" ]
 
