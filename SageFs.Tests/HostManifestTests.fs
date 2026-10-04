@@ -170,19 +170,27 @@ module HostReadyToRun =
         | "Release" ->
           let frameworks = builtFrameworks daemonHostDir
           frameworks |> Expect.isNonEmpty "the tests run against a built daemon, so at least one host directory exists"
-          for tfm in frameworks do
-            let report =
-              match File.Exists(reportFile tfm) with
-              | false -> failtestf "the Release build wrote no ReadyToRun report for %s at %s: the step in SageFs.Host/ReadyToRun.targets did not run" tfm (reportFile tfm)
-              | true -> File.ReadLines(reportFile tfm) |> String.concat "\n"
-            match parseReport report with
-            | Error msg -> failtestf "%s: %s" tfm msg
-            | Ok(Report.Skipped _) -> ()
-            | Ok(Report.Applied assemblies) ->
-              assemblies |> Expect.isNonEmpty (sprintf "%s: an applied step names the assemblies it compiled" tfm)
-              for name in assemblies do
-                isReadyToRun (Path.Combine(daemonHostDir tfm, name + ".dll"))
-                |> Expect.isTrue (sprintf "%s: %s.dll in the daemon's host directory must be a ReadyToRun image" tfm name)
+          // A step that was skipped is legitimate (it is speed only and fails open), but it must not read as a pass: the case is
+          // ignored with the build's own reason, so the TRUST row shows it.
+          let skipped =
+            frameworks
+            |> List.choose (fun tfm ->
+              let report =
+                match File.Exists(reportFile tfm) with
+                | false -> failtestf "the Release build wrote no ReadyToRun report for %s at %s: the step in SageFs.Host/ReadyToRun.targets did not run" tfm (reportFile tfm)
+                | true -> File.ReadLines(reportFile tfm) |> String.concat "\n"
+              match parseReport report with
+              | Error msg -> failtestf "%s: %s" tfm msg
+              | Ok(Report.Skipped reason) -> Some(sprintf "%s: %s" tfm reason)
+              | Ok(Report.Applied assemblies) ->
+                assemblies |> Expect.isNonEmpty (sprintf "%s: an applied step names the assemblies it compiled" tfm)
+                for name in assemblies do
+                  isReadyToRun (Path.Combine(daemonHostDir tfm, name + ".dll"))
+                  |> Expect.isTrue (sprintf "%s: %s.dll in the daemon's host directory must be a ReadyToRun image" tfm name)
+                None)
+          match skipped with
+          | [] -> ()
+          | reasons -> skiptest (sprintf "the ReadyToRun step was skipped, so the host runs plain IL: %s" (String.concat "; " reasons))
         | other -> skiptest (sprintf "the step runs in Release builds only, and these tests run in %s" other)
 
       testCase "Harmony stays plain IL because the FSI host build rewrites its assembly name with Cecil" <| fun _ ->
