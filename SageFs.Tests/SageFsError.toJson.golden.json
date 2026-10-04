@@ -311,6 +311,15 @@
     "suggestedAction": "Run list_runnable_projects to see which projects can run"
   },
   {
+    "case": "AppStopFailed",
+    "fields": {
+      "project": "test",
+      "reason": "test"
+    },
+    "message": "Could not stop \u0027test\u0027: test",
+    "suggestedAction": "Run hard_reset_fsi_session: the worker restart ends the app, which stop_app cannot do in place"
+  },
+  {
     "case": "RestartLimitExceeded",
     "fields": {
       "restartCount": 42,
