@@ -7,7 +7,7 @@ open SageFs.McpSessionRouting
 
 /// The cohort tools' bodies (join, leave, claim, release, reassign, land): what `join_cohort`,
 /// `acquire_claim` and the others call. Split out of Mcp.fs, which was over its line budget; the
-/// plumbing they share (`commitCohort`, `requireCohortOwner`, `memberIdFor`) stays there.
+/// plumbing they share (`commitCohort`, `cohortOwnerFor`, `memberIdFor`) stays there.
 module McpCohortTools =
 
   /// The cohort a caller working in `workingDirectory` belongs to.

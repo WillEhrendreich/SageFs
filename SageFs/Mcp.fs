@@ -3257,14 +3257,6 @@ module McpTools =
 
   // The mapping itself lives in CohortErrorMapping.fs (split out of this file).
 
-  /// `ctx.CohortOwner` is `None` only when nothing wired a cohort owner
-  /// (tests that predate Slice 2) — every production McpContext (DaemonMode.fs)
-  /// always supplies one.
-  let internal requireCohortOwner (ctx: McpContext) : Result<Features.CohortOwner.Handle, SageFsError> =
-    match cohortOwnerFor ctx None with
-    | Some owner -> Ok owner
-    | None -> Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
-
   /// Dispatch one `CohortCommand` through the owner for ITS scope, mapping any refusal to
   /// `SageFsError` at this boundary (roast §10).
   ///
