@@ -89,6 +89,52 @@ let tests =
         reason |> Expect.stringContains "the reason says what to do about it" "rebuild"
       | other -> failtestf "expected Refused, got %A" other
 
+    testCase "decide's refusal names the absolute build it measured, so a build resolved somewhere else is visible" <| fun _ ->
+      let hostVersion = System.Version(1, 2, 3)
+      let candidate = Path.Combine(Path.GetTempPath(), "some-other-checkout", "bin", "SageFs.Core.dll")
+
+      match HostCoreAdoption.decide hostVersion candidate (System.Version(1, 2, 4)) with
+      | HostCoreAdoption.Adoption.Refused reason ->
+        reason |> Expect.stringContains "the reason names the exact dll that was compared" candidate
+      | other -> failtestf "expected Refused, got %A" other
+
+    testCase "a relative project resolves against the caller's working directory, not the daemon's" <| fun _ ->
+      withTempDir (fun callerDir ->
+        let daemonCwd = Directory.GetCurrentDirectory()
+        callerDir |> Expect.notEqual "the working directory differs from the daemon's cwd" daemonCwd
+        let relative = Path.Combine("SageFs.Tests", "SageFs.Tests.fsproj")
+
+        let resolved =
+          SessionProjectTarget.resolveAgainst callerDir [ SessionProjectTarget.Project relative ]
+
+        resolved
+        |> Expect.equal
+          "the project is under the caller's working directory"
+          [ SessionProjectTarget.Project (Path.Combine(callerDir, relative)) ]
+
+        resolved
+        |> SessionProjectTarget.projects
+        |> HostCoreAdoption.projectDirsOf
+        |> Expect.equal
+          "the build search starts in the caller's project directory"
+          [ Path.Combine(callerDir, "SageFs.Tests") ])
+
+    testCase "a relative solution resolves against the caller's working directory too" <| fun _ ->
+      withTempDir (fun callerDir ->
+        SessionProjectTarget.resolveAgainst callerDir [ SessionProjectTarget.Solution "SageFs.slnx" ]
+        |> Expect.equal
+          "the solution is under the caller's working directory"
+          [ SessionProjectTarget.Solution (Path.Combine(callerDir, "SageFs.slnx")) ])
+
+    testCase "an absolute path and a bare target are left exactly as given" <| fun _ ->
+      withTempDir (fun callerDir ->
+        withTempDir (fun elsewhere ->
+          let absolute = Path.Combine(elsewhere, "App.fsproj")
+          SessionProjectTarget.resolveAgainst callerDir [ SessionProjectTarget.Project absolute ]
+          |> Expect.equal "an absolute project is not re-rooted" [ SessionProjectTarget.Project absolute ]
+          SessionProjectTarget.resolveAgainst callerDir [ SessionProjectTarget.Bare ]
+          |> Expect.equal "bare has no path to resolve" [ SessionProjectTarget.Bare ]))
+
     testCase "materialize copies the shared host dir and substitutes SageFs.Core.dll" <| fun _ ->
       withTempDir (fun root ->
         let sharedHostDir = Path.Combine(root, "shared", "host")
