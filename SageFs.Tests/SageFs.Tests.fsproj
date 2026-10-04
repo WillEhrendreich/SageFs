@@ -619,6 +619,7 @@
         <Compile Include="TierSchedSimTests.fs" />
         <Compile Include="BuildPlanTests.fs" />
         <Compile Include="ContentRevisionTests.fs" />
+        <Compile Include="BuildStampsTests.fs" />
         <Compile Include="FailureReportTests.fs" />
         <Compile Include="TestPortsTests.fs" />
         <Compile Include="TrustSignalTests.fs" />
