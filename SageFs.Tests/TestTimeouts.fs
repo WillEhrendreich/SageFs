@@ -204,9 +204,56 @@ module TestTimeouts =
   /// How soon after an eval starts a test cancels it, long before the eval would finish by itself.
   let cancelAfter = ms 700.
 
+  // The restart policy the deterministic simulations run under. `RestartPolicy.defaultPolicy` is NOT
+  // used: its startup-crash window is a wait for the machine, scaled by `SAGEFS_MACHINE_TIER` (10s on
+  // `Fast`, 50s on `Constrained`), so a simulation built on it changes meaning with the machine it runs
+  // on. A 20s gap is "spaced" against 10s and "rapid" against 50s. These values are what the product
+  // ships on a `Fast` machine, written out here so no tier can move them.
+
+  /// How many restarts the simulation policy allows before it gives up.
+  let simMaxRestarts = 5
+  /// How many restarts a loop of startup crashes gets before the simulation policy gives up.
+  let simStartupCrashMaxRestarts = 3
+  /// The delay before the first restart; each later one doubles it.
+  let simBackoffBase = secs 1.
+  /// The longest delay between restarts.
+  let simBackoffMax = secs 30.
+  /// Restarts older than this are forgotten, so a quiet stretch past it starts a new window.
+  let simResetWindow = System.TimeSpan.FromMinutes 5.
+  /// A crash within this long of the previous restart is a startup crash.
+  let simStartupCrashWindow = secs 10.
+
+  /// The restart policy every simulation test builds its scenarios from. A test that needs a different
+  /// ceiling writes `{ TestTimeouts.simRestartPolicy with MaxRestarts = ... }`.
+  let simRestartPolicy : SageFs.RestartPolicy.Policy =
+    { MaxRestarts = simMaxRestarts
+      BackoffBase = simBackoffBase
+      BackoffMax = simBackoffMax
+      ResetWindow = simResetWindow
+      StartupCrashWindow = simStartupCrashWindow
+      StartupCrashMaxRestarts = simStartupCrashMaxRestarts }
+
+  /// `policy` with every duration replaced by the fixed simulation value, so a policy that came from
+  /// somewhere tier-scaled (a generator that reads `RestartPolicy.defaultPolicy`) runs the same on every
+  /// machine. The counts are the caller's own. Every field is named, so a duration added to the policy is
+  /// a compile error here until someone decides what the simulation value for it is.
+  let pinSimDurations (policy: SageFs.RestartPolicy.Policy) : SageFs.RestartPolicy.Policy =
+    { MaxRestarts = policy.MaxRestarts
+      BackoffBase = simBackoffBase
+      BackoffMax = simBackoffMax
+      ResetWindow = simResetWindow
+      StartupCrashWindow = simStartupCrashWindow
+      StartupCrashMaxRestarts = policy.StartupCrashMaxRestarts }
+
+  /// `scenario` with its policy pinned (`pinSimDurations`). The generators in `SageFs.Simulation`
+  /// build their scenarios from `RestartPolicy.defaultPolicy`, so every simulation test that takes a
+  /// scenario from them passes it through here before it runs.
+  let pinSimScenario (scenario: SageFs.Simulation.Scenario.Scenario) : SageFs.Simulation.Scenario.Scenario =
+    { scenario with Policy = pinSimDurations scenario.Policy }
+
   // Crash scenarios for the deterministic simulation. These are inputs to the scenario, not
-  // waits, and they are chosen against `RestartPolicy.defaultPolicy` (a crash within its 10s
-  // StartupCrashWindow is a startup crash; a gap over its 5 minute ResetWindow starts a new window).
+  // waits, and they are chosen against `simRestartPolicy` (a crash within its 10s startup window
+  // is a startup crash; a gap over its 5 minute reset window starts a new window).
 
   /// Crashes spaced past the startup window and inside the reset window: none is a startup
   /// crash and all share one window.

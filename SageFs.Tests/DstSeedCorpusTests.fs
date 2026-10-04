@@ -10,6 +10,11 @@ open SageFs.Simulation.Runner
 open SageFs.Simulation.Invariants
 open SageFs.Simulation.SeedCorpus
 
+/// The curated corpus under the fixed simulation durations. Its scenarios are built from
+/// `RestartPolicy.defaultPolicy`, whose startup-crash window is scaled by the machine tier, so
+/// they are pinned here before any test reads them. This shadows `SeedCorpus.corpus` on purpose.
+let corpus : (string * Scenario) list =
+  SeedCorpus.corpus |> List.map (fun (name, scn) -> name, TestTimeouts.pinSimScenario scn)
 
 /// Brief B4: revision-stamped scenario identity + a saved-seed regression
 /// corpus. A `RevisionStamp` identifies a scenario by its CONTENT
@@ -44,7 +49,7 @@ let tests =
           |> Expect.notEqual (sprintf "%s: appending an event changes the digest" name) (stamp mutated).Digest
 
       testCase "swapping one event's kind changes the digest" <| fun () ->
-        let baseScn = Generators.crashStorm 5
+        let baseScn = TestTimeouts.pinSimScenario (Generators.crashStorm 5)
         let mutated =
           { baseScn with
               Events =
@@ -55,13 +60,13 @@ let tests =
         |> Expect.notEqual "swapping the first event's kind changes the digest" (stamp mutated).Digest
 
       testCase "a policy field change also changes the digest" <| fun () ->
-        let baseScn = Generators.spacedCrashes 4 TestTimeouts.crashGapSpaced
+        let baseScn = TestTimeouts.pinSimScenario (Generators.spacedCrashes 4 TestTimeouts.crashGapSpaced)
         let mutated = { baseScn with Policy = { baseScn.Policy with MaxRestarts = baseScn.Policy.MaxRestarts + 1 } }
         (stamp baseScn).Digest
         |> Expect.notEqual "a changed Policy field changes the digest" (stamp mutated).Digest
 
       testCase "digest ignores Seed — two scenarios differing only by Seed share a digest" <| fun () ->
-        let a = Generators.crashStorm 5
+        let a = TestTimeouts.pinSimScenario (Generators.crashStorm 5)
         let b = { a with Seed = a.Seed + 12345 }
         (stamp a).Digest
         |> Expect.equal "Seed is not part of scenario identity" (stamp b).Digest
@@ -87,7 +92,7 @@ let tests =
         |> Expect.isNone "malformed text parses to None, not an exception"
 
       testCase "tryParse rejects a truncated encoding (missing EVENTS field)" <| fun () ->
-        let scn = Generators.crashStorm 3
+        let scn = TestTimeouts.pinSimScenario (Generators.crashStorm 3)
         let truncated =
           (encode scn).Split('\n')
           |> Array.filter (fun l -> not (l.StartsWith "EVENTS="))

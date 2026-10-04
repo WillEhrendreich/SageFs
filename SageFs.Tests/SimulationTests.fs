@@ -69,6 +69,11 @@ let private genScenario : Gen<Scenario> =
 
 // ── Helpers ──
 
+/// A scenario from `Generators`, run under the fixed simulation durations. `Generators` builds its
+/// scenarios from `RestartPolicy.defaultPolicy`, whose startup-crash window is scaled by
+/// `SAGEFS_MACHINE_TIER`, so a scenario that is not pinned changes meaning with the machine it runs on.
+let pinned : Scenario -> Scenario = TestTimeouts.pinSimScenario
+
 let private assertHolds (t: Trace) =
   match violations t with
   | [] -> ()
@@ -90,7 +95,7 @@ let tests =
       testPropertyWithConfig simConfig "seeded scenarios (default policy) — all invariants hold" <|
         fun (seed: int) ->
           // fromSeed is a pure function of the seed: this case replays exactly.
-          assertHolds (run (Generators.fromSeed seed))
+          assertHolds (run (pinned (Generators.fromSeed seed)))
 
       testPropertyWithConfig simConfig "richly-varied scenarios (varied policy) — all invariants hold" <|
         fun () ->
@@ -119,16 +124,16 @@ let tests =
 
       testProperty "same seed => identical trace (deterministic replay)" <|
         fun (seed: int) ->
-          let a = run (Generators.fromSeed seed)
-          let b = run (Generators.fromSeed seed)
+          let a = run (pinned (Generators.fromSeed seed))
+          let b = run (pinned (Generators.fromSeed seed))
           a.Steps |> Expect.equal "replaying the same seed yields the identical trace" b.Steps
     ]
 
     testList "example scenarios (worked properties)" [
 
       testCase "pure crash storm reaches GiveUp within the startup ceiling" <| fun () ->
-        let t = run (Generators.crashStorm 20)
-        // With the default policy, a back-to-back storm is all startup crashes:
+        let t = run (pinned (Generators.crashStorm 20))
+        // Under the simulation policy, a back-to-back storm is all startup crashes:
         // it must give up at StartupCrashMaxRestarts (3) restarts.
         let restarts =
           t.Steps
@@ -136,21 +141,21 @@ let tests =
           |> List.length
         restarts
         |> Expect.equal "exactly StartupCrashMaxRestarts restarts before GiveUp"
-             RestartPolicy.defaultPolicy.StartupCrashMaxRestarts
+             TestTimeouts.simStartupCrashMaxRestarts
         t.Steps
         |> List.exists (fun s -> match s.Effect with StepEffect.GaveUp _ -> true | _ -> false)
         |> Expect.isTrue "the storm reaches a GiveUp outcome"
         assertHolds t
 
       testCase "spaced crashes in one window back off exponentially and give up at MaxRestarts" <| fun () ->
-        let t = run (Generators.spacedCrashes 6 TestTimeouts.crashSpacingPastStartupWindow)
+        let t = run (pinned (Generators.spacedCrashes 6 TestTimeouts.crashSpacingPastStartupWindow))
         // 20s gap > StartupCrashWindow (10s) => never a startup crash; all in
         // one window (< ResetWindow) => clean exponential backoff, cap 30s.
         let delays =
           t.Steps
           |> List.choose (fun s ->
             match s.Effect with StepEffect.Restarted d -> Some d | _ -> None)
-        let backoffBase = RestartPolicy.defaultPolicy.BackoffBase
+        let backoffBase = TestTimeouts.simBackoffBase
         delays
         |> Expect.equal "exponential backoff 1,2,4,8,16 times the base delay"
              [ backoffBase; backoffBase * 2.0; backoffBase * 4.0
@@ -162,7 +167,7 @@ let tests =
 
       testCase "give-up-terminal: crashes after GiveUp never restart" <| fun () ->
         // 20 back-to-back crashes: 3 restarts, GiveUp, then 16 terminal no-ops.
-        let t = run (Generators.crashStorm 20)
+        let t = run (pinned (Generators.crashStorm 20))
         let giveUpIdx =
           t.Steps
           |> List.findIndex (fun s -> match s.Effect with StepEffect.GaveUp _ -> true | _ -> false)
@@ -177,10 +182,10 @@ let tests =
       // high enough to allow a startup crash at a high count, the fixed 4x-base
       // startup delay UNDERCUTS the exponential delay already reached — a real
       // in-window drop, exposed by the varied-policy generator. It is intended
-      // behavior (invisible under defaultPolicy), so this test pins the drop as
+      // behavior (invisible under the simulation policy), so this test pins the drop as
       // expected while confirming the refined regime-scoped invariant HOLDS.
       testCase "circuit-breaker regime switch legitimately lowers the delay (intended, not a bug)" <| fun () ->
-        let policy = { RestartPolicy.defaultPolicy with MaxRestarts = 8; StartupCrashMaxRestarts = 8 }
+        let policy = { TestTimeouts.simRestartPolicy with MaxRestarts = 8; StartupCrashMaxRestarts = 8 }
         let scn =
           { Seed = 999
             Policy = policy
@@ -209,4 +214,66 @@ let tests =
         backoffMonotonicInWindow.Check t
         |> Expect.equal "monotonicity-with-circuit-breaker-exception holds" Outcome.Holds
     ]
+  ]
+
+// ── The simulations do not depend on the machine tier ──
+
+/// The tier a process started with `SAGEFS_MACHINE_TIER=<tier>` works out, read through the same
+/// parser the product uses and the test suite's own environment isolation.
+let tierFromEnvironment (tier: MachineTier) : MachineTier =
+  TestInfrastructure.withEnvVar MachineTier.envVar (Some (MachineTier.toString tier)) MachineTier.current
+
+/// `policy` as a machine of `tier` would have built it: every duration a wait for the machine, scaled
+/// the way `Timeouts` scales one (`RestartPolicy.defaultPolicy` does this to its startup-crash window).
+let policyOnTier (tier: MachineTier) (policy: RestartPolicy.Policy) : RestartPolicy.Policy =
+  let scale = MachineTier.scaleWait Timeouts.scaledWaitCeiling tier
+  { policy with
+      BackoffBase = scale policy.BackoffBase
+      BackoffMax = scale policy.BackoffMax
+      ResetWindow = scale policy.ResetWindow
+      StartupCrashWindow = scale policy.StartupCrashWindow }
+
+/// What `Generators` hands a test on a machine of `tier`: its scenarios carry that machine's policy.
+let scenarioOnTier (tier: MachineTier) (scenario: Scenario) : Scenario =
+  { scenario with Policy = policyOnTier tier scenario.Policy }
+
+/// The scenarios the simulation tests take from `Generators`, as built on a Fast machine.
+let generatedScenarios : Scenario list =
+  [ for seed in 1 .. 50 -> Generators.fromSeed seed ]
+  @ [ Generators.crashStorm 20
+      Generators.spacedCrashes 6 TestTimeouts.crashGapSpaced ]
+
+let stepsOf (scenarios: Scenario list) = scenarios |> List.map (fun scenario -> (run scenario).Steps)
+
+[<Tests>]
+let simulationTierIndependenceTests =
+  testList "simulation traces do not depend on the machine tier" [
+
+    testCase "pinned scenarios give identical traces on every machine tier" <| fun () ->
+      let pinnedOn (tier: MachineTier) =
+        generatedScenarios |> List.map (scenarioOnTier tier >> TestTimeouts.pinSimScenario) |> stepsOf
+      let fast = pinnedOn (tierFromEnvironment MachineTier.Fast)
+      for tier in MachineTier.all do
+        pinnedOn (tierFromEnvironment tier)
+        |> Expect.equal (sprintf "the pinned traces on %s match the Fast ones" (MachineTier.toString tier)) fast
+
+    testCase "teeth: unpinned, the same scenarios give different traces on a slower tier" <| fun () ->
+      // Without the pin, a 20s gap is spaced against a 10s startup window and rapid against a 50s one,
+      // so the trace moves with the tier. If it did not, the case above would prove nothing.
+      let unpinnedOn (tier: MachineTier) = generatedScenarios |> List.map (scenarioOnTier tier) |> stepsOf
+      let fast = unpinnedOn MachineTier.Fast
+      MachineTier.all
+      |> List.filter (fun tier -> unpinnedOn tier <> fast)
+      |> Expect.isNonEmpty "at least one slower tier changes an unpinned trace"
+
+    testCase "the simulation policy is the product's default policy, with only the startup window scaled by the tier" <| fun () ->
+      // The pinned values must not drift from the product's own, or the simulations stop modelling it.
+      // Both assertions hold on every machine tier.
+      let product = RestartPolicy.defaultPolicy
+      { product with StartupCrashWindow = TestTimeouts.simStartupCrashWindow }
+      |> Expect.equal "everything but the startup window is the product's" TestTimeouts.simRestartPolicy
+      product.StartupCrashWindow
+      |> Expect.equal
+           "the product's startup window is the simulation's, scaled by the tier in force"
+           (MachineTier.scaleWait Timeouts.scaledWaitCeiling Timeouts.machineTier TestTimeouts.simStartupCrashWindow)
   ]

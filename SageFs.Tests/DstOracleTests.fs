@@ -85,22 +85,22 @@ let tests =
     testList "agreement — the real supervision core matches the independent reference model" [
 
       testPropertyWithConfig simConfig "seeded scenarios (default policy) — oracle reports no divergence" <|
-        fun (seed: int) -> assertAgrees (Generators.fromSeed seed)
+        fun (seed: int) -> assertAgrees (TestTimeouts.pinSimScenario (Generators.fromSeed seed))
 
       testPropertyWithConfig simConfig "richly-varied scenarios (varied policy) — oracle reports no divergence" <|
         fun () -> assertAgrees (pick genScenario)
 
       testCase "pure crash storm agrees with the reference model" <| fun () ->
-        assertAgrees (Generators.crashStorm 20)
+        assertAgrees (TestTimeouts.pinSimScenario (Generators.crashStorm 20))
 
       testCase "spaced crashes in one window agree with the reference model" <| fun () ->
-        assertAgrees (Generators.spacedCrashes 6 TestTimeouts.crashGapSpaced)
+        assertAgrees (TestTimeouts.pinSimScenario (Generators.spacedCrashes 6 TestTimeouts.crashGapSpaced))
 
       testCase "circuit-breaker regime switch (dip case) agrees with the reference model" <| fun () ->
         // The scenario from SimulationTests.fs that pins the intended
         // in-window delay dip — the oracle must agree with it exactly, not
         // just satisfy the looser monotonicity-with-exception invariant.
-        let policy = { RestartPolicy.defaultPolicy with MaxRestarts = 8; StartupCrashMaxRestarts = 8 }
+        let policy = { TestTimeouts.simRestartPolicy with MaxRestarts = 8; StartupCrashMaxRestarts = 8 }
         let scn =
           { Seed = 999
             Policy = policy
@@ -117,7 +117,7 @@ let tests =
     testList "teeth — a deliberately-wrong reference model is caught, not vacuously agreed with" [
 
       testCase "wrongGiveUpOffByOne diverges on a crash storm (real gives up one crash earlier)" <| fun () ->
-        let scn = Generators.crashStorm 20
+        let scn = TestTimeouts.pinSimScenario (Generators.crashStorm 20)
         let real = Runner.run scn
         let wrongReference = ReferenceModel.wrongGiveUpOffByOne scn
         let divergences = Oracle.check real wrongReference
@@ -145,7 +145,7 @@ let tests =
           let anyDivergence =
             [ 3 .. 20 ]
             |> List.exists (fun n ->
-              let scn = Generators.crashStorm n
+              let scn = TestTimeouts.pinSimScenario (Generators.crashStorm n)
               Oracle.check (Runner.run scn) (ReferenceModel.wrongGiveUpOffByOne scn)
               |> List.isEmpty
               |> not)
@@ -157,7 +157,7 @@ let tests =
 
       testProperty "same scenario => identical divergence report" <|
         fun (seed: int) ->
-          let scn = Generators.fromSeed seed
+          let scn = TestTimeouts.pinSimScenario (Generators.fromSeed seed)
           let a = checkScenario scn
           let b = checkScenario scn
           a |> Expect.equal "replaying the same scenario yields the identical oracle report" b

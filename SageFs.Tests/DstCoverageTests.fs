@@ -23,7 +23,7 @@ open SageFs.Simulation.Coverage
 /// SimulationTests.fs:181-191 — the one worked example known to produce a
 /// CircuitBreakerDip (an in-window delay drop to the fixed 4x-base delay).
 let private varyPolicyCircuitBreakerScenario : Scenario =
-  let policy = { RestartPolicy.defaultPolicy with MaxRestarts = 8; StartupCrashMaxRestarts = 8 }
+  let policy = { TestTimeouts.simRestartPolicy with MaxRestarts = 8; StartupCrashMaxRestarts = 8 }
   { Seed = 999
     Policy = policy
     StartTime = Generators.epoch
@@ -41,7 +41,7 @@ let private varyPolicyCircuitBreakerScenario : Scenario =
 /// on randomness happening to produce a >5min gap between two crashes.
 let private windowResetScenario : Scenario =
   { Seed = -100
-    Policy = RestartPolicy.defaultPolicy
+    Policy = TestTimeouts.simRestartPolicy
     StartTime = Generators.epoch
     Events =
       [ SimEvent.WorkerCrashed
@@ -54,7 +54,7 @@ let private windowResetScenario : Scenario =
 /// graceful exit but should not be the only source of this effect kind.
 let private gracefulStopScenario : Scenario =
   { Seed = -101
-    Policy = RestartPolicy.defaultPolicy
+    Policy = TestTimeouts.simRestartPolicy
     StartTime = Generators.epoch
     Events = [ SimEvent.WorkerExitedGracefully ] }
 
@@ -62,9 +62,9 @@ let private gracefulStopScenario : Scenario =
 /// canonical worked examples that guarantee every effect kind and invariant
 /// antecedent is hit deterministically, independent of RNG luck.
 let private defaultBattery : Trace list =
-  [ for seed in 1 .. 300 -> Runner.run (Generators.fromSeed seed) ]
-  @ [ Runner.run (Generators.crashStorm 20)
-      Runner.run (Generators.spacedCrashes 6 TestTimeouts.crashGapSpaced)
+  [ for seed in 1 .. 300 -> Runner.run (TestTimeouts.pinSimScenario (Generators.fromSeed seed)) ]
+  @ [ Runner.run (TestTimeouts.pinSimScenario (Generators.crashStorm 20))
+      Runner.run (TestTimeouts.pinSimScenario (Generators.spacedCrashes 6 TestTimeouts.crashGapSpaced))
       Runner.run varyPolicyCircuitBreakerScenario
       Runner.run windowResetScenario
       Runner.run gracefulStopScenario ]
@@ -101,7 +101,7 @@ let tests =
       // pass it trivially.
       let clockOnlyScenario : Scenario =
         { Seed = 0
-          Policy = RestartPolicy.defaultPolicy
+          Policy = TestTimeouts.simRestartPolicy
           StartTime = Generators.epoch
           Events = [ SimEvent.ClockAdvance(TestTimeouts.clockTick) ] }
 
@@ -122,7 +122,7 @@ let tests =
                EffectKind.NoEffectTerminal; EffectKind.CircuitBreakerDip; EffectKind.WindowReset ])
 
     testCase "render produces a printable matrix naming every effect and invariant" <| fun () ->
-      let report = Coverage.over [ Runner.run (Generators.crashStorm 20) ]
+      let report = Coverage.over [ Runner.run (TestTimeouts.pinSimScenario (Generators.crashStorm 20)) ]
       let text = Coverage.render report
 
       [ "Restarted"; "GaveUp"; "Stopped"; "NoEffectTerminal"; "ClockOnly"
