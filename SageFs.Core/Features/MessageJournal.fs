@@ -70,6 +70,18 @@ module Journal =
     }
     { Buffer = RingBuffer.push entry journal.Buffer }
 
+  /// Record one entry per message, oldest message first, all at one level and
+  /// source. Same result as folding `record` over the messages.
+  let recordAll (level: JournalLevel) (source: string) (messages: string seq) (journal: Journal) : Journal =
+    let entries =
+      messages
+      |> Seq.map (fun message ->
+        { Timestamp = DateTimeOffset.UtcNow
+          Level = level
+          Source = source
+          Message = message })
+    { Buffer = RingBuffer.pushAll entries journal.Buffer }
+
   /// Number of entries currently in the journal.
   let count (journal: Journal) : int =
     RingBuffer.count journal.Buffer

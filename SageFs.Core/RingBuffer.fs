@@ -41,6 +41,11 @@ module RingBuffer =
         Count = min (buf.Count + 1) capacity
         TotalPushed = buf.TotalPushed + 1L }
 
+  /// Push every item in order, as if `push` ran once per item. RED stub: the
+  /// naive fold, which copies the whole backing array once per item.
+  let pushAll (items: 'T seq) (buf: RingBuffer<'T>) : RingBuffer<'T> =
+    items |> Seq.fold (fun acc item -> push item acc) buf
+
   /// Get an item by age (0 = most recent, 1 = previous, etc.).
   /// Returns None if age exceeds available history.
   let tryGet (age: int) (buf: RingBuffer<'T>) : 'T option =

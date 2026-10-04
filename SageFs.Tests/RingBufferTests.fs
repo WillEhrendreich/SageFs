@@ -10,6 +10,18 @@ open SageFs.RingBuffer
 let pushMany (items: 'T list) (buf: RingBuffer<'T>) =
   items |> List.fold (fun acc item -> push item acc) buf
 
+/// The shape of the pushAll checks, named so no number hides at a call site.
+module PushAllShape =
+  /// Capacity cap for the generated buffers; large enough to wrap and overflow.
+  let MaxCapacity = 40
+  let SmallBatch = 2_000
+  /// How many times larger the large batch is than the small one.
+  let BatchFactor = 4
+  let LargeBatch = SmallBatch * BatchFactor
+  /// Linear growth is BatchFactor times, quadratic is its square. Anything under
+  /// the midpoint is on the linear side.
+  let GrowthCeiling = float (BatchFactor + BatchFactor * BatchFactor) / 2.0
+
 // ── Tests ──
 
 [<Tests>]
@@ -252,5 +264,54 @@ let ringBufferTests =
         let age = (abs (items.Get.[0]) % count buf)
         (tryGet age buf).IsSome
       )
+    ]
+
+    testList "pushAll" [
+      // The oracle is the definition: pushAll is exactly one `push` per item, in order.
+      testProperty "pushAll gives the same buffer as folding push over the items"
+        (fun (cap: PositiveInt) (before: int list) (items: int list) ->
+          let c = min cap.Get PushAllShape.MaxCapacity
+          let start = before |> List.fold (fun b i -> push i b) (create c)
+          let folded = items |> List.fold (fun b i -> push i b) start
+          let batched = start |> pushAll items
+          toList batched = toList folded
+          && count batched = count folded
+          && totalPushed batched = totalPushed folded
+          && evictedCount batched = evictedCount folded
+          && batched.Head = folded.Head
+          && batched.Items = folded.Items
+        )
+
+      testProperty "pushAll leaves the buffer it was given untouched"
+        (fun (cap: PositiveInt) (before: int list) (items: int list) ->
+          let c = min cap.Get PushAllShape.MaxCapacity
+          let start = before |> List.fold (fun b i -> push i b) (create c)
+          let seenBefore = toList start
+          let itemsBefore = Array.copy start.Items
+          let _batched = start |> pushAll items
+          toList start = seenBefore && start.Items = itemsBefore
+        )
+
+      // Structural, not wall-clock: bytes allocated on this thread are exact and
+      // do not depend on machine load. Copying the whole backing array per item
+      // makes the bytes grow with the SQUARE of the batch; one copy per batch
+      // makes them grow in a straight line. Quadrupling the batch therefore
+      // multiplies the bytes by about 4 when it is right and about 16 when not.
+      test "pushAll allocates in proportion to the batch, not its square" {
+        let allocated (n: int) =
+          let items = Array.init n id
+          let target = create n
+          pushAll items target |> ignore
+          let before = System.GC.GetAllocatedBytesForCurrentThread()
+          pushAll items target |> ignore
+          System.GC.GetAllocatedBytesForCurrentThread() - before
+        let small = allocated PushAllShape.SmallBatch
+        let large = allocated PushAllShape.LargeBatch
+        let growth = float large / float small
+        (growth, PushAllShape.GrowthCeiling)
+        |> Expect.isLessThan
+             (sprintf "bytes grew %.1fx for a %dx batch; a single copy grows about %dx, a copy per item about %dx"
+                growth PushAllShape.BatchFactor PushAllShape.BatchFactor (PushAllShape.BatchFactor * PushAllShape.BatchFactor))
+      }
     ]
   ]
