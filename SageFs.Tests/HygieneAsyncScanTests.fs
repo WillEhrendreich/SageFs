@@ -109,15 +109,16 @@ let asyncScanTests =
       let! asked, leftovers = drive (fun scan -> gather scan None)
       verbs asked
       |> Expect.equal
-        "the worktree list, the base branch, the branch list, then each candidate's merge evidence in turn"
-        [ "worktree"; "rev-parse"; "for-each-ref"; "merge-base"; "cherry"; "status"; "merge-base"; "cherry" ]
+        "the worktree list, the branch list, then each candidate in turn (the first one also asks for the base branch)"
+        [ "worktree"; "for-each-ref"; "rev-parse"; "merge-base"; "cherry"; "status"; "merge-base"; "cherry" ]
       leftovers |> List.isEmpty |> Expect.isFalse "the scan found the worktree and its branch"
     }
 
     testTask "WHY — the snapshot a tool reply is built from comes out of the same awaited scan, and says what a scan that answers at once says" {
-      let! _, snapshot = drive (fun scan -> HygieneService.takeFrom scan)
-      let! immediate =
-        HygieneService.takeFrom (scanWith (fun _ args -> Task.FromResult(answerFor args)))
+      let! driven = drive (fun scan -> HygieneService.takeFrom scan)
+      let snapshot : HygieneService.Snapshot = snd driven
+      let! answeredAtOnce = HygieneService.takeFrom (scanWith (fun _ args -> Task.FromResult(answerFor args)))
+      let immediate : HygieneService.Snapshot = answeredAtOnce
       snapshot.Leftovers |> List.map Leftover.target
       |> Expect.equal "the same targets as when git answers at once" (immediate.Leftovers |> List.map Leftover.target)
       snapshot.Plan.Steps |> List.length

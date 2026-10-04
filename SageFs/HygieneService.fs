@@ -163,15 +163,22 @@ type Snapshot =
     Plan: Plan
     Summary: Summary }
 
-/// Scan the machine for one repo and plan the tidy. The expensive part: sizes and git for every leftover.
-let take (loc: Locations) (live: LiveFacts) : Snapshot =
-  let leftovers = gather (realScan loc live) None
-  let plan = Planner.plan leftovers
-  { Repo = loc.Repo
-    TakenAt = DateTime.UtcNow
-    Leftovers = leftovers
-    Plan = plan
-    Summary = summarize leftovers plan }
+/// Scan the machine with the given scan and plan the tidy. The expensive part: sizes and git for every leftover. Every
+/// git call is awaited, so the scan holds no thread while git works.
+let takeFrom (scan: Scan) : Task<Snapshot> =
+  task {
+    let! leftovers = gather scan None
+    let plan = Planner.plan leftovers
+    return
+      { Repo = scan.Loc.Repo
+        TakenAt = DateTime.UtcNow
+        Leftovers = leftovers
+        Plan = plan
+        Summary = summarize leftovers plan }
+  }
+
+/// Scan the machine for one repo and plan the tidy.
+let take (loc: Locations) (live: LiveFacts) : Task<Snapshot> = takeFrom (realScan loc live)
 
 [<RequireQualifiedAccess>]
 type RefreshState =
@@ -263,7 +270,7 @@ module Cache =
           try
             try
               let! facts = live ()
-              let snapshot = take loc facts
+              let! snapshot = take loc facts
               put snapshot
               failures.TryRemove loc.Repo |> ignore
               mine.SetResult snapshot
@@ -329,45 +336,49 @@ type TidyOutcome =
 
 /// Run the Safe steps of the plan that exists now, if it is the plan the caller was shown. Each step looks at its
 /// target again first. The cache is refreshed after.
-let tidy (loc: Locations) (live: unit -> LiveFacts) (shown: PlanId) : TidyOutcome =
-  let scan = realScan loc (live ())
-  let leftovers = gather scan None
-  let plan = Planner.plan leftovers
-  match Confirmation.safeOnly plan shown with
-  | Result.Error error -> TidyOutcome.NotConfirmed(error, plan)
-  | Result.Ok confirmation ->
-    Cache.beginTidy loc.Repo
-    try
-      let effects = HygieneEdge.effects (HygieneEdge.realContext loc live)
-      let report = Executor.run effects (rootsOf loc) confirmation plan
-      let after = take loc (live ())
-      Cache.put after
-      Cache.setTidied loc.Repo (summarizeReport report)
-      TidyOutcome.Tidied(report, after)
-    finally
-      Cache.endTidy loc.Repo
+let tidy (loc: Locations) (live: unit -> LiveFacts) (shown: PlanId) : Task<TidyOutcome> =
+  task {
+    let scan = realScan loc (live ())
+    let! leftovers = gather scan None
+    let plan = Planner.plan leftovers
+    match Confirmation.safeOnly plan shown with
+    | Result.Error error -> return TidyOutcome.NotConfirmed(error, plan)
+    | Result.Ok confirmation ->
+      Cache.beginTidy loc.Repo
+      try
+        let effects = HygieneEdge.effects (HygieneEdge.realContext loc live)
+        let! report = Executor.runAsync effects (rootsOf loc) confirmation plan
+        let! after = take loc (live ())
+        Cache.put after
+        Cache.setTidied loc.Repo (summarizeReport report)
+        return TidyOutcome.Tidied(report, after)
+      finally
+        Cache.endTidy loc.Repo
+  }
 
 /// The host cache's own housekeeping: prune hosts nobody has used for `DataRetention.hostCacheMaxAge` that are not the
 /// newest of an SDK the daemon resolves and that no process runs from. Same planner, same confirmation, same
 /// second look as `tidy`; it only ever looks at host cache entries.
-let pruneHostCacheWith (ctx: HygieneEdge.EdgeContext) (loc: Locations) : Report =
+let pruneHostCacheWith (ctx: HygieneEdge.EdgeContext) (loc: Locations) : Task<Report> =
   // A host built before sessions marked their use has no `.last-used`, and its directory's own time is when it was
   // built, not when it was last run. Stamp those as used now, so the first prune on an old cache cannot throw away a
   // host somebody ran yesterday; they expire a retention from now unless a session uses them.
-  try
-    for dir in Directory.EnumerateDirectories loc.HostCacheDir do
-      let marker = Path.Combine(dir, FsiHostBuild.HostLastUsedMarker)
-      match File.Exists marker with
-      | true -> ()
-      | false -> File.WriteAllText(marker, DateTime.UtcNow.ToString "o")
-  with _ -> ()
-  let leftovers = gatherKinds (ctx.MakeScan()) [ LeftoverKind.HostCacheEntry ]
-  let plan = Planner.plan leftovers
-  match Confirmation.safeOnly plan plan.Id with
-  | Result.Error _ -> { Executed = []; ReclaimedBytes = 0L }
-  | Result.Ok confirmation -> Executor.run (HygieneEdge.effects ctx) (rootsOf loc) confirmation plan
+  task {
+    try
+      for dir in Directory.EnumerateDirectories loc.HostCacheDir do
+        let marker = Path.Combine(dir, FsiHostBuild.HostLastUsedMarker)
+        match File.Exists marker with
+        | true -> ()
+        | false -> File.WriteAllText(marker, DateTime.UtcNow.ToString "o")
+    with _ -> ()
+    let! leftovers = gatherKinds (ctx.MakeScan()) [ LeftoverKind.HostCacheEntry ]
+    let plan = Planner.plan leftovers
+    match Confirmation.safeOnly plan plan.Id with
+    | Result.Error _ -> return { Executed = []; ReclaimedBytes = 0L }
+    | Result.Ok confirmation -> return! Executor.runAsync (HygieneEdge.effects ctx) (rootsOf loc) confirmation plan
+  }
 
-let pruneHostCache (loc: Locations) (live: unit -> LiveFacts) : Report =
+let pruneHostCache (loc: Locations) (live: unit -> LiveFacts) : Task<Report> =
   pruneHostCacheWith (HygieneEdge.realContext loc live) loc
 
 let private pruning : int ref = ref 0
@@ -378,10 +389,14 @@ let pruneHostCacheInBackground (loc: Locations) (live: unit -> LiveFacts) (repor
   match System.Threading.Interlocked.CompareExchange(&pruning.contents, 1, 0) with
   | 0 ->
     Task.Run(fun () ->
-      try
-        try report (pruneHostCache loc live)
-        with ex -> failed ex
-      finally
-        System.Threading.Interlocked.Exchange(&pruning.contents, 0) |> ignore)
+      task {
+        try
+          try
+            let! pruned = pruneHostCache loc live
+            report pruned
+          with ex -> failed ex
+        finally
+          System.Threading.Interlocked.Exchange(&pruning.contents, 0) |> ignore
+      } :> Task)
     |> ignore
   | _ -> ()

@@ -2,6 +2,7 @@ module SageFs.Tests.HygieneGatherTests
 
 open System
 open System.IO
+open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open SageFs
@@ -46,10 +47,10 @@ let parseTests =
 let gatherTests =
   testList "Workspace hygiene gather: a real repository" [
 
-    testCase "each kind of worktree gets the standing its git state earns" <| fun _ ->
+    testTask "each kind of worktree gets the standing its git state earns" {
       use sb = new Sandbox()
       let paths = populate sb
-      let leftovers = gather (sb.Scan()) None
+      let! leftovers = gather (sb.Scan()) None
       let at name = standingOfPath leftovers paths.[name]
       at "clean-merged" |> Expect.equal "merged at the base head is an ancestor" (Standing.Merged MergeHow.Ancestor)
       at "ff-merged" |> Expect.equal "fast-forwarded is an ancestor" (Standing.Merged MergeHow.Ancestor)
@@ -65,40 +66,44 @@ let gatherTests =
       | Standing.DirtyReal files ->
         NonEmpty.toList files |> List.map (fun f -> f.Path) |> Expect.equal "the new file" [ "src/precious.fs" ]
       | other -> failtestf "expected DirtyReal, got %A" other
+    }
 
-    testCase "a worktree where a process has its working directory is InUse" <| fun _ ->
+    testTask "a worktree where a process has its working directory is InUse" {
       use sb = new Sandbox()
       let path = sb.AddWorktree "busy"
       let proc : Proc = { Pid = 4321; StartTicks = 1L; Name = "bash"; CommandLine = "bash"; Cwd = CwdState.At path; ParentPid = 1; Environment = Map.empty }
-      let leftovers = gather (sb.ScanWith((fun _ _ -> false), [ proc ], LiveFacts.none)) None
+      let! leftovers = gather (sb.ScanWith((fun _ _ -> false), [ proc ], LiveFacts.none)) None
       match standingOfPath leftovers path with
       | Standing.InUse(InUseReason.ProcessWorkingDirectory(4321, "bash"), []) -> ()
       | other -> failtestf "expected InUse by the process, got %A" other
+    }
 
-    testCase "a worktree where a session runs is InUse" <| fun _ ->
+    testTask "a worktree where a session runs is InUse" {
       use sb = new Sandbox()
       let path = sb.AddWorktree "session"
       let live = { LiveFacts.none with Sessions = [ "abc12345", Path.Combine(path, "src") ] }
-      let leftovers = gather (sb.ScanWith((fun _ _ -> false), [], live)) None
+      let! leftovers = gather (sb.ScanWith((fun _ _ -> false), [], live)) None
       match standingOfPath leftovers path with
       | Standing.InUse(InUseReason.LiveSession "abc12345", _) -> ()
       | other -> failtestf "expected InUse by the session, got %A" other
+    }
 
-    testCase "a worktree locked by a live process is InUse, and one locked by a dead one is not" <| fun _ ->
+    testTask "a worktree locked by a live process is InUse, and one locked by a dead one is not" {
       use sb = new Sandbox()
       let path = sb.AddWorktree "locked"
       git sb.Repo [ "worktree"; "lock"; "--reason"; "claude agent locked (pid 777 start 1)"; path ] |> ignore
-      let live = gather (sb.ScanWith((fun pid _ -> pid = 777), [], LiveFacts.none)) None
+      let! live = gather (sb.ScanWith((fun pid _ -> pid = 777), [], LiveFacts.none)) None
       match standingOfPath live path with
       | Standing.InUse(InUseReason.LockedByLiveProcess(777, _), _) -> ()
       | other -> failtestf "expected locked by a live process, got %A" other
-      let dead = gather (sb.Scan()) None
+      let! dead = gather (sb.Scan()) None
       standingOfPath dead path |> Expect.equal "a dead lock does not make it busy" (Standing.Merged MergeHow.Ancestor)
+    }
 
-    testCase "a merged branch whose worktree is in the agent area is paired with it and not marked in use" <| fun _ ->
+    testTask "a merged branch whose worktree is in the agent area is paired with it and not marked in use" {
       use sb = new Sandbox()
       let path = sb.AddWorktree "pair"
-      let leftovers = gather (sb.Scan()) None
+      let! leftovers = gather (sb.Scan()) None
       let branchStanding =
         leftovers
         |> List.pick (fun l ->
@@ -111,18 +116,21 @@ let gatherTests =
       |> List.filter (fun s -> Leftover.target s.Target = Target.Directory path || Leftover.target s.Target = Target.GitBranch(sb.Repo, "worktree-agent-pair"))
       |> List.length
       |> Expect.equal "one step covers the worktree and its branch" 1
+    }
 
-    testCase "a worktree whose creating agent has disconnected says who made it and that they are gone" <| fun _ ->
+    testTask "a worktree whose creating agent has disconnected says who made it and that they are gone" {
       use sb = new Sandbox()
       let path = sb.AddWorktree "orphaned-by-agent"
       let live = { LiveFacts.none with Owners = [ path, Owner.CreatedByAgent("claude", "conn-1"), AgentConnection.NotConnected ] }
-      let plan = Planner.plan (gather (sb.ScanWith((fun _ _ -> false), [], live)) None)
+      let! found = gather (sb.ScanWith((fun _ _ -> false), [], live)) None
+      let plan = Planner.plan found
       let step = plan.Steps |> List.find (fun s -> Leftover.target s.Target = Target.Directory path)
       step.Reason |> Expect.stringContains "names the agent" "claude"
       step.Reason |> Expect.stringContains "says it is gone" "gone"
       (Leftover.entry step.Target).Owner |> Expect.equal "the owner is the connection, not just a name" (Owner.CreatedByAgent("claude", "conn-1"))
+    }
 
-    testCase "a daemon scoped to its own descendants lists only those as orphans, while every process still counts as a use" <| fun _ ->
+    testTask "a daemon scoped to its own descendants lists only those as orphans, while every process still counts as a use" {
       use sb = new Sandbox()
       let path = sb.AddWorktree "scoped"
       let orphan (pid: int) (parent: int) : Proc =
@@ -130,7 +138,7 @@ let gatherTests =
           ParentPid = parent; Environment = Map.ofList [ "SAGEFS_DAEMON_PID", "9001" ] }
       let outsider : Proc = { orphan 8001 1 with Name = "bash"; CommandLine = "bash"; Cwd = CwdState.At path }
       let scan = { sb.ScanWith((fun _ _ -> false), [ orphan 7001 100; orphan 7002 1; outsider ], LiveFacts.none) with Loc = { sb.Locations with Processes = ProcessScope.DescendantsOf 100 } }
-      let leftovers = gather scan None
+      let! leftovers = gather scan None
       leftovers
       |> List.filter (fun l -> Leftover.kind l = LeftoverKind.OrphanProcess)
       |> List.map Leftover.target
@@ -138,11 +146,12 @@ let gatherTests =
       match standingOfPath leftovers path with
       | Standing.InUse(InUseReason.ProcessWorkingDirectory(8001, _), _) -> ()
       | other -> failtestf "a process outside the scope still holds the worktree, got %A" other
+    }
 
-    testCase "a git that is not there makes everything about worktrees Unknown, not clean" <| fun _ ->
+    testTask "a git that is not there makes everything about worktrees Unknown, not clean" {
       use sb = new Sandbox()
-      let scan = { sb.Scan() with Git = (fun _ _ -> GitResult.Unavailable "git is not installed") }
-      let leftovers = gather scan None
+      let scan = { sb.Scan() with Git = (fun _ _ -> Task.FromResult(GitResult.Unavailable "git is not installed")) }
+      let! leftovers = gather scan None
       leftovers |> List.isEmpty |> Expect.isFalse "something is still reported"
       leftovers
       |> List.forall (fun l ->
@@ -150,4 +159,5 @@ let gatherTests =
         | Standing.Unknown _ -> true
         | _ -> false)
       |> Expect.isTrue "every leftover is Unknown"
+    }
   ]

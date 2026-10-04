@@ -55,7 +55,7 @@ let getWorkspaceHygieneAt (locate: string -> Locations) (ctx: McpContext) (worki
     | Result.Ok repo ->
       let! live = liveFactsOf ctx
       let loc = locate repo
-      let snapshot = HygieneService.take loc live
+      let! snapshot = HygieneService.take loc live
       HygieneService.Cache.put snapshot
       return renderPlan snapshot.Leftovers snapshot.Plan
   }
@@ -77,7 +77,7 @@ let tidyWorkspaceAt (locate: string -> Locations) (ctx: McpContext) (workingDire
       | Result.Ok repo ->
         let loc = locate repo
         let! live = liveFactsOf ctx
-        let outcome = HygieneService.tidy loc (fun () -> live) (PlanId planId)
+        let! outcome = HygieneService.tidy loc (fun () -> live) (PlanId planId)
         match outcome with
         | HygieneService.TidyOutcome.Tidied(report, snapshot) ->
           return sprintf "%s\n\n%s" (renderReport report) (renderPlan snapshot.Leftovers snapshot.Plan)

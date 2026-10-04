@@ -130,10 +130,10 @@ module BlockingCall =
 /// What the product may still block on, per call. Ratchet down, never up.
 let private allowances : (BlockingCall * int) list =
   [ BlockingCall.RunAsyncSynchronously, 11
-    BlockingCall.AwaiterResult, 4
+    BlockingCall.AwaiterResult, 2
     BlockingCall.WaitOnTask, 1
     BlockingCall.Sleep, 1
-    BlockingCall.WaitForAll, 1 ]
+    BlockingCall.WaitForAll, 0 ]
 
 let private productFiles : string list =
   [ for project in [ "SageFs"; "SageFs.Core"; "SageFs.Host" ] do

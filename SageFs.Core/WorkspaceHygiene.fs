@@ -370,6 +370,13 @@ type Effects =
     Resolve: string -> Result<string, ResolveFailure>
     Perform: Operation -> Outcome }
 
+/// The same hands for a caller whose looking and doing wait on something outside the process (git, another process):
+/// each is a Task, so the run awaits it and no thread is held while it waits. `Resolve` only reads the file system.
+type AsyncEffects =
+  { Recheck: Target -> System.Threading.Tasks.Task<Rechecked>
+    Resolve: string -> Result<string, ResolveFailure>
+    Perform: Operation -> System.Threading.Tasks.Task<Outcome> }
+
 /// What a confirmation is for. Built from the id of the plan the caller was shown.
 type Confirmation = private ConfirmedSafe of PlanId
 
@@ -933,8 +940,8 @@ module Confirmation =
 // ─── Running ───────────────────────────────────────────────────────────
 
 module Executor =
-  let private accept (roots: Roots) (effects: Effects) (path: string) : Result<Accepted, SkipReason> =
-    Guard.accept roots effects.Resolve path |> Result.mapError SkipReason.Refused
+  let private accept (roots: Roots) (resolve: string -> Result<string, ResolveFailure>) (path: string) : Result<Accepted, SkipReason> =
+    Guard.accept roots resolve path |> Result.mapError SkipReason.Refused
 
   let private pathOf (target: Target) : string =
     match target with
@@ -956,15 +963,15 @@ module Executor =
   /// The operations that carry a step out, built from what the target looks like NOW.
   let private operationsFor
     (roots: Roots)
-    (effects: Effects)
+    (resolve: string -> Result<string, ResolveFailure>)
     (step: Step)
     (fresh: Leftover)
     : Result<Operation list, SkipReason> =
     let entry = Leftover.entry fresh
     let tree () =
       match entry.Target with
-      | Target.File p -> accept roots effects p |> Result.map (fun a -> [ Operation.RemoveFile a ])
-      | Target.Directory p -> accept roots effects p |> Result.map (fun a -> [ Operation.RemoveTree a ])
+      | Target.File p -> accept roots resolve p |> Result.map (fun a -> [ Operation.RemoveFile a ])
+      | Target.Directory p -> accept roots resolve p |> Result.map (fun a -> [ Operation.RemoveTree a ])
       | _ -> Result.Error(SkipReason.LookFailed "that kind of thing is not a path")
     match fresh with
     | Leftover.AgentWorktree(_, detail) ->
@@ -975,7 +982,7 @@ module Executor =
       match detail.Repo with
       | RepoLink.NoRepo -> tree ()
       | RepoLink.InRepo repo ->
-        match accept roots effects (pathOf entry.Target) with
+        match accept roots resolve (pathOf entry.Target) with
         | Result.Error skip -> Result.Error skip
         | Result.Ok a ->
           let removeWorktree = Operation.RemoveWorktree(a, repo, force)
@@ -983,7 +990,7 @@ module Executor =
           | Action.RemoveBranchToo name, Some how -> Result.Ok [ removeWorktree; Operation.DeleteBranch(repo, name, deletion how) ]
           | _ -> Result.Ok [ removeWorktree ]
     | Leftover.GateCheckout(_, Registration.WorktreeOf repo) ->
-      accept roots effects (pathOf entry.Target)
+      accept roots resolve (pathOf entry.Target)
       |> Result.map (fun a -> [ Operation.RemoveWorktree(a, repo, ForceNeed.DisposableCheckout) ])
     | Leftover.GateCheckout(_, Registration.NotRegistered)
     | Leftover.GateTierClone _
@@ -1001,44 +1008,58 @@ module Executor =
       | Target.GitBranch(_, name), Some how -> Result.Ok [ Operation.DeleteBranch(repo, name, deletion how) ]
       | _ -> Result.Error(SkipReason.LookFailed "no merge evidence for the branch")
 
-  let private perform (effects: Effects) (operations: Operation list) : Outcome =
-    operations
-    |> List.fold (fun (acc: Outcome) op ->
-      match acc with
-      | Outcome.Failed _ -> acc
-      | Outcome.Done bytes ->
-        match effects.Perform op with
-        | Outcome.Done more -> Outcome.Done(bytes + more)
-        | Outcome.Failed why -> Outcome.Failed why) (Outcome.Done 0L)
+  /// What a step comes to once its target has been looked at again: settled without touching anything, or a list of
+  /// operations to carry out. The decision is the same for a run that waits on its effects and one that awaits them,
+  /// so it is made here once.
+  [<RequireQualifiedAccess>]
+  type AfterLook =
+    | Settled of StepResult
+    | Operate of Operation list
 
-  let private runStep (effects: Effects) (roots: Roots) (step: Step) : StepResult =
+  let afterLook
+    (roots: Roots)
+    (resolve: string -> Result<string, ResolveFailure>)
+    (step: Step)
+    (looked: Rechecked)
+    : AfterLook =
+    match looked with
+    | Rechecked.Gone -> AfterLook.Settled StepResult.AlreadyGone
+    | Rechecked.CouldNotLook why -> AfterLook.Settled(StepResult.Skipped(SkipReason.LookFailed why))
+    | Rechecked.Fresh fresh ->
+      match Leftover.identity fresh = Leftover.identity step.Target with
+      | false -> AfterLook.Settled(StepResult.Skipped SkipReason.IdentityChanged)
+      | true ->
+        let standing = (Leftover.entry fresh).Standing
+        match Standing.reclaimability standing with
+        | Reclaimability.NeedsReview
+        | Reclaimability.Untouchable -> AfterLook.Settled(StepResult.Skipped(SkipReason.StandingChanged standing))
+        | Reclaimability.Reclaimable ->
+          match operationsFor roots resolve step fresh with
+          | Result.Error skip -> AfterLook.Settled(StepResult.Skipped skip)
+          | Result.Ok operations -> AfterLook.Operate operations
+
+  /// What one more operation adds to the outcome so far: the first failure ends it, and nothing after a failure runs.
+  let afterOperation (soFar: Outcome) (next: unit -> Outcome) : Outcome =
+    match soFar with
+    | Outcome.Failed _ -> soFar
+    | Outcome.Done bytes ->
+      match next () with
+      | Outcome.Done more -> Outcome.Done(bytes + more)
+      | Outcome.Failed why -> Outcome.Failed why
+
+  let perform (effects: Effects) (operations: Operation list) : Outcome =
+    operations |> List.fold (fun acc op -> afterOperation acc (fun () -> effects.Perform op)) (Outcome.Done 0L)
+
+  let runStep (effects: Effects) (roots: Roots) (step: Step) : StepResult =
     match Planner.execution step.Risk with
     | Execution.PresentedOnly -> StepResult.Presented
     | Execution.RunsOnConfirm ->
-      match effects.Recheck(Leftover.target step.Target) with
-      | Rechecked.Gone -> StepResult.AlreadyGone
-      | Rechecked.CouldNotLook why -> StepResult.Skipped(SkipReason.LookFailed why)
-      | Rechecked.Fresh fresh ->
-        match Leftover.identity fresh = Leftover.identity step.Target with
-        | false -> StepResult.Skipped SkipReason.IdentityChanged
-        | true ->
-          let standing = (Leftover.entry fresh).Standing
-          match Standing.reclaimability standing with
-          | Reclaimability.NeedsReview
-          | Reclaimability.Untouchable -> StepResult.Skipped(SkipReason.StandingChanged standing)
-          | Reclaimability.Reclaimable ->
-            match operationsFor roots effects step fresh with
-            | Result.Error skip -> StepResult.Skipped skip
-            | Result.Ok operations -> StepResult.Ran(perform effects operations)
+      match afterLook roots effects.Resolve step (effects.Recheck(Leftover.target step.Target)) with
+      | AfterLook.Settled result -> result
+      | AfterLook.Operate operations -> StepResult.Ran(perform effects operations)
 
-  /// Run the plan's Safe steps, each after looking at its target again. A confirmation made for another
-  /// plan runs nothing.
-  let run (effects: Effects) (roots: Roots) (confirmation: Confirmation) (plan: Plan) : Report =
-    let (ConfirmedSafe confirmed) = confirmation
-    let steps =
-      match confirmed = plan.Id with
-      | true -> plan.Steps |> List.map (fun step -> { Step = step; Result = runStep effects roots step })
-      | false -> plan.Steps |> List.map (fun step -> { Step = step; Result = StepResult.Presented })
+  /// The report for the steps that were run: what each did, and how much was given back.
+  let reportOf (steps: Executed list) : Report =
     let reclaimed =
       steps
       |> List.sumBy (fun e ->
@@ -1046,3 +1067,51 @@ module Executor =
         | StepResult.Ran(Outcome.Done bytes) -> bytes
         | _ -> 0L)
     { Executed = steps; ReclaimedBytes = reclaimed }
+
+  /// Run the plan's Safe steps, each after looking at its target again. A confirmation made for another
+  /// plan runs nothing.
+  let run (effects: Effects) (roots: Roots) (confirmation: Confirmation) (plan: Plan) : Report =
+    let (ConfirmedSafe confirmed) = confirmation
+    match confirmed = plan.Id with
+    | true -> plan.Steps |> List.map (fun step -> { Step = step; Result = runStep effects roots step }) |> reportOf
+    | false -> plan.Steps |> List.map (fun step -> { Step = step; Result = StepResult.Presented }) |> reportOf
+
+  let performAsync (effects: AsyncEffects) (operations: Operation list) : System.Threading.Tasks.Task<Outcome> =
+    task {
+      let mutable outcome = Outcome.Done 0L
+      for op in operations do
+        match outcome with
+        | Outcome.Failed _ -> ()
+        | Outcome.Done _ ->
+          let! result = effects.Perform op
+          outcome <- afterOperation outcome (fun () -> result)
+      return outcome
+    }
+
+  let runStepAsync (effects: AsyncEffects) (roots: Roots) (step: Step) : System.Threading.Tasks.Task<StepResult> =
+    task {
+      match Planner.execution step.Risk with
+      | Execution.PresentedOnly -> return StepResult.Presented
+      | Execution.RunsOnConfirm ->
+        let! looked = effects.Recheck(Leftover.target step.Target)
+        match afterLook roots effects.Resolve step looked with
+        | AfterLook.Settled result -> return result
+        | AfterLook.Operate operations ->
+          let! outcome = performAsync effects operations
+          return StepResult.Ran outcome
+    }
+
+  /// `run` for hands that await: each step is looked at and carried out in turn, and no thread is held while a look or
+  /// an operation waits on git or a process.
+  let runAsync (effects: AsyncEffects) (roots: Roots) (confirmation: Confirmation) (plan: Plan) : System.Threading.Tasks.Task<Report> =
+    task {
+      let (ConfirmedSafe confirmed) = confirmation
+      let executed = ResizeArray<Executed>()
+      for step in plan.Steps do
+        match confirmed = plan.Id with
+        | true ->
+          let! result = runStepAsync effects roots step
+          executed.Add { Step = step; Result = result }
+        | false -> executed.Add { Step = step; Result = StepResult.Presented }
+      return reportOf (List.ofSeq executed)
+    }

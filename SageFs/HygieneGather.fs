@@ -12,6 +12,7 @@ module SageFs.HygieneGather
 open System
 open System.Diagnostics
 open System.IO
+open System.Threading
 open System.Threading.Tasks
 open SageFs
 open SageFs.WorkspaceHygiene
@@ -24,34 +25,49 @@ type GitResult =
   | Exit of code: int * stderr: string
   | Unavailable of detail: string
 
-/// Run `git <args>` in a directory. A function so tests can answer for it.
-type Git = string -> string list -> GitResult
+/// Run `git <args>` in a directory. A function returning a Task, so a scan awaits every answer and holds no thread
+/// while git runs, and so a test can answer for it, whenever it chooses.
+type Git = string -> string list -> Task<GitResult>
 
-/// The real git: argument list (never a shell string), both streams drained, bounded by `Timeouts.gitQuick`.
+/// Stop a git that outlived its bound, and whatever it started. A process that is already gone is not an error.
+let killTree (proc: Process) : unit =
+  try proc.Kill(true) with _ -> ()
+
+/// The real git: argument list (never a shell string), both streams drained, bounded by `Timeouts.gitQuick`. It
+/// awaits the process and both reads, so the thread that asked is free while git works.
 let runGit : Git =
   fun dir args ->
-    try
-      let psi = ProcessStartInfo("git")
-      psi.WorkingDirectory <- dir
-      psi.RedirectStandardOutput <- true
-      psi.RedirectStandardError <- true
-      psi.UseShellExecute <- false
-      for a in args do psi.ArgumentList.Add a
-      use proc = Process.Start psi
-      let out = proc.StandardOutput.ReadToEndAsync()
-      let err = proc.StandardError.ReadToEndAsync()
-      match proc.WaitForExit(int Timeouts.gitQuick.TotalMilliseconds) with
-      | false ->
-        (try proc.Kill(true) with _ -> ())
-        GitResult.Unavailable(sprintf "git %s timed out" (String.Join(" ", args)))
-      | true ->
-        // The process has exited, so both reads are at their end and this returns at once. (The `Git` port it
-        // implements is synchronous, so a scan runs its git calls in turn on whichever thread runs the scan.)
-        Task.WaitAll(out, err)
-        match proc.ExitCode with
-        | 0 -> GitResult.Output out.Result
-        | code -> GitResult.Exit(code, err.Result.Trim())
-    with ex -> GitResult.Unavailable ex.Message
+    task {
+      try
+        let psi = ProcessStartInfo("git")
+        psi.WorkingDirectory <- dir
+        psi.RedirectStandardOutput <- true
+        psi.RedirectStandardError <- true
+        psi.UseShellExecute <- false
+        for a in args do psi.ArgumentList.Add a
+        use proc = Process.Start psi
+        let out = proc.StandardOutput.ReadToEndAsync()
+        let err = proc.StandardError.ReadToEndAsync()
+        use bound = new CancellationTokenSource(Timeouts.gitQuick)
+        let! exited =
+          task {
+            try
+              do! proc.WaitForExitAsync bound.Token
+              return true
+            with :? OperationCanceledException -> return false
+          }
+        match exited with
+        | false ->
+          killTree proc
+          return GitResult.Unavailable(sprintf "git %s timed out" (String.Join(" ", args)))
+        | true ->
+          let! output = out
+          let! errors = err
+          match proc.ExitCode with
+          | 0 -> return GitResult.Output output
+          | code -> return GitResult.Exit(code, errors.Trim())
+      with ex -> return GitResult.Unavailable ex.Message
+    }
 
 // ─── Parsing what git prints ───────────────────────────────────────────
 
@@ -306,50 +322,61 @@ let private under (parent: string) (child: string) : bool =
 
 // ─── Merge evidence ────────────────────────────────────────────────────
 
-let private baseBranch (git: Git) (repo: string) : string option =
-  baseBranchCandidates
-  |> List.tryFind (fun name ->
-    match git repo [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + name ] with
-    | GitResult.Output _ -> true
-    | _ -> false)
+let private baseBranch (git: Git) (repo: string) : Task<string option> =
+  task {
+    let mutable found = None
+    for name in baseBranchCandidates do
+      match found with
+      | Some _ -> ()
+      | None ->
+        match! git repo [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + name ] with
+        | GitResult.Output _ -> found <- Some name
+        | _ -> ()
+    return found
+  }
 
 /// Whether `head` has reached `baseRef`, and how: an ancestor, every commit patch-equivalent (rebased or
 /// squashed), or an identical tree. What is left is the commits it lacks.
-let mergeEvidence (git: Git) (repo: string) (baseRef: string) (head: string) : MergeEvidence =
-  let undecidable (what: string) (detail: string) = MergeEvidence.MergeNotDecidable(UnknownReason.MergeUndecidable(sprintf "%s: %s" what detail))
-  match git repo [ "merge-base"; "--is-ancestor"; head; baseRef ] with
-  | GitResult.Output _ -> MergeEvidence.MergedInto MergeHow.Ancestor
-  | GitResult.Unavailable detail -> MergeEvidence.MergeNotDecidable(UnknownReason.GitUnavailable detail)
-  | GitResult.Exit(code, stderr) when code <> 1 -> undecidable "merge-base" stderr
-  | GitResult.Exit _ ->
-    match git repo [ "cherry"; "-v"; baseRef; head ] with
-    | GitResult.Unavailable detail -> MergeEvidence.MergeNotDecidable(UnknownReason.GitUnavailable detail)
-    | GitResult.Exit(_, stderr) -> undecidable "cherry" stderr
-    | GitResult.Output text ->
-      match Parse.cherryAhead text with
-      | [] -> MergeEvidence.MergedInto MergeHow.PatchEquivalent
-      | ahead ->
-        match git repo [ "diff"; "--quiet"; baseRef; head ] with
-        | GitResult.Output _ -> MergeEvidence.MergedInto MergeHow.TreeEqual
-        | GitResult.Unavailable detail -> MergeEvidence.MergeNotDecidable(UnknownReason.GitUnavailable detail)
-        | GitResult.Exit(1, _) ->
-          match NonEmpty.tryOfList ahead with
-          | Some commits -> MergeEvidence.UnmergedCommits commits
-          | None -> undecidable "cherry" "no commits listed"
-        | GitResult.Exit(_, stderr) -> undecidable "diff" stderr
+let mergeEvidence (git: Git) (repo: string) (baseRef: string) (head: string) : Task<MergeEvidence> =
+  task {
+    let undecidable (what: string) (detail: string) = MergeEvidence.MergeNotDecidable(UnknownReason.MergeUndecidable(sprintf "%s: %s" what detail))
+    match! git repo [ "merge-base"; "--is-ancestor"; head; baseRef ] with
+    | GitResult.Output _ -> return MergeEvidence.MergedInto MergeHow.Ancestor
+    | GitResult.Unavailable detail -> return MergeEvidence.MergeNotDecidable(UnknownReason.GitUnavailable detail)
+    | GitResult.Exit(code, stderr) when code <> 1 -> return undecidable "merge-base" stderr
+    | GitResult.Exit _ ->
+      match! git repo [ "cherry"; "-v"; baseRef; head ] with
+      | GitResult.Unavailable detail -> return MergeEvidence.MergeNotDecidable(UnknownReason.GitUnavailable detail)
+      | GitResult.Exit(_, stderr) -> return undecidable "cherry" stderr
+      | GitResult.Output text ->
+        match Parse.cherryAhead text with
+        | [] -> return MergeEvidence.MergedInto MergeHow.PatchEquivalent
+        | ahead ->
+          match! git repo [ "diff"; "--quiet"; baseRef; head ] with
+          | GitResult.Output _ -> return MergeEvidence.MergedInto MergeHow.TreeEqual
+          | GitResult.Unavailable detail -> return MergeEvidence.MergeNotDecidable(UnknownReason.GitUnavailable detail)
+          | GitResult.Exit(1, _) ->
+            match NonEmpty.tryOfList ahead with
+            | Some commits -> return MergeEvidence.UnmergedCommits commits
+            | None -> return undecidable "cherry" "no commits listed"
+          | GitResult.Exit(_, stderr) -> return undecidable "diff" stderr
+  }
 
 /// What differs in a worktree, each file told apart as build output or work.
-let changedFiles (git: Git) (worktree: string) : Result<ChangedFile list, UnknownReason> =
-  match git worktree [ "status"; "--porcelain=v1"; "-z"; "--untracked-files=normal" ] with
-  | GitResult.Output text ->
-    Parse.statusPaths text
-    |> List.map (fun path ->
-      match Generated.ruleFor path with
-      | Some rule -> ({ Path = path; Origin = ChangeOrigin.Generated rule } : ChangedFile)
-      | None -> ({ Path = path; Origin = ChangeOrigin.Real } : ChangedFile))
-    |> Result.Ok
-  | GitResult.Exit(_, stderr) -> Result.Error(UnknownReason.StatusUnreadable stderr)
-  | GitResult.Unavailable detail -> Result.Error(UnknownReason.GitUnavailable detail)
+let changedFiles (git: Git) (worktree: string) : Task<Result<ChangedFile list, UnknownReason>> =
+  task {
+    match! git worktree [ "status"; "--porcelain=v1"; "-z"; "--untracked-files=normal" ] with
+    | GitResult.Output text ->
+      return
+        Parse.statusPaths text
+        |> List.map (fun path ->
+          match Generated.ruleFor path with
+          | Some rule -> ({ Path = path; Origin = ChangeOrigin.Generated rule } : ChangedFile)
+          | None -> ({ Path = path; Origin = ChangeOrigin.Real } : ChangedFile))
+        |> Result.Ok
+    | GitResult.Exit(_, stderr) -> return Result.Error(UnknownReason.StatusUnreadable stderr)
+    | GitResult.Unavailable detail -> return Result.Error(UnknownReason.GitUnavailable detail)
+  }
 
 // ─── Who is using a path ───────────────────────────────────────────────
 
@@ -376,11 +403,16 @@ let private ownerOf (scan: Scan) (path: string) : Owner * Lineage =
 // ─── Worktrees, gate checkouts and branches ─────────────────────────────
 
 /// A thing to examine: its target and kind are cheap to know; its facts (size, git, owner) are only built
-/// when asked, so looking at ONE target again does not pay for the whole machine.
+/// when asked, so looking at ONE target again does not pay for the whole machine. Building is a Task because the
+/// facts may come from git, and the scan awaits it.
 type Candidate =
   { Target: Target
     Kind: LeftoverKind
-    Build: unit -> Subject }
+    Build: unit -> Task<Subject> }
+
+/// A candidate whose facts are read off the disk and the process table, with nothing to wait on.
+let immediately (read: unit -> Subject) : unit -> Task<Subject> =
+  fun () -> Task.FromResult(read ())
 
 let private subjectBase (kind: LeftoverKind) (target: Target) : Subject =
   { Kind = kind
@@ -399,11 +431,13 @@ let private subjectBase (kind: LeftoverKind) (target: Target) : Subject =
 let private isAgentBranch (name: string) : bool =
   agentBranchPrefixes |> List.exists (fun p -> name.StartsWith(p, StringComparison.Ordinal))
 
-let private worktreeEntries (scan: Scan) : Result<WorktreeEntry list, UnknownReason> =
-  match scan.Git scan.Loc.Repo [ "worktree"; "list"; "--porcelain" ] with
-  | GitResult.Output text -> Result.Ok(Parse.worktreeList text)
-  | GitResult.Exit(_, stderr) -> Result.Error(UnknownReason.GitUnavailable stderr)
-  | GitResult.Unavailable detail -> Result.Error(UnknownReason.GitUnavailable detail)
+let private worktreeEntries (scan: Scan) : Task<Result<WorktreeEntry list, UnknownReason>> =
+  task {
+    match! scan.Git scan.Loc.Repo [ "worktree"; "list"; "--porcelain" ] with
+    | GitResult.Output text -> return Result.Ok(Parse.worktreeList text)
+    | GitResult.Exit(_, stderr) -> return Result.Error(UnknownReason.GitUnavailable stderr)
+    | GitResult.Unavailable detail -> return Result.Error(UnknownReason.GitUnavailable detail)
+  }
 
 /// What the lock on a worktree says: a lock whose named process is alive is a use; a lock whose named process
 /// is gone is nothing, and the edge unlocks it before removing.
@@ -415,32 +449,38 @@ let private lockUse (scan: Scan) (lock: LockState) : InUseReason list =
     | Some pid when scan.IsAlive pid None -> [ InUseReason.LockedByLiveProcess(pid, reason) ]
     | _ -> []
 
-let private worktreeCandidate (scan: Scan) (baseRef: string option) (entry: WorktreeEntry) (kind: LeftoverKind) : Candidate =
+let private worktreeCandidate (scan: Scan) (baseRef: Lazy<Task<string option>>) (entry: WorktreeEntry) (kind: LeftoverKind) : Candidate =
   let target = Target.Directory(normalize entry.Path)
   { Target = target
     Kind = kind
     Build =
       fun () ->
-        let path = normalize entry.Path
-        let git =
-          match baseRef with
-          | None -> GitEvidence.GitUnreadable(UnknownReason.MergeUndecidable "no master or main branch to judge a merge against")
-          | Some b ->
-            let merge = mergeEvidence scan.Git scan.Loc.Repo b (match entry.Branch with | BranchLabel.OnBranch n -> n | _ -> entry.Head)
-            match changedFiles scan.Git path with
-            | Result.Ok files -> GitEvidence.Worktree(merge, files)
-            | Result.Error why -> GitEvidence.GitUnreadable why
-        let owner, lineage = ownerOf scan path
-        { subjectBase kind target with
-            SizeBytes = directorySize path
-            LastTouched = touched path
-            Owner = owner
-            Lineage = lineage
-            Repo = RepoLink.InRepo scan.Loc.Repo
-            Branch = entry.Branch
-            Display = Path.GetFileName path
-            Uses = usesOf scan path @ lockUse scan entry.Lock
-            Git = git } }
+        task {
+          let path = normalize entry.Path
+          let! baseRefIs = baseRef.Value
+          let! git =
+            task {
+              match baseRefIs with
+              | None -> return GitEvidence.GitUnreadable(UnknownReason.MergeUndecidable "no master or main branch to judge a merge against")
+              | Some b ->
+                let! merge = mergeEvidence scan.Git scan.Loc.Repo b (match entry.Branch with | BranchLabel.OnBranch n -> n | _ -> entry.Head)
+                match! changedFiles scan.Git path with
+                | Result.Ok files -> return GitEvidence.Worktree(merge, files)
+                | Result.Error why -> return GitEvidence.GitUnreadable why
+            }
+          let owner, lineage = ownerOf scan path
+          return
+            { subjectBase kind target with
+                SizeBytes = directorySize path
+                LastTouched = touched path
+                Owner = owner
+                Lineage = lineage
+                Repo = RepoLink.InRepo scan.Loc.Repo
+                Branch = entry.Branch
+                Display = Path.GetFileName path
+                Uses = usesOf scan path @ lockUse scan entry.Lock
+                Git = git }
+        } }
 
 /// A worktree git reports that is under no root SageFs manages: listed so the orchestrator sees it, never touched.
 let private outsideCandidate (scan: Scan) (entry: WorktreeEntry) : Candidate =
@@ -449,7 +489,7 @@ let private outsideCandidate (scan: Scan) (entry: WorktreeEntry) : Candidate =
   { Target = target
     Kind = LeftoverKind.AgentWorktree
     Build =
-      fun () ->
+      immediately (fun () ->
         { subjectBase LeftoverKind.AgentWorktree target with
             SizeBytes = directorySize path
             LastTouched = touched path
@@ -457,44 +497,55 @@ let private outsideCandidate (scan: Scan) (entry: WorktreeEntry) : Candidate =
             Branch = entry.Branch
             Display = path
             Uses = usesOf scan path
-            Git = GitEvidence.GitUnreadable(UnknownReason.PathOutsideKnownRoots path) } }
+            Git = GitEvidence.GitUnreadable(UnknownReason.PathOutsideKnownRoots path) }) }
 
-let private branchCandidates (scan: Scan) (baseRef: string option) (entries: WorktreeEntry list) : Candidate list =
-  match scan.Git scan.Loc.Repo [ "for-each-ref"; "--format=%(refname:short)%09%(committerdate:unix)"; "refs/heads/" ] with
-  | GitResult.Output text ->
-    text.Split([| '\n' |], StringSplitOptions.RemoveEmptyEntries)
-    |> Array.toList
-    |> List.choose (fun line ->
-      match line.Split('\t') with
-      | [| name; unix |] when isAgentBranch name ->
-        let target = Target.GitBranch(scan.Loc.Repo, name)
-        Some
-          { Target = target
-            Kind = LeftoverKind.StaleBranch
-            Build =
-              fun () ->
-                let seconds = match Int64.TryParse unix with | true, s -> s | _ -> 0L
-                let checkedOutIn = entries |> List.tryFind (fun e -> e.Branch = BranchLabel.OnBranch name)
-                // The branch of a worktree this scan may remove is that worktree's to carry: the planner pairs them.
-                let managedRoot = Path.Combine(scan.Loc.Repo, ".claude", "worktrees")
-                let uses =
-                  match checkedOutIn with
-                  | Some e when under managedRoot e.Path -> []
-                  | Some e -> [ InUseReason.CheckedOutInWorktree(normalize e.Path) ]
-                  | None -> []
-                let git =
-                  match baseRef with
-                  | None -> GitEvidence.GitUnreadable(UnknownReason.MergeUndecidable "no master or main branch to judge a merge against")
-                  | Some b -> GitEvidence.Branch(mergeEvidence scan.Git scan.Loc.Repo b name)
-                { subjectBase LeftoverKind.StaleBranch target with
-                    LastTouched = DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime
-                    Repo = RepoLink.InRepo scan.Loc.Repo
-                    Branch = BranchLabel.OnBranch name
-                    Display = name
-                    Uses = uses
-                    Git = git } }
-      | _ -> None)
-  | _ -> []
+let private branchCandidates (scan: Scan) (baseRef: Lazy<Task<string option>>) (entries: WorktreeEntry list) : Task<Candidate list> =
+  task {
+    match! scan.Git scan.Loc.Repo [ "for-each-ref"; "--format=%(refname:short)%09%(committerdate:unix)"; "refs/heads/" ] with
+    | GitResult.Output text ->
+      return
+        text.Split([| '\n' |], StringSplitOptions.RemoveEmptyEntries)
+        |> Array.toList
+        |> List.choose (fun line ->
+          match line.Split('\t') with
+          | [| name; unix |] when isAgentBranch name ->
+            let target = Target.GitBranch(scan.Loc.Repo, name)
+            Some
+              { Target = target
+                Kind = LeftoverKind.StaleBranch
+                Build =
+                  fun () ->
+                    task {
+                      let seconds = match Int64.TryParse unix with | true, s -> s | _ -> 0L
+                      let checkedOutIn = entries |> List.tryFind (fun e -> e.Branch = BranchLabel.OnBranch name)
+                      // The branch of a worktree this scan may remove is that worktree's to carry: the planner pairs them.
+                      let managedRoot = Path.Combine(scan.Loc.Repo, ".claude", "worktrees")
+                      let uses =
+                        match checkedOutIn with
+                        | Some e when under managedRoot e.Path -> []
+                        | Some e -> [ InUseReason.CheckedOutInWorktree(normalize e.Path) ]
+                        | None -> []
+                      let! baseRefIs = baseRef.Value
+                      let! git =
+                        task {
+                          match baseRefIs with
+                          | None -> return GitEvidence.GitUnreadable(UnknownReason.MergeUndecidable "no master or main branch to judge a merge against")
+                          | Some b ->
+                            let! merge = mergeEvidence scan.Git scan.Loc.Repo b name
+                            return GitEvidence.Branch merge
+                        }
+                      return
+                        { subjectBase LeftoverKind.StaleBranch target with
+                            LastTouched = DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime
+                            Repo = RepoLink.InRepo scan.Loc.Repo
+                            Branch = BranchLabel.OnBranch name
+                            Display = name
+                            Uses = uses
+                            Git = git }
+                    } }
+          | _ -> None)
+    | _ -> return []
+  }
 
 // ─── The gate's checkouts, the host cache, logs, temp runs, registry ────
 
@@ -514,9 +565,9 @@ let private gateCandidates (scan: Scan) : Candidate list =
     { Target = Target.Directory dir
       Kind = GateReaper.entryKind entry
       Build =
-        fun () ->
+        immediately (fun () ->
           let subject = GateReaper.describe fs scan.Now scan.Loc.GateDir [ scan.Loc.Repo ] None entry
-          { subject with Uses = subject.Uses @ usesOf scan dir } })
+          { subject with Uses = subject.Uses @ usesOf scan dir }) })
 
 /// The SDK version a host was built with, from its content-addressed name: `sdk-<version>-<hash>`.
 let sdkVersionOfHostKey (key: string) : string =
@@ -546,7 +597,7 @@ let private hostCandidates (scan: Scan) : Candidate list =
     { Target = target
       Kind = LeftoverKind.HostCacheEntry
       Build =
-        fun () ->
+        immediately (fun () ->
           let key = Path.GetFileName dir
           let version = sdkVersionOfHostKey key
           let resolvedNow =
@@ -562,7 +613,7 @@ let private hostCandidates (scan: Scan) : Candidate list =
               LastTouched = hostLastUsed dir
               Display = key
               Uses = resolvedNow @ runningFrom @ usesOf scan dir
-              Retention = Retention.KeepFor DataRetention.hostCacheMaxAge } })
+              Retention = Retention.KeepFor DataRetention.hostCacheMaxAge }) })
 
 let private workerLogCandidates (scan: Scan) : Candidate list =
   let dir = Path.Combine(scan.Loc.DataDir, "workers")
@@ -573,14 +624,14 @@ let private workerLogCandidates (scan: Scan) : Candidate list =
     { Target = target
       Kind = LeftoverKind.WorkerLogFile
       Build =
-        fun () ->
+        immediately (fun () ->
           let sessionId = Path.GetFileNameWithoutExtension file
           { subjectBase LeftoverKind.WorkerLogFile target with
               SizeBytes = (try FileInfo(file).Length with _ -> 0L)
               LastTouched = fileTouched file
               Display = Path.GetFileName file
               Uses = scan.Live.Sessions |> List.filter (fun (id, _) -> id = sessionId) |> List.map (fun (id, _) -> InUseReason.LiveSession id)
-              Retention = Retention.KeepFor DataRetention.workerLogMaxAge } })
+              Retention = Retention.KeepFor DataRetention.workerLogMaxAge }) })
 
 /// The owner a temp run recorded for itself (`owner.pid`), as lineage.
 let private tempLineage (scan: Scan) (dir: string) : Lineage =
@@ -611,14 +662,14 @@ let private tempCandidates (scan: Scan) : Candidate list =
     { Target = target
       Kind = LeftoverKind.TempRunDir
       Build =
-        fun () ->
+        immediately (fun () ->
           { subjectBase LeftoverKind.TempRunDir target with
               SizeBytes = (if isDir path then directorySize path else (try FileInfo(path).Length with _ -> 0L))
               LastTouched = (if isDir path then touched path else fileTouched path)
               Display = Path.GetFileName path
               Uses = (if isDir path then usesOf scan path else [])
               Lineage = (if isDir path then tempLineage scan path else Lineage.NoOwnerRecorded)
-              Retention = Retention.KeepFor DataRetention.tempRunMaxAge } })
+              Retention = Retention.KeepFor DataRetention.tempRunMaxAge }) })
 
 let private registryEntries (scan: Scan) : (string * DaemonOwnership.DaemonInfoFile) list =
   let dir = DaemonOwnership.registryDir scan.Loc.DataDir
@@ -635,7 +686,7 @@ let private registryCandidates (scan: Scan) : Candidate list =
     { Target = target
       Kind = LeftoverKind.SpawnedRegistryEntry
       Build =
-        fun () ->
+        immediately (fun () ->
           let lineage =
             match DaemonOwnership.DaemonInfoFile.read file with
             | Result.Error _ -> Lineage.LineageUndecidable "the entry could not be read"
@@ -648,7 +699,7 @@ let private registryCandidates (scan: Scan) : Candidate list =
               LastTouched = fileTouched file
               Display = Path.GetFileName file
               Lineage = lineage
-              Retention = Retention.KeepFor DataRetention.tempRunMaxAge } })
+              Retention = Retention.KeepFor DataRetention.tempRunMaxAge }) })
 
 // ─── Orphan processes ──────────────────────────────────────────────────
 
@@ -692,65 +743,85 @@ let private processCandidates (scan: Scan) : Candidate list =
         { Target = target
           Kind = LeftoverKind.OrphanProcess
           Build =
-            fun () ->
+            immediately (fun () ->
               let rss = try (OwnerMonitor.getProcessById p.Pid |> Option.map (fun x -> x.WorkingSet64) |> Option.defaultValue 0L) with _ -> 0L
               { subjectBase LeftoverKind.OrphanProcess target with
                   SizeBytes = rss
                   Display = p.CommandLine
-                  Lineage = lineage } })
+                  Lineage = lineage }) })
 
 // ─── Everything ────────────────────────────────────────────────────────
 
 /// Every candidate leftover of the wanted kinds, cheap to list. Nothing expensive is read until `Build` runs,
 /// and a kind nobody wants is not even listed (the host cache does not need a worktree list).
-let candidatesOf (scan: Scan) (wanted: LeftoverKind -> bool) : Candidate list =
-  let gitKinds = [ LeftoverKind.AgentWorktree; LeftoverKind.StaleBranch; LeftoverKind.GateCheckout ]
-  let needsGit = gitKinds |> List.exists wanted
-  let kindIf (kind: LeftoverKind) (make: unit -> Candidate list) : Candidate list =
-    match wanted kind with
-    | true -> make ()
-    | false -> []
-  let managedRoot = normalize (Path.Combine(scan.Loc.Repo, ".claude", "worktrees"))
-  let gateRoot = normalize scan.Loc.GateDir
-  let worktreeState = match needsGit with | true -> Some(worktreeEntries scan) | false -> None
-  let baseRef = lazy (baseBranch scan.Git scan.Loc.Repo)
-  let gitBacked : Candidate list =
-    match worktreeState with
-    | None -> []
-    | Some(Result.Error why) ->
-      // Without the worktree list there is nothing to say about worktrees, and that is said once, here.
-      let target = Target.Directory(normalize scan.Loc.Repo)
-      kindIf LeftoverKind.AgentWorktree (fun () ->
-        [ { Target = target
-            Kind = LeftoverKind.AgentWorktree
-            Build =
-              fun () ->
-                { subjectBase LeftoverKind.AgentWorktree target with
-                    Repo = RepoLink.InRepo scan.Loc.Repo
-                    Git = GitEvidence.GitUnreadable why } } ])
-    | Some(Result.Ok all) ->
-      let others = match all with | _ :: rest -> rest | [] -> [] // the first entry is the main checkout
-      kindIf LeftoverKind.AgentWorktree (fun () ->
-        others
-        |> List.choose (fun e ->
-          let p = normalize e.Path
-          match under managedRoot p, under gateRoot p with
-          | true, _ -> Some(worktreeCandidate scan (baseRef.Force()) e LeftoverKind.AgentWorktree)
-          | _, true -> None // a gate checkout: the gate's candidates own it
-          | _ -> Some(outsideCandidate scan e)))
-      @ kindIf LeftoverKind.StaleBranch (fun () -> branchCandidates scan (baseRef.Force()) all)
-  gitBacked
-  @ (match [ LeftoverKind.GateCheckout; LeftoverKind.GateTierClone; LeftoverKind.GatePassRecord ] |> List.exists wanted with
-     | true -> gateCandidates scan |> List.filter (fun c -> wanted c.Kind)
-     | false -> [])
-  @ kindIf LeftoverKind.HostCacheEntry (fun () -> hostCandidates scan)
-  @ kindIf LeftoverKind.WorkerLogFile (fun () -> workerLogCandidates scan)
-  @ kindIf LeftoverKind.TempRunDir (fun () -> tempCandidates scan)
-  @ kindIf LeftoverKind.SpawnedRegistryEntry (fun () -> registryCandidates scan)
-  @ kindIf LeftoverKind.OrphanProcess (fun () -> processCandidates scan)
+let candidatesOf (scan: Scan) (wanted: LeftoverKind -> bool) : Task<Candidate list> =
+  task {
+    let gitKinds = [ LeftoverKind.AgentWorktree; LeftoverKind.StaleBranch; LeftoverKind.GateCheckout ]
+    let needsGit = gitKinds |> List.exists wanted
+    let kindIf (kind: LeftoverKind) (make: unit -> Candidate list) : Candidate list =
+      match wanted kind with
+      | true -> make ()
+      | false -> []
+    let managedRoot = normalize (Path.Combine(scan.Loc.Repo, ".claude", "worktrees"))
+    let gateRoot = normalize scan.Loc.GateDir
+    let! worktreeState =
+      task {
+        match needsGit with
+        | true ->
+          let! entries = worktreeEntries scan
+          return Some entries
+        | false -> return None
+      }
+    // Asked for when the first candidate that needs it is built, and once: git is not asked about the base branch
+    // for a scan that only lists.
+    let baseRef = lazy (baseBranch scan.Git scan.Loc.Repo)
+    let! gitBacked =
+      task {
+        match worktreeState with
+        | None -> return []
+        | Some(Result.Error why) ->
+          // Without the worktree list there is nothing to say about worktrees, and that is said once, here.
+          let target = Target.Directory(normalize scan.Loc.Repo)
+          return
+            kindIf LeftoverKind.AgentWorktree (fun () ->
+              [ { Target = target
+                  Kind = LeftoverKind.AgentWorktree
+                  Build =
+                    immediately (fun () ->
+                      { subjectBase LeftoverKind.AgentWorktree target with
+                          Repo = RepoLink.InRepo scan.Loc.Repo
+                          Git = GitEvidence.GitUnreadable why }) } ])
+        | Some(Result.Ok all) ->
+          let others = match all with | _ :: rest -> rest | [] -> [] // the first entry is the main checkout
+          let worktrees =
+            kindIf LeftoverKind.AgentWorktree (fun () ->
+              others
+              |> List.choose (fun e ->
+                let p = normalize e.Path
+                match under managedRoot p, under gateRoot p with
+                | true, _ -> Some(worktreeCandidate scan baseRef e LeftoverKind.AgentWorktree)
+                | _, true -> None // a gate checkout: the gate's candidates own it
+                | _ -> Some(outsideCandidate scan e)))
+          let! branches =
+            match wanted LeftoverKind.StaleBranch with
+            | true -> branchCandidates scan baseRef all
+            | false -> Task.FromResult []
+          return worktrees @ branches
+      }
+    return
+      gitBacked
+      @ (match [ LeftoverKind.GateCheckout; LeftoverKind.GateTierClone; LeftoverKind.GatePassRecord ] |> List.exists wanted with
+         | true -> gateCandidates scan |> List.filter (fun c -> wanted c.Kind)
+         | false -> [])
+      @ kindIf LeftoverKind.HostCacheEntry (fun () -> hostCandidates scan)
+      @ kindIf LeftoverKind.WorkerLogFile (fun () -> workerLogCandidates scan)
+      @ kindIf LeftoverKind.TempRunDir (fun () -> tempCandidates scan)
+      @ kindIf LeftoverKind.SpawnedRegistryEntry (fun () -> registryCandidates scan)
+      @ kindIf LeftoverKind.OrphanProcess (fun () -> processCandidates scan)
+  }
 
 /// Every candidate leftover of every kind.
-let candidates (scan: Scan) : Candidate list = candidatesOf scan (fun _ -> true)
+let candidates (scan: Scan) : Task<Candidate list> = candidatesOf scan (fun _ -> true)
 
 /// The kinds a target could be, from where it lives, so looking at one target again does not scan the machine.
 let kindsOfTarget (loc: Locations) (target: Target) : LeftoverKind list =
@@ -777,22 +848,38 @@ let kindsOfTarget (loc: Locations) (target: Target) : LeftoverKind list =
       | [] -> [ LeftoverKind.AgentWorktree ]
       | matched -> matched
 
+/// Build and classify the candidates one after another: each build may ask git, and a scan asks it one question at a time.
+let classifyAll (scan: Scan) (chosen: Candidate list) : Task<Leftover list> =
+  task {
+    let classified = ResizeArray<Leftover>()
+    for c in chosen do
+      let! subject = c.Build()
+      classified.Add(classify scan.Now subject)
+    return List.ofSeq classified
+  }
+
 /// Classify every candidate. `only` restricts the work to one target.
-let gather (scan: Scan) (only: Target option) : Leftover list =
-  let wanted =
-    match only with
-    | None -> (fun _ -> true)
-    | Some t ->
-      let kinds = kindsOfTarget scan.Loc t
-      (fun kind -> List.contains kind kinds)
-  candidatesOf scan wanted
-  |> List.filter (fun c -> match only with | None -> true | Some t -> c.Target = t)
-  |> List.map (fun c -> classify scan.Now (c.Build()))
+let gather (scan: Scan) (only: Target option) : Task<Leftover list> =
+  task {
+    let wanted =
+      match only with
+      | None -> (fun _ -> true)
+      | Some t ->
+        let kinds = kindsOfTarget scan.Loc t
+        (fun kind -> List.contains kind kinds)
+    let! found = candidatesOf scan wanted
+    return!
+      found
+      |> List.filter (fun c -> match only with | None -> true | Some t -> c.Target = t)
+      |> classifyAll scan
+  }
 
 /// Classify every candidate of the given kinds.
-let gatherKinds (scan: Scan) (kinds: LeftoverKind list) : Leftover list =
-  candidatesOf scan (fun kind -> List.contains kind kinds)
-  |> List.map (fun c -> classify scan.Now (c.Build()))
+let gatherKinds (scan: Scan) (kinds: LeftoverKind list) : Task<Leftover list> =
+  task {
+    let! found = candidatesOf scan (fun kind -> List.contains kind kinds)
+    return! classifyAll scan found
+  }
 
 /// A scan against the real machine.
 let realScan (loc: Locations) (live: LiveFacts) : Scan =

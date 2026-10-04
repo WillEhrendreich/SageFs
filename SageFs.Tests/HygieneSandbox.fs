@@ -9,11 +9,21 @@ open SageFs.WorkspaceHygiene
 open SageFs.HygieneGather
 open SageFs.HygieneEdge
 
+/// Git for building a sandbox: a plain script that runs before any test body awaits anything, so it runs the process
+/// and waits for it. The product's `runGit` is the awaited one, and it is what every scan under test uses.
+let gitExit (dir: string) (args: string list) : int * string * string =
+  let psi = System.Diagnostics.ProcessStartInfo("git", WorkingDirectory = dir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
+  for a in args do psi.ArgumentList.Add a
+  use proc = System.Diagnostics.Process.Start psi
+  let out = proc.StandardOutput.ReadToEnd()
+  let err = proc.StandardError.ReadToEnd()
+  proc.WaitForExit()
+  proc.ExitCode, out, err
+
 let git (dir: string) (args: string list) : string =
-  match runGit dir args with
-  | GitResult.Output out -> out
-  | GitResult.Exit(code, err) -> failwithf "git %s in %s exited %d: %s" (String.Join(" ", args)) dir code err
-  | GitResult.Unavailable detail -> failwithf "git unavailable: %s" detail
+  match gitExit dir args with
+  | 0, out, _ -> out
+  | code, _, err -> failwithf "git %s in %s exited %d: %s" (String.Join(" ", args)) dir code err
 
 let commitAll (dir: string) (message: string) =
   git dir [ "add"; "-A" ] |> ignore
@@ -69,7 +79,7 @@ type Sandbox() =
 
   member _.Roots : Roots = rootsOf locations
 
-  member this.Effects(alive: int -> int64 option -> bool) : Effects =
+  member this.Effects(alive: int -> int64 option -> bool) : AsyncEffects =
     effects { MakeScan = (fun () -> this.ScanWith(alive, this.Procs, this.Live)); Git = runGit; IsAlive = alive }
 
   interface IDisposable with
@@ -116,6 +126,6 @@ let standingOfPath (leftovers: Leftover list) (path: string) : Standing =
   |> fun l -> (Leftover.entry l).Standing
 
 let branchExists (sb: Sandbox) (name: string) : bool =
-  match runGit sb.Repo [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + name ] with
-  | GitResult.Output _ -> true
+  match gitExit sb.Repo [ "rev-parse"; "--verify"; "--quiet"; "refs/heads/" + name ] with
+  | 0, _, _ -> true
   | _ -> false

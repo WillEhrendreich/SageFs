@@ -2166,7 +2166,7 @@ let createHygieneTidyHandler (q: DashboardQueries) (infra: DashboardInfra) (plan
         let loc = HygieneService.locationsFor repo
         HygieneService.Cache.beginTidy repo
         do! ssePatchNode ctx (renderHygienePanel (HygieneService.HygieneView.Tidying repo))
-        let! outcome = System.Threading.Tasks.Task.Run(fun () -> HygieneService.tidy loc (fun () -> live) (WorkspaceHygiene.PlanId planId))
+        let! outcome = HygieneService.tidy loc (fun () -> live) (WorkspaceHygiene.PlanId planId)
         HygieneService.Cache.endTidy repo
         match outcome with
         | HygieneService.TidyOutcome.Tidied _ -> ()

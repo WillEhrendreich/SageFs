@@ -206,6 +206,11 @@ let decideCustomPortOwnership
       (sprintf "sagefs: --mcp-port %d needs --owner-pid <pid> or --ttl <duration> — a daemon on a non-default port is somebody's temporary daemon, and it has to say who owns it or when to give up." mcpPort)
   | false, _, _ -> CustomPortOwnershipDecision.Allowed
 
+/// The one place the process entry point waits for the work its command started to end. `main` has nothing else to
+/// do, and nothing else waits on the pool, so holding its thread cannot starve a handler.
+let awaitAtEntryPoint (work: System.Threading.Tasks.Task<'a>) : 'a =
+  work.GetAwaiter().GetResult()
+
 /// Run daemon mode (default behavior).
 let runDaemon (args: string array) =
   // Fail fast on a non-loopback SAGEFS_BIND_HOST before anything binds. The
@@ -240,12 +245,12 @@ let runDaemon (args: string array) =
       daemonArgs
       Environment.CurrentDirectory
       cts.Token
-    |> _.GetAwaiter() |> _.GetResult()
+    |> awaitAtEntryPoint
     0
   | false ->
     // The same entry-point wait, for the daemon itself.
     DaemonMode.run bindHost mcpPort flags ownership
-    |> _.GetAwaiter() |> _.GetResult()
+    |> awaitAtEntryPoint
     0
 
 /// `sagefs sweep [--kill]` — reap daemons whose recorded owner is gone.
@@ -319,32 +324,34 @@ let private fetchSessionDirectories (info: DaemonInfo) : (string * string) list 
 
 /// `sagefs hygiene [--tidy] [--repo PATH]` — what agents left behind, as a dry-run plan. `--tidy` runs only the
 /// safe part, for the plan it just printed, and every step looks at its target again before it acts.
-let hygieneCommand (tidy: bool) (repoArg: string) (mcpPort: int) =
-  let start = match repoArg with | "" -> Environment.CurrentDirectory | given -> Path.GetFullPath given
-  match HygieneService.mainRepoOf start with
-  | None ->
-    eprintfn "hygiene: %s is not inside a git checkout. Run it from the repository, or pass --repo PATH." start
-    1
-  | Some repo ->
-    let loc = HygieneService.locationsFor repo
-    let daemon = DaemonState.readOnPort mcpPort
-    let sessions = match daemon with | Some info -> fetchSessionDirectories info | None -> []
-    let owners = HygieneService.OwnerLedger.read loc.DataDir
-    let connection = match daemon with | Some _ -> (fun (_: string) -> true) | None -> (fun (_: string) -> false)
-    let live () = HygieneService.liveFactsOf sessions owners connection
-    let snapshot = HygieneService.take loc (live ())
-    printfn "%s" (WorkspaceHygieneRender.renderPlan snapshot.Leftovers snapshot.Plan)
-    match tidy with
-    | false -> 0
-    | true ->
-      printfn ""
-      match HygieneService.tidy loc live snapshot.Plan.Id with
-      | HygieneService.TidyOutcome.Tidied(report, _) ->
-        printfn "%s" (WorkspaceHygieneRender.renderReport report)
-        0
-      | HygieneService.TidyOutcome.NotConfirmed _ ->
-        eprintfn "hygiene: the workspace changed while it was being looked at; run it again to see the new plan."
-        1
+let hygieneCommand (tidy: bool) (repoArg: string) (mcpPort: int) : System.Threading.Tasks.Task<int> =
+  task {
+    let start = match repoArg with | "" -> Environment.CurrentDirectory | given -> Path.GetFullPath given
+    match HygieneService.mainRepoOf start with
+    | None ->
+      eprintfn "hygiene: %s is not inside a git checkout. Run it from the repository, or pass --repo PATH." start
+      return 1
+    | Some repo ->
+      let loc = HygieneService.locationsFor repo
+      let daemon = DaemonState.readOnPort mcpPort
+      let sessions = match daemon with | Some info -> fetchSessionDirectories info | None -> []
+      let owners = HygieneService.OwnerLedger.read loc.DataDir
+      let connection = match daemon with | Some _ -> (fun (_: string) -> true) | None -> (fun (_: string) -> false)
+      let live () = HygieneService.liveFactsOf sessions owners connection
+      let! snapshot = HygieneService.take loc (live ())
+      printfn "%s" (WorkspaceHygieneRender.renderPlan snapshot.Leftovers snapshot.Plan)
+      match tidy with
+      | false -> return 0
+      | true ->
+        printfn ""
+        match! HygieneService.tidy loc live snapshot.Plan.Id with
+        | HygieneService.TidyOutcome.Tidied(report, _) ->
+          printfn "%s" (WorkspaceHygieneRender.renderReport report)
+          return 0
+        | HygieneService.TidyOutcome.NotConfirmed _ ->
+          eprintfn "hygiene: the workspace changed while it was being looked at; run it again to see the new plan."
+          return 1
+  }
 
 type DaemonLaunchDecision =
   | AttachToExistingDaemon of DaemonInfo
@@ -652,13 +659,13 @@ let main args =
     sweepCommand kill
 
   | Hygiene(tidy, repo) ->
-    hygieneCommand tidy repo (parseMcpPort args)
+    hygieneCommand tidy repo (parseMcpPort args) |> awaitAtEntryPoint
 
   | Mcp mcpArgs ->
     let mcpPort = parseMcpPort mcpArgs
     // The process entry point waiting for the bridge to end; the bridge is the whole process.
     SageFs.Server.McpStdioBridge.runMcpStdio mcpPort
-    |> _.GetAwaiter() |> _.GetResult()
+    |> awaitAtEntryPoint
 
   | Play ledgerPath ->
     match CohortPlay.runPlay ledgerPath with
