@@ -576,6 +576,85 @@ let sessionScopingTests = testList "SSE Session Scoping" [
   ]
 ]
 
+/// The keys written directly on the top-level object of a JSON text, in order, duplicates kept
+/// (JsonDocument would hide them, so this walks the tokens).
+let topLevelKeys (json: string) : string list =
+  let bytes = Encoding.UTF8.GetBytes json
+  let mutable reader = Utf8JsonReader(bytes)
+  let keys = ResizeArray<string>()
+  let mutable depth = 0
+  while reader.Read() do
+    match reader.TokenType with
+    | JsonTokenType.StartObject
+    | JsonTokenType.StartArray -> depth <- depth + 1
+    | JsonTokenType.EndObject
+    | JsonTokenType.EndArray -> depth <- depth - 1
+    | JsonTokenType.PropertyName when depth = 1 -> keys.Add(reader.GetString())
+    | _ -> ()
+  List.ofSeq keys
+
+[<Tests>]
+let sessionIdOnceTests = testList "SSE frame names its session once" [
+  let sid = "9e4357e0"
+
+  let liveBindingsSnapshot : SageFs.Features.LiveValueTree.LiveValueSnapshot =
+    let root : SageFs.Features.LiveValueTree.LiveValueNode =
+      { Label = "x"; TypeName = "int"; Preview = "42"
+        Kind = SageFs.Features.LiveValueTree.NodeKind.Leaf
+        Children = []; BestEffort = false; Depth = 0 }
+    { SessionId = sid
+      Generation = 1L
+      Bindings = [ { Name = "x"; TypeSignature = "int"; Root = root } ]
+      Truncated = false
+      CapturedAt = System.DateTimeOffset.UtcNow }
+
+  let summary : TestSummary =
+    { Total = 1; Passed = 1; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+
+  let annotations : FileAnnotations =
+    { FilePath = "src/Foo.fs"; TestAnnotations = [||]
+      CoverageAnnotations = [||]; InlineFailures = [||]; CodeLenses = [||]
+      PerformanceAnnotations = [||] }
+
+  let batch : TestResultsBatchPayload =
+    { Generation = RunGeneration 1
+      Freshness = ResultFreshness.Fresh
+      Completion = BatchCompletion.Complete(1, 1)
+      Entries = [||]
+      Summary = summary
+      LastDecision = None }
+
+  let frames : (string * string) list =
+    [ "live_bindings", formatLiveBindingsEvent productionSseOpts (Some sid) liveBindingsSnapshot
+      "test_summary", formatTestSummaryEvent productionSseOpts (Some sid) summary None
+      "test_results_batch", formatTestResultsBatchEvent productionSseOpts (Some sid) batch None
+      "file_annotations", formatFileAnnotationsEvent productionSseOpts (Some sid) annotations
+      "warmup_progress", formatWarmupProgressEvent productionSseOpts (Some sid) 1 4 "scanning"
+      "test_trace", formatTestTraceEvent (Some sid) """{"Entries":[]}""" ]
+
+  for (kind, frame) in frames do
+    testCase (sprintf "%s frame has one SessionId key at the top level" kind) <| fun () ->
+      let data = extractSseData frame |> Option.get
+      topLevelKeys data
+      |> List.filter (fun k -> k = "SessionId")
+      |> List.length
+      |> Expect.equal "the session is named once, so a reader that keeps the first key and one that keeps the last agree" 1
+
+  testCase "live_bindings names the session the frame is scoped to, not the one the snapshot was captured under" <| fun () ->
+    let scoped = "scoped-session"
+    let data = extractSseData (formatLiveBindingsEvent productionSseOpts (Some scoped) liveBindingsSnapshot) |> Option.get
+    use doc = JsonDocument.Parse data
+    doc.RootElement.GetProperty("SessionId").GetString()
+    |> Expect.equal "the one SessionId is the frame's scope" scoped
+
+  testCase "live_bindings with no session scope keeps the snapshot's own SessionId, once" <| fun () ->
+    let data = extractSseData (formatLiveBindingsEvent productionSseOpts None liveBindingsSnapshot) |> Option.get
+    topLevelKeys data
+    |> List.filter (fun k -> k = "SessionId")
+    |> List.length
+    |> Expect.equal "the snapshot's own SessionId stays" 1
+]
+
 let private mkSp file line col bid : SequencePoint =
   { File = file; Line = line; Column = col; EndLine = 0; EndColumn = 0; BranchId = bid }
 
