@@ -1202,7 +1202,7 @@ let recordGreenPasses (ran: TierPlan.Tier list) : unit =
 // ends, however it ends, so a red stage never leaves a build running behind it.
 
 /// One command of a background job.
-type BackgroundStep = { Argv: string list; WorkingDir: string }
+type BackgroundStep = { Argv: string list; WorkingDir: string; Env: (string * string) list }
 
 /// A job's steps run one after another. Each has its own completion, so the stage that used to run step N can join
 /// exactly that far and be blamed for exactly that step.
@@ -1247,7 +1247,7 @@ let startBackground (name: string) (steps: BackgroundStep list) : Background =
       | [] -> ()
       | step :: rest ->
         let log = Path.Combine(tierWork, sprintf "%s-%d.log" name index)
-        let! code = execToLogWatching watch backgroundTimeout step.WorkingDir [] log step.Argv
+        let! code = execToLogWatching watch backgroundTimeout step.WorkingDir step.Env log step.Argv
         match code with
         | 0 ->
           completions[index].SetResult(Result.Ok ())
@@ -1291,7 +1291,7 @@ let contractTestParallelism = 6
 /// numbers are what the three stages that used to run it join: compile (2), the test-electron compile (3) and the
 /// client contract tests (4 and 5).
 let vscodeJobSteps : BackgroundStep list =
-  let inVscode argv = { Argv = argv; WorkingDir = vscodeDir }
+  let inVscode argv = { Argv = argv; WorkingDir = vscodeDir; Env = [] }
   [ inVscode [ "dotnet"; "tool"; "restore" ]
     // `npm ci` deletes node_modules and reinstalls: skipped while the lockfile and node are the ones it was installed from.
     inVscode [ "sh"; "-c"; BuildStamps.npmCiScript [ "--include=dev" ] ]
@@ -1309,16 +1309,36 @@ let vscodeContractThrough = 5
 /// closure built first (build/GateProducts.proj), so the "build" stage starts it once that has finished.
 let net10BuildSteps () : BackgroundStep list =
   let ofCommand (command: string) =
-    { Argv = command.Split(' ', StringSplitOptions.RemoveEmptyEntries) |> List.ofArray; WorkingDir = rootDir }
+    { Argv = command.Split(' ', StringSplitOptions.RemoveEmptyEntries) |> List.ofArray; WorkingDir = rootDir; Env = [] }
   TierPlan.Framework.all
   |> List.filter (fun f -> f <> TierPlan.Framework.primary)
   |> List.collect (fun framework ->
     match TierPlan.testBuildCommands framework with
     | [ restore; build ] ->
       [ ofCommand restore
-        { Argv = [ "sh"; "-c"; TierPlan.seedScript framework ]; WorkingDir = rootDir }
+        { Argv = [ "sh"; "-c"; TierPlan.seedScript framework ]; WorkingDir = rootDir; Env = [] }
         ofCommand build ]
     | other -> failwithf "expected a restore then a build for %A, got %A" framework other)
+
+/// The format check: reads the tree, writes nothing. It used to wait for the ratchets (about 9 s) and then take 7 s itself.
+let formatJobSteps : BackgroundStep list =
+  [ { Argv = [ "dotnet"; "format"; "--verify-no-changes"; "--verbosity"; "minimal" ]; WorkingDir = rootDir; Env = [] } ]
+
+/// The samples the integration suites open sessions on. Built by the solution build already, so these are the
+/// checks that each one is up to date; same commands, run beside the ratchets instead of after them.
+let sampleProjects =
+  [ "samples/demos/SageFs.Samples.WebappDatastar/SageFs.Samples.WebappDatastar.fsproj"
+    "samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj"
+    "samples/demos/SageFs.Samples.ConsoleTicker/SageFs.Samples.ConsoleTicker.fsproj" ]
+
+let sampleJobSteps : BackgroundStep list =
+  sampleProjects
+  |> List.map (fun project -> { Argv = [ "dotnet"; "build"; project; "-c"; "Release"; "--nologo" ]; WorkingDir = rootDir; Env = [] })
+
+/// The FSI host every tier shares, built into the shared cache once. Cold it costs about 12 s and 24 CPU seconds
+/// (0.6 s warm), which used to sit between the last stage and the first tier.
+let fsiHostJobSteps : BackgroundStep list =
+  [ { Argv = [ "dotnet"; testDll; "--prebuild-host" ]; WorkingDir = rootDir; Env = [ "SAGEFS_HOST_CACHE_DIR", sharedHostCache ] } ]
 
 // ---- the forked MCP SDK's packs, skipped when nothing they read changed --------
 
@@ -1489,7 +1509,18 @@ pipeline "sagefs" {
     // VS Code stages and every test tier never start. `--ratchets` runs through
     // TrustSignal.run, so zero ratchets registered or ran is NothingRan (exit 3).
     timeoutForStep 300
-    run (fun _ -> runRatchetLane ())
+    run (fun _ ->
+      async {
+        // Nothing below depends on the ratchets' verdict (the format check and the sample builds read and build
+        // what the build stage made; the host build needs only the test assembly), so they start NOW and the
+        // stages that used to run them after the ratchets only join them. A red ratchet still fails this stage
+        // and stops the pipeline, and the jobs are killed when it exits.
+        startBackgroundOnce "format" formatJobSteps
+        startBackgroundOnce "samples" sampleJobSteps
+        Directory.CreateDirectory sharedHostCache |> ignore
+        startBackgroundOnce "fsi-host" fsiHostJobSteps
+        return! runRatchetLane ()
+      })
   }
 
   stage "build other frameworks" {
@@ -1507,7 +1538,8 @@ pipeline "sagefs" {
   }
 
   stage "format" {
-    run "dotnet format --verify-no-changes --verbosity minimal"
+    // `dotnet format --verify-no-changes --verbosity minimal`, started by "ratchets" and joined here.
+    run (fun _ -> joinBackgroundNamed "format" (formatJobSteps.Length - 1))
   }
 
   stage "build samples for integration suites" {
@@ -1520,9 +1552,10 @@ pipeline "sagefs" {
     // McpAppRunOutcomeTests started sessioning on ConsoleTicker without one.
     // `Architecture — every sample an integration suite sessions on is built
     // by CI` now fails the fast local suite instead of waiting for CI.
-    run "dotnet build samples/demos/SageFs.Samples.WebappDatastar/SageFs.Samples.WebappDatastar.fsproj -c Release --nologo"
-    run "dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Release --nologo"
-    run "dotnet build samples/demos/SageFs.Samples.ConsoleTicker/SageFs.Samples.ConsoleTicker.fsproj -c Release --nologo"
+    //
+    // The three `dotnet build samples/... -c Release --nologo` commands (sampleProjects) were started by
+    // "ratchets" and run beside it; this stage joins them.
+    run (fun _ -> joinBackgroundNamed "samples" (sampleJobSteps.Length - 1))
   }
 
   stage "vscode extension compile" {
@@ -1606,6 +1639,11 @@ pipeline "sagefs" {
             for t in browserTiers do
               lock invokedTiers (fun () -> invokedTiers.Add((t.Name, t.Args, false)))
             always @ [ List.head ciOnly ]
+        // The FSI host every tier shares was being built beside the ratchets; wait for it. A failure is not fatal
+        // here (the tiers' own prebuild below tries again and says so), but it is never silent.
+        match! joinBackgroundNamed "fsi-host" (fsiHostJobSteps.Length - 1) with
+        | Ok () -> ()
+        | Error e -> printfn "FSI host prebuild (beside the ratchets) failed, the tiers will retry it: %s" e
         // Tiers that already went green on this commit with these exact bytes take their record (PassRecord),
         // and say so; the rest run. Tiers that ran green on a clean tree leave a record for the next run.
         let toRun = takeRecordedPasses runnable
