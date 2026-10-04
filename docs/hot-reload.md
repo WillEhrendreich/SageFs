@@ -515,6 +515,36 @@ count whether or not `.git` is there.
 The other failure you can hit is Linux running out of inotify instances. That is
 reported the same way, with a hint to raise `fs.inotify.max_user_instances`.
 
+## Nudging a value
+
+You can change one value in a source file the session owns without opening the file. The `nudge_value` tool finds the expression, replaces just that range, and the save reaches the running app the way any other save does. It is the first door onto the live-tweak engine in [`SageFs.Core/Features/Tweak/`](../SageFs.Core/Features/Tweak), which could find, edit and undo an expression before anything called it.
+
+The tool has four actions:
+
+- `inspect` lists what can be nudged in a file: each value's address (`Game.Tuning.tuning/{JumpVelocity}/BinOp.Right`), its text, its hash and, for a literal, its kind. It also says how much history the file has and where undo stands.
+- `set` takes an address, the hash `inspect` gave for it, and either a `literal` (read as the kind the literal already is, so `13.2` for a float, `true` for a bool, `Hard` for a union case) or an `expression` (any F# expression, such as `gravity * 2.0`). A literal keeps your style: `1.0` stays `1.0`, `0x1F` stays hex, `12.5<m/s>` keeps its unit.
+- `undo` and `redo` step back and forward through what the tool wrote to that file.
+
+What it will not do, and what it does about it:
+
+- It only touches the project files of the session you call it for. Anything else is refused as `NotOwned`, and so is a symbolic link, because a rename over a link would replace the link.
+- It never guesses at a stale address. If the expression changed since you inspected it you get `SourceMoved` with the text that is there now. If the binding was renamed you get `AddressMoved` with the new address to confirm, and nothing is written until you send it again. If it is gone you get `AddressGone`.
+- A failed write leaves the file byte-identical. The file is replaced by renaming a finished temp file over it, so a crash at any step leaves the old file or the new one, never half of one.
+- Every write is journaled before the file changes, in a per-file journal under the tweaks folder of SageFs's data directory. A crash between the record and the rename leaves a record for a write that did not land, and the next call finds it, marks it undone and says so. A torn record is removed the same way.
+- `undo` refuses with all three texts when the expression was edited after the write, and leaves your edit alone.
+- Two nudges to one file take turns. Two that start from the same hash cannot both land: the second is told the expression moved.
+- Who may call it is the same question as for any tool that changes things: a member token needs the Implementer role.
+
+Where it falls short:
+
+- An `expression` is parsed, not type-checked. A type error shows up as a failed reload verdict, the app keeps serving its last good value, and `undo` puts the old text back. Every reply that wrote an expression says so.
+- It writes the file. Dragging a value live in the running app, before you save, is not built, and neither is the dashboard or editor control that would call this tool.
+- If hot reload is not watching the file, the file changes and the running app does not. The reply says so.
+- A journal holds 5000 events per file per session. Past that a new write is refused and undo still works. Compacting a journal is not built.
+- A nested module declared with a dotted name (`module A.B =` inside a file) cannot be addressed.
+
+Each of these is pinned by a test: [`NudgeTests`](../SageFs.Tests/NudgeTests.fs) for the behavior and the refusals, [`NudgeSimDstTests`](../SageFs.Tests/NudgeSimDstTests.fs) for the crash and concurrency invariants across 500 seeds, [`NudgeMutationTests`](../SageFs.Tests/NudgeMutationTests.fs) for the decisions, and [`NudgeOutcomeTests`](../SageFs.Tests/NudgeOutcomeTests.fs) for the running app on net10 and net11.
+
 ## Where it falls short right now
 
 I'd rather you hear this from me than find it at 11pm.

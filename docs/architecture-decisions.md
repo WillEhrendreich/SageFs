@@ -9,7 +9,7 @@ These are the key decisions that shape SageFs's architecture, written to explain
 > - ADR-3 says session state and test results go in `.sagefm`. Today `.sagefm` is the daemon's session registry, and test outcomes, coverage and flaky history are in `.sagetc` ([format spec](binary-format-spec.md)). There is no `sagefs dump-manifest` command (the CLI has `check`, `stop`, `status`, `sweep`, `hygiene`, `play` and `mcp`). To look inside a manifest you use the reader in `SageFs.Core/Features/ManifestPersistence.fs`.
 > - ADR-4 says 30 cases. `SageFsError` has 42 now (counted from `type SageFsError` in `SageFs.Core/SageFsError.fs`).
 > - ADR-7 says zero interfaces. There are a few: `ILogger` in `SageFs.Core/Utils.fs` and `IFsiSession`, which `RemoteFsiSession.fs` implements. Everything else is still functions and modules.
-> - ADR-6's tool count is current (65), and its two source links are permalinks to the commit I wrote it against.
+> - ADR-6's tool count is current (66), and its two source links are permalinks to the commit I wrote it against.
 
 ---
 
@@ -135,7 +135,7 @@ positioning. This limitation is accepted for the sake of parity, and Raylib-only
 
 ## ADR-6: MCP as the AI Interface
 
-**Decision**: SageFs exposes 65 tools via [Model Context Protocol](https://modelcontextprotocol.io/).
+**Decision**: SageFs exposes 66 tools via [Model Context Protocol](https://modelcontextprotocol.io/).
 A state machine decides which tools are valid to *call* in the current session state.
 
 **Why**: AI agents (Copilot, Claude, and others) need structured interfaces instead of
@@ -144,7 +144,7 @@ terminal emulation.
 
 **Current status: a call-time gate, not a list filtered by session state**. For a caller with
 no member token, the `tools/list` response is unfiltered: an agent always sees the full
-65-tool catalog, in every session state. What the state machine actually gates is *calling* a tool: `enforceToolCallGate`
+66-tool catalog, in every session state. What the state machine actually gates is *calling* a tool: `enforceToolCallGate`
 rejects a call to a tool that doesn't apply to the current state with a structured error
 ([`SageFs/Mcp.fs:614`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/Mcp.fs#L614),
 wired in [`SageFs/McpServer.fs:433`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/McpServer.fs#L433)).

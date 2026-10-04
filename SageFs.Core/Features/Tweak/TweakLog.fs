@@ -441,7 +441,15 @@ type LastEffect =
   | NoEffects
   | Effect of eventId: int * address: TweakAddress * before: string * after: string
 
-let lastEffectOf (log: EventLog) : LastEffect = failwith "not built yet"
+let lastEffectOf (log: EventLog) : LastEffect =
+  let lookup id = effectOf (fun _ -> None) log.Events id
+  log.Events
+  |> List.rev
+  |> List.tryPick (fun e ->
+    match lookup e.Id with
+    | Some(address, before, after) -> Some(LastEffect.Effect(e.Id, address, before, after))
+    | None -> None)
+  |> Option.defaultValue LastEffect.NoEffects
 
 // ── the snapshot: what compaction folds a prefix of events into ──
 

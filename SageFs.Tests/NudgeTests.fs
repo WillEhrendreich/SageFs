@@ -461,9 +461,10 @@ let inspectTests =
       setLiteral world gravity "9.8" "12.5" |> written "set" |> ignore
       let afterSet = inspectAll world |> inspection "after a set"
       afterSet.Journaled |> Expect.equal "one record" 1
-      afterSet.Cursor |> Expect.equal "at the head" UndoCursor.AtHead
+      (afterSet.UndoSteps, afterSet.RedoSteps) |> Expect.equal "one step back, nothing to redo" (1, 0)
       undo world |> undone "undo" |> ignore
-      (inspectAll world |> inspection "after an undo").Cursor |> Expect.notEqual "stepped back" UndoCursor.AtHead
+      let afterUndo = inspectAll world |> inspection "after an undo"
+      (afterUndo.UndoSteps, afterUndo.RedoSteps) |> Expect.equal "nothing to undo, one to redo" (0, 1)
   ]
 
 [<Tests>]
@@ -508,6 +509,42 @@ let undoTests =
       setLiteral world gravity "9.8" "7.5" |> written "second, from the original" |> ignore
       undo world |> undone "undo the second" |> ignore
       source world |> Expect.equal "back to the original, not to the first" tuningSource
+      refused "the first write was already undone" (undo world) |> Expect.equal "so there is nothing left, not a divergence" NudgeRefusal.NothingToUndo
+      redo world |> redone "redo goes forward to the second, not the first" |> ignore
+      source world |> Expect.stringContains "the second write is back" "let gravity = 7.5"
+
+    testPropertyWithConfig { propConfig with maxTest = 40 } "PROPERTY, any run of writes, undos and redos never refuses a move as diverged, and undoing everything restores the original bytes" <| fun () ->
+      let opGen =
+        gen {
+          let! kind = Gen.choose (0, 3)
+          let! n = Gen.choose (1, 5)
+          return kind, n
+        }
+      Prop.forAll (Arb.fromGen (Gen.listOf opGen)) (fun ops ->
+        let world = create ()
+        let original = world.Disk.BytesOf sourcePath
+        let wellBehaved (kind, n) =
+          match kind with
+          | 0
+          | 1 ->
+            let current = resolve (source world) gravity |> Result.map (fun r -> r.Text) |> Result.defaultValue ""
+            setLiteral world gravity current (sprintf "%d.5" n) |> Result.isOk
+          | 2 ->
+            match undo world with
+            | Ok _
+            | Error NudgeRefusal.NothingToUndo -> true
+            | Error _ -> false
+          | _ ->
+            match redo world with
+            | Ok _
+            | Error NudgeRefusal.NothingToRedo -> true
+            | Error _ -> false
+        let rec unwind remaining =
+          match undo world with
+          | Ok _ when remaining > 0 -> unwind (remaining - 1)
+          | Error NudgeRefusal.NothingToUndo -> true
+          | _ -> false
+        List.forall wellBehaved ops && unwind 1000 && world.Disk.BytesOf sourcePath = original)
 
     testCase "WHY - undo refuses when the expression was edited since, with all three texts, and leaves the later edit alone" <| fun _ ->
       let world = create ()
@@ -701,26 +738,37 @@ let concurrencyTests =
             | true ->
               let bytes = inner.ReadBytes path
               match Interlocked.Increment(&arrivals.contents) with
-              | 1 -> met.Wait NudgeTimeouts.nudgeRendezvous |> ignore
+              | 1 -> met.WaitHandle.WaitOne NudgeTimeouts.nudgeRendezvous |> ignore
               | 2 -> met.Set()
               | _ -> ()
               bytes }
 
+  /// The task's answer, or a failed test if it is not there within the test's patience.
+  let awaitWithin (work: Task<'a>) : Task<'a> =
+    task {
+      let! winner = Task.WhenAny(work :> Task, Task.Delay TestTimeouts.patience)
+      match obj.ReferenceEquals(winner, work) with
+      | true -> return! work
+      | false -> return failtestf "the work did not finish within the test's patience"
+    }
+
   let twoNudges (run: Ports -> NudgeRequest -> Task<Result<Ran, NudgeRefusal>>) =
-    let world = create ()
-    let ports = { world.Ports with Files = meetingSteps world.Disk }
-    let request value = NudgeRequest.Set(file world, gravity, seenOf "9.8", NudgeValue.LiteralText value)
-    let first = run ports (request "12.5")
-    let second = run ports (request "13.5")
-    Task.WhenAll([| first :> Task; second :> Task |]).Wait(TestTimeouts.patience) |> Expect.isTrue "both nudges finish"
-    world, [ first.Result; second.Result ]
+    task {
+      let world = create ()
+      let ports = { world.Ports with Files = meetingSteps world.Disk }
+      let request value = NudgeRequest.Set(file world, gravity, seenOf "9.8", NudgeValue.LiteralText value)
+      let first = run ports (request "12.5")
+      let second = run ports (request "13.5")
+      let! both = awaitWithin (Task.WhenAll [| first; second |])
+      return world, List.ofArray both
+    }
 
   let writtenCount results = results |> List.filter (function Ok { Outcome = NudgeOutcome.Written _ } -> true | _ -> false) |> List.length
 
   testList "Nudge concurrency" [
-    testCase "WHY - two nudges from the same seen hash cannot both land: one wins, the other is told the expression moved" <| fun _ ->
+    testTask "WHY - two nudges from the same seen hash cannot both land: one wins, the other is told the expression moved" {
       let locks = FileLocks()
-      let world, results = twoNudges (fun ports request -> execute ports locks TestTimeouts.patience request)
+      let! world, results = twoNudges (fun ports request -> execute ports locks TestTimeouts.patience request)
       writtenCount results |> Expect.equal "exactly one write" 1
       results
       |> List.exists (function Error(NudgeRefusal.SourceMoved _) -> true | _ -> false)
@@ -728,33 +776,38 @@ let concurrencyTests =
       (journalOf world).Events |> List.length |> Expect.equal "one journal record, for the one write" 1
       let now = source world
       (now.Contains "12.5" <> now.Contains "13.5") |> Expect.isTrue "the file holds exactly one of the two values"
+    }
 
-    testCase "WHY - the twin that skips the lock lets both land, so the test above has teeth" <| fun _ ->
-      let _, results = twoNudges (fun ports request -> executeWithoutLockTwin ports request)
+    testTask "WHY - the twin that skips the lock lets both land, so the test above has teeth" {
+      let! _, results = twoNudges (fun ports request -> executeWithoutLockTwin ports request)
       writtenCount results |> Expect.equal "without the lock both read the same hash and both write: a lost update" 2
+    }
 
-    testCase "WHY - a wait for a busy file is refused as FileBusy after the bound, and names how long it waited" <| fun _ ->
+    testTask "WHY - a wait for a busy file is refused as FileBusy after the bound, and names how long it waited" {
       let locks = FileLocks()
-      use release = new ManualResetEventSlim(false)
+      let release = new ManualResetEventSlim(false)
       let ok = Ok { Outcome = NudgeOutcome.Unchanged(gravity, "9.8"); Notes = [] }
-      let holder = locks.WithLock(sourcePath, TestTimeouts.patience, fun () -> release.Wait(TestTimeouts.patience) |> ignore; ok)
-      let waiter = locks.WithLock(sourcePath, NudgeTimeouts.nudgeShortLockWait, fun () -> ok)
-      match waiter.Result with
-      | Error(NudgeRefusal.FileBusy waited) -> waited |> Expect.equal "the bound it was given" NudgeTimeouts.nudgeShortLockWait
+      let holder = locks.WithLock(sourcePath, TestTimeouts.patience, fun () -> release.WaitHandle.WaitOne TestTimeouts.patience |> ignore; ok)
+      let! waited = awaitWithin (locks.WithLock(sourcePath, NudgeTimeouts.nudgeShortLockWait, fun () -> ok))
+      match waited with
+      | Error(NudgeRefusal.FileBusy bound) -> bound |> Expect.equal "the bound it was given" NudgeTimeouts.nudgeShortLockWait
       | other -> failtestf "%A" other
       release.Set()
-      holder.Wait(TestTimeouts.patience) |> ignore
+      let! _ = awaitWithin holder
+      ()
+    }
 
-    testCase "WHY - a busy file does not hold up a different file" <| fun _ ->
+    testTask "WHY - a busy file does not hold up a different file" {
       let locks = FileLocks()
-      use release = new ManualResetEventSlim(false)
+      let release = new ManualResetEventSlim(false)
       let ok = Ok { Outcome = NudgeOutcome.Unchanged(gravity, "9.8"); Notes = [] }
-      let holder = locks.WithLock(sourcePath, TestTimeouts.patience, fun () -> release.Wait(TestTimeouts.patience) |> ignore; ok)
-      let other = locks.WithLock(otherPath, NudgeTimeouts.nudgeShortLockWait, fun () -> ok)
-      other.Wait(TestTimeouts.patience) |> ignore
-      other.Result |> Expect.isOk "a different path has its own lock"
+      let holder = locks.WithLock(sourcePath, TestTimeouts.patience, fun () -> release.WaitHandle.WaitOne TestTimeouts.patience |> ignore; ok)
+      let! other = awaitWithin (locks.WithLock(otherPath, NudgeTimeouts.nudgeShortLockWait, fun () -> ok))
+      other |> Expect.isOk "a different path has its own lock"
       release.Set()
-      holder.Wait(TestTimeouts.patience) |> ignore
+      let! _ = awaitWithin holder
+      ()
+    }
   ]
 
 [<Tests>]
@@ -804,12 +857,21 @@ let engineAdditionTests =
       let l = log [ saved 1 "12.5"; { Id = 2; At = 2L; Event = TweakLogEvent.ConflictResolved gravity } ]
       lastEffectOf l |> Expect.equal "still the save" (LastEffect.Effect(1, gravity, "9.8", "12.5"))
 
-    testCase "WHY - the undo cursor read from the journal is where undo and redo stand" <| fun _ ->
-      cursorOf EventLog.empty |> Expect.equal "fresh" UndoCursor.AtHead
-      cursorOf (log [ saved 1 "12.5" ]) |> Expect.equal "after a write" UndoCursor.AtHead
-      cursorOf (log [ saved 1 "12.5"; { Id = 2; At = 2L; Event = TweakLogEvent.RolledBack 1 } ]) |> Expect.equal "after an undo" (UndoCursor.At 1)
-      cursorOf (log [ saved 1 "12.5"; { Id = 2; At = 2L; Event = TweakLogEvent.RolledBack 1 }; { Id = 3; At = 3L; Event = TweakLogEvent.RolledBack 2 } ])
-      |> Expect.equal "after a redo" UndoCursor.AtHead
+    testCase "WHY - what undo and redo can do is read from the journal: the writes that are applied, and the undos that can be put back" <| fun _ ->
+      let rolledBack id target = { Id = id; At = int64 id; Event = TweakLogEvent.RolledBack target }
+      historyOf EventLog.empty |> Expect.equal "fresh" { Applied = []; Undone = [] }
+      historyOf (log [ saved 1 "12.5" ]) |> Expect.equal "after a write" { Applied = [ 1 ]; Undone = [] }
+      historyOf (log [ saved 1 "12.5"; rolledBack 2 1 ]) |> Expect.equal "after an undo" { Applied = []; Undone = [ 2 ] }
+      historyOf (log [ saved 1 "12.5"; rolledBack 2 1; rolledBack 3 2 ]) |> Expect.equal "after a redo" { Applied = [ 1 ]; Undone = [] }
+      historyOf (log [ saved 1 "12.5"; rolledBack 2 1; rolledBack 3 2; rolledBack 4 3 ])
+      |> Expect.equal "an undo of a redo (what settling a crash can write) takes the write out again" { Applied = []; Undone = [ 4 ] }
+
+    testCase "WHY - a write after an undo starts a new line of history: the undone write is not walked back into" <| fun _ ->
+      let rolledBack id target = { Id = id; At = int64 id; Event = TweakLogEvent.RolledBack target }
+      historyOf (log [ saved 1 "12.5"; rolledBack 2 1; saved 3 "7.5" ])
+      |> Expect.equal "only the new write is applied, and the old redo is gone" { Applied = [ 3 ]; Undone = [] }
+      historyOf (log [ saved 1 "12.5"; saved 2 "13.5"; rolledBack 3 2; rolledBack 4 1 ])
+      |> Expect.equal "two undos, newest first, so redo puts the most recent undo back first" { Applied = []; Undone = [ 4; 3 ] }
 
     testCase "WHY - reconcile finds nothing to settle when the file shows what the last record says" <| fun _ ->
       let afterSave = tuningSource.Replace("9.8", "12.5")
@@ -861,7 +923,7 @@ let refusalSamples : NudgeRefusal list =
     NudgeRefusal.JournalFailed(JournalFault.Unreadable "garbage")
     NudgeRefusal.JournalAtBudget(5000, 5000)
     NudgeRefusal.WriteFailed { Operation = FileOperation.Renaming; Path = "/x.fs"; Reason = "denied" }
-    NudgeRefusal.FileBusy(TimeSpan.FromSeconds 1.0) ]
+    NudgeRefusal.FileBusy NudgeTimeouts.nudgeShortLockWait ]
 
 [<Tests>]
 let refusalTests =

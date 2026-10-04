@@ -122,6 +122,24 @@ just as editable as a number, and the source file gets the expression back, not 
 Evidence: `live-tweak-spec.md`.
 Reopen it if: the expression path can't be type-checked against the live value safely.
 
+## The nudge door journals before it writes the file
+
+The first caller of the live-tweak engine is the `nudge_value` tool, and the question was which comes
+first when a nudge lands: the file or the record that says how to undo it. File first means a crash
+between the two leaves a changed source file that nothing can put back. Journal first means a crash
+between them leaves a record of a write that did not happen, which the next call finds (the file still
+holds the old text) and marks undone. The second is recoverable and the first is not, so the record
+goes first, the file is replaced by a rename so it is never half written, and a failed write marks
+its own record undone.
+
+The cost is that the engine's undo history can briefly describe a write the disk does not show, and
+every call starts by settling that. A crash simulation across 500 seeds runs both orders: the
+file-first twin loses writes the simulation catches, the shipped order does not.
+
+Evidence: `NudgeSimDstTests` (the twins), `NudgeTests` (the crash cases), `SageFs.Core/Features/Tweak/Nudge.fs`.
+Reopen it if: the journal moves into the same atomic step as the file (a single transactional store),
+which would make the settling unnecessary.
+
 ## Code changes land, state stays, nothing happens silently
 
 The rule for hot reload: a redefined immutable gives you the new value; a live mutable keeps what

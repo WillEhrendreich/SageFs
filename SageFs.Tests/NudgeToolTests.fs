@@ -96,7 +96,7 @@ let renderTests =
       let formula = items |> List.find (fun i -> text i "address" = NudgeAddress.format jumpVelocity)
       text formula "kind" |> Expect.equal "a formula" "Formula"
       text reply "listing" |> Expect.equal "complete" "Complete"
-      (field reply "cursor" |> fun c -> text c "position") |> Expect.equal "at the head" "AtHead"
+      ((field reply "undoSteps").GetInt32(), (field reply "redoSteps").GetInt32()) |> Expect.equal "no history yet" (0, 0)
   ]
 
 [<Tests>]
@@ -175,6 +175,7 @@ let contextFor (workingDirectory: string) (status: SessionLifecycleStatus) (hasS
   let ops =
     { SessionManagementOps.stub with
         GetSessionInfo = fun _ -> Task.FromResult(if hasSession then Some info else None)
+        GetAllSessions = fun () -> Task.FromResult(if hasSession then [ info ] else [])
         GetProxy = fun _ -> Task.FromResult(if hasSession then Some(fun _ -> async { return WorkerResponse.WorkerShuttingDown }) else None) }
   { FrictionStore = None
     DiagnosticsChanged = Event<Features.DiagnosticsStore.T>().Publish

@@ -76,7 +76,7 @@ let private fixedTable : (string * FixedBecause) list =
       [ "statusWaitCap"; "sseKeepAlive"; "debugContinuePark"; "appChangeAwait"; "dashboardHeartbeat"
         "dashboardStaleAfter"; "dashboardProbe"; "dashboardWorkerDataTtl"; "legacyStateStreamKeepAlive"; "reloadStreamHeartbeat"
         "processStartTimeTolerance"; "fileWriteTimeTolerance" ]
-  @ all FixedBecause.Threshold [ "impactP95Acceptable"; "impactP95Investigate"; "memberEvaluationGrace"; "scaledWaitCeiling" ]
+  @ all FixedBecause.Threshold [ "impactP95Acceptable"; "impactP95Investigate"; "memberEvaluationGrace"; "scaledWaitCeiling"; "nudgeFileLock" ]
   @ all FixedBecause.BoundBeforeKill
       [ "processNormalExit"; "processKillVerify"; "stderrDrainGrace"; "fsiHostExitReport"; "fsiHostShutdownGrace"
         "stopKillExit"; "workerShutdownDelay" ]

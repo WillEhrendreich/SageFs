@@ -87,8 +87,8 @@ module NudgeSim =
       PathsAfter: string list
       JournalBefore: byte[]
       JournalAfter: byte[]
-      /// For a nudge: the hash the call carried, and the hash of what was there.
-      SeenUsed: string
+      /// For a nudge: the hash the caller held (what it last saw), and the hash of what was there.
+      SeenGiven: string
       ActualHash: string
       Result: StepResult }
 
@@ -221,13 +221,13 @@ module NudgeSim =
         let otherBefore = world.Disk.BytesOf otherPath
         let journalBefore = world.Disk.BytesOf journal
         let currentSource = utf8.GetString fileBefore
-        let seenText, actualText =
+        let givenText, seenText, actualText =
           match step.Op with
           | Op.Nudge(target, _, which) ->
             let actual = textAt currentSource target
             let given = match which with | Seen.Fresh -> actual | Seen.Stale -> textAt initialSource target
-            (match seen with | SeenPolicy.AsGiven -> given | SeenPolicy.SkipCheckTwin -> actual), actual
-          | _ -> "", ""
+            given, (match seen with | SeenPolicy.AsGiven -> given | SeenPolicy.SkipCheckTwin -> actual), actual
+          | _ -> "", "", ""
         let result =
           match step.Op with
           | Op.OutsideEdit(target, value) ->
@@ -256,7 +256,7 @@ module NudgeSim =
           PathsAfter = world.Disk.Paths
           JournalBefore = journalBefore
           JournalAfter = world.Disk.BytesOf journal
-          SeenUsed = (match seenText with | "" -> "" | text -> contentHash text)
+          SeenGiven = (match givenText with | "" -> "" | text -> contentHash text)
           ActualHash = (match actualText with | "" -> "" | text -> contentHash text)
           Result = result })
     // Recovery: look once (which settles whatever a crash left), then undo everything.

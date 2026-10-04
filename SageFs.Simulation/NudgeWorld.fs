@@ -72,7 +72,7 @@ module NudgeWorld =
   let seenOf (text: string) : SeenHash =
     match SeenHash.tryParse (contentHash text) with
     | Ok seen -> seen
-    | Error reason -> failwithf "a content hash is a valid seen hash: %s" reason
+    | Error fault -> failwithf "a content hash is a valid seen hash: %A" fault
 
   /// Set `address` to a literal, saying the caller last saw `currentText` there.
   let setLiteral (world: World) (address: TweakAddress) (currentText: string) (literal: string) : Result<Ran, NudgeRefusal> =

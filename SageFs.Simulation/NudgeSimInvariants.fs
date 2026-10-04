@@ -126,9 +126,12 @@ module NudgeSimInvariants =
         match TweakLogFormat.decodeSegment (Journal.fingerprintFor sourcePath) o.JournalAfter with
         | Error reason -> violation o.Index (sprintf "the journal does not decode: %s" reason.CorruptionReason)
         | Ok decoded ->
-          match o.Step.Op, o.Result, decoded.TornTail with
-          | Op.NudgeUnowned, _, _ -> None
-          | _, StepResult.Returned(Ok _), true -> violation o.Index "a call that came back left a torn journal tail"
+          // A step that is not a door call (someone editing the file) never touches the journal, and a refused
+          // set that never opened the journal leaves whatever a crash before it left.
+          match isDoorOp o.Step.Op, o.Step.Op, o.Result, decoded.TornTail with
+          | false, _, _, _ -> None
+          | _, Op.NudgeUnowned, _, _ -> None
+          | _, _, StepResult.Returned(Ok _), true -> violation o.Index "a call that came back left a torn journal tail"
           | _ -> None)
 
   /// A nudge made with a hash that is not what is there never lands.
@@ -136,7 +139,7 @@ module NudgeSimInvariants =
     trace.Observations
     |> List.choose (fun o ->
       match o.Step.Op, o.Result with
-      | Op.Nudge _, StepResult.Returned(Ok { Outcome = NudgeOutcome.Written _ }) when o.SeenUsed <> o.ActualHash ->
+      | Op.Nudge _, StepResult.Returned(Ok { Outcome = NudgeOutcome.Written _ }) when o.SeenGiven <> o.ActualHash ->
         violation o.Index "a write landed on an expression that no longer hashed to what the caller saw"
       | _ -> None)
 

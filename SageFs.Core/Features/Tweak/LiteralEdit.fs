@@ -150,7 +150,19 @@ let rec private styleOf (text: string) : LiteralStyle option =
 /// The value and style a piece of source text spells, when it is exactly one
 /// literal. Same reading as `readLiteral`, for a caller that already holds the
 /// expression's text and does not want the file parsed again.
-let readLiteralText (text: string) : Result<LiteralValue * LiteralStyle, LiteralError> = failwith "not built yet"
+let readLiteralText (text: string) : Result<LiteralValue * LiteralStyle, LiteralError> =
+  match parseExpr text with
+  | Error _ -> Error(LiteralError.NotALiteral text)
+  | Ok expr ->
+    let valueAndStyle =
+      match expr with
+      | SynExpr.Const(constant = c) -> valueOfConst c |> Option.map (fun v -> v, styleOf text)
+      | SynExpr.Ident id when id.idText.Length > 0 && Char.IsUpper id.idText.[0] ->
+        Some(LiteralValue.Case id.idText, Some LiteralStyle.CaseStyle)
+      | _ -> None
+    match valueAndStyle with
+    | Some(value, Some style) -> Ok(value, style)
+    | _ -> Error(LiteralError.NotALiteral text)
 
 /// Read the literal at `address`: its exact original text, the value it
 /// carries, and the style to preserve when it's set again.
@@ -158,24 +170,13 @@ let readLiteral (source: string) (address: TweakAddress) : Result<ResolvedLitera
   match resolve source address with
   | Error e -> Error(LiteralError.Gone e)
   | Ok resolved ->
-    match parseExpr resolved.Text with
-    | Error _ -> Error(LiteralError.NotALiteral resolved.Text)
-    | Ok expr ->
-      let valueAndStyle =
-        match expr with
-        | SynExpr.Const(constant = c) -> valueOfConst c |> Option.map (fun v -> v, styleOf resolved.Text)
-        | SynExpr.Ident id when id.idText.Length > 0 && Char.IsUpper id.idText.[0] ->
-          Some(LiteralValue.Case id.idText, Some LiteralStyle.CaseStyle)
-        | _ -> None
-      match valueAndStyle with
-      | Some(value, Some style) ->
-        Ok
-          { Address = address
-            Range = resolved.Range
-            OriginalText = resolved.Text
-            Value = value
-            Style = style }
-      | _ -> Error(LiteralError.NotALiteral resolved.Text)
+    readLiteralText resolved.Text
+    |> Result.map (fun (value, style) ->
+      { Address = address
+        Range = resolved.Range
+        OriginalText = resolved.Text
+        Value = value
+        Style = style })
 
 // ── formatting a value back into text under a given style ──
 

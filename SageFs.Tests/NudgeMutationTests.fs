@@ -166,26 +166,38 @@ let reconcileMutants =
     detectsOutputMutant alwaysSettles (tuningSource.Replace("9.8", "12.5"), logOf [ savedEvent 1 "12.5" ]) (fun (s, l) -> reconcile s l) (fun r -> r = Reconciliation.Consistent)
   ]
 
-let undoLog = logOf [ savedEvent 1 "12.5"; { Id = 2; At = 2L; Event = TweakLogEvent.RolledBack 1 } ]
-let redoLog = logOf [ savedEvent 1 "12.5"; { Id = 2; At = 2L; Event = TweakLogEvent.RolledBack 1 }; { Id = 3; At = 3L; Event = TweakLogEvent.RolledBack 2 } ]
+let rolledBack id target = { Id = id; At = int64 id; Event = TweakLogEvent.RolledBack target }
+let undoLog = logOf [ savedEvent 1 "12.5"; rolledBack 2 1 ]
+let redoLog = logOf [ savedEvent 1 "12.5"; rolledBack 2 1; rolledBack 3 2 ]
+let branchLog = logOf [ savedEvent 1 "12.5"; rolledBack 2 1; savedEvent 3 "7.5" ]
 
-let cursorStuckAtHead : Mutant<EventLog -> UndoCursor> =
-  { Name = "cursorOf_is_always_at_the_head"
-    Description = "after an undo the cursor has to say so, or the next undo repeats the same step"
-    Apply = fun _ _ -> UndoCursor.AtHead }
+let withoutRollbacks (log: EventLog) : EventLog =
+  { log with Events = log.Events |> List.filter (fun e -> match e.Event with TweakLogEvent.RolledBack _ -> false | _ -> true) }
 
-let redoReadAsUndo : Mutant<EventLog -> UndoCursor> =
-  { Name = "cursorOf_reads_a_redo_as_another_undo"
-    Description = "a rollback of a rollback is a redo, and it brings the cursor back"
+let undosForgotten : Mutant<EventLog -> History> =
+  { Name = "historyOf_forgets_undos"
+    Description = "after an undo the write is no longer applied, or the next undo repeats the same step"
+    Apply = fun real log -> real (withoutRollbacks log) }
+
+let redoReadAsUndo : Mutant<EventLog -> History> =
+  { Name = "historyOf_reads_a_redo_as_another_undo"
+    Description = "a rollback of a rollback is a redo, and it puts the write back"
     Apply = fun real log ->
-      match log.Events |> List.tryLast with
-      | Some { Event = TweakLogEvent.RolledBack target } -> UndoCursor.At target
+      match List.rev log.Events with
+      | { Event = TweakLogEvent.RolledBack target } :: older when log.Events |> List.exists (fun e -> e.Id = target && (match e.Event with TweakLogEvent.RolledBack _ -> true | _ -> false)) ->
+        real { log with Events = List.rev older }
       | _ -> real log }
 
-let cursorMutants =
-  testList "mutants of cursorOf" [
-    detectsOutputMutant cursorStuckAtHead undoLog cursorOf (fun c -> c = UndoCursor.At 1)
-    detectsOutputMutant redoReadAsUndo redoLog cursorOf (fun c -> c = UndoCursor.AtHead)
+let writeKeepsTheRedoStack : Mutant<EventLog -> History> =
+  { Name = "historyOf_keeps_the_redo_stack_across_a_new_write"
+    Description = "a write after an undo starts a new line of history, so the old undo can no longer be redone"
+    Apply = fun real log -> { real log with Undone = (real undoLog).Undone } }
+
+let historyMutants =
+  testList "mutants of historyOf" [
+    detectsOutputMutant undosForgotten undoLog historyOf (fun h -> h.Applied = [] && h.Undone = [ 2 ])
+    detectsOutputMutant redoReadAsUndo redoLog historyOf (fun h -> h.Applied = [ 1 ] && h.Undone = [])
+    detectsOutputMutant writeKeepsTheRedoStack branchLog historyOf (fun h -> h.Applied = [ 3 ] && h.Undone = [])
   ]
 
 // ── the journal budget ──
@@ -249,4 +261,4 @@ let atomicMutants =
 
 [<Tests>]
 let nudgeMutationTests =
-  testList "Nudge mutation tests" [ ownershipMutants; planMutants; literalMutants; reconcileMutants; cursorMutants; budgetMutants; addressMutants; atomicMutants ]
+  testList "Nudge mutation tests" [ ownershipMutants; planMutants; literalMutants; reconcileMutants; historyMutants; budgetMutants; addressMutants; atomicMutants ]

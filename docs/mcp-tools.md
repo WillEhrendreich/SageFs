@@ -23,7 +23,7 @@ sees only the tools its role allows. And a daemon started with
 `SAGEFS_IDENTITY_POLICY=TokenRequired` shows a connection with no token only
 the status tools, unless that connection is the conductor.
 
-The full advertised set is 65 tools, grouped below. This is separate
+The full advertised set is 66 tools, grouped below. This is separate
 from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
 for completions, coverage bitmaps, run policies, and event history. Those
 HTTP endpoints are not MCP tools.
@@ -189,6 +189,7 @@ bridge starts one.
 | `disable_hot_reload` | Turn it off. |
 | `reset_hot_reload_state` | List the live state a save kept when you edited its initializer (binding, kept value, waiting initializer), or pass a binding to run only that initializer in the running app. |
 | `set_reflection_read_mode` | Show how hot reload watches values read through reflection (the mode, whether the watch is on, and any question a hot reflective loop raised), or pass `exact-every-read`, `mark-on-reflect` or `probe-callers` to switch the running app. No restart. See [Hot Reload](hot-reload.md#reflection-reads). |
+| `nudge_value` | Nudge one value in a source file the session owns and write it back as just that expression. `action=inspect` lists what can be nudged (each address, its text, its hash and, for a literal, its kind). `action=set` takes a literal or an expression plus the hash you inspected. `action=undo` and `action=redo` step through what the tool wrote. Only the session's project files are touched, a stale address is refused with the reason and never guessed, the file is replaced by a rename so a failed write leaves it byte-identical, and every write is journaled first. A member token needs the Implementer role. See [Hot Reload](hot-reload.md#nudging-a-value). |
 | `run_app` | Run the session's executable project the way `dotnet run` would, with hot reload. Applies `launchSettings.json` (first "Project" profile) and picks a free loopback port when the project sets no URL. Restarts an Interactive session into the Hot Reload workflow first, so REPL bindings are lost. Saving source then hot-patches the running app, including a route table built once at startup. |
 | `stop_app` | Stop the app started by `run_app`. Its web host stops and frees its port; the session keeps running. |
 
