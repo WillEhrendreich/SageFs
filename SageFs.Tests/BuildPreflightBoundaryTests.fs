@@ -106,6 +106,46 @@ let tests =
         try Directory.Delete(dir, true) with _ -> ()
     }
 
+    testTask "a relative project reaches the session manager as the absolute path under the caller's working directory" {
+      let dir = tempDir ()
+      let project = Path.Combine(dir, "App.fsproj")
+      File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup></Project>")
+      Directory.CreateDirectory(Path.Combine(dir, "obj")) |> ignore
+      File.WriteAllText(Path.Combine(dir, "obj", "project.assets.json"), "{}")
+      File.WriteAllText(Path.Combine(dir, "obj", "App.fsproj.nuget.g.props"), "<Project />")
+      let mutable received : SessionProjectTarget list = []
+      let info : SessionInfo = {
+        Id = SessionId.newId(); Name = None; Projects = [ "App.fsproj" ]
+        WorkingDirectory = dir; SolutionRoot = None
+        Status = SessionLifecycleStatus.Starting { Pid = 123; Port = None }
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
+        ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
+      let mailbox =
+        MailboxProcessor<SessionManager.SessionCommand>.Start(fun inbox ->
+          let rec loop () = async {
+            let! command = inbox.Receive()
+            match command with
+            | SessionManager.SessionCommand.CreateSession(targets, _, _, _, reply) ->
+              received <- targets
+              reply.Reply(Ok info)
+            | _ -> ()
+            return! loop ()
+          }
+          loop ())
+      use manifest = Features.ManifestOwner.start silentLogger dir
+      let ops = createSessionOps mailbox (fun () -> SessionManager.QuerySnapshot.empty) manifest
+      try
+        Directory.GetCurrentDirectory() |> Expect.notEqual "the daemon's cwd is not the caller's working directory" dir
+        let! result = ops.CreateSession [ SessionProjectTarget.Project "App.fsproj" ] dir WorkflowTypes.SessionWorkflow.Interactive
+        result |> Expect.isOk "the session is created"
+        received
+        |> Expect.equal "the manager is handed the project under the caller's directory" [ SessionProjectTarget.Project project ]
+      finally
+        (mailbox :> IDisposable).Dispose()
+        try Directory.Delete(dir, true) with _ -> ()
+    }
+
     testTask "recovery failure returns BuildFailed without posting CreateSession" {
       let dir = tempDir ()
       let project = Path.Combine(dir, "App.fsproj")
