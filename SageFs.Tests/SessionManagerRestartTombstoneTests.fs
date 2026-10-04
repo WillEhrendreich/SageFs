@@ -21,10 +21,13 @@ type private RuntimeHarness = {
   GetStartCalls: unit -> int
 }
 
-let private pendingProxyLooksPending (proxy: SessionProxy) =
-  match proxy (WorkerMessage.GetStatus "pending") |> Async.RunSynchronously with
-  | WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed _) -> true
-  | _ -> false
+let private pendingProxyLooksPending (proxy: SessionProxy) : System.Threading.Tasks.Task<bool> =
+  task {
+    let! response = proxy (WorkerMessage.GetStatus "pending") |> Async.StartAsTask
+    match response with
+    | WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed _) -> return true
+    | _ -> return false
+  }
 
 /// A proxy that reports a Ready status snapshot — simulates a live worker.
 let private readyProxy =
@@ -73,8 +76,8 @@ let private mkRuntime
     GetStartCalls = fun () -> startCalls
   }
 
-let private withHarness runtime run =
-  use cancellation = new CancellationTokenSource()
+let private startHarness runtime : Harness =
+  let cancellation = new CancellationTokenSource()
   let faultedEvents = ResizeArray<SessionId * string>()
   let mailbox, readSnapshot =
     createWith
@@ -94,15 +97,32 @@ let private withHarness runtime run =
     FaultedEvents = faultedEvents
     Cancellation = cancellation
   }
+  harness
 
+let private stopHarness (harness: Harness) =
+  try
+    harness.Mailbox.PostAndReply(fun reply -> SessionCommand.StopAll reply)
+  with _ ->
+    ()
+  harness.Cancellation.Cancel()
+  harness.Cancellation.Dispose()
+
+let private withHarness runtime run =
+  let harness = startHarness runtime
   try
     run harness
   finally
+    stopHarness harness
+
+/// `withHarness` for a body that awaits, so a case does not block a thread to wait on a proxy call.
+let private withHarnessAsync runtime (run: Harness -> System.Threading.Tasks.Task<unit>) : System.Threading.Tasks.Task<unit> =
+  task {
+    let harness = startHarness runtime
     try
-      mailbox.PostAndReply(fun reply -> SessionCommand.StopAll reply)
-    with _ ->
-      ()
-    cancellation.Cancel()
+      return! run harness
+    finally
+      stopHarness harness
+  }
 
 let private createSession (harness: Harness) =
   match harness.Mailbox.PostAndReply(fun reply ->
@@ -126,13 +146,13 @@ let private isFaulted = function SessionLifecycleStatus.Faulted _ -> true | _ ->
 [<Tests>]
 let sessionManagerRestartTombstoneTests =
   testList "SessionManager restart tombstones" [
-    testCase "worker ready without a proxy faults the session instead of installing a broken transport" <| fun _ ->
+    testCaseTask "worker ready without a proxy faults the session instead of installing a broken transport" <| fun () ->
       let runtime =
         mkRuntime
           (fun _ -> Ok "build ok")
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
-      withHarness runtime.Runtime <| fun harness ->
+      withHarnessAsync runtime.Runtime <| fun harness -> task {
         let info = createSession harness
         let workerPid =
           getManagedSession harness info.Id
@@ -157,13 +177,15 @@ let sessionManagerRestartTombstoneTests =
         |> Expect.equal "faulted tombstone clears worker pid after invalid worker ready" None
         session.WorkerBaseUrl
         |> Expect.equal "faulted tombstone clears base url after invalid worker ready" ""
-        pendingProxyLooksPending session.Proxy
+        let! looksPending = pendingProxyLooksPending session.Proxy
+        looksPending
         |> Expect.isTrue "invalid worker ready should leave the pending proxy installed"
 
         harness.FaultedEvents |> Seq.length
         |> Expect.equal "invalid worker ready should fire one fault callback" 1
         harness.FaultedEvents[0] |> snd
         |> Expect.stringContains "fault message should describe the invalid transport" "valid proxy"
+      }
 
     testCase "restart with a ready worker uses spawn-first (session transitions through Restarting)" <| fun _ ->
       let runtime =
@@ -339,13 +361,13 @@ let sessionManagerRestartTombstoneTests =
         |> isFaulted
         |> Expect.isFalse "a crash is recovered, not left as a tombstone of the earlier failed build"
 
-    testCase "abandoned worker exit keeps a faulted tombstone session" <| fun _ ->
+    testCaseTask "abandoned worker exit keeps a faulted tombstone session" <| fun () ->
       let runtime =
         mkRuntime
           (fun _ -> Ok "build ok")
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
-      withHarness runtime.Runtime <| fun harness ->
+      withHarnessAsync runtime.Runtime <| fun harness -> task {
         let info = createSession harness
 
         // Rapid (back-to-back) crashes are STARTUP crashes: the circuit
@@ -385,7 +407,8 @@ let sessionManagerRestartTombstoneTests =
         SessionLifecycleStatus.workerPid session.Info.Status
         |> Expect.equal "faulted tombstone clears worker pid after abandoned exit" None
         session.WorkerBaseUrl |> Expect.equal "faulted tombstone clears base url after abandoned exit" ""
-        pendingProxyLooksPending session.Proxy |> Expect.isTrue "abandoned exit should leave the pending proxy installed"
+        let! looksPending = pendingProxyLooksPending session.Proxy
+        looksPending |> Expect.isTrue "abandoned exit should leave the pending proxy installed"
 
         let snapshot = harness.ReadSnapshot()
         QuerySnapshot.tryGetSession info.Id snapshot
@@ -398,8 +421,9 @@ let sessionManagerRestartTombstoneTests =
         |> Expect.equal "abandoned exit should fire one fault callback" 1
         harness.FaultedEvents[0] |> snd
         |> Expect.stringContains "fault message should describe the abandoned worker exit" "abandoned after max retries"
+      }
 
-    testCase "WHY — a rebuild after a failed one swaps the replacement in, because the failed build left the session serving" <| fun _ ->
+    testCaseTask "WHY — a rebuild after a failed one swaps the replacement in, because the failed build left the session serving" <| fun () ->
       let runtime =
         mkRuntime
           (fun call ->
@@ -408,7 +432,7 @@ let sessionManagerRestartTombstoneTests =
             | _ -> Ok "build ok")
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
-      withHarness runtime.Runtime <| fun harness ->
+      withHarnessAsync runtime.Runtime <| fun harness -> task {
         let info = createSession harness
 
         match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, SageFs.RestartPlan.Rebuild SageFs.GranularRestart.RestartSubject.Worker, reply)) with
@@ -429,8 +453,10 @@ let sessionManagerRestartTombstoneTests =
         |> Expect.isTrue "the replacement is swapping in"
         SessionLifecycleStatus.workerPid session.Info.Status
         |> Expect.isSome "the serving worker stays registered until the swap commits"
-        pendingProxyLooksPending session.Proxy
+        let! looksPending = pendingProxyLooksPending session.Proxy
+        looksPending
         |> Expect.isTrue "calls wait for the replacement to become ready"
+      }
 
     testCase "scheduled crash recovery uses the injected runtime instead of spawning a real worker" <| fun _ ->
       let runtime =
@@ -458,7 +484,7 @@ let sessionManagerRestartTombstoneTests =
         session.Info.Status |> isRestarting |> Expect.isTrue "failed scheduled restart keeps the session registered"
         runtime.GetStartCalls() |> Expect.equal "all worker spawn attempts should flow through the injected runtime" 2
 
-    testCase "abandoned crash recovery keeps a faulted tombstone session" <| fun _ ->
+    testCaseTask "abandoned crash recovery keeps a faulted tombstone session" <| fun () ->
       let runtime =
         mkRuntime
           (fun _ -> Ok "build ok")
@@ -467,7 +493,7 @@ let sessionManagerRestartTombstoneTests =
             | 1 -> Ok(Process.GetCurrentProcess())
             | _ -> Error(SageFsError.WorkerSpawnFailed "scheduled restart boom"))
 
-      withHarness runtime.Runtime <| fun harness ->
+      withHarnessAsync runtime.Runtime <| fun harness -> task {
         let info = createSession harness
         let originalPid =
           getManagedSession harness info.Id
@@ -501,7 +527,8 @@ let sessionManagerRestartTombstoneTests =
         SessionLifecycleStatus.workerPid session.Info.Status
         |> Expect.equal "faulted tombstone clears worker pid after abandoned crash recovery" None
         session.WorkerBaseUrl |> Expect.equal "faulted tombstone clears base url after abandoned crash recovery" ""
-        pendingProxyLooksPending session.Proxy |> Expect.isTrue "abandoned crash recovery should leave the pending proxy installed"
+        let! looksPending = pendingProxyLooksPending session.Proxy
+        looksPending |> Expect.isTrue "abandoned crash recovery should leave the pending proxy installed"
 
         let snapshot = harness.ReadSnapshot()
         QuerySnapshot.tryGetSession info.Id snapshot
@@ -514,4 +541,5 @@ let sessionManagerRestartTombstoneTests =
         |> Expect.equal "abandoned crash recovery should fire one fault callback" 1
         harness.FaultedEvents[0] |> snd
         |> Expect.stringContains "fault message should describe the scheduled restart failure" "scheduled restart boom"
+      }
   ]

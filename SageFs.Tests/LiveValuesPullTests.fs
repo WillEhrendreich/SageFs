@@ -13,7 +13,7 @@ let private quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 
 let private createActorResult () =
   let args = SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty
-  SageFs.ActorCreation.createActor args |> Async.AwaitTask |> Async.RunSynchronously
+  SageFs.ActorCreation.createActor args
 
 let private caseNames (t: System.Type) =
   FSharpType.GetUnionCases t |> Array.map (fun c -> c.Name) |> Set.ofArray
@@ -40,16 +40,17 @@ let liveValuesWireTests =
 [<Tests>]
 let liveValuesReplyPathTests =
   Integration.hostList "Live values off the eval reply path" [
-    testCase "WHY — an eval reply carries no liveValueSnapshot metadata because building it (reflection walk + JSON) must not sit between the eval finishing and the caller getting its result" <| fun _ ->
-      let result = createActorResult ()
-      Thread.Sleep(TestTimeouts.threadStartSettle)
+    testCaseTask "WHY — an eval reply carries no liveValueSnapshot metadata because building it (reflection walk + JSON) must not sit between the eval finishing and the caller getting its result" <| fun () -> task {
+      let! result = createActorResult ()
+      do! System.Threading.Tasks.Task.Delay(TestTimeouts.threadStartSettle)
       let request = { Code = "let liveProbe = 42;;"; Args = Map.empty }
-      let response =
+      let! response =
         result.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
-        |> Async.RunSynchronously
+        |> Async.StartAsTask
       response.EvaluationResult |> Expect.isOk "the eval itself succeeds"
       response.Metadata |> Map.containsKey "liveValueSnapshot"
       |> Expect.isFalse "the snapshot is not on the reply"
       response.Metadata |> Map.containsKey "liveValueSnapshotError"
       |> Expect.isFalse "nor is a snapshot error"
+    }
   ]

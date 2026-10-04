@@ -15,18 +15,21 @@ let quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 let captured = Collections.Generic.List<SageFsEvent>()
 let onEvent evt = lock captured (fun () -> captured.Add(evt))
 
-/// Single shared actor for all event emission tests
+/// Single shared actor for all event emission tests. A Lazy<Task>: created once, on first use, and awaited
+/// with `let!` by every case, so no thread blocks on it.
 let sharedActor = lazy(
-  let args = mkCommonActorArgs quietLogger false onEvent SageFs.Args.ProjectLoadConfig.empty
-  let result = createActor args |> Async.AwaitTask |> Async.RunSynchronously
-  result.Actor)
+  task {
+    let args = mkCommonActorArgs quietLogger false onEvent SageFs.Args.ProjectLoadConfig.empty
+    let! result = createActor args
+    return result.Actor
+  })
 
 [<Tests>]
 let actorEventEmissionTests =
   testSequenced <| testList "Actor event emission" [
 
     testTask "actor emits SessionStarted and SessionReady on init" {
-      let _actor = sharedActor.Value
+      let! _actor = sharedActor.Value
       let events = lock captured (fun () -> captured |> Seq.toList)
       events
       |> List.exists (function SessionStarted _ -> true | _ -> false)
@@ -37,7 +40,7 @@ let actorEventEmissionTests =
     }
 
     testTask "actor emits EvalRequested and EvalCompleted on successful eval" {
-      let actor = sharedActor.Value
+      let! (actor: AppActor) = sharedActor.Value
       lock captured (fun () -> captured.Clear())
       let request = { Code = "1 + 1;;"; Args = Map.empty }
       let! _response =
@@ -53,7 +56,7 @@ let actorEventEmissionTests =
     }
 
     testTask "actor emits EvalFailed on syntax error" {
-      let actor = sharedActor.Value
+      let! (actor: AppActor) = sharedActor.Value
       lock captured (fun () -> captured.Clear())
       let request = { Code = "let x = ;;\n;;"; Args = Map.empty }
       let! _response =
@@ -66,7 +69,7 @@ let actorEventEmissionTests =
     }
 
     testTask "actor emits SessionReset on reset" {
-      let actor = sharedActor.Value
+      let! (actor: AppActor) = sharedActor.Value
       lock captured (fun () -> captured.Clear())
       let! _result =
         actor.PostAndAsyncReply(fun r -> ResetSession r)
@@ -78,7 +81,7 @@ let actorEventEmissionTests =
     }
 
     testTask "actor emits DiagnosticsChecked on diagnostics request" {
-      let actor = sharedActor.Value
+      let! (actor: AppActor) = sharedActor.Value
       lock captured (fun () -> captured.Clear())
       let! _diags =
         actor.PostAndAsyncReply(fun r -> GetDiagnostics("let x: int = \"oops\"", r))

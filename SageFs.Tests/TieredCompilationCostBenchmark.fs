@@ -1,6 +1,7 @@
 /// Not a gate, a measurement, so it isn't registered as a test. Run it from a
 /// SageFs session on SageFs.Tests when the tradeoff needs checking again:
-/// `SageFs.Tests.TieredCompilationCostBenchmark.run HostRuntime.Net11 |> Async.AwaitTask |> Async.RunSynchronously;;`
+/// `SageFs.Tests.TieredCompilationCostBenchmark.run HostRuntime.Net11;;` (it returns a Task, so await it with
+/// `let! results = Async.AwaitTask (...)` inside an `async { }` when the numbers are needed in the same cell)
 /// The numbers go in read-tracking-costs.md. The two settings take turns every
 /// rep, so a machine that gets busier halfway through slows both down, not
 /// just one.

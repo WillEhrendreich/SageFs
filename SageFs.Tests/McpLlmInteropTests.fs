@@ -114,8 +114,8 @@ module GetStartupInfoTests =
   let tests =
     testList "get_startup_info tool" [
 
-      testCase "get_startup_info should return structured startup information"
-      <| fun _ ->
+      testCaseTask "get_startup_info should return structured startup information"
+      <| fun () ->
         task {
           let ctx = mkFormattingCtx ()
 
@@ -127,11 +127,9 @@ module GetStartupInfoTests =
           // Verify it mentions startup information
           result |> Expect.stringContains "Should mention startup" "Startup"
         }
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
-      
-      testCase "get_startup_info should handle missing startup config gracefully"
-      <| fun _ ->
+
+      testCaseTask "get_startup_info should handle missing startup config gracefully"
+      <| fun () ->
         task {
           let ctx = mkFormattingCtx ()
           
@@ -140,11 +138,9 @@ module GetStartupInfoTests =
           // Should always return something, even if no config
           result |> Expect.isNotNull "Should return result"
         }
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
-      
-      testCase "get_startup_info names the session and its status for LLMs"
-      <| fun _ ->
+
+      testCaseTask "get_startup_info names the session and its status for LLMs"
+      <| fun () ->
         task {
           let ctx = mkFormattingCtx ()
 
@@ -154,8 +150,6 @@ module GetStartupInfoTests =
           result |> Expect.stringContains "Should name the session" (sprintf "- Session: %s" ctx.SessionMap.["test"])
           result |> Expect.stringContains "Should report the session status" "- Status: "
         }
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
     ]
 
 // ============================================================================
@@ -167,7 +161,7 @@ module EnhancedStatusTests =
   let tests =
     Integration.hostList "split daemon and session status" [
 
-      testCase "daemon and session status expose typed scopes" <| fun _ ->
+      testCaseTask "daemon and session status expose typed scopes" <| fun () ->
         task {
           let ctx = sharedCtx ()
           let! daemon = getDaemonStatus ctx
@@ -176,8 +170,6 @@ module EnhancedStatusTests =
           session |> Expect.stringContains "session scope" "\"scope\":\"Session\""
           session |> Expect.stringContains "ready lifecycle" "\"state\":\"Ready\""
         }
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
     ]
 
 // ============================================================================
@@ -236,7 +228,7 @@ module ProjectDiscoveryTests =
 
   // NOT pure: needs the shared live FSI actor (sharedCtx/globalActorResult) — stays Integration.
   let liveTests =
-    Integration.hostCase "get_available_projects tool formats discoverable projects for LLMs"
+    Integration.hostCaseTask "get_available_projects tool formats discoverable projects for LLMs"
     <| fun () ->
       task {
         let ctx = sharedCtx ()
@@ -260,8 +252,6 @@ module ProjectDiscoveryTests =
         result |> Expect.stringContains "Should guide users toward explicit session creation" "create_project_session"
         result |> Expect.stringContains "Should show working directory" workingDir
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
 // ============================================================================
 // CRITICAL IMPROVEMENT #7: Adapter Functions for Formatting

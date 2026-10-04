@@ -240,6 +240,10 @@ module Integration =
   let hostCase (name: string) (body: unit -> unit) =
     Expecto.Tests.testCase (tagged name) body |> register Host
 
+  /// `hostCase` for a body that awaits, so the case does not block a thread to run it.
+  let hostCaseTask (name: string) (body: unit -> System.Threading.Tasks.Task<unit>) =
+    Expecto.Tests.testCaseTask (tagged name) body |> register Host
+
   /// An integration test case whose subject is a capability that does NOT work
   /// yet, so it cannot gate the main pipeline — but which must stay runnable,
   /// named, and un-weakened, so the day the capability lands it goes green on
