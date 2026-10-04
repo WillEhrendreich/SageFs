@@ -219,6 +219,49 @@ let pureTests =
       |> Expect.equal "another session's warm-up" ReloadFrame.OtherSession
   ]
 
+/// The names of the cases registered under `entryPoint`, for the tests that say which tier a series is measured in.
+let private registeredCaseNames (entryPoint: string) : string list =
+  Integration.registered ()
+  |> List.choose (fun (runner, test) ->
+    match runner with
+    | Integration.Dedicated registeredEntryPoint when registeredEntryPoint = entryPoint -> Some test
+    | Integration.Dedicated _ | Integration.Host -> None)
+  |> List.collect (fun test -> Expecto.Test.toTestCodeList test |> List.map (fun flat -> String.concat "/" flat.name))
+
+[<Tests>]
+let tierTests =
+  testList "Hot-reload latency, which tier measures which series" [
+    testCase "the patched series run on the HR runner's daemon, and each run_app series starts its own and has a tier of its own" <| fun _ ->
+      for series in [ Series.PatchSaveToServed; Series.PatchSaveToConfirmed ] do
+        Series.entryPoint series |> Expect.equal (sprintf "%s needs the runner's session" (Series.name series)) "--integration-hr"
+      Series.entryPoint Series.RestartSaveToServed
+      |> Expect.equal "the 20-save restart journey is the longest case there is, so nothing queues behind it" Integration.hrRestartEntryPoint
+      Series.entryPoint Series.DeltaSaveToServed
+      |> Expect.equal "the delta journey too" Integration.hrDeltaEntryPoint
+      Series.all
+      |> List.map Series.entryPoint
+      |> List.distinct
+      |> List.length
+      |> Expect.equal "three tiers: the runner's, the restart one and the delta one" 3
+
+    testCase "both new tiers are dispatched, so a registered case under one of them cannot run nowhere" <| fun _ ->
+      for entryPoint in [ Integration.hrRestartEntryPoint; Integration.hrDeltaEntryPoint ] do
+        Integration.dispatchedEntryPoints |> Expect.contains (sprintf "Program.fs dispatches %s" entryPoint) entryPoint
+
+    testCase "each run_app tier holds exactly its own series' case" <| fun _ ->
+      match registeredCaseNames Integration.hrRestartEntryPoint with
+      | [ only ] -> only |> Expect.stringContains "the restart tier measures the restart series" "delta route off"
+      | other -> failtestf "the restart tier should hold one case, it holds %A" other
+      match registeredCaseNames Integration.hrDeltaEntryPoint with
+      | [ only ] -> only |> Expect.stringContains "the delta tier measures the delta series" "metadata delta"
+      | other -> failtestf "the delta tier should hold one case, it holds %A" other
+
+    testCase "the HR runner's tier no longer holds the run_app series" <| fun _ ->
+      registeredCaseNames "--integration-hr"
+      |> List.filter (fun name -> name.Contains "run_app")
+      |> Expect.isEmpty "a series measured in its own tier does not also run behind the journeys"
+  ]
+
 /// Report one series the way the LT tier does, then judge it against its bound.
 let private reportAndGate (series: Series) (samples: Sample list) (bound: TimeSpan) =
   let name = Series.name series
