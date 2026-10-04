@@ -363,6 +363,7 @@
          <Compile Include="JsonTests.fs" />
          <Compile Include="JsonCentralizationTests.fs" />
          <Compile Include="TimeoutLiteralsTests.fs" />
+         <Compile Include="ProductBlockingCallsTests.fs" />
          <Compile Include="EnvVarDocTests.fs" />
          <Compile Include="../scripts/roadmap/Roadmap.fs" Link="Roadmap/Roadmap.fs" />
          <Compile Include="../scripts/roadmap/RoadmapItems.fs" Link="Roadmap/RoadmapItems.fs" />
