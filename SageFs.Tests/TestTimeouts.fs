@@ -1021,6 +1021,10 @@ module FixtureDurations =
   /// A pass of virtual time (in seconds) longer than any lease lives, so every abandoned lease is
   /// past its ttl. Chosen against `Timeouts.leaseTtlRunApp`, the longest.
   let passPastEveryLease : int = int (SageFs.Timeouts.leaseTtlRunApp.TotalSeconds * 1.5)
+  /// A pass of virtual time (in seconds) long enough that a queued ask which was never repeated has missed its
+  /// retry window by more than the grace the pool allows, and still shorter than `Timeouts.leaseAskStaleAfter`,
+  /// so the ask has been given up on without having been dropped from the line.
+  let passPastAGoneWaiter : int = int (SageFs.ExpensiveWorkLease.askGrace.TotalSeconds * 2.0)
   /// The timeout seconds a held config carries through a migration. Only `Retries` is read back.
   let heldConfigTimeoutSeconds : int = 30
   /// How far a browser's clock is set from the real time (ten minutes, either way) in the journeys

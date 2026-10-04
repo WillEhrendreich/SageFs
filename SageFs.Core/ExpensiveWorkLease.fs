@@ -291,6 +291,18 @@ module ExpensiveWorkLease =
     // immediately" — a Wait always costs the caller at least a beat.
     List.max [ minRetryAfter; TimeSpan.FromTicks(int64 (frac * float computed.Ticks)) ]
 
+  /// How many of the longest retry windows (`Timeouts.leaseRetryAfterCritical`) a queued ask may miss before the
+  /// pool stops holding a slot for it.
+  let graceInRetryWindows = 2.0
+
+  /// How far past the retry-after it was handed a queued ask may be before the pool stops holding a slot for it.
+  /// A caller that has not come back this long after it was told to is treated as gone for the purpose of
+  /// granting: the asker behind it is served, and the ask keeps its place in line until it ages out at
+  /// `Timeouts.leaseAskStaleAfter`, so a caller that was only slow is served first when it returns. Derived from
+  /// the longest retry-after the pool hands out, not a new duration: an agent that spends a turn thinking between
+  /// two asks is not skipped, and a ghost costs this much instead of the 5 minutes it used to.
+  let askGrace : TimeSpan = Timeouts.leaseRetryAfterCritical * graceInRetryWindows
+
   /// The real reclaim: drop every lease whose `ExpiresAt` has passed, and
   /// every queued ask that has not been repeated within
   /// `Timeouts.leaseAskStaleAfter`.

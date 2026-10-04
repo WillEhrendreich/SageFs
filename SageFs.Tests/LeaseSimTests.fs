@@ -169,6 +169,49 @@ let tests =
         someSeedBreaks PoolBehavior.DuplicatesOnReAskTwin sameHolderIdempotent
     ]
 
+    testList "head-of-line blocking: a waiter that cannot go does not hold up one that can" [
+
+      let lastDecision (states: State list) = (List.last (List.last states).Decisions).Decision
+
+      // Tight (cap 1): a runs, b queues first and c second. Pressure eases to Normal (cap 4) and c asks first.
+      let roomBeyondTheHead =
+        { Seed = -601
+          Events =
+            [ SimEvent.PressureChange MemoryPressure.Tight
+              SimEvent.Request(agentA, Kind.Rebuild)
+              SimEvent.Request(agentB, Kind.Rebuild)
+              SimEvent.Request(agentC, Kind.Rebuild)
+              SimEvent.PressureChange MemoryPressure.Normal
+              SimEvent.PassSeconds 2
+              SimEvent.Request(agentC, Kind.Rebuild) ] }
+
+      // The same line, but b never asks again (its caller gave up) and a finishes; c is still asking.
+      let ghostHead =
+        { Seed = -602
+          Events =
+            [ SimEvent.PressureChange MemoryPressure.Tight
+              SimEvent.Request(agentA, Kind.Rebuild)
+              SimEvent.Request(agentB, Kind.Rebuild)
+              SimEvent.Request(agentC, Kind.Rebuild)
+              SimEvent.Release agentA
+              SimEvent.PassSeconds FixtureDurations.passPastAGoneWaiter
+              SimEvent.Request(agentC, Kind.Rebuild) ] }
+
+      testCase "REPRODUCED — with room for everyone the asker behind a live head is granted at once" <| fun _ ->
+        let states = trace PoolBehavior.Real roomBeyondTheHead
+        assertHolds states
+        match lastDecision states with
+        | Decision.Granted _ -> ()
+        | other -> failtestf "there was room for b and c, expected c Granted, got %A" other
+
+      testCase "REPRODUCED — a head that stopped asking does not hold up the asker behind it" <| fun _ ->
+        let states = trace PoolBehavior.Real ghostHead
+        assertHolds states
+        match lastDecision states with
+        | Decision.Granted _ -> ()
+        | other -> failtestf "b is gone, expected c Granted, got %A" other
+    ]
+
     testList "named worked scenario: no one starved forever" [
 
       testCase "four agents pile onto Rebuild at Critical pressure — all four eventually run" <| fun _ ->

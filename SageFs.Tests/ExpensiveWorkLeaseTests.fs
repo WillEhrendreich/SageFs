@@ -286,6 +286,87 @@ let fairnessTests =
       state'.Active |> Expect.contains "agent-a's already-granted lease is untouched" active
   ]
 
+/// Three holders, the first one running at Tight (cap 1) and the other two queued behind it in the order b, c. The
+/// shape every head-of-line case below starts from.
+let private holdingWithTwoQueued () : PoolState * LeaseId =
+  let s1, first = request epoch MemoryPressure.Tight empty ha Kind.Rebuild
+  let s2, _ = request epoch MemoryPressure.Tight s1 hb Kind.Rebuild
+  let s3, _ = request epoch MemoryPressure.Tight s2 hc Kind.Rebuild
+  s3, grantedId first
+
+[<Tests>]
+let headOfLineTests =
+  testList "ExpensiveWorkLease — a waiter that cannot go does not hold up one that can" [
+
+    testCase "WHY — room that no earlier waiter needs is not withheld: a later asker is granted while a live head still waits" <| fun () ->
+      // Tight (cap 1): a runs, b is queued first and c second. Pressure eases to Normal (cap 4): there is room for
+      // all three, and b has not come back yet. c asking first must not be told to wait for b to ask.
+      let s3, _ = holdingWithTwoQueued ()
+      let _, decision = request (epoch.AddSeconds 2.0) MemoryPressure.Normal s3 hc Kind.Rebuild
+      match decision with
+      | Decision.Granted _ -> ()
+      | other -> failtestf "there was room for b AND c, so c should be granted, got %A" other
+
+    testCase "fairness — a live head still goes first when only one slot is left" <| fun () ->
+      // Normal (cap 4) with three leases out: exactly one slot, and b (earlier) and c (later) both want it.
+      let s3, _ = holdingWithTwoQueued ()
+      let others =
+        [ for i in 1 .. 2 ->
+            { Id = LeaseId.create ()
+              Kind = Kind.SessionCreateOrWarmup
+              Holder = Holder.ofConnection (sprintf "other-%d" i)
+              GrantedAt = epoch
+              ExpiresAt = epoch.AddMinutes 5.0 } ]
+      let crowded = { s3 with Active = s3.Active @ others }
+      let at = epoch.AddSeconds 2.0
+      let afterC, forC = request at MemoryPressure.Normal crowded hc Kind.Rebuild
+      match forC with
+      | Decision.Queued waiting -> waiting.Why |> Expect.equal "c waits for b's slot, it does not take it" WaitReason.NotYourTurn
+      | other -> failtestf "c is behind a live b and the one slot is b's, expected Queued, got %A" other
+      let _, forB = request at MemoryPressure.Normal afterC hb Kind.Rebuild
+      match forB with
+      | Decision.Granted _ -> ()
+      | other -> failtestf "b asked first and the slot is its own, expected Granted, got %A" other
+
+    testCase "WHY — a head that has stopped asking is skipped, not waited for: the asker behind it is granted" <| fun () ->
+      // b asked once and is never heard from again (a daemon call that gave up, an agent that went away). a
+      // finishes. c is still asking. b's ask has not yet aged out of the queue.
+      let s3, leaseA = holdingWithTwoQueued ()
+      let s4, _ = release leaseA s3
+      let stillQueued = epoch + Timeouts.leaseAskStaleAfter - FixtureDurations.insideTheBoundary
+      let _, decision = request stillQueued MemoryPressure.Tight s4 hc Kind.Rebuild
+      match decision with
+      | Decision.Granted _ -> ()
+      | other -> failtestf "b is gone, so c should not be held up behind it, got %A" other
+
+    testCase "a skipped head keeps its place: when it comes back it is served before a later arrival" <| fun () ->
+      let s3, leaseA = holdingWithTwoQueued ()
+      let s4, _ = release leaseA s3
+      let stillQueued = epoch + Timeouts.leaseAskStaleAfter - FixtureDurations.insideTheBoundary
+      let s5, forC = request stillQueued MemoryPressure.Tight s4 hc Kind.Rebuild
+      let leaseC = grantedId forC
+      // b comes back while c runs: it is first in line again, and d, who arrives after it, is second.
+      let backAt = stillQueued + FixtureDurations.pastTheBoundary
+      let s6, forB' = request backAt MemoryPressure.Tight s5 hb Kind.Rebuild
+      (match forB' with
+       | Decision.Queued waiting -> waiting.Position |> Expect.equal "b kept its place at the head" 1
+       | other -> failtestf "c holds the only slot, expected b queued, got %A" other)
+      let hd = Holder.ofConnection "agent-d"
+      let s7, forD = request backAt MemoryPressure.Tight s6 hd Kind.Rebuild
+      (match forD with
+       | Decision.Queued waiting -> waiting.Position |> Expect.equal "d is behind b, who was here first" 2
+       | other -> failtestf "expected d queued behind b, got %A" other)
+      let s8, _ = release leaseC s7
+      let _, forD' = request backAt MemoryPressure.Tight s8 hd Kind.Rebuild
+      (match forD' with
+       | Decision.Queued _ -> ()
+       | other -> failtestf "b is live and first, d must not take its slot, got %A" other)
+      let _, forB = request backAt MemoryPressure.Tight s8 hb Kind.Rebuild
+      match forB with
+      | Decision.Granted _ -> ()
+      | other -> failtestf "b kept its place and the slot is free, expected Granted, got %A" other
+  ]
+
 [<Tests>]
 let snapshotTests =
   testList "ExpensiveWorkLease.snapshot — what get_daemon_status shows" [
