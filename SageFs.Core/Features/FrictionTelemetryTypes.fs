@@ -156,6 +156,24 @@ module SageFsVersion =
       | null -> "unknown"
       | v -> string v)
 
+  /// How much of the source revision a person needs to tell two builds apart.
+  let shortRevisionLength = 7
+
+  /// The build's identity as a person reads it: the version, then the commit it
+  /// was built from, in its short form (`0.6.892+b7ad4fd`). The SDK appends the
+  /// full 40-character revision, which is too long for a statusline. A version
+  /// with no revision is shown as it is.
+  let display (informational: string) =
+    match informational.IndexOf '+' with
+    | -1 -> informational
+    | cut ->
+      let revision = informational.Substring(cut + 1)
+      let shown =
+        match revision.Length > shortRevisionLength with
+        | true -> revision.Substring(0, shortRevisionLength)
+        | false -> revision
+      informational.Substring(0, cut) + "+" + shown
+
 module FrictionEvent =
   let outcomeKind = function
     | { Outcome = FrictionOutcome.CompletedCleanly } -> OutcomeKind.Succeeded
