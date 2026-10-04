@@ -235,7 +235,7 @@ let private ansi = Regex(@"\x1b\[[0-9;]*[A-Za-z]", RegexOptions.Compiled)
 let stripAnsi (text: string) : string = ansi.Replace(text, "")
 
 let private progress =
-  Regex(@"^── (tier|background)|^FAILURE |^cleanup:|STAGE #|^Tiers:|^Expected wall|trust report:|^\| |error", RegexOptions.Compiled)
+  Regex(@"^── (tier|background)|^FAILURE |^cleanup:|^pass records:|STAGE #|^Tiers:|^Expected wall|trust report:|^\| |error", RegexOptions.Compiled)
 
 /// The pipeline lines worth showing on the console while it runs: stage boundaries, one line per finished tier,
 /// the trust table, failures. Everything else goes to the log only.
