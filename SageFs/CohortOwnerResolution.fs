@@ -20,6 +20,23 @@ open SageFs
 /// `None` means the caller named none, so it is asking about the daemon's own cohort.
 module CohortOwnerResolution =
 
+  /// The owner for a SCOPE a caller already knows — a `CohortCommand` carries one, so a
+  /// command dispatch needs no directory.
+  ///
+  /// Separate from `ownerFor` because a scope and a directory are different inputs: a command
+  /// knows its scope exactly, while a caller names a directory that must first be resolved to
+  /// one. `commitCohort` read `.Owners` inline instead, which SKIPS `Single` entirely — so
+  /// every command under a single-owner wiring failed with "no cohort owner is configured for
+  /// this daemon", false (one is configured) and naming no scope.
+  let ownerForScope
+    (support: Features.CohortOwners.Wiring)
+    (scope: CohortScope)
+    : Features.CohortOwner.Handle option =
+    match support with
+    | Features.CohortOwners.Wiring.Wired(owners, _) -> Some(owners.OwnerFor scope)
+    | Features.CohortOwners.Wiring.Single(owner, _own) -> Some owner
+    | Features.CohortOwners.Wiring.Unwired -> None
+
   let ownerFor
     (support: Features.CohortOwners.Wiring)
     (workingDirectory: string option)
@@ -27,21 +44,19 @@ module CohortOwnerResolution =
     let scopeOf dir = Scope.ofWorkingDirectory Scope.defaultStrategy dir
 
     match support with
-    | Features.CohortOwners.Wiring.Wired(owners, own) ->
+    | Features.CohortOwners.Wiring.Wired(_, own) ->
       // The caller's own directory when it named one, and the scope the DAEMON started in
       // when it did not — which is what that caller is asking about.
       let scope =
         match workingDirectory with
         | Some dir -> scopeOf dir
         | None -> own
-      Some(owners.OwnerFor scope)
+      ownerForScope support scope
     | Features.CohortOwners.Wiring.Single(owner, _own) ->
       // The caller wired ONE owner and named no registry, so this caller has exactly one
       // cohort and it is this one — whatever directory it phrases the request in. Checking
       // that the request's scope equals `own` (the first version) refused a caller that was
       // legitimately asking about its own cohort from a different working directory, which
       // is the "no cohort owner is configured" refusal three capability suites hit.
-      // `own` is still what `commitCohort` dispatches on, so the command lands in the right
-      // cohort; this resolver's only job is to FIND the owner.
       Some owner
     | Features.CohortOwners.Wiring.Unwired -> None

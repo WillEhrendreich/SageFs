@@ -3270,10 +3270,13 @@ module McpTools =
       // one scope, so the owner that can accept the command is the one owning that scope —
       // which is how a caller in a second repository gets its own conductor seat instead of
       // a scope collision against a cohort it never asked for.
-      let ownerForScope =
-        match ctx.CohortSupport.Owners with
-        | Some owners -> Some(owners.OwnerFor(Cohort.scopeOf cmd))
-        | None -> None
+      //
+      // Through the shared resolver, NOT `.Owners`: `Wiring` has a second case for a caller
+      // that wired ONE owner and no registry, and reading only `.Owners` skipped it — so every
+      // command under that wiring failed with "no cohort owner is configured for this daemon",
+      // which is false (one IS configured) and named no scope. The command already carries
+      // its scope, so there is nothing here for a caller to supply.
+      let ownerForScope = CohortOwnerResolution.ownerForScope ctx.CohortSupport (Cohort.scopeOf cmd)
 
       match ownerForScope with
       | None -> return Error(SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")

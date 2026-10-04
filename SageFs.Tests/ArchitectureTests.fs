@@ -1157,7 +1157,7 @@ let fileSizeBudgets =
       // the five MCP cohort tools' new `workingDirectory` parameter (each of which needs its own
       // decision about which cohort it addresses) and for the whole-surface authority gate's call
       // site, which the new module now carries. The file is 3280 lines. Exact size.
-      // 3280 -> 3289: RAISED, which this table normally forbids, and the reason is that the
+      // 3280 -> 3292: RAISED, which this table normally forbids, and the reason is that the
       // line count is a proxy and the thing it stands for moved OUT. The multi-cohort work
       // put the "which cohort is this caller asking about" decision here (40 lines, the file's
       // accretion problem in miniature) plus the `CohortSupport` field that carries the wiring.
@@ -1165,8 +1165,9 @@ let fileSizeBudgets =
       // (`requireCohortOwner`, which resolved with no directory) is GONE — every site resolves
       // a scope explicitly, so a bare `None` left anywhere is a question, not a default. What
       // remains is a one-line field, a forwarding call, and the comments saying WHY each site
-      // passes the directory it does.
-      "SageFs/Mcp.fs", 3289
+      // passes the directory it does — including the one that reads no directory at all,
+      // because `commitCohort`'s command already carries its scope.
+      "SageFs/Mcp.fs", 3292
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
