@@ -81,17 +81,24 @@ let private fixtureDir () =
 /// matrix passed on one run and failed on the next. The remaining product gap,
 /// a user who builds Release by hand AFTER SageFs's build, is separate and is
 /// not what this gate claims to prove.
-let private buildFixtureAsSageFsDoes () =
-  let fDir = fixtureDir ()
-  let psi = ProcessStartInfo("dotnet")
-  for a in SessionBuild.buildArguments true (Path.Combine(fDir, "WebAppFixture.fsproj")) do
-    psi.ArgumentList.Add a
-  psi.WorkingDirectory <- fDir
-  psi.UseShellExecute <- false
-  use p = Process.Start psi
-  p.WaitForExit()
-  p.ExitCode
-  |> Expect.equal "the fixture must build with SageFs's own session-build command" 0
+let private buildFixtureAsSageFsDoes () : Task<unit> =
+  task {
+    let fDir = fixtureDir ()
+    let psi = ProcessStartInfo("dotnet")
+    for a in SessionBuild.buildArguments true (Path.Combine(fDir, "WebAppFixture.fsproj")) do
+      psi.ArgumentList.Add a
+    psi.WorkingDirectory <- fDir
+    psi.UseShellExecute <- false
+    use p = Process.Start psi
+    do! p.WaitForExitAsync()
+    p.ExitCode
+    |> Expect.equal "the fixture must build with SageFs's own session-build command" 0
+  }
+
+/// Rethrow `ex` with its original stack from a `with` handler that has already awaited (`reraise ()` cannot
+/// follow an await).
+let private rethrow (ex: exn) : unit =
+  System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex).Throw()
 
 /// The host log as text. The drain tasks append to `hostLog` under `lock hostLog`, so a read takes the
 /// same lock: `StringBuilder` is not thread-safe, and an unlocked `ToString()` racing an append throws
@@ -103,148 +110,177 @@ let hostLogText (hostLog: StringBuilder) : string = lock hostLog (fun () -> host
 /// the host never walks up to the repo root and loads SageFs.slnx (which
 /// would warm up 200+ namespaces and make the test take minutes).
 /// `hostLog` accumulates the host's stdout/stderr for failure diagnostics.
-let private spawnHost (sessionId: string) (hostLog: StringBuilder) =
-  let exe = hostExePath ()
-  let args, envVars = Args.buildWorkerSpawnConfig sessionId [ SageFs.SessionProjectTarget.Project (Path.Combine(fixtureDir (), "WebAppFixture.fsproj")) ] false true (SageFs.WorkflowTypes.SessionWorkflow.HotReload SageFs.WorkflowTypes.BrowserRefreshConfig.defaults)
-  let psi = ProcessStartInfo(exe, args)
-  psi.UseShellExecute <- false
-  psi.RedirectStandardOutput <- true
-  psi.RedirectStandardError <- true
-  // cwd = fixture dir; project passed explicitly so discovery stays tiny.
-  let fDir = fixtureDir ()
-  psi.WorkingDirectory <- fDir
-  let fixtureProj = Path.Combine(fDir, "WebAppFixture.fsproj")
-  for k, v in envVars do
-    if k = SageFs.Args.WorkerConfig.envVar then
-      psi.EnvironmentVariables[k] <- fixtureProj
-    else
-      psi.EnvironmentVariables[k] <- v
-  let proc = Process.Start(psi)
-  // Drain stdout AND stderr on background tasks so neither pipe ever fills
-  // (an undrained redirect pipe deadlocks the host before WORKER_PORT prints).
-  let portLine = TaskCompletionSource<string>()
-  let drainOut = Task.Run(fun () ->
-    try
-      let mutable line = proc.StandardOutput.ReadLine()
-      while line <> null do
-        lock hostLog (fun () -> hostLog.AppendLine(line) |> ignore)
+let private spawnHost (sessionId: string) (hostLog: StringBuilder) : Task<Process * string * WorkerProtocol.SessionProxy> =
+  task {
+    let exe = hostExePath ()
+    let args, envVars = Args.buildWorkerSpawnConfig sessionId [ SageFs.SessionProjectTarget.Project (Path.Combine(fixtureDir (), "WebAppFixture.fsproj")) ] false true (SageFs.WorkflowTypes.SessionWorkflow.HotReload SageFs.WorkflowTypes.BrowserRefreshConfig.defaults)
+    let psi = ProcessStartInfo(exe, args)
+    psi.UseShellExecute <- false
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    // cwd = fixture dir; project passed explicitly so discovery stays tiny.
+    let fDir = fixtureDir ()
+    psi.WorkingDirectory <- fDir
+    let fixtureProj = Path.Combine(fDir, "WebAppFixture.fsproj")
+    for k, v in envVars do
+      if k = SageFs.Args.WorkerConfig.envVar then
+        psi.EnvironmentVariables[k] <- fixtureProj
+      else
+        psi.EnvironmentVariables[k] <- v
+    let proc = Process.Start(psi)
+    // Drain stdout AND stderr with async readers so neither pipe ever fills
+    // (an undrained redirect pipe deadlocks the host before WORKER_PORT prints), and neither drain parks a
+    // pool thread on a blocking ReadLine for the life of the host.
+    let portLine = TaskCompletionSource<string>()
+    let drain (reader: StreamReader) (onLine: string -> unit) : Task =
+      task {
+        try
+          let mutable reading = true
+          while reading do
+            let! line = reader.ReadLineAsync()
+            match isNull line with
+            | true -> reading <- false
+            | false ->
+              lock hostLog (fun () -> hostLog.AppendLine(line) |> ignore)
+              onLine line
+        with _ -> ()
+      }
+    let drainOut =
+      drain proc.StandardOutput (fun line ->
         if line.StartsWith("WORKER_PORT=", StringComparison.Ordinal) then
-          portLine.TrySetResult(line.Substring("WORKER_PORT=".Length)) |> ignore
-        line <- proc.StandardOutput.ReadLine()
-    with _ -> ())
-  let drainErr = Task.Run(fun () ->
+          portLine.TrySetResult(line.Substring("WORKER_PORT=".Length)) |> ignore)
+    let drainErr = drain proc.StandardError ignore
+    let! winner = Task.WhenAny(portLine.Task, Task.Delay Timeouts.webAppPortReady)
+    if not (obj.ReferenceEquals(winner, portLine.Task)) then
+      failwithf "host did not print WORKER_PORT within %.0fs. Host log:\n%s" Timeouts.webAppPortReady.TotalSeconds (hostLogText hostLog)
+    let! port = portLine.Task
+    let baseUrl = port.TrimEnd('/')
+    let proxy = HttpWorkerClient.httpProxy baseUrl
+    return proc, baseUrl, proxy
+  }
+
+let private evalOk (proxy: WorkerProtocol.SessionProxy) (code: string) : Task<string> =
+  task {
+    let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode(code, Guid.NewGuid().ToString("N"))) |> Async.StartAsTask
+    match response with
+    | WorkerProtocol.WorkerResponse.EvalResult (_, Ok result, _, _) -> return result
+    // The compiler diagnostics say WHY (FSI's own message is just "earlier error"), so a red run explains itself.
+    | WorkerProtocol.WorkerResponse.EvalResult (_, Error err, diagnostics, _) -> return failwithf "eval failed: %A\nDiagnostics: %A\nCode: %s" err diagnostics code
+    | other -> return failwithf "unexpected response: %A" other
+  }
+
+let private waitReady (proxy: WorkerProtocol.SessionProxy) (hostLog: StringBuilder) : Task<unit> =
+  task {
+    let mutable ready = false
+    let sw = Stopwatch.StartNew()
+    // Cold CI runners (Linux) can take >60s to warm up FSI + load the project.
+    // Transient HTTP errors are expected while Kestrel is coming up — retry.
+    while not ready && sw.ElapsedMilliseconds < 180000 do
+      try
+        let! response = proxy (WorkerProtocol.WorkerMessage.GetStatus(Guid.NewGuid().ToString("N"))) |> Async.StartAsTask
+        match response with
+        | WorkerProtocol.WorkerResponse.StatusResult (_, s) when s.Status = SessionStatus.Ready -> ready <- true
+        | _ -> do! Task.Delay TestTimeouts.warmupPoll
+      with _ ->
+        do! Task.Delay TestTimeouts.warmupPoll
+    if not ready then
+      failwithf "session did not reach Ready within 180s. Host log:\n%s" (hostLogText hostLog)
+  }
+
+let private httpGet (port: int) (path: string) : Task<string> =
+  task {
+    use client = new HttpClient()
+    client.Timeout <- TestTimeouts.requestPatience
     try
-      let mutable line = proc.StandardError.ReadLine()
-      while line <> null do
-        lock hostLog (fun () -> hostLog.AppendLine(line) |> ignore)
-        line <- proc.StandardError.ReadLine()
-    with _ -> ())
-  let ok = portLine.Task.Wait Timeouts.webAppPortReady
-  if not ok then
-    failwithf "host did not print WORKER_PORT within %.0fs. Host log:\n%s" Timeouts.webAppPortReady.TotalSeconds (hostLogText hostLog)
-  let baseUrl = portLine.Task.Result.TrimEnd('/')
-  let proxy = HttpWorkerClient.httpProxy baseUrl
-  proc, baseUrl, proxy
-
-let private evalOk (proxy: WorkerProtocol.SessionProxy) (code: string) =
-  match proxy (WorkerProtocol.WorkerMessage.EvalCode(code, Guid.NewGuid().ToString("N"))) |> Async.RunSynchronously with
-  | WorkerProtocol.WorkerResponse.EvalResult (_, Ok result, _, _) -> result
-  // The compiler diagnostics say WHY (FSI's own message is just "earlier error"), so a red run explains itself.
-  | WorkerProtocol.WorkerResponse.EvalResult (_, Error err, diagnostics, _) -> failwithf "eval failed: %A\nDiagnostics: %A\nCode: %s" err diagnostics code
-  | other -> failwithf "unexpected response: %A" other
-
-let private waitReady (proxy: WorkerProtocol.SessionProxy) (hostLog: StringBuilder) =
-  let mutable ready = false
-  let sw = Stopwatch.StartNew()
-  // Cold CI runners (Linux) can take >60s to warm up FSI + load the project.
-  // Transient HTTP errors are expected while Kestrel is coming up — retry.
-  while not ready && sw.ElapsedMilliseconds < 180000 do
-    try
-      match proxy (WorkerProtocol.WorkerMessage.GetStatus(Guid.NewGuid().ToString("N"))) |> Async.RunSynchronously with
-      | WorkerProtocol.WorkerResponse.StatusResult (_, s) when s.Status = SessionStatus.Ready -> ready <- true
-      | _ -> Thread.Sleep TestTimeouts.warmupPoll
-    with _ ->
-      Thread.Sleep TestTimeouts.warmupPoll
-  if not ready then
-    failwithf "session did not reach Ready within 180s. Host log:\n%s" (hostLogText hostLog)
-
-let private httpGet (port: int) (path: string) =
-  use client = new HttpClient()
-  client.Timeout <- TestTimeouts.requestPatience
-  try
-    client.GetStringAsync(sprintf "http://127.0.0.1:%d%s" port path)
-    |> Async.AwaitTask
-    |> Async.RunSynchronously
-  with ex ->
-    failwithf "HTTP GET %s failed: %s" path ex.Message
+      return! client.GetStringAsync(sprintf "http://127.0.0.1:%d%s" port path)
+    with ex ->
+      return failwithf "HTTP GET %s failed: %s" path ex.Message
+  }
 
 /// Opt every project file into the hot-reload watch set via the REAL worker
 /// HTTP endpoint (the same route the dashboard calls:
 /// POST /hotreload/watch-all). This proves the save flows through the real
 /// worker file watcher.
-let private watchAllFiles (baseUrl: string) =
-  use client = new HttpClient()
-  client.Timeout <- TestTimeouts.shortPatience
-  use content = new StringContent("{}", Encoding.UTF8, "application/json")
-  let resp = client.PostAsync(baseUrl + "/hotreload/watch-all", content) |> Async.AwaitTask |> Async.RunSynchronously
-  resp.EnsureSuccessStatusCode() |> ignore
+let private watchAllFiles (baseUrl: string) : Task<unit> =
+  task {
+    use client = new HttpClient()
+    client.Timeout <- TestTimeouts.shortPatience
+    use content = new StringContent("{}", Encoding.UTF8, "application/json")
+    let! resp = client.PostAsync(baseUrl + "/hotreload/watch-all", content)
+    resp.EnsureSuccessStatusCode() |> ignore
+  }
 
 /// Poll GET /hotreload until the worker reports at least one watched file.
 /// The watch-all POST updates the worker's HotReloadStateRef asynchronously; a
 /// file save racing that update would be ignored by the watcher (not in the
 /// watch set yet) and the reload would never fire.
-let private waitForWatched (baseUrl: string) (timeoutMs: int) =
-  use client = new HttpClient()
-  client.Timeout <- TestTimeouts.shortPatience
-  let sw = Stopwatch.StartNew()
-  let mutable watched = false
-  while not watched && sw.ElapsedMilliseconds < int64 timeoutMs do
-    try
-      let resp = client.GetAsync(baseUrl + "/hotreload") |> Async.AwaitTask |> Async.RunSynchronously
-      let json = resp.Content.ReadAsStringAsync() |> Async.AwaitTask |> Async.RunSynchronously
-      if json.Contains("\"watchedCount\":0") then
-        Thread.Sleep TestTimeouts.localHttpPoll
-      else
-        watched <- true
-    with _ ->
-      Thread.Sleep TestTimeouts.localHttpPoll
-  if not watched then
-    failwithf "no files were reported as watched within %dms" timeoutMs
+let private waitForWatched (baseUrl: string) (timeoutMs: int) : Task<unit> =
+  task {
+    use client = new HttpClient()
+    client.Timeout <- TestTimeouts.shortPatience
+    let sw = Stopwatch.StartNew()
+    let mutable watched = false
+    while not watched && sw.ElapsedMilliseconds < int64 timeoutMs do
+      try
+        let! resp = client.GetAsync(baseUrl + "/hotreload")
+        let! json = resp.Content.ReadAsStringAsync()
+        if json.Contains("\"watchedCount\":0") then
+          do! Task.Delay TestTimeouts.localHttpPoll
+        else
+          watched <- true
+      with _ ->
+        do! Task.Delay TestTimeouts.localHttpPoll
+    if not watched then
+      failwithf "no files were reported as watched within %dms" timeoutMs
+  }
 
 /// Open the worker's DevReload SSE stream and return a reader positioned at
 /// the first event. Must be called BEFORE the file save so no Compiling/Reload
 /// event can be missed (the watcher's debounce + eval can complete in well
 /// under a second).
-let private openSseStream (baseUrl: string) : StreamReader =
-  let client = new HttpClient()
-  client.Timeout <- TestTimeouts.streamReadPatience
-  let req = new HttpRequestMessage(HttpMethod.Get, baseUrl + "/__sagefs__/reload")
-  req.Headers.Accept.ParseAdd("text/event-stream")
-  let resp = client.Send(req, HttpCompletionOption.ResponseHeadersRead)
-  resp.EnsureSuccessStatusCode() |> ignore
-  new StreamReader(resp.Content.ReadAsStream())
+let private openSseStream (baseUrl: string) : Task<StreamReader> =
+  task {
+    let client = new HttpClient()
+    client.Timeout <- TestTimeouts.streamReadPatience
+    let req = new HttpRequestMessage(HttpMethod.Get, baseUrl + "/__sagefs__/reload")
+    req.Headers.Accept.ParseAdd("text/event-stream")
+    let! resp = client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
+    resp.EnsureSuccessStatusCode() |> ignore
+    let! stream = resp.Content.ReadAsStreamAsync()
+    return new StreamReader(stream)
+  }
 
 /// Read from an already-open SSE stream until an event matching `predicate`
-/// arrives (or `timeoutMs` elapses). Returns the matching event JSON.
-let private readSseUntil (reader: StreamReader) (timeoutMs: int) (predicate: string -> bool) : string =
-  let sw = Stopwatch.StartNew()
-  let seen = ResizeArray<string>()
-  let mutable found = ""
-  let mutable line = reader.ReadLine()
-  while found = "" && line <> null && sw.ElapsedMilliseconds < int64 timeoutMs do
-    if line.StartsWith("data: ", StringComparison.Ordinal) then
-      let payload = line.Substring("data: ".Length)
-      seen.Add payload
-      if predicate payload then found <- payload
-    line <- reader.ReadLine()
-  if found = "" then
-    failwithf "SSE stream did not produce a matching event within %dms. SAW %d events:\n%s" timeoutMs seen.Count (String.concat "\n" seen)
-  found
+/// arrives (or `timeoutMs` elapses). Returns the matching event JSON. The budget bounds every read, so a stream
+/// that goes quiet fails the case at the budget instead of parking on the next line.
+let private readSseUntil (reader: StreamReader) (timeoutMs: int) (predicate: string -> bool) : Task<string> =
+  task {
+    use budget = new CancellationTokenSource(timeoutMs)
+    let seen = ResizeArray<string>()
+    let mutable found = ""
+    let mutable finished = false
+    while found = "" && not finished do
+      let! line =
+        task {
+          try
+            return! reader.ReadLineAsync(budget.Token).AsTask()
+          with :? OperationCanceledException -> return null
+        }
+      if isNull line then
+        finished <- true
+      elif line.StartsWith("data: ", StringComparison.Ordinal) then
+        let payload = line.Substring("data: ".Length)
+        seen.Add payload
+        if predicate payload then found <- payload
+    if found = "" then
+      failwithf "SSE stream did not produce a matching event within %dms. SAW %d events:\n%s" timeoutMs seen.Count (String.concat "\n" seen)
+    return found
+  }
 
 /// A patch's first verdict is `pending` (applied, and the new code has not been seen
 /// running). Once the app has run the patched code the same stream carries
 /// `patched`; when the bound passes without that it carries `neverentered`.
-let private readConfirmation (reader: StreamReader) : string =
+let private readConfirmation (reader: StreamReader) : Task<string> =
   readSseUntil reader 40000 (fun payload ->
     payload.Contains("\"type\":\"patched\"") || payload.Contains("\"type\":\"neverentered\""))
 
@@ -260,23 +296,25 @@ let private readConfirmation (reader: StreamReader) : string =
 /// verdict the product correctly never sends. Two saves a user would experience
 /// as two saves have to be separated by the guard, so the budget is read from
 /// the product's own constant rather than guessed at.
-let private waitOutDoubleCompileGuard () =
-  Thread.Sleep(DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
+let private waitOutDoubleCompileGuard () : Task<unit> =
+  task { do! Task.Delay(DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3) }
 
 /// Write a fixture file with retry: a host process killed at the end of a
 /// previous test can briefly hold the file (FileSystemWatcher + FSI handle
 /// teardown), and two [Integration] tests share the fixture directory.
-let private writeFixtureFile (path: string) (content: string) =
-  let sw = Stopwatch.StartNew()
-  let mutable written = false
-  while not written && sw.ElapsedMilliseconds < 15000L do
-    try
-      File.WriteAllText(path, content)
-      written <- true
-    with :? IOException ->
-      Thread.Sleep TestTimeouts.localHttpPoll
-  if not written then
-    failwithf "could not write fixture file %s within 15s (locked by a previous host?)" path
+let private writeFixtureFile (path: string) (content: string) : Task<unit> =
+  task {
+    let sw = Stopwatch.StartNew()
+    let mutable written = false
+    while not written && sw.ElapsedMilliseconds < 15000L do
+      try
+        File.WriteAllText(path, content)
+        written <- true
+      with :? IOException ->
+        do! Task.Delay TestTimeouts.localHttpPoll
+    if not written then
+      failwithf "could not write fixture file %s within 15s (locked by a previous host?)" path
+  }
 
 /// The hot-reload shape matrix.
 ///
@@ -389,7 +427,7 @@ module ShapeMatrix =
 let webAppHotReloadVerificationTests =
   testList "WebApp hot-reload verification" [
 
-    Integration.hostCase "real file save hot-reloads a running module-declared app (save-driven, no restart)" <| fun () ->
+    Integration.hostCaseTask "real file save hot-reloads a running module-declared app (save-driven, no restart)" <| fun () -> task {
       let fDir = fixtureDir ()
       let appSource = Path.Combine(fDir, "Greeting.fs")
       Expect.isTrue "fixture Greeting.fs should exist" (File.Exists appSource)
@@ -399,39 +437,39 @@ let webAppHotReloadVerificationTests =
 
       let sessionId = sprintf "webapp-verify-%s" (Guid.NewGuid().ToString("N"))
       let hostLog = StringBuilder()
-      let proc, baseUrl, proxy = spawnHost sessionId hostLog
+      let! (proc: Process), baseUrl, proxy = spawnHost sessionId hostLog
       try
         // 1. Wait for the session to be Ready.
-        waitReady proxy hostLog
+        do! waitReady proxy hostLog
 
         // 2. Load Greeting.fs FIRST so App.fs's `Greeting.greeting` reference
         //    binds to the FSI-loaded (detourable) version, not the compiled
         //    WebAppFixture.dll the worker pre-loads from the project bin.
         let appFile = Path.Combine(fDir, "App.fs")
-        let loadResult = evalOk proxy (sprintf "#load @\"%s\"" appSource)
+        let! loadResult = evalOk proxy (sprintf "#load @\"%s\"" appSource)
         Expect.stringContains "Greeting.fs should load" "Greeting.fs" loadResult
-        let loadApp = evalOk proxy (sprintf "#load @\"%s\"" appFile)
+        let! loadApp = evalOk proxy (sprintf "#load @\"%s\"" appFile)
         Expect.stringContains "App.fs should load" "App.fs" loadApp
 
         // 3. Start the app on a free port inside the host.
         let port = freePort ()
-        let startResult = evalOk proxy (sprintf "let appTask = WebAppFixture.App.run %d" port)
+        let! startResult = evalOk proxy (sprintf "let appTask = WebAppFixture.App.run %d" port)
         Expect.stringContains "app start should succeed" "appTask" startResult
 
         // 4. HTTP GET the running app — record value A.
-        let bodyA = httpGet port "/"
+        let! bodyA = httpGet port "/"
         Expect.stringContains "first response should be the original greeting" "hello from sagefs" bodyA
 
         // 5. Opt the fixture source into the hot-reload watch set via the real
         //    worker endpoint (same route the dashboard uses), and confirm the
         //    worker actually reports the file as watched before editing.
-        watchAllFiles baseUrl
-        waitForWatched baseUrl 10000
+        do! watchAllFiles baseUrl
+        do! waitForWatched baseUrl 10000
 
         // 6. Open the DevReload SSE stream BEFORE editing the file, so no
         //    Compiling/Reload event can be missed (the watcher debounce + FSI
         //    eval can complete in well under a second).
-        use sseReader = openSseStream baseUrl
+        use! sseReader = openSseStream baseUrl
 
         // 7. EDIT THE FILE ON DISK — this is the real save that must propagate.
         let edited =
@@ -439,50 +477,54 @@ let webAppHotReloadVerificationTests =
             "let greeting () = \"hello from sagefs\"",
             "let greeting () = \"hello from hot reload (value B)\"")
         Expect.stringContains "fixture should contain the editable greeting function" "let greeting () = \"hello from sagefs\"" original
-        writeFixtureFile appSource edited
+        do! writeFixtureFile appSource edited
         try
           // 8. Observe Compiling -> Reload through the real worker SSE path.
-          readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"pending\""))
-          |> ignore
+          let! _ = readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"pending\""))
 
           // 9. Request the SAME running process without restart — require B.
-          let bodyB = httpGet port "/"
+          let! bodyB = httpGet port "/"
           Expect.stringContains
             (sprintf "hot reload should serve the new greeting from the running process.\nValue A body: %s\nHost log:\n%s" bodyA (hostLogText hostLog))
             "hello from hot reload (value B)" bodyB
 
           // 9b. The request above ran the patched function, so the same stream now
           //     carries the confirmation: the new code was seen running.
-          readConfirmation sseReader
+          let! confirmation = readConfirmation sseReader
+          confirmation
           |> Expect.stringContains "the patch is confirmed once its new body has run" "\"type\":\"patched\""
-        finally
-          // Always restore the fixture so later runs start from value A.
-          writeFixtureFile appSource original
+          // Restore the fixture so later runs start from value A.
+          do! writeFixtureFile appSource original
+        with ex ->
+          // Always restore the fixture so later runs start from value A (a `finally` cannot await).
+          do! writeFixtureFile appSource original
+          rethrow ex
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
-    Integration.hostCase "compile-error save keeps last valid behavior and repair hot-reloads it" <| fun () ->
+    }
+    Integration.hostCaseTask "compile-error save keeps last valid behavior and repair hot-reloads it" <| fun () -> task {
       let fDir = fixtureDir ()
       let appSource = Path.Combine(fDir, "Greeting.fs")
       let original = File.ReadAllText(appSource)
 
       let sessionId = sprintf "webapp-repair-%s" (Guid.NewGuid().ToString("N"))
       let hostLog = StringBuilder()
-      let proc, baseUrl, proxy = spawnHost sessionId hostLog
+      let! (proc: Process), baseUrl, proxy = spawnHost sessionId hostLog
       try
-        waitReady proxy hostLog
+        do! waitReady proxy hostLog
         let appFile = Path.Combine(fDir, "App.fs")
-        evalOk proxy (sprintf "#load @\"%s\"" appSource) |> ignore
-        evalOk proxy (sprintf "#load @\"%s\"" appFile) |> ignore
+        let! _ = evalOk proxy (sprintf "#load @\"%s\"" appSource)
+        let! _ = evalOk proxy (sprintf "#load @\"%s\"" appFile)
         let port = freePort ()
-        evalOk proxy (sprintf "let appTask = WebAppFixture.App.run %d" port) |> ignore
+        let! _ = evalOk proxy (sprintf "let appTask = WebAppFixture.App.run %d" port)
 
-        let bodyA = httpGet port "/"
+        let! bodyA = httpGet port "/"
         Expect.stringContains "first response should be the original greeting" "hello from sagefs" bodyA
 
-        watchAllFiles baseUrl
-        waitForWatched baseUrl 10000
-        use sseReader = openSseStream baseUrl
+        do! watchAllFiles baseUrl
+        do! waitForWatched baseUrl 10000
+        use! sseReader = openSseStream baseUrl
 
         // 1. Save BROKEN F# — this must NOT take down the running process.
         //    The watcher broadcasts CompilationFailed with a diagnostic; the
@@ -495,21 +537,24 @@ let webAppHotReloadVerificationTests =
           original.Replace(
             "let greeting () = \"hello from sagefs\"",
             "let greeting () : int = \"this will not compile\"")
-        writeFixtureFile appSource broken
+        do! writeFixtureFile appSource broken
         try
-          let failedEvt =
-            try
-              readSseUntil sseReader 30000 (fun payload ->
-                payload.Contains("\"type\":\"failed\"") && payload.Contains("diagnostics"))
-            with ex ->
-              let dumpPath = Path.Combine(Path.GetTempPath(), sprintf "sagefs-repair-%s.log" sessionId)
-              File.WriteAllText(dumpPath, hostLogText hostLog)
-              failwithf "%s\nHost log dumped to %s" ex.Message dumpPath
+          let! failedEvt =
+            task {
+              try
+                return!
+                  readSseUntil sseReader 30000 (fun payload ->
+                    payload.Contains("\"type\":\"failed\"") && payload.Contains("diagnostics"))
+              with ex ->
+                let dumpPath = Path.Combine(Path.GetTempPath(), sprintf "sagefs-repair-%s.log" sessionId)
+                File.WriteAllText(dumpPath, hostLogText hostLog)
+                return failwithf "%s\nHost log dumped to %s" ex.Message dumpPath
+            }
           Expect.stringContains
             "failed event should carry the error summary" "error" failedEvt
 
           // App must still be alive and serving the last valid behavior.
-          let bodyAfterFail = httpGet port "/"
+          let! bodyAfterFail = httpGet port "/"
           Expect.stringContains
             "compile error must not take down the running app (last valid behavior retained)"
             "hello from sagefs" bodyAfterFail
@@ -517,19 +562,19 @@ let webAppHotReloadVerificationTests =
           // 2. Repair the file — the fix must hot-reload into the running app.
           //    Brief pause so the FileSystemWatcher has re-armed after the
           //    failed eval's event burst before writing again.
-          Thread.Sleep TestTimeouts.watcherRearmSettle
+          do! Task.Delay TestTimeouts.watcherRearmSettle
           let repaired =
             original.Replace(
               "let greeting () = \"hello from sagefs\"",
               "let greeting () = \"hello from hot reload (value B)\"")
-          writeFixtureFile appSource repaired
+          do! writeFixtureFile appSource repaired
           let written = File.ReadAllText(appSource)
           Expect.stringContains "repair write should have landed on disk" "hello from hot reload (value B)" written
           try
             // The repair save must produce Reload. If it instead produces
             // another `failed`, that's a real bug (a failed eval corrupting
             // the watcher's cache so the fix can't reload) — report it.
-            let evt =
+            let! evt =
               readSseUntil sseReader 30000 (fun payload ->
                 payload.Contains("\"type\":\"pending\"")
                 || payload.Contains("\"type\":\"failed\""))
@@ -539,15 +584,19 @@ let webAppHotReloadVerificationTests =
             let dumpPath = Path.Combine(Path.GetTempPath(), sprintf "sagefs-repair2-%s.log" sessionId)
             File.WriteAllText(dumpPath, hostLogText hostLog)
             failwithf "%s\nHost log dumped to %s" ex.Message dumpPath
-          let bodyB = httpGet port "/"
+          let! bodyB = httpGet port "/"
           Expect.stringContains
             (sprintf "repair should hot-reload the new greeting from the running process.\nHost log:\n%s" (hostLogText hostLog))
             "hello from hot reload (value B)" bodyB
-        finally
-          writeFixtureFile appSource original
+          do! writeFixtureFile appSource original
+        with ex ->
+          // Always restore the fixture so later runs start from value A (a `finally` cannot await).
+          do! writeFixtureFile appSource original
+          rethrow ex
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
+    }
 
     // The shape matrix: one cell per F# binding shape a user can save, through a
     // real host, asserting the reload CLAIM equals the OBSERVED change. It was
@@ -556,8 +605,8 @@ let webAppHotReloadVerificationTests =
     // app still served the old body). All 7 now hold, so it runs in the main
     // pipeline under --integration-host like every other host suite. Every
     // assertion is exactly as first written; none was relaxed to get here.
-    Integration.hostCase "hot-reload shape matrix: a startup-captured handler table, one cell per F# binding shape" <| fun () ->
-      buildFixtureAsSageFsDoes ()
+    Integration.hostCaseTask "hot-reload shape matrix: a startup-captured handler table, one cell per F# binding shape" <| fun () -> task {
+      do! buildFixtureAsSageFsDoes ()
       let fDir = fixtureDir ()
       let shapesSource = Path.Combine(fDir, "Shapes.fs")
       Expect.isTrue "fixture Shapes.fs should exist" (File.Exists shapesSource)
@@ -573,9 +622,9 @@ let webAppHotReloadVerificationTests =
 
       let sessionId = sprintf "shape-matrix-%s" (Guid.NewGuid().ToString("N"))
       let hostLog = StringBuilder()
-      let proc, baseUrl, proxy = spawnHost sessionId hostLog
+      let! (proc: Process), baseUrl, proxy = spawnHost sessionId hostLog
       try
-        waitReady proxy hostLog
+        do! waitReady proxy hostLog
 
         // The REAL user path: the project is loaded by the session, its sources
         // are baselined at session start, and the app runs from the COMPILED
@@ -583,29 +632,30 @@ let webAppHotReloadVerificationTests =
         // module in front of the compiled one and hide exactly the bug this
         // matrix exists to catch.
         let port = freePort ()
-        evalOk proxy (sprintf "WebAppFixture.App.run %d" port) |> ignore
-        let shape (name: string) = httpGet port ("/shape/" + name)
+        let! _ = evalOk proxy (sprintf "WebAppFixture.App.run %d" port)
+        let shape (name: string) : Task<string> = httpGet port ("/shape/" + name)
 
         for cell in ShapeMatrix.cells do
+          let! preEdit = shape cell.Name
           Expect.equal
             (sprintf "%s: the running app should serve the pre-edit value" cell.Name)
-            "A" (shape cell.Name)
+            "A" preEdit
 
-        watchAllFiles baseUrl
-        waitForWatched baseUrl 10000
+        do! watchAllFiles baseUrl
+        do! waitForWatched baseUrl 10000
 
         try
           for cell in ShapeMatrix.cells do
             let before = File.ReadAllText shapesSource
-            use sseReader = openSseStream baseUrl
-            waitOutDoubleCompileGuard ()
-            writeFixtureFile shapesSource (before.Replace(cell.Find, cell.Replace))
+            use! sseReader = openSseStream baseUrl
+            do! waitOutDoubleCompileGuard ()
+            do! writeFixtureFile shapesSource (before.Replace(cell.Find, cell.Replace))
             // Every save must close the Compiling -> terminal contract: a cell
             // that cannot be patched still has to answer, and the answer it
             // gives is `noeffect`/`restarted`, not `reload`/`failed`. Waiting
             // only for the latter two made every RestartOnly cell burn the full
             // 60s budget on a verdict the worker had already sent.
-            let verdict =
+            let! verdict =
               readSseUntil sseReader 60000 (fun payload ->
                 [ "pending"; "failed"; "noeffect"; "restarted" ]
                 |> List.exists (fun t -> payload.Contains(sprintf "\"type\":\"%s\"" t)))
@@ -621,14 +671,18 @@ let webAppHotReloadVerificationTests =
             // failure mean "the patch did not take effect", not "the read was
             // early", which is the difference between a real finding and a
             // flake. If the value never flips, this costs the budget once.
-            let servedSettled (name: string) (want: string) =
-              let sw = Stopwatch.StartNew()
-              let mutable v = shape name
-              while v <> want && sw.ElapsedMilliseconds < 5000L do
-                Thread.Sleep TestTimeouts.poll
-                v <- shape name
-              v
-            let served =
+            let servedSettled (name: string) (want: string) : Task<string> =
+              task {
+                let sw = Stopwatch.StartNew()
+                let! first = shape name
+                let mutable v = first
+                while v <> want && sw.ElapsedMilliseconds < 5000L do
+                  do! Task.Delay TestTimeouts.poll
+                  let! next = shape name
+                  v <- next
+                return v
+              }
+            let! served =
               match cell.Expected with
               | ShapeMatrix.Reloads -> servedSettled cell.Name "B"
               | ShapeMatrix.RestartOnly _
@@ -654,10 +708,10 @@ let webAppHotReloadVerificationTests =
             // the claim that has to agree with the app is the FINAL one: `patched`
             // once the new code has run, `neverentered` when the bound passed first.
             // The request above has already run whatever the route calls.
-            let finalVerdict =
+            let! finalVerdict =
               match verdict.Contains "\"type\":\"pending\"" with
               | true -> readConfirmation sseReader
-              | false -> verdict
+              | false -> Task.FromResult verdict
             let claimedChange =
               [ "\"type\":\"patched\""; "\"type\":\"restarted\"" ]
               |> List.exists finalVerdict.Contains
@@ -693,11 +747,15 @@ let webAppHotReloadVerificationTests =
                 "A" served
               verdict
               |> Expect.stringContains (sprintf "%s: the save has to say what it kept" cell.Name) "\"outcome\":\"KeptLiveState\""
-        finally
-          writeFixtureFile shapesSource original
+          do! writeFixtureFile shapesSource original
+        with ex ->
+          // Always restore the fixture so later runs start from the original (a `finally` cannot await).
+          do! writeFixtureFile shapesSource original
+          rethrow ex
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
+    }
 
     // WHY — sagefs-ux-roast.md §11 Island C: "nobody has confirmed a real
     // client reading the wire can distinguish a no-op from a real reload."
@@ -705,25 +763,28 @@ let webAppHotReloadVerificationTests =
     // proves the WIRE a client actually reads (the `/__sagefs__/reload` SSE
     // payload) carries the difference — same real host, same real file save,
     // no synthetic ReloadOutcome values anywhere in this test.
-    Integration.hostCase "a real reload and a real no-op save produce SSE payloads a client can tell apart" <| fun () ->
+    Integration.hostCaseTask "a real reload and a real no-op save produce SSE payloads a client can tell apart" <| fun () -> task {
       let fDir = fixtureDir ()
       let appSource = Path.Combine(fDir, "Greeting.fs")
       let original = File.ReadAllText(appSource)
 
       let sessionId = sprintf "webapp-distinguish-%s" (Guid.NewGuid().ToString("N"))
       let hostLog = StringBuilder()
-      let proc, baseUrl, proxy = spawnHost sessionId hostLog
+      let! (proc: Process), baseUrl, proxy = spawnHost sessionId hostLog
+      let killHost () =
+        try proc.Kill(entireProcessTree = true) with _ -> ()
+        try proc.Dispose() with _ -> ()
       try
-        waitReady proxy hostLog
+        do! waitReady proxy hostLog
         let appFile = Path.Combine(fDir, "App.fs")
-        evalOk proxy (sprintf "#load @\"%s\"" appSource) |> ignore
-        evalOk proxy (sprintf "#load @\"%s\"" appFile) |> ignore
+        let! _ = evalOk proxy (sprintf "#load @\"%s\"" appSource)
+        let! _ = evalOk proxy (sprintf "#load @\"%s\"" appFile)
         let port = freePort ()
-        evalOk proxy (sprintf "let appTask = WebAppFixture.App.run %d" port) |> ignore
-        httpGet port "/" |> ignore
+        let! _ = evalOk proxy (sprintf "let appTask = WebAppFixture.App.run %d" port)
+        let! _ = httpGet port "/"
 
-        watchAllFiles baseUrl
-        waitForWatched baseUrl 10000
+        do! watchAllFiles baseUrl
+        do! waitForWatched baseUrl 10000
 
         let edited =
           original.Replace(
@@ -731,32 +792,39 @@ let webAppHotReloadVerificationTests =
             "let greeting () = \"hello from hot reload (value B)\"")
 
         // 1. A REAL reload: the payload must announce it landed, with counts.
-        let reloadPayload =
-          use sseReader = openSseStream baseUrl
-          writeFixtureFile appSource edited
-          try readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"pending\""))
-          with ex ->
-            failwithf "%s\nHost log:\n%s" ex.Message (hostLogText hostLog)
+        let! reloadPayload =
+          task {
+            use! sseReader = openSseStream baseUrl
+            do! writeFixtureFile appSource edited
+            try
+              return! readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"pending\""))
+            with ex ->
+              return failwithf "%s\nHost log:\n%s" ex.Message (hostLogText hostLog)
+          }
         Expect.stringContains "an applied reload names its own case" "\"outcome\":\"PatchPending\"" reloadPayload
         // An applied patch has had nothing confirmed yet, so its `patched` count (what has
         // been seen running) is zero, and it still says how many definitions it put in
         // front of the process.
         Expect.isTrue "an applied reload has confirmed nothing yet, and says so" (reloadPayload.Contains("\"patched\":0"))
         Expect.isFalse "but it never claims it put nothing in front of the process" (reloadPayload.Contains("\"considered\":0"))
-        httpGet port "/"
+        let! servedAfterReload = httpGet port "/"
+        servedAfterReload
         |> Expect.stringContains "the running process must actually serve the new code" "hello from hot reload (value B)"
 
         // 2. A REAL no-op: saving the SAME content again changes no
         //    declaration, so the wire must announce NOTHING landed — the
         //    exact distinction a client needs to stop rendering a save as a
         //    silent success when it changed nothing.
-        let noopPayload =
-          use sseReader = openSseStream baseUrl
-          waitOutDoubleCompileGuard ()
-          writeFixtureFile appSource edited
-          try readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"noeffect\""))
-          with ex ->
-            failwithf "a byte-identical resave must report noeffect, not silently re-announce reload: %s\nHost log:\n%s" ex.Message (hostLogText hostLog)
+        let! noopPayload =
+          task {
+            use! sseReader = openSseStream baseUrl
+            do! waitOutDoubleCompileGuard ()
+            do! writeFixtureFile appSource edited
+            try
+              return! readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"noeffect\""))
+            with ex ->
+              return failwithf "a byte-identical resave must report noeffect, not silently re-announce reload: %s\nHost log:\n%s" ex.Message (hostLogText hostLog)
+          }
         Expect.stringContains "a no-op save never claims the Patched case" "\"outcome\":\"Unchanged\"" noopPayload
 
         // 3. The two payloads must actually differ where a client looks:
@@ -767,10 +835,15 @@ let webAppHotReloadVerificationTests =
         |> Expect.isFalse "the two payloads must not be byte-identical — that is the whole bug this wire exists to prevent"
 
         // The running process is unaffected by the no-op save — still B.
-        httpGet port "/"
+        let! servedAfterNoop = httpGet port "/"
+        servedAfterNoop
         |> Expect.stringContains "a no-op save must not disturb the running process" "hello from hot reload (value B)"
-      finally
-        writeFixtureFile appSource original
-        try proc.Kill(entireProcessTree = true) with _ -> ()
-        try proc.Dispose() with _ -> ()
+        do! writeFixtureFile appSource original
+        killHost ()
+      with ex ->
+        // Restore the fixture, then take the host down, then fail with the original error (a `finally` cannot await).
+        do! writeFixtureFile appSource original
+        killHost ()
+        rethrow ex
+    }
   ]
