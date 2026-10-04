@@ -18,22 +18,49 @@
 
 6. **A tool that never answers is a BUG in the product, not a timeout to work around.** A scope-colliding `join_cohort` leaves the bridge alive and streaming notifications while producing NO response at all, so the caller's only signal is a hang. An agent that reads that concludes "hard limit, no workaround" — which is a wrong conclusion produced by a missing answer. If a tool call you made produced no response, say so and treat it as a defect; do not re-derive the answer from the absence.
 
-## Known red at 2026-10-03 (2 suites, NOT caused by the current work)
+## Known red at 2026-10-04: NONE. The list below was cleared.
 
-The full unfiltered suite is **12101 ran, 12093 passed, 2 failed, 1 errored**. Both are
-outside the code this session touched — confirmed by running each in isolation:
+Both entries from the 2026-10-03 list are fixed, and how is worth keeping because the first
+was not the bug it looked like:
 
-- **`a function inlined into its caller`** (1 errored of 2). Genuinely broken, not a flake.
-- **`real guards on a click whose thread is abandoned`** (2 passed in isolation, red in the
-  full run). Cross-test interference: it passes alone and fails in the suite, so treat it as
-  an ordering/isolation defect to chase, not a flake to re-roll.
+- **`a function inlined into its caller`** — FIXED (`fix(hot-reload): the inlined-callee
+  fixture is a REAL .dll`). The detour logic was correct; the FIXTURE was not a file. An
+  `AssemblyBuilder` assembly has no `Save` on this runtime and reports an empty `Location`, so
+  the host derived a null search path and never loaded it. The case died on "the fixture
+  assembly loads" before the detour it exists to prove was attempted. The fixture is now
+  written with `Mono.Cecil` (already a test-project dependency) with the identical IL shape.
+- **`real guards on a click whose thread is abandoned`** — no longer appears in a full run.
 
-Do not "fix" either by touching the `source`/`test_run_completed` work. The first attempt to
-establish this by checking out the baseline commit FAILED, and the reason is worth knowing:
+The lesson recorded for the next person: **"the fixture assembly loads" failing is a
+statement about the FIXTURE, not about the product.** Read the assertion's subject before
+concluding the feature under test is broken.
+
+Do not reintroduce either by touching the `source`/`test_run_completed` work. The earlier
+attempt to establish this by checking out the baseline commit FAILED, and the reason is worth knowing:
 the baseline worktree crashes during Expecto discovery because `SkillLayoutTests`,
 `RetiredToolNameTests` and `ToolSurfaceHonestyTests` located the repo by walking up from
-`Environment.CurrentDirectory` — the defect this session fixed. So a baseline worktree can
+`Environment.CurrentDirectory` — a defect fixed since. So a baseline worktree can
 only answer questions about suites whose discovery no longer depends on the CWD.
+
+7. **A LAZY REGISTRY'S "on create" HOOK MISSES EVERYTHING SEEDED BEFORE IT.** `CohortOwners.SetOnOwnerStarted`
+   fires when an owner is CREATED. `DaemonMode.fs` seeded the daemon's own owner ~100 lines BEFORE
+   registering the hook, so the daemon's own cohort had **no subscriber at all** — no `CohortChanged`,
+   so the dashboard's cohort panel rendered once and froze. A member could join and leave and nothing
+   on screen moved. Every LATER scope worked, because those owners are created after the hook.
+   The asymmetry is what made this read as a stale-COUNT bug instead of a missing subscription, and
+   why I spent a long time fixing renderers that were already correct. **When a hook means "on create",
+   anything created before the hook is invisible to it: subscribe those by hand, and if the hook's
+   body is more than a line, name it and call it from both places so neither can be forgotten.**
+
+8. **`Some X` counts a DIFFERENT collection than readers assume.** `CohortFrame.MemberIds` holds every
+   member a cohort has EVER seen — a departed member stays so their claims stay resolvable — while
+   `MemberSeat` says who is present. Both renderers counted `MemberIds`, so they reported "1 member"
+   after the last one left, beside a conductor line reading VACANT. Fixing that then broke two other
+   things, both now pinned by tests in `CohortPanelTests`: `ClaimHolderIndex` indexes `MemberIds` (so
+   bounding it by the PRESENT count drops holder names), and the claims/landings list is nested inside
+   the "has members" branch (so gating on members alone hides every claim the moment its holder leaves).
+   **When a count changes, grep for every use of the old collection's length before committing** — a
+   count is also a loop bound and an index bound.
 
 ## The Bozzetto fork (Clef): `FidelityFramework/Bozzetto`
 
