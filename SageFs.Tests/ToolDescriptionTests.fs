@@ -88,7 +88,9 @@ let requiredParamsByTool =
     // Per-run member tokens (Capability.fs): who is minting and the role are required; scope, lifetime and
     // checkout default to the whole repo, the default lifetime and no session. Revoking names the member.
     "mint_member", set ["agentName"; "role"]
-    "revoke_member", set ["agentName"; "member_id"] ]
+    "revoke_member", set ["agentName"; "member_id"]
+    // The nudge door: every call says what it is doing; the file, address, hash and value depend on the action.
+    "nudge_value", set ["action"] ]
   |> Map.ofList
 
 [<Tests>]
