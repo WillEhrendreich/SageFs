@@ -98,7 +98,13 @@ module McpCapability =
                         // The scope the minted member joins. Taken from the working directory it is joining
             // FROM, not from the process: two agents in two repositories are two cohorts, so the
             // conductor seat they contend for is the one in their own repository.
-            let scope = McpCohortTools.cohortScopeOf workingDirectory
+            //
+            // Through `ScopeOf` — the same rule the status read and every command dispatch use.
+            // It was `cohortScopeOf`, which is a plain walk-up, and the two disagree wherever
+            // the repository is a linked WORKTREE: the mint seated `cap:…` in one cohort while
+            // `get_cohort_status` read the other, so the member the mint had just created was
+            // absent from the frame naming it.
+            let scope = ScopeOf.ofWorkingDirectory workingDirectory
             let! seated = commitCohort ctx (Cohort.CohortCommand.Join(who, RolePreset.joinableRole preset, sessionOpt, scope))
             match seated with
             | Error e ->
@@ -140,7 +146,7 @@ module McpCapability =
           // The token is already dead. Departing the seat is housekeeping; a seat that is already
           // gone is not a failure. The seat belongs to the caller's OWN scope, which is the `wd`
           // resolved above: a token minted in one repository is revoked in that repository's cohort.
-          let! _ = commitCohort ctx (Cohort.CohortCommand.Depart(CapabilityId.memberId target, McpCohortTools.cohortScopeOf wd))
+          let! _ = commitCohort ctx (Cohort.CohortCommand.Depart(CapabilityId.memberId target, SageFs.ScopeOf.ofWorkingDirectory wd))
           return
             Ok(
               sprintf

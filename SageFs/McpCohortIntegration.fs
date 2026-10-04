@@ -130,7 +130,7 @@ module McpCohortIntegration =
           let who = memberIdFor agentName
           let! commitResult =
             commitCohort ctx (
-              Cohort.CohortCommand.SetIntegrationHead(who, sha, McpCohortTools.cohortScopeOf callerSessionWorkingDirectory))
+              Cohort.CohortCommand.SetIntegrationHead(who, sha, SageFs.ScopeOf.ofWorkingDirectory callerSessionWorkingDirectory))
           match commitResult with
           | Error e -> return Error e
           | Ok _ ->

@@ -12,36 +12,22 @@ module McpCohortTools =
 
   /// The cohort a caller working in `workingDirectory` belongs to.
   ///
+  /// `ScopeOf.ofWorkingDirectory` IS this function now. It used to be a plain walk-up
+  /// (`Scope.ofWorkingDirectory` over the caller's directory), which disagrees with every
+  /// other resolution wherever the repository is a linked WORKTREE — and it took four
+  /// separate fixes to notice, each one a cohort that could not see its own members. The
+  /// second rule is deleted rather than left for the next caller to reach for: it compiles,
+  /// it looks right, and it is wrong in exactly the case nobody tests by hand.
+  ///
   /// Per repository by default, which is the unit two agents actually contend over: two agents in
   /// one repo must see each other's claims and share a conductor, and two agents in unrelated
   /// repos must not. The strategy is `Scope.defaultStrategy` and is a VALUE rather than a
   /// hardcoded rule, so per-solution, per-worktree or machine-wide are selectable by whoever
   /// configures the daemon — adding one is a new case, not a new mechanism.
   ///
-  /// A caller that names no directory falls back to the process's own, so an unbound caller is
-  /// scoped to wherever the daemon was started rather than being given the machine-wide cohort
-  /// unconditionally.
-  let cohortScopeOf (workingDirectory: string option) : SageFs.CohortScope =
-    SageFs.Scope.ofWorkingDirectory SageFs.Scope.defaultStrategy (Option.defaultValue Environment.CurrentDirectory workingDirectory)
-
-  /// The SAME scope resolution the daemon binds its cohort owner to, resolved for a caller's
-  /// directory. The daemon owns ONE cohort, so a caller's command must name that cohort or it is
-  /// refused as a scope collision — which is correct, and useless if the two sides compute the
-  /// scope by different rules.
-  ///
-  /// A plain walk-up is not that rule. A worktree's own `.git` is a POINTER FILE, so stopping at the
-  /// first checkout marker resolves a worktree to ITSELF while the daemon, asking git for the shared
-  /// directory, resolves it to its repository. The integration tree, the trunk checkout and the main
-  /// checkout are then one repository under one rule and three under another, and every command the
-  /// trunk gate issues is refused. Asking git — `git rev-parse --git-common-dir`, which is what the
-  /// helper resolves — is the one answer that holds from every checkout of a repository.
-  let internal scopeForDirectory (workingDirectory: string) : SageFs.CohortScope =
-    match Features.CohortGit.commonRepositoryRoot workingDirectory with
-    | Some root -> SageFs.Scope.ofWorkingDirectory SageFs.Scope.defaultStrategy root
-    | None -> cohortScopeOf (Some workingDirectory)
-
   /// The scope a command issued from `workingDirectory` belongs to: the same rule the daemon bound
   /// its cohort owner to, so a caller's command names THAT cohort instead of colliding with it.
+  /// Delegates, so there is exactly one rule and no second copy to drift.
   let internal scopeOf (workingDirectory: string option) : SageFs.CohortScope =
     // THE ONE RULE, shared with the owner resolver. When these were two rules the join and the
     // status read about it resolved differently — `ScopeOf` asked git for the common root, a
