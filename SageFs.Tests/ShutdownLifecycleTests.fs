@@ -118,7 +118,7 @@ let shutdownLifecycleTests =
       let session = mkHangingSession proc
       try
         let stop = SessionManager.stopWorker session |> Async.StartAsTask
-        let! winner = Task.WhenAny(stop, Task.Delay TestTimeouts.shortPatience)
+        let! winner = Task.WhenAny(stop, Task.Delay TestTimeouts.hungWorkerStopBudget)
         obj.ReferenceEquals(winner, stop)
         |> Expect.isTrue
           (sprintf "stopWorker must return within a bound even when the Shutdown proxy hangs (pid %d)" pid)

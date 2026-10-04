@@ -658,6 +658,12 @@ module TestTimeouts =
   let evalOutlastingStatusProbe = secs 3.
   /// A worker whose HTTP server is wedged: the proxy never answers within the test.
   let hungWorkerReply = secs 60.
+  /// How long a stop of that hung worker may take before the case calls it a hang. Half the proxy's hang,
+  /// derived from it and not guessed: a stop that waited on the hung proxy takes at least `hungWorkerReply`,
+  /// so it can never fit under this, while a healthy stop (its own bound is a sum of waits, about 5.5 seconds
+  /// on an idle machine) has a wide margin however loaded the machine is. A flat ten seconds was both: it did
+  /// not follow the hang, and a healthy stop lost to it when the gate shared the machine with other builds.
+  let hungWorkerStopBudget = System.TimeSpan.FromTicks(hungWorkerReply.Ticks / 2L)
 
   // A real VS Code window, driven over its debug port.
 
