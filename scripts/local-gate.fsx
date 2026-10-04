@@ -405,6 +405,8 @@ let gate (sha: string) (force: bool) : int =
       try
         let wt = prepareCheckout sha
         let log = Path.Combine(logsRoot, short + ".log")
+        // A report from an earlier run of this commit must never be mistaken for this run's.
+        (try File.Delete(Path.Combine(logsRoot, short + ".failure.txt")) with _ -> ())
         printfn "=== local gate: %s ===" (mustGit wt [ "log"; "--oneline"; "-1" ])
         printfn "    log: %s" log
         let clock = Stopwatch.StartNew()
@@ -428,6 +430,16 @@ let gate (sha: string) (force: bool) : int =
           |> Array.map ReleaseRules.stripAnsi
           |> Array.rev |> Array.truncate failureTailLines |> Array.rev
           |> Array.iter (printfn "%s")
+          // The first failure, whole: the case, its message, where in our code, the command that reruns it. The
+          // pipeline writes it when it finds it; this is the last thing on screen, and it is kept beside the log.
+          let reportFile = Path.Combine(wt, "test-results", "failure-report.txt")
+          match File.Exists reportFile with
+          | true ->
+            let report = File.ReadAllText reportFile
+            File.WriteAllText(Path.Combine(logsRoot, short + ".failure.txt"), report)
+            printfn "%s" (report.TrimEnd())
+            printfn "log: %s" log
+          | false -> ()
           fail (PipelineFailed failed)
       finally
         releaseLease ()

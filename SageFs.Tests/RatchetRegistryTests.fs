@@ -166,6 +166,7 @@ let private notRatchets : (string * string) list =
     "LiveTestingGoldenFixtureTests.fs", "golden client-contract fixtures, mixed with behaviour tests"
     "NativeResolutionTests.fs", "builds a temp project to prove native resolution"
     "ProjectLoadProgressTests.fs", "product behaviour on temp projects"
+    "RatchetBudgets.fs", "the numbers and the counting behind the registered budget ratchets in ArchitectureTests.fs, loaded by scripts/ratchets-source.fsx too; it holds no test"
     "ReloadPlanningTests.fs", "runs the product parser over every Core file: a real-source stress test, too heavy for the lane"
     "SageFsErrorJsonShapeTests.fs", "one golden JSON file inside a unit list"
     "StableIdentityEvalTests.fs", "product behaviour on a fixture"

@@ -207,6 +207,8 @@ let writeReleaseManifest () =
 // bypasses `testTier`.
 
 #load "build/TierPlan.fs"
+#load "build/TierCost.fs"
+#load "build/FailureReport.fs"
 open SageFs.Build
 
 // Every downstream check runs against the ONE Release build of the primary
@@ -270,7 +272,17 @@ let killedExitCode = 124
 /// Run argv, streaming both pipes to `log`. The whole process tree is killed
 /// on timeout or cancellation. It used to just stop waiting, and a hung tier
 /// kept running for an hour after the stage was cancelled.
-let execToLog (timeout: TimeSpan) (workingDir: string) (env: (string * string) list) (log: string) (argv: string list) =
+/// What a caller can hang on a running process: a look at every output line (the streaming failure detector),
+/// and a way to learn how to kill the whole thing from outside (the fail-fast cancel).
+type Watch =
+  { /// Called with every raw output line, after it is in the log. Never under the log's lock.
+    OnLine: string -> unit
+    /// Called once the process is running, with the function that kills it and everything it started.
+    OnStarted: (unit -> unit) -> unit }
+
+let noWatch = { OnLine = ignore; OnStarted = ignore }
+
+let execToLogWatching (watch: Watch) (timeout: TimeSpan) (workingDir: string) (env: (string * string) list) (log: string) (argv: string list) =
   async {
     let! ct = Async.CancellationToken
     let psi = Diagnostics.ProcessStartInfo(List.head argv)
@@ -281,7 +293,10 @@ let execToLog (timeout: TimeSpan) (workingDir: string) (env: (string * string) l
     for (k, v) in env do psi.Environment[k] <- v
     use writer = new StreamWriter(log, false)
     let gate = obj ()
-    let write (line: string) = if not (isNull line) then lock gate (fun () -> writer.WriteLine line)
+    let write (line: string) =
+      if not (isNull line) then
+        lock gate (fun () -> writer.WriteLine line)
+        watch.OnLine line
     use p = new Diagnostics.Process(StartInfo = psi)
     p.OutputDataReceived.Add(fun e -> write e.Data)
     p.ErrorDataReceived.Add(fun e -> write e.Data)
@@ -289,6 +304,7 @@ let execToLog (timeout: TimeSpan) (workingDir: string) (env: (string * string) l
     p.BeginOutputReadLine()
     p.BeginErrorReadLine()
     let killTree () = try p.Kill(entireProcessTree = true) with _ -> ()
+    watch.OnStarted killTree
     use _ = ct.Register(fun () -> killTree ())
     let exited = p.WaitForExitAsync()
     let! finished = Threading.Tasks.Task.WhenAny(exited, Threading.Tasks.Task.Delay timeout) |> Async.AwaitTask
@@ -302,6 +318,8 @@ let execToLog (timeout: TimeSpan) (workingDir: string) (env: (string * string) l
       write (sprintf "KILLED: no exit after %.0fs. Timed out, not failed; see the log above for where it stopped." timeout.TotalSeconds)
       return killedExitCode
   }
+
+let execToLog = execToLogWatching noWatch
 
 let private exitOf (argv: string list) =
   try
@@ -335,6 +353,87 @@ let private procId (field: string) =
   File.ReadAllLines "/proc/self/status"
   |> Array.find (fun l -> l.StartsWith(field + ":"))
   |> fun l -> int (l.Split([| '\t'; ' ' |], StringSplitOptions.RemoveEmptyEntries).[1])
+
+/// Whether a transient systemd user scope can be made here, probed and never assumed. With one, every tier
+/// runs inside its own scope and reports what its whole process tree cost (CPU, peak memory); without one
+/// the tier runs as before and reports no cost.
+let detectAccounting () =
+  exitOf [ "systemd-run"; "--user"; "--scope"; "--quiet"; "true" ] = 0
+
+/// What each tier cost this run, by tier name. Persisted beside the durations for the next run.
+let tierCosts = Collections.Concurrent.ConcurrentDictionary<string, TierCost.Cost>()
+
+let accountingAvailable = lazy (detectAccounting ())
+
+let costsFile = Path.ChangeExtension(durationsFile, ".costs.json")
+
+// ---- fail fast -------------------------------------------------------------------
+//
+// A red case used to be found in a tier log minutes after it happened, because every tier ran to the end whatever
+// the others did. Now the first failure any tier prints is reported the moment Expecto writes it (the pure reader
+// is build/FailureReport.fs), and unless the run says --keep-going, every other tier is cancelled.
+//
+// Cancelling kills by CGROUP, not by walking process trees: each tier runs in its own systemd scope, and killing
+// the scope kills every process in it, including a daemon that outlived the test process that started it. The
+// scope is exactly what this run started, so nothing else can be hit. Without a scope (no systemd user session)
+// it falls back to killing the process tree and says so.
+
+let keepGoing =
+  fsi.CommandLineArgs |> Array.contains "--keep-going"
+  || (match Environment.GetEnvironmentVariable "SAGEFS_KEEP_GOING" with
+      | "1" | "true" -> true
+      | _ -> false)
+
+/// The first failure of the run, with the lines that were printed for it.
+type FirstFailure = { Tier: string; Case: string; Report: string list }
+
+let firstFailure : FirstFailure option ref = ref None
+let failureGate = obj ()
+let cancelRequested = ref false
+/// Tiers that failed after the first one, named but not reported in full.
+let alsoFailed = Collections.Generic.List<string * string>()
+/// Kill-everything functions of the tiers running right now.
+let runningKillers = Collections.Concurrent.ConcurrentDictionary<string, unit -> unit>()
+/// Tiers stopped (or never started) because of the first failure, with the reason.
+let cancelledByFailFast = Collections.Concurrent.ConcurrentDictionary<string, string>()
+/// The systemd scope each tier ran in, for the cleanup audit.
+let tierUnits = Collections.Concurrent.ConcurrentDictionary<string, string>()
+
+/// Kills every process in the tier's scope, orphans included.
+let killScope (unitName: string) =
+  exitOf [ "systemctl"; "--user"; "kill"; "--kill-whom=all"; "--signal=SIGKILL"; unitName + ".scope" ] |> ignore
+
+/// Stop every running tier and let nothing new start.
+let cancelAll (because: string) =
+  lock failureGate (fun () -> cancelRequested.Value <- true)
+  for kv in runningKillers do
+    cancelledByFailFast[kv.Key] <- because
+    try kv.Value () with _ -> ()
+
+/// A tier ended its first failing case. Fail fast prints the report now and stops everything; keep going prints
+/// it and carries on. Later failures are named in one line each.
+let reportFailure (tier: TierPlan.Tier) (failure: FailureReport.Failure) =
+  let reproduce = FailureReport.reproduceCommand (TierPlan.dllOf tier.Framework) tier.Args failure.Name
+  let lines = FailureReport.render tier.Name rootDir reproduce FailureReport.NotRecorded failure
+  let isFirst =
+    lock failureGate (fun () ->
+      match firstFailure.Value with
+      | None ->
+        firstFailure.Value <- Some { Tier = tier.Name; Case = failure.Name; Report = lines }
+        true
+      | Some _ ->
+        alsoFailed.Add((tier.Name, failure.Name))
+        false)
+  match isFirst with
+  | true ->
+    lock invokedTiers (fun () -> for l in lines do printfn "%s" l)
+    match keepGoing with
+    | true -> printfn "%sthe run keeps going (--keep-going): every other tier still runs" FailureReport.linePrefix
+    | false ->
+      printfn "%scancelling every other tier (pass --keep-going to see all failures)" FailureReport.linePrefix
+      // Off the reader thread that found it: killing a tier ends its own reader.
+      Threading.Tasks.Task.Run(fun () -> cancelAll (sprintf "%s failed in %s" failure.Name tier.Name)) |> ignore
+  | false -> printfn "%salso failed, tier %s: %s" FailureReport.linePrefix tier.Name failure.Name
 
 /// Run one tier (in its own clone when isolated) and record its outcome.
 /// `slotIndex` is which of the `slots` concurrently-running workers is
@@ -375,37 +474,146 @@ let runTier (isolation: TierPlan.Isolation) (slots: int) (slotIndex: int) (t: Ti
         "SAGEFS_TEST_PORT_RANGE", $"{portLo}-{portHi}" ]
     let command = $"dotnet {TierPlan.dllOf t.Framework} {t.Args}"
     let tierTimeout = TierPlan.timeoutOf (readDurations ()) t
+    let costFile = Path.Combine(tierWork, safe + ".cost")
+    if File.Exists costFile then File.Delete costFile
+    let accounted = accountingAvailable.Force()
+    let env = (TierCost.statFileEnvironmentVariable, costFile) :: env
+    let unitName = sprintf "sagefs-tier-%s-%d" safe Environment.ProcessId
+    let inScope (argv: string list) =
+      match accounted with
+      | true ->
+        tierUnits[t.Name] <- unitName
+        TierCost.accountedArgv unitName argv
+      | false -> argv
+    // The streaming failure reader: one per tier, fed every output line. A block is reported when the next log
+    // line ends it, or when the log has been quiet for `quietBeforeFlush` (the last block of a tier that has
+    // gone quiet would otherwise wait for a line that never comes).
+    let reading = TierPlan.caseFailureFailsTier t
+    let detector = ref FailureReport.Idle
+    let detectorGate = obj ()
+    let lastLine = Diagnostics.Stopwatch.StartNew()
+    let handle (found: FailureReport.Failure option) =
+      match found with
+      | Some failure when reading -> reportFailure t failure
+      | _ -> ()
+    let onLine (raw: string) =
+      match reading with
+      | false -> ()
+      | true ->
+        let found =
+          lock detectorGate (fun () ->
+            lastLine.Restart()
+            let next, found = FailureReport.step detector.Value (FailureReport.stripAnsi raw)
+            detector.Value <- next
+            found)
+        handle found
+    let quietBeforeFlush = TimeSpan.FromSeconds 2.0
+    let flushWhenQuiet =
+      new Threading.Timer(
+        (fun _ ->
+          let found =
+            lock detectorGate (fun () ->
+              match lastLine.Elapsed >= quietBeforeFlush with
+              | true ->
+                let held = FailureReport.flush detector.Value
+                detector.Value <- FailureReport.Idle
+                held
+              | false -> None)
+          handle found),
+        null, quietBeforeFlush, quietBeforeFlush)
+    let kill () =
+      match accounted with
+      | true -> killScope unitName
+      | false -> ()
+    let watch =
+      { OnLine = onLine
+        OnStarted =
+          fun killTree ->
+            let killer () =
+              kill ()
+              killTree ()
+            runningKillers[t.Name] <- killer
+            // A tier that starts after the cancel went out must not run.
+            if cancelRequested.Value then
+              cancelledByFailFast.TryAdd(t.Name, "started after the first failure") |> ignore
+              killer () }
     let sw = Diagnostics.Stopwatch.StartNew()
     let! code =
       match isolation with
-      | TierPlan.Shared -> execToLog tierTimeout rootDir env log [ "sh"; "-c"; command ]
+      | TierPlan.Shared -> execToLogWatching watch tierTimeout rootDir env log (inScope [ "sh"; "-c"; command ])
       | TierPlan.CopyOnWrite ->
         async {
           match exitOf [ "cp"; "-a"; "--reflink=always"; rootDir; clone ] with
           | 0 ->
             let argv = TierPlan.isolatedArgv (procId "Uid") (procId "Gid") rootDir clone tmpDir command
-            return! execToLog tierTimeout rootDir env log argv
+            return! execToLogWatching watch tierTimeout rootDir env log (inScope argv)
           | failed ->
             File.WriteAllText(log, sprintf "could not clone the checkout for this tier (cp exit %d)" failed)
             return failed
         }
+    flushWhenQuiet.Dispose()
+    runningKillers.TryRemove t.Name |> ignore
+    handle (lock detectorGate (fun () -> FailureReport.flush detector.Value))
     let seconds = sw.Elapsed.TotalSeconds
+    let cancelled = cancelledByFailFast.ContainsKey t.Name
     lock invokedTiers (fun () -> invokedTiers.Add((t.Name, t.Args, (code = 0))))
     let tail =
       match code with
       | 0 -> ""
+      | _ when cancelled -> ""
       | _ ->
         File.ReadAllLines log
         |> Array.map (fun l -> Text.RegularExpressions.Regex.Replace(l, "\x1b\\[[0-9;?]*[A-Za-z]", ""))
         |> fun lines -> lines[max 0 (lines.Length - 60) ..]
         |> String.concat "\n"
+    let cost =
+      match File.Exists costFile with
+      | false -> None
+      | true ->
+        match TierCost.parse (File.ReadAllText costFile) with
+        | Result.Ok cost ->
+          tierCosts[t.Name] <- cost
+          Some cost
+        | Result.Error _ -> None
+    let costText =
+      match cost with
+      | Some c -> sprintf "  cpu=%.0fs (user %.0f, sys %.0f) peak=%.1fGB" (TierCost.totalSeconds c) c.UserSeconds c.SystemSeconds (float c.PeakBytes / 1073741824.0)
+      | None -> ""
+    let cancelledText = match cancelled with | true -> "  CANCELLED by fail-fast" | false -> ""
     lock invokedTiers (fun () ->
-      printfn "── tier %-28s exit=%d in %.0fs  (log: %s)" t.Name code seconds log
+      printfn "── tier %-28s exit=%d in %.0fs%s%s  (log: %s)" t.Name code seconds costText cancelledText log
       if tail <> "" then printfn "%s\n── end of %s" tail t.Name)
-    // A passing tier's clone is only scratch; a failing one is kept to inspect.
-    if code = 0 && Directory.Exists clone then
+    // A passing tier's clone is only scratch; a failing one is kept to inspect. A tier cancelled because ANOTHER
+    // tier failed has nothing to inspect, so its clone goes too.
+    let isTheFailingTier = firstFailure.Value |> Option.exists (fun f -> f.Tier = t.Name)
+    if (code = 0 || (cancelled && not isTheFailingTier)) && Directory.Exists clone then
       try Directory.Delete(clone, true) with _ -> ()
     return t.Name, seconds
+  }
+
+/// After a cancel: every scope of a cancelled tier must be gone, which means no process of that tier is left,
+/// orphaned daemons and workers included. A scope that is still there after the grace is killed again, and one that
+/// still survives is named loudly (a leaked daemon would hold the tier's ports for the next run).
+let auditCleanup () =
+  async {
+    let graceSeconds = 10.0
+    let pollEvery = 200
+    for kv in cancelledByFailFast do
+      match tierUnits.TryGetValue kv.Key with
+      | false, _ -> ()
+      | true, unitName ->
+        let active () = exitOf [ "systemctl"; "--user"; "--quiet"; "is-active"; unitName + ".scope" ] = 0
+        let deadline = DateTime.UtcNow.AddSeconds graceSeconds
+        while active () && DateTime.UtcNow < deadline do
+          do! Async.Sleep pollEvery
+        match active () with
+        | false -> printfn "cleanup: %-28s scope gone, nothing of this tier is left running" kv.Key
+        | true ->
+          killScope unitName
+          do! Async.Sleep (pollEvery * 5)
+          match active () with
+          | false -> printfn "cleanup: %-28s scope needed a second kill, now gone" kv.Key
+          | true -> printfn "cleanup: LEFTOVER %s still has processes in %s.scope; `systemctl --user kill -s KILL %s.scope`" kv.Key unitName unitName
   }
 
 /// Run every tier, `slots` at a time, longest-expected first, then merge the
@@ -439,12 +647,23 @@ let runTiers (tiers: TierPlan.Tier list) =
       async {
         let results = ResizeArray()
         let mutable next = Unchecked.defaultof<TierPlan.Tier>
-        while queue.TryDequeue(&next) do
+        while not cancelRequested.Value && queue.TryDequeue(&next) do
           let! r = runTier isolation slots slotIndex next
           results.Add r
         return List.ofSeq results
       }
     let! measured = List.init slots worker |> Async.Parallel
+    // Tiers that never started because the run was cancelled are red in the trust report, never absent from it.
+    let because =
+      firstFailure.Value
+      |> Option.map (fun f -> sprintf "%s failed in %s" f.Case f.Tier)
+      |> Option.defaultValue "the run was cancelled"
+    let mutable neverStarted = Unchecked.defaultof<TierPlan.Tier>
+    while queue.TryDequeue(&neverStarted) do
+      cancelledByFailFast[neverStarted.Name] <- because
+      lock invokedTiers (fun () -> invokedTiers.Add((neverStarted.Name, neverStarted.Args, false)))
+      printfn "── tier %-28s never started (cancelled by fail-fast)" neverStarted.Name
+    do! auditCleanup ()
     // Merge ledgers (per-tier files: separate processes never share a writer).
     for t in tiers do
       let ledger = Path.Combine(tierWork, TierPlan.fileNameOf t.Name + ".jsonl")
@@ -452,13 +671,22 @@ let runTiers (tiers: TierPlan.Tier list) =
     // Per-suite timings from every shard feed the next run's balancing.
     let suiteTimings =
       tiers
+      |> List.filter (fun t -> not (cancelledByFailFast.ContainsKey t.Name))
       |> List.map (fun t -> Path.Combine(tierWork, TierPlan.fileNameOf t.Name + ".suites.json"))
       |> List.filter File.Exists
       |> List.fold (fun (acc: Map<string, float>) f ->
         readJsonMap f |> Map.fold (fun (m: Map<string, float>) k v -> m.Add(k, v)) acc) (readJsonMap suiteDurationsFile)
     try File.WriteAllText(suiteDurationsFile, JsonSerializer.Serialize suiteTimings) with _ -> ()
+    try
+      Directory.CreateDirectory(Path.GetDirectoryName costsFile) |> ignore
+      File.WriteAllText(costsFile, JsonSerializer.Serialize(Map.ofSeq (tierCosts |> Seq.map (fun kv -> kv.Key, kv.Value))))
+    with _ -> ()
     let updated =
-      measured |> Seq.concat |> Seq.fold (fun (m: Map<string, float>) (n, s) -> m.Add(n, s)) durations
+      measured
+      |> Seq.concat
+      // A cancelled tier's time is how long it got to run, not how long it takes.
+      |> Seq.filter (fun (n, _) -> not (cancelledByFailFast.ContainsKey n))
+      |> Seq.fold (fun (m: Map<string, float>) (n, s) -> m.Add(n, s)) durations
     try
       Directory.CreateDirectory(Path.GetDirectoryName durationsFile) |> ignore
       File.WriteAllText(durationsFile, JsonSerializer.Serialize updated)
@@ -543,12 +771,17 @@ let trustLines () =
   [ for (tier, _args, stepOk) in List.ofSeq invokedTiers ->
       match rows |> List.filter (fun r -> str r "Tier" = tier) |> List.tryLast with
       | None ->
+        let cancelled = cancelledByFailFast.TryGetValue tier
         { Tier = tier; Registered = "?"; Ran = "?"; Passed = "?"; Failed = "?"; Errored = "?"; Ignored = "?"
-          Verdict = "NoReport"
+          Verdict =
+            match cancelled with
+            | true, _ -> "Cancelled"
+            | false, _ -> "NoReport"
           Detail =
-            match stepOk with
-            | true -> "the step passed but the process reported nothing"
-            | false -> "the process failed before reporting (runner setup or crash)"
+            match cancelled, stepOk with
+            | (true, because), _ -> sprintf "stopped by fail-fast, so it did not finish: %s" because
+            | (false, _), true -> "the step passed but the process reported nothing"
+            | (false, _), false -> "the process failed before reporting (runner setup or crash)"
           Red = true }
       | Some r ->
         let verdict = str r "Verdict"
@@ -578,6 +811,126 @@ let renderTrustTable (lines: TrustLine list) =
       $"| {l.Tier} | {l.Registered} | {l.Ran} | {l.Passed} | {l.Failed} | {l.Errored} | {l.Ignored} | {mark} {l.Verdict} | {l.Detail} |")
   String.concat "\n" ("## Test trust report" :: "" :: header @ body)
 
+// ---- work that runs beside the stages ------------------------------------------
+//
+// Some stages do not depend on the one before them. The net10 test assembly is built from its own private obj tree
+// (TierPlan.testBuildCommands), so it can be compiled while the net11 build is still going; the VS Code stages
+// touch nothing .NET built here. They used to wait their turn, about 130 seconds of a 260 second run-up to the
+// tiers. Now each is STARTED as early as its inputs exist and JOINED by the stage that used to run it, so the
+// stages keep their names and order, a failure still stops the pipeline at the same stage, and the wait that is
+// left is only what the work really costs beyond what it overlapped.
+//
+// A background job writes to its own log (printed, tail first, when it fails) and is killed when the pipeline
+// ends, however it ends, so a red stage never leaves a build running behind it.
+
+/// One command of a background job.
+type BackgroundStep = { Argv: string list; WorkingDir: string }
+
+/// A job's steps run one after another. Each has its own completion, so the stage that used to run step N can join
+/// exactly that far and be blamed for exactly that step.
+type Background =
+  { Name: string
+    Steps: Threading.Tasks.TaskCompletionSource<Result<unit, string>> array }
+
+let backgroundKillers = Collections.Concurrent.ConcurrentDictionary<string, unit -> unit>()
+let backgroundClock = Collections.Concurrent.ConcurrentDictionary<string, Diagnostics.Stopwatch>()
+
+let killBackground () =
+  for kv in backgroundKillers do
+    try kv.Value () with _ -> ()
+
+AppDomain.CurrentDomain.ProcessExit.Add(fun _ -> killBackground ())
+
+/// The last lines of a log with colour removed, for a failure message.
+let tailOfLog (log: string) (count: int) : string =
+  match File.Exists log with
+  | false -> "(no log was written)"
+  | true ->
+    File.ReadAllLines log
+    |> Array.map FailureReport.stripAnsi
+    |> fun lines -> lines[max 0 (lines.Length - count) ..]
+    |> String.concat "\n"
+
+let backgroundTailLines = 40
+let backgroundTimeout = TimeSpan.FromMinutes 30.0
+
+/// Start `steps` in order (stopping at the first one that fails) beside whatever the pipeline is doing.
+let startBackground (name: string) (steps: BackgroundStep list) : Background =
+  Directory.CreateDirectory tierWork |> ignore
+  backgroundClock[name] <- Diagnostics.Stopwatch.StartNew()
+  let completions =
+    steps
+    |> List.map (fun _ -> Threading.Tasks.TaskCompletionSource<Result<unit, string>>(Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously))
+    |> Array.ofList
+  let watch = { noWatch with OnStarted = fun killTree -> backgroundKillers[name] <- killTree }
+  let rec go (index: int) (remaining: BackgroundStep list) : Async<unit> =
+    async {
+      match remaining with
+      | [] -> ()
+      | step :: rest ->
+        let log = Path.Combine(tierWork, sprintf "%s-%d.log" name index)
+        let! code = execToLogWatching watch backgroundTimeout step.WorkingDir [] log step.Argv
+        match code with
+        | 0 ->
+          completions[index].SetResult(Result.Ok ())
+          return! go (index + 1) rest
+        | failed ->
+          let reason =
+            sprintf "%s: `%s` exited %d (log: %s)\n%s" name (String.concat " " step.Argv) failed log (tailOfLog log backgroundTailLines)
+          // This step and every one after it did not pass.
+          for i in index .. completions.Length - 1 do
+            completions[i].TrySetResult(Result.Error reason) |> ignore
+    }
+  Async.Start(go 0 steps)
+  { Name = name; Steps = completions }
+
+/// Wait for a background job up to and including step `through` (0-based) and report it.
+let joinBackground (job: Background) (through: int) : Async<Result<unit, string>> =
+  async {
+    let! result = Async.AwaitTask job.Steps[through].Task
+    let seconds = backgroundClock[job.Name].Elapsed.TotalSeconds
+    printfn "── background %-20s step %d %s after %.0fs (it ran beside the stages before this one)" job.Name through (match result with Result.Ok () -> "passed" | Result.Error _ -> "FAILED") seconds
+    return result
+  }
+
+/// Filled in by the stage that starts each job, read by the stage that joins it.
+let backgroundJobs = Collections.Concurrent.ConcurrentDictionary<string, Background>()
+
+let startBackgroundOnce (name: string) (steps: BackgroundStep list) =
+  backgroundJobs.GetOrAdd(name, fun n -> startBackground n steps) |> ignore
+
+let joinBackgroundNamed (name: string) (through: int) : Async<Result<unit, string>> =
+  async {
+    match backgroundJobs.TryGetValue name with
+    | true, job -> return! joinBackground job through
+    | false, _ -> return Result.Error(sprintf "background job %s was never started" name)
+  }
+
+/// How many contract-test scripts run at once. Each is its own `dotnet fsi` of one file.
+let contractTestParallelism = 6
+
+/// The VS Code extension work: needs only node and its own sources, nothing the .NET build produces. The step
+/// numbers are what the three stages that used to run it join: compile (2), the test-electron compile (3) and the
+/// client contract tests (4 and 5).
+let vscodeJobSteps : BackgroundStep list =
+  let inVscode argv = { Argv = argv; WorkingDir = vscodeDir }
+  [ inVscode [ "dotnet"; "tool"; "restore" ]
+    inVscode [ "npm"; "ci"; "--include=dev" ]
+    inVscode [ "npm"; "run"; "compile" ]
+    inVscode [ "npm"; "run"; "compile:test-electron" ]
+    inVscode [ "npm"; "run"; "test:golden" ]
+    inVscode [ "sh"; "-c"; sprintf "printf '%%s\\0' tests/*.fsx | xargs -0 -n 1 -P %d dotnet fsi" contractTestParallelism ] ]
+
+let vscodeCompileThrough = 2
+let vscodeTestHostThrough = 3
+let vscodeContractThrough = 5
+
+let net10BuildSteps () : BackgroundStep list =
+  TierPlan.Framework.all
+  |> List.filter (fun f -> f <> TierPlan.Framework.primary)
+  |> List.collect TierPlan.testBuildCommands
+  |> List.map (fun command -> { Argv = command.Split(' ', StringSplitOptions.RemoveEmptyEntries) |> List.ofArray; WorkingDir = rootDir })
+
 // ---- the pipeline ------------------------------------------------------------
 
 /// Run shell steps in order, stopping at the first failure.
@@ -602,6 +955,22 @@ pipeline "sagefs" {
   timeout 3600
   timeoutForStep 900
   collapseGithubActionLogs
+
+  stage "source ratchets" {
+    // The ratchets that read only source text (file-size and blocking-call budgets), in seconds, before anything
+    // is restored or built. An over-budget file used to be reported after the whole Release build. They read the
+    // same table the compiled ratchet lane reads (SageFs.Tests/RatchetBudgets.fs), so this is the same check run
+    // earlier: nothing is weakened, and the compiled lane below still runs it again.
+    timeoutForStep 120
+    run $"dotnet fsi scripts/ratchets-source.fsx -- \"{rootDir}\""
+    // The VS Code work needs nothing the .NET build makes, so it starts now and runs beside the restore and the
+    // build. The three "vscode ..." stages below join it.
+    run (fun _ ->
+      async {
+        startBackgroundOnce "vscode" vscodeJobSteps
+        return Ok()
+      })
+  }
 
   stage "restore mcp sdk fork" {
     timeoutForStep 300
@@ -646,7 +1015,16 @@ pipeline "sagefs" {
     // Build the whole solution ONCE, in Release. Every downstream stage runs
     // --no-build against this exact output — the single build that used to be
     // repeated in build/integration-host/extensions/release-artifacts.
-    run "dotnet build -c Release"
+    //
+    // The other frameworks' test assemblies are built from private obj trees
+    // (TierPlan.testBuildCommands), so they start NOW and run beside this build;
+    // "build other frameworks" below joins them. The two builds share the machine
+    // (the build uses about a third of its threads on average), they do not share files.
+    run (fun ctx ->
+      async {
+        startBackgroundOnce "net10-tests" (net10BuildSteps ())
+        return! ctx.RunCommand "dotnet build -c Release"
+      })
   }
 
   stage "ratchets" {
@@ -668,11 +1046,11 @@ pipeline "sagefs" {
     // tracked lock files and the primary build's obj/ alone. It sits AFTER the
     // ratchets because it costs about a minute and a half (restore plus compile)
     // and the ratchets need only the primary build: a red ratchet should not wait for it.
-    run (fun ctx ->
-      async {
-        let others = TierPlan.Framework.all |> List.filter (fun f -> f <> TierPlan.Framework.primary)
-        return! runSteps ctx.RunCommand (others |> List.collect TierPlan.testBuildCommands)
-      })
+    //
+    // It now RUNS beside the primary build (started by "build"), and this stage
+    // joins it, so what is left to wait for here is only what the net10 build
+    // costs beyond the net11 build and the ratchets it overlapped.
+    run (fun _ -> joinBackgroundNamed "net10-tests" (net10BuildSteps().Length - 1))
   }
 
   stage "format" {
@@ -696,18 +1074,16 @@ pipeline "sagefs" {
 
   stage "vscode extension compile" {
     // Needed by both the VS Code command-proof suite (loads the extension from
-    // source) and the VSIX package step.
-    workingDir vscodeDir
-    run "dotnet tool restore"
-    run "npm ci --include=dev"
-    run "npm run compile"
+    // source) and the VSIX package step. The work ran beside the build (started
+    // by "source ratchets", see "work that runs beside the stages"); this stage
+    // is where a failure in it stops the pipeline.
+    run (fun _ -> joinBackgroundNamed "vscode" vscodeCompileThrough)
   }
 
   stage "vscode command-proof host" {
     // @vscode/test-electron harness for the command-proof suite run under
-    // --integration-host.
-    workingDir vscodeDir
-    run "npm run compile:test-electron"
+    // --integration-host. Joined here; it ran beside the build.
+    run (fun _ -> joinBackgroundNamed "vscode" vscodeTestHostThrough)
   }
 
   stage "vscode client contract tests" {
@@ -718,17 +1094,10 @@ pipeline "sagefs" {
     // sagefs-vscode/tests/*.fsx contract test. Structural, not an enumerated
     // list, so a new *.fsx contract test is picked up here by construction —
     // the same "join CI by construction" discipline TestInfrastructure.
-    // Integration.hostList applies on the .NET side.
-    workingDir vscodeDir
-    timeoutForStep 300
-    run "npm run test:golden"
-    run (fun ctx ->
-      async {
-        let fsxFiles =
-          Directory.GetFiles(Path.Combine(vscodeDir, "tests"), "*.fsx")
-          |> Array.sort
-        return! runSteps ctx.RunCommand [ for f in fsxFiles -> $"dotnet fsi \"{f}\"" ]
-      })
+    // Integration.hostList applies on the .NET side. `npm run test:golden`
+    // and `tests/*.fsx` (six at a time) ran beside the build; a failure in
+    // either stops the pipeline here.
+    run (fun _ -> joinBackgroundNamed "vscode" vscodeContractThrough)
   }
 
   stage "test tiers" {
@@ -804,14 +1173,30 @@ pipeline "sagefs" {
         match Environment.GetEnvironmentVariable "GITHUB_STEP_SUMMARY" with
         | null | "" -> ()
         | summary -> File.AppendAllText(summary, table + "\n")
+        // The first failure again, last, so it is the thing on screen when the run ends. Also written beside the
+        // ledger, so the local gate and the ship can show it without anyone opening a log.
+        let failureReportFile = Path.Combine(Path.GetDirectoryName trustLedger, "failure-report.txt")
+        if File.Exists failureReportFile then File.Delete failureReportFile
+        match firstFailure.Value with
+        | None -> ()
+        | Some failure ->
+          let extra =
+            alsoFailed |> Seq.map (fun (tier, case) -> sprintf "%salso failed, tier %s: %s" FailureReport.linePrefix tier case) |> List.ofSeq
+          let all = failure.Report @ extra
+          File.WriteAllText(failureReportFile, String.concat "\n" all + "\n")
+          printfn "%s" (String.concat "\n" all)
         match lines |> List.filter (fun l -> l.Red) with
         | [] when lines.IsEmpty -> return Error "trust report: no test tier ran at all"
         | [] -> return Ok()
         | red ->
+          let first =
+            match firstFailure.Value with
+            | Some f -> sprintf " First failure: %s (tier %s)." f.Case f.Tier
+            | None -> ""
           return
             Error(
-              sprintf "trust report: %d of %d tier(s) not trusted: %s" red.Length lines.Length
-                (red |> List.map (fun l -> $"{l.Tier} ({l.Verdict})") |> String.concat ", "))
+              sprintf "trust report: %d of %d tier(s) not trusted: %s.%s" red.Length lines.Length
+                (red |> List.map (fun l -> $"{l.Tier} ({l.Verdict})") |> String.concat ", ") first)
       })
   }
 

@@ -280,3 +280,9 @@ let isolatedArgv
   [ "unshare"; "--user"; "--map-root-user"; "--mount"; "--"; "sh"; "-c"
     sprintf "mount --bind %s %s && mount --bind %s /tmp && cd %s && exec unshare --user --map-user=%d --map-group=%d -- %s"
       (quote clone) (quote checkout) (quote privateTmp) (quote checkout) uid gid command ]
+
+/// Whether a failing-looking case in this tier's output means the tier has failed. The mutation gate runs each
+/// mutant as a case that FAILS when the mutant is not killed, so its log is full of `[E]` lines by design and its
+/// own verdict (the score against its bar) is the judgment. Every other tier fails when a case fails.
+let caseFailureFailsTier (tier: Tier) =
+  not (tier.Args.StartsWith("--mutation-score", System.StringComparison.Ordinal))

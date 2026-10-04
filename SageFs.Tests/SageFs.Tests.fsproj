@@ -10,8 +10,11 @@
     <ItemGroup>
         <Compile Include="LiveTestingBudgets.fs" />
         <Compile Include="TestTimeouts.fs" />
+        <Compile Include="CasePhases.fs" />
         <!-- Before TestInfrastructure: the trust ledger names a tier by its framework. -->
         <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
+        <Compile Include="../build/TierCost.fs" Link="Build/TierCost.fs" />
+        <Compile Include="../build/FailureReport.fs" Link="Build/FailureReport.fs" />
         <Compile Include="RunnerDirs.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="SourceStateFixtures.fs" />
@@ -604,10 +607,12 @@
         <Compile Include="ComplianceSuite.fs" />
         <Compile Include="AppStatePropertyTests.fs" />
         <Compile Include="EditorPropertyTests.fs" />
+        <Compile Include="RatchetBudgets.fs" />
         <Compile Include="ArchitectureTests.fs" />
         <Compile Include="UnionCaseShadowingTests.fs" />
         <Compile Include="UnionCaseShadowingFsiRegressionTests.fs" />
         <Compile Include="TierPlanTests.fs" />
+        <Compile Include="FailureReportTests.fs" />
         <Compile Include="TestPortsTests.fs" />
         <Compile Include="TrustSignalTests.fs" />
         <Compile Include="DefinitionOfDoneTests.fs" />

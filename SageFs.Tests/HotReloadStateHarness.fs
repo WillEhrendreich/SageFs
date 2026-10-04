@@ -279,11 +279,15 @@ let private postJson (url: string) (body: string) = task {
 /// the worker's own CWD becomes that dir, so a `.SageFs/settings.json` it
 /// writes there is the repo layer `reflectionSettingsFor` resolves against.
 let startFixture (fixture: Fixture) (runtime: HostRuntime) (configureRepo: string -> unit) : Task<RunningApp> = task {
+  let clock = Stopwatch.StartNew()
   let runDir, project = copyFixture fixture runtime
   configureRepo runDir
+  CasePhases.mark clock "copy fixture"
   do! buildAsSageFsDoes runDir project
+  CasePhases.mark clock "dotnet build"
   let hostLog = StringBuilder()
   let! proc, workerUrl = spawnHost runtime runDir project hostLog
+  CasePhases.mark clock "host port"
   let proxy = HttpWorkerClient.httpProxy workerUrl
   let logText () = lock hostLog (fun () -> hostLog.ToString())
   do!
@@ -291,6 +295,7 @@ let startFixture (fixture: Fixture) (runtime: HostRuntime) (configureRepo: strin
       match! proxy (WorkerMessage.GetStatus(Guid.NewGuid().ToString("N"))) |> Async.StartAsTask with
       | WorkerResponse.StatusResult(_, s) -> return s.Status = SessionStatus.Ready
       | _ -> return false })
+  CasePhases.mark clock "session ready"
   // The app runs in the isolated FSI host, not in SageFs.Host, so THAT is the
   // runtime the run has to be on. Checked, not assumed: an inherited
   // global.json once put a "net10" run's app on .NET 11 without a word.
@@ -299,6 +304,7 @@ let startFixture (fixture: Fixture) (runtime: HostRuntime) (configureRepo: strin
   |> Expect.stringContains (sprintf "the app has to run on %s" (HostRuntime.moniker runtime)) wantRuntime
   let appPort, _ = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
   let! _ = evalOk proxy (sprintf "%s.App.run %d" fixture.Project appPort)
+  CasePhases.mark clock "app run eval"
   let app =
     { Runtime = runtime
       RunDir = runDir
@@ -311,11 +317,13 @@ let startFixture (fixture: Fixture) (runtime: HostRuntime) (configureRepo: strin
   do! until TestTimeouts.appFirstAnswer (fun () -> sprintf "the app never answered /%s.\n%s" fixture.ReadyRoute (logText ())) (fun () -> task {
     let! _ = get app fixture.ReadyRoute
     return true })
+  CasePhases.mark clock "app first answer"
   let! status, body = postJson (workerUrl + "/hotreload/watch-all") "{}"
   status |> Expect.equal (sprintf "watch-all should succeed: %s" body) 200
   do! until TestTimeouts.watchRegistered (fun () -> "no file was reported as watched") (fun () -> task {
     let! json = http.GetStringAsync(workerUrl + "/hotreload")
     return not (json.Contains "\"watchedCount\":0") })
+  CasePhases.mark clock "watch registered"
   return app
 }
 

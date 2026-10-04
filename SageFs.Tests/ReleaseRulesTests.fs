@@ -180,7 +180,7 @@ let gateTests =
       ownerRecord "/work/repo" 4242 "2026-10-02T14:01:30-05:00" |> Expect.equal "three lines" "/work/repo\n4242\n2026-10-02T14:01:30-05:00\n"
 
     testCase "WHY — the console shows stage boundaries, finished tiers, the trust table and failures, and nothing else" <| fun _ ->
-      for line in [ "── tier fast: 12s"; "STAGE #3 build"; "Tiers: 2 Trusted"; "Expected wall: 20m"; "trust report: /x"; "| tier | verdict |"; "something error here" ] do
+      for line in [ "── tier fast: 12s"; "── background vscode  step 5 passed after 31s"; "FAILURE case:    A.b"; "cleanup: tier x scope gone"; "STAGE #3 build"; "Tiers: 2 Trusted"; "Expected wall: 20m"; "trust report: /x"; "| tier | verdict |"; "something error here" ] do
         isProgressLine line |> Expect.isTrue (sprintf "shown: %s" line)
       for line in [ "restoring packages"; "  Passed! 12 tests"; "STAGE build"; "a | b" ] do
         isProgressLine line |> Expect.isFalse (sprintf "hidden: %s" line)
@@ -190,7 +190,7 @@ let gateTests =
       stripAnsi "\u001b[32mok\u001b[0m \u001b[1;31mred\u001b[0m" |> Expect.equal "colour removed" "ok red"
 
     testCase "WHY — a failed gate repeats the lines that name the cause" <| fun _ ->
-      for line in [ "── tier slow failed"; "  ── tier x"; "::error::boom"; "  ::error::boom"; "STAGE #4 failed"; "STAGE #4 finished"; "build error CS0001" ] do
+      for line in [ "── tier slow failed"; "FAILURE where:   SageFs.Tests/A.fs:3"; "  ── tier x"; "::error::boom"; "  ::error::boom"; "STAGE #4 failed"; "STAGE #4 finished"; "build error CS0001" ] do
         isFailureSummaryLine line |> Expect.isTrue (sprintf "summarised: %s" line)
       for line in [ "restoring packages"; "STAGE #4 started" ] do
         isFailureSummaryLine line |> Expect.isFalse (sprintf "not summarised: %s" line)

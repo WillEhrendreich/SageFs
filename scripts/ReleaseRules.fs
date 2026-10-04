@@ -207,14 +207,14 @@ let private ansi = Regex(@"\x1b\[[0-9;]*[A-Za-z]", RegexOptions.Compiled)
 let stripAnsi (text: string) : string = ansi.Replace(text, "")
 
 let private progress =
-  Regex(@"^── tier|STAGE #|^Tiers:|^Expected wall|trust report:|^\| |error", RegexOptions.Compiled)
+  Regex(@"^── (tier|background)|^FAILURE |^cleanup:|STAGE #|^Tiers:|^Expected wall|trust report:|^\| |error", RegexOptions.Compiled)
 
 /// The pipeline lines worth showing on the console while it runs: stage boundaries, one line per finished tier,
 /// the trust table, failures. Everything else goes to the log only.
 let isProgressLine (rawLine: string) : bool = progress.IsMatch rawLine
 
 let private failureSummary =
-  Regex(@"^\s*(──|::error)|STAGE .* (failed|finished)|error ", RegexOptions.Compiled)
+  Regex(@"^\s*(──|::error)|^FAILURE |STAGE .* (failed|finished)|error ", RegexOptions.Compiled)
 
 /// The lines a failed gate repeats at the end, so the cause is on screen without opening the log.
 let isFailureSummaryLine (rawLine: string) : bool = failureSummary.IsMatch rawLine

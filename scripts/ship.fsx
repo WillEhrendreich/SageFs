@@ -118,6 +118,11 @@ let runRatchets (target: string) : unit =
       [ sprintf "ship: the ratchets read the working tree, which must be exactly %s (HEAD, no tracked changes)." (target.Substring(0, 8))
         "      commit or stash the rest, or ship from a clean worktree of that commit." ]
   | true -> ()
+  // The ratchets that read only source text (file-size and blocking-call budgets) run first, in seconds, with
+  // nothing built: an over-budget file is reported before the Release build, not after it. The compiled lane below
+  // reads the same table, so this is the same check run earlier, not a different one.
+  printfn "ship: source ratchets, before any build"
+  mustRun "the source-only ratchets" repo "dotnet" [ "fsi"; Path.Combine(scriptsDir, "ratchets-source.fsx"); "--"; repo ]
   printfn "ship: building SageFs.Tests (Release), then the ratchets"
   mustRun "the SageFs.Tests build" repo "dotnet" [ "build"; Path.Combine(repo, "SageFs.Tests"); "-c"; "Release"; "--nologo"; "-v"; "minimal" ]
   // From the repo root: three ratchets find the repo by walking up from the working directory.
@@ -195,7 +200,21 @@ mustRun "the plugin compatibility check" repo "dotnet" (fsiScript "sync-nvim-ver
 mustRun "the plugin impact check" repo "dotnet" (fsiScript "sync-nvim-version.fsx" [ "--"; "--impact"; sha ])
 
 // STEP gate
-mustRun "the local gate" repo "dotnet" (fsiScript "local-gate.fsx" [ "--"; sha ])
+let gateFailureFile : string =
+  let home =
+    match Environment.GetEnvironmentVariable "SAGEFS_GATE_HOME" with
+    | null | "" -> Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, ".local", "share", "sagefs-gate")
+    | path -> path
+  Path.Combine(home, "logs", sha.Substring(0, 8) + ".failure.txt")
+
+match (start repo "dotnet" (fsiScript "local-gate.fsx" [ "--"; sha ]) false).Code with
+| 0 -> ()
+| code ->
+  die
+    [ sprintf "ship: the local gate failed (exit %d); nothing was installed or pushed." code
+      (match File.Exists gateFailureFile with
+       | true -> sprintf "      the first failure is printed above and kept in %s" gateFailureFile
+       | false -> "      no per-case failure was captured; the gate log named above has the reason") ]
 
 // The daemon this machine runs must be the build being shipped: install the nupkg the gate just built and
 // restart the daemon on it, and prove the daemon reports that version, before anything is pushed. Open
@@ -204,6 +223,7 @@ mustRun "the local gate" repo "dotnet" (fsiScript "local-gate.fsx" [ "--"; sha ]
 mustRun "the local install" repo "dotnet" (fsiScript "install-local.fsx" [ "--"; sha; "--force" ])
 
 mustRun "the push" repo "git" [ "-C"; repo; "push"; "origin"; sprintf "%s:refs/heads/master" sha ]
+let pushedAt = DateTimeOffset.UtcNow
 printfn "ship: pushed %s; the self-hosted runner promotes its bundle to publish" (sha.Substring(0, 8))
 
 // sagefs.nvim is part of SageFs and its version always matches the release. This bumps, tests and
@@ -217,6 +237,21 @@ let released =
     | true -> m.Groups[1].Value
     | false -> ""
   | _ -> ""
+
+// The one wait after a green publish nobody had measured: push to the version being downloadable from nuget.org's
+// flat container. A poller, detached and bounded (it gives up after 15 minutes), appends one line to
+// <gate home>/nuget-lag.log. It does not hold the ship up and it changes nothing; it only records the number.
+match released with
+| "" -> ()
+| version ->
+  let gateHome = Path.GetDirectoryName(Path.GetDirectoryName gateFailureFile)
+  let psi = ProcessStartInfo("dotnet")
+  for a in fsiScript "nuget-visible.fsx" [ "SageFs"; version; "--since"; pushedAt.ToString "o"; "--log"; Path.Combine(gateHome, "nuget-lag.log") ] do
+    psi.ArgumentList.Add a
+  psi.WorkingDirectory <- repo
+  psi.UseShellExecute <- false
+  // Output is NOT redirected: a pipe closed by the ship's exit would kill the poller before it wrote its line.
+  try Process.Start psi |> ignore with _ -> ()
 
 match released with
 | "" -> ()
