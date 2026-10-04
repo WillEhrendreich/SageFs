@@ -93,6 +93,11 @@ let private buildFixtureAsSageFsDoes () =
   p.ExitCode
   |> Expect.equal "the fixture must build with SageFs's own session-build command" 0
 
+/// The host log as text. The drain tasks append to `hostLog` under `lock hostLog`, so a read takes the
+/// same lock: `StringBuilder` is not thread-safe, and an unlocked `ToString()` racing an append throws
+/// `ArgumentOutOfRangeException ('chunkLength')`, which flaked a release gate on a case that was passing.
+let hostLogText (hostLog: StringBuilder) : string = lock hostLog (fun () -> hostLog.ToString())
+
 /// Spawn the real host, read WORKER_PORT= from stdout, return (proc, baseUrl, proxy).
 /// The fixture project is passed EXPLICITLY via SAGEFS_SESSION_PROJECTS so
 /// the host never walks up to the repo root and loads SageFs.slnx (which
@@ -136,7 +141,7 @@ let private spawnHost (sessionId: string) (hostLog: StringBuilder) =
     with _ -> ())
   let ok = portLine.Task.Wait Timeouts.webAppPortReady
   if not ok then
-    failwithf "host did not print WORKER_PORT within %.0fs. Host log:\n%s" Timeouts.webAppPortReady.TotalSeconds (hostLog.ToString())
+    failwithf "host did not print WORKER_PORT within %.0fs. Host log:\n%s" Timeouts.webAppPortReady.TotalSeconds (hostLogText hostLog)
   let baseUrl = portLine.Task.Result.TrimEnd('/')
   let proxy = HttpWorkerClient.httpProxy baseUrl
   proc, baseUrl, proxy
@@ -161,7 +166,7 @@ let private waitReady (proxy: WorkerProtocol.SessionProxy) (hostLog: StringBuild
     with _ ->
       Thread.Sleep TestTimeouts.warmupPoll
   if not ready then
-    failwithf "session did not reach Ready within 180s. Host log:\n%s" (hostLog.ToString())
+    failwithf "session did not reach Ready within 180s. Host log:\n%s" (hostLogText hostLog)
 
 let private httpGet (port: int) (path: string) =
   use client = new HttpClient()
@@ -443,7 +448,7 @@ let webAppHotReloadVerificationTests =
           // 9. Request the SAME running process without restart — require B.
           let bodyB = httpGet port "/"
           Expect.stringContains
-            (sprintf "hot reload should serve the new greeting from the running process.\nValue A body: %s\nHost log:\n%s" bodyA (hostLog.ToString()))
+            (sprintf "hot reload should serve the new greeting from the running process.\nValue A body: %s\nHost log:\n%s" bodyA (hostLogText hostLog))
             "hello from hot reload (value B)" bodyB
 
           // 9b. The request above ran the patched function, so the same stream now
@@ -498,7 +503,7 @@ let webAppHotReloadVerificationTests =
                 payload.Contains("\"type\":\"failed\"") && payload.Contains("diagnostics"))
             with ex ->
               let dumpPath = Path.Combine(Path.GetTempPath(), sprintf "sagefs-repair-%s.log" sessionId)
-              File.WriteAllText(dumpPath, hostLog.ToString())
+              File.WriteAllText(dumpPath, hostLogText hostLog)
               failwithf "%s\nHost log dumped to %s" ex.Message dumpPath
           Expect.stringContains
             "failed event should carry the error summary" "error" failedEvt
@@ -532,11 +537,11 @@ let webAppHotReloadVerificationTests =
               "repair save should apply the patch, not fail again" "\"type\":\"pending\"" evt
           with ex ->
             let dumpPath = Path.Combine(Path.GetTempPath(), sprintf "sagefs-repair2-%s.log" sessionId)
-            File.WriteAllText(dumpPath, hostLog.ToString())
+            File.WriteAllText(dumpPath, hostLogText hostLog)
             failwithf "%s\nHost log dumped to %s" ex.Message dumpPath
           let bodyB = httpGet port "/"
           Expect.stringContains
-            (sprintf "repair should hot-reload the new greeting from the running process.\nHost log:\n%s" (hostLog.ToString()))
+            (sprintf "repair should hot-reload the new greeting from the running process.\nHost log:\n%s" (hostLogText hostLog))
             "hello from hot reload (value B)" bodyB
         finally
           writeFixtureFile appSource original
@@ -660,7 +665,7 @@ let webAppHotReloadVerificationTests =
             Expect.equal
               (sprintf
                 "%s: the wire and the running app must agree about whether anything changed. The app serves %s, so the process %s changed; the worker sent:\n  %s\nA save that moves behaviour while reporting no effect (or reports a patch that did not land) is the dishonest-count failure ReloadOutcome was built to prevent.\nHost log:\n%s"
-                cell.Name served (if observedChange then "DID" else "did NOT") finalVerdict (hostLog.ToString()))
+                cell.Name served (if observedChange then "DID" else "did NOT") finalVerdict (hostLogText hostLog))
               observedChange claimedChange
 
             match cell.Expected with
@@ -668,7 +673,7 @@ let webAppHotReloadVerificationTests =
               Expect.equal
                 (sprintf
                   "%s — %s\nThe running app must serve the new code after the save, with no restart.\nWorker said: %s\nHost log:\n%s"
-                  cell.Name cell.Why verdict (hostLog.ToString()))
+                  cell.Name cell.Why verdict (hostLogText hostLog))
                 "B" served
               // The request that served B ran the patched function, so the worker has seen
               // its new code run and says so: not merely applied.
@@ -678,13 +683,13 @@ let webAppHotReloadVerificationTests =
               Expect.equal
                 (sprintf
                   "%s — this shape CANNOT be patched in place (%s), so the running app must still serve the pre-edit value. If this now serves the new value the limitation is gone: move the cell to Reloads and update docs/hot-reload.md.\nWorker said: %s\nHost log:\n%s"
-                  cell.Name reason verdict (hostLog.ToString()))
+                  cell.Name reason verdict (hostLogText hostLog))
                 "A" served
             | ShapeMatrix.KeepsLiveValue reason ->
               Expect.equal
                 (sprintf
                   "%s: %s, so the running app must still serve its live value.\nWorker said: %s\nHost log:\n%s"
-                  cell.Name reason verdict (hostLog.ToString()))
+                  cell.Name reason verdict (hostLogText hostLog))
                 "A" served
               verdict
               |> Expect.stringContains (sprintf "%s: the save has to say what it kept" cell.Name) "\"outcome\":\"KeptLiveState\""
@@ -731,7 +736,7 @@ let webAppHotReloadVerificationTests =
           writeFixtureFile appSource edited
           try readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"pending\""))
           with ex ->
-            failwithf "%s\nHost log:\n%s" ex.Message (hostLog.ToString())
+            failwithf "%s\nHost log:\n%s" ex.Message (hostLogText hostLog)
         Expect.stringContains "an applied reload names its own case" "\"outcome\":\"PatchPending\"" reloadPayload
         // An applied patch has had nothing confirmed yet, so its `patched` count (what has
         // been seen running) is zero, and it still says how many definitions it put in
@@ -751,7 +756,7 @@ let webAppHotReloadVerificationTests =
           writeFixtureFile appSource edited
           try readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"noeffect\""))
           with ex ->
-            failwithf "a byte-identical resave must report noeffect, not silently re-announce reload: %s\nHost log:\n%s" ex.Message (hostLog.ToString())
+            failwithf "a byte-identical resave must report noeffect, not silently re-announce reload: %s\nHost log:\n%s" ex.Message (hostLogText hostLog)
         Expect.stringContains "a no-op save never claims the Patched case" "\"outcome\":\"Unchanged\"" noopPayload
 
         // 3. The two payloads must actually differ where a client looks:
