@@ -1387,11 +1387,7 @@ module StartEscalationTimeouts =
   /// The absolute bound given to those tests: far past the silence allowance, never reached.
   let shortAbsolute = System.TimeSpan.FromSeconds 30.
 
-/// The nudge door's tests. Both are made to EXPIRE in the test that uses them, so a long one only slows it.
+/// The nudge door's tests. The wait is made to EXPIRE in the test that uses it, so a long one only slows it.
 module NudgeTimeouts =
-  /// How long the first of two concurrent nudges waits for the second to reach the file. With the file lock the
-  /// second never arrives, so this runs out and the first goes ahead; without it the two meet.
-  let nudgeRendezvous = System.TimeSpan.FromMilliseconds 300.
-
   /// A file-lock wait short enough that the test of a refused wait (`FileBusy`) ends quickly.
   let nudgeShortLockWait = System.TimeSpan.FromMilliseconds 150.

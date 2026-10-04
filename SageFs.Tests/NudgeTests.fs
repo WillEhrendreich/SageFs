@@ -724,24 +724,59 @@ let atomicityTests =
 
 [<Tests>]
 let concurrencyTests =
-  /// Steps that make the first two readers of the source file meet before either goes on: the first waits for the
-  /// second, up to the rendezvous. With the file lock the second can never arrive, so the first times out and goes.
-  let meetingSteps (disk: Disk) : FileSteps =
-    let arrivals = ref 0
-    let met = new ManualResetEventSlim(false)
+  /// A nudge's steps with two announcements: when it is about to make its FIRST change to disk (the journal's
+  /// folder, temp file or record, which is after it has read, settled and planned), and when its rename over the
+  /// source has returned. The reads are the disk's own.
+  let announcing (onFirstWrite: unit -> unit) (onLanded: unit -> unit) (disk: Disk) : FileSteps =
     let inner = disk.Steps
+    let announced = ref 0
+    let first () = if Interlocked.Exchange(&announced.contents, 1) = 0 then onFirstWrite ()
     { inner with
-        ReadBytes =
-          fun path ->
-            match path = sourcePath with
-            | false -> inner.ReadBytes path
-            | true ->
-              let bytes = inner.ReadBytes path
-              match Interlocked.Increment(&arrivals.contents) with
-              | 1 -> met.WaitHandle.WaitOne NudgeTimeouts.nudgeRendezvous |> ignore
-              | 2 -> met.Set()
-              | _ -> ()
-              bytes }
+        MakeDirectory = fun path -> first (); inner.MakeDirectory path
+        WriteTemp = fun path bytes -> first (); inner.WriteTemp path bytes
+        Append = fun path bytes -> first (); inner.Append path bytes
+        Discard = fun path -> first (); inner.Discard path
+        Rename =
+          fun temp path ->
+            first ()
+            let renamed = inner.Rename temp path
+            if path = sourcePath then onLanded ()
+            renamed }
+
+  /// The wait inside a step, which has to end because the other nudge is coming. It is the test's patience, not
+  /// a guess at how long the other takes: reaching it means the choreography is broken, and it says so.
+  let awaitOther (what: string) (signal: ManualResetEventSlim) : unit =
+    match signal.WaitHandle.WaitOne TestTimeouts.patience with
+    | true -> ()
+    | false -> failtestf "the other nudge never came: %s" what
+
+  /// The twin's choreography, one per pair of nudges. The first nudge to reach its first write waits there until
+  /// the second has reached its own, so both have read, settled and planned from the same pre-state. Then the first
+  /// goes through to its rename and only after that is the second let go, so the two writes never interleave
+  /// mid-step and the outcome is the same on every run.
+  let lockstep (disk: Disk) : unit -> FileSteps =
+    let arrivals = ref 0
+    let bothPlanned = new ManualResetEventSlim(false)
+    let firstLanded = new ManualResetEventSlim(false)
+    let onFirstWrite () =
+      match Interlocked.Increment(&arrivals.contents) with
+      | 1 -> awaitOther "the first nudge waits at its first write for the second to have planned" bothPlanned
+      | _ ->
+        bothPlanned.Set()
+        awaitOther "the second nudge waits at its first write for the first to have landed" firstLanded
+    fun () -> announcing onFirstWrite firstLanded.Set disk
+
+  /// The locked case's observer: it waits for nobody. It counts how many nudges are between their first write and
+  /// their landing at once, and keeps the most it ever saw.
+  let observing (mostInside: int ref) (disk: Disk) : unit -> FileSteps =
+    let inside = ref 0
+    let gate = obj ()
+    let onFirstWrite () =
+      lock gate (fun () ->
+        inside.Value <- inside.Value + 1
+        mostInside.Value <- max mostInside.Value inside.Value)
+    let onLanded () = lock gate (fun () -> inside.Value <- inside.Value - 1)
+    fun () -> announcing onFirstWrite onLanded disk
 
   /// The task's answer, or a failed test if it is not there within the test's patience.
   let awaitWithin (work: Task<'a>) : Task<'a> =
@@ -752,13 +787,18 @@ let concurrencyTests =
       | false -> return failtestf "the work did not finish within the test's patience"
     }
 
-  let twoNudges (run: Ports -> NudgeRequest -> Task<Result<Ran, NudgeRefusal>>) =
+  /// Two nudges to one file from the same seen hash, each with its own steps from `choreography`.
+  let twoNudges
+    (choreography: Disk -> unit -> FileSteps)
+    (run: Ports -> NudgeRequest -> Task<Result<Ran, NudgeRefusal>>)
+    =
     task {
       let world = create ()
-      let ports = { world.Ports with Files = meetingSteps world.Disk }
+      let stepsFor = choreography world.Disk
+      let portsFor () = { world.Ports with Files = stepsFor () }
       let request value = NudgeRequest.Set(file world, gravity, seenOf "9.8", NudgeValue.LiteralText value)
-      let first = run ports (request "12.5")
-      let second = run ports (request "13.5")
+      let first = run (portsFor ()) (request "12.5")
+      let second = run (portsFor ()) (request "13.5")
       let! both = awaitWithin (Task.WhenAll [| first; second |])
       return world, List.ofArray both
     }
@@ -768,7 +808,9 @@ let concurrencyTests =
   testList "Nudge concurrency" [
     testTask "WHY - two nudges from the same seen hash cannot both land: one wins, the other is told the expression moved" {
       let locks = FileLocks()
-      let! world, results = twoNudges (fun ports request -> execute ports locks TestTimeouts.patience request)
+      let mostInside = ref 0
+      let! world, results = twoNudges (observing mostInside) (fun ports request -> execute ports locks TestTimeouts.patience request)
+      mostInside.Value |> Expect.equal "the lock let one nudge at a time past its first write" 1
       writtenCount results |> Expect.equal "exactly one write" 1
       results
       |> List.exists (function Error(NudgeRefusal.SourceMoved _) -> true | _ -> false)
@@ -779,7 +821,7 @@ let concurrencyTests =
     }
 
     testTask "WHY - the twin that skips the lock lets both land, so the test above has teeth" {
-      let! _, results = twoNudges (fun ports request -> executeWithoutLockTwin ports request)
+      let! _, results = twoNudges lockstep (fun ports request -> executeWithoutLockTwin ports request)
       writtenCount results |> Expect.equal "without the lock both read the same hash and both write: a lost update" 2
     }
 
