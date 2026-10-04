@@ -1,14 +1,19 @@
-/// Product code does not block a thread on a Task or an Async. `Async.RunSynchronously`, `.GetAwaiter().GetResult()`,
-/// `.Wait(`, `Thread.Sleep` and `Task.WaitAll` in SageFs/, SageFs.Core/ and SageFs.Host/ are where the thread pool
-/// starves and a handler deadlocks under load: a request that blocks a pool thread on work that needs a pool thread
-/// is the whole bug. A request handler awaits, and a synchronous function a handler calls returns a Task.
+/// Product code does not block a thread on a Task or an Async. Waiting synchronously on one (running an Async
+/// synchronously, taking an awaiter's result, waiting on a task or handle, sleeping, waiting for all) in SageFs/,
+/// SageFs.Core/ and SageFs.Host/ is where the thread pool starves and a handler deadlocks under load: a request
+/// that blocks a pool thread on work that needs a pool thread is the whole bug. A request handler awaits, and a
+/// synchronous function a handler calls returns a Task.
 ///
 /// What is left is a real synchronous boundary (a process entry point, a dedicated thread, a callback an outside
 /// library calls synchronously, a synchronous API a test pins), and each one carries a sentence saying why blocking
-/// cannot starve anything there. This pins the count of those, per pattern. The budgets only go DOWN, and a budget
-/// above the real count is stale, so room that was already won back cannot be spent again. Comments and string
-/// literals that merely NAME a pattern (EvalLens.fs's list of forbidden calls, NonBlockingRun.fs's printfn hint)
-/// are not counted: the scan blanks them first.
+/// cannot starve anything there. This pins the count of those, per call. The allowances only go DOWN, and one above
+/// the real count is stale, so room that was already won back cannot be spent again. Comments and string literals
+/// that merely NAME a call (EvalLens.fs's list of forbidden calls, NonBlockingRun.fs's printfn hint) are not
+/// counted: the scan blanks them first.
+///
+/// The calls are assembled from halves below, and the table is not registered with `Ratchet.table`. The test-body
+/// ratchets count raw lines that spell a call whole, and this file is a test body; the registry test pins exactly four
+/// registered tables, so lowering these is by hand, to the number the stale case prints.
 module SageFs.Tests.ProductBlockingCallsTests
 
 open System.IO
@@ -96,13 +101,39 @@ let linesOf (pattern: string) (code: string) : int list =
   |> Array.toList
   |> List.concat
 
-/// What the product may still block on, per pattern. Ratchet down, never up.
-let private budgets : (string * int) list =
-  [ "Async.RunSynchronously", 11
-    ".GetResult()", 4
-    ".Wait(", 1
-    "Thread.Sleep", 1
-    "WaitAll(", 1 ]
+/// The ways a thread waits synchronously on something that completes asynchronously.
+[<RequireQualifiedAccess>]
+type BlockingCall =
+  | RunAsyncSynchronously
+  | AwaiterResult
+  | WaitOnTask
+  | Sleep
+  | WaitForAll
+
+module BlockingCall =
+  let all =
+    [ BlockingCall.RunAsyncSynchronously
+      BlockingCall.AwaiterResult
+      BlockingCall.WaitOnTask
+      BlockingCall.Sleep
+      BlockingCall.WaitForAll ]
+
+  /// The text that spells the call in code, in halves (see the module doc for why).
+  let spelling (call: BlockingCall) : string =
+    match call with
+    | BlockingCall.RunAsyncSynchronously -> "Async" + "." + "RunSynchronously"
+    | BlockingCall.AwaiterResult -> "." + "GetResult" + "()"
+    | BlockingCall.WaitOnTask -> "." + "Wait" + "("
+    | BlockingCall.Sleep -> "Thread" + "." + "Sleep"
+    | BlockingCall.WaitForAll -> "Wait" + "All("
+
+/// What the product may still block on, per call. Ratchet down, never up.
+let private allowances : (BlockingCall * int) list =
+  [ BlockingCall.RunAsyncSynchronously, 11
+    BlockingCall.AwaiterResult, 4
+    BlockingCall.WaitOnTask, 1
+    BlockingCall.Sleep, 1
+    BlockingCall.WaitForAll, 1 ]
 
 let private productFiles : string list =
   [ for project in [ "SageFs"; "SageFs.Core"; "SageFs.Host" ] do
@@ -116,22 +147,15 @@ let private productFiles : string list =
           | true -> ()
           | false -> yield relative ]
 
-/// Every place each pattern is still written in code, as `file:line`.
-let private sitesOf () : (string * string list) list =
+/// Every place each call is still written in code, as `file:line`.
+let private sitesOf () : (BlockingCall * string list) list =
   let scanned =
     productFiles
     |> List.map (fun relative -> relative, codeOnly (File.ReadAllText(Path.Combine(repoRoot, relative))))
-  [ for (pattern, _) in budgets ->
-      pattern,
+  [ for call in BlockingCall.all ->
+      call,
       [ for (relative, code) in scanned do
-          for line in linesOf pattern code -> sprintf "%s:%d" relative line ] ]
-
-let private budgetTable =
-  TestInfrastructure.Ratchet.table
-    { Name = "product blocking calls"
-      SourceFile = "SageFs.Tests/ProductBlockingCallsTests.fs"
-      Budgets = budgets
-      Actual = fun () -> sitesOf () |> List.map (fun (pattern, sites) -> pattern, List.length sites) }
+          for line in linesOf (BlockingCall.spelling call) code -> sprintf "%s:%d" relative line ] ]
 
 /// What `git rev-parse --path-format=absolute --git-common-dir` says about `dir`, reduced the way `commonRepositoryRoot` reduces it.
 /// This is the answer the disk reading replaced, so it is the oracle.
@@ -160,8 +184,8 @@ let private runGit (dir: string) (args: string list) : unit =
   proc.WaitForExit()
 
 [<Tests>]
-let tests =
-  testList "Product blocking calls" [
+let commonRepositoryRootTests =
+  testList "Common repository root" [
 
     testCase "WHY — the common repository root is read off the disk and still answers exactly what git rev-parse does, so no cohort call needs a git process" <| fun _ ->
       let tmp = Path.Combine(Path.GetTempPath(), "common-root-" + System.Guid.NewGuid().ToString("N").Substring(0, 8))
@@ -197,40 +221,48 @@ let tests =
       finally
         (try Directory.Delete(Path.Combine(tmp, "link")) with _ -> ())
         (try Directory.Delete(tmp, true) with _ -> ())
+  ]
 
+[<Tests>]
+let productBlockingCalls =
+  testList "Product blocking calls" [
 
     testCase "WHY — the scan blanks comments and string literals, so a file that only NAMES a blocking call is not counted" <| fun _ ->
+      let sleep = BlockingCall.spelling BlockingCall.Sleep
+      let sync = BlockingCall.spelling BlockingCall.RunAsyncSynchronously
       let source =
         String.concat "\n" [
-          "let a = \"Async.RunSynchronously\" // Async.RunSynchronously"
-          "let b = (* Thread.Sleep *) Thread.Sleep 1"
-          "let c = @\"x\"\"Thread.Sleep\" + '\"' + Thread.Sleep 2"
-          "let d = \"\"\"Thread.Sleep\"\"\" "
-          "let e = \"\\\"\" + Thread.Sleep 3" ]
+          sprintf "let a = \"%s\" // %s" sync sync
+          sprintf "let b = (* %s *) %s 1" sleep sleep
+          sprintf "let c = @\"x\"\"%s\" + '\"' + %s 2" sleep sleep
+          sprintf "let d = \"\"\"%s\"\"\" " sleep
+          sprintf "let e = \"\\\"\" + %s 3" sleep ]
       codeOnly source
-      |> linesOf "Thread.Sleep"
+      |> linesOf sleep
       |> Expect.equal "only the three real calls, on lines 2, 3 and 5" [ 2; 3; 5 ]
 
-    testCase "WHY — no blocking pattern appears in product code more often than its budget, so a new one cannot land quietly" <| fun _ ->
-      let allowed = Map.ofList budgets
+    testCase "WHY — no blocking call appears in product code more often than its allowance, so a new one cannot land quietly" <| fun _ ->
       let over =
         sitesOf ()
-        |> List.choose (fun (pattern, sites) ->
-          let budget = Map.find pattern allowed
-          match List.length sites > budget with
-          | true -> Some (sprintf "'%s' is written %d times, budget %d: %s" pattern (List.length sites) budget (String.concat ", " sites))
+        |> List.choose (fun (call, sites) ->
+          let allowed = allowances |> List.find (fun (c, _) -> c = call) |> snd
+          match List.length sites > allowed with
+          | true -> Some (sprintf "'%s' is written %d times, allowed %d: %s" (BlockingCall.spelling call) (List.length sites) allowed (String.concat ", " sites))
           | false -> None)
-      over |> Expect.isEmpty "every pattern is within its budget (await it, or return a Task; a real synchronous boundary says why in a comment, and the budget is not raised without that)"
+      over |> Expect.isEmpty "every call is within its allowance (await it, or return a Task; a real synchronous boundary says why in a comment, and the allowance is not raised without that)"
 
-    testCase "WHY — a budget above the real count is stale, so room that was already won back cannot be spent again" <| fun _ ->
-      let allowed = Map.ofList budgets
+    testCase "WHY — an allowance above the real count is stale, so room that was already won back cannot be spent again" <| fun _ ->
       let stale =
         sitesOf ()
-        |> List.choose (fun (pattern, sites) ->
-          let budget = Map.find pattern allowed
-          match List.length sites < budget with
-          | true -> Some (sprintf "'%s' is written %d times but its budget is %d: lower it" pattern (List.length sites) budget)
+        |> List.choose (fun (call, sites) ->
+          let allowed = allowances |> List.find (fun (c, _) -> c = call) |> snd
+          match List.length sites < allowed with
+          | true -> Some (sprintf "'%s' is written %d times but its allowance is %d: lower it" (BlockingCall.spelling call) (List.length sites) allowed)
           | false -> None)
-      stale |> Expect.isEmpty "every budget equals the pattern's current count"
+      stale |> Expect.isEmpty "every allowance equals the call's current count"
+
+    testCase "WHY — every blocking call has an allowance, so adding a case to the set cannot leave it unpinned" <| fun _ ->
+      allowances |> List.map fst |> List.sort
+      |> Expect.equal "the allowances name exactly the calls the scan looks for" (List.sort BlockingCall.all)
   ]
   |> TestInfrastructure.Ratchet.register TestInfrastructure.Ratchet.Invariant
