@@ -491,6 +491,7 @@
         <Compile Include="ReadyWaitTests.fs" />
         <Compile Include="ErrorAlgebraHardeningTests.fs" />
         <Compile Include="McpToolErrorBodyTests.fs" />
+        <Compile Include="LiveTestingCycleRefusalTests.fs" />
         <Compile Include="SessionIdTests.fs" />
         <Compile Include="EndpointContractTests.fs" />
         <Compile Include="FsiRegressionTests.fs" />

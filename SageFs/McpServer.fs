@@ -3535,6 +3535,13 @@ let mapLiveBindingsRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapPost("/api/sessions/{sid}/live-values/mode", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) -> liveBindingsSetMode askFor hub ctx) |> ignore
   app.MapGet("/api/sessions/{sid}/live-values/mode", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) -> liveBindingsReadMode askFor hub ctx) |> ignore
 
+/// What a live-testing route that works on the daemon's one cycle says when the caller asked about a session that does
+/// not own it. Built from the route, the owning session and the one asked about, so the remedy names real things.
+let cycleOwnerRefusal (route: string) (owner: string) (requested: string) : string =
+  sprintf
+    "%s operates on the live-testing cycle the daemon currently holds, which belongs to session %s. It cannot act on session %s without taking that session's cycle; read %s for per-session state."
+    route owner requested route
+
 let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
   // Truthful command failure: enable/disable/policy used to report HTTP 200
   // success even when the internal operation failed (e.g. Elm loop not
@@ -3885,10 +3892,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
           do!
             jsonResponse ctx 409 {|
               success = false
-              error =
-                sprintf
-                  "%s operates on the live-testing cycle the daemon currently holds, which belongs to session %s. It cannot act on session %s without taking that session's cycle; read %s for per-session state."
-                  route o sid route
+              error = cycleOwnerRefusal route o sid
               sessionId = sid
               cycleOwner = o
             |}
