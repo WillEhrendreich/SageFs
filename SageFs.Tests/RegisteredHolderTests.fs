@@ -199,14 +199,14 @@ let currentRegistryTests =
       // back to a private registry is the defect: the value would be held and
       // no restart could ever see it.
       //
-      // `Current` is a mutable STATIC, and this is the THIRD time it has cost
-      // a test: it passed in isolation and failed in the full run, because some
-      // other test in the same process had published a handle. So the reset is
-      // now unconditional and happens BEFORE the match, and the surrounding
-      // tests restore it in a `finally` — ambient state plus a shared test
-      // process is a bad pair, and the cost of learning that is one failure per
-      // occurrence unless the reset is not conditional on anything.
-      HolderRegistry.Current <- None
+      // `Current` is a mutable STATIC, and this is the FOURTH time it has cost
+      // a test. The reset to None is `withCurrent`'s own first step, taken
+      // under the lock the other case holds while it publishes and reads. It
+      // used to ALSO be written here, outside the lock, right before
+      // `withCurrent`: that write could land between the other case's publish
+      // and its read, and "the worker published a registry, so this must
+      // succeed" failed in the gate (twice, on default-net10) while passing
+      // alone. Every write to the handle goes through the lock.
       withCurrent (fun () ->
         match RegisteredHolder.holdInCurrent "Order" 1 with
         | RegisteredHolder.HeldOrUnseen.Visible _ ->
