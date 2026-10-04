@@ -43,11 +43,11 @@ module McpCohortTools =
   /// The scope a command issued from `workingDirectory` belongs to: the same rule the daemon bound
   /// its cohort owner to, so a caller's command names THAT cohort instead of colliding with it.
   let internal scopeOf (workingDirectory: string option) : SageFs.CohortScope =
-    let dir =
-      match workingDirectory with
-      | Some wd -> wd
-      | None -> Environment.CurrentDirectory
-    scopeForDirectory dir
+    // THE ONE RULE, shared with the owner resolver. When these were two rules the join and the
+    // status read about it resolved differently — `ScopeOf` asked git for the common root, a
+    // plain walk-up did not — so a join landed in one cohort and the read came back from
+    // another, with both sides individually correct.
+    ScopeOf.ofWorkingDirectory workingDirectory
 
   let private parseJoinableRole (raw: string) : Result<Cohort.JoinableRole, SageFsError> =
     match (if isNull raw then "" else raw.Trim().ToLowerInvariant()) with

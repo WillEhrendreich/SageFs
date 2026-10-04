@@ -1,6 +1,29 @@
 namespace SageFs
 
+open System
 open SageFs
+
+/// THE ONE RULE for turning a caller's directory into a scope.
+///
+/// WHY IT LIVES HERE AND NOT IN `McpCohortTools`: `McpCohortTools.scopeOf` already answers
+/// this question — by asking git for `--git-common-dir`, so a worktree, the trunk checkout
+/// and the main checkout are ONE repository. A second rule, added beside it, is how a join
+/// lands in one cohort and the status read about that join comes back from another: both
+/// sides were right and the cohort was different. So the resolver and the command dispatch
+/// ask THIS, and neither keeps a copy.
+[<RequireQualifiedAccess>]
+module ScopeOf =
+
+  /// The caller's directory resolved to the scope its cohort lives under. `None` is the
+  /// daemon's own working directory, which is the cohort it bound its owner to.
+  let ofWorkingDirectory (workingDirectory: string option) : CohortScope =
+    let dir =
+      match workingDirectory with
+      | Some wd -> wd
+      | None -> Environment.CurrentDirectory
+    match Features.CohortGit.commonRepositoryRoot dir with
+    | Some root -> Scope.ofWorkingDirectory Scope.defaultStrategy root
+    | None -> Scope.ofWorkingDirectory Scope.defaultStrategy dir
 
 /// WHICH COHORT A CALLER IS ASKING ABOUT.
 ///
@@ -41,15 +64,14 @@ module CohortOwnerResolution =
     (support: Features.CohortOwners.Wiring)
     (workingDirectory: string option)
     : Features.CohortOwner.Handle option =
-    let scopeOf dir = Scope.ofWorkingDirectory Scope.defaultStrategy dir
-
     match support with
     | Features.CohortOwners.Wiring.Wired(_, own) ->
       // The caller's own directory when it named one, and the scope the DAEMON started in
-      // when it did not — which is what that caller is asking about.
+      // when it did not — which is what that caller is asking about. Resolved by `ScopeOf`,
+      // the same rule `commitCohort`'s command scope comes from.
       let scope =
         match workingDirectory with
-        | Some dir -> scopeOf dir
+        | Some _ -> ScopeOf.ofWorkingDirectory workingDirectory
         | None -> own
       ownerForScope support scope
     | Features.CohortOwners.Wiring.Single(owner, _own) ->

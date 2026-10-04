@@ -212,25 +212,36 @@ let cohortMcpToolsTests =
         System.IO.Directory.CreateDirectory repoB |> ignore
 
         // Repo A: the first joiner becomes ITS conductor.
+        //
+        // The scope's PREFIX is deliberately not asserted. A directory with a `.git` is
+        // `repo:` and one without is `named:` — both correct, and which one applies is not
+        // what this test is about. What matters is that A and B name DIFFERENT scopes, so the
+        // two statuses are compared for difference rather than against a literal.
         let! joinA = joinCohortWithDir sageFsAgent "agent-a" "Implementer" repoA
-        joinA |> Expect.stringContains "repo-a" "the join names the repository it joined"
-        joinA |> Expect.stringContains "You are the conductor" "and A's first joiner is A's conductor"
+        joinA |> Expect.stringContains "You are the conductor" "A's first joiner is A's conductor"
 
         // Repo B: a different connection, a different repository, its OWN conductor seat.
         // Before the fix this was refused as a scope collision against A's cohort.
         let! joinB = joinCohortWithDir nehemiahAgent "agent-b" "Implementer" repoB
-        joinB |> Expect.stringContains "repo-b" "B joined B's cohort"
         joinB |> Expect.stringContains "You are the conductor" "and B's first joiner is B's OWN conductor"
 
         // And each repository reports ITSELF: the frame a caller reads back is the one for
-        // the directory it named, not the daemon's and not its neighbour's.
+        // the directory it named, not the daemon's and not its neighbour's. Each status
+        // carries its OWN scope's path, which is what makes the two frames distinguishable
+        // without asserting a `repo:`/`named:` prefix that depends on whether the directory
+        // happens to carry a `.git`.
         let! statusA = getCohortStatusIn sageFsAgent repoA
-        statusA |> Expect.stringContains "repo-a" "A reads A's cohort"
-        statusA |> Expect.stringContains "agent-a" "which holds A's member"
+        statusA |> Expect.stringContains "agent-a" "A reads A's cohort, which holds A's member"
+        statusA |> Expect.stringContains repoA "and that frame names A's own scope"
 
         let! statusB = getCohortStatusIn nehemiahAgent repoB
-        statusB |> Expect.stringContains "repo-b" "B reads B's cohort"
-        statusB |> Expect.stringContains "agent-b" "which holds B's member"
+        statusB |> Expect.stringContains "agent-b" "B reads B's cohort, which holds B's member"
+        statusB |> Expect.stringContains repoB "and that frame names B's own scope"
+
+        // THE TWO SCOPES ARE DIFFERENT, which is the claim "two repositories, two cohorts"
+        // actually makes — a single shared cohort would satisfy every assertion above.
+        (statusA = statusB)
+        |> Expect.isFalse "the two repositories' frames are not the same frame"
 
         // THE NEGATIVE, without which the positives above mean nothing: the two cohorts do
         // not see each other. A's member is absent from B's frame and vice versa, which is
