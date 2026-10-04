@@ -64,8 +64,9 @@ let createTestActor () =
     return result.Actor
   }
 
-// Shared actor for all Falco tests
-let sharedActor = lazy(createTestActor() |> Async.AwaitTask |> Async.RunSynchronously)
+// Shared actor for all Falco tests. A Lazy<Task>: created once, on first use, and awaited with `let!` by
+// every case, so no thread blocks on it.
+let sharedActor = lazy(createTestActor())
 
 let evalCode (actor: AppActor) code =
   task {
@@ -111,7 +112,7 @@ let tests =
 
     testTask "create and start basic Falco web app" {
         printfn "Starting test: create and start basic Falco web app"
-        let actor = sharedActor.Value
+        let! actor = sharedActor.Value
         let port = getRandomPort ()
 
         // Create a basic Falco web app
@@ -174,7 +175,7 @@ printfn "Web app started on port {port}"
 
     testTask "hot reload Falco markup" {
         printfn "Starting test: hot reload Falco markup"
-        let actor = sharedActor.Value
+        let! actor = sharedActor.Value
         let port = getRandomPort ()
 
         // Create initial app

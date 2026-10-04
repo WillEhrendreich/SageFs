@@ -504,16 +504,25 @@ let daemonLifecycleTests =
 
 // ─── SessionManager lifecycle: spawn, eval, stop ───────────────────
 
-/// Helper to clean up a session in a finally block.
+/// Helper to clean up a session after a failure. Awaited from a `with` handler (a `finally` cannot await).
 let cleanupSession
   (mgr: MailboxProcessor<SageFs.SessionManager.SessionCommand>)
   (sessionId: SessionId)
-  =
-  try
-    mgr.PostAndAsyncReply(fun reply ->
-      SageFs.SessionManager.SessionCommand.StopSession(sessionId, reply))
-    |> Async.RunSynchronously |> ignore
-  with _ -> ()
+  : System.Threading.Tasks.Task =
+  task {
+    try
+      let! _ =
+        mgr.PostAndAsyncReply(fun reply ->
+          SageFs.SessionManager.SessionCommand.StopSession(sessionId, reply))
+        |> Async.StartAsTask
+      ()
+    with _ -> ()
+  }
+
+/// Rethrow `ex` with its original stack, from a `with` handler that has already awaited (`reraise ()` cannot
+/// follow an await).
+let rethrow (ex: exn) : unit =
+  System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex).Throw()
 
 [<Tests>]
 let sessionManagerLifecycleTests =
@@ -597,9 +606,12 @@ let sessionManagerLifecycleTests =
             SageFs.SessionManager.SessionCommand.ListSessions reply)
           |> Async.StartAsTask
         sessions.Length |> Expect.equal "no sessions" 0
-      finally
-        cleanupSession mgr info.Id
         cts.Dispose()
+      with ex ->
+        // The happy path above already stopped the session; this only covers a failure part-way through.
+        do! cleanupSession mgr info.Id
+        cts.Dispose()
+        rethrow ex
     }
 
     // Collapsed real-process smoke (was two tests: "worker crash is detected
@@ -750,9 +762,12 @@ let sessionManagerLifecycleTests =
                 reply)
             |> Async.StartAsTask
           afterStop.Length |> Expect.equal "no sessions" 0
-        finally
-          cleanupSession mgr info1.Id
-          cleanupSession mgr info2.Id
+        with ex ->
+          // The happy path above already stopped both sessions; this only covers a failure part-way through.
+          do! cleanupSession mgr info1.Id
+          do! cleanupSession mgr info2.Id
+          cts.Dispose()
+          rethrow ex
       | Error err, _ ->
         failwithf "session 1 create failed: %s" (SageFsError.describe err)
       | _, Error err ->

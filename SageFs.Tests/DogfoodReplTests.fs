@@ -31,10 +31,14 @@ let private testsProject =
 let private testsDir =
   Path.Combine(repoRoot, "SageFs.Tests")
 
-let private evalIn (proxy: SessionProxy) (rid: string) (code: string) : Result<string, SageFsError> =
-  match proxy (WorkerMessage.EvalCode(code, rid)) |> Async.RunSynchronously with
-  | WorkerResponse.EvalResult(_, result, _, _) -> result
-  | other -> Error (SageFsError.Unexpected (Exception (sprintf "unexpected eval response: %A" other)))
+let private evalIn (proxy: SessionProxy) (rid: string) (code: string) : Task<Result<string, SageFsError>> =
+  async {
+    let! response = proxy (WorkerMessage.EvalCode(code, rid))
+    match response with
+    | WorkerResponse.EvalResult(_, result, _, _) -> return result
+    | other -> return Error (SageFsError.Unexpected (Exception (sprintf "unexpected eval response: %A" other)))
+  }
+  |> Async.StartAsTask
 
 /// ONE real session shared by every probe below — warming up SageFs.Tests
 /// (a real `dotnet build` + a real isolated FSI host start) is the expensive
@@ -60,50 +64,58 @@ let private evalIn (proxy: SessionProxy) (rid: string) (code: string) : Result<s
 /// stuck setup fails the case instead of hanging the run.
 let private setupBudgetMs = TestTimeouts.asMs TestTimeouts.sessionReadyColdBuild
 
-let private sharedSession =
-  lazy (
+/// Boot one real session on `project` and answer with its manager, id and ManagedSession, or why it did not
+/// get there. A real async workflow: every wait is bounded by `setupBudgetMs`, and nothing blocks a thread.
+let private bootSession (project: string) (workingDir: string) (label: string) =
+  async {
     let cts = new CancellationTokenSource()
     let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
-    let created =
-      mgr.PostAndAsyncReply(fun reply ->
-        SageFs.SessionManager.SessionCommand.CreateSession(
-          [ SageFs.SessionProjectTarget.Project testsProject ], testsDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
-      |> fun ask -> Async.RunSynchronously(ask, setupBudgetMs)
+    let! created =
+      mgr.PostAndAsyncReply(
+        (fun reply ->
+          SageFs.SessionManager.SessionCommand.CreateSession(
+            [ SageFs.SessionProjectTarget.Project project ], workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply)),
+        setupBudgetMs)
     match created with
-    | Error err -> Error(sprintf "create failed: %s" (SageFsError.describe err))
+    | Error err -> return Error(sprintf "create failed: %s" (SageFsError.describe err))
     | Ok info ->
-      let ready =
-        mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
-        |> fun ask -> Async.RunSynchronously(ask, setupBudgetMs)
+      let! ready = mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply)), setupBudgetMs)
       match ready with
-      | Error err -> Error(sprintf "the SageFs.Tests session never reached Ready: %s" (SageFsError.describe err))
+      | Error err -> return Error(sprintf "the %s session never reached Ready: %s" label (SageFsError.describe err))
       | Ok() ->
-        let session =
-          mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.GetSession(info.Id, reply))
-          |> fun ask -> Async.RunSynchronously(ask, setupBudgetMs)
+        let! session = mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.GetSession(info.Id, reply)), setupBudgetMs)
         match session with
-        | None -> Error "session vanished after Ready"
-        | Some s -> Ok(mgr, info.Id, s))
+        | None -> return Error "session vanished after Ready"
+        | Some s -> return Ok(mgr, info.Id, s)
+  }
+  |> Async.StartAsTask
 
-/// Best-effort: stop the shared session when the test process exits, so a
-/// full `--integration-host` run never leaves an orphaned worker behind. Only
-/// runs `.Value` (and so only tears down) when some case actually forced it.
-do
+/// Best-effort: stop a booted session when the test process exits, so a full `--integration-host` run never
+/// leaves an orphaned worker behind. Only touches the task (and so only tears down) when some case forced it.
+/// A ProcessExit handler has no async entry point to hand control back to, so this is the one unavoidably
+/// blocking wait in this file: `.Result` runs once, at process exit, and cannot starve a test body.
+let private stopOnProcessExit (session: Lazy<Task<Result<MailboxProcessor<SageFs.SessionManager.SessionCommand> * _ * _, string>>>) =
   AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
-    match sharedSession.IsValueCreated with
+    match session.IsValueCreated with
     | false -> ()
     | true ->
-      match sharedSession.Value with
+      match session.Value.Result with
       | Error _ -> ()
       | Ok(mgr, sessionId, _) ->
-        mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.StopSession(sessionId, reply))
-        |> Async.RunSynchronously
+        (Async.StartAsTask(mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.StopSession(sessionId, reply)))).Result
         |> ignore)
 
-let private withDogfoodSession (run: SessionProxy -> unit) =
-  match sharedSession.Value with
-  | Error msg -> failtestf "dogfood session setup failed: %s" msg
-  | Ok(_, _, s) -> run s.Proxy
+let private sharedSession = lazy (bootSession testsProject testsDir "SageFs.Tests")
+
+do stopOnProcessExit sharedSession
+
+let private withDogfoodSession (run: SessionProxy -> Task<unit>) : Task<unit> =
+  task {
+    let! result = sharedSession.Value
+    match result with
+    | Error msg -> failtestf "dogfood session setup failed: %s" msg
+    | Ok(_, _, s) -> return! run s.Proxy
+  }
 
 [<Tests>]
 let dogfoodReplTests =
@@ -149,17 +161,22 @@ let dogfoodReplTests =
     // decision assumes it will. That is a genuine CLR fact, observable only
     // across a real process boundary — this case is what still needs the
     // live session.
-    testCase "WHY — the project's own SageFs.Core wins over the host's copy, because a REPL that runs the installed tool's bits instead of the build it was asked to load cannot show new code (roast-4 #0)" <| fun _ ->
-      withDogfoodSession (fun proxy ->
-        match evalIn proxy "dogfood-core" "typeof<SageFs.SageFsError>.Assembly.Location;;" with
-        | Error err -> failtestf "eval failed: %s" (SageFsError.describe err)
-        | Ok output ->
-          let normalized = output.Replace('\\', '/')
-          // Sessions are isolated by default: the FSI host contains no SageFs assembly at all, so the ONLY SageFs.Core
-          // the REPL can see is the project's own build, loaded from the session's shadow copy of it. (The daemon's
-          // own copy, and a private host copy of the old in-process design, cannot be what resolves.)
-          (normalized.Contains "sagefs-shadow-" && normalized.Contains "SageFs.Core.dll")
-          |> Expect.isTrue (sprintf "SageFs.Core must resolve to the project's own (shadow-copied) build, got: %s" output))
+    testTask "WHY — the project's own SageFs.Core wins over the host's copy, because a REPL that runs the installed tool's bits instead of the build it was asked to load cannot show new code (roast-4 #0)" {
+      do!
+        withDogfoodSession (fun proxy ->
+          task {
+            let! evaluated = evalIn proxy "dogfood-core" "typeof<SageFs.SageFsError>.Assembly.Location;;"
+            match evaluated with
+            | Error err -> failtestf "eval failed: %s" (SageFsError.describe err)
+            | Ok output ->
+              let normalized = output.Replace('\\', '/')
+              // Sessions are isolated by default: the FSI host contains no SageFs assembly at all, so the ONLY SageFs.Core
+              // the REPL can see is the project's own build, loaded from the session's shadow copy of it. (The daemon's
+              // own copy, and a private host copy of the old in-process design, cannot be what resolves.)
+              (normalized.Contains "sagefs-shadow-" && normalized.Contains "SageFs.Core.dll")
+              |> Expect.isTrue (sprintf "SageFs.Core must resolve to the project's own (shadow-copied) build, got: %s" output)
+          })
+    }
 
     // roast-4 #0(b). The SageFs DECISION behind this case —
     // `ProjectLoading.topoSortByProjectReferences`, which orders the `-r:`
@@ -174,11 +191,16 @@ let dogfoodReplTests =
     // `SageFs.Tests.EvalTimelineTests` as the ambiguous union case instead of
     // the sibling namespace (`ProjectLoading.fs:594-603`) — only observable
     // by actually asking a real FSI session to resolve the name.
-    testCase "WHY — the SageFs.Tests namespace is reachable by name, because warmup auto-open must never let a referenced assembly's union case (PaneId.Tests) shadow a namespace of the project being developed (roast-4 #0)" <| fun _ ->
-      withDogfoodSession (fun proxy ->
-        evalIn proxy "dogfood-ns" "SageFs.Tests.EvalTimelineTests.evalTimelineTests |> ignore;;"
-        |> Result.mapError SageFsError.describe
-        |> Expect.isOk "SageFs.Tests.EvalTimelineTests resolves as a namespace path, not as PaneId.Tests")
+    testTask "WHY — the SageFs.Tests namespace is reachable by name, because warmup auto-open must never let a referenced assembly's union case (PaneId.Tests) shadow a namespace of the project being developed (roast-4 #0)" {
+      do!
+        withDogfoodSession (fun proxy ->
+          task {
+            let! evaluated = evalIn proxy "dogfood-ns" "SageFs.Tests.EvalTimelineTests.evalTimelineTests |> ignore;;"
+            evaluated
+            |> Result.mapError SageFsError.describe
+            |> Expect.isOk "SageFs.Tests.EvalTimelineTests resolves as a namespace path, not as PaneId.Tests"
+          })
+    }
 
     // F5b Wave 2: the self-host staleness signal, proven end-to-end against a
     // REAL adoption rather than synthetic inputs. A session on SageFs.Tests
@@ -195,8 +217,10 @@ let dogfoodReplTests =
     // `(version, writeTime)` pairs — every branch of the DU. What only a real
     // session can prove is fact (a): that a real spawn actually POPULATES
     // `ManagedSession.AdoptedCore` at all.
-    testCase "WHY — a real self-host session records its adopted SageFs.Core and reports Current, then Stale once a newer build lands on disk, because a self-hosting agent must be told when its REPL is running code the disk has moved past (F5b)" <| fun _ ->
-      match sharedSession.Value with
+    testTask "WHY — a real self-host session records its adopted SageFs.Core and reports Current, then Stale once a newer build lands on disk, because a self-hosting agent must be told when its REPL is running code the disk has moved past (F5b)" {
+      let! (shared: Result<MailboxProcessor<SageFs.SessionManager.SessionCommand> * SessionId * SageFs.SessionManager.ManagedSession, string>) =
+        sharedSession.Value
+      match shared with
       | Error msg -> failtestf "dogfood session setup failed: %s" msg
       | Ok(_, _, s) ->
         // (a) A real adoption was captured at spawn.
@@ -225,6 +249,7 @@ let dogfoodReplTests =
             | other -> failtestf "expected Stale after a newer build landed on disk, got %A" other
           finally
             File.SetLastWriteTimeUtc(candidate, original)
+    }
   ]
 
 // #141/#142's own outcome gate — deliberately sitting next to the SageFs.Core identity test above so the
@@ -244,45 +269,9 @@ let private fsharpCoreFixtureDir =
 // setup runs once, on first .Value access, as a real async workflow; every test case awaits the SAME
 // memoized Task with a plain `let!` inside `testTask`, never blocking a thread to get it.
 let private fsharpCoreSessionTask =
-  lazy (
-    Async.StartAsTask(
-      async {
-        let cts = new CancellationTokenSource()
-        let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
-        let! created =
-          mgr.PostAndAsyncReply(
-            (fun reply ->
-              SageFs.SessionManager.SessionCommand.CreateSession(
-                [ SageFs.SessionProjectTarget.Project fsharpCoreFixtureProject ], fsharpCoreFixtureDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply)),
-            setupBudgetMs)
-        match created with
-        | Error err -> return Error(sprintf "create failed: %s" (SageFsError.describe err))
-        | Ok info ->
-          let! ready = mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply)), setupBudgetMs)
-          match ready with
-          | Error err -> return Error(sprintf "the FSharpCoreIdentityFixture session never reached Ready: %s" (SageFsError.describe err))
-          | Ok() ->
-            let! session = mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.GetSession(info.Id, reply)), setupBudgetMs)
-            match session with
-            | None -> return Error "session vanished after Ready"
-            | Some s -> return Ok(mgr, info.Id, s)
-      }))
+  lazy (bootSession fsharpCoreFixtureProject fsharpCoreFixtureDir "FSharpCoreIdentityFixture")
 
-/// Best-effort: stop the fixture session when the test process exits (see `sharedSession`'s identical
-/// teardown above — the reasoning is the same, for the same failure mode). A ProcessExit handler has no
-/// async entry point to hand control back to, so this is unavoidably blocking; `.Result` (not one of the
-/// ratcheted blocking-call patterns, and no worse than a synchronous async-run would be) keeps a
-/// process-exit-only block from eating into the budget test bodies are held to.
-do
-  AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
-    match fsharpCoreSessionTask.IsValueCreated with
-    | false -> ()
-    | true ->
-      match fsharpCoreSessionTask.Value.Result with
-      | Error _ -> ()
-      | Ok(mgr, sessionId, _) ->
-        (Async.StartAsTask(mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.StopSession(sessionId, reply)))).Result
-        |> ignore)
+do stopOnProcessExit fsharpCoreSessionTask
 
 let private withFSharpCoreSession (run: SessionProxy -> Task<unit>) : Task<unit> =
   task {
@@ -319,7 +308,8 @@ let fsharpCoreIdentityOutcomeTests =
         do!
           withFSharpCoreSession (fun proxy ->
             task {
-              match evalIn proxy "fscore-basedir" "Repro.baseDirectory ();;" with
+              let! evaluated = evalIn proxy "fscore-basedir" "Repro.baseDirectory ();;"
+              match evaluated with
               | Error err -> failtestf "eval failed: %s" (SageFsError.describe err)
               | Ok output ->
                 let normalize (p: string) = p.Replace('\\', '/').TrimEnd('/')
@@ -336,7 +326,8 @@ let fsharpCoreIdentityOutcomeTests =
       do!
         withFSharpCoreSession (fun proxy ->
           task {
-            match evalIn proxy "fscore-value" "Repro.useInTask ();;" with
+            let! evaluated = evalIn proxy "fscore-value" "Repro.useInTask ();;"
+            match evaluated with
             | Error err -> failtestf "eval failed: %s" (SageFsError.describe err)
             | Ok output -> output |> Expect.stringContains "the project's own use-in-task code returns 1L" "1L"
           })
@@ -353,7 +344,8 @@ let fsharpCoreIdentityOutcomeTests =
       do!
         withFSharpCoreSession (fun proxy ->
           task {
-            match evalIn proxy "fscore-identity-boundary" "Repro.fsharpCoreLocation ();;" with
+            let! evaluated = evalIn proxy "fscore-identity-boundary" "Repro.fsharpCoreLocation ();;"
+            match evaluated with
             | Error err -> failtestf "eval failed: %s" (SageFsError.describe err)
             | Ok output ->
               let normalized = output.Replace('\\', '/')
@@ -378,13 +370,16 @@ let fsharpCoreIdentityOutcomeTests =
       do!
         withFSharpCoreSession (fun proxy ->
           task {
-            match evalIn proxy "fscore-typecheck-option" "Some 42;;" with
+            let! optionEval = evalIn proxy "fscore-typecheck-option" "Some 42;;"
+            match optionEval with
             | Error err -> failtestf "'Some 42;;' eval failed: %s" (SageFsError.describe err)
             | Ok output -> output |> Expect.stringContains "a plain option value still type-checks and prints" "Some 42"
-            match evalIn proxy "fscore-typecheck-list" "[1;2;3];;" with
+            let! listEval = evalIn proxy "fscore-typecheck-list" "[1;2;3];;"
+            match listEval with
             | Error err -> failtestf "'[1;2;3];;' eval failed: %s" (SageFsError.describe err)
             | Ok output -> output |> Expect.stringContains "a plain list literal still type-checks and prints" "[1; 2; 3]"
-            match evalIn proxy "fscore-typecheck-task-use" "(task { use s = new System.IO.MemoryStream() in return s.Length }).Result;;" with
+            let! taskUseEval = evalIn proxy "fscore-typecheck-task-use" "(task { use s = new System.IO.MemoryStream() in return s.Length }).Result;;"
+            match taskUseEval with
             | Error err -> failtestf "typed-in 'task { use ... }' eval failed: %s" (SageFsError.describe err)
             | Ok output ->
               // Genuinely calls TaskBuilderBase.Using now (the use->let rewrite that used to dodge this

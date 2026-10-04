@@ -56,21 +56,31 @@ let private dashboardPort = mcpPort + 1
 let private attackerTargetDir =
   SageFs.Tests.RunnerDirs.scratchDir "origin-guard-"
 
+// A Lazy<Task>: started once, on first use, and awaited with `let!` by every case, so no thread blocks on it.
 let private daemon =
   lazy (
     // --no-resume + a fresh SAGEFS_DATA_DIR (set by startDaemonWithArgs) mean
     // this daemon starts with exactly zero sessions, so "no session was
     // created" is an exact assertion rather than a delta.
-    Harness.startDaemonWithArgs mcpPort Harness.repoRoot [ "--no-resume" ]
-    |> Async.AwaitTask
-    |> Async.RunSynchronously)
+    Harness.startDaemonWithArgs mcpPort Harness.repoRoot [ "--no-resume" ])
 
-let private daemonClient () = snd daemon.Value
-let private daemonProc () = fst daemon.Value
+let private daemonClient () : Threading.Tasks.Task<HttpClient> =
+  task {
+    let! _, client = daemon.Value
+    return client
+  }
 
+let private daemonProc () : Threading.Tasks.Task<Diagnostics.Process> =
+  task {
+    let! proc, _ = daemon.Value
+    return proc
+  }
+
+// A ProcessExit handler has no async entry point, so it reads the finished task's result directly, and only
+// when startup completed. It runs once, at exit, where it cannot starve a test body.
 do AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
-  if daemon.IsValueCreated then
-    let proc, client = daemon.Value
+  if daemon.IsValueCreated && daemon.Value.IsCompletedSuccessfully then
+    let proc, client = daemon.Value.Result
     client.Dispose()
     Harness.killDaemon proc
   try IO.Directory.Delete(attackerTargetDir, true) with _ -> ())
@@ -175,7 +185,7 @@ let originGuardOutcomeTests =
     // ── The headline attack: a web page creating a session ──────────────────
 
     testTask "a cross-origin POST cannot create a session on a real daemon" {
-      let client = daemonClient ()
+      let! (client: HttpClient) = daemonClient ()
       let! before = sessionCount client
       before |> Expect.equal "the daemon starts with no sessions (--no-resume, fresh data dir)" 0
 
@@ -235,7 +245,8 @@ let originGuardOutcomeTests =
         |> sendToMcp
       rejected |> expectRejection 415 "text/plain"
 
-      let! after = sessionCount (daemonClient ())
+      let! afterClient = daemonClient ()
+      let! after = sessionCount afterClient
       after |> Expect.equal "the simple-request bypass must not have created a session" 0
     }
 
@@ -292,10 +303,11 @@ let originGuardOutcomeTests =
 
       // The outcome: the daemon is still alive and still serving. A 403 that
       // arrived after the shutdown handler ran would prove nothing.
-      let proc = daemonProc ()
+      let! (proc: Diagnostics.Process) = daemonProc ()
       proc.HasExited
       |> Expect.isFalse "a cross-origin /api/shutdown must not end the daemon"
-      let! status, _ = Harness.getJson (daemonClient ()) "/health"
+      let! healthClient = daemonClient ()
+      let! status, _ = Harness.getJson healthClient "/health"
       status |> Expect.equal "the daemon still serves /health after the attack" 200
     }
 

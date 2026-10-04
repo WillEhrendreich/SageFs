@@ -366,15 +366,27 @@ let httpApiHarnessTests =
 
 let private sharedPort = reserveLoopbackPort ()
 
-let private sharedDaemon =
-  lazy (startDaemon sharedPort |> Async.AwaitTask |> Async.RunSynchronously) // lazy one-time startup, acceptable
+// A Lazy<Task>: the one-time startup runs on first access as a real task, and every case awaits the SAME
+// memoized Task with `let!`, so no thread is blocked to get it.
+let private sharedDaemon = lazy (startDaemon sharedPort)
 
-let private getSharedClient () = snd sharedDaemon.Value
-let private getSharedProc () = fst sharedDaemon.Value
+let private getSharedClient () : Task<HttpClient> =
+  task {
+    let! _, client = sharedDaemon.Value
+    return client
+  }
 
+let private getSharedProc () : Task<Process> =
+  task {
+    let! proc, _ = sharedDaemon.Value
+    return proc
+  }
+
+// A ProcessExit handler has no async entry point, so it reads the finished task's result directly; it only
+// does so when the startup actually completed, and it runs once, at exit, where it cannot starve a test.
 do AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
-  if sharedDaemon.IsValueCreated then
-    let proc, client = sharedDaemon.Value
+  if sharedDaemon.IsValueCreated && sharedDaemon.Value.IsCompletedSuccessfully then
+    let proc, client = sharedDaemon.Value.Result
     client.Dispose()
     killDaemon proc)
 
@@ -387,14 +399,14 @@ let integrationTests =
     // ── Core endpoints ──────────────────────────────────────────
 
     testTask "GET /health returns 200" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let! status, body = getJson client "/health"
       status |> Expect.equal "200 OK" 200
       body |> Expect.isNotEmpty "body is not empty"
     }
 
     testTask "GET /health includes session diagnostics when a session exists" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let payload =
         {| code = "let healthDiagnostics = 42;;"
@@ -435,7 +447,7 @@ let integrationTests =
     // ── Eval endpoints ──────────────────────────────────────────
 
     testTask "POST /exec evaluates F# code and returns result" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let payload =
         {| code = "1 + 1;;"
            working_directory = testProjectDir |}
@@ -454,7 +466,7 @@ let integrationTests =
     }
 
     testTask "POST /exec reports eval failure truthfully (200, success=false)" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let payload =
         {| code = """let x: int = "not an int";;"""
@@ -482,7 +494,7 @@ let integrationTests =
     // different HTTP statuses: this proves the infra case is a real non-2xx
     // via the SageFsError algebra, not the eval-failure 200.
     testTask "POST /exec reports an infra failure as a non-2xx, distinct from a code-eval failure" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let unmatchedDir =
         Path.Combine(Path.GetTempPath(), "sagefs-exec-infra-" + Guid.NewGuid().ToString("N"))
       let payload =
@@ -503,7 +515,7 @@ let integrationTests =
     }
 
     testTask "POST /exec routes to existing session by working_directory" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let payload =
         {| code = "let routedEval = true;;"
@@ -526,7 +538,7 @@ let integrationTests =
     }
 
     testTask "Multiple sequential evals maintain session scope" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let p1 = {| code = "let scopeVal = 42;;" ; working_directory = testProjectDir |}
       let! s1, _ = postJson client "/exec" p1
@@ -548,7 +560,7 @@ let integrationTests =
     // ── Session state queries ───────────────────────────────────
 
     testTask "GET /api/sessions returns session list" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let! status, body = getJson client "/api/sessions"
       status |> Expect.equal "200 OK" 200
 
@@ -561,7 +573,7 @@ let integrationTests =
     }
 
     testTask "POST /exec then GET /api/status shows eval count > 0" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let payload =
         {| code = "let apiTestVal = 42;;"
@@ -581,15 +593,16 @@ let integrationTests =
       root.GetProperty("version").GetString()
       |> Expect.isNotEmpty "has version"
 
+      let! (daemonProc: Process) = getSharedProc()
       root.GetProperty("pid").GetInt32()
-      |> Expect.equal "pid matches daemon" (getSharedProc().Id)
+      |> Expect.equal "pid matches daemon" daemonProc.Id
       doc.Dispose()
     }
 
     // ── SSE streams ─────────────────────────────────────────────
 
     testTask "GET /events SSE stream sends at least one event" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let cts = new CancellationTokenSource(TestTimeouts.sseListen)
       let eventsReceived = System.Collections.Concurrent.ConcurrentBag<string>()
 
@@ -623,7 +636,7 @@ let integrationTests =
     }
 
     testTask "GET /diagnostics SSE responds with text/event-stream" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let cts = new CancellationTokenSource(TestTimeouts.httpProbe)
       let req = new HttpRequestMessage(HttpMethod.Get, "/diagnostics")
       let! (resp: HttpResponseMessage) =
@@ -638,7 +651,7 @@ let integrationTests =
     // ── Extension endpoints ─────────────────────────────────────
 
     testTask "POST /api/live-testing/enable returns success and message" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let! status, body = postJson client "/api/live-testing/enable" {||}
       status |> Expect.equal "200 OK" 200
 
@@ -651,7 +664,7 @@ let integrationTests =
     }
 
     testTask "POST /api/live-testing/policy sets unit policy" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let payload = {| category = "unit"; policy = "every" |}
       let! status, body = postJson client "/api/live-testing/policy" payload
       status |> Expect.equal "200 OK" 200
@@ -663,7 +676,7 @@ let integrationTests =
     }
 
     testTask "POST /api/live-testing/run returns 409 until tests are discovered" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let payload = {| pattern = ""; category = "" |}
       let! status, body = postJson client "/api/live-testing/run" payload
 
@@ -682,7 +695,7 @@ let integrationTests =
     }
 
     testTask "GET /api/dependency-graph returns TotalSymbols" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let! status, body = getJson client "/api/dependency-graph"
       status |> Expect.equal "200 OK" 200
 
@@ -697,7 +710,7 @@ let integrationTests =
     }
 
     testTask "GET /api/dependency-graph?symbol=unknown returns empty tests" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       let! status, body = getJson client "/api/dependency-graph?symbol=NonExistent.symbol"
       status |> Expect.equal "200 OK" 200
 
@@ -708,7 +721,7 @@ let integrationTests =
     }
 
     testTask "GET /api/recent-events returns content after eval" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let payload =
         {| code = "1 + 1;;"
@@ -724,7 +737,7 @@ let integrationTests =
     // ── Mutations (reset, hard-reset) ───────────────────────────
 
     testTask "POST /reset resets the session" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let payload = {| code = "let resetTestVal = 1;;" ; working_directory = testProjectDir |}
       let! evalStatus, _ = postJson client "/exec" payload
@@ -740,7 +753,7 @@ let integrationTests =
     }
 
     testTask "POST /reset after eval allows re-eval" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let p1 = {| code = "let resetReeval = 99;;" ; working_directory = testProjectDir |}
       let! _, _ = postJson client "/exec" p1
@@ -761,7 +774,7 @@ let integrationTests =
     }
 
     testTask "POST /exec still answers after a pending Task was bound at top level, because the live-values pass must not wait on it" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       // A Task that never completes. Reading its Result waits for it, and the live-values pass ran
       // that read on the thread every eval of the session runs on, so the NEXT eval never came back.
@@ -789,7 +802,7 @@ let integrationTests =
     // ── Session lifecycle ───────────────────────────────────────
 
     testTask "POST /api/sessions/create creates a new session" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       // Create for the smoke sample dir — NOT the web sample dir — so we do
       // not end up with two sessions for the same workingDirectory (which
       // breaks /exec routing with "Multiple sessions match").
@@ -806,7 +819,7 @@ let integrationTests =
     }
 
     testTask "POST /api/sessions/switch returns 404 for unknown session" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       // Session IDs are 8-char lowercase hex; well-formed-but-unknown must 404.
       // Malformed IDs are rejected earlier with 400.
       let! status, body = postJson client "/api/sessions/switch" {| sessionId = "deadbeef" |}
@@ -819,7 +832,7 @@ let integrationTests =
     }
 
     testTask "POST /api/sessions/stop stops a session" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let p = {| code = "let stopTest = 1;;" ; working_directory = testProjectDir |}
       let! _, _ = postJson client "/exec" p
@@ -843,7 +856,7 @@ let integrationTests =
     }
 
     testTask "POST /hard-reset with rebuild=false succeeds" {
-      let client = getSharedClient()
+      let! (client: HttpClient) = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let payload = {| code = "let hrTest = 1;;" ; working_directory = testProjectDir |}
       let! evalStatus, _ = postJson client "/exec" payload
@@ -1299,14 +1312,15 @@ let httpApiLiveTestingCompiledProjectTests =
 [<Tests>]
 let daemonStartupSmokeTest =
   Integration.hostList "Daemon startup smoke" [
-    testCase "Daemon starts on fresh port and /health responds" <| fun _ ->
+    testTask "Daemon starts on fresh port and /health responds" {
       let port = reserveLoopbackPort ()
-      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      let! proc, client = startDaemon port
       try
-        let status, body = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously
+        let! status, body = getJson client "/health"
         status |> Expect.equal "200 OK" 200
         body |> Expect.isNotEmpty "body is not empty"
       finally
         client.Dispose()
         killDaemon proc
+    }
   ]

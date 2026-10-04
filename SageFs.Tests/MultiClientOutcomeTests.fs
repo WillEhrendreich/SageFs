@@ -41,11 +41,9 @@ let private daemonPort = Harness.reserveLoopbackPort ()
 
 let private sharedDir = SageFs.Tests.RunnerDirs.scratchDir "multiclient-"
 
+// A Lazy<Task>: started once, on first use, and awaited with `let!`, so no thread blocks on it.
 let private daemon =
-  lazy (
-    Harness.startDaemonWithArgs daemonPort Harness.repoRoot [ "--no-resume" ]
-    |> Async.AwaitTask
-    |> Async.RunSynchronously)
+  lazy (Harness.startDaemonWithArgs daemonPort Harness.repoRoot [ "--no-resume" ])
 
 /// The client the harness owns (used for lifecycle), plus two clients that are
 /// each as independent of it as an editor and a dashboard tab are of each
@@ -65,8 +63,10 @@ let private clientB =
 do AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
   for c in [ clientA; clientB ] do
     if c.IsValueCreated then (try c.Value.Dispose() with _ -> ())
-  if daemon.IsValueCreated then
-    let proc, c = daemon.Value
+  // A ProcessExit handler has no async entry point, so it reads the finished task's result directly, and
+  // only when startup completed. It runs once, at exit, where it cannot starve a test body.
+  if daemon.IsValueCreated && daemon.Value.IsCompletedSuccessfully then
+    let proc, c = daemon.Value.Result
     c.Dispose()
     Harness.killDaemon proc
   try IO.Directory.Delete(sharedDir, true) with _ -> ())
@@ -115,7 +115,7 @@ let multiClientOutcomeTests =
       let a = clientA.Value
       let b = clientB.Value
       // Force the daemon up through the harness's own health-polled start.
-      let _ = daemon.Value
+      let! _ = daemon.Value
 
       // CLIENT A creates the session.
       let! createStatus, createBody =

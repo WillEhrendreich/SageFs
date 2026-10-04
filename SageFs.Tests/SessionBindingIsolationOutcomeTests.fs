@@ -47,17 +47,21 @@ let private daemonPort = Harness.reserveLoopbackPort ()
 let private dirA = SageFs.Tests.RunnerDirs.scratchDir "isolation-a-"
 let private dirB = SageFs.Tests.RunnerDirs.scratchDir "isolation-b-"
 
+// A Lazy<Task>: started once, on first use, and awaited with `let!` by every case, so no thread blocks on it.
 let private daemon =
-  lazy (
-    Harness.startDaemonWithArgs daemonPort Harness.repoRoot [ "--no-resume" ]
-    |> Async.AwaitTask
-    |> Async.RunSynchronously)
+  lazy (Harness.startDaemonWithArgs daemonPort Harness.repoRoot [ "--no-resume" ])
 
-let private client () = snd daemon.Value
+let private client () : Threading.Tasks.Task<HttpClient> =
+  task {
+    let! _, c = daemon.Value
+    return c
+  }
 
+// A ProcessExit handler has no async entry point, so it reads the finished task's result directly, and only
+// when startup completed. It runs once, at exit, where it cannot starve a test body.
 do AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
-  if daemon.IsValueCreated then
-    let proc, c = daemon.Value
+  if daemon.IsValueCreated && daemon.Value.IsCompletedSuccessfully then
+    let proc, c = daemon.Value.Result
     c.Dispose()
     Harness.killDaemon proc
   for dir in [ dirA; dirB ] do
@@ -72,8 +76,9 @@ type private EvalOutcome =
   | Refused of result: string
 
 let private execIn (workingDir: string) (code: string) = task {
+  let! http = client ()
   let! status, body =
-    Harness.postJson (client ()) "/exec" {| code = code; working_directory = workingDir |}
+    Harness.postJson http "/exec" {| code = code; working_directory = workingDir |}
   status |> Expect.equal (sprintf "/exec processes the request (body: %s)" body) 200
   use doc = JsonDocument.Parse(body: string)
   let result = doc.RootElement.GetProperty("result").GetString()
@@ -84,11 +89,12 @@ let private execIn (workingDir: string) (code: string) = task {
 }
 
 let private createBareSession (workingDir: string) = task {
+  let! http = client ()
   let! status, body =
-    Harness.postJson (client ()) "/api/sessions/create"
+    Harness.postJson http "/api/sessions/create"
       {| projects = ([||]: string array); workingDirectory = workingDir |}
   status |> Expect.equal (sprintf "session create for %s succeeds (%s)" workingDir body) 200
-  let! ready, sessions = Harness.waitForReadySession (client ()) workingDir SageFs.Timeouts.integrationDaemonReady
+  let! ready, sessions = Harness.waitForReadySession http workingDir SageFs.Timeouts.integrationDaemonReady
   ready
   |> Expect.isTrue (sprintf "the bare session for %s must reach Ready. Sessions: %s" workingDir sessions)
 }

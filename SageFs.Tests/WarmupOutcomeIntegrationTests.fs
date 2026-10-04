@@ -24,12 +24,24 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 /// Best-effort cleanup — the test's own StopSession call is the assertion
 /// under test, so this is only a safety net for a mid-test failure.
-let private cleanupSession (mgr: MailboxProcessor<SageFs.SessionManager.SessionCommand>) (sessionId: SessionId) =
-  try
-    mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.StopSession(sessionId, reply)), 5000)
-    |> Async.RunSynchronously
-    |> ignore
-  with _ -> ()
+let private cleanupSession (mgr: MailboxProcessor<SageFs.SessionManager.SessionCommand>) (sessionId: SessionId option) : System.Threading.Tasks.Task =
+  task {
+    match sessionId with
+    | None -> ()
+    | Some id ->
+      try
+        let! _ =
+          mgr.PostAndAsyncReply((fun reply -> SageFs.SessionManager.SessionCommand.StopSession(id, reply)), 5000)
+          |> Async.StartAsTask
+        ()
+      with _ -> ()
+  }
+
+/// A scope exit that awaits: `use` of this in a `task` block runs `cleanup` when the block's scope ends,
+/// without a blocking wait (a `finally` block cannot await).
+let private onScopeExit (cleanup: unit -> System.Threading.Tasks.Task) : IAsyncDisposable =
+  { new IAsyncDisposable with
+      member _.DisposeAsync() = System.Threading.Tasks.ValueTask(cleanup ()) }
 
 [<Tests>]
 let tests =
@@ -58,9 +70,10 @@ let tests =
       let cts = new CancellationTokenSource(int Timeouts.integrationDaemonReady.TotalMilliseconds)
       let mgr, _ =
         SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
-      let mutable createdSessionId : SessionId option = None
+      let createdSessionId : SessionId option ref = ref None
 
       try
+        use _stopSafetyNet = onScopeExit (fun () -> cleanupSession mgr createdSessionId.Value)
         let! createResult =
           mgr.PostAndAsyncReply(fun reply ->
             SageFs.SessionManager.SessionCommand.CreateSession(
@@ -74,7 +87,7 @@ let tests =
           // test protects ("never Starting forever") holds trivially here.
           SageFsError.describe err |> Expect.isNotNull "a real, described refusal"
         | Ok info ->
-          createdSessionId <- Some info.Id
+          createdSessionId.Value <- Some info.Id
           // The common shape: a worker DOES spawn (CreateSession answers
           // immediately, per SessionManager's own doctrine — "register
           // immediately with pending proxy, don't block") and warmup fails
@@ -117,7 +130,6 @@ let tests =
           (sw.Elapsed.TotalSeconds, 15.0)
           |> Expect.isLessThan "stop_session returns promptly, nowhere near the reported 300s hang"
       finally
-        createdSessionId |> Option.iter (cleanupSession mgr)
         try Directory.Delete(workingDir, true) with _ -> ()
     }
   ]

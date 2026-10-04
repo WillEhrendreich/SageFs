@@ -169,11 +169,11 @@ let captureIntegrationTests =
     // fine outside it). So the contract is asserted always, and the artifact
     // only where capture is actually possible. A Failed outcome is still read
     // closely: it must say why, or we have learned nothing from it.
-    testCase "capturing this very test process reports its outcome truthfully" <| fun () ->
+    testCaseTask "capturing this very test process reports its outcome truthfully" <| fun () -> task {
       let outputDir = IO.Path.Combine(IO.Path.GetTempPath(), "sagefs-gcdump-tests-" + Guid.NewGuid().ToString("N"))
       try
         let ownPid = Diagnostics.Process.GetCurrentProcess().Id
-        let outcome = GcDumpCapture.captureAsync ownPid outputDir |> Async.RunSynchronously
+        let! outcome = GcDumpCapture.captureAsync ownPid outputDir |> Async.StartAsTask
         match outcome with
         | GcDumpCapture.CaptureOutcome.Captured path ->
           IO.File.Exists path |> Expect.isTrue "the tool reported success — the file must actually be on disk"
@@ -190,4 +190,5 @@ let captureIntegrationTests =
           reason |> Expect.isNotEmpty "a failed capture has to say why, or the diagnostic is useless"
       finally
         try IO.Directory.Delete(outputDir, true) with _ -> ()
+    }
   ]
