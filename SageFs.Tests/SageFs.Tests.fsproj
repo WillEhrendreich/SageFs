@@ -621,6 +621,8 @@
         <Compile Include="BuildPlanTests.fs" />
         <Compile Include="ContentRevisionTests.fs" />
         <Compile Include="BuildStampsTests.fs" />
+        <Compile Include="PassRecordTests.fs" />
+        <Compile Include="PassRecordSimDstTests.fs" />
         <Compile Include="FailureReportTests.fs" />
         <Compile Include="TestPortsTests.fs" />
         <Compile Include="TrustSignalTests.fs" />
