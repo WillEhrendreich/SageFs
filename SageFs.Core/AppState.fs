@@ -767,14 +767,14 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
     // and computation-expression rewriting silently no-op (the P0 hot-reload
     // gap: HotReload sessions never detoured because _SageFsHotReload was
     // unbound). getBaseConfigString() was dead code — wire it here.
-    let baseConfig =
-      try
-        SageFs.Utils.Configuration.getBaseConfigString()
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
-      with ex ->
-        logger.LogWarning (sprintf "  Failed to load embedded base.fsx: %s" ex.Message)
-        ""
+    let! baseConfig =
+      async {
+        try
+          return! SageFs.Utils.Configuration.getBaseConfigString() |> Async.AwaitTask
+        with ex ->
+          logger.LogWarning (sprintf "  Failed to load embedded base.fsx: %s" ex.Message)
+          return ""
+      }
     match baseConfig.Trim() with
     | "" -> ()
     | _ ->
@@ -1637,13 +1637,15 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             // if EvalInteractionNonThrowing hangs during namespace opening.
             // Task.Delay races against the warmup: if the timeout fires first,
             // we cancel and unblock the mailbox even if FSI is stuck.
+            // Async.StartAsTask queues the workflow to the pool and awaits
+            // it there, so no pool thread sits parked on the warmup.
             let warmupTask =
-              System.Threading.Tasks.Task.Run<Result<_, exn>>(fun () ->
-                let onProgress (s,t,msg) =
-                  emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
-                  publishPhase (Initializing (Some (sprintf "[%d/%d] %s" s t msg))) evalStats
+              let onProgress (s,t,msg) =
+                emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
+                publishPhase (Initializing (Some (sprintf "[%d/%d] %s" s t msg))) evalStats
+              async {
                 try
-                  Async.RunSynchronously(
+                  let! session =
                     createFsiSession
                       sessionKind
                       logger
@@ -1654,11 +1656,13 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                       autoOpenNamespaces
                       hotReload
                       warmupCts.Token
-                      onProgress)
-                  |> Ok
+                      onProgress
+                  return Ok session
                 with
-                | :? OperationCanceledException as ex -> Error (ex :> exn)
-                | ex -> Error ex)
+                | :? OperationCanceledException as ex -> return Error (ex :> exn)
+                | ex -> return Error ex
+              }
+              |> Async.StartAsTask
             let timeoutTask = System.Threading.Tasks.Task.Delay(warmupTimeout)
             let! winner = System.Threading.Tasks.Task.WhenAny(warmupTask, timeoutTask) |> Async.AwaitTask
             let! warmupResult =
