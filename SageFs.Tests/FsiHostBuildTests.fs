@@ -61,6 +61,17 @@ let tests =
         Expect.equal "no roll-forward" "disable" (sdk.GetProperty("rollForward").GetString())
     ]
 
+    testList "hostBuildRuntimeEnvironment" [
+      testCase "the build's own processes (MSBuild and fsc) run with tiered PGO off, so a cold host build spends less CPU" <| fun _ ->
+        hostBuildRuntimeEnvironment |> Expect.contains "DOTNET_TieredPGO=0 reaches the build" ("DOTNET_TieredPGO", "0")
+
+      testCase "it names nothing that would change what the build produces" <| fun _ ->
+        hostBuildRuntimeEnvironment
+        |> List.map fst
+        |> List.filter (fun name -> not (name.StartsWith("DOTNET_Tiered", StringComparison.Ordinal)))
+        |> Expect.isEmpty "only runtime tiering knobs, which change how fast the compiler runs and never what it emits"
+    ]
+
     testList "embedded sources" [
       testCase "every host source is embedded and non-empty" <| fun _ ->
         match embeddedSources () with
