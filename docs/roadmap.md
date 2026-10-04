@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 16, Later 18, Exploring 17. Already built: 16.
+On the page today: Now 0, Next 15, Later 18, Exploring 17. Already built: 17.
 
 ## Next
 
@@ -26,10 +26,6 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 - **Level the REPL after a patch without losing it.** Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. I'd make the daemon re-fetch maps and discovery after any host swap and check the REPL is idle and empty first, then do it for you. ([decisions.md](decisions.md), [how-hot-reload-works.md](how-hot-reload-works.md))
 - **Nudge a value in the running app.** The engine for dragging a value in a running app and writing the result back to the source file is built and tested, with addressing that survives a rename and an undoable history. Nothing in the dashboard or the editors calls it yet, so today you can't use it. ([decisions.md](decisions.md))
 - **Callers in other files follow a signature change.** When a save re-signs a function, a caller in another file keeps calling the old method until you save that file too. The build wouldn't pass until you did, so the window is short, but the old behavior runs in it. A cross-file check of who calls what would close it. ([hot-reload.md](hot-reload.md), [decisions.md](decisions.md))
-
-### Isolation
-
-- **Check native NuGet packages in sessions.** Someone reported a `#r` NuGet package with a native library failing in plain FSI. I haven't checked whether the isolated host fixes it, so I'll run that repro and write down what I find, good or bad. ([how-isolation-works.md](how-isolation-works.md))
 
 ### Agents and cohorts
 
@@ -155,6 +151,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 ### Isolation
 
 - **A session builds against the Core its project brings.** A session on a project in a repo that builds its own SageFs.Core now compiles against that Core, not the daemon's older one. Before, building SageFs.Tests in a worktree failed against the old Core and printed a wrong compile-order hint. A project that can't be read is refused with the path and the reason. The daemon and its FSI host still match Cores by version number, so a worktree Core and an older daemon can disagree at load time until they're built together. Code: [`SageFs.Core/CoreEvidence.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/CoreEvidence.fs)
+- **Native NuGet packages load in sessions.** Someone reported a `#r` NuGet package with a native library failing in plain FSI. I couldn't reproduce that on Linux: SQLite, SkiaSharp and LibGit2Sharp all load in plain FSI and in a bare SageFs session. What did fail was a project session, because the package's native library sits in the NuGet cache and the isolated host never looked there. The host now finds it from the project's restore, and a library that won't load is named with its package, this runtime and what to do. Windows, macOS and arm64 are untested. Code: [`SageFs.Core/NativeResolution.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/NativeResolution.fs)
 
 ### Agents and cohorts
 

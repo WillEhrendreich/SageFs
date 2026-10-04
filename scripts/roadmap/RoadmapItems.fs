@@ -173,10 +173,10 @@ let items : Item list =
       []
       "I timed an edit plus a check in a warm session against a build plus a filtered test on three projects, from a few hundred lines to a very large one. The session answered in a fraction of a second where the build took seconds, and you pay the warmup once. None of it is in the docs yet, and I want the table there with the machine and the load stated."
 
-    item "native-nuget-in-sessions" "Check native NuGet packages in sessions" Isolation Next
-      NoLandmarkYet
+    item "native-nuget-in-sessions" "Native NuGet packages load in sessions" Isolation Now
+      (landmark "SageFs.Core/NativeResolution.fs" "NativeAssets")
       [ "docs/how-isolation-works.md" ]
-      "Someone reported a `#r` NuGet package with a native library failing in plain FSI. I haven't checked whether the isolated host fixes it, so I'll run that repro and write down what I find, good or bad."
+      "Someone reported a `#r` NuGet package with a native library failing in plain FSI. I couldn't reproduce that on Linux: SQLite, SkiaSharp and LibGit2Sharp all load in plain FSI and in a bare SageFs session. What did fail was a project session, because the package's native library sits in the NuGet cache and the isolated host never looked there. The host now finds it from the project's restore, and a library that won't load is named with its package, this runtime and what to do. Windows, macOS and arm64 are untested."
 
     item "cross-file-signature-callers" "Callers in other files follow a signature change" HotReload Next
       NoLandmarkYet
