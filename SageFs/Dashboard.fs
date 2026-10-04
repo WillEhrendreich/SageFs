@@ -1986,12 +1986,15 @@ let createSessionActionHandler
       let sid = WorkerProtocol.SessionId.value sessionId
       // Read the signals so we know which session is currently being viewed
       // and which page (client id) owns this browser tab's SSE stream.
-      let viewingId, channelClientId =
-        try
-          use doc = readSignalsJsonSized ctx |> Async.AwaitTask |> Async.RunSynchronously
-          getSignalString doc Signals.ViewingSessionId "viewing-session-id",
-          clientIdFromSignals doc
-        with _ -> "", ""
+      let! viewingId, channelClientId =
+        task {
+          try
+            use! doc = readSignalsJsonSized ctx
+            return
+              getSignalString doc Signals.ViewingSessionId "viewing-session-id",
+              clientIdFromSignals doc
+          with _ -> return "", ""
+        }
       Response.sseStartResponse ctx |> ignore
       let isViewingStopped = viewingId = sid
       // Immediate feedback: swap the card for the "Stopping…" message.
@@ -3079,11 +3082,13 @@ let createEndpoints
       (routeValue "id")
       (fun sessionId -> fun ctx -> task {
         let! previous = q.GetPreviousSessions ()
-        let channelClientId =
-          try
-            use doc = readSignalsJsonSized ctx |> Async.AwaitTask |> Async.RunSynchronously
-            clientIdFromSignals doc
-          with _ -> ""
+        let! channelClientId =
+          task {
+            try
+              use! doc = readSignalsJsonSized ctx
+              return clientIdFromSignals doc
+            with _ -> return ""
+          }
         match previous |> List.tryFind (fun s -> s.Id = sessionId) with
         | Some prev ->
           Response.sseStartResponse ctx |> ignore
