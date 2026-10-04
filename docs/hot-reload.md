@@ -124,7 +124,9 @@ just before the first byte of the save is written and stops on a response the
 app sent or a frame the daemon pushed (`HotReloadLatency.fs`,
 `HotReloadLatencyTests.fs`). 20 saves per path after 2 warm-up saves, and the
 tier fails if a path's p95 passes its bound in `TestTimeouts.fs`. The app is the
-small `WebAppFixture`. The machine was an AMD Ryzen 7 5800XT, 16 threads,
+small `WebAppFixture`. The two `run_app` rows each start a daemon of their own, so since 2026-10-04 they run as the
+tiers `--integration-hr-restart` and `--integration-hr-delta`, and `--integration-hr` keeps the journeys and the patched
+rows; what is measured and how many saves it takes did not change. The machine was an AMD Ryzen 7 5800XT, 16 threads,
 Linux, .NET 11.0.0-rc.1, and the tier ran 8 times in a row on 2026-10-01 with
 other jobs running on it. Each cell is the range of the 8 runs.
 
