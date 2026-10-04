@@ -125,10 +125,11 @@ let tests =
         | Outcome.Holds -> failtest "expected the never-expires twin to VIOLATE every-lease-expires"
         holdsFor PoolBehavior.Real everyLeaseExpires scenario
 
-      testCase "the invariant has teeth: some seeded scenario deadlocks the twin" <| fun () ->
-        teethSeeds
-        |> List.exists (fun seed -> violatedBy PoolBehavior.NeverExpiresTwin queueDrainsOnCooldown (scenarioOf seed))
-        |> Expect.isTrue "at least one seeded scenario must deadlock the never-expires twin"
+      // A seeded sweep used to deadlock this twin on some seed, but only through the head-of-line blocking that
+      // the pool no longer has: a ghost at the front stopped the asks behind it, and the twin never aged it out.
+      // Measured over 3000 seeds, no seeded scenario leaves the twin's queue non-empty now, because it takes four
+      // abandoned leases at once to fill the pool. The deadlock's teeth are the named scenario above, which does
+      // exactly that, and `every-lease-expires` below keeps its seeded teeth against the same twin.
 
       testCase "every-lease-expires has teeth against the never-expires twin" <| fun () ->
         someSeedBreaks PoolBehavior.NeverExpiresTwin everyLeaseExpires
@@ -210,6 +211,23 @@ let tests =
         match lastDecision states with
         | Decision.Granted _ -> ()
         | other -> failtestf "b is gone, expected c Granted, got %A" other
+
+      testCase "no-room-withheld has teeth: the front-only twin queues c with room to spare, in both scenarios" <| fun _ ->
+        for scenario in [ roomBeyondTheHead; ghostHead ] do
+          holdsFor PoolBehavior.Real noRoomWithheld scenario
+          violatedBy PoolBehavior.FrontOnlyTwin noRoomWithheld scenario
+          |> Expect.isTrue (sprintf "the front-only twin withholds the room in scenario %d" scenario.Seed)
+
+      testCase "no-room-withheld has teeth over seeded scenarios too" <| fun () ->
+        someSeedBreaks PoolBehavior.FrontOnlyTwin noRoomWithheld
+
+      testCase "grant-never-jumps-a-live-waiter has teeth: the jumping twin takes a slot a live earlier ask was waiting for" <| fun () ->
+        someSeedBreaks PoolBehavior.JumpsTheQueueTwin grantNeverJumpsALiveWaiter
+
+      testCase "a live head is never jumped: the real pool holds the invariant over every seed the twin breaks it on" <| fun () ->
+        teethSeeds
+        |> List.filter (fun seed -> violatedBy PoolBehavior.JumpsTheQueueTwin grantNeverJumpsALiveWaiter (scenarioOf seed))
+        |> List.iter (fun seed -> holdsFor PoolBehavior.Real grantNeverJumpsALiveWaiter (scenarioOf seed))
     ]
 
     testList "named worked scenario: no one starved forever" [

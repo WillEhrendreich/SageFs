@@ -38,9 +38,13 @@ open System.IO
 /// module only makes the refusal truthful and the holder visible.
 ///
 /// FAIRNESS: requests queue by arrival (a monotonic sequence number, not
-/// wall-clock, so replay is exact) and are granted strictly in that order
-/// once capacity exists — nobody who asked first waits behind somebody who
-/// asked later. `maxPerHolder` caps how many leases any ONE holder may hold
+/// wall-clock, so replay is exact). An ask is granted exactly when
+/// `active + liveAhead < cap`: every earlier ask that is still coming back
+/// has its slot reserved, so nobody who asked first is jumped by somebody who
+/// asked later, and an earlier ask whose caller has not come back (see
+/// `waiterIsLive`) reserves nothing, so it does not hold up the asks behind it
+/// while it keeps its place in line. Spare room beyond the earlier asks is
+/// never withheld. `maxPerHolder` caps how many leases any ONE holder may hold
 /// at once, regardless of pressure, so a single busy agent cannot monopolize
 /// an otherwise-quiet machine. An agent that never releases loses its lease
 /// at `ExpiresAt` — reclaimed on the very next `request` call, not on a
@@ -193,6 +197,10 @@ module ExpensiveWorkLease =
     /// The last time the holder asked. An ask that is not repeated within
     /// `Timeouts.leaseAskStaleAfter` is abandoned and loses its place.
     LastAskedAt: DateTimeOffset
+    /// When the holder was told to ask again (its last ask plus the retry-after it was handed). An ask that is
+    /// more than `askGrace` past this has not come back when it said it would: the pool stops holding a slot for
+    /// it, though it keeps its place in line (see `waiterIsLive`).
+    AskAgainBy: DateTimeOffset
   }
 
   /// Why a queued caller is not running yet.
@@ -303,6 +311,12 @@ module ExpensiveWorkLease =
   /// two asks is not skipped, and a ghost costs this much instead of the 5 minutes it used to.
   let askGrace : TimeSpan = Timeouts.leaseRetryAfterCritical * graceInRetryWindows
 
+  /// Whether the pool still holds a slot for a queued ask at `now`: it came back when it was told to, give or take
+  /// `askGrace`. A waiter that is not live is SKIPPED when the pool decides who is served, never removed: it keeps
+  /// its place in line (its `Seq`) until `Timeouts.leaseAskStaleAfter` drops it, and the next time it asks it is
+  /// live again and ahead of everyone who arrived after it.
+  let waiterIsLive (now: DateTimeOffset) (waiter: QueuedRequest) : bool = now <= waiter.AskAgainBy + askGrace
+
   /// The real reclaim: drop every lease whose `ExpiresAt` has passed, and
   /// every queued ask that has not been repeated within
   /// `Timeouts.leaseAskStaleAfter`.
@@ -319,9 +333,26 @@ module ExpensiveWorkLease =
     /// Take another one (the twin that breaks idempotence).
     | GrantAnother
 
-  /// The three places the real pool and its twins differ, injected so every
+  /// Who may be granted when the pool has room. The INVARIANT the real rule enforces: an ask is granted exactly
+  /// when the room left after every LIVE earlier ask has its slot is still positive, that is
+  /// `active + liveAhead < cap`. So a grantable earlier ask is never jumped (its slot is reserved), and an earlier
+  /// ask that cannot go (its caller has not come back, see `waiterIsLive`) reserves nothing, so it does not hold
+  /// up the ask behind it.
+  [<RequireQualifiedAccess>]
+  type private Admit =
+    /// `active + liveAhead < cap`.
+    | ReserveForLiveAhead
+    /// Only the front of the queue, whether or not it is asking and whatever room there is (the pool before this
+    /// rule): room no earlier ask needs is withheld, and a head whose caller is gone blocks the line.
+    | FrontOnly
+    /// Anyone with room, whoever is ahead (the twin that breaks fairness).
+    | AnyoneWithRoom
+
+  /// The places the real pool and its twins differ, injected so every
   /// twin shares every other line of the real decision logic.
   type private Policy = {
+    /// Who may be granted when there is room.
+    Admit: Admit
     /// Whether leases and stale asks are reclaimed. Without it a crashed
     /// agent deadlocks the pool forever.
     Reap: DateTimeOffset -> PoolState -> PoolState
@@ -331,7 +362,7 @@ module ExpensiveWorkLease =
     ReAsk: ReAsk
   }
 
-  let private realPolicy : Policy = { Reap = reapExpired; Identify = id; ReAsk = ReAsk.ReturnExisting }
+  let private realPolicy : Policy = { Admit = Admit.ReserveForLiveAhead; Reap = reapExpired; Identify = id; ReAsk = ReAsk.ReturnExisting }
 
   let private requestCore (policy: Policy) (now: DateTimeOffset) (pressure: MemoryPressure) (state: PoolState) (asker: Holder) (kind: Kind) : PoolState * Decision =
     let state = policy.Reap now state
@@ -377,16 +408,19 @@ module ExpensiveWorkLease =
           | None ->
             let seq = state.NextSeq
             seq,
-            state.Queue @ [ { Holder = holder; Kind = kind; Seq = seq; FirstAskedAt = now; LastAskedAt = now } ],
+            state.Queue @ [ { Holder = holder; Kind = kind; Seq = seq; FirstAskedAt = now; LastAskedAt = now; AskAgainBy = now } ],
             state.NextSeq + 1L
         let sortedQueue = queueWithMine |> List.sortBy (fun q -> q.Seq)
         let cap = maxConcurrentFor pressure
-        let capacityAvailable = List.length state.Active < cap
-        let isFront =
-          match List.tryHead sortedQueue with
-          | Some f -> f.Seq = mySeq
-          | None -> true
-        match capacityAvailable && isFront with
+        let activeCount = List.length state.Active
+        let roomForOne = activeCount < cap
+        let earlier = sortedQueue |> List.takeWhile (fun q -> q.Seq <> mySeq)
+        let admitted =
+          match policy.Admit with
+          | Admit.ReserveForLiveAhead -> activeCount + List.length (earlier |> List.filter (waiterIsLive now)) < cap
+          | Admit.FrontOnly -> List.isEmpty earlier
+          | Admit.AnyoneWithRoom -> true
+        match roomForOne && admitted with
         | true ->
           let leaseId = LeaseId.create ()
           let expiresAt = now + Kind.defaultTtl kind
@@ -397,19 +431,22 @@ module ExpensiveWorkLease =
           let position = sortedQueue |> List.findIndex (fun q -> q.Seq = mySeq)
           let computed = baseBackoff pressure + TimeSpan.FromSeconds(float position * 3.0)
           let why =
-            match capacityAvailable with
+            match roomForOne with
             | true -> WaitReason.NotYourTurn
             | false -> WaitReason.AtCapacity
+          let retryAfter = withJitter holder kind mySeq computed
           let waiting : Waiting =
             { Position = position + 1
               Kind = kind
-              Ahead = sortedQueue |> List.filter (fun q -> q.Seq < mySeq)
+              Ahead = earlier
               Holding = state.Active |> List.sortBy (fun l -> l.GrantedAt, l.ExpiresAt)
               Cap = cap
               Pressure = pressure
               Why = why
-              RetryAfter = withJitter holder kind mySeq computed }
-          { state with Queue = sortedQueue; NextSeq = nextSeq }, Decision.Queued waiting
+              RetryAfter = retryAfter }
+          // The ask is told when to come back; that moment is what `waiterIsLive` measures it against.
+          let told = sortedQueue |> List.map (fun q -> if q.Seq = mySeq then { q with AskAgainBy = now + retryAfter } else q)
+          { state with Queue = told; NextSeq = nextSeq }, Decision.Queued waiting
 
   /// The one decision function. Pure: same `now`/`pressure`/`state`/
   /// `holder`/`kind` in, same `(state', Decision)` out, every time (a granted
@@ -438,6 +475,18 @@ module ExpensiveWorkLease =
   /// again is idempotent" and "one holder never holds two" can be shown to
   /// have teeth.
   let requestDuplicatesOnReAskTwin = requestCore { realPolicy with ReAsk = ReAsk.GrantAnother }
+
+  /// TWIN: only the front of the queue may be granted, as the pool did before
+  /// `Admit.ReserveForLiveAhead`. Room no earlier ask needs is withheld from the
+  /// asker behind the head, and a head whose caller is gone blocks the line
+  /// until its ask ages out. Exists so "a waiter that cannot go does not hold up
+  /// one that can" can be shown to have teeth.
+  let requestFrontOnlyTwin = requestCore { realPolicy with Admit = Admit.FrontOnly }
+
+  /// TWIN: anyone with room is granted, whoever is ahead. A later ask takes the
+  /// slot a live earlier ask was waiting for. Exists so "a grantable earlier ask
+  /// is never jumped" can be shown to have teeth.
+  let requestJumpsTheQueueTwin = requestCore { realPolicy with Admit = Admit.AnyoneWithRoom }
 
   /// Whether a release found a still-live lease. `AlreadyGone` is the
   /// fencing signal a pure coordination pool CAN actually give (it cannot

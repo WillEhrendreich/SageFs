@@ -49,6 +49,8 @@ module LeaseSim =
     | NeverExpiresTwin
     | CollapsedIdentityTwin
     | DuplicatesOnReAskTwin
+    | FrontOnlyTwin
+    | JumpsTheQueueTwin
 
   let private requestFnOf =
     function
@@ -56,6 +58,8 @@ module LeaseSim =
     | PoolBehavior.NeverExpiresTwin -> requestNeverExpiresTwin
     | PoolBehavior.CollapsedIdentityTwin -> requestCollapsedIdentityTwin
     | PoolBehavior.DuplicatesOnReAskTwin -> requestDuplicatesOnReAskTwin
+    | PoolBehavior.FrontOnlyTwin -> requestFrontOnlyTwin
+    | PoolBehavior.JumpsTheQueueTwin -> requestJumpsTheQueueTwin
 
   /// One request's outcome, with enough context for invariants to check
   /// capacity, fairness, attribution and idempotence against the EXACT
@@ -73,6 +77,8 @@ module LeaseSim =
     ActiveBefore: ActiveLease list
     /// Pool.Active AFTER this decision was applied — what a capacity check compares against.
     ActiveAfter: ActiveLease list
+    /// Pool.Queue BEFORE this request, before anything aged out: the asks that were ahead of this one.
+    QueueBefore: QueuedRequest list
     /// Pool.Queue AFTER this decision was applied.
     QueueAfter: QueuedRequest list
   }
@@ -137,6 +143,7 @@ module LeaseSim =
           Decision = decision
           ActiveBefore = s.Pool.Active
           ActiveAfter = pool'.Active
+          QueueBefore = s.Pool.Queue
           QueueAfter = pool'.Queue }
       { s with Pool = pool'; HeldByAgent = held'; Decisions = s.Decisions @ [ record ] }
 
@@ -182,15 +189,14 @@ module LeaseSim =
     let retryEveryKindForEveryAgent =
       [ for a in agents do
           for k in Kind.all -> SimEvent.Request(a, k) ]
-    // `request`'s FIFO is STRICT and positional: a queued entry is only
-    // ever promoted when its OWN holder retries AND it is exactly the
-    // front of the queue at that moment — a later entry never jumps ahead
-    // just because capacity would allow it too. So even with cap=4 and 4
-    // agents, draining a full queue takes up to 4 SEPARATE retry rounds in
-    // the worst case (one entry advances to the front and gets granted per
-    // round), the same way real callers each keep retrying on their own
-    // backoff until it's genuinely their turn. `agents.Length + 1` rounds
-    // is a safe upper bound for however many agents this scenario uses.
+    // A queued entry is only ever promoted when its OWN holder retries, and
+    // only while `active + liveAhead < cap`: a later entry never takes the
+    // slot a live earlier one is waiting for. So with cap=1 and 4 agents,
+    // draining a full queue can still take up to 4 SEPARATE retry rounds in
+    // the worst case (one entry is granted per round), the same way real
+    // callers each keep retrying on their own backoff until it's genuinely
+    // their turn. `agents.Length + 1` rounds is a safe upper bound for
+    // however many agents this scenario uses.
     let retryRounds = List.replicate (agents.Length + 1) ()
     let coolDown =
       [ SimEvent.PressureChange MemoryPressure.Normal ]

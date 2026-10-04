@@ -226,8 +226,70 @@ module LeaseSimInvariants =
               | false -> Some(sprintf "step %d: asking again changed %s's lease count from %d to %d" r.AtStep (Holder.describe r.Holder) (List.length heldBefore) heldAfter)
             | other -> Some(sprintf "step %d: %s already held a %s lease and asking again answered %A instead of handing it back" r.AtStep (Holder.describe r.Holder) (Kind.toToken r.Kind) other)) }
 
+  /// The asks ahead of the caller's own at the moment it asked that the pool still held a slot for: still in line
+  /// after anything stale aged out, and still coming back when they were told to (`waiterIsLive`). An ask the
+  /// caller has not made before has every ask in the line ahead of it.
+  let liveAheadOf (r: DecisionRecord) : QueuedRequest list =
+    let mySeq =
+      match r.QueueBefore |> List.tryFind (fun q -> q.Holder = r.Holder && q.Kind = r.Kind) with
+      | Some mine -> mine.Seq
+      | None -> System.Int64.MaxValue
+    r.QueueBefore
+    |> List.filter (fun q -> q.Seq < mySeq && q.LastAskedAt + Timeouts.leaseAskStaleAfter > r.Clock && waiterIsLive r.Clock q)
+
+  /// GRANT-NEVER-JUMPS-A-LIVE-WAITER: a Granted decision only fires when the pool had a slot left for it after
+  /// every live earlier ask had its own, that is `active + liveAhead < cap`. A later ask never takes the slot an
+  /// earlier ask that is still coming back was waiting for.
+  let grantNeverJumpsALiveWaiter : Invariant =
+    { Id = "grant-never-jumps-a-live-waiter"
+      Description = "A Granted decision leaves a slot for every live earlier ask: active + liveAhead < cap."
+      Check = fun states ->
+        firstViolation states (fun r ->
+          match r.Decision with
+          | Decision.Granted _ ->
+            let cap = maxConcurrentFor r.Pressure
+            let preGrantCount = List.length r.ActiveAfter - 1
+            let liveAhead = liveAheadOf r
+            match preGrantCount + List.length liveAhead >= cap with
+            | true ->
+              Some(
+                sprintf
+                  "step %d: %s was granted with %d active and %d live earlier ask(s) ahead (cap %d), taking a slot an earlier ask was waiting for"
+                  r.AtStep (Holder.describe r.Holder) preGrantCount (List.length liveAhead) cap
+              )
+            | false -> None
+          | Decision.AlreadyHeld _
+          | Decision.Queued _
+          | Decision.Refused _ -> None) }
+
+  /// NO-ROOM-WITHHELD: a Queued decision only fires when there was no slot left after every live earlier ask had
+  /// its own. Room beyond them is never withheld, and an earlier ask that is not coming back reserves nothing.
+  let noRoomWithheld : Invariant =
+    { Id = "no-room-withheld"
+      Description = "A Queued decision only fires when active + liveAhead >= cap: no room is left unused behind a head that cannot go."
+      Check = fun states ->
+        firstViolation states (fun r ->
+          match r.Decision with
+          | Decision.Queued _ ->
+            let cap = maxConcurrentFor r.Pressure
+            let active = List.length r.ActiveAfter
+            let liveAhead = liveAheadOf r
+            match active + List.length liveAhead < cap with
+            | true ->
+              Some(
+                sprintf
+                  "step %d: %s was told to wait with %d active and %d live earlier ask(s) ahead (cap %d): there was room"
+                  r.AtStep (Holder.describe r.Holder) active (List.length liveAhead) cap
+              )
+            | false -> None
+          | Decision.Granted _
+          | Decision.AlreadyHeld _
+          | Decision.Refused _ -> None) }
+
   let all : Invariant list =
     [ grantNeverExceedsCap
+      grantNeverJumpsALiveWaiter
+      noRoomWithheld
       everyWaitHasPositiveRetryAfter
       mutualExclusion
       everyLeaseExpires
