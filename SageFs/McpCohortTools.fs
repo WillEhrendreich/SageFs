@@ -162,6 +162,25 @@ module McpCohortTools =
   // line each: take the directory given, or `None` for the daemon's own scope. A helper that
   // answers the same question a second way is a helper someone will reach for again.
 
+  /// Why a conductor seat is empty, in words an agent can act on.
+  let vacancyWhy (why: Cohort.VacancyReason) : string =
+    match why with
+    | Cohort.VacancyReason.ConductorLeft -> "the conductor left"
+    | Cohort.VacancyReason.LeaseLapsed -> "the conductor's lease lapsed"
+    | Cohort.VacancyReason.Revoked -> "the conductor was revoked"
+    | Cohort.VacancyReason.NeverBound -> "no conductor was ever bound"
+
+  /// What a join says about the conductor seat, from the cohort's binding AFTER the join. Total, so a caller
+  /// is always told which seat it holds. A rejoin that finds the caller still seated used to say nothing, and
+  /// an agent could not tell whether its seat had lapsed.
+  let seatSentence (who: MemberTable.MemberId) (conductor: Cohort.ConductorBinding<MemberTable.MemberId>) : string =
+    match conductor with
+    | Cohort.ConductorBinding.Bound holder when holder = who -> "You are the conductor."
+    | Cohort.ConductorBinding.Bound holder -> sprintf "The conductor is %s." (MemberTable.MemberId.display holder)
+    | Cohort.ConductorBinding.Vacant(_, _, why) ->
+      sprintf "The conductor seat is vacant (%s). Nobody holds conductor authority until a person appoints one." (vacancyWhy why)
+    | Cohort.ConductorBinding.NeverBound -> "This cohort has no conductor yet."
+
   /// Join the implicit per-daemon cohort as `role` (Implementer/Verifier/
   /// Observer). v1 has no separate `create_cohort` command — the first
   /// member to join an empty cohort becomes its conductor automatically
@@ -223,12 +242,20 @@ module McpCohortTools =
               match currentCapability.Value with
               | Some _ -> " Your role is the one your member token was minted with; the role argument is ignored."
               | None -> ""
+            // Every join says which seat the caller holds, not only the join that created it.
+            let seatNote =
+              match becameConductor with
+              | true -> " You are the conductor (first to join in this scope)."
+              | false ->
+                match SageFs.McpTools.cohortOwnerFor ctx workingDirectory with
+                | Some owner -> " " + seatSentence who (owner.ReadFrame()).Conductor
+                | None -> ""
             sprintf
               "Joined cohort as %s (%s) in %s.%s%s%s"
               (MemberTable.MemberId.display who)
               (string r)
               (SageFs.Scope.label cohortScope)
-              (if becameConductor then " You are the conductor (first to join in this scope)." else "")
+              seatNote
               tokenNote
               sessionNote)
     }
