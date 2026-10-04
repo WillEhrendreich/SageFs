@@ -116,6 +116,11 @@ let cacheKey (sdkVersion: string) (sources: (string * string) list) : string =
 let globalJson (sdkVersion: string) : string =
   sprintf """{"sdk":{"version":"%s","rollForward":"disable","allowPrerelease":true}}""" sdkVersion
 
+/// Runtime tiering knobs for the build's own processes (MSBuild and fsc), on top of what they inherit. Tiered PGO instruments first-tier
+/// code and recompiles from the profile; a build that lives ten seconds never earns that back. Measured on a cold host build: 15% less CPU and
+/// 19% less wall time. These change how fast the compiler runs and never what it emits, so they are not part of the cache key.
+let hostBuildRuntimeEnvironment : (string * string) list = [ "DOTNET_TieredPGO", "0" ]
+
 /// The assembly identity the host's Harmony carries. It is NOT `0Harmony`: a project that references Lib.Harmony must never
 /// collide with the agent's own copy, so the agent's is a differently-named assembly of the same build.
 [<Literal>]
@@ -334,9 +339,10 @@ let ensureBuiltWith (dotnet: string) (selection: SdkSelection) (cacheRoot: strin
           // MSBuild loads its targets from the inherited root instead. Point
           // the whole build at the SDK the project asked for.
           let buildEnvironment =
-            match selection.DotnetRoot with
-            | None -> []
-            | Some root -> [ "DOTNET_ROOT", root; "DOTNET_HOST_PATH", SdkSelection.muxer dotnet selection ]
+            hostBuildRuntimeEnvironment
+            @ (match selection.DotnetRoot with
+               | None -> []
+               | Some root -> [ "DOTNET_ROOT", root; "DOTNET_HOST_PATH", SdkSelection.muxer dotnet selection ])
           runCaptureWith
             buildEnvironment
             dotnet
