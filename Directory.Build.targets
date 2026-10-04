@@ -20,4 +20,37 @@
     </ItemGroup>
   </Target>
 
+  <!-- The build's revision is the last commit that changed what this project is built from, never HEAD.
+
+       The SDK stamps every assembly with the HEAD commit (AssemblyInformationalVersion `0.6.895+<sha>`), and
+       SourceLink writes it into a file the compiler reads. Any commit at all, an empty one, a docs edit, a test
+       fix, changed both, so every project recompiled after every commit: a measured 750 CPU seconds and 148 s of
+       wall clock per empty commit (SageFs.Core, Simulation, Host, SageFs and SageFs.Tests, each for two
+       frameworks). It also meant a gate could not reuse the build of the commit before it.
+
+       Both are replaced by the last commit touching this project's directory or the files every project is
+       built from. The revision is still a real commit, still shown by the statusline (`0.6.895+8f4a237`), and for
+       a release it is the same commit as before: ship's version bump touches Directory.Build.props, which is in
+       every project's path list, so the gated commit is the last one to have changed it. What changes is that two
+       builds of the same sources now say the same thing, which is what makes their bytes comparable and a build
+       cache possible. SourceLink's URL map goes: nothing here reads it, and it embedded the HEAD commit too.
+       (Directory.Build.props turns both off; this target supplies the revision.) -->
+  <Target Name="SageFsContentRevision"
+          BeforeTargets="AddSourceRevisionToInformationalVersion"
+          Condition="'$(SourceRevisionId)' == '' and Exists('$(MSBuildThisFileDirectory).git')">
+    <Exec Command="git log -1 --format=%25H -- . &quot;$(MSBuildThisFileDirectory)Directory.Build.props&quot; &quot;$(MSBuildThisFileDirectory)Directory.Build.targets&quot; &quot;$(MSBuildThisFileDirectory)Directory.Packages.props&quot; &quot;$(MSBuildThisFileDirectory)global.json&quot; &quot;$(MSBuildThisFileDirectory)nuget.config&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low"
+          IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true"
+          ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="SageFsContentRevisionOutput" />
+    </Exec>
+    <PropertyGroup>
+      <SourceRevisionId>$([System.String]::Copy('$(SageFsContentRevisionOutput)').Trim())</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
+
 </Project>

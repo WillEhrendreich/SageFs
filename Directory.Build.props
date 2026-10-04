@@ -36,6 +36,14 @@
     <RestoreLockedMode Condition="'$(CI)' == 'true' or '$(GITHUB_ACTIONS)' == 'true'">true</RestoreLockedMode>
   </PropertyGroup>
 
+  <!-- Build identity that does not move with HEAD (see Directory.Build.targets, SageFsContentRevision). The
+       SDK's own revision stamp and SourceLink both embed the HEAD commit, which made every commit rebuild
+       every project. -->
+  <PropertyGroup>
+    <EnableSourceLink>false</EnableSourceLink>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+  </PropertyGroup>
+
   <!-- The path to SageFs.Core.dll for a sample that wants the holder API
        (Holder / HolderRegistry / RegisteredHolder), so a sample can demonstrate
        registered live state without hand-writing a HintPath to a build output.
