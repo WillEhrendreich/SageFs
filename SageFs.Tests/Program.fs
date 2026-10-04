@@ -268,10 +268,17 @@ let main argv =
   match isIntegrationHost with
   | true ->
     let shard = SageFs.Build.TierPlan.shardOfArgs argv
-    let hostArgv =
+    let shardlessArgv =
       match shard with
       | Some s -> argv |> Array.filter (fun a -> a <> "--integration-host" && a <> "--shard" && a <> sprintf "%d/%d" s.Index s.Count)
       | None -> argv |> Array.filter (fun a -> a <> "--integration-host")
+    // The suites registered as concurrent (Integration.hostListConcurrent) run their cases in parallel, and Expecto starts
+    // that many at a time: as many as there are host slots, so no case waits for a slot with its clock running (a case's
+    // seconds are what the partition balances on). A run that names its own count keeps it.
+    let hostArgv =
+      match shardlessArgv |> Array.contains "--parallel-workers" with
+      | true -> shardlessArgv
+      | false -> Array.append shardlessArgv [| "--parallel-workers"; string SageFs.Tests.TestMagnitudes.concurrentHosts |]
     match ensureHostPrebuilt () with
     | Result.Ok _ -> ()
     | Result.Error reason -> eprintfn "warning: could not pre-build the FSI host: %s" reason
@@ -312,7 +319,12 @@ let main argv =
             | _ :: suite :: _ -> Some (suite, summary.duration.TotalSeconds)
             | _ -> None)
           |> List.groupBy fst
-          |> List.map (fun (suite, xs) -> suite, xs |> List.sumBy snd)
+          // A concurrent suite's cases overlap, so what the partition balances on is their sum over the slots.
+          |> List.map (fun (suite, xs) ->
+            suite,
+            SageFs.Tests.TestInfrastructure.Integration.suiteWallSeconds
+              (SageFs.Tests.TestInfrastructure.Integration.concurrencyOf suite)
+              (xs |> List.sumBy snd))
           |> Map.ofList
         try File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize timings) with _ -> ()
     let result =

@@ -358,32 +358,26 @@ let exerciseRow (app: RunningApp) (row: Row) : Task<Observed> = task {
 /// One row on a host of its own, start to finish. A row gets its own host because a save the
 /// product cannot patch leaves its edit on disk and the baseline behind, so every later save in
 /// that host would carry it too: one red row would make every row after it red for the wrong reason.
-let private runRow (runtime: HostRuntime) (fixture: Fixture) (row: Row) : Task<Observed> = task {
-  let! app = startFixture fixture runtime ignore
-  try
-    return! exerciseRow app row
-  finally
-    stop app
-}
-
-/// How many hosts one test runs at once. Each is a real process with its own build, so this is
-/// bounded by what a machine can run, not by what is quick.
-let private concurrentHosts = 3
+let private runRow (runtime: HostRuntime) (fixture: Fixture) (row: Row) : Task<Observed> =
+  // A slot from the process's host slots, for the life of the host: the rows of every case in this suite share them, so
+  // however many rows are waiting, only `HostSlots.shared.Limit` hosts exist at once.
+  HostSlots.withSlot (fun () -> task {
+    let! app = startFixture fixture runtime ignore
+    try
+      return! exerciseRow app row
+    finally
+      stop app
+  })
 
 /// Every row of one kind on one runtime, each on its own host, and ONE verdict at the end: a table of
 /// the rows that held and the ones that did not, so a red run reads as a matrix and not as the first
 /// failure.
 let private runRows (runtime: HostRuntime) (fixture: Fixture) (selected: Row list) : Task<unit> = task {
-  use gate = new System.Threading.SemaphoreSlim(concurrentHosts)
   let one (row: Row) : Task<Observed> = task {
-    do! gate.WaitAsync()
     try
-      try
-        return! runRow runtime fixture row
-      with ex ->
-        return { Row = row; Said = "no verdict"; Served = ""; Problem = ex.Message.Split('\n').[0] }
-    finally
-      gate.Release() |> ignore
+      return! runRow runtime fixture row
+    with ex ->
+      return { Row = row; Said = "no verdict"; Served = ""; Problem = ex.Message.Split('\n').[0] }
   }
   let! observed = selected |> List.map one |> Task.WhenAll
   let table =
@@ -403,21 +397,26 @@ let private patching = rows |> List.filter (fun r -> r.Ending = Ending.Patches)
 
 let private restarting = rows |> List.filter (fun r -> r.Ending <> Ending.Patches)
 
+/// One suite per runtime, so the partition can put the two in different shards. The cases run together: each row of each
+/// case takes a slot of its own (`HostSlots`), so the rows of all four cases share one queue and no case waits behind
+/// another's last row.
 [<Tests>]
 let hotReloadParityTests =
-  Integration.hostList "hot reload parity with .NET Hot Reload" [
+  testList "hot reload parity with .NET Hot Reload, per runtime" [
     for runtime in HostRuntime.all do
-      testTask (sprintf "[%s] every edit that has to land in the running app, lands, and is Patched only after its new body ran" (HostRuntime.moniker runtime)) {
-        do! runRows runtime parityFixture patching
-      }
-      testTask (sprintf "[%s] every edit that has to restart says why, and leaves the running app alone" (HostRuntime.moniker runtime)) {
-        do! runRows runtime parityFixture restarting
-      }
-      testTask (sprintf "[%s] every generic function edit that has to land in the running app, lands in every instantiation, and is Patched only after its new body ran" (HostRuntime.moniker runtime)) {
-        do! runRows runtime parityFixture (genericRows |> List.filter (fun r -> r.Ending = Ending.Patches))
-      }
-      testTask (sprintf "[%s] every generic function edit that has to restart says why, and leaves the running app alone" (HostRuntime.moniker runtime)) {
-        do! runRows runtime parityFixture (genericRows |> List.filter (fun r -> r.Ending <> Ending.Patches))
-        do! runRows runtime reflectionFixture reflectionRows
-      }
+      Integration.hostListConcurrent (sprintf "hot reload parity with .NET Hot Reload on %s" (HostRuntime.moniker runtime)) [
+        testTask (sprintf "[%s] every edit that has to land in the running app, lands, and is Patched only after its new body ran" (HostRuntime.moniker runtime)) {
+          do! runRows runtime parityFixture patching
+        }
+        testTask (sprintf "[%s] every edit that has to restart says why, and leaves the running app alone" (HostRuntime.moniker runtime)) {
+          do! runRows runtime parityFixture restarting
+        }
+        testTask (sprintf "[%s] every generic function edit that has to land in the running app, lands in every instantiation, and is Patched only after its new body ran" (HostRuntime.moniker runtime)) {
+          do! runRows runtime parityFixture (genericRows |> List.filter (fun r -> r.Ending = Ending.Patches))
+        }
+        testTask (sprintf "[%s] every generic function edit that has to restart says why, and leaves the running app alone" (HostRuntime.moniker runtime)) {
+          do! runRows runtime parityFixture (genericRows |> List.filter (fun r -> r.Ending <> Ending.Patches))
+          do! runRows runtime reflectionFixture reflectionRows
+        }
+      ]
   ]

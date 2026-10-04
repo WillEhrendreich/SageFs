@@ -240,19 +240,35 @@ module Integration =
   let hostCase (name: string) (body: unit -> unit) =
     Expecto.Tests.testCase (tagged name) body |> register Host
 
-  /// How a host suite's cases run inside their process. (The stub: red.)
+  /// How a host suite's cases run inside their process.
   [<RequireQualifiedAccess>]
   type Concurrency =
+    /// One after another, as every host suite did: the cases share something or measure something a neighbour would move.
     | Sequential
+    /// A few at a time (`HostSlots`): each case is a host, a run dir and a port of its own.
     | Concurrent
 
-  let concurrentCases (tests: Expecto.Test list) : Expecto.Test list = tests
+  /// The cases marked to run in parallel. Inside the host entry point's `testSequenced` wrapper the nearest sequencing
+  /// wins, so these run in parallel and the rest of the wrapper still runs in sequence. The case itself is untouched, so
+  /// the registry and the default run find its body by identity as before.
+  let concurrentCases (tests: Expecto.Test list) : Expecto.Test list =
+    tests |> List.map (fun test -> Expecto.Test.Sequenced (Expecto.SequenceMethod.InParallel, test))
 
-  let hostListConcurrent (name: string) (tests: Expecto.Test list) = hostList name tests
+  /// The suites registered as concurrent, by their tagged name.
+  let concurrentSuites = System.Collections.Generic.HashSet<string>()
 
-  let concurrencyOf (_suite: string) : Concurrency = Concurrency.Sequential
+  /// A self-contained integration test list whose cases are independent hosts and run a few at a time. Every body that
+  /// starts a host takes a slot (`HostSlots.withSlot`), which is what bounds them.
+  let hostListConcurrent (name: string) (tests: Expecto.Test list) =
+    lock concurrentSuites (fun () -> concurrentSuites.Add (tagged name) |> ignore)
+    Expecto.Tests.testList (tagged name) (concurrentCases tests) |> register Host
 
-  let suiteWallSeconds (_concurrency: Concurrency) (seconds: float) : float = seconds
+  /// The seconds a suite takes in its process, from the sum of its cases' seconds: a concurrent suite's cases overlap, so
+  /// their sum is spread over the slots. This is the figure the partition balances shards on.
+  let suiteWallSeconds (concurrency: Concurrency) (seconds: float) : float =
+    match concurrency with
+    | Concurrency.Sequential -> seconds
+    | Concurrency.Concurrent -> seconds / float TestMagnitudes.concurrentHosts
 
   /// `hostCase` for a body that awaits, so the case does not block a thread to run it.
   let hostCaseTask (name: string) (body: unit -> System.Threading.Tasks.Task<unit>) =
@@ -282,6 +298,14 @@ module Integration =
   /// Every registry in this file fills during module initialization, so each one
   /// forces this before it answers (the Ratchet registry below shares it).
   let ensureDiscovered () = discovery.Force()
+
+  /// How the suite called `suite` (its tagged name) runs its cases. A suite nobody registered as concurrent is sequential.
+  /// Registration happens in module initialization, which is lazy, so this asks only once every file has registered.
+  let concurrencyOf (suite: string) : Concurrency =
+    ensureDiscovered ()
+    match lock concurrentSuites (fun () -> concurrentSuites.Contains suite) with
+    | true -> Concurrency.Concurrent
+    | false -> Concurrency.Sequential
 
   let registered () =
     ensureDiscovered ()

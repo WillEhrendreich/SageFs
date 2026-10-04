@@ -231,28 +231,22 @@ let exerciseRow (app: RunningApp) (row: Row) : Task<Observed> = task {
 
 /// One row on a host of its own, start to finish. A row that cannot be patched ends the run, and every
 /// later save in that host would carry its edit too.
-let private runRow (runtime: HostRuntime) (row: Row) : Task<Observed> = task {
-  let! app = startRunApp runtime
-  try
-    return! exerciseRow app row
-  finally
-    stop app
-}
-
-/// How many hosts one test runs at once. Each is a real process with its own build.
-let private concurrentHosts = 3
+let private runRow (runtime: HostRuntime) (row: Row) : Task<Observed> =
+  // A slot from the process's host slots for the life of the host, shared by every case of the suite.
+  HostSlots.withSlot (fun () -> task {
+    let! app = startRunApp runtime
+    try
+      return! exerciseRow app row
+    finally
+      stop app
+  })
 
 let private runRows (runtime: HostRuntime) (selected: Row list) : Task<unit> = task {
-  use gate = new System.Threading.SemaphoreSlim(concurrentHosts)
   let one (row: Row) : Task<Observed> = task {
-    do! gate.WaitAsync()
     try
-      try
-        return! runRow runtime row
-      with ex ->
-        return { Row = row; Said = "no verdict"; Served = ""; Problem = ex.Message.Split('\n').[0] }
-    finally
-      gate.Release() |> ignore
+      return! runRow runtime row
+    with ex ->
+      return { Row = row; Said = "no verdict"; Served = ""; Problem = ex.Message.Split('\n').[0] }
   }
   let! observed = selected |> List.map one |> Task.WhenAll
   let table =
@@ -272,70 +266,76 @@ let private patching = rows |> List.filter (fun r -> r.Ending = Ending.PatchedBy
 
 let private restarting = rows |> List.filter (fun r -> r.Ending <> Ending.PatchedByDelta)
 
+/// A run_app host for the whole of `body`, from the process's host slots (the rows' hosts take them too).
+let private withRunApp (start: unit -> Task<RunningApp>) (body: RunningApp -> Task<unit>) : Task<unit> =
+  HostSlots.withSlot (fun () -> task {
+    let! app = start ()
+    try
+      do! body app
+    finally
+      stop app
+  })
+
+/// One suite per runtime, so the partition can put the two in different shards. The cases run together: each host, a row's
+/// or a case's own, takes a slot (`HostSlots`).
 [<Tests>]
 let runAppDeltaTests =
-  Integration.hostList "run_app metadata delta" [
+  testList "run_app metadata delta, per runtime" [
     for runtime in HostRuntime.all do
-      testTask (sprintf "[%s] an edit to the body of a running run_app app is patched into the same process, by metadata delta" (HostRuntime.moniker runtime)) {
-        do! runRows runtime patching
-      }
-      testTask (sprintf "[%s] an edit a metadata delta cannot take restarts the app and names the declaration" (HostRuntime.moniker runtime)) {
-        do! runRows runtime restarting
-      }
-      testTask (sprintf "[%s] saves after saves each land on the one before: the chain carries from the first delta to the third, in the same process" (HostRuntime.moniker runtime)) {
-        let! app = startRunApp runtime
-        try
-          let! pid = get app "pid"
-          let mutable problems = []
-          for was, now in [ "A", "B"; "B", "C"; "C", "D" ] do
-            let! verdict = saveEdits app app.StateSource [ sprintf "\"closure:%s\"" was, sprintf "\"closure:%s\"" now ]
-            let! served = settle app "closure" (sprintf "closure:%s!?" now)
-            let! pidAfter = tryGet app "pid"
-            match prop (json verdict) "type", prop (json verdict) "mechanism", served = sprintf "closure:%s!?" now, pidAfter = pid with
-            | "pending", "metadata-delta", true, true -> ()
-            | _ -> problems <- sprintf "%s to %s: said %s, serves %A, pid %s (was %s)" was now (said verdict) served pidAfter pid :: problems
-          problems |> Expect.isEmpty "every save in the chain is a delta on the same process"
-        finally
-          stop app
-      }
-      testTask (sprintf "[%s] a patch and then an edit a delta cannot take: the first is patched, the second restarts and names what could not be" (HostRuntime.moniker runtime)) {
-        let! app = startRunApp runtime
-        try
-          let! first = saveEdits app app.StateSource [ "\"taskBody:A\"", "\"taskBody:B\"" ]
-          prop (json first) "type" |> Expect.equal (sprintf "the first save is patched: %s" (said first)) "pending"
-          let! second = saveEdits app app.StateSource [ "fun () -> \"closure:A\" + tag", "fun () -> \"closure:A\" + tag + suffix" ]
-          reasonsOf second
-          |> List.exists (fun r -> r.StartsWith("FieldsChanged:", StringComparison.Ordinal) && r.Contains "makeHeld")
-          |> Expect.isTrue (sprintf "the second save restarts and names the closure of makeHeld: %s" (said second))
-        finally
-          stop app
-      }
-      testTask (sprintf "[%s] a save that does not build is reported as it is and leaves the process alone, and the fix is patched on the chain that was there" (HostRuntime.moniker runtime)) {
-        let! app = startRunApp runtime
-        try
-          let! pid = get app "pid"
-          let! broken = saveEdits app app.StateSource [ "\"closure:A\"", "undefinedNameZ" ]
-          prop (json broken) "type" |> Expect.equal (sprintf "a build that fails is reported as failed: %s" (said broken)) "failed"
-          let! stillServing = get app "closure"
-          stillServing |> Expect.equal "the process keeps serving what it had" "closure:A!?"
-          let! fixedSave = saveEdits app app.StateSource [ "undefinedNameZ", "\"closure:B\"" ]
-          prop (json fixedSave) "mechanism" |> Expect.equal (sprintf "the fix is patched by delta: %s" (said fixedSave)) "metadata-delta"
-          let! served = settle app "closure" "closure:B!?"
-          served |> Expect.equal "and the process serves it" "closure:B!?"
-          let! pidAfter = get app "pid"
-          pidAfter |> Expect.equal "in the same process" pid
-        finally
-          stop app
-      }
-      testTask (sprintf "[%s] with the route off, a body edit to a run_app app restarts the app as it always did" (HostRuntime.moniker runtime)) {
-        let! app = startRunAppWith SageFs.Features.MetadataDelta.MetadataDeltaMode.Off runtime
-        try
-          let! verdict = saveEdits app app.StateSource [ "\"closure:A\"", "\"closure:B\"" ]
-          prop (json verdict) "outcome" |> Expect.equal (sprintf "the edit restarts: %s" (said verdict)) "Restarted"
-          prop (json verdict) "mechanism" |> Expect.equal "and it is not a patch, so it names no mechanism" ""
-        finally
-          stop app
-      }
+      Integration.hostListConcurrent (sprintf "run_app metadata delta on %s" (HostRuntime.moniker runtime)) [
+        testTask (sprintf "[%s] an edit to the body of a running run_app app is patched into the same process, by metadata delta" (HostRuntime.moniker runtime)) {
+          do! runRows runtime patching
+        }
+        testTask (sprintf "[%s] an edit a metadata delta cannot take restarts the app and names the declaration" (HostRuntime.moniker runtime)) {
+          do! runRows runtime restarting
+        }
+        testTask (sprintf "[%s] saves after saves each land on the one before: the chain carries from the first delta to the third, in the same process" (HostRuntime.moniker runtime)) {
+          do! withRunApp (fun () -> startRunApp runtime) (fun app -> task {
+            let! pid = get app "pid"
+            let mutable problems = []
+            for was, now in [ "A", "B"; "B", "C"; "C", "D" ] do
+              let! verdict = saveEdits app app.StateSource [ sprintf "\"closure:%s\"" was, sprintf "\"closure:%s\"" now ]
+              let! served = settle app "closure" (sprintf "closure:%s!?" now)
+              let! pidAfter = tryGet app "pid"
+              match prop (json verdict) "type", prop (json verdict) "mechanism", served = sprintf "closure:%s!?" now, pidAfter = pid with
+              | "pending", "metadata-delta", true, true -> ()
+              | _ -> problems <- sprintf "%s to %s: said %s, serves %A, pid %s (was %s)" was now (said verdict) served pidAfter pid :: problems
+            problems |> Expect.isEmpty "every save in the chain is a delta on the same process"
+          })
+        }
+        testTask (sprintf "[%s] a patch and then an edit a delta cannot take: the first is patched, the second restarts and names what could not be" (HostRuntime.moniker runtime)) {
+          do! withRunApp (fun () -> startRunApp runtime) (fun app -> task {
+            let! first = saveEdits app app.StateSource [ "\"taskBody:A\"", "\"taskBody:B\"" ]
+            prop (json first) "type" |> Expect.equal (sprintf "the first save is patched: %s" (said first)) "pending"
+            let! second = saveEdits app app.StateSource [ "fun () -> \"closure:A\" + tag", "fun () -> \"closure:A\" + tag + suffix" ]
+            reasonsOf second
+            |> List.exists (fun r -> r.StartsWith("FieldsChanged:", StringComparison.Ordinal) && r.Contains "makeHeld")
+            |> Expect.isTrue (sprintf "the second save restarts and names the closure of makeHeld: %s" (said second))
+          })
+        }
+        testTask (sprintf "[%s] a save that does not build is reported as it is and leaves the process alone, and the fix is patched on the chain that was there" (HostRuntime.moniker runtime)) {
+          do! withRunApp (fun () -> startRunApp runtime) (fun app -> task {
+            let! pid = get app "pid"
+            let! broken = saveEdits app app.StateSource [ "\"closure:A\"", "undefinedNameZ" ]
+            prop (json broken) "type" |> Expect.equal (sprintf "a build that fails is reported as failed: %s" (said broken)) "failed"
+            let! stillServing = get app "closure"
+            stillServing |> Expect.equal "the process keeps serving what it had" "closure:A!?"
+            let! fixedSave = saveEdits app app.StateSource [ "undefinedNameZ", "\"closure:B\"" ]
+            prop (json fixedSave) "mechanism" |> Expect.equal (sprintf "the fix is patched by delta: %s" (said fixedSave)) "metadata-delta"
+            let! served = settle app "closure" "closure:B!?"
+            served |> Expect.equal "and the process serves it" "closure:B!?"
+            let! pidAfter = get app "pid"
+            pidAfter |> Expect.equal "in the same process" pid
+          })
+        }
+        testTask (sprintf "[%s] with the route off, a body edit to a run_app app restarts the app as it always did" (HostRuntime.moniker runtime)) {
+          do! withRunApp (fun () -> startRunAppWith SageFs.Features.MetadataDelta.MetadataDeltaMode.Off runtime) (fun app -> task {
+            let! verdict = saveEdits app app.StateSource [ "\"closure:A\"", "\"closure:B\"" ]
+            prop (json verdict) "outcome" |> Expect.equal (sprintf "the edit restarts: %s" (said verdict)) "Restarted"
+            prop (json verdict) "mechanism" |> Expect.equal "and it is not a patch, so it names no mechanism" ""
+          })
+        }
+      ]
   ]
 
 // -- the REPL after a delta -----------------------------------------------------------------------------------------
@@ -428,61 +428,69 @@ let private loggedMs (log: string) (label: string) : float list =
   |> Seq.map (fun m -> float m.Groups[1].Value)
   |> List.ofSeq
 
+/// The cost cases of one runtime.
+let costCases (runtime: HostRuntime) : Test list =
+  [
+    testTask (sprintf "[%s] a process started so it can take a delta runs a call-heavy loop within a small multiple of one that was not" (HostRuntime.moniker runtime)) {
+      let! off = spinTimes SageFs.Features.MetadataDelta.MetadataDeltaMode.Off runtime
+      let! on = spinTimes SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime
+      let ratio = median on / median off
+      eprintfn "DELTA-COST machine: %s" (machine ())
+      eprintfn "DELTA-COST [%s] %d calls of a NoInlining method, n=%d runs after a warm-up: route off %s ms (median %.0f), route on %s ms (median %.0f), ratio %.2f"
+        (HostRuntime.moniker runtime) 50000000 spinRuns
+        (off |> List.map (sprintf "%.0f") |> String.concat ", ") (median off)
+        (on |> List.map (sprintf "%.0f") |> String.concat ", ") (median on)
+        ratio
+      (ratio, spinCostBound) |> Expect.isLessThan (sprintf "the route's cost on a call-heavy loop (off %A ms, on %A ms)" off on)
+    }
+    testTask (sprintf "[%s] what a save costs: file written to new code served, with the build, the diff and the runtime's call apart, against a process start" (HostRuntime.moniker runtime)) {
+      let! app, started = startRunAppTimed SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime
+      try
+        let served = ResizeArray<float>()
+        // The reload watcher drops a second change to a file inside its double-compile guard, so the first write waits it out.
+        do! Task.Delay (SageFs.DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
+        let letters = [ 'A'; 'B'; 'C'; 'D'; 'E'; 'F'; 'G'; 'H' ] |> List.truncate (latencySaves + 1)
+        for was, now in List.pairwise letters do
+          let source = System.IO.File.ReadAllText app.StateSource
+          let find = sprintf "\"closure:%c\"" was
+          let after = source.Replace(find, sprintf "\"closure:%c\"" now)
+          after |> Expect.notEqual (sprintf "the anchor %s is in the file" find) source
+          let watch = System.Diagnostics.Stopwatch.StartNew()
+          System.IO.File.WriteAllText(app.StateSource, after)
+          let want = sprintf "closure:%c!?" now
+          let mutable answer = ""
+          while answer <> want && watch.Elapsed < TestTimeouts.saveVerdict do
+            let! read = tryGet app "closure"
+            answer <- read
+            match answer = want with
+            | true -> ()
+            | false -> do! Task.Delay TestTimeouts.pollMeasure
+          answer |> Expect.equal "the process serves the new body" want
+          served.Add watch.Elapsed.TotalMilliseconds
+          // The watcher's double-compile guard, again, before the next write.
+          do! Task.Delay (SageFs.DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
+        let log = RunningApp.log app
+        let build = loggedMs log "build"
+        let prepare = loggedMs log "diff and write"
+        let apply = loggedMs log "apply"
+        eprintfn "DELTA-COST machine: %s" (machine ())
+        eprintfn "DELTA-COST [%s] n=%d saves to a running run_app app, file written to new body served (ms): %s, median %.0f"
+          (HostRuntime.moniker runtime) served.Count (served |> Seq.map (sprintf "%.0f") |> String.concat ", ") (median (List.ofSeq served))
+        eprintfn "DELTA-COST [%s] of which the build (ms): median %.0f, the diff and the delta written: median %.0f, the runtime's call and its handlers: median %.0f"
+          (HostRuntime.moniker runtime) (median build) (median prepare) (median apply)
+        eprintfn "DELTA-COST [%s] a restart starts a process on top of the same build: host to app answering %.0f ms, after a build of %.0f ms (one start, measured on this run)"
+          (HostRuntime.moniker runtime) started.ProcessMs started.BuildMs
+        build |> List.length |> Expect.equal "every save logged its parts" served.Count
+      finally
+        stop app
+    }
+  ]
+
 [<Tests>]
 let runAppDeltaCostTests =
-  Integration.hostList "run_app metadata delta cost" [
+  testList "run_app metadata delta cost, per runtime" [
     for runtime in HostRuntime.all do
-      testTask (sprintf "[%s] a process started so it can take a delta runs a call-heavy loop within a small multiple of one that was not" (HostRuntime.moniker runtime)) {
-        let! off = spinTimes SageFs.Features.MetadataDelta.MetadataDeltaMode.Off runtime
-        let! on = spinTimes SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime
-        let ratio = median on / median off
-        eprintfn "DELTA-COST machine: %s" (machine ())
-        eprintfn "DELTA-COST [%s] %d calls of a NoInlining method, n=%d runs after a warm-up: route off %s ms (median %.0f), route on %s ms (median %.0f), ratio %.2f"
-          (HostRuntime.moniker runtime) 50000000 spinRuns
-          (off |> List.map (sprintf "%.0f") |> String.concat ", ") (median off)
-          (on |> List.map (sprintf "%.0f") |> String.concat ", ") (median on)
-          ratio
-        (ratio, spinCostBound) |> Expect.isLessThan (sprintf "the route's cost on a call-heavy loop (off %A ms, on %A ms)" off on)
-      }
-      testTask (sprintf "[%s] what a save costs: file written to new code served, with the build, the diff and the runtime's call apart, against a process start" (HostRuntime.moniker runtime)) {
-        let! app, started = startRunAppTimed SageFs.Features.MetadataDelta.MetadataDeltaMode.On runtime
-        try
-          let served = ResizeArray<float>()
-          // The reload watcher drops a second change to a file inside its double-compile guard, so the first write waits it out.
-          do! Task.Delay (SageFs.DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
-          let letters = [ 'A'; 'B'; 'C'; 'D'; 'E'; 'F'; 'G'; 'H' ] |> List.truncate (latencySaves + 1)
-          for was, now in List.pairwise letters do
-            let source = System.IO.File.ReadAllText app.StateSource
-            let find = sprintf "\"closure:%c\"" was
-            let after = source.Replace(find, sprintf "\"closure:%c\"" now)
-            after |> Expect.notEqual (sprintf "the anchor %s is in the file" find) source
-            let watch = System.Diagnostics.Stopwatch.StartNew()
-            System.IO.File.WriteAllText(app.StateSource, after)
-            let want = sprintf "closure:%c!?" now
-            let mutable answer = ""
-            while answer <> want && watch.Elapsed < TestTimeouts.saveVerdict do
-              let! read = tryGet app "closure"
-              answer <- read
-              match answer = want with
-              | true -> ()
-              | false -> do! Task.Delay TestTimeouts.pollMeasure
-            answer |> Expect.equal "the process serves the new body" want
-            served.Add watch.Elapsed.TotalMilliseconds
-            // The watcher's double-compile guard, again, before the next write.
-            do! Task.Delay (SageFs.DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
-          let log = RunningApp.log app
-          let build = loggedMs log "build"
-          let prepare = loggedMs log "diff and write"
-          let apply = loggedMs log "apply"
-          eprintfn "DELTA-COST machine: %s" (machine ())
-          eprintfn "DELTA-COST [%s] n=%d saves to a running run_app app, file written to new body served (ms): %s, median %.0f"
-            (HostRuntime.moniker runtime) served.Count (served |> Seq.map (sprintf "%.0f") |> String.concat ", ") (median (List.ofSeq served))
-          eprintfn "DELTA-COST [%s] of which the build (ms): median %.0f, the diff and the delta written: median %.0f, the runtime's call and its handlers: median %.0f"
-            (HostRuntime.moniker runtime) (median build) (median prepare) (median apply)
-          eprintfn "DELTA-COST [%s] a restart starts a process on top of the same build: host to app answering %.0f ms, after a build of %.0f ms (one start, measured on this run)"
-            (HostRuntime.moniker runtime) started.ProcessMs started.BuildMs
-          build |> List.length |> Expect.equal "every save logged its parts" served.Count
-        finally
-          stop app
-      }
+      // Sequential, unlike its neighbours: these cases time a loop and the saves of a process, and a host starting beside
+      // them in this process would move the numbers they gate on. The suite is one per runtime so the partition can place them.
+      Integration.hostList (sprintf "run_app metadata delta cost on %s" (HostRuntime.moniker runtime)) (costCases runtime)
   ]

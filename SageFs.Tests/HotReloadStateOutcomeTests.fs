@@ -13,13 +13,16 @@ open SageFs.Tests.HotReloadStateHarness
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
-let private withApp (runtime: HostRuntime) (body: RunningApp -> System.Threading.Tasks.Task<unit>) = task {
-  let! app = start runtime
-  try
-    do! body app
-  finally
-    stop app
-}
+/// One host for the whole of `body`, taken from the process's host slots: the cases of this suite run a few at a time,
+/// and a slot is what bounds the hosts, from the start of one to the end of its stop.
+let private withApp (runtime: HostRuntime) (body: RunningApp -> System.Threading.Tasks.Task<unit>) =
+  HostSlots.withSlot (fun () -> task {
+    let! app = start runtime
+    try
+      do! body app
+    finally
+      stop app
+  })
 
 let private bumpTimes (app: RunningApp) (route: string) (n: int) = task {
   let mutable last = ""
@@ -340,65 +343,71 @@ let private exactEveryReadPatches (runtime: HostRuntime) =
 /// around 12,000 calls, so this hammers it and waits for the report to say so.
 let private keepTieringLapsesAndFailsClosed (runtime: HostRuntime) =
   testTask (sprintf "[%s] rule 2, keep-tiering: a real tiering lapse fails closed instead of saying Patched" (HostRuntime.moniker runtime)) {
-    let! app =
-      HotReloadStateHarness.startConfigured runtime (fun runDir ->
-        SageFs.SettingsStore.setKey
-          (SageFs.SettingsStore.repoPath runDir)
-          SageFs.SessionAgent.tieredCompilationSetting.Key
-          (SageFs.Middleware.ValueReads.TieringChoice.name SageFs.Middleware.ValueReads.TieringChoice.KeepTiering)
-        |> ignore)
-    try
-      let! (first: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
-      // Whether the runtime has already recompiled the method by this first look is its background compiler's call
-      // (the gate saw a lapse here under five parallel tiers). Watching or already Lapsed both leave the contract below
-      // testable; only a watch that could not be put on is a different test.
-      match first.Watch with
-      | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Watching
-      | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Lapsed _ -> ()
-      | other -> failtestf "keep-tiering must start out watching like tiering-off does, or already have lapsed; got %A\nHost log:\n%s" other (RunningApp.log app)
-      let mutable lapsed = false
-      let mutable calls = 0
-      while not lapsed && calls < 80 do
-        let! _ = get app "reflectDrop"
-        calls <- calls + 1
-        let! (report: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
-        match report.Watch with
-        | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Lapsed _ -> lapsed <- true
-        | _ -> ()
-      match lapsed with
-      | false ->
-        // When the runtime recompiles a method is up to its background
-        // compiler, and some runs never get there. That says nothing about
-        // the fail-closed contract, and the forced lapse in
-        // ReflectionReadTrackingTests covers it every run, so this skips.
-        skiptest (sprintf "%d calls to reflectDrop (%d reads) never lapsed the watch with tiering kept on. The runtime didn't recompile the entry points this run.\nHost log:\n%s" calls (calls * 2000) (RunningApp.log app))
-      | true ->
-        // 160,000 stack walks just ran, so give the verdict more room than a
-        // quiet app needs.
-        let! verdict = HotReloadStateHarness.saveWithinBudget SageFs.Tests.TestTimeouts.heavyVerdictBudget app "let reflected = \"mirror\"" "let reflected = \"glass\""
-        str (json verdict) "outcome"
-        |> Expect.notEqual (sprintf "the watch lapsed, so a read in the gap can't be ruled out. Patched here is the lie fail-closed exists to prevent.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
-        let _, message = firstReason verdict
-        message |> Expect.stringContains "names the lapse, not a guess" "reflection"
-    finally
-      stop app
+    let keepTiering (runDir: string) =
+      SageFs.SettingsStore.setKey
+        (SageFs.SettingsStore.repoPath runDir)
+        SageFs.SessionAgent.tieredCompilationSetting.Key
+        (SageFs.Middleware.ValueReads.TieringChoice.name SageFs.Middleware.ValueReads.TieringChoice.KeepTiering)
+      |> ignore
+    do! HostSlots.withSlot (fun () -> task {
+      let! app = HotReloadStateHarness.startConfigured runtime keepTiering
+      try
+        let! (first: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
+        // Whether the runtime has already recompiled the method by this first look is its background compiler's call
+        // (the gate saw a lapse here under five parallel tiers). Watching or already Lapsed both leave the contract below
+        // testable; only a watch that could not be put on is a different test.
+        match first.Watch with
+        | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Watching
+        | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Lapsed _ -> ()
+        | other -> failtestf "keep-tiering must start out watching like tiering-off does, or already have lapsed; got %A\nHost log:\n%s" other (RunningApp.log app)
+        let mutable lapsed = false
+        let mutable calls = 0
+        while not lapsed && calls < 80 do
+          let! _ = get app "reflectDrop"
+          calls <- calls + 1
+          let! (report: SageFs.Middleware.ValueReads.ReflectionReadsReport) = reflectionReport app
+          match report.Watch with
+          | SageFs.Middleware.ValueReads.ReflectionWatchStatus.Lapsed _ -> lapsed <- true
+          | _ -> ()
+        match lapsed with
+        | false ->
+          // When the runtime recompiles a method is up to its background
+          // compiler, and some runs never get there. That says nothing about
+          // the fail-closed contract, and the forced lapse in
+          // ReflectionReadTrackingTests covers it every run, so this skips.
+          skiptest (sprintf "%d calls to reflectDrop (%d reads) never lapsed the watch with tiering kept on. The runtime didn't recompile the entry points this run.\nHost log:\n%s" calls (calls * 2000) (RunningApp.log app))
+        | true ->
+          // 160,000 stack walks just ran, so give the verdict more room than a
+          // quiet app needs.
+          let! verdict = HotReloadStateHarness.saveWithinBudget SageFs.Tests.TestTimeouts.heavyVerdictBudget app "let reflected = \"mirror\"" "let reflected = \"glass\""
+          str (json verdict) "outcome"
+          |> Expect.notEqual (sprintf "the watch lapsed, so a read in the gap can't be ruled out. Patched here is the lie fail-closed exists to prevent.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
+          let _, message = firstReason verdict
+          message |> Expect.stringContains "names the lapse, not a guess" "reflection"
+      finally
+        stop app
+    })
   }
 
+/// One suite per runtime, so the partition can put the two in different shards, and the cases of a suite run a few at a
+/// time: each is a host, a run dir and a port of its own (`HostSlots`).
 [<Tests>]
 let hotReloadStateOutcomeTests =
-  Integration.hostList "hot reload keeps live state across a save" [
+  testList "hot reload keeps live state across a save, per runtime" [
     for runtime in HostRuntime.all do
-      publicStateSurvives runtime
-      privateStateSurvives runtime
-      editedInitializerIsKept runtime
-      resetRunsTheNewInitializer runtime
-      retypedStateRestarts runtime
-      uncapturedValueIsPatched runtime
-      capturedValueIsNeverPatched runtime
-      lazyForcedAfterStartupIsNeverPatched runtime
-      lazyNotYetForcedGetsTheNewValue runtime
-      probeCallersPatchesAThrownAwayReflectiveRead runtime
-      markOnReflectRestarts runtime
-      exactEveryReadPatches runtime
-      keepTieringLapsesAndFailsClosed runtime
+      Integration.hostListConcurrent (sprintf "hot reload keeps live state across a save on %s" (HostRuntime.moniker runtime)) [
+        publicStateSurvives runtime
+        privateStateSurvives runtime
+        editedInitializerIsKept runtime
+        resetRunsTheNewInitializer runtime
+        retypedStateRestarts runtime
+        uncapturedValueIsPatched runtime
+        capturedValueIsNeverPatched runtime
+        lazyForcedAfterStartupIsNeverPatched runtime
+        lazyNotYetForcedGetsTheNewValue runtime
+        probeCallersPatchesAThrownAwayReflectiveRead runtime
+        markOnReflectRestarts runtime
+        exactEveryReadPatches runtime
+        keepTieringLapsesAndFailsClosed runtime
+      ]
   ]
