@@ -381,6 +381,14 @@ id itself, which is the SDK's bearer handle: anyone who could read the status
 could present it as `Mcp-Session-Id` and act as that member, the conductor
 included. The id names a member now and cannot be used to be one.
 
+**Every cohort tool below takes `working_directory`.** Cohorts are scoped per repository,
+so a tool needs to know WHICH repository's cohort you mean: `join_cohort` in Nehemiah and
+`join_cohort` in Molina are different cohorts with different conductor seats, and one global
+cohort would have made the second collide with a cohort it never asked for. It must be the
+exact MCP wire name `working_directory` — the registered tool surface enforces that spelling
+on every directory parameter, so one name works everywhere a client needs it. The rows
+mention it only where the behaviour is worth calling out; assume the rest take it too.
+
 | Tool | What it does |
 |:---|:---|
 | `join_cohort` | Join your repository's coordination session. The first joiner **of that repository** becomes its conductor. Takes `working_directory`: cohorts are per repository, so an agent in a second repository joins a second cohort with its own conductor seat instead of colliding with a cohort it never asked for. |
