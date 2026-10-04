@@ -85,20 +85,24 @@ let private specVerdicts (scenario: Scenario) : string list =
   for ev in scenario.Events do
     match ev with
     | SimEvent.PassMinutes n -> clock <- clock.AddMinutes(float n)
-    | SimEvent.Mint(token, kind, preset, scope, lifetimeMinutes) ->
+    | SimEvent.Mint(token, kind, preset, scope, route, lifetimeMinutes) ->
       let notAfter = clock.AddMinutes(float lifetimeMinutes)
       let isConductor = (kind = MinterKind.ConductorTop || kind = MinterKind.ConductorNarrow)
-      let minterRank, minterSegments, minterNotAfter =
+      let minterRank, minterSegments, minterNotAfter, minterRoute =
         match kind with
-        | MinterKind.ConductorNarrow -> rank RolePreset.Analysis, [ "src"; "Foo" ], clock.AddHours 2.0
+        | MinterKind.ConductorNarrow -> rank RolePreset.Analysis, [ "src"; "Foo" ], clock.AddHours 2.0, Some narrowConductorRoute
         | MinterKind.ConductorTop
         | MinterKind.PlainMember
-        | MinterKind.Anonymous -> rank RolePreset.Implementer, [], DateTime.MaxValue
+        | MinterKind.Anonymous -> rank RolePreset.Implementer, [], DateTime.MaxValue, None
+      // The route, as plain arithmetic: nobody mints an Unbound token, and a minter that is itself
+      // bound can hand out only its own binding. A minter that is not bound hands out any bound one.
+      let routeWidens = (match minterRoute with Some own -> route <> own | None -> false)
       let verdict =
         if not isConductor then "not-conductor"
         elif Map.containsKey token tokens then "duplicate"
         elif notAfter <= clock then "not-in-future"
-        elif rank preset > minterRank || not (isPrefix minterSegments (segmentsOf scope)) || notAfter > minterNotAfter then "would-widen"
+        elif route = RouteBinding.Unbound then "unbound-not-mintable"
+        elif rank preset > minterRank || not (isPrefix minterSegments (segmentsOf scope)) || notAfter > minterNotAfter || routeWidens then "would-widen"
         elif notAfter - clock > lifetimeMax then "too-long"
         else "ok"
       if verdict = "ok" then
@@ -120,6 +124,7 @@ let private specVerdicts (scenario: Scenario) : string list =
       | None -> ()
     | SimEvent.PresentUnknown _ -> verdicts.Add "present:unknown"
     | SimEvent.Claim _ -> ()
+    | SimEvent.Routed _ -> ()
   List.ofSeq verdicts
 
 let private realVerdicts (scenario: Scenario) : string list =
@@ -134,6 +139,7 @@ let private realVerdicts (scenario: Scenario) : string list =
          | Error MintRefusal.NotConductor -> "not-conductor"
          | Error MintRefusal.DuplicateToken -> "duplicate"
          | Error(MintRefusal.NotInTheFuture _) -> "not-in-future"
+         | Error MintRefusal.UnboundNotMintable -> "unbound-not-mintable"
          | Error(MintRefusal.WouldWiden _) -> "would-widen"
          | Error(MintRefusal.LifetimeTooLong _) -> "too-long"))
   let presents =
@@ -166,7 +172,7 @@ let tests =
 
       testCase "the sweep reaches every outcome, so agreement is not vacuous" <| fun () ->
         let all = teethSeeds |> List.collect (fun seed -> realVerdicts (scenarioOf seed)) |> Set.ofList
-        for outcome in [ "mint:ok"; "mint:not-conductor"; "mint:would-widen"; "mint:too-long"; "mint:duplicate"; "mint:not-in-future"; "present:ok"; "present:unknown"; "present:revoked"; "present:expired"; "present:lapsed" ] do
+        for outcome in [ "mint:ok"; "mint:not-conductor"; "mint:would-widen"; "mint:too-long"; "mint:duplicate"; "mint:not-in-future"; "mint:unbound-not-mintable"; "present:ok"; "present:unknown"; "present:revoked"; "present:expired"; "present:lapsed" ] do
           all |> Set.contains outcome |> Expect.isTrue (sprintf "some scenario produces %s" outcome)
 
       testProperty "same seed, same trace" <|
@@ -215,5 +221,30 @@ let tests =
       testCase "the real reducer refuses a token nobody minted" <| fun () -> realHolds unknownTokenNeverResolves
       testCase "a bad token that falls back to the connection is a downgrade" <| fun () ->
         someSeedBreaks Behavior.BadTokenFallsBackTwin unknownTokenNeverResolves
+    ]
+
+    testList "SCOPE-NEVER-WIDENS covers the route" [
+      testCase "a mint whose widening check forgets the route lets a bound minter hand out another binding" <| fun () ->
+        someSeedBreaks Behavior.MintIgnoresRouteTwin scopeNeverWidens
+    ]
+
+    testList "ROUTE-NEVER-ESCAPES-BINDING has teeth" [
+      testCase "the real reducer admits a route only inside the token's binding" <| fun () -> realHolds routeNeverEscapesBinding
+      testCase "a route check that ignores the binding admits a token for a session it was not bound to" <| fun () ->
+        someSeedBreaks Behavior.RouteIgnoresBindingTwin routeNeverEscapesBinding
+      testCase "the sweep reaches admitted and refused routes under every kind of binding, so the invariant is not vacuous" <| fun () ->
+        let routes = teethSeeds |> List.collect (fun seed -> (List.last (trace Behavior.Real (scenarioOf seed))).Routes)
+        routes |> List.exists (fun r -> r.Admitted) |> Expect.isTrue "some route is admitted"
+        routes |> List.exists (fun r -> not r.Admitted) |> Expect.isTrue "some route is refused"
+        for kind in [ "session"; "checkout" ] do
+          let ofKind (r: RouteRecord) = (match r.Binding with RouteBinding.BoundToSession _ -> "session" | RouteBinding.BoundToCheckout _ -> "checkout" | RouteBinding.Unbound -> "unbound") = kind
+          routes |> List.exists (fun r -> ofKind r && r.Admitted) |> Expect.isTrue (sprintf "an admitted route under a %s binding" kind)
+          routes |> List.exists (fun r -> ofKind r && not r.Admitted) |> Expect.isTrue (sprintf "a refused route under a %s binding" kind)
+    ]
+
+    testList "ROUTE-REQUIRES-A-LIVE-TOKEN has teeth" [
+      testCase "the real reducer routes only a token that is live" <| fun () -> realHolds routeRequiresALiveToken
+      testCase "a route that skips resolving the token admits a revoked, expired or lapsed one" <| fun () ->
+        someSeedBreaks Behavior.RouteSkipsResolveTwin routeRequiresALiveToken
     ]
   ]
