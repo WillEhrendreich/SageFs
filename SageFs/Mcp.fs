@@ -2999,12 +2999,9 @@ module McpTools =
         | [] -> return "No eval history — journal is empty."
         | history ->
           let journal =
-            history
-            |> List.rev
-            |> List.fold (fun j e ->
-              Features.MessageJournal.Journal.record
-                Features.MessageJournal.JournalLevel.Info "eval" e.Code j)
-              (Features.MessageJournal.Journal.create (max 256 history.Length))
+            Features.MessageJournal.Journal.create (max 256 history.Length)
+            |> Features.MessageJournal.Journal.recordAll
+                 Features.MessageJournal.JournalLevel.Info "eval" (history |> List.rev |> List.map (fun e -> e.Code))
           let filtered =
             match minLevel with
             | Some lvl ->

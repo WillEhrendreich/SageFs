@@ -60,27 +60,22 @@ module Journal =
   let create (capacity: int) : Journal =
     { Buffer = RingBuffer.create capacity }
 
-  /// Record a new entry.
-  let record (level: JournalLevel) (source: string) (message: string) (journal: Journal) : Journal =
-    let entry = {
-      Timestamp = DateTimeOffset.UtcNow
+  /// An entry stamped with the clock now.
+  let entryNow (level: JournalLevel) (source: string) (message: string) : JournalEntry =
+    { Timestamp = DateTimeOffset.UtcNow
       Level = level
       Source = source
-      Message = message
-    }
-    { Buffer = RingBuffer.push entry journal.Buffer }
+      Message = message }
+
+  /// Record a new entry.
+  let record (level: JournalLevel) (source: string) (message: string) (journal: Journal) : Journal =
+    { Buffer = RingBuffer.push (entryNow level source message) journal.Buffer }
 
   /// Record one entry per message, oldest message first, all at one level and
-  /// source. Same result as folding `record` over the messages.
+  /// source. Same result as folding `record` over the messages, with one copy
+  /// of the ring instead of one per message.
   let recordAll (level: JournalLevel) (source: string) (messages: string seq) (journal: Journal) : Journal =
-    let entries =
-      messages
-      |> Seq.map (fun message ->
-        { Timestamp = DateTimeOffset.UtcNow
-          Level = level
-          Source = source
-          Message = message })
-    { Buffer = RingBuffer.pushAll entries journal.Buffer }
+    { Buffer = RingBuffer.pushAll (messages |> Seq.map (entryNow level source)) journal.Buffer }
 
   /// Number of entries currently in the journal.
   let count (journal: Journal) : int =
