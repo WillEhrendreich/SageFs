@@ -58,8 +58,12 @@ let main argv =
           | _ -> None
         | _ :: rest -> parse rest
         | [] -> None
+      // The bar is every mutant killed unless a run says otherwise. It used to default to 0.0, a bar that
+      // no run can miss, and four stale cases (a planner that changed under them) sat listed as "survivors
+      // under the bar" in every gate until a person read the log.
+      let everyMutantKilled = 100.0
       parse (Array.toList argv)
-      |> Option.defaultValue 0.0
+      |> Option.defaultValue everyMutantKilled
     let mutationTests =
       testList "Mutation Score" [
         HotReloadStateMutationTests.hotReloadMutationTests

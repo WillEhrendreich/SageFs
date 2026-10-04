@@ -36,40 +36,34 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     | ReloadPlan.RestartRequired (first, rest) -> failtestf "adding a function must patch, not restart: %A" (first :: rest)
     | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
-  // WHY these two say DeclarationAdded rather than ValueChanged/TypeChanged:
-  // `outcomeOf`'s None branch used to report an ADDED declaration as *Changed*,
-  // which sent the user hunting for an edit they never made — the thing was new,
-  // not modified. `DeclarationAdded` was introduced to say what actually
-  // happened, and maps to `RestartReason.NewDeclaration` ("did not exist when the
-  // app started, so there is nothing running to re-point"). The restart verdict is
-  // unchanged and still the point of these cases; only the description is honest now.
-  testCase "WHY — new_value_in_edited_file_is_Restart_not_Patch — a new value is built at startup and cannot be patched in" <| fun () ->
+  // WHY these two patch rather than restart (commit 975b6bb8): a declaration the running build never had needs no
+  // compiled original. It is defined in FSI, and the saved code that uses it is patched to call it. They used to
+  // be RestartRequired with DeclarationAdded, and these cases kept asserting that after the planner changed,
+  // because this list only runs in the mutation tier, which reported them as "survivors under the bar".
+  testCase "WHY — new_value_in_edited_file_is_Patch_not_Restart — a new value is defined in FSI, so adding one must not force a restart" <| fun () ->
     let before = declsOf "module M\nlet a () = 1\n"
     let after = declsOf "module M\nlet a () = 1\nlet v = 42\n"
     match planReload before after with
-    | ReloadPlan.RestartRequired (first, rest) ->
-      (first :: rest) |> Expect.equal "a brand-new value must restart, described as an ADDED declaration, not a changed one" [ReloadChange.DeclarationAdded "v"]
-    | ReloadPlan.PatchFunctions fs -> failtestf "a new value must restart, not patch: %A" (fs |> List.map (fun d -> d.Name))
+    | ReloadPlan.PatchFunctions fs -> fs |> List.map (fun d -> d.Name) |> Expect.equal "the new value v is the only thing patched in" ["v"]
+    | ReloadPlan.RestartRequired (first, rest) -> failtestf "a new value must patch, not restart: %A" (first :: rest)
     | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
-  testCase "WHY — new_type_in_edited_file_is_Restart — a brand-new type must restart, described as an addition" <| fun () ->
+  testCase "WHY — new_type_in_edited_file_is_Patch_not_Restart — a new type is defined in FSI, so adding one must not force a restart" <| fun () ->
     let before = declsOf "module M\nlet a () = 1\n"
     let after = declsOf "module M\nlet a () = 1\ntype T = { X: int }\n"
     match planReload before after with
-    | ReloadPlan.RestartRequired (first, rest) ->
-      (first :: rest) |> Expect.equal "a brand-new type must restart, described as an ADDED declaration, not a changed one" [ReloadChange.DeclarationAdded "T"]
-    | ReloadPlan.PatchFunctions fs -> failtestf "a new type must restart, not patch: %A" (fs |> List.map (fun d -> d.Name))
+    | ReloadPlan.PatchFunctions fs -> fs |> List.map (fun d -> d.Name) |> Expect.equal "the new type T is the only thing patched in" ["T"]
+    | ReloadPlan.RestartRequired (first, rest) -> failtestf "a new type must patch, not restart: %A" (first :: rest)
     | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   // ── Removed declarations ─────────────────────────────────────────────────
 
-  testCase "WHY — removed_function_is_DeclarationRemoved — deleting a function the app already loaded must force a restart" <| fun () ->
+  testCase "WHY — removed_function_is_a_plan_with_nothing_to_patch — the old function stays in the process, so a removal restarts nothing" <| fun () ->
     let before = declsOf "module M\nlet a () = 1\nlet b () = 2\n"
     let after = declsOf "module M\nlet a () = 1\n"
     match planReload before after with
-    | ReloadPlan.RestartRequired (first, rest) ->
-      (first :: rest) |> Expect.equal "removing b must restart, described as DeclarationRemoved \"b\"" [ReloadChange.DeclarationRemoved "b"]
-    | ReloadPlan.PatchFunctions fs -> failtestf "a removed function must restart, not patch: %A" (fs |> List.map (fun d -> d.Name))
+    | ReloadPlan.PatchFunctions fs -> fs |> List.map (fun d -> d.Name) |> Expect.equal "removing b patches nothing and restarts nothing" []
+    | ReloadPlan.RestartRequired (first, rest) -> failtestf "a removed function must not restart: %A" (first :: rest)
     | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   testCase "WHY — removed_entryPoint_is_EntryPointChanged_not_DeclarationRemoved — removal of the special decls keeps their special reason" <| fun () ->
@@ -91,13 +85,12 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     | ReloadPlan.RestartRequired (first, rest) -> failtestf "a body-only edit must patch: %A" (first :: rest)
     | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
-  testCase "WHY — function_header_changed_is_SignatureChanged_restart — a signature change cannot be patched (callers are compiled against the old shape)" <| fun () ->
+  testCase "WHY — function_header_changed_is_Patch — a re-signed function is a new method to the running app, and its callers are saved with it" <| fun () ->
     let before = declsOf "module M\nlet f (x: int) = x + 1\n"
     let after = declsOf "module M\nlet f (x: int) (y: int) = x + y\n"
     match planReload before after with
-    | ReloadPlan.RestartRequired (first, rest) ->
-      (first :: rest) |> Expect.equal "a changed function header must restart as SignatureChanged \"f\"" [ReloadChange.SignatureChanged "f"]
-    | ReloadPlan.PatchFunctions fs -> failtestf "a signature change must restart, not patch: %A" (fs |> List.map (fun d -> d.Name))
+    | ReloadPlan.PatchFunctions fs -> fs |> List.map (fun d -> d.Name) |> Expect.equal "f is patched as a new method" ["f"]
+    | ReloadPlan.RestartRequired (first, rest) -> failtestf "a signature change must patch, not restart: %A" (first :: rest)
     | ReloadPlan.PatchKeepingState (fs, first, rest) -> failtestf "no live state is involved in this edit, got %A kept alongside %A" (first :: rest) (fs |> List.map (fun d -> d.Name))
 
   // ── UsesNonPublicMember: a patch cannot see private/internal members ────
