@@ -224,6 +224,41 @@ let commonRepositoryRootTests =
   ]
 
 [<Tests>]
+let reloadPlanningAwaiting =
+  let declsOf (source: string) =
+    match SageFs.Features.ReloadPlanning.extractDecls source with
+    | Ok decls -> decls
+    | Error reason -> failtestf "the fixture should parse: %s" reason
+  testList "ReloadPlanning awaiting the compiler's check" [
+
+    testAsync "WHY — planReloadAsync plans exactly what planReload does, so the host's reload step can await the check without changing a decision" {
+      let source =
+        "module Demo.Access\n\nlet private secret () = 41\n\nlet answer () =\n  secret () + 1\n\nlet shout (s: string) = s.ToUpper()\n"
+      let edits =
+        [ "a patch that uses a private member (a restart)", source.Replace("secret () + 1", "secret () + 2")
+          "a patch that uses only public members", source.Replace("s.ToUpper()", "s.ToLower()") ]
+      for (name, edited) in edits do
+        let baseline = declsOf source
+        let current = declsOf edited
+        let! awaited = SageFs.Features.ReloadPlanning.planReloadAsync baseline current
+        awaited |> Expect.equal name (SageFs.Features.ReloadPlanning.planReload baseline current)
+    }
+  ]
+
+[<Tests>]
+let configHostAwaiting =
+  testList "ConfigHost awaiting the FSI host" [
+
+    testAsync "WHY — ConfigHost.evaluateAsync evaluates a config script in a real FSI host and answers its value, so a dashboard handler can await it instead of blocking on it" {
+      let! evaluated =
+        SageFs.ConfigHost.evaluateAsync System.Environment.CurrentDirectory "{ DirectoryConfig.empty with AutoOpenNamespaces = false }"
+      match evaluated with
+      | Ok config -> config.AutoOpenNamespaces |> Expect.isFalse "the script's own value came back"
+      | Error reason -> failtestf "the config should evaluate: %s" (SageFs.ConfigHost.describeError reason)
+    }
+  ]
+
+[<Tests>]
 let productBlockingCalls =
   testList "Product blocking calls" [
 
