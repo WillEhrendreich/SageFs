@@ -136,6 +136,11 @@ let private genSageFsError =
       return SageFsError.AppRunFailed(project, reason)
     }
     gen {
+      let! project = genNonEmptyString
+      let! reason = genNonEmptyString
+      return SageFsError.AppStopFailed(project, reason)
+    }
+    gen {
       let! count = Gen.choose (1, 20)
       let! minutes = Gen.choose (1, 60) |> Gen.map float
       return SageFsError.RestartLimitExceeded(count, minutes)

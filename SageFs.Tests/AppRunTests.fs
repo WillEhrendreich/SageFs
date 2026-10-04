@@ -256,6 +256,29 @@ let appRunFailedWordingTests =
   ]
 
 [<Tests>]
+let appStopFailedWordingTests =
+  let reason = "Program.main has no host to stop, so it cannot be stopped in place. → Hard-reset the session to stop it."
+  testList "AppRun stop failure wording" [
+    testCase "WHY — SageFsError — a failed stop says it could not STOP the app because \"Could not run\" tells the user the wrong operation failed" <| fun _ ->
+      let text = SageFs.SageFsError.describe (SageFs.SageFsError.AppStopFailed ("Web", reason))
+      text |> Expect.stringStarts "the verb is the one the user asked for" "Could not stop 'Web'"
+      text |> Expect.stringContains "the worker's own reason survives" reason
+
+    testCase "WHY — SageFsError — a stop with no project chosen names no empty project because \"Could not stop ''\" reads as a broken UI" <| fun _ ->
+      SageFs.SageFsError.describe (SageFs.SageFsError.AppStopFailed ("", reason))
+      |> Expect.equal "the refusal must read as a sentence" (sprintf "Could not stop the app: %s" reason)
+
+    testCase "WHY — SageFsError — a failed stop is not told to list runnable projects because that is the remedy for a run that has no project" <| fun _ ->
+      let action = SageFs.SageFsError.suggestedAction (SageFs.SageFsError.AppStopFailed ("Web", reason))
+      action |> Expect.stringContains "a stop that cannot happen in place ends with the session's own reset" "hard_reset_fsi_session"
+      action.Contains "list_runnable_projects" |> Expect.isFalse "it is not the run's remedy"
+
+    testCase "WHY — SageFsError — a failed stop and a failed run are different cases because they are worded and remedied differently" <| fun _ ->
+      (SageFs.SageFsError.toJson (SageFs.SageFsError.AppStopFailed ("Web", reason))).``case``
+      |> Expect.notEqual "stop has its own case name" (SageFs.SageFsError.toJson (SageFs.SageFsError.AppRunFailed ("Web", reason))).``case``
+  ]
+
+[<Tests>]
 let restartWordingTests =
   let at = System.DateTime(2026, 9, 11, 0, 0, 0, System.DateTimeKind.Utc)
   let typeChange = SageFs.Features.ReloadPlanning.ReloadChange.TypeChanged "TodoItem"

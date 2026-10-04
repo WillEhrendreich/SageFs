@@ -50,6 +50,7 @@ let private golden : (string * ErrorCategory) list =
     "HotReloadFailed", ErrorCategory.Internal
     "HotReloadStateError", ErrorCategory.Internal
     "AppRunFailed", ErrorCategory.Internal
+    "AppStopFailed", ErrorCategory.Internal
     "RestartLimitExceeded", ErrorCategory.Infra
     "DaemonStartFailed", ErrorCategory.Internal
     "DaemonNotRunning", ErrorCategory.Client
