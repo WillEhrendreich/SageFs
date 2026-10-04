@@ -169,17 +169,19 @@ type Isolation =
   /// must run one at a time.
   | Shared
 
-/// How many tiers run at once. Without isolation, one: sharing a checkout is
-/// exactly the conflict this module exists to rule out. With it, an explicit
-/// request wins, else one tier per ~3 cores capped at 6, because each tier
-/// runs its own daemons, FSI hosts and browsers, and contention fakes timing
-/// failures (the trust table is where a too-high setting shows up).
+/// The STATIC rule for how many tiers run at once, kept as what a machine that cannot be read falls back to
+/// (`Admission.standard`'s FallbackConcurrency; `policyFor` decides everything else by pressure and memory).
+/// Without isolation, one: sharing a checkout is exactly the conflict this module exists to rule out. With it, an
+/// explicit request wins, else one tier per ~3 cores capped at 6, because each tier runs its own daemons, FSI hosts
+/// and browsers, and contention fakes timing failures (the trust table is where a too-high setting shows up).
 let parallelism (isolation: Isolation) (cores: int) (requested: int option) =
   match isolation, requested with
   | Shared, _ -> 1
   | CopyOnWrite, Some n when n >= 1 -> n
   | CopyOnWrite, _ -> max 1 (min 6 (cores / 3))
 
+/// The static order, used when there is no cost history to read (`TierSchedule.orderByCriticalPath` is the one the
+/// pipeline runs: it also weighs how much of its time a tier spends waiting).
 /// Longest-expected-first (LPT) order: with a fixed number of slots, starting
 /// the long tiers first minimises the wall clock. A tier with no recorded
 /// duration sorts FIRST, since it may be long and starting it last is the
@@ -508,6 +510,21 @@ let advanceWith
            LastAdmit = AdmittedAt now })
 
 let advance = advanceWith decide
+
+/// The policy a run gets. Without isolation tiers share one checkout, so one runs at a time. An explicit request
+/// (SAGEFS_TIER_PARALLEL) is a fixed count. Otherwise the machine decides, and `parallelism` (the old static rule)
+/// is only what an unreadable machine falls back to.
+let policyFor (isolation: Isolation) (cores: int) (requested: int option) : Policy =
+  match isolation, requested with
+  | Shared, _ -> Fixed 1
+  | CopyOnWrite, Some n when n >= 1 -> Fixed n
+  | CopyOnWrite, _ -> ByPressure (Admission.standard (parallelism isolation cores None))
+
+/// How many tiers can run at once under `policy`: the number of slots the port pool is cut into (`portRangeOf`).
+let slotsOf (policy: Policy) : int =
+  match policy with
+  | Fixed n -> n
+  | ByPressure limits -> limits.MaxTierProcesses
 
 // ---- reading the machine ----------------------------------------------------------------------------
 

@@ -67,6 +67,10 @@ let parseCaseTimings (tsv: string) : CaseTiming list =
 
 let caseNameSeparator = " / "
 
+/// The root list of the host tier (SageFs.Tests Program.fs: `testList "Integration (host)"`): the suites of the host tier
+/// are the lists right under it.
+let hostRootName = "Integration (host)"
+
 /// Seconds per suite: the sum of its cases. A case's suite is the level right under the root list (`root / suite / case`),
 /// the unit the host partition moves between shards.
 let suiteSecondsOfCases (root: string) (cases: CaseTiming list) : Map<string, float> =
@@ -105,6 +109,29 @@ let shardLoads (count: int) (durations: Map<string, float>) (suites: string list
       |> List.distinct
       |> List.filter (fun s -> plan[s] = shard)
       |> List.sumBy (fun s -> durations.TryFind s |> Option.defaultValue fallback) ]
+
+/// Today's shard count, and the most there will be: past the heaviest suite more shards shorten nothing, and every shard
+/// is one more process tree (the scheduler admits them by what the machine has, so a high count is safe, not free).
+let minHostShards = 5
+let maxHostShards = 8
+
+/// A shard may be this much longer than the best a count can do, before another shard is asked for.
+let hostShardTolerance = 0.05
+
+/// How many host shards the recorded suite weights call for: the smallest count whose longest shard (by
+/// `TierPlan.assign`) is within `hostShardTolerance` of the best any count can do, which is the heaviest suite alone or a
+/// perfect split at the cap. With no history it is `minHostShards`, today's count.
+let hostShardCount (suiteSeconds: Map<string, float>) : int =
+  match suiteSeconds.IsEmpty with
+  | true -> minHostShards
+  | false ->
+    let suites = suiteSeconds |> Map.toList |> List.map fst
+    let heaviest = suiteSeconds |> Map.fold (fun m _ v -> max m v) 0.0
+    let total = suiteSeconds |> Map.fold (fun s _ v -> s + v) 0.0
+    let target = max heaviest (total / float maxHostShards) * (1.0 + hostShardTolerance)
+    [ minHostShards .. maxHostShards ]
+    |> List.tryFind (fun n -> List.max (shardLoads n suiteSeconds suites) <= target)
+    |> Option.defaultValue maxHostShards
 
 /// Whether the shards between them were handed every host case exactly once.
 type Coverage =
