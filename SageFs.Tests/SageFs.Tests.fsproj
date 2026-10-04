@@ -16,6 +16,7 @@
         <Compile Include="../build/TierCost.fs" Link="Build/TierCost.fs" />
         <Compile Include="../build/FailureReport.fs" Link="Build/FailureReport.fs" />
         <Compile Include="../build/TierSchedule.fs" Link="Build/TierSchedule.fs" />
+        <Compile Include="../build/BuildStamps.fs" Link="Build/BuildStamps.fs" />
         <Compile Include="RunnerDirs.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="SourceStateFixtures.fs" />

@@ -213,6 +213,7 @@ let writeReleaseManifest () =
 #load "build/TierCost.fs"
 #load "build/FailureReport.fs"
 #load "build/TierSchedule.fs"
+#load "build/BuildStamps.fs"
 open SageFs.Build
 
 // Every downstream check runs against the ONE Release build of the primary
@@ -1091,7 +1092,8 @@ let contractTestParallelism = 6
 let vscodeJobSteps : BackgroundStep list =
   let inVscode argv = { Argv = argv; WorkingDir = vscodeDir }
   [ inVscode [ "dotnet"; "tool"; "restore" ]
-    inVscode [ "npm"; "ci"; "--include=dev" ]
+    // `npm ci` deletes node_modules and reinstalls: skipped while the lockfile and node are the ones it was installed from.
+    inVscode [ "sh"; "-c"; BuildStamps.npmCiScript [ "--include=dev" ] ]
     inVscode [ "npm"; "run"; "compile" ]
     inVscode [ "npm"; "run"; "compile:test-electron" ]
     inVscode [ "npm"; "run"; "test:golden" ]
@@ -1116,6 +1118,62 @@ let net10BuildSteps () : BackgroundStep list =
         { Argv = [ "sh"; "-c"; TierPlan.seedScript framework ]; WorkingDir = rootDir }
         ofCommand build ]
     | other -> failwithf "expected a restore then a build for %A, got %A" framework other)
+
+// ---- the forked MCP SDK's packs, skipped when nothing they read changed --------
+
+/// stdout of `argv` in `workingDir`, trimmed; empty when it cannot run or fails (a key built from it then differs
+/// from any stamp, so the stage runs).
+let outputOf (workingDir: string) (argv: string list) : string =
+  try
+    let psi = Diagnostics.ProcessStartInfo(List.head argv)
+    List.tail argv |> List.iter psi.ArgumentList.Add
+    psi.WorkingDirectory <- workingDir
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    use p = Diagnostics.Process.Start psi
+    let out = p.StandardOutput.ReadToEndAsync()
+    p.StandardError.ReadToEndAsync() |> ignore
+    p.WaitForExit()
+    match p.ExitCode with
+    | 0 -> out.Result.Trim()
+    | _ -> ""
+  with _ -> ""
+
+let mcpPackProjects = [ mcpSdkCoreDir; mcpSdkClientDir; mcpSdkAspNetCoreDir ]
+
+let mcpPackCommands =
+  mcpPackProjects |> List.map (fun dir -> $"dotnet pack \"{dir}\" -o \"{mcpNupkgDir}\" -c Release -p:NuGetAudit=false")
+
+let mcpPackStampFile = Path.Combine(mcpNupkgDir, ".pack-stamp")
+
+/// What the packs read: the fork's commit and whether its tree is clean, the SDK that compiles it, and the commands.
+let mcpPackKey () : string =
+  BuildStamps.keyOf
+    [ "mcp-sdk head", outputOf mcpSdkDir [ "git"; "rev-parse"; "HEAD" ]
+      "mcp-sdk status", outputOf mcpSdkDir [ "git"; "status"; "--porcelain" ]
+      "dotnet sdk", outputOf rootDir [ "dotnet"; "--version" ]
+      "commands", String.concat "\n" mcpPackCommands ]
+
+/// A package per project must be there: `<Project>.<version>.nupkg`, the version starting with a digit so
+/// ModelContextProtocol does not match ModelContextProtocol.Core's package.
+let mcpPackOutputs () : BuildStamps.Outputs =
+  mcpPackProjects
+  |> List.tryPick (fun dir ->
+    let name = Path.GetFileName dir
+    let found =
+      match Directory.Exists mcpNupkgDir with
+      | false -> false
+      | true ->
+        Directory.GetFiles(mcpNupkgDir, name + ".*.nupkg")
+        |> Array.exists (fun f ->
+          let file = Path.GetFileName f
+          file.Length > name.Length + 1 && Char.IsDigit file[name.Length + 1])
+    match found with
+    | true -> None
+    | false -> Some name)
+  |> function
+    | None -> BuildStamps.Outputs.Present
+    | Some name -> BuildStamps.Outputs.Missing(sprintf "the %s package" name)
 
 // ---- the pipeline ------------------------------------------------------------
 
@@ -1169,9 +1227,24 @@ pipeline "sagefs" {
         if Directory.Exists mcpSdkDir then return Ok()
         else return! ctx.RunCommand $"git clone --depth 1 {mcpSdkRepoUrl} \"{mcpSdkDir}\""
       })
-    run $"dotnet pack \"{mcpSdkCoreDir}\" -o \"{mcpNupkgDir}\" -c Release -p:NuGetAudit=false"
-    run $"dotnet pack \"{mcpSdkClientDir}\" -o \"{mcpNupkgDir}\" -c Release -p:NuGetAudit=false"
-    run $"dotnet pack \"{mcpSdkAspNetCoreDir}\" -o \"{mcpNupkgDir}\" -c Release -p:NuGetAudit=false"
+    // The three packs cost 7.5 s of a quiet gate and make the same package every time: the fork is cloned once
+    // and never moves. They run only when the fork's commit, its working tree, the SDK or the commands changed, or
+    // a package is missing (BuildStamps decides; the key is printed).
+    run (fun ctx ->
+      async {
+        let key = mcpPackKey ()
+        match BuildStamps.decide key (BuildStamps.read mcpPackStampFile) (mcpPackOutputs ()) with
+        | BuildStamps.Verdict.UpToDate ->
+          printfn "mcp sdk packs: up to date (stamp %s), not packing" (key.Substring(0, 12))
+          return Ok()
+        | BuildStamps.Verdict.Rebuild because ->
+          printfn "mcp sdk packs: %s, packing" because
+          match! runSteps ctx.RunCommand mcpPackCommands with
+          | Ok () ->
+            BuildStamps.write mcpPackStampFile key
+            return Ok()
+          | Error e -> return Error e
+      })
   }
 
   stage "restore harmony fork" {
