@@ -3539,8 +3539,8 @@ let mapLiveBindingsRoutes (app: WebApplication) (rctx: RouteContext) =
 /// not own it. Built from the route, the owning session and the one asked about, so the remedy names real things.
 let cycleOwnerRefusal (route: string) (owner: string) (requested: string) : string =
   sprintf
-    "%s operates on the live-testing cycle the daemon currently holds, which belongs to session %s. It cannot act on session %s without taking that session's cycle; read %s for per-session state."
-    route owner requested route
+    "%s operates on the live-testing cycle the daemon currently holds, which belongs to session %s. It cannot act on session %s without taking that session's cycle. Ask for session %s, which owns it (add ?session=%s), or enable live testing for session %s to move the cycle to it."
+    route owner requested owner owner requested
 
 let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
   // Truthful command failure: enable/disable/policy used to report HTTP 200
