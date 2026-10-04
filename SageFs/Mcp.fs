@@ -749,16 +749,10 @@ module McpTools =
   /// `ToolAuthorityGate.fs`. This is the call site; it belongs here because it needs `McpContext`.
   let private checkToolAuthorityGate (ctx: McpContext) (agent: string) (workingDirectory: string option) (toolName: string) : Result<unit, string> =
     let who = memberIdFor agent
-    // The cohort the CALL ACTS IN: the tool's own `working_directory`, resolved exactly as the
-    // tool body resolves it, and the daemon's own cohort only when the call names none.
-    //
-    // This used to read the daemon's own cohort always, on the reasoning that the gate decides
-    // "may this identity call this tool", a question about the identity and not a cohort. That
-    // is false for the cohort verbs: the gate intersects the role table with the cohort's own
-    // membership table, and membership is per cohort. So an agent that joined ANOTHER
-    // repository's cohort was `Anonymous` in the daemon's, and acquire_claim was refused with
-    // "your role is Working: that needs the Working role" for an agent that was that
-    // repository's conductor.
+    // The cohort the CALL ACTS IN: the tool's own `working_directory`, as the tool body resolves it,
+    // and the daemon's own only when the call names none. Always reading the daemon's refused every
+    // cohort verb to a member of any OTHER repository's cohort (Anonymous there), because the cohort
+    // verbs are gated on membership and membership is per cohort. See fix(gate) 097c260d.
     let authority = ToolAuthorityGate.authorityOf (cohortOwnerFor ctx workingDirectory) who
     match ToolAuthorityGate.decide who authority toolName with
     | ToolAuthorityGate.Decision.Admitted -> Ok ()
@@ -781,7 +775,6 @@ module McpTools =
       | Capability.IdentityPolicy.ConnectionsAllowed -> Ok ()
       | Capability.IdentityPolicy.TokenRequired ->
         let authority, seat =
-          // The cohort the call acts in, for the same reason as `checkToolAuthorityGate`.
           match cohortOwnerFor ctx workingDirectory with
           | Some owner ->
             let frame = owner.ReadFrame()
