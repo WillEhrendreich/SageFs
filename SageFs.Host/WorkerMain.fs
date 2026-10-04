@@ -1619,7 +1619,8 @@ let run (sessionId: string) (port: int) = async {
             match AppRunner.state appRunner with
             | AppRun.AppRunState.Running _ -> Features.ReloadPlanning.AppPlacement.InWorkerProcess
             | _ -> Features.ReloadPlanning.AppPlacement.InAgentProcess
-          match Features.PatchRoute.choose placement deltaMode (Features.ReloadPlanning.planReload baseline current) with
+          let! plan = Features.ReloadPlanning.planReloadAsync baseline current
+          match Features.PatchRoute.choose placement deltaMode plan with
           | Features.SaveRoute.ByMetadataDelta functions -> return! patchByDelta fileName filePath current functions
           | Features.SaveRoute.PerPlan (Features.ReloadPlanning.ReloadPlan.PatchFunctions []) ->
             // The file's declarations are byte-identical to the running build.

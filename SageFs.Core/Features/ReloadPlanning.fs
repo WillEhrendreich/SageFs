@@ -1162,27 +1162,44 @@ let private checkCounter = ref 0
 /// reported, never silently swallowed into an empty result: an incomplete
 /// symbol table must never be mistaken for "nothing references the hidden
 /// declaration."
-let private symbolUsesOf (source: string) : Result<FSharp.Compiler.CodeAnalysis.FSharpSymbolUse list, string> =
-  try
-    let n = System.Threading.Interlocked.Increment checkCounter
-    let fileName = sprintf "reload-planning-check-%d.fs" n
-    let sourceText = FSharp.Compiler.Text.SourceText.ofString source
-    let projOptions, _ =
-      checker.Value.GetProjectOptionsFromScript(fileName, sourceText, assumeDotNetFramework = false)
-      |> fun a -> Async.RunSynchronously(a, timeout = int SageFs.Timeouts.reloadPlanningCheck.TotalMilliseconds)
-    let parseResults, answer =
-      checker.Value.ParseAndCheckFileInProject(fileName, n, sourceText, projOptions)
-      |> fun a -> Async.RunSynchronously(a, timeout = int SageFs.Timeouts.reloadPlanningCheck.TotalMilliseconds)
-    match answer with
-    | FSharp.Compiler.CodeAnalysis.FSharpCheckFileAnswer.Aborted ->
-      Error "the standalone type check was aborted"
-    | FSharp.Compiler.CodeAnalysis.FSharpCheckFileAnswer.Succeeded checkResults ->
-      let isError (d: FSharp.Compiler.Diagnostics.FSharpDiagnostic) =
-        d.Severity = FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error
-      match Array.append parseResults.Diagnostics checkResults.Diagnostics |> Array.exists isError with
-      | true -> Error "the file does not type-check standalone; symbol resolution may be incomplete"
-      | false -> Ok (checkResults.GetAllUsesOfAllSymbolsInFile() |> Seq.toList)
-  with ex -> Error ex.Message
+let private symbolUsesOfAsync (source: string) : Async<Result<FSharp.Compiler.CodeAnalysis.FSharpSymbolUse list, string>> =
+  // Each compiler call is bounded by `reloadPlanningCheck`: one that has not answered by then is cancelled and throws,
+  // and the caller falls back to the identifier-name reading, so a stuck check delays a reload by that bound and no more.
+  let withinCheckBound (call: Async<'a>) : Async<'a> =
+    async {
+      use bound = new System.Threading.CancellationTokenSource()
+      let work = Async.StartAsTask(call, cancellationToken = bound.Token)
+      let! winner =
+        System.Threading.Tasks.Task.WhenAny(work, System.Threading.Tasks.Task.Delay(SageFs.Timeouts.reloadPlanningCheck, bound.Token))
+        |> Async.AwaitTask
+      let answered = obj.ReferenceEquals(winner, work)
+      bound.Cancel()
+      match answered with
+      | true -> return! Async.AwaitTask work
+      | false -> return raise (TimeoutException(sprintf "the compiler did not answer within %A" SageFs.Timeouts.reloadPlanningCheck))
+    }
+  async {
+    try
+      let n = System.Threading.Interlocked.Increment checkCounter
+      let fileName = sprintf "reload-planning-check-%d.fs" n
+      let sourceText = FSharp.Compiler.Text.SourceText.ofString source
+      let! projOptions, _ =
+        checker.Value.GetProjectOptionsFromScript(fileName, sourceText, assumeDotNetFramework = false)
+        |> withinCheckBound
+      let! parseResults, answer =
+        checker.Value.ParseAndCheckFileInProject(fileName, n, sourceText, projOptions)
+        |> withinCheckBound
+      match answer with
+      | FSharp.Compiler.CodeAnalysis.FSharpCheckFileAnswer.Aborted ->
+        return Error "the standalone type check was aborted"
+      | FSharp.Compiler.CodeAnalysis.FSharpCheckFileAnswer.Succeeded checkResults ->
+        let isError (d: FSharp.Compiler.Diagnostics.FSharpDiagnostic) =
+          d.Severity = FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error
+        match Array.append parseResults.Diagnostics checkResults.Diagnostics |> Array.exists isError with
+        | true -> return Error "the file does not type-check standalone; symbol resolution may be incomplete"
+        | false -> return Ok (checkResults.GetAllUsesOfAllSymbolsInFile() |> Seq.toList)
+    with ex -> return Error ex.Message
+  }
 
 /// Exact reachability via the compiler's own symbol table, not identifier-name
 /// matching: a patch only "uses" a hidden declaration when some use inside the
@@ -1193,22 +1210,20 @@ let private symbolUsesOf (source: string) : Result<FSharp.Compiler.CodeAnalysis.
 /// mistaken for a reference to it, and a use that only reaches a hidden type
 /// through a union case or record field (never spelling the type's own name)
 /// still resolves, because the compiler resolved the reference.
-let private hiddenUsesViaSymbols (source: string) (patches: SourceDecl list) (hidden: SourceDecl list) : Result<(SourceDecl * SourceDecl list) list, string> =
-  symbolUsesOf source
-  |> Result.map (fun uses ->
-    let within (d: SourceDecl) (line: int) = line >= d.StartLine && line <= d.EndLine
-    let declarationLine (su: FSharp.Compiler.CodeAnalysis.FSharpSymbolUse) =
-      match su.IsFromDefinition with
-      | true -> None
-      | false -> su.Symbol.DeclarationLocation |> Option.map (fun r -> r.StartLine)
-    patches
-    |> List.map (fun f ->
-      let declLines =
-        uses
-        |> Seq.filter (fun su -> within f su.Range.StartLine)
-        |> Seq.choose declarationLine
-        |> Set.ofSeq
-      f, hidden |> List.filter (fun h -> h.Name <> f.Name && declLines |> Set.exists (within h))))
+let private hiddenUsesFromUses (patches: SourceDecl list) (hidden: SourceDecl list) (uses: FSharp.Compiler.CodeAnalysis.FSharpSymbolUse list) : (SourceDecl * SourceDecl list) list =
+  let within (d: SourceDecl) (line: int) = line >= d.StartLine && line <= d.EndLine
+  let declarationLine (su: FSharp.Compiler.CodeAnalysis.FSharpSymbolUse) =
+    match su.IsFromDefinition with
+    | true -> None
+    | false -> su.Symbol.DeclarationLocation |> Option.map (fun r -> r.StartLine)
+  patches
+  |> List.map (fun f ->
+    let declLines =
+      uses
+      |> Seq.filter (fun su -> within f su.Range.StartLine)
+      |> Seq.choose declarationLine
+      |> Set.ofSeq
+    f, hidden |> List.filter (fun h -> h.Name <> f.Name && declLines |> Set.exists (within h)))
 
 /// Prefers the exact FCS-symbol check on the real file text; falls back to the
 /// identifier-set heuristic — never to "reachable" — when there is no real
@@ -1219,17 +1234,19 @@ let private hiddenUsesViaSymbols (source: string) (patches: SourceDecl list) (hi
 /// Answers with EVERY hidden declaration each patch uses, in file order, so the
 /// planner can tell the ones it can carry (live mutable storage) from the ones
 /// it can't.
-let private hiddenUsesOf (current: FileDecls) (patches: SourceDecl list) (hidden: SourceDecl list) : (SourceDecl * SourceDecl list) list =
-  match hidden, patches with
-  | [], _
-  | _, [] -> []
-  | _ ->
-    match current.RawSource with
-    | Some source ->
-      match hiddenUsesViaSymbols source patches hidden with
-      | Ok found -> found
-      | Error _ -> hiddenUsesViaIdentifiers patches hidden
-    | None -> hiddenUsesViaIdentifiers patches hidden
+let private hiddenUsesOfAsync (current: FileDecls) (patches: SourceDecl list) (hidden: SourceDecl list) : Async<(SourceDecl * SourceDecl list) list> =
+  async {
+    match hidden, patches with
+    | [], _
+    | _, [] -> return []
+    | _ ->
+      match current.RawSource with
+      | Some source ->
+        match! symbolUsesOfAsync source with
+        | Ok uses -> return hiddenUsesFromUses patches hidden uses
+        | Error _ -> return hiddenUsesViaIdentifiers patches hidden
+      | None -> return hiddenUsesViaIdentifiers patches hidden
+  }
 
 /// A hidden declaration a patch can reach anyway: a `let mutable` is only its
 /// storage, and the patch gets a stand-in bound to that storage (see
@@ -1239,7 +1256,14 @@ let private isCarryable (d: SourceDecl) = d.Kind = DeclKind.MutableValueDecl
 
 /// Types, values and startup code are compared with the source the running app
 /// was built from; a function may be patched only if its header is unchanged.
-let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
+///
+/// `resolveHiddenUses` is the one step that asks the compiler. It is handed the continuation that finishes the plan,
+/// so the synchronous planner and the awaiting one share every other line and differ only in how that step waits.
+let private planReloadThen
+  (resolveHiddenUses: FileDecls -> SourceDecl list -> SourceDecl list -> ((SourceDecl * SourceDecl list) list -> ReloadPlan) -> 'r)
+  (baseline: FileDecls)
+  (current: FileDecls)
+  : 'r =
   let baselineKeyed = keyed baseline.Decls
   let currentKeyed = keyed current.Decls
   let before = Map.ofList baselineKeyed
@@ -1260,42 +1284,64 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
   let redefined = outcomes |> List.choose (function DeclOutcome.Redefine d -> Some d | _ -> None)
   // A redefined value's new text is emitted into the patch too, so it can't
   // reach the file's hidden members any more than a function can.
-  let hiddenUses = hiddenUsesOf current (patches @ redefined) hidden
-  let unreachable =
-    hiddenUses
-    |> List.choose (fun (f, used) ->
-      used
-      |> List.tryFind (isCarryable >> not)
-      |> Option.map (fun h -> ReloadChange.UsesNonPublicMember (f.Name, h.Name)))
-  let carried =
-    hiddenUses
-    |> List.collect snd
-    |> List.filter isCarryable
-    |> List.distinct
-    |> List.map LiveState.Carried
-  let kept = outcomes |> List.choose (function DeclOutcome.Keep d -> Some (LiveState.Kept d) | _ -> None)
-  let restarts =
-    (outcomes |> List.choose (function DeclOutcome.Restart c -> Some c | _ -> None)) @ removed @ unreachable
-    |> List.distinct
-  match restarts, carried @ kept @ (redefined |> List.map LiveState.Redefined) with
-  | [], [] -> ReloadPlan.PatchFunctions patches
-  | [], state :: more -> ReloadPlan.PatchKeepingState (patches, state, more)
-  | _ :: _, _ ->
-    // Restarting anyway, so a redefined value is just another thing the
-    // restart picks up, and the card lists it where it sits in the file.
-    let all =
-      (outcomes
-       |> List.choose (function
-         | DeclOutcome.Restart c -> Some c
-         | DeclOutcome.Redefine d -> Some (ReloadChange.ValueChanged d.Name)
-         | DeclOutcome.Unchanged
-         | DeclOutcome.Patch _
-         | DeclOutcome.Keep _ -> None))
-      @ removed @ unreachable
+  resolveHiddenUses current (patches @ redefined) hidden (fun hiddenUses ->
+    let unreachable =
+      hiddenUses
+      |> List.choose (fun (f, used) ->
+        used
+        |> List.tryFind (isCarryable >> not)
+        |> Option.map (fun h -> ReloadChange.UsesNonPublicMember (f.Name, h.Name)))
+    let carried =
+      hiddenUses
+      |> List.collect snd
+      |> List.filter isCarryable
       |> List.distinct
-    match all with
-    | first :: rest -> ReloadPlan.RestartRequired (first, rest)
-    | [] -> ReloadPlan.PatchFunctions patches
+      |> List.map LiveState.Carried
+    let kept = outcomes |> List.choose (function DeclOutcome.Keep d -> Some (LiveState.Kept d) | _ -> None)
+    let restarts =
+      (outcomes |> List.choose (function DeclOutcome.Restart c -> Some c | _ -> None)) @ removed @ unreachable
+      |> List.distinct
+    match restarts, carried @ kept @ (redefined |> List.map LiveState.Redefined) with
+    | [], [] -> ReloadPlan.PatchFunctions patches
+    | [], state :: more -> ReloadPlan.PatchKeepingState (patches, state, more)
+    | _ :: _, _ ->
+      // Restarting anyway, so a redefined value is just another thing the
+      // restart picks up, and the card lists it where it sits in the file.
+      let all =
+        (outcomes
+         |> List.choose (function
+           | DeclOutcome.Restart c -> Some c
+           | DeclOutcome.Redefine d -> Some (ReloadChange.ValueChanged d.Name)
+           | DeclOutcome.Unchanged
+           | DeclOutcome.Patch _
+           | DeclOutcome.Keep _ -> None))
+        @ removed @ unreachable
+        |> List.distinct
+      match all with
+      | first :: rest -> ReloadPlan.RestartRequired (first, rest)
+      | [] -> ReloadPlan.PatchFunctions patches)
+
+/// The plan for a save, waiting on the compiler's check where it needs one. A synchronous API, which tests and
+/// callers with no async context use; the host's reload step awaits `planReloadAsync` instead.
+let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
+  planReloadThen
+    (fun current patches hidden finish ->
+      // The one place the planner blocks: a synchronous caller has nothing to await with, and the check is
+      // bounded by `reloadPlanningCheck` inside `symbolUsesOfAsync`.
+      finish (hiddenUsesOfAsync current patches hidden |> Async.RunSynchronously))
+    baseline
+    current
+
+/// `planReload`, awaiting the compiler's check instead of parking a thread on it.
+let planReloadAsync (baseline: FileDecls) (current: FileDecls) : Async<ReloadPlan> =
+  planReloadThen
+    (fun current patches hidden finish ->
+      async {
+        let! hiddenUses = hiddenUsesOfAsync current patches hidden
+        return finish hiddenUses
+      })
+    baseline
+    current
 
 [<RequireQualifiedAccess>]
 type PatchOutcome =
