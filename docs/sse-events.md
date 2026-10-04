@@ -1,6 +1,8 @@
 # SSE Events Reference
 
-Editors receive daemon events over the main SSE stream, `GET /events` on port 37749. Most events carry a `SessionId` field so a client can filter to the session it cares about. The four cohort events are the exception: one cohort spans every session on the daemon, so they carry no `SessionId`.
+Editors receive daemon events over the main SSE stream, `GET /events` on port 37749. Most events carry a `SessionId` field so a client can filter to the session it cares about. The four cohort events are the exception: a cohort spans every session in its **repository**, so they carry no `SessionId`.
+
+One daemon holds one cohort **per repository**, so these four describe whichever repository's cohort is relevant. The `state` stream's `cohortChanged` event is the one that says *which* — it carries the `CohortScope` that changed, so a client redrawing every cohort it happens to be showing is how you get a change attributed to the wrong repository. Filter on that scope, or on the repository you are working in.
 
 The daemon emits 25 event types across four sources: 22 `SseWriter` events on `/events`, one `session` event (8 subtypes), one `state` event (8 variants), and `diagnostics` on its own stream.
 
