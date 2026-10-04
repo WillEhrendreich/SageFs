@@ -849,8 +849,28 @@ let integrationTests =
       let! evalStatus, _ = postJson client "/exec" payload
       evalStatus |> Expect.equal "eval 200" 200
 
+      // NAME THE SESSION. `/hard-reset` is a mutating, session-scoped route, and a
+      // missing `sessionId` makes it a typed refusal (HTTP 400) the moment more than
+      // ONE session exists — which is exactly what happens when this tier runs five
+      // shards against one daemon and any earlier case left a session behind. The case
+      // passed in isolation and failed in the suite for that reason alone, and it read
+      // as a hard-reset bug rather than a test that depended on ambient state.
+      let! _, sessBody = getJson client "/api/sessions"
+      // No `use`: inside `testTask` `use` binds `use!`, and JsonDocument is not
+      // IAsyncDisposable. This file's own idiom (line 827) parses without disposing.
+      let sessDoc = JsonDocument.Parse(sessBody: string)
+      let sessions = sessDoc.RootElement.GetProperty("sessions")
+      let sid =
+        [| for i in 0 .. (sessions.GetArrayLength() - 1) do
+             let s = sessions.[i]
+             if s.GetProperty("workingDirectory").GetString() = testProjectDir then
+               yield s.GetProperty("id").GetString() |]
+        |> Array.tryLast
+        |> Option.defaultWith (fun () ->
+          failtestf "the session ensureSession just made (%s) is not in %s" testProjectDir sessBody)
+
       let! hrStatus, hrBody =
-        postJson client "/hard-reset" {| rebuild = false |}
+        postJson client "/hard-reset" {| rebuild = false; sessionId = sid |}
       hrStatus |> Expect.equal "hard-reset 200" 200
 
       let doc = JsonDocument.Parse(hrBody: string)
