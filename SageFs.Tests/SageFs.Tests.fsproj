@@ -247,6 +247,8 @@
         <Compile Include="LtStream.fs" />
         <Compile Include="LiveTestingLatencyTests.fs" />
         <Compile Include="LiveTestingJourneyTests.fs" />
+        <Compile Include="LiveTestingShards.fs" />
+        <Compile Include="LiveTestingShardsTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
         <Compile Include="DevReloadTests.fs" />
         <Compile Include="DevReloadLastOutcomeTests.fs" />
