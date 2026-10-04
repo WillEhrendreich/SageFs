@@ -87,7 +87,7 @@ let refreshSoon (ctx: McpContext) (workingDirectory: string) : unit =
   match ctx.Dispatch, HygieneService.mainRepoOf workingDirectory with
   | Some _, Some repo ->
     let loc = HygieneService.locationsFor repo
-    HygieneService.Cache.refresh loc (fun () -> (liveFactsOf ctx).GetAwaiter().GetResult()) |> ignore
+    HygieneService.Cache.refreshAsync loc (fun () -> liveFactsOf ctx) |> ignore
   | _ -> ()
 
 /// The line for a reply about a session in `workingDirectory`: the nudge from the cached snapshot, and a refresh in

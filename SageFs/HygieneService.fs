@@ -248,7 +248,10 @@ module Cache =
     | false -> TidyState.NotTidying
 
   /// Refresh in the background. A refresh already running for the repo is joined, not repeated.
-  let refresh (loc: Locations) (live: unit -> LiveFacts) : Task<Snapshot> =
+  ///
+  /// `live` is awaited, never waited on: a caller whose live facts come from a Task passes it here, and the scan starts
+  /// once they arrive.
+  let refreshAsync (loc: Locations) (live: unit -> Task<LiveFacts>) : Task<Snapshot> =
     // The entry is in the table before the scan starts, so a scan that finishes at once cannot remove it first.
     let mine = TaskCompletionSource<Snapshot>(TaskCreationOptions.RunContinuationsAsynchronously)
     let current = inFlight.GetOrAdd(loc.Repo, mine.Task)
@@ -256,19 +259,26 @@ module Cache =
     | false -> current
     | true ->
       Task.Run(fun () ->
-        try
+        task {
           try
-            let snapshot = take loc (live ())
-            put snapshot
-            failures.TryRemove loc.Repo |> ignore
-            mine.SetResult snapshot
-          with ex ->
-            failures.[loc.Repo] <- ex.Message
-            mine.SetException ex
-        finally
-          inFlight.TryRemove(System.Collections.Generic.KeyValuePair(loc.Repo, mine.Task)) |> ignore)
+            try
+              let! facts = live ()
+              let snapshot = take loc facts
+              put snapshot
+              failures.TryRemove loc.Repo |> ignore
+              mine.SetResult snapshot
+            with ex ->
+              failures.[loc.Repo] <- ex.Message
+              mine.SetException ex
+          finally
+            inFlight.TryRemove(System.Collections.Generic.KeyValuePair(loc.Repo, mine.Task)) |> ignore
+        } :> Task)
       |> ignore
       mine.Task
+
+  /// `refreshAsync` for a caller that already has its live facts, or reads them without waiting.
+  let refresh (loc: Locations) (live: unit -> LiveFacts) : Task<Snapshot> =
+    refreshAsync loc (fun () -> Task.FromResult(live ()))
 
 /// What the dashboard's hygiene panel shows, a closed set: no repository to look at, one not scanned yet, a scan
 /// running, or a scan with what the last tidy did.

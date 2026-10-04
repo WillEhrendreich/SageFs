@@ -3196,7 +3196,9 @@ let run
     HygieneService.pruneHostCacheInBackground
       (HygieneService.locationsFor Environment.CurrentDirectory)
       (fun () ->
-        let sessions = (sessionOps.GetAllSessions()).GetAwaiter().GetResult()
+        // The same in-memory snapshot read `GetAllSessions` answers from, taken directly: this runs on the prune's own
+        // background thread, once per second look, and has no Task to wait for.
+        let sessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
         HygieneService.liveFactsWith (sessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id, s.WorkingDirectory)) None)
       (fun report ->
         match report.ReclaimedBytes with
