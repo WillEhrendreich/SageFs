@@ -209,6 +209,42 @@ let analysisToolDescriptionTests =
         |> List.map (fun p -> sprintf "%s lacks %s" name p))
       |> Expect.isEmpty "a session-analysis tool cannot be pointed at a session"
 
+    // WHY THIS EXISTS, SPECIFICALLY: `get_cohort_status` took its directory as
+    // `workingDirectory` while every other tool in the file takes `working_directory`. The
+    // MCP SDK binds a parameter BY NAME, so the argument was never delivered, the tool fell
+    // back to its default, and it answered about the DAEMON's cohort — a well-formed frame
+    // about the wrong repository. It compiled, it was green in every test that did not pass
+    // a directory, and the only thing that caught it was an integration test that did.
+    // A naming rule the compiler cannot see has to be a ratchet, not a convention.
+    testCase "WHY — every tool taking a directory spells it working_directory, the name the SDK binds" <| fun _ ->
+      // DERIVED from the registered set, so a tool added tomorrow is covered without anyone
+      // remembering to list it. A hand-kept list is the same rot this suite exists to stop.
+      let everyTool = registeredNames |> Set.toList
+      let withDirectory =
+        everyTool
+        |> List.filter (fun name ->
+          (toolMethod name).GetParameters()
+          |> Array.exists (fun p -> p.Name.EndsWith("irectory", StringComparison.Ordinal)))
+      let camelCased =
+        withDirectory
+        |> List.filter (fun name ->
+          (toolMethod name).GetParameters()
+          |> Array.exists (fun p ->
+            p.Name.EndsWith("irectory", StringComparison.Ordinal)
+            && not (p.Name = "working_directory")))
+        |> List.map (fun name ->
+          let actual =
+            (toolMethod name).GetParameters()
+            |> Array.map (fun p -> p.Name)
+            |> Array.filter (fun n -> n.EndsWith("irectory", StringComparison.Ordinal))
+            |> String.concat ", "
+          sprintf "%s takes [%s] — a caller sending `working_directory` reaches nothing" name actual)
+      camelCased |> Expect.isEmpty "a directory parameter the SDK cannot bind"
+      // NON-VACUOUS: a case that silently inspected nothing would pass over the exact bug it
+      // was written for, so the list it scanned is asserted non-empty.
+      (withDirectory |> List.isEmpty)
+      |> Expect.isFalse "no tool takes a directory, so this case checked nothing"
+
     testCase "WHY — each tool that answers Measured or NotAvailable says so in its description" <| fun _ ->
       [ "diagnose"; "coverage_intel"; "impact_forecast"; "plan_ripple"; "preview_what_if"; "suggest_next_cell"; "suggest_next_action"; "get_cell_dependencies" ]
       |> List.filter (fun name ->

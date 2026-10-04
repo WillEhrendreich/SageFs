@@ -2486,11 +2486,11 @@ OUTPUT: Confirmation text.""")>]
         agentName: string,
         [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
         [<Optional; DefaultParameterValue("")>]
-        workingDirectory: string
+        working_directory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: leave_cohort called by {AgentName}", agentName)
         task {
-          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName workingDirectory
+          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName working_directory
           let! result = SageFs.McpCohortTools.leaveCohort ctx agentName wd
           return
             match result with
@@ -2516,11 +2516,11 @@ OUTPUT: Confirmation text with the new claim id and fence, or a conflict error n
         purpose: string,
         [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
         [<Optional; DefaultParameterValue("")>]
-        workingDirectory: string
+        working_directory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: acquire_claim called by {AgentName}, scope={Scope}", agentName, scope)
         task {
-          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName workingDirectory
+          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName working_directory
           let! result = SageFs.McpCohortTools.acquireClaim ctx agentName scope purpose wd
           return
             match result with
@@ -2544,11 +2544,11 @@ OUTPUT: Confirmation text, or an error naming why the release was refused.""")>]
         fence: int64,
         [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
         [<Optional; DefaultParameterValue("")>]
-        workingDirectory: string
+        working_directory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: release_claim called by {AgentName}, claim={ClaimId}", agentName, claimId)
         task {
-          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName workingDirectory
+          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName working_directory
           let! result = SageFs.McpCohortTools.releaseClaim ctx agentName claimId fence wd
           return
             match result with
@@ -2572,11 +2572,11 @@ OUTPUT: Confirmation text, or an error (not conductor / claim not orphaned / tar
         toMember: string,
         [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
         [<Optional; DefaultParameterValue("")>]
-        workingDirectory: string
+        working_directory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: reassign_claim called by {AgentName}, claim={ClaimId}, to={ToMember}", agentName, claimId, toMember)
         task {
-          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName workingDirectory
+          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName working_directory
           let! result = SageFs.McpCohortTools.reassignClaim ctx agentName claimId toMember wd
           return
             match result with
@@ -2600,11 +2600,11 @@ OUTPUT: Confirmation text with the new landing id, or a validation error (invali
         statement: string,
         [<Description("The directory you are working in. It decides WHICH cohort this is: cohorts are per repository, so two agents in two repositories have two conductor seats and never contend.")>]
         [<Optional; DefaultParameterValue("")>]
-        workingDirectory: string
+        working_directory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: request_landing called by {AgentName}", agentName)
         task {
-          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName workingDirectory
+          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName working_directory
           let! result = SageFs.McpCohortTools.requestLanding ctx agentName claims commits statement wd
           return
             match result with
@@ -2624,16 +2624,22 @@ Once an integration is configured it ends with the trunk: one `trunk <landing id
     member _.get_cohort_status(
         [<Description("The directory you are working in. It decides WHICH cohort is reported: one daemon holds one cohort per repository, so an agent working in a second repository must pass it or it reads the cohort of the directory the daemon itself started in.")>]
         [<Optional; DefaultParameterValue("")>]
-        workingDirectory: string
+        // `working_directory`, SNAKE CASE, like every other tool in this file. The MCP SDK
+        // matches the parameter by name, so a camelCase `workingDirectory` here was never
+        // bound: a caller passing `working_directory` got the default, and the tool answered
+        // about the DAEMON's cohort — a correct-looking frame about the wrong repository,
+        // which is the defect this parameter exists to remove. It compiled, and it was
+        // green in every test that did not pass the directory.
+        working_directory: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_cohort_status called")
         task {
-          // `workingDirectory` selects WHICH cohort is reported. It is optional because a
-          // caller naming none is asking about the daemon's own scope, which is the answer
+          // `working_directory` selects WHICH cohort is reported. It is optional because a
+          // caller naming none is asking about the daemon's own cohort, which is the answer
           // it gave before any repository could be asked about — but an agent working in a
           // second repository MUST pass it, or it reads back the first one's members.
           let dir =
-            if System.String.IsNullOrWhiteSpace workingDirectory then None else Some workingDirectory
+            if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
           let! result = SageFs.McpCohortIntegration.getCohortStatus ctx dir
           return
             match result with
