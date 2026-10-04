@@ -231,11 +231,15 @@ let cohortMcpToolsTests =
         // without asserting a `repo:`/`named:` prefix that depends on whether the directory
         // happens to carry a `.git`.
         let! statusA = getCohortStatusIn sageFsAgent repoA
-        statusA |> Expect.stringContains "A reads A's cohort, which holds A's member" "agent-a"
+        statusA |> Expect.stringContains "A reads A's cohort, which holds A's member" "mcp:m-"
         statusA |> Expect.stringContains "and that frame names A's own scope" repoA
 
         let! statusB = getCohortStatusIn nehemiahAgent repoB
-        statusB |> Expect.stringContains "B reads B's cohort, which holds B's member" "agent-b"
+        // NOT `agent-b`: identity is bound to the MCP CONNECTION and displayed as its
+        // fingerprint (`mcp:m-<hex>`), not the self-declared `agentName`. Asserting the
+        // declared name here tested nothing — the frame never contained it, so the assertion
+        // failed for a reason that had nothing to do with which cohort answered.
+        statusB |> Expect.stringContains "B reads B's cohort, which holds B's member" "mcp:m-"
         statusB |> Expect.stringContains "and that frame names B's own scope" repoB
 
         // THE TWO SCOPES ARE DIFFERENT, which is the claim "two repositories, two cohorts"
@@ -244,12 +248,27 @@ let cohortMcpToolsTests =
         |> Expect.isFalse "the two repositories' frames are not the same frame"
 
         // THE NEGATIVE, without which the positives above mean nothing: the two cohorts do
-        // not see each other. A's member is absent from B's frame and vice versa, which is
-        // what "two repositories, two cohorts" actually claims.
-        (statusA.Contains "agent-b")
-        |> Expect.isFalse "A's frame does not list B's member"
-        (statusB.Contains "agent-a")
-        |> Expect.isFalse "B's frame does not list A's member"
+        // not see each other. A's member is absent from B's frame and vice versa.
+        //
+        // It reads the REAL member ids out of each frame rather than the `agentName` each
+        // caller declared. The previous form checked for `agent-b` in A's frame — a string
+        // that is in NEITHER frame, because identity is the connection's fingerprint. So it
+        // passed for a reason unrelated to the cohorts being separate, and would have passed
+        // just as happily with ONE shared cohort. A vacuous negative is worse than none.
+        let memberIdsOf (status: string) =
+          System.Text.RegularExpressions.Regex.Matches(status, @"mcp:m-[0-9a-f]+")
+          |> Seq.map (fun m -> m.Value)
+          |> Set.ofSeq
+        let aMembers = memberIdsOf statusA
+        let bMembers = memberIdsOf statusB
+        (aMembers.IsEmpty)
+        |> Expect.isFalse "A's frame lists at least one member, so the negative below means something"
+        (bMembers.IsEmpty)
+        |> Expect.isFalse "B's frame lists at least one member, so the negative below means something"
+        Set.isSubset bMembers aMembers
+        |> Expect.isFalse "and A's frame does NOT list B's member"
+        Set.isSubset aMembers bMembers
+        |> Expect.isFalse "and B's frame does NOT list A's member"
 
         do! Task.CompletedTask })
     }
