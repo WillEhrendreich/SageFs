@@ -30,6 +30,14 @@ let tests =
       freshnessOfForce true |> Expect.equal "force is fresh" ForceFresh
       freshnessOfForce false |> Expect.equal "otherwise records may be reused" AllowReuse
 
+    testCase "the console shows which tiers took a record and which ran, so a reuse is never silent on screen" <| fun _ ->
+      isProgressLine "── tier --ratchets-net10             reused: green in 8s on 2026-10-04T17:30:22-05:00, the same commit and the same bytes (record 027cc30db122)"
+      |> Expect.isTrue "a reused tier"
+      isProgressLine "pass records: --integration-host[2/5]     runs (changed: closure)"
+      |> Expect.isTrue "a tier that runs, with why"
+      isProgressLine "pass records: every tier took a record, nothing to run (--fresh runs them all)"
+      |> Expect.isTrue "the whole stage skipped"
+
     testCase "the records live in the gate's own home, beside its passes, never in the checkout" <| fun _ ->
       tierPassesDirectory "/home/u/.local/share/sagefs-gate"
       |> Expect.equal "under the gate home" "/home/u/.local/share/sagefs-gate/tier-passes"
