@@ -224,10 +224,7 @@ let recordToolFailure (ctx: McpContext) (tracker: McpServerTracker) (ex: exn) =
   match ctx.FrictionStore with
   | Some store ->
     try
-      SageFs.Features.McpFrictionRecorder.Recorder.appendEventDirect store event
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
-      |> ignore
+      store.AppendEvent event |> ignore
     with _ -> () // never throw from the failure path
   | None -> ()
   // Note: we deliberately do NOT push this to the in-memory PushEvent tracker.
@@ -262,10 +259,7 @@ let recordGateRejection (ctx: McpContext) (toolName: string) (gateError: string)
   match ctx.FrictionStore with
   | Some store ->
     try
-      SageFs.Features.McpFrictionRecorder.Recorder.appendEventDirect store event
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
-      |> ignore
+      store.AppendEvent event |> ignore
     with _ -> ()
   | None -> ()
 
