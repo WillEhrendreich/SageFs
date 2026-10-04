@@ -19,6 +19,11 @@
              the vetted manifest closure — disable its generation so the
              fail-closed startup check never sees an unexpected file. -->
         <GenerateRuntimeConfigDevFile>false</GenerateRuntimeConfigDevFile>
+        <!-- Tiered PGO instruments first-tier code and recompiles from the profile. This process lives for minutes and its work is the
+             F# compiler's, so the instrumentation costs more than the profile earns: about half a CPU second of every start, and 20%
+             of the CPU of 300 small evals, with no change in wall time (measured; HostRuntimeConfig tests, commit message). Platform
+             neutral, so unlike a ReadyToRun image it is safe in the package. -->
+        <TieredPGO>false</TieredPGO>
     </PropertyGroup>
 
     <ItemGroup>

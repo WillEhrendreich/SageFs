@@ -14,6 +14,11 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Tiered PGO instruments first-tier code and recompiles hot methods from the profile. FCS's work here is bursty and the process
+         lives for minutes, so the instrumentation costs more than the profile earns (see SageFs.Host.fsproj, and HostRuntimeConfig in
+         the tests). It also applies to the user's code, which runs in this process: a long compute-bound app loses at most the profile's
+         last few percent. -->
+    <TieredPGO>false</TieredPGO>
     <!-- MSBuildExtensionsPath has a trailing slash on SDK 10 but not on SDK 11: normalise it. -->
     <FSharpSdkDir>$([MSBuild]::EnsureTrailingSlash('$(MSBuildExtensionsPath)'))FSharp/</FSharpSdkDir>
   </PropertyGroup>
