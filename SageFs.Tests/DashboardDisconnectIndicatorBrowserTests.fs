@@ -394,11 +394,82 @@ let private clockSkewJourney (skewMs: int64) = task {
     try Directory.Delete(daemon.DataDir, true) with _ -> ()
 }
 
+/// The soft banner: the live stream is late but the daemon still answers.
+let softBannerVisible (page: IPage) = page.Locator("#server-stale").IsVisibleAsync()
+
+/// One isolated daemon and one page opened on its dashboard. `prepare` runs on the new context and page
+/// BEFORE the page navigates (a fake clock, a blocked stream); `body` is the journey. Everything is torn
+/// down afterwards, daemon included.
+let private withDashboardPage (prepare: IPage -> Task) (body: IsolatedDaemon -> IPage -> Task) : Task = task {
+  let repoRoot = RepoPaths.repoPathFull [||]
+  let daemon = IsolatedDaemon.start repoRoot
+  let mutable playwright : IPlaywright option = None
+  try
+    let! healthy = IsolatedDaemon.waitHealthy 60.0 daemon
+    if not healthy then
+      IsolatedDaemon.dumpLogs daemon
+      Tests.failtestf "isolated daemon on port %d never became healthy" daemon.McpPort
+    let! pw = Playwright.CreateAsync()
+    playwright <- Some pw
+    let! browser = pw.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
+    let! ctx = browser.NewContextAsync()
+    let! page = ctx.NewPageAsync()
+    do! prepare page
+    let! _ = page.GotoAsync(sprintf "http://localhost:%d/dashboard" daemon.DashboardPort)
+    do! body daemon page
+    try do! ctx.CloseAsync() with _ -> ()
+  finally
+    playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
+    IsolatedDaemon.kill daemon
+    try Directory.Delete(daemon.DataDir, true) with _ -> ()
+}
+
+/// A suspended or throttled page is not a dead daemon. The page's clock jumps (a laptop lid, a background
+/// tab) and the staleness timer fires once before the stream's next heartbeat can be processed, so a
+/// check that reads "no heartbeat for a minute" as an outage claims "Daemon not running" while the daemon
+/// never stopped. Over the whole window the banner must never show and the page must never call itself
+/// disconnected.
+let pausedPageJourney () =
+  withDashboardPage (fun page -> page.Clock.InstallAsync()) (fun _ page -> task {
+    let! hidden = waitUntil BrowserWaits.pageRenders (fun () -> bannerHidden page)
+    Expect.isTrue hidden "banner hidden while the daemon is up"
+    let! connected = waitUntil BrowserWaits.pageProbe (fun () -> dataConnected page "true")
+    Expect.isTrue connected "body[data-connected]=\"true\" while the daemon is up"
+
+    do! page.Clock.FastForwardAsync(FixtureDurations.suspendedPageMs)
+
+    let window = Diagnostics.Stopwatch.StartNew()
+    let mutable everClaimedDown = false
+    while window.Elapsed < TestTimeouts.patienceBrief do
+      let! shown = bannerVisible page
+      let! stillConnected = dataConnected page "true"
+      if shown || not stillConnected then everClaimedDown <- true
+      do! Task.Delay(TestTimeouts.pollPage)
+    Expect.isFalse everClaimedDown "a page that was only suspended never claims the daemon is not running" })
+
+/// A silent stream is not a dead daemon either. With the stream blocked no heartbeat ever arrives, but the
+/// daemon is up and answers a direct request. The page says what it knows (live updates are paused and it
+/// is reconnecting) and does NOT say the daemon is not running.
+let silentStreamJourney () =
+  withDashboardPage
+    (fun page -> page.RouteAsync("**/dashboard/stream/**", fun route -> route.AbortAsync()))
+    (fun _ page -> task {
+      let! paused = waitUntil TestTiming.staleWaitBudgetMs (fun () -> softBannerVisible page)
+      Expect.isTrue paused "a late stream with an answering daemon shows the soft 'updates paused' banner"
+      let! daemonBannerHidden = bannerHidden page
+      Expect.isTrue daemonBannerHidden "the 'daemon not running' banner stays hidden while the daemon answers"
+      let! connected = dataConnected page "true"
+      Expect.isTrue connected "body[data-connected] stays \"true\": the daemon is reachable" })
+
 [<Tests>]
 let tests =
   testList "Dashboard disconnect-indicator browser tests" [
     testTask "[Integration] Dashboard disconnect indicator: kill/respawn journey" {
       do! disconnectIndicatorJourney () }
+    testTask "[Integration] Dashboard disconnect indicator: a suspended page never claims the daemon is not running" {
+      do! pausedPageJourney () }
+    testTask "[Integration] Dashboard disconnect indicator: a silent stream with an answering daemon says updates are paused, not that the daemon is down" {
+      do! silentStreamJourney () }
     testTask "[Integration] Dashboard disconnect indicator: client clock far BEHIND real time still detects staleness (GLM roast #5)" {
       do! clockSkewJourney (-FixtureDurations.clockSkewMs) }
     testTask "[Integration] Dashboard disconnect indicator: client clock far AHEAD of real time still detects staleness (GLM roast #5)" {

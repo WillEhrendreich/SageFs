@@ -973,6 +973,10 @@ module FixtureDurations =
   /// How far a browser's clock is set from the real time (ten minutes, either way) in the journeys
   /// that prove the disconnect banner does not trust the client clock.
   let clockSkewMs : int64 = 600_000L
+  /// How far a browser page's clock jumps when the page was suspended or throttled (a laptop lid, a
+  /// background tab): a minute, which is far past any staleness budget, so any check that reads the
+  /// gap as an outage would claim one.
+  let suspendedPageMs : int64 = 60_000L
 
 /// Values a case pins because the number IS the expectation: the case is about a bound, a
 /// default or a window, and says so in its name. A case that merely needs a duration to build a
