@@ -18,6 +18,7 @@
         <Compile Include="../build/TierSchedule.fs" Link="Build/TierSchedule.fs" />
         <Compile Include="../build/BuildStamps.fs" Link="Build/BuildStamps.fs" />
         <Compile Include="RunnerDirs.fs" />
+        <Compile Include="FixtureBuildCache.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="SourceStateFixtures.fs" />
         <Compile Include="RunnerLogging.fs" />
@@ -82,6 +83,7 @@
         <Compile Include="HygieneExecuteTests.fs" />
         <Compile Include="GateReaperTests.fs" />
         <Compile Include="RunnerDirsTests.fs" />
+        <Compile Include="FixtureBuildCacheTests.fs" />
         <Compile Include="HygieneSurfaceTests.fs" />
         <Compile Include="HygienePanelTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />
