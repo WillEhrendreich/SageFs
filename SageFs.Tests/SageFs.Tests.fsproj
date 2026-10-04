@@ -15,6 +15,7 @@
         <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
         <Compile Include="../build/TierCost.fs" Link="Build/TierCost.fs" />
         <Compile Include="../build/FailureReport.fs" Link="Build/FailureReport.fs" />
+        <Compile Include="../build/TierSchedule.fs" Link="Build/TierSchedule.fs" />
         <Compile Include="RunnerDirs.fs" />
         <Compile Include="TestInfrastructure.fs" />
         <Compile Include="SourceStateFixtures.fs" />
@@ -613,6 +614,9 @@
         <Compile Include="UnionCaseShadowingTests.fs" />
         <Compile Include="UnionCaseShadowingFsiRegressionTests.fs" />
         <Compile Include="TierPlanTests.fs" />
+        <Compile Include="TierAdmissionTests.fs" />
+        <Compile Include="TierScheduleTests.fs" />
+        <Compile Include="TierSchedSimTests.fs" />
         <Compile Include="FailureReportTests.fs" />
         <Compile Include="TestPortsTests.fs" />
         <Compile Include="TrustSignalTests.fs" />
