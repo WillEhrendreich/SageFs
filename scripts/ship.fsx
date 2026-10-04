@@ -1,4 +1,7 @@
-// scripts/ship.fsx [<commit>]   run it as: dotnet fsi scripts/ship.fsx [-- <commit>]
+// scripts/ship.fsx [<commit>] [--fresh]   run it as: dotnet fsi scripts/ship.fsx [-- <commit>] [--fresh]
+//
+// A rerun of a commit whose gate failed does not rerun the tiers that were green (pass records, see
+// local-gate.fsx); `--fresh` runs every tier.
 //
 // Bump the version, gate that commit on this machine, then push exactly it to master.
 //
@@ -15,6 +18,8 @@
 //
 // Before it bumps anything or calls the gate it builds SageFs.Tests in Release and runs the ratchet lane
 // (`SageFs.Tests.dll --ratchets`) on the working tree, which has to be exactly the commit being shipped.
+
+#load "ReleaseRules.fs"
 
 open System
 open System.Diagnostics
@@ -144,8 +149,15 @@ let runRatchets (target: string) : unit =
 
 // ---- the ship -------------------------------------------------------------------------------------------
 
-let private given =
-  fsi.CommandLineArgs |> Array.skip 1 |> Array.filter (fun a -> a <> "--") |> Array.tryHead
+// `--fresh` runs every tier even if the gate has a green record for it from an earlier run of this commit.
+let reuse, shipArguments =
+  fsi.CommandLineArgs |> Array.skip 1 |> Array.filter (fun a -> a <> "--") |> List.ofArray |> ReleaseRules.splitFresh
+
+let private given = shipArguments |> List.tryHead
+
+match reuse with
+| ReleaseRules.ForceFresh -> Environment.SetEnvironmentVariable("SAGEFS_FRESH", "1")
+| ReleaseRules.AllowReuse -> ()
 
 /// The arguments for `dotnet` to run one of the sibling scripts.
 let private fsiScript (name: string) (args: string list) = "fsi" :: Path.Combine(scriptsDir, name) :: args

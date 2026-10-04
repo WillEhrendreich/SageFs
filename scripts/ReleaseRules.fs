@@ -181,6 +181,34 @@ let parseGateArgs (argv: string list) : GateRequest =
   | "--force" :: rest -> Gate((match rest with c :: _ -> c | [] -> "HEAD"), true)
   | rest -> Gate((match rest with c :: _ -> c | [] -> "HEAD"), false)
 
+/// Whether the pipeline may take a green tier's record from an earlier run of the same commit.
+type PassReuse =
+  | AllowReuse
+  | ForceFresh
+
+/// `--fresh` anywhere in `argv` (ship's own arguments), and the arguments without it, in their order.
+let splitFresh (argv: string list) : PassReuse * string list =
+  let kept = argv |> List.filter (fun a -> a <> "--fresh")
+  match kept.Length = argv.Length with
+  | true -> AllowReuse, kept
+  | false -> ForceFresh, kept
+
+/// `--force` re-gates a commit that already passed, so it must not be answered with records of that pass.
+let freshnessOfForce (force: bool) : PassReuse =
+  match force with
+  | true -> ForceFresh
+  | false -> AllowReuse
+
+/// The arguments `dotnet` gets to run the pipeline: every stage, the release bundle, and `--fresh` when asked.
+let pipelineArgs (reuse: PassReuse) : string list =
+  [ "fsi"; "ci-pipeline.fsx"; "--"; "ci"; "release" ]
+  @ (match reuse with
+     | AllowReuse -> []
+     | ForceFresh -> [ "--fresh" ])
+
+/// Where the pipeline keeps its tier pass records: beside the gate's passes, outside every checkout.
+let tierPassesDirectory (gateHome: string) : string = gateHome.TrimEnd('/') + "/tier-passes"
+
 /// `3m7s`, the way a gate reports how long it took (minutes and seconds, no padding).
 let formatElapsed (elapsed: TimeSpan) : string =
   let total = int elapsed.TotalSeconds

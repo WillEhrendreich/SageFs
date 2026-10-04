@@ -1,5 +1,5 @@
 // scripts/local-gate.fsx [<commit>]                  gate a commit (default HEAD) on this machine
-// scripts/local-gate.fsx --force <commit>            re-gate even if it already passed
+// scripts/local-gate.fsx --force <commit>            re-gate even if it already passed, and run every tier (no pass records)
 // scripts/local-gate.fsx --promote <commit> <dir>    copy a passed commit's release bundle into <dir>
 //                                                    (used by the self-hosted "main build" job)
 //
@@ -10,6 +10,11 @@
 // means. Running it on a clean checkout (never the working tree) is what answers "does THIS COMMIT pass"
 // rather than "does my tree pass". Local dev state (Debug outputs, stray files, another agent's uncommitted
 // edits) has masked real failures here more than once.
+//
+// A gate that failed for one flaky tier does not rerun the tiers that were green: each green tier leaves a pass
+// record (build/PassRecord.fs) under $SAGEFS_GATE_HOME/tier-passes/<sha>/, and a rerun of the same commit with
+// byte-identical binaries takes it and shows `Trusted (reused from <time>)` in the trust table. `--force` or
+// SAGEFS_FRESH=1 runs every tier.
 //
 // A pass is recorded under $SAGEFS_GATE_HOME/passed/<sha>/: the trust ledger, the trust report table and the
 // release bundle. The pre-push hook refuses to push master to a commit with no pass. The self-hosted "main
@@ -68,7 +73,8 @@ let gitTimeout = TimeSpan.FromMinutes 5.
 let helperTimeout = TimeSpan.FromSeconds 30.
 /// The failed-gate summary repeats this many of the log's last matching lines on the console.
 let failureTailLines = 15
-let pipelineArgs = [ "fsi"; "ci-pipeline.fsx"; "--"; "ci"; "release" ]
+/// Where the pipeline keeps the pass records of tiers that went green (reused by a rerun of the same commit).
+let tierPassesDir = ReleaseRules.tierPassesDirectory gateHome
 
 /// Why the script stopped. One exit code per kind.
 type Failure =
@@ -346,7 +352,7 @@ let prepareCheckout (sha: string) : string =
 /// Runs the pipeline in the checkout with its output merged into one stream: all of it to the log, and the
 /// lines worth watching (stage boundaries, one line per finished tier, failures) to the console as they happen.
 /// Returns the pipeline's exit code.
-let runPipeline (wt: string) (sha: string) (log: string) : int =
+let runPipeline (wt: string) (sha: string) (log: string) (reuse: ReleaseRules.PassReuse) : int =
   // Data and temp state live in the gate's own home, never the user's real ~/.SageFs.
   for dir in [ dataDir; tmpDir ] do
     (try Directory.Delete(dir, true) with :? DirectoryNotFoundException -> ())
@@ -356,8 +362,11 @@ let runPipeline (wt: string) (sha: string) (log: string) : int =
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
-  pipelineArgs |> List.iter psi.ArgumentList.Add
+  ReleaseRules.pipelineArgs reuse |> List.iter psi.ArgumentList.Add
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+  // A tier that already went green on this commit with these exact bytes is not run again; `--force` and
+  // `ship --fresh` (SAGEFS_FRESH) run every tier.
+  psi.Environment["SAGEFS_TIER_PASSES"] <- tierPassesDir
   psi.Environment["TMPDIR"] <- tmpDir
   psi.Environment["SOURCE_SHA"] <- sha
   // MSBuild reuse nodes outlive the build that spawned them (about 15 minutes idle).
@@ -410,7 +419,7 @@ let gate (sha: string) (force: bool) : int =
         printfn "=== local gate: %s ===" (mustGit wt [ "log"; "--oneline"; "-1" ])
         printfn "    log: %s" log
         let clock = Stopwatch.StartNew()
-        let code = runPipeline wt sha log
+        let code = runPipeline wt sha log (ReleaseRules.freshnessOfForce force)
         let elapsed = ReleaseRules.formatElapsed clock.Elapsed
         printfn ""
         match code with
