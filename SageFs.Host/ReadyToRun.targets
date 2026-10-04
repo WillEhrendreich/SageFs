@@ -1,0 +1,185 @@
+<Project>
+
+  <!--
+    ReadyToRun for the worker host, in the DAEMON'S host/ directory only.
+
+    Every session a user opens starts a SageFs.Host process, and so does every host case the test suite runs (about a hundred a gate).
+    A cold start spends seconds of CPU in the JIT compiling the F# compiler service and SageFs.Core. ReadyToRun images carry precompiled
+    code beside the IL, so the JIT only compiles what the images do not cover. Measured on one hot reload case, alternating runs, cgroup CPU:
+    see the commit that added this file.
+
+    What this step does, after SageFs's CopyHostOutput has put an IL copy of SageFs.Host's output in $(TargetDir)host:
+
+      1. finds crossgen2 (the SDK's own pack, Microsoft.NETCore.App.Crossgen2.<rid>, at the version the SDK pins for this target framework),
+         and fetches it with a one-package restore if it is not in the NuGet cache yet;
+      2. compiles each assembly in SageFsReadyToRunAssemblies, keyed by the SHA-256 of its IL, so a second build is a cache hit. The key is
+         <cache>/<rid>/<crossgen2 version>-r<recipe>/<IL hash>/<file name>. A hit costs a hash and a copy; crossgen2 does not run;
+      3. copies the images over the IL in the daemon's host/ directory (same file names, so host-manifest.json still describes the directory);
+      4. writes obj/<cfg>/<tfm>/sagefs-host-r2r.status, one line the tests read back: `r2r: applied ...` or `r2r: skipped <reason>`.
+
+    It is speed only and fails open. A missing pack, no network, a crossgen2 error or a timeout leaves the IL in place and says why in the
+    status line. Nothing here fails a build or a pack.
+
+    WHAT IT MUST NOT TOUCH: SageFs.Host/bin, which PackHostForDaemon packs into the tool. The tool is one payload for every OS and CPU, and a
+    ReadyToRun image is built for one of them: the runtime throws BadImageFormatException on a foreign one instead of using the IL. (Measured:
+    a win-x64 image of FSharp.Core in the host directory takes the Linux host down at startup.) So the package keeps plain IL, and
+    HostManifestTests holds that line.
+
+    0Harmony.dll stays IL too: FsiHostBuild rewrites its assembly name with Cecil, and Cecil cannot write a ReadyToRun image back.
+
+    Release builds only (a Debug build is the inner loop and should not pay for crossgen2). Switches:
+      -p:SageFsReadyToRun=false          skip the step
+      -p:SageFsReadyToRunFetch=false     never fetch the crossgen2 pack (offline builds)
+      -p:SageFsCrossgen2Dir=<dir>        a crossgen2 `tools` directory to use instead of the NuGet pack
+      -p:SageFsReadyToRunCache=<dir>     where images are cached (default: the user's cache directory)
+  -->
+
+  <PropertyGroup>
+    <!-- Chosen by measurement (commit message). The IL it replaces is in $(TargetDir)host, never in SageFs.Host/bin. -->
+    <SageFsReadyToRunAssemblies Condition="'$(SageFsReadyToRunAssemblies)' == ''">FSharp.Compiler.Service;FSharp.Core;Fantomas.Core;Fantomas.FCS;SageFs.Core;SageFs.Host;FSharp.Data.Adaptive;FsToolkit.ErrorHandling;Ionide.ProjInfo</SageFsReadyToRunAssemblies>
+    <!-- Bump when the crossgen2 arguments below change, so images built the old way are not reused. -->
+    <SageFsReadyToRunRecipe>1</SageFsReadyToRunRecipe>
+    <!-- Cached images not used for this many days are deleted. Every build of SageFs.Core is a new key. -->
+    <SageFsReadyToRunCacheDays Condition="'$(SageFsReadyToRunCacheDays)' == ''">14</SageFsReadyToRunCacheDays>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(SageFsReadyToRunCache)' == ''">
+    <SageFsReadyToRunCache Condition="'$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/sagefs/r2r</SageFsReadyToRunCache>
+    <SageFsReadyToRunCache Condition="'$(SageFsReadyToRunCache)' == '' and '$(OS)' == 'Windows_NT'">$(LOCALAPPDATA)/sagefs/r2r</SageFsReadyToRunCache>
+    <SageFsReadyToRunCache Condition="'$(SageFsReadyToRunCache)' == ''">$(HOME)/.cache/sagefs/r2r</SageFsReadyToRunCache>
+  </PropertyGroup>
+
+  <Target Name="SageFsReadyToRunHost"
+          AfterTargets="CopyHostOutput"
+          DependsOnTargets="_SageFsR2RResolve;_SageFsR2RCompile;_SageFsR2RApply"
+          Condition="'$(TargetFramework)' != '' and '$(Configuration)' == 'Release' and '$(SageFsReadyToRun)' != 'false'">
+    <ItemGroup>
+      <_R2RBuilt Include="@(_R2RMiss)" Condition="Exists('%(_R2RMiss.Cached)')" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_R2RBuiltCount>@(_R2RBuilt->Count())</_R2RBuiltCount>
+      <_R2RReadyCount>@(_R2RReady->Count())</_R2RReadyCount>
+      <_R2RStatus Condition="'$(_R2RSkip)' != ''">r2r: skipped $(_R2RSkip)</_R2RStatus>
+      <_R2RStatus Condition="'$(_R2RSkip)' == '' and '$(_R2RReadyCount)' == '0'">r2r: skipped crossgen2 $(_R2RPackVersion) produced no image (run the build with -v:n to see its output)</_R2RStatus>
+      <_R2RStatus Condition="'$(_R2RStatus)' == ''">r2r: applied rid=$(_R2RRid) crossgen2=$(_R2RPackVersion) built=$(_R2RBuiltCount) cached=$([MSBuild]::Subtract($(_R2RReadyCount), $(_R2RBuiltCount))) assemblies=@(_R2RReady->'%(Filename)', ',')</_R2RStatus>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)sagefs-host-r2r.status" Lines="$(_R2RStatus)" Overwrite="true" ContinueOnError="true" />
+    <Message Importance="high" Text="$(_R2RStatus)" />
+  </Target>
+
+  <!-- Which crossgen2, which runtime to compile against, and what to compile. Sets _R2RSkip (with the reason) when it cannot go on. -->
+  <Target Name="_SageFsR2RResolve">
+    <PropertyGroup>
+      <_R2RSkip></_R2RSkip>
+      <_R2RHostDir>$([MSBuild]::EnsureTrailingSlash('$(TargetDir)'))host/</_R2RHostDir>
+      <_R2RRid>$(NETCoreSdkPortableRuntimeIdentifier)</_R2RRid>
+      <_R2RMajor>$([System.Version]::Parse($(TargetFrameworkVersion.TrimStart('v'))).Major)</_R2RMajor>
+      <_R2RCache>$([MSBuild]::EnsureTrailingSlash('$(SageFsReadyToRunCache)'))</_R2RCache>
+    </PropertyGroup>
+    <PropertyGroup>
+      <_R2ROs Condition="$(_R2RRid.StartsWith('win'))">windows</_R2ROs>
+      <_R2ROs Condition="$(_R2RRid.StartsWith('osx'))">osx</_R2ROs>
+      <_R2ROs Condition="$(_R2RRid.StartsWith('linux'))">linux</_R2ROs>
+      <_R2RArch>$(_R2RRid.Substring($([MSBuild]::Add($(_R2RRid.LastIndexOf('-')), 1))))</_R2RArch>
+    </PropertyGroup>
+
+    <!-- The pack version the SDK pins for this target framework, and the runtime it was built with. -->
+    <ItemGroup>
+      <_R2RPack Include="@(KnownCrossgen2Pack)" Condition="'%(KnownCrossgen2Pack.TargetFramework)' == '$(TargetFramework)'" />
+      <_R2RFramework Include="@(KnownFrameworkReference)" Condition="'%(KnownFrameworkReference.Identity)' == 'Microsoft.NETCore.App' and '%(KnownFrameworkReference.TargetFramework)' == '$(TargetFramework)'" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_R2RPackVersion>@(_R2RPack->'%(Crossgen2PackVersion)')</_R2RPackVersion>
+      <_R2RRuntimeVersion>@(_R2RFramework->'%(LatestRuntimeFrameworkVersion)')</_R2RRuntimeVersion>
+      <_R2RDotnetRoot>$([MSBuild]::NormalizeDirectory('$(NetCoreTargetingPackRoot)', '..'))</_R2RDotnetRoot>
+      <_R2RFrameworkDir>$(_R2RDotnetRoot)shared/Microsoft.NETCore.App/$(_R2RRuntimeVersion)/</_R2RFrameworkDir>
+      <_R2RAspNetDir>$(_R2RDotnetRoot)shared/Microsoft.AspNetCore.App/$(_R2RRuntimeVersion)/</_R2RAspNetDir>
+      <_R2RTools Condition="'$(SageFsCrossgen2Dir)' != ''">$([MSBuild]::EnsureTrailingSlash('$(SageFsCrossgen2Dir)'))</_R2RTools>
+      <_R2RTools Condition="'$(_R2RTools)' == ''">$(NuGetPackageRoot)microsoft.netcore.app.crossgen2.$(_R2RRid)/$(_R2RPackVersion)/tools/</_R2RTools>
+      <_R2RExeSuffix Condition="'$(OS)' == 'Windows_NT'">.exe</_R2RExeSuffix>
+      <_R2RDotnet>dotnet</_R2RDotnet>
+      <_R2RDotnet Condition="'$(DOTNET_HOST_PATH)' != ''">$(DOTNET_HOST_PATH)</_R2RDotnet>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(_R2RSkip)' == ''">
+      <_R2RSkip Condition="'$(_R2ROs)' == ''">unsupported platform $(_R2RRid)</_R2RSkip>
+      <_R2RSkip Condition="'$(_R2RSkip)' == '' and '$(_R2RPackVersion)' == ''">the SDK pins no crossgen2 pack for $(TargetFramework)</_R2RSkip>
+      <_R2RSkip Condition="'$(_R2RSkip)' == '' and !Exists('$(_R2RFrameworkDir)System.Private.CoreLib.dll')">the $(TargetFramework) runtime $(_R2RRuntimeVersion) is not installed under $(_R2RDotnetRoot)</_R2RSkip>
+    </PropertyGroup>
+
+    <!-- Fetch the pack when it is not in the NuGet cache: a restore of one PackageDownload. Bounded, and remembered when it fails so an
+         offline machine does not wait on the network at every build. -->
+    <PropertyGroup Condition="'$(_R2RSkip)' == '' and !Exists('$(_R2RTools)') and '$(SageFsReadyToRunFetch)' != 'false'">
+      <_R2RFetchDir>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)sagefs-r2r-fetch/</_R2RFetchDir>
+      <_R2RFetchFailed>$(_R2RFetchDir)failed-$(_R2RRid)-$(_R2RPackVersion)</_R2RFetchFailed>
+    </PropertyGroup>
+    <MakeDir Directories="$(_R2RFetchDir)" Condition="'$(_R2RFetchDir)' != '' and !Exists('$(_R2RFetchFailed)')" ContinueOnError="true" />
+    <WriteLinesToFile Condition="'$(_R2RFetchDir)' != '' and !Exists('$(_R2RFetchFailed)')"
+                      File="$(_R2RFetchDir)fetch.csproj" Overwrite="true" ContinueOnError="true"
+                      Lines="&lt;Project Sdk=&quot;Microsoft.NET.Sdk&quot;&gt;;&lt;PropertyGroup&gt;&lt;TargetFramework&gt;$(TargetFramework)&lt;/TargetFramework&gt;&lt;RestorePackagesWithLockFile&gt;false&lt;/RestorePackagesWithLockFile&gt;&lt;RestoreLockedMode&gt;false&lt;/RestoreLockedMode&gt;&lt;NuGetAudit&gt;false&lt;/NuGetAudit&gt;&lt;/PropertyGroup&gt;;&lt;ItemGroup&gt;&lt;PackageDownload Include=&quot;Microsoft.NETCore.App.Crossgen2.$(_R2RRid)&quot; Version=&quot;[$(_R2RPackVersion)]&quot; /&gt;&lt;/ItemGroup&gt;;&lt;/Project&gt;" />
+    <Exec Condition="'$(_R2RFetchDir)' != '' and !Exists('$(_R2RFetchFailed)')"
+          Command="&quot;$(_R2RDotnet)&quot; restore &quot;$(_R2RFetchDir)fetch.csproj&quot; --packages &quot;$(NuGetPackageRoot)&quot; --verbosity quiet"
+          WorkingDirectory="$(_R2RFetchDir)" Timeout="120000"
+          ContinueOnError="true" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="low" StandardErrorImportance="low" />
+    <WriteLinesToFile Condition="'$(_R2RFetchDir)' != '' and !Exists('$(_R2RTools)') and !Exists('$(_R2RFetchFailed)')"
+                      File="$(_R2RFetchFailed)" Lines="the crossgen2 pack could not be fetched" Overwrite="true" ContinueOnError="true" />
+
+    <PropertyGroup Condition="'$(_R2RSkip)' == ''">
+      <_R2RCommand Condition="Exists('$(_R2RTools)crossgen2.dll')">&quot;$(_R2RDotnet)&quot; &quot;$(_R2RTools)crossgen2.dll&quot;</_R2RCommand>
+      <_R2RCommand Condition="'$(_R2RCommand)' == '' and Exists('$(_R2RTools)crossgen2$(_R2RExeSuffix)')">&quot;$(_R2RTools)crossgen2$(_R2RExeSuffix)&quot;</_R2RCommand>
+      <_R2RSkip Condition="'$(_R2RCommand)' == ''">no crossgen2 $(_R2RPackVersion) for $(_R2RRid) at $(_R2RTools) (offline, or fetching it failed)</_R2RSkip>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(_R2RSkip)' == ''">
+      <_R2RName Include="$(SageFsReadyToRunAssemblies)" />
+      <_R2RInput Include="$(_R2RHostDir)%(_R2RName.Identity).dll" Condition="Exists('$(_R2RHostDir)%(_R2RName.Identity).dll')" />
+    </ItemGroup>
+    <PropertyGroup Condition="'$(_R2RSkip)' == '' and '@(_R2RInput)' == ''">
+      <_R2RSkip>none of $(SageFsReadyToRunAssemblies) is in $(_R2RHostDir)</_R2RSkip>
+    </PropertyGroup>
+  </Target>
+
+  <!-- Hash the IL, and compile what the cache does not already hold. -->
+  <Target Name="_SageFsR2RCompile" Condition="'$(_R2RSkip)' == ''">
+    <GetFileHash Files="@(_R2RInput)" Algorithm="SHA256" HashEncoding="hex">
+      <Output TaskParameter="Items" ItemName="_R2RHashed" />
+    </GetFileHash>
+    <PropertyGroup>
+      <_R2RKeyDir>$(_R2RCache)$(_R2RRid)/$(_R2RPackVersion)-r$(SageFsReadyToRunRecipe)/</_R2RKeyDir>
+      <_R2RScratch>$(_R2RCache)tmp-$([System.Guid]::NewGuid().ToString('N'))/</_R2RScratch>
+    </PropertyGroup>
+    <ItemGroup>
+      <_R2RPlan Include="@(_R2RHashed)">
+        <Cached>$(_R2RKeyDir)%(FileHash)/%(Filename)%(Extension)</Cached>
+        <Scratch>$(_R2RScratch)%(Filename)%(Extension)</Scratch>
+      </_R2RPlan>
+      <_R2RMiss Include="@(_R2RPlan)" Condition="!Exists('%(_R2RPlan.Cached)')" />
+    </ItemGroup>
+    <MakeDir Directories="$(_R2RScratch)" Condition="'@(_R2RMiss)' != ''" ContinueOnError="true" />
+    <Exec Condition="'@(_R2RMiss)' != ''"
+          Command="$(_R2RCommand) &quot;%(_R2RMiss.FullPath)&quot; -o:&quot;%(_R2RMiss.Scratch)&quot; -r:&quot;$(_R2RFrameworkDir)*.dll&quot; -r:&quot;$(_R2RAspNetDir)*.dll&quot; -r:&quot;$(_R2RHostDir)*.dll&quot; --targetos:$(_R2ROs) --targetarch:$(_R2RArch) -O"
+          Timeout="600000" ContinueOnError="true" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="low" StandardErrorImportance="low" />
+    <!-- A finished image is moved into the cache under its key; a half-written one never has the key's name. -->
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('%(_R2RMiss.Cached)'))" Condition="'@(_R2RMiss)' != '' and Exists('%(_R2RMiss.Scratch)')" ContinueOnError="true" />
+    <Move SourceFiles="%(_R2RMiss.Scratch)" DestinationFiles="%(_R2RMiss.Cached)" Condition="'@(_R2RMiss)' != '' and Exists('%(_R2RMiss.Scratch)')" ContinueOnError="true" />
+    <RemoveDir Directories="$(_R2RScratch)" Condition="Exists('$(_R2RScratch)')" ContinueOnError="true" />
+  </Target>
+
+  <!-- Put the images over the IL in host/, say what happened, and drop what has not been used for a while. -->
+  <Target Name="_SageFsR2RApply" Condition="'$(_R2RSkip)' == ''">
+    <ItemGroup>
+      <_R2RReady Include="@(_R2RPlan)" Condition="Exists('%(_R2RPlan.Cached)')" />
+    </ItemGroup>
+    <Copy SourceFiles="%(_R2RReady.Cached)" DestinationFolder="$(_R2RHostDir)" Condition="'@(_R2RReady)' != ''" ContinueOnError="true" />
+    <Touch Files="%(_R2RReady.Cached)" Condition="'@(_R2RReady)' != ''" ContinueOnError="true" />
+    <ItemGroup>
+      <_R2RCacheEntry Include="$(_R2RCache)**/*.dll" />
+      <_R2RCacheFresh Include="@(_R2RCacheEntry)" Condition="$([System.DateTime]::Parse('%(_R2RCacheEntry.ModifiedTime)').AddDays($(SageFsReadyToRunCacheDays)).Ticks) &gt; $([System.DateTime]::Now.Ticks)" />
+      <_R2RCacheStale Include="@(_R2RCacheEntry)" Exclude="@(_R2RCacheFresh)" />
+    </ItemGroup>
+    <Delete Files="@(_R2RCacheStale)" ContinueOnError="true" />
+  </Target>
+
+</Project>

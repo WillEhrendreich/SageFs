@@ -334,4 +334,8 @@
               DestinationFiles="@(HostFiles->'$(TargetDir)host\%(RecursiveDir)%(Filename)%(Extension)')" />
     </Target>
 
+    <!-- ReadyToRun images for the host's big assemblies, applied to the copy above and nowhere else (SageFs.Host/ReadyToRun.targets says why
+         the package's copy must stay IL). Release only, cached by content hash, and it fails open. -->
+    <Import Project="..\SageFs.Host\ReadyToRun.targets" />
+
 </Project>
