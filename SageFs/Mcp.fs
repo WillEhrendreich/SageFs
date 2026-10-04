@@ -2224,9 +2224,9 @@ module McpTools =
 
   let createSession (ctx: McpContext) (agent: string) (targets: SessionProjectTarget list) (workingDir: string) (workflowRaw: string) : Task<string> =
     task {
-      match SessionProjectTarget.validate targets with
+      match SessionProjectTarget.validate targets |> Result.map (fun () -> SessionProjectTarget.resolveAgainst workingDir targets) with
       | Error reason -> return sprintf "Error: %s" reason
-      | Ok () ->
+      | Ok targets ->
       match SessionPathValidation.validateSessionCreateRequest workingDir (SessionProjectTarget.paths targets) with
       | Error err -> return SageFsError.describeForAgent err
       | Ok () ->

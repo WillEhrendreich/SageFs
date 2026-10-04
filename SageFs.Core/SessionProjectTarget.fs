@@ -82,6 +82,24 @@ module SessionProjectTarget =
       | SessionProjectTarget.Solution path -> Some path
       | SessionProjectTarget.Bare -> None)
 
+  /// A relative path means relative to the working directory the CALLER named, never to the
+  /// daemon's own, which says nothing about the caller's checkout. An absolute path is left as
+  /// given, and the result is canonical so two spellings of one file compare equal.
+  let resolvePath (workingDir: string) (path: string) : string =
+    match Path.IsPathRooted path with
+    | true -> path
+    | false -> Path.GetFullPath(Path.Combine(workingDir, path))
+
+  /// Every project and solution path made absolute against `workingDir`; `Bare` has no path.
+  /// Pure: it reads no filesystem and no process cwd, so a daemon started elsewhere cannot
+  /// change the answer.
+  let resolveAgainst (workingDir: string) (targets: SessionProjectTarget list) : SessionProjectTarget list =
+    targets
+    |> List.map (function
+      | SessionProjectTarget.Project path -> SessionProjectTarget.Project (resolvePath workingDir path)
+      | SessionProjectTarget.Solution path -> SessionProjectTarget.Solution (resolvePath workingDir path)
+      | SessionProjectTarget.Bare -> SessionProjectTarget.Bare)
+
   let projects (targets: SessionProjectTarget list) : string list =
     targets
     |> List.choose (function

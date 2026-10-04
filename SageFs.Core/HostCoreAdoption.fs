@@ -112,9 +112,10 @@ module HostCoreAdoption =
     | false ->
       Adoption.Refused(
         sprintf
-          "The running SageFs daemon (SageFs.Core %s) and the session project's own build (SageFs.Core %s) come from different builds — rebuild SageFs so both come from one build, then retry."
+          "The running SageFs daemon (SageFs.Core %s) and the session project's own build (SageFs.Core %s, read from %s) come from different builds — rebuild SageFs so both come from one build, then retry. If that path is not the checkout you meant, the project path was resolved somewhere else: pass an absolute path."
           (hostVersion.ToString())
-          (candidateVersion.ToString()))
+          (candidateVersion.ToString())
+          (Path.GetFullPath candidatePath))
 
   /// Copies `sharedHostDir` into a fresh `<privateRoot>/host/` directory and
   /// substitutes `SageFs.Core.dll` (+ `.pdb`, if either side has one) with

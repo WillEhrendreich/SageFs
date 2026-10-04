@@ -536,8 +536,11 @@ let createSessionOpsWithRecovery
       return Error (SageFsError.SessionCreationFailed(Features.ManifestOwner.CommitError.describe err))
   }
   {
-    CreateSession = fun targets workingDir workflow ->
+    CreateSession = fun requestedTargets workingDir workflow ->
       task {
+        // The one door every caller (MCP, HTTP, dashboard) comes through, so a relative path is rooted at the
+        // caller's working directory here, once, instead of at whatever directory this daemon was started in.
+        let targets = SessionProjectTarget.resolveAgainst workingDir requestedTargets
         match checkMailboxAdmission sessionManager with
         | Result.Error busy -> return Result.Error busy
         | Result.Ok () ->
