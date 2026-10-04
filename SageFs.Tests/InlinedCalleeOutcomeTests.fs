@@ -17,6 +17,7 @@ open System
 open System.IO
 open System.Reflection
 open System.Reflection.Emit
+open Mono.Cecil.Cil
 open System.Runtime.CompilerServices
 open Expecto
 open Expecto.Flip
@@ -45,47 +46,6 @@ type private Outcome = SageFs.Features.ReloadOutcome.ReloadOutcome
 ///
 /// `1 -> 2 -> 20` before a save; `10010` is what the CONTROL (a real call) returns once the
 /// callee is patched, which is the contrast this case exists to pin.
-let private inlinedFixtureAssembly : Assembly =
-  let asm =
-    AssemblyBuilder.DefineDynamicAssembly(
-      AssemblyName("sagefs-inlined-callee-fixture"),
-      AssemblyBuilderAccess.Run)
-  let md = asm.DefineDynamicModule "MainModule"
-  let t =
-    md.DefineType(
-      "InlinedCalleeFixture",
-      TypeAttributes.Public ||| TypeAttributes.Class ||| TypeAttributes.Abstract ||| TypeAttributes.Sealed)
-
-  // The callee: a real, patchable method. `AggressiveInlining` says a JIT MAY inline it.
-  let callee =
-    t.DefineMethod("inlinedCalleeProbe", MethodAttributes.Public ||| MethodAttributes.Static, typeof<int>, [| typeof<int> |])
-  callee.SetImplementationFlags(MethodImplAttributes.AggressiveInlining)
-  let ci = callee.GetILGenerator()
-  ci.Emit(OpCodes.Ldarg_0)
-  ci.Emit(OpCodes.Ldc_I4_1)
-  ci.Emit(OpCodes.Add)
-  ci.Emit(OpCodes.Ret)
-
-  // The caller: `NoInlining` so the two shapes differ for a REASON, and the callee's body
-  // COPIED IN rather than called — so patching the callee can never be observed here.
-  let caller =
-    t.DefineMethod(
-      "renderWithInlinedCallee",
-      MethodAttributes.Public ||| MethodAttributes.Static,
-      typeof<int>,
-      [| typeof<int> |])
-  caller.SetImplementationFlags(MethodImplAttributes.NoInlining)
-  let gi = caller.GetILGenerator()
-  gi.Emit(OpCodes.Ldarg_0)
-  gi.Emit(OpCodes.Ldc_I4_1)
-  gi.Emit(OpCodes.Add)   // the inlined copy of the callee's body
-  // `Ldc_I4` with an operand, not a dedicated opcode: IL only has `Ldc_I4_0`..`Ldc_I4_8`.
-  gi.Emit(OpCodes.Ldc_I4, 10)
-  gi.Emit(OpCodes.Mul)
-  gi.Emit(OpCodes.Ret)
-
-  t.CreateType() |> ignore
-  asm
 
 /// The control: the callee is a real call, so the patched body is entered.
 module CalledCalleeFixture =
@@ -97,19 +57,103 @@ module CalledCalleeFixture =
 
 let private fixtureAssemblyPath = Assembly.GetExecutingAssembly().Location
 
+/// Write the INLINED fixture — the one shape F# cannot express — as a REAL `.dll`.
+///
+/// WHY A FILE. The fixture is EMITTED, and an emitted assembly is not a file:
+/// `AssemblyBuilder` has no `Save` on this runtime (nor a single-file generator), and an
+/// in-memory assembly reports an EMPTY `Location`. The hot-reload host derives its search
+/// path from the assembly it is asked to patch, so it was handed a null directory and
+/// refused to load the fixture at all — surfacing as "the fixture assembly loads. Should
+/// be empty." on a case whose entire point is a DETOUR that must be applied.
+///
+/// WHY CECIL. It is already this test project's IL dependency (CoverageInstrumenterTests
+/// uses it) and it WRITES real assemblies. The IL below is the SAME shape the
+/// `AssemblyBuilder` version emitted — an `AggressiveInlining` callee a detour can re-point,
+/// and a `NoInlining` caller with that body COPIED IN rather than called. Only where the
+/// bytes land changed.
+let private writeInlinedFixture (path: string) =
+  let module_ = Mono.Cecil.ModuleDefinition.CreateModule(path, Mono.Cecil.ModuleKind.Dll)
+  // Cecil's `TypeDefinition` takes its NAMESPACE first (empty here), then the name, then
+  // the attributes — a different order from `AssemblyBuilder.DefineType`.
+  let t =
+    Mono.Cecil.TypeDefinition(
+      "",
+      "InlinedCalleeFixture",
+      Mono.Cecil.TypeAttributes.Public
+      ||| Mono.Cecil.TypeAttributes.Abstract
+      ||| Mono.Cecil.TypeAttributes.Sealed,
+      module_.TypeSystem.Object)
+  module_.Types.Add t |> ignore
+
+  let callee =
+    Mono.Cecil.MethodDefinition(
+      "inlinedCalleeProbe",
+      Mono.Cecil.MethodAttributes.Public
+      ||| Mono.Cecil.MethodAttributes.Static
+      ||| Mono.Cecil.MethodAttributes.HideBySig,
+      module_.TypeSystem.Int32)
+  t.Methods.Add callee |> ignore
+  let calleeParam = Mono.Cecil.ParameterDefinition(module_.TypeSystem.Int32)
+  calleeParam.Name <- "n"
+  callee.Parameters.Add calleeParam |> ignore
+  callee.ImplAttributes <- Mono.Cecil.MethodImplAttributes.AggressiveInlining
+  let ci = callee.Body.GetILProcessor()
+  ci.Emit(OpCodes.Ldarg_0) |> ignore
+  ci.Emit(OpCodes.Ldc_I4_1) |> ignore
+  ci.Emit(OpCodes.Add) |> ignore
+  ci.Emit(OpCodes.Ret) |> ignore
+
+  let caller =
+    Mono.Cecil.MethodDefinition(
+      "renderWithInlinedCallee",
+      Mono.Cecil.MethodAttributes.Public
+      ||| Mono.Cecil.MethodAttributes.Static
+      ||| Mono.Cecil.MethodAttributes.HideBySig,
+      module_.TypeSystem.Int32)
+  t.Methods.Add caller |> ignore
+  let callerParam = Mono.Cecil.ParameterDefinition(module_.TypeSystem.Int32)
+  callerParam.Name <- "n"
+  caller.Parameters.Add callerParam |> ignore
+  caller.ImplAttributes <- Mono.Cecil.MethodImplAttributes.NoInlining
+  let gi = caller.Body.GetILProcessor()
+  gi.Emit(OpCodes.Ldarg_0) |> ignore
+  gi.Emit(OpCodes.Ldc_I4_1) |> ignore
+  gi.Emit(OpCodes.Add) |> ignore       // the inlined copy of the callee's body
+  gi.Emit(OpCodes.Ldc_I4, 10) |> ignore
+  gi.Emit(OpCodes.Mul) |> ignore
+  gi.Emit(OpCodes.Ret) |> ignore
+
+  // Cecil's `Write()` overload that takes a PATH does not exist — `ModuleDefinition.Write`
+  // is `(Stream)` or `(Stream, WriterParameters)`, and the parameterless one tries to write
+  // over the module's own never-opened file ("Operation is not valid due to the current
+  // state of the object"). So it is handed a real stream.
+  use stream = File.Create path
+  module_.Write stream
+  module_.Dispose()
+
+/// The path the INLINED fixture is written to, written on first use and then reused so the
+/// host and the test read the same bytes.
+let private inlinedFixtureDll =
+  lazy
+    let dir = Path.Combine(Path.GetTempPath(), "sagefs-inlined-fixtures")
+    Directory.CreateDirectory dir |> ignore
+    let path = Path.Combine(dir, "inlined-callee-fixture.dll")
+    if not (File.Exists path) then writeInlinedFixture path
+    path
+
 /// A dynamically emitted re-eval of one function whose body is `n + 1000`,
 /// shaped like FSI's own flattened re-emit: the type name survives without its
 /// namespace, so its name is a suffix of the compiled copy's.
 let private saveOf (typeName: string) (methodName: string) : Assembly =
-  let asm = AssemblyBuilder.DefineDynamicAssembly(AssemblyName("sagefs-save-" + typeName), AssemblyBuilderAccess.Run)
+  let asm = AssemblyBuilder.DefineDynamicAssembly(AssemblyName("sagefs-save-" + typeName), AssemblyBuilderAccess.RunAndCollect)
   let md = asm.DefineDynamicModule "MainModule"
   let t = md.DefineType(typeName, TypeAttributes.Public ||| TypeAttributes.Class ||| TypeAttributes.Abstract ||| TypeAttributes.Sealed)
   let m = t.DefineMethod(methodName, MethodAttributes.Public ||| MethodAttributes.Static, typeof<int>, [| typeof<int> |])
   let il = m.GetILGenerator()
-  il.Emit OpCodes.Ldarg_0
-  il.Emit(OpCodes.Ldc_I4, 1000)
-  il.Emit OpCodes.Add
-  il.Emit OpCodes.Ret
+  il.Emit System.Reflection.Emit.OpCodes.Ldarg_0
+  il.Emit(System.Reflection.Emit.OpCodes.Ldc_I4, 1000)
+  il.Emit System.Reflection.Emit.OpCodes.Add
+  il.Emit System.Reflection.Emit.OpCodes.Ret
   t.CreateType() |> ignore
   asm :> Assembly
 
@@ -175,18 +219,19 @@ let private settled (applied: Applied) : Async<WatchStep> =
 let tests =
   testList "a function inlined into its caller" [
     testTask "WHY — a patch whose new body is never entered is never reported as Patched, because the page keeps serving the old result" {
-      let fixtureType = inlinedFixtureAssembly.GetType("InlinedCalleeFixture")
+      let fixtureType = Assembly.LoadFrom(inlinedFixtureDll.Value).GetType("InlinedCalleeFixture")
       let render = fixtureType.GetMethod("renderWithInlinedCallee", BindingFlags.Public ||| BindingFlags.Static)
       render.Invoke(null, [| box 1 |])
       |> Expect.equal "before the save the caller returns the old result" 20
 
-      // The dynamic assembly has no `Location` — a `Run` dynamic assembly reports an empty
-      // string, so `registerSearchPath` would derive a null directory. The host only needs a
-      // directory to resolve against, and the fixtures here depend on nothing, so the test
-      // assembly's own directory is the honest thing to hand it.
+      // The fixture assembly is EMITTED, so it must be SAVED to a real file and the host
+      // pointed at that file. Handing it the test assembly's directory instead meant the host
+      // resolved nothing, `AssemblyLoadErrors` was non-empty, and the case died on "the
+      // fixture assembly loads" before the detour it exists to prove was ever attempted.
+      let fixtureDll = inlinedFixtureDll.Value
       let applied =
         applySave
-          (Path.GetDirectoryName fixtureAssemblyPath)
+          fixtureDll
           [ "InlinedCalleeFixture" ]
           "InlinedCalleeFixture"
           "inlinedCalleeProbe"
