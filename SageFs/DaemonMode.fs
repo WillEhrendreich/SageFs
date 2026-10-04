@@ -3095,7 +3095,14 @@ let run
       | Some root, _ -> root
       | None, Some dir -> dir
       | None, None -> Environment.CurrentDirectory
-    SageFs.Scope.ofWorkingDirectory SageFs.Scope.defaultStrategy subject
+    // THROUGH `ScopeOf`, the same rule every caller and every command is resolved with.
+    // This line was `Scope.ofWorkingDirectory` — a plain walk-up — which is a DIFFERENT
+    // rule from the one `ScopeOf` applies, and the two disagree exactly where it matters:
+    // this daemon's checkout is a linked WORKTREE, so the walk stops at itself while
+    // `ScopeOf` asks git and gets the main checkout. A caller naming no directory then
+    // resolved to one scope and the daemon's owner answered for another, which is the
+    // "Members (0)" beside a join that plainly succeeded.
+    ScopeOf.ofWorkingDirectory (Some subject)
 
   // One cohort owner PER SCOPE, so this daemon serves many repositories.
   //
