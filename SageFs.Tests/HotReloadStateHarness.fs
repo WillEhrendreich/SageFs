@@ -162,8 +162,9 @@ let private copyFixture (fixture: Fixture) (runtime: HostRuntime) =
   runDir, project
 
 /// Built with SageFs's own session-build command, so what the host loads is
-/// what a user's session loads (Optimize=false included).
-let private buildAsSageFsDoes (runDir: string) (project: string) = task {
+/// what a user's session loads (Optimize=false included). An `Error` carries
+/// what the build printed.
+let buildOutcome (runDir: string) (project: string) : Task<Result<unit, string>> = task {
   let psi = ProcessStartInfo("dotnet")
   for a in SessionBuild.buildArguments true project do
     psi.ArgumentList.Add a
@@ -177,8 +178,62 @@ let private buildAsSageFsDoes (runDir: string) (project: string) = task {
   do! p.WaitForExitAsync()
   let! out = out
   let! err = err
-  p.ExitCode
-  |> Expect.equal (sprintf "the state fixture has to build with SageFs's session-build command:\n%s\n%s" out err) 0
+  match p.ExitCode with
+  | 0 -> return Ok ()
+  | code -> return Error (sprintf "the fixture has to build with SageFs's session-build command (exit %d):\n%s\n%s" code out err)
+}
+
+/// How a case gets the build of its fixture.
+[<RequireQualifiedAccess>]
+type BuildMode =
+  /// Copied from a build made once per process (FixtureBuildCache), falling back to a real build on any doubt.
+  | Cached
+  /// A real `dotnet build` in the case's own run dir: for a case whose subject is what a build costs.
+  | Fresh
+
+/// The SDK `dotnet` picks in `runDir`, once per runtime: a net10 run pins its own, a net11 run keeps the repo's.
+let sdkVersions = System.Collections.Concurrent.ConcurrentDictionary<HostRuntime, Lazy<Task<string>>>()
+
+let sdkVersionIn (runtime: HostRuntime) (runDir: string) : Task<string> =
+  let ask () = task {
+    let psi = ProcessStartInfo("dotnet", "--version")
+    psi.RedirectStandardOutput <- true
+    psi.UseShellExecute <- false
+    psi.WorkingDirectory <- runDir
+    use p = Process.Start psi
+    let version = p.StandardOutput.ReadToEndAsync()
+    do! p.WaitForExitAsync()
+    let! text = version
+    return text.Trim()
+  }
+  sdkVersions.GetOrAdd(runtime, fun _ -> lazy (ask ())).Value
+
+/// The repo files every fixture build reads, digested once.
+let repoBuildInputs = lazy (FixtureBuildCache.repoInputs (repoRoot ()))
+
+/// This process's cache for a fixture: its trees live under the fixture's own `.runs` (git-ignored), where the repo's
+/// package pins apply, and go when the process does.
+let cacheOf (fixture: Fixture) : FixtureBuildCache.Cache =
+  FixtureBuildCache.sharedFor (Path.Combine(fixtureSourceDir fixture, ".runs", sprintf "build-cache-%d" Environment.ProcessId))
+
+/// Put a build of `project` into `runDir`, the way `mode` says.
+let buildFixture (mode: BuildMode) (fixture: Fixture) (runtime: HostRuntime) (runDir: string) (project: string) : Task<unit> = task {
+  match mode with
+  | BuildMode.Fresh ->
+    match! buildOutcome runDir project with
+    | Ok () -> ()
+    | Error why -> failwith why
+  | BuildMode.Cached ->
+    let! sdk = sdkVersionIn runtime runDir
+    let projectFile = Path.GetFileName project
+    let inputs : FixtureBuildCache.BuildInputs =
+      { Tree = FixtureBuildCache.treeOf runDir
+        Shared = repoBuildInputs.Value
+        Sdk = sdk
+        Command = SessionBuild.buildArguments true projectFile }
+    match! FixtureBuildCache.provide (cacheOf fixture) inputs runDir (fun dir -> buildOutcome dir (Path.Combine(dir, projectFile))) with
+    | Ok _ -> ()
+    | Error why -> failwith why
 }
 
 let private spawnHost (runtime: HostRuntime) (runDir: string) (project: string) (hostLog: StringBuilder) = task {
@@ -278,12 +333,12 @@ let private postJson (url: string) (body: string) = task {
 /// `configureRepo` runs against the scratch run dir before the host spawns —
 /// the worker's own CWD becomes that dir, so a `.SageFs/settings.json` it
 /// writes there is the repo layer `reflectionSettingsFor` resolves against.
-let startFixture (fixture: Fixture) (runtime: HostRuntime) (configureRepo: string -> unit) : Task<RunningApp> = task {
+let startFixtureWith (mode: BuildMode) (fixture: Fixture) (runtime: HostRuntime) (configureRepo: string -> unit) : Task<RunningApp> = task {
   let clock = Stopwatch.StartNew()
   let runDir, project = copyFixture fixture runtime
   configureRepo runDir
   CasePhases.mark clock "copy fixture"
-  do! buildAsSageFsDoes runDir project
+  do! buildFixture mode fixture runtime runDir project
   CasePhases.mark clock "dotnet build"
   let hostLog = StringBuilder()
   let! proc, workerUrl = spawnHost runtime runDir project hostLog
@@ -326,6 +381,11 @@ let startFixture (fixture: Fixture) (runtime: HostRuntime) (configureRepo: strin
   CasePhases.mark clock "watch registered"
   return app
 }
+
+/// The fixture's app on a host of its own. Its build comes from the per-process cache: a case's subject is what the
+/// host does with the project, not the `dotnet build` of a project that is the same for every case on a runtime.
+let startFixture (fixture: Fixture) (runtime: HostRuntime) (configureRepo: string -> unit) : Task<RunningApp> =
+  startFixtureWith BuildMode.Cached fixture runtime configureRepo
 
 let startConfigured (runtime: HostRuntime) (configureRepo: string -> unit) : Task<RunningApp> =
   startFixture stateFixture runtime configureRepo

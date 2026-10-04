@@ -71,25 +71,6 @@ let private copyFixture (fixture: Fixture) (runtime: HostRuntime) =
     File.SetLastWriteTimeUtc(Path.Combine(runDir, source), past)
   runDir, project
 
-/// Built with SageFs's own session-build command, so what the host loads is what a user's session loads.
-let private buildAsSageFsDoes (runDir: string) (project: string) = task {
-  let psi = ProcessStartInfo("dotnet")
-  for a in SessionBuild.buildArguments true project do
-    psi.ArgumentList.Add a
-  psi.WorkingDirectory <- runDir
-  psi.UseShellExecute <- false
-  psi.RedirectStandardOutput <- true
-  psi.RedirectStandardError <- true
-  use p = Process.Start psi
-  let out = p.StandardOutput.ReadToEndAsync()
-  let err = p.StandardError.ReadToEndAsync()
-  do! p.WaitForExitAsync()
-  let! out = out
-  let! err = err
-  p.ExitCode
-  |> Expect.equal (sprintf "the run_app fixture has to build with SageFs's session-build command:\n%s\n%s" out err) 0
-}
-
 let private spawnHost (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) (runDir: string) (project: string) (hostLog: StringBuilder) = task {
   let sessionId = sprintf "runapp-%s" (Guid.NewGuid().ToString("N"))
   let args, envVars =
@@ -172,10 +153,10 @@ type StartTimes =
     /// This is what a restart pays on top of the build.
     ProcessMs: float }
 
-let startRunAppTimed (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp * StartTimes> = task {
+let startRunAppBuilt (mode: BuildMode) (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp * StartTimes> = task {
   let runDir, project = copyFixture runAppFixture runtime
   let watch = Stopwatch.StartNew()
-  do! buildAsSageFsDoes runDir project
+  do! buildFixture mode runAppFixture runtime runDir project
   let buildMs = watch.Elapsed.TotalMilliseconds
   watch.Restart()
   let hostLog = StringBuilder()
@@ -211,8 +192,14 @@ let startRunAppTimed (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode
   | false -> return failwithf "the run_app fixture never answered /%s.\n%s" runAppFixture.ReadyRoute (RunningApp.log app)
 }
 
+/// A start that times the build as a real one: the case that reports what a restart pays on top of the build has to
+/// measure that build, so it does not take it from the cache.
+let startRunAppTimed (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp * StartTimes> =
+  startRunAppBuilt BuildMode.Fresh deltaMode runtime
+
+/// The route's app on a host of its own, its build copied from the per-process cache.
 let startRunAppWith (deltaMode: SageFs.Features.MetadataDelta.MetadataDeltaMode) (runtime: HostRuntime) : Task<RunningApp> = task {
-  let! app, _ = startRunAppTimed deltaMode runtime
+  let! app, _ = startRunAppBuilt BuildMode.Cached deltaMode runtime
   return app
 }
 
