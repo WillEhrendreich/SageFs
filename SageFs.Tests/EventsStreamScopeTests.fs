@@ -26,7 +26,6 @@ open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Logging
 open Expecto
 open Expecto.Flip
-open FsCheck
 open SageFs
 open SageFs.McpTools
 open SageFs.ProjectLoading
@@ -35,22 +34,22 @@ open SageFs.WorkerProtocol
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
-let private mkSessionId (hex: string) : SessionId =
+let mkSessionId (hex: string) : SessionId =
   match SessionId.validate hex with
   | Ok id -> id
   | Error e -> failwith e
 
-let private sidA = mkSessionId "0a0b0c0d"
-let private sidB = mkSessionId "deadbeef"
-let private idA = SessionId.value sidA
-let private idB = SessionId.value sidB
+let sidA = mkSessionId "0a0b0c0d"
+let sidB = mkSessionId "deadbeef"
+let idA = SessionId.value sidA
+let idB = SessionId.value sidB
 
-let private project : ClassifiedProject =
+let project : ClassifiedProject =
   { Path = "/repo/MyApp/MyApp.fsproj"; Role = ProjectRole.Executable; PackageRefs = []; LoadMode = LoadMode.Evaluated; Build = SageFs.BuildOptimization.Unoptimized }
 
-let private at = DateTime(2026, 10, 4, 0, 0, 0, DateTimeKind.Utc)
+let createdAt = DateTime(2026, 10, 4, 0, 0, 0, DateTimeKind.Utc)
 
-let private mkSessionInfo (id: SessionId) : SessionInfo =
+let mkSessionInfo (id: SessionId) : SessionInfo =
   { Id = id
     Name = None
     Projects = [ project.Path ]
@@ -58,39 +57,45 @@ let private mkSessionInfo (id: SessionId) : SessionInfo =
     SolutionRoot = None
     Status = SessionLifecycleStatus.Ready { Pid = 1; Port = Some 5000 }
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
-    CreatedAt = at
-    LastActivity = at
+    CreatedAt = createdAt
+    LastActivity = createdAt
     ActiveProject = None
     ProjectRoles = [ project ]
     App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
 /// Two sessions the daemon knows about. Anything else is unknown.
-let private fakeOps : SessionManagementOps =
+let fakeOps : SessionManagementOps =
   let known = [ mkSessionInfo sidA; mkSessionInfo sidB ]
   { SessionManagementOps.stub with
       GetAllSessions = fun () -> Task.FromResult known
       GetSessionInfo = fun sid -> Task.FromResult(known |> List.tryFind (fun s -> s.Id = sid)) }
 
 /// A frame whose payload is a marker the assertions can search for.
-let private wireOf (marker: string) = sprintf "event: test\ndata: {\"marker\":\"%s\"}\n\n" marker
+let wireOf (marker: string) = sprintf "event: test\ndata: {\"marker\":\"%s\"}\n\n" marker
 
 // ── The decision, on its own ─────────────────────────────────────────────
 
-let private sessionIdPool = Gen.elements [ "0a0b0c0d"; "deadbeef"; "11223344"; "abcdef01" ]
+/// Small enough to enumerate in full, so the cases below are a proof over it, not a sample.
+let sessionIdPool = [ "0a0b0c0d"; "deadbeef"; "11223344"; "abcdef01" ]
 
 [<Tests>]
 let visibilityTests = testList "SseFrame.visibleTo" [
 
-  testProperty "a connection with no sessionId sees every frame" <| fun () ->
-    Prop.forAll (Arb.fromGen sessionIdPool) (fun owner ->
+  testCase "a connection with no sessionId sees every frame" <| fun _ ->
+    for owner in sessionIdPool do
       SseFrame.session owner "x" |> SseFrame.visibleTo StreamScope.EverySession
-      && SseFrame.daemon "x" |> SseFrame.visibleTo StreamScope.EverySession)
+      |> Expect.isTrue (sprintf "the firehose sees %s's frame" owner)
+    SseFrame.daemon "x" |> SseFrame.visibleTo StreamScope.EverySession
+    |> Expect.isTrue "the firehose sees the daemon's frame"
 
-  testProperty "a connection for one session sees that session's frames and the daemon's, never another session's" <| fun () ->
-    Prop.forAll (Arb.fromGen (Gen.zip sessionIdPool sessionIdPool)) (fun (wanted, owner) ->
-      let seesOwnerFrame = SseFrame.session owner "x" |> SseFrame.visibleTo (StreamScope.OnlySession wanted)
-      let seesDaemonFrame = SseFrame.daemon "x" |> SseFrame.visibleTo (StreamScope.OnlySession wanted)
-      seesDaemonFrame && (seesOwnerFrame = (wanted = owner)))
+  testCase "a connection for one session sees that session's frames and the daemon's, never another session's (every pair)" <| fun _ ->
+    for wanted in sessionIdPool do
+      for owner in sessionIdPool do
+        let stream = StreamScope.OnlySession wanted
+        SseFrame.session owner "x" |> SseFrame.visibleTo stream
+        |> Expect.equal (sprintf "a stream for %s, a frame of %s's" wanted owner) (wanted = owner)
+      SseFrame.daemon "x" |> SseFrame.visibleTo (StreamScope.OnlySession wanted)
+      |> Expect.isTrue (sprintf "a stream for %s still gets the daemon's frame" wanted)
 
   testCase "a frame about no session (None, empty, blank) is the daemon's, so a scoped stream still gets it" <| fun _ ->
     for id in [ None; Some ""; Some "   " ] do
@@ -99,21 +104,29 @@ let visibilityTests = testList "SseFrame.visibleTo" [
 ]
 
 [<Tests>]
-let queryTests = testList "StreamScope.ofQuery" [
+let queryTests = testList "SseEvent.streamScopeOf" [
 
   testCase "no parameter, or an empty one, is the firehose" <| fun _ ->
     for raw in [ ""; null ] do
-      StreamScope.ofQuery raw
+      SseEvent.streamScopeOf raw
       |> Expect.equal (sprintf "%A is every session" raw) (Ok StreamScope.EverySession)
 
   testCase "a well-formed id asks for that session" <| fun _ ->
-    StreamScope.ofQuery idA
+    SseEvent.streamScopeOf idA
     |> Expect.equal "one session" (Ok (StreamScope.OnlySession idA))
 
-  testCase "a malformed id is an error that says why, never a silent firehose" <| fun _ ->
-    match StreamScope.ofQuery "not-a-session" with
+  testCase "a malformed id is refused, never read as the firehose, and the refusal says what to do" <| fun _ ->
+    match SseEvent.streamScopeOf "not-a-session" with
     | Ok scope -> failtestf "a bad id was accepted as %A" scope
-    | Error why -> why |> Expect.isNotEmpty "the refusal carries a reason"
+    | Error refusal ->
+      StreamScopeRefusal.status refusal |> Expect.equal "a malformed id is the caller's mistake" 400
+      StreamScopeRefusal.message refusal |> Expect.stringContains "points at where the ids are" "list_sessions"
+
+  testCase "an unknown session is a 404 that also says what to do" <| fun _ ->
+    let refusal = StreamScopeRefusal.UnknownSession idB
+    StreamScopeRefusal.status refusal |> Expect.equal "not found" 404
+    StreamScopeRefusal.message refusal |> Expect.stringContains "names the session" idB
+    StreamScopeRefusal.message refusal |> Expect.stringContains "points at where the ids are" "list_sessions"
 ]
 
 [<Tests>]
@@ -141,7 +154,7 @@ let sseEventScopeTests = testList "SseEvent.scope" [
 
 // ── The real route ───────────────────────────────────────────────────────
 
-type private Harness =
+type Harness =
   { App: WebApplication
     BaseUrl: string
     State: Event<SseEvent>
@@ -150,7 +163,7 @@ type private Harness =
 
 /// Stand up only `mapEventsRoute` on a bare Kestrel host. `staleSlot` is what the daemon's
 /// single "last eval diff" replay slot happens to hold when a client connects.
-let private startServer (staleSlot: SseFrame option) = task {
+let startServer (staleSlot: SseFrame option) = task {
   let builder = WebApplication.CreateBuilder([||])
   builder.WebHost.UseUrls("http://127.0.0.1:0") |> ignore
   builder.Logging.ClearProviders() |> ignore
@@ -226,10 +239,10 @@ let private startServer (staleSlot: SseFrame option) = task {
   return { App = app; BaseUrl = baseUrl; State = state; Session = session; Test = test }
 }
 
-let private client = new HttpClient(Timeout = Timeout.InfiniteTimeSpan)
+let client = new HttpClient(Timeout = Timeout.InfiniteTimeSpan)
 
 /// Read lines until one contains `marker`, with a hard budget, and hand back everything seen.
-let private readUntil (reader: StreamReader) (marker: string) : Task<string> = task {
+let readUntil (reader: StreamReader) (marker: string) : Task<string> = task {
   use cts = new CancellationTokenSource(TestTimeouts.patienceInProcess)
   let seen = StringBuilder()
   let mutable found = false
@@ -248,7 +261,7 @@ let private readUntil (reader: StreamReader) (marker: string) : Task<string> = t
 
 /// Connect, and read through the replay up to the retry hint. The hint is written after every
 /// live source is subscribed, so a frame triggered once this returns cannot be missed.
-let private connect (h: Harness) (query: string) = task {
+let connect (h: Harness) (query: string) = task {
   let! resp = client.GetAsync(h.BaseUrl + "/events" + query, HttpCompletionOption.ResponseHeadersRead)
   match int resp.StatusCode with
   | 200 ->
@@ -261,22 +274,22 @@ let private connect (h: Harness) (query: string) = task {
     return Choice2Of2 (status, text)
 }
 
-let private open200 (h: Harness) (query: string) = task {
+let open200 (h: Harness) (query: string) = task {
   match! connect h query with
   | Choice1Of2 opened -> return opened
   | Choice2Of2 (status, text) -> return failwithf "expected a stream, got %d: %s" status text
 }
 
-let private withServer (staleSlot: SseFrame option) (body: Harness -> Task) = task {
+let withServer (staleSlot: SseFrame option) (body: Harness -> Task) = task {
   let! h = startServer staleSlot
   try do! body h
   finally (h.App :> IDisposable).Dispose()
 }
 
-let private markerA = "MARKER-ALPHA"
-let private markerB = "MARKER-BRAVO"
-let private daemonMarker = "MARKER-DAEMON"
-let private sentinel = "MARKER-SENTINEL"
+let markerA = "MARKER-ALPHA"
+let markerB = "MARKER-BRAVO"
+let daemonMarker = "MARKER-DAEMON"
+let sentinel = "MARKER-SENTINEL"
 
 [<Tests>]
 let routeTests = testList "GET /events?sessionId=" [
@@ -366,7 +379,9 @@ let routeTests = testList "GET /events?sessionId=" [
   testTask "a well-formed id the daemon does not hold is a 404" {
     do! withServer None (fun h -> task {
       match! connect h "?sessionId=cafef00d" with
-      | Choice2Of2 (status, _) -> status |> Expect.equal "unknown session" 404
+      | Choice2Of2 (status, text) ->
+        status |> Expect.equal "unknown session" 404
+        text |> Expect.stringContains "says what to do next" "list_sessions"
       | Choice1Of2 _ -> failtest "an unknown session opened a stream"
     })
   }

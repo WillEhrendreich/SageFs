@@ -71,12 +71,12 @@ let private mkSessionInfo () : SessionInfo =
     ProjectRoles = [ project ]
     App = AppRun.AppRunState.NotRunning; Rebuild = LastRebuild.NeverRebuilt; Reload = SessionReload.NoReloadYet; Freshness = SageFs.ReplFreshness.InSync }
 
-let private mkSseContext (getWarmup: string -> Task<WarmupContext option>) (broadcast: Event<string>) : SseContext =
+let private mkSseContext (getWarmup: string -> Task<WarmupContext option>) (broadcast: Event<SseFrame>) : SseContext =
   { GetElmModel = None
     GetWarmupContext = Some getWarmup
     GetHotReloadState = None
     SseJsonOpts = JsonSerializerOptions()
-    TestEventBroadcast = Event<string>()
+    TestEventBroadcast = Event<SseFrame>()
     SessionEventBroadcast = broadcast
     ServerTracker = McpServerTracker()
     CohortOwner = None }
@@ -127,9 +127,9 @@ let wireSessionHealthSubscriptionTests = testList "wireSessionHealthSubscription
 
   testCase "pushes on the first classification, stays silent on repeats, pushes again only on a real transition" <| fun _ ->
     let stateChanged = Event<SseEvent>()
-    let broadcast = Event<string>()
+    let broadcast = Event<SseFrame>()
     let received = ResizeArray<string>()
-    broadcast.Publish.Add(received.Add)
+    broadcast.Publish.Add(fun frame -> received.Add frame.Wire)
 
     // Every session starts Healthy; a mutable ref lets the fake flip it to
     // "nothing loaded" (Degraded) mid-test, simulating a live transition.
@@ -167,9 +167,9 @@ let wireSessionHealthSubscriptionTests = testList "wireSessionHealthSubscription
     // case can flip a session's usability), so a HotReloadChanged tick must
     // trigger the same dedup-gated recompute as a ModelChanged tick.
     let stateChanged = Event<SseEvent>()
-    let broadcast = Event<string>()
+    let broadcast = Event<SseFrame>()
     let received = ResizeArray<string>()
-    broadcast.Publish.Add(received.Add)
+    broadcast.Publish.Add(fun frame -> received.Add frame.Wire)
     let getWarmup (_: string) = Task.FromResult (Some healthyWarmup)
     let getAllSessions () = Task.FromResult [ mkSessionInfo () ]
     let ctx = mkSseContext getWarmup broadcast
@@ -192,10 +192,10 @@ let replayHealthSnapshotTests = testList "replayHealthSnapshot" [
   testTask "writes the CURRENT (already-Degraded) verdict without waiting for a transition" {
     let getWarmup (_: string) = Task.FromResult (Some nothingLoadedWarmup)
     let getAllSessions () = Task.FromResult [ mkSessionInfo () ]
-    let ctx = mkSseContext getWarmup (Event<string>())
+    let ctx = mkSseContext getWarmup (Event<SseFrame>())
     use stream = new IO.MemoryStream()
 
-    do! replayHealthSnapshot ctx getAllSessions stream
+    do! replayHealthSnapshot ctx StreamScope.EverySession getAllSessions stream
 
     stream.Position <- 0L
     let written = (new IO.StreamReader(stream)).ReadToEnd()
@@ -207,10 +207,10 @@ let replayHealthSnapshotTests = testList "replayHealthSnapshot" [
   testTask "writes Healthy for a session with no warmup data yet (quiet common case)" {
     let getWarmup (_: string) = Task.FromResult (None: WarmupContext option)
     let getAllSessions () = Task.FromResult [ mkSessionInfo () ]
-    let ctx = mkSseContext getWarmup (Event<string>())
+    let ctx = mkSseContext getWarmup (Event<SseFrame>())
     use stream = new IO.MemoryStream()
 
-    do! replayHealthSnapshot ctx getAllSessions stream
+    do! replayHealthSnapshot ctx StreamScope.EverySession getAllSessions stream
 
     stream.Position <- 0L
     let written = (new IO.StreamReader(stream)).ReadToEnd()

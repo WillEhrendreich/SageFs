@@ -311,6 +311,7 @@
         <Compile Include="Features\FeatureDiscovery.fs" />
         <Compile Include="Features\Diagnostician.fs" />
         <Compile Include="RetryPolicy.fs" />
+        <Compile Include="SseFrame.fs" />
         <Compile Include="SseWriter.fs" />
     <Compile Include="Features\EvalStore.fs" />
     <Compile Include="Features\FeatureHooks.fs" />

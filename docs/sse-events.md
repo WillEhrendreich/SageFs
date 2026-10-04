@@ -9,11 +9,24 @@ The daemon emits 25 event types across four sources: 22 `SseWriter` events on `/
 ## Connection
 
 ```
-GET /events          → SSE stream (all events below except diagnostics)
-GET /diagnostics      → SSE stream (compiler diagnostics only — separate endpoint)
+GET /events                      → SSE stream (all events below except diagnostics)
+GET /events?sessionId=<id>       → the same stream, narrowed to one session
+GET /diagnostics                 → SSE stream (compiler diagnostics only — separate endpoint)
 ```
 
 The daemon sends a `retry:` hint at connection time so clients reconnect automatically.
+
+### Narrowing a connection to one session
+
+With no `sessionId`, `/events` is the firehose: every session's frames, and a catch-up on connect for whichever session is active. That is what the editors use today and it has not changed.
+
+With `?sessionId=<id>` the daemon does the filtering, so a client that only cares about one session never receives another's frames:
+
+- You get that session's frames, plus the ones that are true for the whole daemon: the four cohort events, the `state` events that name no session (the `outputCount`/`diagCount` tick, `systemAlarm`, `cohortChanged`), and the keepalive.
+- The catch-up on connect is for that session, whether or not it is the active one. Health is replayed for that session only.
+- A malformed id is a `400` and an id the daemon does not hold is a `404`. Both bodies say what to do next. A bad id is never read as "no id", because that would quietly widen the stream to everything.
+
+One limit worth knowing: the daemon keeps one catch-up slot per feature (`eval_diff`, `cell_dependencies`, `binding_scope_map`, `eval_timeline`), not one per session. Each slot remembers which session it was built for, so a stream for A is never handed B's, but if B evaluated last, A's connect-time replay of those four is empty until A evaluates again.
 
 ---
 

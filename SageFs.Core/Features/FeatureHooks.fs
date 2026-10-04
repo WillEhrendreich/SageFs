@@ -4,10 +4,13 @@ type EvalHistoryEntry = EvalStore.EvalHistoryEntry
 
 type FeaturePushState = {
   LastOutputText: string
-  LastEvalDiffSse: string option
-  LastCellDepsSse: string option
-  LastBindingScopeSse: string option
-  LastEvalTimelineSse: string option
+  /// The last frame pushed for each feature, kept so a client that connects later can be
+  /// caught up. ONE slot per feature for the whole daemon, so each carries the scope it was
+  /// built for: a replay hands it only to a connection that wants that session.
+  LastEvalDiffSse: SageFs.SseFrame option
+  LastCellDepsSse: SageFs.SseFrame option
+  LastBindingScopeSse: SageFs.SseFrame option
+  LastEvalTimelineSse: SageFs.SseFrame option
   /// The retained eval history: bounded, id-indexed, each cell tokenized
   /// once when recorded, so recording an eval costs the same at 100 cells
   /// as at the 10,000-cell cap (see EvalStore).
@@ -90,47 +93,47 @@ let recentEvals (count: int) (state: FeaturePushState) : EvalHistoryEntry list =
 let computeEvalDiffPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (currentOutputText: string) (state: FeaturePushState) =
   let diff = EvalDiff.diffLines (Some state.LastOutputText) (Some currentOutputText)
   let summary = EvalDiff.summarize diff
-  let sseStr = SageFs.SseWriter.formatEvalDiffEvent opts sessionId summary
+  let frame = SageFs.SseFrame.ofSession sessionId (SageFs.SseWriter.formatEvalDiffEvent opts sessionId summary)
   let updatedState = { state with LastOutputText = currentOutputText }
-  if Some sseStr = state.LastEvalDiffSse then
-    { updatedState with LastEvalDiffSse = Some sseStr }, None
+  if Some frame = state.LastEvalDiffSse then
+    { updatedState with LastEvalDiffSse = Some frame }, None
   else
-    { updatedState with LastEvalDiffSse = Some sseStr }, Some sseStr
+    { updatedState with LastEvalDiffSse = Some frame }, Some frame
 
 let computeCellDepsPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (state: FeaturePushState) =
-  let sseStr = SageFs.SseWriter.formatCellDependenciesEvent opts sessionId (cellGraph state)
-  if Some sseStr = state.LastCellDepsSse then
-    { state with LastCellDepsSse = Some sseStr }, None
+  let frame = SageFs.SseFrame.ofSession sessionId (SageFs.SseWriter.formatCellDependenciesEvent opts sessionId (cellGraph state))
+  if Some frame = state.LastCellDepsSse then
+    { state with LastCellDepsSse = Some frame }, None
   else
-    { state with LastCellDepsSse = Some sseStr }, Some sseStr
+    { state with LastCellDepsSse = Some frame }, Some frame
 
 let computeBindingScopePush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (state: FeaturePushState) =
-  let sseStr = SageFs.SseWriter.formatBindingScopeMapEvent opts sessionId (scope state)
-  if Some sseStr = state.LastBindingScopeSse then
-    { state with LastBindingScopeSse = Some sseStr }, None
+  let frame = SageFs.SseFrame.ofSession sessionId (SageFs.SseWriter.formatBindingScopeMapEvent opts sessionId (scope state))
+  if Some frame = state.LastBindingScopeSse then
+    { state with LastBindingScopeSse = Some frame }, None
   else
-    { state with LastBindingScopeSse = Some sseStr }, Some sseStr
+    { state with LastBindingScopeSse = Some frame }, Some frame
 
 let computeEvalTimelinePush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (state: FeaturePushState) =
   let stats = EvalTimeline.timelineStats 20 state.CachedTimeline
-  let sseStr = SageFs.SseWriter.formatEvalTimelineEvent opts sessionId stats
-  if Some sseStr = state.LastEvalTimelineSse then
-    { state with LastEvalTimelineSse = Some sseStr }, None
+  let frame = SageFs.SseFrame.ofSession sessionId (SageFs.SseWriter.formatEvalTimelineEvent opts sessionId stats)
+  if Some frame = state.LastEvalTimelineSse then
+    { state with LastEvalTimelineSse = Some frame }, None
   else
-    { state with LastEvalTimelineSse = Some sseStr }, Some sseStr
+    { state with LastEvalTimelineSse = Some frame }, Some frame
 
 /// Recompute and emit the history-derived pushes (cell deps, binding scope,
 /// eval timeline) ONLY when the eval history advanced since they were last
 /// emitted. App output changes the output count but not the history, so on a
 /// pure-output tick this skips the O(history) scope/graph rebuild entirely
 /// (the server view is unchanged, so nothing is lost — server-authoritative,
-/// no client-side state). Returns the updated state, the SSE strings to emit,
+/// no client-side state). Returns the updated state, the SSE frames to emit,
 /// and the binding scope snapshot to share (Some only when it was recomputed).
 let computeHistoryDerivedPushes
   (opts: System.Text.Json.JsonSerializerOptions)
   (sessionId: string option)
   (state: FeaturePushState)
-  : FeaturePushState * string list * BindingExplorer.BindingScopeSnapshot option =
+  : FeaturePushState * SageFs.SseFrame list * BindingExplorer.BindingScopeSnapshot option =
   match state.History.NextId = state.LastPushedHistoryVersion with
   | true -> state, [], None
   | false ->

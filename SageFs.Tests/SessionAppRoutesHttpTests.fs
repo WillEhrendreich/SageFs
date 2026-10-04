@@ -169,8 +169,8 @@ let private startTestServer (ops: SessionManagementOps) = task {
       GetWarmupContext = None
       GetHotReloadState = None
       SseJsonOpts = JsonSerializerOptions()
-      TestEventBroadcast = Event<string>()
-      SessionEventBroadcast = Event<string>()
+      TestEventBroadcast = Event<SseFrame>()
+      SessionEventBroadcast = Event<SseFrame>()
       ServerTracker = SageFs.Server.McpServer.McpServerTracker()
       CohortOwner = None }
 

@@ -189,6 +189,7 @@
         <Compile Include="SageFsErrorMutationTests.fs" />
         <Compile Include="SessionLifecycleMutationTests.fs" />
         <Compile Include="CoverageViewMutationTests.fs" />
+        <Compile Include="EventsStreamScopeMutationTests.fs" />
         <Compile Include="CoverageViewProjectMutationTests.fs" />
         <Compile Include="RestartPolicyBoundaryMutationTests.fs" />
         <Compile Include="WatchdogMutationTests.fs" />

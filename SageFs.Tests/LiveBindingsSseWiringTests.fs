@@ -53,24 +53,25 @@ let pushLiveBindingsOverSseTests = testList "pushLiveBindingsOverSse" [
       ConfiguredWalk = fun _ -> WalkSafe }
 
   testCase "no hub, no subscription, so nothing is pushed" <| fun _ ->
-    use _subscription = pushLiveBindingsOverSse (Event<string>()) jsonOpts None
+    use _subscription = pushLiveBindingsOverSse (Event<SseFrame>()) jsonOpts None
     ()
 
   testCase "every store update pushes a live_bindings SSE frame carrying the real snapshot" <| fun _ ->
-    let broadcast = Event<string>()
-    let received = ResizeArray<string>()
+    let broadcast = Event<SseFrame>()
+    let received = ResizeArray<SseFrame>()
     broadcast.Publish.Add(received.Add)
     let hub = hubOf ()
     use _subscription = pushLiveBindingsOverSse broadcast jsonOpts (Some hub)
     SageFs.Features.LiveBindingsAdaptive.update hub.Adaptive "sess-1" (mkSnapshot "sess-1")
     received.Count |> Expect.equal "exactly one live_bindings frame pushed" 1
-    received.[0] |> Expect.stringStarts "rides the session channel" "event: live_bindings\n"
-    received.[0] |> Expect.stringContains "carries the session id" "sess-1"
-    received.[0] |> Expect.stringContains "carries the real binding name" "\"x\""
+    received.[0].Wire |> Expect.stringStarts "rides the session channel" "event: live_bindings\n"
+    received.[0].Wire |> Expect.stringContains "carries the session id" "sess-1"
+    received.[0].Wire |> Expect.stringContains "carries the real binding name" "\"x\""
+    received.[0].Scope |> Expect.equal "is that session's news, so a stream for another never gets it" (FrameScope.Session "sess-1")
 
   testCase "one push per update, no extra pushes, and none after the subscription is disposed" <| fun _ ->
-    let broadcast = Event<string>()
-    let received = ResizeArray<string>()
+    let broadcast = Event<SseFrame>()
+    let received = ResizeArray<SseFrame>()
     broadcast.Publish.Add(received.Add)
     let hub = hubOf ()
     let subscription = pushLiveBindingsOverSse broadcast jsonOpts (Some hub)

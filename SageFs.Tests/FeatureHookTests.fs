@@ -5,6 +5,7 @@ open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
 open System.Text.Json
+open SageFs
 open SageFs.Features
 open SageFs.Features.FeatureHooks
 
@@ -76,7 +77,8 @@ let featureHookTests = testList "Feature Hook Computation" [
       let state = FeaturePushState.empty |> recordEval "let x = 1" "val x: int = 1" 50L
       let _, sse = computeEvalDiffPush sseJsonOpts (Some "s1") "val x: int = 1" state
       sse |> Expect.isSome "should push SSE"
-      let s = sse.Value
+      sse.Value.Scope |> Expect.equal "the frame is the session it was computed for's news" (FrameScope.Session "s1")
+      let s = sse.Value.Wire
       s |> Expect.stringContains "should contain eval_diff" "eval_diff"
       s |> Expect.stringContains "should contain added" "added"
     }
@@ -87,7 +89,7 @@ let featureHookTests = testList "Feature Hook Computation" [
         |> recordEval "let x = 1" "val x: int = 1" 50L
       let _, sse = computeEvalDiffPush sseJsonOpts (Some "s1") "val x: int = 1" state
       sse |> Expect.isSome "should push (first time)"
-      let s = sse.Value
+      let s = sse.Value.Wire
       s |> Expect.stringContains "should contain unchanged" "unchanged"
     }
 
@@ -97,7 +99,7 @@ let featureHookTests = testList "Feature Hook Computation" [
         |> recordEval "let x = 2" "val x: int = 2" 50L
       let _, sse = computeEvalDiffPush sseJsonOpts (Some "s1") "val x: int = 2" state
       sse |> Expect.isSome "should push"
-      let s = sse.Value
+      let s = sse.Value.Wire
       s |> Expect.stringContains "should contain modified" "modified"
     }
   ]
@@ -109,7 +111,7 @@ let featureHookTests = testList "Feature Hook Computation" [
         |> recordEval "let x = 1" "val x: int = 1" 50L
       let _, sse = computeCellDepsPush sseJsonOpts (Some "s1") state
       sse |> Expect.isSome "should push"
-      let s = sse.Value
+      let s = sse.Value.Wire
       s |> Expect.stringContains "should contain cell_dependencies" "cell_dependencies"
       s |> Expect.stringContains "should contain nodes" "nodes"
     }
@@ -122,7 +124,7 @@ let featureHookTests = testList "Feature Hook Computation" [
         |> recordEval "let x = 1" "val x: int = 1" 50L
       let _, sse = computeBindingScopePush sseJsonOpts (Some "s1") state
       sse |> Expect.isSome "should push"
-      let s = sse.Value
+      let s = sse.Value.Wire
       s |> Expect.stringContains "should contain binding_scope_map" "binding_scope_map"
       s |> Expect.stringContains "should contain bindings" "bindings"
     }
@@ -135,7 +137,7 @@ let featureHookTests = testList "Feature Hook Computation" [
         |> recordEval "let x = 1" "val x: int = 1" 50L
       let _, sse = computeEvalTimelinePush sseJsonOpts (Some "s1") state
       sse |> Expect.isSome "should push"
-      let s = sse.Value
+      let s = sse.Value.Wire
       s |> Expect.stringContains "should contain eval_timeline" "eval_timeline"
       s |> Expect.stringContains "should contain sparkline" "sparkline"
     }

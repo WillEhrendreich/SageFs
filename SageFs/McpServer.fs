@@ -983,8 +983,10 @@ type SseContext = {
   GetWarmupContext: (string -> Task<SageFs.WarmupContext option>) option
   GetHotReloadState: (string -> Task<string list option>) option
   SseJsonOpts: JsonSerializerOptions
-  TestEventBroadcast: Event<string>
-  SessionEventBroadcast: Event<string>
+  /// Frames are pushed with their scope, so each `/events` connection can be handed only
+  /// what it asked for (`SseFrame.visibleTo`). A pre-formatted string cannot be filtered.
+  TestEventBroadcast: Event<SseFrame>
+  SessionEventBroadcast: Event<SseFrame>
   ServerTracker: McpServerTracker
   /// The single per-daemon cohort owner (item 15a). `None` when the caller
   /// wires no cohort support — the cohort_matrix/claim_changed/
@@ -999,6 +1001,14 @@ module SseContext =
       SageFs.ActiveSession.sessionId (gm().Sessions.ActiveSessionId)
       |> Option.map SageFs.WorkerProtocol.SessionId.value)
 
+  /// Which session a connecting client is caught up on. The firehose is caught up on the
+  /// daemon's active session, as it always was; a connection that named one is caught up on
+  /// THAT one, whatever happens to be active.
+  let replayTarget (ctx: SseContext) (stream: StreamScope) : string option =
+    match stream with
+    | StreamScope.EverySession -> activeSessionId ctx
+    | StreamScope.OnlySession sessionId -> Some sessionId
+
   let withModel (ctx: SseContext) (f: SageFs.SageFsModel -> unit) =
     ctx.GetElmModel |> Option.iter (fun getModel -> f (getModel()))
 
@@ -1010,16 +1020,12 @@ module SseContext =
 // ── SSE replay: send cached state on new SSE connection ──
 
 /// Replay warmup context + hotreload state for a new SSE connection.
-let replaySessionSnapshot (ctx: SseContext) (body: System.IO.Stream) =
+let replaySessionSnapshot (ctx: SseContext) (target: string option) (body: System.IO.Stream) =
   match ctx.GetElmModel, ctx.GetWarmupContext with
-  | Some getModel, Some getCtx ->
+  | Some _, Some getCtx ->
     task {
       try
-        let activeId =
-          let model = getModel()
-          SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
-          |> Option.map SageFs.WorkerProtocol.SessionId.value
-          |> Option.defaultValue ""
+        let activeId = target |> Option.defaultValue ""
         match activeId.Length > 0 with
         | true ->
           let! ctxOpt = getCtx activeId
@@ -1045,11 +1051,11 @@ let replaySessionSnapshot (ctx: SseContext) (body: System.IO.Stream) =
   | _ -> task { () }
 
 /// Replay cached test results + file annotations for a new SSE connection.
-let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
+let replayCachedTestState (ctx: SseContext) (target: string option) (body: System.IO.Stream) =
   SseContext.withModelAsync ctx (fun model -> task {
     try
       let lt = model.LiveTesting.TestState
-      let activeId = SseContext.activeSessionId ctx |> Option.defaultValue ""
+      let activeId = target |> Option.defaultValue ""
       let sessionEntries =
         LiveTestState.statusEntriesForSession activeId lt
       // Zero-test suppression defect: even with zero entries, an ACTIVE
@@ -1148,6 +1154,7 @@ let replayCohortMatrix (ctx: SseContext) (body: System.IO.Stream) =
 /// connection sees here always agrees with a GET made at the same instant.
 let replayHealthSnapshot
   (ctx: SseContext)
+  (stream: StreamScope)
   (getAllSessions: unit -> Task<SageFs.WorkerProtocol.SessionInfo list>)
   (body: System.IO.Stream) =
   task {
@@ -1160,7 +1167,10 @@ let replayHealthSnapshot
           | Some getCtx -> getCtx sid
           | None -> Task.FromResult None
         let health = SageFs.SessionHealth.classify sess.Status sess.ProjectRoles warmupOpt
-        do! SseEvent.SessionHealthChanged(sid, health) |> SseEvent.format |> writeSseFrame body
+        let frame = SseEvent.SessionHealthChanged(sid, health) |> SseEvent.frame
+        match SseFrame.visibleTo stream frame with
+        | true -> do! writeSseFrame body frame.Wire
+        | false -> ()
     with
     | :? System.IO.IOException | :? ObjectDisposedException -> ()
     | ex -> Log.error "[SSE] Health snapshot replay error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
@@ -1191,7 +1201,7 @@ let wireSessionEventSubscription
               match hrOpt with
               | Some watchedFiles ->
                 let evt = SseEvent.HotReloadSnapshot(activeId, watchedFiles)
-                ctx.SessionEventBroadcast.Trigger(SseEvent.format evt)
+                ctx.SessionEventBroadcast.Trigger(SseEvent.frame evt)
               | None -> ()
             | None -> ()
           with
@@ -1214,7 +1224,7 @@ let wireSessionEventSubscription
               match ctxOpt with
               | Some wctx ->
                 let evt = SseEvent.WarmupContextSnapshot(sidStr, wctx)
-                ctx.SessionEventBroadcast.Trigger(SseEvent.format evt)
+                ctx.SessionEventBroadcast.Trigger(SseEvent.frame evt)
               | None -> ()
               match ctx.GetHotReloadState with
               | Some getHr ->
@@ -1222,7 +1232,7 @@ let wireSessionEventSubscription
                 match hrOpt with
                 | Some watchedFiles ->
                   let hrEvt = SseEvent.HotReloadSnapshot(sidStr, watchedFiles)
-                  ctx.SessionEventBroadcast.Trigger(SseEvent.format hrEvt)
+                  ctx.SessionEventBroadcast.Trigger(SseEvent.frame hrEvt)
                 | None -> ()
               | None -> ()
             | false -> ()
@@ -1246,7 +1256,7 @@ let wireSessionEventSubscription
       | SseEvent.WarmupProgress(sid, step, total, msg) ->
         let sidStr = SageFs.WorkerProtocol.SessionId.value sid
         let sseFrame = SageFs.SseWriter.formatWarmupProgressEvent ctx.SseJsonOpts (Some sidStr) step total msg
-        ctx.SessionEventBroadcast.Trigger(sseFrame)
+        ctx.SessionEventBroadcast.Trigger(SseFrame.session sidStr sseFrame)
       | SseEvent.FileReloaded (sid, path) ->
         ctx.ServerTracker.AccumulateEvent(Some (SageFs.WorkerProtocol.SessionId.value sid), PushEvent.FileReloaded path)
       // What the save DID, once the worker has decided. "Compiling" is not pushed:
@@ -1335,7 +1345,7 @@ let wireCohortEventSubscription
           match Map.tryFind claimId state.Claims with
           | Some claim ->
             ctx.SessionEventBroadcast.Trigger(
-              SageFs.SseWriter.formatClaimChangedEvent ctx.SseJsonOpts kind claim)
+              SseFrame.daemon (SageFs.SseWriter.formatClaimChangedEvent ctx.SseJsonOpts kind claim))
           | None -> ()
         | None ->
           match ev with
@@ -1343,13 +1353,13 @@ let wireCohortEventSubscription
             match Map.tryFind landingId state.Landings with
             | Some landing ->
               ctx.SessionEventBroadcast.Trigger(
-                SageFs.SseWriter.formatLandingChangedEvent ctx.SseJsonOpts landing)
+                SseFrame.daemon (SageFs.SseWriter.formatLandingChangedEvent ctx.SseJsonOpts landing))
             | None -> ()
           | SageFs.Cohort.CohortEvent.ClaimViolationObserved _ ->
             match saveObservedRow state ev with
             | Some(claim, observer, holder, path) ->
               ctx.SessionEventBroadcast.Trigger(
-                SageFs.SseWriter.formatSaveObservedEvent ctx.SseJsonOpts claim observer holder path)
+                SseFrame.daemon (SageFs.SseWriter.formatSaveObservedEvent ctx.SseJsonOpts claim observer holder path))
             | None -> ()
           | _ -> ()
       let frame = cohortOwner.ReadFrame()
@@ -1364,7 +1374,7 @@ let wireCohortEventSubscription
       | true ->
         matrixGate.Value <- newGate
         ctx.SessionEventBroadcast.Trigger(
-          SageFs.SseWriter.formatCohortMatrixEvent ctx.SseJsonOpts frame)
+          SseFrame.daemon (SageFs.SseWriter.formatCohortMatrixEvent ctx.SseJsonOpts frame))
         ctx.ServerTracker.NotifyResourceUpdatedAsync(SageFs.Server.McpResources.CohortStatusUri) |> ignore
       | false -> ()
     with ex ->
@@ -1450,7 +1460,7 @@ let wireSessionHealthSubscription
           match changed with
           | true ->
             lastKnown.[sid] <- health
-            ctx.SessionEventBroadcast.Trigger(SseEvent.format (SseEvent.SessionHealthChanged(sid, health)))
+            ctx.SessionEventBroadcast.Trigger(SseEvent.frame (SseEvent.SessionHealthChanged(sid, health)))
           | false -> ()
       with
       | :? System.IO.IOException | :? ObjectDisposedException -> ()
@@ -1468,7 +1478,7 @@ let wireSessionHealthSubscription
 /// click's answer and a mode switch all reach the editors the same way, because they all go through the store. No hub, no
 /// subscription. Dispose to stop pushing.
 let pushLiveBindingsOverSse
-  (sessionEventBroadcast: Event<string>)
+  (sessionEventBroadcast: Event<SseFrame>)
   (sseJsonOpts: JsonSerializerOptions)
   (hub: SageFs.Features.LiveBindingsPane.Hub option)
   : IDisposable =
@@ -1476,7 +1486,7 @@ let pushLiveBindingsOverSse
   | None -> { new IDisposable with member _.Dispose() = () }
   | Some hub ->
     hub.Adaptive.Updates.Publish.Subscribe(fun (sid, snap) ->
-      sessionEventBroadcast.Trigger(SageFs.SseWriter.formatLiveBindingsEvent sseJsonOpts (Some sid) snap))
+      sessionEventBroadcast.Trigger(SseFrame.session sid (SageFs.SseWriter.formatLiveBindingsEvent sseJsonOpts (Some sid) snap)))
 
 // ── Action queue push: ActionQueueReady, wired for real ─────────────────────
 
@@ -1578,6 +1588,7 @@ let wireModelChangeHandlers
           fsiBindings.Value
           |> Map.values |> Array.ofSeq
           |> SageFs.SseWriter.formatBindingsSnapshotEvent ctx.SseJsonOpts (Some sid) bindingValues bsl fp
+          |> SseFrame.ofSession (Some sid)
           |> ctx.TestEventBroadcast.Trigger
         | false -> ())
     | false -> ()
@@ -1612,7 +1623,7 @@ let wireModelChangeHandlers
         match effect with
         | BroadcastTestSse json ->
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatTestTraceEvent sid json)
+            SseFrame.ofSession sid (SageFs.SseWriter.formatTestTraceEvent sid json))
         | AccumulatePush _ -> ())
 
   let handleTestSummaryChange () =
@@ -1640,7 +1651,8 @@ let wireModelChangeHandlers
         | true ->
           modelChangeState.Value <- { modelChangeState.Value with LastTestSsePushTicks = now }
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration (SageFsModel.liveTestActivityFor activeId model))
+            SseFrame.ofSession (Some activeId)
+              (SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration (SageFsModel.liveTestActivityFor activeId model)))
           let freshness =
             match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
             | true -> SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
@@ -1664,7 +1676,8 @@ let wireModelChangeHandlers
             | SourceStateProbe.SourceSourceRefusal.NoSessionToRead
             | SourceStateProbe.SourceSourceRefusal.SessionNotKnown -> None
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire)
+            SseFrame.ofSession (Some activeId)
+              (SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload sourceWire))
           // A FINISHED run is a different fact from a batch of results arriving: this fires
           // only when nothing is running, so a client that renders "run finished" acts once
           // per run rather than on every incremental batch during one. Gated on a real
@@ -1674,11 +1687,12 @@ let wireModelChangeHandlers
           if isRunComplete && not !runCompletionAnnounced then
             runCompletionAnnounced.Value <- true
             ctx.TestEventBroadcast.Trigger(
-              SageFs.SseWriter.formatTestRunCompletedEvent
-                ctx.SseJsonOpts
-                (Some activeId)
-                payload
-                sourceWire)
+              SseFrame.ofSession (Some activeId)
+                (SageFs.SseWriter.formatTestRunCompletedEvent
+                  ctx.SseJsonOpts
+                  (Some activeId)
+                  payload
+                  sourceWire))
           elif not isRunComplete then
             // A new run started, so the next completion is a completion again.
             runCompletionAnnounced.Value <- false
@@ -1726,7 +1740,8 @@ let wireModelChangeHandlers
             match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 || fa.InlineFailures.Length > 0 with
             | true ->
               ctx.TestEventBroadcast.Trigger(
-                SageFs.SseWriter.formatFileAnnotationsEvent ctx.SseJsonOpts (Some activeId) fa)
+                SseFrame.ofSession (Some activeId)
+                  (SageFs.SseWriter.formatFileAnnotationsEvent ctx.SseJsonOpts (Some activeId) fa))
               // Emit one coverage_view event per CoverageView so editors
               // can render a single badge per function instead of one per test.
               let views =
@@ -1739,7 +1754,8 @@ let wireModelChangeHandlers
                 RunGeneration.value model.LiveTesting.TestState.LastGeneration
               for view in views do
                 ctx.TestEventBroadcast.Trigger(
-                  SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) gen view)
+                  SseFrame.ofSession (Some activeId)
+                    (SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) gen view))
             | false -> ()
         | false -> ()
       | false -> ())
@@ -1773,6 +1789,7 @@ let wireModelChangeHandlers
         | Some snap -> System.Threading.Volatile.Write(&sharedBindingScope.contents, Some snap)
         | None -> ()
         featurePushState.Value <- state
+        // Each push is already a frame (built with the session it was computed for).
         (diffSse |> Option.toList) @ historyDerivedSse
         |> List.iter ctx.TestEventBroadcast.Trigger)
     | false -> ()
@@ -1790,7 +1807,8 @@ let wireModelChangeHandlers
         match activeId.Length > 0 with
         | true ->
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatFailureNarrativesEvent ctx.SseJsonOpts (Some activeId) lt.Cached.FailureNarratives)
+            SseFrame.ofSession (Some activeId)
+              (SageFs.SseWriter.formatFailureNarrativesEvent ctx.SseJsonOpts (Some activeId) lt.Cached.FailureNarratives))
         | false -> ()
       | false -> ())
 
@@ -1829,7 +1847,8 @@ let wireModelChangeHandlers
         match activeId.Length > 0 with
         | true ->
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatDiagnosisReadyEvent ctx.SseJsonOpts (Some activeId) report)
+            SseFrame.ofSession (Some activeId)
+              (SageFs.SseWriter.formatDiagnosisReadyEvent ctx.SseJsonOpts (Some activeId) report))
         | false -> ()
 
         // Action queue, alongside the diagnosis above — reuses the SAME
@@ -1886,7 +1905,8 @@ let wireModelChangeHandlers
           | locs ->
             ctx.ServerTracker.AccumulateEvent(SseContext.activeSessionId ctx, PushEvent.TestSourceLocations locs)
             ctx.TestEventBroadcast.Trigger(
-              SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts (SseContext.activeSessionId ctx) locs))
+              SseFrame.ofSession (SseContext.activeSessionId ctx)
+                (SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts (SseContext.activeSessionId ctx) locs)))
         match ctx.ServerTracker.Count > 0 with
         | true ->
           try
@@ -2193,7 +2213,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
         match filePath, blockStartLine with
         | Some fp, Some bsl when not (System.String.IsNullOrEmpty(fp)) ->
           let startedStr = SageFs.SseWriter.formatEvalStartedEvent rctx.SseContext.SseJsonOpts sid fp bsl
-          rctx.SseContext.TestEventBroadcast.Trigger(startedStr)
+          rctx.SseContext.TestEventBroadcast.Trigger(SseFrame.ofSession sid startedStr)
           // Remember for bindings_snapshot stamping
           rctx.LastEvalContext.Value <- Some (fp, bsl)
           Some fp, Some bsl
@@ -2213,7 +2233,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
                   let fp = evalFp |> Option.defaultValue ""
                   let bsl = evalBsl |> Option.defaultValue 0
                   let hbStr = SageFs.SseWriter.formatEvalHeartbeatEvent rctx.SseContext.SseJsonOpts sid fp bsl sw.ElapsedMilliseconds
-                  rctx.SseContext.TestEventBroadcast.Trigger(hbStr)
+                  rctx.SseContext.TestEventBroadcast.Trigger(SseFrame.ofSession sid hbStr)
             with :? System.OperationCanceledException -> ()
           } :> System.Threading.Tasks.Task))
       let! result, outcome, _diags, _lastError, _ = SageFs.McpTools.evalFSharpCodeWithOutcome rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine None
@@ -2243,7 +2263,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
       match evalFp, evalBsl with
       | Some fp, Some bsl ->
         let sseStr = SageFs.SseWriter.formatEvalResultEvent rctx.SseContext.SseJsonOpts sid fp bsl result true (sw.ElapsedMilliseconds |> float)
-        rctx.SseContext.TestEventBroadcast.Trigger(sseStr)
+        rctx.SseContext.TestEventBroadcast.Trigger(SseFrame.ofSession sid sseStr)
       | _ -> ()
       // Truthful contract: success reflects the typed worker outcome (an eval
       // that failed to compile/run has success=false), never string sniffing.
@@ -2789,58 +2809,91 @@ let mapDiagnosticsRoutes (app: WebApplication) (rctx: RouteContext) =
     } :> Task
   ) |> ignore
 
+/// What an `/events` request asked for, checked against the sessions the daemon holds. A bad
+/// id is refused here, before any stream is opened, so it can never fall through to the firehose.
+let resolveStreamScope
+  (sessionOps: SageFs.SessionManagementOps)
+  (raw: string | null)
+  : Task<Result<StreamScope, StreamScopeRefusal>> =
+  task {
+    match SseEvent.streamScopeOf raw with
+    | Result.Error refusal -> return Result.Error refusal
+    | Result.Ok StreamScope.EverySession -> return Result.Ok StreamScope.EverySession
+    | Result.Ok (StreamScope.OnlySession id as scope) ->
+      let! info = sessionOps.GetSessionInfo (toSessionId id)
+      match info with
+      | Some _ -> return Result.Ok scope
+      | None -> return Result.Error (StreamScopeRefusal.UnknownSession id)
+  }
+
+/// One `/events` connection: catch it up on what it asked for, then stream what it asked for.
+let serveEvents (rctx: RouteContext) (stream: StreamScope) (ctx: Microsoft.AspNetCore.Http.HttpContext) : Task =
+  task {
+    SageFs.Instrumentation.sseConnectionsActive.Add(1L)
+    let connSw = System.Diagnostics.Stopwatch.StartNew()
+    let connActivity =
+      SageFs.Instrumentation.startSpanWithKind
+        SageFs.Instrumentation.daemonSource "sse.connection"
+        System.Diagnostics.ActivityKind.Server
+        [("sse.endpoint", box "/events")]
+    setSseHeaders ctx
+    match rctx.Config.StateChanged with
+    | Some evt ->
+      let target = SseContext.replayTarget rctx.SseContext stream
+      do! replaySessionSnapshot rctx.SseContext target ctx.Response.Body
+      do! replayCachedTestState rctx.SseContext target ctx.Response.Body
+      do! replayCohortMatrix rctx.SseContext ctx.Response.Body
+      do! replayHealthSnapshot rctx.SseContext stream rctx.Config.SessionOps.GetAllSessions ctx.Response.Body
+      // The bindings map is the ACTIVE session's, so it is only replayed to a connection
+      // that is catching up on that session.
+      match rctx.FsiBindings.Value.Count, target, SseContext.activeSessionId rctx.SseContext with
+      | count, Some sid, Some active when count > 0 && sid = active ->
+        let frame =
+          rctx.FsiBindings.Value |> Map.values |> Array.ofSeq
+          |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid) [] 0 None
+        do! writeSseFrame ctx.Response.Body frame
+      | _ -> ()
+      // One slot per feature for the whole daemon, each remembering whose it is.
+      let replayed =
+        [ rctx.FeaturePushState.Value.LastEvalDiffSse
+          rctx.FeaturePushState.Value.LastCellDepsSse
+          rctx.FeaturePushState.Value.LastBindingScopeSse
+          rctx.FeaturePushState.Value.LastEvalTimelineSse ]
+        |> List.choose id
+        |> List.filter (SseFrame.visibleTo stream)
+      for frame in replayed do
+        do! writeSseFrame ctx.Response.Body frame.Wire
+      let stateSource =
+        evt |> Observable.map (fun change ->
+          { Scope = SseEvent.scope change
+            Wire = change |> SseEvent.toJson |> SageFs.SseWriter.formatSseEvent "state" })
+      let sources =
+        [ stateSource; rctx.SseContext.TestEventBroadcast.Publish; rctx.SseContext.SessionEventBroadcast.Publish ]
+        |> List.map (fun src ->
+          src
+          |> Observable.filter (SseFrame.visibleTo stream)
+          |> Observable.map (fun frame -> frame.Wire))
+      do! runSseWriteLoop ctx.Response.Body ctx.RequestAborted sources 15000
+      connSw.Stop()
+      SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
+      SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
+      SageFs.Instrumentation.succeedSpan connActivity
+    | None ->
+      ctx.Response.StatusCode <- 501
+      do! writeSseFrame ctx.Response.Body "event: error\ndata: {\"error\":\"No Elm loop available\"}\n\n"
+      connSw.Stop()
+      SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
+      SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
+      SageFs.Instrumentation.failSpan connActivity "No Elm loop available"
+  }
+
 let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      SageFs.Instrumentation.sseConnectionsActive.Add(1L)
-      let connSw = System.Diagnostics.Stopwatch.StartNew()
-      let connActivity =
-        SageFs.Instrumentation.startSpanWithKind
-          SageFs.Instrumentation.daemonSource "sse.connection"
-          System.Diagnostics.ActivityKind.Server
-          [("sse.endpoint", box "/events")]
-      setSseHeaders ctx
-      match rctx.Config.StateChanged with
-      | Some evt ->
-        do! replaySessionSnapshot rctx.SseContext ctx.Response.Body
-        do! replayCachedTestState rctx.SseContext ctx.Response.Body
-        do! replayCohortMatrix rctx.SseContext ctx.Response.Body
-        do! replayHealthSnapshot rctx.SseContext rctx.Config.SessionOps.GetAllSessions ctx.Response.Body
-        match rctx.FsiBindings.Value.Count, SseContext.activeSessionId rctx.SseContext with
-        | count, Some sid when count > 0 ->
-          let frame =
-            rctx.FsiBindings.Value |> Map.values |> Array.ofSeq
-            |> SageFs.SseWriter.formatBindingsSnapshotEvent rctx.SseContext.SseJsonOpts (Some sid) [] 0 None
-          do! writeSseFrame ctx.Response.Body frame
-        | _ -> ()
-        for sse in
-          [rctx.FeaturePushState.Value.LastEvalDiffSse
-           rctx.FeaturePushState.Value.LastCellDepsSse
-           rctx.FeaturePushState.Value.LastBindingScopeSse
-           rctx.FeaturePushState.Value.LastEvalTimelineSse]
-          |> List.choose id do
-          do! writeSseFrame ctx.Response.Body sse
-        let stateSource =
-          evt |> Observable.map (fun change ->
-            change
-            |> SseEvent.toJson
-            |> SageFs.SseWriter.formatSseEvent "state")
-        do! runSseWriteLoop
-              ctx.Response.Body
-              ctx.RequestAborted
-              [ stateSource; rctx.SseContext.TestEventBroadcast.Publish; rctx.SseContext.SessionEventBroadcast.Publish ]
-              15000
-        connSw.Stop()
-        SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
-        SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
-        SageFs.Instrumentation.succeedSpan connActivity
-      | None ->
-        ctx.Response.StatusCode <- 501
-        do! writeSseFrame ctx.Response.Body "event: error\ndata: {\"error\":\"No Elm loop available\"}\n\n"
-        connSw.Stop()
-        SageFs.Instrumentation.sseConnectionDurationMs.Record(connSw.Elapsed.TotalMilliseconds)
-        SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
-        SageFs.Instrumentation.failSpan connActivity "No Elm loop available"
+      match! resolveStreamScope rctx.Config.SessionOps (ctx.Request.Query["sessionId"].ToString()) with
+      | Result.Error refusal ->
+        do! jsonResponse ctx (StreamScopeRefusal.status refusal) {| success = false; error = StreamScopeRefusal.message refusal |}
+      | Result.Ok stream -> do! serveEvents rctx stream ctx
     } :> Task
   ) |> ignore
 
@@ -4001,8 +4054,8 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       // after the MCP context) so `sessionEventBroadcast`/`sseJsonOpts` exist
       // in time to wrap `cfg.LiveSnapshotSink` below — neither has any
       // dependency on `app`/`mcpContext`/`serverTracker`.
-      let testEventBroadcast = Event<string>()
-      let sessionEventBroadcast = Event<string>()
+      let testEventBroadcast = Event<SseFrame>()
+      let sessionEventBroadcast = Event<SseFrame>()
       let sseJsonOpts = Json.optionsOf Json.standard
       // Every fresh LiveValueSnapshot now ALSO reaches editor clients over SSE
       // (roast-8 §2), not just the dashboard's own adaptive store — the inner

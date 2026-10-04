@@ -224,3 +224,44 @@ module SseEvent =
   /// Format a complete SSE frame (`event: ...\ndata: ...\n\n`) for an event.
   let format (evt: SseEvent) : string =
     SseWriter.formatSseEvent (sseEventType evt) (toJson evt)
+
+  /// Whose news an event is. Exhaustive, no wildcard: a new case has to say whether it is one
+  /// session's or the daemon's before it compiles, so a connection that asked for one session
+  /// can never be handed another's by an event nobody classified.
+  let scope (evt: SseEvent) : FrameScope =
+    match evt with
+    | SessionReady id
+    | SessionSwitched id
+    | HotReloadChanged id
+    | ReloadReported (id, _)
+    | FileReloaded (id, _)
+    | SessionFaulted (id, _)
+    | WarmupProgress (id, _, _, _) -> FrameScope.Session (sid id)
+    | WarmupContextSnapshot (id, _)
+    | HotReloadSnapshot (id, _)
+    | HotReloadFileToggled (id, _, _)
+    | SessionActivated id
+    | SessionCreated (id, _)
+    | SessionStopped id
+    | WorkflowSwitching (id, _, _)
+    | WorkflowSwitched (id, _, _, _)
+    | SessionHealthChanged (id, _) -> FrameScope.Session id
+    | SessionProgress
+    | ModelChanged _
+    | SystemAlarm _
+    | CohortChanged _ -> FrameScope.Daemon
+
+  /// The event as a frame that carries its own scope.
+  let frame (evt: SseEvent) : SseFrame =
+    { Scope = scope evt; Wire = format evt }
+
+  /// What an `/events` request asked for: no parameter is the firehose, a well-formed id is
+  /// that one session, anything else is refused with the reason, never read as the firehose.
+  let streamScopeOf (raw: string | null) : Result<StreamScope, StreamScopeRefusal> =
+    match raw with
+    | null
+    | "" -> Ok StreamScope.EverySession
+    | id ->
+      WorkerProtocol.SessionId.validate id
+      |> Result.map (fun valid -> StreamScope.OnlySession (sid valid))
+      |> Result.mapError StreamScopeRefusal.NotASessionId
