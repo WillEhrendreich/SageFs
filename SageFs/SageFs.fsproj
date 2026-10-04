@@ -59,6 +59,7 @@
         <Compile Include="DaemonTelemetry.fs" />
         <Compile Include="TestingPlatformAdapter.fs" />
         <Compile Include="SseEvent.fs" />
+        <Compile Include="WorkflowSwitchWatch.fs" />
         <!-- The daemon's Elm kernel + render stack (moved out of SageFs.Core so the
              FSI host closure ships the session engine only). Order is dependency-driven:
              leaves first, SageFsApp/ElmDaemon last. -->

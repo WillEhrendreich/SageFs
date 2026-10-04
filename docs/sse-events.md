@@ -145,8 +145,8 @@ A single `session` event type carries a `type` discriminator for the subtype.
 | `session_activated` | `sessionId` | Session became the active target (multi-session switch). |
 | `session_created` | `sessionId`, `projectNames[]` | New session initialized with loaded projects. |
 | `session_stopped` | `sessionId` | Session terminated cleanly. |
-| `workflow_switching` | `sessionId`, `fromWorkflow`, `toWorkflow` | Workflow-mode transition started. |
-| `workflow_switched` | `sessionId`, `workflowLabel`, `replCapability`, `hotReloadActive` | Workflow-mode transition completed. |
+| `workflow_switching` | `sessionId`, `fromWorkflow`, `toWorkflow` | Workflow-mode transition started: the daemon accepted a replacement worker for the new workflow (`POST /api/sessions/{sid}/workflow`, the dashboard switcher, or `run_app` switching into hot reload). Scoped to that session. |
+| `workflow_switched` | `sessionId`, `workflowLabel`, `replCapability`, `hotReloadActive` | Workflow-mode transition completed: the replacement worker is serving. Scoped to that session. A switch whose replacement worker faults sends `workflow_switching` and no `workflow_switched`; the session's `session_health_changed` says why. |
 
 ---
 

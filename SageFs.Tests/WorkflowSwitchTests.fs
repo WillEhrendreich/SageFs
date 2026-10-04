@@ -456,13 +456,14 @@ let workflowSwitchEmissionTests =
             AwaitReady = fun _ _ ->
               current.Value <- [ sessionAt SessionWorkflow.LiveTesting serving ]
               System.Threading.Tasks.Task.FromResult(Result.Ok ()) }
-      use _watch = SwitchWatch.wire stateChanged.Publish ops publish
+      let watch = SwitchWatch.wire stateChanged.Publish ops publish
       stateChanged.Trigger SageFs.Server.SseEvent.SessionProgress
       current.Value <- [ sessionAt SessionWorkflow.LiveTesting restarting ]
       stateChanged.Trigger SageFs.Server.SseEvent.SessionProgress
       let! finished =
         System.Threading.Tasks.Task.WhenAny(switchedSeen.Task, System.Threading.Tasks.Task.Delay TestTimeouts.patienceBrief)
-      finished |> Expect.equal "switched arrived" (switchedSeen.Task :> System.Threading.Tasks.Task)
+      watch.Dispose()
+      finished |> Expect.equal "switched arrived" switchedSeen.Task
       let wires = pushed.ToArray() |> Array.map (fun f -> f.Wire)
       wires |> Array.length |> Expect.equal "two frames" 2
       wires.[0] |> Expect.stringContains "switching comes first" "workflow_switching"

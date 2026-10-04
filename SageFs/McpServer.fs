@@ -4123,6 +4123,10 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       let _sessionHealthSub =
         cfg.StateChanged |> Option.map (fun evt -> wireSessionHealthSubscription evt sseCtx cfg.SessionOps.GetAllSessions)
 
+      let _workflowSwitchSub =
+        cfg.StateChanged
+        |> Option.map (fun evt -> SageFs.Server.WorkflowSwitchWatch.wire evt cfg.SessionOps sseCtx.SessionEventBroadcast.Trigger)
+
       mapExecutionRoutes app rctx
       mapHealthRoutes app rctx
       mapDiagnosticsRoutes app rctx
