@@ -35,19 +35,20 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
   // and AppState.fs's StampRequested comment). A single real chain never
   // sees both StampRequested and StampModelChanged on the same tracker.
 
-  testCase "WHY (worker-side) — Requested/Finished alone never enters the ring — MorphWritten never fires inside the worker process, so this sample stays in flight forever on the worker's own tracker" <| fun _ ->
+  testCaseTask "WHY (worker-side) — Requested/Finished alone never enters the ring — MorphWritten never fires inside the worker process, so this sample stays in flight forever on the worker's own tracker" <| fun () -> task {
     let tracker = EvalLatencyTrace.Tracker(256)
     tracker.StampRequested() |> ignore
-    System.Threading.Thread.Sleep(TestTimeouts.measurableGap)
+    do! System.Threading.Tasks.Task.Delay TestTimeouts.measurableGap
     tracker.StampFinished()
     tracker.Snapshot() |> Expect.equal "nothing completed — the worker never reaches MorphWritten" []
+  }
 
-  testCase "WHY (daemon-side) — a chain stamped ModelChanged through MorphWritten reports a positive total and enters the ring — because the statusline's p50/p99 read this ring, not the in-flight slot" <| fun _ ->
+  testCaseTask "WHY (daemon-side) — a chain stamped ModelChanged through MorphWritten reports a positive total and enters the ring — because the statusline's p50/p99 read this ring, not the in-flight slot" <| fun () -> task {
     let tracker = EvalLatencyTrace.Tracker(256)
     tracker.StampModelChanged()
     // A real, small, measurable gap — not a mock clock — so this proves the
     // Stopwatch-based math actually elapses time, not just that fields got set.
-    System.Threading.Thread.Sleep(TestTimeouts.measurableGap)
+    do! System.Threading.Tasks.Task.Delay TestTimeouts.measurableGap
     tracker.StampPushReceived()
     tracker.StampMorphWritten()
     let snapshot = tracker.Snapshot()
@@ -62,6 +63,7 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
     // hard perf assertion on a shared CI runner.
     (total.Value, 200.0) |> Expect.isLessThan (sprintf "chain total %.3fms should track the ~2ms gap, not balloon" total.Value)
     (total.Value, 0.0) |> Expect.isGreaterThanOrEqual "chain total is never negative"
+  }
 
   testCase "WHY (daemon-side) — an incomplete chain never enters the ring — because a straggler mid-chain (a burst was still rendering when the next eval started) must not corrupt the p50/p99 window with a bogus tiny sample" <| fun _ ->
     let tracker = EvalLatencyTrace.Tracker(256)
@@ -70,13 +72,13 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
     // No MorphWritten — the chain never reached the pixel.
     tracker.Snapshot() |> Expect.equal "nothing completed yet" []
 
-  testCase "WHY (daemon-side) — every ModelChanged ALWAYS starts a fresh chain, discarding whatever was in flight — this was the actual bug found live: merging a late ModelChanged into an old un-completed sample produced a fabricated 'p50 51488.6ms' (the gap since a stale ModelChanged from long before any browser connected), not a real render latency" <| fun _ ->
+  testCaseTask "WHY (daemon-side) — every ModelChanged ALWAYS starts a fresh chain, discarding whatever was in flight — this was the actual bug found live: merging a late ModelChanged into an old un-completed sample produced a fabricated 'p50 51488.6ms' (the gap since a stale ModelChanged from long before any browser connected), not a real render latency" <| fun () -> task {
     let tracker = EvalLatencyTrace.Tracker(256)
     // First ModelChanged: no SSE client connected, so it never reaches
     // Push/Morph — it would linger forever if ModelChanged merged instead
     // of restarting.
     tracker.StampModelChanged()
-    System.Threading.Thread.Sleep(TestTimeouts.settle)
+    do! System.Threading.Tasks.Task.Delay TestTimeouts.settle
     // Second ModelChanged: this is the one a now-connected client's push
     // agent will actually observe and render.
     tracker.StampModelChanged()
@@ -89,6 +91,7 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
     // be >= the 50ms sleep. It must instead track the SECOND ModelChanged,
     // which was immediately followed by Push/Morph with no sleep.
     (total, 50.0) |> Expect.isLessThan (sprintf "total %.3fms must reflect only the second ModelChanged, not the 50ms-stale first one" total)
+  }
 
   testCase "WHY — the ring caps at its capacity — because vision §3.4 specifies 'ring of the last 256', and an unbounded ring would grow forever over a long daemon session" <| fun _ ->
     let tracker = EvalLatencyTrace.Tracker(8)

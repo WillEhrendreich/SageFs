@@ -47,16 +47,19 @@ let batchFlusherTests = testList "BatchFlusher never loses items and respects ca
     flushed.[0] |> Expect.equal "got remaining items" [|42;99|]
   }
 
-  test "timer-based flush fires within interval" {
+  testCaseTask "timer-based flush fires within interval" <| fun () -> task {
     let flushed = ResizeArray<int array>()
-    use flusher = new BatchFlusher<int>(100, 100, fun batch -> flushed.Add(batch))
+    // The flush itself says when it happened: no poll, and no thread parked while the timer runs.
+    let firstFlush = System.Threading.Tasks.TaskCompletionSource<unit>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+    use flusher =
+      new BatchFlusher<int>(100, 100, fun batch ->
+        lock flushed (fun () -> flushed.Add(batch))
+        firstFlush.TrySetResult() |> ignore)
     flusher.Add(7)
-    // Poll up to 3 seconds (CI has ~10× variance vs dev machine under ThreadPool pressure)
-    let deadline = System.Diagnostics.Stopwatch.GetTimestamp() + System.Diagnostics.Stopwatch.Frequency * 3L
-    while flushed.Count = 0 && System.Diagnostics.Stopwatch.GetTimestamp() < deadline do
-      Thread.Sleep(TestTimeouts.pollFlush)
-    (flushed.Count, 1) |> Expect.isGreaterThanOrEqual "timer flushed at least once within 3s"
-    flushed.[0] |> Expect.sequenceEqual "contains the item" [|7|]
+    // The flush goes through the thread pool, which CI starves (~10× variance vs a dev machine): the in-process ceiling.
+    let! winner = System.Threading.Tasks.Task.WhenAny(firstFlush.Task, System.Threading.Tasks.Task.Delay TestTimeouts.patienceInProcess)
+    obj.ReferenceEquals(winner, firstFlush.Task) |> Expect.isTrue "timer flushed at least once within the in-process patience"
+    lock flushed (fun () -> flushed.[0]) |> Expect.sequenceEqual "contains the item" [|7|]
   }
 
   test "multiple batches accumulate correctly" {

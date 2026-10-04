@@ -131,7 +131,7 @@ let sessionActivityTouchTests =
 
         // Real wall-clock gap so a later LastActivity is unambiguously later,
         // not a same-tick coincidence.
-        Thread.Sleep TestTimeouts.clockGap
+        do! System.Threading.Tasks.Task.Delay TestTimeouts.clockGap
 
         let! _ = wrapped (WorkerMessage.EvalCode("1+1", "r1")) |> Async.StartAsTask
         let afterTouch = flush harness created.Id
@@ -167,7 +167,7 @@ let sessionActivityTouchTests =
             (fun () -> harness.Mailbox.Post(SessionCommand.TouchSession created.Id))
             fakeWorker
 
-        Thread.Sleep TestTimeouts.clockGap
+        do! System.Threading.Tasks.Task.Delay TestTimeouts.clockGap
         let! _ = wrapped (WorkerMessage.GetStatus "poll") |> Async.StartAsTask
         let afterPoll = flush harness created.Id
 
