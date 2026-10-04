@@ -76,6 +76,7 @@
         <Compile Include="HygieneSimDstTests.fs" />
         <Compile Include="HygieneSandbox.fs" />
         <Compile Include="HygieneGatherTests.fs" />
+        <Compile Include="HygieneAsyncScanTests.fs" />
         <Compile Include="HygieneExecuteTests.fs" />
         <Compile Include="GateReaperTests.fs" />
         <Compile Include="RunnerDirsTests.fs" />
