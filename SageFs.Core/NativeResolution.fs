@@ -5,6 +5,7 @@ open System.IO
 open System.Reflection
 open System.Runtime.InteropServices
 open System.Runtime.Loader
+open System.Text.Json
 
 /// Resolves a hosted project's UNMANAGED native dependencies.
 ///
@@ -175,3 +176,326 @@ module NativeResolution =
             log (sprintf "[NativeResolution] resolver error for '%s': %s" name ex.Message)
             IntPtr.Zero)
       AssemblyLoadContext.Default.add_ResolvingUnmanagedDll handler
+
+/// Which runtimes a native asset is for.
+type NativeAssetScope =
+  /// A `runtimeTargets` entry: the package says which runtime identifier this file is for.
+  | ForRuntime of runtimeId: string
+  /// An entry of the target's own `native` group: the restore was for one runtime, so the file is for it.
+  | ForRestoredTarget
+
+/// One native file a package ships, as an absolute path.
+type NativeAsset = { Scope: NativeAssetScope; File: string }
+
+/// A restored package that ships native files.
+type NativePackage = { Name: string; Version: string; Assets: NativeAsset list }
+
+/// A package that ships native libraries, but none for the runtime the host is on.
+type NativeGap =
+  { Name: string
+    Version: string
+    ShippedRuntimes: string list
+    LibraryStems: string list }
+
+/// What reading a project's restore record gave: the packages that carry native files, or why it could not be read.
+type NativeAssetsReading =
+  | PackagesRead of NativePackage list
+  | Unreadable of reason: string
+
+/// What the host knows about native libraries: which runtime it is on and which packages ship natives.
+type NativeFacts =
+  { Runtime: string
+    Compatible: string list
+    Packages: NativePackage list }
+
+/// Reads the native libraries a project's restore says its packages carry (`obj/project.assets.json`), so the isolated
+/// host can make them loadable and say what is wrong when one cannot be. Why the host needs this: a package's native
+/// library lives in the NuGet cache under `runtimes/<rid>/native`, which the loader never searches, and a class
+/// library's build output does not hold a copy (only an executable's does).
+[<RequireQualifiedAccess>]
+module NativeAssets =
+
+  /// The environment variable the worker names a host's assets files in: the `project.assets.json` of each project
+  /// the session loaded, separated by the platform's path separator.
+  [<Literal>]
+  let EnvironmentVariable = "SAGEFS_PROJECT_ASSETS"
+
+  /// The runtime identifiers a native file may be for on this machine, most specific first: the running one, then the
+  /// portable `<os>-<arch>`, then the bare OS and, off Windows, the `unix` family NuGet's runtime graph also names.
+  let compatibleRuntimes (running: string) (os: string) (arch: string) : string list =
+    let family =
+      match os with
+      | "win" -> []
+      | _ -> [ sprintf "unix-%s" arch; "unix" ]
+    [ [ running; sprintf "%s-%s" os arch; os ]; family ]
+    |> List.concat
+    |> List.filter (fun id -> not (String.IsNullOrWhiteSpace id))
+    |> List.distinct
+
+  /// A file name without its directory, `lib` prefix and extension: `libSkiaSharp.so` and `SkiaSharp.dll` are `skiasharp`.
+  let libraryStem (fileName: string) : string =
+    let name = Path.GetFileName fileName
+    let noExtension =
+      match name.IndexOf ".so." with
+      | -1 -> Path.GetFileNameWithoutExtension name
+      | at -> name.Substring(0, at)
+    let noPrefix =
+      match noExtension.StartsWith("lib", StringComparison.OrdinalIgnoreCase) && noExtension.Length > 3 with
+      | true -> noExtension.Substring 3
+      | false -> noExtension
+    noPrefix.ToLowerInvariant()
+
+  let splitIdentity (identity: string) : string * string =
+    match identity.LastIndexOf '/' with
+    | -1 -> identity, ""
+    | at -> identity.Substring(0, at), identity.Substring(at + 1)
+
+  let members (element: JsonElement) : (string * JsonElement) list =
+    match element.ValueKind with
+    | JsonValueKind.Object -> [ for property in element.EnumerateObject() -> property.Name, property.Value ]
+    | _ -> []
+
+  let text (element: JsonElement) (name: string) : string =
+    match element.TryGetProperty name with
+    | true, value when value.ValueKind = JsonValueKind.String -> value.GetString() |> Option.ofObj |> Option.defaultValue ""
+    | _ -> ""
+
+  let child (element: JsonElement) (name: string) : JsonElement =
+    match element.ValueKind, element.TryGetProperty name with
+    | JsonValueKind.Object, (true, value) -> value
+    | _ -> JsonDocument.Parse("{}").RootElement
+
+  /// Where one package's native files are, from a `project.assets.json`: every package that ships a native file, with
+  /// absolute paths. `directoryExists` says which package folder actually holds the package (a restore may list a
+  /// fallback folder first). A package whose folder cannot be found has nothing the host could load, so it is left out.
+  let read (directoryExists: string -> bool) (json: string) : NativeAssetsReading =
+    try
+      use document = JsonDocument.Parse json
+      let root = document.RootElement
+      let folders = members (child root "packageFolders") |> List.map fst
+      let libraries = members (child root "libraries") |> Map.ofList
+      let folderOf (identity: string) : string =
+        match Map.tryFind identity libraries with
+        | None -> ""
+        | Some library ->
+          let relative = text library "path"
+          match relative with
+          | "" -> ""
+          | _ ->
+            folders
+            |> List.map (fun folder -> Path.Combine(folder, relative))
+            |> List.tryFind directoryExists
+            |> Option.defaultValue ""
+      let packages =
+        [ for _, target in members (child root "targets") do
+            for identity, package in members target do
+              let name, version = splitIdentity identity
+              let runtimeAssets =
+                members (child package "runtimeTargets")
+                |> List.choose (fun (path, details) ->
+                  match text details "assetType", text details "rid" with
+                  | "native", "" -> Some(ForRestoredTarget, path)
+                  | "native", rid -> Some(ForRuntime rid, path)
+                  | _ -> None)
+              let targetAssets = members (child package "native") |> List.map (fun (path, _) -> ForRestoredTarget, path)
+              match runtimeAssets @ targetAssets with
+              | [] -> ()
+              | assets ->
+                match folderOf identity with
+                | "" -> ()
+                | folder ->
+                  yield
+                    { Name = name
+                      Version = version
+                      Assets =
+                        assets
+                        |> List.map (fun (scope, path) -> { Scope = scope; File = Path.GetFullPath(Path.Combine(folder, path)) }) } ]
+      // A multi-target restore lists a package once per target; keep one copy of each file.
+      let merged =
+        packages
+        |> List.groupBy (fun p -> p.Name, p.Version)
+        |> List.map (fun ((name, version), group) ->
+          { Name = name
+            Version = version
+            Assets = group |> List.collect (fun p -> p.Assets) |> List.distinct })
+      PackagesRead merged
+    with ex -> Unreadable ex.Message
+
+  let applies (compatible: string list) (asset: NativeAsset) : bool =
+    match asset.Scope with
+    | ForRestoredTarget -> true
+    | ForRuntime id -> List.contains id compatible
+
+  /// The directories to search for native libraries: the folder of every native file that is for this machine.
+  let directories (compatible: string list) (packages: NativePackage list) : string list =
+    packages
+    |> List.collect (fun p -> p.Assets)
+    |> List.filter (applies compatible)
+    |> List.choose (fun a -> Path.GetDirectoryName a.File |> Option.ofObj)
+    |> List.distinct
+
+  /// The packages that ship the library with this stem for this machine.
+  let providers (compatible: string list) (stem: string) (packages: NativePackage list) : NativePackage list =
+    packages
+    |> List.filter (fun p -> p.Assets |> List.exists (fun a -> applies compatible a && libraryStem a.File = stem))
+
+  /// The packages that ship native libraries but none for this machine, and whose libraries no package that does ship
+  /// one for this machine provides. (SkiaSharp depends on a package for every platform; on Linux the Windows and macOS
+  /// ones ship nothing for it, and that is not a gap because the Linux one provides the same library.)
+  let gaps (compatible: string list) (packages: NativePackage list) : NativeGap list =
+    let stemsOf (assets: NativeAsset list) = assets |> List.map (fun a -> libraryStem a.File) |> List.distinct
+    let covered =
+      packages
+      |> List.collect (fun p -> p.Assets |> List.filter (applies compatible))
+      |> stemsOf
+      |> Set.ofList
+    packages
+    |> List.filter (fun p -> p.Assets |> List.exists (applies compatible) |> not)
+    |> List.choose (fun p ->
+      let stems = stemsOf p.Assets
+      match stems |> List.exists (fun stem -> not (Set.contains stem covered)) with
+      | false -> None
+      | true ->
+        Some
+          { Name = p.Name
+            Version = p.Version
+            ShippedRuntimes =
+              p.Assets
+              |> List.choose (fun a ->
+                match a.Scope with
+                | ForRuntime id -> Some id
+                | ForRestoredTarget -> None)
+              |> List.distinct
+              |> List.sort
+            LibraryStems = stems })
+
+  /// The facts for the assets files the daemon named: those that read, merged. A file that is missing or does not
+  /// parse contributes nothing, and the failure is returned beside the facts so a caller can say it.
+  let factsFrom
+    (readText: string -> string)
+    (directoryExists: string -> bool)
+    (running: string)
+    (os: string)
+    (arch: string)
+    (assetsFiles: string list)
+    : NativeFacts * string list =
+    let readings =
+      assetsFiles
+      |> List.map (fun file ->
+        try
+          match read directoryExists (readText file) with
+          | PackagesRead packages -> PackagesRead packages
+          | Unreadable why -> Unreadable(sprintf "%s: %s" file why)
+        with ex -> Unreadable(sprintf "%s: %s" file ex.Message))
+    let packages =
+      readings
+      |> List.collect (function
+        | PackagesRead found -> found
+        | Unreadable _ -> [])
+      |> List.distinct
+    let problems =
+      readings
+      |> List.choose (function
+        | Unreadable why -> Some why
+        | PackagesRead _ -> None)
+    { Runtime = running; Compatible = compatibleRuntimes running os arch; Packages = packages }, problems
+
+  /// This machine's facts for the assets files the daemon named, reading the real filesystem.
+  let currentFacts (assetsFiles: string list) : NativeFacts * string list =
+    let os =
+      match RuntimeInformation.IsOSPlatform OSPlatform.Windows, RuntimeInformation.IsOSPlatform OSPlatform.OSX with
+      | true, _ -> "win"
+      | _, true -> "osx"
+      | _ -> "linux"
+    let arch = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()
+    factsFrom File.ReadAllText Directory.Exists RuntimeInformation.RuntimeIdentifier os arch assetsFiles
+
+  /// Names the daemon passes the assets files in, separated by the platform's path separator.
+  let splitFileList (value: string) : string list =
+    match String.IsNullOrWhiteSpace value with
+    | true -> []
+    | false -> value.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) |> Array.toList
+
+/// Says what is wrong when a native library cannot be loaded.
+[<RequireQualifiedAccess>]
+module NativeDiagnosis =
+
+  /// Whether a failure is a native library that would not load.
+  type Explanation =
+    | NotANativeLoadFailure
+    | NativeLoadFailure of text: string
+
+  let rec findNotFound (ex: exn) : DllNotFoundException list =
+    match ex with
+    | :? DllNotFoundException as missing -> [ missing ]
+    | :? AggregateException as many -> many.InnerExceptions |> Seq.toList |> List.collect findNotFound
+    | _ ->
+      match ex.InnerException with
+      | null -> []
+      | inner -> findNotFound inner
+
+  /// The library name a loader message quotes (`Unable to load shared library 'libX' or one of its dependencies`).
+  let quotedLibrary (message: string) : string =
+    match message.IndexOf '\'' with
+    | -1 -> ""
+    | start ->
+      match message.IndexOf('\'', start + 1) with
+      | -1 -> ""
+      | stop -> message.Substring(start + 1, stop - start - 1)
+
+  let describeGap (gap: NativeGap) : string =
+    match gap.ShippedRuntimes with
+    | [] -> sprintf "%s %s" gap.Name gap.Version
+    | runtimes -> sprintf "%s %s (ships %s)" gap.Name gap.Version (String.Join(", ", runtimes))
+
+  /// Said when a session starts, before any call can fail: this package ships native libraries but none for this machine.
+  let gapWarning (facts: NativeFacts) (gap: NativeGap) : string =
+    sprintf
+      "Package %s %s ships native libraries for %s only, none for %s, so a call into it will fail to load its native library on this machine. Use a version or variant of the package that ships %s, or install the library on this machine."
+      gap.Name gap.Version (String.Join(", ", gap.ShippedRuntimes)) facts.Runtime facts.Runtime
+
+  /// What to tell the user about `failure`: which library, which runtime, which package ships it for other runtimes only,
+  /// and what to do. `NotANativeLoadFailure` when no native library failed to load anywhere in the exception chain.
+  let explain (facts: NativeFacts) (failure: exn) : Explanation =
+    match findNotFound failure with
+    | [] -> NotANativeLoadFailure
+    | missing :: _ ->
+      let library = quotedLibrary missing.Message
+      let stem = NativeAssets.libraryStem library
+      let gaps = NativeAssets.gaps facts.Compatible facts.Packages
+      let named = gaps |> List.filter (fun g -> List.contains stem g.LibraryStems)
+      let providers = NativeAssets.providers facts.Compatible stem facts.Packages
+      let subject =
+        match library with
+        | "" -> "a native library"
+        | name -> sprintf "the native library '%s'" name
+      let advice =
+        match providers, named, gaps with
+        | provider :: _, _, _ ->
+          sprintf
+            "%s %s ships it for %s, so the loader found it and failed on something it depends on. Check what the library links to (on Linux, run ldd on it) and install what is missing."
+            provider.Name provider.Version facts.Runtime
+        | [], _ :: _, _ ->
+          let owners =
+            match named with
+            | [ one ] -> sprintf "%s, which ships" (describeGap one)
+            | many -> sprintf "%s, which ship" (String.Join(" and ", many |> List.map describeGap))
+          sprintf
+            "It comes from %s native libraries for other runtimes only, none for %s. Use a version or variant of the package that ships a %s native library, or install the library on this machine."
+            owners facts.Runtime facts.Runtime
+        | [], [], _ :: _ ->
+          sprintf
+            "These packages ship native libraries but none for %s: %s. If one of them is the owner, use a version or variant that ships %s, or install the library on this machine."
+            facts.Runtime (String.Join("; ", gaps |> List.map describeGap)) facts.Runtime
+        | [], [], [] ->
+          sprintf
+            "No package the project restored ships a native library for %s that matches it. If a package should provide it, check the package has a %s asset; otherwise install the library on this machine so the loader can find it."
+            facts.Runtime facts.Runtime
+      let heading = Char.ToUpperInvariant(subject.[0]).ToString() + subject.Substring 1
+      NativeLoadFailure(sprintf "%s could not be loaded on %s. %s" heading facts.Runtime advice)
+
+  /// `message` with the explanation after it when `failure` is a native load failure; `message` itself otherwise.
+  let annotate (facts: NativeFacts) (failure: exn) (message: string) : string =
+    match explain facts failure with
+    | NotANativeLoadFailure -> message
+    | NativeLoadFailure text -> sprintf "%s\n%s" message text

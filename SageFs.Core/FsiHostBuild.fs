@@ -23,6 +23,7 @@ let hostSourceNames =
     "FsiNaming.fs"
     "MachineTier.fs"
     "Timeouts.fs"
+    "NativeResolution.fs"
     "Instrumentation.fs"
     "LiveValueTree.fs"
     "DirectoryConfigTypes.fs"

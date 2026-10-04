@@ -8,6 +8,22 @@ open SageFs.IsolatedFsiSession
 [<Tests>]
 let tests =
   testList "IsolatedFsiSession" [
+    // A package's native library lives in the NuGet cache; the project's restore record names which packages the
+    // project uses, so the host is given that file to find them (see NativeAssets).
+    testList "projectAssetsFilesWith" [
+      test "WHY — both layouts a restore writes its record in are found, and only the files that exist are named" {
+        let beside = IO.Path.GetFullPath "/repo/App/obj/project.assets.json"
+        let arcade = IO.Path.GetFullPath "/repo/Lib/artifacts/obj/Lib/project.assets.json"
+        projectAssetsFilesWith (fun path -> path = beside || path = arcade) [ "/repo/App/App.fsproj"; "/repo/Lib/Lib.fsproj"; "/repo/None/None.fsproj" ]
+        |> Expect.equal "App's obj/ file and Lib's artifacts/obj/ file, nothing for the project with none" [ beside; arcade ]
+      }
+
+      test "no projects name no files, so a bare session sets nothing" {
+        projectAssetsFilesWith (fun _ -> true) []
+        |> Expect.isEmpty "nothing to name"
+      }
+    ]
+
     // #142: AppContext.BaseDirectory and Assembly.Location inside a session point at the isolated host's own
     // directory (or, worse, at the worker's shadow-copy temp dir), never the project's build output.
     // primaryProjectOutputDir is the pure-over-filesystem-primitives lookup that finds the primary

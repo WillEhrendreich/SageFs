@@ -108,6 +108,7 @@
         <EmbeddedResource Include="FsiNaming.fs" LogicalName="FsiHost/FsiNaming.fs" />
         <EmbeddedResource Include="MachineTier.fs" LogicalName="FsiHost/MachineTier.fs" />
         <EmbeddedResource Include="Timeouts.fs" LogicalName="FsiHost/Timeouts.fs" />
+        <EmbeddedResource Include="NativeResolution.fs" LogicalName="FsiHost/NativeResolution.fs" />
         <EmbeddedResource Include="Instrumentation.fs" LogicalName="FsiHost/Instrumentation.fs" />
         <EmbeddedResource Include="DirectoryConfigTypes.fs" LogicalName="FsiHost/DirectoryConfigTypes.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/ConfigDsl.fs" LogicalName="FsiHost/ConfigDsl.fs" />

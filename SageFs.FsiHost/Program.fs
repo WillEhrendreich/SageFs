@@ -133,6 +133,39 @@ let private applyProjectBaseDirectory () =
   | "" -> ()
   | dir -> AppContext.SetData("APP_CONTEXT_BASE_DIRECTORY", dir)
 
+/// The native libraries the session's packages carry (a package keeps them under runtimes/<rid>/native in the NuGet
+/// cache, which the loader never searches, and a class library's build output holds no copy): read from the
+/// `project.assets.json` files the worker names in SAGEFS_PROJECT_ASSETS, made loadable by the resolver, and kept as
+/// the facts that explain a library that still will not load. A bare session names none, and the resolver then
+/// only looks beside the assemblies that ask.
+let installNativeResolution () : NativeFacts =
+  let files =
+    match Environment.GetEnvironmentVariable NativeAssets.EnvironmentVariable with
+    | null -> []
+    | value -> NativeAssets.splitFileList value
+  let facts, problems = NativeAssets.currentFacts files
+  for problem in problems do
+    eprintfn "[fsihost] native assets: %s" problem
+  NativeResolution.install (fun message -> eprintfn "[fsihost] %s" message) (NativeAssets.directories facts.Compatible facts.Packages)
+  facts
+
+/// A native library that will not load can end the process from a thread no eval is waiting on (a finalizer, a timer):
+/// the runtime then prints the bare exception and exits. This says what the failure means first, on the real stderr
+/// (the redirected one is gone with the process), so the crash report the daemon keeps carries it.
+let explainFatalNativeFailure (facts: NativeFacts) (args: UnhandledExceptionEventArgs) : unit =
+  try
+    match args.ExceptionObject with
+    | :? exn as failure ->
+      match NativeDiagnosis.explain facts failure with
+      | NativeDiagnosis.NotANativeLoadFailure -> ()
+      | NativeDiagnosis.NativeLoadFailure text ->
+        use stderr = Console.OpenStandardError()
+        let bytes = Encoding.UTF8.GetBytes(sprintf "[fsihost] %s\n" text)
+        stderr.Write(bytes, 0, bytes.Length)
+        stderr.Flush()
+    | _ -> ()
+  with _ -> ()
+
 let private run (fsiArgs: string list) : int =
   applyProjectBaseDirectory ()
 
@@ -157,6 +190,8 @@ let private run (fsiArgs: string list) : int =
   // User code writing to the console shows up as Output, just like FSI's own printing.
   Console.SetOut outWriter
   Console.SetError errWriter
+  let nativeFacts = installNativeResolution ()
+  AppDomain.CurrentDomain.UnhandledException.Add(explainFatalNativeFailure nativeFacts)
 
   let config = FsiEvaluationSession.GetDefaultConfiguration()
   use session =
@@ -281,7 +316,7 @@ let private run (fsiArgs: string list) : int =
                 match result with
                 | Choice1Of2 _ -> EvalSucceeded
                 | Choice2Of2 ex when cancel.IsCancellationRequested || (ex :? OperationCanceledException) -> EvalInterrupted
-                | Choice2Of2 ex -> EvalFailed ex.Message
+                | Choice2Of2 ex -> EvalFailed(NativeDiagnosis.annotate nativeFacts ex ex.Message)
               outcome, diagnostics |> Array.map FcsQueries.toWire |> Array.toList
             with
             | :? ThreadInterruptedException -> EvalInterrupted, []

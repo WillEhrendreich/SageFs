@@ -37,6 +37,9 @@
     <Compile Include="FsiNaming.fs" />
     <Compile Include="MachineTier.fs" />
     <Compile Include="Timeouts.fs" />
+    <!-- Where a package's native libraries are, and what to say when one will not load. BCL only. The loader never
+         searches the NuGet cache's runtimes/<rid>/native, so this process has to be told. -->
+    <Compile Include="NativeResolution.fs" />
     <Compile Include="Instrumentation.fs" />
     <Compile Include="LiveValueTree.fs" />
     <Compile Include="DirectoryConfigTypes.fs" />

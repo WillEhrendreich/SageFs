@@ -105,6 +105,20 @@ let primaryProjectOutputDir (projects: string list) : string option =
     File.GetLastWriteTimeUtc
     projects
 
+/// The `project.assets.json` of each project that has one: the restore's record of which packages the project
+/// uses, which is where a package's native libraries are found (see `NativeAssets`). The two layouts a restore
+/// writes it in are `obj/` beside the project and `artifacts/obj/<name>/`; a project built under a different
+/// intermediate path yields none, and its session then looks for native libraries only beside the assemblies that ask.
+let projectAssetsFilesWith (fileExists: string -> bool) (projects: string list) : string list =
+  projects
+  |> List.collect (fun project ->
+    let projectDir = Path.GetDirectoryName(Path.GetFullPath project)
+    let name = Path.GetFileNameWithoutExtension(project: string)
+    [ Path.Combine(projectDir, "obj", "project.assets.json")
+      Path.Combine(projectDir, "artifacts", "obj", name, "project.assets.json") ]
+    |> List.filter fileExists)
+  |> List.distinct
+
 /// The isolated host's own FSharp.Core.dll (`typeof<unit>` lives there) — a sibling of the host's own entry
 /// assembly, since `ensureBuiltWith` copies the SDK toolset's FSharp.Core into the same build output
 /// directory as `FsiHost.dll`.
@@ -717,6 +731,18 @@ let start
             match primaryProjectOutputDir projects with
             | Some dir -> [ ProjectOutputEnvironmentVariable, dir ]
             | None -> []
+          // A package's native library lives in the NuGet cache, where the loader never looks: name the projects'
+          // restore records so the host can say where, and warn now about a package that ships none for this machine.
+          let assetsFiles = projectAssetsFilesWith File.Exists projects
+          let nativeEnv =
+            match assetsFiles with
+            | [] -> []
+            | files -> [ NativeAssets.EnvironmentVariable, String.Join(string Path.PathSeparator, files) ]
+          let nativeFacts, nativeProblems = NativeAssets.currentFacts assetsFiles
+          for problem in nativeProblems do
+            logger.LogWarning(sprintf "  Native libraries: could not read %s" problem)
+          for gap in NativeAssets.gaps nativeFacts.Compatible nativeFacts.Packages do
+            logger.LogWarning("  " + NativeDiagnosis.gapWarning nativeFacts gap)
           // #141: the project's FSharp.Core, if it differs in build from the host's own (both commonly
           // report the same version), silently loses at runtime — warn now instead of waiting for the
           // MissingMethodException that only shows up when user code happens to hit a missing member. The
@@ -747,7 +773,7 @@ let start
               Dotnet = dotnet
               FsiArgs = fsiArgs
               WorkingDir = workingDir
-              Environment = projectOutputEnv @ RuntimeCompat.rollForwardEnv choice @ Middleware.ValueReadTracking.processEnvironment agent.ValueReads
+              Environment = projectOutputEnv @ nativeEnv @ RuntimeCompat.rollForwardEnv choice @ Middleware.ValueReadTracking.processEnvironment agent.ValueReads
               Libraries = libraries
               OnOutput =
                 fun stream text ->

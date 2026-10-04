@@ -46,8 +46,8 @@ let everyFolderExists (_: string) = true
 
 let read (json: string) : NativePackage list =
   match NativeAssets.read everyFolderExists json with
-  | Result.Ok packages -> packages
-  | Result.Error why -> failtestf "the assets file should read: %s" why
+  | PackagesRead packages -> packages
+  | Unreadable why -> failtestf "the assets file should read: %s" why
 
 let linux = NativeAssets.compatibleRuntimes "linux-x64" "linux" "x64"
 
@@ -99,8 +99,8 @@ let tests =
       let json = (assetsJson fallback).Replace(fallbackEntry, sprintf "%s, \"%s\": {}" fallbackEntry (packagesRoot.Replace('\\', '/')))
       let holdsPackages (dir: string) = dir.StartsWith(packagesRoot, StringComparison.Ordinal)
       match NativeAssets.read holdsPackages json with
-      | Result.Error why -> failtestf "should read: %s" why
-      | Result.Ok packages ->
+      | Unreadable why -> failtestf "should read: %s" why
+      | PackagesRead packages ->
         packages
         |> List.collect (fun p -> p.Assets)
         |> List.forall (fun a -> a.File.StartsWith(packagesRoot, StringComparison.Ordinal))
@@ -108,13 +108,13 @@ let tests =
 
     testCase "WHY — a package whose folder cannot be found has nothing the host could load, so it is left out instead of named with a path that does not exist" <| fun _ ->
       match NativeAssets.read (fun _ -> false) (assetsJson packagesRoot) with
-      | Result.Ok packages -> packages |> Expect.isEmpty "no folder, no packages"
-      | Result.Error why -> failtestf "should read: %s" why
+      | PackagesRead packages -> packages |> Expect.isEmpty "no folder, no packages"
+      | Unreadable why -> failtestf "should read: %s" why
 
     testCase "WHY — text that is not an assets file is an error that names what was wrong, not an empty answer that reads as 'no native libraries'" <| fun _ ->
       match NativeAssets.read everyFolderExists "{ not json" with
-      | Result.Error why -> why |> Expect.isNotEmpty "says why"
-      | Result.Ok _ -> failtest "a broken file must not read as an empty restore"
+      | Unreadable why -> why |> Expect.isNotEmpty "says why"
+      | PackagesRead _ -> failtest "a broken file must not read as an empty restore"
 
     testCase "WHY — an entry in a RID-specific restore's own native group is for that restore, so it applies on any machine that restore was run for" <| fun _ ->
       let json =
@@ -155,7 +155,7 @@ let tests =
       NativeAssets.splitFileList "  " |> Expect.isEmpty "blank"
 
     testCase "WHY — facts from several assets files merge, and a file that cannot be read is reported beside them instead of hiding the rest" <| fun _ ->
-      let files = Map.ofList [ "/good/project.assets.json", assetsJson packagesRoot ]
+      let files = Map.ofList [ ("/good/project.assets.json", assetsJson packagesRoot) ]
       let readText path =
         match Map.tryFind path files with
         | Some text -> text
@@ -187,6 +187,13 @@ let tests =
           text |> Expect.stringContains "names this runtime" "linux-x64"
           text |> Expect.stringContains "says what to do" "install the library on this machine"
 
+      testCase "WHY — a library a package DOES ship for this runtime is not reported as missing, because then the loader found it and what failed is something it depends on" <| fun _ ->
+        match NativeDiagnosis.explain (factsFor (read (assetsJson packagesRoot))) (notFound "libSkiaSharp") with
+        | NativeDiagnosis.NotANativeLoadFailure -> failtest "should be a native load failure"
+        | NativeDiagnosis.NativeLoadFailure text ->
+          text |> Expect.stringContains "names the package that ships it here" "SkiaSharp.NativeAssets.Linux.NoDependencies 2.88.8 ships it for linux-x64"
+          text |> Expect.stringContains "points at its dependencies" "ldd"
+
       testCase "WHY — a gap in some OTHER package is listed without being blamed, when the missing library does not match it" <| fun _ ->
         let onlyWindows = read (assetsJson packagesRoot) |> List.filter (fun p -> p.Name = "SkiaSharp.NativeAssets.Win32")
         match NativeDiagnosis.explain (factsFor onlyWindows) (notFound "libother") with
@@ -203,6 +210,17 @@ let tests =
           match NativeDiagnosis.explain (factsFor []) failure with
           | NativeDiagnosis.NativeLoadFailure _ -> ()
           | NativeDiagnosis.NotANativeLoadFailure -> failtestf "should find the DllNotFoundException in %s" (failure.GetType().Name))
+
+      testCase "WHY — the warning given when a session starts names the package, what it ships, this runtime and what to do, so the user hears before a call fails" <| fun _ ->
+        let onlyWindows = read (assetsJson packagesRoot) |> List.filter (fun p -> p.Name = "SkiaSharp.NativeAssets.Win32")
+        let facts = factsFor onlyWindows
+        match NativeAssets.gaps facts.Compatible facts.Packages with
+        | [ gap ] ->
+          let said = NativeDiagnosis.gapWarning facts gap
+          said |> Expect.stringContains "names the package" "SkiaSharp.NativeAssets.Win32 2.88.8"
+          said |> Expect.stringContains "names what it ships" "win-x64, win-x86"
+          said |> Expect.stringContains "names this runtime" "none for linux-x64"
+        | other -> failtestf "expected the one gap, got %A" other
 
       testCase "WHY — a failure with no native library in it is left alone, so an ordinary exception's message is never rewritten" <| fun _ ->
         NativeDiagnosis.explain (factsFor []) (InvalidOperationException "boom")
