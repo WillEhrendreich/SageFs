@@ -477,3 +477,17 @@ let sessionManagerOffMailboxBuildTests =
       })
     }
   ]
+
+[<Tests>]
+let sessionCommandWorkerSpawnFailedShapeTests =
+  testList "SessionCommand.WorkerSpawnFailed carries what the handler needs to notify clients" [
+
+    testCase "it has the session id, the worker pid and the message, in that order" <| fun _ ->
+      let spawnFailed =
+        Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<SessionCommand>)
+        |> Array.find (fun case -> case.Name = "WorkerSpawnFailed")
+      let fieldTypes = spawnFailed.GetFields() |> Array.map (fun field -> field.PropertyType)
+      fieldTypes
+      |> Expect.equal "the fields are the session id, the worker pid and the message"
+           [| typeof<SessionId>; typeof<int>; typeof<string> |]
+  ]

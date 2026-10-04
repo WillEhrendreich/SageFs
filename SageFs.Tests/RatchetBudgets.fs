@@ -286,7 +286,7 @@ let lineCount (repoRoot: string) (rel: string) : int =
 /// Blocking calls in test bodies starve the thread pool and make the suite time out. These freeze the current debt
 /// at its present level: a new one fails, and converting a test to testTask/testAsync lowers a number.
 let blockingCalls : (string * int) list =
-  [ "Async.RunSynchronously", 43
+  [ "Async.RunSynchronously", 41
     "Thread.Sleep", 37
     ".Wait(", 17
     "GetAwaiter().GetResult()", 24 ]

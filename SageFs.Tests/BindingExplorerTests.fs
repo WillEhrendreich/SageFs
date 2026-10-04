@@ -327,3 +327,93 @@ let bindingExplorerTests = testList "BindingExplorer" [
         | None -> false
   ]
 ]
+
+/// A cell whose source is `source` and whose FSI output is `fsiOutput`.
+let cellAt (index: int) (source: string) (fsiOutput: string) : CellInput =
+  { CellIndex = index; Source = source; FsiOutput = fsiOutput }
+
+[<Tests>]
+let scopeShadowDetectionTests = testList "buildScopeSnapshot shadow detection" [
+
+  testCase "a single binding has no shadows and is active" <| fun _ ->
+    let scope = buildScopeSnapshot [ cellAt 0 "let x = 1" "val x: int = 1" ]
+    scope.Bindings |> Expect.hasLength "one binding" 1
+    scope.Bindings.[0].ShadowedBy |> Expect.isEmpty "a unique name has no shadows"
+    scope.ActiveBindings |> Map.containsKey "x" |> Expect.isTrue "x is active"
+
+  testCase "a redefined binding is shadowed by the later cell, and the later one is active" <| fun _ ->
+    let scope = buildScopeSnapshot [ cellAt 0 "let x = 1" "val x: int = 1"; cellAt 1 "let x = 2" "val x: int = 2" ]
+    let original = scope.Bindings |> List.find (fun b -> b.Name = "x" && b.CellIndex = 0)
+    original.ShadowedBy |> Expect.equal "cell 0's x is shadowed by cell 1" [ 1 ]
+    (scope.ActiveBindings |> Map.find "x").CellIndex |> Expect.equal "the active x is from cell 1" 1
+
+  testCase "a triple redefinition shadows every earlier version" <| fun _ ->
+    let scope =
+      buildScopeSnapshot
+        [ cellAt 0 "let v = 1" "val v: int = 1"
+          cellAt 1 "let v = 2" "val v: int = 2"
+          cellAt 2 "let v = 3" "val v: int = 3" ]
+    let v0 = scope.Bindings |> List.find (fun b -> b.Name = "v" && b.CellIndex = 0)
+    let v1 = scope.Bindings |> List.find (fun b -> b.Name = "v" && b.CellIndex = 1)
+    v0.ShadowedBy |> List.length |> Expect.equal "v0 is shadowed by the 2 later cells" 2
+    v1.ShadowedBy |> Expect.equal "v1 is shadowed by cell 2 only" [ 2 ]
+    scope.ShadowedBindings |> Expect.hasLength "2 shadowed bindings" 2
+
+  testCase "distinct names never shadow each other" <| fun _ ->
+    let scope =
+      buildScopeSnapshot
+        [ cellAt 0 "let a = 1" "val a: int = 1"
+          cellAt 1 "let b = 2" "val b: int = 2"
+          cellAt 2 "let c = 3" "val c: int = 3" ]
+    scope.Bindings |> List.forall (fun b -> List.isEmpty b.ShadowedBy)
+    |> Expect.isTrue "distinct names produce no shadows"
+    scope.ActiveBindings |> Map.count |> Expect.equal "all three names are active" 3
+
+  testCase "100 cells defining the same name leave one active binding and 99 shadowed" <| fun _ ->
+    let scope =
+      buildScopeSnapshot [ for i in 0 .. 99 -> cellAt i (sprintf "let x = %d" i) (sprintf "val x: int = %d" i) ]
+    scope.ActiveBindings |> Map.count |> Expect.equal "one active binding (x)" 1
+    (scope.ActiveBindings |> Map.find "x").CellIndex |> Expect.equal "the active x is from cell 99" 99
+    scope.ShadowedBindings |> Expect.hasLength "99 shadowed definitions" 99
+]
+
+[<Tests>]
+let scopeReferenceMatchingTests = testList "buildScopeSnapshot ReferencedIn matches whole words" [
+
+  testCase "a short name does not match inside a longer identifier" <| fun _ ->
+    // `x` appears in `maxValue` only as a substring, so nothing references it.
+    let scope =
+      buildScopeSnapshot
+        [ cellAt 0 "let x = 1" "val x: int = 1"
+          cellAt 1 "let maxValue = 100" "val maxValue: int = 100"
+          cellAt 2 "printfn \"%d\" maxValue" "" ]
+    (scope.Bindings |> List.find (fun b -> b.Name = "x")).ReferencedIn
+    |> Expect.isEmpty "x only appears as a substring, so it has no references"
+
+  testCase "a name matches when it is used as a standalone word, and not inside another word" <| fun _ ->
+    let scope =
+      buildScopeSnapshot
+        [ cellAt 0 "let count = 5" "val count: int = 5"
+          cellAt 1 "let doubled = count * 2" ""
+          cellAt 2 "let discounted = price - 1" "" ]   // `count` inside `discounted` is a substring only
+    (scope.Bindings |> List.find (fun b -> b.Name = "count")).ReferencedIn
+    |> Expect.equal "count is referenced only in cell 1" [ 1 ]
+
+  testCase "a single-letter name matches only as a standalone word" <| fun _ ->
+    let scope =
+      buildScopeSnapshot
+        [ cellAt 0 "let i = 42" "val i: int = 42"
+          cellAt 1 "printfn \"result\" " ""         // no standalone `i`
+          cellAt 2 "let j = i + 1" "" ]             // `i` as a standalone word
+    (scope.Bindings |> List.find (fun b -> b.Name = "i")).ReferencedIn
+    |> Expect.equal "i is referenced only in cell 2" [ 2 ]
+
+  testCase "20 bindings each referenced once still resolve to the right cell" <| fun _ ->
+    // More bindings than a small per-name regex cache would hold: every reference must still land.
+    let bindingCount = 20
+    let definitions = [ for i in 0 .. bindingCount - 1 -> cellAt i (sprintf "let binding%d = %d" i i) (sprintf "val binding%d: int = %d" i i) ]
+    let references = [ for i in 0 .. bindingCount - 1 -> cellAt (bindingCount + i) (sprintf "let result%d = binding%d * 2" i i) "" ]
+    let binding0 = (buildScopeSnapshot (definitions @ references)).Bindings |> List.find (fun b -> b.Name = "binding0")
+    binding0.ReferencedIn |> Expect.hasLength "binding0 is referenced in exactly 1 cell" 1
+    binding0.ReferencedIn.Head |> Expect.equal "binding0 is referenced in the right cell" bindingCount
+]

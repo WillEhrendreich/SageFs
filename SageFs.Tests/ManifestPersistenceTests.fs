@@ -437,3 +437,149 @@ let manifestMappingTests = testList "ManifestMapping" [
     let s2 = roundtripped.Sessions.["s2"]
     s2.StoppedAt |> Expect.isSome "s2 stopped"
 ]
+
+/// An empty manifest that names `activeId` as its active session.
+let manifestDataWithActive (activeId: string) : DaemonManifestData =
+  { Entries = []
+    ActiveSessionId = Some activeId
+    CreatedAtMs = TestMagnitudes.epochMs }
+
+[<Tests>]
+let manifestWriterHeaderBoundsTests = testList "DaemonManifest writer header bounds" [
+
+  testCase "an active session id too long for the fixed header is refused, not written as a corrupt file" <| fun _ ->
+    // The header is 64 bytes and the fixed fields before ActiveSessionId use about 40, so a
+    // 40-character id pushes the position past the header. A negative pad length used to skip
+    // the pad write silently and leave a manifest that still passed its CRC.
+    let overlongId = String.replicate 40 "a"
+    Expect.throwsT<InvalidOperationException>
+      "an overlong ActiveSessionId is refused"
+      (fun () -> ManifestWriter.write (manifestDataWithActive overlongId) |> ignore)
+
+  testCase "a short active session id writes bytes" <| fun _ ->
+    ManifestWriter.write (manifestDataWithActive "abc12345")
+    |> Expect.isNotNull "a short id should produce bytes"
+
+  testCase "no active session id writes bytes" <| fun _ ->
+    ManifestWriter.write DaemonManifestData.empty
+    |> Expect.isNotNull "a missing active id should produce bytes"
+]
+
+/// A manifest of two live sessions, `sess-aaa` active.
+let twoSessionManifest : DaemonManifestData =
+  { Entries =
+      [ { ManifestSessionEntry.SessionId = "sess-aaa"
+          Projects = ["a.fsproj"]
+          WorkingDir = "C:\\a"
+          CreatedAt = DateTimeOffset.UtcNow
+          StoppedAt = None }
+        { ManifestSessionEntry.SessionId = "sess-bbb"
+          Projects = ["b.fsproj"]
+          WorkingDir = "C:\\b"
+          CreatedAt = DateTimeOffset.UtcNow
+          StoppedAt = None } ]
+    ActiveSessionId = Some "sess-aaa"
+    CreatedAtMs = TestMagnitudes.fixedCreatedAtMs }
+
+[<Tests>]
+let manifestMultiEntryRoundTripTests = testList "DaemonManifest multi-entry round trip" [
+
+  testCase "round-trips two sessions without corruption" <| fun _ ->
+    match ManifestReader.read (ManifestWriter.write twoSessionManifest) with
+    | Error msg -> failtestf "read failed: %s" msg
+    | Ok result -> result.Entries |> Expect.hasLength "should have 2 entries" 2
+
+  testCase "round-tripped entry ids match the originals" <| fun _ ->
+    match ManifestReader.read (ManifestWriter.write twoSessionManifest) with
+    | Error msg -> failtestf "read failed: %s" msg
+    | Ok result ->
+      result.Entries |> List.map (fun e -> e.SessionId) |> List.sort
+      |> Expect.equal "both session ids survive the round trip" [ "sess-aaa"; "sess-bbb" ]
+
+  testCase "ActiveSessionId survives the round trip" <| fun _ ->
+    match ManifestReader.read (ManifestWriter.write twoSessionManifest) with
+    | Error msg -> failtestf "read failed: %s" msg
+    | Ok result -> result.ActiveSessionId |> Expect.equal "ActiveSessionId should survive" (Some "sess-aaa")
+
+  testCase "a StoppedAt timestamp survives the round trip" <| fun _ ->
+    let stoppedAt = DateTimeOffset.UtcNow.AddMinutes(-5.0)
+    let data : DaemonManifestData =
+      { Entries =
+          [ { ManifestSessionEntry.SessionId = "s1"
+              Projects = ["p.fsproj"]
+              WorkingDir = "C:\\p"
+              CreatedAt = DateTimeOffset.UtcNow.AddHours(-1.0)
+              StoppedAt = Some stoppedAt } ]
+        ActiveSessionId = None
+        CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
+    match ManifestReader.read (ManifestWriter.write data) with
+    | Error msg -> failtestf "round-trip failed: %s" msg
+    | Ok result ->
+      let entry = result.Entries |> List.find (fun e -> e.SessionId = "s1")
+      entry.StoppedAt |> Expect.isSome "StoppedAt preserved through the round trip"
+]
+
+[<Tests>]
+let manifestReaderRejectionTests = testList "DaemonManifest reader rejection messages" [
+
+  testCase "a zero-byte file is an error that says the file is too small" <| fun _ ->
+    match ManifestReader.read [||] with
+    | Ok _ -> failtest "Expected an error for an empty manifest"
+    | Result.Error msg -> msg |> Expect.stringContains "the empty file is reported as too small" "too small"
+
+  testCase "a header with a valid magic and version but a wrong checksum fails the whole-file integrity check" <| fun _ ->
+    // Magic SFM1, format version 1, minimum reader version 1, everything else zero: the CRC cannot match.
+    let tinyInvalidFile = Array.create 64 0uy
+    tinyInvalidFile.[0] <- 0x53uy; tinyInvalidFile.[1] <- 0x46uy
+    tinyInvalidFile.[2] <- 0x4Duy; tinyInvalidFile.[3] <- 0x31uy
+    tinyInvalidFile.[4] <- 1uy; tinyInvalidFile.[5] <- 0uy
+    tinyInvalidFile.[6] <- 1uy; tinyInvalidFile.[7] <- 0uy
+    match ManifestReader.read tinyInvalidFile with
+    | Ok _ -> failtest "Expected an error for a manifest with a wrong checksum"
+    | Result.Error msg -> msg |> Expect.stringContains "the error names the whole-file integrity check" "File integrity CRC mismatch"
+]
+
+[<Tests>]
+let manifestMappingPruneTests = testList "ManifestMapping prunes stopped sessions by StoppedAt" [
+
+  /// One manifest entry; `StoppedAt = None` means the session is alive.
+  let entry (id: string) (createdDaysAgo: float) (stoppedDaysAgo: float option) : ManifestSessionEntry =
+    { SessionId = id
+      Projects = [ id + ".fsproj" ]
+      WorkingDir = "C:\\" + id
+      CreatedAt = DateTimeOffset.UtcNow.AddDays(-createdDaysAgo)
+      StoppedAt = stoppedDaysAgo |> Option.map (fun days -> DateTimeOffset.UtcNow.AddDays(-days)) }
+
+  let manifestOf (entries: ManifestSessionEntry list) (active: string option) : DaemonManifestData =
+    { Entries = entries
+      ActiveSessionId = active
+      CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
+
+  testCase "a session created 10 days ago but stopped 1 day ago is kept" <| fun _ ->
+    // Pruning by CreatedAt would have dropped it.
+    let state = ManifestMapping.toManifestState (manifestOf [ entry "old-created-recent-stopped" 10.0 (Some 1.0) ] None)
+    state.Sessions |> Map.containsKey "old-created-recent-stopped"
+    |> Expect.isTrue "a session stopped 1 day ago is kept even though it was created 10 days ago"
+
+  testCase "a session stopped 8 days ago is pruned whatever its CreatedAt" <| fun _ ->
+    let state = ManifestMapping.toManifestState (manifestOf [ entry "old-stopped-8d" 1.0 (Some 8.0) ] None)
+    state.Sessions |> Map.containsKey "old-stopped-8d"
+    |> Expect.isFalse "a session stopped 8 days ago is pruned"
+
+  testCase "a session with no StoppedAt is never pruned by age" <| fun _ ->
+    let state = ManifestMapping.toManifestState (manifestOf [ entry "alive-very-old" 30.0 None ] (Some "alive-very-old"))
+    state.Sessions |> Map.containsKey "alive-very-old"
+    |> Expect.isTrue "an alive session (no StoppedAt) is kept however old it is, so a crash stays visible"
+
+  testCase "with several entries only the long-stopped one is pruned" <| fun _ ->
+    let state =
+      ManifestMapping.toManifestState
+        (manifestOf
+          [ entry "keep-alive" 20.0 None
+            entry "keep-recent-stop" 20.0 (Some 2.0)
+            entry "prune-old-stop" 20.0 (Some 10.0) ]
+          (Some "keep-alive"))
+    state.Sessions |> Map.containsKey "keep-alive" |> Expect.isTrue "alive session kept"
+    state.Sessions |> Map.containsKey "keep-recent-stop" |> Expect.isTrue "recently stopped session kept"
+    state.Sessions |> Map.containsKey "prune-old-stop" |> Expect.isFalse "long-stopped session pruned"
+]

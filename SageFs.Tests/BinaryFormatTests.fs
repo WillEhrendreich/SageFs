@@ -1061,6 +1061,15 @@ let fieldBoundsTests = testList "field-level bounds" [
       with _ -> true
     threw |> Expect.isTrue "should reject oversized optional string length"
 
+  testCase "readLpStringOption with a length above Int32.MaxValue throws InvalidOperationException, not an out-of-range read" <| fun _ ->
+    // 0x80000001u LE. Cast to int it is negative, so an unguarded read would throw
+    // ArgumentOutOfRangeException from ReadBytes instead of the format's own refusal.
+    use ms = new IO.MemoryStream([| 0x01uy; 0x00uy; 0x00uy; 0x80uy |])
+    use br = new IO.BinaryReader(ms)
+    Expect.throwsT<InvalidOperationException>
+      "an oversized length is refused by the format guard"
+      (fun () -> BinaryPrimitives.readLpStringOption br |> ignore)
+
   testCase "readLpString with 0xFFFFFFFF does not OOM" <| fun _ ->
     use ms = new IO.MemoryStream()
     use bw = new IO.BinaryWriter(ms)

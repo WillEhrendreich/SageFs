@@ -1318,3 +1318,11 @@ let coverageSummaryTests = testList "CoverageSummary" [
     }
   ]
 ]
+
+[<Tests>]
+let liveTestStateDefaultsTests = testList "LiveTestState defaults" [
+
+  testCase "an empty state has never discovered a test, so LastDiscoveryTime is MinValue" <| fun _ ->
+    LiveTestState.empty.LastDiscoveryTime
+    |> Expect.equal "an empty state has not discovered anything" DateTimeOffset.MinValue
+]

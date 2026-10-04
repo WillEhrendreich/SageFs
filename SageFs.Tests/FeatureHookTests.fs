@@ -350,3 +350,104 @@ let featureHookTests = testList "Feature Hook Computation" [
     }
   ]
 ]
+
+/// The push state after evaluating each `(code, result)` pair in order, with a fixed duration.
+let afterEvals (evals: (string * string) list) : FeaturePushState =
+  evals
+  |> List.fold (fun state (code, result) -> recordEval code result 1L state) FeaturePushState.empty
+
+[<Tests>]
+let knownBindingsTests = testList "FeaturePushState.KnownBindings is kept up to date by recordEval" [
+
+  testCase "an empty state has no known bindings" <| fun _ ->
+    FeaturePushState.empty.KnownBindings |> Map.isEmpty |> Expect.isTrue "an empty state has no bindings"
+
+  testCase "a val line adds its binding" <| fun _ ->
+    (afterEvals [ "let x = 42", "val x : int = 42" ]).KnownBindings |> Map.containsKey "x"
+    |> Expect.isTrue "binding 'x' is known after the eval"
+
+  testCase "each binding maps to the cell that produced it" <| fun _ ->
+    let state = afterEvals [ "let a = 1", "val a : int = 1"; "let b = 2", "val b : int = 2" ]
+    state.KnownBindings |> Map.tryFind "a" |> Expect.equal "a is cell 0" (Some 0)
+    state.KnownBindings |> Map.tryFind "b" |> Expect.equal "b is cell 1" (Some 1)
+
+  testCase "a later binding with the same name overwrites the earlier one" <| fun _ ->
+    let state = afterEvals [ "let x = 1", "val x : int = 1"; "let x = 99", "val x : int = 99" ]
+    state.KnownBindings |> Map.tryFind "x" |> Expect.equal "x points to the latest cell" (Some 1)
+
+  testCase "a result without val lines adds nothing" <| fun _ ->
+    (afterEvals [ "printfn \"hi\"", "hi" ]).KnownBindings |> Map.isEmpty
+    |> Expect.isTrue "no val lines means no bindings added"
+
+  testCase "pushing the cell dependency graph keeps the known bindings" <| fun _ ->
+    let state = afterEvals [ "let z = 10", "val z : int = 10"; "z + 1", "val it : int = 11" ]
+    let pushed, _ = computeCellDepsPush sseJsonOpts None state
+    pushed.KnownBindings |> Map.containsKey "z" |> Expect.isTrue "z is still a known binding after the push"
+]
+
+[<Tests>]
+let incrementalScopeAndTimelineTests = testList "FeaturePushState caches the scope and the timeline per eval" [
+
+  testCase "an empty state has an empty scope and an empty timeline" <| fun _ ->
+    (scope FeaturePushState.empty).Bindings |> Expect.isEmpty "an empty state has no bindings in scope"
+    FeaturePushState.empty.CachedTimeline
+    |> Expect.equal "an empty state has an empty timeline" EvalTimeline.TimelineState.empty
+
+  testCase "recordEval puts the new binding in scope" <| fun _ ->
+    let state = afterEvals [ "let answer = 42", "val answer: int = 42" ]
+    (scope state).Bindings |> Expect.hasLength "one binding after one eval" 1
+    (scope state).ActiveBindings |> Map.containsKey "answer" |> Expect.isTrue "the scope contains 'answer'"
+
+  testCase "recordEval updates the cached timeline incrementally" <| fun _ ->
+    let state = afterEvals [ "let a = 1", "val a: int = 1"; "let b = 2", "val b: int = 2" ]
+    (EvalTimeline.timelineStats 20 state.CachedTimeline).Count |> Expect.equal "two evals recorded in the timeline" 2
+
+  testCase "several evals accumulate in the scope" <| fun _ ->
+    let state = afterEvals [ "let a = 1", "val a: int = 1"; "let b = 2", "val b: int = 2"; "let c = 3", "val c: int = 3" ]
+    (scope state).ActiveBindings |> Map.count |> Expect.equal "three active bindings in scope" 3
+
+  testCase "redefining a name leaves one active binding" <| fun _ ->
+    let state = afterEvals [ "let x = 1", "val x: int = 1"; "let x = 2", "val x: int = 2" ]
+    (scope state).ActiveBindings |> Map.count |> Expect.equal "one active binding (x shadowed, then redefined)" 1
+]
+
+[<Tests>]
+let evalHistoryCellIndexTests = testList "FeaturePushState eval history and cell indexes" [
+
+  testCase "cell indexes count up from 0" <| fun _ ->
+    let state1 = recordEval "let x = 1" "val x: int = 1" 5L FeaturePushState.empty
+    let state2 = recordEval "let y = 2" "val y: int = 2" 5L state1
+    let state3 = recordEval "let z = 3" "val z: int = 3" 5L state2
+    state1.EvalHistory.Head.CellIndex |> Expect.equal "the first eval gets cell index 0" 0
+    state2.EvalHistory.Head.CellIndex |> Expect.equal "the second eval gets cell index 1" 1
+    state3.EvalHistory.Head.CellIndex |> Expect.equal "the third eval gets cell index 2" 2
+
+  testCase "NextCellIndex keeps advancing when the history is at its cap" <| fun _ ->
+    // A 50-cell cap injected into the state, exceeded by 2 evals, so the cap really is hit.
+    let testCap = 50
+    let iterations = testCap + 2
+    let cap =
+      match EvalStore.HistoryCap.tryCreate testCap with
+      | Ok c -> c
+      | Error reason -> failtest reason
+    let finalState =
+      [ 0 .. iterations - 1 ]
+      |> List.fold
+           (fun state i -> recordEval (sprintf "let x%d = %d" i i) (sprintf "val x%d: int = %d" i i) 1L state)
+           (FeaturePushState.withCap cap)
+    finalState.NextCellIndex |> Expect.equal "NextCellIndex is the number of evals" iterations
+    finalState.EvalHistory.Length |> Expect.equal "the history holds exactly the cap" testCap
+
+  testCase "no two retained cells share a cell index" <| fun _ ->
+    let evals = [ for i in 0 .. 54 -> sprintf "let v%d = %d" i i, sprintf "val v%d: int = %d" i i ]
+    let indices = (afterEvals evals).EvalHistory |> List.map (fun e -> e.CellIndex)
+    indices |> List.distinct |> Expect.hasLength "every cell index in the history is unique" indices.Length
+
+  testCase "the history is newest first" <| fun _ ->
+    let evals = [ for i in 0 .. 4 -> sprintf "let q%d = %d" i i, sprintf "val q%d: int = %d" i i ]
+    (afterEvals evals).EvalHistory.Head.CellIndex |> Expect.equal "the head of the history is the most recent eval" 4
+
+  testCase "the scope reflects every eval" <| fun _ ->
+    let evals = [ for i in 0 .. 9 -> sprintf "let bind%d = %d" i i, sprintf "val bind%d: int = %d" i i ]
+    (scope (afterEvals evals)).Bindings |> Expect.hasLength "the scope has 10 bindings" 10
+]

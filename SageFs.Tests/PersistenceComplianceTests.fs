@@ -246,6 +246,54 @@ let testCacheTests = testList "Test cache contracts" [
     | Error _ -> ())
 ]
 
+// ── 7. Daemon manifest load and corrupt-file rename ──
+
+/// The path of the daemon manifest inside `dir`.
+let daemonManifestPath (dir: string) = System.IO.Path.Combine(dir, "daemon.sagefm")
+
+let daemonManifestLoadTests = testList "Daemon manifest load and corrupt-file rename" [
+
+  testCase "a corrupt manifest file is CorruptData, not NotFound and not an IO error"
+  <| fun _ -> withTempDir (fun dir ->
+    System.IO.File.WriteAllBytes(daemonManifestPath dir, Array.create 32 0xDEuy)
+    match DaemonPersistence.loadManifest dir with
+    | Error (ManifestTypes.ManifestLoadError.CorruptData _) -> ()
+    | other -> failwithf "expected CorruptData, got %A" other)
+
+  testCase "loading the same manifest twice returns equal results"
+  <| fun _ -> withTempDir (fun dir ->
+    DaemonPersistence.saveManifest dir DaemonManifest.DaemonManifestState.empty |> ignore
+    match DaemonPersistence.loadManifest dir, DaemonPersistence.loadManifest dir with
+    | Ok first, Ok second ->
+      first.Sessions.Count |> Expect.equal "two loads give the same session count" second.Sessions.Count
+      first.ActiveSessionId |> Expect.equal "two loads give the same active id" second.ActiveSessionId
+    | first, second -> failwithf "expected both loads to succeed, got %A and %A" first second)
+
+  testCase "renameCorruptManifest moves daemon.sagefm to daemon.sagefm.corrupt.<ms> and keeps one backup"
+  <| fun _ -> withTempDir (fun dir ->
+    System.IO.File.WriteAllBytes(daemonManifestPath dir, [| 0xFFuy; 0xFEuy; 0xFDuy |])
+    DaemonPersistence.renameCorruptManifest dir |> Expect.isTrue "renameCorruptManifest returns true on success"
+    System.IO.File.Exists(daemonManifestPath dir) |> Expect.isFalse "the original manifest is gone after the rename"
+    System.IO.Directory.GetFiles(dir, "daemon.sagefm.corrupt.*")
+    |> Expect.hasLength "one .corrupt. backup file exists" 1)
+
+  testCase "after the corrupt file is renamed, loadManifest is NotFound and a new save succeeds"
+  <| fun _ -> withTempDir (fun dir ->
+    System.IO.File.WriteAllBytes(daemonManifestPath dir, [| 0xFFuy; 0xFEuy; 0xFDuy |])
+    DaemonPersistence.renameCorruptManifest dir |> ignore
+    match DaemonPersistence.loadManifest dir with
+    | Error ManifestTypes.ManifestLoadError.NotFound -> ()
+    | other -> failwithf "expected NotFound after the rename, got %A" other
+    match DaemonPersistence.saveManifest dir DaemonManifest.DaemonManifestState.empty with
+    | Ok _ -> ()
+    | Error err -> failwithf "saveManifest should succeed after the rename, got %s" err)
+
+  testCase "renameCorruptManifest returns false when there is no manifest"
+  <| fun _ -> withTempDir (fun dir ->
+    DaemonPersistence.renameCorruptManifest (System.IO.Path.Combine(dir, "never-created"))
+    |> Expect.isFalse "there is no file to rename")
+]
+
 [<Tests>]
 let allPersistenceComplianceTests = testList "Persistence Compliance (synthesis 4.2)" [
   roundtripTests
@@ -254,4 +302,5 @@ let allPersistenceComplianceTests = testList "Persistence Compliance (synthesis 
   missingDataTests
   corruptionTests
   testCacheTests
+  daemonManifestLoadTests
 ]
