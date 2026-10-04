@@ -45,11 +45,17 @@ let private newStore () = CapabilityStore(IdentityPolicy.ConnectionsAllowed)
 
 /// The cohort these tests drive. Every command in this file goes through a cohort tool body
 /// (`join_cohort`, `acquire_claim`, `mint_member`, ...) rather than a hand-built `CohortCommand`,
-/// and each of those derives its scope the way the daemon does — `cohortScopeOf` on the caller's
-/// `working_directory`, which is `None` throughout this file. So the scope is asked of the very
-/// same function rather than hardcoded, which is what keeps the owner and the tool bodies talking
-/// about one cohort instead of refusing each other with `WrongCohortScope`.
-let private cohortScope = McpCohortTools.cohortScopeOf None
+/// and each of those derives its scope the way the daemon does — `ScopeOf.ofWorkingDirectory`
+/// on the caller's `working_directory`, which is `None` throughout this file. So the scope is
+/// asked of the very same function rather than hardcoded, which is what keeps the owner and the
+/// tool bodies talking about one cohort instead of refusing each other with `WrongCohortScope`.
+///
+/// It used to ask `McpCohortTools.cohortScopeOf`, which was the same function when this was
+/// written and stopped being the same function when the daemon moved to `ScopeOf` — so this
+/// file silently kept the old rule while the daemon took the new one. The two disagree
+/// exactly where this repo is a linked WORKTREE, and the symptom was a ledger read against a
+/// different cohort than the daemon's, which is what `WrongCohortScope` is.
+let private cohortScope = SageFs.ScopeOf.ofWorkingDirectory None
 
 /// A daemon's cohort in memory: an owner, its ledger, and a context wired to it.
 let private withCohort (body: McpContext -> Features.CohortOwner.Handle -> Features.CohortLedger.LedgerPort<MemberId> -> Task<unit>) : Task<unit> =
