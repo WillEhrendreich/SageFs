@@ -769,8 +769,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
     // unbound). getBaseConfigString() was dead code — wire it here.
     let! baseConfig =
       async {
-        try
-          return! SageFs.Utils.Configuration.getBaseConfigString() |> Async.AwaitTask
+        try return! SageFs.Utils.Configuration.getBaseConfigString() |> Async.AwaitTask
         with ex ->
           logger.LogWarning (sprintf "  Failed to load embedded base.fsx: %s" ex.Message)
           return ""
@@ -1637,8 +1636,6 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             // if EvalInteractionNonThrowing hangs during namespace opening.
             // Task.Delay races against the warmup: if the timeout fires first,
             // we cancel and unblock the mailbox even if FSI is stuck.
-            // Async.StartAsTask queues the workflow to the pool and awaits
-            // it there, so no pool thread sits parked on the warmup.
             let warmupTask =
               let onProgress (s,t,msg) =
                 emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
@@ -1658,11 +1655,8 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                       warmupCts.Token
                       onProgress
                   return Ok session
-                with
-                | :? OperationCanceledException as ex -> return Error (ex :> exn)
-                | ex -> return Error ex
-              }
-              |> Async.StartAsTask
+                with ex -> return Error ex
+              } |> Async.StartAsTask
             let timeoutTask = System.Threading.Tasks.Task.Delay(warmupTimeout)
             let! winner = System.Threading.Tasks.Task.WhenAny(warmupTask, timeoutTask) |> Async.AwaitTask
             let! warmupResult =
