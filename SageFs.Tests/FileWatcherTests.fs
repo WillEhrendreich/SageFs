@@ -562,6 +562,18 @@ let classifyWatcherErrorTests = testList "classifyWatcherError" [
       let kind, _hint = classifyWatcherError (IOException "Access to the path '/tmp/x' is denied.")
       kind |> Flip.Expect.equal "message-based fallback still recognizes the denial" "permission denied"
     }
+    test "WHY — UnauthorizedAccessException is permission denied whatever language or text its message has, because the TYPE says access was denied and an OS that writes its messages in another language must not turn a wrong-watch-root problem into a generic watcher error" {
+      // The messages an OS could attach: none of them contains the English word "denied".
+      let messagesWithoutTheEnglishWord =
+        [ "Zugriff auf den Pfad '/tmp/x' wurde verweigert."
+          "Acceso denegado a la ruta '/tmp/x'."
+          "パス '/tmp/x' へのアクセスが拒否されました。"
+          "" ]
+      for message in messagesWithoutTheEnglishWord do
+        let kind, hint = classifyWatcherError (UnauthorizedAccessException message)
+        kind |> Flip.Expect.equal (sprintf "an access-denied exception with the message %A is still a permission problem" message) "permission denied"
+        hint |> Flip.Expect.stringContains "and it still names the actual problem (wrong watch root)" "scratch directory"
+    }
     test "WHY — an unrecognized exception still gets a real label, never silently dropped" {
       let kind, _hint = classifyWatcherError (Exception "something else entirely")
       kind |> Flip.Expect.equal "unknown watcher errors get a generic but real label" "watcher error"

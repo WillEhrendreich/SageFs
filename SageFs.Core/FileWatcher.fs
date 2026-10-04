@@ -312,14 +312,20 @@ let isUnderPrunedPath (root: string) (path: string) (hasCheckoutMarker: string -
 /// services restart) — worth naming distinctly so an operator reads
 /// "wrong watch root", not "flaky buffer".
 let classifyWatcherError (ex: exn) : string * string =
+  let permissionDenied =
+    "permission denied",
+    "A subdirectory under this root denies read access to the daemon's user (e.g. another user's or systemd's private temp directories) — a recursive watch will keep losing events under it. Point the session/fallback watch at a real project root, not a shared scratch directory like /tmp."
   match ex with
   | :? InternalBufferOverflowException ->
     "buffer overflow",
     "The OS-level watch buffer overflowed under heavy file-change volume — raise DevReload.FileWatcherBufferSizeBytes if this recurs."
-  | :? UnauthorizedAccessException
-  | _ when ex.Message.Contains("denied", StringComparison.OrdinalIgnoreCase) ->
-    "permission denied",
-    "A subdirectory under this root denies read access to the daemon's user (e.g. another user's or systemd's private temp directories) — a recursive watch will keep losing events under it. Point the session/fallback watch at a real project root, not a shared scratch directory like /tmp."
+  // The exception TYPE says access was denied, whatever language the OS wrote the message in. This used to
+  // share one `when` guard with the message test below, and a guard applies to the WHOLE or-pattern, so the
+  // type alone was never enough: only an English "denied" in the message got the right label.
+  | :? UnauthorizedAccessException -> permissionDenied
+  // .NET's Unix FileSystemWatcher sometimes surfaces a denial as a plain IOException, where only the
+  // message can tell. A localized one still reads as a generic watcher error.
+  | _ when ex.Message.Contains("denied", StringComparison.OrdinalIgnoreCase) -> permissionDenied
   | _ ->
     "watcher error",
     "The OS-level file watcher reported an error and may have lost events under this root."
