@@ -177,7 +177,7 @@ let tests =
 
     testCase "WHY — the number of waits for the machine only goes up when a table says so (a ratchet on the count, with the reason a wait is fixed in the table above)" <| fun _ ->
       machineScaled |> Set.count |> Expect.equal "waits for the machine" 60
-      fixedTable |> List.length |> Expect.equal "fixed durations (96 + capabilityDefaultLifetime and capabilityMaxLifetime, which are presence: a run's token is trusted for a stated time)" 98
+      fixedTable |> List.length |> Expect.equal "fixed durations (97 + capabilityDefaultLifetime and capabilityMaxLifetime, which are presence: a run's token is trusted for a stated time)" 99
 
     testCase "WHY — each machine constant in the running process equals its written value scaled for the process's tier, so the wiring is real and not only the text" <| fun _ ->
       let timeouts = typeof<ValidTimeout>.Assembly.GetType "SageFs.Timeouts"
