@@ -1,17 +1,17 @@
-/// Same-commit, same-binary reuse of a green test tier.
-///
-/// A gate that was red for ONE flaky tier used to rerun all thirteen (14 to 19 minutes) to learn what the twelve green
-/// ones had already said. A pass record is what a green tier leaves behind: the exact inputs it ran on and the verdict
-/// it earned. A later run of the SAME commit with byte-identical binaries is the same statement a fresh run would
-/// make, except for flakiness, so it may take the record instead, and says so in the trust table
-/// (`Trusted (reused from <time>)`), never silently. `--fresh` forces a run.
-///
-/// Nothing is cached across commits: 80 test files read the source tree, so no tier's inputs are knowable cheaply.
-/// Everything here fails CLOSED: a record that cannot be read, a tree that is not clean, a hash that moved by one
-/// byte, a tier that was not green: the tier runs.
-///
-/// Pure, so the pipeline script, the simulation and the tests read the same rules. Loaded by ci-pipeline.fsx
-/// (`#load`) and compiled into SageFs.Simulation.
+// Same-commit, same-binary reuse of a green test tier.
+//
+// A gate that was red for ONE flaky tier used to rerun all thirteen (14 to 19 minutes) to learn what the twelve green
+// ones had already said. A pass record is what a green tier leaves behind: the exact inputs it ran on and the verdict
+// it earned. A later run of the SAME commit with byte-identical binaries is the same statement a fresh run would
+// make, except for flakiness, so it may take the record instead, and says so in the trust table
+// (`Trusted (reused from <time>)`), never silently. `--fresh` forces a run.
+//
+// Nothing is cached across commits: 80 test files read the source tree, so no tier's inputs are knowable cheaply.
+// Everything here fails CLOSED: a record that cannot be read, a tree that is not clean, a hash that moved by one
+// byte, a tier that was not green: the tier runs.
+//
+// Pure, so the pipeline script, the simulation and the tests read the same rules. Loaded by ci-pipeline.fsx
+// (`#load`) and compiled into SageFs.Simulation.
 namespace SageFs.Build
 
 open System

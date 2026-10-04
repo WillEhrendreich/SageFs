@@ -1,10 +1,10 @@
-/// A stamp lets a pipeline stage skip work whose inputs have not changed since it last ran: the stage writes a key
-/// (a SHA-256 over everything the work reads) next to what it produced, and the next run compares. A stage runs
-/// again on ANY doubt: no stamp, a different key, an output that is not there. A skipped stage therefore proves
-/// exactly what a run would have, and costs a hash.
-///
-/// Pure, so the pipeline script and the tests read the same rules. Loaded by ci-pipeline.fsx (`#load`) and compiled
-/// into SageFs.Tests.
+// A stamp lets a pipeline stage skip work whose inputs have not changed since it last ran: the stage writes a key
+// (a SHA-256 over everything the work reads) next to what it produced, and the next run compares. A stage runs
+// again on ANY doubt: no stamp, a different key, an output that is not there. A skipped stage therefore proves
+// exactly what a run would have, and costs a hash.
+//
+// Pure, so the pipeline script and the tests read the same rules. Loaded by ci-pipeline.fsx (`#load`) and compiled
+// into SageFs.Tests.
 namespace SageFs.Build
 
 open System
