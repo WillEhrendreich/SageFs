@@ -499,6 +499,8 @@ let private productionBuildRecovery
       return Result.Error (SageFsError.NeedsRebuild [ "a build for these projects is already running in this directory; try again when it finishes" ])
     | ExpensiveWorkLease.Decision.Queued _
     | ExpensiveWorkLease.Decision.Refused _ as decision ->
+      // This caller gives up on a wait and never asks again: leave the line, or the ask sits at its head as a ghost.
+      Features.LeaseWatch.withdraw holder ExpensiveWorkLease.Kind.Rebuild
       return Result.Error (SageFsError.NeedsRebuild [ ExpensiveWorkLease.explain System.DateTimeOffset.UtcNow decision ])
   }
 

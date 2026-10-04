@@ -28,6 +28,11 @@ module LeaseWatch =
       pool <- pool'
       decision)
 
+  /// Give up a queued ask the caller will not repeat, so it does not sit at the head of the line as a ghost. See
+  /// `ExpensiveWorkLease.withdraw`.
+  let withdraw (holder: ExpensiveWorkLease.Holder) (kind: ExpensiveWorkLease.Kind) : unit =
+    lock gate (fun () -> pool <- ExpensiveWorkLease.withdraw holder kind pool)
+
   /// Release a held lease. Returns whether it was actually still live —
   /// see `ExpensiveWorkLease.ReleaseOutcome`'s own doc comment for why a
   /// caller should pay attention to `AlreadyGone`.

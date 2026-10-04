@@ -525,7 +525,8 @@ module ExpensiveWorkLease =
   /// going to ask again (the daemon's create-time build gives up on a Queued answer and returns an error). Left in
   /// the line it would sit at the head, a ghost, until it aged out. It never touches a lease, another kind's ask, or
   /// anyone else's ask, and withdrawing an ask that is not queued changes nothing.
-  let withdraw (holder: Holder) (kind: Kind) (state: PoolState) : PoolState = state
+  let withdraw (holder: Holder) (kind: Kind) (state: PoolState) : PoolState =
+    { state with Queue = state.Queue |> List.filter (fun q -> not (q.Holder = holder && q.Kind = kind)) }
 
   // ---------------------------------------------------------------------
   // Words. One place turns a decision into what an agent reads.
