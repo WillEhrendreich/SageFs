@@ -392,12 +392,49 @@ module CohortSpec =
       Capped = capped
       Violations = List.ofSeq violations }
 
+  /// The same enumeration, a level at a time with the level's nodes spread over every core. Breadth-first search
+  /// has no ordering dependence a proof could lean on: the set of reachable nodes, and the set of rules violated
+  /// at some node, are the same whatever order the nodes are expanded in. `decide`, `enabled` and the rules are
+  /// pure functions of the state, so expanding nodes concurrently shares nothing but the visited set, which is
+  /// concurrent. The sequential `explore` above stays as the reference: a test compares the two node counts.
+  let exploreParallel (decide: Decide) (cap: int) : ExploreResult =
+    let visited = System.Collections.Concurrent.ConcurrentDictionary<CohortState<Member> * CohortEffect<Member> option, byte>(HashIdentity.Structural)
+    let violations = System.Collections.Concurrent.ConcurrentDictionary<string, byte>()
+    let start = (CohortState.empty (), None)
+    visited.TryAdd(start, 0uy) |> ignore
+    let mutable frontier = [| start |]
+    let mutable capped = false
+    while frontier.Length > 0 && not capped do
+      let next = System.Collections.Concurrent.ConcurrentBag<CohortState<Member> * CohortEffect<Member> option>()
+      System.Threading.Tasks.Parallel.ForEach(frontier, fun (s, pend) ->
+        for (name, rule) in rules do
+          if not (rule s) then violations.TryAdd(name, 0uy) |> ignore
+        for (cmd, ent) in enabled (s, pend) do
+          match decide clock ent s cmd with
+          | Result.Ok(s', _, effs) ->
+            let pend' =
+              match effs |> List.tryPick landingEffectOf with
+              | Some e -> Some e
+              | None -> if isCompletionCmd cmd then None else pend
+            if visited.TryAdd((s', pend'), 0uy) then next.Add((s', pend'))
+          | Result.Error _ -> ())
+      |> ignore
+      capped <- visited.Count > cap
+      frontier <- next.ToArray()
+    { Nodes = visited.Count
+      Complete = (frontier.Length = 0 && not capped)
+      Capped = capped
+      Violations = violations.Keys |> Seq.sort |> List.ofSeq }
+
   /// A generous cap — the bounded model closes at a few thousand nodes, so this
   /// only guards against an accidental unbounded change to the alphabet.
   let defaultCap = 500_000
 
   /// PROVE the rules over the real `Cohort.decide` (Exhaustive mode).
-  let proof () : ExploreResult = explore (fun c e s cmd -> Cohort.decide c e s cmd) defaultCap
+  let proof () : ExploreResult = exploreParallel (fun c e s cmd -> Cohort.decide c e s cmd) defaultCap
+
+  /// The same proof by the sequential reference explorer, for the test that checks the parallel one against it.
+  let proofSequential () : ExploreResult = explore (fun c e s cmd -> Cohort.decide c e s cmd) defaultCap
 
   /// The FAULTS-mode twin: reintroduce the pre-fix RebaseConflict queue-jam — a
   /// rebase conflict blocks the front-of-queue landing but does NOT pop the queue
@@ -422,4 +459,4 @@ module CohortSpec =
 
   /// Explore through the fault twin (Faults mode) — expected to VIOLATE
   /// `NO-TERMINAL-IN-QUEUE`.
-  let faults () : ExploreResult = explore faultRebaseConflictJam defaultCap
+  let faults () : ExploreResult = exploreParallel faultRebaseConflictJam defaultCap

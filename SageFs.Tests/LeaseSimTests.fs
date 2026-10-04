@@ -65,20 +65,27 @@ let tests =
       // `LeaseId.create()` mints a fresh `Guid.NewGuid()` per grant, a
       // deliberate, correct impurity (production wants unguessable ids), so
       // determinism is checked on a projection that drops the id.
+      // Each state carries EVERY decision so far, so the last state's list holds them all once, and projecting
+      // each state's copy again was the whole cost of this test (a `%A` per decision, per state, per run: about
+      // 140s under load). The per-step part is the pool's queue and active count. Equality of this projection says
+      // exactly what equality of the per-state projections said, because a state's list is a prefix of the last.
+      // `%A` is reflection-based pretty printing; a decision's parts are plain data, so they are compared as data.
+      let projectDecision (r: DecisionRecord) =
+        let decision =
+          match r.Decision with
+          | Decision.Granted(_, expiresAt) -> "granted", string expiresAt
+          | Decision.AlreadyHeld lease -> "already-held", string lease.ExpiresAt
+          | Decision.Queued waiting -> "queued", String.concat "|" [ string waiting.RetryAfter.Ticks; string waiting.Position; string (List.length waiting.Holding) ]
+          | Decision.Refused refusal ->
+            "refused",
+            (match refusal with
+             | Refusal.HoldsOtherKind(_, asked) -> Kind.toToken asked
+             | Refusal.OtherKindQueued(q, asked) -> Kind.toToken q + "/" + Kind.toToken asked)
+        r.AtStep, r.Clock, r.Pressure, r.Holder, r.Kind, decision
+
       let projectForDeterminism (states: State list) =
-        states
-        |> List.map (fun s ->
-          s.Decisions
-          |> List.map (fun r ->
-            let decision =
-              match r.Decision with
-              | Decision.Granted(_, expiresAt) -> "granted", string expiresAt
-              | Decision.AlreadyHeld lease -> "already-held", string lease.ExpiresAt
-              | Decision.Queued waiting -> "queued", sprintf "%A|%d|%d" waiting.RetryAfter waiting.Position (List.length waiting.Holding)
-              | Decision.Refused refusal -> "refused", sprintf "%A" (match refusal with Refusal.HoldsOtherKind(_, asked) -> string asked | Refusal.OtherKindQueued(q, asked) -> sprintf "%A/%A" q asked)
-            r.AtStep, r.Clock, r.Pressure, r.Holder, r.Kind, decision),
-          s.Pool.Queue |> List.map (fun q -> q.Holder, q.Kind, q.Seq),
-          List.length s.Pool.Active)
+        (List.last states).Decisions |> List.map projectDecision,
+        states |> List.map (fun s -> s.Pool.Queue |> List.map (fun q -> q.Holder, q.Kind, q.Seq), List.length s.Pool.Active)
 
       testProperty "same seed => identical trace, up to the randomly-minted lease id (determinism/replay)" <|
         fun (seed: int) ->

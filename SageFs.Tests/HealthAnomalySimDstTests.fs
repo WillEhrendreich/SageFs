@@ -14,12 +14,22 @@ open SageFs.Simulation.HealthAnomalySim
 
 let private seeds = [ 1 .. 300 ]
 
+/// The real detector's trace for every seed, computed ONCE. Seven invariants and two coverage checks read these
+/// same traces; each used to compute its own (a trace is about 14ms, 300 seeds, nine times over), and one of them
+/// did it while the test tree was being built, so every test process that discovers tests paid for it. The twin is
+/// deliberately NOT cached: its test runs the twin twice to prove it has no hidden randomness, and a cache would
+/// make that comparison say nothing.
+let private realTraces =
+  lazy (seeds |> List.map (fun seed -> let scenario = scenarioOf seed in scenario, trace DetectorBehavior.Real scenario))
+
+let private tracesFor (behavior: DetectorBehavior) : (Scenario * State list) list =
+  match behavior with
+  | DetectorBehavior.Real -> realTraces.Force()
+  | other -> seeds |> List.map (fun seed -> let scenario = scenarioOf seed in scenario, trace other scenario)
+
 let private violationsFor (behavior: DetectorBehavior) (invariant: State list -> ShapeEvent list -> HealthAnomalySimInvariants.Violation list) =
-  seeds
-  |> List.map (fun seed ->
-    let scenario = scenarioOf seed
-    let states = trace behavior scenario
-    scenario, invariant states scenario.Events)
+  tracesFor behavior
+  |> List.map (fun (scenario, states) -> scenario, invariant states scenario.Events)
   |> List.filter (fun (_, vs) -> not (List.isEmpty vs))
 
 let private expectNone (label: string) (bad: (Scenario * HealthAnomalySimInvariants.Violation list) list) =
@@ -81,10 +91,8 @@ let healthAnomalySimDstTests =
         |> expectNone "a recovery segment never settled back to Normal"
 
       testCase "LEGITIMATE-SCALE-CHANGE-EVENTUALLY-SETTLES" <| fun _ ->
-        seeds
-        |> List.choose (fun seed ->
-          let scenario = scenarioOf seed
-          let states = trace DetectorBehavior.Real scenario
+        tracesFor DetectorBehavior.Real
+        |> List.choose (fun (scenario, states) ->
           match HealthAnomalySimInvariants.legitimateScaleChangeEventuallySettles (isThePermanentStep scenario.Events) 30 states scenario.Events with
           | [] -> None
           | vs -> Some(scenario, vs))
@@ -92,10 +100,10 @@ let healthAnomalySimDstTests =
     ]
 
     testList "the seeds reach the interesting cases, so a green run means something" [
-      let traces = seeds |> List.map (fun seed -> scenarioOf seed, trace DetectorBehavior.Real (scenarioOf seed))
+      let traces () = tracesFor DetectorBehavior.Real
 
       testCase "some seeds' sustained step reads Broken, not just Drifting" <| fun _ ->
-        traces
+        traces ()
         |> List.exists (fun (scenario, states) ->
           HealthAnomalySimInvariants.segments states scenario.Events
           |> List.exists (fun (_, ev, samples) ->
@@ -105,7 +113,7 @@ let healthAnomalySimDstTests =
         |> Expect.isTrue "at least one seed's step is severe enough to read as Broken"
 
       testCase "some seeds' drift reads Drifting" <| fun _ ->
-        traces
+        traces ()
         |> List.exists (fun (scenario, states) ->
           HealthAnomalySimInvariants.segments states scenario.Events
           |> List.exists (fun (_, ev, samples) ->

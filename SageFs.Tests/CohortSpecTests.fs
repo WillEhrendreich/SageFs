@@ -58,6 +58,13 @@ let tests =
       r.Violations
       |> Expect.contains "the reintroduced queue-jam must violate the no-deadlock rule" "NO-TERMINAL-IN-QUEUE"
 
+    testCase "the overCores explorer reaches exactly the space the sequential reference reaches, and violates exactly the same rules" <| fun _ ->
+      let reference = CohortSpec.proofSequential ()
+      let overCores = CohortSpec.proof ()
+      overCores.Nodes |> Expect.equal "the same reachable states, whatever order they were expanded in" reference.Nodes
+      overCores.Complete |> Expect.equal "both close" reference.Complete
+      (overCores.Violations |> List.sort) |> Expect.equal "the same rules are violated at some node" (reference.Violations |> List.sort)
+
     testCase "the exploration is deterministic — the same bound yields the same node count" <| fun _ ->
       let a = CohortSpec.proof ()
       let b = CohortSpec.proof ()
