@@ -95,6 +95,8 @@ SageFs.Tests/fixtures/HotReloadParityFixture/.runs/
 SageFs.Tests/fixtures/HotReloadGenericReflectionFixture/.runs/
 SageFs.Tests/fixtures/RunAppDeltaFixture/.runs/
 SageFs.Tests/fixtures/SageFsLikeRepoFixture/.runs/
+# The FromCSharp sample copy each --integration-lt shard edits (LiveTestingShards.sampleCopy).
+SageFs.Tests/fixtures/LiveTestingSample/.runs/
 
 # Agent scratch. NEVER a product artifact.
 #

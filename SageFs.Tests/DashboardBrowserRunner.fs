@@ -274,6 +274,49 @@ File.WriteAllText(
   sprintf "http://127.0.0.1:%d" port)
 """
 
+/// Pre-build the project `projectFile` of a copied fixture or sample in `dest` (Debug is fine: the daemon's config
+/// fallback resolves Debug<->Release at the same TFM), so a session's warmup loads an already-built project. Fails
+/// loudly with the build log if the project cannot build on this machine.
+let prebuildCopy (dest: string) (projectFile: string) : unit =
+  let psi = Diagnostics.ProcessStartInfo()
+  psi.FileName <- "dotnet"
+  psi.UseShellExecute <- false
+  psi.CreateNoWindow <- true
+  psi.WorkingDirectory <- dest
+  psi.ArgumentList.Add("build")
+  psi.ArgumentList.Add(projectFile)
+  psi.ArgumentList.Add("-v")
+  psi.ArgumentList.Add("q")
+  psi.RedirectStandardOutput <- true
+  psi.RedirectStandardError <- true
+  use build = Diagnostics.Process.Start(psi)
+  // Drain to files (never undrained pipes): files can't deadlock the child.
+  let buildOut = Path.Combine(dest, "build.stdout.log")
+  let buildErr = Path.Combine(dest, "build.stderr.log")
+  let outWriter = new System.IO.StreamWriter(buildOut)
+  let errWriter = new System.IO.StreamWriter(buildErr)
+  let drain (stream: System.IO.StreamReader) (writer: System.IO.StreamWriter) =
+    async {
+      try
+        let mutable line = stream.ReadLine()
+        while not (isNull line) do
+          writer.WriteLine(line)
+          line <- stream.ReadLine()
+      with _ -> ()
+      writer.Dispose()
+    }
+  let outDrain = drain build.StandardOutput outWriter |> Async.StartAsTask
+  let errDrain = drain build.StandardError errWriter |> Async.StartAsTask
+  if not (build.WaitForExit(SageFs.Timeouts.webAppHotReloadBuild)) then
+    failwithf "runner: pre-build of %s in %s timed out after %O" projectFile dest SageFs.Timeouts.webAppHotReloadBuild
+  try outDrain.Wait(TestTimeouts.childExit) |> ignore with _ -> ()
+  try errDrain.Wait(TestTimeouts.childExit) |> ignore with _ -> ()
+  if build.ExitCode <> 0 then
+    let out = if File.Exists buildOut then File.ReadAllText(buildOut) else ""
+    let err = if File.Exists buildErr then File.ReadAllText(buildErr) else ""
+    failwithf "runner: pre-build of %s in %s failed (exit %d).\n%s\n%s"
+      projectFile dest build.ExitCode out err
+
 /// Copy the WebAppFixture into a fresh temp dir, drop in the init profile,
 /// and pre-build the copy so the daemon's warmup loads an already-built
 /// project (a cold ionide/FSI build of a temp copy on a clean CI runner can
@@ -320,47 +363,7 @@ let prepareHotReloadFixture (repoRoot: string) (runtime: HotReloadStateHarness.H
         Path.Combine(dest, "global.json"),
         sprintf """{"sdk":{"version":"%s","rollForward":"latestPatch","allowPrerelease":false}}""" sdk)
     | None -> failwith "HR runner: a net10 fixture copy needs an SDK pin, and none was produced"
-  // Pre-build the temp copy (Debug is fine — the daemon's config fallback
-  // resolves Debug<->Release at the same TFM). Fail loudly with the build log
-  // if the fixture itself cannot build on this machine.
-  let psi = Diagnostics.ProcessStartInfo()
-  psi.FileName <- "dotnet"
-  psi.UseShellExecute <- false
-  psi.CreateNoWindow <- true
-  psi.WorkingDirectory <- dest
-  psi.ArgumentList.Add("build")
-  psi.ArgumentList.Add("WebAppFixture.fsproj")
-  psi.ArgumentList.Add("-v")
-  psi.ArgumentList.Add("q")
-  psi.RedirectStandardOutput <- true
-  psi.RedirectStandardError <- true
-  use build = Diagnostics.Process.Start(psi)
-  // Drain to files (never undrained pipes): files can't deadlock the child.
-  let buildOut = Path.Combine(dest, "build.stdout.log")
-  let buildErr = Path.Combine(dest, "build.stderr.log")
-  let outWriter = new System.IO.StreamWriter(buildOut)
-  let errWriter = new System.IO.StreamWriter(buildErr)
-  let drain (stream: System.IO.StreamReader) (writer: System.IO.StreamWriter) =
-    async {
-      try
-        let mutable line = stream.ReadLine()
-        while not (isNull line) do
-          writer.WriteLine(line)
-          line <- stream.ReadLine()
-      with _ -> ()
-      writer.Dispose()
-    }
-  let outDrain = drain build.StandardOutput outWriter |> Async.StartAsTask
-  let errDrain = drain build.StandardError errWriter |> Async.StartAsTask
-  if not (build.WaitForExit(SageFs.Timeouts.webAppHotReloadBuild)) then
-    failwithf "HR runner: pre-build of the WebAppFixture copy timed out after %O" SageFs.Timeouts.webAppHotReloadBuild
-  try outDrain.Wait(TestTimeouts.childExit) |> ignore with _ -> ()
-  try errDrain.Wait(TestTimeouts.childExit) |> ignore with _ -> ()
-  if build.ExitCode <> 0 then
-    let out = if File.Exists buildOut then File.ReadAllText(buildOut) else ""
-    let err = if File.Exists buildErr then File.ReadAllText(buildErr) else ""
-    failwithf "HR runner: pre-build of the WebAppFixture copy failed (exit %d).\n%s\n%s"
-      build.ExitCode out err
+  prebuildCopy dest "WebAppFixture.fsproj"
   dest
 
 /// Run the HR-DASH browser journeys end to end, owning the daemon lifecycle.
@@ -603,16 +606,14 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
   let mcpPort, dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
   let dataDir = SageFs.Tests.RunnerDirs.create SageFs.Tests.RunnerDirs.Family.LiveTestingRuns
 
-  // The FromCSharp sample IN PLACE (central package management; a temp copy
-  // outside the repo cannot resolve Expecto's version). Live-testing rebuilds
-  // it on edit via dotnet build, which works here because the repo's
-  // Directory.Packages.props + nuget.config are in scope.
-  let sampleProject =
-    Path.Combine(
-      repoRoot, "samples", "from-csharp", "SageFs.Samples.FromCSharp",
-      "SageFs.Samples.FromCSharp.fsproj")
-  let sampleDir = Path.GetDirectoryName(sampleProject)
-  let helloPath = Path.Combine(sampleDir, "Hello.fs")
+  // A COPY of the FromCSharp sample, made for this runner and under the repo (central package management: a copy
+  // outside the repo cannot resolve Expecto's version; Directory.Packages.props + nuget.config are in scope here), so
+  // the cases edit `Hello.fs` of a sample that is this runner's own. The checked-in sample is never written, and
+  // several `--shard`s of this tier run side by side, each on its own copy, daemon and session.
+  let sampleDir = SageFs.Tests.LiveTestingShards.sampleCopy repoRoot
+  let sampleFile = "SageFs.Samples.FromCSharp.fsproj"
+  let sampleProject = Path.Combine(sampleDir, sampleFile)
+  prebuildCopy sampleDir sampleFile
 
   let psi = Diagnostics.ProcessStartInfo()
   psi.FileName <- exe
@@ -691,27 +692,12 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
     resp.Dispose()
     status, body
 
+  // The copy goes with the run: nothing a case left in its Hello.fs outlives it, and nothing reaches the checkout.
   let exitWith (code: int) =
     stopDaemon ()
     SageFs.Tests.RunnerDirs.remove dataDir
+    SageFs.Tests.RunnerDirs.remove sampleDir
     code
-
-  // Always restore Hello.fs if a journey left it mutated (belt and braces on
-  // top of the journey's own finally).
-  let restoreHello () =
-    try
-      let git = Diagnostics.ProcessStartInfo("git")
-      git.WorkingDirectory <- repoRoot
-      git.ArgumentList.Add("checkout")
-      git.ArgumentList.Add("--")
-      git.ArgumentList.Add(Path.GetRelativePath(repoRoot, helloPath))
-      git.UseShellExecute <- false
-      git.CreateNoWindow <- true
-      git.RedirectStandardOutput <- true
-      git.RedirectStandardError <- true
-      use p = Diagnostics.Process.Start(git)
-      p.WaitForExit(TestTimeouts.childExitSlow) |> ignore
-    with _ -> ()
 
   try
     let mutable healthy = false
@@ -833,31 +819,29 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
             | None -> eprintfn "--- /api/live-testing/status (last) --- unavailable"
             dumpDaemonLogs ()
 
-          try
-            Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
-            Environment.SetEnvironmentVariable("SAGEFS_LT_FIXTURE_DIR", sampleDir)
-            Environment.SetEnvironmentVariable("SAGEFS_LT_DATA_DIR", dataDir)
-            Environment.SetEnvironmentVariable("SAGEFS_LT_MCP_PORT", string mcpPort)
-            let ltArgv =
-              cliArgs
-              |> Array.filter (fun a -> a <> "--integration-lt")
-            // One daemon, one session, one Hello.fs: everything that edits it runs in sequence. The
-            // journeys come first (they need the baseline run's coverage untouched by anything else),
-            // the browser tests next, and the latency measurement last, from a settled session.
-            let ltTests =
-              Expecto.Tests.testSequenced (
-                Expecto.Tests.testList
-                  "Live testing against the FromCSharp sample"
-                  [ LiveTestingJourneyTests.journeyTests
-                    LiveTestingBrowserTests.tests
-                    LiveTestingLatencyTests.latencyTests ])
-            let result =
-              SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-lt" ltArgv ltTests
-            exitWith result
-          finally
-            restoreHello ()
+          Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
+          Environment.SetEnvironmentVariable("SAGEFS_LT_FIXTURE_DIR", sampleDir)
+          Environment.SetEnvironmentVariable("SAGEFS_LT_DATA_DIR", dataDir)
+          Environment.SetEnvironmentVariable("SAGEFS_LT_MCP_PORT", string mcpPort)
+          let shard = SageFs.Build.TierPlan.shardOfArgs cliArgs
+          let ltArgv =
+            match shard with
+            | Some s -> cliArgs |> Array.filter (fun a -> a <> "--integration-lt" && a <> "--shard" && a <> sprintf "%d/%d" s.Index s.Count)
+            | None -> cliArgs |> Array.filter (fun a -> a <> "--integration-lt")
+          let tierName =
+            match shard with
+            | Some s -> sprintf "--integration-lt[%d/%d]" s.Index s.Count
+            | None -> "--integration-lt"
+          // One daemon, one session, one Hello.fs per shard: what edits it runs in sequence. The journeys come
+          // first (they need the baseline run's coverage untouched by anything else), the browser tests next, and
+          // the latency measurement last, from a settled session. A shard keeps that order for its share.
+          let ltTests =
+            SageFs.Tests.LiveTestingShards.share shard (SageFs.Tests.LiveTestingShards.readDurations ()) (SageFs.Tests.LiveTestingShards.tree ())
+          let result =
+            SageFs.Tests.TestInfrastructure.TrustSignal.runObserved
+              SageFs.Tests.TestInfrastructure.TrustSignal.record SageFs.Tests.LiveTestingShards.recordCaseTimings tierName ltArgv ltTests
+          exitWith result
   with ex ->
     eprintfn "LT runner: %s" (ex.ToString())
-    try restoreHello () with _ -> ()
     exitWith 1
 

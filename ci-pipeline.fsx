@@ -1608,6 +1608,7 @@ pipeline "sagefs" {
           match Int32.TryParse(Environment.GetEnvironmentVariable "SAGEFS_HOST_SHARDS") with
           | true, n when n >= 1 -> n
           | _ -> TierSchedule.hostShardCount (readJsonMap suiteDurationsFile)
+        let ltShards = 4
         let always =
           testTier "--summary"
           // The default suite on the net10 tool asset too (built in the "build"
@@ -1621,7 +1622,9 @@ pipeline "sagefs" {
             testTier "--integration-hr --summary"
             testTier "--integration-hr-restart --summary"
             testTier "--integration-hr-delta --summary"
-            testTier "--integration-lt --summary"
+            // The live-testing cases edit the sample in place, so a tier is a share of them on a copy of its own.
+            for k in 1 .. ltShards do
+              testTier $"--integration-lt --shard {k}/{ltShards} --summary"
             testTier "--integration-disconnect --summary" ]
         let browserTiers = ciOnly |> List.filter (fun t -> t.Name <> "--mutation-score")
         // Chromium is installed ONCE, before any browser tier starts (they run
