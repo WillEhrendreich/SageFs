@@ -309,3 +309,163 @@ let workflowSseEventTests =
           json.Contains sid
     ]
   ]
+
+// ── The switch events are really emitted ────────────────────
+//
+// `WorkflowSwitching` and `WorkflowSwitched` were defined, serialized and documented, and nothing in the daemon
+// constructed either: a switch through `POST /api/sessions/{sid}/workflow` said nothing on `/events`. The daemon's one
+// switch command restarts the same session spawn-first, so the two points are read off the session list.
+
+module SwitchWatch = SageFs.Server.WorkflowSwitchWatch
+
+let private watchHandle : SageFs.WorkerProtocol.WorkerHandle = { Pid = 1; Port = Some 5000 }
+
+let private watchSid = "0a0b0c0d"
+
+let private watchSessionId : SageFs.WorkerProtocol.SessionId =
+  match SageFs.WorkerProtocol.SessionId.validate watchSid with
+  | Ok id -> id
+  | Error e -> failwith e
+
+let private sessionAt
+  (workflow: SessionWorkflow)
+  (status: SageFs.WorkerProtocol.SessionLifecycleStatus)
+  : SageFs.WorkerProtocol.SessionInfo =
+  let at = System.DateTime(2026, 10, 4, 0, 0, 0, System.DateTimeKind.Utc)
+  { Id = watchSessionId
+    Name = None
+    Projects = []
+    WorkingDirectory = "/repo/app"
+    SolutionRoot = None
+    Status = status
+    Workflow = workflow
+    CreatedAt = at
+    LastActivity = at
+    ActiveProject = None
+    ProjectRoles = []
+    App = SageFs.AppRun.AppRunState.NotRunning
+    Rebuild = SageFs.LastRebuild.NeverRebuilt
+    Reload = SageFs.SessionReload.NoReloadYet
+    Freshness = SageFs.ReplFreshness.InSync }
+
+let private serving = SageFs.WorkerProtocol.SessionLifecycleStatus.Ready watchHandle
+
+let private restarting =
+  SageFs.WorkerProtocol.SessionLifecycleStatus.Restarting (SageFs.WorkerProtocol.PreviousWorker.Was watchHandle.Pid)
+
+let private faulted =
+  SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted (SageFs.WorkerProtocol.FaultReason.report "the replacement worker died")
+
+/// Look at one session after another, carrying the watch, and return what each look said.
+let private looks (sessions: SageFs.WorkerProtocol.SessionInfo list list) : SageFs.Server.WorkflowObservation list =
+  sessions
+  |> List.scan
+    (fun (_, watch) one ->
+      let seen = SwitchWatch.observe watch one
+      Some seen, seen.Watch)
+    (None, Map.empty)
+  |> List.choose fst
+
+let private typeOf (evt: SageFs.Server.SseEvent) : string =
+  use doc = System.Text.Json.JsonDocument.Parse(SageFs.Server.SseEvent.toJson evt)
+  doc.RootElement.GetProperty("type").GetString()
+
+[<Tests>]
+let workflowSwitchEmissionTests =
+  testList "Workflow switch events are emitted" [
+
+    testCase "a session seen for the first time is not announced as switched" <| fun _ ->
+      let seen = looks [ [ sessionAt SessionWorkflow.Interactive serving ] ]
+      seen |> List.collect (fun o -> o.Events) |> Expect.isEmpty "creating a session into a workflow is not a switch"
+
+    testCase "a changed workflow with its replacement worker still coming says switching, naming both workflows" <| fun _ ->
+      let seen = looks [ [ sessionAt SessionWorkflow.Interactive serving ]; [ sessionAt SessionWorkflow.LiveTesting restarting ] ]
+      seen.[1].Events
+      |> Expect.equal "one switching event, from what it ran to what it will run"
+           [ SageFs.Server.SseEvent.WorkflowSwitching (watchSid, SessionWorkflow.label SessionWorkflow.Interactive, SessionWorkflow.label SessionWorkflow.LiveTesting) ]
+      seen.[1].Awaiting |> Expect.equal "the switch is waited on until its worker is ready" [ watchSessionId ]
+
+    testCase "switched follows once the new worker is serving, with the capability and hot reload state the workflow derives" <| fun _ ->
+      let hotReload = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
+      let seen =
+        looks
+          [ [ sessionAt SessionWorkflow.Interactive serving ]
+            [ sessionAt hotReload restarting ]
+            [ sessionAt hotReload serving ]
+            [ sessionAt hotReload serving ] ]
+      seen.[2].Events
+      |> Expect.equal "one switched event with the labels the workflow derives"
+           [ SageFs.Server.SseEvent.WorkflowSwitched
+               (watchSid,
+                SessionWorkflow.label hotReload,
+                ReplCapability.label (SessionWorkflow.replCapability hotReload),
+                SessionWorkflow.isHotReloadActive hotReload) ]
+      seen.[3].Events |> Expect.isEmpty "once told, a later look says nothing more"
+
+    testCase "a switch whose worker faults says switching and never switched" <| fun _ ->
+      let seen =
+        looks
+          [ [ sessionAt SessionWorkflow.Interactive serving ]
+            [ sessionAt SessionWorkflow.LiveTesting restarting ]
+            [ sessionAt SessionWorkflow.LiveTesting faulted ] ]
+      seen |> List.collect (fun o -> o.Events) |> List.map typeOf
+      |> Expect.equal "the failure is the session's health event, not a switched event" [ "workflow_switching" ]
+
+    testCase "a second switch while one is in flight starts from the first one's target" <| fun _ ->
+      let hotReload = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
+      let seen =
+        looks
+          [ [ sessionAt SessionWorkflow.Interactive serving ]
+            [ sessionAt SessionWorkflow.LiveTesting restarting ]
+            [ sessionAt hotReload restarting ] ]
+      seen.[2].Events
+      |> Expect.equal "the superseded target is where the new switch begins"
+           [ SageFs.Server.SseEvent.WorkflowSwitching (watchSid, SessionWorkflow.label SessionWorkflow.LiveTesting, SessionWorkflow.label hotReload) ]
+
+    testCase "a session that is gone is forgotten, so one that returns is a first sight" <| fun _ ->
+      let seen =
+        looks
+          [ [ sessionAt SessionWorkflow.Interactive serving ]
+            []
+            [ sessionAt SessionWorkflow.LiveTesting serving ] ]
+      seen |> List.collect (fun o -> o.Events) |> Expect.isEmpty "no switch is claimed across a gap"
+
+    testCase "both events are scoped to the session that switched, so /events?sessionId= stays honest" <| fun _ ->
+      let seen = looks [ [ sessionAt SessionWorkflow.Interactive serving ]; [ sessionAt SessionWorkflow.LiveTesting serving ] ]
+      let frames = seen.[1].Events |> List.map SageFs.Server.SseEvent.frame
+      frames |> List.length |> Expect.equal "switching and switched" 2
+      frames
+      |> List.map (fun f -> f.Scope)
+      |> List.distinct
+      |> Expect.equal "every frame is that one session's" [ SageFs.FrameScope.Session watchSid ]
+
+    testTask "wired to the daemon's state changes, a switch pushes both frames, and the ready one needs no further state change" {
+      let stateChanged = Event<SageFs.Server.SseEvent>()
+      let current = ref [ sessionAt SessionWorkflow.Interactive serving ]
+      let pushed = System.Collections.Concurrent.ConcurrentQueue<SageFs.SseFrame>()
+      let switchedSeen = System.Threading.Tasks.TaskCompletionSource()
+      let publish (frame: SageFs.SseFrame) =
+        pushed.Enqueue frame
+        match frame.Wire.Contains "workflow_switched" with
+        | true -> switchedSeen.TrySetResult() |> ignore
+        | false -> ()
+      let ops : SageFs.SessionManagementOps =
+        { SageFs.SessionManagementOps.stub with
+            GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult current.Value
+            // The session is ready by the time the wait for it ends; no state change announces it.
+            AwaitReady = fun _ _ ->
+              current.Value <- [ sessionAt SessionWorkflow.LiveTesting serving ]
+              System.Threading.Tasks.Task.FromResult(Result.Ok ()) }
+      use _watch = SwitchWatch.wire stateChanged.Publish ops publish
+      stateChanged.Trigger SageFs.Server.SseEvent.SessionProgress
+      current.Value <- [ sessionAt SessionWorkflow.LiveTesting restarting ]
+      stateChanged.Trigger SageFs.Server.SseEvent.SessionProgress
+      let! finished =
+        System.Threading.Tasks.Task.WhenAny(switchedSeen.Task, System.Threading.Tasks.Task.Delay TestTimeouts.patienceBrief)
+      finished |> Expect.equal "switched arrived" (switchedSeen.Task :> System.Threading.Tasks.Task)
+      let wires = pushed.ToArray() |> Array.map (fun f -> f.Wire)
+      wires |> Array.length |> Expect.equal "two frames" 2
+      wires.[0] |> Expect.stringContains "switching comes first" "workflow_switching"
+      wires.[1] |> Expect.stringContains "switched comes second" "workflow_switched"
+    }
+  ]
