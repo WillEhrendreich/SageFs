@@ -2621,7 +2621,11 @@ WHEN TO USE: Before acquiring a claim (check for conflicts), to see who else is 
 OUTPUT: Plain-text summary of members, claims, the test matrix, AND the landing queue — each landing's id, requester, state (Queued/Rebasing/Verifying/Blocked/Landed/Withdrawn), queue position, and the current integration head. The same landing state is on the cohort://status MCP resource, so you can subscribe instead of polling.
 
 Once an integration is configured it ends with the trunk: one `trunk <landing id>: ...` line per landing that landed, saying what the trunk session's running app did with it (the file, the outcome such as PatchPending, Patched or Restarted, the mechanism such as metadata-delta or detour, and the cause of a restart), or that there is no running app to update.""")>]
-    member _.get_cohort_status([<System.Runtime.InteropServices.OptionalAttribute>] workingDirectory: string) : Task<string> =
+    member _.get_cohort_status(
+        [<Description("The directory you are working in. It decides WHICH cohort is reported: one daemon holds one cohort per repository, so an agent working in a second repository must pass it or it reads the cohort of the directory the daemon itself started in.")>]
+        [<Optional; DefaultParameterValue("")>]
+        workingDirectory: string
+    ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_cohort_status called")
         task {
           // `workingDirectory` selects WHICH cohort is reported. It is optional because a

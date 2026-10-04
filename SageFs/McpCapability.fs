@@ -69,9 +69,13 @@ module McpCapability =
       | _, Error e, _
       | _, _, Error e -> return Error e
       | Ok preset, Ok prefix, Ok lifetime ->
-        match requireCohortOwner ctx with
-        | Error e -> return Error e
-        | Ok owner ->
+        // The CALLER's cohort: a token minted in a second repository is seated in THAT
+        // repository's cohort, not the daemon's. Reading the daemon's own cohort refused the
+        // mint outright with "no cohort owner is configured for this daemon" — a false
+        // statement (one IS configured) that hid the real question.
+        match cohortOwnerFor ctx workingDirectory with
+        | None -> return Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+        | Some owner ->
           let minter =
             { Authority = authorityOf owner (memberIdFor agentName)
               // A conductor acting under a token mints under that token's grant; otherwise it holds the conductor's authority.
@@ -118,9 +122,14 @@ module McpCapability =
     (memberText: string)
     : Task<Result<string, SageFsError>> =
     task {
-      match requireCohortOwner ctx with
-      | Error e -> return Error e
-      | Ok owner ->
+      // Resolve the caller's directory FIRST, and use it for BOTH the owner and the scope the
+      // command is dispatched on. They were resolved separately — the owner with no directory
+      // and the scope with one — so the authority check could read a different cohort from the
+      // one the revoke landed in, which is the whole bug this feature is about.
+      let! wd = McpCohortTools.callerWorkingDirectory ctx agentName None
+      match cohortOwnerFor ctx wd with
+      | None -> return Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+      | Some owner ->
         let text = if isNull memberText then "" else memberText.Trim()
         // Anything that is not `cap:<id>` is a capability id that does not exist, so the refusal names what was asked.
         let target = CapabilityId(if text.StartsWith("cap:", StringComparison.Ordinal) then text.Substring 4 else text)
@@ -129,10 +138,8 @@ module McpCapability =
         | Error refusal -> return Error(CohortErrorMapping.revokeRefusalToSageFsError refusal)
         | Ok () ->
           // The token is already dead. Departing the seat is housekeeping; a seat that is already
-          // gone is not a failure. The seat belongs to the caller's OWN scope, read from where they
-          // are rather than passed in: a token minted in one repository is revoked in that
-          // repository's cohort.
-          let! wd = McpCohortTools.callerWorkingDirectory ctx agentName None
+          // gone is not a failure. The seat belongs to the caller's OWN scope, which is the `wd`
+          // resolved above: a token minted in one repository is revoked in that repository's cohort.
           let! _ = commitCohort ctx (Cohort.CohortCommand.Depart(CapabilityId.memberId target, McpCohortTools.cohortScopeOf wd))
           return
             Ok(
