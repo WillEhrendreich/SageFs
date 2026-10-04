@@ -467,6 +467,8 @@ let runTier (isolation: TierPlan.Isolation) (slots: int) (slotIndex: int) (t: Ti
         "MSBUILDDISABLENODEREUSE", "1"
         "SAGEFS_SUITE_DURATIONS", suiteDurationsFile
         "SAGEFS_SUITE_TIMINGS_OUT", Path.Combine(tierWork, safe + ".suites.json")
+        // Every case's seconds, slowest first, beside the tier's log: the log itself prints only the slowest 15.
+        "SAGEFS_CASE_TIMINGS_OUT", Path.Combine(tierWork, safe + ".cases.tsv")
         // Every harness that spawns a real daemon reserves its ports through
         // TestPorts.reservePair(), which scans ONLY inside this range — see
         // build/TierPlan.fs `portRangeOf` for why disjoint-per-slot ranges

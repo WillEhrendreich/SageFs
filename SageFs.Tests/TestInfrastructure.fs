@@ -695,6 +695,10 @@ module TrustSignal =
 
   let LedgerEnvironmentVariable = "SAGEFS_TRUST_LEDGER"
 
+  /// A file that gets EVERY case's seconds and full name, slowest first (tab separated), when this is set. The
+  /// tier log prints only the slowest 15, which is not enough to choose what to speed up next.
+  let CaseTimingsEnvironmentVariable = "SAGEFS_CASE_TIMINGS_OUT"
+
   /// Print the row and append it to the ledger (when one is configured).
   let record (row: Row) =
     printfn "TRUST tier=%s registered=%d ran=%d passed=%d failed=%d errored=%d ignored=%d verdict=%s (%s)"
@@ -801,6 +805,15 @@ module TrustSignal =
         |> List.sortByDescending (fun (_, seconds, _) -> seconds)
         |> List.truncate 10
         |> List.iter (fun (root, seconds, n) -> printfn "  %7.1fs  %4d tests  %s" seconds n root)
+        match System.Environment.GetEnvironmentVariable CaseTimingsEnvironmentVariable with
+        | null | "" -> ()
+        | timingsPath ->
+          try
+            timed
+            |> List.sortByDescending (fun (_, t) -> t.duration)
+            |> List.map (fun (flat, t) -> sprintf "%.3f\t%s" t.duration.TotalSeconds (String.concat " / " flat.name))
+            |> fun lines -> System.IO.File.WriteAllLines(timingsPath, lines)
+          with _ -> ()
       | None -> ()
       exitCode
 
