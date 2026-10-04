@@ -1101,11 +1101,21 @@ let vscodeCompileThrough = 2
 let vscodeTestHostThrough = 3
 let vscodeContractThrough = 5
 
+/// The test assembly for every framework but the primary one: restore into a private obj tree, put the shipped closure's
+/// intermediate outputs there (`TierPlan.seedScript`), then compile only the test assembly against them. It needs the
+/// closure built first (build/GateProducts.proj), so the "build" stage starts it once that has finished.
 let net10BuildSteps () : BackgroundStep list =
+  let ofCommand (command: string) =
+    { Argv = command.Split(' ', StringSplitOptions.RemoveEmptyEntries) |> List.ofArray; WorkingDir = rootDir }
   TierPlan.Framework.all
   |> List.filter (fun f -> f <> TierPlan.Framework.primary)
-  |> List.collect TierPlan.testBuildCommands
-  |> List.map (fun command -> { Argv = command.Split(' ', StringSplitOptions.RemoveEmptyEntries) |> List.ofArray; WorkingDir = rootDir })
+  |> List.collect (fun framework ->
+    match TierPlan.testBuildCommands framework with
+    | [ restore; build ] ->
+      [ ofCommand restore
+        { Argv = [ "sh"; "-c"; TierPlan.seedScript framework ]; WorkingDir = rootDir }
+        ofCommand build ]
+    | other -> failwithf "expected a restore then a build for %A, got %A" framework other)
 
 // ---- the pipeline ------------------------------------------------------------
 
@@ -1192,14 +1202,18 @@ pipeline "sagefs" {
     // --no-build against this exact output — the single build that used to be
     // repeated in build/integration-host/extensions/release-artifacts.
     //
-    // The other frameworks' test assemblies are built from private obj trees
-    // (TierPlan.testBuildCommands), so they start NOW and run beside this build;
-    // "build other frameworks" below joins them. The two builds share the machine
-    // (the build uses about a third of its threads on average), they do not share files.
+    // Three steps. The shipped closure (Core, Simulation, SageFs, Host; every one of them multi-targets both
+    // frameworks) is built first by build/GateProducts.proj. Then the solution build (the net11 test assembly, the
+    // fixtures, the samples) and the other frameworks' test assemblies run side by side: the latter compile ONLY the
+    // test assembly, against the closure the first step made (TierPlan.testBuildCommands), so nothing is compiled
+    // twice. "build other frameworks" below joins them. They share the machine, not files: the net10 test
+    // assembly's intermediate files are in a private obj tree.
+    run "dotnet restore"
+    run "dotnet build build/GateProducts.proj -c Release --no-restore"
     run (fun ctx ->
       async {
         startBackgroundOnce "net10-tests" (net10BuildSteps ())
-        return! ctx.RunCommand "dotnet build -c Release"
+        return! ctx.RunCommand "dotnet build -c Release --no-restore"
       })
   }
 

@@ -1,0 +1,22 @@
+<Project>
+  <!-- The shipped closure, built in ONE msbuild session, before anything that consumes it.
+
+       The gate used to build the whole solution and, beside it, a second copy of this same closure for net10
+       (in a private obj tree) so the net10 test assembly had something to compile against. Every project here
+       multi-targets net10.0;net11.0, so the solution build had already made the net10 assemblies: the second
+       compile was a duplicate of about 200 CPU seconds, and both copies were written to bin/Release/net10.0
+       with different bytes (the debug directory embeds the obj path), last writer wins.
+
+       Built here first, the net10 test assembly can compile against what this made (TierPlan.testBuildCommands,
+       the no-dependencies flag), at the same time as the net11 test assembly and the samples are built by the solution
+       build that follows. Core is requested by all three projects and built once, because every request carries
+       the same global properties. -->
+  <ItemGroup>
+    <Product Include="$(MSBuildThisFileDirectory)../SageFs.Simulation/SageFs.Simulation.fsproj" />
+    <Product Include="$(MSBuildThisFileDirectory)../SageFs/SageFs.fsproj" />
+    <Product Include="$(MSBuildThisFileDirectory)../SageFs.Host/SageFs.Host.fsproj" />
+  </ItemGroup>
+  <Target Name="Build">
+    <MSBuild Projects="@(Product)" Targets="Build" BuildInParallel="true" />
+  </Target>
+</Project>

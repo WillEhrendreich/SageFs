@@ -148,6 +148,15 @@ let dllOf (framework: Framework) = sprintf "%s/SageFs.Tests.dll" (testBinDirOf f
 ///    later `--no-restore` net11 build failing NETSDK1005. A private obj
 ///    directory per framework keeps the two restores apart. bin/ is already
 ///    per-framework.
+///
+/// The build compiles ONLY the test assembly (`--no-dependencies`): the shipped
+/// closure (Core, Simulation, Host, SageFs) multi-targets both frameworks, so the
+/// build that made the primary outputs (build/GateProducts.proj) already made this
+/// framework's too. Compiling them again in the private obj tree cost about 200 CPU
+/// seconds and wrote a second, byte-different copy of every one of them into
+/// bin/Release/<tfm>/. What the compile needs from them is their reference
+/// assemblies and apphosts, which the private obj tree does not have until
+/// `seedScript` puts them there.
 let testBuildCommands (framework: Framework) : string list =
   let tfm = Framework.tfm framework
   let isolation =
@@ -155,7 +164,27 @@ let testBuildCommands (framework: Framework) : string list =
       "-p:TargetFramework=%s -p:NuGetLockFilePath=obj/tier-%s/packages.lock.json -p:RestoreLockedMode=false -p:BaseIntermediateOutputPath=obj/tier-%s/"
       tfm tfm tfm
   [ sprintf "dotnet restore SageFs.Tests %s" isolation
-    sprintf "dotnet build SageFs.Tests -c Release --no-restore %s" isolation ]
+    sprintf "dotnet build SageFs.Tests -c Release --no-restore --no-dependencies %s" isolation ]
+
+/// The projects `testBuildCommands` no longer compiles: the shipped closure the test assembly references.
+let productProjects = [ "SageFs.Core"; "SageFs.Simulation"; "SageFs"; "SageFs.Host" ]
+
+/// Where a product's intermediate outputs for `framework` live in the primary build, and where the isolated test
+/// build (private obj tree) looks for them. Both relative to the checkout.
+let seedOf (framework: Framework) (project: string) : string * string =
+  let tfm = Framework.tfm framework
+  sprintf "%s/obj/Release/%s" project tfm, sprintf "%s/obj/tier-%s/Release/%s" project tfm tfm
+
+/// One `sh -c` script that copies every product's primary-build intermediate outputs (reference assemblies, apphost)
+/// into the private obj tree, replacing whatever was there. Copy-on-write where the filesystem has it. It runs after
+/// the build that made them and before the isolated test build, and it fails the step if any source is missing,
+/// so a test build can never compile against a half-built closure or a stale private copy.
+let seedScript (framework: Framework) : string =
+  productProjects
+  |> List.map (fun project ->
+    let source, target = seedOf framework project
+    sprintf "test -d %s && rm -rf %s && mkdir -p %s && cp -a --reflink=auto %s %s" source target (System.IO.Path.GetDirectoryName target) source target)
+  |> String.concat " && "
 
 /// Whether tiers can be given private copies of the checkout.
 type Isolation =
