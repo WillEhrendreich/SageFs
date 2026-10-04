@@ -166,6 +166,9 @@ type SageFsError =
   | HotReloadStateError of sessionId: string * reason: string
   // ── Running apps ──
   | AppRunFailed of project: string * reason: string
+  /// A stop the worker could not carry out (a console app has no host to stop in place). Its own case, so it is
+  /// worded and remedied as a stop and not as a run that has no project.
+  | AppStopFailed of project: string * reason: string
   // ── Restart policy ──
   | RestartLimitExceeded of restartCount: int * windowMinutes: float
   // ── Infrastructure ──
@@ -276,6 +279,10 @@ module SageFsError =
       sprintf "Could not run the app: %s" reason
     | SageFsError.AppRunFailed(project, reason) ->
       sprintf "Could not run '%s': %s" project reason
+    | SageFsError.AppStopFailed("", reason) ->
+      sprintf "Could not stop the app: %s" reason
+    | SageFsError.AppStopFailed(project, reason) ->
+      sprintf "Could not stop '%s': %s" project reason
     | SageFsError.RestartLimitExceeded(count, windowMin) ->
       sprintf "Worker restarted %d times within %.0f minutes — giving up. Check the log file for crash details and restart SageFs." count windowMin
     | SageFsError.DaemonStartFailed reason ->
@@ -316,6 +323,7 @@ module SageFsError =
     | SageFsError.ScriptLoadFailed _ -> LogLevel.Error
     | SageFsError.HotReloadFailed _ -> LogLevel.Error
     | SageFsError.AppRunFailed _ -> LogLevel.Error
+    | SageFsError.AppStopFailed _ -> LogLevel.Error
     | SageFsError.SseConnectionError _ -> LogLevel.Error
     | SageFsError.Unexpected _ -> LogLevel.Error
     // Warning — degraded but recoverable
@@ -391,6 +399,7 @@ module SageFsError =
     | SageFsError.HotReloadFailed _ -> 500
     | SageFsError.HotReloadStateError _ -> 500
     | SageFsError.AppRunFailed _ -> 500
+    | SageFsError.AppStopFailed _ -> 500
     | SageFsError.DaemonStartFailed _ -> 500
     | SageFsError.Unexpected _ -> 500
 
@@ -429,6 +438,7 @@ module SageFsError =
     | SageFsError.HotReloadStateError _
     | SageFsError.DaemonStartFailed _
     | SageFsError.AppRunFailed _
+    | SageFsError.AppStopFailed _
     | SageFsError.Unexpected _ -> ErrorCategory.Internal
     | SageFsError.WorkerCommunicationFailed _
     | SageFsError.FsiHostCrashed _
@@ -494,6 +504,7 @@ module SageFsError =
     | SageFsError.HotReloadFailed _ -> "Check the file for syntax errors"
     | SageFsError.HotReloadStateError _ -> "Run hard_reset_fsi_session"
     | SageFsError.AppRunFailed _ -> "Run list_runnable_projects to see which projects can run"
+    | SageFsError.AppStopFailed _ -> "Run hard_reset_fsi_session: the worker restart ends the app, which stop_app cannot do in place"
     | SageFsError.RestartLimitExceeded _ -> "Check the log file and restart SageFs"
     | SageFsError.DaemonStartFailed _ -> "Check port availability and .NET SDK"
     | SageFsError.DaemonNotRunning -> "Start SageFs with 'sagefs'"
@@ -556,6 +567,7 @@ module SageFsError =
     | SageFsError.HotReloadFailed _ -> "HotReloadFailed"
     | SageFsError.HotReloadStateError _ -> "HotReloadStateError"
     | SageFsError.AppRunFailed _ -> "AppRunFailed"
+    | SageFsError.AppStopFailed _ -> "AppStopFailed"
     | SageFsError.RestartLimitExceeded _ -> "RestartLimitExceeded"
     | SageFsError.DaemonStartFailed _ -> "DaemonStartFailed"
     | SageFsError.DaemonNotRunning -> "DaemonNotRunning"
@@ -675,7 +687,8 @@ module SageFsError =
     | SageFsError.HotReloadStateError(sessionId, reason) ->
       [ "sessionId", box sessionId
         "reason", box reason ]
-    | SageFsError.AppRunFailed(project, reason) ->
+    | SageFsError.AppRunFailed(project, reason)
+    | SageFsError.AppStopFailed(project, reason) ->
       [ "project", box project
         "reason", box reason ]
     | SageFsError.RestartLimitExceeded(restartCount, windowMinutes) ->

@@ -70,6 +70,7 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   // HotReloadStateError — see targetedVerifyResult in Mcp.fs.
   | SageFs.SageFsError.HotReloadStateError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.LoadedStateStale
   | SageFs.SageFsError.AppRunFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.AppStopFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.RestartLimitExceeded _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.DaemonStartFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.DaemonNotRunning -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
