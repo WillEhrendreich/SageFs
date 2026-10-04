@@ -101,9 +101,9 @@ let narrateStatusTests =
       TestNarration.statusLabel TestRunStatus.PolicyDisabled |> Expect.equal "disabled" "Disabled by policy"
 
     testCase "status label for passed includes timing" <| fun _ ->
-      let label = TestNarration.statusLabel (TestRunStatus.Passed TestTimeouts.reportedElapsed)
+      let label = TestNarration.statusLabel (TestRunStatus.Passed FixtureDurations.roundTripDuration)
       label |> Expect.stringContains "has passed" "Passed"
-      label |> Expect.stringContains "has timing" (string (int TestTimeouts.reportedElapsed.TotalMilliseconds))
+      label |> Expect.stringContains "has timing" (string (int FixtureDurations.roundTripDuration.TotalMilliseconds))
 
     testCase "status label for failed includes reason" <| fun _ ->
       let label = TestNarration.statusLabel (TestRunStatus.Failed (TestFailure.AssertionFailed "bad", TestTimeouts.testElapsed))

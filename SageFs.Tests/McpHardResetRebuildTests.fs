@@ -89,7 +89,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
 
 /// Waits for the background rebuild's final status notification.
 let private awaitOutcome (p: Probe) = task {
-  let! winner = Task.WhenAny(p.Finished.Task :> Task, Task.Delay TestTimeouts.eventCeiling)
+  let! winner = Task.WhenAny(p.Finished.Task :> Task, Task.Delay TestTimeouts.briefPatience)
   obj.ReferenceEquals(winner, p.Finished.Task) |> Expect.isTrue "the background rebuild must report an outcome"
   return p.Finished.Task.Result
 }

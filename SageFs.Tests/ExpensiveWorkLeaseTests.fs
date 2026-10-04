@@ -250,7 +250,7 @@ let fairnessTests =
       let stillAsking = epoch + Timeouts.leaseAskStaleAfter - FixtureDurations.insideTheBoundary
       let s3', _ = request stillAsking MemoryPressure.Tight s3 hc Kind.Rebuild // agent-c keeps asking
       let s4, _ = release leaseA s3'
-      let muchLater = epoch + Timeouts.leaseAskStaleAfter + FixtureDurations.pastTheBoundary
+      let muchLater = epoch + Timeouts.leaseAskStaleAfter + TestTimeouts.pastBoundBy
       let s5, decision = request muchLater MemoryPressure.Tight s4 hc Kind.Rebuild
       match decision with
       | Decision.Granted _ -> ()
@@ -346,7 +346,7 @@ let headOfLineTests =
       let s5, forC = request stillQueued MemoryPressure.Tight s4 hc Kind.Rebuild
       let leaseC = grantedId forC
       // b comes back while c runs: it is first in line again, and d, who arrives after it, is second.
-      let backAt = stillQueued + FixtureDurations.pastTheBoundary
+      let backAt = stillQueued + TestTimeouts.pastBoundBy
       let s6, forB' = request backAt MemoryPressure.Tight s5 hb Kind.Rebuild
       (match forB' with
        | Decision.Queued waiting -> waiting.Position |> Expect.equal "b kept its place at the head" 1
@@ -421,7 +421,7 @@ let snapshotTests =
 
     testCase "a lease past its expiry is not shown" <| fun () ->
       let s1, _ = request epoch MemoryPressure.Normal empty ha Kind.SessionCreateOrWarmup
-      let view = snapshot (epoch + Kind.defaultTtl Kind.SessionCreateOrWarmup + FixtureDurations.pastTheBoundary) s1
+      let view = snapshot (epoch + Kind.defaultTtl Kind.SessionCreateOrWarmup + TestTimeouts.pastBoundBy) s1
       view.ActiveCount |> Expect.equal "lapsed" 0
   ]
 

@@ -20,7 +20,7 @@ type private WatchOutcome =
   | NothingReported
 
 /// Watch a fresh directory holding Hello.fs, run `save` on it, and report what the
-/// live-test watcher said within `TestTimeouts.eventCeiling`.
+/// live-test watcher said within `TestTimeouts.briefPatience`.
 let private watchAfter (save: string -> unit) = task {
   let dir = Directory.CreateTempSubdirectory "sagefs-watch-"
   let target = Path.Combine(dir.FullName, "Hello.fs")
@@ -38,7 +38,7 @@ let private watchAfter (save: string -> unit) = task {
     manager.WatchedDirectories |> ignore
     do! Task.Delay TestTimeouts.threadStartSettle // small settle for the OS watcher to begin delivering events
     save target
-    let! winner = Task.WhenAny(reloaded.Task :> Task, Task.Delay TestTimeouts.eventCeiling)
+    let! winner = Task.WhenAny(reloaded.Task :> Task, Task.Delay TestTimeouts.briefPatience)
     return
       match obj.ReferenceEquals(winner, reloaded.Task) with
       | true -> Reloaded reloaded.Task.Result

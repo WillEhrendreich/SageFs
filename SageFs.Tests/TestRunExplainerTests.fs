@@ -43,7 +43,7 @@ let explainerTests = testList "TestRunExplainer" [
     let lastResults =
       Map.ofList [
         TestId.TestId "test_add",
-        mkResult "test_add" (TestResult.Passed TestTimeouts.reportedElapsed) ]
+        mkResult "test_add" (TestResult.Passed FixtureDurations.roundTripDuration) ]
     let result =
       TestRunExplainer.explainTest
         graph lastResults Map.empty ["MyModule.add"] RunTrigger.Keystroke tc
@@ -53,7 +53,7 @@ let explainerTests = testList "TestRunExplainer" [
     |> Expect.equal "should be SymbolCoverage"
       (TestTriggerReason.SymbolCoverage ["MyModule.add"])
     result.DurationMs
-    |> Expect.equal "should have cached duration" (Some TestTimeouts.reportedElapsed.TotalMilliseconds)
+    |> Expect.equal "should have cached duration" (Some FixtureDurations.roundTripDuration.TotalMilliseconds)
     result.FlakyClassification |> Expect.equal "no history = insufficient" FlakyClassification.Insufficient
 
   testCase "explainTest: new test with no prior results" <| fun _ ->

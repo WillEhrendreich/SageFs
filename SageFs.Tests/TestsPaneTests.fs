@@ -19,7 +19,7 @@ let private makeEntry (name: string) (status: TestRunStatus) : TestStatusEntry =
     Status = status
     PreviousStatus = TestRunStatus.Stale; Provenance = ResultProvenance.Compiled }
 
-let private passEntry n  = makeEntry n (TestRunStatus.Passed TestTimeouts.reportedElapsed)
+let private passEntry n  = makeEntry n (TestRunStatus.Passed FixtureDurations.roundTripDuration)
 let private failEntry n  = makeEntry n (TestRunStatus.Failed (TestFailure.AssertionFailed "boom", TestTimeouts.testElapsedOther))
 let private runEntry  n  = makeEntry n TestRunStatus.Running
 let private staleEntry n = makeEntry n TestRunStatus.Stale
@@ -114,7 +114,7 @@ let buildContentTests = testList "TestsPane.buildContent" [
   }
   test "duration appears for passed test" {
     let content = TestsPane.buildContent 80 [| passEntry "T" |]
-    content |> Expect.stringContains "duration present" (sprintf "%dms" (int TestTimeouts.reportedElapsed.TotalMilliseconds))
+    content |> Expect.stringContains "duration present" (sprintf "%dms" (int FixtureDurations.roundTripDuration.TotalMilliseconds))
   }
   test "long test name is truncated to fit pane" {
     let longName = System.String.Concat(Array.replicate 200 "x")

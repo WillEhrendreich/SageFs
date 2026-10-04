@@ -70,13 +70,13 @@ let private exampleTests = testList "decidePoll examples" [
   }
 
   test "elapsed past the absolute bound times out even with a fresh Progressed-reset inactivity clock" {
-    match decidePoll bounds (bounds.Absolute + TestTimeouts.pastAbsoluteBy) TimeSpan.Zero PollObservation.StillWarming with
+    match decidePoll bounds (bounds.Absolute + TestTimeouts.pastALimit) TimeSpan.Zero PollObservation.StillWarming with
     | PollDecision.TimedOut reason -> reason |> Expect.stringContains "mentions absolute limit" "absolute limit"
     | other -> failtestf "expected TimedOut, got %A" other
   }
 
   test "absolute bound wins even over a Ready observation — no argument, no exceptions" {
-    match decidePoll bounds (bounds.Absolute + TestTimeouts.pastAbsoluteBy) TimeSpan.Zero (PollObservation.Ready "loaded") with
+    match decidePoll bounds (bounds.Absolute + TestTimeouts.pastALimit) TimeSpan.Zero (PollObservation.Ready "loaded") with
     | PollDecision.TimedOut _ -> ()
     | other -> failtestf "expected TimedOut (absolute bound is absolute), got %A" other
   }

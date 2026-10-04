@@ -107,7 +107,7 @@ let private waitForDashboard (http: HttpClient) (dashboardUrl: string) (timeout:
       let! text = dashboardText http dashboardUrl
       last <- text
       satisfied <- predicate text
-      if not satisfied then do! Task.Delay TestTimeouts.slowPollInterval
+      if not satisfied then do! Task.Delay TestTimeouts.slowPoll
     return satisfied, last
   }
 

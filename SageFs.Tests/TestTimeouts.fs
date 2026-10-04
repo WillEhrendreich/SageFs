@@ -22,7 +22,8 @@ module TestTimeouts =
   let tokenTwoRuns = System.TimeSpan.FromHours 2.
   /// A short token: it expires inside the test's own clock, before its lease window does.
   let tokenShort = System.TimeSpan.FromMinutes 20.
-  /// One minute past a limit, so a test crosses the limit and not merely touches it.
+  /// One minute past a limit (a token lifetime cap, a lease window, the absolute warmup bound), so a test crosses
+  /// the limit and not merely touches it.
   let pastALimit = System.TimeSpan.FromMinutes 1.
 
   // --- tests A to K ---
@@ -277,7 +278,8 @@ module TestTimeouts =
   let shortPatience = System.TimeSpan.FromSeconds 10.
 
   /// The ceiling on an in-process event that normally lands in milliseconds (an outcome
-  /// report, a timer firing, a callback). Five seconds absorbs a starved thread pool.
+  /// report, a timer firing, a callback, a file watcher callback, a status notification from a
+  /// background task). Five seconds absorbs a starved thread pool.
   let briefPatience = System.TimeSpan.FromSeconds 5.
 
   /// The ceiling on a cancellation or an expiry to take effect. It has to stay below the
@@ -330,7 +332,8 @@ module TestTimeouts =
   let warmupPoll = System.TimeSpan.FromMilliseconds 500.
 
   /// Polling something that changes on the scale of seconds: a daemon's session list, a
-  /// status bar, a connection that is retried.
+  /// status bar, a connection that is retried, the text a running app printed to the dashboard
+  /// (a read costs a page render, and half a second would only add load).
   let slowPoll = System.TimeSpan.FromSeconds 1.
 
   // Settles: real time a test lets pass because the effect under test needs it.
@@ -355,7 +358,8 @@ module TestTimeouts =
   /// rounding tolerance for a jittered span.
   let boundaryMargin = System.TimeSpan.FromMilliseconds 1.
 
-  /// How far past a bound a scenario puts a value it needs to be unambiguously beyond.
+  /// How far past a bound a scenario puts a value it needs to be unambiguously beyond: a clock past a lease or a
+  /// queued ask's ttl, an elapsed past an inactivity window.
   let pastBoundBy = System.TimeSpan.FromSeconds 1.
 
   /// How far past the restart grace the exhausted-restart-budget scenario checks: after
@@ -445,9 +449,6 @@ module TestTimeouts =
   /// A second elapsed, for a test that needs two results it can tell apart.
   let testElapsedOther = System.TimeSpan.FromMilliseconds 20.
 
-  /// An elapsed that a formatting test feeds in and then looks for in the output.
-  let reportedElapsed = System.TimeSpan.FromMilliseconds 42.
-
   /// How long a tree-sitter pass took in a diagnostics timing record.
   let treeSitterElapsed = System.TimeSpan.FromMilliseconds 5.
 
@@ -514,19 +515,12 @@ module TestTimeouts =
   /// A single small clock advance before a stop.
   let clockAdvanceSmall = System.TimeSpan.FromSeconds 1.
 
-  /// How far past the absolute warmup bound a scenario puts the elapsed time.
-  let pastAbsoluteBy = System.TimeSpan.FromMinutes 1.
-
   // --- tests L to R ---
   // A ceiling is how long a wait may take before the test calls it failed. A test that reaches
   // one has failed; it is never how a passing test finishes. Where a wait ends the moment the
   // thing it waits on happens, a generous ceiling costs a passing test nothing.
 
   // `patience` (20 s) is defined once, in the A to K section, and used here too.
-
-  /// Ceiling on one in-process event that arrives within milliseconds when it arrives at all
-  /// (a file watcher callback, a status notification from a background task).
-  let eventCeiling = System.TimeSpan.FromSeconds 5.
 
   /// How fast a tool call that must not wait on a background rebuild has to return. The call
   /// does no real work, so this only fails when it blocks.
@@ -556,10 +550,6 @@ module TestTimeouts =
   /// How often a wait re-reads a page or an HTTP endpoint it is waiting on. Sub-second so a
   /// state that is already true is seen at once; the wait ends on the first read that passes.
   let pollInterval = System.TimeSpan.FromMilliseconds 500.
-
-  /// How often a wait re-reads a slower source (the text a running app printed to the
-  /// dashboard), where a read costs a page render and half a second would only add load.
-  let slowPollInterval = System.TimeSpan.FromSeconds 1.
 
   /// The wait a `run_tests` call asks for when the fake engine answers at once, so the call
   /// returns when the engine does and never after the whole wait.
@@ -853,8 +843,9 @@ module FixtureDurations =
   /// How long a stage clearly longer than `shortStage` took, for a case that needs the two apart.
   let longerStage = System.TimeSpan.FromMilliseconds 200.
 
-  /// The duration of a result that a round-trip case checks comes back unchanged. It is neither
-  /// zero nor one of the shared values above, so a value lost on the way reads back different.
+  /// The duration of a result that a round-trip case checks comes back unchanged, or that a formatting case
+  /// feeds in and then looks for in the output. It is neither zero nor one of the shared values above, so a
+  /// value lost on the way reads back different.
   let roundTripDuration = System.TimeSpan.FromMilliseconds 42.
 
   /// An eval timeline entry a case feeds the timeline. Every entry starts at zero, so only the
@@ -1015,8 +1006,6 @@ module FixtureDurations =
   /// How far inside a boundary a lease case puts a caller who is still asking (inside the window a queued ask
   /// stays in line for): any positive margin does, this one is far above the clock's resolution.
   let insideTheBoundary = System.TimeSpan.FromSeconds 30.
-  /// How far past a boundary a lease case puts the clock, so a lease or an ask is certainly lapsed.
-  let pastTheBoundary = System.TimeSpan.FromSeconds 1.
 
   /// A pass of virtual time (in seconds) longer than any lease lives, so every abandoned lease is
   /// past its ttl. Chosen against `Timeouts.leaseTtlRunApp`, the longest.

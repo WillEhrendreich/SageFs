@@ -601,7 +601,7 @@ let restoreTestCacheTests = testList "RestoreTestCache" [
     let result : LiveTesting.TestRunResult = {
       TestId = tid
       TestName = "test1"
-      Result = LiveTesting.TestResult.Passed TestTimeouts.reportedElapsed
+      Result = LiveTesting.TestResult.Passed FixtureDurations.roundTripDuration
       Timestamp = DateTimeOffset.UtcNow
       Output = None
     }
