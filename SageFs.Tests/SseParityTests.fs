@@ -122,18 +122,16 @@ let vscodeKnownGaps : Set<string> =
   Set.ofList [ "cohort_matrix"; "claim_changed"; "landing_changed"; "save_observed" ]
 
 // ── Neovim half — DERIVED from the real sibling checkout, not hand-typed ─────
-// sagefs.nvim is a SEPARATE repository that lives as a sibling of this one, so it
-// cannot be reached through RepoPaths (which only ever resolves INSIDE this repo).
-// It is located at RUNTIME instead: `SAGEFS_NVIM_DIR` if set, else the parent of
-// the repository root — never a build-time constant. Both sets below are parsed
-// out of that repo's Lua source, so a phantom cannot be asserted here: to claim
-// the plugin handles an event, this file has to point at a line of real Lua.
+// sagefs.nvim is a SEPARATE repository that lives as a sibling of this one, so its
+// files are not under the repo root. It is located at RUNTIME: `SAGEFS_NVIM_DIR` if
+// set, else `RepoPaths.siblingCheckoutDir`, which looks next to the MAIN checkout —
+// the repo root's own parent is not that inside a git worktree. Never a build-time
+// constant. Both sets below are parsed out of that repo's Lua source, so a phantom
+// cannot be asserted here: to claim the plugin handles an event, this file has to
+// point at a line of real Lua.
 let private nvimRepoDir : string =
   match System.Environment.GetEnvironmentVariable "SAGEFS_NVIM_DIR" with
-  | null | "" ->
-    // The SageFs checkout's parent holds the sibling plugin checkout.
-    Path.Combine(Path.GetDirectoryName(repoRoot), "sagefs.nvim")
-    |> Path.GetFullPath
+  | null | "" -> RepoPaths.siblingCheckoutDir repoRoot "sagefs.nvim"
   | dir -> Path.GetFullPath dir
 
 let private nvimEventsPath : string =

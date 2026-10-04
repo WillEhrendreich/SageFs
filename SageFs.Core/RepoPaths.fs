@@ -199,6 +199,50 @@ let requireRepoRoot () : string =
             (AppContext.BaseDirectory)
             (Directory.GetCurrentDirectory())
 
+/// What a worktree's `.git` FILE starts with before the path of its admin directory.
+[<Literal>]
+let GitFilePointerPrefix = "gitdir:"
+
+/// The name of git's own directory, both at a checkout's root and at the top of a worktree's admin path.
+[<Literal>]
+let GitDirName = ".git"
+
+/// The MAIN checkout `root` belongs to. A normal checkout is its own main checkout. A git worktree has a `.git`
+/// FILE whose pointer names `<main>/.git/worktrees/<name>`, so its main checkout is the parent of the `.git`
+/// directory that pointer passes through (a relative pointer is read against the worktree). Anything unreadable
+/// answers `root` itself: a guess at another directory would be worse than the honest one.
+let mainCheckoutRoot (root: string) : string =
+    let gitPath = Path.Combine(root, GitDirName)
+    match File.Exists gitPath with
+    | false -> root
+    | true ->
+        try
+            let contents = (File.ReadAllText gitPath).Trim()
+            let pointer =
+                match contents.StartsWith(GitFilePointerPrefix, StringComparison.OrdinalIgnoreCase) with
+                | true -> contents.Substring(GitFilePointerPrefix.Length).Trim()
+                | false -> contents
+            let adminDir =
+                match Path.IsPathRooted pointer with
+                | true -> pointer
+                | false -> Path.GetFullPath(Path.Combine(root, pointer))
+            let rec upToGitDir (dir: string) : string option =
+                match String.IsNullOrEmpty dir with
+                | true -> None
+                | false ->
+                    match Path.GetFileName(Path.TrimEndingDirectorySeparator dir) = GitDirName with
+                    | true -> Path.GetDirectoryName dir |> Option.ofObj
+                    | false -> upToGitDir (Path.GetDirectoryName dir)
+            upToGitDir adminDir |> Option.defaultValue root
+        with _ ->
+            root
+
+/// Where a repository that lives NEXT TO this one (`sagefs.nvim`) is checked out: a child of the main checkout's
+/// parent. From a worktree the repo root's own parent is `<main>/.claude/worktrees`, which holds no siblings,
+/// so the lookup goes through `mainCheckoutRoot` and finds the same directory from either kind of checkout.
+let siblingCheckoutDir (root: string) (name: string) : string =
+    Path.Combine(Path.GetDirectoryName(mainCheckoutRoot root), name) |> Path.GetFullPath
+
 /// `requireRepoRoot` joined with one or more relative segments.
 ///
 /// The single place relative paths are built, so no call site concatenates separators
