@@ -114,6 +114,29 @@ let tests =
       |> List.max
       |> Expect.equal "five suites on five shards: the largest suite is the longest shard" 362.0
 
+    // ── how many shards ──
+    testCase "WHY — with no history the host tier gets today's shard count" <| fun _ ->
+      hostShardCount Map.empty |> Expect.equal "the floor" minHostShards
+
+    testCase "WHY — more shards are asked for only while they shorten the longest one: past the heaviest suite they buy nothing" <| fun _ ->
+      // 75 suites with the real shape: one 360 s suite, one 350 s, one 264 s, and a long tail.
+      let heavy = [ "a", 360.0; "b", 350.0; "c", 264.0; "d", 143.0; "e", 132.0 ]
+      let tail = [ for i in 1 .. 70 -> sprintf "t%d" i, 20.0 ]
+      let weights = Map.ofList (heavy @ tail)
+      let n = hostShardCount weights
+      (n > minHostShards) |> Expect.isTrue "the tail can be spread, so more shards than the floor"
+      (n <= maxHostShards) |> Expect.isTrue "never past the cap"
+      let longest = shardLoads n weights (weights |> Map.toList |> List.map fst) |> List.max
+      (longest <= 360.0 * (1.0 + hostShardTolerance) + 1e-6) |> Expect.isTrue "the longest shard is within the tolerance of the heaviest suite"
+
+    testCase "WHY — one suite that dwarfs the rest gains nothing from more shards, so the count stays at the floor" <| fun _ ->
+      hostShardCount (Map.ofList [ "huge", 900.0; "a", 10.0; "b", 10.0 ]) |> Expect.equal "the floor" minHostShards
+
+    testProperty "WHY — the shard count stays between the floor and the cap, whatever the weights" <|
+      fun (weights: PositiveInt list) ->
+        let n = hostShardCount (weights |> List.mapi (fun i w -> sprintf "s%d" i, float w.Get) |> Map.ofList)
+        n >= minHostShards && n <= maxHostShards
+
     // ── coverage ──
     testCase "WHY — shards that between them registered every host case are Covered" <| fun _ ->
       checkHostCoverage 330 [ 61; 36; 76; 71; 86 ] |> Expect.equal "61+36+76+71+86" Covered
