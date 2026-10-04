@@ -214,6 +214,7 @@ let writeReleaseManifest () =
 #load "build/FailureReport.fs"
 #load "build/TierSchedule.fs"
 #load "build/BuildStamps.fs"
+#load "build/PassRecord.fs"
 open SageFs.Build
 
 // Every downstream check runs against the ONE Release build of the primary
@@ -891,6 +892,167 @@ let runRatchetLane () =
             ratchetReproduction)
   }
 
+// ---- reusing a green tier of the same commit ---------------------------------------
+//
+// A gate that was red for one flaky tier used to rerun all of them to learn what the others had already said.
+// A tier that goes green on a clean tree leaves a pass record (build/PassRecord.fs: the key, the rules, the
+// format); a later run of the SAME commit with byte-identical binaries takes it instead and the trust table says
+// `Trusted (reused from <time>)`. `--fresh` (or SAGEFS_FRESH=1) runs everything. Records live in
+// SAGEFS_TIER_PASSES, which the local gate sets; with no store (CI, a plain run) nothing is reused and nothing
+// is written.
+
+/// stdout of `argv` in `workingDir`, trimmed. An `Error` when it cannot run or exits non-zero, so "git printed
+/// nothing" and "git failed" are never confused.
+let captureOf (workingDir: string) (argv: string list) : Result<string, string> =
+  try
+    let psi = Diagnostics.ProcessStartInfo(List.head argv)
+    List.tail argv |> List.iter psi.ArgumentList.Add
+    psi.WorkingDirectory <- workingDir
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    use p = Diagnostics.Process.Start psi
+    let out = p.StandardOutput.ReadToEndAsync()
+    p.StandardError.ReadToEndAsync() |> ignore
+    p.WaitForExit()
+    match p.ExitCode with
+    | 0 -> Result.Ok(out.Result.Trim())
+    | code -> Result.Error(sprintf "%s exited %d" (String.concat " " argv) code)
+  with e -> Result.Error e.Message
+
+let passFreshness =
+  let asked =
+    fsi.CommandLineArgs |> Array.contains "--fresh"
+    || (match Environment.GetEnvironmentVariable "SAGEFS_FRESH" with
+        | "1" | "true" -> true
+        | _ -> false)
+  match asked with
+  | true -> Freshness.Fresh
+  | false -> Freshness.Reuse
+
+let passStore =
+  match Environment.GetEnvironmentVariable "SAGEFS_TIER_PASSES" with
+  | null | "" -> Store.Disabled
+  | directory -> Store.At directory
+
+/// The tiers that took a record this run, by tier name.
+let reusedTiers = Collections.Concurrent.ConcurrentDictionary<string, PassRecord>()
+
+/// The inputs each tier was judged on, by tier name: what a green run records.
+let passInputsByTier = Collections.Concurrent.ConcurrentDictionary<string, PassInputs>()
+
+/// The suite-duration table this run was asked to partition by, when it is the one a first run of this commit
+/// recorded rather than today's. A later run of a commit has to partition like the first or a shard's record covers
+/// other suites; `Live` carries the table as it was, so it can be put back with this run's timings merged in.
+type PartitionSource =
+  | Live
+  | Frozen of live: Map<string, float>
+
+let partitionSource = ref Live
+
+let isoNow () = DateTimeOffset.Now.ToString "yyyy-MM-dd'T'HH:mm:sszzz"
+
+/// The tiers a pass record may never stand in for: the mutation score is judged against its own bar.
+let eligibilityOf (tier: TierPlan.Tier) : Eligibility =
+  match tier.Args.StartsWith("--mutation-score", StringComparison.Ordinal) with
+  | true -> Eligibility.Ineligible "the mutation score is judged against its own bar"
+  | false -> Eligibility.Eligible
+
+/// Clean means NOTHING differs from the commit, untracked files included. A git that cannot answer is dirty.
+let treeStateNow () : TreeState =
+  match captureOf rootDir [ "git"; "status"; "--porcelain" ] with
+  | Result.Ok "" -> TreeState.Clean
+  | _ -> TreeState.Dirty
+
+let closureDirectoriesOf (framework: TierPlan.Framework) : string list =
+  [ TierPlan.testBinDirOf framework; sprintf "SageFs/bin/Release/%s" (TierPlan.Framework.tfm framework) ]
+
+/// Hashes of what a framework's tiers load, once per run (the product closure is hundreds of MB).
+let frameworkHashes =
+  Collections.Concurrent.ConcurrentDictionary<TierPlan.Framework, Result<string * string, string>>()
+
+let hashesOf (framework: TierPlan.Framework) : Result<string * string, string> =
+  frameworkHashes.GetOrAdd(
+    framework,
+    fun f ->
+      try
+        let testAssembly = PassRecord.hashFile (Path.Combine(rootDir, TierPlan.dllOf f))
+        Result.Ok(testAssembly, PassRecord.closureHash rootDir (closureDirectoriesOf f))
+      with e -> Result.Error(sprintf "cannot hash the %s build: %s" (TierPlan.Framework.tfm f) e.Message))
+
+let sdkVersionNow = lazy (captureOf rootDir [ "dotnet"; "--version" ])
+
+let passInputsOf (sha: string) (tier: TierPlan.Tier) : Result<PassInputs, string> =
+  match hashesOf tier.Framework, sdkVersionNow.Force() with
+  | Result.Ok(testAssembly, closure), Result.Ok sdk ->
+    let partition =
+      match TierPlan.shardOfArgs (tier.Args.Split(' ', StringSplitOptions.RemoveEmptyEntries)) with
+      | Some _ ->
+        PassRecord.sha256OfText (match File.Exists suiteDurationsFile with | true -> File.ReadAllText suiteDurationsFile | false -> "")
+      | None -> ""
+    Result.Ok
+      { Sha = sha; Tier = tier.Name; Args = tier.Args; Framework = TierPlan.Framework.tfm tier.Framework; Sdk = sdk
+        TestAssembly = testAssembly; Closure = closure; Partition = partition }
+  | Result.Error e, _ -> Result.Error e
+  | _, Result.Error e -> Result.Error e
+
+/// The first run of a commit writes down the suite-duration table it partitions by; every later run of that commit
+/// partitions by the same table, so a shard's record covers the same suites when it is asked about again.
+let freezePartition (directory: string) (sha: string) : unit =
+  let snapshot = Path.Combine(directory, sha, "partition.json")
+  match File.Exists snapshot with
+  | true ->
+    partitionSource.Value <- Frozen(readJsonMap suiteDurationsFile)
+    Directory.CreateDirectory(Path.GetDirectoryName suiteDurationsFile) |> ignore
+    File.Copy(snapshot, suiteDurationsFile, true)
+  | false ->
+    Directory.CreateDirectory(Path.GetDirectoryName snapshot) |> ignore
+    match File.Exists suiteDurationsFile with
+    | true -> File.Copy(suiteDurationsFile, snapshot, true)
+    | false -> File.WriteAllText(snapshot, "{}")
+
+/// After the tiers: today's table gets this run's timings on top of what it held before the freeze.
+let restorePartition () : unit =
+  match partitionSource.Value with
+  | Live -> ()
+  | Frozen live ->
+    let merged = readJsonMap suiteDurationsFile |> Map.fold (fun (m: Map<string, float>) k v -> m.Add(k, v)) live
+    try File.WriteAllText(suiteDurationsFile, JsonSerializer.Serialize merged) with _ -> ()
+    partitionSource.Value <- Live
+
+/// Takes the records it may, says so for every tier, and returns the tiers that still have to run.
+let takeRecordedPasses (tiers: TierPlan.Tier list) : TierPlan.Tier list =
+  match passStore with
+  | Store.Disabled -> tiers
+  | Store.At directory ->
+    match captureOf rootDir [ "git"; "rev-parse"; "HEAD" ], treeStateNow () with
+    | Result.Error e, _ ->
+      printfn "pass records: not used, the commit is unknown (%s)" e
+      tiers
+    | Result.Ok sha, tree ->
+      PassRecord.prune directory
+      match tree with
+      | TreeState.Clean -> freezePartition directory sha
+      | TreeState.Dirty -> ()
+      let toRun = ResizeArray<TierPlan.Tier>()
+      for tier in tiers do
+        let stored = PassRecord.read (PassRecord.recordPath directory sha (TierPlan.fileNameOf tier.Name))
+        let decision =
+          match passInputsOf sha tier with
+          | Result.Ok inputs ->
+            passInputsByTier[tier.Name] <- inputs
+            PassRecord.decide passFreshness passStore tree (eligibilityOf tier) inputs stored
+          | Result.Error e -> Decision.RunTier(RunBecause.UnreadableRecord e)
+        match decision with
+        | Decision.ReuseRecord record ->
+          reusedTiers[tier.Name] <- record
+          File.AppendAllText(trustLedger, record.LedgerRow + "\n")
+          lock invokedTiers (fun () -> invokedTiers.Add((tier.Name, tier.Args, true)))
+          printfn "── tier %-28s reused: green in %.0fs on %s, the same commit and the same bytes (record %s)" tier.Name record.Seconds record.RecordedAt (record.Key.Substring(0, 12))
+        | Decision.RunTier because ->
+          printfn "pass records: %-28s runs (%s)" tier.Name (PassRecord.describeRun because)
+          toRun.Add tier
+      List.ofSeq toRun
+
 type TrustLine =
   { Tier: string
     Registered: string
@@ -942,7 +1104,12 @@ let tierTrustLines () =
           Failed = str r "Failed"
           Errored = str r "Errored"
           Ignored = str r "Ignored"
-          Verdict = match greenVerdict, stepOk with | true, false -> "ExitMismatch" | _ -> verdict
+          Verdict =
+            match greenVerdict, stepOk, reusedTiers.TryGetValue tier with
+            | true, false, _ -> "ExitMismatch"
+            // A tier that took a record says so, and when: never a plain Trusted.
+            | true, true, (true, record) -> PassRecord.reusedVerdict record
+            | _ -> verdict
           Detail =
             match greenVerdict, stepOk with
             | true, false -> "reported green, but the process exited non-zero"
@@ -987,6 +1154,40 @@ let renderTrustTable (lines: TrustLine list) =
       let mark = match l.Red with true -> "❌" | false -> "✅"
       $"| {l.Tier} | {l.Registered} | {l.Ran} | {l.Passed} | {l.Failed} | {l.Errored} | {l.Ignored} | {mark} {l.Verdict} | {l.Detail} |")
   String.concat "\n" ("## Test trust report" :: "" :: header @ body)
+
+/// The row a tier's process wrote to the trust ledger, verbatim: what a record carries so a reused tier's row is the original.
+let ledgerRowOf (tier: string) : string =
+  match File.Exists trustLedger with
+  | false -> ""
+  | true ->
+    File.ReadAllLines trustLedger
+    |> Array.filter (fun l ->
+      l.Trim() <> ""
+      && (try JsonDocument.Parse(l).RootElement.GetProperty("Tier").GetString() = tier with _ -> false))
+    |> Array.tryLast
+    |> Option.defaultValue ""
+
+/// After the tiers: every tier that RAN and came out Trusted, on a clean tree, leaves a record for its inputs.
+/// A tier that took a record this run is not recorded again; one that was red, cancelled or errored is never recorded.
+let recordGreenPasses (ran: TierPlan.Tier list) : unit =
+  match passStore, treeStateNow (), captureOf rootDir [ "git"; "rev-parse"; "HEAD" ] with
+  | Store.At directory, TreeState.Clean, Result.Ok sha ->
+    let lines = trustLines ()
+    let seconds = readDurations ()
+    for tier in ran do
+      match passInputsByTier.TryGetValue tier.Name, lines |> List.tryFind (fun l -> l.Tier = tier.Name) with
+      | (true, inputs), Some line when inputs.Sha = sha && not line.Red && line.Verdict = "Trusted" && not (reusedTiers.ContainsKey tier.Name) ->
+        match ledgerRowOf tier.Name with
+        | "" -> ()
+        | row ->
+          let record =
+            PassRecord.make inputs (isoNow ()) (seconds.TryFind tier.Name |> Option.defaultValue 0.0) line.Verdict
+              (line.Registered, line.Ran, line.Passed, line.Failed, line.Errored, line.Ignored) line.Detail row
+          try PassRecord.write (PassRecord.recordPath directory sha (TierPlan.fileNameOf tier.Name)) record
+          with e -> printfn "pass records: could not record %s (%s)" tier.Name e.Message
+      | _ -> ()
+  | Store.At _, TreeState.Dirty, _ -> printfn "pass records: nothing recorded, the working tree is not clean"
+  | _ -> ()
 
 // ---- work that runs beside the stages ------------------------------------------
 //
@@ -1124,20 +1325,9 @@ let net10BuildSteps () : BackgroundStep list =
 /// stdout of `argv` in `workingDir`, trimmed; empty when it cannot run or fails (a key built from it then differs
 /// from any stamp, so the stage runs).
 let outputOf (workingDir: string) (argv: string list) : string =
-  try
-    let psi = Diagnostics.ProcessStartInfo(List.head argv)
-    List.tail argv |> List.iter psi.ArgumentList.Add
-    psi.WorkingDirectory <- workingDir
-    psi.RedirectStandardOutput <- true
-    psi.RedirectStandardError <- true
-    use p = Diagnostics.Process.Start psi
-    let out = p.StandardOutput.ReadToEndAsync()
-    p.StandardError.ReadToEndAsync() |> ignore
-    p.WaitForExit()
-    match p.ExitCode with
-    | 0 -> out.Result.Trim()
-    | _ -> ""
-  with _ -> ""
+  match captureOf workingDir argv with
+  | Result.Ok text -> text
+  | Result.Error _ -> ""
 
 let mcpPackProjects = [ mcpSdkCoreDir; mcpSdkClientDir; mcpSdkAspNetCoreDir ]
 
@@ -1416,7 +1606,14 @@ pipeline "sagefs" {
             for t in browserTiers do
               lock invokedTiers (fun () -> invokedTiers.Add((t.Name, t.Args, false)))
             always @ [ List.head ciOnly ]
-        do! runTiers runnable
+        // Tiers that already went green on this commit with these exact bytes take their record (PassRecord),
+        // and say so; the rest run. Tiers that ran green on a clean tree leave a record for the next run.
+        let toRun = takeRecordedPasses runnable
+        match toRun with
+        | [] -> printfn "pass records: every tier took a record, nothing to run (--fresh runs them all)"
+        | _ -> do! runTiers toRun
+        restorePartition ()
+        recordGreenPasses toRun
         return Ok()
       })
   }
