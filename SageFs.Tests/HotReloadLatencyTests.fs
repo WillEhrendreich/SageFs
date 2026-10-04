@@ -282,32 +282,53 @@ let private reportAndGate (series: Series) (samples: Sample list) (bound: TimeSp
     | GateVerdict.WithinBound _ -> ()
     | regressed -> failtest (sprintf "%s: %s" name (describeVerdict regressed))
 
+/// The patched series, measured last on the net11 session of the daemon the HR runner started.
+let patchedLatencyCase =
+  Integration.dedicatedCaseTask
+    (Series.entryPoint Series.PatchSaveToServed)
+    "HR latency: save to served and save to confirmed on a patched save, p50 and p95 over many saves"
+    (fun () ->
+      task {
+        let! samples = measurePatchedSaves ()
+        reportAndGate Series.PatchSaveToServed samples TestTimeouts.hotReloadPatchServedP95Bound
+        reportAndGate Series.PatchSaveToConfirmed samples TestTimeouts.hotReloadPatchConfirmedP95Bound
+      })
+
+/// Saves to an app `run_app` runs, each one a rebuild and a new worker: the longest case in the gate.
+let restartLatencyCase =
+  Integration.dedicatedCaseTask
+    (Series.entryPoint Series.RestartSaveToServed)
+    "HR latency: save to served on a save to an app run_app runs with the delta route off, which is restarted, p50 and p95 over many saves"
+    (fun () ->
+      task {
+        let! samples = measureRunAppSaves Series.RestartSaveToServed
+        reportAndGate Series.RestartSaveToServed samples TestTimeouts.hotReloadRestartServedP95Bound
+      })
+
+let deltaLatencyCase =
+  Integration.dedicatedCaseTask
+    (Series.entryPoint Series.DeltaSaveToServed)
+    "HR latency: save to served on a save to an app run_app runs on the default route, which is a metadata delta, p50 and p95 over many saves"
+    (fun () ->
+      task {
+        let! samples = measureRunAppSaves Series.DeltaSaveToServed
+        reportAndGate Series.DeltaSaveToServed samples TestTimeouts.hotReloadDeltaServedP95Bound
+      })
+
+/// Every series. The HR runner runs only `patchedLatencyCase` from here; the other two have tiers of their own.
 [<Tests>]
 let latencyTests =
-  testList "Hot-reload latency" [
-    Integration.dedicatedCaseTask
-      "--integration-hr"
-      "HR latency: save to served and save to confirmed on a patched save, p50 and p95 over many saves"
-      (fun () ->
-        task {
-          let! samples = measurePatchedSaves ()
-          reportAndGate Series.PatchSaveToServed samples TestTimeouts.hotReloadPatchServedP95Bound
-          reportAndGate Series.PatchSaveToConfirmed samples TestTimeouts.hotReloadPatchConfirmedP95Bound
-        })
-    Integration.dedicatedCaseTask
-      "--integration-hr"
-      "HR latency: save to served on a save to an app run_app runs with the delta route off, which is restarted, p50 and p95 over many saves"
-      (fun () ->
-        task {
-          let! samples = measureRunAppSaves Series.RestartSaveToServed
-          reportAndGate Series.RestartSaveToServed samples TestTimeouts.hotReloadRestartServedP95Bound
-        })
-    Integration.dedicatedCaseTask
-      "--integration-hr"
-      "HR latency: save to served on a save to an app run_app runs on the default route, which is a metadata delta, p50 and p95 over many saves"
-      (fun () ->
-        task {
-          let! samples = measureRunAppSaves Series.DeltaSaveToServed
-          reportAndGate Series.DeltaSaveToServed samples TestTimeouts.hotReloadDeltaServedP95Bound
-        })
-  ]
+  testList "Hot-reload latency" [ patchedLatencyCase; restartLatencyCase; deltaLatencyCase ]
+
+/// What one run_app tier runs: its series, alone and in sequence with nothing, under the tier's own trust row. The
+/// tier needs no daemon, session or fixture from the runner: the series starts what it measures.
+let runSeriesTier (series: Series) (cliArgs: string array) : int =
+  let entryPoint = Series.entryPoint series
+  let argv = cliArgs |> Array.filter (fun a -> a <> entryPoint)
+  let case =
+    match series with
+    | Series.RestartSaveToServed -> restartLatencyCase
+    | Series.DeltaSaveToServed -> deltaLatencyCase
+    | Series.PatchSaveToServed | Series.PatchSaveToConfirmed ->
+      failwithf "%s is measured on the HR runner's daemon, not in a tier of its own" (Series.name series)
+  SageFs.Tests.TestInfrastructure.TrustSignal.run entryPoint argv (testSequenced (testList (Series.name series) [ case ]))

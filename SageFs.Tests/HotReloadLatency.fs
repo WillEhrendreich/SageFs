@@ -160,6 +160,15 @@ module Series =
     | Series.RestartSaveToServed -> "hr-restart"
     | Series.DeltaSaveToServed -> "hr-delta"
 
+  /// The tier a series is measured in. The patched series run on the daemon and the session the `--integration-hr`
+  /// runner started. A run_app series starts the daemon it measures (it needs its own route setting), so it reads nothing
+  /// of the runner's and is a tier of its own.
+  let entryPoint (series: Series) : string =
+    match series with
+    | Series.PatchSaveToServed | Series.PatchSaveToConfirmed -> "--integration-hr"
+    | Series.RestartSaveToServed -> TestInfrastructure.Integration.hrRestartEntryPoint
+    | Series.DeltaSaveToServed -> TestInfrastructure.Integration.hrDeltaEntryPoint
+
   /// What the daemon a series is measured on has to be told. The route is read by the daemon when it starts a
   /// worker, so a row that must run on one route gets a daemon of its own. The restart row turns the route off
   /// (the same fixture edit is what a delta takes, so on the default it would time a delta under the name

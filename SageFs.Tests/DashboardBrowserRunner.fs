@@ -561,13 +561,14 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
         // restore saves on the net11 session, and an outcome from one of those
         // arriving during a journey would be read as that journey's save. The latency measurement goes
         // last, from a session the journeys have left at rest, and it saves Greeting.fs and CalledCallee.fs
-        // of the net11 copy, so nothing may run beside it.
+        // of the net11 copy, so nothing may run beside it. The two run_app series are not here: each starts the
+        // daemon it measures and has a tier of its own (`--integration-hr-restart`, `--integration-hr-delta`).
         let hrJourneys =
           testList
             "hot-reload journeys"
             [ HotReloadInlinedCalleeJourneyTests.tests
               HotReloadBrowserTests.tests
-              testSequenced HotReloadLatencyTests.latencyTests ]
+              testSequenced (testList "Hot-reload latency" [ HotReloadLatencyTests.patchedLatencyCase ]) ]
         let result =
           SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-hr" hrArgv hrJourneys
         exitWith result

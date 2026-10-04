@@ -410,12 +410,19 @@ module Integration =
     |> List.filter isBareFlagEntryPoint
     |> List.filter (fun ep -> not (List.contains ep knownEntryPoints))
 
+  /// The tiers of the two `run_app` hot-reload latency series. Each starts the daemon it measures and reads nothing the
+  /// `--integration-hr` runner set up, so each is a tier of its own: the 20-save restart journey is the longest case in
+  /// the gate, and behind the runner's journeys it set the wall of the whole hr tier.
+  let hrRestartEntryPoint = "--integration-hr-restart"
+  let hrDeltaEntryPoint = "--integration-hr-delta"
+
   /// The `Dedicated` entry points Program.fs has a dispatch branch for. ONE
   /// list, read by Program.fs's fail-closed `unwiredDedicated` check and by the
   /// "every tier is invoked by CI" structural test — so "dispatched" and
   /// "invoked" are checked against the same set rather than two hand copies.
   let dispatchedEntryPoints =
-    [ "--integration-browser"; "--integration-hr"; "--integration-lt"; "--integration-disconnect" ]
+    [ "--integration-browser"; "--integration-hr"; "--integration-lt"; "--integration-disconnect"
+      hrRestartEntryPoint; hrDeltaEntryPoint ]
 
   /// The tree a plain default run (`--summary`, no `--all`/`--integration`)
   /// actually executes: every [<Tests>] value in this assembly, minus the

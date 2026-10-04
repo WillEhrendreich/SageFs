@@ -1619,6 +1619,8 @@ pipeline "sagefs" {
           [ testTier "--mutation-score"
             testTier "--integration-browser --summary"
             testTier "--integration-hr --summary"
+            testTier "--integration-hr-restart --summary"
+            testTier "--integration-hr-delta --summary"
             testTier "--integration-lt --summary"
             testTier "--integration-disconnect --summary" ]
         let browserTiers = ciOnly |> List.filter (fun t -> t.Name <> "--mutation-score")

@@ -348,6 +348,21 @@ let main argv =
     result
   | false ->
 
+  // The two run_app hot-reload latency series, one tier each. A series starts the daemon it measures (the route is
+  // read when a daemon starts a worker), so it needs nothing from the --integration-hr runner above and runs without
+  // that runner's daemon, fixtures and sessions. The restart series (20 saves, each a rebuild and a new worker) is the
+  // longest case in the gate, so a tier of its own sets the hr wall at that one case instead of behind the journeys.
+  let runSeriesTier (series: SageFs.Tests.HotReloadLatency.Series) : int =
+    let result = SageFs.Tests.HotReloadLatencyTests.runSeriesTier series argv
+    Environment.Exit result
+    result
+  match argv |> Array.contains SageFs.Tests.TestInfrastructure.Integration.hrRestartEntryPoint with
+  | true -> runSeriesTier SageFs.Tests.HotReloadLatency.Series.RestartSaveToServed
+  | false ->
+  match argv |> Array.contains SageFs.Tests.TestInfrastructure.Integration.hrDeltaEntryPoint with
+  | true -> runSeriesTier SageFs.Tests.HotReloadLatency.Series.DeltaSaveToServed
+  | false ->
+
   // Run the [Integration] live-testing dashboard browser journeys
   // (Playwright.NET) against a session on the FromCSharp sample: enable live
   // testing through the panel -> 11 tests discovered/passing -> edit Hello.fs
