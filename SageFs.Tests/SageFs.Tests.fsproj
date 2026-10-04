@@ -79,6 +79,8 @@
         <Compile Include="HygieneSurfaceTests.fs" />
         <Compile Include="HygienePanelTests.fs" />
         <Compile Include="NativeResolutionTests.fs" />
+        <Compile Include="NativeAssetsTests.fs" />
+        <Compile Include="NativePackageSessionTests.fs" />
         <Compile Include="MemberTableTests.fs" />
         <Compile Include="CrossCheckoutOverlapTests.fs" />
         <Compile Include="AppRunTests.fs" />
@@ -866,6 +868,11 @@
              ReferenceOutputAssembly="false" pattern: built so a session can load it, never linked into
              this test project's own references. -->
         <ProjectReference Include="fixtures\FSharpCoreIdentityFixture\FSharpCoreIdentityFixture.fsproj"
+                          PrivateAssets="all"
+                          ReferenceOutputAssembly="false" />
+        <!-- A real compiled class library that calls a native library a NuGet package carries (Microsoft.Data.Sqlite),
+             for the native-package outcome gate. Same ReferenceOutputAssembly="false" pattern. -->
+        <ProjectReference Include="fixtures\NativeSqliteFixture\NativeSqliteFixture.fsproj"
                           PrivateAssets="all"
                           ReferenceOutputAssembly="false" />
     </ItemGroup>

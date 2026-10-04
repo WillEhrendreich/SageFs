@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A class library that calls into a NATIVE library a NuGet package carries: Microsoft.Data.Sqlite, through
+       SQLitePCLRaw's bundle, which brings libe_sqlite3 under runtimes/<rid>/native in the package. This is the
+       shape of the "#r a NuGet package with a native library" report. A class library's build output does NOT hold the
+       package's files (only an executable's does), so the native file is in the NuGet cache and nowhere the
+       loader looks unless SageFs says where. Written like a normal user's project: no central package management. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+    <NuGetAudit>false</NuGetAudit>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Repro.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.1" />
+  </ItemGroup>
+</Project>

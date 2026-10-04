@@ -1,0 +1,7 @@
+<Project>
+  <!-- Stops NuGet's Directory.Packages.props search from walking up to the repo root's central package management:
+       this fixture is a normal standalone project that names its own package versions. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>
