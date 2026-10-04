@@ -219,6 +219,8 @@ module DomIds =
   let [<Literal>] ThemeVars = "theme-vars"
   let [<Literal>] ThemePicker = "theme-picker"
   let [<Literal>] ServerStatus = "server-status"
+  /// The soft banner: the daemon answers and the live stream is catching up.
+  let [<Literal>] ServerStale = "server-stale"
   let [<Literal>] CompletionDropdown = "completion-dropdown"
   let [<Literal>] KeyboardHelp = "keyboard-help"
   let [<Literal>] KeyboardHelpWrapper = "keyboard-help-wrapper"

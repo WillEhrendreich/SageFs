@@ -103,6 +103,7 @@
         <Compile Include="PageChoices.fs" />
         <Compile Include="SourceStateProbe.fs" />
         <Compile Include="DashboardTypes.fs" />
+        <Compile Include="DashboardConnection.fs" />
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="CohortInspector.fs" />
         <Compile Include="SettingsPanel.fs" />

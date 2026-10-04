@@ -74,7 +74,7 @@ let private fixedTable : (string * FixedBecause) list =
   @ all FixedBecause.Network [ "updateCheckFetch"; "updateCheckInterval"; "frictionReportPost" ]
   @ all FixedBecause.Protocol
       [ "statusWaitCap"; "sseKeepAlive"; "debugContinuePark"; "appChangeAwait"; "dashboardHeartbeat"
-        "dashboardStaleAfter"; "dashboardWorkerDataTtl"; "legacyStateStreamKeepAlive"; "reloadStreamHeartbeat"
+        "dashboardStaleAfter"; "dashboardProbe"; "dashboardWorkerDataTtl"; "legacyStateStreamKeepAlive"; "reloadStreamHeartbeat"
         "processStartTimeTolerance"; "fileWriteTimeTolerance" ]
   @ all FixedBecause.Threshold [ "impactP95Acceptable"; "impactP95Investigate"; "memberEvaluationGrace"; "scaledWaitCeiling" ]
   @ all FixedBecause.BoundBeforeKill
@@ -177,7 +177,7 @@ let tests =
 
     testCase "WHY — the number of waits for the machine only goes up when a table says so (a ratchet on the count, with the reason a wait is fixed in the table above)" <| fun _ ->
       machineScaled |> Set.count |> Expect.equal "waits for the machine" 60
-      fixedTable |> List.length |> Expect.equal "fixed durations (95 + capabilityDefaultLifetime and capabilityMaxLifetime, which are presence: a run's token is trusted for a stated time)" 97
+      fixedTable |> List.length |> Expect.equal "fixed durations (96 + capabilityDefaultLifetime and capabilityMaxLifetime, which are presence: a run's token is trusted for a stated time)" 98
 
     testCase "WHY — each machine constant in the running process equals its written value scaled for the process's tier, so the wiring is real and not only the text" <| fun _ ->
       let timeouts = typeof<ValidTimeout>.Assembly.GetType "SageFs.Timeouts"

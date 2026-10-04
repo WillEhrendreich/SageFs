@@ -616,9 +616,14 @@ module Timeouts =
   /// Server SSE heartbeat cadence: the stream loop patches a heartbeat signal at
   /// least this often (even on no-change ticks) so the client can prove liveness.
   let dashboardHeartbeat = envOrDefault "SAGEFS_DASHBOARD_HEARTBEAT_SECONDS" 5.0
-  /// Client staleness budget: if no heartbeat arrives within this window the
-  /// dashboard flips Signals.Connected=false and shows the disconnect banner.
+  /// Client staleness budget: if no heartbeat arrives within this window the live stream is LATE, which
+  /// is a suspicion and not a verdict. The page then asks the daemon directly (`dashboardProbe`) before
+  /// it says anything about whether the daemon is running.
   let dashboardStaleAfter = envOrDefault "SAGEFS_DASHBOARD_STALE_AFTER_SECONDS" 15.0
+  /// How long the dashboard page waits for the daemon to answer its own "are you there" request before
+  /// that attempt counts as unanswered. A refused connection fails at once and needs no wait; this bounds
+  /// the case where the daemon accepts the connection but is too busy to reply, which is slow, not gone.
+  let dashboardProbe = TimeSpan.FromSeconds(3.0)
   /// How long the dashboard reuses the last three worker fetches (eval stats,
   /// hot reload state, warmup context) for a session before it fetches them
   /// again. They are the dominant per-push cost. The render guard still morphs

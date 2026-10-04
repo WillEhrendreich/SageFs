@@ -621,7 +621,12 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     // never appeared (all three disconnect journeys, including both clock-skew
     // variants, failed on it).
     html |> Expect.stringContains "an effect records the LOCAL arrival time only when a NEW heartbeat value arrives" "$dsLastBeatAt !== $dsHeartbeatAt && ($dsLastBeatAt = $dsHeartbeatAt, $dsLastSeenAt = Date.now())"
-    html |> Expect.stringContains "staleness check compares the client's OWN clock against the local arrival time (no cross-clock skew)" "$connected = (Date.now() - $dsLastSeenAt)"
+    // A late heartbeat is a suspicion, not a verdict (DashboardConnection.fs): the page asks the daemon directly
+    // before it says anything about the daemon, and it has a banner for each thing it can know. How that
+    // decision behaves is proven in a real browser by the --integration-disconnect journeys, not by pinning JS text.
+    html |> Expect.stringContains "a late heartbeat makes the page ask the daemon directly before it claims the daemon is down" SageFs.Server.DashboardConnection.probeRoute
+    html |> Expect.stringContains "the shell carries the hard banner for a daemon that cannot be reached" (sprintf "id=\"%s\"" DomIds.ServerStatus)
+    html |> Expect.stringContains "and the soft banner for a stream that is late while the daemon answers" (sprintf "id=\"%s\"" DomIds.ServerStale)
     html |> Expect.stringContains "staleness check mirrors the literal string onto body[data-connected]" "document.body.setAttribute('data-connected', $connected ? 'true' : 'false')"
   }
 

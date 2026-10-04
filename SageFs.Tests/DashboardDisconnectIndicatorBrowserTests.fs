@@ -7,14 +7,14 @@
 /// existed but nothing ever turned them on. The fix is a server SSE heartbeat
 /// (`Timeouts.dashboardHeartbeat`) patched into a client-observable Datastar
 /// signal, checked client-side on a `Ds.onInterval` against
-/// `Timeouts.dashboardStaleAfter`; see Dashboard.fs's `ConnMonitor` module and
-/// `connectionStaleCheckExpr`.
+/// `Timeouts.dashboardStaleAfter`; see `DashboardConnection.fs`, which also says why a late
+/// heartbeat is a suspicion and not a verdict (the two journeys at the end of this file).
 ///
 /// Regression (R5): E9's own comparison read the server's absolute heartbeat
 /// timestamp directly against the browser's `Date.now()` — a cross-clock
 /// comparison that fails OPEN (banner never shows on a dead daemon) when the
 /// client clock lags the server. The fix stamps a CLIENT-local arrival
-/// signal (`ConnMonitor.LastSeenSignal`) via `Ds.effect` every time the
+/// signal (`DashboardConnection.LastSeenSignal`) via `Ds.effect` every time the
 /// server's heartbeat changes, and compares `Date.now()` only against that —
 /// both sides of every comparison are now the browser's own clock. See the
 /// `clockSkewJourney` tests below for the regression coverage.
@@ -312,7 +312,7 @@ let private disconnectIndicatorJourney () = task {
 /// mechanism Playwright's own docs use to seed `Math.random`). Only
 /// `Date.now` is patched — the sole `Date` API the disconnect-indicator
 /// client script touches (`heartbeatArrivalEffectExpr` /
-/// `connectionStaleCheckExpr` in Dashboard.fs); `new Date()` and friends are
+/// `connectionCheckExpr` in DashboardConnection.fs); `new Date()` and friends are
 /// left alone so the rest of the page behaves normally.
 let private addClockSkew (ctx: IBrowserContext) (offsetMs: int64) : Task<unit> = task {
   let script =
@@ -332,7 +332,7 @@ let private addClockSkew (ctx: IBrowserContext) (offsetMs: int64) : Task<unit> =
 /// exact regression E9's fix was meant to close). A client clock far AHEAD
 /// of the server made the same expression exceed the staleness budget
 /// immediately, showing the banner on a perfectly healthy daemon
-/// (false-positive). The fix (Dashboard.fs `ConnMonitor.LastSeenSignal` +
+/// (false-positive). The fix (DashboardConnection.fs `LastSeenSignal` +
 /// `heartbeatArrivalEffectExpr`) compares `Date.now()` only against a
 /// CLIENT-local arrival stamp, so neither direction of skew can move the
 /// result — this journey proves both directions under a 10-minute skew, far
