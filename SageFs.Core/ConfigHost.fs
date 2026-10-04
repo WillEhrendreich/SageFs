@@ -33,45 +33,60 @@ let describeError (error: ConfigHostError) : string =
 
 let private cache = ConcurrentDictionary<string, Result<DirectoryConfig, ConfigHostError>>()
 
-/// Start a host (no project), evaluate `content`, dispose. Blocking: config loading is a synchronous seam.
-let private evaluateUncached (workingDir: string) (content: string) : Result<DirectoryConfig, ConfigHostError> =
-  let dotnet = IsolatedFsiSession.dotnetPath ()
-  match resolveSdk dotnet workingDir |> Result.bind (fun sdk -> ensureBuiltWith dotnet sdk (IsolatedFsiSession.hostCacheRoot ())) with
-  | Error reason -> Error(HostUnavailable(describeBuildError reason))
-  | Ok build ->
-    let dll =
-      match build with
-      | Built dll
-      | Reused dll -> dll
-    let options =
-      { HostDll = dll
-        Dotnet = dotnet
-        // The host references its own assembly, which carries DirectoryConfig and LoadStrategy for the script.
-        FsiArgs = [ "fsi"; "--noninteractive"; "--nologo"; "--readline-"; "-r:" + dll ]
-        WorkingDir = workingDir
-        Environment = []
-        Libraries = HostAdaptation.HostLibraries.AsBuilt
-        OnOutput = fun _ _ -> ()
-        OnLog = ignore
-        StartupTimeoutMs = int Timeouts.fsiHostStartup.TotalMilliseconds }
-    match Async.RunSynchronously(start options) with
-    | Error reason -> Error(HostUnavailable(describeStartError reason))
-    | Ok host ->
-      use _ = host :> IDisposable
-      match Async.RunSynchronously(host.EvalConfig content) with
-      | Answered(ConfigEvaluated config) -> Ok config
-      | Answered(ConfigRejected failure) -> Error(ScriptRejected failure)
-      | HostGone reason -> Error(HostLostWhileEvaluating reason)
+/// Start a host (no project), evaluate `content`, dispose. The SDK lookup and the host build are synchronous process
+/// work, so they run on the pool and are awaited; the host's own startup and evaluation are awaited as they are.
+let private evaluateUncachedAsync (workingDir: string) (content: string) : Async<Result<DirectoryConfig, ConfigHostError>> =
+  async {
+    let dotnet = IsolatedFsiSession.dotnetPath ()
+    let! built =
+      Threading.Tasks.Task.Run(fun () ->
+        resolveSdk dotnet workingDir |> Result.bind (fun sdk -> ensureBuiltWith dotnet sdk (IsolatedFsiSession.hostCacheRoot ())))
+      |> Async.AwaitTask
+    match built with
+    | Error reason -> return Error(HostUnavailable(describeBuildError reason))
+    | Ok build ->
+      let dll =
+        match build with
+        | Built dll
+        | Reused dll -> dll
+      let options =
+        { HostDll = dll
+          Dotnet = dotnet
+          // The host references its own assembly, which carries DirectoryConfig and LoadStrategy for the script.
+          FsiArgs = [ "fsi"; "--noninteractive"; "--nologo"; "--readline-"; "-r:" + dll ]
+          WorkingDir = workingDir
+          Environment = []
+          Libraries = HostAdaptation.HostLibraries.AsBuilt
+          OnOutput = fun _ _ -> ()
+          OnLog = ignore
+          StartupTimeoutMs = int Timeouts.fsiHostStartup.TotalMilliseconds }
+      match! start options with
+      | Error reason -> return Error(HostUnavailable(describeStartError reason))
+      | Ok host ->
+        use _ = host :> IDisposable
+        match! host.EvalConfig content with
+        | Answered(ConfigEvaluated config) -> return Ok config
+        | Answered(ConfigRejected failure) -> return Error(ScriptRejected failure)
+        | HostGone reason -> return Error(HostLostWhileEvaluating reason)
+  }
 
 /// Evaluate a config.fsx expression. Script outcomes are cached by text; infrastructure failures are not.
+let evaluateAsync (workingDir: string) (content: string) : Async<Result<DirectoryConfig, ConfigHostError>> =
+  async {
+    match cache.TryGetValue content with
+    | true, cached -> return cached
+    | false, _ ->
+      let! result = evaluateUncachedAsync workingDir content
+      match result with
+      | Ok _
+      | Error(ScriptRejected _) -> cache[content] <- result
+      | Error(HostUnavailable _)
+      | Error(HostLostWhileEvaluating _) -> ()
+      return result
+  }
+
+/// `evaluateAsync` for the callers that are synchronous (`DirectoryConfig.load` and the project-resolution code
+/// above it, and the tests that pin them). A cached answer returns without waiting at all, and `evaluateAsync` is
+/// what a caller that can await uses, so this is the one place config loading blocks.
 let evaluate (workingDir: string) (content: string) : Result<DirectoryConfig, ConfigHostError> =
-  match cache.TryGetValue content with
-  | true, cached -> cached
-  | false, _ ->
-    let result = evaluateUncached workingDir content
-    match result with
-    | Ok _
-    | Error(ScriptRejected _) -> cache[content] <- result
-    | Error(HostUnavailable _)
-    | Error(HostLostWhileEvaluating _) -> ()
-    result
+  evaluateAsync workingDir content |> Async.RunSynchronously

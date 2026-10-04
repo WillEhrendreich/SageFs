@@ -53,18 +53,31 @@ module DirectoryConfig =
   let evaluate (content: string) : Result<DirectoryConfig, string> =
     evaluateIn Environment.CurrentDirectory content
 
+  /// What a config file's evaluation means for the directory: its config, or the defaults with the reason logged.
+  let configOfEvaluation (path: string) (evaluated: Result<DirectoryConfig, string>) : DirectoryConfig =
+    match evaluated with
+    | Ok cfg -> cfg
+    | Error msg ->
+      Log.warn "Failed to load %s: %s (using defaults)" path msg
+      empty
+
   let load (workingDir: string) : DirectoryConfig option =
     let path = configPath workingDir
     match File.Exists path with
-    | true ->
-      let content = File.ReadAllText path
-      match evaluateIn workingDir content with
-      | Ok cfg -> Some cfg
-      | Error msg ->
-        Log.warn "Failed to load %s: %s (using defaults)" path msg
-        Some empty
-    | false ->
-      None
+    | true -> Some(configOfEvaluation path (evaluateIn workingDir (File.ReadAllText path)))
+    | false -> None
+
+  /// `load`, awaiting the evaluation of the config instead of blocking on it. The answer lands in the same cache, so a
+  /// synchronous `load` of the same config straight after returns at once.
+  let loadAsync (workingDir: string) : Async<DirectoryConfig option> =
+    async {
+      let path = configPath workingDir
+      match File.Exists path with
+      | true ->
+        let! evaluated = ConfigHost.evaluateAsync workingDir (File.ReadAllText path)
+        return Some(configOfEvaluation path (evaluated |> Result.mapError ConfigHost.describeError))
+      | false -> return None
+    }
 
   let autoOpenNamespacesForDirectory (workingDir: string) =
     load workingDir

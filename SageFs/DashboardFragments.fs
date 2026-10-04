@@ -3894,7 +3894,9 @@ let renderDiscoveredProjectsWithConfig (dirConfig: DirectoryConfig option) (disc
 /// reflect what Create will do for what the user has typed right now, not
 /// just the untouched auto-detect case (roast-9 #2).
 let pushDiscoverResults (ctx: HttpContext) (dir: string) (manualProjects: string) = task {
-  let dirConfig = DirectoryConfig.load dir
+  // Awaited: evaluating a config starts an FSI host. It also fills the cache the synchronous load in
+  // `resolveSessionProjects` below reads, so that one answers at once.
+  let! dirConfig = DirectoryConfig.loadAsync dir
   let discovered = discoverProjects dir
   let planText = describeSessionLoadPlan discovered (resolveSessionProjects dir manualProjects)
   do! ssePatchNode ctx (renderDiscoveredProjectsWithConfig dirConfig discovered planText)
