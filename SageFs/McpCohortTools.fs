@@ -153,12 +153,14 @@ module McpCohortTools =
           return info |> Option.map (fun i -> i.WorkingDirectory)
     }
 
-  /// The same, from a wire string where "" means "I did not name one". The MCP tools take
-  /// `workingDirectory` as an optional STRING because an SDK tool parameter cannot be an F#
-  /// option, so this is where that encoding is undone — in one place, rather than at each of the
-  /// five call sites that would otherwise each have to remember it.
-  let internal callerWorkingDirectoryOf (ctx: McpContext) (agentName: string) (workingDirectory: string) : Task<string option> =
-    callerWorkingDirectory ctx agentName (if String.IsNullOrWhiteSpace workingDirectory then None else Some workingDirectory)
+  // `callerWorkingDirectoryOf` used to live here: "read the caller's directory from a wire
+  // string, falling back to the ACTIVE SESSION's directory". Five tools used it and
+  // `join_cohort` did not, so a join and a leave that both omitted the directory could land in
+  // different cohorts — the member stayed Present forever and the cohort panel never went away.
+  //
+  // It is DELETED rather than left unreferenced. The rule every cohort tool now follows is one
+  // line each: take the directory given, or `None` for the daemon's own scope. A helper that
+  // answers the same question a second way is a helper someone will reach for again.
 
   /// Join the implicit per-daemon cohort as `role` (Implementer/Verifier/
   /// Observer). v1 has no separate `create_cohort` command — the first

@@ -2976,7 +2976,18 @@ let private cohortClaimStateLabel (state: SageFs.Cohort.ClaimState<MemberTable.M
 /// (`CohortFrame` doc, Cohort.fs) — every lookup here is a plain array index,
 /// never a `Map` walk.
 let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
-  let memberCount = frame.MemberIds.Length
+  // MEMBERS PRESENT, not members ever known. `frame.MemberIds` is every id the cohort has
+  // ever seen — a departed member stays in it with `SeatState.Departed`, which is what the
+  // ledger keeps and what `ClaimHolderIndex` must still resolve. Counting that array said
+  // "Cohort — 1 member" after the last member had LEFT, so the header contradicted
+  // `PanelFacts.cohortPresence` (which filters on the seat) and the panel could never go away.
+  let memberCount =
+    frame.MemberSeat
+    |> Array.filter (fun seat ->
+      match seat with
+      | SageFs.Cohort.SeatState.Present -> true
+      | SageFs.Cohort.SeatState.Departed _ -> false)
+    |> Array.length
   let claimCount = frame.ClaimIds.Length
   // Bounded rows (CohortBoundedView): headers keep the TOTAL, the lists draw at
   // most `rowCap` rows most-actionable-first, and an overflow line says what
@@ -2988,8 +2999,13 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
       Text.raw "👥 "
       textEnc (sprintf "Cohort — %d member%s" memberCount (if memberCount = 1 then "" else "s"))
     ]
-    match memberCount with
-    | 0 ->
+    // "Show the detail" is NOT "are there members". Claims and landings outlive the members
+    // who made them — an orphaned claim must still render as neutral territory, and that is
+    // exactly the case with ZERO present members. Gating the detail on the member count hid
+    // every claim the moment its holder left.
+    let hasAnythingToShow = memberCount > 0 || claimCount > 0 || frame.LandingIds.Length > 0
+    match hasAnythingToShow with
+    | false ->
       Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem; margin-top: 0.4rem;" ] [
         Text.raw "No cohort members — agents join via join_cohort."
       ]
@@ -3035,8 +3051,13 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
               for i in claimView.Shown do
                 let (SageFs.Cohort.ClaimId claimIdStr) = frame.ClaimIds.[i]
                 let holderIdx = frame.ClaimHolderIndex.[i]
+                // `holderIdx` indexes `MemberIds`, which still holds DEPARTED members — that is the
+                // point of it, a claim's holder must stay resolvable after they leave. So the
+                // bound is `MemberIds.Length`, NOT the present-member count introduced above.
+                // Using the present count here silently dropped the holder's name from any
+                // claim whose holder had departed.
                 let holderText =
-                  match holderIdx >= 0 && holderIdx < memberCount with
+                  match holderIdx >= 0 && holderIdx < frame.MemberIds.Length with
                   | true -> sprintf "held by %s" (MemberTable.MemberId.display frame.MemberIds.[holderIdx])
                   | false -> cohortClaimStateLabel frame.ClaimState.[i]
                 Elem.li [ Attr.style "overflow-wrap: anywhere;" ] [

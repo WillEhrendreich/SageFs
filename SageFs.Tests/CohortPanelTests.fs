@@ -80,6 +80,39 @@ let cohortPanelTests =
       html |> Expect.stringContains "shows the panel heading with zero members" "Cohort — 0 members"
       html |> Expect.stringContains "explains how to join, instead of rendering nothing" "join_cohort"
 
+    testCase "WHY — a member who LEFT is not counted as a member, so the panel can go away" <| fun _ ->
+      // `frame.MemberIds` deliberately keeps a departed member (a claim they held must stay
+      // resolvable). The heading counted THAT array, so it said "Cohort — 1 member" after the
+      // only member had left, contradicted the VACANT conductor line beside it, and the panel
+      // could never disappear — which read as "the dashboard is not updating".
+      let m = MemberId.Minted "agent-1"
+      let frame =
+        frameAfter
+          [ CohortCommand.Join(m, JoinableRole.Implementer, None, machine)
+            CohortCommand.Depart(m, machine) ]
+      let html = renderCohortPanel frame |> render
+      html |> Expect.stringContains "the heading counts only PRESENT members" "Cohort — 0 members"
+      html |> Expect.stringContains "so the panel falls back to its empty state" "join_cohort"
+
+    testCase "WHY — a claim whose holder DEPARTED renders as an orphan, and says so" <| fun _ ->
+      // The counterexample to the fix above, and the reason the holder index must not be
+      // bounded by the PRESENT count: `MemberIds` keeps departed members, but DEPARTING
+      // ORPHANS the claim (`ClaimState.Orphaned`), which is what sets `ClaimHolderIndex` to
+      // -1. So the row must fall through to the orphan label, not name a holder — and it must
+      // still be RENDERED, which is what the `hasAnythingToShow` gate protects: a cohort with
+      // no present members and one orphaned claim still has something to say.
+      let m = MemberId.Minted "agent-1"
+      let frame =
+        frameAfter
+          [ CohortCommand.Join(m, JoinableRole.Implementer, None, machine)
+            CohortCommand.AcquireClaim(m, ClaimScope.File "src/F1.fs", "editing", machine)
+            CohortCommand.Depart(m, machine) ]
+      let html = renderCohortPanel frame |> render
+      html |> Expect.stringContains "the claim is still counted" "Claims (1)"
+      html |> Expect.stringContains "and is labelled orphaned, not dropped" "orphaned"
+      (html.Contains "held by agent-1")
+      |> Expect.isFalse "an orphaned claim names no holder — the holder has gone"
+
     testCase "WHY — a burst of orphaned claims renders a BOUNDED list with an honest overflow line, never 43 rows" <| fun _ ->
       // The live symptom: 43 orphaned claims, hours old, all listed. Each of
       // 43 members holds one claim, then departs (orphaning it).

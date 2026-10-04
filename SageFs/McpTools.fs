@@ -2490,7 +2490,19 @@ OUTPUT: Confirmation text.""")>]
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: leave_cohort called by {AgentName}", agentName)
         task {
-          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName working_directory
+          // WHY THE SAME RESOLUTION `join_cohort` USES, AND NOT A "SMARTER" ONE: `leave_cohort`
+          // used to fall back to the ACTIVE SESSION's directory when none was named, and
+          // `join_cohort` does not. A join and a leave that both omitted the directory could
+          // therefore land in DIFFERENT cohorts — the member stayed Present forever, the
+          // cohort panel never went away, and nothing said why.
+          //
+          // One sentence: a tool resolves the directory it was GIVEN, and `None` means the
+          // daemon's own scope. Both ends of a member's lifecycle must read it the same way or
+          // the pair is not a pair. `resolveJoinSession` still decides which SESSION a join is
+          // attributed to, which is a different question from which COHORT it joins.
+          let wd =
+            if System.String.IsNullOrWhiteSpace working_directory then None
+            else Some working_directory
           let! result = SageFs.McpCohortTools.leaveCohort ctx agentName wd
           return
             match result with
@@ -2520,7 +2532,13 @@ OUTPUT: Confirmation text with the new claim id and fence, or a conflict error n
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: acquire_claim called by {AgentName}, scope={Scope}", agentName, scope)
         task {
-          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName working_directory
+          // The SAME resolution `join_cohort` uses, for the reason `leave_cohort` was changed:
+          // a tool resolves the directory it was GIVEN, and `None` means the daemon's own
+          // scope. Falling back to the ACTIVE SESSION made which cohort an operation touched
+          // depend on ambient state that can change between two calls about the same member.
+          let wd =
+            if System.String.IsNullOrWhiteSpace working_directory then None
+            else Some working_directory
           let! result = SageFs.McpCohortTools.acquireClaim ctx agentName scope purpose wd
           return
             match result with
@@ -2548,7 +2566,13 @@ OUTPUT: Confirmation text, or an error naming why the release was refused.""")>]
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: release_claim called by {AgentName}, claim={ClaimId}", agentName, claimId)
         task {
-          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName working_directory
+          // The SAME resolution `join_cohort` uses, for the reason `leave_cohort` was changed:
+          // a tool resolves the directory it was GIVEN, and `None` means the daemon's own
+          // scope. Falling back to the ACTIVE SESSION made which cohort an operation touched
+          // depend on ambient state that can change between two calls about the same member.
+          let wd =
+            if System.String.IsNullOrWhiteSpace working_directory then None
+            else Some working_directory
           let! result = SageFs.McpCohortTools.releaseClaim ctx agentName claimId fence wd
           return
             match result with
@@ -2576,7 +2600,13 @@ OUTPUT: Confirmation text, or an error (not conductor / claim not orphaned / tar
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: reassign_claim called by {AgentName}, claim={ClaimId}, to={ToMember}", agentName, claimId, toMember)
         task {
-          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName working_directory
+          // The SAME resolution `join_cohort` uses, for the reason `leave_cohort` was changed:
+          // a tool resolves the directory it was GIVEN, and `None` means the daemon's own
+          // scope. Falling back to the ACTIVE SESSION made which cohort an operation touched
+          // depend on ambient state that can change between two calls about the same member.
+          let wd =
+            if System.String.IsNullOrWhiteSpace working_directory then None
+            else Some working_directory
           let! result = SageFs.McpCohortTools.reassignClaim ctx agentName claimId toMember wd
           return
             match result with
@@ -2604,7 +2634,13 @@ OUTPUT: Confirmation text with the new landing id, or a validation error (invali
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: request_landing called by {AgentName}", agentName)
         task {
-          let! wd = SageFs.McpCohortTools.callerWorkingDirectoryOf ctx agentName working_directory
+          // The SAME resolution `join_cohort` uses, for the reason `leave_cohort` was changed:
+          // a tool resolves the directory it was GIVEN, and `None` means the daemon's own
+          // scope. Falling back to the ACTIVE SESSION made which cohort an operation touched
+          // depend on ambient state that can change between two calls about the same member.
+          let wd =
+            if System.String.IsNullOrWhiteSpace working_directory then None
+            else Some working_directory
           let! result = SageFs.McpCohortTools.requestLanding ctx agentName claims commits statement wd
           return
             match result with

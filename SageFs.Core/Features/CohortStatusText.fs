@@ -109,7 +109,20 @@ module CohortStatusText =
     let memberView = CohortBoundedView.members CohortBoundedView.rowCap frame
     let claimView = CohortBoundedView.claims CohortBoundedView.rowCap frame
     let landingView = CohortBoundedView.landings CohortBoundedView.rowCap frame
-    sb.AppendLine(sprintf "Members (%d):" frame.MemberIds.Length) |> ignore
+    // MEMBERS PRESENT, not members ever known. `MemberIds` is every id the cohort has ever
+    // seen; a departed member stays in it with `SeatState.Departed` so `ClaimHolderIndex`
+    // can still resolve a claim it held. Reporting that array's length said "Members (1)"
+    // after the last member had LEFT, which contradicts the VACANT conductor line printed
+    // two lines above it — the same panel counted the same way, so this was one bug in two
+    // renderers rather than two bugs.
+    let presentCount =
+      frame.MemberSeat
+      |> Array.filter (fun seat ->
+        match seat with
+        | SageFs.Cohort.SeatState.Present -> true
+        | SageFs.Cohort.SeatState.Departed _ -> false)
+      |> Array.length
+    sb.AppendLine(sprintf "Members (%d):" presentCount) |> ignore
     for i in memberView.Shown do
       let seat = seatText now i frame
       sb.AppendLine(sprintf "  - %s [%A] %s" (MemberTable.MemberId.display frame.MemberIds.[i]) frame.MemberRole.[i] seat) |> ignore
