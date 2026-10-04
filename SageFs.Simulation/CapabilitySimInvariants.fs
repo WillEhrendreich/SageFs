@@ -99,6 +99,12 @@ module CapabilitySimInvariants =
                   yield sprintf "step %d: token %d was minted for '%s', outside its minter's '%s'" mint.AtStep mint.Token (ScopePrefix.value granted.Scope) (ScopePrefix.value minter.Scope)
                 if granted.NotAfter > minter.NotAfter then
                   yield sprintf "step %d: token %d outlives its minter" mint.AtStep mint.Token
+                // The route, as plain comparison: a minted token is never Unbound, and a minter that is itself
+                // bound hands out only its own binding.
+                if granted.Route = RouteBinding.Unbound then
+                  yield sprintf "step %d: token %d was minted Unbound, so it routes anywhere" mint.AtStep mint.Token
+                if minter.Route <> RouteBinding.Unbound && granted.Route <> minter.Route then
+                  yield sprintf "step %d: token %d was minted for %A by a minter bound to %A" mint.AtStep mint.Token granted.Route minter.Route
               | Error _ -> ()
             for claim in final.Claims do
               if claim.Allowed then
@@ -190,13 +196,87 @@ module CapabilitySimInvariants =
                 | other -> yield sprintf "step %d: an unknown token resolved as %A" present.AtStep other
           }) }
 
+  /// The independent route arithmetic: the sim's registry, and the whole-segment prefix rule written out.
+  let private sessionDirectory (id: string) : string option =
+    simSessions |> List.tryFind (fun (sid, _) -> sid = id) |> Option.map snd
+
+  let private insideDirectory (root: string) (directory: string) : bool =
+    directory = root || directory.StartsWith(root + "/", StringComparison.Ordinal)
+
+  /// A directory a call names, resolved the way a path is: `.` and `..` folded, and only an absolute one
+  /// can be inside anything.
+  let private resolvedDirectory (raw: string) : string option =
+    if not (raw.StartsWith "/") then None
+    else
+      raw.Split('/')
+      |> Array.filter (fun s -> s <> "" && s <> ".")
+      |> Array.fold
+        (fun stack segment ->
+          match segment, stack with
+          | "..", _ :: rest -> rest
+          | "..", [] -> []
+          | name, _ -> name :: stack)
+        []
+      |> List.rev
+      |> String.concat "/"
+      |> fun joined -> Some("/" + joined)
+
+  /// ROUTE-NEVER-ESCAPES-BINDING: whatever a bound token's call names, it is admitted only when every session and
+  /// directory it names is inside the binding. Written from the doctrine, not from `Route.admit`.
+  let routeNeverEscapesBinding : Invariant =
+    { Id = "ROUTE-NEVER-ESCAPES-BINDING"
+      Description = "An admitted route names only a session and a directory inside the token's binding."
+      Check = fun states ->
+        let final = List.last states
+        firstViolation
+          (seq {
+            for route in final.Routes do
+              if route.Admitted then
+                let sessionInside =
+                  match route.Call.SessionId, route.Binding with
+                  | None, _ -> true
+                  | Some _, RouteBinding.Unbound -> true
+                  | Some id, RouteBinding.BoundToSession bound -> id = bound
+                  | Some id, RouteBinding.BoundToCheckout root ->
+                    sessionDirectory id |> Option.exists (insideDirectory (CheckoutRoot.value root))
+                let directoryInside =
+                  match route.Call.WorkingDirectory, route.Binding with
+                  | None, _ -> true
+                  | Some _, RouteBinding.Unbound -> true
+                  | Some raw, RouteBinding.BoundToCheckout root -> resolvedDirectory raw |> Option.exists (insideDirectory (CheckoutRoot.value root))
+                  | Some raw, RouteBinding.BoundToSession bound ->
+                    match sessionDirectory bound with
+                    | Some dir -> resolvedDirectory raw |> Option.exists (insideDirectory dir)
+                    | None -> false
+                if not sessionInside then
+                  yield sprintf "step %d: token %d bound to %A was admitted for session %A" route.AtStep route.Token route.Binding route.Call.SessionId
+                if not directoryInside then
+                  yield sprintf "step %d: token %d bound to %A was admitted for directory %A" route.AtStep route.Token route.Binding route.Call.WorkingDirectory
+          }) }
+
+  /// ROUTE-REQUIRES-A-LIVE-TOKEN: a route is admitted only for a token that is good at that moment. A revoked,
+  /// expired or lapsed token routes nowhere, whatever it names.
+  let routeRequiresALiveToken : Invariant =
+    { Id = "ROUTE-REQUIRES-A-LIVE-TOKEN"
+      Description = "A route is admitted only for a token that is not revoked, not expired and not lapsed."
+      Check = fun states ->
+        let final = List.last states
+        firstViolation
+          (seq {
+            for route in final.Routes do
+              if route.Admitted && not route.LiveBySpec then
+                yield sprintf "step %d: token %d routed while revoked, expired or lapsed" route.AtStep route.Token
+          }) }
+
   let all : Invariant list =
     [ noRawTokenInLedger
       scopeNeverWidens
       mintNeverSubstitutes
       revokedStaysRevoked
       expiryIsHonored
-      unknownTokenNeverResolves ]
+      unknownTokenNeverResolves
+      routeNeverEscapesBinding
+      routeRequiresALiveToken ]
 
   let violations (states: State list) : (string * string) list =
     all

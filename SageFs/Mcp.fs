@@ -749,10 +749,8 @@ module McpTools =
   /// `ToolAuthorityGate.fs`. This is the call site; it belongs here because it needs `McpContext`.
   let private checkToolAuthorityGate (ctx: McpContext) (agent: string) (workingDirectory: string option) (toolName: string) : Result<unit, string> =
     let who = memberIdFor agent
-    // The cohort the CALL ACTS IN: the tool's own `working_directory`, as the tool body resolves it,
-    // and the daemon's own only when the call names none. Always reading the daemon's refused every
-    // cohort verb to a member of any OTHER repository's cohort (Anonymous there), because the cohort
-    // verbs are gated on membership and membership is per cohort. See fix(gate) 097c260d.
+    // The cohort the CALL ACTS IN (the tool's `working_directory`; the daemon's own only when it names none):
+    // membership is per cohort, so reading the daemon's refused a member of any other repository. 097c260d.
     let authority = ToolAuthorityGate.authorityOf (cohortOwnerFor ctx workingDirectory) who
     match ToolAuthorityGate.decide who authority toolName with
     | ToolAuthorityGate.Decision.Admitted -> Ok ()
@@ -800,12 +798,11 @@ module McpTools =
   ///     the gate evaluates the SAME session the tool would target.
   ///   - undeclared      — fails closed (ToolNotAvailable).
   ///
-  /// EVERY tool additionally passes through `checkToolAuthorityGate` FIRST —
-  /// a role-based dimension the session-state gate has no concept of, and the
-  /// one that used to apply only to the ten cohort verbs. The two are composed
-  /// by INTERSECTION, never union: the call must satisfy BOTH, and a failure in
-  /// either refuses it. `admitToolCallWithin` is the gate itself; it returns
-  /// what it resolved, so the tool body need not resolve a second time.
+  /// EVERY tool also passes `RouteGate.admit` (a bound token acts only on the session or checkout it is
+  /// bound to) and `checkToolAuthorityGate` (a role dimension the session-state gate has no concept of).
+  /// They compose by INTERSECTION, never union: a failure in any refuses the call. The session registry
+  /// is also confined to the binding underneath every tool body (`RouteGate.confine`, wired in `mkContext`).
+  /// `admitToolCallWithin` is the gate itself; it returns what it resolved, so the tool body need not resolve a second time.
   let admitToolCallWithinStore
     (store: CapabilityStore)
     (probeBound: TimeSpan)
@@ -821,6 +818,9 @@ module McpTools =
       Affordances.checkToolCallAllowed state toolName |> Result.mapError SageFsError.describeForAgent
     task {
       match checkIdentityGate store ctx agent workingDirectory toolName with
+      | Error message -> return Error message
+      | Ok () ->
+      match! RouteGate.admit ctx.SessionOps RouteGate.productionWithin (RouteGate.routeOf currentCapability.Value) toolName sessionId workingDirectory with
       | Error message -> return Error message
       | Ok () ->
       match checkToolAuthorityGate ctx agent workingDirectory toolName with

@@ -128,6 +128,9 @@
         <Compile Include="CohortOwnerResolution.fs" />
         <!-- ToolAuthorityGate before Mcp.fs: it holds the tool-admission decision Mcp.fs's gate calls. -->
         <Compile Include="ToolAuthorityGate.fs" />
+        <!-- RouteGate before Mcp.fs: the gate step that holds a member token to the session or checkout it is
+             bound to, and the confinement of the session registry underneath every tool body. -->
+        <Compile Include="RouteGate.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpHygiene.fs" />
         <Compile Include="McpNudge.fs" />

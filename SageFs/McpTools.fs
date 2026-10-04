@@ -2764,6 +2764,7 @@ The token is returned ONCE and never stored: SageFs keeps only its hash, so it c
 A token IS a cohort member (cap:<id> in get_cohort_status) and outranks the connection it arrives on, so sub-agents sharing one connection are as many members as they have tokens, each with real claim exclusivity. It is bound to:
 - a role, one of a closed set: Observer (read the cohort and status), Analysis (Observer plus read-only analysis of code and history; no eval, no tests), Verifier (Analysis plus run_tests and build/test leases; no eval), Implementer (everything a working member does: eval, sessions, apps, claims, landings). No role can mint, revoke, reassign claims, configure the integration, clear local data or tidy the workspace.
 - a scope: a repo-relative directory prefix. The token can claim only inside it; src/Foo/../Bar counts as src/Bar. A scope is policy, not a sandbox: it refuses claims, it does not stop a process from writing files.
+- a route: the ONE place it may act, which you name with working_directory (an absolute path to the checkout the run works in: every session rooted in it, a git worktree nested under it excluded) or with session_id (one session). Name exactly one; naming neither or both is refused, and no token is ever unbound. A call from the token that names another session or directory is refused with what the token is bound to, and the sessions outside the route are not listed to it at all. A token bound to a session creates none; one bound to a checkout creates sessions inside it. Like the scope this is policy for the tool surface, not a sandbox: an Implementer token can run code.
 - an expiry: ttl_minutes from now (0 = 120, at most 480), and it also lapses after 30 minutes without a call, the way a silent member's seat does.
 
 A token can only be narrower than the one that mints it. A request that is wider is refused with the widenings named, never clamped. Tokens do not survive a daemon restart; mint new ones.
@@ -2782,14 +2783,18 @@ OUTPUT: The member id (cap:<id>), the grant, the token (once), and how to presen
         [<Description("Minutes the token lives. 0 = the default (120). At most 480.")>]
         [<Optional; DefaultParameterValue(0)>]
         ttl_minutes: int,
-        [<Description("Working directory of the checkout this run works in, resolved to a session id the way join_cohort resolves it. Optional.")>]
+        [<Description("The checkout this run works in, as an ABSOLUTE path: the token may act only on sessions rooted inside it (a git worktree nested under it is its own checkout) and the member is seated in that repository's cohort. Name this OR session_id, not both.")>]
         [<Optional; DefaultParameterValue("")>]
-        working_directory: string
+        working_directory: string,
+        [<Description("One session the token may act on, instead of a checkout: the member is seated in that session's repository. Name this OR working_directory, not both.")>]
+        [<Optional; DefaultParameterValue("")>]
+        session_id: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let sid = match System.String.IsNullOrWhiteSpace session_id with | true -> None | false -> Some session_id
         logger.LogDebug("MCP-TOOL: mint_member called by {AgentName}, role={Role}, scope={Scope}, ttl={Ttl}", agentName, role, scope, ttl_minutes)
         task {
-          let! result = SageFs.McpCapability.mintMember ctx SageFs.McpTools.capabilityStore System.DateTime.UtcNow agentName role scope ttl_minutes wd
+          let! result = SageFs.McpCapability.mintMember ctx SageFs.McpTools.capabilityStore System.DateTime.UtcNow agentName role scope ttl_minutes wd sid
           return
             match result with
             | Ok minted -> SageFs.McpCapability.describeMinted minted, SageFs.McpCapability.describeMintedForLog minted, None

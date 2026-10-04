@@ -73,8 +73,12 @@ let private withCohort (body: McpContext -> Features.CohortOwner.Handle -> Featu
     do! body { sharedCtx () with CohortSupport = SageFs.Features.CohortOwners.Wiring.Single(owner, owner.Scope) } owner ledger
   }
 
+/// The checkout these tests mint for: the one the cohort above is wired to, so a token is seated where the
+/// conductor is. Every cohort here is `Single`, which takes any directory for the one cohort it has.
+let private mintCheckout = Environment.CurrentDirectory
+
 let private mintAs (ctx: McpContext) (store: CapabilityStore) (handle: string) (role: string) (scope: string) (ttl: int) =
-  asConnection handle (fun () -> mintMember ctx store now "gateway" role scope ttl None)
+  asConnection handle (fun () -> mintMember ctx store now "gateway" role scope ttl (Some mintCheckout) None)
 
 let private okOrFail (result: Result<'a, SageFsError>) : 'a =
   match result with
@@ -274,7 +278,7 @@ let gateTests =
       let grant (preset: RolePreset) : ResolvedCapability =
         { Id = CapabilityId "0123456789abcdef"
           Hash = TokenHash.ofToken "sfm_x"
-          Grant = { Preset = preset; Scope = ScopePrefix.repoRoot; NotAfter = now.AddHours 1.0 } }
+          Grant = { Preset = preset; Scope = ScopePrefix.repoRoot; Route = RouteBinding.BoundToSession "session-1"; NotAfter = now.AddHours 1.0 } }
       let visibleFor preset = visibleToolNames IdentityPolicy.ConnectionsAllowed ConductorSeat.Bound Authority.Anonymous (Some(grant preset)) registered
       visibleFor RolePreset.Analysis |> List.contains "diagnose" |> Expect.isTrue "analysis stays"
       visibleFor RolePreset.Analysis |> List.contains "send_fsharp_code" |> Expect.isFalse "eval goes"
@@ -406,7 +410,7 @@ let mintTests =
         let cap : ResolvedCapability =
           { Id = CapabilityId "feedfacefeedface"
             Hash = TokenHash.ofToken "sfm_x"
-            Grant = { Preset = RolePreset.Implementer; Scope = ScopePrefix.repoRoot; NotAfter = now.AddHours 1.0 } }
+            Grant = { Preset = RolePreset.Implementer; Scope = ScopePrefix.repoRoot; Route = RouteBinding.BoundToSession "session-1"; NotAfter = now.AddHours 1.0 } }
         let! joined = asCaller handleWorker (Some cap) (fun () -> joinCohort ctx "agent" "Implementer" None)
         errorText joined |> Expect.stringContains "says the conductor must join first" "conductor"
       })

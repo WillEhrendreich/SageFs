@@ -64,9 +64,9 @@ let readyProxy : SessionProxy =
             { Status = SessionStatus.Ready
               StatusMessage = None
               EvalCount = 0
-              AvgDurationMs = 0L
-              MinDurationMs = 0L
-              MaxDurationMs = 0L
+              AvgDurationMs = FixtureDurations.notRunMsInt64
+              MinDurationMs = FixtureDurations.notRunMsInt64
+              MaxDurationMs = FixtureDurations.notRunMsInt64
               Projects = []
               CoreVersion = "0.0.0-test" })
       | other -> return failwithf "the gate sent the worker something other than a status probe: %A" other
@@ -569,8 +569,12 @@ let worktreeTests =
 
 // ── mint_member: a token names where it routes ──────────────────────────
 
-let mintBy (ctx: McpContext) (store: CapabilityStore) (workingDirectory: string option) (sessionId: string option) =
+let mintBy (ctx: McpContext) (store: CapabilityStore) (workingDirectory: string option) (sessionId: string option) : Task<Result<McpCapability.MintedMember, SageFsError>> =
   asCaller "conductor-conn" None (fun () -> McpCapability.mintMember ctx store now "gateway" "Analysis" "" 60 workingDirectory sessionId)
+
+/// The minted member, or the refusal as the agent would read it. Annotated, so a test body can read its fields.
+let mintedOrFail (message: string) (result: Result<McpCapability.MintedMember, SageFsError>) : McpCapability.MintedMember =
+  result |> Result.mapError SageFsError.describeForAgent |> Expect.wantOk message
 
 let conductorOf (ctx: McpContext) (dir: string) =
   task {
@@ -587,7 +591,7 @@ let mintToolTests =
       let store = newStore ()
       do! conductorOf ctx dirA
       let! minted = mintBy ctx store (Some dirA) None
-      let minted = minted |> Result.mapError SageFsError.describeForAgent |> Expect.wantOk "minted"
+      let minted = mintedOrFail "minted" minted
       minted.Record.Grant.Route |> Expect.equal "bound to the checkout" (RouteBinding.BoundToCheckout(rootOf dirA))
     }
 
@@ -596,7 +600,7 @@ let mintToolTests =
       let store = newStore ()
       do! conductorOf ctx dirB
       let! minted = mintBy ctx store None (Some(SessionId.value sidB))
-      let minted = minted |> Result.mapError SageFsError.describeForAgent |> Expect.wantOk "minted for B's session, from B's cohort"
+      let minted = mintedOrFail "minted for B's session, from B's cohort" minted
       minted.Record.Grant.Route |> Expect.equal "bound to the session" (RouteBinding.BoundToSession(SessionId.value sidB))
       minted.Session |> Expect.equal "seated on that session" (Some(SessionId.value sidB))
     }
@@ -647,7 +651,7 @@ let mintToolTests =
       let store = newStore ()
       do! conductorOf ctx dirA
       let! minted = mintBy ctx store (Some dirA) None
-      let minted = minted |> Result.mapError SageFsError.describeForAgent |> Expect.wantOk "minted"
+      let minted = mintedOrFail "minted" minted
       McpCapability.describeMinted minted |> Expect.stringContains "names the checkout" dirA
       McpCapability.describeMintedForLog minted |> Expect.stringContains "the log text names it too" dirA
     }
@@ -695,4 +699,112 @@ let wiringTests =
       let! unbound = asCaller "plain-conn" None (fun () -> ctx.SessionOps.GetAllSessions())
       unbound |> List.length |> Expect.equal "an untokened caller sees both" 2
     }
+  ]
+
+// ── The daemon's own background work is not held to a caller's route ────
+
+/// The working directories a scan was told are in use.
+let sessionDirectories (facts: HygieneGather.LiveFacts) : string list =
+  facts.Sessions |> List.map snd |> List.sort
+
+[<Tests>]
+let backgroundTests =
+  testList "the daemon's own background work is not held to a caller's route" [
+
+    testTask "a machine scan started by a bound caller still sees every session as in use" {
+      // Cache.refresh runs the scan on a pool thread, which inherits the member token of the call that started it.
+      // Seen through a token bound to A, B's worktree would look unused and the cached plan would call it reclaimable.
+      let ctx = mkCtx ()
+      let store = newStore ()
+      let token = tokenFor store RolePreset.Implementer boundToA
+      let! scanned = asCaller "token-conn" (Some token) (fun () -> Task.Run(fun () -> McpHygiene.daemonLiveFacts ctx))
+      scanned |> sessionDirectories |> Expect.equal "both directories are in use" [ dirA; dirB ]
+    }
+
+    testTask "CONTRAST: the same gathering through the caller's own view sees only the route" {
+      let ctx = mkCtx ()
+      let store = newStore ()
+      let token = tokenFor store RolePreset.Implementer boundToA
+      let! seen = asCaller "token-conn" (Some token) (fun () -> Task.Run<HygieneGather.LiveFacts>(fun () -> McpHygiene.liveFactsOf ctx))
+      seen |> sessionDirectories |> Expect.equal "only A, which is why the scan must not use it" [ dirA ]
+    }
+
+    testTask "the scan's thread dropping the binding does not drop the caller's" {
+      let ctx = mkCtx ()
+      let store = newStore ()
+      let token = tokenFor store RolePreset.Implementer boundToA
+      let! stillBound =
+        asCaller "token-conn" (Some token) (fun () ->
+          task {
+            let! _ = Task.Run(fun () -> McpHygiene.daemonLiveFacts ctx)
+            return currentCapability.Value |> Option.isSome
+          })
+      stillBound |> Expect.isTrue "the call that started the scan is still held to its route"
+    }
+  ]
+
+// ── MCP resources ───────────────────────────────────────────────────────
+
+let confinedResources = [ McpResources.SessionsListUri ]
+
+[<Tests>]
+let resourceTests =
+  testList "MCP resources are held to the route too" [
+
+    testTask "sessions://list, read by a caller bound to A, lists A and not B" {
+      let ctx = mkCtx ()
+      let store = newStore ()
+      let token = tokenFor store RolePreset.Observer boundToA
+      let! json = asCaller "token-conn" (Some token) (fun () -> McpResources.SageFsResources(ctx).SessionsList())
+      json |> Expect.stringContains "its own session" (SessionId.value sidA)
+      json.Contains(SessionId.value sidB) |> Expect.isFalse "B is not listed"
+      json.Contains dirB |> Expect.isFalse "B's directory is not listed"
+    }
+
+    testTask "NEGATIVE CONTROL: sessions://list, read with no token, lists both" {
+      let ctx = mkCtx ()
+      let! json = asCaller "plain-conn" None (fun () -> McpResources.SageFsResources(ctx).SessionsList())
+      json |> Expect.stringContains "A" (SessionId.value sidA)
+      json |> Expect.stringContains "B" (SessionId.value sidB)
+    }
+
+    testCase "a bound caller reads only the resources cut to its route, and a resource added tomorrow is refused to it" <| fun () ->
+      for binding in [ boundToA; checkoutOfA () ] do
+        RouteGate.resourceAdmitted confinedResources binding McpResources.SessionsListUri |> Expect.equal "the confined resource" (Ok())
+        RouteGate.resourceAdmitted confinedResources binding McpResources.CohortStatusUri |> Result.isError |> Expect.isTrue "the cohort resource shows the daemon's own repository"
+        RouteGate.resourceAdmitted confinedResources binding "a-resource://added-tomorrow" |> Result.isError |> Expect.isTrue "an unclassified resource"
+
+    testCase "a refused resource says what the token is bound to and what to read instead" <| fun () ->
+      match RouteGate.resourceAdmitted confinedResources boundToA McpResources.CohortStatusUri with
+      | Error text ->
+        text |> Expect.stringContains "names the binding" (SessionId.value sidA)
+        text |> Expect.stringContains "names the tool that takes a directory" "get_cohort_status"
+      | Ok() -> failtest "the cohort resource was admitted to a bound token"
+
+    testCase "an untokened caller reads every resource, as before" <| fun () ->
+      for uri in [ McpResources.SessionsListUri; McpResources.CohortStatusUri; "a-resource://added-tomorrow" ] do
+        RouteGate.resourceAdmitted confinedResources RouteBinding.Unbound uri |> Expect.equal uri (Ok())
+  ]
+
+// ── Mutants of the resource decision ────────────────────────────────────
+
+type ResourceInput = RouteBinding * string
+
+let resourceAdmittedOf ((binding, uri): ResourceInput) : Result<unit, string> = RouteGate.resourceAdmitted confinedResources binding uri
+
+let resourcesAdmitEverything : MutationTestingFramework.Mutant<ResourceInput -> Result<unit, string>> =
+  { Name = "resources_admit_everything_to_a_bound_token"
+    Description = "the cohort resource shows the daemon's own repository, so a bound token must not read it"
+    Apply = fun _ _ -> Ok() }
+
+let resourcesRefuseTheConfinedOne : MutationTestingFramework.Mutant<ResourceInput -> Result<unit, string>> =
+  { Name = "resources_refuse_the_confined_resource"
+    Description = "sessions://list is cut to the route underneath, so a bound token may read it"
+    Apply = fun real (binding, uri) -> (match binding with RouteBinding.Unbound -> real (binding, uri) | _ -> Result.Error "refused") }
+
+[<Tests>]
+let resourceMutationTests =
+  testList "resourceAdmitted mutants are caught" [
+    MutationTestingFramework.detectsOutputMutant resourcesAdmitEverything (boundToA, McpResources.CohortStatusUri) resourceAdmittedOf Result.isError
+    MutationTestingFramework.detectsOutputMutant resourcesRefuseTheConfinedOne (boundToA, McpResources.SessionsListUri) resourceAdmittedOf Result.isOk
   ]

@@ -218,6 +218,10 @@ module CohortErrorMapping =
       failed
         (sprintf "The token would already be expired: its expiry %s is not in the future." (notAfter.ToString "u"))
         "Ask for a lifetime of at least one minute."
+    | Capability.MintRefusal.UnboundNotMintable ->
+      failed
+        "A member token must be bound to a session or a checkout, and this request would have bound it to nothing: a token that routes anywhere is the conductor's own authority, which no mint hands out."
+        "Pass working_directory (an absolute path to the checkout the run works in) or session_id (one session) to mint_member."
     | Capability.MintRefusal.WouldWiden widenings ->
       let describeWidening (widening: Capability.Widening) =
         match widening with
@@ -225,6 +229,8 @@ module CohortErrorMapping =
           sprintf "role %s is wider than %s" (Capability.RolePreset.toToken requested) (Capability.RolePreset.toToken minter)
         | Capability.Widening.Scope(requested, minter) ->
           sprintf "scope %s is wider than %s" (scopeText requested) (scopeText minter)
+        | Capability.Widening.Route(requested, minter) ->
+          sprintf "route %s is not inside %s" (Capability.RouteBinding.describe requested) (Capability.RouteBinding.describe minter)
         | Capability.Widening.Expiry(requested, minter) ->
           sprintf "expiry %s is later than %s" (requested.ToString "u") (minter.ToString "u")
       failed
@@ -234,6 +240,30 @@ module CohortErrorMapping =
       failed
         (sprintf "A member token may live at most %d minutes (the maximum), and this one asked for %d." (int max.TotalMinutes) (int requested.TotalMinutes))
         "Ask for a shorter lifetime and mint a new token for the next run."
+
+  /// A refused route: the rule and the next action, both from the pure decision.
+  let routeRefusalToSageFsError (refusal: Capability.RouteRefusal) : SageFsError =
+    failed (Capability.RouteRefusal.describe refusal) (Capability.RouteRefusal.nextAction refusal)
+
+  /// A mint request that names no usable binding.
+  let bindRefusalToSageFsError (refusal: Capability.BindRefusal) : SageFsError =
+    match refusal with
+    | Capability.BindRefusal.NothingNamed ->
+      failed
+        "A member token must name where it routes, and this request named neither a session nor a working directory."
+        "Pass working_directory (the absolute path of the checkout the run works in) to bind the token to that checkout, or session_id to bind it to one session."
+    | Capability.BindRefusal.BothNamed ->
+      failed
+        "A member token has one binding, and this request named both a session_id and a working_directory."
+        "Pass working_directory to bind the token to a checkout, or session_id to bind it to one session. Not both."
+    | Capability.BindRefusal.NotAbsolute raw ->
+      failed
+        (sprintf "'%s' is not an absolute path, so it names no checkout." raw)
+        "Pass the checkout's absolute path as working_directory."
+    | Capability.BindRefusal.FilesystemRoot raw ->
+      failed
+        (sprintf "'%s' is the root of the file system, which is not a checkout: a token bound to it would route anywhere." raw)
+        "Pass the checkout's own directory as working_directory."
 
   let revokeRefusalToSageFsError (refusal: Capability.RevokeRefusal) : SageFsError =
     match refusal with

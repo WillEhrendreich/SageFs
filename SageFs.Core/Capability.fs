@@ -19,7 +19,8 @@ open SageFs.MemberTable
 ///
 /// What this module decides, all of it pure (time is a parameter, randomness
 /// never enters):
-///   - a grant is a closed role preset, a canonical scope prefix and an expiry;
+///   - a grant is a closed role preset, a canonical scope prefix, a route binding (the session or
+///     checkout it may act on, never "anything") and an expiry;
 ///   - a grant can never be wider than its minter's (`Grant.isNarrowerOrEqual`,
 ///     a partial order the property tests check), and a request that is wider
 ///     is refused with the widenings named, never clamped;
@@ -244,11 +245,352 @@ module Capability =
     let isNarrowerOrEqual (a: RolePreset) (b: RolePreset) : bool =
       Set.isSubset (toolClasses a) (toolClasses b)
 
+  // ── Route binding: where a token may route ────────────────────────────────
+  //
+  // The role says WHICH tools a token may call and the scope says which FILES it may claim.
+  // Neither said which SESSION or CHECKOUT the call may act on, so any tool that takes a
+  // `session_id` or a `working_directory` honored whichever the caller named: an Analysis token
+  // minted for one session could read another's. A grant now names exactly one of three things,
+  // a closed DU and not a bool or an option, so "bound to nothing" is not a state a minted
+  // token can be in.
+  //
+  // WHAT THIS IS NOT. It decides what the MCP tool surface will do for a caller holding the
+  // token. It does not stop a process the token's holder runs (an `Implementer` token can eval
+  // arbitrary F# as the daemon's OS user, and that code can call the daemon's loopback with any
+  // session id). Like the scope prefix and the role, it is policy that makes the wrong call
+  // refused and named, and it is not containment. The long form is in `ToolAuthorityGate.fs`.
+
+  /// Why a directory is not a checkout root.
+  [<RequireQualifiedAccess>]
+  type RootRefusal =
+    | Blank
+    /// Not an absolute path, so it names no directory on this machine.
+    | NotAbsolute of raw: string
+    /// The root of the file system names everything, which is not a checkout.
+    | FilesystemRoot of raw: string
+
+  /// A canonical absolute directory a token is confined to. Constructed only by
+  /// `CheckoutRoot.tryParse`, so `/work/x/../a` and `/work/a/` are the same root.
+  type CheckoutRoot = private CheckoutRoot of string
+
+  module CheckoutRoot =
+    /// The canonical spelling of an absolute directory: separators normalized, `.` and `..`
+    /// resolved, no trailing separator. `None` for text that is not an absolute path. Pure string
+    /// work: it never touches the disk, so a directory that does not exist has a spelling too.
+    let canonical (raw: string) : string option =
+      match String.IsNullOrWhiteSpace raw with
+      | true -> None
+      | false ->
+        let text = raw.Trim()
+        match IO.Path.IsPathRooted text with
+        | false -> None
+        | true ->
+          let full = IO.Path.GetFullPath text
+          match IO.Path.GetPathRoot full = full with
+          | true -> Some full
+          | false -> Some(full.TrimEnd('/', '\\'))
+
+    let tryParse (raw: string) : Result<CheckoutRoot, RootRefusal> =
+      match String.IsNullOrWhiteSpace raw with
+      | true -> Error RootRefusal.Blank
+      | false ->
+        match canonical raw with
+        | None -> Error(RootRefusal.NotAbsolute raw)
+        | Some path when IO.Path.GetPathRoot path = path -> Error(RootRefusal.FilesystemRoot raw)
+        | Some path -> Ok(CheckoutRoot path)
+
+    let value (CheckoutRoot canonical) : string = canonical
+
+  /// Where a grant may route.
+  [<RequireQualifiedAccess>]
+  type RouteBinding =
+    /// Every session the daemon serves. The conductor's authority and the identity of a connection
+    /// with no token. NO MINT CAN HAND THIS OUT (`MintRefusal.UnboundNotMintable`), so a token is
+    /// always bound to something.
+    | Unbound
+    /// One session, by id.
+    | BoundToSession of sessionId: string
+    /// Every session whose working directory is this checkout, a git worktree nested under it excluded.
+    | BoundToCheckout of CheckoutRoot
+
+  /// Why a mint request names no usable binding.
+  [<RequireQualifiedAccess>]
+  type BindRefusal =
+    | NothingNamed
+    | BothNamed
+    | NotAbsolute of raw: string
+    | FilesystemRoot of raw: string
+
+  module RouteBinding =
+    /// `a` routes nowhere `b` does not. `Unbound` is the top; two bound grants are related only when
+    /// they are the same binding, because whether a session is inside a checkout is a fact about the
+    /// registry, not about the grants, and an order that guessed would be a widening waiting to happen.
+    let isNarrowerOrEqual (a: RouteBinding) (b: RouteBinding) : bool =
+      match b with
+      | RouteBinding.Unbound -> true
+      | RouteBinding.BoundToSession _
+      | RouteBinding.BoundToCheckout _ -> a = b
+
+    /// The binding a mint request asks for: a session OR a working directory, never both, never neither.
+    /// The result is never `Unbound`.
+    let ofRequest (sessionId: string option) (workingDirectory: string option) : Result<RouteBinding, BindRefusal> =
+      let present (text: string option) = text |> Option.map (fun s -> s.Trim()) |> Option.filter (fun s -> s <> "")
+      match present sessionId, present workingDirectory with
+      | None, None -> Error BindRefusal.NothingNamed
+      | Some _, Some _ -> Error BindRefusal.BothNamed
+      | Some id, None -> Ok(RouteBinding.BoundToSession id)
+      | None, Some directory ->
+        match CheckoutRoot.tryParse directory with
+        | Ok root -> Ok(RouteBinding.BoundToCheckout root)
+        | Error RootRefusal.Blank -> Error BindRefusal.NothingNamed
+        | Error(RootRefusal.NotAbsolute raw) -> Error(BindRefusal.NotAbsolute raw)
+        | Error(RootRefusal.FilesystemRoot raw) -> Error(BindRefusal.FilesystemRoot raw)
+
+    /// In words, for a refusal or the mint reply.
+    let describe (binding: RouteBinding) : string =
+      match binding with
+      | RouteBinding.Unbound -> "any session the daemon serves"
+      | RouteBinding.BoundToSession id -> sprintf "session %s" id
+      | RouteBinding.BoundToCheckout root -> sprintf "the checkout %s" (CheckoutRoot.value root)
+
+  /// How a tool uses the session or directory it is given, closed. A binding means something
+  /// different for each: a tool that acts on a session is held to the sessions the binding allows, a
+  /// tool that picks a cohort by directory must be told which directory, and so on. A tool with no
+  /// kind is refused to a bound token, so a tool added tomorrow cannot be forgotten into the gate.
+  [<RequireQualifiedAccess>]
+  type RouteKind =
+    /// Acts on one session: `session_id`, else `working_directory`, else the caller's own active session.
+    | OnSession
+    /// Lists the sessions the daemon serves. What it shows is cut to the binding underneath it.
+    | ListsSessions
+    /// Starts a new session rooted at `working_directory`.
+    | CreatesSession
+    /// `working_directory` picks the repository's cohort. Omitted, it means the DAEMON's own repository.
+    | InCohort
+    /// Lists files under `working_directory` on disk.
+    | ReadsDirectory
+    /// Acts on the daemon or on the caller's own state, and names no session. Leases, friction and the
+    /// daemon's own status. A directory or session id it is given anyway is still held to the binding.
+    | DaemonWide
+
+  module RouteKind =
+    let all : RouteKind list =
+      [ RouteKind.OnSession
+        RouteKind.ListsSessions
+        RouteKind.CreatesSession
+        RouteKind.InCohort
+        RouteKind.ReadsDirectory
+        RouteKind.DaemonWide ]
+
+    let toToken =
+      function
+      | RouteKind.OnSession -> "OnSession"
+      | RouteKind.ListsSessions -> "ListsSessions"
+      | RouteKind.CreatesSession -> "CreatesSession"
+      | RouteKind.InCohort -> "InCohort"
+      | RouteKind.ReadsDirectory -> "ReadsDirectory"
+      | RouteKind.DaemonWide -> "DaemonWide"
+
+    /// One entry per registered tool. The same names `ToolClass.toolsOf` lists, held to them by a test.
+    let private tagged (kind: RouteKind) (tools: string list) : (string * RouteKind) list =
+      tools |> List.map (fun tool -> tool, kind)
+
+    let assignments : (string * RouteKind) list =
+      tagged
+        RouteKind.InCohort
+        [ "get_cohort_status"; "join_cohort"; "leave_cohort"; "acquire_claim"; "release_claim"
+          "request_landing"; "reassign_claim"; "set_integration_ref"; "mint_member"; "revoke_member" ]
+      @ tagged
+          RouteKind.OnSession
+          [ "get_session_status"; "list_runnable_projects"; "discover_features"; "get_recent_fsi_events"
+            "switch_session"; "check_fsharp_code"; "diagnose"; "coverage_intel"; "impact_forecast"
+            "suggest_next_action"; "plan_ripple"; "preview_what_if"; "suggest_next_cell"
+            "get_cell_dependencies"; "explain_test_failure"; "list_tests"; "suggest_repair"
+            "get_session_filmstrip"; "get_eval_timeline"; "get_eval_diff"; "get_message_journal"
+            "export_notebook"; "export_session_transcript"; "run_tests"; "targeted_verify"
+            "send_fsharp_code"; "cancel_eval"; "manage_scratch_pad"; "reset_fsi_session"
+            "hard_reset_fsi_session"; "switch_workflow"; "stop_session"; "enable_hot_reload"
+            "disable_hot_reload"; "reset_hot_reload_state"; "set_reflection_read_mode"; "run_app"
+            "stop_app" ]
+      @ tagged RouteKind.CreatesSession [ "create_project_session"; "create_solution_session"; "create_bare_session" ]
+      @ tagged RouteKind.ListsSessions [ "list_sessions" ]
+      @ tagged RouteKind.ReadsDirectory [ "get_available_projects" ]
+      @ tagged
+          RouteKind.DaemonWide
+          [ "get_daemon_status"; "get_friction_report"; "get_friction_summary"; "report_friction"
+            "decompose_pipeline"; "acquire_full_build_lease"; "acquire_test_suite_lease"
+            "acquire_run_app_lease"; "release_work_lease"; "manage_local_data"
+            "get_workspace_hygiene"; "tidy_workspace" ]
+
+    let private kindByTool : Map<string, RouteKind> = Map.ofList assignments
+
+    /// The kind of a registered tool, or `None` for a name nobody classified.
+    let ofTool (toolName: string) : RouteKind option = Map.tryFind toolName kindByTool
+
+  /// What the gate knows of a call before its body runs: the tool, and the two parameters that route.
+  type RouteCall = {
+    Tool: string
+    SessionId: string option
+    WorkingDirectory: string option
+  }
+
+  /// What the registry says about the call, read by the edge and handed in, so the decision is pure.
+  type RouteFacts = {
+    /// The working directory of the session `session_id` names, when the daemon serves it.
+    NamedSessionDirectory: string option
+    /// The working directory of the bound session, when the binding is `BoundToSession` and it is served.
+    BoundSessionDirectory: string option
+    /// Whether `directory` lies inside checkout `root`. A git worktree nested under `root` is its own
+    /// checkout, so it is NOT inside. Both arguments are canonical.
+    Within: string -> string -> bool
+  }
+
+  [<RequireQualifiedAccess>]
+  type RouteRefusal =
+    /// The call names a session the binding does not allow (or one the daemon does not serve, which
+    /// is not told apart from one outside the binding, so the refusal is no oracle for other sessions).
+    | SessionOutsideBinding of requested: string * binding: RouteBinding
+    /// The call names a directory that is not inside the binding.
+    | DirectoryOutsideBinding of requested: string * binding: RouteBinding
+    /// The binding names a session the daemon no longer serves, so no directory can be shown to be inside it.
+    | BoundSessionNotServed of sessionId: string
+    /// The tool picks a cohort or reads a directory and the call named none. Defaulting it would act in
+    /// the daemon's own repository, which is outside the binding.
+    | DirectoryRequired of tool: string * binding: RouteBinding
+    /// A token bound to one session creates none: a new session is one it is not bound to.
+    | CannotCreateSessions of binding: RouteBinding
+    /// The tool has no routing kind, so the gate cannot say where it acts.
+    | UnclassifiedRouting of tool: string
+
+  module RouteRefusal =
+    /// One sentence: what was refused and by what rule.
+    let describe (refusal: RouteRefusal) : string =
+      match refusal with
+      | RouteRefusal.SessionOutsideBinding(requested, binding) ->
+        sprintf "This member token is bound to %s, and session %s is not inside that." (RouteBinding.describe binding) requested
+      | RouteRefusal.DirectoryOutsideBinding(requested, binding) ->
+        sprintf "This member token is bound to %s, and the directory '%s' is not inside that." (RouteBinding.describe binding) requested
+      | RouteRefusal.BoundSessionNotServed id ->
+        sprintf "This member token is bound to session %s, which the daemon no longer serves, so no directory can be shown to be inside it." id
+      | RouteRefusal.DirectoryRequired(tool, binding) ->
+        sprintf "%s acts in the repository of the directory it is given, and this call named none, which would mean the daemon's own repository. This member token is bound to %s." tool (RouteBinding.describe binding)
+      | RouteRefusal.CannotCreateSessions binding ->
+        sprintf "This member token is bound to %s, and creating a session routes to one it is not bound to." (RouteBinding.describe binding)
+      | RouteRefusal.UnclassifiedRouting tool ->
+        sprintf "SageFs has no routing rule for the tool %s, so a bound member token may not call it." tool
+
+    /// The next action, so a refusal says how to proceed and not only that it stopped.
+    let nextAction (refusal: RouteRefusal) : string =
+      let useInstead (binding: RouteBinding) =
+        match binding with
+        | RouteBinding.BoundToSession id -> sprintf "Pass session_id %s, or no session at all to act on it." id
+        | RouteBinding.BoundToCheckout root -> sprintf "Pass a working_directory inside %s, or none to act on a session there." (CheckoutRoot.value root)
+        | RouteBinding.Unbound -> "This token is not bound, so nothing is outside it."
+      match refusal with
+      | RouteRefusal.SessionOutsideBinding(_, binding)
+      | RouteRefusal.DirectoryOutsideBinding(_, binding) ->
+        sprintf "%s To reach another session, ask the conductor to mint a token bound to it (mint_member)." (useInstead binding)
+      | RouteRefusal.BoundSessionNotServed id ->
+        sprintf "Session %s is gone. Ask the conductor to mint a token for the session or checkout you are working in (mint_member)." id
+      | RouteRefusal.DirectoryRequired(_, binding) ->
+        match binding with
+        | RouteBinding.BoundToSession id -> sprintf "Pass working_directory: the directory of session %s, which list_sessions shows." id
+        | RouteBinding.BoundToCheckout root -> sprintf "Pass working_directory %s (or a directory inside it)." (CheckoutRoot.value root)
+        | RouteBinding.Unbound -> "This token is not bound, so a directory is not required."
+      | RouteRefusal.CannotCreateSessions binding ->
+        sprintf "Use the session you are bound to (%s). A token bound to a checkout can create sessions inside it: ask the conductor for one (mint_member with working_directory)." (RouteBinding.describe binding)
+      | RouteRefusal.UnclassifiedRouting tool ->
+        sprintf "Use the conductor's own connection, or report this: every registered tool must have a routing kind (%s has none)." tool
+
+  module Route =
+    /// May a caller bound by `binding` act on the session `sessionId`, rooted at `sessionDirectory`?
+    /// The one rule the confinement of the registry and the gate share.
+    let permitsSession (binding: RouteBinding) (within: string -> string -> bool) (sessionId: string) (sessionDirectory: string) : bool =
+      match binding with
+      | RouteBinding.Unbound -> true
+      | RouteBinding.BoundToSession bound -> sessionId = bound
+      | RouteBinding.BoundToCheckout root -> within (CheckoutRoot.value root) sessionDirectory
+
+    /// The directory a binding confines directories to. `Unbound` has none: every directory is inside it.
+    let private regionOf (binding: RouteBinding) (facts: RouteFacts) : Result<string option, RouteRefusal> =
+      match binding with
+      | RouteBinding.Unbound -> Ok None
+      | RouteBinding.BoundToCheckout root -> Ok(Some(CheckoutRoot.value root))
+      | RouteBinding.BoundToSession id ->
+        match facts.BoundSessionDirectory |> Option.bind CheckoutRoot.canonical with
+        | Some directory -> Ok(Some directory)
+        | None -> Error(RouteRefusal.BoundSessionNotServed id)
+
+    let private checkSession (binding: RouteBinding) (call: RouteCall) (facts: RouteFacts) : Result<unit, RouteRefusal> =
+      match call.SessionId with
+      | None -> Ok()
+      | Some id ->
+        let inside =
+          match binding with
+          | RouteBinding.Unbound -> true
+          | RouteBinding.BoundToSession bound -> id = bound
+          | RouteBinding.BoundToCheckout root -> facts.NamedSessionDirectory |> Option.exists (facts.Within(CheckoutRoot.value root))
+        match inside with
+        | true -> Ok()
+        | false -> Error(RouteRefusal.SessionOutsideBinding(id, binding))
+
+    let private checkDirectory (binding: RouteBinding) (call: RouteCall) (facts: RouteFacts) : Result<unit, RouteRefusal> =
+      match call.WorkingDirectory with
+      | None -> Ok()
+      | Some raw ->
+        match regionOf binding facts with
+        | Error refusal -> Error refusal
+        | Ok None -> Ok()
+        | Ok(Some region) ->
+          // Resolved before it is compared, so `/work/a/../b` is `/work/b`. A directory that is not
+          // absolute cannot be shown to be inside anything.
+          match CheckoutRoot.canonical raw |> Option.exists (facts.Within region) with
+          | true -> Ok()
+          | false -> Error(RouteRefusal.DirectoryOutsideBinding(raw, binding))
+
+    let private checkKind (binding: RouteBinding) (kind: RouteKind) (call: RouteCall) : Result<unit, RouteRefusal> =
+      let directoryRequired () =
+        match call.WorkingDirectory with
+        | Some _ -> Ok()
+        | None -> Error(RouteRefusal.DirectoryRequired(call.Tool, binding))
+      match kind with
+      | RouteKind.OnSession
+      | RouteKind.ListsSessions
+      | RouteKind.DaemonWide -> Ok()
+      | RouteKind.InCohort
+      | RouteKind.ReadsDirectory -> directoryRequired ()
+      | RouteKind.CreatesSession ->
+        match binding with
+        | RouteBinding.BoundToSession _ -> Error(RouteRefusal.CannotCreateSessions binding)
+        | RouteBinding.BoundToCheckout _
+        | RouteBinding.Unbound -> directoryRequired ()
+
+    /// THE decision every call from a bound token passes through. Pure. `Unbound` admits everything,
+    /// because it is the conductor's authority and a connection with no token. For a bound token a
+    /// session id or directory the call names is held to the binding on EVERY tool, a tool with no
+    /// routing kind is refused, and the kind says what a call that names nothing may do.
+    let admit (binding: RouteBinding) (call: RouteCall) (facts: RouteFacts) : Result<unit, RouteRefusal> =
+      match binding with
+      | RouteBinding.Unbound -> Ok()
+      | RouteBinding.BoundToSession _
+      | RouteBinding.BoundToCheckout _ ->
+        match RouteKind.ofTool call.Tool with
+        | None -> Error(RouteRefusal.UnclassifiedRouting call.Tool)
+        | Some kind ->
+          match checkSession binding call facts with
+          | Error refusal -> Error refusal
+          | Ok() ->
+            match checkDirectory binding call facts with
+            | Error refusal -> Error refusal
+            | Ok() -> checkKind binding kind call
+
   // ── Grant: what a token may do ────────────────────────────────────────────
 
   type Grant = {
     Preset: RolePreset
     Scope: ScopePrefix
+    /// Where the token may route. A minted token is never `Unbound`.
+    Route: RouteBinding
     /// The token never works at or after this instant.
     NotAfter: DateTime
   }
@@ -258,20 +600,26 @@ module Capability =
   type Widening =
     | Role of requested: RolePreset * minter: RolePreset
     | Scope of requested: ScopePrefix * minter: ScopePrefix
+    | Route of requested: RouteBinding * minter: RouteBinding
     | Expiry of requested: DateTime * minter: DateTime
 
   module Grant =
     /// What the conductor may hand out: everything, everywhere, for ever. A
-    /// minted token is always narrower than this, because mint caps a lifetime.
+    /// minted token is always narrower than this, because mint caps a lifetime
+    /// and refuses to hand out `Unbound`.
     let conductorAuthority : Grant =
-      { Preset = RolePreset.Implementer; Scope = ScopePrefix.repoRoot; NotAfter = DateTime.MaxValue }
+      { Preset = RolePreset.Implementer
+        Scope = ScopePrefix.repoRoot
+        Route = RouteBinding.Unbound
+        NotAfter = DateTime.MaxValue }
 
     /// `a` grants nothing `b` does not: a role that calls no more tools, a scope
-    /// that is the same directory or under it, an expiry no later. A partial
+    /// that is the same directory or under it, a route that is no wider, an expiry no later. A partial
     /// order, so "narrower than the minter" means something the tests can check.
     let isNarrowerOrEqual (a: Grant) (b: Grant) : bool =
       RolePreset.isNarrowerOrEqual a.Preset b.Preset
       && ScopePrefix.isWithin a.Scope b.Scope
+      && RouteBinding.isNarrowerOrEqual a.Route b.Route
       && a.NotAfter <= b.NotAfter
 
     /// Each way `requested` is wider than `minter`. Empty exactly when it is narrower or equal.
@@ -280,6 +628,8 @@ module Capability =
           Widening.Role(requested.Preset, minter.Preset)
         if not (ScopePrefix.isWithin requested.Scope minter.Scope) then
           Widening.Scope(requested.Scope, minter.Scope)
+        if not (RouteBinding.isNarrowerOrEqual requested.Route minter.Route) then
+          Widening.Route(requested.Route, minter.Route)
         if requested.NotAfter > minter.NotAfter then
           Widening.Expiry(requested.NotAfter, minter.NotAfter) ]
 
@@ -395,6 +745,9 @@ module Capability =
     | NotConductor
     | DuplicateToken
     | NotInTheFuture of notAfter: DateTime
+    /// The request asks for `RouteBinding.Unbound`. No token routes anywhere: even the conductor's
+    /// own authority is not something a mint can hand out, so a token always names where it routes.
+    | UnboundNotMintable
     | WouldWiden of Widening list
     | LifetimeTooLong of requested: TimeSpan * max: TimeSpan
 
@@ -441,6 +794,7 @@ module Capability =
     | Authority.Conductor by ->
       if Map.containsKey hash state.Records then Error MintRefusal.DuplicateToken
       elif requested.NotAfter <= now then Error(MintRefusal.NotInTheFuture requested.NotAfter)
+      elif requested.Route = RouteBinding.Unbound then Error MintRefusal.UnboundNotMintable
       else
         match Grant.wideningsOf requested minter.Grant with
         | _ :: _ as widenings -> Error(MintRefusal.WouldWiden widenings)

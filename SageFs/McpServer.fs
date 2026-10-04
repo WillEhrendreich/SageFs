@@ -528,6 +528,25 @@ let createToolListFilter (mcpCtx: McpContext) =
           return result
         })))
 
+/// ReadResource filter: `resources/read` carries the member token the way a tool call does, and the registry a
+/// resource reads is confined to a binding only while the token is bound to the call. A token that is bad is
+/// refused, as it is for a tool call, and a bound caller reads only the resources cut to its route.
+let createReadResourceFilter () =
+  McpRequestFilter<ReadResourceRequestParams, ReadResourceResult>(fun next ->
+    McpRequestHandler<ReadResourceRequestParams, ReadResourceResult>(fun ctx ct ->
+      ValueTask<ReadResourceResult>(
+        task {
+          let meta = match box ctx.Params with | null -> null | _ -> ctx.Params.Meta
+          let uri = match box ctx.Params with | null -> "" | _ -> ctx.Params.Uri
+          match SageFs.McpCapability.presentToken SageFs.McpTools.capabilityStore DateTime.UtcNow (SageFs.McpCapability.presentationFrom ctx.User meta) with
+          | Error refusal -> return raise (ModelContextProtocol.McpProtocolException(SageFs.SageFsError.describeForAgent refusal, ModelContextProtocol.McpErrorCode.InvalidRequest))
+          | Ok capability ->
+            SageFs.McpTools.currentCapability.Value <- capability
+            match SageFs.RouteGate.resourceAdmitted [ SageFs.Server.McpResources.SessionsListUri ] (SageFs.RouteGate.routeOf capability) uri with
+            | Error message -> return raise (ModelContextProtocol.McpProtocolException(message, ModelContextProtocol.McpErrorCode.InvalidRequest))
+            | Ok() -> return! next.Invoke(ctx, ct).AsTask()
+        })))
+
 /// The member-token header, read at the HTTP edge. The token is hashed here and only the hash goes
 /// on the request's principal, for the MCP request filters to read; the raw value goes no further.
 /// Installed ahead of `MapMcp`.
@@ -960,12 +979,13 @@ type McpServerConfig = {
   GetDaemonHealth: unit -> SageFs.Features.HealthSnapshot option
 }
 
-// Create shared MCP context (private — called only by startMcpServer)
-let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> option) (featureStateGetter: (unit -> SageFs.Features.FeatureHooks.FeaturePushState) option) (recordEval: (string -> string -> int64 -> unit) option) : McpContext =
+// Create shared MCP context, called by startMcpServer. It is the daemon's ONE McpContext constructor, and the one
+// place the session registry a tool body reaches is narrowed to the binding of the member token the call holds.
+let mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> option) (featureStateGetter: (unit -> SageFs.Features.FeatureHooks.FeaturePushState) option) (recordEval: (string -> string -> int64 -> unit) option) : McpContext =
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; RecordEval = recordEval; ActivityTracker = cfg.ActivityTracker; LiveBindings = cfg.LiveBindings; CohortSupport = cfg.CohortSupport; GetDaemonHealth = cfg.GetDaemonHealth; GetProcessTelemetry = DaemonTelemetry.current }
+  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = RouteGate.confine (fun () -> RouteGate.routeOf currentCapability.Value) RouteGate.productionWithin cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; RecordEval = recordEval; ActivityTracker = cfg.ActivityTracker; LiveBindings = cfg.LiveBindings; CohortSupport = cfg.CohortSupport; GetDaemonHealth = cfg.GetDaemonHealth; GetProcessTelemetry = DaemonTelemetry.current }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 
@@ -2059,6 +2079,7 @@ let configureMcpProtocol (builder: WebApplicationBuilder) (mcpContext: McpContex
     .WithRequestFilters(fun filters ->
       filters.AddCallToolFilter(createServerCaptureFilter mcpContext serverTracker) |> ignore
       filters.AddListToolsFilter(createToolListFilter mcpContext) |> ignore
+      filters.AddReadResourceFilter(createReadResourceFilter ()) |> ignore
     )
   |> ignore
 

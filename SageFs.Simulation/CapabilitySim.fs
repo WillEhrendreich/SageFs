@@ -26,6 +26,11 @@ open SageFs.Capability
 ///   - `NeverExpiresTwin` ignores `NotAfter` and the idle lease.
 ///   - `BadTokenFallsBackTwin` resolves a token nobody minted as the plain
 ///     connection, the downgrade a presented-but-bad token must never get.
+///   - `MintIgnoresRouteTwin` checks a request against the minter's grant with the route
+///     left out, so a minter bound to one checkout hands out another.
+///   - `RouteIgnoresBindingTwin` admits any call of a live token, whatever it names.
+///   - `RouteSkipsResolveTwin` decides a route from the token's record without asking
+///     whether the token is still good, so a revoked, expired or lapsed token still routes.
 module CapabilitySim =
 
   /// Who is asking to mint.
@@ -40,8 +45,8 @@ module CapabilitySim =
 
   [<RequireQualifiedAccess>]
   type SimEvent =
-    /// Mint token number `token` as `minter`, asking for `preset` over `scope`, valid for `lifetimeMinutes` from now.
-    | Mint of token: int * minter: MinterKind * preset: RolePreset * scope: ScopePrefix * lifetimeMinutes: int
+    /// Mint token number `token` as `minter`, asking for `preset` over `scope`, bound to `route`, valid for `lifetimeMinutes` from now.
+    | Mint of token: int * minter: MinterKind * preset: RolePreset * scope: ScopePrefix * route: RouteBinding * lifetimeMinutes: int
     | Touch of token: int
     | Revoke of token: int * byConductor: bool
     | Present of token: int
@@ -49,6 +54,8 @@ module CapabilitySim =
     | PresentUnknown of n: int
     /// The token holder tries to claim `scope`.
     | Claim of token: int * scope: ClaimScope
+    /// The token holder makes a call that names `call`'s session and directory.
+    | Routed of token: int * call: RouteCall
     | PassMinutes of int
 
   [<RequireQualifiedAccess>]
@@ -62,6 +69,9 @@ module CapabilitySim =
     | MintOverwritesTwin
     | NeverExpiresTwin
     | BadTokenFallsBackTwin
+    | MintIgnoresRouteTwin
+    | RouteIgnoresBindingTwin
+    | RouteSkipsResolveTwin
 
   [<RequireQualifiedAccess>]
   type Resolution =
@@ -102,6 +112,18 @@ module CapabilitySim =
     Allowed: bool
   }
 
+  /// One call a token holder made that names a session or a directory, and what the real route decision said.
+  type RouteRecord = {
+    AtStep: int
+    Token: int
+    /// The binding the token's grant carries.
+    Binding: RouteBinding
+    Call: RouteCall
+    Admitted: bool
+    /// Whether the token was good at that step, by the sim's own bookkeeping and not by `resolve`.
+    LiveBySpec: bool
+  }
+
   type State = {
     Step: int
     Clock: DateTime
@@ -116,6 +138,7 @@ module CapabilitySim =
     Mints: MintRecord list
     Presents: PresentRecord list
     Claims: ClaimRecord list
+    Routes: RouteRecord list
     /// Steps at which each token was revoked, by an accepted revoke.
     RevokedAtStep: Map<int, int>
   }
@@ -133,14 +156,48 @@ module CapabilitySim =
     Mints = []
     Presents = []
     Claims = []
+    Routes = []
     RevokedAtStep = Map.empty
   }
 
   let private conductorId = MemberId.Minted "conductor"
 
+  // ── The registry the routed calls are made against ──────────────────────────
+
+  /// Three sessions in two checkouts: s1 is the checkout's root, s3 is under it, s2 is elsewhere.
+  let simSessions : (string * string) list = [ "s1", "/sim/a"; "s2", "/sim/b"; "s3", "/sim/a/sub" ]
+
+  let private rootOf (directory: string) : CheckoutRoot =
+    match CheckoutRoot.tryParse directory with
+    | Ok root -> root
+    | Error refusal -> failwithf "the sim's own directory %s is not a checkout root: %A" directory refusal
+
+  /// The checkout the narrow conductor is bound to.
+  let narrowConductorRoute : RouteBinding = RouteBinding.BoundToCheckout(rootOf "/sim/a")
+
+  /// What a mint may ask to bind to: a session, either checkout, and Unbound, which no mint may hand out.
+  let routePool : RouteBinding list =
+    [ RouteBinding.BoundToSession "s1"
+      RouteBinding.BoundToSession "s2"
+      narrowConductorRoute
+      RouteBinding.BoundToCheckout(rootOf "/sim/b")
+      RouteBinding.Unbound ]
+
+  let simWithin (root: string) (directory: string) : bool =
+    directory = root || directory.StartsWith(root + "/", StringComparison.Ordinal)
+
+  let private simFacts (binding: RouteBinding) (call: RouteCall) : RouteFacts =
+    { NamedSessionDirectory = call.SessionId |> Option.bind (fun id -> simSessions |> List.tryFind (fun (sid, _) -> sid = id) |> Option.map snd)
+      BoundSessionDirectory =
+        match binding with
+        | RouteBinding.BoundToSession id -> simSessions |> List.tryFind (fun (sid, _) -> sid = id) |> Option.map snd
+        | RouteBinding.Unbound
+        | RouteBinding.BoundToCheckout _ -> None
+      Within = simWithin }
+
   let narrowConductorGrant (now: DateTime) : Grant =
     let scope = match ScopePrefix.tryParse "src/Foo" with Ok p -> p | Error _ -> ScopePrefix.repoRoot
-    { Preset = RolePreset.Analysis; Scope = scope; NotAfter = now.AddHours 2.0 }
+    { Preset = RolePreset.Analysis; Scope = scope; Route = narrowConductorRoute; NotAfter = now.AddHours 2.0 }
 
   let private minterOf (kind: MinterKind) (now: DateTime) : Minter =
     match kind with
@@ -169,7 +226,10 @@ module CapabilitySim =
       | Behavior.TouchRevivesTwin
       | Behavior.MintOverwritesTwin
       | Behavior.NeverExpiresTwin
-      | Behavior.BadTokenFallsBackTwin -> BitConverter.GetBytes step
+      | Behavior.BadTokenFallsBackTwin
+      | Behavior.MintIgnoresRouteTwin
+      | Behavior.RouteIgnoresBindingTwin
+      | Behavior.RouteSkipsResolveTwin -> BitConverter.GetBytes step
     { Step = step; Text = sprintf "%A %A" command events; Entropy = entropy }
 
   /// Every spelling a raw token or its entropy could take in a ledger row.
@@ -201,7 +261,8 @@ module CapabilitySim =
   let private clampTo (minter: Grant) (requested: Grant) : Grant =
     let preset = if RolePreset.isNarrowerOrEqual requested.Preset minter.Preset then requested.Preset else minter.Preset
     let scope = if ScopePrefix.isWithin requested.Scope minter.Scope then requested.Scope else minter.Scope
-    { Preset = preset; Scope = scope; NotAfter = min requested.NotAfter minter.NotAfter }
+    let route = if RouteBinding.isNarrowerOrEqual requested.Route minter.Route then requested.Route else minter.Route
+    { Preset = preset; Scope = scope; Route = route; NotAfter = min requested.NotAfter minter.NotAfter }
 
   let private resolveNeverExpires (now: DateTime) (state: CapabilityState) (hash: TokenHash) : Result<CapabilityRecord, PresentRefusal> =
     match Map.tryFind hash state.Records with
@@ -224,8 +285,8 @@ module CapabilitySim =
     let s = { s with Step = s.Step + 1 }
     match ev with
     | SimEvent.PassMinutes n -> { s with Clock = s.Clock.AddMinutes(float n) }
-    | SimEvent.Mint(token, kind, preset, scope, lifetimeMinutes) ->
-      let request = { Preset = preset; Scope = scope; NotAfter = s.Clock.AddMinutes(float lifetimeMinutes) }
+    | SimEvent.Mint(token, kind, preset, scope, route, lifetimeMinutes) ->
+      let request = { Preset = preset; Scope = scope; Route = route; NotAfter = s.Clock.AddMinutes(float lifetimeMinutes) }
       let raw, entropy = rawTokenFor s token
       let hash = TokenHash.ofToken raw
       let minter = minterOf kind s.Clock
@@ -237,12 +298,17 @@ module CapabilitySim =
         | Behavior.MintClampsTwin ->
           decide s.Clock s.Capabilities (CapabilityCommand.Mint(minter, clampTo minter.Grant request, hash))
         | Behavior.MintOverwritesTwin -> mintOverwrites s.Clock s.Capabilities minter request hash
+        | Behavior.MintIgnoresRouteTwin ->
+          let blind = { minter with Grant = { minter.Grant with Route = RouteBinding.Unbound } }
+          decide s.Clock s.Capabilities (CapabilityCommand.Mint(blind, request, hash))
         | Behavior.Real
         | Behavior.MintsFromLedgerEntropyTwin
         | Behavior.NaivePrefixClaimTwin
         | Behavior.TouchRevivesTwin
         | Behavior.NeverExpiresTwin
-        | Behavior.BadTokenFallsBackTwin -> decide s.Clock s.Capabilities command
+        | Behavior.BadTokenFallsBackTwin
+        | Behavior.RouteIgnoresBindingTwin
+        | Behavior.RouteSkipsResolveTwin -> decide s.Clock s.Capabilities command
       let recorded record = { AtStep = s.Step; At = s.Clock; Token = token; Minter = kind; MinterGrant = minter.Grant; Requested = request; Outcome = record }
       match outcome with
       | Ok(next, events) ->
@@ -272,7 +338,10 @@ module CapabilitySim =
         | Behavior.NaivePrefixClaimTwin
         | Behavior.MintOverwritesTwin
         | Behavior.NeverExpiresTwin
-        | Behavior.BadTokenFallsBackTwin ->
+        | Behavior.BadTokenFallsBackTwin
+        | Behavior.MintIgnoresRouteTwin
+        | Behavior.RouteIgnoresBindingTwin
+        | Behavior.RouteSkipsResolveTwin ->
           match decide s.Clock s.Capabilities command with
           | Ok(next, events) ->
             let accepted = if List.isEmpty events then s.LastAccepted else Map.add token s.Clock s.LastAccepted
@@ -335,8 +404,44 @@ module CapabilitySim =
             | Behavior.TouchRevivesTwin
             | Behavior.MintOverwritesTwin
             | Behavior.NeverExpiresTwin
-            | Behavior.BadTokenFallsBackTwin -> Result.isOk (admitClaim record.Grant scope)
+            | Behavior.BadTokenFallsBackTwin
+            | Behavior.MintIgnoresRouteTwin
+            | Behavior.RouteIgnoresBindingTwin
+            | Behavior.RouteSkipsResolveTwin -> Result.isOk (admitClaim record.Grant scope)
           { s with Claims = s.Claims @ [ { AtStep = s.Step; Token = token; Scope = scope; Grant = record.Grant; Allowed = allowed } ] }
+    | SimEvent.Routed(token, call) ->
+      match Map.tryFind token s.RawTokens with
+      | None -> s
+      | Some raw ->
+        let hash = TokenHash.ofToken raw
+        // Whether the token is good now, from the sim's own bookkeeping: not revoked, before its expiry,
+        // and used within a lease window. The reducer's `resolve` is the thing under test, not the oracle.
+        let liveBySpec =
+          match Map.tryFind hash s.Capabilities.Records, Map.tryFind token s.LastAccepted with
+          | Some record, Some lastAccepted ->
+            (match record.Status with CapabilityStatus.Active -> true | CapabilityStatus.Revoked _ -> false)
+            && s.Clock < record.Grant.NotAfter
+            && s.Clock - lastAccepted < Cohort.leaseWindow
+          | _ -> false
+        let resolved = resolve s.Clock s.Capabilities hash
+        // The route decision is made for a token that resolves. The twin that skips that step decides it for a record the
+        // reducer already refused.
+        let record =
+          match resolved, behavior with
+          | Ok record, _ -> Some record
+          | Error _, Behavior.RouteSkipsResolveTwin -> Map.tryFind hash s.Capabilities.Records
+          | Error _, _ -> None
+        match record with
+        | None -> s
+        | Some record ->
+          let admitted =
+            match behavior with
+            | Behavior.RouteIgnoresBindingTwin -> true
+            | _ -> Result.isOk (Route.admit record.Grant.Route call (simFacts record.Grant.Route call))
+          { s with
+              Routes =
+                s.Routes
+                @ [ { AtStep = s.Step; Token = token; Binding = record.Grant.Route; Call = call; Admitted = admitted; LiveBySpec = liveBySpec } ] }
 
   type Scenario = { Seed: int; Events: SimEvent list }
 
@@ -358,12 +463,32 @@ module CapabilitySim =
        ClaimScope.File "../escape.fs"
        ClaimScope.File "top.fs" |]
 
+  let private toolPool =
+    [| "check_fsharp_code"; "send_fsharp_code"; "join_cohort"; "create_project_session"; "list_sessions"
+       "get_available_projects"; "get_daemon_status"; "a_tool_added_tomorrow" |]
+
+  let private routedSessionPool = [| None; Some "s1"; Some "s2"; Some "s3"; Some "zz" |]
+
+  /// Directories a call may name: inside either checkout, a detour into the other, a parent, and a relative one.
+  let private routedDirectoryPool =
+    [| None; Some "/sim/a"; Some "/sim/b"; Some "/sim/a/sub"; Some "/sim/a/../b"; Some "/sim/b/../a"; Some "/sim"; Some "rel" |]
+
   let private tokenCount = 6
 
   let private mintOfSeed (rng: Random) (token: int) (minter: MinterKind) : SimEvent =
     let scope = match ScopePrefix.tryParse prefixPool.[rng.Next prefixPool.Length] with Ok p -> p | Error _ -> ScopePrefix.repoRoot
+    let route = routePool.[rng.Next routePool.Length]
     // Zero to 10 hours: zero is already expired, some are past the 8 hour maximum, some beyond the narrow conductor's own 2 hours.
-    SimEvent.Mint(token, minter, RolePreset.all.[rng.Next RolePreset.all.Length], scope, rng.Next 600)
+    // One in twelve is zero on purpose: left to a uniform draw it is a one in 600 event, and a scenario sweep would reach it by luck.
+    let lifetimeMinutes = match rng.Next 12 with 0 -> 0 | _ -> rng.Next 600
+    SimEvent.Mint(token, minter, RolePreset.all.[rng.Next RolePreset.all.Length], scope, route, lifetimeMinutes)
+
+  let private routedOfSeed (rng: Random) (token: int) : SimEvent =
+    SimEvent.Routed(
+      token,
+      { Tool = toolPool.[rng.Next toolPool.Length]
+        SessionId = routedSessionPool.[rng.Next routedSessionPool.Length]
+        WorkingDirectory = routedDirectoryPool.[rng.Next routedDirectoryPool.Length] })
 
   /// A pure function of `seed`.
   let scenarioOf (seed: int) : Scenario =
@@ -373,12 +498,13 @@ module CapabilitySim =
     let events =
       [ for _ in 1 .. n ->
           let token = rng.Next tokenCount
-          match rng.Next 12 with
+          match rng.Next 16 with
           | 0 | 1 | 2 -> mintOfSeed rng token minters.[rng.Next minters.Length]
           | 3 | 4 -> SimEvent.Present token
           | 5 -> SimEvent.PresentUnknown(rng.Next 3)
           | 6 -> SimEvent.Touch token
           | 7 -> SimEvent.Revoke(token, rng.Next 5 <> 0)
           | 8 | 9 -> SimEvent.Claim(token, claimPool.[rng.Next claimPool.Length])
+          | 10 | 11 | 12 | 13 -> routedOfSeed rng token
           | _ -> SimEvent.PassMinutes(1 + rng.Next 90) ]
     { Seed = seed; Events = events }

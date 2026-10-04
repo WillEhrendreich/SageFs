@@ -28,6 +28,10 @@ open System
 /// another door. Any allow-list containing either of those is ADVISORY AGAINST A HOSTILE AGENT,
 /// NOT A BOUNDARY. Containment is a process or credential boundary, never a row in a table. Read
 /// `Affordances.fs`'s section header for the long form.
+///
+/// WHICH SESSION. This gate decides which TOOLS a caller may call. WHERE a member token may call them
+/// (the session or checkout its grant is bound to) is `RouteGate.fs`, a separate step with the same
+/// "policy, not a sandbox" limit: a role that can eval can run code that routes around both.
 [<RequireQualifiedAccess>]
 module ToolAuthorityGate =
 

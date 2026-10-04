@@ -20,6 +20,16 @@ let liveFactsOf (ctx: McpContext) : Task<LiveFacts> =
     return HygieneService.liveFactsWith pairs (Some ctx.ActivityTracker)
   }
 
+/// The live facts for a scan of the machine, which is the daemon's own work and not the caller's. Call it only from
+/// the background thread that does the scan: that thread inherited the member token of the call that started it, and a
+/// token bound to one session sees only that session's worktrees as in use, so the plan every later reader is shown
+/// would call the others reclaimable. It clears the binding for the flow it runs in, before the session list is read.
+let daemonLiveFacts (ctx: McpContext) : Task<LiveFacts> =
+  task {
+    currentCapability.Value <- None
+    return! liveFactsOf ctx
+  }
+
 /// The repository a call is about: the working directory it names, else the one repository its live sessions are in.
 let resolveRepo (ctx: McpContext) (workingDirectory: string) : Task<Result<string, string>> =
   task {
@@ -87,7 +97,7 @@ let refreshSoon (ctx: McpContext) (workingDirectory: string) : unit =
   match ctx.Dispatch, HygieneService.mainRepoOf workingDirectory with
   | Some _, Some repo ->
     let loc = HygieneService.locationsFor repo
-    HygieneService.Cache.refreshAsync loc (fun () -> liveFactsOf ctx) |> ignore
+    HygieneService.Cache.refreshAsync loc (fun () -> daemonLiveFacts ctx) |> ignore
   | _ -> ()
 
 /// The line for a reply about a session in `workingDirectory`: the nudge from the cached snapshot, and a refresh in

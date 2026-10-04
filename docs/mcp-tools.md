@@ -413,7 +413,7 @@ daemon's own cohort instead of the one the call acts in. If you see that text, t
 | `reassign_claim` | Conductor-only: reassign an orphaned claim to a present member. |
 | `request_landing` | Queue a landing: your commits are rebased onto the integration head, verified against affected tests, and fast-forwarded in. Landings are strictly serial (one FIFO queue). |
 | `set_integration_ref` | Conductor-only: configure the git ref that landings rebase onto, in a dedicated integration worktree, and the trunk checkout the landings are carried to. The reply names both (`worktree=` and `trunk=`). |
-| `mint_member` | Conductor-only: mint a per-run member token bound to a role, a scope prefix and an expiry. The token comes back once. See [member tokens](#member-tokens-one-identity-per-agent-run). |
+| `mint_member` | Conductor-only: mint a per-run member token bound to a role, a scope prefix, the one session or checkout it may act on, and an expiry. The token comes back once. See [member tokens](#member-tokens-one-identity-per-agent-run). |
 | `revoke_member` | Conductor-only: cut a member token off. It is refused from the next call, its seat departs and its claims are orphaned. |
 
 Claim paths are canonical. `file:src/Foo/../Bar/x.fs` is `file:src/Bar/x.fs`, so
@@ -427,13 +427,56 @@ because identity was the connection. `mint_member` fixes that: the conductor
 mints a token per run, each token is its own cohort member (`cap:<16 hex>`), and
 a token outranks the connection it arrives on.
 
-**Mint.** `mint_member role=Analysis scope=src/Foo/ ttl_minutes=60`. The reply
-has the member id, the grant and the token (`sfm_...`), once. SageFs keeps only
-the token's SHA-256, so it is in no ledger row, log line or status text, and it
-cannot be shown again. Tokens live in the daemon's memory and do not survive a
-restart: the orchestrator mints new ones. Only the conductor mints, and a token
-can only be narrower than whoever mints it: a wider role, a wider scope or a
+**Mint.** `mint_member role=Analysis scope=src/Foo/ ttl_minutes=60 working_directory=/abs/path/to/checkout`.
+The reply has the member id, the grant and the token (`sfm_...`), once. SageFs
+keeps only the token's SHA-256, so it is in no ledger row, log line or status
+text, and it cannot be shown again. Tokens live in the daemon's memory and do
+not survive a restart: the orchestrator mints new ones. Because no token
+outlives a restart, there are no tokens from before the route binding existed
+and nothing to migrate. Only the conductor mints, and a token can only be
+narrower than whoever mints it: a wider role, a wider scope, another route or a
 later expiry is refused with the widenings named, never clamped.
+
+**Route.** Every token names the one place it may act, and you say where with
+exactly one of two parameters:
+
+- `working_directory`: an absolute path to a checkout. The token may act on
+  sessions rooted inside that directory. A git worktree nested under it is its
+  own checkout, so a token for `/repo` does not reach a session in
+  `/repo/.claude/worktrees/agent-x`, and a token for the worktree does not reach
+  `/repo`. The member is seated in that repository's cohort.
+- `session_id`: one session. The member is seated in the repository that
+  session lives in.
+
+Naming neither is refused, naming both is refused, and a relative path or the
+file system root is refused. No mint can produce a token that routes anywhere:
+that is the conductor's own authority, which a connection with no token has, and
+it is not something a grant can carry. A token can hand out only its own route,
+because whether one session is inside a checkout is a fact about the registry and
+not about two grants.
+
+How a call is held to the route depends on what the tool does with a session or
+a directory. Every tool has exactly one of these kinds, and a tool with no kind
+is refused to a bound token, so a tool added tomorrow cannot be forgotten:
+
+| Kind | Tools | What a bound token may do |
+|:---|:---|:---|
+| Acts on a session | everything that evaluates, analyses, tests, resets, runs the app or reads a session's status or history | Name its own session or a directory inside its route. Name nothing and the call acts on its session. Name another and it is refused. |
+| Lists sessions | `list_sessions` | Allowed, and it shows only the sessions inside the route. |
+| Creates a session | `create_project_session`, `create_solution_session`, `create_bare_session` | A checkout token creates sessions inside its checkout and nowhere else. A session token creates none. |
+| Picks a cohort | the cohort tools, `mint_member`, `revoke_member` | Must pass `working_directory` inside its route. Left out, the call would act in the daemon's own repository, so it is refused with the directory to pass. |
+| Reads a directory | `get_available_projects` | Must pass a `working_directory` inside its route. |
+| Daemon-wide | `get_daemon_status`, friction, leases, `decompose_pipeline` | Allowed. A session or directory it names is still held to the route. |
+
+Two things back that up. A `session_id` or `working_directory` that a call names
+is held to the route on every tool, whatever the tool does with it, and a
+directory is resolved before it is compared, so `/repo/a/../b` is `/repo/b`. And
+underneath every tool body the daemon shows a bound caller only the sessions
+inside its route: the others are absent from `list_sessions`, from a status
+lookup and from the registry a tool reads, and a stop, restart or app command on
+one is refused. So a call that names nothing cannot fall through to "the only
+other session", and an active-session pointer that points elsewhere finds
+nothing.
 
 **Present.** In the `X-SageFs-Member-Token` HTTP header (one value per
 connection), or in the request's `_meta["sagefs/memberToken"]` (per call, so one
@@ -458,7 +501,9 @@ No role can call `mint_member`, `revoke_member`, `reassign_claim`,
 `set_integration_ref`, `manage_local_data`, `get_workspace_hygiene` or
 `tidy_workspace`. A token call also passes the cohort's own role check, so an
 Observer, Analysis or Verifier token can read the cohort but not claim a scope or
-queue a landing. `tools/list` shows a token only the tools its role allows.
+queue a landing. `tools/list` shows a token only the tools its role allows. The
+role says which tools a token may call and the route (below) says where it may call
+them, and a call must pass both.
 
 **Scope.** A prefix such as `src/Foo/`. The token can claim only inside it, and
 the path is canonicalized first, so `src/Foo/../Bar` counts as `src/Bar`. This is
@@ -503,11 +548,50 @@ Error: This member token is confined to 'src/Foo' and cannot claim file:src/Bar/
 wider scope.
 ```
 
+```
+Error: This member token is bound to session a1b2c3d4, and session d7b45c0e is not inside that.
+→ Next: Pass session_id a1b2c3d4, or no session at all to act on it. To reach another
+session, ask the conductor to mint a token bound to it (mint_member).
+```
+
+```
+Error: join_cohort acts in the repository of the directory it is given, and this call named
+none, which would mean the daemon's own repository. This member token is bound to the
+checkout /work/checkout-a.
+→ Next: Pass working_directory /work/checkout-a (or a directory inside it).
+```
+
+**What the route does not stop.** It decides what the tool surface will do for a
+caller holding the token, and like the role and the scope it is policy and not a
+sandbox. These are specific to the route:
+
+- An `Implementer` token can run code (`send_fsharp_code`), and that code runs as
+  the daemon's OS user. It can call the daemon's HTTP API on loopback with any
+  session id, read the data directory and read `/proc`. The route does not
+  change that. Against a hostile agent only the roles without eval mean
+  something.
+- The HTTP API and the MCP resources (`sessions://list`, `cohort://status`) do
+  not read the token, so they are not confined to the route.
+- The daemon-wide reads show the whole daemon: `get_daemon_status` reports
+  session counts, worker processes by session id prefix and which agents hold
+  build and test leases for which directories, and the friction reports name
+  sessions. They are allowed to every role that may call them.
+- A directory is compared as a path and not through the file system, so a
+  symbolic link inside a checkout that points at another checkout is inside.
+- A token bound to a checkout acts on every session rooted in that checkout, not
+  one of them in particular. Bind to a `session_id` when one is what you mean.
+- `switch_session` by a bound token moves the daemon's active-session pointer to
+  that token's own session, like any caller's, and nothing else.
+- A token dies with the daemon. The route, the role and the expiry all go with it,
+  and the orchestrator mints again.
+
 **Limits.** A token is held by whatever sends it, so a leaked one is
 impersonation until it expires or is revoked. A connection-wide header cannot tell
 apart sub-agents that share a connection (Claude Code's `Agent` tool): only a
 per-call `_meta` can, and Claude Code gives the model no per-call header. The
-conductor on a `ConnectionsAllowed` daemon is still identified by its connection.
+conductor on a `ConnectionsAllowed` daemon is still identified by its connection,
+and a connection with no token routes anywhere, which is what lets the conductor
+mint for any session.
 
 ### The trunk
 

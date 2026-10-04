@@ -29,8 +29,11 @@ let private prefix (raw: string) : ScopePrefix =
   | Ok p -> p
   | Error refusal -> failwithf "test prefix %s is not valid: %A" raw refusal
 
+/// Where the tokens in these tests route: one session. The routing rules have their own tests (RouteBindingTests).
+let private route : RouteBinding = RouteBinding.BoundToSession "session-1"
+
 let private grantOf (preset: RolePreset) (scope: string) (lifetime: TimeSpan) : Grant =
-  { Preset = preset; Scope = prefix scope; NotAfter = epoch + lifetime }
+  { Preset = preset; Scope = prefix scope; Route = route; NotAfter = epoch + lifetime }
 
 let private hourOf (preset: RolePreset) (scope: string) = grantOf preset scope TestTimeouts.tokenRun
 
@@ -59,12 +62,21 @@ let private genPrefix : Gen<ScopePrefix> =
   Gen.elements [ ""; "src"; "src/Foo"; "src/Foo/Sub"; "src/Bar"; "tests" ]
   |> Gen.map prefix
 
+let private genRoute : Gen<RouteBinding> =
+  Gen.elements
+    [ RouteBinding.Unbound
+      RouteBinding.BoundToSession "session-1"
+      RouteBinding.BoundToSession "session-2"
+      (match CheckoutRoot.tryParse "/work/a" with Ok root -> RouteBinding.BoundToCheckout root | Error refusal -> failwithf "%A" refusal)
+      (match CheckoutRoot.tryParse "/work/b" with Ok root -> RouteBinding.BoundToCheckout root | Error refusal -> failwithf "%A" refusal) ]
+
 let private genGrant : Gen<Grant> =
   gen {
     let! preset = genPreset
     let! scope = genPrefix
+    let! binding = genRoute
     let! minutes = Gen.choose (1, 600)
-    return { Preset = preset; Scope = scope; NotAfter = epoch.AddMinutes(float minutes) }
+    return { Preset = preset; Scope = scope; Route = binding; NotAfter = epoch.AddMinutes(float minutes) }
   }
 
 type private CapabilityGenerators =

@@ -72,6 +72,16 @@ implying the command closes it.
   to 0.6.891 told you "your role is Working: that needs the Working role" after you joined
   as Implementer in a repository that is not the daemon's own, that was a daemon bug, fixed
   after 0.6.891 (docs/mcp-tools.md, "If a cohort tool says you have not joined").
+- **A call is refused with "This member token is bound to ...".** Your token routes to ONE
+  session or ONE checkout, and the call named another session or another directory. The
+  refusal says what the token is bound to and what to pass instead. It is not a role
+  problem and it is not a stale daemon: asking for another session needs a new token from
+  the conductor (`mint_member` with that `session_id` or `working_directory`). Two cases
+  look odd. A cohort tool or `get_available_projects` that names no `working_directory` is
+  refused, because left out it would act in the daemon's own repository, so pass the
+  checkout's directory. And a session outside your route is not listed at all, so
+  `list_sessions` shows only yours and a status call for another says it is outside your
+  token's route. Details in docs/mcp-tools.md, "Route".
 - **"Operation could not be completed due to earlier error"** means a previous
   statement failed. Read the diagnostics and fix that statement. The session is
   fine, so don't reset it.

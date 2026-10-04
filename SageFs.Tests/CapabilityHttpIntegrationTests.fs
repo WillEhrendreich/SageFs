@@ -63,6 +63,9 @@ let private listTools (client: McpClient) (meta: (string * string) list) : Task<
     return result.Tools |> Seq.map (fun t -> t.Name) |> List.ofSeq
   }
 
+/// The directory the spawned daemon runs in, so it is the checkout a token is minted for.
+let private daemonRepo = RepoPaths.repoPathFull [||]
+
 let private tokenOf (mintText: string) : string =
   let m = Regex.Match(mintText, @"sfm_[A-Za-z0-9_\-]+")
   match m.Success with
@@ -100,8 +103,8 @@ let tests =
         plainTools |> List.contains "send_fsharp_code" |> Expect.isFalse "tools/list hides eval from it"
         plainTools |> List.contains "get_cohort_status" |> Expect.isTrue "but not status"
 
-        // The conductor mints an Analysis token for src/Foo/.
-        let! mintError, minted = call gateway "mint_member" [ "agentName", box "gateway"; "role", box "Analysis"; "scope", box "src/Foo/"; "ttl_minutes", box 30 ] []
+        // The conductor mints an Analysis token for src/Foo/, bound to the checkout the daemon runs in.
+        let! mintError, minted = call gateway "mint_member" [ "agentName", box "gateway"; "role", box "Analysis"; "scope", box "src/Foo/"; "ttl_minutes", box 30; "working_directory", box daemonRepo ] []
         mintError |> Expect.isFalse (sprintf "the conductor mints: %s" minted)
         let token = tokenOf minted
         let memberId = memberIdOf minted
@@ -115,7 +118,8 @@ let tests =
         evalError |> Expect.isTrue "an Analysis token cannot eval"
         evalText |> Expect.stringContains "the refusal names the role" "Analysis"
         evalText |> Expect.stringContains "and the tool" "send_fsharp_code"
-        let! statusError, status = call viaHeader "get_cohort_status" [] []
+        // A bound token names the directory of the cohort it reads: omitted, the call would act in the daemon's own.
+        let! statusError, status = call viaHeader "get_cohort_status" [ "working_directory", box daemonRepo ] []
         statusError |> Expect.isFalse "it can read the cohort"
         status |> Expect.stringContains "and is a member by its public id" memberId
         status.Contains token |> Expect.isFalse "status never shows the token"

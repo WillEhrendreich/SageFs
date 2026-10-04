@@ -91,6 +91,11 @@ let parsingTests =
       CheckoutRoot.tryParse "" |> Expect.equal "empty" (Error RootRefusal.Blank)
       CheckoutRoot.tryParse "   " |> Expect.equal "blank" (Error RootRefusal.Blank)
 
+    testCase "WHY - the root of the file system is not a checkout: a token bound to it would route anywhere" <| fun () ->
+      CheckoutRoot.tryParse "/" |> Expect.equal "root" (Error(RootRefusal.FilesystemRoot "/"))
+      CheckoutRoot.tryParse "/work/.." |> Expect.equal "a detour that lands on it" (Error(RootRefusal.FilesystemRoot "/work/.."))
+      RouteBinding.ofRequest None (Some "/") |> Expect.equal "refused as a mint request too" (Error(BindRefusal.FilesystemRoot "/"))
+
     testCase "WHY - a request names a session or a working directory, and the result is never Unbound" <| fun () ->
       RouteBinding.ofRequest (Some sessionA) None |> Expect.equal "a session" (Ok(RouteBinding.BoundToSession sessionA))
       RouteBinding.ofRequest None (Some dirOfA) |> Expect.equal "a checkout" (Ok checkoutA)
@@ -453,7 +458,9 @@ let dropsDirectoryRequired : Mutant<AdmitFn> =
     Description = "a bound token that names no directory acts in the daemon's own cohort, which is outside its binding"
     Apply = fun real (b, c, f) ->
       match RouteKind.ofTool c.Tool, c.WorkingDirectory with
-      | Some RouteKind.InCohort, None -> Ok()
+      | Some RouteKind.InCohort, None
+      | Some RouteKind.ReadsDirectory, None
+      | Some RouteKind.CreatesSession, None -> Ok()
       | _ -> real (b, c, f) }
 
 let sessionBoundMayCreate : Mutant<AdmitFn> =
@@ -501,14 +508,15 @@ let isOk (result: Result<unit, RouteRefusal>) = Result.isOk result
 [<Tests>]
 let admitMutationTests =
   testList "Route.admit mutants are caught" [
-    detectsOutputMutant skipsTheSessionCheck (inputFor sessionBoundA (call onSession (Some sessionB) None)) admitOf isError
-    detectsOutputMutant skipsTheSessionCheck (inputFor checkoutA (call onSession (Some sessionB) None)) admitOf isError
-    detectsOutputMutant skipsTheDirectoryCheck (inputFor sessionBoundA (call onSession None (Some dirOfB))) admitOf isError
-    detectsOutputMutant skipsTheDirectoryCheck (inputFor checkoutA (call onSession None (Some dirOfB))) admitOf isError
-    detectsOutputMutant swapsWithinArguments (inputFor checkoutA (call onSession None (Some "/work"))) admitOf isError
-    detectsOutputMutant swapsWithinArguments (inputFor checkoutA (call onSession None (Some(dirOfA + "/src")))) admitOf isOk
-    detectsOutputMutant dropsDirectoryRequired (inputFor checkoutA (call cohort None None)) admitOf isError
-    detectsOutputMutant dropsDirectoryRequired (inputFor sessionBoundA (call reading None None)) admitOf isError
+    testList "session binding" [ detectsOutputMutant skipsTheSessionCheck (inputFor sessionBoundA (call onSession (Some sessionB) None)) admitOf isError ]
+    testList "checkout binding" [ detectsOutputMutant skipsTheSessionCheck (inputFor checkoutA (call onSession (Some sessionB) None)) admitOf isError ]
+    testList "session binding, directory" [ detectsOutputMutant skipsTheDirectoryCheck (inputFor sessionBoundA (call onSession None (Some dirOfB))) admitOf isError ]
+    testList "checkout binding, directory" [ detectsOutputMutant skipsTheDirectoryCheck (inputFor checkoutA (call onSession None (Some dirOfB))) admitOf isError ]
+    testList "a parent of the checkout is refused" [ detectsOutputMutant swapsWithinArguments (inputFor checkoutA (call onSession None (Some "/work"))) admitOf isError ]
+    testList "a directory inside the checkout is admitted" [ detectsOutputMutant swapsWithinArguments (inputFor checkoutA (call onSession None (Some(dirOfA + "/src")))) admitOf isOk ]
+    testList "checkout binding, cohort verb" [ detectsOutputMutant dropsDirectoryRequired (inputFor checkoutA (call cohort None None)) admitOf isError ]
+    testList "session binding, directory read" [ detectsOutputMutant dropsDirectoryRequired (inputFor sessionBoundA (call reading None None)) admitOf isError ]
+    testList "checkout binding, creating a session" [ detectsOutputMutant dropsDirectoryRequired (inputFor checkoutA (call creating None None)) admitOf isError ]
     detectsOutputMutant sessionBoundMayCreate (inputFor sessionBoundA (call creating None (Some dirOfA))) admitOf isError
     detectsOutputMutant unboundIsRefused (inputFor RouteBinding.Unbound (call onSession (Some sessionB) (Some dirOfB))) admitOf isOk
     detectsOutputMutant unclassifiedIsAdmitted (inputFor checkoutA (call "a_tool_added_tomorrow" None None)) admitOf isError
@@ -548,7 +556,7 @@ let sessionWithinAnyCheckout : Mutant<OrderFn> =
 let orderMutationTests =
   testList "RouteBinding.isNarrowerOrEqual mutants are caught" [
     detectsOutputMutant unboundIsTheBottom (RouteBinding.Unbound, checkoutA) orderOf not
-    detectsOutputMutant anyTwoBoundAreRelated (checkoutB, checkoutA) orderOf not
-    detectsOutputMutant anyTwoBoundAreRelated (RouteBinding.BoundToSession sessionB, sessionBoundA) orderOf not
+    testList "two checkouts" [ detectsOutputMutant anyTwoBoundAreRelated (checkoutB, checkoutA) orderOf not ]
+    testList "two sessions" [ detectsOutputMutant anyTwoBoundAreRelated (RouteBinding.BoundToSession sessionB, sessionBoundA) orderOf not ]
     detectsOutputMutant sessionWithinAnyCheckout (sessionBoundA, checkoutA) orderOf not
   ]

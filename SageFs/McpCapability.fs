@@ -61,14 +61,37 @@ module McpCapability =
     (role: string)
     (scope: string)
     (ttlMinutes: int)
-    (workingDirectory: string option)
+    (requestedDirectory: string option)
+    (requestedSession: string option)
     : Task<Result<MintedMember, SageFsError>> =
     task {
-      match parsePreset role, parseScope scope, lifetimeOf ttlMinutes with
-      | Error e, _, _
-      | _, Error e, _
-      | _, _, Error e -> return Error e
-      | Ok preset, Ok prefix, Ok lifetime ->
+      // The binding is parsed first, because it decides the cohort too: a token for one session is seated in
+      // the repository that session lives in, and a token for a checkout in that checkout's.
+      let binding = RouteBinding.ofRequest requestedSession requestedDirectory |> Result.mapError CohortErrorMapping.bindRefusalToSageFsError
+      let! boundDirectory =
+        task {
+          match binding with
+          | Ok(RouteBinding.BoundToSession id) ->
+            match WorkerProtocol.SessionId.validate id with
+            | Error _ -> return Error(SageFsError.SessionNotFound id)
+            | Ok sid ->
+              let! info = ctx.SessionOps.GetSessionInfo sid
+              match info with
+              | Some session -> return Ok session.WorkingDirectory
+              | None -> return Error(SageFsError.SessionNotFound id)
+          | Ok(RouteBinding.BoundToCheckout root) -> return Ok(CheckoutRoot.value root)
+          // `ofRequest` never answers Unbound; if it ever did, a token that routes anywhere is not minted.
+          | Ok RouteBinding.Unbound -> return Error(CohortErrorMapping.bindRefusalToSageFsError BindRefusal.NothingNamed)
+          | Error e -> return Error e
+        }
+      match parsePreset role, parseScope scope, lifetimeOf ttlMinutes, binding, boundDirectory with
+      | Error e, _, _, _, _
+      | _, Error e, _, _, _
+      | _, _, Error e, _, _
+      | _, _, _, Error e, _
+      | _, _, _, _, Error e -> return Error e
+      | Ok preset, Ok prefix, Ok lifetime, Ok route, Ok cohortDirectory ->
+        let workingDirectory = Some cohortDirectory
         // The CALLER's cohort: a token minted in a second repository is seated in THAT
         // repository's cohort, not the daemon's. Reading the daemon's own cohort refused the
         // mint outright with "no cohort owner is configured for this daemon" — a false
@@ -83,19 +106,20 @@ module McpCapability =
                 match currentCapability.Value with
                 | Some capability -> capability.Grant
                 | None -> Grant.conductorAuthority }
-          let requested = { Preset = preset; Scope = prefix; NotAfter = now + lifetime }
+          let requested = { Preset = preset; Scope = prefix; Route = route; NotAfter = now + lifetime }
           let rawToken = Token.ofEntropy (RandomNumberGenerator.GetBytes Token.entropyBytes)
           match store.Mint(now, minter, requested, TokenHash.ofToken rawToken) with
           | Error refusal -> return Error(CohortErrorMapping.mintRefusalToSageFsError refusal)
           | Ok record ->
             let who = CapabilityId.memberId record.Id
-            // The checkout the minted run works in, only when the conductor names one: resolving "the
-            // conductor's own active session" would seat the run in the wrong checkout.
+            // The session the minted run is seated on: the one it is bound to, or the one in the checkout it is
+            // bound to. Never "the conductor's own active session", which would seat the run in the wrong checkout.
             let! sessionOpt =
-              match workingDirectory with
-              | Some _ -> McpCohortTools.resolveJoinSession ctx agentName workingDirectory
-              | None -> Task.FromResult None
-                        // The scope the minted member joins. Taken from the working directory it is joining
+              match route with
+              | RouteBinding.BoundToSession id -> Task.FromResult(Some id)
+              | RouteBinding.BoundToCheckout _
+              | RouteBinding.Unbound -> McpCohortTools.resolveJoinSession ctx agentName workingDirectory
+            // The scope the minted member joins. Taken from the working directory it is joining
             // FROM, not from the process: two agents in two repositories are two cohorts, so the
             // conductor seat they contend for is the one in their own repository.
             //
@@ -238,11 +262,12 @@ module McpCapability =
     let seatText =
       match minted.Session with
       | Some sid -> sprintf "bound to session %s" sid
-      | None -> "not bound to a session (pass working_directory to bind one)"
+      | None -> "no session is open in that checkout yet; the token can create one inside it"
     String.concat
       "\n"
       [ sprintf "Minted member %s." (MemberTable.MemberId.display (CapabilityId.memberId record.Id))
         sprintf "  role:    %s (cohort role %A)" (RolePreset.toToken grant.Preset) (RolePreset.joinableRole grant.Preset)
+        sprintf "  route:   %s (a call that names another session or directory is refused)" (RouteBinding.describe grant.Route)
         sprintf "  scope:   %s (claims outside it are refused)" scopeText
         sprintf "  expires: %s, and lapses after %d minutes without a call" (grant.NotAfter.ToString "u") (int Cohort.leaseWindow.TotalMinutes)
         sprintf "  seat:    %s" seatText
