@@ -218,12 +218,12 @@ let cohortMcpToolsTests =
         // what this test is about. What matters is that A and B name DIFFERENT scopes, so the
         // two statuses are compared for difference rather than against a literal.
         let! joinA = joinCohortWithDir sageFsAgent "agent-a" "Implementer" repoA
-        joinA |> Expect.stringContains "You are the conductor" "A's first joiner is A's conductor"
+        joinA |> Expect.stringContains "A's first joiner is A's conductor" "You are the conductor"
 
         // Repo B: a different connection, a different repository, its OWN conductor seat.
         // Before the fix this was refused as a scope collision against A's cohort.
         let! joinB = joinCohortWithDir nehemiahAgent "agent-b" "Implementer" repoB
-        joinB |> Expect.stringContains "You are the conductor" "and B's first joiner is B's OWN conductor"
+        joinB |> Expect.stringContains "B's first joiner is B's OWN conductor" "You are the conductor"
 
         // And each repository reports ITSELF: the frame a caller reads back is the one for
         // the directory it named, not the daemon's and not its neighbour's. Each status
@@ -231,12 +231,12 @@ let cohortMcpToolsTests =
         // without asserting a `repo:`/`named:` prefix that depends on whether the directory
         // happens to carry a `.git`.
         let! statusA = getCohortStatusIn sageFsAgent repoA
-        statusA |> Expect.stringContains "agent-a" "A reads A's cohort, which holds A's member"
-        statusA |> Expect.stringContains repoA "and that frame names A's own scope"
+        statusA |> Expect.stringContains "A reads A's cohort, which holds A's member" "agent-a"
+        statusA |> Expect.stringContains "and that frame names A's own scope" repoA
 
         let! statusB = getCohortStatusIn nehemiahAgent repoB
-        statusB |> Expect.stringContains "agent-b" "B reads B's cohort, which holds B's member"
-        statusB |> Expect.stringContains repoB "and that frame names B's own scope"
+        statusB |> Expect.stringContains "B reads B's cohort, which holds B's member" "agent-b"
+        statusB |> Expect.stringContains "and that frame names B's own scope" repoB
 
         // THE TWO SCOPES ARE DIFFERENT, which is the claim "two repositories, two cohorts"
         // actually makes — a single shared cohort would satisfy every assertion above.
@@ -358,7 +358,11 @@ let cohortMcpToolsTests =
         // `Cohort.decide` ever sees the command (never a NotClaimHolder).
         let! releaseResult = releaseClaim other "bystander" claimId 1L
         releaseResult
-        |> Expect.stringContains "a Verifier's release_claim call must be refused by the role gate" "does not permit it"
+        // The gate's real sentence is ToolAuthorityGate.fs's
+        // "%s cannot call %s (your role is %s): %s" with the inner reason appended. The
+        // assertion used to look for "does not permit it", a string no code has ever
+        // produced, so it failed on the CORRECT refusal.
+        |> Expect.stringContains "a Verifier's release_claim call must be refused by the role gate" "cannot call release_claim (your role is Verifier)"
       })
     }
 
@@ -385,7 +389,7 @@ let cohortMcpToolsTests =
         // guarantee, not a bypass of it.
         let! reassignResult = reassignClaim nonConductor "not-the-conductor" claimId "the-conductor"
         reassignResult
-        |> Expect.stringContains "a non-conductor's reassign must be refused by the role gate" "does not permit it"
+        |> Expect.stringContains "a non-conductor's reassign must be refused by the role gate" "cannot call reassign_claim (your role is"
       })
     }
   ]
