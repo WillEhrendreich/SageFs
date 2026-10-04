@@ -33,3 +33,19 @@ let cycleOwnerRefusalTests = testList "a live-testing route refused for a sessio
       text |> Expect.stringContains "names the session that was refused" asked
       text |> Expect.stringContains "gives the query that asks for the owner" (sprintf "session=%s" owner)
 ]
+
+[<Tests>]
+let noCycleOwnerRefusalTests = testList "a live-testing route refused because no session owns the cycle" [
+  for route in refusedRoutes do
+    testCase (sprintf "%s names the query parameter the route reads, and no other" route) <| fun _ ->
+      let text = noCycleOwnerRefusal route asked
+      text |> Expect.stringContains "asks with the parameter the routes read, from the one shared constant" (sprintf "?%s=%s" LiveTestingSessionQueryParam asked)
+      text |> Expect.stringContains "names the session that was refused" asked
+      text |> occurrences route |> Expect.equal "the refused route is the subject only, never the remedy" 1
+
+  testCase "the owner refusal and the no-owner refusal name the same query parameter" <| fun _ ->
+    let route = List.head refusedRoutes
+    let named (text: string) = text.Contains(sprintf "?%s=" LiveTestingSessionQueryParam)
+    named (cycleOwnerRefusal route owner asked) |> Expect.isTrue "the owner refusal uses the shared constant"
+    named (noCycleOwnerRefusal route asked) |> Expect.isTrue "the no-owner refusal uses the shared constant"
+]
