@@ -9,11 +9,11 @@ open Expecto
 open Expecto.Flip
 open SageFs.Build.TierPlan
 
-let private repoRoot = RepoPaths.repoPathFull [||]
-let private read (relative: string) = File.ReadAllText(Path.Combine(repoRoot, relative))
+let repoRoot =RepoPaths.repoPathFull [||]
+let read(relative: string) = File.ReadAllText(Path.Combine(repoRoot, relative))
 
 /// The `.fsproj` names a project's `<ProjectReference Include="..\X\X.fsproj" />` entries point at.
-let private referencedProjects (fsproj: string) : string list =
+let referencedProjects(fsproj: string) : string list =
   XDocument.Parse(read fsproj).Descendants(XName.Get "ProjectReference")
   |> Seq.map (fun e -> e.Attribute(XName.Get "Include").Value.Replace('\\', '/'))
   |> Seq.map (fun path -> Path.GetFileNameWithoutExtension path)

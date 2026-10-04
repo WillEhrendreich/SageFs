@@ -11,7 +11,7 @@ open FsCheck
 open SageFs.Build
 open SageFs.Build.BuildStamps
 
-let private parts = [ "sdk", "11.0.100"; "head", "abc123"; "tree", "clean" ]
+let parts =[ "sdk", "11.0.100"; "head", "abc123"; "tree", "clean" ]
 
 let pureTests =
   testList "Build stamps (pure)" [
@@ -57,7 +57,7 @@ let pureTests =
   ]
 
 /// Runs `sh -c script` in `dir` with `bin` first on PATH, returns the exit code.
-let private runShell (dir: string) (bin: string) (script: string) : Threading.Tasks.Task<int> =
+let runShell(dir: string) (bin: string) (script: string) : Threading.Tasks.Task<int> =
   task {
     let psi = ProcessStartInfo("sh")
     psi.WorkingDirectory <- dir

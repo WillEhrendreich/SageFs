@@ -12,10 +12,10 @@ open System.IO
 open Expecto
 open Expecto.Flip
 
-let private repoRoot = RepoPaths.repoPathFull [||]
+let repoRoot =RepoPaths.repoPathFull [||]
 
 /// Runs a program to completion with both pipes drained, so a chatty child cannot block on a full pipe.
-let private run (workingDirectory: string) (file: string) (args: string list) : Threading.Tasks.Task<int * string> =
+let run(workingDirectory: string) (file: string) (args: string list) : Threading.Tasks.Task<int * string> =
   task {
     let psi = ProcessStartInfo(file)
     psi.WorkingDirectory <- workingDirectory
@@ -32,7 +32,7 @@ let private run (workingDirectory: string) (file: string) (args: string list) : 
     return p.ExitCode, stdout + stderr
   }
 
-let private git (dir: string) (args: string list) =
+let git(dir: string) (args: string list) =
   task {
     let! code, output = run dir "git" ([ "-c"; "user.email=t@example.test"; "-c"; "user.name=t"; "-c"; "commit.gpgsign=false" ] @ args)
     match code with
@@ -41,7 +41,7 @@ let private git (dir: string) (args: string list) =
   }
 
 /// The informational version MSBuild computes for the probe project, the string an assembly would be stamped with.
-let private informationalVersion (dir: string) =
+let informationalVersion(dir: string) =
   task {
     let! code, output =
       run dir "dotnet" [ "msbuild"; Path.Combine("Probe", "Probe.csproj"); "-t:GetAssemblyAttributes"; "-getProperty:InformationalVersion"; "-nologo" ]
