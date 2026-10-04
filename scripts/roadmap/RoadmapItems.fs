@@ -188,10 +188,10 @@ let items : Item list =
       [ "docs/hot-reload.md"; "docs/decisions.md" ]
       "When a save re-signs a function, a caller in another file keeps calling the old method until you save that file too. The build wouldn't pass until you did, so the window is short, but the old behavior runs in it. A cross-file check of who calls what would close it."
 
-    item "tokens-bound-to-a-session" "A member token bound to one session" Agents Next
-      NoLandmarkYet
+    item "tokens-bound-to-a-session" "A member token bound to one session" Agents Now
+      (landmark "SageFs.Core/Capability.fs" "RouteBinding")
       [ "docs/mcp-tools.md" ]
-      "A token is confined to a scope of files, but an Analysis token can still read any session the daemon serves, because a tool that takes a session id or a working directory honors it. I want the grant to name the session or checkout it may route to."
+      "A minted token now names the one session or checkout it may route to. A tool that takes a session id or a working directory is held to that on every call, a session list and the session resources are cut to it, and a refusal says which rule it hit and what to do. `mint_member` takes a `session_id`, and its `working_directory` has to be an absolute path."
 
     // ---- Later: months to a year ----
 
