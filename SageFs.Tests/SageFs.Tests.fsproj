@@ -414,6 +414,7 @@
         <Compile Include="NotebookExportTests.fs" />
         <Compile Include="SseFeatureFormatTests.fs" />
         <Compile Include="SessionHealthSseTests.fs" />
+        <Compile Include="EventsStreamScopeTests.fs" />
         <Compile Include="LiveBindingsSseWiringTests.fs" />
         <Compile Include="EvalStoreTests.fs" />
         <Compile Include="FeatureHookTests.fs" />
