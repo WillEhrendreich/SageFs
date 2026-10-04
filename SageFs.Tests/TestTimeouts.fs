@@ -1181,6 +1181,10 @@ module TestMagnitudes =
   let tokenizeRuns = 50_000
   /// A log entry far larger than the log's cap.
   let entryLargerThanCap = 10_000
+  /// How many fixture hosts one test process runs at once (`HostSlots`): each is a real host, an FSI session and an app,
+  /// about a core and a half while it starts, so this is bounded by what a machine runs beside the other tiers, not by
+  /// what is quick. Three is what the parity rows always ran.
+  let concurrentHosts = 3
   /// The longest run capture the test runner keeps, in characters.
   let runCaptureCap = 200_000
   /// A byte budget for the aggressive tweak-log retention policy.

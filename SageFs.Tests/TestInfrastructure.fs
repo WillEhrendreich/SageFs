@@ -240,6 +240,20 @@ module Integration =
   let hostCase (name: string) (body: unit -> unit) =
     Expecto.Tests.testCase (tagged name) body |> register Host
 
+  /// How a host suite's cases run inside their process. (The stub: red.)
+  [<RequireQualifiedAccess>]
+  type Concurrency =
+    | Sequential
+    | Concurrent
+
+  let concurrentCases (tests: Expecto.Test list) : Expecto.Test list = tests
+
+  let hostListConcurrent (name: string) (tests: Expecto.Test list) = hostList name tests
+
+  let concurrencyOf (_suite: string) : Concurrency = Concurrency.Sequential
+
+  let suiteWallSeconds (_concurrency: Concurrency) (seconds: float) : float = seconds
+
   /// `hostCase` for a body that awaits, so the case does not block a thread to run it.
   let hostCaseTask (name: string) (body: unit -> System.Threading.Tasks.Task<unit>) =
     Expecto.Tests.testCaseTask (tagged name) body |> register Host
