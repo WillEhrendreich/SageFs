@@ -34,7 +34,7 @@ let private builtAt = DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc)
 let private fakeBuild (runs: int ref) (dir: string) : Task<Result<unit, string>> = task {
   Threading.Interlocked.Increment runs |> ignore
   // Long enough for concurrent callers to pile up behind the first one.
-  do! Task.Delay 50
+  do! Task.Delay TestTimeouts.pollQuick
   let outputs = [ Path.Combine("bin", "Debug", "net11.0", "Proj.dll"); Path.Combine("obj", "project.assets.json") ]
   for relative in outputs do
     let path = Path.Combine(dir, relative)
