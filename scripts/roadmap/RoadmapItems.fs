@@ -98,10 +98,15 @@ let items : Item list =
       [ "docs/decisions.md"; "docs/how-hot-reload-works.md" ]
       "Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. I'd make the daemon re-fetch maps and discovery after any host swap and check the REPL is idle and empty first, then do it for you."
 
-    item "live-tweak-front-door" "Nudge a value in the running app" HotReload Next
+    item "live-tweak-front-door" "Nudge a value in the running app" HotReload Now
+      (landmark "SageFs/McpNudge.fs" "nudgeValue")
+      [ "docs/hot-reload.md"; "docs/mcp-tools.md" ]
+      "The `nudge_value` tool lists the literals and expressions in a file the session owns, writes one of them back as just that range, journals the write before it lands, and undoes it exactly. A stale address is refused with what moved, and a write that does not type-check shows up in the reload verdict and rolls back. Agents and scripts can use it today."
+
+    item "live-tweak-knob" "A knob for the value you are nudging" HotReload Next
       NoLandmarkYet
-      [ "docs/decisions.md" ]
-      "The engine for dragging a value in a running app and writing the result back to the source file is built and tested, with addressing that survives a rename and an undoable history. Nothing in the dashboard or the editors calls it yet, so today you can't use it."
+      [ "docs/hot-reload.md" ]
+      "`nudge_value` writes the file, but nothing in the dashboard or the editors lets you drag a number. I'd put a knob on a live binding in the dashboard, a scrub key in Neovim and Alt-drag in VS Code, and apply the drag to the running app before you save it."
 
     item "neovim-debug-a-failing-test" "Debug a failing test from Neovim" Editors Next
       NoLandmarkYet
@@ -111,7 +116,7 @@ let items : Item list =
     item "neovim-catches-up" "The Neovim plugin catches up with the daemon" Editors Next
       NoLandmarkYet
       [ "docs/sse-events.md"; "docs/mcp-tools.md" ]
-      "The daemon's wire moved under the plugin. Hot reload now reports pending and never-entered states, and the live-values pane has a Safe mode with a click to run one getter. The hand-offs are written and the work is in the plugin's own repo."
+      "The plugin shows hot reload's pending and never-entered states, the live-values pane with its Safe mode click, workflow switching and the session's own app state, and it names the session on every session-scoped call. Still to wire: `nudge_value`, the slow-eval heartbeat events and nvim-dap."
 
     item "debug-failing-tests-in-vscode" "Debug failing tests properly in VS Code" LiveTesting Next
       NoLandmarkYet

@@ -9,7 +9,7 @@ I don't edit status by hand. Each item can name a landmark, a file and a symbol 
 
 The horizons are guesses about distance and I'm not promising dates. Things move, and the order below is my best current read. If something here matters to you and it's far away, tell me. That moves things more than anything else does.
 
-On the page today: Now 0, Next 15, Later 18, Exploring 17. Already built: 17.
+On the page today: Now 0, Next 15, Later 18, Exploring 17. Already built: 18.
 
 ## Next
 
@@ -24,7 +24,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 
 - **A REPL eval changes the running app.** An eval reaches an app you started from FSI, but not one started with run_app, where only saved files get through. There are two ways in. One writes the evaluated declaration to source and lets save, build and delta carry it, which costs the build. The other grafts FSI's own IL into a delta, and in a spike that worked and was served in milliseconds, but it isn't wired through a real worker and it has sharp edges. I'm building the write-to-source route first because it also keeps your change, then the faster one behind a flag. ([how-hot-reload-works.md](how-hot-reload-works.md))
 - **Level the REPL after a patch without losing it.** Bringing the REPL level with a patched app means a fresh FSI host, which takes about 2 seconds and keeps the app's process and state, but it wipes your definitions and an init script's, and it would break live testing's coverage maps and kill a test run in flight. The only remedy today is a rebuild reset that stops the app. I'd make the daemon re-fetch maps and discovery after any host swap and check the REPL is idle and empty first, then do it for you. ([decisions.md](decisions.md), [how-hot-reload-works.md](how-hot-reload-works.md))
-- **Nudge a value in the running app.** The engine for dragging a value in a running app and writing the result back to the source file is built and tested, with addressing that survives a rename and an undoable history. Nothing in the dashboard or the editors calls it yet, so today you can't use it. ([decisions.md](decisions.md))
+- **A knob for the value you are nudging.** `nudge_value` writes the file, but nothing in the dashboard or the editors lets you drag a number. I'd put a knob on a live binding in the dashboard, a scrub key in Neovim and Alt-drag in VS Code, and apply the drag to the running app before you save it. ([hot-reload.md](hot-reload.md))
 - **Callers in other files follow a signature change.** When a save re-signs a function, a caller in another file keeps calling the old method until you save that file too. The build wouldn't pass until you did, so the window is short, but the old behavior runs in it. A cross-file check of who calls what would close it. ([hot-reload.md](hot-reload.md), [decisions.md](decisions.md))
 
 ### Agents and cohorts
@@ -35,7 +35,7 @@ _Designed, or close to it, and queued behind Now. Weeks to a couple of months._
 ### Editors
 
 - **Debug a failing test from Neovim.** The daemon side is done: one route holds the test and hands back a process id to attach to, and another releases it. The Neovim plugin has to wire nvim-dap to those routes, and that work lives in the sagefs.nvim repo. ([LIVE_TESTING_GUIDE.md](LIVE_TESTING_GUIDE.md))
-- **The Neovim plugin catches up with the daemon.** The daemon's wire moved under the plugin. Hot reload now reports pending and never-entered states, and the live-values pane has a Safe mode with a click to run one getter. The hand-offs are written and the work is in the plugin's own repo. ([sse-events.md](sse-events.md), [mcp-tools.md](mcp-tools.md))
+- **The Neovim plugin catches up with the daemon.** The plugin shows hot reload's pending and never-entered states, the live-values pane with its Safe mode click, workflow switching and the session's own app state, and it names the session on every session-scoped call. Still to wire: `nudge_value`, the slow-eval heartbeat events and nvim-dap. ([sse-events.md](sse-events.md), [mcp-tools.md](mcp-tools.md))
 
 ### Dashboard
 
@@ -143,6 +143,7 @@ _These were on this page and are in the code now. Whether a build has shipped is
 - **Saves to run_app apps patch in place.** A save to an app you started with run_app is handed to the runtime as a metadata delta, so the process keeps its state. On the test fixture a save was served in 1.8 to 2.6 seconds against 6 to 8.5 for the restart it replaced, and `SAGEFS_METADATA_DELTA=off` puts the old behavior back. Code: [`SageFs.Host/RunAppDelta.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Host/RunAppDelta.fs)
 - **Generic functions patch in every instantiation.** A save to a generic function reaches every instantiation the runtime compiled, including a float or struct first used after the save. If your code calls MakeGenericMethod anywhere, a save to a generic function still restarts and names why. Code: [`SageFs.Core/Middleware/HotReloadCore.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/HotReloadCore.fs)
 - **Hot reload save times are measured.** A test tier times saves against a real running app and fails if the p95 drifts. It's one machine and one small app, and I have no Microsoft figure to set it against. Code: [`SageFs.Tests/HotReloadLatency.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Tests/HotReloadLatency.fs)
+- **Nudge a value in the running app.** The `nudge_value` tool lists the literals and expressions in a file the session owns, writes one of them back as just that range, journals the write before it lands, and undoes it exactly. A stale address is refused with what moved, and a write that does not type-check shows up in the reload verdict and rolls back. Agents and scripts can use it today. Code: [`SageFs/McpNudge.fs`](https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/McpNudge.fs)
 
 ### The REPL
 
