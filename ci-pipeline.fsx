@@ -202,13 +202,17 @@ let writeReleaseManifest () =
 // process died before it could report. Where the filesystem can clone
 // copy-on-write, tiers run CONCURRENTLY, each in a private clone of the built
 // checkout mounted at the checkout's own path (build/TierPlan.fs explains why
-// the mount is required), longest-expected tier first. `TrustSignalTests` fails
+// the mount is required). A tier starts when the machine has room for it (cpu pressure
+// under a bound, memory for its recorded peak plus a reserve, a cap on processes: TierPlan.advance,
+// proven by SageFs.Simulation.TierSched), the one that holds up the end of the run first
+// (TierSchedule.orderByCriticalPath). `TrustSignalTests` fails
 // the fast suite if a registered tier is not declared here, or if a test run
 // bypasses `testTier`.
 
 #load "build/TierPlan.fs"
 #load "build/TierCost.fs"
 #load "build/FailureReport.fs"
+#load "build/TierSchedule.fs"
 open SageFs.Build
 
 // Every downstream check runs against the ONE Release build of the primary
@@ -367,6 +371,59 @@ let accountingAvailable = lazy (detectAccounting ())
 
 let costsFile = Path.ChangeExtension(durationsFile, ".costs.json")
 
+// ---- what the scheduler knows and what it reads off the machine -------------------------------------
+//
+// History is the three files the pipeline keeps beside its results (wall seconds per tier, cost per tier, seconds per
+// host suite). A file that is missing or unreadable is an empty map, so a first run, a new checkout or a damaged file
+// schedules in the declared order and assumes every unit's memory: slower to plan, never wrong.
+
+let readCosts () : Map<string, TierCost.Cost> =
+  try JsonSerializer.Deserialize<Map<string, TierCost.Cost>>(File.ReadAllText costsFile)
+  with _ -> Map.empty
+
+let readHistory () : TierSchedule.History =
+  { Wall = readDurations (); Costs = readCosts () }
+
+let readProc (path: string) : Result<string, string> =
+  try Result.Ok (File.ReadAllText path)
+  with e -> Result.Error (sprintf "%s: %s" path e.Message)
+
+/// The machine as /proc reports it. A file that cannot be read is a reading that says so, never an idle machine.
+let machinePort : TierPlan.MachinePort =
+  { Read =
+      fun () ->
+        { Pressure =
+            (match readProc "/proc/pressure/cpu" with
+             | Result.Ok text -> TierPlan.parseCpuPressure text
+             | Result.Error reason -> TierPlan.NotMeasured reason)
+          Memory =
+            (match readProc "/proc/meminfo" with
+             | Result.Ok text -> TierPlan.parseMemAvailable text
+             | Result.Error reason -> TierPlan.Unreadable reason) } }
+
+/// How many cases every host suite registers when none is left out, from a `--list-tests` of the whole host tier. The
+/// shards' own counts must add up to this: a suite no shard was handed would otherwise just be a test that never ran.
+type HostCaseCount =
+  | NotCounted of reason: string
+  | Counted of cases: int
+
+let hostCaseCount : HostCaseCount ref = ref (NotCounted "the host tier was not listed")
+
+/// Start offset, wall and cpu of every tier `runTiers` ran, for the timing table.
+let tierTimings = Collections.Concurrent.ConcurrentDictionary<string, TierSchedule.TierTiming>()
+
+/// The runtime settings every test tier's processes get (the tier process, and every daemon, worker and build it spawns),
+/// never the pipeline's own build.
+///
+/// Measured 2026-10-04 (one host case, `[net11.0] rule 1: a public let mutable ...`, each variant in its own cgroup, six
+/// rounds with the order rotated, CPU seconds user+system, medians; the machine was never quiet, loads 11 to 22):
+///   default 21.8 | TieredPGO=0 16.0 | + gcConcurrent=0 18.2 | + QuickJitForLoops/OSR knobs 16.2 | + TieredCompilation=0 20.2
+/// TieredPGO=0 beat the default in 5 of 6 paired rounds (the two runs at pressure under 2: 15.5 against 14.4, so 7% when
+/// quiet, 26% at the medians when not). Turning off concurrent GC cost CPU in 6 of 6 pairs against TieredPGO=0 alone, and the
+/// tiering knobs did nothing beyond it, so only TieredPGO=0 is adopted. These are runtime settings, not code: a process that
+/// lives ten seconds never earns back the instrumentation tier-0 code carries to feed profile-guided optimization.
+let tierRuntimeEnvironment : (string * string) list = [ "DOTNET_TieredPGO", "0" ]
+
 // ---- fail fast -------------------------------------------------------------------
 //
 // A red case used to be found in a tier log minutes after it happened, because every tier ran to the end whatever
@@ -474,6 +531,7 @@ let runTier (isolation: TierPlan.Isolation) (slots: int) (slotIndex: int) (t: Ti
         // build/TierPlan.fs `portRangeOf` for why disjoint-per-slot ranges
         // make a cross-tier port collision structurally impossible.
         "SAGEFS_TEST_PORT_RANGE", $"{portLo}-{portHi}" ]
+      @ tierRuntimeEnvironment
     let command = $"dotnet {TierPlan.dllOf t.Framework} {t.Args}"
     let tierTimeout = TierPlan.timeoutOf (readDurations ()) t
     let costFile = Path.Combine(tierWork, safe + ".cost")
@@ -634,61 +692,149 @@ let runTiers (tiers: TierPlan.Tier list) =
       match Int32.TryParse(Environment.GetEnvironmentVariable "SAGEFS_TIER_PARALLEL") with
       | true, n -> Some n
       | _ -> None
-    let slots = TierPlan.parallelism isolation Environment.ProcessorCount requested
-    let durations = readDurations ()
-    let ordered = TierPlan.order durations tiers
-    let estimate (t: TierPlan.Tier) = durations.TryFind t.Name |> Option.defaultValue 0.0
+    let policy = TierPlan.policyFor isolation Environment.ProcessorCount requested
+    let slots = TierPlan.slotsOf policy
+    let history = readHistory ()
+    let ordered = TierSchedule.orderByCriticalPath history tiers
+    let estimate (t: TierPlan.Tier) = history.Wall.TryFind t.Name |> Option.defaultValue 0.0
     let serial = ordered |> List.sumBy estimate
-    printfn "Tiers: %d, %d at a time (%A), order: %s" tiers.Length slots isolation
+    let longest = ordered |> List.fold (fun m t -> max m (estimate t)) 0.0
+    printfn "Tiers: %d, admitted by %s (%A), order: %s" tiers.Length
+      (match policy with
+       | TierPlan.Fixed n -> sprintf "a fixed count of %d" n
+       | TierPlan.ByPressure l -> sprintf "cpu pressure under %.0f%% and memory above %d GiB reserve, at most %d at once" l.CpuPressureBound (l.MemoryReserveBytes / TierPlan.Admission.bytesPerGiB) l.MaxTierProcesses)
+      isolation
       (ordered |> List.map (fun t -> t.Name) |> String.concat ", ")
     if serial > 0.0 then
-      printfn "Expected wall clock %.0fs (serial would be %.0fs), from recorded durations"
-        (TierPlan.makespan slots estimate ordered) serial
-    let queue = Collections.Concurrent.ConcurrentQueue<TierPlan.Tier>(ordered)
-    let worker (slotIndex: int) =
-      async {
-        let results = ResizeArray()
-        let mutable next = Unchecked.defaultof<TierPlan.Tier>
-        while not cancelRequested.Value && queue.TryDequeue(&next) do
-          let! r = runTier isolation slots slotIndex next
-          results.Add r
-        return List.ofSeq results
-      }
-    let! measured = List.init slots worker |> Async.Parallel
+      printfn "Expected: the longest unit is %.0fs (the floor of this stage), all units in series would be %.0fs, from recorded durations" longest serial
+    // How many cases every host suite registers, so the trust report can check the shards were handed all of them.
+    // Listing executes nothing (Expecto's --list-tests), costs one process start, and a failure is a red row, not a skip.
+    // It runs beside the first units (a task, awaited when the tiers are done), so it is never on the critical path.
+    let listing =
+      match tiers |> List.exists (fun t -> t.Args.StartsWith "--integration-host") with
+      | false -> Threading.Tasks.Task.CompletedTask
+      | true ->
+        let listLog = Path.Combine(tierWork, "host-list.log")
+        Async.StartAsTask(
+          async {
+            let! listed =
+              execToLog (TimeSpan.FromMinutes 5.0) rootDir [ "SAGEFS_DATA_DIR", Path.Combine(tierWork, "host-list.data") ] listLog
+                [ "dotnet"; testDll; "--integration-host"; "--list-tests" ]
+            hostCaseCount.Value <-
+              match listed with
+              | 0 ->
+                let cases = File.ReadAllLines listLog |> Array.filter (fun l -> Text.RegularExpressions.Regex.IsMatch(l, "^[NPF] ")) |> Array.length
+                Counted cases
+              | code -> NotCounted (sprintf "`--integration-host --list-tests` exited %d (log: %s)" code listLog)
+            printfn "host tier: %A" hostCaseCount.Value
+          })
+        :> Threading.Tasks.Task
+    // The scheduler: a unit starts when the machine has room (TierPlan.advance), the head of the line first. A finishing unit
+    // wakes the loop at once; otherwise it looks again every `reevaluateEverySeconds`. Everything it decides is
+    // TierPlan.advanceWith, the function SageFs.Simulation.TierSched runs against a fake machine.
+    let clock = Diagnostics.Stopwatch.StartNew()
+    let gate = obj ()
+    let schedule = ref (TierPlan.startSchedule 0.0 (ordered |> List.map (TierSchedule.candidateOf history)))
+    let byLabel = ordered |> List.map (fun t -> t.Name, t) |> Map.ofList
+    let freeSlots = Collections.Generic.Stack<int>([ slots - 1 .. -1 .. 0 ])
+    let somethingFinished = new Threading.SemaphoreSlim(0)
+    let results = Collections.Concurrent.ConcurrentBag<string * float>()
+    let tasks = ResizeArray<Threading.Tasks.Task>()
+    let lastHeld = ref ""
+    let waitingLeft () = lock gate (fun () -> not schedule.Value.Waiting.IsEmpty)
+    while not cancelRequested.Value && waitingLeft () do
+      let step =
+        lock gate (fun () ->
+          let now = clock.Elapsed.TotalSeconds
+          match TierPlan.advance policy (machinePort.Read ()) now schedule.Value with
+          | TierPlan.Started (candidate, basis, next) ->
+            schedule.Value <- next
+            TierPlan.Started (candidate, basis, next), freeSlots.Pop(), now
+          | held -> held, -1, now)
+      match step with
+      | TierPlan.Started (candidate, basis, _), slot, startedAt ->
+        let t = byLabel[candidate.Label]
+        lastHeld.Value <- ""
+        printfn "── start %-28s at +%.0fs, slot %d, %d running (%s)" t.Name startedAt slot
+          (lock gate (fun () -> schedule.Value.Running.Length))
+          (match basis with TierPlan.Fits -> "the machine has room" | TierPlan.StarvationGuard -> "starvation guard: nothing of ours runs and it waited out the patience")
+        let tierTask =
+          Async.StartAsTask(
+            async {
+              let! (name, seconds) = runTier isolation slots slot t
+              let cpu =
+                match tierCosts.TryGetValue name with
+                | true, c -> TierSchedule.CpuSeconds (TierCost.totalSeconds c)
+                | false, _ -> TierSchedule.CpuNotMeasured
+              tierTimings[name] <- { Tier = name; StartOffsetSeconds = startedAt; WallSeconds = seconds; Cpu = cpu }
+              results.Add((name, seconds))
+              lock gate (fun () ->
+                freeSlots.Push slot
+                schedule.Value <- TierPlan.finishUnit name schedule.Value)
+              somethingFinished.Release() |> ignore
+            })
+        lock gate (fun () -> tasks.Add tierTask)
+      | TierPlan.Held reason, _, _ ->
+        let kind = (match reason with TierPlan.AtProcessCap _ -> "cap" | TierPlan.Settling _ -> "settling" | TierPlan.CpuBusy _ -> "cpu" | TierPlan.MemoryShort _ -> "memory")
+        // Said once per kind, not once per look: a wait of minutes is one line, not a hundred. The settle between two
+        // starts is routine and not worth a line.
+        if lastHeld.Value <> kind && kind <> "settling" then
+          lastHeld.Value <- kind
+          printfn "── hold: next unit waits, %s" (TierPlan.WaitReason.describe reason)
+        do! somethingFinished.WaitAsync(TimeSpan.FromSeconds TierPlan.Admission.reevaluateEverySeconds) |> Async.AwaitTask |> Async.Ignore
+      | TierPlan.Drained, _, _ -> ()
+    do! (lock gate (fun () -> tasks.ToArray())) |> Threading.Tasks.Task.WhenAll |> Async.AwaitTask
+    do! listing |> Async.AwaitTask
+    let measured = [ List.ofSeq results ]
     // Tiers that never started because the run was cancelled are red in the trust report, never absent from it.
     let because =
       firstFailure.Value
       |> Option.map (fun f -> sprintf "%s failed in %s" f.Case f.Tier)
       |> Option.defaultValue "the run was cancelled"
-    let mutable neverStarted = Unchecked.defaultof<TierPlan.Tier>
-    while queue.TryDequeue(&neverStarted) do
-      cancelledByFailFast[neverStarted.Name] <- because
-      lock invokedTiers (fun () -> invokedTiers.Add((neverStarted.Name, neverStarted.Args, false)))
-      printfn "── tier %-28s never started (cancelled by fail-fast)" neverStarted.Name
+    for neverStarted in lock gate (fun () -> schedule.Value.Waiting) do
+      let t = byLabel[neverStarted.Label]
+      cancelledByFailFast[t.Name] <- because
+      lock invokedTiers (fun () -> invokedTiers.Add((t.Name, t.Args, false)))
+      printfn "── tier %-28s never started (cancelled by fail-fast)" t.Name
     do! auditCleanup ()
     // Merge ledgers (per-tier files: separate processes never share a writer).
     for t in tiers do
       let ledger = Path.Combine(tierWork, TierPlan.fileNameOf t.Name + ".jsonl")
       if File.Exists ledger then File.AppendAllText(trustLedger, File.ReadAllText ledger)
-    // Per-suite timings from every shard feed the next run's balancing.
-    let suiteTimings =
-      tiers
-      |> List.filter (fun t -> not (cancelledByFailFast.ContainsKey t.Name))
-      |> List.map (fun t -> Path.Combine(tierWork, TierPlan.fileNameOf t.Name + ".suites.json"))
-      |> List.filter File.Exists
-      |> List.fold (fun (acc: Map<string, float>) f ->
-        readJsonMap f |> Map.fold (fun (m: Map<string, float>) k v -> m.Add(k, v)) acc) (readJsonMap suiteDurationsFile)
+    // What this run learned feeds the next. A cancelled tier's time and cost are how long it got to run, not what it takes,
+    // so none of it is recorded.
+    let finishedTiers = tiers |> List.filter (fun t -> not (cancelledByFailFast.ContainsKey t.Name))
+    // Per-suite seconds: every finished tier's case file (SAGEFS_CASE_TIMINGS_OUT) summed by suite, falling back to the
+    // suite file the process itself writes, then blended into the recorded weights so one run under load cannot
+    // move a suite to another shard and back (TierSchedule.blend).
+    let suitesOf (t: TierPlan.Tier) =
+      let cases = Path.Combine(tierWork, TierPlan.fileNameOf t.Name + ".cases.tsv")
+      match File.Exists cases with
+      | true -> TierSchedule.suiteSecondsOfCases TierSchedule.hostRootName (TierSchedule.parseCaseTimings (File.ReadAllText cases))
+      | false -> readJsonMap (Path.Combine(tierWork, TierPlan.fileNameOf t.Name + ".suites.json"))
+    let latestSuites =
+      finishedTiers
+      |> List.map suitesOf
+      |> List.fold (fun (acc: Map<string, float>) m -> m |> Map.fold (fun (a: Map<string, float>) k v -> a.Add(k, v)) acc) Map.empty
+    let suiteTimings = TierSchedule.blend (readJsonMap suiteDurationsFile) latestSuites
     try File.WriteAllText(suiteDurationsFile, JsonSerializer.Serialize suiteTimings) with _ -> ()
     try
       Directory.CreateDirectory(Path.GetDirectoryName costsFile) |> ignore
-      File.WriteAllText(costsFile, JsonSerializer.Serialize(Map.ofSeq (tierCosts |> Seq.map (fun kv -> kv.Key, kv.Value))))
+      let costs =
+        finishedTiers
+        |> List.fold
+          (fun (acc: Map<string, TierCost.Cost>) t ->
+            match tierCosts.TryGetValue t.Name with
+            | true, cost -> acc.Add(t.Name, cost)
+            | false, _ -> acc)
+          history.Costs
+      File.WriteAllText(costsFile, JsonSerializer.Serialize costs)
     with _ -> ()
     let updated =
       measured
       |> Seq.concat
-      // A cancelled tier's time is how long it got to run, not how long it takes.
       |> Seq.filter (fun (n, _) -> not (cancelledByFailFast.ContainsKey n))
-      |> Seq.fold (fun (m: Map<string, float>) (n, s) -> m.Add(n, s)) durations
+      |> Seq.fold (fun (m: Map<string, float>) (n, s) -> m.Add(n, s)) history.Wall
     try
       Directory.CreateDirectory(Path.GetDirectoryName durationsFile) |> ignore
       File.WriteAllText(durationsFile, JsonSerializer.Serialize updated)
@@ -757,7 +903,7 @@ type TrustLine =
     Red: bool }
 
 /// Join what the pipeline invoked with what each test process reported.
-let trustLines () =
+let tierTrustLines () =
   let rows =
     match File.Exists trustLedger with
     | false -> []
@@ -801,6 +947,34 @@ let trustLines () =
             | true, false -> "reported green, but the process exited non-zero"
             | _ -> str r "Detail"
           Red = not (greenVerdict && stepOk) } ]
+
+/// The one row that says the host shards between them ran every host case: the shards' registered counts must add up to
+/// what a listing of the whole host tier registers, so a suite no shard was handed is a red row and not a test that
+/// quietly never ran. Not asked when a shard did not report (that tier is already red, and its count says nothing), and
+/// not asked when the run did not include the host shards.
+let hostCoverageLines (lines: TrustLine list) : TrustLine list =
+  let shards = lines |> List.filter (fun l -> l.Tier.StartsWith "--integration-host[")
+  let row (red: bool) (verdict: string) (registered: string) (detail: string) =
+    { Tier = "--integration-host (coverage)"
+      Registered = registered; Ran = "-"; Passed = "-"; Failed = "-"; Errored = "-"; Ignored = "-"
+      Verdict = verdict; Detail = detail; Red = red }
+  match shards with
+  | [] -> []
+  | _ when shards |> List.exists (fun l -> l.Registered = "?") -> []
+  | _ ->
+    match hostCaseCount.Value with
+    | NotCounted reason -> [ row true "CoverageUnknown" "?" (sprintf "the host tier could not be listed, so nobody can say every host case was handed to a shard: %s" reason) ]
+    | Counted expected ->
+      let registered = shards |> List.map (fun l -> int l.Registered)
+      match TierSchedule.checkHostCoverage expected registered with
+      | TierSchedule.Covered ->
+        [ row false "Covered" (string expected) (sprintf "%d shards registered %d host cases, every one of the %d the host suites register" shards.Length (List.sum registered) expected) ]
+      | TierSchedule.CoverageGap (wanted, got) ->
+        [ row true "CoverageGap" (string got) (sprintf "the host suites register %d cases and the %d shards registered %d between them: a suite was dropped or taken twice" wanted shards.Length got) ]
+
+let trustLines () =
+  let lines = tierTrustLines ()
+  lines @ hostCoverageLines lines
 
 let renderTrustTable (lines: TrustLine list) =
   let header =
@@ -1123,7 +1297,7 @@ pipeline "sagefs" {
         let hostShards =
           match Int32.TryParse(Environment.GetEnvironmentVariable "SAGEFS_HOST_SHARDS") with
           | true, n when n >= 1 -> n
-          | _ -> 5
+          | _ -> TierSchedule.hostShardCount (readJsonMap suiteDurationsFile)
         let always =
           testTier "--summary"
           // The default suite on the net10 tool asset too (built in the "build"
@@ -1172,9 +1346,13 @@ pipeline "sagefs" {
         printfn "%s" table
         // Kept beside the ledger so a local gate can record it with the pass.
         File.WriteAllText(Path.Combine(Path.GetDirectoryName trustLedger, "trust-report.md"), table + "\n")
+        // When each tier started, how long it ran and what it cost, so the critical path is visible without a log.
+        let timing = TierSchedule.renderTimingTable (tierTimings.Values |> List.ofSeq)
+        printfn "%s" timing
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName trustLedger, "tier-timing.md"), timing + "\n")
         match Environment.GetEnvironmentVariable "GITHUB_STEP_SUMMARY" with
         | null | "" -> ()
-        | summary -> File.AppendAllText(summary, table + "\n")
+        | summary -> File.AppendAllText(summary, table + "\n\n" + timing + "\n")
         // The first failure again, last, so it is the thing on screen when the run ends. Also written beside the
         // ledger, so the local gate and the ship can show it without anyone opening a log.
         let failureReportFile = Path.Combine(Path.GetDirectoryName trustLedger, "failure-report.txt")

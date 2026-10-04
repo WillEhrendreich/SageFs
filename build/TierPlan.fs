@@ -363,8 +363,9 @@ module Admission =
   let rampSeconds = 60.0
   /// Two minutes: longer than any transient spike, short enough that a neighbour holding memory costs a wait, not the gate.
   let patienceSeconds = 120.0
-  /// How often a waiting scheduler looks again when no unit has finished.
-  let reevaluateEverySeconds = 2.0
+  /// How often a waiting scheduler looks again when no unit has finished: at most a third of the settle time, so a start
+  /// is never late by more than the settle's own resolution (a 2 s look turned a 3 s settle into 4 s, measured).
+  let reevaluateEverySeconds = 1.0
 
   let standard (fallbackConcurrency: int) : Limits =
     { MaxTierProcesses = maxTierProcesses
