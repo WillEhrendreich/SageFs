@@ -3126,7 +3126,39 @@ let run
 
   // The daemon's OWN scope, seeded eagerly so a caller in the launch directory is never
   // refused for want of an owner. Every other scope gets its owner on first use.
+  //
+  // ORDER MATTERS AND WAS WRONG. `SetOnOwnerStarted` fires when an owner is CREATED, so a
+  // hook registered after this line never sees the owner seeded here — the daemon's own
+  // cohort would get NO subscriber, so no `CohortChanged` would ever fire for it and the
+  // dashboard's cohort panel would freeze on the frame it first rendered. A member who
+  // joined or left would change nothing on screen. Every LATER scope worked, which is why
+  // this looked like a stale-count bug rather than a missing subscription.
   let cohortOwner = cohortOwners.OwnerFor cohortScope
+
+  // WHY THE DAEMON'S OWN OWNER IS SUBSCRIBED HERE, BY HAND, RATHER THAN ONLY BY THE HOOK
+  // BELOW. `SetOnOwnerStarted` fires when an owner is CREATED, and this owner was created
+  // four hundred lines ABOVE the hook — so the hook never saw it. The daemon's own cohort
+  // therefore had no subscriber, no `CohortChanged` ever fired for it, and the dashboard's
+  // cohort panel froze on whatever frame it first rendered: a member could join and leave and
+  // the panel would not move. Every OTHER scope worked, because those owners are created
+  // after the hook and so did get one — which is why this looked like a stale-count bug and
+  // not a missing subscription.
+  let subscribeCohortEvents (scope: SageFs.CohortScope) (owner: Features.CohortOwner.Handle) =
+    owner.Events.Add(fun events ->
+      let visible =
+        events
+        |> List.exists (fun ev ->
+          match ev with
+          | SageFs.Cohort.CohortEvent.LeaseRenewed _ -> false
+          | _ -> true)
+      // The scope travels with the event, so a client redraws the cohort that actually
+      // changed rather than every cohort it happens to be showing — and a stale panel is
+      // then distinguishable from a live one instead of looking identical.
+      match visible with
+      | true -> stateChangedEvent.Trigger(CohortChanged scope)
+      | false -> ())
+
+  subscribeCohortEvents cohortScope cohortOwner
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
@@ -3201,20 +3233,7 @@ let run
   // scope is asked for, so a loop here would only ever see the daemon's own cohort — the
   // second repository's panel would stay stale forever. The hook fires as each owner
   // appears, so one registration covers every cohort this daemon will ever serve.
-  cohortOwners.SetOnOwnerStarted (fun scope owner ->
-    owner.Events.Add(fun events ->
-      let visible =
-        events
-        |> List.exists (fun ev ->
-          match ev with
-          | SageFs.Cohort.CohortEvent.LeaseRenewed _ -> false
-          | _ -> true)
-      // The scope travels with the event, so a client redraws the cohort that actually
-      // changed rather than every cohort it happens to be showing — and a stale panel is
-      // then distinguishable from a live one instead of looking identical.
-      match visible with
-      | true -> stateChangedEvent.Trigger(CohortChanged scope)
-      | false -> ()))
+  cohortOwners.SetOnOwnerStarted subscribeCohortEvents
   // No landing-outcome hook feeds the integration session's trustworthiness, and that is the better
   // shape. Whether the last verification ended in a landing used to be read off
   // `LandingStateChanged(_, Blocked | Landed)`, and it cannot be read off `RunTests` either — the
