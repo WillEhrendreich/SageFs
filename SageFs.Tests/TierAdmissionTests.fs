@@ -53,7 +53,7 @@ let tests =
     testCase "WHY — memory must cover the reserve plus the unit's own peak" <| fun _ ->
       let needed = Admission.memoryReserveBytes + head.PeakBytes
       let short = { calm with Memory = AvailableBytes (needed - 1L) }
-      match decideNow short 0.0 (scheduleWith [ running "u1" 0.0 ] (AdmittedAt 0.0)) with
+      match decideNow short afterRamp (scheduleWith [ running "u1" 0.0 ] (AdmittedAt 0.0)) with
       | Wait (MemoryShort (n, a)) ->
         n |> Expect.equal "needs reserve + peak (the running unit has finished ramping)" needed
         a |> Expect.equal "against what is available" (needed - 1L)
@@ -65,13 +65,13 @@ let tests =
       let needed = Admission.memoryReserveBytes + head.PeakBytes
       let justEnough = { calm with Memory = AvailableBytes needed }
       match decideNow justEnough 0.0 (scheduleWith [ running "u1" 0.0 ] (AdmittedAt (-10.0))) with
-      | Wait (MemoryShort (n, _)) -> n |> Expect.isGreaterThan "the fresh unit's whole peak is added" needed
+      | Wait (MemoryShort (n, _)) -> (n > needed) |> Expect.isTrue "the fresh unit's whole peak is added"
       | other -> failtestf "a unit that just started still holds its peak in reserve, got %A" other
 
     testCase "WHY — two starts are never closer than the settle time, because avg10 and memory lag a start" <| fun _ ->
       let justAfter = Admission.settleSeconds / 2.0
       match decideNow calm justAfter (scheduleWith [ running "u1" 0.0 ] (AdmittedAt 0.0)) with
-      | Wait (Settling remaining) -> remaining |> Expect.floatClose Accuracy.medium "the rest of the settle time" (Admission.settleSeconds - justAfter)
+      | Wait (Settling remaining) -> (abs (remaining - (Admission.settleSeconds - justAfter)) < 1e-9) |> Expect.isTrue "the rest of the settle time"
       | other -> failtestf "expected Settling, got %A" other
 
     testCase "WHY — the hard cap holds whatever the machine says" <| fun _ ->

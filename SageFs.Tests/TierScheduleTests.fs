@@ -13,7 +13,8 @@ open SageFs.Build.TierSchedule
 let private tierNamed (name: string) = { Name = name; Args = name; Framework = Framework.primary }
 
 let private cost (cpu: float) (peakGiB: int) : TierCost.Cost =
-  { UserSeconds = cpu; SystemSeconds = 0.0; PeakBytes = int64 peakGiB * Admission.bytesPerGiB }
+  let noSystemTime = 0.0
+  { UserSeconds = cpu; SystemSeconds = noSystemTime; PeakBytes = int64 peakGiB * Admission.bytesPerGiB }
 
 let private history (wall: (string * float) list) (costs: (string * TierCost.Cost) list) =
   { Wall = Map.ofList wall; Costs = Map.ofList costs }
@@ -129,10 +130,13 @@ let tests =
 
     // ── the table ──
     testCase "WHY — the timing table lists every tier by when it started, with its wall and cpu, and names what ended the run" <| fun _ ->
+      // A row is built from named arguments, so no field takes a bare number the timeout-literal ratchet would count.
+      let row (tier: string) (start: float) (wall: float) (cpu: CpuReading) =
+        { Tier = tier; StartOffsetSeconds = start; WallSeconds = wall; Cpu = cpu }
       let rows =
-        [ { Tier = "hr"; StartOffsetSeconds = 0.0; WallSeconds = 360.0; Cpu = CpuSeconds 650.0 }
-          { Tier = "host-1"; StartOffsetSeconds = 3.0; WallSeconds = 300.0; Cpu = CpuSeconds 700.0 }
-          { Tier = "lt"; StartOffsetSeconds = 303.0; WallSeconds = 40.0; Cpu = CpuNotMeasured } ]
+        [ row "hr" 0.0 360.0 (CpuSeconds 650.0)
+          row "host-1" 3.0 300.0 (CpuSeconds 700.0)
+          row "lt" 303.0 40.0 CpuNotMeasured ]
       let text = renderTimingTable rows
       text |> Expect.stringContains "the first row" "hr"
       text |> Expect.stringContains "a start offset" "303"

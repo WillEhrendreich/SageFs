@@ -234,6 +234,12 @@
         <Compile Include="MemoryShedInvariants.fs" />
         <Compile Include="LeaseSim.fs" />
         <Compile Include="LeaseSimInvariants.fs" />
+        <!-- Tier scheduler DST: admission by pressure folded through the REAL TierPlan.advanceWith (the file the pipeline
+             `#load`s, compiled here once; SageFs.Tests reaches it through this reference); a fake clock and machine,
+             neighbours that spike and hold memory, units that die; eight twins prove the invariants' teeth. -->
+        <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
+        <Compile Include="TierSched.fs" />
+        <Compile Include="TierSchedInvariants.fs" />
         <!-- Per-run member capability DST: mint, present, touch and revoke folded through the REAL
              Capability.decide and resolve; eight twins (token minted from ledger entropy, mint that
              ignores its minter, clamping mint, string-prefix claim check, reviving touch, mint over a

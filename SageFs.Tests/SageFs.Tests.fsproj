@@ -11,8 +11,8 @@
         <Compile Include="LiveTestingBudgets.fs" />
         <Compile Include="TestTimeouts.fs" />
         <Compile Include="CasePhases.fs" />
-        <!-- Before TestInfrastructure: the trust ledger names a tier by its framework. -->
-        <Compile Include="../build/TierPlan.fs" Link="Build/TierPlan.fs" />
+        <!-- Before TestInfrastructure: the trust ledger names a tier by its framework. build/TierPlan.fs is compiled into
+             SageFs.Simulation (its scheduler DST folds through it) and reached here through that project reference. -->
         <Compile Include="../build/TierCost.fs" Link="Build/TierCost.fs" />
         <Compile Include="../build/FailureReport.fs" Link="Build/FailureReport.fs" />
         <Compile Include="../build/TierSchedule.fs" Link="Build/TierSchedule.fs" />

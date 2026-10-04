@@ -59,7 +59,7 @@ let tests =
 
       testCase "the sweep reaches each fault: a unit that dies, a neighbour that holds the memory, a machine that cannot be read" <| fun _ ->
         let traces = teethSeeds |> List.map (fun s -> trace Behavior.Real (scenarioOf s))
-        traces |> List.exists (fun t -> t.Ended |> List.exists (fun (_, _, how) -> how = Dies))
+        traces |> List.exists (fun t -> t.Ended |> List.exists (fun (_, _, how) -> how = UnitEnd.Dies))
         |> Expect.isTrue "some unit dies"
         traces |> List.exists (fun t -> t.Starts |> List.exists (fun s -> s.Basis = StarvationGuard))
         |> Expect.isTrue "the starvation guard fires for some seed"
