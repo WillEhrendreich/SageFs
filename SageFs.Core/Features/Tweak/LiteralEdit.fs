@@ -147,6 +147,11 @@ let rec private styleOf (text: string) : LiteralStyle option =
       |> Option.map (fun inner -> LiteralStyle.MeasureStyle(m.Groups["unit"].Value, inner))
     | false -> numericStyleOf t
 
+/// The value and style a piece of source text spells, when it is exactly one
+/// literal. Same reading as `readLiteral`, for a caller that already holds the
+/// expression's text and does not want the file parsed again.
+let readLiteralText (text: string) : Result<LiteralValue * LiteralStyle, LiteralError> = failwith "not built yet"
+
 /// Read the literal at `address`: its exact original text, the value it
 /// carries, and the style to preserve when it's set again.
 let readLiteral (source: string) (address: TweakAddress) : Result<ResolvedLiteral, LiteralError> =

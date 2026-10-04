@@ -278,6 +278,12 @@ let addressesOf (source: string) : Result<TweakAddress list, ResolveError> =
       |> List.map (fun (path, _) -> { ModulePath = b.ModulePath; BindingName = b.Name; Path = path })
       |> List.distinct))
 
+/// Every addressable expression in a file with its range, text and hash, from ONE
+/// parse. Reports the same addresses as `addressesOf`, in the same order, each
+/// resolved to what `resolve` would give for it. A caller that wants all of them
+/// (a listing) calls this instead of parsing the file once per address.
+let resolveAll (source: string) : Result<ResolvedTweak list, ResolveError> = failwith "not built yet"
+
 /// Walk `expr` down `path`, or say exactly where the path stopped meaning
 /// anything.
 let rec private walkPath (expr: SynExpr) (path: PathStep list) : SynExpr option =

@@ -162,6 +162,15 @@
              line-based undo, and a compaction that drops an unsaved tweak. -->
         <Compile Include="TweakSim.fs" />
         <Compile Include="TweakSimInvariants.fs" />
+        <!-- The nudge door onto that engine: an in-memory disk that crashes where a
+             scenario says, the world the tests share, and a seeded sim of nudges,
+             undos, outside edits and crashes folded through the real door. Twins
+             write in place, write before journaling, skip the hash check and skip
+             settling a crash. -->
+        <Compile Include="NudgeDisk.fs" />
+        <Compile Include="NudgeWorld.fs" />
+        <Compile Include="NudgeSim.fs" />
+        <Compile Include="NudgeSimInvariants.fs" />
         <!-- Local data retention: seeded months of upgrades, bursts, restarts
              and cohort traffic through LocalDataRetention; a twin prunes by
              age only and ignores the version. -->

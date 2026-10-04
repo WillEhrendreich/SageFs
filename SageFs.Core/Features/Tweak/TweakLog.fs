@@ -432,6 +432,17 @@ let recoveryOffer (log: EventLog) : RecoverableTweak list =
 let hasOpenConflict (log: EventLog) (address: TweakAddress) : bool =
   (project log).OpenConflicts |> Set.contains address
 
+/// The newest event that moved an address's text, and what it moved it from
+/// and to. A `RolledBack` reports its target's effect flipped, the same way
+/// `project` reads it. This is what a caller that journals BEFORE it writes a
+/// file asks after a crash: "what did the last record say the file now holds?"
+[<RequireQualifiedAccess>]
+type LastEffect =
+  | NoEffects
+  | Effect of eventId: int * address: TweakAddress * before: string * after: string
+
+let lastEffectOf (log: EventLog) : LastEffect = failwith "not built yet"
+
 // ── the snapshot: what compaction folds a prefix of events into ──
 
 /// Versioned like an event, not a disposable cache: once compaction has

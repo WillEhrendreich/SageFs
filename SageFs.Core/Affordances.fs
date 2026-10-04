@@ -204,6 +204,10 @@ let private gatingDomain : Map<string, ToolGate> =
     // Lists or switches rule 2's reflection read mode. Same shape: it goes
     // straight to the worker, which answers for itself.
     "set_reflection_read_mode", ToolGate.AlwaysAvailable
+    // Nudges one value in a source file the session's hot reload watches, and writes it back. It
+    // resolves the session itself and reads the worker's watched-file list, so it does not need the
+    // session-state gate: a session that is not Ready is answered by the tool, with a named reason.
+    "nudge_value", ToolGate.AlwaysAvailable
     "stop_session", ToolGate.AlwaysAvailable
     // switch_session is navigation, not code execution: it only rebinds which
     // session the agent views and moves the daemon-global active pointer. It
@@ -648,6 +652,8 @@ type ToolName =
   | DisableHotReload
   | ResetHotReloadState
   | SetReflectionReadMode
+  // Nudging a value in a source file and writing it back.
+  | NudgeValue
   // Leases.
   | AcquireFullBuildLease
   | AcquireTestSuiteLease
@@ -723,6 +729,7 @@ module ToolName =
     | ToolName.DisableHotReload -> "disable_hot_reload"
     | ToolName.ResetHotReloadState -> "reset_hot_reload_state"
     | ToolName.SetReflectionReadMode -> "set_reflection_read_mode"
+    | ToolName.NudgeValue -> "nudge_value"
     | ToolName.AcquireFullBuildLease -> "acquire_full_build_lease"
     | ToolName.AcquireTestSuiteLease -> "acquire_test_suite_lease"
     | ToolName.AcquireRunAppLease -> "acquire_run_app_lease"
@@ -790,6 +797,7 @@ module ToolName =
       ToolName.DisableHotReload
       ToolName.ResetHotReloadState
       ToolName.SetReflectionReadMode
+      ToolName.NudgeValue
       ToolName.AcquireFullBuildLease
       ToolName.AcquireTestSuiteLease
       ToolName.AcquireRunAppLease

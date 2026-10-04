@@ -152,6 +152,10 @@ module Timeouts =
   /// that takes this long means a hung or starved worker, and the caller should
   /// hear that now, not after workerHttpRequest's ten minutes.
   let gateStatusProbe = forMachine (TimeSpan.FromSeconds(5.0))
+  /// How long a nudge waits for another nudge to the same source file to finish. A nudge reads one file, appends
+  /// one journal record and renames one file, which is milliseconds, so a wait this long means the holder is
+  /// stuck. The caller is refused with `FileBusy` and told to retry, rather than parked behind it.
+  let nudgeFileLock = TimeSpan.FromSeconds(10.0)
   /// The longest `wait_seconds` get_session_status will park a caller for.
   /// A larger request is clamped to this, never refused.
   let statusWaitCap = TimeSpan.FromSeconds(60.0)

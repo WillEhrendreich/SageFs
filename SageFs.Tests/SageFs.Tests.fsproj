@@ -408,6 +408,14 @@
         <Compile Include="TweakTransactionTests.fs" />
         <Compile Include="TweakLogTests.fs" />
         <Compile Include="TweakSimDstTests.fs" />
+        <!-- The nudge door: the first production caller of the engine above. -->
+        <Compile Include="NudgeAddressTests.fs" />
+        <Compile Include="NudgeIoTests.fs" />
+        <Compile Include="NudgeFsTests.fs" />
+        <Compile Include="NudgeTests.fs" />
+        <Compile Include="NudgeMutationTests.fs" />
+        <Compile Include="NudgeSimDstTests.fs" />
+        <Compile Include="NudgeToolTests.fs" />
         <Compile Include="RetentionSimDstTests.fs" />
         <Compile Include="LiveStateEmitTests.fs" />
         <Compile Include="ValueReadsTests.fs" />
@@ -713,6 +721,7 @@
         <Compile Include="HotReloadLatency.fs" />
         <Compile Include="HotReloadLatencyTests.fs" />
         <Compile Include="HotReloadStateOutcomeTests.fs" />
+        <Compile Include="NudgeOutcomeTests.fs" />
         <Compile Include="HotReloadParityTests.fs" />
         <Compile Include="RunAppDeltaHarness.fs" />
         <Compile Include="RunAppDeltaTests.fs" />

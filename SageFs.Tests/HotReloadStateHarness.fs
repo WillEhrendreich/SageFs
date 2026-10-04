@@ -344,12 +344,7 @@ let private isVerdict (payload: string) =
 /// watcher drops a second change to the same file inside `DoubleCompileGuardMs`
 /// on purpose. Two saves in a row have to be further apart than that or the
 /// product (correctly) sees one.
-let saveEditsWithinBudget (budget: TimeSpan) (app: RunningApp) (source: string) (edits: (string * string) list) : Task<string> = task {
-  let before = File.ReadAllText source
-  for find, _ in edits do
-    let occurrences = before.Split([| find |], StringSplitOptions.None).Length - 1
-    occurrences |> Expect.equal (sprintf "the edit anchor has to appear exactly once in %s: %s" (Path.GetFileName source) find) 1
-  let after = edits |> List.fold (fun (text: string) (find, replace) -> text.Replace(find, replace)) before
+let awaitVerdictAfter (budget: TimeSpan) (app: RunningApp) (what: string) (write: unit -> Task<unit>) : Task<string> = task {
   use req = new HttpRequestMessage(HttpMethod.Get, app.WorkerUrl + "/__sagefs__/reload")
   req.Headers.Accept.ParseAdd "text/event-stream"
   use streamClient = new HttpClient(Timeout = Timeout.InfiniteTimeSpan)
@@ -358,7 +353,7 @@ let saveEditsWithinBudget (budget: TimeSpan) (app: RunningApp) (source: string) 
   use! stream = resp.Content.ReadAsStreamAsync()
   use reader = new StreamReader(stream)
   do! Task.Delay(DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
-  File.WriteAllText(source, after)
+  do! write ()
   use cts = new CancellationTokenSource(budget)
   let seen = ResizeArray<string>()
   let mutable verdict = ""
@@ -378,9 +373,18 @@ let saveEditsWithinBudget (budget: TimeSpan) (app: RunningApp) (source: string) 
   match verdict with
   | "" ->
     return
-      failwithf "no verdict within %.0fs for the edit %A. Saw:\n%s\nHost log:\n%s"
-        budget.TotalSeconds edits (String.concat "\n" seen) (RunningApp.log app)
+      failwithf "no verdict within %.0fs for %s. Saw:\n%s\nHost log:\n%s"
+        budget.TotalSeconds what (String.concat "\n" seen) (RunningApp.log app)
   | v -> return v
+}
+
+let saveEditsWithinBudget (budget: TimeSpan) (app: RunningApp) (source: string) (edits: (string * string) list) : Task<string> = task {
+  let before = File.ReadAllText source
+  for find, _ in edits do
+    let occurrences = before.Split([| find |], StringSplitOptions.None).Length - 1
+    occurrences |> Expect.equal (sprintf "the edit anchor has to appear exactly once in %s: %s" (Path.GetFileName source) find) 1
+  let after = edits |> List.fold (fun (text: string) (find, replace) -> text.Replace(find, replace)) before
+  return! awaitVerdictAfter budget app (sprintf "the edit %A" edits) (fun () -> task { File.WriteAllText(source, after) })
 }
 
 let saveWithinBudget (budget: TimeSpan) (app: RunningApp) (find: string) (replace: string) : Task<string> =

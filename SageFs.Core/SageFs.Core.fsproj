@@ -192,6 +192,13 @@
              with bounded-growth compaction, on top of the address/edit
              modules above. -->
         <Compile Include="Features\Tweak\TweakLog.fs" />
+        <!-- The door onto the engine above: the first production caller of it. Text form of an
+             address, the disk protocol (temp+rename, journal+fsync), the request/refusal types and
+             the run, and the System.IO adapter. -->
+        <Compile Include="Features\Tweak\NudgeAddress.fs" />
+        <Compile Include="Features\Tweak\NudgeIo.fs" />
+        <Compile Include="Features\Tweak\Nudge.fs" />
+        <Compile Include="Features\Tweak\NudgeFs.fs" />
         <Compile Include="Features\LiveStateEmit.fs" />
         <Compile Include="Features\KeptState.fs" />
         <Compile Include="ShadowCopy.fs" />

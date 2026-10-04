@@ -1468,6 +1468,51 @@ The mode new sessions start in is the `hotreload.reflectionReadMode` setting."""
         })
         |> withEcho ctx "set_reflection_read_mode"
 
+    [<McpServerTool>]
+    [<Description("""Nudge one value in a source file the session owns, and write it back to that file as just that expression. The running app picks the change up through hot reload.
+
+WORKFLOW:
+1. action=inspect with `file` lists the values you can nudge in it: each one's address, its current text, its hash and, for a literal, its value. Add `address` to look at one.
+2. action=set with `file`, `address`, `seen` (the hash inspect gave for that address) and exactly one of `literal` or `expression`.
+   - `literal` is read as the kind the existing literal is: 13.2 for a float, true for a bool, Hard for a union case. Its style survives (1.0 stays 1.0, 0x1F stays hex, 12.5<m/s> keeps its unit).
+   - `expression` is any F# expression, like `gravity * 2.0`. It is parsed, not type-checked: a type error shows in the reload verdict, and undo puts the old text back.
+   Only that expression's range is rewritten. Every other byte of the file is untouched.
+3. action=undo or action=redo with `file` steps back or forward through what this tool wrote to that file. Undo is refused, with all three texts, when the expression has changed since the write.
+
+ADDRESS: `Module.Path.binding/step/step`. A step is {Field}, Tuple.N, List.N, Arg.N, If.Cond, If.Then, If.Else, BinOp.Left or BinOp.Right: Game.Tuning.tuning/{JumpVelocity}/BinOp.Right.
+
+SAFETY:
+- Only the source files the session's hot reload watches are touched. Anything else is refused.
+- A stale address is refused with the reason, never guessed. If the expression changed since you inspected it you get both texts. If it moved, you get its new address to confirm.
+- The file is replaced by a rename, so a failed or interrupted write leaves it byte-identical. Every write is journaled before it happens and can be undone.
+- A member token needs the Implementer role, as for any tool that changes things.""")>]
+    member _.nudge_value(
+        [<Description("inspect, set, undo or redo.")>]
+        action: string,
+        [<Description("The source file, absolute or relative to the session's working directory. It must be one the session's hot reload watches.")>]
+        [<Optional; DefaultParameterValue("")>]
+        file: string,
+        [<Description("Address of the value, as inspect reports it. Required for set. Optional for inspect (leave empty to list the whole file).")>]
+        [<Optional; DefaultParameterValue("")>]
+        address: string,
+        [<Description("For set: the hash inspect gave for the address. The write is refused if the expression no longer hashes to it.")>]
+        [<Optional; DefaultParameterValue("")>]
+        seen: string,
+        [<Description("For set: the new value of a literal, read as the literal's own kind (13.2, true, Hard). Give this or `expression`, not both.")>]
+        [<Optional; DefaultParameterValue("")>]
+        literal: string,
+        [<Description("For set: a new F# expression for the whole value, like gravity * 2.0. Give this or `literal`, not both.")>]
+        [<Optional; DefaultParameterValue("")>]
+        expression: string,
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: nudge_value called: action={Action}, file={File}", action, file)
+        let raw : SageFs.Features.Tweak.Nudge.RawNudge =
+          { Action = action; File = file; Address = address; Seen = seen; Literal = literal; Expression = expression }
+        SageFs.McpNudge.nudgeValue ctx working_directory raw |> withEcho ctx "nudge_value"
+
     // ── Session Management Tools ──────────────
 
     [<McpServerTool>]

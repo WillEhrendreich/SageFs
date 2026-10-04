@@ -129,6 +129,7 @@
         <Compile Include="ToolAuthorityGate.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpHygiene.fs" />
+        <Compile Include="McpNudge.fs" />
         <Compile Include="McpRunTests.fs" />
         <Compile Include="McpAnalysis.fs" />
         <Compile Include="McpDebugTest.fs" />
