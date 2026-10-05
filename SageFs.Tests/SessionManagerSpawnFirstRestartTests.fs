@@ -720,7 +720,7 @@ let sessionManagerProjectRolesTests =
           |> Option.bind (fun s -> SessionLifecycleStatus.workerPid s.Info.Status)
           |> Option.defaultWith (fun () -> failtest "expected worker pid")
         mailbox.Post(SessionCommand.WorkerReady(info.Id, pid, "http://localhost:4123", proxy))
-        let deadline = System.DateTime.UtcNow.AddSeconds 10.0
+        let deadline = System.DateTime.UtcNow.Add TestTimeouts.patience
         let rec settledRoles () =
           task {
             let! current = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
@@ -844,7 +844,7 @@ let workerFaultReportTests =
           |> Option.bind (fun s -> SessionLifecycleStatus.workerPid s.Info.Status)
           |> Option.defaultWith (fun () -> failtest "expected worker pid")
         mailbox.Post(SessionCommand.WorkerReady(info.Id, pid, "http://localhost:4123", proxy))
-        let deadline = System.DateTime.UtcNow.AddSeconds 10.0
+        let deadline = System.DateTime.UtcNow.Add TestTimeouts.patience
         let rec faultReason () =
           task {
             let! current = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.GetSession(info.Id, reply))

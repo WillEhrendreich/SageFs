@@ -112,7 +112,7 @@ let rec private waitUntil (owner: CohortOwner.Handle) (deadline: DateTime) (desc
       return! waitUntil owner deadline describe check
   }
 
-let private defaultDeadline () = DateTime.UtcNow.AddSeconds 10.0
+let private defaultDeadline () = DateTime.UtcNow.Add TestTimeouts.patience
 
 let private landingOf (owner: CohortOwner.Handle) (id: LandingId) : LandingRequest<MemberId> =
   owner.ReadCohortState().Landings

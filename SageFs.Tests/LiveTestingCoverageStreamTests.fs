@@ -123,7 +123,7 @@ let private runStream (probes: FakeProbes) (takeCoverage: unit -> HostAgent.Agen
         takeCoverage
         0
     use _server = server
-    use client = new HttpClient(BaseAddress = Uri server.BaseUrl, Timeout = TestTimeouts.httpRequest)
+    use client = new HttpClient(BaseAddress = Uri server.BaseUrl, Timeout = TestTimeouts.requestPatience)
     let body = Serialization.serialize {| tests = tests; maxParallelism = maxParallelism |}
     use content = new StringContent(body, Encoding.UTF8, "application/json")
     let! response = client.PostAsync("/run-tests-stream", content)

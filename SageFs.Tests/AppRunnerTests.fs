@@ -55,7 +55,7 @@ let private primaryUrl (state: AppRunState) =
   | other -> failtestf "expected a running web app, got %A" other
 
 let private getBody (url: string) = task {
-  use client = new HttpClient(Timeout = TestTimeouts.httpProbe)
+  use client = new HttpClient(Timeout = TestTimeouts.requestPatience)
   return! client.GetStringAsync(url)
 }
 

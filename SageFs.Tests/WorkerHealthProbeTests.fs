@@ -82,14 +82,17 @@ let runLoopTests =
           probeCalls <- probeCalls + 1
           return ProbeOutcome.Healthy
         }
-      let stopAfter = DateTime.UtcNow.AddMilliseconds 120.0
-      let shouldContinue () = DateTime.UtcNow < stopAfter
+      // Driven off the probe count, not a 120 ms wall-clock window: a window that starts when the case is
+      // built has usually run out before a starved thread pool schedules the loop's first turn, and then no
+      // probe runs at all. Twenty healthy probes are "many intervals", and the loop stops on its own after them.
+      let manyIntervals = 20
+      let shouldContinue () = probeCalls < manyIntervals
       do!
         run healthyProbe 3 10 shouldContinue ignore (fun () -> restartCount <- restartCount + 1)
         |> Async.StartAsTask :> Task
 
       restartCount |> Expect.equal "never restarted" 0
-      (probeCalls > 0) |> Expect.isTrue "the probe actually ran at least once"
+      probeCalls |> Expect.equal "the probe ran every interval until the loop stopped" manyIntervals
     }
 
     testTask "shouldContinue turning false stops the loop before the threshold is reached" {

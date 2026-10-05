@@ -293,7 +293,7 @@ let cohortFastForwardFailedOwnerTests =
         | Error err -> failtestf "RequestLanding was refused: %A" err
 
       do!
-        waitUntil owner (DateTime.UtcNow.AddSeconds 10.0) (fun () -> sprintf "%A" (landingOf owner landingId).State) (fun () ->
+        waitUntil owner (DateTime.UtcNow.Add TestTimeouts.patience) (fun () -> sprintf "%A" (landingOf owner landingId).State) (fun () ->
           match (landingOf owner landingId).State with
           | LandingState.Landed _ -> true
           | _ -> false)
