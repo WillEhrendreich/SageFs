@@ -1577,7 +1577,13 @@ let tests =
     let dialog = page.Locator("#new-session-dialog")
     do! dialog.WaitForAsync(LocatorWaitForOptions(State = WaitForSelectorState.Visible, Timeout = float32 BrowserWaits.pageRenders))
     // Working directory input (placeholder "/path/to/project"), scoped to the dialog.
-    do! PlaywrightExpect.isVisibleAsync (dialog.Locator("input[placeholder*=\"/path/to/project\"]")) "working directory input visible"
+    // The modal's own shell is visible before its form is: the working-directory input
+    // arrives on a later morph, so sampling visibility the instant the dialog opens
+    // races it and fails every time. Wait for the input the way the dialog itself is
+    // waited for above, then assert it is really visible.
+    let workingDirInput = dialog.Locator("input[placeholder*=\"/path/to/project\"]")
+    do! workingDirInput.WaitForAsync(LocatorWaitForOptions(State = WaitForSelectorState.Visible, Timeout = float32 BrowserWaits.pageRenders))
+    do! PlaywrightExpect.isVisibleAsync workingDirInput "working directory input visible"
     do! PlaywrightExpect.isVisibleAsync (dialog.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Find projects in this directory"))) "Find button visible"
     do! PlaywrightExpect.isVisibleAsync (dialog.GetByTestId "new-session") "Create button visible"
     do! page.Keyboard.PressAsync "Escape"
