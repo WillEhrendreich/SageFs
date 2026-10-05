@@ -102,8 +102,7 @@ let genSource : Gen<SourceFacts> =
       Gen.elements [ "a.fs: does not parse" ] |> Gen.map SourceFacts.FilesUnknown
       genRef |> Gen.map SourceFacts.OneSource
       Gen.listOfLength 2 genRef |> Gen.map SourceFacts.ManySources
-      genRef |> Gen.map SourceFacts.PartNotSpelled
-      genRef |> Gen.map SourceFacts.PartNotMapped ]
+      genRef |> Gen.map SourceFacts.PartNotSpelled ]
 
 let genRefusal : Gen<NudgeRefusal> =
   Gen.elements
@@ -279,7 +278,6 @@ let deriveTests =
       state SourceFacts.NoFileBindsIt |> Expect.equal "repl" (PersistenceState.NotInAFile NotInFileWhy.NoOwnedFileBindsIt)
       state (SourceFacts.FilesUnknown "x") |> Expect.equal "unknown" (PersistenceState.NotInAFile(NotInFileWhy.OwnedFilesUnknown "x"))
       state (SourceFacts.PartNotSpelled owner) |> Expect.equal "not spelled" (PersistenceState.NotInAFile(NotInFileWhy.NotSpelledInTheFile owner))
-      state (SourceFacts.PartNotMapped owner) |> Expect.equal "not mapped" (PersistenceState.NotInAFile(NotInFileWhy.PartNotMapped owner))
 
     testCase "a refusal because the expression moved is a stale address showing both versions, never a plain refusal" <| fun _ ->
       let seen = real "a.fs" "gravity" "9.8"

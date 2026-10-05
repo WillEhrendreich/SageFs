@@ -196,7 +196,7 @@ let serviceTests =
         let place = placeOf rows (RowKey.top "gravity")
         do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor place (RowKey.top "gravity") (TweakVerb.Steps 3))
         File.ReadAllText sb.Tuning |> Expect.equal "three tenths up" (tuningText.Replace("let gravity = 9.8", "let gravity = 10.1"))
-        let! again = view sb [ "gravity", box 10.1 ]
+        let! again = view sb [ "gravity", box 10.1; "maxHealth", box 100 ]
         let health = RowKey.top "maxHealth"
         let healthPlace = placeOf again health
         do! Service.act sb.Service "s" sb.Owned noReload ignore (requestFor healthPlace health (TweakVerb.Steps -7))

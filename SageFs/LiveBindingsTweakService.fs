@@ -33,6 +33,9 @@ open SageFs.Features.Tweak.BindingTweakRows
 type TweakVerb =
   | SetLiteral of text: string
   | SetExpression of text: string
+  /// A number moved by a count of steps (negative is down): a drag, the buttons and the arrow keys are all just a count. The
+  /// literal to write is worked out here, from the number the row showed, by `Stepping.literalAfter`.
+  | Steps of count: int
   | Undo
   | Redo
 
@@ -41,6 +44,7 @@ module TweakVerb =
   /// The tokens a control stages in the page's signals.
   let [<Literal>] LiteralToken = "set"
   let [<Literal>] ExpressionToken = "expression"
+  let [<Literal>] StepsToken = "steps"
   let [<Literal>] UndoToken = "undo"
   let [<Literal>] RedoToken = "redo"
 
@@ -48,6 +52,7 @@ module TweakVerb =
     match verb with
     | TweakVerb.SetLiteral _ -> LiteralToken
     | TweakVerb.SetExpression _ -> ExpressionToken
+    | TweakVerb.Steps _ -> StepsToken
     | TweakVerb.Undo -> UndoToken
     | TweakVerb.Redo -> RedoToken
 
@@ -55,14 +60,20 @@ module TweakVerb =
     match token with
     | LiteralToken -> Ok(TweakVerb.SetLiteral value)
     | ExpressionToken -> Ok(TweakVerb.SetExpression value)
+    | StepsToken ->
+      match Int32.TryParse(value, Globalization.NumberStyles.AllowLeadingSign, Globalization.CultureInfo.InvariantCulture) with
+      | true, count -> Ok(TweakVerb.Steps count)
+      | false, _ -> Error(sprintf "'%s' is not a count of steps" value)
     | UndoToken -> Ok TweakVerb.Undo
     | RedoToken -> Ok TweakVerb.Redo
     | other -> Error(sprintf "'%s' is not something a row can ask for" other)
 
+  /// What the verb does to the file, once a step count has become a literal.
   let writeKindOf (verb: TweakVerb) : WriteKind =
     match verb with
     | TweakVerb.SetLiteral text
     | TweakVerb.SetExpression text -> WriteKind.SetTo text
+    | TweakVerb.Steps count -> WriteKind.SetTo(sprintf "%+d steps" count)
     | TweakVerb.Undo -> WriteKind.UndoStep
     | TweakVerb.Redo -> WriteKind.RedoStep
 
@@ -111,6 +122,9 @@ module TweakRequest =
     match request.Verb with
     | TweakVerb.SetLiteral text -> { raw (NudgeAction.toToken NudgeAction.Set) with Literal = text }
     | TweakVerb.SetExpression text -> { raw (NudgeAction.toToken NudgeAction.Set) with Expression = text }
+    // A step count is resolved against the row before it gets here (`Service.resolve`); a count that reaches the door unresolved
+    // has no literal, and the door says so.
+    | TweakVerb.Steps _ -> raw (NudgeAction.toToken NudgeAction.Set)
     | TweakVerb.Undo -> raw (NudgeAction.toToken NudgeAction.Undo)
     | TweakVerb.Redo -> raw (NudgeAction.toToken NudgeAction.Redo)
 
@@ -356,6 +370,19 @@ module Service =
         Span = { Line = 0; Column = 0; EndLine = 0; EndColumn = 0 }
         Kind = kind }
 
+  /// A step count becomes the literal it means, from the number the row showed. Anything else is already what the door takes.
+  let resolve (attempted: SourceRef) (request: TweakRequest) : Result<TweakRequest, NudgeRefusal> =
+    match request.Verb with
+    | TweakVerb.Steps count ->
+      match Stepping.literalAfter (Control.ofSource attempted) count with
+      | Ok text -> Ok { request with Verb = TweakVerb.SetLiteral text }
+      | Error StepRefusal.OutOfRange ->
+        Error(NudgeRefusal.ValueKindMismatch(sprintf "%s is not a number a step can move, or the step leaves the numbers a literal can spell." attempted.Text))
+    | TweakVerb.SetLiteral _
+    | TweakVerb.SetExpression _
+    | TweakVerb.Undo
+    | TweakVerb.Redo -> Ok request
+
   /// Do what a row asked. The row shows `Writing` at once, then the door's answer (a landed write, or a refusal that stays on the row);
   /// `changed` tells the page's stream to draw both. `currentReload` is the session's reload verdict as of the call, which is the
   /// baseline the row waits to see move.
@@ -369,12 +396,17 @@ module Service =
     : Task<unit> =
     task {
       let attempted = attemptedOf service request
-      update service sessionId (Memory.started request.Row (TweakVerb.writeKindOf request.Verb) attempted)
-      changed ()
       let baseline = currentReload ()
-      let! result = door service owned (TweakRequest.rawOf request)
-      update service sessionId (Memory.finished request.Row attempted result baseline (service.Env.Now()))
-      changed ()
+      match resolve attempted request with
+      | Error refusal ->
+        update service sessionId (Memory.finished request.Row attempted (Error refusal) baseline (service.Env.Now()))
+        changed ()
+      | Ok resolved ->
+        update service sessionId (Memory.started resolved.Row (TweakVerb.writeKindOf resolved.Verb) attempted)
+        changed ()
+        let! result = door service owned (TweakRequest.rawOf resolved)
+        update service sessionId (Memory.finished resolved.Row attempted result baseline (service.Env.Now()))
+        changed ()
     }
 
   /// The files a session owns, as the dashboard's worker data lists them.

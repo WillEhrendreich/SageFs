@@ -90,21 +90,6 @@ module Memory =
   /// Forget everything about a row's outcome (the person dismissed it, or the row is gone).
   let forgetRow (key: RowKey) (memory: Memory) : Memory = { memory with Outcomes = Map.remove key memory.Outcomes }
 
-[<RequireQualifiedAccess>]
-type PlaceOf =
-  | Placed of SourceRef
-  | NotPlaced
-
-module PlaceOf =
-  let ofFacts (facts: SourceFacts) : PlaceOf =
-    match facts with
-    | SourceFacts.OneSource place -> PlaceOf.Placed place
-    | SourceFacts.NoFileBindsIt
-    | SourceFacts.FilesUnknown _
-    | SourceFacts.ManySources _
-    | SourceFacts.PartNotSpelled _
-    | SourceFacts.PartNotMapped _ -> PlaceOf.NotPlaced
-
 module Rows =
   let private watchingOf (index: SourceIndex) (place: PlaceOf) : WatchStatus =
     match place with
@@ -143,6 +128,7 @@ module Rows =
       | PlaceOf.NotPlaced -> RowKey.text key
     { State = state
       Control = Control.ofState state facts
+      Place = place
       Watching = watchingOf index place
       Reload = reloadOf memory current now patience key
       Undo = FileTrail.undoFor address trail
@@ -186,8 +172,7 @@ module Rows =
         | SourceFacts.NoFileBindsIt
         | SourceFacts.FilesUnknown _
         | SourceFacts.ManySources _
-        | SourceFacts.PartNotSpelled _
-        | SourceFacts.PartNotMapped _ -> [ own ])
+        | SourceFacts.PartNotSpelled _ -> [ own ])
     { Rows = Map.ofList rows }
 
   /// The names a pane asks the files about: its top-level bindings.

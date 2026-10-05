@@ -105,8 +105,21 @@ type SourceFacts =
   /// The binding is in one file, and this part of its value is not an expression the file spells (a record field filled by a call
   /// that is not a literal or a formula the address model reaches).
   | PartNotSpelled of owner: SourceRef
-  /// The binding is in one file, and this kind of part (a list item, a tuple item, a map entry) is not mapped by the pane yet.
-  | PartNotMapped of owner: SourceRef
+
+/// Where a row's single source is, when it has exactly one.
+[<RequireQualifiedAccess>]
+type PlaceOf =
+  | Placed of SourceRef
+  | NotPlaced
+
+module PlaceOf =
+  let ofFacts (facts: SourceFacts) : PlaceOf =
+    match facts with
+    | SourceFacts.OneSource place -> PlaceOf.Placed place
+    | SourceFacts.NoFileBindsIt
+    | SourceFacts.FilesUnknown _
+    | SourceFacts.ManySources _
+    | SourceFacts.PartNotSpelled _ -> PlaceOf.NotPlaced
 
 /// A file the session owns, inspected through the door. `Items` is the door's listing of the file's tweakable points: every
 /// literal, and every record field. A binding whose right-hand side is not itself a literal (a record, a formula) has no item
@@ -229,8 +242,6 @@ type NotInFileWhy =
   | OwnedFilesUnknown of reason: string
   /// The binding is in a file, and this part of its value is not spelled there as something a write can reach.
   | NotSpelledInTheFile of owner: SourceRef
-  /// The binding is in a file, and the pane does not map this kind of part (list, tuple or map items) yet.
-  | PartNotMapped of owner: SourceRef
 
 [<RequireQualifiedAccess>]
 type DerivedWhy =
@@ -293,8 +304,7 @@ module PersistenceState =
     | SourceFacts.NoFileBindsIt
     | SourceFacts.FilesUnknown _
     | SourceFacts.ManySources _
-    | SourceFacts.PartNotSpelled _
-    | SourceFacts.PartNotMapped _ -> true
+    | SourceFacts.PartNotSpelled _ -> true
 
   let private ofRefusal (refusal: NudgeRefusal) (attempted: SourceRef) : PersistenceState =
     match refusal with
@@ -311,7 +321,6 @@ module PersistenceState =
     | SourceFacts.FilesUnknown reason -> PersistenceState.NotInAFile(NotInFileWhy.OwnedFilesUnknown reason)
     | SourceFacts.ManySources places -> PersistenceState.Ambiguous places
     | SourceFacts.PartNotSpelled owner -> PersistenceState.NotInAFile(NotInFileWhy.NotSpelledInTheFile owner)
-    | SourceFacts.PartNotMapped owner -> PersistenceState.NotInAFile(NotInFileWhy.PartNotMapped owner)
     | SourceFacts.OneSource place ->
       match live, place.Kind with
       | LiveShape.Container, _
@@ -384,8 +393,9 @@ type Control =
   /// An integer (decimal, hex, octal or binary: the door keeps the base).
   | IntegerStepper of value: int64
   | Toggle of value: bool
-  /// A string, a character or a union case: a field.
-  | LiteralField of kind: LiteralKindName * text: string
+  /// A string, a character or a union case: a field. It holds the VALUE the door reads back (a string without its quotes, a
+  /// case by its name), because that is what the door takes.
+  | LiteralField of kind: LiteralKindName * value: string
   /// A formula, edited as an F# expression.
   | ExpressionField of text: string
   | NoControl
@@ -397,9 +407,9 @@ module Control =
     | ItemKind.Knob(LiteralValue.Real value) -> Control.RealStepper(value, Step.ofRealText source.Text)
     | ItemKind.Knob(LiteralValue.Integer value) -> Control.IntegerStepper value
     | ItemKind.Knob(LiteralValue.Bool value) -> Control.Toggle value
-    | ItemKind.Knob(LiteralValue.Char _ as value)
-    | ItemKind.Knob(LiteralValue.Text _ as value)
-    | ItemKind.Knob(LiteralValue.Case _ as value) -> Control.LiteralField(LiteralKindName.ofValue value, source.Text)
+    | ItemKind.Knob(LiteralValue.Char c as value) -> Control.LiteralField(LiteralKindName.ofValue value, string c)
+    | ItemKind.Knob(LiteralValue.Text s as value) -> Control.LiteralField(LiteralKindName.ofValue value, s)
+    | ItemKind.Knob(LiteralValue.Case name as value) -> Control.LiteralField(LiteralKindName.ofValue value, name)
 
   /// The control a state allows. A write in flight offers none (the buttons wait for the answer); a refusal and a stale address
   /// offer the control of the expression the file holds NOW, so the person can try again from what is true.
@@ -410,8 +420,7 @@ module Control =
       | SourceFacts.NoFileBindsIt
       | SourceFacts.FilesUnknown _
       | SourceFacts.ManySources _
-      | SourceFacts.PartNotSpelled _
-      | SourceFacts.PartNotMapped _ -> Control.NoControl
+      | SourceFacts.PartNotSpelled _ -> Control.NoControl
     match state with
     | PersistenceState.InSource place -> ofSource place
     | PersistenceState.Derived(place, DerivedWhy.AFormula) -> Control.ExpressionField place.Text
@@ -524,6 +533,9 @@ type RowKey = { Binding: string; Labels: string list }
 type RowView =
   { State: PersistenceState
     Control: Control
+    /// The row's single source as it is NOW (what a write is addressed to), when it has one. It is the file's current expression
+    /// even when the state is a stale or refused one about an earlier look.
+    Place: PlaceOf
     Watching: WatchStatus
     Reload: RowReload
     Undo: HistoryStep
