@@ -823,6 +823,7 @@
         <Compile Include="CohortPanelTests.fs" />
         <Compile Include="CohortLandingPanelTests.fs" />
         <Compile Include="DashboardPanelVisibilityTests.fs" />
+        <Compile Include="DockPanesTests.fs" />
         <Compile Include="CohortTerritoryPanelTests.fs" />
         <Compile Include="CohortInspectorTests.fs" />
         <Compile Include="CohortScrubberTests.fs" />
