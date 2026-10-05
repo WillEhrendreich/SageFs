@@ -8,7 +8,9 @@ on:
   workflow_dispatch:
 
 # The ENTIRE build/test/integration/pack/release-bundle pipeline lives in
-# ci-pipeline.fsx as one typed F# Fun.Build pipeline. GitHub Actions supplies
+# ci-pipeline.fsx as one typed F# Partas.Build pipeline (migrated from Fun.Build;
+# the stage/pipeline DSL is Fun.Build's, the flags and --help are System.CommandLine's).
+# GitHub Actions supplies
 # only the runner, the two checkouts, and the SDK/Node/xvfb install — it encodes
 # no build logic of its own. The exact same stages run locally:
 # `dotnet fsi ci-pipeline.fsx -- ci [release]` (see that file's header).

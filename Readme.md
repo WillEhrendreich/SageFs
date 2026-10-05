@@ -518,7 +518,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 - `quality/`, the release Definition-of-Done matrix the publish workflow gates on
 - `samples/`, runnable sample apps and language-onramp projects
 - `scripts/`, repo helper scripts and smoke/integration utilities
-- `ci-pipeline.fsx`, CI is one Fun.Build pipeline; the GitHub workflows just invoke it
+- `ci-pipeline.fsx`, CI is one Partas.Build pipeline; the GitHub workflows just invoke it
 
 `SageFs.slnx` covers the core tool, retained legacy projects, tests, and samples. The VS Code integration lives alongside it in `sagefs-vscode/` because it uses its own packaging toolchain and release flow.
 

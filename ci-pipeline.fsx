@@ -35,7 +35,8 @@
 //     tier scheduler section and build/TierPlan.fs).
 //   * always, after the tiers — the "trust report": one table of every tier's
 //     registered/ran/verdict; the one place a red test tier fails the run.
-//   * whenCmdArg "release" — pack the shippable bundle + write release-manifest.
+//   * `release` token (read as `releaseRequested`) — pack the shippable bundle +
+//     write release-manifest.
 //
 // Cross-platform packing is safe: every per-RID tree-sitter native is committed
 // under runtimes/ and the fsproj includes them by Condition="Exists(...)", so
@@ -45,7 +46,7 @@
 // ever wanted in the package, cross-publish it with `dotnet publish -r win-x64`,
 // which works from Linux.)
 
-#r "nuget: Fun.Build, 1.2.0"
+#r "nuget: Partas.Build, 0.4.0-alpha.3"
 
 open System
 open System.IO
@@ -53,8 +54,32 @@ open System.IO.Compression
 open System.Security.Cryptography
 open System.Text.Json
 open System.Xml.Linq
-open Fun.Build
-open Fun.Build.Github
+open Partas.Build
+
+/// The two positional tier tokens this script has always accepted (`-- ci`,
+/// `-- ci release`), plus the `--` separator fsi may leave in. They are read HERE
+/// rather than declared as Partas inputs: declaring them would make them required
+/// positionals, and the documented no-argument invocation must keep running the base
+/// tier. So the tokens are stripped from the argv handed to System.CommandLine and
+/// read straight off `fsi.CommandLineArgs`, which is exactly how the "test tiers" step
+/// has always read `ci`.
+let tierArgs (args: string list) : string list =
+  args |> List.filter (fun a -> a <> "ci" && a <> "release" && a <> "--")
+
+let hasTier (name: string) : bool =
+  fsi.CommandLineArgs |> Array.contains name
+
+/// The `release` stage condition, as a plain bool. Fun.Build spelled this
+/// `whenCmdArg "release"`; Partas.Build has no command-argument conditions at all (its
+/// `StageContext` exposes no cmd args — flags are declared inputs lifted into
+/// System.CommandLine), so the token is read off `fsi.CommandLineArgs` instead.
+let releaseRequested = hasTier "release"
+
+// Fun.Build.Github's `collapseGithubActionLogs` inlined, because Partas.Build does not
+// ship a Github module. Top-level stages only (ParentContext is ValueNone), so a group
+// never nests inside a sub-stage. Kept rather than dropped: without it every step's
+// output becomes its own block in the Actions log and a failed stage's reason is
+// buried a screen down.
 
 let rootDir = __SOURCE_DIRECTORY__
 let mcpSdkDir = Path.Combine(rootDir, "mcp-sdk")
@@ -1400,7 +1425,59 @@ let rec runSteps (runCommand: string -> Async<Result<unit, string>>) (steps: str
       | Error e -> return Error e
   }
 
-pipeline "sagefs" {
+/// Fun.Build's `StageContext.RunCommand`, which Partas.Build does not carry: its steps
+/// declare inputs and return a `Cmd`, so there is no in-step command runner at all. Six call
+/// sites and `runSteps` were written against `string -> Async<Result<unit, string>>`, so this
+/// is that function — built on `execToLogWatching`, the process runner this script already
+/// owns, rather than a second one (streaming, timeout and kill-tree come with it).
+///
+/// The line goes to the platform shell because every caller quotes its own paths
+/// (`dotnet pack "{dir}" -o "{out}"`). A hand-rolled splitter would have to reimplement
+/// quoting, and it would fail in the direction that matters: a quote character kept as part of
+/// the path writes the package into a directory literally named `"..."`.
+///
+/// Output is echoed to the console AND held, because a CI log that shows only an exit code
+/// after a 10-minute build tells you nothing about which command failed.
+let runCommandIn (workingDir: string) (commandLine: string) : Async<Result<unit, string>> =
+  async {
+    let argv =
+      if OperatingSystem.IsWindows() then
+        [ "cmd.exe"; "/c"; commandLine ]
+      else
+        [ "sh"; "-c"; commandLine ]
+
+    let log = Path.Combine(Path.GetTempPath(), $"sagefs-gate-step-%O{Guid.NewGuid()}.log")
+    let held = ResizeArray<string>()
+
+    let watch =
+      { OnLine =
+          (fun line ->
+            printfn "%s" line
+            lock held (fun () -> held.Add line))
+        OnStarted = ignore }
+
+    let! code = execToLogWatching watch (TimeSpan.FromMinutes 60.) workingDir [] log argv
+    try
+      File.Delete log
+    with _ -> ()
+
+    return
+      if code = 0 then
+        Ok()
+      else
+        let tail = String.concat "\n" (List.ofSeq (Seq.truncate 40 held))
+        Error $"exit %d{code} from `%s{commandLine}`:\n%s{tail}"
+  }
+
+/// The runner for one stage, bound to the working directory that stage resolved. Every stage
+/// in this pipeline is top-level, so "its own dir if it declared one, else the pipeline's"
+/// is the whole inheritance rule — `rootDir`.
+let runnerFor (ctx: Internal.StageContext) : string -> Async<Result<unit, string>> =
+  runCommandIn (match ctx.WorkingDir with
+                | ValueSome dir -> dir
+                | ValueNone -> rootDir)
+
+let sagefsPipeline = pipeline "sagefs" {
   description
     "SageFs CI as one typed F# pipeline: restore the forked MCP SDK, build once \
      in Release, then run every check --no-build off that output. Linux leg: \
@@ -1410,7 +1487,8 @@ pipeline "sagefs" {
   workingDir rootDir
   timeout 3600
   timeoutForStep 900
-  collapseGithubActionLogs
+  runBeforeEachStage (fun ctx -> if ValueOption.isNone ctx.ParentContext then printfn "::group::%s" ctx.Name)
+  runAfterEachStage (fun ctx -> if ValueOption.isNone ctx.ParentContext then printfn "::endgroup::")
 
   stage "source ratchets" {
     // The ratchets that read only source text (file-size and blocking-call budgets), in seconds, before anything
@@ -1437,7 +1515,7 @@ pipeline "sagefs" {
     run (fun ctx ->
       async {
         if Directory.Exists mcpSdkDir then return Ok()
-        else return! ctx.RunCommand $"git clone --depth 1 {mcpSdkRepoUrl} \"{mcpSdkDir}\""
+        else return! (runnerFor ctx) $"git clone --depth 1 {mcpSdkRepoUrl} \"{mcpSdkDir}\""
       })
     // The three packs cost 7.5 s of a quiet gate and make the same package every time: the fork is cloned once
     // and never moves. They run only when the fork's commit, its working tree, the SDK or the commands changed, or
@@ -1451,7 +1529,7 @@ pipeline "sagefs" {
           return Ok()
         | BuildStamps.Verdict.Rebuild because ->
           printfn "mcp sdk packs: %s, packing" because
-          match! runSteps ctx.RunCommand mcpPackCommands with
+          match! runSteps (runnerFor ctx) mcpPackCommands with
           | Ok () ->
             BuildStamps.write mcpPackStampFile key
             return Ok()
@@ -1469,7 +1547,7 @@ pipeline "sagefs" {
         | true -> return Ok()
         | false ->
           return!
-            runSteps ctx.RunCommand [
+            runSteps (runnerFor ctx) [
               if not (Directory.Exists harmonyDir) then $"git clone --no-checkout {harmonyRepoUrl} \"{harmonyDir}\""
               $"git -C \"{harmonyDir}\" fetch --depth 1 origin {harmonyCommit}"
               $"git -C \"{harmonyDir}\" checkout --force {harmonyCommit}"
@@ -1498,7 +1576,7 @@ pipeline "sagefs" {
     run (fun ctx ->
       async {
         startBackgroundOnce "net10-tests" (net10BuildSteps ())
-        return! ctx.RunCommand "dotnet build -c Release --no-restore"
+        return! (runnerFor ctx) "dotnet build -c Release --no-restore"
       })
   }
 
@@ -1646,7 +1724,7 @@ pipeline "sagefs" {
           match ci with
           | false -> async { return Ok() }
           | true ->
-            ctx.RunCommand $"{testBinDir}/.playwright/node/linux-x64/node {testBinDir}/.playwright/package/cli.js install chromium"
+            (runnerFor ctx) $"{testBinDir}/.playwright/node/linux-x64/node {testBinDir}/.playwright/package/cli.js install chromium"
         let runnable =
           match ci, chromium with
           | false, _ -> always
@@ -1722,7 +1800,7 @@ pipeline "sagefs" {
   stage "package vscode extension" {
     // Produce the shippable VSIX straight into release/ (no separate artifact
     // hand-off between jobs).
-    whenCmdArg "release"
+    when' releaseRequested
     workingDir vscodeDir
     run (fun ctx ->
       async {
@@ -1733,7 +1811,7 @@ pipeline "sagefs" {
         if Directory.Exists releaseDir then Directory.Delete(releaseDir, true)
         Directory.CreateDirectory releaseDir |> ignore
         let vsixOut = Path.Combine(releaseDir, $"sagefs-vscode-{pkgJsonVersion ()}.vsix")
-        return! ctx.RunCommand $"npx @vscode/vsce package -o \"{vsixOut}\""
+        return! (runnerFor ctx) $"npx @vscode/vsce package -o \"{vsixOut}\""
       })
   }
 
@@ -1741,7 +1819,7 @@ pipeline "sagefs" {
     // Pack the nupkg, verify it is installable and version-aligned, and write
     // the manifest publish.yml consumes — all straight into release/, uploaded
     // by the one build job. This is the whole former release-artifacts job.
-    whenCmdArg "release"
+    when' releaseRequested
     run (fun _ -> async { verifyVersionAlignment (); return Ok() })
     run (fun _ ->
       async {
@@ -1770,7 +1848,7 @@ pipeline "sagefs" {
     // "disable") to that exact SDK, so `dotnet` resolution can't accidentally
     // fall through to the other one. A single run under whichever SDK happens
     // to be ambient would only ever prove ONE of the two payloads works.
-    whenCmdArg "release"
+    when' releaseRequested
     timeoutForStep 300
     run (fun _ ->
       async {
@@ -1813,8 +1891,33 @@ pipeline "sagefs" {
         | errors -> return Error(String.concat "; " errors)
       })
   }
-
-  runIfOnlySpecified false
 }
 
-tryPrintPipelineCommandHelp ()
+// `runIfOnlySpecified false` + `tryPrintPipelineCommandHelp ()` are Fun.Build's entry
+// mechanism and have no Partas equivalent, so the root command replaces both: it runs the
+// pipeline immediately (no-arg invocation => base tier) and generates `--help` from the
+// declarations. The tier tokens are stripped first — see `tierArgs` above — so
+// System.CommandLine sees only what it declares, while `ci`/`release` stay readable from
+// `fsi.CommandLineArgs` inside the steps exactly as before.
+//
+// `|> exit` is load-bearing: without it the script's exit code is 0 no matter what the
+// gate did, and CI would pass on a red run.
+let argv =
+  fsi.CommandLineArgs
+  // Drop the script name: `rootCommand` takes the ARGUMENTS only, and passing the name
+  // is "Unrecognized command or argument" (the pipeline never runs). Proven against a
+  // two-stage control script, where `Array.skip 1` runs and the full list does not.
+  |> Array.skip 1
+  |> Array.toList
+  |> tierArgs
+  |> List.toArray
+
+rootCommand argv {
+  name "ci-pipeline.fsx"
+  description
+    "SageFs CI as one typed Partas.Build pipeline: restore the forked MCP SDK, build once \
+     in Release, then run every check --no-build off that output. Linux leg: format, unit \
+     suite, mutation gate, VSIX + nupkg + release manifest. Identical locally and in GitHub Actions."
+  sagefsPipeline
+}
+|> exit
