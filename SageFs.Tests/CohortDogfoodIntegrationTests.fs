@@ -252,10 +252,12 @@ let private killDaemon (proc: Process) =
   with _ -> ()
   proc.Dispose()
 
+/// The tool's own answer: the first text block. The daemon's event echo is a later block of its own.
 let private textOf (result: CallToolResult) : string =
   result.Content
   |> Seq.choose (function :? TextContentBlock as t -> Some t.Text | _ -> None)
-  |> String.concat ""
+  |> Seq.tryHead
+  |> Option.defaultValue ""
 
 let private connect (port: int) : Task<McpClient> =
   let opts = HttpClientTransportOptions(Endpoint = Uri(sprintf "http://localhost:%d/" port))

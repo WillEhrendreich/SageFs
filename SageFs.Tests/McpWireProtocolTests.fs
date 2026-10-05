@@ -239,3 +239,46 @@ let sessionEventSerializationTests = testList "SessionEvent serialization" [
       |> Expect.isNotNull "type field exists"
   }
 ]
+
+// ─── The daemon's event echo ──────────────────────────────────────
+
+let private textBlocks (result: ModelContextProtocol.Protocol.CallToolResult) : string list =
+  [ for block in result.Content do
+      match block with
+      | :? ModelContextProtocol.Protocol.TextContentBlock as text -> yield text.Text
+      | _ -> () ]
+
+let private answering (answer: string) : ModelContextProtocol.Protocol.CallToolResult =
+  let result = ModelContextProtocol.Protocol.CallToolResult()
+  result.Content.Add(ModelContextProtocol.Protocol.TextContentBlock(Text = answer))
+  result
+
+[<Tests>]
+let eventEchoTests = testList "MCP tool reply and the daemon's event echo" [
+  test "the echo is its own content block after the answer, so a JSON answer in the first block is valid JSON" {
+    let answer = """{"outcome":"Written","after":"12.5","notes":[]}"""
+    let echoed = McpServer.withEventEcho [| "✓ warmup complete"; "state: output=10 diags=0" |] (answering answer)
+    match textBlocks echoed with
+    | [ first; echo ] ->
+      first |> Expect.equal "the answer is exactly what the tool said" answer
+      JsonDocument.Parse(first).RootElement.GetProperty("outcome").GetString() |> Expect.equal "it parses on its own" "Written"
+      echo |> Expect.stringContains "the echo says what it is" "SageFs events since last call"
+      echo |> Expect.stringContains "and carries every event" "warmup complete"
+      echo |> Expect.stringContains "all of them" "state: output=10 diags=0"
+    | other -> failtestf "expected the answer and one echo block, got %d blocks: %A" other.Length other
+  }
+
+  test "no events leaves the tool's result as it was: one block, no echo" {
+    let echoed = McpServer.withEventEcho [||] (answering "{}")
+    textBlocks echoed |> Expect.equal "just the answer" [ "{}" ]
+  }
+
+  test "the echo keeps every block the tool made, in order, and only adds one after them" {
+    let result = answering "answer"
+    result.Content.Add(ModelContextProtocol.Protocol.TextContentBlock(Text = "second"))
+    let echoed = McpServer.withEventEcho [| "one" |] result
+    match textBlocks echoed with
+    | [ "answer"; "second"; echo ] -> echo |> Expect.stringContains "added last" "one"
+    | other -> failtestf "expected the two blocks the tool made and then the echo, got %A" other
+  }
+]

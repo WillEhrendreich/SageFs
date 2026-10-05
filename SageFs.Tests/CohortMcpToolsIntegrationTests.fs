@@ -116,13 +116,13 @@ let killDaemon (proc: Process) =
   with _ -> ()
   proc.Dispose()
 
-/// Extract the concatenated text of every TextContentBlock in a tool result
-/// — the same shape every SageFsTools member returns (see McpTools.fs's
-/// withEcho/withEchoOutcome: always a single text block).
+/// The tool's own answer: the first TextContentBlock of its result. The daemon's event echo
+/// (McpServer.withEventEcho) is a later block of its own, so it is never part of the answer.
 let private textOf (result: CallToolResult) : string =
   result.Content
   |> Seq.choose (function :? TextContentBlock as t -> Some t.Text | _ -> None)
-  |> String.concat ""
+  |> Seq.tryHead
+  |> Option.defaultValue ""
 
 /// Connect a fresh MCP client — a fresh client is a fresh transport session,
 /// which is a fresh bound cohort identity (Mcp.fs's memberIdFor). Returned

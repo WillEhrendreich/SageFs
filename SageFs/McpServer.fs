@@ -286,6 +286,21 @@ let structuredToolErrorResult (err: SageFsError) : CallToolResult =
   result.StructuredContent <- Nullable(doc.RootElement.Clone())
   result
 
+/// The daemon's event echo for a tool result: what happened since the caller's last call, as its OWN text content
+/// block after the tool's answer, never glued onto the answer's text. A tool whose answer is JSON therefore stays
+/// valid JSON in its first block, and a client reads the answer from block 0 and treats any later block as the daemon
+/// talking. No events leaves the result as it was.
+let withEventEcho (events: string array) (result: CallToolResult) : CallToolResult =
+  match events.Length > 0 with
+  | true ->
+    let eventText =
+      events
+      |> Array.map (sprintf "  • %s")
+      |> String.concat "\n"
+    result.Content.Add(TextContentBlock(Text = sprintf "\n\n📡 SageFs events since last call:\n%s" eventText))
+  | false -> ()
+  result
+
 /// CallToolFilter that captures the McpServer and appends accumulated events
 /// to tool responses. This ensures the LLM sees events even if the client
 /// doesn't surface MCP notifications directly.
@@ -345,17 +360,7 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
           match activeSessionId mcpCtx "mcp" with
           | "" -> None
           | s -> Some s
-        let events = tracker.DrainEvents(activeSid)
-        match events.Length > 0 with
-        | true ->
-          let eventText =
-            events
-            |> Array.map (sprintf "  • %s")
-            |> String.concat "\n"
-          let banner = sprintf "\n\n📡 SageFs events since last call:\n%s" eventText
-          result.Content.Add(TextContentBlock(Text = banner))
-        | false -> ()
-        result
+        withEventEcho (tracker.DrainEvents(activeSid)) result
 
       /// WHY — the caller of an MCP tool is usually a language model whose only
       /// recovery mechanism is reading error text and retrying correctly. A thrown

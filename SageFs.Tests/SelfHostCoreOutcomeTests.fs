@@ -93,17 +93,19 @@ let private callText (client: McpClient) (name: string) (args: (string * obj) li
   task {
     use cts = new CancellationTokenSource(TestTimeouts.toolCallThatRestarts)
     let! result = client.CallToolAsync(name, readOnlyDict args, null, null, cts.Token)
+    // The tool's own answer: the first text block. The daemon's event echo is a later block of its own.
     return
       result.Content
       |> Seq.choose (function :? TextContentBlock as t -> Some t.Text | _ -> None)
-      |> String.concat ""
+      |> Seq.tryHead
+      |> Option.defaultValue ""
   }
 
 /// A session's id is the first token a create tool prints.
 let private sessionIdOf (createText: string) : string =
   createText.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries).[0].Trim()
 
-/// The status JSON is the first line of the reply; the daemon appends an events trailer after it.
+/// The status JSON is the first line of the reply.
 let private statusOf (text: string) : JsonDocument =
   match text.TrimStart().StartsWith "{" with
   | true -> JsonDocument.Parse(text.Split('\n').[0])

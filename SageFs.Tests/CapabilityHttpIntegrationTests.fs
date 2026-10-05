@@ -23,10 +23,12 @@ open SageFs.Capability
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
+/// The tool's own answer: the first text block. The daemon's event echo is a later block of its own.
 let private textOf (result: CallToolResult) : string =
   result.Content
   |> Seq.choose (function :? TextContentBlock as t -> Some t.Text | _ -> None)
-  |> String.concat ""
+  |> Seq.tryHead
+  |> Option.defaultValue ""
 
 let private connectWith (port: int) (headers: (string * string) list) : Task<McpClient> =
   let opts = HttpClientTransportOptions(Endpoint = Uri(sprintf "http://localhost:%d/" port))
