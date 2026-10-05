@@ -258,7 +258,7 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       Elem.style [] [ Text.raw fontFaceCss ]
     ]
     Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true" ] [
-      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, false); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.HygienePanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "");
+      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, false); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (NewSessionDialog.NewSessionNames.TargetSignal, NewSessionDialog.TargetKind.key NewSessionDialog.TargetKind.LoadProjects); Ds.signal (NewSessionDialog.NewSessionNames.ProjectsSignal, Array.empty<string>); Ds.signal (NewSessionDialog.NewSessionNames.WorkflowSignal, NewSessionDialog.WorkflowChoice.key NewSessionDialog.WorkflowChoice.defaultChoice);Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.HygienePanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "");
                 // Chat-style output following (see `OutputFollow`). The browser's
                 // own state lives here, outside #main, so no morph resets it;
                 // the server's feed signals are seeded here too and then
@@ -1250,6 +1250,7 @@ let createStreamHandler
         let snap =
           applyCohortViewing infra currentCohortViewingSeq snapRaw
           |> PanelVisibility.apply (panelFactsFor q infra None clientId)
+          |> DashboardNewSession.apply clientId
         match SnapshotRenderGuard.decide renderMemory snap with
         | SnapshotRenderGuard.Decision.Skip -> () // unchanged tick — renderMainContent/renderNode never run
         | SnapshotRenderGuard.Decision.Render newMemory ->
@@ -1275,6 +1276,7 @@ let createStreamHandler
       let snap =
         applyCohortViewing infra currentCohortViewingSeq snapRaw
         |> PanelVisibility.apply (panelFactsFor q infra (Some newSessionId) clientId)
+        |> DashboardNewSession.apply clientId
       match cached with
       | None ->
         // This push performed the expensive fetches — record them so the next
@@ -1543,7 +1545,9 @@ let createEvalHandler
             buildDashboardSnapshot q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None
           // Same panel visibility the stream uses, so this morph and the next
           // stream push agree on which panels exist.
-          let snap = PanelVisibility.apply (panelFactsFor q infra (Some sessionId) (clientIdFromSignals doc)) snapRaw
+          let snap =
+            PanelVisibility.apply (panelFactsFor q infra (Some sessionId) (clientIdFromSignals doc)) snapRaw
+            |> DashboardNewSession.apply (clientIdFromSignals doc)
           // DIAGNOSTIC: log output panel HTML to verify content is present.
           // Render once — the node built here is reused for the patch below.
           let mainNode = renderMainContent snap
@@ -2569,7 +2573,7 @@ let createToggleWarmupAutoOpenHandler
               match resolveSessionProjects dir "" with
               | Ok ps -> SessionProjectTarget.tryCreateMany (ps |> List.truncate 1) |> Result.defaultValue [ SessionProjectTarget.Bare ]
               | Error _ -> [ SessionProjectTarget.Bare ]
-          let! result = a.CreateSession targets dir
+          let! result = DashboardActions.createInteractive a targets dir
           match result with
           | Ok newSessionId ->
             let! _ = a.SwitchSession newSessionId in ()
@@ -2866,7 +2870,7 @@ let renderLanding (q: DashboardQueries) (infra: DashboardInfra) (panelsQuery: st
     let noSessionPage () =
       task {
         let! snapRaw = buildNoSessionSnapshot q infra
-        let snap = PanelVisibility.apply (panelFactsFor q infra None clientId) snapRaw
+        let snap = PanelVisibility.apply (panelFactsFor q infra None clientId) snapRaw |> DashboardNewSession.apply clientId
         return renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContent snap)
       }
     try
@@ -2874,7 +2878,7 @@ let renderLanding (q: DashboardQueries) (infra: DashboardInfra) (panelsQuery: st
       match firstLiveSession sessions with
       | Some firstId ->
         let! snapRaw, resolvedId, _, _ = buildDashboardSnapshot q infra firstId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
-        let snap = PanelVisibility.apply (panelFactsFor q infra (Some resolvedId) clientId) snapRaw
+        let snap = PanelVisibility.apply (panelFactsFor q infra (Some resolvedId) clientId) snapRaw |> DashboardNewSession.apply clientId
         return renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (resolveDefaultWorkingDir ()) (renderMainContent snap)
       | None ->
         return! noSessionPage ()
@@ -3079,7 +3083,7 @@ let createEndpoints
       let tempDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-%s" (Guid.NewGuid().ToString("N").[..7]))
       Directory.CreateDirectory(tempDir) |> ignore
       Response.sseStartResponse ctx |> ignore
-      let! result = a.CreateSession [ SessionProjectTarget.Bare ] tempDir
+      let! result = DashboardActions.createInteractive a [ SessionProjectTarget.Bare ] tempDir
       match result with
       | Ok sessionId ->
         a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
@@ -3112,7 +3116,7 @@ let createEndpoints
             Log.warn "[Dashboard] Could not reopen previous session for %s: %s" prev.WorkingDir reason
             do! ssePatchNode ctx (evalResultError (sprintf "Could not reopen previous session: %s" reason))
           | Ok targets ->
-            let! result = a.CreateSession targets prev.WorkingDir
+            let! result = DashboardActions.createInteractive a targets prev.WorkingDir
             match result with
             | Ok newSessionId ->
               a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
@@ -3138,7 +3142,8 @@ let createEndpoints
     yield post "/dashboard/cohort/scrub" (createCohortScrubHandler infra)
     yield post "/dashboard/live-testing/enable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.EnableLiveTesting)
     yield post "/dashboard/live-testing/disable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.DisableLiveTesting)
-    yield post "/dashboard/session/create" (createCreateSessionHandler q infra a.CreateSession a.SwitchSession)
+    yield post "/dashboard/session/create" (createCreateSessionHandler q infra (DashboardActions.createInteractive a) a.SwitchSession)
+    yield! DashboardNewSession.routes q infra a
     yield post "/dashboard/config/disable-auto-open" (createToggleWarmupAutoOpenHandler a false)
     yield post "/dashboard/config/enable-auto-open" (createToggleWarmupAutoOpenHandler a true)
     yield mapPostRaw "/dashboard/session/switch/{id}"
@@ -3184,7 +3189,7 @@ let createEndpoints
             | Ok resolved ->
               let targets = SessionProjectTarget.tryCreateMany resolved |> Result.defaultValue [ SessionProjectTarget.Bare ]
               do! say (sprintf "Loading %s… (the previous session's REPL bindings are discarded)" project)
-              let! created = a.CreateSession targets dir
+              let! created = DashboardActions.createInteractive a targets dir
               match created with
               | Error err -> do! say (sprintf "Could not load %s: %s" project err)
               | Ok newId ->

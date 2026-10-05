@@ -34,6 +34,8 @@
   --tabline-h: 36px;
   --statusline-h: 28px;
   --cmdline-h: 32px;
+  /* Every icon button is this exact square, so a row of them never reads as three different sizes. */
+  --icon-btn-size: 28px;
 }
 
 * {
@@ -209,12 +211,19 @@ h2 {
   }
 }
 
-.sidebar-header-btn {
+.sidebar-header-btn,
+.icon-btn {
   background: none;
   border: 1px solid var(--border-normal);
   color: var(--fg-default);
   border-radius: 0;
-  padding: 2px 8px;
+  width: var(--icon-btn-size);
+  height: var(--icon-btn-size);
+  flex: 0 0 var(--icon-btn-size);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   font-size: 0.9rem;
   font-family: inherit;
@@ -222,11 +231,18 @@ h2 {
   transition: background 0.15s, color 0.15s;
 }
 
-.sidebar.collapsed .sidebar-header-btn {
-  padding: 2px 6px;
+/* The header's row of icon buttons keeps one gap between them, whatever width the row has. */
+.sidebar-header {
+  gap: 0.25rem;
 }
 
-.sidebar-header-btn:hover {
+/* Collapsed to a 32px sliver there is room for the toggle only; the others come back with the sidebar. */
+.sidebar.collapsed .sidebar-header-btn:not(#sidebar-toggle-btn) {
+  display: none;
+}
+
+.sidebar-header-btn:hover,
+.icon-btn:hover {
   background: var(--bg-selection, #3a3a3a);
   color: var(--fg-accent, #fff);
 }
@@ -1017,24 +1033,199 @@ h2 {
   gap: 0.5rem;
 }
 
-/* New Session collapsible panel */
-.new-session-panel {
-  summary {
-    list-style: none;
+/* ── New session dialog ──────────────────────────────────────────────
+   A native modal: the browser puts it in the top layer, traps focus in it, makes the page behind it inert,
+   closes it on Esc and hands focus back to the [+] that opened it. Everything inside wraps and never sets
+   a width of its own, so at 320px it is the viewport minus a gutter and nothing scrolls sideways. */
+.nsd {
+  width: min(36rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border-focus);
+  background: var(--bg-panel);
+  color: var(--fg-default);
+  overflow: hidden;
 
-    &::-webkit-details-marker {
-      display: none;
-    }
-
-    &::before {
-      content: "▸ ";
-      color: var(--fg-dim);
-    }
+  &[open] {
+    display: flex;
+    flex-direction: column;
   }
 
-  &[open] summary::before {
-    content: "▾ ";
+  &::backdrop {
+    background: rgba(0, 0, 0, 0.55);
   }
+}
+
+.nsd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-normal);
+  flex: 0 0 auto;
+
+  h2 {
+    margin: 0;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+}
+
+.nsd-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.nsd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nsd-dir {
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+
+  /* .eval-input is the multi-line eval box (80px tall, resizable); a one-line path needs neither. */
+  input {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    height: 2rem;
+    resize: none;
+  }
+
+  .eval-btn {
+    flex: 0 0 auto;
+  }
+}
+
+.nsd-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.5rem;
+  border: 1px solid var(--border-normal);
+
+  legend {
+    padding: 0 0.25rem;
+    font-size: 0.75rem;
+    color: var(--fg-dim);
+  }
+}
+
+.nsd-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.125rem 0;
+  cursor: pointer;
+
+  input {
+    flex: 0 0 auto;
+    margin-top: 0.2rem;
+  }
+}
+
+.nsd-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.nsd-path {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.nsd-meta {
+  font-size: 0.75rem;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+
+.nsd-suggested {
+  color: var(--fg-cyan);
+}
+
+.nsd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  max-height: 12rem;
+  padding: 0.25rem 0.5rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--border-normal);
+}
+
+.nsd-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid;
+  overflow-wrap: anywhere;
+}
+
+.nsd-warning {
+  border-color: var(--fg-yellow);
+  background: color-mix(in srgb, var(--fg-yellow) 10%, transparent);
+}
+
+.nsd-refusal {
+  border-color: var(--fg-red);
+  background: color-mix(in srgb, var(--fg-red) 10%, transparent);
+}
+
+.nsd-overlap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.nsd-overlap-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.nsd-status {
+  font-size: 0.8rem;
+  color: var(--fg-blue);
+}
+
+.nsd-foot {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-top: 1px solid var(--border-normal);
+}
+
+/* The card a create shows in the Sessions list the moment the dialog closes. */
+.session-starting {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-normal);
 }
 
 /* ── Live Bindings Watch Window ──────────────────────────────────── */

@@ -921,7 +921,11 @@ let discoverProjects (workingDir: string) : DiscoveredProjects =
       // exactly the noise this was supposed to skip. A live process dump
       // caught this walk following Wine's `dosdevices/z:` -> `/` back into
       // itself when the daemon was started from $HOME.
-      let result = SafeDirectoryWalk.walkFiles workingDir (fun p -> p.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase)) isNoiseProjectPath SafeDirectoryWalk.Bounds.standard
+      // Noise is judged on the path INSIDE the searched directory. The walk hands over absolute paths, and a
+      // directory that sits under a folder called `.claude`, `packages` or `bin` (every agent worktree does)
+      // would otherwise be pruned whole, finding nothing, because of where it lives and not what is in it.
+      let isNoiseInside (path: string) = isNoiseProjectPath (Path.GetRelativePath(workingDir, path))
+      let result = SafeDirectoryWalk.walkFiles workingDir (fun p -> p.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase)) isNoiseInside SafeDirectoryWalk.Bounds.standard
       if result.Truncated then
         Log.warn "[Discovery] Project walk in %s hit its depth/entry bound — some projects may be missing. %s is not a project tree if this keeps happening." workingDir workingDir
       result.Files
@@ -1346,13 +1350,28 @@ type DashboardActions = {
   StopSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   /// Purge — stop the session + remove its .sagefm manifest entry (gone from resume picker).
   PurgeSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
-  CreateSession: SessionProjectTarget list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>
+  /// Create a session in a working directory with the workflow the caller chose. The refusal stays typed
+  /// (`SageFsError`) so a caller can say what it was and what to do next; `DashboardActions.createInteractive`
+  /// is the REPL-and-worded-refusal form every caller that does not choose a workflow wants.
+  CreateSession: SessionProjectTarget list -> string -> WorkflowTypes.SessionWorkflow -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, SageFsError>>
   ShutdownCallback: (unit -> unit) option
   /// Run the session's executable project (see AppRunOrchestration).
   RunApp: WorkerProtocol.SessionId -> AppRun.RunRequest -> Threading.Tasks.Task<Result<string, string>>
   /// Stop the app the session runs.
   StopApp: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
 }
+
+module DashboardActions =
+  /// A REPL session, with the refusal put into words: what every create that does not choose a workflow wants.
+  let createInteractive
+    (actions: DashboardActions)
+    (targets: SessionProjectTarget list)
+    (workingDirectory: string)
+    : Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>> =
+    task {
+      let! created = actions.CreateSession targets workingDirectory WorkflowTypes.SessionWorkflow.Interactive
+      return created |> Result.mapError SageFsError.describe
+    }
 
 /// Per-connection SSE stream command — daemon state pushes plus viewing-session
 /// retargets issued by dashboard POST handlers. The stream channel is keyed by
@@ -1776,9 +1795,14 @@ let resolveSessionProjects (dir: string) (manualProjects: string) : Result<strin
       match Directory.Exists(full) with
       | true -> DirectoryInfo(full) :> System.IO.FileSystemInfo
       | false -> FileInfo(full) :> System.IO.FileSystemInfo
-    match fsi.ResolveLinkTarget(returnFinalTarget = true) with
-    | null -> full
-    | resolved -> resolved.FullName
+    // A path that is not there cannot be a link, and asking a missing path for its link target throws.
+    // A project that has gone since it was listed must be refused by the later, named step, not crash this one.
+    match fsi.Exists with
+    | false -> full
+    | true ->
+      match fsi.ResolveLinkTarget(returnFinalTarget = true) with
+      | null -> full
+      | resolved -> resolved.FullName
   let canonicalDir = resolveRealPath dir
   let isContainedInDir (p: string) =
     let canonical = resolveRealPath p

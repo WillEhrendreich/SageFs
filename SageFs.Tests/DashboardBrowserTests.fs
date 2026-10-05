@@ -193,9 +193,9 @@ module PlaywrightFixture =
     | None -> ()
   }
 
-/// Accordion helpers for the dashboard shell — the Evaluate and New Session
-/// sections are <details> accordions collapsed by default, so journeys must
-/// open them before interacting with their contents.
+/// Accordion helpers for the dashboard shell — the Evaluate section and the
+/// extra session panels are collapsed by default, so journeys must open them
+/// before interacting with their contents.
 module DashboardDom =
   /// Make the page view ONE specific session, the way a user does: click that session's Switch
   /// button and wait until `#main` says it is viewing it. The dashboard's view is a client signal
@@ -228,8 +228,8 @@ module DashboardDom =
   }
 
   /// Enable "expanded" dashboard mode. The extra session panels — Hot Reload,
-  /// Live Testing, Bindings, Session Context, Friction, AND the New Session
-  /// form — live inside `.expanded-only` wrappers (display:none in the default
+  /// Live Testing, Bindings, Session Context, Friction — live inside
+  /// `.expanded-only` wrappers (display:none in the default
   /// minimal mode) and are revealed only when #main gains the `expanded` class
   /// (the `expandedDashboard` signal). Journeys that touch those panels must
   /// turn expanded mode on first. Idempotent — a no-op when already expanded.
@@ -257,22 +257,6 @@ module DashboardDom =
       do! summary.ClickAsync()
     let evalInput = page.Locator(".eval-input").First
     do! PlaywrightExpect.isVisibleAsync evalInput "eval input visible after opening"
-  }
-
-  /// Open the New Session accordion (a <details class="new-session-panel">
-  /// collapsed by default). Checks the current open state first — like
-  /// `openEvalArea` — so it is a no-op when already open and safe to call
-  /// repeatedly from `throughPanelReset` (a second unconditional click would
-  /// instead toggle it closed again).
-  let openNewSession (page: IPage) = task {
-    // New Session lives in an `.expanded-only` wrapper — reveal it first.
-    do! ensureExpanded page
-    let! isOpen =
-      page.EvaluateAsync<bool>(
-        "() => { var el = document.querySelector('.new-session-panel'); return el ? el.open : false; }")
-    if not isOpen then
-      let toggle = page.GetByText("New Session").First
-      do! toggle.ClickAsync()
   }
 
   /// The eval code textarea — located by its stable id, never by role/name
@@ -695,7 +679,7 @@ module private NoSessionLanding =
 
   /// The permanent chrome that must render in EVERY dashboard state — this
   /// exact invariant is what the no-session landing broke twice: header,
-  /// sidebar Sessions panel, sidebar New Session accordion, and the
+  /// sidebar Sessions panel with its [+] new-session button, and the
   /// statusline (session-status pill + session identity — the same elements
   /// the shared-daemon "session status renders with state" test above treats
   /// as the statusline for the with-session case).
@@ -706,13 +690,9 @@ module private NoSessionLanding =
     do! PlaywrightExpect.isVisibleAsync daemonHealth (sprintf "[%s] daemon health bar visible" label)
     let sessionsHeading = page.GetByRole(AriaRole.Heading, PageGetByRoleOptions(Name = "Sessions"))
     do! PlaywrightExpect.isVisibleAsync sessionsHeading (sprintf "[%s] sidebar Sessions heading visible" label)
-    // The New Session accordion lives in an `.expanded-only` sidebar wrapper
-    // (display:none in minimal mode) — assert it is PRESENT in the DOM
-    // (it is permanent chrome regardless of session state), not that it is
-    // currently visible.
-    let! newSessionPresent =
-      page.EvaluateAsync<bool>("() => document.querySelector('.new-session-panel') !== null")
-    Expect.isTrue newSessionPresent (sprintf "[%s] sidebar New Session panel present in the DOM" label)
+    // The [+] that opens the new-session dialog is permanent chrome in the Sessions header, visible in every state.
+    let newSession = page.GetByTestId "new-session-open"
+    do! PlaywrightExpect.isVisibleAsync newSession (sprintf "[%s] sidebar new-session [+] visible" label)
     let statusPill = page.Locator("#session-status")
     do! PlaywrightExpect.isVisibleAsync statusPill (sprintf "[%s] statusline session-status pill visible" label)
     let tabline = page.Locator("#main .tabline-info").First
@@ -1589,29 +1569,19 @@ let tests =
     do! PlaywrightExpect.waitForText BrowserWaits.pageRenders clearBtn "CLEAR"
   })
 
-  playwrightTest "page structure: create session section has inputs and buttons" (fun page -> task {
+  playwrightTest "page structure: the plus opens the new-session dialog with its inputs and buttons" (fun page -> task {
     do! PlaywrightExpect.waitForSSE BrowserWaits.pageRenders page
-    // "New Session" is a <details> collapsed by default, and the periodic
-    // 1s SSE fallback push can re-collapse it between these sequential
-    // IsVisibleAsync snapshots on a loaded machine — reopen and retry the
-    // whole assertion block (see DashboardDom.throughPanelReset).
-    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openNewSession page) 5 (fun () -> task {
-      // Working directory input (placeholder "/path/to/project"), scoped to the
-      // New Session panel so it never matches a similar input elsewhere.
-      let dirInput = page.Locator(".new-session-panel input[placeholder*=\"/path/to/project\"]").First
-      do! PlaywrightExpect.isVisibleAsync dirInput "working directory input visible"
-      // Discover button
-      let discoverBtn =
-        page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Discover")).First
-      do! PlaywrightExpect.isVisibleAsync discoverBtn "Discover button visible"
-      // Manual projects input
-      let manualInput = page.Locator("input[placeholder*=\"MyProject.fsproj\"]")
-      do! PlaywrightExpect.isVisibleAsync manualInput "manual projects input visible"
-      // Create session button
-      let createBtn =
-        page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Create")).First
-      do! PlaywrightExpect.isVisibleAsync createBtn "Create button visible"
-    })
+    // The dialog is a native modal opened by a signal, so it stays open across the page's SSE morphs; no retry
+    // around a collapsed panel is needed any more. The dedicated journeys are in NewSessionDialogBrowserTests.
+    do! page.GetByTestId("new-session-open").ClickAsync()
+    let dialog = page.Locator("#new-session-dialog")
+    do! dialog.WaitForAsync(LocatorWaitForOptions(State = WaitForSelectorState.Visible, Timeout = float32 BrowserWaits.pageRenders))
+    // Working directory input (placeholder "/path/to/project"), scoped to the dialog.
+    do! PlaywrightExpect.isVisibleAsync (dialog.Locator("input[placeholder*=\"/path/to/project\"]")) "working directory input visible"
+    do! PlaywrightExpect.isVisibleAsync (dialog.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Find projects in this directory"))) "Find button visible"
+    do! PlaywrightExpect.isVisibleAsync (dialog.GetByTestId "new-session") "Create button visible"
+    do! page.Keyboard.PressAsync "Escape"
+    do! dialog.WaitForAsync(LocatorWaitForOptions(State = WaitForSelectorState.Hidden, Timeout = float32 BrowserWaits.pageRenders))
   })
 
   // --- TS journey ports (friction-panel-journey.spec.ts) ---

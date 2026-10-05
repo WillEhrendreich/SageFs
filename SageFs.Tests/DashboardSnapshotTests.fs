@@ -721,12 +721,13 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     html |> Expect.stringContains "has Clear button" "Clear"
   }
 
-  test "create session section has all inputs" {
+  test "the Sessions header has a plus that opens the guided new-session dialog, and the collapsible form is gone" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    html |> Expect.stringContains "has Discover button" "Discover"
-    html |> Expect.stringContains "has fsproj placeholder" "fsproj"
-    html |> Expect.stringContains "has Create Session button" "Create"
-    html |> Expect.stringContains "new session section is a collapsible details" "New Session"
+    html |> Expect.stringContains "a plus opens the dialog" "data-testid=\"new-session-open\""
+    html |> Expect.stringContains "named for screen readers" "aria-label=\"New session: find projects and start one\""
+    html |> Expect.stringContains "announces that it opens a dialog" "aria-haspopup=\"dialog\""
+    (html.Contains "new-session-panel") |> Expect.isFalse "the collapsible New Session panel is gone"
+    (html.Contains "Projects (comma-sep)") |> Expect.isFalse "so is its comma-separated projects box"
   }
 
   test "server-status banner reacts to the connected signal via data-show" {
@@ -1136,7 +1137,10 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
     let expectedSignalAttrs =
       [ "data-signals:help-visible"; "data-signals:sidebar-open"; "data-signals:viewing-session-id"
         "data-signals:code"; "data-signals:new-session-dir"; "data-signals:manual-projects"
-        "data-signals:theme"; "data-signals:cursor-pos"; "data-signals:test-filter" ]
+        "data-signals:theme"; "data-signals:cursor-pos"; "data-signals:test-filter"
+        // The new-session dialog's own signals: open, what to load, which projects, which workflow.
+        "data-signals:new-session-open"; "data-signals:new-session-target"; "data-signals:new-session-projects"
+        "data-signals:new-session-workflow" ]
     for attr in expectedSignalAttrs do
       html |> Expect.stringContains (sprintf "signal attr '%s' must be initialized" attr) attr
   }

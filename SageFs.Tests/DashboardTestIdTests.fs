@@ -102,7 +102,7 @@ let dashboardTestIdTests = testList "Dashboard data-testid hooks" [
     html |> Expect.stringContains "eval testid present" "data-testid=\"eval\""
     html |> Expect.stringContains "reset testid present" "data-testid=\"reset\""
     html |> Expect.stringContains "hard-reset testid present" "data-testid=\"hard-reset\""
-    html |> Expect.stringContains "new-session testid present" "data-testid=\"new-session\""
+    html |> Expect.stringContains "new-session-open testid present" "data-testid=\"new-session-open\""
     html |> Expect.stringContains "session-output testid present in composed page" "data-testid=\"session-output\""
     html |> Expect.stringContains "live-testing-toggle testid present in composed page" "data-testid=\"live-testing-toggle\""
 ]

@@ -198,12 +198,17 @@ module Refusal =
     | Refusal.NoDirectory -> "A session lives in a working directory, and the box is empty."
     | Refusal.DirectoryMissing path -> sprintf "There is no directory at %s." path
     | Refusal.NothingPicked -> "Loading projects needs at least one ticked, and none is."
+    // The daemon's sentence names an MCP tool the person at this page has no use for; the facts are the same.
+    | Refusal.Daemon (SageFsError.DuplicateSession(existingId, directory)) ->
+      sprintf "A session for this project already exists: session %s, working in %s." existingId directory
     | Refusal.Daemon error -> SageFsError.describe error
 
   let nextAction = function
     | Refusal.NoDirectory -> "Type or pick a directory, then Create."
     | Refusal.DirectoryMissing _ -> "Check the path for typos, or create the directory first."
     | Refusal.NothingPicked -> "Tick a project, or choose Bare to start without one."
+    | Refusal.Daemon (SageFsError.DuplicateSession _) ->
+      "Use the session that is already there (switch to it from the list), or load different projects."
     | Refusal.Daemon error -> SageFsError.suggestedAction error
 
 module Request =
@@ -228,6 +233,20 @@ module Request =
         { Directory = directory.Trim()
           Target = target
           Workflow = SessionWorkflow.tryOfString workflowKey |> Option.defaultValue SessionWorkflow.defaultWorkflow })
+
+/// What is ticked, and which target is chosen, when discovery finishes: a sensible start the person can change.
+module DefaultChoice =
+  /// A solution is ticked on its own (it already covers its projects). A lone project is ticked. Several
+  /// projects and no solution tick nothing: that is the person's choice, and Create waits for it. With
+  /// nothing found the only thing that can be created is a bare session.
+  let ofFound (found: Found) : TargetKind * string list =
+    match found.Candidates with
+    | [] -> TargetKind.BareSession, []
+    | candidates ->
+      match candidates |> List.tryFind (fun c -> c.Kind = CandidateKind.Solution), candidates with
+      | Some solution, _ -> TargetKind.LoadProjects, [ solution.Path ]
+      | None, [ only ] -> TargetKind.LoadProjects, [ only.Path ]
+      | None, _ -> TargetKind.LoadProjects, []
 
 // ── The workflows, in plain words ────────────────────────────────────────
 
@@ -327,7 +346,10 @@ type Event =
   | Missing of directory: string * Refusal
   | Submit of Request
   | Created
+  /// The daemon refused the create that was in flight.
   | Failed of Refusal
+  /// The click was refused before it reached the daemon: nothing typed, nothing ticked, a path that escapes.
+  | Rejected of directory: string * Refusal
   | Dismiss
 
 module NewSessionDialog =
@@ -357,14 +379,18 @@ module NewSessionDialog =
     // A create in flight is changed only by how it ends.
     | NewSessionDialog.Creating _, Event.Created -> NewSessionDialog.Closed
     | NewSessionDialog.Creating(_, found), Event.Failed reason -> NewSessionDialog.Refused(reason, found)
-    | NewSessionDialog.Creating _, (Event.Open _ | Event.Found _ | Event.Missing _ | Event.Submit _ | Event.Dismiss) -> state
+    | NewSessionDialog.Creating _, (Event.Open _ | Event.Found _ | Event.Missing _ | Event.Submit _ | Event.Rejected _ | Event.Dismiss) -> state
     | _, Event.Open directory -> NewSessionDialog.Discovering directory
     | NewSessionDialog.Discovering waiting, Event.Found(found, overlaps) when Overlap.canonical waiting = Overlap.canonical found.Directory ->
       match overlaps with
       | [] -> NewSessionDialog.Choosing found
       | first :: rest -> NewSessionDialog.Warning(found, first, rest)
+    // Nothing typed yet is not a mistake: the dialog opened on an empty box and waits for a directory.
+    | NewSessionDialog.Discovering waiting, Event.Missing(directory, Refusal.NoDirectory) when Overlap.canonical waiting = Overlap.canonical directory ->
+      NewSessionDialog.Choosing (Found.nothing directory)
     | NewSessionDialog.Discovering waiting, Event.Missing(directory, reason) when Overlap.canonical waiting = Overlap.canonical directory ->
       NewSessionDialog.Refused(reason, Found.nothing directory)
+    | _, Event.Rejected(directory, reason) -> NewSessionDialog.Refused(reason, foundOf state directory)
     | _, Event.Submit request -> NewSessionDialog.Creating(request, foundOf state request.Directory)
     | _, Event.Dismiss -> NewSessionDialog.Closed
     | _, (Event.Found _ | Event.Missing _ | Event.Created | Event.Failed _) -> state
@@ -420,9 +446,7 @@ module NewSessionNames =
   [<Literal>]
   let WorkflowSignal = "newSessionWorkflow"
 
-  // routes
-  [<Literal>]
-  let OpenRoute = "/dashboard/new-session/open"
+  // routes (opening the dialog is a discovery of the directory it opens on)
   [<Literal>]
   let DiscoverRoute = "/dashboard/new-session/discover"
   [<Literal>]

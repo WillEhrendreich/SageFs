@@ -19,11 +19,29 @@ let readProjectFile (path: string) : string =
   try File.ReadAllText path
   with _ -> ""
 
-/// What a project file says about the frameworks it builds for.
-let frameworksOf (projectXml: string) : Frameworks =
+/// The frameworks the nearest `Directory.Build.props` above `directory` declares, which is where most solutions
+/// keep them. A props file that names none is looked past, up to the root of the filesystem.
+let frameworksFromProps (directory: string) : Frameworks =
+  let rec up (dir: string) =
+    match String.IsNullOrEmpty dir with
+    | true -> Frameworks.NamedByImports
+    | false ->
+      let props = Path.Combine(dir, "Directory.Build.props")
+      let found =
+        match File.Exists props with
+        | true -> ProjectCompatibility.readTargetFrameworks (readProjectFile props)
+        | false -> Error ProjectCompatibility.ProjectReadError.Empty
+      match found with
+      | Ok tfms -> Frameworks.Declared tfms
+      | Error _ -> up (Path.GetDirectoryName dir)
+  up directory
+
+/// What a project file says about the frameworks it builds for, and when it says nothing, what the props file
+/// above it says.
+let frameworksOf (projectDirectory: string) (projectXml: string) : Frameworks =
   match ProjectCompatibility.readTargetFrameworks projectXml with
   | Ok tfms -> Frameworks.Declared tfms
-  | Error _ -> Frameworks.NamedByImports
+  | Error _ -> frameworksFromProps projectDirectory
 
 /// The package names a project file asks for plus the markers its own XML carries (the Web SDK), which is
 /// what `WorkflowDetection.suggest` reads.
@@ -47,7 +65,10 @@ let candidatesOf (directory: string) : Candidate list * string list list =
     |> List.map (fun relative -> relative, readProjectFile (Path.Combine(directory, relative)))
   let projects =
     projectXml
-    |> List.map (fun (relative, xml) -> { Path = relative; Kind = CandidateKind.Project; Frameworks = frameworksOf xml })
+    |> List.map (fun (relative, xml) ->
+      { Path = relative
+        Kind = CandidateKind.Project
+        Frameworks = frameworksOf (Path.GetDirectoryName(Path.GetFullPath(Path.Combine(directory, relative)))) xml })
   solutions @ projects, projectXml |> List.map (snd >> packageNamesOf)
 
 /// A web project suggests Hot Reload. It only suggests: nothing is chosen for the person.
@@ -69,6 +90,19 @@ let discover (live: LiveSession list) (directory: string) : Result<Found * Overl
       let candidates, packages = candidatesOf directory
       let overlaps = Overlap.decide directory (Boundary.classify directory) live
       Ok ({ Directory = directory; Candidates = candidates; Hint = hintOf packages }, overlaps)
+
+/// The targets a request loads, or the refusal that says why it cannot. Bare reads nothing. Ticked projects go
+/// through the one containment rule (`resolveSessionProjects`: a project that escapes the working directory is
+/// refused by name, never dropped), so the dialog can never create a session missing a project it was asked for.
+let resolveTargets (request: Request) : Result<SessionProjectTarget list, Refusal> =
+  match request.Target with
+  | Target.Bare -> Ok [ SessionProjectTarget.Bare ]
+  | Target.Load(first, rest) ->
+    resolveSessionProjects request.Directory (String.Join(",", first :: rest))
+    |> Result.mapError Refusal.Daemon
+    |> Result.bind (fun paths ->
+      SessionProjectTarget.tryCreateMany paths
+      |> Result.mapError (fun reason -> Refusal.Daemon (SageFsError.SessionCreationFailed reason)))
 
 /// The sessions that count as already here: every one that is not stopped, with the checkout it sits in.
 let liveSessionsOf (sessions: WorkerProtocol.SessionInfo list) : LiveSession list =

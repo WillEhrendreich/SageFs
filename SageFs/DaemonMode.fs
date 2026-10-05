@@ -4370,12 +4370,11 @@ let run
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
       return result |> Result.mapError SageFsError.describe
     }
-    CreateSession = fun targets workingDir -> task {
-      let! result = sessionOps.CreateSession targets workingDir WorkflowTypes.SessionWorkflow.Interactive
+    CreateSession = fun targets workingDir workflow -> task {
+      let! result = sessionOps.CreateSession targets workingDir workflow
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
       return result
         |> Result.map (fun sidStr -> WorkerProtocol.SessionId.validate sidStr |> Result.defaultValue (WorkerProtocol.SessionId.newId ()))
-        |> Result.mapError SageFsError.describe
     }
     ShutdownCallback = Some (fun () -> cts.Cancel())
     RunApp = fun sid request -> task {

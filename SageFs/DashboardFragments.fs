@@ -2264,6 +2264,18 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         Elem.div [ Attr.class' "sidebar-header" ] [
           Elem.h2 [] [ Text.raw "Sessions" ]
           Elem.span [ Attr.style "margin-left:auto;margin-right:8px;" ] [ connectionNode ]
+          // New session: opens the guided dialog (find projects, pick a workflow, see who is already here).
+          // Opening is a signal, and the post asks the daemon to look in the directory the dialog opens on.
+          Elem.button
+            [ Attr.type' "button"
+              Attr.class' "sidebar-header-btn"
+              Attr.id NewSessionDialog.NewSessionNames.OpenButtonId
+              testid NewSessionDialog.NewSessionNames.OpenTestId
+              Attr.create "aria-label" "New session: find projects and start one"
+              Attr.create "aria-haspopup" "dialog"
+              Attr.create "title" "New session"
+              Ds.onClick (sprintf "$%s = true; %s" Signals.NewSessionOpen (Ds.post NewSessionDialog.NewSessionNames.DiscoverRoute)) ]
+            [ Text.raw "+" ]
           // Show/hide the extra per-session panels (Hot Reload, Live Testing,
           // Bindings, Context) — belongs with the sessions, not by app settings.
           Elem.button
@@ -2295,62 +2307,6 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             snap.CohortPanel
             snap.HygienePanel
           ]
-          signalDetails
-            Signals.NewSessionOpen
-            [ Attr.class' "panel new-session-panel" ]
-            [
-              Elem.summary
-                [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none; color: var(--fg-blue);" ]
-                [ Text.raw "➕ New Session" ]
-              Elem.div [ Attr.style "margin-top: 0.5rem;" ] [
-                Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [
-                  Text.raw "Working Directory"
-                ]
-                Elem.input
-                  [ Attr.class' "eval-input"
-                    Attr.style "min-height: auto; height: 2rem;"
-                    Ds.bind Signals.NewSessionDir
-                    // Native directory autocomplete: the datalist below is
-                    // morphed by /dashboard/dir-suggest as the user types.
-                    Attr.create "list" DomIds.DirSuggestions
-                    Ds.onEvent ("input.debounce_250ms", "@post('/dashboard/dir-suggest')")
-                    Attr.create "placeholder" workingDirPlaceholder ]
-                renderDirSuggestions []
-                Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
-                  Elem.button
-                    [ Attr.class' "eval-btn"
-                      Attr.style "flex: 1; font-size: 0.8rem;"
-                      Attr.create "aria-label" "Discover — scan this directory for projects"
-                      Attr.create "title" "Discover — scan this directory for projects"
-                      Ds.indicator Signals.DiscoverLoading
-                      Ds.attr' ("disabled", "$discoverLoading")
-                      Ds.onClick (Ds.post "/dashboard/discover-projects") ]
-                    [ Elem.span [ Ds.show "$discoverLoading" ] [ Text.raw "⏳ " ]
-                      Elem.span [ Ds.show "!$discoverLoading" ] [ Text.raw "🔍 " ]
-                      Text.raw "Discover" ]
-                ]
-                Elem.div [ Attr.id DomIds.DiscoveredProjects ] []
-                Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px; margin-top: 0.5rem;" ] [
-                  Text.raw "Projects (comma-sep)"
-                ]
-                Elem.input
-                  [ Attr.class' "eval-input"
-                    Attr.style "min-height: auto; height: 2rem;"
-                    Ds.bind Signals.ManualProjects
-                    Attr.create "placeholder" "MyProject.fsproj" ]
-                Elem.button
-                  [ Attr.class' "eval-btn"
-                    Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
-                    testid "new-session"
-                    Attr.create "aria-label" "Create — start a new session in this directory"
-                    Attr.create "title" "Create — start a new session in this directory (enter a working directory first)"
-                    Ds.indicator Signals.CreateLoading
-                    Ds.attr' ("disabled", "$createLoading || !$newSessionDir.trim()")
-                    Ds.onClick (Ds.post "/dashboard/session/create") ]
-                  [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ Creating... " ]
-                    Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ Create" ] ]
-              ]
-            ]
         ]
       ]
     ]

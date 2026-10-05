@@ -19,8 +19,11 @@ open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 open SageFs.Server.NewSessionDialog
 
-/// How long after the last keystroke the dialog asks the daemon for directory suggestions.
-let suggestDebounceMs : int = int Timeouts.dashboardDirectorySuggestDebounce.TotalMilliseconds
+/// How long after the last keystroke the directory box asks the daemon for suggestions, in the text form
+/// Datastar's `debounce` modifier takes: short enough to feel live, long enough that one word typed is one
+/// request. It is a pause tuned to a person typing, and the page's own timer owns it, not the daemon.
+[<Literal>]
+let SuggestDebounce = "250ms"
 
 let signalRef (name: string) : string = sprintf "$%s" name
 
@@ -32,8 +35,14 @@ let closeExpr : string = sprintf "$%s = false" Signals.NewSessionOpen
 let openEffectExpr : string =
   sprintf "%s ? (el.open || el.showModal()) : (!el.open || el.close())" (signalRef Signals.NewSessionOpen)
 
-/// The native close event, which Esc and `close()` both raise, becomes the signal and tells the server.
-let onCloseExpr : string = sprintf "%s; %s" closeExpr (Ds.post NewSessionNames.CloseRoute)
+/// Closing by a button: the signal goes false (the effect closes the dialog) and the server is told.
+let closeAndTellExpr : string = sprintf "%s; %s" closeExpr (Ds.post NewSessionNames.CloseRoute)
+
+/// The native close event is raised by Esc and by `close()` alike. When the signal is already false a control
+/// closed it and said what it needed to (Create is mid-request, and must not be undone by a late Close), so
+/// there is nothing to add. When it is still true the browser closed the dialog by itself (Esc), so the signal
+/// follows and the server is told.
+let onCloseExpr : string = sprintf "if(%s){%s}" (signalRef Signals.NewSessionOpen) closeAndTellExpr
 
 let loadKey : string = TargetKind.key TargetKind.LoadProjects
 
@@ -58,7 +67,7 @@ let head : XmlNode =
         testid NewSessionNames.CloseTestId
         Attr.create "aria-label" "Close the new session dialog"
         Attr.create "title" "Close (Esc)"
-        Ds.onClick closeExpr ]
+        Ds.onClick closeAndTellExpr ]
       [ Text.raw "✕" ]
   ]
 
@@ -70,12 +79,13 @@ let directoryField : XmlNode =
         [ Attr.id NewSessionNames.DirectoryInputId
           Attr.type' "text"
           Attr.class' "eval-input"
+          Attr.create "autofocus" "autofocus"
           Attr.create "autocomplete" "off"
           Attr.create "spellcheck" "false"
           Attr.create "list" DomIds.DirSuggestions
           Attr.create "placeholder" workingDirPlaceholder
           Ds.bind Signals.NewSessionDir
-          Ds.onEvent (sprintf "input.debounce_%dms" suggestDebounceMs, Ds.post "/dashboard/dir-suggest")
+          Ds.onEvent (sprintf "input.debounce_%s" SuggestDebounce, Ds.post "/dashboard/dir-suggest")
           Ds.onEvent ("change", Ds.post NewSessionNames.DiscoverRoute)
           Ds.onEvent ("keydown", sprintf "if(evt.key==='Enter'){evt.preventDefault();%s}" (Ds.post NewSessionNames.DiscoverRoute)) ]
       Elem.button
@@ -192,12 +202,16 @@ let targetGroup (found: Found) : XmlNode =
         Elem.span [ Attr.class' "nsd-meta" ] [ Text.raw "Tick one or several. Their code is loaded into the session." ]
       ]
     ]
-    match found.Candidates with
-    | [] ->
+    match found.Candidates, String.IsNullOrWhiteSpace found.Directory with
+    | [], true ->
+      Elem.p [ Attr.class' "nsd-meta nsd-empty" ] [
+        Text.raw "Choose a directory above and press Find to see its projects, or start a bare session."
+      ]
+    | [], false ->
       Elem.p [ Attr.class' "nsd-meta nsd-empty" ] [
         textEnc (sprintf "No projects or solutions found in %s. A bare session starts without one." found.Directory)
       ]
-    | candidates ->
+    | candidates, _ ->
       Elem.div [ Attr.class' "nsd-list" ] (candidates |> List.map candidateRow)
     Elem.label [ Attr.class' "nsd-row" ] [
       radio NewSessionNames.TargetSignal (TargetKind.key TargetKind.BareSession) Availability.Enabled
@@ -238,7 +252,7 @@ let footer (createLabel: string) (disabledExpr: string) : XmlNode =
       [ Attr.type' "button"
         Attr.class' "eval-btn nsd-secondary"
         testid NewSessionNames.CancelTestId
-        Ds.onClick closeExpr ]
+        Ds.onClick closeAndTellExpr ]
       [ Text.raw "Cancel" ]
     Elem.button
       [ Attr.type' "button"
@@ -258,7 +272,7 @@ let createAnotherLabel = "Create another session here"
 
 // ── The dialog ───────────────────────────────────────────────────────────
 
-let frame (state: NewSessionDialog) (body: XmlNode list) : XmlNode =
+let frame (state: NewSessionDialog) (body: XmlNode list) (foot: XmlNode list) : XmlNode =
   Elem.dialog
     [ Attr.id NewSessionNames.DialogId
       Attr.class' "nsd"
@@ -271,40 +285,42 @@ let frame (state: NewSessionDialog) (body: XmlNode list) : XmlNode =
     [ yield head
       match body with
       | [] -> ()
-      | _ -> yield Elem.div [ Attr.class' "nsd-body" ] body ]
+      | _ -> yield Elem.div [ Attr.class' "nsd-body" ] body
+      // The footer is the dialog's own row, outside the scrolling body, so Create is always on screen.
+      yield! foot ]
 
 /// The dialog for a state. Total: a new state cannot be added without being drawn here.
 let render (state: NewSessionDialog) : XmlNode =
   match state with
-  | NewSessionDialog.Closed -> frame state []
+  | NewSessionDialog.Closed -> frame state [] []
   | NewSessionDialog.Discovering directory ->
     frame state
       [ directoryField
-        statusLine (sprintf "Looking for projects in %s…" directory)
-        footer createLabel "true" ]
+        statusLine (sprintf "Looking for projects in %s…" directory) ]
+      [ footer createLabel "true" ]
   | NewSessionDialog.Choosing found ->
     frame state
       [ yield directoryField
-        yield! choices found
-        yield footer createLabel createDisabledExpr ]
+        yield! choices found ]
+      [ footer createLabel createDisabledExpr ]
   | NewSessionDialog.Warning(found, first, rest) ->
     frame state
       [ yield directoryField
         yield warning first rest
-        yield! choices found
-        yield footer createAnotherLabel createDisabledExpr ]
+        yield! choices found ]
+      [ footer createAnotherLabel createDisabledExpr ]
   | NewSessionDialog.Creating(request, found) ->
     frame state
       [ yield directoryField
         yield statusLine (sprintf "Starting a %s session in %s…" (workflowName request.Workflow) request.Directory)
-        yield! choices found
-        yield footer createLabel "true" ]
+        yield! choices found ]
+      [ footer createLabel "true" ]
   | NewSessionDialog.Refused(reason, found) ->
     frame state
       [ yield directoryField
         yield refusal reason
-        yield! choices found
-        yield footer createLabel createDisabledExpr ]
+        yield! choices found ]
+      [ footer createLabel createDisabledExpr ]
 
 /// The card a create shows in the Sessions list the moment the dialog closes, before the daemon has a session
 /// to list. Same slot, same morph: it goes when the state leaves Creating, and the real card is in the list.

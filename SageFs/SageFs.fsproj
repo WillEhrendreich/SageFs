@@ -112,6 +112,7 @@
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="LiveBindingsDock.fs" />
         <Compile Include="NewSessionDialogView.fs" />
+        <Compile Include="DashboardNewSession.fs" />
         <Compile Include="CohortInspector.fs" />
         <Compile Include="SettingsPanel.fs" />
         <Compile Include="Dashboard.fs" />

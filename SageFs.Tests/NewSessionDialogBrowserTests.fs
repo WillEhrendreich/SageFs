@@ -39,6 +39,10 @@ module Viewport =
     | Viewport.Phone -> "320px"
     | Viewport.Wide -> "wide"
 
+/// The tallest a one-line text box can be: two rems of the dashboard's 14px type with its padding. The eval box
+/// the directory input borrows its look from is 80px, so anything near this is the wrong box.
+let oneLineBoxMaxHeight = 48.0f
+
 /// A directory holding several small sample projects, which is what "discovers the sample projects" means.
 let samplesDir = Path.Combine(repoRoot, "samples", "demos")
 
@@ -207,7 +211,7 @@ let createJourney (daemon: Daemon) (seen: Seen) : Task<unit> = task {
   let! count = candidates.CountAsync()
   (count >= 2) |> Expect.isTrue (sprintf "several sample projects are offered, got %d" count)
   let! dialogText = (dialogOf page).InnerTextAsync()
-  dialogText.Contains "net" |> Expect.isTrue "each carries its framework"
+  Text.RegularExpressions.Regex.IsMatch(dialogText, @"net\d+\.\d") |> Expect.isTrue "each carries its framework, like net10.0"
   dialogText.Contains "REPL" |> Expect.isTrue "the REPL workflow is described"
   dialogText.Contains "Live Testing" |> Expect.isTrue "the Live Testing workflow is described"
   dialogText.Contains "Hot Reload" |> Expect.isTrue "the Hot Reload workflow is described"
@@ -218,6 +222,22 @@ let createJourney (daemon: Daemon) (seen: Seen) : Task<unit> = task {
   let create = byTestId page NewSessionNames.CreateTestId
   let! enabled = create.IsEnabledAsync()
   enabled |> Expect.isTrue "Create is available once Bare is chosen"
+  // Watch from inside the page for the card in its warming state: it lasts seconds, but a poll from outside could
+  // still step over it, and an observer cannot.
+  let! _ =
+    page.EvaluateAsync(
+      sprintf
+        """() => {
+          window.__sawWarming = false;
+          var look = function () {
+            var starting = document.querySelector('[data-testid="%s"]');
+            var rows = Array.from(document.querySelectorAll('[data-testid="session-card"]'));
+            if (starting || rows.some(function (r) { return /starting/i.test(r.innerText || ''); })) window.__sawWarming = true;
+          };
+          new MutationObserver(look).observe(document.body, { childList: true, subtree: true, characterData: true });
+          look();
+        }"""
+        NewSessionNames.StartingTestId)
   do! create.ClickAsync()
   do! waitForOpen page false
 
@@ -227,16 +247,19 @@ let createJourney (daemon: Daemon) (seen: Seen) : Task<unit> = task {
       return n >= 1
     })
   cardAppeared |> Expect.isTrue "a session card appears in the list"
+  let! sawWarming = page.EvaluateAsync<bool>("() => window.__sawWarming === true")
+  sawWarming |> Expect.isTrue "the dialog closed into a card in a warming state (Starting), not into nothing"
 
-  // The card warms to Ready, read from the page and not only from the API.
+  // The card warms to Ready, read from the page and not only from the API. A ready session's card says "running".
   let! sessions = sessionsNow daemon
   let id = idFor sessions samplesDir
   let! ready =
     waitUntil BrowserWaits.daemonWork (fun () -> task {
       let! text = page.Locator(sprintf "#session-card-%s" id).InnerTextAsync()
-      return text.Contains "Ready"
+      return text.ToLowerInvariant().Contains "running"
     })
-  ready |> Expect.isTrue "the card shows Ready once the session has warmed up"
+  ready |> Expect.isTrue "the card shows the session running once it has warmed up"
+  do! PlaywrightExpect.waitForSelectorText BrowserWaits.daemonWork page "#session-status" "Ready"
   do! waitForState page "closed"
   assertNoErrors "create" seen
 }
@@ -362,8 +385,14 @@ let layoutJourney (viewport: Viewport) (daemon: Daemon) (seen: Seen) : Task<unit
   let! cancel = boxOf (byTestId page NewSessionNames.CancelTestId)
   let overlap = create.X < cancel.X + cancel.Width && cancel.X < create.X + create.Width && create.Y < cancel.Y + cancel.Height && cancel.Y < create.Y + create.Height
   overlap |> Expect.isFalse (sprintf "[%s] Create and Cancel do not overlap" label)
-  (float create.X >= m.DialogLeft && float (create.X + create.Width) <= m.DialogRight) |> Expect.isTrue (sprintf "[%s] Create is inside the dialog" label)
-  (float cancel.X >= m.DialogLeft && float (cancel.X + cancel.Width) <= m.DialogRight) |> Expect.isTrue (sprintf "[%s] Cancel is inside the dialog" label)
+  (float create.X >= m.DialogLeft && float (create.X + create.Width) <= m.DialogRight) |> Expect.isTrue (sprintf "[%s] Create is inside the dialog sideways" label)
+  (float cancel.X >= m.DialogLeft && float (cancel.X + cancel.Width) <= m.DialogRight) |> Expect.isTrue (sprintf "[%s] Cancel is inside the dialog sideways" label)
+  // The footer is pinned: Create is on screen without scrolling the dialog, however much it holds.
+  (float create.Y >= m.DialogTop && float (create.Y + create.Height) <= m.DialogBottom) |> Expect.isTrue (sprintf "[%s] Create is inside the dialog vertically, not scrolled out of it (%.0f..%.0f in %.0f..%.0f)" label create.Y (create.Y + create.Height) m.DialogTop m.DialogBottom)
+  (float (create.Y + create.Height) <= m.ViewportHeight) |> Expect.isTrue (sprintf "[%s] Create is on screen" label)
+  // The directory box is one line, not the 80px eval box it borrows its look from.
+  let! dirBox = boxOf (page.Locator(sprintf "#%s" NewSessionNames.DirectoryInputId))
+  (dirBox.Height < oneLineBoxMaxHeight) |> Expect.isTrue (sprintf "[%s] the directory box is one line tall, got %.0f" label dirBox.Height)
   do! shot page (sprintf "5-%s" label)
   assertNoErrors label seen
 }
