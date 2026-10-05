@@ -106,6 +106,7 @@
         <Compile Include="DashboardTypes.fs" />
         <Compile Include="DashboardConnection.fs" />
         <Compile Include="DockPanes.fs" />
+        <Compile Include="AppOutputPane.fs" />
         <Compile Include="EvaluatePopover.fs" />
         <Compile Include="NewSessionDialog.fs" />
         <Compile Include="NewSessionDiscovery.fs" />
