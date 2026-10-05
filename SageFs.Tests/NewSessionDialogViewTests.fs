@@ -83,6 +83,11 @@ let view =
       h |> contains (sprintf "value=\"%s\"" (TargetKind.key TargetKind.BareSession)) "the Bare choice"
       h |> contains (sprintf "value=\"%s\"" (TargetKind.key TargetKind.LoadProjects)) "the load choice"
 
+    testCase "WHY — when Create is waiting on a tick the footer says so, and only then, because a dimmed button must explain itself" <| fun _ ->
+      let h = html (NewSessionDialog.Choosing twoCandidates)
+      h |> contains "Tick a project, or choose Bare" "the hint names both ways forward"
+      h |> contains (sprintf "data-show=\"$%s === '%s' && $%s.length === 0\"" NewSessionNames.TargetSignal (TargetKind.key TargetKind.LoadProjects) NewSessionNames.ProjectsSignal) "shown only while projects are to be loaded and none is ticked"
+
     testCase "WHY — a directory with nothing to load says so and leaves Bare as the way forward" <| fun _ ->
       let h = html (NewSessionDialog.Choosing (Found.nothing "/work/empty"))
       h |> contains "No projects" "says nothing was found"
